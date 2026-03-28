@@ -58,6 +58,8 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
     selected_events = pd.read_csv(artifacts["selected_profile_events"])
     profile_summary = pd.read_csv(artifacts["profile_summary"])
     common_patterns = pd.read_csv(artifacts["common_patterns"])
+    early_entry_events = pd.read_csv(artifacts["early_entry_events"])
+    early_entry_summary = pd.read_csv(artifacts["early_entry_summary"])
 
     assert artifacts["report"].exists()
     assert len(selected_events) == 1
@@ -66,3 +68,8 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
     assert "balanced" in set(profile_summary["profile_id"].dropna().astype(str))
     assert int(profile_summary.loc[profile_summary["profile_id"] == "balanced", "events_count"].iloc[0]) == 1
     assert int(common_patterns.iloc[0]["events_count"]) == 1
+    assert len(early_entry_events) == 1
+    assert str(early_entry_events.iloc[0]["entry_triggered"]).lower() == "true"
+    assert float(early_entry_events.iloc[0]["entry_delay_minutes"]) == 1.0
+    assert "target_5pct_hit_rate" in set(early_entry_summary.columns)
+    assert int(early_entry_summary.iloc[0]["entries_triggered_count"]) == 1

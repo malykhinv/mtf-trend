@@ -27,12 +27,12 @@ GRID_MIN_RANGE_ATR_VALUES: tuple[float, ...] = (2.0, 2.5, 3.0)
 GRID_MIN_BODY_ATR_VALUES: tuple[float, ...] = (1.25, 1.5, 2.0)
 GRID_MIN_VOLUME_MULT_VALUES: tuple[float, ...] = (2.0, 2.5, 3.0)
 GRID_MAX_CLOSE_TO_HIGH_FRAC_VALUES: tuple[float, ...] = (0.25, 0.20)
-GRID_MIN_BREAKOUT_PCT_VALUES: tuple[float, ...] = (0.001, 0.002, 0.003)
+GRID_MIN_BREAKOUT_PCT_VALUES: tuple[float, ...] = (0.0,)
 
 _PROFILE_THRESHOLDS: dict[HourlyAsiaPumpProfileId, tuple[float, float, float, float, float]] = {
-    "loose": (2.0, 1.25, 2.0, 0.25, 0.001),
-    "balanced": (2.5, 1.5, 2.5, 0.25, 0.002),
-    "strict": (3.0, 2.0, 3.0, 0.20, 0.003),
+    "loose": (2.0, 1.25, 2.0, 0.25, 0.0),
+    "balanced": (2.5, 1.5, 2.5, 0.25, 0.0),
+    "strict": (3.0, 2.0, 3.0, 0.20, 0.0),
 }
 
 

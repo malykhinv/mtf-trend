@@ -31,6 +31,8 @@ from vectorbt_runner.data_preparer import DataPreparer
 module_logger = logging.getLogger(__name__)
 
 _HORIZON_MINUTES: tuple[int, ...] = (5, 15, 30, 60)
+_EARLY_ENTRY_TARGET_PCTS: tuple[float, ...] = (0.01, 0.02, 0.05, 0.10)
+_LAST_RED_LOOKBACK_MINUTES = 60
 
 
 def _timeframe_minutes(timeframe: Timeframe) -> int:
@@ -513,6 +515,243 @@ def _append_lifecycle_metrics(
     return pd.concat([events.reset_index(drop=True), metrics_frame], axis=1)
 
 
+def _simulate_break_first_high_trailing_stop(
+    *,
+    open_values: Any,
+    high_values: Any,
+    low_values: Any,
+    close_values: Any,
+    timestamp_values: Any,
+    timeframe: Timeframe,
+    row_index: int,
+    max_follow_minutes: int,
+) -> dict[str, object]:
+    tf_minutes = _timeframe_minutes(timeframe)
+    max_follow_bars = _bars_for_minutes(timeframe, max_follow_minutes)
+    end_idx = min(len(open_values) - 1, row_index + max_follow_bars)
+    trigger_high = float(high_values[row_index])
+
+    entry_idx: int | None = None
+    for idx in range(row_index + 1, end_idx + 1):
+        if float(high_values[idx]) >= trigger_high:
+            entry_idx = idx
+            break
+
+    base_result: dict[str, object] = {
+        "entry_model": "break_first_high_trail_last_red",
+        "entry_triggered": entry_idx is not None,
+        "entry_price": trigger_high if trigger_high > 0 else None,
+        "entry_timestamp_ms": None,
+        "entry_timestamp_utc": None,
+        "entry_delay_bars": None,
+        "entry_delay_minutes": None,
+        "initial_stop_price": None,
+        "initial_stop_timestamp_ms": None,
+        "initial_stop_timestamp_utc": None,
+        "initial_risk_pct": None,
+        "max_return_after_entry_pct": None,
+        "max_r_multiple": None,
+        "exit_reason": "no_entry",
+        "exit_price": None,
+        "exit_timestamp_ms": None,
+        "exit_timestamp_utc": None,
+        "exit_return_pct": None,
+        "exit_r_multiple": None,
+        "bars_held_after_entry": None,
+        "minutes_held_after_entry": None,
+    }
+    for target_pct in _EARLY_ENTRY_TARGET_PCTS:
+        pct_label = int(round(target_pct * 100))
+        base_result[f"target_{pct_label}pct_hit"] = False
+
+    if entry_idx is None:
+        return base_result
+
+    entry_timestamp_ms = int(timestamp_values[entry_idx])
+    base_result.update(
+        {
+            "entry_timestamp_ms": entry_timestamp_ms,
+            "entry_timestamp_utc": pd.to_datetime(entry_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S"),
+            "entry_delay_bars": entry_idx - row_index,
+            "entry_delay_minutes": (entry_idx - row_index) * tf_minutes,
+        }
+    )
+
+    lookback_bars = _bars_for_minutes(timeframe, _LAST_RED_LOOKBACK_MINUTES)
+    stop_idx: int | None = None
+    lookback_start = max(0, row_index - lookback_bars)
+    for idx in range(row_index - 1, lookback_start - 1, -1):
+        if float(close_values[idx]) < float(open_values[idx]):
+            stop_idx = idx
+            break
+    if stop_idx is None and row_index > 0:
+        stop_idx = row_index - 1
+    if stop_idx is None:
+        return base_result
+
+    entry_price = float(trigger_high)
+    initial_stop_price = float(low_values[stop_idx])
+    risk = entry_price - initial_stop_price
+    stop_timestamp_ms = int(timestamp_values[stop_idx])
+    base_result.update(
+        {
+            "initial_stop_price": initial_stop_price,
+            "initial_stop_timestamp_ms": stop_timestamp_ms,
+            "initial_stop_timestamp_utc": pd.to_datetime(stop_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    )
+    if entry_price <= 0 or risk <= 0:
+        base_result["exit_reason"] = "invalid_risk"
+        return base_result
+
+    current_stop = initial_stop_price
+    candidate_stop: float | None = None
+    highest_high = max(entry_price, float(high_values[entry_idx]))
+    max_high_after_entry = highest_high
+    exit_idx: int | None = None
+    exit_price: float | None = None
+    exit_reason = "time_exit"
+
+    for idx in range(entry_idx + 1, end_idx + 1):
+        low_value = float(low_values[idx])
+        high_value = float(high_values[idx])
+        open_value = float(open_values[idx])
+        close_value = float(close_values[idx])
+
+        if low_value <= current_stop:
+            exit_idx = idx
+            exit_price = current_stop
+            exit_reason = "stop"
+            break
+
+        if high_value > max_high_after_entry:
+            max_high_after_entry = high_value
+
+        if high_value > highest_high:
+            highest_high = high_value
+            if candidate_stop is not None and candidate_stop > current_stop:
+                current_stop = candidate_stop
+
+        if close_value < open_value:
+            candidate_stop = low_value
+
+    if exit_idx is None:
+        exit_idx = end_idx
+        exit_price = float(close_values[end_idx])
+
+    max_return_after_entry_pct = (max_high_after_entry / entry_price) - 1.0
+    exit_return_pct = (float(exit_price) / entry_price) - 1.0
+    exit_timestamp_ms = int(timestamp_values[exit_idx])
+    result = {
+        **base_result,
+        "initial_risk_pct": risk / entry_price,
+        "max_return_after_entry_pct": max_return_after_entry_pct,
+        "max_r_multiple": max_return_after_entry_pct / (risk / entry_price) if risk > 0 else None,
+        "exit_reason": exit_reason,
+        "exit_price": exit_price,
+        "exit_timestamp_ms": exit_timestamp_ms,
+        "exit_timestamp_utc": pd.to_datetime(exit_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S"),
+        "exit_return_pct": exit_return_pct,
+        "exit_r_multiple": exit_return_pct / (risk / entry_price) if risk > 0 else None,
+        "bars_held_after_entry": exit_idx - entry_idx,
+        "minutes_held_after_entry": (exit_idx - entry_idx) * tf_minutes,
+    }
+    for target_pct in _EARLY_ENTRY_TARGET_PCTS:
+        pct_label = int(round(target_pct * 100))
+        result[f"target_{pct_label}pct_hit"] = max_return_after_entry_pct >= target_pct
+    return result
+
+
+def _build_early_entry_events_for_timeframe(
+    *,
+    preparer: DataPreparer,
+    timeframe: Timeframe,
+    selected_events: pd.DataFrame,
+    max_follow_minutes: int,
+    logger: logging.Logger,
+) -> pd.DataFrame:
+    if selected_events.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    grouped = list(selected_events.groupby("symbol", sort=True))
+    total_symbols = len(grouped)
+    started_at = time.time()
+    for symbol_index, (symbol, group) in enumerate(grouped, start=1):
+        frame = preparer.load_symbol_data(symbol, timeframe)
+        if frame.empty:
+            continue
+        open_values = pd.to_numeric(frame["open"], errors="coerce").to_numpy(dtype="float64")
+        high_values = pd.to_numeric(frame["high"], errors="coerce").to_numpy(dtype="float64")
+        low_values = pd.to_numeric(frame["low"], errors="coerce").to_numpy(dtype="float64")
+        close_values = pd.to_numeric(frame["close"], errors="coerce").to_numpy(dtype="float64")
+        timestamp_values = pd.to_numeric(frame["timestamp"], errors="coerce").fillna(0).astype("int64").to_numpy()
+
+        for event in group.to_dict("records"):
+            row_index = int(event["row_index"])
+            trailing = _simulate_break_first_high_trailing_stop(
+                open_values=open_values,
+                high_values=high_values,
+                low_values=low_values,
+                close_values=close_values,
+                timestamp_values=timestamp_values,
+                timeframe=timeframe,
+                row_index=row_index,
+                max_follow_minutes=max_follow_minutes,
+            )
+            rows.append({**event, **trailing})
+
+        if symbol_index % 25 == 0 or symbol_index == total_symbols:
+            progress_pct, elapsed, eta_seconds = _progress_snapshot(
+                completed=symbol_index,
+                total=total_symbols,
+                started_at=started_at,
+            )
+            logger.info(
+                "hourly-asia-pump: timeframe=%s stage=early-entry-analysis progress=%.1f%% scanned_symbols=%s/%s analyzed_events=%s elapsed=%s eta=%s",
+                timeframe.value,
+                progress_pct,
+                symbol_index,
+                total_symbols,
+                len(rows),
+                _format_duration(elapsed),
+                _format_duration(eta_seconds),
+            )
+    return pd.DataFrame(rows)
+
+
+def _build_early_entry_summary(early_entry_events: pd.DataFrame) -> pd.DataFrame:
+    if early_entry_events.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    for timeframe, group in early_entry_events.groupby("timeframe", sort=True):
+        entered = group[group["entry_triggered"].astype(bool)].copy()
+        rows.append(
+            {
+                "timeframe": timeframe,
+                "selected_events_count": int(len(group)),
+                "entries_triggered_count": int(len(entered)),
+                "entry_rate": (len(entered) / len(group)) if len(group) > 0 else None,
+                "median_entry_delay_minutes": _median_or_none(entered.get("entry_delay_minutes", pd.Series(dtype="float64"))),
+                "median_initial_risk_pct": _median_or_none(entered.get("initial_risk_pct", pd.Series(dtype="float64"))),
+                "median_max_return_after_entry_pct": _median_or_none(entered.get("max_return_after_entry_pct", pd.Series(dtype="float64"))),
+                "p75_max_return_after_entry_pct": _quantile_or_none(entered.get("max_return_after_entry_pct", pd.Series(dtype="float64")), 0.75),
+                "median_exit_return_pct": _median_or_none(entered.get("exit_return_pct", pd.Series(dtype="float64"))),
+                "p75_exit_return_pct": _quantile_or_none(entered.get("exit_return_pct", pd.Series(dtype="float64")), 0.75),
+                "median_max_r_multiple": _median_or_none(entered.get("max_r_multiple", pd.Series(dtype="float64"))),
+                "median_exit_r_multiple": _median_or_none(entered.get("exit_r_multiple", pd.Series(dtype="float64"))),
+                "exit_positive_rate": _mean_or_none((pd.to_numeric(entered.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce") > 0).astype("float64")),
+                "stop_exit_rate": _mean_or_none((entered.get("exit_reason", pd.Series(dtype="object")).astype(str) == "stop").astype("float64")),
+                "time_exit_rate": _mean_or_none((entered.get("exit_reason", pd.Series(dtype="object")).astype(str) == "time_exit").astype("float64")),
+                "target_1pct_hit_rate": _mean_or_none(entered.get("target_1pct_hit", pd.Series(dtype="float64"))),
+                "target_2pct_hit_rate": _mean_or_none(entered.get("target_2pct_hit", pd.Series(dtype="float64"))),
+                "target_5pct_hit_rate": _mean_or_none(entered.get("target_5pct_hit", pd.Series(dtype="float64"))),
+                "target_10pct_hit_rate": _mean_or_none(entered.get("target_10pct_hit", pd.Series(dtype="float64"))),
+            }
+        )
+    return pd.DataFrame(rows).sort_values("timeframe").reset_index(drop=True)
+
+
 def _filter_events_for_params(events: pd.DataFrame, params: HourlyAsiaPumpParams) -> pd.DataFrame:
     if events.empty:
         return pd.DataFrame()
@@ -707,6 +946,7 @@ def _write_report(
     profile_summary: pd.DataFrame,
     selected_common_patterns: pd.DataFrame,
     top_grid_rows: pd.DataFrame,
+    early_entry_summary: pd.DataFrame,
     selection_profile: HourlyAsiaPumpProfileId,
 ) -> Path:
     context_frame = pd.DataFrame(
@@ -770,6 +1010,26 @@ def _write_report(
             ),
         ),
         "",
+        "## Early Entry Trail Model",
+        "",
+        _frame_to_markdown(
+            early_entry_summary,
+            columns=(
+                "timeframe",
+                "selected_events_count",
+                "entries_triggered_count",
+                "entry_rate",
+                "median_entry_delay_minutes",
+                "median_initial_risk_pct",
+                "median_max_return_after_entry_pct",
+                "median_exit_return_pct",
+                "median_max_r_multiple",
+                "median_exit_r_multiple",
+                "target_5pct_hit_rate",
+                "target_10pct_hit_rate",
+            ),
+        ),
+        "",
         "## Top Grid Rows",
         "",
     ]
@@ -809,6 +1069,8 @@ def _write_report(
             f"- selected profile events: `{output_dir / 'selected_profile_events.csv'}`",
             f"- selected profile symbol summary: `{output_dir / 'selected_profile_symbol_summary.csv'}`",
             f"- common patterns: `{output_dir / 'common_patterns_by_timeframe.csv'}`",
+            f"- early entry events: `{output_dir / 'early_entry_events.csv'}`",
+            f"- early entry summary: `{output_dir / 'early_entry_summary.csv'}`",
             "",
         ]
     )
@@ -846,6 +1108,7 @@ def build_hourly_asia_pump_research_artifacts(
     selected_event_frames: list[pd.DataFrame] = []
     common_pattern_frames: list[pd.DataFrame] = []
     symbol_summary_frames: list[pd.DataFrame] = []
+    early_entry_event_frames: list[pd.DataFrame] = []
     resolved_symbols_by_timeframe: dict[str, list[str]] = {}
     timeframe_durations: list[float] = []
     total_timeframes = len(timeframes)
@@ -957,6 +1220,14 @@ def build_hourly_asia_pump_research_artifacts(
         selected_event_frames.append(selected_events)
         common_pattern_frames.append(_build_common_patterns(selected_events))
         symbol_summary_frames.append(_build_selected_symbol_summary(selected_events))
+        early_entry_events = _build_early_entry_events_for_timeframe(
+            preparer=preparer,
+            timeframe=timeframe,
+            selected_events=selected_events,
+            max_follow_minutes=max_follow_minutes,
+            logger=active_logger,
+        )
+        early_entry_event_frames.append(early_entry_events)
 
         timeframe_elapsed = max(0.0, time.time() - timeframe_started_at)
         timeframe_durations.append(timeframe_elapsed)
@@ -987,6 +1258,8 @@ def build_hourly_asia_pump_research_artifacts(
     selected_events_all = pd.concat(selected_event_frames, ignore_index=True) if selected_event_frames else pd.DataFrame()
     common_patterns_all = pd.concat(common_pattern_frames, ignore_index=True) if common_pattern_frames else pd.DataFrame()
     symbol_summary_all = pd.concat(symbol_summary_frames, ignore_index=True) if symbol_summary_frames else pd.DataFrame()
+    early_entry_events_all = pd.concat(early_entry_event_frames, ignore_index=True) if early_entry_event_frames else pd.DataFrame()
+    early_entry_summary_all = _build_early_entry_summary(early_entry_events_all)
     top_grid_rows = _top_grid_rows_by_timeframe(grid_summary_all, limit=10)
 
     grid_summary_path = output_dir / "grid_summary.csv"
@@ -1003,6 +1276,12 @@ def build_hourly_asia_pump_research_artifacts(
 
     symbol_summary_path = output_dir / "selected_profile_symbol_summary.csv"
     symbol_summary_all.to_csv(symbol_summary_path, index=False)
+
+    early_entry_events_path = output_dir / "early_entry_events.csv"
+    early_entry_events_all.to_csv(early_entry_events_path, index=False)
+
+    early_entry_summary_path = output_dir / "early_entry_summary.csv"
+    early_entry_summary_all.to_csv(early_entry_summary_path, index=False)
 
     top_grid_rows_path = output_dir / "top_grid_by_timeframe.csv"
     top_grid_rows.to_csv(top_grid_rows_path, index=False)
@@ -1031,6 +1310,7 @@ def build_hourly_asia_pump_research_artifacts(
         profile_summary=profile_summary_all,
         selected_common_patterns=common_patterns_all,
         top_grid_rows=top_grid_rows,
+        early_entry_summary=early_entry_summary_all,
         selection_profile=selection_profile,
     )
 
@@ -1048,6 +1328,8 @@ def build_hourly_asia_pump_research_artifacts(
         "selected_profile_events": selected_events_path,
         "common_patterns": common_patterns_path,
         "selected_profile_symbol_summary": symbol_summary_path,
+        "early_entry_events": early_entry_events_path,
+        "early_entry_summary": early_entry_summary_path,
         "top_grid_by_timeframe": top_grid_rows_path,
         "research_context": context_path,
         "report": report_path,
