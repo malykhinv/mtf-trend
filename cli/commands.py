@@ -76,6 +76,7 @@ from strategy.hourly_asia_pump import (
     DEFAULT_TRIGGER_MINUTE,
     HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES,
     build_hourly_asia_pump_research_artifacts,
+    build_hourly_asia_pump_static_combo_artifacts,
     parse_hourly_asia_pump_profile_id,
 )
 from strategy.post_pump_absorption import (
@@ -2195,6 +2196,44 @@ def _run_hourly_pump_research_inner(config: AppConfig, args: argparse.Namespace)
     return 0
 
 
+def _run_hourly_pump_static_combo_analysis_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("run-hourly-pump-static-combo-analysis", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    base_events_path = Path(getattr(args, "base_events", ""))
+    confirmed_events_path = Path(getattr(args, "confirmed_events", ""))
+    if not base_events_path.exists():
+        raise FileNotFoundError(f"Не найден base events csv: {base_events_path}")
+    if not confirmed_events_path.exists():
+        raise FileNotFoundError(f"Не найден confirmed events csv: {confirmed_events_path}")
+
+    timestamp_label = time.strftime("%Y%m%d_%H%M%S")
+    root_output_dir = (
+        Path(args.output_dir)
+        if getattr(args, "output_dir", None)
+        else Path(config.backtest.results_dir) / "research" / "hourly_asia_pump_static_combo" / timestamp_label
+    )
+    root_output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "run-hourly-pump-static-combo-analysis: base_events=%s confirmed_events=%s output_dir=%s",
+        base_events_path,
+        confirmed_events_path,
+        root_output_dir,
+    )
+    artifacts = build_hourly_asia_pump_static_combo_artifacts(
+        base_events_path=base_events_path,
+        confirmed_events_path=confirmed_events_path,
+        output_dir=root_output_dir,
+        logger=logger,
+    )
+    logger.info(
+        "run-hourly-pump-static-combo-analysis: artifacts great_catalog=%s priority_summary=%s priority_events=%s",
+        artifacts["great_combo_catalog"],
+        artifacts["priority_selected_summary"],
+        artifacts["priority_selected_events"],
+    )
+    return 0
+
+
 def _collect_ppa_stage_summary_rows(
     *,
     timeframe: Timeframe,
@@ -2593,6 +2632,15 @@ def run_ppa_research(config: AppConfig, args: argparse.Namespace) -> int:
 def run_hourly_pump_research(config: AppConfig, args: argparse.Namespace) -> int:
     """Runs hourly Asia-session pump research on cached micro timeframes."""
     return _run_with_logging("run-hourly-pump-research", config, lambda: _run_hourly_pump_research_inner(config, args))
+
+
+def run_hourly_pump_static_combo_analysis(config: AppConfig, args: argparse.Namespace) -> int:
+    """Builds static full-year hourly pump combo catalog and priority-selected portfolio."""
+    return _run_with_logging(
+        "run-hourly-pump-static-combo-analysis",
+        config,
+        lambda: _run_hourly_pump_static_combo_analysis_inner(config, args),
+    )
 
 
 def run_ppa_stage(config: AppConfig, args: argparse.Namespace) -> int:

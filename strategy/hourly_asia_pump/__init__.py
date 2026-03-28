@@ -11,6 +11,7 @@ from strategy.hourly_asia_pump.config import (
     parse_hourly_asia_pump_profile_id,
 )
 from strategy.hourly_asia_pump.research import build_hourly_asia_pump_research_artifacts
+from strategy.hourly_asia_pump.static_combo import build_hourly_asia_pump_static_combo_artifacts
 
 __all__ = [
     "DEFAULT_ASIA_END_HOUR_UTC",
@@ -23,5 +24,6 @@ __all__ = [
     "build_hourly_asia_pump_grid",
     "build_hourly_asia_pump_profile",
     "build_hourly_asia_pump_research_artifacts",
+    "build_hourly_asia_pump_static_combo_artifacts",
     "parse_hourly_asia_pump_profile_id",
 ]

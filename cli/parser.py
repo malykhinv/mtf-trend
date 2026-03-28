@@ -189,6 +189,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hourly_pump.add_argument("--output-dir", default=None, help="Root directory for research results")
 
+    hourly_pump_static_combo = subparsers.add_parser(
+        "run-hourly-pump-static-combo-analysis",
+        help="Build a static full-year combo catalog and priority-selected portfolio from hourly pump event exports",
+    )
+    hourly_pump_static_combo.add_argument(
+        "--base-events",
+        required=True,
+        help="Path to trade_model_events.csv produced by run-hourly-pump-research",
+    )
+    hourly_pump_static_combo.add_argument(
+        "--confirmed-events",
+        required=True,
+        help="Path to confirmed_trade_events.csv from the confirmed continuation search",
+    )
+    hourly_pump_static_combo.add_argument(
+        "--output-dir",
+        default=None,
+        help="Root directory for static combo analysis results",
+    )
+
     ppa_stage = subparsers.add_parser(
         "ppa-stage",
         help="Run compact post_pump_absorption stage review across micro timeframes",
@@ -242,6 +262,7 @@ def resolve_handler(command_name: str) -> Handler:
         "run-backtest": commands.run_backtest,
         "run-ppa-research": commands.run_ppa_research,
         "run-hourly-pump-research": commands.run_hourly_pump_research,
+        "run-hourly-pump-static-combo-analysis": commands.run_hourly_pump_static_combo_analysis,
         "ppa-stage": commands.run_ppa_stage,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
