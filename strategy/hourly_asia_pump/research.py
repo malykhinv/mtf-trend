@@ -199,6 +199,7 @@ def _build_symbol_candidates(
     atr_window_bars = _bars_for_minutes(timeframe, base_params.atr_window_minutes)
     volume_window_bars = _bars_for_minutes(timeframe, base_params.volume_window_minutes)
     breakout_lookback_bars = _bars_for_minutes(timeframe, base_params.breakout_lookback_minutes)
+    pre_base_window_bars = _bars_for_minutes(timeframe, 60)
     timestamps = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
     hours = timestamps.dt.hour
     event_mask = (
@@ -234,7 +235,24 @@ def _build_symbol_candidates(
         breakout_lookback_bars,
         min_periods=max(3, breakout_lookback_bars // 3),
     ).max().shift(1)
+    pre_base_high = frame["high"].rolling(
+        pre_base_window_bars,
+        min_periods=max(3, pre_base_window_bars // 2),
+    ).max().shift(1)
+    pre_base_low = frame["low"].rolling(
+        pre_base_window_bars,
+        min_periods=max(3, pre_base_window_bars // 2),
+    ).min().shift(1)
+    pre_base_open = frame["open"].shift(pre_base_window_bars)
+    pre_base_close = frame["close"].shift(1)
     close_to_high_frac = (frame["high"] - frame["close"]) / true_range.where(true_range > 0)
+    pre_base_range_pct = pd.to_numeric((pre_base_high - pre_base_low) / frame["open"], errors="coerce")
+    pre_base_drift_pct = pd.to_numeric((pre_base_close / pre_base_open - 1.0).abs(), errors="coerce")
+    trigger_range_pct = pd.to_numeric(true_range / frame["open"], errors="coerce")
+    pre_base_range_vs_trigger = pd.to_numeric(
+        pre_base_range_pct / trigger_range_pct.where(trigger_range_pct > 0),
+        errors="coerce",
+    )
 
     events = pd.DataFrame(
         {
@@ -251,12 +269,15 @@ def _build_symbol_candidates(
             "trigger_close": pd.to_numeric(frame["close"], errors="coerce"),
             "trigger_volume": pd.to_numeric(frame["volume"], errors="coerce"),
             "trigger_return_pct": pd.to_numeric(frame["close"] / frame["open"] - 1.0, errors="coerce"),
-            "trigger_range_pct": pd.to_numeric(true_range / frame["open"], errors="coerce"),
+            "trigger_range_pct": trigger_range_pct,
             "range_atr": pd.to_numeric(true_range / atr, errors="coerce"),
             "body_atr": pd.to_numeric((frame["close"] - frame["open"]) / atr, errors="coerce"),
             "volume_mult": pd.to_numeric(frame["volume"] / volume_baseline, errors="coerce"),
             "close_to_high_frac": pd.to_numeric(close_to_high_frac.fillna(1.0), errors="coerce"),
             "breakout_pct": pd.to_numeric(frame["high"] / prior_high - 1.0, errors="coerce"),
+            "pre_base_range_pct_60m": pre_base_range_pct,
+            "pre_base_drift_pct_60m": pre_base_drift_pct,
+            "pre_base_range_vs_trigger": pre_base_range_vs_trigger,
             "atr_window_minutes": base_params.atr_window_minutes,
             "volume_window_minutes": base_params.volume_window_minutes,
             "breakout_lookback_minutes": base_params.breakout_lookback_minutes,
@@ -762,13 +783,76 @@ def _event_matches_trade_model(event: dict[str, object], model: HourlyAsiaPumpTr
     close_to_high_frac = _safe_numeric(event.get("close_to_high_frac"))
     if trigger_return_pct is None or range_atr is None or body_atr is None or volume_mult is None or close_to_high_frac is None:
         return False
-    return (
+    matches = (
         trigger_return_pct >= model.min_trigger_return_pct
         and range_atr >= model.min_range_atr
         and body_atr >= model.min_body_atr
         and volume_mult >= model.min_volume_mult
         and close_to_high_frac <= model.max_close_to_high_frac
     )
+    if not matches:
+        return False
+
+    pre_base_range_pct_60m = _safe_numeric(event.get("pre_base_range_pct_60m"))
+    pre_base_drift_pct_60m = _safe_numeric(event.get("pre_base_drift_pct_60m"))
+    pre_base_range_vs_trigger = _safe_numeric(event.get("pre_base_range_vs_trigger"))
+    if model.max_pre_base_range_pct_60m is not None:
+        if pre_base_range_pct_60m is None or pre_base_range_pct_60m > model.max_pre_base_range_pct_60m:
+            return False
+    if model.max_pre_base_drift_pct_60m is not None:
+        if pre_base_drift_pct_60m is None or pre_base_drift_pct_60m > model.max_pre_base_drift_pct_60m:
+            return False
+    if model.max_pre_base_range_vs_trigger is not None:
+        if pre_base_range_vs_trigger is None or pre_base_range_vs_trigger > model.max_pre_base_range_vs_trigger:
+            return False
+    return True
+
+
+def _build_pre_entry_context(
+    *,
+    row_index: int,
+    entry_idx: int,
+    trigger_high: float,
+    trigger_low: float,
+    trigger_range: float,
+    trigger_volume: float,
+    open_values: Any,
+    low_values: Any,
+    close_values: Any,
+    volume_values: Any,
+) -> dict[str, float]:
+    if entry_idx <= row_index + 1:
+        return {
+            "pre_entry_pullback_frac": 0.0,
+            "pre_entry_red_volume_frac": 0.0,
+            "pre_entry_low_frac_of_trigger_range": 1.0,
+        }
+
+    pre_slice = slice(row_index + 1, entry_idx)
+    pre_lows = low_values[pre_slice]
+    min_low = float(pre_lows.min()) if len(pre_lows) > 0 else trigger_high
+    red_volume_frac = 0.0
+    for idx in range(row_index + 1, entry_idx):
+        if float(close_values[idx]) < float(open_values[idx]) and trigger_volume > 0:
+            red_volume_frac = max(red_volume_frac, float(volume_values[idx]) / trigger_volume)
+    return {
+        "pre_entry_pullback_frac": max(0.0, (trigger_high - min_low) / trigger_range) if trigger_range > 0 else 0.0,
+        "pre_entry_red_volume_frac": red_volume_frac,
+        "pre_entry_low_frac_of_trigger_range": ((min_low - trigger_low) / trigger_range) if trigger_range > 0 else 0.0,
+    }
+
+
+def _context_entry_allowed(model: HourlyAsiaPumpTradeModel, context: dict[str, float]) -> bool:
+    if model.max_pre_entry_pullback_frac is not None and context["pre_entry_pullback_frac"] > model.max_pre_entry_pullback_frac:
+        return False
+    if model.max_pre_entry_red_volume_frac is not None and context["pre_entry_red_volume_frac"] > model.max_pre_entry_red_volume_frac:
+        return False
+    if (
+        model.min_pre_entry_low_frac_of_trigger_range is not None
+        and context["pre_entry_low_frac_of_trigger_range"] < model.min_pre_entry_low_frac_of_trigger_range
+    ):
+        return False
+    return True
 
 
 def _find_trade_model_entry(
@@ -807,6 +891,20 @@ def _find_trade_model_entry(
                 initial_stop_price = trigger_body_mid
                 if model.initial_stop_style == "trigger_low":
                     initial_stop_price = trigger_low
+                context = _build_pre_entry_context(
+                    row_index=row_index,
+                    entry_idx=idx,
+                    trigger_high=trigger_high,
+                    trigger_low=trigger_low,
+                    trigger_range=trigger_range,
+                    trigger_volume=trigger_volume,
+                    open_values=open_values,
+                    low_values=low_values,
+                    close_values=close_values,
+                    volume_values=volume_values,
+                )
+                if not _context_entry_allowed(model, context):
+                    continue
                 return {
                     "trade_triggered": True,
                     "entry_idx": idx,
@@ -814,6 +912,7 @@ def _find_trade_model_entry(
                     "entry_reason": "break_trigger_high",
                     "initial_stop_price": initial_stop_price,
                     "initial_stop_reason": model.initial_stop_style,
+                    **context,
                 }
         return no_entry
 
@@ -831,13 +930,33 @@ def _find_trade_model_entry(
             entry_end_idx = min(len(high_values) - 1, pullback_idx + model.max_entry_bars)
             for idx in range(pullback_idx + 1, entry_end_idx + 1):
                 if float(high_values[idx]) >= pullback_high:
+                    context = _build_pre_entry_context(
+                        row_index=row_index,
+                        entry_idx=idx,
+                        trigger_high=trigger_high,
+                        trigger_low=trigger_low,
+                        trigger_range=trigger_range,
+                        trigger_volume=trigger_volume,
+                        open_values=open_values,
+                        low_values=low_values,
+                        close_values=close_values,
+                        volume_values=volume_values,
+                    )
+                    if not _context_entry_allowed(model, context):
+                        continue
+                    initial_stop_price = pullback_low
+                    if model.initial_stop_style == "trigger_low":
+                        initial_stop_price = trigger_low
+                    elif model.initial_stop_style == "trigger_body_mid":
+                        initial_stop_price = trigger_body_mid
                     return {
                         "trade_triggered": True,
                         "entry_idx": idx,
                         "entry_price": pullback_high,
                         "entry_reason": model.entry_style,
-                        "initial_stop_price": pullback_low,
-                        "initial_stop_reason": "pullback_low",
+                        "initial_stop_price": initial_stop_price,
+                        "initial_stop_reason": model.initial_stop_style,
+                        **context,
                     }
         return no_entry
 
@@ -855,13 +974,33 @@ def _find_trade_model_entry(
         entry_end_idx = min(len(high_values) - 1, flag_end + model.max_entry_bars)
         for idx in range(flag_end + 1, entry_end_idx + 1):
             if float(high_values[idx]) >= flag_high:
+                context = _build_pre_entry_context(
+                    row_index=row_index,
+                    entry_idx=idx,
+                    trigger_high=trigger_high,
+                    trigger_low=trigger_low,
+                    trigger_range=trigger_range,
+                    trigger_volume=trigger_volume,
+                    open_values=open_values,
+                    low_values=low_values,
+                    close_values=close_values,
+                    volume_values=volume_values,
+                )
+                if not _context_entry_allowed(model, context):
+                    continue
+                initial_stop_price = flag_low
+                if model.initial_stop_style == "trigger_low":
+                    initial_stop_price = trigger_low
+                elif model.initial_stop_style == "trigger_body_mid":
+                    initial_stop_price = trigger_body_mid
                 return {
                     "trade_triggered": True,
                     "entry_idx": idx,
                     "entry_price": flag_high,
                     "entry_reason": "flag_break",
-                    "initial_stop_price": flag_low,
-                    "initial_stop_reason": "flag_low",
+                    "initial_stop_price": initial_stop_price,
+                    "initial_stop_reason": model.initial_stop_style,
+                    **context,
                 }
         return no_entry
 
@@ -1359,7 +1498,7 @@ def _candidate_cache_path(
         "atr_window_minutes": DEFAULT_ATR_WINDOW_MINUTES,
         "volume_window_minutes": DEFAULT_VOLUME_WINDOW_MINUTES,
         "breakout_lookback_minutes": DEFAULT_BREAKOUT_LOOKBACK_MINUTES,
-        "candidate_version": 1,
+        "candidate_version": 2,
     }
     digest = hashlib.sha1(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()[:16]
     return candidate_cache_dir / timeframe.value / f"{digest}.parquet"

@@ -67,6 +67,11 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
     assert len(selected_events) == 1
     assert selected_events.iloc[0]["symbol"] == "AAA/USDT"
     assert selected_events.iloc[0]["selection_profile"] == "balanced"
+    assert {
+        "pre_base_range_pct_60m",
+        "pre_base_drift_pct_60m",
+        "pre_base_range_vs_trigger",
+    } <= set(selected_events.columns)
     assert "balanced" in set(profile_summary["profile_id"].dropna().astype(str))
     assert int(profile_summary.loc[profile_summary["profile_id"] == "balanced", "events_count"].iloc[0]) == 1
     assert int(common_patterns.iloc[0]["events_count"]) == 1
@@ -75,6 +80,20 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
     assert float(early_entry_events.iloc[0]["entry_delay_minutes"]) == 1.0
     assert "target_5pct_hit_rate" in set(early_entry_summary.columns)
     assert int(early_entry_summary.iloc[0]["entries_triggered_count"]) == 1
-    assert {"trade_model_id", "trade_triggered", "exit_reason"} <= set(trade_model_events.columns)
+    assert {
+        "trade_model_id",
+        "trade_triggered",
+        "exit_reason",
+        "pre_entry_pullback_frac",
+        "pre_entry_red_volume_frac",
+        "pre_entry_low_frac_of_trigger_range",
+    } <= set(trade_model_events.columns)
     assert {"trade_model_id", "trades_count", "profit_factor", "trades_per_year"} <= set(trade_model_summary.columns)
     assert int(trade_model_summary["trades_count"].max()) >= 1
+    assert {
+        "context_monster_5pct",
+        "context_monster_5pct_tight",
+        "context_monster_7p5pct",
+        "context_monster_7p5pct_mid",
+        "context_monster_7p5pct_tight",
+    } <= set(trade_model_summary["trade_model_id"].dropna().astype(str))
