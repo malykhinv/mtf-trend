@@ -35,6 +35,7 @@ _UNIFIED_HOLDOUT_SPLITS: tuple[tuple[str, int], ...] = (
     ("train8_test4", 8),
     ("train9_test3", 9),
 )
+_UNIFIED_HOLDOUT_TOP_CANDIDATES = 150
 _UNIFIED_FAMILY_GRIDS: tuple[dict[str, Any], ...] = (
     {
         "stop_style": "trigger_low",
@@ -609,6 +610,99 @@ def _build_late_holdout_sanity(
     return pd.DataFrame(rows)
 
 
+def _build_candidate_holdout_summary(
+    *,
+    candidates: pd.DataFrame,
+    confirmed_events: pd.DataFrame,
+    calendar_months: list[str],
+) -> pd.DataFrame:
+    if candidates.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    top_candidates = candidates.head(_UNIFIED_HOLDOUT_TOP_CANDIDATES).copy()
+    events_by_stop = {
+        stop_style: confirmed_events[confirmed_events["stop_style"].astype(str) == str(stop_style)].copy().reset_index(drop=True)
+        for stop_style in top_candidates["stop_style"].astype(str).unique().tolist()
+    }
+    arrays_by_stop = {
+        stop_style: {
+            "trigger_return_pct": pd.to_numeric(frame["trigger_return_pct"], errors="coerce").to_numpy(dtype="float64"),
+            "range_atr": pd.to_numeric(frame["range_atr"], errors="coerce").to_numpy(dtype="float64"),
+            "body_atr": pd.to_numeric(frame["body_atr"], errors="coerce").to_numpy(dtype="float64"),
+            "volume_mult": pd.to_numeric(frame["volume_mult"], errors="coerce").to_numpy(dtype="float64"),
+            "close_to_high_frac": pd.to_numeric(frame["close_to_high_frac"], errors="coerce").to_numpy(dtype="float64"),
+            "next_bar_pullback_frac": pd.to_numeric(frame["next_bar_pullback_frac"], errors="coerce").to_numpy(dtype="float64"),
+            "pre_base_range_pct_60m": pd.to_numeric(frame["pre_base_range_pct_60m"], errors="coerce").to_numpy(dtype="float64"),
+            "pre_base_drift_pct_60m": pd.to_numeric(frame["pre_base_drift_pct_60m"], errors="coerce").to_numpy(dtype="float64"),
+            "pre_base_range_vs_trigger": pd.to_numeric(frame["pre_base_range_vs_trigger"], errors="coerce").to_numpy(dtype="float64"),
+            "next_bar_is_green": frame["next_bar_is_green"].fillna(False).astype(bool).to_numpy(dtype="bool"),
+        }
+        for stop_style, frame in events_by_stop.items()
+    }
+
+    for _, candidate in top_candidates.iterrows():
+        stop_style = str(candidate["stop_style"])
+        scoped = events_by_stop[stop_style]
+        arrays = arrays_by_stop[stop_style]
+        mask = _build_filter_mask(arrays=arrays, candidate=candidate.to_dict())
+        selected = scoped.loc[mask].copy().reset_index(drop=True)
+        row: dict[str, object] = {
+            "candidate_id": candidate["candidate_id"],
+            "candidate_variant": candidate["candidate_variant"],
+        }
+        all_positive = True
+        all_non_empty = True
+        late_score = 0.0
+        for split_id, train_months in _UNIFIED_HOLDOUT_SPLITS:
+            if len(calendar_months) <= train_months:
+                continue
+            test_months = calendar_months[train_months:]
+            split_summary = _summarize_events(
+                selected[selected["month_utc"].astype(str).isin(test_months)].copy(),
+                calendar_months=test_months,
+            )
+            if split_summary is None:
+                split_summary = {
+                    "trades_count": 0,
+                    "trades_per_year": 0.0,
+                    "mean_return_pct": 0.0,
+                    "win_rate": 0.0,
+                    "annualized_unit_pnl_pct": 0.0,
+                    "max_drawdown_pct": 0.0,
+                    "positive_months_count": 0,
+                    "non_positive_months_count": len(test_months),
+                }
+            row[f"{split_id}_trades_count"] = split_summary.get("trades_count")
+            row[f"{split_id}_trades_per_year"] = split_summary.get("trades_per_year")
+            row[f"{split_id}_mean_return_pct"] = split_summary.get("mean_return_pct")
+            row[f"{split_id}_win_rate"] = split_summary.get("win_rate")
+            row[f"{split_id}_annualized_unit_pnl_pct"] = split_summary.get("annualized_unit_pnl_pct")
+            row[f"{split_id}_max_drawdown_pct"] = split_summary.get("max_drawdown_pct")
+            row[f"{split_id}_positive_months_count"] = split_summary.get("positive_months_count")
+            row[f"{split_id}_non_positive_months_count"] = split_summary.get("non_positive_months_count")
+            split_trades = int(split_summary.get("trades_count", 0) or 0)
+            split_positive_months = int(split_summary.get("positive_months_count", 0) or 0)
+            split_test_months = len(test_months)
+            split_mean = float(split_summary.get("mean_return_pct", 0.0) or 0.0)
+            split_wr = float(split_summary.get("win_rate", 0.0) or 0.0)
+            split_ann = float(split_summary.get("annualized_unit_pnl_pct", 0.0) or 0.0)
+            split_dd = float(split_summary.get("max_drawdown_pct", 0.0) or 0.0)
+            split_all_positive = split_positive_months == split_test_months and split_test_months > 0
+            row[f"{split_id}_all_positive"] = split_all_positive
+            all_positive = all_positive and split_all_positive
+            all_non_empty = all_non_empty and split_trades > 0
+            late_score += min(split_mean, 0.04) * 500.0
+            late_score += min(split_wr, 0.70) * 90.0
+            late_score += min(split_ann, 3.0) * 25.0
+            late_score += split_positive_months * 10.0
+            late_score -= max(split_dd - 0.20, 0.0) * 120.0
+        row["late_holdout_all_positive"] = all_positive
+        row["late_holdout_all_non_empty"] = all_non_empty
+        row["late_holdout_score"] = late_score
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def build_hourly_asia_pump_unified_artifacts(
     *,
     confirmed_events_path: Path,
@@ -644,6 +738,7 @@ def build_hourly_asia_pump_unified_artifacts(
     best_monthly_path = output_dir / "unified_strategy_best_monthly.csv"
     best_events_path = output_dir / "unified_strategy_best_events.csv"
     holdout_path = output_dir / "unified_strategy_best_holdout.csv"
+    candidate_holdout_path = output_dir / "unified_strategy_candidate_holdout.csv"
     robustness_path = output_dir / "unified_strategy_best_robustness.csv"
     context_path = output_dir / "unified_strategy_context.json"
     report_path = output_dir / "unified_strategy_report.md"
@@ -658,6 +753,7 @@ def build_hourly_asia_pump_unified_artifacts(
         pd.DataFrame().to_csv(best_monthly_path, index=False)
         pd.DataFrame().to_csv(best_events_path, index=False)
         pd.DataFrame().to_csv(holdout_path, index=False)
+        pd.DataFrame().to_csv(candidate_holdout_path, index=False)
         pd.DataFrame().to_csv(robustness_path, index=False)
         context_path.write_text(json.dumps({"status": "empty"}, ensure_ascii=False, indent=2), encoding="utf-8")
         report_path.write_text("# Unified XX:00 Report\n\nКандидаты не найдены.\n", encoding="utf-8")
@@ -672,6 +768,51 @@ def build_hourly_asia_pump_unified_artifacts(
             "report": report_path,
             "goal_passed": False,
         }
+
+    candidate_holdout_summary = _build_candidate_holdout_summary(
+        candidates=candidate_summary,
+        confirmed_events=confirmed_events,
+        calendar_months=calendar_months,
+    )
+    if not candidate_holdout_summary.empty:
+        candidate_summary = candidate_summary.merge(candidate_holdout_summary, on=["candidate_id", "candidate_variant"], how="left")
+    if "late_holdout_all_positive" in candidate_summary.columns:
+        candidate_summary["late_holdout_all_positive"] = candidate_summary["late_holdout_all_positive"].astype("boolean").fillna(False).astype(bool)
+    else:
+        candidate_summary["late_holdout_all_positive"] = pd.Series(False, index=candidate_summary.index, dtype="bool")
+    if "late_holdout_all_non_empty" in candidate_summary.columns:
+        candidate_summary["late_holdout_all_non_empty"] = candidate_summary["late_holdout_all_non_empty"].astype("boolean").fillna(False).astype(bool)
+    else:
+        candidate_summary["late_holdout_all_non_empty"] = pd.Series(False, index=candidate_summary.index, dtype="bool")
+    candidate_summary["late_holdout_score"] = pd.to_numeric(candidate_summary.get("late_holdout_score", pd.Series(0.0, index=candidate_summary.index)), errors="coerce").fillna(0.0)
+    candidate_summary["stable_priority_score"] = (
+        pd.to_numeric(candidate_summary["priority_score"], errors="coerce").fillna(0.0)
+        + candidate_summary["late_holdout_score"]
+        + (candidate_summary["late_holdout_all_positive"].astype(int) * 250.0)
+        + (candidate_summary["late_holdout_all_non_empty"].astype(int) * 40.0)
+    )
+    candidate_summary = _sort_summary_frame(
+        candidate_summary,
+        sort_columns=[
+            "meets_goal",
+            "late_holdout_all_positive",
+            "late_holdout_all_non_empty",
+            "stable_priority_score",
+            "priority_score",
+            "mean_return_pct",
+            "annualized_unit_pnl_pct",
+            "max_drawdown_pct",
+        ],
+        ascending=[False, False, False, False, False, False, False, True],
+    )
+    candidate_summary["candidate_rank"] = np.arange(1, len(candidate_summary) + 1)
+    candidate_summary["candidate_variant"] = [f"U{idx}" for idx in candidate_summary["candidate_rank"]]
+    if not candidate_holdout_summary.empty:
+        candidate_holdout_summary = candidate_holdout_summary.drop(columns=["candidate_variant"], errors="ignore").merge(
+            candidate_summary[["candidate_id", "candidate_variant"]],
+            on="candidate_id",
+            how="left",
+        )
 
     best_candidate = candidate_summary.iloc[0].copy()
     best_scoped = confirmed_events[confirmed_events["stop_style"].astype(str) == str(best_candidate["stop_style"])].copy().reset_index(drop=True)
@@ -702,6 +843,7 @@ def build_hourly_asia_pump_unified_artifacts(
     best_monthly.to_csv(best_monthly_path, index=False)
     best_events.to_csv(best_events_path, index=False)
     holdout_sanity.to_csv(holdout_path, index=False)
+    candidate_holdout_summary.to_csv(candidate_holdout_path, index=False)
     robustness_summary.to_csv(robustness_path, index=False)
 
     _save_priority_equity_curve_chart(best_events, equity_chart_path)
@@ -736,6 +878,10 @@ def build_hourly_asia_pump_unified_artifacts(
             "trade_distribution": str(distribution_chart_path),
             "trade_timeline": str(timeline_chart_path),
         },
+        "selection_logic": {
+            "selection_mode": "full_year_plus_late_holdout",
+            "late_holdout_splits": [split_id for split_id, _ in _UNIFIED_HOLDOUT_SPLITS],
+        },
     }
     context_path.write_text(json.dumps(_to_json_ready(context), ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -765,6 +911,7 @@ def build_hourly_asia_pump_unified_artifacts(
                 "mean_neg_trade_pct",
                 "positive_months_count",
                 "non_positive_months_count",
+                "late_holdout_all_positive",
             ),
             header_labels={
                 "candidate_variant": "Вариант",
@@ -780,6 +927,7 @@ def build_hourly_asia_pump_unified_artifacts(
                 "mean_neg_trade_pct": "Средняя Минусовая",
                 "positive_months_count": "Плюсовых Месяцев",
                 "non_positive_months_count": "Неплюсовых Месяцев",
+                "late_holdout_all_positive": "Позднее Окно Всё Плюс",
             },
         ),
         "",
@@ -899,6 +1047,7 @@ def build_hourly_asia_pump_unified_artifacts(
         "## Вывод",
         "",
         "Оптимальный конфиг в этом отчёте выбирается по полному году целиком, без monthly-adaptive логики и без hour-specific развилок.",
+        "Дополнительно лучший вариант выбирается не только по full-year, но и с учётом late-holdout на последних месяцах.",
         (
             "Текущий лучший unified-кандидат проходит целевой минимум."
             if bool(best_candidate["meets_goal"])
@@ -931,6 +1080,7 @@ def build_hourly_asia_pump_unified_artifacts(
         "best_monthly": best_monthly_path,
         "best_events": best_events_path,
         "best_holdout": holdout_path,
+        "candidate_holdout": candidate_holdout_path,
         "best_robustness": robustness_path,
         "context": context_path,
         "report": report_path,
