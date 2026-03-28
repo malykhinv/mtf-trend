@@ -209,6 +209,8 @@ def test_build_hourly_asia_pump_static_combo_artifacts_builds_great_combo_catalo
     priority_events = pd.read_csv(artifacts["priority_selected_events"])
     priority_summary = pd.read_csv(artifacts["priority_selected_summary"])
     holdout_sanity = pd.read_csv(artifacts["great_combo_holdout_sanity"])
+    priority_topn_summary = pd.read_csv(artifacts["priority_topn_summary"])
+    combo_robustness_summary = pd.read_csv(artifacts["combo_robustness_summary"])
 
     assert artifacts["static_combo_context"].exists()
     assert len(great_catalog) == 1
@@ -222,3 +224,6 @@ def test_build_hourly_asia_pump_static_combo_artifacts_builds_great_combo_catalo
     assert int(priority_summary.iloc[0]["matched_combo_variants_count"]) == 1
     assert float(priority_summary.iloc[0]["mean_return_pct"]) >= 0.02
     assert set(holdout_sanity["split_id"].astype(str)) == {"train8_test4", "train9_test3"}
+    assert set(priority_topn_summary["top_n_variants"].astype(int)) == {1}
+    assert len(combo_robustness_summary) == 1
+    assert combo_robustness_summary.iloc[0]["combo_variant"] == "A"

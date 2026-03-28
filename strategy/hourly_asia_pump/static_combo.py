@@ -24,6 +24,8 @@ _STATIC_HOLDOUT_SPLITS: tuple[tuple[str, int], ...] = (
     ("train8_test4", 8),
     ("train9_test3", 9),
 )
+_STATIC_PRIORITY_TOP_N_VALUES: tuple[int, ...] = (1, 3, 5, 10, 20, 50, 100)
+_STATIC_LOCAL_COMPONENT_DISTANCE_MAX = 2
 
 
 def _safe_numeric(value: object) -> float | None:
@@ -488,6 +490,143 @@ def _empty_priority_summary() -> pd.DataFrame:
     )
 
 
+def _parse_component_ids(raw_value: object) -> tuple[str, ...]:
+    if raw_value is None or raw_value is pd.NA:
+        return tuple()
+    parts = [part.strip() for part in str(raw_value).split(",")]
+    return tuple(part for part in parts if part)
+
+
+def _top_k_rank(top_k_value: object) -> int:
+    try:
+        parsed = int(top_k_value)
+    except (TypeError, ValueError):
+        return 99
+    order = {1: 0, 2: 1, 99: 2}
+    return order.get(parsed, 99)
+
+
+def _build_priority_topn_summary(
+    *,
+    great_combos: pd.DataFrame,
+    combo_events: pd.DataFrame,
+) -> pd.DataFrame:
+    if great_combos.empty or combo_events.empty:
+        return pd.DataFrame()
+
+    top_n_values = [value for value in _STATIC_PRIORITY_TOP_N_VALUES if value < len(great_combos)]
+    top_n_values.append(len(great_combos))
+    rows: list[dict[str, object]] = []
+    for top_n in sorted(set(top_n_values)):
+        scoped_catalog = great_combos.head(top_n).copy()
+        priority_events = _build_priority_selected_events(combo_events=combo_events, combo_catalog=scoped_catalog)
+        summary = _summarize_events(priority_events)
+        if summary is None:
+            continue
+        rows.append(
+            {
+                "top_n_variants": int(top_n),
+                "top_variant": str(scoped_catalog.iloc[0]["combo_variant"]),
+                "last_variant": str(scoped_catalog.iloc[-1]["combo_variant"]),
+                "selected_event_count": int(len(priority_events)),
+                **summary,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _quantile_value(series: pd.Series, quantile: float) -> float | None:
+    clean = pd.to_numeric(series, errors="coerce").dropna()
+    if clean.empty:
+        return None
+    return float(clean.quantile(quantile))
+
+
+def _build_combo_robustness_summary(
+    *,
+    selected_combos: pd.DataFrame,
+    all_unique_combos: pd.DataFrame,
+) -> pd.DataFrame:
+    if selected_combos.empty or all_unique_combos.empty:
+        return pd.DataFrame()
+
+    universe = all_unique_combos.copy().reset_index(drop=True)
+    universe["component_tuple"] = universe.get("component_ids", pd.Series(dtype="object")).apply(_parse_component_ids)
+    universe["component_set"] = universe["component_tuple"].apply(set)
+    universe["top_k_rank"] = universe.get("top_k_per_timestamp", pd.Series(dtype="float64")).apply(_top_k_rank)
+
+    rows: list[dict[str, object]] = []
+    for combo in selected_combos.to_dict("records"):
+        combo_id = str(combo.get("combo_id", ""))
+        component_tuple = _parse_component_ids(combo.get("component_ids"))
+        component_set = set(component_tuple)
+        if not component_set:
+            continue
+        top_k_rank = _top_k_rank(combo.get("top_k_per_timestamp"))
+        neighbors = universe[universe.get("combo_id", pd.Series(dtype="object")).astype(str) != combo_id].copy()
+        neighbors["component_distance"] = neighbors["component_set"].apply(
+            lambda other_set: len(component_set.symmetric_difference(other_set))
+        )
+        neighbors["same_components"] = neighbors["component_tuple"].apply(lambda other_tuple: other_tuple == component_tuple)
+        neighbors["minor_component_change"] = (~neighbors["same_components"]) & (
+            neighbors["component_distance"] <= _STATIC_LOCAL_COMPONENT_DISTANCE_MAX
+        )
+        neighbors["top_k_step_distance"] = (neighbors["top_k_rank"] - top_k_rank).abs()
+
+        local_neighbors = neighbors[neighbors["same_components"] | neighbors["minor_component_change"]].copy()
+        same_component_neighbors = local_neighbors[local_neighbors["same_components"]].copy()
+        minor_change_neighbors = local_neighbors[local_neighbors["minor_component_change"]].copy()
+
+        local_goal_rate = float(pd.to_numeric(local_neighbors.get("meets_goal"), errors="coerce").fillna(0.0).mean()) if not local_neighbors.empty else None
+        minor_change_goal_rate = float(pd.to_numeric(minor_change_neighbors.get("meets_goal"), errors="coerce").fillna(0.0).mean()) if not minor_change_neighbors.empty else None
+        local_mean_p25 = _quantile_value(local_neighbors.get("mean_return_pct", pd.Series(dtype="float64")), 0.25)
+        local_dd_p75 = _quantile_value(local_neighbors.get("max_drawdown_pct", pd.Series(dtype="float64")), 0.75)
+        local_ann_median = _quantile_value(local_neighbors.get("annualized_sum_return_pct", pd.Series(dtype="float64")), 0.50)
+
+        robustness_label = "fragile"
+        if (
+            local_goal_rate is not None
+            and local_mean_p25 is not None
+            and local_dd_p75 is not None
+            and local_ann_median is not None
+        ):
+            if local_goal_rate >= 0.60 and local_mean_p25 >= 0.02 and local_dd_p75 <= 0.30 and local_ann_median >= 1.0:
+                robustness_label = "strong"
+            elif local_goal_rate >= 0.35 and local_mean_p25 >= 0.015 and local_dd_p75 <= 0.35 and local_ann_median >= 0.75:
+                robustness_label = "mixed"
+
+        rows.append(
+            {
+                "combo_variant": combo.get("combo_variant"),
+                "combo_priority": combo.get("combo_priority"),
+                "combo_id": combo_id,
+                "component_ids": combo.get("component_ids"),
+                "top_k_per_timestamp": combo.get("top_k_per_timestamp"),
+                "local_neighbors_count": int(len(local_neighbors)),
+                "same_components_other_topk_count": int(len(same_component_neighbors)),
+                "minor_component_change_count": int(len(minor_change_neighbors)),
+                "local_goal_rate": local_goal_rate,
+                "minor_change_goal_rate": minor_change_goal_rate,
+                "local_mean_return_min_pct": _quantile_value(local_neighbors.get("mean_return_pct", pd.Series(dtype="float64")), 0.0),
+                "local_mean_return_p25_pct": local_mean_p25,
+                "local_mean_return_median_pct": _quantile_value(local_neighbors.get("mean_return_pct", pd.Series(dtype="float64")), 0.50),
+                "local_mean_return_max_pct": _quantile_value(local_neighbors.get("mean_return_pct", pd.Series(dtype="float64")), 1.0),
+                "local_win_rate_min": _quantile_value(local_neighbors.get("win_rate", pd.Series(dtype="float64")), 0.0),
+                "local_win_rate_median": _quantile_value(local_neighbors.get("win_rate", pd.Series(dtype="float64")), 0.50),
+                "local_win_rate_max": _quantile_value(local_neighbors.get("win_rate", pd.Series(dtype="float64")), 1.0),
+                "local_annualized_min_pct": _quantile_value(local_neighbors.get("annualized_sum_return_pct", pd.Series(dtype="float64")), 0.0),
+                "local_annualized_median_pct": local_ann_median,
+                "local_annualized_max_pct": _quantile_value(local_neighbors.get("annualized_sum_return_pct", pd.Series(dtype="float64")), 1.0),
+                "local_dd_min_pct": _quantile_value(local_neighbors.get("max_drawdown_pct", pd.Series(dtype="float64")), 0.0),
+                "local_dd_p75_pct": local_dd_p75,
+                "local_dd_max_pct": _quantile_value(local_neighbors.get("max_drawdown_pct", pd.Series(dtype="float64")), 1.0),
+                "robustness_label": robustness_label,
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 def build_hourly_asia_pump_static_combo_artifacts(
     *,
     base_events_path: Path | str,
@@ -570,6 +709,11 @@ def build_hourly_asia_pump_static_combo_artifacts(
     priority_summary["matched_combo_variants_count"] = int(great_combos["combo_variant"].nunique()) if not great_combos.empty and "combo_variant" in great_combos.columns else 0
 
     holdout_sanity = _build_holdout_sanity_rows(combo_summary=great_combos, combo_events_by_id=combo_events_by_id)
+    priority_topn_summary = _build_priority_topn_summary(great_combos=great_combos, combo_events=combo_events_all)
+    combo_robustness_summary = _build_combo_robustness_summary(
+        selected_combos=great_combos,
+        all_unique_combos=unique_combo_summary,
+    )
     priority_holdout_sanity_rows: list[dict[str, object]] = []
     if not priority_events.empty:
         months = sorted(priority_events["month_utc"].dropna().astype(str).unique().tolist())
@@ -613,6 +757,10 @@ def build_hourly_asia_pump_static_combo_artifacts(
     holdout_sanity.to_csv(holdout_sanity_path, index=False)
     priority_holdout_sanity_path = output_path / "priority_selected_holdout_sanity.csv"
     priority_holdout_sanity.to_csv(priority_holdout_sanity_path, index=False)
+    priority_topn_summary_path = output_path / "priority_topn_summary.csv"
+    priority_topn_summary.to_csv(priority_topn_summary_path, index=False)
+    combo_robustness_summary_path = output_path / "combo_robustness_summary.csv"
+    combo_robustness_summary.to_csv(combo_robustness_summary_path, index=False)
 
     context = {
         "base_events_path": str(Path(base_events_path)),
@@ -639,6 +787,8 @@ def build_hourly_asia_pump_static_combo_artifacts(
         "priority_selected_summary": priority_summary_path,
         "great_combo_holdout_sanity": holdout_sanity_path,
         "priority_selected_holdout_sanity": priority_holdout_sanity_path,
+        "priority_topn_summary": priority_topn_summary_path,
+        "combo_robustness_summary": combo_robustness_summary_path,
         "static_combo_context": context_path,
     }
 
