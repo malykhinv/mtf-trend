@@ -30,6 +30,26 @@ def _build_flat_frame(*, start: str, periods: int, freq: str) -> pd.DataFrame:
     return frame
 
 
+def _aggregate_ohlcv(frame: pd.DataFrame, freq: str) -> pd.DataFrame:
+    indexed = frame.copy()
+    indexed["datetime_utc"] = pd.to_datetime(indexed["timestamp"], unit="ms", utc=True)
+    aggregated = (
+        indexed.set_index("datetime_utc")
+        .resample(freq, label="left", closed="left")
+        .agg(
+            open=("open", "first"),
+            high=("high", "max"),
+            low=("low", "min"),
+            close=("close", "last"),
+            volume=("volume", "sum"),
+        )
+        .dropna()
+        .reset_index()
+    )
+    aggregated["timestamp"] = (aggregated["datetime_utc"].astype("int64") // 1_000_000).astype("int64")
+    return aggregated[["timestamp", "open", "high", "low", "close", "volume"]]
+
+
 def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_path: Path) -> None:
     cache_dir = tmp_path / "cache"
     frame = _build_flat_frame(start="2026-01-01 12:00:00", periods=900, freq="1min")
@@ -62,9 +82,12 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
     early_entry_summary = pd.read_csv(artifacts["early_entry_summary"])
     trade_model_events = pd.read_csv(artifacts["trade_model_events"])
     trade_model_summary = pd.read_csv(artifacts["trade_model_summary"])
+    trade_portfolio_component_events = pd.read_csv(artifacts["trade_portfolio_component_events"])
     trade_portfolio_events = pd.read_csv(artifacts["trade_portfolio_events"])
     trade_portfolio_summary = pd.read_csv(artifacts["trade_portfolio_summary"])
     trade_portfolio_monthly = pd.read_csv(artifacts["trade_portfolio_monthly"])
+    trade_portfolio_walk_forward_folds = pd.read_csv(artifacts["trade_portfolio_walk_forward_folds"])
+    trade_portfolio_walk_forward_summary = pd.read_csv(artifacts["trade_portfolio_walk_forward_summary"])
 
     assert artifacts["report"].exists()
     assert len(selected_events) == 1
@@ -87,11 +110,21 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
         "trade_model_id",
         "trade_triggered",
         "exit_reason",
+        "entry_sequence_source",
+        "entry_sequence_status",
+        "entry_bar_stop_ambiguous",
         "pre_entry_pullback_frac",
         "pre_entry_red_volume_frac",
         "pre_entry_low_frac_of_trigger_range",
     } <= set(trade_model_events.columns)
-    assert {"trade_model_id", "trades_count", "profit_factor", "trades_per_year"} <= set(trade_model_summary.columns)
+    assert {
+        "trade_model_id",
+        "trades_count",
+        "profit_factor",
+        "trades_per_year",
+        "sequenced_entry_rate",
+        "entry_bar_ambiguous_rate",
+    } <= set(trade_model_summary.columns)
     assert int(trade_model_summary["trades_count"].max()) >= 1
     assert {
         "context_monster_5pct",
@@ -107,15 +140,103 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
         "trade_portfolio_id",
         "portfolio_component_model_id",
         "trade_portfolio_label",
+    } <= set(trade_portfolio_component_events.columns)
+    assert {
+        "trade_portfolio_id",
+        "trade_portfolio_label",
+        "portfolio_component_count",
+        "portfolio_component_model_ids",
+        "portfolio_has_ambiguous_entry",
     } <= set(trade_portfolio_events.columns)
     assert {
         "trade_portfolio_id",
         "trades_count",
+        "mean_component_count",
+        "ambiguous_entry_rate",
         "positive_months_count",
         "all_active_months_positive",
     } <= set(trade_portfolio_summary.columns)
     assert {
+        "single_context_uq_65_no3",
+        "single_context_close_65",
+        "single_context_uq_65_tight_mid",
+        "single_monster_break_5pct_h1",
         "stacked_context_core_65",
         "stacked_context_all_positive_v1",
     } <= set(trade_portfolio_summary["trade_portfolio_id"].dropna().astype(str))
     assert {"trade_portfolio_id", "month_utc", "total_return_pct", "month_positive"} <= set(trade_portfolio_monthly.columns)
+    assert {
+        "timeframe",
+        "folds_count",
+        "oos_trades_count",
+        "oos_mean_return_pct",
+        "all_active_test_months_positive",
+    } <= set(trade_portfolio_walk_forward_summary.columns)
+    assert {
+        "timeframe",
+        "walk_forward_fold",
+        "test_month_utc",
+        "selected_trade_portfolio_id",
+        "test_trades_count",
+    } <= set(trade_portfolio_walk_forward_folds.columns)
+
+
+def test_trade_model_execution_sequences_entry_bar_with_m1_data(tmp_path: Path) -> None:
+    cache_dir = tmp_path / "cache"
+    frame_1m = _build_flat_frame(start="2026-01-01 12:00:00", periods=900, freq="1min")
+
+    pump_rows = [
+        (780, 100.0, 103.0, 100.0, 103.0, 40.0),
+        (781, 103.0, 106.0, 103.0, 105.0, 40.0),
+        (782, 105.0, 107.0, 105.0, 106.5, 40.0),
+        (783, 106.5, 108.0, 106.5, 107.5, 40.0),
+        (784, 107.5, 109.0, 107.5, 108.0, 40.0),
+        (785, 108.0, 110.0, 99.0, 101.0, 55.0),
+        (786, 101.0, 101.5, 100.0, 100.5, 15.0),
+        (787, 100.5, 101.0, 100.0, 100.4, 12.0),
+        (788, 100.4, 100.9, 99.8, 100.2, 11.0),
+        (789, 100.2, 100.5, 99.7, 100.0, 10.0),
+    ]
+    for idx, open_price, high_price, low_price, close_price, volume in pump_rows:
+        frame_1m.loc[idx, ["open", "high", "low", "close", "volume"]] = [
+            open_price,
+            high_price,
+            low_price,
+            close_price,
+            volume,
+        ]
+
+    frame_5m = _aggregate_ohlcv(frame_1m, "5min")
+    _write_symbol_cache(cache_dir, "AAA/USDT", Timeframe.M1, frame_1m)
+    _write_symbol_cache(cache_dir, "AAA/USDT", Timeframe.M5, frame_5m)
+
+    output_dir = tmp_path / "research_m5"
+    artifacts = build_hourly_asia_pump_research_artifacts(
+        cache_dir=cache_dir,
+        output_dir=output_dir,
+        timeframes=[Timeframe.M5],
+        asia_start_hour_utc=0,
+        asia_end_hour_utc=9,
+        trigger_minute=0,
+        max_follow_minutes=120,
+        selection_profile="balanced",
+    )
+
+    trade_model_events = pd.read_csv(artifacts["trade_model_events"])
+    portfolio_events = pd.read_csv(artifacts["trade_portfolio_events"])
+
+    sequenced_trade = trade_model_events[
+        (trade_model_events["trade_model_id"].astype(str) == "monster_break_5pct")
+        & (trade_model_events["trade_triggered"].astype(str).str.lower() == "true")
+    ].iloc[0]
+    assert sequenced_trade["entry_sequence_source"] == "m1"
+    assert sequenced_trade["entry_sequence_status"] == "ambiguous_same_minute_stop"
+    assert bool(sequenced_trade["entry_bar_stop_hit"]) is True
+    assert bool(sequenced_trade["entry_bar_stop_ambiguous"]) is True
+    assert sequenced_trade["exit_reason"] == "entry_bar_stop"
+
+    portfolio_trade = portfolio_events[
+        portfolio_events["trade_portfolio_id"].astype(str) == "single_monster_break_5pct_h1"
+    ].iloc[0]
+    assert int(portfolio_trade["portfolio_component_count"]) == 1
+    assert bool(portfolio_trade["portfolio_has_ambiguous_entry"]) is True

@@ -38,6 +38,7 @@ module_logger = logging.getLogger(__name__)
 _HORIZON_MINUTES: tuple[int, ...] = (5, 15, 30, 60)
 _EARLY_ENTRY_TARGET_PCTS: tuple[float, ...] = (0.01, 0.02, 0.05, 0.10)
 _LAST_RED_LOOKBACK_MINUTES = 60
+_WALK_FORWARD_MIN_TRAIN_MONTHS = 6
 
 
 def _timeframe_minutes(timeframe: Timeframe) -> int:
@@ -68,6 +69,12 @@ def _progress_snapshot(*, completed: int, total: int, started_at: float) -> tupl
         return 0.0, elapsed, None
     eta_seconds = (elapsed / ratio) - elapsed
     return ratio * 100.0, elapsed, max(0.0, eta_seconds)
+
+
+def _lower_timeframe_for_execution(timeframe: Timeframe) -> Timeframe | None:
+    if timeframe == Timeframe.M1:
+        return None
+    return Timeframe.M1
 
 
 def _safe_numeric(value: object) -> float | None:
@@ -1026,6 +1033,154 @@ def _find_trade_model_entry(
     return no_entry
 
 
+def _resolve_entry_bar_execution(
+    *,
+    model: HourlyAsiaPumpTradeModel,
+    timeframe: Timeframe,
+    row_index: int,
+    entry_idx: int,
+    entry_price: float,
+    initial_stop_price: float,
+    trigger_timestamp_ms: int,
+    timestamp_values: Any,
+    high_values: Any,
+    commission_rate: float,
+    partial_target_pct: float,
+    partial_target_price: float,
+    micro_open_values: Any | None,
+    micro_high_values: Any | None,
+    micro_low_values: Any | None,
+    micro_timestamp_values: Any | None,
+) -> dict[str, object]:
+    entry_bar_timestamp_ms = int(timestamp_values[entry_idx])
+    default_entry_timestamp_ms = entry_bar_timestamp_ms
+    highest_high = max(entry_price, float(high_values[entry_idx]))
+    current_stop = initial_stop_price
+    remaining_fraction = 1.0
+    realized_return_pct = -commission_rate
+    partial_taken = False
+
+    result: dict[str, object] = {
+        "entry_timestamp_ms": default_entry_timestamp_ms,
+        "entry_timestamp_utc": pd.to_datetime(default_entry_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S"),
+        "entry_delay_bars": entry_idx - row_index,
+        "entry_delay_minutes": (default_entry_timestamp_ms - trigger_timestamp_ms) / 60_000.0,
+        "entry_sequence_source": "native_ohlc",
+        "entry_sequence_status": "not_sequenced",
+        "entry_sequence_micro_bars": 0,
+        "entry_bar_stop_hit": False,
+        "entry_bar_stop_ambiguous": False,
+        "current_stop": current_stop,
+        "remaining_fraction": remaining_fraction,
+        "realized_return_pct": realized_return_pct,
+        "partial_taken": partial_taken,
+        "highest_high": highest_high,
+        "exit_in_entry_bar": False,
+        "exit_reason": None,
+        "exit_timestamp_ms": None,
+        "exit_timestamp_utc": None,
+    }
+
+    if (
+        micro_open_values is None
+        or micro_high_values is None
+        or micro_low_values is None
+        or micro_timestamp_values is None
+        or timeframe == Timeframe.M1
+    ):
+        return result
+
+    tf_ms = timeframe.to_milliseconds()
+    entry_bar_end_ms = entry_bar_timestamp_ms + tf_ms
+    micro_start_idx = int(micro_timestamp_values.searchsorted(entry_bar_timestamp_ms, side="left"))
+    micro_end_idx = int(micro_timestamp_values.searchsorted(entry_bar_end_ms, side="left"))
+    if micro_start_idx >= micro_end_idx:
+        result["entry_sequence_source"] = "m1_missing"
+        result["entry_sequence_status"] = "m1_unavailable"
+        return result
+
+    entered = False
+    for micro_idx in range(micro_start_idx, micro_end_idx):
+        micro_timestamp_ms = int(micro_timestamp_values[micro_idx])
+        micro_high = float(micro_high_values[micro_idx])
+        micro_low = float(micro_low_values[micro_idx])
+
+        result["entry_sequence_source"] = "m1"
+        result["entry_sequence_micro_bars"] = result["entry_sequence_micro_bars"] + 1
+
+        if not entered:
+            if micro_high < entry_price:
+                continue
+            entered = True
+            result["entry_timestamp_ms"] = micro_timestamp_ms
+            result["entry_timestamp_utc"] = pd.to_datetime(micro_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S")
+            result["entry_delay_minutes"] = (micro_timestamp_ms - trigger_timestamp_ms) / 60_000.0
+            result["entry_sequence_status"] = "confirmed_m1"
+            highest_high = entry_price
+
+            if micro_low <= current_stop:
+                result["entry_bar_stop_hit"] = True
+                result["entry_bar_stop_ambiguous"] = True
+                result["entry_sequence_status"] = "ambiguous_same_minute_stop"
+                result["realized_return_pct"] = realized_return_pct + (((current_stop / entry_price) - 1.0) - commission_rate)
+                result["remaining_fraction"] = 0.0
+                result["highest_high"] = entry_price
+                result["exit_in_entry_bar"] = True
+                result["exit_reason"] = "entry_bar_stop"
+                result["exit_timestamp_ms"] = micro_timestamp_ms
+                result["exit_timestamp_utc"] = result["entry_timestamp_utc"]
+                return result
+
+            highest_high = max(highest_high, micro_high)
+            if (
+                model.partial_fraction > 0.0
+                and partial_target_pct > 0.0
+                and not partial_taken
+                and micro_high >= partial_target_price
+            ):
+                realized_return_pct += model.partial_fraction * (partial_target_pct - commission_rate)
+                remaining_fraction = max(0.0, remaining_fraction - model.partial_fraction)
+                partial_taken = True
+                if model.move_stop_to_be_after_partial:
+                    current_stop = max(current_stop, entry_price)
+            continue
+
+        if micro_low <= current_stop:
+            result["entry_bar_stop_hit"] = True
+            result["realized_return_pct"] = realized_return_pct + (remaining_fraction * (((current_stop / entry_price) - 1.0) - commission_rate))
+            result["remaining_fraction"] = 0.0
+            result["partial_taken"] = partial_taken
+            result["highest_high"] = highest_high
+            result["current_stop"] = current_stop
+            result["exit_in_entry_bar"] = True
+            result["exit_reason"] = "entry_bar_stop"
+            result["exit_timestamp_ms"] = micro_timestamp_ms
+            result["exit_timestamp_utc"] = pd.to_datetime(micro_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S")
+            return result
+
+        highest_high = max(highest_high, micro_high)
+        if (
+            model.partial_fraction > 0.0
+            and partial_target_pct > 0.0
+            and not partial_taken
+            and micro_high >= partial_target_price
+        ):
+            realized_return_pct += model.partial_fraction * (partial_target_pct - commission_rate)
+            remaining_fraction = max(0.0, remaining_fraction - model.partial_fraction)
+            partial_taken = True
+            if model.move_stop_to_be_after_partial:
+                current_stop = max(current_stop, entry_price)
+
+    result["realized_return_pct"] = realized_return_pct
+    result["remaining_fraction"] = remaining_fraction
+    result["partial_taken"] = partial_taken
+    result["highest_high"] = highest_high
+    result["current_stop"] = current_stop
+    if not entered:
+        result["entry_sequence_status"] = "m1_touch_missing"
+    return result
+
+
 def _simulate_trade_model_from_entry(
     *,
     model: HourlyAsiaPumpTradeModel,
@@ -1040,10 +1195,15 @@ def _simulate_trade_model_from_entry(
     entry_price: float,
     initial_stop_price: float,
     commission_rate: float,
+    micro_open_values: Any | None = None,
+    micro_high_values: Any | None = None,
+    micro_low_values: Any | None = None,
+    micro_timestamp_values: Any | None = None,
 ) -> dict[str, object]:
     tf_minutes = _timeframe_minutes(timeframe)
     end_idx = min(len(close_values) - 1, entry_idx + _bars_for_minutes(timeframe, model.max_hold_minutes))
     risk_pct = (entry_price - initial_stop_price) / entry_price if entry_price > 0 else None
+    trigger_timestamp_ms = int(timestamp_values[row_index])
 
     base_result: dict[str, object] = {
         "trade_triggered": True,
@@ -1051,6 +1211,11 @@ def _simulate_trade_model_from_entry(
         "entry_timestamp_utc": pd.to_datetime(int(timestamp_values[entry_idx]), unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S"),
         "entry_delay_bars": entry_idx - row_index,
         "entry_delay_minutes": (entry_idx - row_index) * tf_minutes,
+        "entry_sequence_source": "native_ohlc",
+        "entry_sequence_status": "not_sequenced",
+        "entry_sequence_micro_bars": 0,
+        "entry_bar_stop_hit": False,
+        "entry_bar_stop_ambiguous": False,
         "initial_risk_pct": risk_pct,
         "exit_reason": "invalid_risk",
         "exit_timestamp_ms": None,
@@ -1076,15 +1241,69 @@ def _simulate_trade_model_from_entry(
     partial_target_pct = max(model.partial_take_pct, target_from_r)
     partial_target_price = entry_price * (1.0 + partial_target_pct)
 
-    current_stop = initial_stop_price
-    remaining_fraction = 1.0
-    realized_return_pct = -commission_rate
-    partial_taken = False
+    entry_execution = _resolve_entry_bar_execution(
+        model=model,
+        timeframe=timeframe,
+        row_index=row_index,
+        entry_idx=entry_idx,
+        entry_price=entry_price,
+        initial_stop_price=initial_stop_price,
+        trigger_timestamp_ms=trigger_timestamp_ms,
+        timestamp_values=timestamp_values,
+        high_values=high_values,
+        commission_rate=commission_rate,
+        partial_target_pct=partial_target_pct,
+        partial_target_price=partial_target_price,
+        micro_open_values=micro_open_values,
+        micro_high_values=micro_high_values,
+        micro_low_values=micro_low_values,
+        micro_timestamp_values=micro_timestamp_values,
+    )
+    current_stop = float(entry_execution["current_stop"])
+    remaining_fraction = float(entry_execution["remaining_fraction"])
+    realized_return_pct = float(entry_execution["realized_return_pct"])
+    partial_taken = bool(entry_execution["partial_taken"])
     last_red_low: float | None = None
-    highest_high = max(entry_price, float(high_values[entry_idx]))
+    highest_high = float(entry_execution["highest_high"])
     exit_idx: int | None = None
     exit_reason = "time_exit"
     trail_active = model.trail_activation_pct <= 0.0
+
+    base_result = {
+        **base_result,
+        "entry_timestamp_ms": int(entry_execution["entry_timestamp_ms"]),
+        "entry_timestamp_utc": str(entry_execution["entry_timestamp_utc"]),
+        "entry_delay_minutes": float(entry_execution["entry_delay_minutes"]),
+        "entry_sequence_source": str(entry_execution["entry_sequence_source"]),
+        "entry_sequence_status": str(entry_execution["entry_sequence_status"]),
+        "entry_sequence_micro_bars": int(entry_execution["entry_sequence_micro_bars"]),
+        "entry_bar_stop_hit": bool(entry_execution["entry_bar_stop_hit"]),
+        "entry_bar_stop_ambiguous": bool(entry_execution["entry_bar_stop_ambiguous"]),
+    }
+
+    if bool(entry_execution["exit_in_entry_bar"]):
+        max_return_after_entry_pct = (highest_high / entry_price) - 1.0
+        exit_timestamp_ms = int(entry_execution["exit_timestamp_ms"]) if entry_execution["exit_timestamp_ms"] is not None else int(timestamp_values[entry_idx])
+        realized_exit_return_pct = float(entry_execution["realized_return_pct"])
+        result = {
+            **base_result,
+            "exit_reason": str(entry_execution["exit_reason"]),
+            "exit_timestamp_ms": exit_timestamp_ms,
+            "exit_timestamp_utc": str(entry_execution["exit_timestamp_utc"]),
+            "exit_return_pct": realized_exit_return_pct,
+            "exit_r_multiple": realized_exit_return_pct / risk_pct if risk_pct > 0 else None,
+            "max_return_after_entry_pct": max_return_after_entry_pct,
+            "max_r_multiple": max_return_after_entry_pct / risk_pct if risk_pct > 0 else None,
+            "bars_held_after_entry": 0,
+            "minutes_held_after_entry": 0.0,
+            "partial_taken": partial_taken,
+            "realized_ge_5pct": realized_exit_return_pct >= 0.05,
+            "realized_ge_10pct": realized_exit_return_pct >= 0.10,
+        }
+        for target_pct in _EARLY_ENTRY_TARGET_PCTS:
+            pct_label = int(round(target_pct * 100))
+            result[f"mfe_ge_{pct_label}pct"] = max_return_after_entry_pct >= target_pct
+        return result
 
     for idx in range(entry_idx + 1, end_idx + 1):
         low_value = float(low_values[idx])
@@ -1184,6 +1403,20 @@ def _build_trade_model_events_for_timeframe(
         frame = preparer.load_symbol_data(symbol, timeframe)
         if frame.empty:
             continue
+        lower_timeframe = _lower_timeframe_for_execution(timeframe)
+        micro_open_values: Any | None = None
+        micro_high_values: Any | None = None
+        micro_low_values: Any | None = None
+        micro_timestamp_values: Any | None = None
+        if lower_timeframe is not None:
+            microframe = preparer.load_symbol_data(symbol, lower_timeframe)
+            if not microframe.empty:
+                micro_open_values = pd.to_numeric(microframe["open"], errors="coerce").to_numpy(dtype="float64")
+                micro_high_values = pd.to_numeric(microframe["high"], errors="coerce").to_numpy(dtype="float64")
+                micro_low_values = pd.to_numeric(microframe["low"], errors="coerce").to_numpy(dtype="float64")
+                micro_timestamp_values = (
+                    pd.to_numeric(microframe["timestamp"], errors="coerce").fillna(0).astype("int64").to_numpy()
+                )
         open_values = pd.to_numeric(frame["open"], errors="coerce").to_numpy(dtype="float64")
         high_values = pd.to_numeric(frame["high"], errors="coerce").to_numpy(dtype="float64")
         low_values = pd.to_numeric(frame["low"], errors="coerce").to_numpy(dtype="float64")
@@ -1244,6 +1477,10 @@ def _build_trade_model_events_for_timeframe(
                     entry_price=float(entry["entry_price"]),
                     initial_stop_price=float(entry["initial_stop_price"]),
                     commission_rate=commission_rate,
+                    micro_open_values=micro_open_values,
+                    micro_high_values=micro_high_values,
+                    micro_low_values=micro_low_values,
+                    micro_timestamp_values=micro_timestamp_values,
                 )
                 rows.append(
                     {
@@ -1323,6 +1560,9 @@ def _build_trade_model_summary(trade_model_events: pd.DataFrame) -> pd.DataFrame
                 "realized_ge_10pct_rate": _mean_or_none(trades.get("realized_ge_10pct", pd.Series(dtype="float64"))),
                 "median_hold_minutes": _median_or_none(trades.get("minutes_held_after_entry", pd.Series(dtype="float64"))),
                 "median_initial_risk_pct": _median_or_none(trades.get("initial_risk_pct", pd.Series(dtype="float64"))),
+                "sequenced_entry_rate": _mean_or_none((trades.get("entry_sequence_source", pd.Series(dtype="object")).astype(str) == "m1").astype("float64")),
+                "entry_bar_stop_rate": _mean_or_none(trades.get("entry_bar_stop_hit", pd.Series(dtype="float64"))),
+                "entry_bar_ambiguous_rate": _mean_or_none(trades.get("entry_bar_stop_ambiguous", pd.Series(dtype="float64"))),
                 "meets_50_trades_per_year": trades_per_year >= 50.0,
                 "meets_150_trades_per_year": trades_per_year >= 150.0,
             }
@@ -1357,7 +1597,7 @@ def _filter_trade_portfolio_component_rows(
     return rows
 
 
-def _build_trade_portfolio_events(
+def _build_trade_portfolio_component_events(
     trade_model_events: pd.DataFrame,
     portfolios: Sequence[HourlyAsiaPumpTradePortfolio],
 ) -> pd.DataFrame:
@@ -1391,6 +1631,138 @@ def _build_trade_portfolio_events(
     return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame()
 
 
+def _month_labels_from_entry(frame: pd.DataFrame) -> pd.Series:
+    entry_timestamps = pd.to_datetime(
+        frame.get("entry_timestamp_ms", pd.Series(dtype="float64")),
+        unit="ms",
+        utc=True,
+        errors="coerce",
+    )
+    return entry_timestamps.dt.tz_localize(None).dt.to_period("M").astype(str)
+
+
+def _monthly_returns_from_events(events: pd.DataFrame) -> pd.Series:
+    if events.empty:
+        return pd.Series(dtype="float64")
+    frame = events.copy()
+    if "month_utc" not in frame.columns:
+        frame["month_utc"] = _month_labels_from_entry(frame)
+    frame["exit_return_pct"] = pd.to_numeric(frame.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce")
+    monthly = (
+        frame.dropna(subset=["month_utc"])
+        .groupby("month_utc", sort=True)["exit_return_pct"]
+        .sum(min_count=1)
+        .dropna()
+    )
+    return monthly
+
+
+def _build_trade_portfolio_events(trade_portfolio_component_events: pd.DataFrame) -> pd.DataFrame:
+    if trade_portfolio_component_events.empty:
+        return pd.DataFrame()
+
+    rows: list[dict[str, object]] = []
+    grouped = trade_portfolio_component_events.groupby(
+        ["timeframe", "trade_portfolio_id", "trade_portfolio_label", "trade_portfolio_mode", "symbol", "timestamp_ms"],
+        sort=True,
+    )
+    for (timeframe, portfolio_id, portfolio_label, portfolio_mode, symbol, timestamp_ms), group in grouped:
+        sorted_group = group.sort_values(["entry_timestamp_ms", "trade_model_id"], na_position="last").copy()
+        first = sorted_group.iloc[0]
+        exit_returns = pd.to_numeric(sorted_group.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce").dropna()
+        entry_timestamps = pd.to_numeric(sorted_group.get("entry_timestamp_ms", pd.Series(dtype="float64")), errors="coerce").dropna()
+        exit_timestamps = pd.to_numeric(sorted_group.get("exit_timestamp_ms", pd.Series(dtype="float64")), errors="coerce").dropna()
+        ambiguous_entries = sorted_group.get(
+            "entry_bar_stop_ambiguous",
+            pd.Series(False, index=sorted_group.index, dtype="boolean"),
+        ).astype("boolean").fillna(False)
+        stop_hits = sorted_group.get(
+            "entry_bar_stop_hit",
+            pd.Series(False, index=sorted_group.index, dtype="boolean"),
+        ).astype("boolean").fillna(False)
+        component_model_ids = sorted(sorted_group.get("portfolio_component_model_id", pd.Series(dtype="object")).dropna().astype(str).unique().tolist())
+        component_labels = sorted(sorted_group.get("trade_model_label", pd.Series(dtype="object")).dropna().astype(str).unique().tolist())
+        entry_sequence_sources = sorted(sorted_group.get("entry_sequence_source", pd.Series(dtype="object")).dropna().astype(str).unique().tolist())
+        entry_sequence_statuses = sorted(sorted_group.get("entry_sequence_status", pd.Series(dtype="object")).dropna().astype(str).unique().tolist())
+        signal_return_pct = _mean_or_none(exit_returns)
+        signal_mfe_pct = _mean_or_none(sorted_group.get("max_return_after_entry_pct", pd.Series(dtype="float64")))
+        entry_timestamp_ms = int(entry_timestamps.min()) if not entry_timestamps.empty else None
+        exit_timestamp_ms = int(exit_timestamps.max()) if not exit_timestamps.empty else None
+        month_utc = (
+            pd.to_datetime(entry_timestamp_ms, unit="ms", utc=True).tz_localize(None).to_period("M").strftime("%Y-%m")
+            if entry_timestamp_ms is not None
+            else None
+        )
+        rows.append(
+            {
+                "timeframe": timeframe,
+                "trade_portfolio_id": portfolio_id,
+                "trade_portfolio_label": portfolio_label,
+                "trade_portfolio_mode": portfolio_mode,
+                "trade_triggered": True,
+                "symbol": symbol,
+                "timestamp_ms": int(timestamp_ms),
+                "timestamp_utc": first.get("timestamp_utc"),
+                "date_utc": first.get("date_utc"),
+                "hour_utc": first.get("hour_utc"),
+                "selection_profile": first.get("selection_profile"),
+                "month_utc": month_utc,
+                "portfolio_component_count": int(len(sorted_group)),
+                "portfolio_component_model_ids": ",".join(component_model_ids),
+                "portfolio_component_labels": ",".join(component_labels),
+                "portfolio_entry_sequence_sources": ",".join(entry_sequence_sources),
+                "portfolio_entry_sequence_statuses": ",".join(entry_sequence_statuses),
+                "portfolio_sequenced_component_count": int((sorted_group.get("entry_sequence_source", pd.Series(dtype="object")).astype(str) == "m1").sum()),
+                "portfolio_ambiguous_component_count": int(ambiguous_entries.sum()),
+                "portfolio_has_entry_bar_stop": bool(stop_hits.any()),
+                "portfolio_has_ambiguous_entry": bool(ambiguous_entries.any()),
+                "entry_timestamp_ms": entry_timestamp_ms,
+                "entry_timestamp_utc": (
+                    pd.to_datetime(entry_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S")
+                    if entry_timestamp_ms is not None
+                    else None
+                ),
+                "entry_delay_minutes": _mean_or_none(sorted_group.get("entry_delay_minutes", pd.Series(dtype="float64"))),
+                "exit_timestamp_ms": exit_timestamp_ms,
+                "exit_timestamp_utc": (
+                    pd.to_datetime(exit_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S")
+                    if exit_timestamp_ms is not None
+                    else None
+                ),
+                "exit_reason": "portfolio_blend",
+                "exit_return_pct": signal_return_pct,
+                "max_return_after_entry_pct": signal_mfe_pct,
+                "minutes_held_after_entry": _mean_or_none(sorted_group.get("minutes_held_after_entry", pd.Series(dtype="float64"))),
+                "initial_risk_pct": _mean_or_none(sorted_group.get("initial_risk_pct", pd.Series(dtype="float64"))),
+                "realized_ge_5pct": (signal_return_pct is not None and signal_return_pct >= 0.05),
+                "realized_ge_10pct": (signal_return_pct is not None and signal_return_pct >= 0.10),
+                "mfe_ge_5pct": (signal_mfe_pct is not None and signal_mfe_pct >= 0.05),
+                "mfe_ge_10pct": (signal_mfe_pct is not None and signal_mfe_pct >= 0.10),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _sort_trade_portfolio_summary(summary: pd.DataFrame) -> pd.DataFrame:
+    if summary.empty:
+        return summary
+    return summary.sort_values(
+        [
+            "timeframe",
+            "meets_50_trades_per_year",
+            "all_active_months_positive",
+            "non_positive_months_count",
+            "mean_return_pct",
+            "win_rate",
+            "annual_sum_return_pct",
+            "profit_factor",
+            "trades_count",
+        ],
+        ascending=[True, False, False, True, False, False, False, False, False],
+        na_position="last",
+    ).reset_index(drop=True)
+
+
 def _build_trade_portfolio_summary(trade_portfolio_events: pd.DataFrame) -> pd.DataFrame:
     if trade_portfolio_events.empty:
         return pd.DataFrame()
@@ -1412,25 +1784,7 @@ def _build_trade_portfolio_summary(trade_portfolio_events: pd.DataFrame) -> pd.D
         )
         trades_per_year = (len(group) / span_days) * 365.0 if len(group) > 0 else 0.0
         exit_returns = pd.to_numeric(group.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce").dropna()
-        months = pd.to_datetime(
-            group.get("entry_timestamp_ms", pd.Series(dtype="float64")),
-            unit="ms",
-            utc=True,
-            errors="coerce",
-        ).dropna()
-        monthly_returns = (
-            pd.DataFrame(
-                {
-                    "month_utc": months.dt.tz_localize(None).dt.to_period("M").astype(str),
-                    "exit_return_pct": pd.to_numeric(
-                        group.loc[months.index, "exit_return_pct"],
-                        errors="coerce",
-                    ).to_numpy(),
-                }
-            )
-            .groupby("month_utc", sort=True)["exit_return_pct"]
-            .sum()
-        )
+        monthly_returns = _monthly_returns_from_events(group)
         rows.append(
             {
                 "timeframe": timeframe,
@@ -1450,6 +1804,12 @@ def _build_trade_portfolio_summary(trade_portfolio_events: pd.DataFrame) -> pd.D
                 "realized_ge_5pct_rate": _mean_or_none(group.get("realized_ge_5pct", pd.Series(dtype="float64"))),
                 "realized_ge_10pct_rate": _mean_or_none(group.get("realized_ge_10pct", pd.Series(dtype="float64"))),
                 "median_hold_minutes": _median_or_none(group.get("minutes_held_after_entry", pd.Series(dtype="float64"))),
+                "mean_component_count": _mean_or_none(group.get("portfolio_component_count", pd.Series(dtype="float64"))),
+                "ambiguous_entry_rate": _mean_or_none(group.get("portfolio_has_ambiguous_entry", pd.Series(dtype="float64"))),
+                "sequenced_component_share": _mean_or_none(
+                    pd.to_numeric(group.get("portfolio_sequenced_component_count", pd.Series(dtype="float64")), errors="coerce")
+                    / pd.to_numeric(group.get("portfolio_component_count", pd.Series(dtype="float64")), errors="coerce").replace(0, pd.NA)
+                ),
                 "positive_months_count": int((monthly_returns > 0).sum()),
                 "non_positive_months_count": int((monthly_returns <= 0).sum()),
                 "all_active_months_positive": bool((monthly_returns > 0).all()) if not monthly_returns.empty else False,
@@ -1461,12 +1821,7 @@ def _build_trade_portfolio_summary(trade_portfolio_events: pd.DataFrame) -> pd.D
             }
         )
 
-    summary = pd.DataFrame(rows)
-    return summary.sort_values(
-        ["timeframe", "all_active_months_positive", "mean_return_pct", "profit_factor", "trades_count"],
-        ascending=[True, False, False, False, False],
-        na_position="last",
-    ).reset_index(drop=True)
+    return _sort_trade_portfolio_summary(pd.DataFrame(rows))
 
 
 def _build_trade_portfolio_monthly(trade_portfolio_events: pd.DataFrame) -> pd.DataFrame:
@@ -1474,13 +1829,8 @@ def _build_trade_portfolio_monthly(trade_portfolio_events: pd.DataFrame) -> pd.D
         return pd.DataFrame()
 
     frame = trade_portfolio_events.copy()
-    entry_timestamps = pd.to_datetime(
-        frame.get("entry_timestamp_ms", pd.Series(dtype="float64")),
-        unit="ms",
-        utc=True,
-        errors="coerce",
-    )
-    frame["month_utc"] = entry_timestamps.dt.tz_localize(None).dt.to_period("M").astype(str)
+    if "month_utc" not in frame.columns:
+        frame["month_utc"] = _month_labels_from_entry(frame)
     frame["exit_return_pct"] = pd.to_numeric(frame.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce")
     monthly = (
         frame.groupby(["timeframe", "trade_portfolio_id", "trade_portfolio_label", "month_utc"], sort=True)
@@ -1494,6 +1844,197 @@ def _build_trade_portfolio_monthly(trade_portfolio_events: pd.DataFrame) -> pd.D
     )
     monthly["month_positive"] = pd.to_numeric(monthly["total_return_pct"], errors="coerce") > 0
     return monthly
+
+
+def _build_trade_portfolio_walk_forward(
+    trade_portfolio_events: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    fold_columns = [
+        "timeframe",
+        "walk_forward_fold",
+        "train_start_month_utc",
+        "train_end_month_utc",
+        "train_months_count",
+        "test_month_utc",
+        "selected_trade_portfolio_id",
+        "selected_trade_portfolio_label",
+        "train_trades_count",
+        "train_trades_per_year",
+        "train_mean_return_pct",
+        "train_win_rate",
+        "train_profit_factor",
+        "train_all_active_months_positive",
+        "train_non_positive_months_count",
+        "train_annual_sum_return_pct",
+        "test_trades_count",
+        "test_mean_return_pct",
+        "test_median_return_pct",
+        "test_win_rate",
+        "test_profit_factor",
+        "test_total_return_pct",
+        "test_month_positive",
+        "test_month_active",
+        "test_ambiguous_entry_rate",
+    ]
+    oos_summary_columns = [
+        "timeframe",
+        "folds_count",
+        "active_test_months_count",
+        "inactive_test_months_count",
+        "positive_test_months_count",
+        "non_positive_test_months_count",
+        "all_active_test_months_positive",
+        "selected_portfolios_count",
+        "oos_trades_count",
+        "oos_trades_per_year",
+        "oos_mean_return_pct",
+        "oos_median_return_pct",
+        "oos_win_rate",
+        "oos_profit_factor",
+        "oos_annual_sum_return_pct",
+        "oos_worst_month_return_pct",
+        "oos_best_month_return_pct",
+        "oos_ambiguous_entry_rate",
+        "meets_50_trades_per_year",
+        "meets_150_trades_per_year",
+    ]
+    if trade_portfolio_events.empty:
+        return pd.DataFrame(columns=fold_columns), pd.DataFrame(columns=list(trade_portfolio_events.columns)), pd.DataFrame(columns=oos_summary_columns)
+
+    events = trade_portfolio_events.copy()
+    if "month_utc" not in events.columns:
+        events["month_utc"] = _month_labels_from_entry(events)
+
+    fold_rows: list[dict[str, object]] = []
+    oos_event_frames: list[pd.DataFrame] = []
+    for timeframe, timeframe_events in events.groupby("timeframe", sort=True):
+        months = [str(month) for month in sorted(timeframe_events["month_utc"].dropna().astype(str).unique().tolist())]
+        if len(months) <= _WALK_FORWARD_MIN_TRAIN_MONTHS:
+            continue
+        for fold_index, test_month in enumerate(months[_WALK_FORWARD_MIN_TRAIN_MONTHS :], start=1):
+            train_months = months[: months.index(test_month)]
+            if len(train_months) < _WALK_FORWARD_MIN_TRAIN_MONTHS:
+                continue
+            train_events = timeframe_events[timeframe_events["month_utc"].isin(train_months)].copy()
+            train_summary = _build_trade_portfolio_summary(train_events)
+            if train_summary.empty:
+                continue
+            ranked = _sort_trade_portfolio_summary(train_summary)
+            selected = ranked.iloc[0]
+            selected_portfolio_id = str(selected["trade_portfolio_id"])
+            test_events = timeframe_events[
+                (timeframe_events["trade_portfolio_id"].astype(str) == selected_portfolio_id)
+                & (timeframe_events["month_utc"].astype(str) == test_month)
+            ].copy()
+            test_exit_returns = pd.to_numeric(test_events.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce").dropna()
+            test_total_return_pct = float(test_exit_returns.sum()) if not test_exit_returns.empty else 0.0
+            fold_rows.append(
+                {
+                    "timeframe": timeframe,
+                    "walk_forward_fold": fold_index,
+                    "train_start_month_utc": train_months[0],
+                    "train_end_month_utc": train_months[-1],
+                    "train_months_count": len(train_months),
+                    "test_month_utc": test_month,
+                    "selected_trade_portfolio_id": selected_portfolio_id,
+                    "selected_trade_portfolio_label": selected["trade_portfolio_label"],
+                    "train_trades_count": int(selected["trades_count"]),
+                    "train_trades_per_year": selected["trades_per_year"],
+                    "train_mean_return_pct": selected["mean_return_pct"],
+                    "train_win_rate": selected["win_rate"],
+                    "train_profit_factor": selected["profit_factor"],
+                    "train_all_active_months_positive": selected["all_active_months_positive"],
+                    "train_non_positive_months_count": selected["non_positive_months_count"],
+                    "train_annual_sum_return_pct": selected["annual_sum_return_pct"],
+                    "test_trades_count": int(len(test_events)),
+                    "test_mean_return_pct": _mean_or_none(test_exit_returns),
+                    "test_median_return_pct": _median_or_none(test_exit_returns),
+                    "test_win_rate": _mean_or_none((test_exit_returns > 0).astype("float64")),
+                    "test_profit_factor": _profit_factor(test_exit_returns),
+                    "test_total_return_pct": test_total_return_pct,
+                    "test_month_positive": bool(test_total_return_pct > 0) if len(test_events) > 0 else False,
+                    "test_month_active": bool(len(test_events) > 0),
+                    "test_ambiguous_entry_rate": _mean_or_none(test_events.get("portfolio_has_ambiguous_entry", pd.Series(dtype="float64"))),
+                }
+            )
+            if not test_events.empty:
+                test_events["walk_forward_fold"] = fold_index
+                test_events["walk_forward_test_month_utc"] = test_month
+                test_events["walk_forward_selected_trade_portfolio_id"] = selected_portfolio_id
+                oos_event_frames.append(test_events)
+
+    folds = pd.DataFrame(fold_rows)
+    oos_events = (
+        pd.concat(oos_event_frames, ignore_index=True)
+        if oos_event_frames
+        else pd.DataFrame(
+            columns=[
+                *list(events.columns),
+                "walk_forward_fold",
+                "walk_forward_test_month_utc",
+                "walk_forward_selected_trade_portfolio_id",
+            ]
+        )
+    )
+    if folds.empty:
+        return pd.DataFrame(columns=fold_columns), oos_events, pd.DataFrame(columns=oos_summary_columns)
+
+    summary_rows: list[dict[str, object]] = []
+    for timeframe, timeframe_folds in folds.groupby("timeframe", sort=True):
+        timeframe_oos_events = oos_events[oos_events["timeframe"].astype(str) == str(timeframe)].copy() if not oos_events.empty else pd.DataFrame()
+        oos_exit_returns = pd.to_numeric(timeframe_oos_events.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce").dropna()
+        entry_timestamps = pd.to_datetime(
+            timeframe_oos_events.get("entry_timestamp_ms", pd.Series(dtype="float64")),
+            unit="ms",
+            utc=True,
+            errors="coerce",
+        ).dropna()
+        span_days = max(
+            1.0,
+            ((entry_timestamps.max() - entry_timestamps.min()).total_seconds() / 86_400)
+            if len(entry_timestamps) >= 2
+            else float(max(1, timeframe_folds["test_month_utc"].nunique())),
+        )
+        trades_per_year = (len(timeframe_oos_events) / span_days) * 365.0 if len(timeframe_oos_events) > 0 else 0.0
+        active_folds = timeframe_folds[timeframe_folds["test_month_active"].astype(bool)].copy()
+        summary_rows.append(
+            {
+                "timeframe": timeframe,
+                "folds_count": int(len(timeframe_folds)),
+                "active_test_months_count": int(len(active_folds)),
+                "inactive_test_months_count": int((~timeframe_folds["test_month_active"].astype(bool)).sum()),
+                "positive_test_months_count": int((active_folds["test_month_positive"].astype(bool)).sum()),
+                "non_positive_test_months_count": int((active_folds["test_month_positive"].astype(bool) == False).sum()),
+                "all_active_test_months_positive": bool(active_folds["test_month_positive"].astype(bool).all()) if not active_folds.empty else False,
+                "selected_portfolios_count": int(timeframe_folds["selected_trade_portfolio_id"].astype(str).nunique()),
+                "oos_trades_count": int(len(timeframe_oos_events)),
+                "oos_trades_per_year": trades_per_year,
+                "oos_mean_return_pct": _mean_or_none(oos_exit_returns),
+                "oos_median_return_pct": _median_or_none(oos_exit_returns),
+                "oos_win_rate": _mean_or_none((oos_exit_returns > 0).astype("float64")),
+                "oos_profit_factor": _profit_factor(oos_exit_returns),
+                "oos_annual_sum_return_pct": float(oos_exit_returns.sum()) if not oos_exit_returns.empty else None,
+                "oos_worst_month_return_pct": _min_or_none(active_folds.get("test_total_return_pct", pd.Series(dtype="float64"))),
+                "oos_best_month_return_pct": _max_or_none(active_folds.get("test_total_return_pct", pd.Series(dtype="float64"))),
+                "oos_ambiguous_entry_rate": _mean_or_none(timeframe_oos_events.get("portfolio_has_ambiguous_entry", pd.Series(dtype="float64"))),
+                "meets_50_trades_per_year": trades_per_year >= 50.0,
+                "meets_150_trades_per_year": trades_per_year >= 150.0,
+            }
+        )
+
+    summary = pd.DataFrame(summary_rows, columns=oos_summary_columns).sort_values(
+        [
+            "timeframe",
+            "meets_50_trades_per_year",
+            "all_active_test_months_positive",
+            "oos_mean_return_pct",
+            "oos_win_rate",
+            "oos_profit_factor",
+        ],
+        ascending=[True, False, False, False, False, False],
+        na_position="last",
+    ).reset_index(drop=True)
+    return pd.DataFrame(fold_rows, columns=fold_columns), oos_events, summary
 
 
 def _filter_events_for_params(events: pd.DataFrame, params: HourlyAsiaPumpParams) -> pd.DataFrame:
@@ -1693,6 +2234,8 @@ def _write_report(
     early_entry_summary: pd.DataFrame,
     trade_model_summary: pd.DataFrame,
     trade_portfolio_summary: pd.DataFrame,
+    trade_portfolio_walk_forward_summary: pd.DataFrame,
+    trade_portfolio_walk_forward_folds: pd.DataFrame,
     selection_profile: HourlyAsiaPumpProfileId,
 ) -> Path:
     context_frame = pd.DataFrame(
@@ -1789,6 +2332,8 @@ def _write_report(
                 "median_return_pct",
                 "win_rate",
                 "profit_factor",
+                "sequenced_entry_rate",
+                "entry_bar_ambiguous_rate",
                 "mfe_ge_5pct_rate",
                 "realized_ge_5pct_rate",
                 "meets_150_trades_per_year",
@@ -1808,11 +2353,54 @@ def _write_report(
                 "median_return_pct",
                 "win_rate",
                 "profit_factor",
+                "mean_component_count",
+                "ambiguous_entry_rate",
                 "positive_months_count",
                 "non_positive_months_count",
                 "all_active_months_positive",
                 "annual_sum_return_pct",
             ),
+        ),
+        "",
+        "## Trade Portfolio Walk-Forward",
+        "",
+        _frame_to_markdown(
+            trade_portfolio_walk_forward_summary,
+            columns=(
+                "timeframe",
+                "folds_count",
+                "active_test_months_count",
+                "inactive_test_months_count",
+                "oos_trades_count",
+                "oos_trades_per_year",
+                "oos_mean_return_pct",
+                "oos_win_rate",
+                "oos_profit_factor",
+                "positive_test_months_count",
+                "non_positive_test_months_count",
+                "all_active_test_months_positive",
+                "oos_annual_sum_return_pct",
+            ),
+        ),
+        "",
+        "## Walk-Forward Folds",
+        "",
+        _frame_to_markdown(
+            trade_portfolio_walk_forward_folds,
+            columns=(
+                "timeframe",
+                "walk_forward_fold",
+                "test_month_utc",
+                "selected_trade_portfolio_id",
+                "train_trades_count",
+                "train_mean_return_pct",
+                "train_win_rate",
+                "test_trades_count",
+                "test_mean_return_pct",
+                "test_total_return_pct",
+                "test_month_positive",
+            ),
+            limit=24,
         ),
         "",
         "## Top Grid Rows",
@@ -1858,9 +2446,13 @@ def _write_report(
             f"- early entry summary: `{output_dir / 'early_entry_summary.csv'}`",
             f"- trade model events: `{output_dir / 'trade_model_events.csv'}`",
             f"- trade model summary: `{output_dir / 'trade_model_summary.csv'}`",
+            f"- trade portfolio component events: `{output_dir / 'trade_portfolio_component_events.csv'}`",
             f"- trade portfolio events: `{output_dir / 'trade_portfolio_events.csv'}`",
             f"- trade portfolio summary: `{output_dir / 'trade_portfolio_summary.csv'}`",
             f"- trade portfolio monthly: `{output_dir / 'trade_portfolio_monthly.csv'}`",
+            f"- trade portfolio walk-forward folds: `{output_dir / 'trade_portfolio_walk_forward_folds.csv'}`",
+            f"- trade portfolio walk-forward events: `{output_dir / 'trade_portfolio_walk_forward_events.csv'}`",
+            f"- trade portfolio walk-forward summary: `{output_dir / 'trade_portfolio_walk_forward_summary.csv'}`",
             "",
         ]
     )
@@ -1901,6 +2493,7 @@ def build_hourly_asia_pump_research_artifacts(
     symbol_summary_frames: list[pd.DataFrame] = []
     early_entry_event_frames: list[pd.DataFrame] = []
     trade_model_event_frames: list[pd.DataFrame] = []
+    trade_portfolio_component_event_frames: list[pd.DataFrame] = []
     trade_portfolio_event_frames: list[pd.DataFrame] = []
     resolved_symbols_by_timeframe: dict[str, list[str]] = {}
     timeframe_durations: list[float] = []
@@ -2032,7 +2625,9 @@ def build_hourly_asia_pump_research_artifacts(
             logger=active_logger,
         )
         trade_model_event_frames.append(trade_model_events)
-        trade_portfolio_events = _build_trade_portfolio_events(trade_model_events, trade_portfolios)
+        trade_portfolio_component_events = _build_trade_portfolio_component_events(trade_model_events, trade_portfolios)
+        trade_portfolio_component_event_frames.append(trade_portfolio_component_events)
+        trade_portfolio_events = _build_trade_portfolio_events(trade_portfolio_component_events)
         trade_portfolio_event_frames.append(trade_portfolio_events)
 
         timeframe_elapsed = max(0.0, time.time() - timeframe_started_at)
@@ -2068,6 +2663,11 @@ def build_hourly_asia_pump_research_artifacts(
     early_entry_summary_all = _build_early_entry_summary(early_entry_events_all)
     trade_model_events_all = pd.concat(trade_model_event_frames, ignore_index=True) if trade_model_event_frames else pd.DataFrame()
     trade_model_summary_all = _build_trade_model_summary(trade_model_events_all)
+    trade_portfolio_component_events_all = (
+        pd.concat(trade_portfolio_component_event_frames, ignore_index=True)
+        if trade_portfolio_component_event_frames
+        else pd.DataFrame()
+    )
     trade_portfolio_events_all = (
         pd.concat(trade_portfolio_event_frames, ignore_index=True)
         if trade_portfolio_event_frames
@@ -2075,6 +2675,9 @@ def build_hourly_asia_pump_research_artifacts(
     )
     trade_portfolio_summary_all = _build_trade_portfolio_summary(trade_portfolio_events_all)
     trade_portfolio_monthly_all = _build_trade_portfolio_monthly(trade_portfolio_events_all)
+    trade_portfolio_walk_forward_folds_all, trade_portfolio_walk_forward_events_all, trade_portfolio_walk_forward_summary_all = (
+        _build_trade_portfolio_walk_forward(trade_portfolio_events_all)
+    )
     top_grid_rows = _top_grid_rows_by_timeframe(grid_summary_all, limit=10)
 
     grid_summary_path = output_dir / "grid_summary.csv"
@@ -2104,6 +2707,9 @@ def build_hourly_asia_pump_research_artifacts(
     trade_model_summary_path = output_dir / "trade_model_summary.csv"
     trade_model_summary_all.to_csv(trade_model_summary_path, index=False)
 
+    trade_portfolio_component_events_path = output_dir / "trade_portfolio_component_events.csv"
+    trade_portfolio_component_events_all.to_csv(trade_portfolio_component_events_path, index=False)
+
     trade_portfolio_events_path = output_dir / "trade_portfolio_events.csv"
     trade_portfolio_events_all.to_csv(trade_portfolio_events_path, index=False)
 
@@ -2112,6 +2718,15 @@ def build_hourly_asia_pump_research_artifacts(
 
     trade_portfolio_monthly_path = output_dir / "trade_portfolio_monthly.csv"
     trade_portfolio_monthly_all.to_csv(trade_portfolio_monthly_path, index=False)
+
+    trade_portfolio_walk_forward_folds_path = output_dir / "trade_portfolio_walk_forward_folds.csv"
+    trade_portfolio_walk_forward_folds_all.to_csv(trade_portfolio_walk_forward_folds_path, index=False)
+
+    trade_portfolio_walk_forward_events_path = output_dir / "trade_portfolio_walk_forward_events.csv"
+    trade_portfolio_walk_forward_events_all.to_csv(trade_portfolio_walk_forward_events_path, index=False)
+
+    trade_portfolio_walk_forward_summary_path = output_dir / "trade_portfolio_walk_forward_summary.csv"
+    trade_portfolio_walk_forward_summary_all.to_csv(trade_portfolio_walk_forward_summary_path, index=False)
 
     top_grid_rows_path = output_dir / "top_grid_by_timeframe.csv"
     top_grid_rows.to_csv(top_grid_rows_path, index=False)
@@ -2128,6 +2743,7 @@ def build_hourly_asia_pump_research_artifacts(
         "breakout_lookback_minutes": DEFAULT_BREAKOUT_LOOKBACK_MINUTES,
         "max_follow_minutes": max_follow_minutes,
         "commission_rate": commission_rate,
+        "walk_forward_min_train_months": _WALK_FORWARD_MIN_TRAIN_MONTHS,
         "top_n": top_n,
         "symbols": list(symbols or []),
         "resolved_symbols_by_timeframe": resolved_symbols_by_timeframe,
@@ -2144,6 +2760,8 @@ def build_hourly_asia_pump_research_artifacts(
         early_entry_summary=early_entry_summary_all,
         trade_model_summary=trade_model_summary_all,
         trade_portfolio_summary=trade_portfolio_summary_all,
+        trade_portfolio_walk_forward_summary=trade_portfolio_walk_forward_summary_all,
+        trade_portfolio_walk_forward_folds=trade_portfolio_walk_forward_folds_all,
         selection_profile=selection_profile,
     )
 
@@ -2165,9 +2783,13 @@ def build_hourly_asia_pump_research_artifacts(
         "early_entry_summary": early_entry_summary_path,
         "trade_model_events": trade_model_events_path,
         "trade_model_summary": trade_model_summary_path,
+        "trade_portfolio_component_events": trade_portfolio_component_events_path,
         "trade_portfolio_events": trade_portfolio_events_path,
         "trade_portfolio_summary": trade_portfolio_summary_path,
         "trade_portfolio_monthly": trade_portfolio_monthly_path,
+        "trade_portfolio_walk_forward_folds": trade_portfolio_walk_forward_folds_path,
+        "trade_portfolio_walk_forward_events": trade_portfolio_walk_forward_events_path,
+        "trade_portfolio_walk_forward_summary": trade_portfolio_walk_forward_summary_path,
         "top_grid_by_timeframe": top_grid_rows_path,
         "research_context": context_path,
         "report": report_path,

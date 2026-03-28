@@ -675,6 +675,48 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
 def build_hourly_asia_pump_trade_portfolios() -> list[HourlyAsiaPumpTradePortfolio]:
     return [
         HourlyAsiaPumpTradePortfolio(
+            portfolio_id="single_context_uq_65_no3",
+            label="Single Context UQ 6.5 No 03",
+            mode="stacked",
+            components=(
+                HourlyAsiaPumpTradePortfolioComponent(
+                    model_id="context_break_65_uq_tight",
+                    exclude_hours_utc=(3,),
+                ),
+            ),
+        ),
+        HourlyAsiaPumpTradePortfolio(
+            portfolio_id="single_context_close_65",
+            label="Single Context Close 6.5",
+            mode="stacked",
+            components=(
+                HourlyAsiaPumpTradePortfolioComponent(
+                    model_id="context_break_65_close_tight",
+                ),
+            ),
+        ),
+        HourlyAsiaPumpTradePortfolio(
+            portfolio_id="single_context_uq_65_tight_mid",
+            label="Single Context UQ 6.5 Tight Mid",
+            mode="stacked",
+            components=(
+                HourlyAsiaPumpTradePortfolioComponent(
+                    model_id="context_break_65_uq_tight_mid",
+                ),
+            ),
+        ),
+        HourlyAsiaPumpTradePortfolio(
+            portfolio_id="single_monster_break_5pct_h1",
+            label="Single Monster Break 5pct H1",
+            mode="stacked",
+            components=(
+                HourlyAsiaPumpTradePortfolioComponent(
+                    model_id="monster_break_5pct",
+                    include_hours_utc=(1,),
+                ),
+            ),
+        ),
+        HourlyAsiaPumpTradePortfolio(
             portfolio_id="stacked_context_core_65",
             label="Stacked Context Core 6.5",
             mode="stacked",
