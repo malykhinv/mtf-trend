@@ -5,6 +5,7 @@ import itertools
 import json
 import logging
 import math
+import time
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -30,6 +31,7 @@ _STATIC_HOLDOUT_SPLITS: tuple[tuple[str, int], ...] = (
 )
 _STATIC_PRIORITY_TOP_N_VALUES: tuple[int, ...] = (1, 3, 5, 10, 20, 50, 100)
 _STATIC_LOCAL_COMPONENT_DISTANCE_MAX = 2
+_STATIC_PROGRESS_LOG_EVERY = 100
 
 
 def _safe_numeric(value: object) -> float | None:
@@ -44,6 +46,17 @@ def _safe_numeric(value: object) -> float | None:
     if math.isnan(numeric):
         return None
     return numeric
+
+
+def _format_elapsed(seconds: float | None) -> str:
+    if seconds is None:
+        return "n/a"
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
 
 
 def _format_value(column_name: str, value: object) -> str:
@@ -1121,15 +1134,18 @@ def build_hourly_asia_pump_static_combo_artifacts(
     active_logger = logger or logging.getLogger("hourly-asia-pump-static-combo")
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
+    run_started_at = time.perf_counter()
 
+    active_logger.info("hourly-asia-pump-static-combo: stage=load-inputs")
     base_events = _prepare_base_events(Path(base_events_path))
     confirmed_events = _prepare_confirmed_events(Path(confirmed_events_path))
     candidate_frames = _build_static_candidate_frames(base_events=base_events, confirmed_events=confirmed_events)
     active_logger.info(
-        "hourly-asia-pump-static-combo: candidates=%s base_events=%s confirmed_events=%s",
+        "hourly-asia-pump-static-combo: stage=candidates candidates=%s base_events=%s confirmed_events=%s elapsed=%s",
         len(candidate_frames),
         len(base_events),
         len(confirmed_events),
+        _format_elapsed(time.perf_counter() - run_started_at),
     )
 
     candidate_rows: list[dict[str, object]] = []
@@ -1149,10 +1165,25 @@ def build_hourly_asia_pump_static_combo_artifacts(
     combo_event_frames: list[pd.DataFrame] = []
     combo_events_by_id: dict[str, pd.DataFrame] = {}
     candidate_ids = list(candidate_frames.keys())
+    total_combo_jobs = (
+        sum(math.comb(len(candidate_ids), combo_size) for combo_size in range(_STATIC_MIN_COMPONENTS, min(_STATIC_MAX_COMPONENTS, len(candidate_ids)) + 1))
+        * len(_STATIC_TOP_K_VALUES)
+        if candidate_ids
+        else 0
+    )
+    combo_stage_started_at = time.perf_counter()
+    processed_combo_jobs = 0
+    active_logger.info(
+        "hourly-asia-pump-static-combo: stage=combo-grid-start candidates=%s combo_jobs=%s elapsed=%s eta=n/a",
+        len(candidate_ids),
+        total_combo_jobs,
+        _format_elapsed(combo_stage_started_at - run_started_at),
+    )
     for combo_size in range(_STATIC_MIN_COMPONENTS, min(_STATIC_MAX_COMPONENTS, len(candidate_ids)) + 1):
         for component_ids in itertools.combinations(candidate_ids, combo_size):
             component_id_list = list(component_ids)
             for top_k_per_timestamp in _STATIC_TOP_K_VALUES:
+                processed_combo_jobs += 1
                 combo_events = _build_combo_events(
                     candidate_frames=candidate_frames,
                     component_ids=component_id_list,
@@ -1164,16 +1195,46 @@ def build_hourly_asia_pump_static_combo_artifacts(
                 combo_events_by_id[combo_id] = combo_events
                 combo_event_frames.append(combo_events)
                 summary = _summarize_events(combo_events)
-                if summary is None:
-                    continue
-                summary["combo_id"] = combo_id
-                summary["component_ids"] = ",".join(component_id_list)
-                summary["component_count"] = len(component_id_list)
-                summary["top_k_per_timestamp"] = top_k_per_timestamp
-                summary["event_signature"] = _build_event_signature(combo_events)
-                combo_summary_rows.append(summary)
+                if summary is not None:
+                    summary["combo_id"] = combo_id
+                    summary["component_ids"] = ",".join(component_id_list)
+                    summary["component_count"] = len(component_id_list)
+                    summary["top_k_per_timestamp"] = top_k_per_timestamp
+                    summary["event_signature"] = _build_event_signature(combo_events)
+                    combo_summary_rows.append(summary)
+                if (
+                    processed_combo_jobs == 1
+                    or processed_combo_jobs == total_combo_jobs
+                    or processed_combo_jobs % _STATIC_PROGRESS_LOG_EVERY == 0
+                ):
+                    combo_elapsed = time.perf_counter() - combo_stage_started_at
+                    combo_eta = (
+                        (combo_elapsed / processed_combo_jobs) * (total_combo_jobs - processed_combo_jobs)
+                        if processed_combo_jobs > 0
+                        else None
+                    )
+                    active_logger.info(
+                        "hourly-asia-pump-static-combo: stage=combo-grid progress=%.1f%% processed=%s/%s size=%s top_k=%s summary_rows=%s elapsed=%s eta=%s",
+                        (processed_combo_jobs / total_combo_jobs) * 100.0 if total_combo_jobs > 0 else 100.0,
+                        processed_combo_jobs,
+                        total_combo_jobs,
+                        combo_size,
+                        top_k_per_timestamp,
+                        len(combo_summary_rows),
+                        _format_elapsed(combo_elapsed),
+                        _format_elapsed(combo_eta),
+                    )
 
     combo_events_all = pd.concat(combo_event_frames, ignore_index=True) if combo_event_frames else pd.DataFrame()
+    active_logger.info(
+        "hourly-asia-pump-static-combo: stage=combo-grid-complete processed=%s/%s combo_events=%s combo_summaries=%s elapsed=%s",
+        processed_combo_jobs,
+        total_combo_jobs,
+        len(combo_events_all),
+        len(combo_summary_rows),
+        _format_elapsed(time.perf_counter() - combo_stage_started_at),
+    )
+    active_logger.info("hourly-asia-pump-static-combo: stage=ranking")
     combo_summary = _rank_combo_summary(pd.DataFrame(combo_summary_rows))
 
     if not combo_summary.empty and "event_signature" in combo_summary.columns:
@@ -1184,6 +1245,12 @@ def build_hourly_asia_pump_static_combo_artifacts(
         great_combos = _assign_combo_variants(unique_combo_summary[unique_combo_summary["meets_goal"].astype(bool)].copy())
     else:
         great_combos = unique_combo_summary.iloc[0:0].copy()
+    active_logger.info(
+        "hourly-asia-pump-static-combo: stage=selection unique_combos=%s great_combos=%s elapsed=%s",
+        len(unique_combo_summary),
+        len(great_combos),
+        _format_elapsed(time.perf_counter() - run_started_at),
+    )
     priority_events = _build_priority_selected_events(combo_events=combo_events_all, combo_catalog=great_combos)
     if not priority_events.empty:
         priority_summary_payload = _summarize_events(priority_events)
@@ -1227,6 +1294,13 @@ def build_hourly_asia_pump_static_combo_artifacts(
                 }
             )
     priority_holdout_sanity = pd.DataFrame(priority_holdout_sanity_rows)
+    active_logger.info(
+        "hourly-asia-pump-static-combo: stage=post-analysis priority_trades=%s monthly_rows=%s holdout_rows=%s elapsed=%s",
+        len(priority_events),
+        len(priority_monthly_returns),
+        len(priority_holdout_sanity),
+        _format_elapsed(time.perf_counter() - run_started_at),
+    )
 
     candidate_summary_path = output_path / "candidate_component_summary.csv"
     candidate_summary.to_csv(candidate_summary_path, index=False)
@@ -1291,12 +1365,13 @@ def build_hourly_asia_pump_static_combo_artifacts(
     )
 
     active_logger.info(
-        "hourly-asia-pump-static-combo artifacts saved: output_dir=%s great_combos=%s priority_trades=%s report=%s charts_dir=%s",
+        "hourly-asia-pump-static-combo artifacts saved: output_dir=%s great_combos=%s priority_trades=%s report=%s charts_dir=%s elapsed=%s",
         output_path,
         len(great_combos),
         len(priority_events),
         report_path,
         charts_dir,
+        _format_elapsed(time.perf_counter() - run_started_at),
     )
     return {
         "candidate_component_summary": candidate_summary_path,
