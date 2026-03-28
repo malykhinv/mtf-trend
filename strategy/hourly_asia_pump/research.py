@@ -804,13 +804,16 @@ def _find_trade_model_entry(
         entry_end_idx = min(len(high_values) - 1, row_index + model.max_entry_bars)
         for idx in range(row_index + 1, entry_end_idx + 1):
             if float(high_values[idx]) >= trigger_high:
+                initial_stop_price = trigger_body_mid
+                if model.initial_stop_style == "trigger_low":
+                    initial_stop_price = trigger_low
                 return {
                     "trade_triggered": True,
                     "entry_idx": idx,
                     "entry_price": trigger_high,
                     "entry_reason": "break_trigger_high",
-                    "initial_stop_price": trigger_body_mid,
-                    "initial_stop_reason": "trigger_body_mid",
+                    "initial_stop_price": initial_stop_price,
+                    "initial_stop_reason": model.initial_stop_style,
                 }
         return no_entry
 
@@ -878,6 +881,7 @@ def _simulate_trade_model_from_entry(
     entry_idx: int,
     entry_price: float,
     initial_stop_price: float,
+    commission_rate: float,
 ) -> dict[str, object]:
     tf_minutes = _timeframe_minutes(timeframe)
     end_idx = min(len(close_values) - 1, entry_idx + _bars_for_minutes(timeframe, model.max_hold_minutes))
@@ -916,12 +920,13 @@ def _simulate_trade_model_from_entry(
 
     current_stop = initial_stop_price
     remaining_fraction = 1.0
-    realized_return_pct = 0.0
+    realized_return_pct = -commission_rate
     partial_taken = False
     last_red_low: float | None = None
     highest_high = max(entry_price, float(high_values[entry_idx]))
     exit_idx: int | None = None
     exit_reason = "time_exit"
+    trail_active = model.trail_activation_pct <= 0.0
 
     for idx in range(entry_idx + 1, end_idx + 1):
         low_value = float(low_values[idx])
@@ -930,14 +935,19 @@ def _simulate_trade_model_from_entry(
         close_value = float(close_values[idx])
 
         if low_value <= current_stop:
-            realized_return_pct += remaining_fraction * ((current_stop / entry_price) - 1.0)
+            realized_return_pct += remaining_fraction * (((current_stop / entry_price) - 1.0) - commission_rate)
             remaining_fraction = 0.0
             exit_idx = idx
             exit_reason = "stop"
             break
 
-        if not partial_taken and high_value >= partial_target_price:
-            realized_return_pct += model.partial_fraction * partial_target_pct
+        if (
+            model.partial_fraction > 0.0
+            and partial_target_pct > 0.0
+            and not partial_taken
+            and high_value >= partial_target_price
+        ):
+            realized_return_pct += model.partial_fraction * (partial_target_pct - commission_rate)
             remaining_fraction = max(0.0, remaining_fraction - model.partial_fraction)
             partial_taken = True
             if model.move_stop_to_be_after_partial:
@@ -945,15 +955,18 @@ def _simulate_trade_model_from_entry(
 
         if high_value > highest_high:
             highest_high = high_value
-            if model.trail_style == "prev_bar_low" and idx - 1 >= entry_idx:
-                current_stop = max(current_stop, float(low_values[idx - 1]))
-            elif model.trail_style == "last_red_low" and last_red_low is not None:
-                current_stop = max(current_stop, last_red_low)
+            if not trail_active and highest_high >= (entry_price * (1.0 + model.trail_activation_pct)):
+                trail_active = True
+            if trail_active:
+                if model.trail_style == "prev_bar_low" and idx - 1 >= entry_idx:
+                    current_stop = max(current_stop, float(low_values[idx - 1]))
+                elif model.trail_style == "last_red_low" and last_red_low is not None:
+                    current_stop = max(current_stop, last_red_low)
 
         if model.fast_fail_bars > 0 and (idx - entry_idx) == model.fast_fail_bars:
             min_progress_price = entry_price * (1.0 + model.fast_fail_min_return_pct)
             if highest_high < min_progress_price:
-                realized_return_pct += remaining_fraction * ((close_value / entry_price) - 1.0)
+                realized_return_pct += remaining_fraction * (((close_value / entry_price) - 1.0) - commission_rate)
                 remaining_fraction = 0.0
                 exit_idx = idx
                 exit_reason = "fast_fail"
@@ -963,7 +976,7 @@ def _simulate_trade_model_from_entry(
             last_red_low = low_value
 
     if remaining_fraction > 0.0:
-        realized_return_pct += remaining_fraction * ((float(close_values[end_idx]) / entry_price) - 1.0)
+        realized_return_pct += remaining_fraction * (((float(close_values[end_idx]) / entry_price) - 1.0) - commission_rate)
         exit_idx = end_idx
 
     exit_timestamp_ms = int(timestamp_values[exit_idx]) if exit_idx is not None else None
@@ -999,6 +1012,7 @@ def _build_trade_model_events_for_timeframe(
     timeframe: Timeframe,
     selected_events: pd.DataFrame,
     trade_models: Sequence[HourlyAsiaPumpTradeModel],
+    commission_rate: float,
     logger: logging.Logger,
 ) -> pd.DataFrame:
     if selected_events.empty:
@@ -1071,6 +1085,7 @@ def _build_trade_model_events_for_timeframe(
                     entry_idx=int(entry["entry_idx"]),
                     entry_price=float(entry["entry_price"]),
                     initial_stop_price=float(entry["initial_stop_price"]),
+                    commission_rate=commission_rate,
                 )
                 rows.append(
                     {
@@ -1524,6 +1539,7 @@ def build_hourly_asia_pump_research_artifacts(
     trigger_minute: int,
     max_follow_minutes: int,
     selection_profile: HourlyAsiaPumpProfileId,
+    commission_rate: float = 0.0,
     candidate_cache_dir: Path | None = None,
     reuse_candidate_cache: bool = True,
     logger: logging.Logger | None = None,
@@ -1668,6 +1684,7 @@ def build_hourly_asia_pump_research_artifacts(
             timeframe=timeframe,
             selected_events=selected_events,
             trade_models=trade_models,
+            commission_rate=commission_rate,
             logger=active_logger,
         )
         trade_model_event_frames.append(trade_model_events)
@@ -1748,6 +1765,7 @@ def build_hourly_asia_pump_research_artifacts(
         "volume_window_minutes": DEFAULT_VOLUME_WINDOW_MINUTES,
         "breakout_lookback_minutes": DEFAULT_BREAKOUT_LOOKBACK_MINUTES,
         "max_follow_minutes": max_follow_minutes,
+        "commission_rate": commission_rate,
         "top_n": top_n,
         "symbols": list(symbols or []),
         "resolved_symbols_by_timeframe": resolved_symbols_by_timeframe,

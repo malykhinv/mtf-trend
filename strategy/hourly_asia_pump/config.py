@@ -16,6 +16,7 @@ HourlyAsiaPumpTradeEntryStyle = Literal[
     "flag_break",
 ]
 HourlyAsiaPumpTradeTrailStyle = Literal["prev_bar_low", "last_red_low"]
+HourlyAsiaPumpTradeInitialStopStyle = Literal["trigger_body_mid", "trigger_low", "pattern_low"]
 
 HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = (
     Timeframe.M1,
@@ -68,6 +69,7 @@ class HourlyAsiaPumpTradeModel:
     label: str
     entry_style: HourlyAsiaPumpTradeEntryStyle
     trail_style: HourlyAsiaPumpTradeTrailStyle
+    initial_stop_style: HourlyAsiaPumpTradeInitialStopStyle
     min_trigger_return_pct: float
     min_range_atr: float
     min_body_atr: float
@@ -82,6 +84,7 @@ class HourlyAsiaPumpTradeModel:
     partial_take_r: float
     partial_fraction: float
     move_stop_to_be_after_partial: bool
+    trail_activation_pct: float
     fast_fail_bars: int
     fast_fail_min_return_pct: float
     max_hold_minutes: int
@@ -194,6 +197,7 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             label="Aggressive Break Fast",
             entry_style="break_trigger_high",
             trail_style="prev_bar_low",
+            initial_stop_style="trigger_body_mid",
             min_trigger_return_pct=0.02,
             min_range_atr=2.5,
             min_body_atr=1.5,
@@ -208,6 +212,7 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             partial_take_r=1.5,
             partial_fraction=0.35,
             move_stop_to_be_after_partial=True,
+            trail_activation_pct=0.0,
             fast_fail_bars=2,
             fast_fail_min_return_pct=0.005,
             max_hold_minutes=180,
@@ -217,6 +222,7 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             label="Pullback Reclaim",
             entry_style="pullback_reclaim",
             trail_style="prev_bar_low",
+            initial_stop_style="pattern_low",
             min_trigger_return_pct=0.015,
             min_range_atr=2.5,
             min_body_atr=1.5,
@@ -231,6 +237,7 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             partial_take_r=2.0,
             partial_fraction=0.5,
             move_stop_to_be_after_partial=True,
+            trail_activation_pct=0.0,
             fast_fail_bars=3,
             fast_fail_min_return_pct=0.003,
             max_hold_minutes=240,
@@ -240,6 +247,7 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             label="Pressure Reclaim",
             entry_style="pressure_reclaim",
             trail_style="last_red_low",
+            initial_stop_style="pattern_low",
             min_trigger_return_pct=0.02,
             min_range_atr=2.75,
             min_body_atr=1.75,
@@ -254,6 +262,7 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             partial_take_r=2.0,
             partial_fraction=0.4,
             move_stop_to_be_after_partial=True,
+            trail_activation_pct=0.0,
             fast_fail_bars=3,
             fast_fail_min_return_pct=0.004,
             max_hold_minutes=240,
@@ -263,6 +272,7 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             label="Tight Flag Runner",
             entry_style="flag_break",
             trail_style="prev_bar_low",
+            initial_stop_style="pattern_low",
             min_trigger_return_pct=0.015,
             min_range_atr=2.5,
             min_body_atr=1.5,
@@ -277,6 +287,7 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             partial_take_r=2.0,
             partial_fraction=0.35,
             move_stop_to_be_after_partial=True,
+            trail_activation_pct=0.0,
             fast_fail_bars=2,
             fast_fail_min_return_pct=0.004,
             max_hold_minutes=240,
@@ -286,6 +297,7 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             label="Monster Break 3pct",
             entry_style="break_trigger_high",
             trail_style="last_red_low",
+            initial_stop_style="trigger_low",
             min_trigger_return_pct=0.03,
             min_range_atr=3.0,
             min_body_atr=2.0,
@@ -300,6 +312,7 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             partial_take_r=1.5,
             partial_fraction=0.30,
             move_stop_to_be_after_partial=True,
+            trail_activation_pct=0.03,
             fast_fail_bars=2,
             fast_fail_min_return_pct=0.0075,
             max_hold_minutes=360,
@@ -309,6 +322,7 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             label="Monster Break 5pct",
             entry_style="break_trigger_high",
             trail_style="last_red_low",
+            initial_stop_style="trigger_low",
             min_trigger_return_pct=0.05,
             min_range_atr=3.0,
             min_body_atr=2.0,
@@ -323,8 +337,59 @@ def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
             partial_take_r=2.0,
             partial_fraction=0.25,
             move_stop_to_be_after_partial=True,
+            trail_activation_pct=0.05,
             fast_fail_bars=2,
             fast_fail_min_return_pct=0.01,
             max_hold_minutes=480,
+        ),
+        HourlyAsiaPumpTradeModel(
+            model_id="super_monster_7p5pct",
+            label="Super Monster 7.5pct",
+            entry_style="break_trigger_high",
+            trail_style="last_red_low",
+            initial_stop_style="trigger_low",
+            min_trigger_return_pct=0.075,
+            min_range_atr=4.0,
+            min_body_atr=3.0,
+            min_volume_mult=5.0,
+            max_close_to_high_frac=0.15,
+            max_entry_bars=1,
+            max_pullback_frac=0.0,
+            pullback_volume_frac=1.0,
+            flag_bars=0,
+            flag_max_range_frac=0.0,
+            partial_take_pct=0.0,
+            partial_take_r=0.0,
+            partial_fraction=0.0,
+            move_stop_to_be_after_partial=False,
+            trail_activation_pct=0.05,
+            fast_fail_bars=2,
+            fast_fail_min_return_pct=0.015,
+            max_hold_minutes=720,
+        ),
+        HourlyAsiaPumpTradeModel(
+            model_id="super_monster_10pct",
+            label="Super Monster 10pct",
+            entry_style="break_trigger_high",
+            trail_style="last_red_low",
+            initial_stop_style="trigger_low",
+            min_trigger_return_pct=0.10,
+            min_range_atr=4.0,
+            min_body_atr=3.0,
+            min_volume_mult=5.0,
+            max_close_to_high_frac=0.15,
+            max_entry_bars=1,
+            max_pullback_frac=0.0,
+            pullback_volume_frac=1.0,
+            flag_bars=0,
+            flag_max_range_frac=0.0,
+            partial_take_pct=0.0,
+            partial_take_r=0.0,
+            partial_fraction=0.0,
+            move_stop_to_be_after_partial=False,
+            trail_activation_pct=0.075,
+            fast_fail_bars=2,
+            fast_fail_min_return_pct=0.02,
+            max_hold_minutes=720,
         ),
     ]

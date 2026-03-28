@@ -2181,6 +2181,7 @@ def _run_hourly_pump_research_inner(config: AppConfig, args: argparse.Namespace)
         trigger_minute=trigger_minute,
         max_follow_minutes=max_follow_minutes,
         selection_profile=selection_profile,
+        commission_rate=config.simulation.commission_rate,
         candidate_cache_dir=Path(config.backtest.results_dir) / "research_cache" / "hourly_asia_pump",
         reuse_candidate_cache=True,
         logger=logger,
