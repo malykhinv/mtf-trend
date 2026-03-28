@@ -29,7 +29,7 @@ _STATIC_MIN_CANDIDATE_EVENTS = 6
 _STATIC_MIN_TRADES_PER_YEAR = 50.0
 _STATIC_MIN_MEAN_RETURN_PCT = 0.02
 _STATIC_MIN_WIN_RATE = 0.40
-_STATIC_MIN_ANNUALIZED_SUM_RETURN_PCT = 1.0
+_STATIC_MIN_ANNUALIZED_UNIT_PNL_PCT = 1.0
 _STATIC_MAX_DRAWDOWN_PCT = 0.30
 _STATIC_MIN_POSITIVE_MONTHS = 9
 _STATIC_HOLDOUT_SPLITS: tuple[tuple[str, int], ...] = (
@@ -39,6 +39,11 @@ _STATIC_HOLDOUT_SPLITS: tuple[tuple[str, int], ...] = (
 _STATIC_PRIORITY_TOP_N_VALUES: tuple[int, ...] = (1, 3, 5, 10, 20, 50, 100)
 _STATIC_LOCAL_COMPONENT_DISTANCE_MAX = 2
 _STATIC_PROGRESS_LOG_EVERY = 100
+_STATIC_FROZEN_THRESHOLD_VERSION = "2026-03-28-v1"
+_STATIC_MB5_01_SHALLOW_PULLBACK_FRAC_MAX = 0.0
+_STATIC_MB3_03_TRIGGER_RETURN_PCT_Q75_MIN = 0.08412202070738665
+_STATIC_SM75_00_INITIAL_RISK_PCT_Q25_MAX = 0.0919540229885057
+_STATIC_MB5_06_SHALLOW_PULLBACK_FRAC_MAX = 0.0
 
 
 def _safe_numeric(value: object) -> float | None:
@@ -162,7 +167,9 @@ def _compute_overlap_stats(frame: pd.DataFrame) -> tuple[int | None, int | None]
 def _dedupe_source_events(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame.copy()
-    ordered = frame.sort_values(["symbol", "timestamp_ms", "exit_return_pct"], ascending=[True, True, False]).copy()
+    # Resolve duplicate source rows conservatively: when the same event appears
+    # under multiple configs, keep the weakest realized outcome instead of the best.
+    ordered = frame.sort_values(["symbol", "timestamp_ms", "exit_return_pct"], ascending=[True, True, True]).copy()
     return ordered.drop_duplicates(["symbol", "timestamp_ms"]).reset_index(drop=True)
 
 
@@ -219,14 +226,14 @@ def _build_static_candidate_frames(
         & (pd.to_numeric(base.get("hour_utc"), errors="coerce") == 1)
     ].copy()
     mb5_01_pullback = _numeric_series(mb5_01, "pre_entry_pullback_frac")
-    _add_candidate("mb5_01_shallow", mb5_01[mb5_01_pullback <= mb5_01_pullback.quantile(0.5)])
+    _add_candidate("mb5_01_shallow", mb5_01[mb5_01_pullback <= _STATIC_MB5_01_SHALLOW_PULLBACK_FRAC_MAX])
 
     mb3_03 = base[
         (base.get("trade_model_id", pd.Series(dtype="object")).astype(str) == "monster_break_3pct")
         & (pd.to_numeric(base.get("hour_utc"), errors="coerce") == 3)
     ].copy()
     mb3_03_trigger = _numeric_series(mb3_03, "trigger_return_pct")
-    _add_candidate("mb3_03_trg_q75", mb3_03[mb3_03_trigger >= mb3_03_trigger.quantile(0.75)])
+    _add_candidate("mb3_03_trg_q75", mb3_03[mb3_03_trigger >= _STATIC_MB3_03_TRIGGER_RETURN_PCT_Q75_MIN])
     _add_candidate("mb3_03_raw", mb3_03)
 
     sm75_00 = base[
@@ -234,14 +241,14 @@ def _build_static_candidate_frames(
         & (pd.to_numeric(base.get("hour_utc"), errors="coerce") == 0)
     ].copy()
     sm75_risk = _numeric_series(sm75_00, "initial_risk_pct")
-    _add_candidate("sm75_00_risk_q25", sm75_00[sm75_risk <= sm75_risk.quantile(0.25)])
+    _add_candidate("sm75_00_risk_q25", sm75_00[sm75_risk <= _STATIC_SM75_00_INITIAL_RISK_PCT_Q25_MAX])
 
     mb5_06 = base[
         (base.get("trade_model_id", pd.Series(dtype="object")).astype(str) == "monster_break_5pct")
         & (pd.to_numeric(base.get("hour_utc"), errors="coerce") == 6)
     ].copy()
     mb5_06_pullback = _numeric_series(mb5_06, "pre_entry_pullback_frac")
-    _add_candidate("mb5_06_shallow", mb5_06[mb5_06_pullback <= mb5_06_pullback.quantile(0.5)])
+    _add_candidate("mb5_06_shallow", mb5_06[mb5_06_pullback <= _STATIC_MB5_06_SHALLOW_PULLBACK_FRAC_MAX])
 
     _add_candidate(
         "mb5_03_raw",
@@ -492,7 +499,7 @@ def _meets_static_goal(summary_row: pd.Series) -> bool:
         pd.to_numeric(summary_row.get("trades_per_year"), errors="coerce") >= _STATIC_MIN_TRADES_PER_YEAR
         and pd.to_numeric(summary_row.get("mean_return_pct"), errors="coerce") >= _STATIC_MIN_MEAN_RETURN_PCT
         and pd.to_numeric(summary_row.get("win_rate"), errors="coerce") > _STATIC_MIN_WIN_RATE
-        and pd.to_numeric(summary_row.get("annualized_sum_return_pct"), errors="coerce") >= _STATIC_MIN_ANNUALIZED_SUM_RETURN_PCT
+        and pd.to_numeric(summary_row.get("annualized_unit_pnl_pct"), errors="coerce") >= _STATIC_MIN_ANNUALIZED_UNIT_PNL_PCT
         and pd.to_numeric(summary_row.get("max_drawdown_pct"), errors="coerce") <= _STATIC_MAX_DRAWDOWN_PCT
         and pd.to_numeric(summary_row.get("positive_months_count"), errors="coerce") >= _STATIC_MIN_POSITIVE_MONTHS
     )
@@ -502,7 +509,7 @@ def _priority_score(summary_row: pd.Series) -> float:
     mean_return = float(pd.to_numeric(summary_row.get("mean_return_pct"), errors="coerce") or 0.0)
     win_rate = float(pd.to_numeric(summary_row.get("win_rate"), errors="coerce") or 0.0)
     trades_per_year = float(pd.to_numeric(summary_row.get("trades_per_year"), errors="coerce") or 0.0)
-    annualized_sum = float(pd.to_numeric(summary_row.get("annualized_sum_return_pct"), errors="coerce") or 0.0)
+    annualized_sum = float(pd.to_numeric(summary_row.get("annualized_unit_pnl_pct"), errors="coerce") or 0.0)
     max_drawdown = float(pd.to_numeric(summary_row.get("max_drawdown_pct"), errors="coerce") or 1.0)
     positive_months = float(pd.to_numeric(summary_row.get("positive_months_count"), errors="coerce") or 0.0)
     return (
@@ -526,7 +533,7 @@ def _rank_combo_summary(combo_summary: pd.DataFrame) -> pd.DataFrame:
             "meets_goal",
             "priority_score",
             "mean_return_pct",
-            "annualized_sum_return_pct",
+            "annualized_unit_pnl_pct",
             "win_rate",
             "trades_per_year",
         ],
@@ -645,6 +652,8 @@ def _empty_priority_summary() -> pd.DataFrame:
             "profit_factor",
             "annual_sum_return_pct",
             "annualized_sum_return_pct",
+            "unit_pnl_sum_pct",
+            "annualized_unit_pnl_pct",
             "mean_pos_trade_pct",
             "mean_neg_trade_pct",
             "positive_months_count",
@@ -653,6 +662,8 @@ def _empty_priority_summary() -> pd.DataFrame:
             "best_month_return_pct",
             "worst_month_return_pct",
             "max_drawdown_pct",
+            "max_concurrent_trades",
+            "overlapping_entries_count",
             "matched_combo_variants_count",
         ]
     )
@@ -749,7 +760,7 @@ def _build_combo_robustness_summary(
         minor_change_goal_rate = float(pd.to_numeric(minor_change_neighbors.get("meets_goal"), errors="coerce").fillna(0.0).mean()) if not minor_change_neighbors.empty else None
         local_mean_p25 = _quantile_value(local_neighbors.get("mean_return_pct", pd.Series(dtype="float64")), 0.25)
         local_dd_p75 = _quantile_value(local_neighbors.get("max_drawdown_pct", pd.Series(dtype="float64")), 0.75)
-        local_ann_median = _quantile_value(local_neighbors.get("annualized_sum_return_pct", pd.Series(dtype="float64")), 0.50)
+        local_ann_median = _quantile_value(local_neighbors.get("annualized_unit_pnl_pct", pd.Series(dtype="float64")), 0.50)
 
         robustness_label = "fragile"
         if (
@@ -782,9 +793,9 @@ def _build_combo_robustness_summary(
                 "local_win_rate_min": _quantile_value(local_neighbors.get("win_rate", pd.Series(dtype="float64")), 0.0),
                 "local_win_rate_median": _quantile_value(local_neighbors.get("win_rate", pd.Series(dtype="float64")), 0.50),
                 "local_win_rate_max": _quantile_value(local_neighbors.get("win_rate", pd.Series(dtype="float64")), 1.0),
-                "local_annualized_min_pct": _quantile_value(local_neighbors.get("annualized_sum_return_pct", pd.Series(dtype="float64")), 0.0),
+                "local_annualized_min_pct": _quantile_value(local_neighbors.get("annualized_unit_pnl_pct", pd.Series(dtype="float64")), 0.0),
                 "local_annualized_median_pct": local_ann_median,
-                "local_annualized_max_pct": _quantile_value(local_neighbors.get("annualized_sum_return_pct", pd.Series(dtype="float64")), 1.0),
+                "local_annualized_max_pct": _quantile_value(local_neighbors.get("annualized_unit_pnl_pct", pd.Series(dtype="float64")), 1.0),
                 "local_dd_min_pct": _quantile_value(local_neighbors.get("max_drawdown_pct", pd.Series(dtype="float64")), 0.0),
                 "local_dd_p75_pct": local_dd_p75,
                 "local_dd_max_pct": _quantile_value(local_neighbors.get("max_drawdown_pct", pd.Series(dtype="float64")), 1.0),
@@ -982,7 +993,7 @@ def _save_priority_topn_chart(priority_topn_summary: pd.DataFrame, path: Path) -
     figure, axes = plt.subplots(2, 2, figsize=(12, 8), sharex=True)
     metrics = [
         ("mean_return_pct", "Mean trade", True),
-        ("annualized_sum_return_pct", "Annualized sum", True),
+        ("annualized_unit_pnl_pct", "Annualized unit PnL", True),
         ("max_drawdown_pct", "Max drawdown", True),
         ("trades_per_year", "Trades per year", False),
     ]
@@ -1279,7 +1290,7 @@ def _write_static_combo_report(
     if not priority_topn_summary.empty:
         topn_subset = priority_topn_summary[priority_topn_summary["top_n_variants"].astype(int).isin({1, 3, 5, 10})].copy()
         if not topn_subset.empty:
-            comparison_columns = ["trades_count", "mean_return_pct", "win_rate", "annualized_sum_return_pct", "max_drawdown_pct"]
+            comparison_columns = ["trades_count", "mean_return_pct", "win_rate", "annualized_unit_pnl_pct", "max_drawdown_pct"]
             first_row = topn_subset.iloc[0]
             topn_equal_up_to_10 = bool(
                 topn_subset[comparison_columns]
@@ -1317,12 +1328,14 @@ def _write_static_combo_report(
                 "median_return_pct",
                 "win_rate",
                 "profit_factor",
-                "annualized_sum_return_pct",
+                "annualized_unit_pnl_pct",
                 "max_drawdown_pct",
                 "mean_pos_trade_pct",
                 "mean_neg_trade_pct",
                 "positive_months_count",
                 "non_positive_months_count",
+                "max_concurrent_trades",
+                "overlapping_entries_count",
                 "matched_combo_variants_count",
             ),
         ),
@@ -1349,7 +1362,7 @@ def _write_static_combo_report(
                 "trades_per_year",
                 "mean_return_pct",
                 "win_rate",
-                "annualized_sum_return_pct",
+                "annualized_unit_pnl_pct",
                 "max_drawdown_pct",
                 "positive_months_count",
                 "robustness_label",
@@ -1384,7 +1397,7 @@ def _write_static_combo_report(
                 "trades_per_year",
                 "mean_return_pct",
                 "win_rate",
-                "annualized_sum_return_pct",
+                "annualized_unit_pnl_pct",
                 "max_drawdown_pct",
                 "positive_months_count",
                 "non_positive_months_count",
@@ -1401,7 +1414,7 @@ def _write_static_combo_report(
                 "trades_per_year",
                 "mean_return_pct",
                 "win_rate",
-                "annualized_sum_return_pct",
+                "annualized_unit_pnl_pct",
                 "max_drawdown_pct",
                 "positive_months_count",
                 "non_positive_months_count",
@@ -1453,6 +1466,13 @@ def _write_static_combo_report(
         "### Leader Robustness",
         "",
         "![Leader Robustness](charts/leader_robustness.png)",
+        "",
+        "## Reliability Note",
+        "",
+        "- `annualized_unit_pnl_pct` is additive unit-PnL across trades, not capital-constrained CAGR.",
+        "- `max_concurrent_trades` and `overlapping_entries_count` show where multiple trades overlap in time.",
+        "- `shallow/q75/q25` candidate thresholds are frozen numeric values in code, not recomputed quantiles at report time.",
+        "- Combo discovery and ranking are still selected on the same full-year dataset, so this report remains research-grade rather than independent live proof.",
         "",
         "## Trade Chart Samples",
         "",
@@ -1509,7 +1529,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
         candidate_rows.append(summary)
     candidate_summary = _sort_summary_frame(
         pd.DataFrame(candidate_rows),
-        sort_columns=["mean_return_pct", "annualized_sum_return_pct", "win_rate"],
+        sort_columns=["mean_return_pct", "annualized_unit_pnl_pct", "win_rate"],
         ascending=[False, False, False],
     )
 
@@ -1690,6 +1710,13 @@ def build_hourly_asia_pump_static_combo_artifacts(
         "base_events_path": str(Path(base_events_path)),
         "confirmed_events_path": str(Path(confirmed_events_path)),
         "cache_dir": str(Path(cache_dir)) if cache_dir is not None else None,
+        "frozen_threshold_profile_version": _STATIC_FROZEN_THRESHOLD_VERSION,
+        "frozen_thresholds": {
+            "mb5_01_shallow_pre_entry_pullback_frac_max": _STATIC_MB5_01_SHALLOW_PULLBACK_FRAC_MAX,
+            "mb3_03_trg_q75_trigger_return_pct_min": _STATIC_MB3_03_TRIGGER_RETURN_PCT_Q75_MIN,
+            "sm75_00_risk_q25_initial_risk_pct_max": _STATIC_SM75_00_INITIAL_RISK_PCT_Q25_MAX,
+            "mb5_06_shallow_pre_entry_pullback_frac_max": _STATIC_MB5_06_SHALLOW_PULLBACK_FRAC_MAX,
+        },
         "candidate_ids": list(candidate_frames.keys()),
         "great_combo_count": int(len(great_combos)),
         "recommended_shortlist_count": int(len(recommended_shortlist)),

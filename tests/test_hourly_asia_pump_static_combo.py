@@ -7,6 +7,7 @@ import pandas as pd
 from strategy.hourly_asia_pump.static_combo import (
     _build_combo_events,
     _build_priority_selected_events,
+    _dedupe_source_events,
     _index_to_variant_label,
     build_hourly_asia_pump_static_combo_artifacts,
 )
@@ -194,6 +195,23 @@ def test_build_priority_selected_events_picks_best_combo_for_same_signal() -> No
     assert selected.iloc[0]["combo_variant"] == "A"
     assert int(selected.iloc[0]["matched_combo_count"]) == 2
     assert selected.iloc[0]["matched_combo_variants"] == "A,B"
+
+
+def test_dedupe_source_events_uses_conservative_min_return() -> None:
+    events = pd.DataFrame(
+        [
+            {"symbol": "AAA/USDT", "timestamp_ms": 1, "exit_return_pct": 0.08, "config_id": "fast"},
+            {"symbol": "AAA/USDT", "timestamp_ms": 1, "exit_return_pct": -0.03, "config_id": "slow"},
+            {"symbol": "BBB/USDT", "timestamp_ms": 2, "exit_return_pct": 0.05, "config_id": "only"},
+        ]
+    )
+
+    deduped = _dedupe_source_events(events)
+
+    assert len(deduped) == 2
+    aaa = deduped[deduped["symbol"] == "AAA/USDT"].iloc[0]
+    assert float(aaa["exit_return_pct"]) == -0.03
+    assert aaa["config_id"] == "slow"
 
 
 def test_build_hourly_asia_pump_static_combo_artifacts_builds_great_combo_catalog(tmp_path: Path) -> None:
