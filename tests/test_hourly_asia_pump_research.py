@@ -88,6 +88,11 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
     trade_portfolio_monthly = pd.read_csv(artifacts["trade_portfolio_monthly"])
     trade_portfolio_walk_forward_folds = pd.read_csv(artifacts["trade_portfolio_walk_forward_folds"])
     trade_portfolio_walk_forward_summary = pd.read_csv(artifacts["trade_portfolio_walk_forward_summary"])
+    trade_search_component_summary = pd.read_csv(artifacts["trade_search_component_summary"])
+    trade_search_holdout_summary = pd.read_csv(artifacts["trade_search_holdout_summary"])
+    trade_search_holdout_selected_events = pd.read_csv(artifacts["trade_search_holdout_selected_events"])
+    trade_search_walk_forward_folds = pd.read_csv(artifacts["trade_search_walk_forward_folds"])
+    trade_search_walk_forward_summary = pd.read_csv(artifacts["trade_search_walk_forward_summary"])
 
     assert artifacts["report"].exists()
     assert len(selected_events) == 1
@@ -179,6 +184,34 @@ def test_build_hourly_asia_pump_research_artifacts_writes_expected_outputs(tmp_p
         "selected_trade_portfolio_id",
         "test_trades_count",
     } <= set(trade_portfolio_walk_forward_folds.columns)
+    assert {
+        "search_component_id",
+        "trade_model_id",
+        "hour_utc",
+        "mean_return_pct",
+        "ambiguous_entry_rate",
+    } <= set(trade_search_component_summary.columns)
+    assert {
+        "search_combo_id",
+        "search_component_ids",
+        "selected_by_train",
+        "train_mean_return_pct",
+        "test_mean_return_pct",
+        "test_meets_full_goal",
+    } <= set(trade_search_holdout_summary.columns)
+    assert {"search_combo_id", "search_component_ids"} <= set(trade_search_holdout_selected_events.columns)
+    assert {
+        "walk_forward_fold",
+        "selection_status",
+        "search_combo_id",
+        "test_mean_return_pct",
+    } <= set(trade_search_walk_forward_folds.columns)
+    assert {
+        "selected_folds_count",
+        "oos_trades_count",
+        "oos_mean_return_pct",
+        "oos_annualized_sum_return_pct",
+    } <= set(trade_search_walk_forward_summary.columns)
 
 
 def test_trade_model_execution_sequences_entry_bar_with_m1_data(tmp_path: Path) -> None:

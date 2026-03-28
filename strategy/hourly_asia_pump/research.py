@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import hashlib
+import itertools
 import json
 import logging
 import math
@@ -39,6 +40,12 @@ _HORIZON_MINUTES: tuple[int, ...] = (5, 15, 30, 60)
 _EARLY_ENTRY_TARGET_PCTS: tuple[float, ...] = (0.01, 0.02, 0.05, 0.10)
 _LAST_RED_LOOKBACK_MINUTES = 60
 _WALK_FORWARD_MIN_TRAIN_MONTHS = 6
+_SEARCH_MIN_TRAIN_MONTHS = 6
+_SEARCH_TOP_ATOMIC_COMPONENTS = 14
+_SEARCH_MAX_COMPONENTS = 3
+_SEARCH_MIN_COMPONENT_TRADES = 4
+_SEARCH_MIN_COMPONENT_WIN_RATE = 0.38
+_SEARCH_MAX_COMPONENT_AMBIGUITY_RATE = 0.10
 
 
 def _timeframe_minutes(timeframe: Timeframe) -> int:
@@ -1641,12 +1648,19 @@ def _month_labels_from_entry(frame: pd.DataFrame) -> pd.Series:
     return entry_timestamps.dt.tz_localize(None).dt.to_period("M").astype(str)
 
 
+def _ensure_month_utc(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame.copy()
+    prepared = frame.copy()
+    if "month_utc" not in prepared.columns:
+        prepared["month_utc"] = _month_labels_from_entry(prepared)
+    return prepared
+
+
 def _monthly_returns_from_events(events: pd.DataFrame) -> pd.Series:
     if events.empty:
         return pd.Series(dtype="float64")
-    frame = events.copy()
-    if "month_utc" not in frame.columns:
-        frame["month_utc"] = _month_labels_from_entry(frame)
+    frame = _ensure_month_utc(events)
     frame["exit_return_pct"] = pd.to_numeric(frame.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce")
     monthly = (
         frame.dropna(subset=["month_utc"])
@@ -2037,6 +2051,721 @@ def _build_trade_portfolio_walk_forward(
     return pd.DataFrame(fold_rows, columns=fold_columns), oos_events, summary
 
 
+def _annualized_return_sum(total_return_pct: object, active_months_count: object) -> float | None:
+    total = _safe_numeric(total_return_pct)
+    active_months = _safe_numeric(active_months_count)
+    if total is None or active_months is None or active_months <= 0:
+        return None
+    return float(total * (12.0 / active_months))
+
+
+def _apply_search_goal_columns(summary: pd.DataFrame, *, prefix: str) -> pd.DataFrame:
+    if summary.empty:
+        return summary
+
+    frame = summary.copy()
+    positive_col = f"{prefix}positive_months_count"
+    non_positive_col = f"{prefix}non_positive_months_count"
+    mean_col = f"{prefix}mean_return_pct"
+    wr_col = f"{prefix}win_rate"
+    tpy_col = f"{prefix}trades_per_year"
+    ambiguous_col = f"{prefix}ambiguous_entry_rate"
+    annual_sum_col = f"{prefix}annual_sum_return_pct"
+
+    frame[f"{prefix}active_months_count"] = (
+        pd.to_numeric(frame.get(positive_col, pd.Series(dtype="float64")), errors="coerce").fillna(0)
+        + pd.to_numeric(frame.get(non_positive_col, pd.Series(dtype="float64")), errors="coerce").fillna(0)
+    )
+    frame[f"{prefix}annualized_sum_return_pct"] = [
+        _annualized_return_sum(total_return_pct, active_months_count)
+        for total_return_pct, active_months_count in zip(
+            frame.get(annual_sum_col, pd.Series(dtype="float64")),
+            frame.get(f"{prefix}active_months_count", pd.Series(dtype="float64")),
+            strict=False,
+        )
+    ]
+    frame[f"{prefix}meets_mean_trade_goal"] = pd.to_numeric(frame.get(mean_col, pd.Series(dtype="float64")), errors="coerce") >= 0.025
+    frame[f"{prefix}meets_wr_goal"] = pd.to_numeric(frame.get(wr_col, pd.Series(dtype="float64")), errors="coerce") > 0.40
+    frame[f"{prefix}meets_freq_goal"] = pd.to_numeric(frame.get(tpy_col, pd.Series(dtype="float64")), errors="coerce") >= 50.0
+    frame[f"{prefix}meets_annual_goal"] = pd.to_numeric(
+        frame.get(f"{prefix}annualized_sum_return_pct", pd.Series(dtype="float64")),
+        errors="coerce",
+    ) >= 1.0
+    ambiguous_values = pd.to_numeric(frame.get(ambiguous_col, pd.Series(dtype="float64")), errors="coerce")
+    frame[f"{prefix}meets_ambiguity_goal"] = ambiguous_values.fillna(0.0) <= 0.05
+    frame[f"{prefix}meets_core_goal"] = (
+        frame[f"{prefix}meets_mean_trade_goal"].astype(bool)
+        & frame[f"{prefix}meets_wr_goal"].astype(bool)
+        & frame[f"{prefix}meets_freq_goal"].astype(bool)
+    )
+    frame[f"{prefix}meets_full_goal"] = (
+        frame[f"{prefix}meets_core_goal"].astype(bool)
+        & frame.get(f"{prefix}all_active_months_positive", pd.Series(False, index=frame.index)).astype(bool)
+        & frame[f"{prefix}meets_annual_goal"].astype(bool)
+        & frame[f"{prefix}meets_ambiguity_goal"].astype(bool)
+    )
+    goal_columns = [
+        f"{prefix}meets_mean_trade_goal",
+        f"{prefix}meets_wr_goal",
+        f"{prefix}meets_freq_goal",
+        f"{prefix}meets_annual_goal",
+        f"{prefix}meets_ambiguity_goal",
+        f"{prefix}all_active_months_positive",
+    ]
+    frame[f"{prefix}goal_score"] = frame[goal_columns].astype("int64").sum(axis=1)
+    return frame
+
+
+def _sort_search_summary(summary: pd.DataFrame, *, prefix: str) -> pd.DataFrame:
+    if summary.empty:
+        return summary
+    return summary.sort_values(
+        [
+            f"{prefix}meets_full_goal",
+            f"{prefix}meets_core_goal",
+            f"{prefix}all_active_months_positive",
+            f"{prefix}goal_score",
+            f"{prefix}mean_return_pct",
+            f"{prefix}win_rate",
+            f"{prefix}trades_per_year",
+            f"{prefix}annualized_sum_return_pct",
+            f"{prefix}profit_factor",
+        ],
+        ascending=[False, False, False, False, False, False, False, False, False],
+        na_position="last",
+    ).reset_index(drop=True)
+
+
+def _search_component_id(*, model_id: str, hour_utc: int) -> str:
+    return f"{model_id}@{hour_utc:02d}h"
+
+
+def _search_combo_id(component_ids: Sequence[str]) -> str:
+    payload = "|".join(sorted(component_ids))
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+    return f"search_{digest}"
+
+
+def _summarize_search_components(trade_model_events: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "timeframe",
+        "search_component_id",
+        "search_component_label",
+        "trade_model_id",
+        "trade_model_label",
+        "hour_utc",
+        "trades_count",
+        "trades_per_year",
+        "mean_return_pct",
+        "median_return_pct",
+        "win_rate",
+        "profit_factor",
+        "annual_sum_return_pct",
+        "ambiguous_entry_rate",
+        "sequenced_entry_rate",
+    ]
+    if trade_model_events.empty:
+        return pd.DataFrame(columns=columns)
+
+    prepared = _ensure_month_utc(trade_model_events)
+    triggered = prepared[prepared["trade_triggered"].astype(bool)].copy()
+    if triggered.empty:
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict[str, object]] = []
+    grouped = triggered.groupby(["timeframe", "trade_model_id", "trade_model_label", "hour_utc"], sort=True)
+    for (timeframe, model_id, model_label, hour_utc), group in grouped:
+        exit_returns = pd.to_numeric(group.get("exit_return_pct", pd.Series(dtype="float64")), errors="coerce").dropna()
+        entry_timestamps = pd.to_datetime(
+            group.get("entry_timestamp_ms", pd.Series(dtype="float64")),
+            unit="ms",
+            utc=True,
+            errors="coerce",
+        ).dropna()
+        span_days = max(
+            1.0,
+            ((entry_timestamps.max() - entry_timestamps.min()).total_seconds() / 86_400)
+            if len(entry_timestamps) >= 2
+            else float(max(1, group.get("date_utc", pd.Series(dtype="object")).nunique())),
+        )
+        component_hour = int(_safe_numeric(hour_utc) or 0)
+        rows.append(
+            {
+                "timeframe": timeframe,
+                "search_component_id": _search_component_id(model_id=str(model_id), hour_utc=component_hour),
+                "search_component_label": f"{model_id}@{component_hour:02d}h",
+                "trade_model_id": model_id,
+                "trade_model_label": model_label,
+                "hour_utc": component_hour,
+                "trades_count": int(len(group)),
+                "trades_per_year": (len(group) / span_days) * 365.0 if len(group) > 0 else 0.0,
+                "mean_return_pct": _mean_or_none(exit_returns),
+                "median_return_pct": _median_or_none(exit_returns),
+                "win_rate": _mean_or_none((exit_returns > 0).astype("float64")),
+                "profit_factor": _profit_factor(exit_returns),
+                "annual_sum_return_pct": float(exit_returns.sum()) if not exit_returns.empty else None,
+                "ambiguous_entry_rate": _mean_or_none(group.get("entry_bar_stop_ambiguous", pd.Series(dtype="float64"))),
+                "sequenced_entry_rate": _mean_or_none(
+                    (group.get("entry_sequence_source", pd.Series(dtype="object")).astype(str) == "m1").astype("float64")
+                ),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["timeframe", "mean_return_pct", "win_rate", "trades_count"],
+        ascending=[True, False, False, False],
+        na_position="last",
+    ).reset_index(drop=True)
+
+
+def _build_search_component_candidates(
+    *,
+    trade_model_events: pd.DataFrame,
+    timeframe: str,
+    months_subset: Sequence[str],
+) -> pd.DataFrame:
+    prepared = _ensure_month_utc(trade_model_events)
+    candidates = _summarize_search_components(
+        prepared[
+            (prepared["timeframe"].astype(str) == str(timeframe))
+            & (prepared["month_utc"].astype(str).isin([str(month) for month in months_subset]))
+        ].copy()
+    )
+    if candidates.empty:
+        return candidates
+    filtered = candidates[
+        (pd.to_numeric(candidates["trades_count"], errors="coerce") >= _SEARCH_MIN_COMPONENT_TRADES)
+        & (pd.to_numeric(candidates["mean_return_pct"], errors="coerce") > 0.0)
+        & (pd.to_numeric(candidates["win_rate"], errors="coerce") >= _SEARCH_MIN_COMPONENT_WIN_RATE)
+        & (
+            pd.to_numeric(candidates["ambiguous_entry_rate"], errors="coerce").fillna(0.0)
+            <= _SEARCH_MAX_COMPONENT_AMBIGUITY_RATE
+        )
+    ].copy()
+    return filtered.sort_values(
+        ["mean_return_pct", "win_rate", "trades_count"],
+        ascending=[False, False, False],
+        na_position="last",
+    ).head(_SEARCH_TOP_ATOMIC_COMPONENTS).reset_index(drop=True)
+
+
+def _build_search_combo_specs(candidate_components: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "search_combo_id",
+        "search_combo_label",
+        "search_component_count",
+        "search_component_ids",
+        "search_component_labels",
+    ]
+    if candidate_components.empty:
+        return pd.DataFrame(columns=columns)
+
+    component_ids = candidate_components["search_component_id"].dropna().astype(str).tolist()
+    label_map = {
+        str(row["search_component_id"]): str(row["search_component_label"])
+        for row in candidate_components.to_dict("records")
+    }
+    rows: list[dict[str, object]] = []
+    for combo_size in range(1, _SEARCH_MAX_COMPONENTS + 1):
+        for combo_ids in itertools.combinations(component_ids, combo_size):
+            rows.append(
+                {
+                    "search_combo_id": _search_combo_id(combo_ids),
+                    "search_combo_label": " + ".join(label_map.get(component_id, component_id) for component_id in combo_ids),
+                    "search_component_count": combo_size,
+                    "search_component_ids": ",".join(combo_ids),
+                    "search_component_labels": ",".join(label_map.get(component_id, component_id) for component_id in combo_ids),
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _build_search_combo_component_events(
+    *,
+    trade_model_events: pd.DataFrame,
+    timeframe: str,
+    candidate_components: pd.DataFrame,
+    combo_specs: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = list(trade_model_events.columns) + [
+        "trade_portfolio_id",
+        "trade_portfolio_label",
+        "trade_portfolio_mode",
+        "portfolio_component_model_id",
+        "portfolio_component_include_hours_utc",
+        "portfolio_component_exclude_hours_utc",
+    ]
+    if trade_model_events.empty or candidate_components.empty or combo_specs.empty:
+        return pd.DataFrame(columns=columns)
+
+    prepared = _ensure_month_utc(trade_model_events)
+    triggered = prepared[
+        (prepared["timeframe"].astype(str) == str(timeframe))
+        & prepared["trade_triggered"].astype(bool)
+    ].copy()
+    if triggered.empty:
+        return pd.DataFrame(columns=columns)
+
+    component_rows_map = {
+        str(row["search_component_id"]): row
+        for row in candidate_components.to_dict("records")
+    }
+    component_frames: dict[str, pd.DataFrame] = {}
+    for component_id, row in component_rows_map.items():
+        component_frames[component_id] = triggered[
+            (triggered["trade_model_id"].astype(str) == str(row["trade_model_id"]))
+            & (pd.to_numeric(triggered["hour_utc"], errors="coerce") == int(row["hour_utc"]))
+        ].copy()
+
+    rows: list[pd.DataFrame] = []
+    for combo in combo_specs.to_dict("records"):
+        combo_id = str(combo["search_combo_id"])
+        combo_label = str(combo["search_combo_label"])
+        component_ids = [component_id for component_id in str(combo["search_component_ids"]).split(",") if component_id]
+        for component_id in component_ids:
+            component_frame = component_frames.get(component_id)
+            if component_frame is None or component_frame.empty:
+                continue
+            frame = component_frame.copy()
+            frame["trade_portfolio_id"] = combo_id
+            frame["trade_portfolio_label"] = combo_label
+            frame["trade_portfolio_mode"] = "searched"
+            frame["portfolio_component_model_id"] = component_id
+            frame["portfolio_component_include_hours_utc"] = ""
+            frame["portfolio_component_exclude_hours_utc"] = ""
+            rows.append(frame)
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=columns)
+
+
+def _build_holdout_search_summary(
+    trade_model_events: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    prepared_events = _ensure_month_utc(trade_model_events)
+    selected_event_columns = list(trade_model_events.columns) + ["search_combo_id", "search_component_ids"]
+    component_columns = [
+        "timeframe",
+        "search_component_id",
+        "search_component_label",
+        "trade_model_id",
+        "trade_model_label",
+        "hour_utc",
+        "trades_count",
+        "trades_per_year",
+        "mean_return_pct",
+        "median_return_pct",
+        "win_rate",
+        "profit_factor",
+        "annual_sum_return_pct",
+        "ambiguous_entry_rate",
+        "sequenced_entry_rate",
+        "holdout_train_start_month_utc",
+        "holdout_train_end_month_utc",
+        "holdout_test_start_month_utc",
+        "holdout_test_end_month_utc",
+    ]
+    summary_columns = [
+        "timeframe",
+        "search_combo_id",
+        "search_combo_label",
+        "search_component_count",
+        "search_component_ids",
+        "search_component_labels",
+        "holdout_train_start_month_utc",
+        "holdout_train_end_month_utc",
+        "holdout_test_start_month_utc",
+        "holdout_test_end_month_utc",
+        "selected_by_train",
+        "train_trades_count",
+        "train_trades_per_year",
+        "train_mean_return_pct",
+        "train_median_return_pct",
+        "train_win_rate",
+        "train_profit_factor",
+        "train_ambiguous_entry_rate",
+        "train_positive_months_count",
+        "train_non_positive_months_count",
+        "train_all_active_months_positive",
+        "train_annual_sum_return_pct",
+        "train_active_months_count",
+        "train_annualized_sum_return_pct",
+        "train_meets_mean_trade_goal",
+        "train_meets_wr_goal",
+        "train_meets_freq_goal",
+        "train_meets_annual_goal",
+        "train_meets_ambiguity_goal",
+        "train_meets_core_goal",
+        "train_meets_full_goal",
+        "train_goal_score",
+        "test_trades_count",
+        "test_trades_per_year",
+        "test_mean_return_pct",
+        "test_median_return_pct",
+        "test_win_rate",
+        "test_profit_factor",
+        "test_ambiguous_entry_rate",
+        "test_positive_months_count",
+        "test_non_positive_months_count",
+        "test_all_active_months_positive",
+        "test_annual_sum_return_pct",
+        "test_active_months_count",
+        "test_annualized_sum_return_pct",
+        "test_meets_mean_trade_goal",
+        "test_meets_wr_goal",
+        "test_meets_freq_goal",
+        "test_meets_annual_goal",
+        "test_meets_ambiguity_goal",
+        "test_meets_core_goal",
+        "test_meets_full_goal",
+        "test_goal_score",
+    ]
+    if prepared_events.empty:
+        return (
+            pd.DataFrame(columns=summary_columns),
+            pd.DataFrame(columns=selected_event_columns),
+            pd.DataFrame(columns=component_columns),
+        )
+
+    rows: list[pd.DataFrame] = []
+    selected_event_frames: list[pd.DataFrame] = []
+    candidate_component_frames: list[pd.DataFrame] = []
+    for timeframe, timeframe_events in prepared_events.groupby("timeframe", sort=True):
+        months = sorted(timeframe_events["month_utc"].dropna().astype(str).unique().tolist())
+        if len(months) <= _SEARCH_MIN_TRAIN_MONTHS:
+            continue
+        train_months = months[:_SEARCH_MIN_TRAIN_MONTHS]
+        test_months = months[_SEARCH_MIN_TRAIN_MONTHS:]
+        if not test_months:
+            continue
+
+        candidate_components = _build_search_component_candidates(
+            trade_model_events=trade_model_events,
+            timeframe=str(timeframe),
+            months_subset=train_months,
+        )
+        if candidate_components.empty:
+            continue
+        candidate_components = candidate_components.copy()
+        candidate_components["holdout_train_start_month_utc"] = train_months[0]
+        candidate_components["holdout_train_end_month_utc"] = train_months[-1]
+        candidate_components["holdout_test_start_month_utc"] = test_months[0]
+        candidate_components["holdout_test_end_month_utc"] = test_months[-1]
+        candidate_component_frames.append(candidate_components)
+
+        combo_specs = _build_search_combo_specs(candidate_components)
+        combo_specs["timeframe"] = str(timeframe)
+        combo_component_events = _build_search_combo_component_events(
+            trade_model_events=trade_model_events,
+            timeframe=str(timeframe),
+            candidate_components=candidate_components,
+            combo_specs=combo_specs,
+        )
+        combo_events = _build_trade_portfolio_events(combo_component_events)
+        if combo_events.empty:
+            continue
+
+        train_events = combo_events[combo_events["month_utc"].astype(str).isin(train_months)].copy()
+        test_events = combo_events[combo_events["month_utc"].astype(str).isin(test_months)].copy()
+
+        train_summary = _build_trade_portfolio_summary(train_events)
+        test_summary = _build_trade_portfolio_summary(test_events)
+        if train_summary.empty:
+            continue
+        train_summary = _apply_search_goal_columns(train_summary, prefix="")
+        ranked_train = _sort_search_summary(train_summary, prefix="")
+        selected_id = str(ranked_train.iloc[0]["trade_portfolio_id"])
+        train_summary = train_summary.rename(
+            columns={
+                column: f"train_{column}"
+                for column in train_summary.columns
+                if column not in {"timeframe", "trade_portfolio_id", "trade_portfolio_label"}
+            }
+        )
+        test_summary = _apply_search_goal_columns(test_summary, prefix="")
+        test_summary = test_summary.rename(
+            columns={
+                column: f"test_{column}"
+                for column in test_summary.columns
+                if column not in {"timeframe", "trade_portfolio_id", "trade_portfolio_label"}
+            }
+        )
+        merged = combo_specs.rename(
+            columns={
+                "search_combo_id": "search_combo_id",
+                "search_combo_label": "search_combo_label",
+            }
+        ).merge(
+            train_summary,
+            left_on=["timeframe", "search_combo_id", "search_combo_label"],
+            right_on=["timeframe", "trade_portfolio_id", "trade_portfolio_label"],
+            how="left",
+        ).merge(
+            test_summary,
+            left_on=["timeframe", "search_combo_id", "search_combo_label"],
+            right_on=["timeframe", "trade_portfolio_id", "trade_portfolio_label"],
+            how="left",
+        )
+        merged = merged.drop(
+            columns=[
+                column
+                for column in (
+                    "trade_portfolio_id_x",
+                    "trade_portfolio_label_x",
+                    "trade_portfolio_id_y",
+                    "trade_portfolio_label_y",
+                    "trade_portfolio_id",
+                    "trade_portfolio_label",
+                )
+                if column in merged.columns
+            ]
+        )
+        merged["holdout_train_start_month_utc"] = train_months[0]
+        merged["holdout_train_end_month_utc"] = train_months[-1]
+        merged["holdout_test_start_month_utc"] = test_months[0]
+        merged["holdout_test_end_month_utc"] = test_months[-1]
+        ranked = _sort_search_summary(merged, prefix="train_")
+        ranked["selected_by_train"] = ranked["search_combo_id"].astype(str) == selected_id
+        rows.append(ranked.reindex(columns=summary_columns))
+        selected_frame = test_events[test_events["trade_portfolio_id"].astype(str) == selected_id].copy()
+        if not selected_frame.empty:
+            selected_frame["search_combo_id"] = selected_id
+            selected_frame["search_component_ids"] = str(
+                ranked.loc[ranked["search_combo_id"].astype(str) == selected_id, "search_component_ids"].iloc[0]
+            )
+            selected_event_frames.append(selected_frame)
+
+    summary = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=summary_columns)
+    candidate_components_all = (
+        pd.concat(candidate_component_frames, ignore_index=True)
+        if candidate_component_frames
+        else pd.DataFrame(columns=component_columns)
+    )
+    selected_events = (
+        pd.concat(selected_event_frames, ignore_index=True)
+        if selected_event_frames
+        else pd.DataFrame(columns=selected_event_columns)
+    )
+    return summary, selected_events, candidate_components_all
+
+
+def _build_search_walk_forward(
+    trade_model_events: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    prepared_events = _ensure_month_utc(trade_model_events)
+    event_columns = list(trade_model_events.columns) + ["walk_forward_fold", "walk_forward_test_month_utc", "search_combo_id"]
+    fold_columns = [
+        "timeframe",
+        "walk_forward_fold",
+        "train_start_month_utc",
+        "train_end_month_utc",
+        "train_months_count",
+        "test_month_utc",
+        "selection_status",
+        "search_combo_id",
+        "search_combo_label",
+        "search_component_ids",
+        "train_trades_per_year",
+        "train_mean_return_pct",
+        "train_win_rate",
+        "train_goal_score",
+        "train_meets_core_goal",
+        "train_meets_full_goal",
+        "test_trades_count",
+        "test_mean_return_pct",
+        "test_win_rate",
+        "test_profit_factor",
+        "test_total_return_pct",
+        "test_month_positive",
+        "test_ambiguous_entry_rate",
+    ]
+    summary_columns = [
+        "timeframe",
+        "folds_count",
+        "selected_folds_count",
+        "skipped_folds_count",
+        "active_test_months_count",
+        "positive_test_months_count",
+        "non_positive_test_months_count",
+        "all_active_test_months_positive",
+        "oos_trades_count",
+        "oos_trades_per_year",
+        "oos_mean_return_pct",
+        "oos_median_return_pct",
+        "oos_win_rate",
+        "oos_profit_factor",
+        "oos_annual_sum_return_pct",
+        "oos_annualized_sum_return_pct",
+        "oos_ambiguous_entry_rate",
+        "meets_50_trades_per_year",
+        "meets_150_trades_per_year",
+    ]
+    if prepared_events.empty:
+        return pd.DataFrame(columns=fold_columns), pd.DataFrame(columns=event_columns), pd.DataFrame(columns=summary_columns)
+
+    fold_rows: list[dict[str, object]] = []
+    oos_event_frames: list[pd.DataFrame] = []
+    for timeframe, timeframe_events in prepared_events.groupby("timeframe", sort=True):
+        months = sorted(timeframe_events["month_utc"].dropna().astype(str).unique().tolist())
+        if len(months) <= _SEARCH_MIN_TRAIN_MONTHS:
+            continue
+        for fold_index in range(_SEARCH_MIN_TRAIN_MONTHS, len(months)):
+            train_months = months[:fold_index]
+            test_month = months[fold_index]
+            candidate_components = _build_search_component_candidates(
+                trade_model_events=trade_model_events,
+                timeframe=str(timeframe),
+                months_subset=train_months,
+            )
+            if candidate_components.empty:
+                fold_rows.append(
+                    {
+                        "timeframe": timeframe,
+                        "walk_forward_fold": fold_index - _SEARCH_MIN_TRAIN_MONTHS + 1,
+                        "train_start_month_utc": train_months[0],
+                        "train_end_month_utc": train_months[-1],
+                        "train_months_count": len(train_months),
+                        "test_month_utc": test_month,
+                        "selection_status": "no_components",
+                    }
+                )
+                continue
+            combo_specs = _build_search_combo_specs(candidate_components)
+            combo_component_events = _build_search_combo_component_events(
+                trade_model_events=trade_model_events,
+                timeframe=str(timeframe),
+                candidate_components=candidate_components,
+                combo_specs=combo_specs,
+            )
+            combo_events = _build_trade_portfolio_events(combo_component_events)
+            train_events = combo_events[combo_events["month_utc"].astype(str).isin(train_months)].copy()
+            train_summary = _build_trade_portfolio_summary(train_events)
+            if train_summary.empty:
+                fold_rows.append(
+                    {
+                        "timeframe": timeframe,
+                        "walk_forward_fold": fold_index - _SEARCH_MIN_TRAIN_MONTHS + 1,
+                        "train_start_month_utc": train_months[0],
+                        "train_end_month_utc": train_months[-1],
+                        "train_months_count": len(train_months),
+                        "test_month_utc": test_month,
+                        "selection_status": "no_combos",
+                    }
+                )
+                continue
+            train_summary = _apply_search_goal_columns(train_summary, prefix="")
+            ranked = _sort_search_summary(train_summary, prefix="")
+            top_row = ranked.iloc[0]
+            if not bool(top_row["meets_core_goal"]):
+                fold_rows.append(
+                    {
+                        "timeframe": timeframe,
+                        "walk_forward_fold": fold_index - _SEARCH_MIN_TRAIN_MONTHS + 1,
+                        "train_start_month_utc": train_months[0],
+                        "train_end_month_utc": train_months[-1],
+                        "train_months_count": len(train_months),
+                        "test_month_utc": test_month,
+                        "selection_status": "no_qualified_combo",
+                    }
+                )
+                continue
+            selected_id = str(top_row["trade_portfolio_id"])
+            selected_events = combo_events[
+                (combo_events["trade_portfolio_id"].astype(str) == selected_id)
+                & (combo_events["month_utc"].astype(str) == test_month)
+            ].copy()
+            test_summary = _build_trade_portfolio_summary(selected_events)
+            test_row = test_summary.iloc[0] if not test_summary.empty else pd.Series(dtype="object")
+            fold_rows.append(
+                {
+                    "timeframe": timeframe,
+                    "walk_forward_fold": fold_index - _SEARCH_MIN_TRAIN_MONTHS + 1,
+                    "train_start_month_utc": train_months[0],
+                    "train_end_month_utc": train_months[-1],
+                    "train_months_count": len(train_months),
+                    "test_month_utc": test_month,
+                    "selection_status": "selected",
+                    "search_combo_id": selected_id,
+                    "search_combo_label": str(top_row["trade_portfolio_label"]),
+                    "search_component_ids": str(
+                        combo_specs.loc[combo_specs["search_combo_id"].astype(str) == selected_id, "search_component_ids"].iloc[0]
+                    ),
+                    "train_trades_per_year": top_row.get("trades_per_year"),
+                    "train_mean_return_pct": top_row.get("mean_return_pct"),
+                    "train_win_rate": top_row.get("win_rate"),
+                    "train_goal_score": top_row.get("goal_score"),
+                    "train_meets_core_goal": top_row.get("meets_core_goal"),
+                    "train_meets_full_goal": top_row.get("meets_full_goal"),
+                    "test_trades_count": test_row.get("trades_count"),
+                    "test_mean_return_pct": test_row.get("mean_return_pct"),
+                    "test_win_rate": test_row.get("win_rate"),
+                    "test_profit_factor": test_row.get("profit_factor"),
+                    "test_total_return_pct": test_row.get("annual_sum_return_pct"),
+                    "test_month_positive": test_row.get("all_active_months_positive"),
+                    "test_ambiguous_entry_rate": test_row.get("ambiguous_entry_rate"),
+                }
+            )
+            if not selected_events.empty:
+                selected_events["walk_forward_fold"] = fold_index - _SEARCH_MIN_TRAIN_MONTHS + 1
+                selected_events["walk_forward_test_month_utc"] = test_month
+                selected_events["search_combo_id"] = selected_id
+                oos_event_frames.append(selected_events)
+
+    folds = pd.DataFrame(fold_rows, columns=fold_columns)
+    oos_events = pd.concat(oos_event_frames, ignore_index=True) if oos_event_frames else pd.DataFrame(columns=event_columns)
+    if oos_events.empty:
+        return folds, oos_events, pd.DataFrame(columns=summary_columns)
+
+    oos_summary = _build_trade_portfolio_summary(
+        oos_events.assign(
+            trade_portfolio_id=oos_events.get("timeframe", pd.Series(dtype="object")).astype(str) + "_search_walk_forward",
+            trade_portfolio_label="Adaptive Search Walk-Forward",
+        )
+    )
+    oos_summary = _apply_search_goal_columns(oos_summary, prefix="")
+    rows: list[dict[str, object]] = []
+    for timeframe, group in folds.groupby("timeframe", sort=True):
+        timeframe_oos = oos_events[oos_events["timeframe"].astype(str) == str(timeframe)].copy()
+        timeframe_summary = oos_summary[oos_summary["timeframe"].astype(str) == str(timeframe)]
+        row = timeframe_summary.iloc[0] if not timeframe_summary.empty else pd.Series(dtype="object")
+        active_months = int(
+            pd.to_numeric(group.get("test_trades_count", pd.Series(dtype="float64")), errors="coerce").fillna(0).gt(0).sum()
+        )
+        test_month_positive = (
+            group.get("test_month_positive", pd.Series(dtype="boolean")).astype("boolean").fillna(False)
+        )
+        selected_test_month_positive = (
+            group.loc[group["selection_status"].astype(str) == "selected", "test_month_positive"].astype("boolean").fillna(False)
+        )
+        rows.append(
+            {
+                "timeframe": timeframe,
+                "folds_count": int(len(group)),
+                "selected_folds_count": int((group["selection_status"].astype(str) == "selected").sum()),
+                "skipped_folds_count": int((group["selection_status"].astype(str) != "selected").sum()),
+                "active_test_months_count": active_months,
+                "positive_test_months_count": int(test_month_positive.astype(bool).sum()),
+                "non_positive_test_months_count": int(
+                    selected_test_month_positive.astype(bool).eq(False).sum()
+                ),
+                "all_active_test_months_positive": bool(
+                    selected_test_month_positive.astype(bool).all()
+                )
+                if active_months > 0
+                else False,
+                "oos_trades_count": int(len(timeframe_oos)),
+                "oos_trades_per_year": row.get("trades_per_year"),
+                "oos_mean_return_pct": row.get("mean_return_pct"),
+                "oos_median_return_pct": row.get("median_return_pct"),
+                "oos_win_rate": row.get("win_rate"),
+                "oos_profit_factor": row.get("profit_factor"),
+                "oos_annual_sum_return_pct": row.get("annual_sum_return_pct"),
+                "oos_annualized_sum_return_pct": row.get("annualized_sum_return_pct"),
+                "oos_ambiguous_entry_rate": row.get("ambiguous_entry_rate"),
+                "meets_50_trades_per_year": bool((row.get("trades_per_year") or 0) >= 50.0),
+                "meets_150_trades_per_year": bool((row.get("trades_per_year") or 0) >= 150.0),
+            }
+        )
+    return folds, oos_events, pd.DataFrame(rows, columns=summary_columns)
+
+
 def _filter_events_for_params(events: pd.DataFrame, params: HourlyAsiaPumpParams) -> pd.DataFrame:
     if events.empty:
         return pd.DataFrame()
@@ -2236,6 +2965,9 @@ def _write_report(
     trade_portfolio_summary: pd.DataFrame,
     trade_portfolio_walk_forward_summary: pd.DataFrame,
     trade_portfolio_walk_forward_folds: pd.DataFrame,
+    search_holdout_summary: pd.DataFrame,
+    search_walk_forward_summary: pd.DataFrame,
+    search_walk_forward_folds: pd.DataFrame,
     selection_profile: HourlyAsiaPumpProfileId,
 ) -> Path:
     context_frame = pd.DataFrame(
@@ -2250,6 +2982,11 @@ def _write_report(
     selected_profile_rows = (
         profile_summary[profile_summary["profile_id"].astype(str) == str(selection_profile)].copy()
         if not profile_summary.empty and "profile_id" in profile_summary.columns
+        else pd.DataFrame()
+    )
+    selected_search_holdout_rows = (
+        search_holdout_summary[search_holdout_summary.get("selected_by_train", pd.Series(dtype="bool")).fillna(False).astype(bool)].copy()
+        if not search_holdout_summary.empty
         else pd.DataFrame()
     )
 
@@ -2403,6 +3140,68 @@ def _write_report(
             limit=24,
         ),
         "",
+        "## Honest Search Holdout",
+        "",
+        _frame_to_markdown(
+            selected_search_holdout_rows,
+            columns=(
+                "timeframe",
+                "search_combo_label",
+                "search_component_ids",
+                "train_mean_return_pct",
+                "train_win_rate",
+                "train_trades_per_year",
+                "train_non_positive_months_count",
+                "test_mean_return_pct",
+                "test_win_rate",
+                "test_trades_per_year",
+                "test_non_positive_months_count",
+                "test_annualized_sum_return_pct",
+                "test_meets_full_goal",
+            ),
+        ),
+        "",
+        "## Honest Search Walk-Forward",
+        "",
+        _frame_to_markdown(
+            search_walk_forward_summary,
+            columns=(
+                "timeframe",
+                "folds_count",
+                "selected_folds_count",
+                "skipped_folds_count",
+                "active_test_months_count",
+                "oos_trades_count",
+                "oos_trades_per_year",
+                "oos_mean_return_pct",
+                "oos_win_rate",
+                "oos_profit_factor",
+                "positive_test_months_count",
+                "non_positive_test_months_count",
+                "all_active_test_months_positive",
+                "oos_annualized_sum_return_pct",
+            ),
+        ),
+        "",
+        "## Honest Search Folds",
+        "",
+        _frame_to_markdown(
+            search_walk_forward_folds,
+            columns=(
+                "timeframe",
+                "walk_forward_fold",
+                "test_month_utc",
+                "selection_status",
+                "search_combo_label",
+                "train_mean_return_pct",
+                "train_trades_per_year",
+                "test_trades_count",
+                "test_mean_return_pct",
+                "test_total_return_pct",
+            ),
+            limit=24,
+        ),
+        "",
         "## Top Grid Rows",
         "",
     ]
@@ -2453,6 +3252,12 @@ def _write_report(
             f"- trade portfolio walk-forward folds: `{output_dir / 'trade_portfolio_walk_forward_folds.csv'}`",
             f"- trade portfolio walk-forward events: `{output_dir / 'trade_portfolio_walk_forward_events.csv'}`",
             f"- trade portfolio walk-forward summary: `{output_dir / 'trade_portfolio_walk_forward_summary.csv'}`",
+            f"- trade search component summary: `{output_dir / 'trade_search_component_summary.csv'}`",
+            f"- trade search holdout summary: `{output_dir / 'trade_search_holdout_summary.csv'}`",
+            f"- trade search holdout selected events: `{output_dir / 'trade_search_holdout_selected_events.csv'}`",
+            f"- trade search walk-forward folds: `{output_dir / 'trade_search_walk_forward_folds.csv'}`",
+            f"- trade search walk-forward events: `{output_dir / 'trade_search_walk_forward_events.csv'}`",
+            f"- trade search walk-forward summary: `{output_dir / 'trade_search_walk_forward_summary.csv'}`",
             "",
         ]
     )
@@ -2678,6 +3483,12 @@ def build_hourly_asia_pump_research_artifacts(
     trade_portfolio_walk_forward_folds_all, trade_portfolio_walk_forward_events_all, trade_portfolio_walk_forward_summary_all = (
         _build_trade_portfolio_walk_forward(trade_portfolio_events_all)
     )
+    trade_search_holdout_summary_all, trade_search_holdout_selected_events_all, trade_search_component_summary_all = (
+        _build_holdout_search_summary(trade_model_events_all)
+    )
+    trade_search_walk_forward_folds_all, trade_search_walk_forward_events_all, trade_search_walk_forward_summary_all = (
+        _build_search_walk_forward(trade_model_events_all)
+    )
     top_grid_rows = _top_grid_rows_by_timeframe(grid_summary_all, limit=10)
 
     grid_summary_path = output_dir / "grid_summary.csv"
@@ -2728,6 +3539,24 @@ def build_hourly_asia_pump_research_artifacts(
     trade_portfolio_walk_forward_summary_path = output_dir / "trade_portfolio_walk_forward_summary.csv"
     trade_portfolio_walk_forward_summary_all.to_csv(trade_portfolio_walk_forward_summary_path, index=False)
 
+    trade_search_component_summary_path = output_dir / "trade_search_component_summary.csv"
+    trade_search_component_summary_all.to_csv(trade_search_component_summary_path, index=False)
+
+    trade_search_holdout_summary_path = output_dir / "trade_search_holdout_summary.csv"
+    trade_search_holdout_summary_all.to_csv(trade_search_holdout_summary_path, index=False)
+
+    trade_search_holdout_selected_events_path = output_dir / "trade_search_holdout_selected_events.csv"
+    trade_search_holdout_selected_events_all.to_csv(trade_search_holdout_selected_events_path, index=False)
+
+    trade_search_walk_forward_folds_path = output_dir / "trade_search_walk_forward_folds.csv"
+    trade_search_walk_forward_folds_all.to_csv(trade_search_walk_forward_folds_path, index=False)
+
+    trade_search_walk_forward_events_path = output_dir / "trade_search_walk_forward_events.csv"
+    trade_search_walk_forward_events_all.to_csv(trade_search_walk_forward_events_path, index=False)
+
+    trade_search_walk_forward_summary_path = output_dir / "trade_search_walk_forward_summary.csv"
+    trade_search_walk_forward_summary_all.to_csv(trade_search_walk_forward_summary_path, index=False)
+
     top_grid_rows_path = output_dir / "top_grid_by_timeframe.csv"
     top_grid_rows.to_csv(top_grid_rows_path, index=False)
 
@@ -2744,6 +3573,9 @@ def build_hourly_asia_pump_research_artifacts(
         "max_follow_minutes": max_follow_minutes,
         "commission_rate": commission_rate,
         "walk_forward_min_train_months": _WALK_FORWARD_MIN_TRAIN_MONTHS,
+        "search_min_train_months": _SEARCH_MIN_TRAIN_MONTHS,
+        "search_top_atomic_components": _SEARCH_TOP_ATOMIC_COMPONENTS,
+        "search_max_components": _SEARCH_MAX_COMPONENTS,
         "top_n": top_n,
         "symbols": list(symbols or []),
         "resolved_symbols_by_timeframe": resolved_symbols_by_timeframe,
@@ -2762,6 +3594,9 @@ def build_hourly_asia_pump_research_artifacts(
         trade_portfolio_summary=trade_portfolio_summary_all,
         trade_portfolio_walk_forward_summary=trade_portfolio_walk_forward_summary_all,
         trade_portfolio_walk_forward_folds=trade_portfolio_walk_forward_folds_all,
+        search_holdout_summary=trade_search_holdout_summary_all,
+        search_walk_forward_summary=trade_search_walk_forward_summary_all,
+        search_walk_forward_folds=trade_search_walk_forward_folds_all,
         selection_profile=selection_profile,
     )
 
@@ -2790,6 +3625,12 @@ def build_hourly_asia_pump_research_artifacts(
         "trade_portfolio_walk_forward_folds": trade_portfolio_walk_forward_folds_path,
         "trade_portfolio_walk_forward_events": trade_portfolio_walk_forward_events_path,
         "trade_portfolio_walk_forward_summary": trade_portfolio_walk_forward_summary_path,
+        "trade_search_component_summary": trade_search_component_summary_path,
+        "trade_search_holdout_summary": trade_search_holdout_summary_path,
+        "trade_search_holdout_selected_events": trade_search_holdout_selected_events_path,
+        "trade_search_walk_forward_folds": trade_search_walk_forward_folds_path,
+        "trade_search_walk_forward_events": trade_search_walk_forward_events_path,
+        "trade_search_walk_forward_summary": trade_search_walk_forward_summary_path,
         "top_grid_by_timeframe": top_grid_rows_path,
         "research_context": context_path,
         "report": report_path,
