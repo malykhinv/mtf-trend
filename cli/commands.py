@@ -2223,6 +2223,7 @@ def _run_hourly_pump_static_combo_analysis_inner(config: AppConfig, args: argpar
         base_events_path=base_events_path,
         confirmed_events_path=confirmed_events_path,
         output_dir=root_output_dir,
+        cache_dir=config.backtest.cache_dir,
         logger=logger,
     )
     logger.info(

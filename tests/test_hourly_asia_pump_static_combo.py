@@ -213,10 +213,12 @@ def test_build_hourly_asia_pump_static_combo_artifacts_builds_great_combo_catalo
     combo_robustness_summary = pd.read_csv(artifacts["combo_robustness_summary"])
     recommended_shortlist = pd.read_csv(artifacts["recommended_combo_shortlist"])
     priority_monthly = pd.read_csv(artifacts["priority_selected_monthly"])
+    trade_chart_manifest = pd.read_csv(artifacts["priority_trade_chart_manifest"])
 
     assert artifacts["static_combo_context"].exists()
     assert artifacts["report"].exists()
     assert artifacts["charts_manifest"].exists()
+    assert artifacts["priority_trade_chart_manifest"].exists()
     assert len(great_catalog) == 1
     assert great_catalog.iloc[0]["combo_variant"] == "A"
     assert int(great_catalog.iloc[0]["combo_priority"]) == 1
@@ -233,3 +235,4 @@ def test_build_hourly_asia_pump_static_combo_artifacts_builds_great_combo_catalo
     assert combo_robustness_summary.iloc[0]["combo_variant"] == "A"
     assert len(recommended_shortlist) == 1
     assert set(priority_monthly.columns) >= {"month_utc", "total_return_pct", "trades_count", "month_positive"}
+    assert trade_chart_manifest.empty

@@ -15,6 +15,9 @@ import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 import pandas as pd
 
+from domain.enums.timeframe import Timeframe
+from vectorbt_runner.data_preparer import DataPreparer
+
 _STATIC_TOP_K_VALUES: tuple[int, ...] = (99, 1, 2)
 _STATIC_MIN_COMPONENTS = 2
 _STATIC_MAX_COMPONENTS = 5
@@ -330,23 +333,53 @@ def _build_combo_events(
         exit_returns = pd.to_numeric(sorted_group.get("exit_return_pct"), errors="coerce").dropna()
         if exit_returns.empty:
             continue
-        entry_timestamp_ms = pd.to_numeric(sorted_group.get("entry_timestamp_ms"), errors="coerce").dropna()
-        first = sorted_group.iloc[0]
+        target_return = float(exit_returns.mean())
+        sorted_group["_exit_diff_to_mean"] = (
+            pd.to_numeric(sorted_group.get("exit_return_pct"), errors="coerce") - target_return
+        ).abs()
+        representative = sorted_group.sort_values(
+            ["_exit_diff_to_mean", "entry_timestamp_ms", "combo_component_id"],
+            na_position="last",
+        ).iloc[0]
+        entry_price = _safe_numeric(representative.get("entry_price"))
+        if entry_price is None:
+            entry_price = _safe_numeric(representative.get("next_bar_open_price"))
+        stop_price = _safe_numeric(representative.get("initial_stop_price"))
+        if stop_price is None:
+            stop_price = _safe_numeric(representative.get("next_bar_low_price"))
+        exit_price = None
+        if entry_price is not None:
+            exit_price = entry_price * (1.0 + target_return)
         rows.append(
             {
                 "symbol": str(symbol),
                 "timestamp_ms": int(timestamp_ms),
-                "entry_timestamp_ms": int(entry_timestamp_ms.min()) if not entry_timestamp_ms.empty else None,
-                "entry_timestamp_utc": first.get("entry_timestamp_utc"),
-                "date_utc": first.get("date_utc"),
-                "month_utc": first.get("month_utc"),
-                "hour_utc": first.get("hour_utc"),
+                "entry_timestamp_ms": representative.get("entry_timestamp_ms"),
+                "entry_timestamp_utc": representative.get("entry_timestamp_utc"),
+                "date_utc": representative.get("date_utc"),
+                "month_utc": representative.get("month_utc"),
+                "hour_utc": representative.get("hour_utc"),
                 "combo_matched_component_count": int(sorted_group["combo_component_id"].nunique()),
                 "combo_matched_component_ids": ",".join(sorted(sorted_group["combo_component_id"].astype(str).unique().tolist())),
-                "exit_return_pct": float(exit_returns.mean()),
+                "exit_return_pct": target_return,
                 "trigger_return_pct": float(pd.to_numeric(sorted_group.get("trigger_return_pct"), errors="coerce").max()),
                 "volume_mult": float(pd.to_numeric(sorted_group.get("volume_mult"), errors="coerce").max()),
                 "range_atr": float(pd.to_numeric(sorted_group.get("range_atr"), errors="coerce").max()),
+                "source_timeframe": representative.get("timeframe"),
+                "source_trade_model_id": representative.get("trade_model_id"),
+                "source_config_id": representative.get("config_id"),
+                "source_entry_timestamp_ms": representative.get("entry_timestamp_ms"),
+                "source_entry_timestamp_utc": representative.get("entry_timestamp_utc"),
+                "source_entry_price": entry_price,
+                "source_stop_price": stop_price,
+                "source_exit_timestamp_ms": representative.get("exit_timestamp_ms"),
+                "source_exit_timestamp_utc": representative.get("exit_timestamp_utc"),
+                "source_exit_price": exit_price,
+                "source_exit_reason": representative.get("exit_reason"),
+                "source_trigger_open": _safe_numeric(representative.get("trigger_open")),
+                "source_trigger_high": _safe_numeric(representative.get("trigger_high")),
+                "source_trigger_low": _safe_numeric(representative.get("trigger_low")),
+                "source_trigger_close": _safe_numeric(representative.get("trigger_close")),
             }
         )
     frame = pd.DataFrame(rows)
@@ -912,6 +945,276 @@ def _save_leader_robustness_chart(shortlist: pd.DataFrame, path: Path) -> None:
     plt.close(figure)
 
 
+def _sanitize_filename(value: str) -> str:
+    sanitized = "".join(character if character.isalnum() or character in {"-", "_"} else "_" for character in value)
+    while "__" in sanitized:
+        sanitized = sanitized.replace("__", "_")
+    return sanitized.strip("_") or "item"
+
+
+def _resolve_trade_chart_timeframe(raw_value: object) -> Timeframe | None:
+    if raw_value is None or raw_value is pd.NA:
+        return Timeframe.M5
+    normalized = str(raw_value).strip().lower()
+    for timeframe in Timeframe:
+        if timeframe.value == normalized:
+            return timeframe
+    return None
+
+
+def _select_trade_chart_samples(manifest: pd.DataFrame) -> pd.DataFrame:
+    if manifest.empty or "chart_status" not in manifest.columns:
+        return pd.DataFrame(columns=list(manifest.columns) if not manifest.empty else ["chart_path"])
+    available = manifest[manifest["chart_status"].astype(str) == "created"].copy()
+    if available.empty:
+        return available
+
+    picks: list[pd.Series] = []
+    available = available.sort_values("entry_timestamp_ms").copy()
+    picks.append(available.iloc[0])
+    best = available.sort_values("exit_return_pct", ascending=False).iloc[0]
+    worst = available.sort_values("exit_return_pct", ascending=True).iloc[0]
+    median_value = float(pd.to_numeric(available["exit_return_pct"], errors="coerce").median())
+    median_row = available.assign(_median_distance=(pd.to_numeric(available["exit_return_pct"], errors="coerce") - median_value).abs()).sort_values("_median_distance").iloc[0]
+    picks.extend([best, worst, median_row])
+
+    deduped_rows: list[pd.Series] = []
+    seen_paths: set[str] = set()
+    for row in picks:
+        chart_path = str(row.get("chart_path", ""))
+        if chart_path and chart_path not in seen_paths:
+            deduped_rows.append(row)
+            seen_paths.add(chart_path)
+    return pd.DataFrame(deduped_rows).reset_index(drop=True)
+
+
+def _save_trade_instrument_chart(
+    *,
+    frame: pd.DataFrame,
+    symbol: str,
+    combo_variant: str,
+    event_timestamp_ms: int,
+    entry_timestamp_ms: int,
+    exit_timestamp_ms: int | None,
+    entry_price: float | None,
+    stop_price: float | None,
+    exit_price: float | None,
+    trigger_high: float | None,
+    trigger_low: float | None,
+    exit_return_pct: float | None,
+    output_path: Path,
+) -> None:
+    if frame.empty:
+        _save_placeholder_chart(output_path, title=f"{symbol} {combo_variant} trade")
+        return
+
+    chart_frame = frame.copy().sort_values("timestamp").reset_index(drop=True)
+    chart_frame["datetime_utc"] = pd.to_datetime(chart_frame["timestamp"], unit="ms", utc=True, errors="coerce")
+    x_values = list(range(len(chart_frame)))
+
+    figure, (price_axis, volume_axis) = plt.subplots(
+        2,
+        1,
+        figsize=(16, 9),
+        sharex=True,
+        gridspec_kw={"height_ratios": [4, 1]},
+    )
+
+    candle_width = 0.6
+    for idx, row in chart_frame.iterrows():
+        open_price = float(row["open"])
+        close_price = float(row["close"])
+        high_price = float(row["high"])
+        low_price = float(row["low"])
+        color = "#198754" if close_price >= open_price else "#DC3545"
+        price_axis.vlines(idx, low_price, high_price, color=color, linewidth=1.0)
+        body_low = min(open_price, close_price)
+        body_height = max(abs(close_price - open_price), 1e-8)
+        price_axis.add_patch(plt.Rectangle((idx - candle_width / 2, body_low), candle_width, body_height, color=color, alpha=0.85))
+        volume_axis.bar(idx, float(row["volume"]), color=color, width=0.7, alpha=0.75)
+
+    timestamp_lookup = {int(value): idx for idx, value in enumerate(pd.to_numeric(chart_frame["timestamp"], errors="coerce").fillna(0).astype(int).tolist())}
+    trigger_idx = timestamp_lookup.get(int(event_timestamp_ms))
+    entry_idx = timestamp_lookup.get(int(entry_timestamp_ms))
+    exit_idx = timestamp_lookup.get(int(exit_timestamp_ms)) if exit_timestamp_ms is not None else None
+
+    if trigger_idx is not None:
+        price_axis.axvline(trigger_idx, color="#6F42C1", linewidth=1.6, linestyle="--", label="Trigger")
+    if entry_idx is not None:
+        price_axis.axvline(entry_idx, color="#0D6EFD", linewidth=1.6, linestyle="-.", label="Entry")
+    if exit_idx is not None:
+        price_axis.axvline(exit_idx, color="#FD7E14", linewidth=1.6, linestyle="-.", label="Exit")
+
+    if entry_price is not None:
+        price_axis.axhline(entry_price, color="#0D6EFD", linewidth=1.3, linestyle="-", alpha=0.8)
+    if stop_price is not None:
+        price_axis.axhline(stop_price, color="#DC3545", linewidth=1.3, linestyle="--", alpha=0.8)
+    if exit_price is not None:
+        price_axis.axhline(exit_price, color="#FD7E14", linewidth=1.3, linestyle=":", alpha=0.9)
+    if trigger_high is not None:
+        price_axis.axhline(trigger_high, color="#20C997", linewidth=1.0, linestyle=":", alpha=0.7)
+    if trigger_low is not None:
+        price_axis.axhline(trigger_low, color="#6C757D", linewidth=1.0, linestyle=":", alpha=0.7)
+
+    if entry_idx is not None and exit_idx is not None and entry_price is not None and stop_price is not None:
+        left = min(entry_idx, exit_idx)
+        right = max(entry_idx, exit_idx)
+        risk_bottom = min(entry_price, stop_price)
+        risk_height = abs(entry_price - stop_price)
+        if risk_height > 0:
+            price_axis.add_patch(
+                plt.Rectangle(
+                    (left - 0.45, risk_bottom),
+                    max(right - left, 1) + 0.9,
+                    risk_height,
+                    color="#DC3545",
+                    alpha=0.10,
+                )
+            )
+
+    tick_positions = x_values[:: max(1, len(x_values) // 8)]
+    tick_labels = [chart_frame.iloc[position]["datetime_utc"].strftime("%m-%d %H:%M") for position in tick_positions]
+    price_axis.set_xticks(tick_positions)
+    price_axis.set_xticklabels(tick_labels, rotation=45, ha="right")
+    volume_axis.set_xticks(tick_positions)
+    volume_axis.set_xticklabels(tick_labels, rotation=45, ha="right")
+
+    chart_return = f"{(exit_return_pct or 0.0) * 100:.2f}%"
+    price_axis.set_title(f"{symbol} | {combo_variant} | return {chart_return}")
+    price_axis.set_ylabel("Price")
+    volume_axis.set_ylabel("Volume")
+    price_axis.grid(alpha=0.20)
+    volume_axis.grid(alpha=0.20)
+    handles, labels = price_axis.get_legend_handles_labels()
+    if handles:
+        price_axis.legend(handles, labels, loc="upper left")
+    figure.tight_layout()
+    figure.savefig(output_path, dpi=160, bbox_inches="tight")
+    plt.close(figure)
+
+
+def _build_trade_chart_manifest(
+    *,
+    priority_events: pd.DataFrame,
+    cache_dir: Path | str | None,
+    charts_dir: Path,
+    logger: logging.Logger | None = None,
+) -> pd.DataFrame:
+    empty_manifest = pd.DataFrame(
+        columns=[
+            "chart_index",
+            "symbol",
+            "combo_variant",
+            "component_ids",
+            "entry_timestamp_ms",
+            "entry_timestamp_utc",
+            "exit_return_pct",
+            "chart_status",
+            "chart_path",
+        ]
+    )
+    if cache_dir is None:
+        return empty_manifest
+    if priority_events.empty:
+        return empty_manifest
+
+    active_logger = logger or logging.getLogger("hourly-asia-pump-static-combo")
+    trade_charts_dir = charts_dir / "trades"
+    trade_charts_dir.mkdir(parents=True, exist_ok=True)
+    preparer = DataPreparer(Path(cache_dir))
+    frame_cache: dict[tuple[str, str], pd.DataFrame] = {}
+
+    rows: list[dict[str, object]] = []
+    ordered = priority_events.sort_values("entry_timestamp_ms").reset_index(drop=True)
+    total_events = len(ordered)
+    stage_started_at = time.perf_counter()
+    for idx, (_, event) in enumerate(ordered.iterrows(), start=1):
+        symbol = str(event.get("symbol", ""))
+        combo_variant = str(event.get("combo_variant", ""))
+        timeframe = _resolve_trade_chart_timeframe(event.get("source_timeframe"))
+        entry_timestamp_ms = _safe_numeric(event.get("source_entry_timestamp_ms")) or _safe_numeric(event.get("entry_timestamp_ms"))
+        exit_timestamp_ms = _safe_numeric(event.get("source_exit_timestamp_ms"))
+        entry_price = _safe_numeric(event.get("source_entry_price"))
+        stop_price = _safe_numeric(event.get("source_stop_price"))
+        exit_price = _safe_numeric(event.get("source_exit_price"))
+        trigger_high = _safe_numeric(event.get("source_trigger_high"))
+        trigger_low = _safe_numeric(event.get("source_trigger_low"))
+        exit_return_pct = _safe_numeric(event.get("exit_return_pct"))
+        chart_status = "created"
+        chart_path: Path | None = None
+
+        if timeframe is None or entry_timestamp_ms is None:
+            chart_status = "missing_trade_metadata"
+        else:
+            cache_key = (symbol, timeframe.value)
+            frame = frame_cache.get(cache_key)
+            if frame is None:
+                frame = preparer.load_symbol_data(symbol, timeframe)
+                frame_cache[cache_key] = frame
+            if frame.empty:
+                chart_status = "missing_cache_frame"
+            else:
+                timeframe_ms = timeframe.to_milliseconds()
+                start_ts = int((_safe_numeric(event.get("timestamp_ms")) or entry_timestamp_ms) - (timeframe_ms * 18))
+                right_anchor = exit_timestamp_ms if exit_timestamp_ms is not None else entry_timestamp_ms + (timeframe_ms * 24)
+                end_ts = int(right_anchor + (timeframe_ms * 18))
+                scoped = frame[
+                    (pd.to_numeric(frame["timestamp"], errors="coerce") >= start_ts)
+                    & (pd.to_numeric(frame["timestamp"], errors="coerce") <= end_ts)
+                ].copy()
+                if scoped.empty:
+                    chart_status = "empty_chart_window"
+                else:
+                    chart_file_name = (
+                        f"{idx:03d}_{combo_variant}_{_sanitize_filename(symbol)}_"
+                        f"{pd.to_datetime(int(entry_timestamp_ms), unit='ms', utc=True).strftime('%Y%m%d_%H%M')}.png"
+                    )
+                    chart_path = trade_charts_dir / chart_file_name
+                    _save_trade_instrument_chart(
+                        frame=scoped,
+                        symbol=symbol,
+                        combo_variant=combo_variant,
+                        event_timestamp_ms=int(_safe_numeric(event.get("timestamp_ms")) or entry_timestamp_ms),
+                        entry_timestamp_ms=int(entry_timestamp_ms),
+                        exit_timestamp_ms=int(exit_timestamp_ms) if exit_timestamp_ms is not None else None,
+                        entry_price=entry_price,
+                        stop_price=stop_price,
+                        exit_price=exit_price,
+                        trigger_high=trigger_high,
+                        trigger_low=trigger_low,
+                        exit_return_pct=exit_return_pct,
+                        output_path=chart_path,
+                    )
+
+        rows.append(
+            {
+                "chart_index": idx,
+                "symbol": symbol,
+                "combo_variant": combo_variant,
+                "component_ids": event.get("component_ids"),
+                "entry_timestamp_ms": int(entry_timestamp_ms) if entry_timestamp_ms is not None else None,
+                "entry_timestamp_utc": event.get("source_entry_timestamp_utc") or event.get("entry_timestamp_utc"),
+                "exit_return_pct": exit_return_pct,
+                "chart_status": chart_status,
+                "chart_path": str(chart_path) if chart_path is not None else None,
+            }
+        )
+
+        if idx == 1 or idx == total_events or idx % 10 == 0:
+            elapsed = time.perf_counter() - stage_started_at
+            eta = (elapsed / idx) * (total_events - idx) if idx > 0 else None
+            active_logger.info(
+                "hourly-asia-pump-static-combo: stage=trade-charts progress=%.1f%% charts=%s/%s elapsed=%s eta=%s",
+                (idx / total_events) * 100.0,
+                idx,
+                total_events,
+                _format_elapsed(elapsed),
+                _format_elapsed(eta),
+            )
+
+    return pd.DataFrame(rows) if rows else empty_manifest
+
+
 def _build_chart_manifest(
     *,
     charts_dir: Path,
@@ -951,6 +1254,8 @@ def _write_static_combo_report(
     priority_holdout_sanity: pd.DataFrame,
     priority_topn_summary: pd.DataFrame,
     combo_robustness_summary: pd.DataFrame,
+    trade_chart_manifest: pd.DataFrame,
+    trade_chart_samples: pd.DataFrame,
     chart_paths: dict[str, Path],
 ) -> Path:
     great_combo_count = int(len(great_combos))
@@ -1088,6 +1393,22 @@ def _write_static_combo_report(
             ),
         ),
         "",
+        "## Trade Chart Manifest",
+        "",
+        _frame_to_markdown(
+            trade_chart_manifest,
+            columns=(
+                "chart_index",
+                "symbol",
+                "combo_variant",
+                "entry_timestamp_utc",
+                "exit_return_pct",
+                "chart_status",
+                "chart_path",
+            ),
+            limit=30,
+        ),
+        "",
         "## Chart Gallery",
         "",
         "### Equity Curve",
@@ -1118,7 +1439,22 @@ def _write_static_combo_report(
         "",
         "![Leader Robustness](charts/leader_robustness.png)",
         "",
+        "## Trade Chart Samples",
+        "",
     ]
+    for _, row in trade_chart_samples.iterrows():
+        chart_path = row.get("chart_path")
+        if chart_path is None or chart_path is pd.NA:
+            continue
+        chart_name = Path(str(chart_path)).name
+        lines.extend(
+            [
+                f"### {row.get('combo_variant', '')} | {row.get('symbol', '')} | {_format_value('exit_return_pct', row.get('exit_return_pct'))}",
+                "",
+                f"![{row.get('symbol', '')} trade](charts/trades/{chart_name})",
+                "",
+            ]
+        )
     report_path = output_dir / "static_combo_report.md"
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path
@@ -1129,6 +1465,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
     base_events_path: Path | str,
     confirmed_events_path: Path | str,
     output_dir: Path | str,
+    cache_dir: Path | str | None = None,
     logger: logging.Logger | None = None,
 ) -> dict[str, Path]:
     active_logger = logger or logging.getLogger("hourly-asia-pump-static-combo")
@@ -1332,6 +1669,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
     context = {
         "base_events_path": str(Path(base_events_path)),
         "confirmed_events_path": str(Path(confirmed_events_path)),
+        "cache_dir": str(Path(cache_dir)) if cache_dir is not None else None,
         "candidate_ids": list(candidate_frames.keys()),
         "great_combo_count": int(len(great_combos)),
         "recommended_shortlist_count": int(len(recommended_shortlist)),
@@ -1340,6 +1678,17 @@ def build_hourly_asia_pump_static_combo_artifacts(
     context_path.write_text(json.dumps(context, ensure_ascii=False, indent=2), encoding="utf-8")
 
     charts_dir = output_path / "charts"
+    trade_chart_manifest = _build_trade_chart_manifest(
+        priority_events=priority_events,
+        cache_dir=cache_dir,
+        charts_dir=charts_dir,
+        logger=active_logger,
+    )
+    trade_chart_manifest_path = output_path / "priority_trade_chart_manifest.csv"
+    trade_chart_manifest.to_csv(trade_chart_manifest_path, index=False)
+    trade_chart_samples = _select_trade_chart_samples(trade_chart_manifest)
+    trade_chart_samples_path = output_path / "priority_trade_chart_samples.csv"
+    trade_chart_samples.to_csv(trade_chart_samples_path, index=False)
     chart_paths = _build_chart_manifest(
         charts_dir=charts_dir,
         priority_events=priority_events,
@@ -1361,6 +1710,8 @@ def build_hourly_asia_pump_static_combo_artifacts(
         priority_holdout_sanity=priority_holdout_sanity,
         priority_topn_summary=priority_topn_summary,
         combo_robustness_summary=combo_robustness_summary,
+        trade_chart_manifest=trade_chart_manifest,
+        trade_chart_samples=trade_chart_samples,
         chart_paths=chart_paths,
     )
 
@@ -1387,6 +1738,8 @@ def build_hourly_asia_pump_static_combo_artifacts(
         "combo_robustness_summary": combo_robustness_summary_path,
         "recommended_combo_shortlist": recommended_shortlist_path,
         "priority_selected_monthly": priority_monthly_returns_path,
+        "priority_trade_chart_manifest": trade_chart_manifest_path,
+        "priority_trade_chart_samples": trade_chart_samples_path,
         "charts_manifest": charts_manifest_path,
         "report": report_path,
         "static_combo_context": context_path,
