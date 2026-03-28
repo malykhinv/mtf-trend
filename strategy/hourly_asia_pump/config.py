@@ -11,6 +11,7 @@ from domain.enums.timeframe import Timeframe
 HourlyAsiaPumpProfileId = Literal["loose", "balanced", "strict"]
 HourlyAsiaPumpTradeEntryStyle = Literal[
     "break_trigger_high",
+    "next_bar_open",
     "pullback_reclaim",
     "pressure_reclaim",
     "flag_break",
@@ -221,6 +222,31 @@ def build_hourly_asia_pump_grid(
 
 def build_hourly_asia_pump_trade_models() -> list[HourlyAsiaPumpTradeModel]:
     return [
+        HourlyAsiaPumpTradeModel(
+            model_id="next_open_red_trail",
+            label="Next Open Red Trail",
+            entry_style="next_bar_open",
+            trail_style="last_red_low",
+            initial_stop_style="trigger_low",
+            min_trigger_return_pct=0.0,
+            min_range_atr=0.0,
+            min_body_atr=0.0,
+            min_volume_mult=0.0,
+            max_close_to_high_frac=1.0,
+            max_entry_bars=1,
+            max_pullback_frac=0.0,
+            pullback_volume_frac=1.0,
+            flag_bars=0,
+            flag_max_range_frac=0.0,
+            partial_take_pct=0.0,
+            partial_take_r=0.0,
+            partial_fraction=0.0,
+            move_stop_to_be_after_partial=False,
+            trail_activation_pct=0.0,
+            fast_fail_bars=0,
+            fast_fail_min_return_pct=0.0,
+            max_hold_minutes=720,
+        ),
         HourlyAsiaPumpTradeModel(
             model_id="aggr_break_fast",
             label="Aggressive Break Fast",
