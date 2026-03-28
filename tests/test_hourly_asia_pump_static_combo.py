@@ -5,10 +5,12 @@ from pathlib import Path
 import pandas as pd
 
 from strategy.hourly_asia_pump.static_combo import (
+    _build_monthly_returns_frame,
     _build_combo_events,
     _build_priority_selected_events,
     _dedupe_source_events,
     _index_to_variant_label,
+    _summarize_events,
     build_hourly_asia_pump_static_combo_artifacts,
 )
 from strategy.hourly_asia_pump.static_combo_trade_plotter import (
@@ -212,6 +214,39 @@ def test_dedupe_source_events_uses_conservative_min_return() -> None:
     aaa = deduped[deduped["symbol"] == "AAA/USDT"].iloc[0]
     assert float(aaa["exit_return_pct"]) == -0.03
     assert aaa["config_id"] == "slow"
+
+
+def test_monthly_summary_includes_zero_trade_months_from_calendar_span() -> None:
+    events = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA/USDT",
+                "timestamp_ms": 1,
+                "entry_timestamp_ms": int(pd.Timestamp("2025-01-15T00:05:00Z").timestamp() * 1000),
+                "date_utc": "2025-01-15",
+                "month_utc": "2025-01",
+                "exit_return_pct": 0.05,
+            },
+            {
+                "symbol": "BBB/USDT",
+                "timestamp_ms": 2,
+                "entry_timestamp_ms": int(pd.Timestamp("2025-03-10T00:05:00Z").timestamp() * 1000),
+                "date_utc": "2025-03-10",
+                "month_utc": "2025-03",
+                "exit_return_pct": -0.01,
+            },
+        ]
+    )
+
+    monthly = _build_monthly_returns_frame(events, calendar_months=["2025-01", "2025-02", "2025-03"])
+    summary = _summarize_events(events, calendar_months=["2025-01", "2025-02", "2025-03"])
+
+    assert monthly["month_utc"].tolist() == ["2025-01", "2025-02", "2025-03"]
+    assert monthly["trades_count"].tolist() == [1, 0, 1]
+    assert monthly["month_positive"].tolist() == [True, False, False]
+    assert int(summary["positive_months_count"]) == 1
+    assert int(summary["non_positive_months_count"]) == 2
+    assert bool(summary["all_active_months_positive"]) is False
 
 
 def test_build_hourly_asia_pump_static_combo_artifacts_builds_great_combo_catalog(tmp_path: Path) -> None:

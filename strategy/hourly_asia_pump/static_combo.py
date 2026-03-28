@@ -116,6 +116,39 @@ def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(frame[column], errors="coerce")
 
 
+def _normalize_calendar_months(months: Sequence[str]) -> list[str]:
+    cleaned = [str(month).strip() for month in months if str(month).strip()]
+    if not cleaned:
+        return []
+    periods = pd.PeriodIndex(cleaned, freq="M")
+    full_periods = pd.period_range(periods.min(), periods.max(), freq="M")
+    return [period.strftime("%Y-%m") for period in full_periods]
+
+
+def _calendar_months_from_frames(*frames: pd.DataFrame) -> list[str]:
+    months: list[str] = []
+    for frame in frames:
+        if frame.empty or "month_utc" not in frame.columns:
+            continue
+        months.extend(frame["month_utc"].dropna().astype(str).tolist())
+    return _normalize_calendar_months(months)
+
+
+def _monthly_returns_series(
+    frame: pd.DataFrame,
+    *,
+    calendar_months: Sequence[str] | None = None,
+) -> pd.Series:
+    if frame.empty or "month_utc" not in frame.columns or "exit_return_pct" not in frame.columns:
+        if calendar_months:
+            return pd.Series(0.0, index=list(calendar_months), dtype="float64")
+        return pd.Series(dtype="float64")
+    monthly = frame.groupby("month_utc", sort=True)["exit_return_pct"].sum()
+    if calendar_months:
+        return monthly.reindex(list(calendar_months), fill_value=0.0).astype("float64")
+    return monthly.astype("float64")
+
+
 def _profit_factor(returns: pd.Series) -> float | None:
     if returns.empty:
         return None
@@ -302,34 +335,43 @@ def _build_static_candidate_frames(
     return candidates
 
 
-def _summarize_events(frame: pd.DataFrame) -> dict[str, object] | None:
-    if frame.empty:
+def _summarize_events(
+    frame: pd.DataFrame,
+    *,
+    calendar_months: Sequence[str] | None = None,
+) -> dict[str, object] | None:
+    if frame.empty and not calendar_months:
         return None
-    ordered = frame.sort_values("entry_timestamp_ms").copy()
+    ordered = frame.sort_values("entry_timestamp_ms").copy() if not frame.empty else frame.copy()
     returns = pd.to_numeric(ordered.get("exit_return_pct"), errors="coerce").dropna()
-    if returns.empty:
-        return None
 
-    entry_timestamps = pd.to_datetime(ordered.get("entry_timestamp_ms"), unit="ms", utc=True, errors="coerce").dropna()
-    if len(entry_timestamps) >= 2:
-        span_days = max(1.0, (entry_timestamps.max() - entry_timestamps.min()).total_seconds() / 86_400)
+    normalized_calendar_months = _normalize_calendar_months(calendar_months or [])
+    if normalized_calendar_months:
+        periods = pd.PeriodIndex(normalized_calendar_months, freq="M")
+        start_timestamp = periods.min().to_timestamp(how="start").tz_localize("UTC")
+        end_timestamp = (periods.max() + 1).to_timestamp(how="start").tz_localize("UTC")
+        span_days = max(1.0, (end_timestamp - start_timestamp).total_seconds() / 86_400)
     else:
-        span_days = float(max(1, ordered.get("date_utc", pd.Series(dtype="object")).nunique()))
+        entry_timestamps = pd.to_datetime(ordered.get("entry_timestamp_ms"), unit="ms", utc=True, errors="coerce").dropna()
+        if len(entry_timestamps) >= 2:
+            span_days = max(1.0, (entry_timestamps.max() - entry_timestamps.min()).total_seconds() / 86_400)
+        else:
+            span_days = float(max(1, ordered.get("date_utc", pd.Series(dtype="object")).nunique()))
 
-    monthly_returns = ordered.groupby("month_utc", sort=True)["exit_return_pct"].sum()
-    equity_curve = 1.0 + returns.cumsum()
+    monthly_returns = _monthly_returns_series(ordered, calendar_months=normalized_calendar_months)
+    equity_curve = 1.0 + returns.cumsum() if not returns.empty else pd.Series([1.0], dtype="float64")
     drawdown = ((equity_curve.cummax() - equity_curve) / equity_curve.cummax().replace(0, pd.NA)).fillna(0.0)
     max_concurrent_trades, overlapping_entries_count = _compute_overlap_stats(ordered)
-    annual_sum_return_pct = float(returns.sum())
+    annual_sum_return_pct = float(returns.sum()) if not returns.empty else 0.0
     annualized_unit_pnl_pct = float(annual_sum_return_pct * (12.0 / max(1, len(monthly_returns))))
 
     return {
         "trades_count": int(len(ordered)),
         "trade_days_count": int(ordered.get("date_utc", pd.Series(dtype="object")).nunique()),
         "trades_per_year": float((len(ordered) / span_days) * 365.0),
-        "mean_return_pct": float(returns.mean()),
-        "median_return_pct": float(returns.median()),
-        "win_rate": float((returns > 0).mean()),
+        "mean_return_pct": float(returns.mean()) if not returns.empty else 0.0,
+        "median_return_pct": float(returns.median()) if not returns.empty else 0.0,
+        "win_rate": float((returns > 0).mean()) if not returns.empty else 0.0,
         "profit_factor": _profit_factor(returns),
         "annual_sum_return_pct": annual_sum_return_pct,
         "annualized_sum_return_pct": annualized_unit_pnl_pct,
@@ -606,25 +648,24 @@ def _build_holdout_sanity_rows(
     *,
     combo_summary: pd.DataFrame,
     combo_events_by_id: dict[str, pd.DataFrame],
+    calendar_months: Sequence[str],
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     if combo_summary.empty:
         return pd.DataFrame()
+    normalized_calendar_months = _normalize_calendar_months(calendar_months)
     for combo in combo_summary.to_dict("records"):
         combo_id = str(combo["combo_id"])
         events = combo_events_by_id.get(combo_id)
-        if events is None or events.empty:
+        if events is None:
             continue
-        months = sorted(events["month_utc"].dropna().astype(str).unique().tolist())
         for split_id, train_months_count in _STATIC_HOLDOUT_SPLITS:
-            if len(months) <= train_months_count:
+            if len(normalized_calendar_months) <= train_months_count:
                 continue
-            train_months = months[:train_months_count]
-            test_months = months[train_months_count:]
+            train_months = normalized_calendar_months[:train_months_count]
+            test_months = normalized_calendar_months[train_months_count:]
             test_events = events[events["month_utc"].astype(str).isin(test_months)].copy()
-            summary = _summarize_events(test_events)
-            if summary is None:
-                continue
+            summary = _summarize_events(test_events, calendar_months=test_months)
             rows.append(
                 {
                     "combo_id": combo_id,
@@ -689,6 +730,7 @@ def _build_priority_topn_summary(
     *,
     great_combos: pd.DataFrame,
     combo_events: pd.DataFrame,
+    calendar_months: Sequence[str],
 ) -> pd.DataFrame:
     if great_combos.empty or combo_events.empty:
         return pd.DataFrame()
@@ -699,7 +741,7 @@ def _build_priority_topn_summary(
     for top_n in sorted(set(top_n_values)):
         scoped_catalog = great_combos.head(top_n).copy()
         priority_events = _build_priority_selected_events(combo_events=combo_events, combo_catalog=scoped_catalog)
-        summary = _summarize_events(priority_events)
+        summary = _summarize_events(priority_events, calendar_months=calendar_months)
         if summary is None:
             continue
         rows.append(
@@ -833,9 +875,24 @@ def _build_recommended_shortlist(
     return merged.drop_duplicates(subset=["component_ids"], keep="first").head(limit).reset_index(drop=True)
 
 
-def _build_monthly_returns_frame(events: pd.DataFrame) -> pd.DataFrame:
+def _build_monthly_returns_frame(
+    events: pd.DataFrame,
+    *,
+    calendar_months: Sequence[str] | None = None,
+) -> pd.DataFrame:
+    normalized_calendar_months = _normalize_calendar_months(calendar_months or [])
     if events.empty or "month_utc" not in events.columns or "exit_return_pct" not in events.columns:
-        return pd.DataFrame(columns=["month_utc", "total_return_pct", "trades_count", "month_positive"])
+        if not normalized_calendar_months:
+            return pd.DataFrame(columns=["month_utc", "total_return_pct", "trades_count", "month_positive"])
+        monthly = pd.DataFrame(
+            {
+                "month_utc": normalized_calendar_months,
+                "total_return_pct": [0.0] * len(normalized_calendar_months),
+                "trades_count": [0] * len(normalized_calendar_months),
+            }
+        )
+        monthly["month_positive"] = False
+        return monthly
     monthly = (
         events.groupby("month_utc", sort=True)
         .agg(
@@ -844,6 +901,14 @@ def _build_monthly_returns_frame(events: pd.DataFrame) -> pd.DataFrame:
         )
         .reset_index()
     )
+    if normalized_calendar_months:
+        monthly = (
+            monthly.set_index("month_utc")
+            .reindex(normalized_calendar_months, fill_value=0.0)
+            .rename_axis("month_utc")
+            .reset_index()
+        )
+        monthly["trades_count"] = pd.to_numeric(monthly["trades_count"], errors="coerce").fillna(0).astype(int)
     monthly["month_positive"] = monthly["total_return_pct"] > 0
     return monthly
 
@@ -1511,6 +1576,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
     active_logger.info("hourly-asia-pump-static-combo: stage=load-inputs")
     base_events = _prepare_base_events(Path(base_events_path))
     confirmed_events = _prepare_confirmed_events(Path(confirmed_events_path))
+    analysis_calendar_months = _calendar_months_from_frames(base_events, confirmed_events)
     candidate_frames = _build_static_candidate_frames(base_events=base_events, confirmed_events=confirmed_events)
     active_logger.info(
         "hourly-asia-pump-static-combo: stage=candidates candidates=%s base_events=%s confirmed_events=%s elapsed=%s",
@@ -1522,7 +1588,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
 
     candidate_rows: list[dict[str, object]] = []
     for candidate_id, frame in candidate_frames.items():
-        summary = _summarize_events(frame)
+        summary = _summarize_events(frame, calendar_months=analysis_calendar_months)
         if summary is None:
             continue
         summary["candidate_id"] = candidate_id
@@ -1566,7 +1632,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
                 combo_id = str(combo_events.iloc[0]["combo_id"])
                 combo_events_by_id[combo_id] = combo_events
                 combo_event_frames.append(combo_events)
-                summary = _summarize_events(combo_events)
+                summary = _summarize_events(combo_events, calendar_months=analysis_calendar_months)
                 if summary is not None:
                     summary["combo_id"] = combo_id
                     summary["component_ids"] = ",".join(component_id_list)
@@ -1630,14 +1696,22 @@ def build_hourly_asia_pump_static_combo_artifacts(
     )
     priority_events = _build_priority_selected_events(combo_events=combo_events_all, combo_catalog=great_combos)
     if not priority_events.empty:
-        priority_summary_payload = _summarize_events(priority_events)
+        priority_summary_payload = _summarize_events(priority_events, calendar_months=analysis_calendar_months)
         priority_summary = pd.DataFrame([priority_summary_payload]) if priority_summary_payload is not None else _empty_priority_summary()
     else:
         priority_summary = _empty_priority_summary()
     priority_summary["matched_combo_variants_count"] = int(great_combos["combo_variant"].nunique()) if not great_combos.empty and "combo_variant" in great_combos.columns else 0
 
-    holdout_sanity = _build_holdout_sanity_rows(combo_summary=great_combos, combo_events_by_id=combo_events_by_id)
-    priority_topn_summary = _build_priority_topn_summary(great_combos=great_combos, combo_events=combo_events_all)
+    holdout_sanity = _build_holdout_sanity_rows(
+        combo_summary=great_combos,
+        combo_events_by_id=combo_events_by_id,
+        calendar_months=analysis_calendar_months,
+    )
+    priority_topn_summary = _build_priority_topn_summary(
+        great_combos=great_combos,
+        combo_events=combo_events_all,
+        calendar_months=analysis_calendar_months,
+    )
     combo_robustness_summary = _build_combo_robustness_summary(
         selected_combos=great_combos,
         all_unique_combos=unique_combo_summary,
@@ -1646,30 +1720,26 @@ def build_hourly_asia_pump_static_combo_artifacts(
         great_combos=great_combos,
         combo_robustness_summary=combo_robustness_summary,
     )
-    priority_monthly_returns = _build_monthly_returns_frame(priority_events)
+    priority_monthly_returns = _build_monthly_returns_frame(priority_events, calendar_months=analysis_calendar_months)
     priority_holdout_sanity_rows: list[dict[str, object]] = []
-    if not priority_events.empty:
-        months = sorted(priority_events["month_utc"].dropna().astype(str).unique().tolist())
-        for split_id, train_months_count in _STATIC_HOLDOUT_SPLITS:
-            if len(months) <= train_months_count:
-                continue
-            train_months = months[:train_months_count]
-            test_months = months[train_months_count:]
-            test_events = priority_events[priority_events["month_utc"].astype(str).isin(test_months)].copy()
-            summary = _summarize_events(test_events)
-            if summary is None:
-                continue
-            priority_holdout_sanity_rows.append(
-                {
-                    "portfolio_id": "priority_selected_static_year",
-                    "split_id": split_id,
-                    "train_start_month_utc": train_months[0],
-                    "train_end_month_utc": train_months[-1],
-                    "test_start_month_utc": test_months[0],
-                    "test_end_month_utc": test_months[-1],
-                    **summary,
-                }
-            )
+    for split_id, train_months_count in _STATIC_HOLDOUT_SPLITS:
+        if len(analysis_calendar_months) <= train_months_count:
+            continue
+        train_months = analysis_calendar_months[:train_months_count]
+        test_months = analysis_calendar_months[train_months_count:]
+        test_events = priority_events[priority_events["month_utc"].astype(str).isin(test_months)].copy()
+        summary = _summarize_events(test_events, calendar_months=test_months)
+        priority_holdout_sanity_rows.append(
+            {
+                "portfolio_id": "priority_selected_static_year",
+                "split_id": split_id,
+                "train_start_month_utc": train_months[0],
+                "train_end_month_utc": train_months[-1],
+                "test_start_month_utc": test_months[0],
+                "test_end_month_utc": test_months[-1],
+                **summary,
+            }
+        )
     priority_holdout_sanity = pd.DataFrame(priority_holdout_sanity_rows)
     active_logger.info(
         "hourly-asia-pump-static-combo: stage=post-analysis priority_trades=%s monthly_rows=%s holdout_rows=%s elapsed=%s",
@@ -1710,6 +1780,7 @@ def build_hourly_asia_pump_static_combo_artifacts(
         "base_events_path": str(Path(base_events_path)),
         "confirmed_events_path": str(Path(confirmed_events_path)),
         "cache_dir": str(Path(cache_dir)) if cache_dir is not None else None,
+        "analysis_calendar_months": analysis_calendar_months,
         "frozen_threshold_profile_version": _STATIC_FROZEN_THRESHOLD_VERSION,
         "frozen_thresholds": {
             "mb5_01_shallow_pre_entry_pullback_frac_max": _STATIC_MB5_01_SHALLOW_PULLBACK_FRAC_MAX,

@@ -11,6 +11,7 @@ from strategy.hourly_asia_pump.static_combo import (
     _build_monthly_returns_frame,
     _build_priority_selected_events,
     _frame_to_markdown,
+    _normalize_calendar_months,
     _save_priority_equity_curve_chart,
     _save_priority_monthly_returns_chart,
     _save_priority_trade_distribution_chart,
@@ -101,6 +102,16 @@ def _load_optional_csv(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def _load_optional_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _combo_id_from_variant_spec(variant_spec: HourlyAsiaPumpProductionVariantSpec) -> str:
+    return f"{'|'.join(variant_spec.component_ids)}__top{variant_spec.top_k_per_timestamp}"
+
+
 def _find_variant_row(
     *,
     great_catalog: pd.DataFrame,
@@ -125,6 +136,8 @@ def _find_variant_row(
 def _build_production_variant_summary(
     *,
     great_catalog: pd.DataFrame,
+    combo_events: pd.DataFrame,
+    calendar_months: list[str],
     robustness_summary: pd.DataFrame,
 ) -> pd.DataFrame:
     robustness_index: dict[str, dict[str, Any]] = {}
@@ -136,7 +149,24 @@ def _build_production_variant_summary(
 
     rows: list[dict[str, object]] = []
     for spec in HOURLY_ASIA_PUMP_PRODUCTION_VARIANTS:
-        row = _find_variant_row(great_catalog=great_catalog, variant_spec=spec)
+        row: pd.Series | None = None
+        try:
+            row = _find_variant_row(great_catalog=great_catalog, variant_spec=spec)
+        except ValueError:
+            combo_id = _combo_id_from_variant_spec(spec)
+            fallback_events = combo_events[combo_events["combo_id"].astype(str) == combo_id].copy()
+            fallback_summary = _summarize_events(fallback_events, calendar_months=calendar_months)
+            if fallback_summary is None:
+                raise
+            row = pd.Series(
+                {
+                    "combo_variant": "unranked",
+                    "combo_id": combo_id,
+                    "component_ids": ",".join(spec.component_ids),
+                    "top_k_per_timestamp": spec.top_k_per_timestamp,
+                    **fallback_summary,
+                }
+            )
         robustness = robustness_index.get(str(row["combo_id"]), {})
         rows.append(
             {
@@ -192,6 +222,7 @@ def _build_production_holdout_summary(
     *,
     combo_events: pd.DataFrame,
     production_catalog: pd.DataFrame,
+    calendar_months: list[str],
 ) -> pd.DataFrame:
     if combo_events.empty or production_catalog.empty:
         return pd.DataFrame()
@@ -199,18 +230,14 @@ def _build_production_holdout_summary(
     scoped_events = combo_events[combo_events["combo_id"].astype(str).isin(production_catalog["combo_id"].astype(str))].copy()
     if scoped_events.empty:
         return pd.DataFrame()
-    months = sorted(scoped_events["month_utc"].dropna().astype(str).unique().tolist())
+    months = _normalize_calendar_months(calendar_months)
     for split_id, train_months_count in _PRODUCTION_HOLDOUT_SPLITS:
         if len(months) <= train_months_count:
             continue
         test_months = months[train_months_count:]
         test_events = scoped_events[scoped_events["month_utc"].astype(str).isin(test_months)].copy()
-        if test_events.empty:
-            continue
         selected = _build_priority_selected_events(combo_events=test_events, combo_catalog=production_catalog)
-        summary = _summarize_events(selected)
-        if summary is None:
-            continue
+        summary = _summarize_events(selected, calendar_months=test_months)
         rows.append(
             {
                 "split_id": split_id,
@@ -547,9 +574,15 @@ def build_hourly_asia_pump_production_artifacts(
     combo_events = _load_required_csv(static_combo_path / "combo_events.csv")
     robustness_summary = _load_optional_csv(static_combo_path / "combo_robustness_summary.csv")
     priority_trade_chart_manifest = _load_optional_csv(static_combo_path / "priority_trade_chart_manifest.csv")
+    static_combo_context = _load_optional_json(static_combo_path / "static_combo_context.json")
+    calendar_months = _normalize_calendar_months(static_combo_context.get("analysis_calendar_months", []))
+    if not calendar_months and "month_utc" in combo_events.columns:
+        calendar_months = _normalize_calendar_months(combo_events["month_utc"].dropna().astype(str).tolist())
 
     variant_summary = _build_production_variant_summary(
         great_catalog=great_catalog,
+        combo_events=combo_events,
+        calendar_months=calendar_months,
         robustness_summary=robustness_summary,
     )
     production_catalog = _build_production_catalog(variant_summary)
@@ -557,7 +590,7 @@ def build_hourly_asia_pump_production_artifacts(
         combo_events=combo_events,
         combo_catalog=production_catalog,
     )
-    production_summary_payload = _summarize_events(production_events)
+    production_summary_payload = _summarize_events(production_events, calendar_months=calendar_months)
     if production_summary_payload is None:
         raise ValueError("Production pack selected no trades; cannot build production report.")
     production_summary = pd.DataFrame(
@@ -568,10 +601,11 @@ def build_hourly_asia_pump_production_artifacts(
             }
         ]
     )
-    production_monthly = _build_monthly_returns_frame(production_events)
+    production_monthly = _build_monthly_returns_frame(production_events, calendar_months=calendar_months)
     production_holdout = _build_production_holdout_summary(
         combo_events=combo_events,
         production_catalog=production_catalog,
+        calendar_months=calendar_months,
     )
     kpi_validation = _evaluate_kpi_gate(
         full_year_summary=production_summary,
