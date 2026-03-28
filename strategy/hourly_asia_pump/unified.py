@@ -36,13 +36,14 @@ _UNIFIED_HOLDOUT_SPLITS: tuple[tuple[str, int], ...] = (
     ("train9_test3", 9),
 )
 _UNIFIED_HOLDOUT_TOP_CANDIDATES = 150
+_UNIFIED_RESILIENCE_TOP_CANDIDATES = 200
 _UNIFIED_FAMILY_GRIDS: tuple[dict[str, Any], ...] = (
     {
         "stop_style": "trigger_low",
         "trigger_values": (0.05, 0.06, 0.065, 0.07, 0.075, 0.08),
-        "range_atr_values": (7.0, 8.0, 9.0, 10.0, 12.0),
+        "range_atr_values": (7.0, 7.5, 8.0, 8.5, 9.0, 10.0, 12.0),
         "body_atr_values": (None, 7.0),
-        "volume_values": (8.0, 10.0, 12.0, 15.0, 18.0),
+        "volume_values": (8.0, 9.0, 10.0, 12.0, 15.0, 18.0),
         "close_to_high_values": (0.18, 0.17, 0.15, 0.13),
         "require_next_green_values": (False, True),
         "next_pullback_values": (None, 0.33, 0.25),
@@ -53,9 +54,9 @@ _UNIFIED_FAMILY_GRIDS: tuple[dict[str, Any], ...] = (
     {
         "stop_style": "next_low",
         "trigger_values": (0.05, 0.06, 0.065, 0.07, 0.075, 0.08),
-        "range_atr_values": (7.0, 8.0, 9.0, 10.0, 12.0),
+        "range_atr_values": (7.0, 7.5, 8.0, 8.5, 9.0, 10.0, 12.0),
         "body_atr_values": (None, 7.0),
-        "volume_values": (8.0, 10.0, 12.0, 15.0, 18.0),
+        "volume_values": (8.0, 9.0, 10.0, 12.0, 15.0, 18.0),
         "close_to_high_values": (0.18, 0.17, 0.15, 0.13),
         "require_next_green_values": (False, True),
         "next_pullback_values": (None, 0.33, 0.25),
@@ -703,6 +704,118 @@ def _build_candidate_holdout_summary(
     return pd.DataFrame(rows)
 
 
+def _build_candidate_resilience_summary(
+    *,
+    candidates: pd.DataFrame,
+    confirmed_events: pd.DataFrame,
+    calendar_months: list[str],
+) -> pd.DataFrame:
+    if candidates.empty:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    top_candidates = candidates.head(_UNIFIED_RESILIENCE_TOP_CANDIDATES).copy()
+    events_by_stop = {
+        stop_style: confirmed_events[confirmed_events["stop_style"].astype(str) == str(stop_style)].copy().reset_index(drop=True)
+        for stop_style in top_candidates["stop_style"].astype(str).unique().tolist()
+    }
+    arrays_by_stop = {
+        stop_style: {
+            "trigger_return_pct": pd.to_numeric(frame["trigger_return_pct"], errors="coerce").to_numpy(dtype="float64"),
+            "range_atr": pd.to_numeric(frame["range_atr"], errors="coerce").to_numpy(dtype="float64"),
+            "body_atr": pd.to_numeric(frame["body_atr"], errors="coerce").to_numpy(dtype="float64"),
+            "volume_mult": pd.to_numeric(frame["volume_mult"], errors="coerce").to_numpy(dtype="float64"),
+            "close_to_high_frac": pd.to_numeric(frame["close_to_high_frac"], errors="coerce").to_numpy(dtype="float64"),
+            "next_bar_pullback_frac": pd.to_numeric(frame["next_bar_pullback_frac"], errors="coerce").to_numpy(dtype="float64"),
+            "pre_base_range_pct_60m": pd.to_numeric(frame["pre_base_range_pct_60m"], errors="coerce").to_numpy(dtype="float64"),
+            "pre_base_drift_pct_60m": pd.to_numeric(frame["pre_base_drift_pct_60m"], errors="coerce").to_numpy(dtype="float64"),
+            "pre_base_range_vs_trigger": pd.to_numeric(frame["pre_base_range_vs_trigger"], errors="coerce").to_numpy(dtype="float64"),
+            "next_bar_is_green": frame["next_bar_is_green"].fillna(False).astype(bool).to_numpy(dtype="bool"),
+        }
+        for stop_style, frame in events_by_stop.items()
+    }
+    calendar_months_count = max(1, len(calendar_months))
+
+    for _, candidate in top_candidates.iterrows():
+        stop_style = str(candidate["stop_style"])
+        scoped = events_by_stop[stop_style]
+        arrays = arrays_by_stop[stop_style]
+        mask = _build_filter_mask(arrays=arrays, candidate=candidate.to_dict())
+        selected = scoped.loc[mask].copy().reset_index(drop=True)
+        if selected.empty:
+            continue
+
+        symbol_pnl = (
+            selected.groupby("symbol", sort=False)["exit_return_pct"]
+            .sum()
+            .sort_values(ascending=False)
+        )
+        total_unit_pnl = float(pd.to_numeric(selected["exit_return_pct"], errors="coerce").fillna(0.0).sum())
+
+        def _top_share(top_n: int) -> float | None:
+            if symbol_pnl.empty or total_unit_pnl == 0.0:
+                return None
+            return float(symbol_pnl.head(top_n).sum() / total_unit_pnl)
+
+        def _annualized_without_top_symbols(top_n: int) -> float:
+            excluded_symbols = set(symbol_pnl.head(top_n).index.tolist())
+            scoped_without = selected[~selected["symbol"].astype(str).isin(excluded_symbols)].copy()
+            summary = _summarize_events(scoped_without, calendar_months=calendar_months)
+            if summary is None:
+                return 0.0
+            return float(summary.get("annualized_unit_pnl_pct", 0.0) or 0.0)
+
+        worst_leave_month_annualized = 0.0
+        if calendar_months:
+            leave_month_values: list[float] = []
+            for month in calendar_months:
+                scoped_without_month = selected[selected["month_utc"].astype(str) != str(month)].copy()
+                summary = _summarize_events(
+                    scoped_without_month,
+                    calendar_months=[item for item in calendar_months if item != month],
+                )
+                if summary is None:
+                    leave_month_values.append(0.0)
+                else:
+                    leave_month_values.append(float(summary.get("annualized_unit_pnl_pct", 0.0) or 0.0))
+            if leave_month_values:
+                worst_leave_month_annualized = float(min(leave_month_values))
+
+        annualized_remove_top1 = _annualized_without_top_symbols(1)
+        annualized_remove_top3 = _annualized_without_top_symbols(3)
+        annualized_remove_top5 = _annualized_without_top_symbols(5)
+        top1_share = _top_share(1)
+        top3_share = _top_share(3)
+        top5_share = _top_share(5)
+
+        resilience_score = 0.0
+        resilience_score += min(annualized_remove_top1, 2.0) * 10.0
+        resilience_score += min(annualized_remove_top3, 2.0) * 30.0
+        resilience_score += max(annualized_remove_top5, -1.0) * 45.0
+        resilience_score += min(worst_leave_month_annualized, 2.0) * 20.0
+        resilience_score -= float(top1_share or 0.0) * 10.0
+        resilience_score -= float(top3_share or 0.0) * 25.0
+        resilience_score -= float(max((top5_share or 0.0) - 1.0, 0.0)) * 40.0
+
+        rows.append(
+            {
+                "candidate_id": candidate["candidate_id"],
+                "candidate_variant": candidate["candidate_variant"],
+                "symbol_count": int(selected["symbol"].astype(str).nunique()),
+                "top1_symbol_pnl_share": top1_share,
+                "top3_symbol_pnl_share": top3_share,
+                "top5_symbol_pnl_share": top5_share,
+                "annualized_remove_top1_unit_pnl_pct": annualized_remove_top1,
+                "annualized_remove_top3_unit_pnl_pct": annualized_remove_top3,
+                "annualized_remove_top5_unit_pnl_pct": annualized_remove_top5,
+                "worst_leave_month_annualized_unit_pnl_pct": worst_leave_month_annualized,
+                "remove_top5_stays_positive": annualized_remove_top5 > 0.0,
+                "resilience_score": resilience_score,
+                "calendar_months_count": calendar_months_count,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def build_hourly_asia_pump_unified_artifacts(
     *,
     confirmed_events_path: Path,
@@ -739,6 +852,7 @@ def build_hourly_asia_pump_unified_artifacts(
     best_events_path = output_dir / "unified_strategy_best_events.csv"
     holdout_path = output_dir / "unified_strategy_best_holdout.csv"
     candidate_holdout_path = output_dir / "unified_strategy_candidate_holdout.csv"
+    candidate_resilience_path = output_dir / "unified_strategy_candidate_resilience.csv"
     robustness_path = output_dir / "unified_strategy_best_robustness.csv"
     context_path = output_dir / "unified_strategy_context.json"
     report_path = output_dir / "unified_strategy_report.md"
@@ -754,6 +868,7 @@ def build_hourly_asia_pump_unified_artifacts(
         pd.DataFrame().to_csv(best_events_path, index=False)
         pd.DataFrame().to_csv(holdout_path, index=False)
         pd.DataFrame().to_csv(candidate_holdout_path, index=False)
+        pd.DataFrame().to_csv(candidate_resilience_path, index=False)
         pd.DataFrame().to_csv(robustness_path, index=False)
         context_path.write_text(json.dumps({"status": "empty"}, ensure_ascii=False, indent=2), encoding="utf-8")
         report_path.write_text("# Unified XX:00 Report\n\nКандидаты не найдены.\n", encoding="utf-8")
@@ -763,6 +878,7 @@ def build_hourly_asia_pump_unified_artifacts(
             "best_monthly": best_monthly_path,
             "best_events": best_events_path,
             "best_holdout": holdout_path,
+            "candidate_resilience": candidate_resilience_path,
             "best_robustness": robustness_path,
             "context": context_path,
             "report": report_path,
@@ -805,10 +921,47 @@ def build_hourly_asia_pump_unified_artifacts(
         ],
         ascending=[False, False, False, False, False, False, False, True],
     )
+    candidate_resilience_summary = _build_candidate_resilience_summary(
+        candidates=candidate_summary,
+        confirmed_events=confirmed_events,
+        calendar_months=calendar_months,
+    )
+    if not candidate_resilience_summary.empty:
+        candidate_summary = candidate_summary.merge(
+            candidate_resilience_summary.drop(columns=["candidate_variant"], errors="ignore"),
+            on="candidate_id",
+            how="left",
+        )
+    candidate_summary["resilience_score"] = pd.to_numeric(
+        candidate_summary.get("resilience_score", pd.Series(0.0, index=candidate_summary.index)),
+        errors="coerce",
+    ).fillna(0.0)
+    candidate_summary["robust_selection_score"] = candidate_summary["stable_priority_score"] + candidate_summary["resilience_score"]
+    candidate_summary = _sort_summary_frame(
+        candidate_summary,
+        sort_columns=[
+            "meets_goal",
+            "late_holdout_all_positive",
+            "late_holdout_all_non_empty",
+            "robust_selection_score",
+            "stable_priority_score",
+            "priority_score",
+            "mean_return_pct",
+            "annualized_unit_pnl_pct",
+            "max_drawdown_pct",
+        ],
+        ascending=[False, False, False, False, False, False, False, False, True],
+    )
     candidate_summary["candidate_rank"] = np.arange(1, len(candidate_summary) + 1)
     candidate_summary["candidate_variant"] = [f"U{idx}" for idx in candidate_summary["candidate_rank"]]
     if not candidate_holdout_summary.empty:
         candidate_holdout_summary = candidate_holdout_summary.drop(columns=["candidate_variant"], errors="ignore").merge(
+            candidate_summary[["candidate_id", "candidate_variant"]],
+            on="candidate_id",
+            how="left",
+        )
+    if not candidate_resilience_summary.empty:
+        candidate_resilience_summary = candidate_resilience_summary.drop(columns=["candidate_variant"], errors="ignore").merge(
             candidate_summary[["candidate_id", "candidate_variant"]],
             on="candidate_id",
             how="left",
@@ -837,6 +990,16 @@ def build_hourly_asia_pump_unified_artifacts(
     best_monthly = _build_monthly_returns_frame(best_events, calendar_months=calendar_months)
     holdout_sanity = _build_late_holdout_sanity(best_events=best_events, calendar_months=calendar_months)
     robustness_summary = _build_local_robustness_summary(candidate_summary, best_candidate)
+    if not candidate_resilience_summary.empty:
+        best_resilience = candidate_resilience_summary[
+            candidate_resilience_summary["candidate_id"].astype(str) == str(best_candidate["candidate_id"])
+        ].copy()
+        if not best_resilience.empty:
+            robustness_summary = robustness_summary.merge(
+                best_resilience.drop(columns=["candidate_variant"], errors="ignore"),
+                on="candidate_id",
+                how="left",
+            )
 
     candidate_summary.to_csv(candidate_summary_path, index=False)
     best_summary.to_csv(best_summary_path, index=False)
@@ -844,6 +1007,7 @@ def build_hourly_asia_pump_unified_artifacts(
     best_events.to_csv(best_events_path, index=False)
     holdout_sanity.to_csv(holdout_path, index=False)
     candidate_holdout_summary.to_csv(candidate_holdout_path, index=False)
+    candidate_resilience_summary.to_csv(candidate_resilience_path, index=False)
     robustness_summary.to_csv(robustness_path, index=False)
 
     _save_priority_equity_curve_chart(best_events, equity_chart_path)
@@ -852,7 +1016,7 @@ def build_hourly_asia_pump_unified_artifacts(
     _save_priority_trade_timeline_chart(best_events, timeline_chart_path)
 
     context = {
-        "version": "2026-03-28-unified-v1",
+        "version": "2026-03-28-unified-v2",
         "goal": {
             "annualized_unit_pnl_pct_min": _UNIFIED_MIN_ANNUALIZED_UNIT_PNL_PCT,
             "mean_return_pct_min": _UNIFIED_MIN_MEAN_RETURN_PCT,
@@ -879,8 +1043,9 @@ def build_hourly_asia_pump_unified_artifacts(
             "trade_timeline": str(timeline_chart_path),
         },
         "selection_logic": {
-            "selection_mode": "full_year_plus_late_holdout",
+            "selection_mode": "full_year_plus_late_holdout_plus_resilience",
             "late_holdout_splits": [split_id for split_id, _ in _UNIFIED_HOLDOUT_SPLITS],
+            "resilience_top_candidates": _UNIFIED_RESILIENCE_TOP_CANDIDATES,
         },
     }
     context_path.write_text(json.dumps(_to_json_ready(context), ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1061,6 +1226,40 @@ def build_hourly_asia_pump_unified_artifacts(
         f"- trades: `{distribution_chart_path}`",
         f"- timeline: `{timeline_chart_path}`",
     ]
+    report_lines.extend(
+        [
+            "",
+            "## Проверка На Перекос По Символам И Месяцам",
+            "",
+            _frame_to_markdown(
+                robustness_summary,
+                columns=(
+                    "symbol_count",
+                    "top1_symbol_pnl_share",
+                    "top3_symbol_pnl_share",
+                    "top5_symbol_pnl_share",
+                    "annualized_remove_top1_unit_pnl_pct",
+                    "annualized_remove_top3_unit_pnl_pct",
+                    "annualized_remove_top5_unit_pnl_pct",
+                    "worst_leave_month_annualized_unit_pnl_pct",
+                    "remove_top5_stays_positive",
+                ),
+                header_labels={
+                    "symbol_count": "Символов",
+                    "top1_symbol_pnl_share": "Доля Топ-1 Символа",
+                    "top3_symbol_pnl_share": "Доля Топ-3 Символов",
+                    "top5_symbol_pnl_share": "Доля Топ-5 Символов",
+                    "annualized_remove_top1_unit_pnl_pct": "Годовой Unit PnL Без Топ-1",
+                    "annualized_remove_top3_unit_pnl_pct": "Годовой Unit PnL Без Топ-3",
+                    "annualized_remove_top5_unit_pnl_pct": "Годовой Unit PnL Без Топ-5",
+                    "worst_leave_month_annualized_unit_pnl_pct": "Худший Leave-One-Month-Out",
+                    "remove_top5_stays_positive": "Без Топ-5 Всё Ещё Плюс",
+                },
+            ),
+            "",
+            "Коротко: лучший вариант теперь выбирается не только по full-year и late-holdout, но и по устойчивости к выбрасыванию лучших символов и отдельных месяцев.",
+        ]
+    )
     report_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
 
     if logger is not None:
@@ -1081,6 +1280,7 @@ def build_hourly_asia_pump_unified_artifacts(
         "best_events": best_events_path,
         "best_holdout": holdout_path,
         "candidate_holdout": candidate_holdout_path,
+        "candidate_resilience": candidate_resilience_path,
         "best_robustness": robustness_path,
         "context": context_path,
         "report": report_path,

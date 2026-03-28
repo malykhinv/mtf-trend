@@ -78,4 +78,6 @@ def test_build_hourly_asia_pump_unified_artifacts_finds_unified_config(tmp_path:
 
     context = json.loads(Path(artifacts["context"]).read_text(encoding="utf-8"))
     assert context["search_scope"]["uses_hour_utc_in_optimization"] is False
+    resilience = pd.read_csv(artifacts["candidate_resilience"])
+    assert "resilience_score" in resilience.columns
     assert Path(artifacts["report"]).exists()
