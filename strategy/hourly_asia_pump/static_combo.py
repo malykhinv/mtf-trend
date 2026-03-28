@@ -121,6 +121,44 @@ def _profit_factor(returns: pd.Series) -> float | None:
     return wins / abs(losses)
 
 
+def _compute_overlap_stats(frame: pd.DataFrame) -> tuple[int | None, int | None]:
+    if frame.empty:
+        return None, None
+    entry_source = frame["entry_timestamp_ms"] if "entry_timestamp_ms" in frame.columns else pd.Series(index=frame.index, dtype="float64")
+    exit_source = frame["exit_timestamp_ms"] if "exit_timestamp_ms" in frame.columns else pd.Series(index=frame.index, dtype="float64")
+    source_exit_source = (
+        frame["source_exit_timestamp_ms"] if "source_exit_timestamp_ms" in frame.columns else pd.Series(index=frame.index, dtype="float64")
+    )
+    entry_series = pd.to_numeric(entry_source, errors="coerce")
+    exit_series = pd.to_numeric(exit_source, errors="coerce")
+    if exit_series.isna().all():
+        exit_series = pd.to_numeric(source_exit_source, errors="coerce")
+    scoped = pd.DataFrame(
+        {
+            "entry_timestamp_ms": entry_series,
+            "exit_timestamp_ms": exit_series,
+        }
+    ).dropna(subset=["entry_timestamp_ms"])
+    if scoped.empty:
+        return None, None
+    scoped["entry_timestamp_ms"] = scoped["entry_timestamp_ms"].astype("int64")
+    scoped["exit_timestamp_ms"] = scoped["exit_timestamp_ms"].fillna(scoped["entry_timestamp_ms"]).astype("int64")
+    scoped = scoped.sort_values(["entry_timestamp_ms", "exit_timestamp_ms"]).reset_index(drop=True)
+
+    active_exit_times: list[int] = []
+    max_concurrent = 0
+    overlapping_entries = 0
+    for _, row in scoped.iterrows():
+        entry_timestamp_ms = int(row["entry_timestamp_ms"])
+        exit_timestamp_ms = int(max(row["exit_timestamp_ms"], entry_timestamp_ms))
+        active_exit_times = [timestamp for timestamp in active_exit_times if timestamp > entry_timestamp_ms]
+        if active_exit_times:
+            overlapping_entries += 1
+        active_exit_times.append(exit_timestamp_ms)
+        max_concurrent = max(max_concurrent, len(active_exit_times))
+    return max_concurrent, overlapping_entries
+
+
 def _dedupe_source_events(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame.copy()
@@ -274,6 +312,9 @@ def _summarize_events(frame: pd.DataFrame) -> dict[str, object] | None:
     monthly_returns = ordered.groupby("month_utc", sort=True)["exit_return_pct"].sum()
     equity_curve = 1.0 + returns.cumsum()
     drawdown = ((equity_curve.cummax() - equity_curve) / equity_curve.cummax().replace(0, pd.NA)).fillna(0.0)
+    max_concurrent_trades, overlapping_entries_count = _compute_overlap_stats(ordered)
+    annual_sum_return_pct = float(returns.sum())
+    annualized_unit_pnl_pct = float(annual_sum_return_pct * (12.0 / max(1, len(monthly_returns))))
 
     return {
         "trades_count": int(len(ordered)),
@@ -283,8 +324,10 @@ def _summarize_events(frame: pd.DataFrame) -> dict[str, object] | None:
         "median_return_pct": float(returns.median()),
         "win_rate": float((returns > 0).mean()),
         "profit_factor": _profit_factor(returns),
-        "annual_sum_return_pct": float(returns.sum()),
-        "annualized_sum_return_pct": float(returns.sum() * (12.0 / max(1, len(monthly_returns)))),
+        "annual_sum_return_pct": annual_sum_return_pct,
+        "annualized_sum_return_pct": annualized_unit_pnl_pct,
+        "unit_pnl_sum_pct": annual_sum_return_pct,
+        "annualized_unit_pnl_pct": annualized_unit_pnl_pct,
         "mean_pos_trade_pct": float(returns[returns > 0].mean()) if (returns > 0).any() else None,
         "mean_neg_trade_pct": float(returns[returns < 0].mean()) if (returns < 0).any() else None,
         "positive_months_count": int((monthly_returns > 0).sum()),
@@ -293,6 +336,8 @@ def _summarize_events(frame: pd.DataFrame) -> dict[str, object] | None:
         "best_month_return_pct": float(monthly_returns.max()) if not monthly_returns.empty else None,
         "worst_month_return_pct": float(monthly_returns.min()) if not monthly_returns.empty else None,
         "max_drawdown_pct": float(drawdown.max()) if not drawdown.empty else None,
+        "max_concurrent_trades": max_concurrent_trades,
+        "overlapping_entries_count": overlapping_entries_count,
     }
 
 
@@ -337,14 +382,16 @@ def _build_combo_events(
         exit_returns = pd.to_numeric(sorted_group.get("exit_return_pct"), errors="coerce").dropna()
         if exit_returns.empty:
             continue
-        target_return = float(exit_returns.mean())
-        sorted_group["_exit_diff_to_mean"] = (
-            pd.to_numeric(sorted_group.get("exit_return_pct"), errors="coerce") - target_return
-        ).abs()
+        sorted_group["_exit_return_pct_numeric"] = pd.to_numeric(sorted_group.get("exit_return_pct"), errors="coerce")
         representative = sorted_group.sort_values(
-            ["_exit_diff_to_mean", "entry_timestamp_ms", "combo_component_id"],
+            ["_exit_return_pct_numeric", "entry_timestamp_ms", "combo_component_id"],
+            ascending=[True, True, True],
             na_position="last",
         ).iloc[0]
+        target_return = float(representative["_exit_return_pct_numeric"])
+        matched_return_min = float(exit_returns.min())
+        matched_return_mean = float(exit_returns.mean())
+        matched_return_max = float(exit_returns.max())
         entry_price = _safe_numeric(representative.get("entry_price"))
         if entry_price is None:
             entry_price = _safe_numeric(representative.get("next_bar_open_price"))
@@ -365,6 +412,11 @@ def _build_combo_events(
                 "hour_utc": representative.get("hour_utc"),
                 "combo_matched_component_count": int(sorted_group["combo_component_id"].nunique()),
                 "combo_matched_component_ids": ",".join(sorted(sorted_group["combo_component_id"].astype(str).unique().tolist())),
+                "combo_return_resolution": "conservative_min",
+                "combo_matched_return_min_pct": matched_return_min,
+                "combo_matched_return_mean_pct": matched_return_mean,
+                "combo_matched_return_max_pct": matched_return_max,
+                "combo_matched_return_spread_pct": float(matched_return_max - matched_return_min),
                 "exit_return_pct": target_return,
                 "trigger_return_pct": float(pd.to_numeric(sorted_group.get("trigger_return_pct"), errors="coerce").max()),
                 "volume_mult": float(pd.to_numeric(sorted_group.get("volume_mult"), errors="coerce").max()),

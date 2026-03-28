@@ -37,7 +37,7 @@ class HourlyAsiaPumpProductionVariantSpec:
 
 @dataclass(frozen=True, slots=True)
 class HourlyAsiaPumpProductionKpi:
-    annualized_sum_return_pct_min: float = 1.0
+    annualized_unit_pnl_pct_min: float = 1.0
     mean_return_pct_min: float = 0.02
     win_rate_min: float = 0.40
     trades_per_year_min: float = 50.0
@@ -155,12 +155,15 @@ def _build_production_variant_summary(
                 "median_return_pct": row.get("median_return_pct"),
                 "win_rate": row.get("win_rate"),
                 "profit_factor": row.get("profit_factor"),
-                "annualized_sum_return_pct": row.get("annualized_sum_return_pct"),
+                "annualized_unit_pnl_pct": row.get("annualized_unit_pnl_pct", row.get("annualized_sum_return_pct")),
+                "unit_pnl_sum_pct": row.get("unit_pnl_sum_pct", row.get("annual_sum_return_pct")),
                 "mean_pos_trade_pct": row.get("mean_pos_trade_pct"),
                 "mean_neg_trade_pct": row.get("mean_neg_trade_pct"),
                 "positive_months_count": row.get("positive_months_count"),
                 "non_positive_months_count": row.get("non_positive_months_count"),
                 "max_drawdown_pct": row.get("max_drawdown_pct"),
+                "max_concurrent_trades": row.get("max_concurrent_trades"),
+                "overlapping_entries_count": row.get("overlapping_entries_count"),
                 "robustness_label": robustness.get("robustness_label"),
                 "local_goal_rate": robustness.get("local_goal_rate"),
                 "local_mean_return_p25_pct": robustness.get("local_mean_return_p25_pct"),
@@ -177,7 +180,7 @@ def _build_production_catalog(variant_summary: pd.DataFrame) -> pd.DataFrame:
     catalog = variant_summary.copy()
     catalog["combo_priority"] = pd.to_numeric(catalog["production_priority"], errors="coerce")
     catalog["priority_score"] = (
-        pd.to_numeric(catalog["annualized_sum_return_pct"], errors="coerce").fillna(0.0) * 2.0
+        pd.to_numeric(catalog["annualized_unit_pnl_pct"], errors="coerce").fillna(0.0) * 2.0
         + pd.to_numeric(catalog["mean_return_pct"], errors="coerce").fillna(0.0) * 4.0
         + pd.to_numeric(catalog["win_rate"], errors="coerce").fillna(0.0)
     )
@@ -231,12 +234,12 @@ def _evaluate_kpi_gate(
     row = full_year_summary.iloc[0]
     checks: list[dict[str, object]] = [
         {
-            "metric": "annualized_sum_return_pct",
+            "metric": "annualized_unit_pnl_pct",
             "scope": "full_year",
-            "actual": row.get("annualized_sum_return_pct"),
-            "threshold": kpi.annualized_sum_return_pct_min,
+            "actual": row.get("annualized_unit_pnl_pct", row.get("annualized_sum_return_pct")),
+            "threshold": kpi.annualized_unit_pnl_pct_min,
             "operator": ">=",
-            "passed": float(pd.to_numeric(row.get("annualized_sum_return_pct"), errors="coerce")) >= kpi.annualized_sum_return_pct_min,
+            "passed": float(pd.to_numeric(row.get("annualized_unit_pnl_pct", row.get("annualized_sum_return_pct")), errors="coerce")) >= kpi.annualized_unit_pnl_pct_min,
         },
         {
             "metric": "mean_return_pct",
@@ -329,12 +332,12 @@ def _evaluate_kpi_gate(
                         "passed": float(pd.to_numeric(holdout_row.get("max_drawdown_pct"), errors="coerce")) <= kpi.max_drawdown_pct_max,
                     },
                     {
-                        "metric": "annualized_sum_return_pct",
+                        "metric": "annualized_unit_pnl_pct",
                         "scope": split_id,
-                        "actual": holdout_row.get("annualized_sum_return_pct"),
+                        "actual": holdout_row.get("annualized_unit_pnl_pct", holdout_row.get("annualized_sum_return_pct")),
                         "threshold": 0.0,
                         "operator": ">",
-                        "passed": float(pd.to_numeric(holdout_row.get("annualized_sum_return_pct"), errors="coerce")) > 0.0,
+                        "passed": float(pd.to_numeric(holdout_row.get("annualized_unit_pnl_pct", holdout_row.get("annualized_sum_return_pct")), errors="coerce")) > 0.0,
                     },
                 ]
             )
@@ -430,12 +433,14 @@ def _write_production_report(
                 "median_return_pct",
                 "win_rate",
                 "profit_factor",
-                "annualized_sum_return_pct",
+                "annualized_unit_pnl_pct",
                 "max_drawdown_pct",
                 "mean_pos_trade_pct",
                 "mean_neg_trade_pct",
                 "positive_months_count",
                 "non_positive_months_count",
+                "max_concurrent_trades",
+                "overlapping_entries_count",
                 "matched_combo_variants_count",
             ),
         ),
@@ -458,9 +463,10 @@ def _write_production_report(
                 "trades_per_year",
                 "mean_return_pct",
                 "win_rate",
-                "annualized_sum_return_pct",
+                "annualized_unit_pnl_pct",
                 "max_drawdown_pct",
                 "positive_months_count",
+                "max_concurrent_trades",
                 "robustness_label",
             ),
         ),
@@ -482,10 +488,12 @@ def _write_production_report(
                 "trades_per_year",
                 "mean_return_pct",
                 "win_rate",
-                "annualized_sum_return_pct",
+                "annualized_unit_pnl_pct",
                 "max_drawdown_pct",
                 "positive_months_count",
                 "non_positive_months_count",
+                "max_concurrent_trades",
+                "overlapping_entries_count",
                 "all_active_months_positive",
             ),
         ),
@@ -514,8 +522,10 @@ def _write_production_report(
         "",
         "## Reliability Note",
         "",
-        "- This report validates backtest profitability and late holdout sanity on the fixed yearly production pack.",
-        "- It is a production gate for the current research dataset, not a guarantee of future real-money profitability.",
+        "- `annualized_unit_pnl_pct` is additive unit-PnL across trades, not capital-constrained account CAGR.",
+        "- `max_concurrent_trades` and `overlapping_entries_count` are reported to show where multiple trades overlap in time.",
+        "- The pack itself is selected from the same full-year research dataset; late holdout rows are sanity checks, not independent proof of live profitability.",
+        "- This is a production gate for the current research dataset, not a guarantee of future real-money profitability.",
     ]
     report_path = output_dir / "production_report.md"
     report_path.write_text("\n".join(lines), encoding="utf-8")
@@ -613,13 +623,14 @@ def build_hourly_asia_pump_production_artifacts(
             for spec in HOURLY_ASIA_PUMP_PRODUCTION_VARIANTS
         ],
         "kpi": {
-            "annualized_sum_return_pct_min": active_kpi.annualized_sum_return_pct_min,
+            "annualized_unit_pnl_pct_min": active_kpi.annualized_unit_pnl_pct_min,
             "mean_return_pct_min": active_kpi.mean_return_pct_min,
             "win_rate_min": active_kpi.win_rate_min,
             "trades_per_year_min": active_kpi.trades_per_year_min,
             "max_drawdown_pct_max": active_kpi.max_drawdown_pct_max,
             "positive_months_min": active_kpi.positive_months_min,
         },
+        "selection_bias_warning": True,
         "production_pack_matches_top_variant": bool(
             not production_events.empty
             and not great_catalog.empty

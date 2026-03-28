@@ -5,6 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from strategy.hourly_asia_pump.static_combo import (
+    _build_combo_events,
     _build_priority_selected_events,
     _index_to_variant_label,
     build_hourly_asia_pump_static_combo_artifacts,
@@ -324,3 +325,61 @@ def test_static_combo_trade_plotter_renders_bee_bite_style_chart(tmp_path: Path)
 
     assert output_path.exists()
     assert output_path.stat().st_size > 0
+
+
+def test_build_combo_events_uses_conservative_min_return_for_overlaps() -> None:
+    candidate_frames = {
+        "alpha": pd.DataFrame(
+            [
+                {
+                    "symbol": "AAA/USDT",
+                    "timestamp_ms": 1_700_000_000_000,
+                    "entry_timestamp_ms": 1_700_000_300_000,
+                    "entry_timestamp_utc": "2023-11-14T22:18:20+00:00",
+                    "date_utc": "2023-11-14",
+                    "month_utc": "2023-11",
+                    "hour_utc": 0,
+                    "exit_return_pct": 0.10,
+                    "trigger_return_pct": 0.04,
+                    "volume_mult": 3.0,
+                    "range_atr": 2.0,
+                    "entry_price": 100.0,
+                    "trade_model_id": "m1",
+                    "config_id": "c1",
+                }
+            ]
+        ),
+        "beta": pd.DataFrame(
+            [
+                {
+                    "symbol": "AAA/USDT",
+                    "timestamp_ms": 1_700_000_000_000,
+                    "entry_timestamp_ms": 1_700_000_300_000,
+                    "entry_timestamp_utc": "2023-11-14T22:18:20+00:00",
+                    "date_utc": "2023-11-14",
+                    "month_utc": "2023-11",
+                    "hour_utc": 0,
+                    "exit_return_pct": -0.02,
+                    "trigger_return_pct": 0.04,
+                    "volume_mult": 3.0,
+                    "range_atr": 2.0,
+                    "entry_price": 100.0,
+                    "trade_model_id": "m2",
+                    "config_id": "c2",
+                }
+            ]
+        ),
+    }
+
+    combo_events = _build_combo_events(
+        candidate_frames=candidate_frames,
+        component_ids=["alpha", "beta"],
+        top_k_per_timestamp=99,
+    )
+
+    assert len(combo_events) == 1
+    assert float(combo_events.iloc[0]["exit_return_pct"]) == -0.02
+    assert str(combo_events.iloc[0]["combo_return_resolution"]) == "conservative_min"
+    assert float(combo_events.iloc[0]["combo_matched_return_min_pct"]) == -0.02
+    assert float(combo_events.iloc[0]["combo_matched_return_mean_pct"]) == 0.04
+    assert float(combo_events.iloc[0]["combo_matched_return_max_pct"]) == 0.10
