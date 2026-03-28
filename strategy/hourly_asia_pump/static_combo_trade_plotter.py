@@ -88,7 +88,6 @@ class StaticComboTradePlotter:
     _FIGURE_DPI = 100
     _GRIDSPEC_HEIGHT_RATIOS = [4, 1]
     _MAX_X_TICKS = 8
-    _BASE_ZONE_SHARE = 0.25
 
     def plot_trade(
         self,
@@ -145,71 +144,11 @@ class StaticComboTradePlotter:
         else:
             volume_axis.set_visible(False)
 
-        base_slice = self._resolve_base_slice(prepared=prepared, trigger_idx=trigger_idx)
-        if base_slice is not None:
-            base_start_idx, base_end_idx, base_low, base_high = base_slice
-            self._draw_rectangle(
-                axis=price_axis,
-                start_idx=base_start_idx,
-                end_idx=window_end,
-                visible_start_idx=window_start,
-                visible_end_idx=window_end,
-                low=base_low,
-                high=base_high,
-                index_shift=window_start,
-                edge_color=self._BOX_EDGE,
-                face_color=self._BOX_FACE,
-                alpha=0.16,
-            )
-            lower_zone_high = base_low + ((base_high - base_low) * self._BASE_ZONE_SHARE)
-            upper_zone_low = base_high - ((base_high - base_low) * self._BASE_ZONE_SHARE)
-            self._draw_rectangle(
-                axis=price_axis,
-                start_idx=base_start_idx,
-                end_idx=window_end,
-                visible_start_idx=window_start,
-                visible_end_idx=window_end,
-                low=base_low,
-                high=lower_zone_high,
-                index_shift=window_start,
-                edge_color=self._LOWER_ZONE_EDGE,
-                face_color=self._LOWER_ZONE_FACE,
-                alpha=0.22,
-            )
-            self._draw_rectangle(
-                axis=price_axis,
-                start_idx=base_start_idx,
-                end_idx=window_end,
-                visible_start_idx=window_start,
-                visible_end_idx=window_end,
-                low=upper_zone_low,
-                high=base_high,
-                index_shift=window_start,
-                edge_color=self._UPPER_ZONE_EDGE,
-                face_color=self._UPPER_ZONE_FACE,
-                alpha=0.18,
-            )
-
         trigger_high = spec.trigger_high
-        trigger_low = spec.trigger_low
-        if trigger_high is not None and trigger_low is not None and trigger_high > trigger_low:
-            self._draw_rectangle(
-                axis=price_axis,
-                start_idx=trigger_idx,
-                end_idx=max(trigger_idx, entry_idx),
-                visible_start_idx=window_start,
-                visible_end_idx=window_end,
-                low=trigger_low,
-                high=trigger_high,
-                index_shift=window_start,
-                edge_color=self._TRIGGER_RANGE_EDGE,
-                face_color=self._TRIGGER_RANGE_FACE,
-                alpha=0.12,
-            )
+        if trigger_high is not None:
             price_axis.axhline(trigger_high, color=self._TRIGGER_RANGE_EDGE, linestyle=":", linewidth=1.0, alpha=0.85)
-            price_axis.axhline(trigger_low, color=self._GRID_COLOR, linestyle=":", linewidth=1.0, alpha=0.75)
 
-        tp1_price, tp2_price, tp3_price = self._resolve_reward_targets(spec=spec)
+        tp1_price, _, _ = self._resolve_reward_targets(spec=spec)
         trade_end_idx = self._timestamp_to_index(prepared, spec.exit_timestamp_ms) if spec.exit_timestamp_ms is not None else window_end
         if spec.entry_price is not None and spec.stop_price is not None and spec.entry_price > spec.stop_price:
             self._draw_trade_band(
@@ -237,55 +176,9 @@ class StaticComboTradePlotter:
                 face_color=self._TP1_FACE,
                 alpha=0.18,
             )
-        if tp1_price is not None and tp2_price is not None and tp2_price > tp1_price:
-            self._draw_trade_band(
-                axis=price_axis,
-                start_idx=entry_idx,
-                end_idx=trade_end_idx,
-                visible_start_idx=window_start,
-                visible_end_idx=window_end,
-                low=tp1_price,
-                high=tp2_price,
-                index_shift=window_start,
-                face_color=self._TP2_FACE,
-                alpha=0.14,
-            )
-        if tp2_price is not None and tp3_price is not None and tp3_price > tp2_price:
-            self._draw_trade_band(
-                axis=price_axis,
-                start_idx=entry_idx,
-                end_idx=trade_end_idx,
-                visible_start_idx=window_start,
-                visible_end_idx=window_end,
-                low=tp2_price,
-                high=tp3_price,
-                index_shift=window_start,
-                face_color=self._TP3_FACE,
-                alpha=0.12,
-            )
 
         if spec.entry_price is not None:
             price_axis.axhline(spec.entry_price, color=self._ENTRY_COLOR, linestyle="-", linewidth=1.0, alpha=0.95)
-        if spec.stop_price is not None:
-            price_axis.axhline(spec.stop_price, color=self._STOP_COLOR, linestyle="--", linewidth=1.0, alpha=0.95)
-        if tp1_price is not None:
-            price_axis.axhline(tp1_price, color=self._TP1_COLOR, linestyle="--", linewidth=1.0, alpha=0.95)
-        if tp2_price is not None:
-            price_axis.axhline(tp2_price, color=self._TP2_COLOR, linestyle="--", linewidth=1.0, alpha=0.95)
-        if tp3_price is not None:
-            price_axis.axhline(tp3_price, color=self._TP3_COLOR, linestyle="--", linewidth=1.0, alpha=0.95)
-
-        self._draw_vertical_event(price_axis, trigger_idx - window_start, self._TRIGGER_COLOR, alpha=0.45, linewidth=1.0)
-        self._draw_vertical_event(price_axis, entry_idx - window_start, self._ENTRY_COLOR, alpha=0.55, linewidth=1.0)
-        if spec.peak_timestamp_ms is not None and spec.peak_price is not None:
-            peak_idx = self._timestamp_to_index(prepared, spec.peak_timestamp_ms)
-            if window_start <= peak_idx <= window_end:
-                self._draw_marker(price_axis, peak_idx - window_start, spec.peak_price, self._PEAK_COLOR)
-        if spec.entry_price is not None:
-            self._draw_marker(price_axis, entry_idx - window_start, spec.entry_price, self._ENTRY_COLOR)
-        if spec.exit_timestamp_ms is not None and spec.exit_price is not None:
-            exit_idx = self._timestamp_to_index(prepared, spec.exit_timestamp_ms)
-            self._draw_marker(price_axis, exit_idx - window_start, spec.exit_price, self._EXIT_COLOR)
 
         title_parts = [spec.symbol, spec.combo_variant]
         if spec.source_trade_model_id:
@@ -297,7 +190,7 @@ class StaticComboTradePlotter:
         price_axis.set_ylabel("Цена", color=self._TEXT_COLOR)
         price_axis.grid(alpha=0.18, color=self._GRID_COLOR)
 
-        info_lines = self._build_info_lines(spec=spec, tp1_price=tp1_price, tp2_price=tp2_price, tp3_price=tp3_price)
+        info_lines = self._build_info_lines(spec=spec, tp1_price=tp1_price)
         price_axis.text(
             0.015,
             0.985,
@@ -334,24 +227,6 @@ class StaticComboTradePlotter:
         plt.close(figure)
 
     @staticmethod
-    def _resolve_base_slice(*, prepared: pd.DataFrame, trigger_idx: int) -> tuple[int, int, float, float] | None:
-        if trigger_idx <= 0:
-            return None
-        base_start_idx = max(0, trigger_idx - StaticComboTradePlotter._PRE_TRIGGER_CONTEXT_BARS)
-        base_end_idx = max(0, trigger_idx - 1)
-        if base_end_idx < base_start_idx:
-            return None
-        base_window = prepared.iloc[base_start_idx : base_end_idx + 1]
-        if base_window.empty:
-            return None
-        return (
-            base_start_idx,
-            base_end_idx,
-            float(base_window["low"].min()),
-            float(base_window["high"].max()),
-        )
-
-    @staticmethod
     def _resolve_reward_targets(spec: StaticComboTradePlotSpec) -> tuple[float | None, float | None, float | None]:
         if spec.entry_price is None or spec.stop_price is None:
             return None, None, None
@@ -381,52 +256,28 @@ class StaticComboTradePlotter:
         *,
         spec: StaticComboTradePlotSpec,
         tp1_price: float | None,
-        tp2_price: float | None,
-        tp3_price: float | None,
     ) -> list[str]:
-        realized_r = None
-        if spec.exit_return_pct is not None and spec.initial_risk_pct not in {None, 0.0}:
-            realized_r = spec.exit_return_pct / spec.initial_risk_pct
         model_marker = spec.source_trade_model_label or spec.source_trade_model_id or spec.source_config_id or "н/д"
         lines = [
-            f"Результат: {cls._format_pct(spec.exit_return_pct)} | R: {cls._format_ratio(realized_r)}",
+            f"Результат: {cls._format_pct(spec.exit_return_pct)}",
             f"Модель: {model_marker}",
             (
-                f"Вход: {spec.entry_price:.5f} | Стоп: {spec.stop_price:.5f}"
-                if spec.entry_price is not None and spec.stop_price is not None
-                else "Вход/стоп: н/д"
-            ),
-            (
-                f"1R/2R/3R: {tp1_price:.5f} / {tp2_price:.5f} / {tp3_price:.5f}"
-                if tp1_price is not None and tp2_price is not None and tp3_price is not None
-                else "1R/2R/3R: н/д"
+                f"Вход: {spec.entry_price:.5f} | TP: {tp1_price:.5f} | SL: {spec.stop_price:.5f}"
+                if spec.entry_price is not None and spec.stop_price is not None and tp1_price is not None
+                else (
+                    f"Вход: {spec.entry_price:.5f} | Стоп: {spec.stop_price:.5f}"
+                    if spec.entry_price is not None and spec.stop_price is not None
+                    else "Вход/стоп: н/д"
+                )
             ),
             (
                 f"Импульс: {cls._format_pct(spec.trigger_return_pct)} | "
-                f"Диапазон: {cls._format_pct(spec.trigger_range_pct)} | "
-                f"Объём: {cls._format_ratio(spec.volume_mult)}x"
-            ),
-            (
-                f"База60: {cls._format_pct(spec.pre_base_range_pct_60m)} | "
-                f"Дрифт60: {cls._format_pct(spec.pre_base_drift_pct_60m)} | "
-                f"База/импульс: {cls._format_ratio(spec.pre_base_range_vs_trigger)}"
-            ),
-            (
-                f"Откат: {cls._format_pct(spec.pre_entry_pullback_frac)} | "
-                f"Красный объём: {cls._format_ratio(spec.pre_entry_red_volume_frac)} | "
-                f"Закр. к хаю: {cls._format_pct(spec.close_to_high_frac)}"
-            ),
-            (
-                f"Диап/ATR: {cls._format_ratio(spec.range_atr)} | "
-                f"Тело/ATR: {cls._format_ratio(spec.body_atr)} | "
+                f"Объём: {cls._format_ratio(spec.volume_mult)}x | "
                 f"Выход: {spec.exit_reason or 'н/д'}"
             ),
         ]
-        if spec.next_bar_pullback_frac is not None or spec.next_close_to_high_frac is not None:
-            lines.append(
-                f"След. откат: {cls._format_pct(spec.next_bar_pullback_frac)} | "
-                f"След. закр. к хаю: {cls._format_pct(spec.next_close_to_high_frac)}"
-            )
+        if spec.trigger_high is not None:
+            lines.append(f"Триггер: {spec.trigger_high:.5f}")
         return lines
 
     def _draw_candles(self, axis: plt.Axes, frame: pd.DataFrame, positions: list[int]) -> None:
