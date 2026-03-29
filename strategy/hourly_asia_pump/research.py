@@ -827,11 +827,23 @@ def _event_matches_trade_model(event: dict[str, object], model: HourlyAsiaPumpTr
     pre_base_range_pct_60m = _safe_numeric(event.get("pre_base_range_pct_60m"))
     pre_base_drift_pct_60m = _safe_numeric(event.get("pre_base_drift_pct_60m"))
     pre_base_range_vs_trigger = _safe_numeric(event.get("pre_base_range_vs_trigger"))
+    min_pre_base_range_pct_60m = _safe_numeric(getattr(model, "min_pre_base_range_pct_60m", None))
+    min_pre_base_drift_pct_60m = _safe_numeric(getattr(model, "min_pre_base_drift_pct_60m", None))
+    min_pre_base_range_vs_trigger = _safe_numeric(getattr(model, "min_pre_base_range_vs_trigger", None))
+    if min_pre_base_range_pct_60m is not None:
+        if pre_base_range_pct_60m is None or pre_base_range_pct_60m < min_pre_base_range_pct_60m:
+            return False
     if model.max_pre_base_range_pct_60m is not None:
         if pre_base_range_pct_60m is None or pre_base_range_pct_60m > model.max_pre_base_range_pct_60m:
             return False
+    if min_pre_base_drift_pct_60m is not None:
+        if pre_base_drift_pct_60m is None or pre_base_drift_pct_60m < min_pre_base_drift_pct_60m:
+            return False
     if model.max_pre_base_drift_pct_60m is not None:
         if pre_base_drift_pct_60m is None or pre_base_drift_pct_60m > model.max_pre_base_drift_pct_60m:
+            return False
+    if min_pre_base_range_vs_trigger is not None:
+        if pre_base_range_vs_trigger is None or pre_base_range_vs_trigger < min_pre_base_range_vs_trigger:
             return False
     if model.max_pre_base_range_vs_trigger is not None:
         if pre_base_range_vs_trigger is None or pre_base_range_vs_trigger > model.max_pre_base_range_vs_trigger:
@@ -857,6 +869,7 @@ def _build_pre_entry_context(
             "pre_entry_pullback_frac": 0.0,
             "pre_entry_red_volume_frac": 0.0,
             "pre_entry_low_frac_of_trigger_range": 1.0,
+            "pre_entry_min_low_price": trigger_low,
         }
 
     pre_slice = slice(row_index + 1, entry_idx)
@@ -870,6 +883,7 @@ def _build_pre_entry_context(
         "pre_entry_pullback_frac": max(0.0, (trigger_high - min_low) / trigger_range) if trigger_range > 0 else 0.0,
         "pre_entry_red_volume_frac": red_volume_frac,
         "pre_entry_low_frac_of_trigger_range": ((min_low - trigger_low) / trigger_range) if trigger_range > 0 else 0.0,
+        "pre_entry_min_low_price": min_low,
     }
 
 
@@ -1003,7 +1017,7 @@ def _find_trade_model_entry(
         )
         if not _context_entry_allowed(model, context):
             return no_entry
-        initial_stop_price = _resolve_initial_stop(trigger_low)
+        initial_stop_price = _resolve_initial_stop(float(context.get("pre_entry_min_low_price", trigger_low)))
         return {
             "trade_triggered": True,
             "entry_idx": entry_idx,
@@ -1016,11 +1030,66 @@ def _find_trade_model_entry(
             **next_bar_context,
         }
 
+    if model.entry_style == "confirmed_next_open":
+        next_idx = row_index + 1
+        entry_idx = row_index + 2
+        if next_idx >= len(open_values) or entry_idx >= len(open_values):
+            return no_entry
+        require_next_bar_green = bool(getattr(model, "require_next_bar_green", False))
+        max_next_bar_pullback_frac = _safe_numeric(getattr(model, "max_next_bar_pullback_frac", None))
+        min_next_bar_low_frac_of_trigger_range = _safe_numeric(
+            getattr(model, "min_next_bar_low_frac_of_trigger_range", None)
+        )
+        min_next_bar_return_pct = _safe_numeric(getattr(model, "min_next_bar_return_pct", None))
+        next_bar_is_red = bool(next_bar_context.get("next_bar_is_red"))
+        next_bar_pullback_frac = _safe_numeric(next_bar_context.get("next_bar_pullback_frac"))
+        next_bar_low_frac_of_trigger_range = _safe_numeric(next_bar_context.get("next_bar_low_frac_of_trigger_range"))
+        next_bar_return_pct = _safe_numeric(next_bar_context.get("next_bar_return_pct"))
+        if require_next_bar_green and next_bar_is_red:
+            return no_entry
+        if max_next_bar_pullback_frac is not None:
+            if next_bar_pullback_frac is None or next_bar_pullback_frac > max_next_bar_pullback_frac:
+                return no_entry
+        if min_next_bar_low_frac_of_trigger_range is not None:
+            if (
+                next_bar_low_frac_of_trigger_range is None
+                or next_bar_low_frac_of_trigger_range < min_next_bar_low_frac_of_trigger_range
+            ):
+                return no_entry
+        if min_next_bar_return_pct is not None:
+            if next_bar_return_pct is None or next_bar_return_pct < min_next_bar_return_pct:
+                return no_entry
+        context = _build_pre_entry_context(
+            row_index=row_index,
+            entry_idx=entry_idx,
+            trigger_high=trigger_high,
+            trigger_low=trigger_low,
+            trigger_range=trigger_range,
+            trigger_volume=trigger_volume,
+            open_values=open_values,
+            low_values=low_values,
+            close_values=close_values,
+            volume_values=volume_values,
+        )
+        if not _context_entry_allowed(model, context):
+            return no_entry
+        initial_stop_price = _resolve_initial_stop(float(context.get("pre_entry_min_low_price", trigger_low)))
+        return {
+            "trade_triggered": True,
+            "entry_idx": entry_idx,
+            "entry_price": float(open_values[entry_idx]),
+            "entry_reason": "confirmed_next_open",
+            "entry_execution_mode": "bar_open",
+            "initial_stop_price": initial_stop_price,
+            "initial_stop_reason": model.initial_stop_style,
+            **context,
+            **next_bar_context,
+        }
+
     if model.entry_style == "break_trigger_high":
         entry_end_idx = min(len(high_values) - 1, row_index + model.max_entry_bars)
         for idx in range(row_index + 1, entry_end_idx + 1):
             if float(high_values[idx]) >= trigger_high:
-                initial_stop_price = _resolve_initial_stop(trigger_body_mid)
                 context = _build_pre_entry_context(
                     row_index=row_index,
                     entry_idx=idx,
@@ -1035,6 +1104,7 @@ def _find_trade_model_entry(
                 )
                 if not _context_entry_allowed(model, context):
                     continue
+                initial_stop_price = _resolve_initial_stop(float(context.get("pre_entry_min_low_price", trigger_body_mid)))
                 return {
                     "trade_triggered": True,
                     "entry_idx": idx,
@@ -1076,7 +1146,7 @@ def _find_trade_model_entry(
                     )
                     if not _context_entry_allowed(model, context):
                         continue
-                    initial_stop_price = _resolve_initial_stop(pullback_low)
+                    initial_stop_price = _resolve_initial_stop(float(context.get("pre_entry_min_low_price", pullback_low)))
                     return {
                         "trade_triggered": True,
                         "entry_idx": idx,
@@ -1118,7 +1188,7 @@ def _find_trade_model_entry(
                 )
                 if not _context_entry_allowed(model, context):
                     continue
-                initial_stop_price = _resolve_initial_stop(flag_low)
+                initial_stop_price = _resolve_initial_stop(float(context.get("pre_entry_min_low_price", flag_low)))
                 return {
                     "trade_triggered": True,
                     "entry_idx": idx,
@@ -1268,6 +1338,17 @@ def _resolve_entry_bar_execution(
                 partial_taken = True
                 if model.move_stop_to_be_after_partial:
                     current_stop = max(current_stop, entry_price)
+                if remaining_fraction <= 0.0:
+                    result["realized_return_pct"] = realized_return_pct
+                    result["remaining_fraction"] = 0.0
+                    result["partial_taken"] = partial_taken
+                    result["highest_high"] = highest_high
+                    result["current_stop"] = current_stop
+                    result["exit_in_entry_bar"] = True
+                    result["exit_reason"] = "target"
+                    result["exit_timestamp_ms"] = micro_timestamp_ms
+                    result["exit_timestamp_utc"] = pd.to_datetime(micro_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S")
+                    return result
 
         result["realized_return_pct"] = realized_return_pct
         result["remaining_fraction"] = remaining_fraction
@@ -1338,6 +1419,17 @@ def _resolve_entry_bar_execution(
                 partial_taken = True
                 if model.move_stop_to_be_after_partial:
                     current_stop = max(current_stop, entry_price)
+                if remaining_fraction <= 0.0:
+                    result["realized_return_pct"] = realized_return_pct
+                    result["remaining_fraction"] = 0.0
+                    result["partial_taken"] = partial_taken
+                    result["highest_high"] = highest_high
+                    result["current_stop"] = current_stop
+                    result["exit_in_entry_bar"] = True
+                    result["exit_reason"] = "target"
+                    result["exit_timestamp_ms"] = micro_timestamp_ms
+                    result["exit_timestamp_utc"] = pd.to_datetime(micro_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S")
+                    return result
             continue
 
         if micro_low <= current_stop:
@@ -1365,6 +1457,17 @@ def _resolve_entry_bar_execution(
             partial_taken = True
             if model.move_stop_to_be_after_partial:
                 current_stop = max(current_stop, entry_price)
+            if remaining_fraction <= 0.0:
+                result["realized_return_pct"] = realized_return_pct
+                result["remaining_fraction"] = 0.0
+                result["partial_taken"] = partial_taken
+                result["highest_high"] = highest_high
+                result["current_stop"] = current_stop
+                result["exit_in_entry_bar"] = True
+                result["exit_reason"] = "target"
+                result["exit_timestamp_ms"] = micro_timestamp_ms
+                result["exit_timestamp_utc"] = pd.to_datetime(micro_timestamp_ms, unit="ms", utc=True).strftime("%Y-%m-%d %H:%M:%S")
+                return result
 
     result["realized_return_pct"] = realized_return_pct
     result["remaining_fraction"] = remaining_fraction
@@ -1466,6 +1569,7 @@ def _simulate_trade_model_from_entry(
     exit_idx: int | None = None
     exit_reason = "time_exit"
     trail_active = model.trail_activation_pct <= 0.0
+    breakeven_activation_pct = max(0.0, float(getattr(model, "breakeven_activation_pct", 0.0) or 0.0))
 
     base_result = {
         **base_result,
@@ -1530,11 +1634,17 @@ def _simulate_trade_model_from_entry(
             partial_taken = True
             if model.move_stop_to_be_after_partial:
                 current_stop = max(current_stop, entry_price)
+            if remaining_fraction <= 0.0:
+                exit_idx = idx
+                exit_reason = "target"
+                break
 
         if high_value > highest_high:
             highest_high = high_value
             if not trail_active and highest_high >= (entry_price * (1.0 + model.trail_activation_pct)):
                 trail_active = True
+            if breakeven_activation_pct > 0.0 and highest_high >= (entry_price * (1.0 + breakeven_activation_pct)):
+                current_stop = max(current_stop, entry_price)
             if trail_active:
                 if model.trail_style == "prev_bar_low" and idx - 1 >= entry_idx:
                     current_stop = max(current_stop, float(low_values[idx - 1]))
