@@ -919,6 +919,9 @@ def _build_next_bar_context(
         "next_bar_return_pct": None,
         "next_bar_pullback_frac": None,
         "next_bar_low_frac_of_trigger_range": None,
+        "next_close_pos_in_bar": None,
+        "next_close_from_high_frac": None,
+        "next_extension_above_trigger_high_pct": None,
         "next_bar_is_red": None,
     }
     next_idx = row_index + 1
@@ -931,6 +934,10 @@ def _build_next_bar_context(
     next_close = float(close_values[next_idx])
     pullback_frac = max(0.0, (trigger_high - next_low) / trigger_range) if trigger_range > 0 else 0.0
     low_frac_of_trigger_range = ((next_low - trigger_low) / trigger_range) if trigger_range > 0 else 0.0
+    next_range = max(1e-12, next_high - next_low)
+    next_close_pos_in_bar = ((next_close - next_low) / next_range) if next_range > 0 else None
+    next_close_from_high_frac = ((next_high - next_close) / next_range) if next_range > 0 else None
+    next_extension_above_trigger_high_pct = ((next_high / trigger_high) - 1.0) if trigger_high > 0 else None
     context.update(
         {
             "next_bar_open_price": next_open,
@@ -940,6 +947,9 @@ def _build_next_bar_context(
             "next_bar_return_pct": ((next_close / next_open) - 1.0) if next_open > 0 else None,
             "next_bar_pullback_frac": pullback_frac,
             "next_bar_low_frac_of_trigger_range": low_frac_of_trigger_range,
+            "next_close_pos_in_bar": next_close_pos_in_bar,
+            "next_close_from_high_frac": next_close_from_high_frac,
+            "next_extension_above_trigger_high_pct": next_extension_above_trigger_high_pct,
             "next_bar_is_red": next_close < next_open,
         }
     )
@@ -1041,10 +1051,18 @@ def _find_trade_model_entry(
             getattr(model, "min_next_bar_low_frac_of_trigger_range", None)
         )
         min_next_bar_return_pct = _safe_numeric(getattr(model, "min_next_bar_return_pct", None))
+        min_next_close_pos_in_bar = _safe_numeric(getattr(model, "min_next_close_pos_in_bar", None))
+        min_next_extension_above_trigger_high_pct = _safe_numeric(
+            getattr(model, "min_next_extension_above_trigger_high_pct", None)
+        )
         next_bar_is_red = bool(next_bar_context.get("next_bar_is_red"))
         next_bar_pullback_frac = _safe_numeric(next_bar_context.get("next_bar_pullback_frac"))
         next_bar_low_frac_of_trigger_range = _safe_numeric(next_bar_context.get("next_bar_low_frac_of_trigger_range"))
         next_bar_return_pct = _safe_numeric(next_bar_context.get("next_bar_return_pct"))
+        next_close_pos_in_bar = _safe_numeric(next_bar_context.get("next_close_pos_in_bar"))
+        next_extension_above_trigger_high_pct = _safe_numeric(
+            next_bar_context.get("next_extension_above_trigger_high_pct")
+        )
         if require_next_bar_green and next_bar_is_red:
             return no_entry
         if max_next_bar_pullback_frac is not None:
@@ -1058,6 +1076,15 @@ def _find_trade_model_entry(
                 return no_entry
         if min_next_bar_return_pct is not None:
             if next_bar_return_pct is None or next_bar_return_pct < min_next_bar_return_pct:
+                return no_entry
+        if min_next_close_pos_in_bar is not None:
+            if next_close_pos_in_bar is None or next_close_pos_in_bar < min_next_close_pos_in_bar:
+                return no_entry
+        if min_next_extension_above_trigger_high_pct is not None:
+            if (
+                next_extension_above_trigger_high_pct is None
+                or next_extension_above_trigger_high_pct < min_next_extension_above_trigger_high_pct
+            ):
                 return no_entry
         context = _build_pre_entry_context(
             row_index=row_index,

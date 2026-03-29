@@ -105,6 +105,8 @@ class UnifiedExecutionModel:
     max_next_bar_pullback_frac: float | None = None
     min_next_bar_low_frac_of_trigger_range: float | None = None
     min_next_bar_return_pct: float | None = None
+    min_next_close_pos_in_bar: float | None = None
+    min_next_extension_above_trigger_high_pct: float | None = None
     breakeven_activation_pct: float = 0.0
 
 
@@ -287,17 +289,26 @@ def _build_signal_profiles() -> tuple[dict[str, Any], ...]:
 
 def _build_entry_profiles() -> tuple[dict[str, Any], ...]:
     return (
-        {"entry_profile_id": "next_open", "entry_style": "next_bar_open", "max_entry_bars": 1, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
-        {"entry_profile_id": "confirm_25g", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.25, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
-        {"entry_profile_id": "confirm_25g_strong", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.25, "min_next_bar_low_frac_of_trigger_range": 0.50, "min_next_bar_return_pct": 0.0, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
-        {"entry_profile_id": "confirm_33", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": 0.33, "min_next_bar_low_frac_of_trigger_range": 0.35, "min_next_bar_return_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
-        {"entry_profile_id": "confirm_50g", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.50, "min_next_bar_low_frac_of_trigger_range": 0.25, "min_next_bar_return_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
-        {"entry_profile_id": "break_1", "entry_style": "break_trigger_high", "max_entry_bars": 1, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
-        {"entry_profile_id": "break_2", "entry_style": "break_trigger_high", "max_entry_bars": 2, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
-        {"entry_profile_id": "break_2_hold", "entry_style": "break_trigger_high", "max_entry_bars": 2, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "max_pre_entry_pullback_frac": 0.25, "max_pre_entry_red_volume_frac": 0.80, "min_pre_entry_low_frac_of_trigger_range": 0.50},
-        {"entry_profile_id": "pullback_25", "entry_style": "pullback_reclaim", "max_entry_bars": 3, "max_pullback_frac": 0.25, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "max_pre_entry_pullback_frac": 0.35, "max_pre_entry_red_volume_frac": 1.0, "min_pre_entry_low_frac_of_trigger_range": 0.35},
-        {"entry_profile_id": "pressure_25", "entry_style": "pressure_reclaim", "max_entry_bars": 3, "max_pullback_frac": 0.25, "pullback_volume_frac": 0.80, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "max_pre_entry_pullback_frac": 0.35, "max_pre_entry_red_volume_frac": 0.80, "min_pre_entry_low_frac_of_trigger_range": 0.35},
-        {"entry_profile_id": "flag_2", "entry_style": "flag_break", "max_entry_bars": 2, "max_pullback_frac": 0.35, "pullback_volume_frac": 1.0, "flag_bars": 2, "flag_max_range_frac": 0.60, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "max_pre_entry_pullback_frac": 0.35, "max_pre_entry_red_volume_frac": 1.0, "min_pre_entry_low_frac_of_trigger_range": 0.35},
+        {"entry_profile_id": "next_open", "entry_style": "next_bar_open", "max_entry_bars": 1, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_25g", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.25, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_25g_strong", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.25, "min_next_bar_low_frac_of_trigger_range": 0.50, "min_next_bar_return_pct": 0.0, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_25g_strong_pos50", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.25, "min_next_bar_low_frac_of_trigger_range": 0.50, "min_next_bar_return_pct": 0.0, "min_next_close_pos_in_bar": 0.50, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_25g_strong_ext5", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.25, "min_next_bar_low_frac_of_trigger_range": 0.50, "min_next_bar_return_pct": 0.0, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": 0.005, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_25g_strong_pos50_ext5", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.25, "min_next_bar_low_frac_of_trigger_range": 0.50, "min_next_bar_return_pct": 0.0, "min_next_close_pos_in_bar": 0.50, "min_next_extension_above_trigger_high_pct": 0.005, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_25g_strong_pos50_ext5_ret5", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.25, "min_next_bar_low_frac_of_trigger_range": 0.50, "min_next_bar_return_pct": 0.005, "min_next_close_pos_in_bar": 0.50, "min_next_extension_above_trigger_high_pct": 0.005, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_33", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": 0.33, "min_next_bar_low_frac_of_trigger_range": 0.35, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_50g", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.50, "min_next_bar_low_frac_of_trigger_range": 0.25, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_50g_ret5", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.50, "min_next_bar_low_frac_of_trigger_range": 0.25, "min_next_bar_return_pct": 0.005, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_50g_pos50", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.50, "min_next_bar_low_frac_of_trigger_range": 0.25, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": 0.50, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_50g_ext5", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.50, "min_next_bar_low_frac_of_trigger_range": 0.25, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": 0.005, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_50g_pos50_ext5", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.50, "min_next_bar_low_frac_of_trigger_range": 0.25, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": 0.50, "min_next_extension_above_trigger_high_pct": 0.005, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "confirm_50g_pos50_ext5_ret5", "entry_style": "confirmed_next_open", "max_entry_bars": 0, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": True, "max_next_bar_pullback_frac": 0.50, "min_next_bar_low_frac_of_trigger_range": 0.25, "min_next_bar_return_pct": 0.005, "min_next_close_pos_in_bar": 0.50, "min_next_extension_above_trigger_high_pct": 0.005, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "break_1", "entry_style": "break_trigger_high", "max_entry_bars": 1, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "break_2", "entry_style": "break_trigger_high", "max_entry_bars": 2, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": None, "max_pre_entry_red_volume_frac": None, "min_pre_entry_low_frac_of_trigger_range": None},
+        {"entry_profile_id": "break_2_hold", "entry_style": "break_trigger_high", "max_entry_bars": 2, "max_pullback_frac": 0.0, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": 0.25, "max_pre_entry_red_volume_frac": 0.80, "min_pre_entry_low_frac_of_trigger_range": 0.50},
+        {"entry_profile_id": "pullback_25", "entry_style": "pullback_reclaim", "max_entry_bars": 3, "max_pullback_frac": 0.25, "pullback_volume_frac": 1.0, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": 0.35, "max_pre_entry_red_volume_frac": 1.0, "min_pre_entry_low_frac_of_trigger_range": 0.35},
+        {"entry_profile_id": "pressure_25", "entry_style": "pressure_reclaim", "max_entry_bars": 3, "max_pullback_frac": 0.25, "pullback_volume_frac": 0.80, "flag_bars": 0, "flag_max_range_frac": 0.0, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": 0.35, "max_pre_entry_red_volume_frac": 0.80, "min_pre_entry_low_frac_of_trigger_range": 0.35},
+        {"entry_profile_id": "flag_2", "entry_style": "flag_break", "max_entry_bars": 2, "max_pullback_frac": 0.35, "pullback_volume_frac": 1.0, "flag_bars": 2, "flag_max_range_frac": 0.60, "require_next_bar_green": False, "max_next_bar_pullback_frac": None, "min_next_bar_low_frac_of_trigger_range": None, "min_next_bar_return_pct": None, "min_next_close_pos_in_bar": None, "min_next_extension_above_trigger_high_pct": None, "max_pre_entry_pullback_frac": 0.35, "max_pre_entry_red_volume_frac": 1.0, "min_pre_entry_low_frac_of_trigger_range": 0.35},
     )
 
 
@@ -344,6 +355,10 @@ def _build_rule_text(model: UnifiedExecutionModel) -> str:
         parts.append(f"next_low>={model.min_next_bar_low_frac_of_trigger_range:.2f}")
     if model.min_next_bar_return_pct is not None:
         parts.append(f"next_ret>={model.min_next_bar_return_pct:.3f}")
+    if model.min_next_close_pos_in_bar is not None:
+        parts.append(f"next_close_pos>={model.min_next_close_pos_in_bar:.2f}")
+    if model.min_next_extension_above_trigger_high_pct is not None:
+        parts.append(f"next_ext>={model.min_next_extension_above_trigger_high_pct:.3f}")
     if model.max_pre_entry_pullback_frac is not None:
         parts.append(f"entry_pb<={model.max_pre_entry_pullback_frac:.2f}")
     if model.max_pre_entry_red_volume_frac is not None:
@@ -409,6 +424,8 @@ def _build_execution_models() -> list[UnifiedExecutionModel]:
                         max_next_bar_pullback_frac=_safe_float(entry_profile.get("max_next_bar_pullback_frac")),
                         min_next_bar_low_frac_of_trigger_range=_safe_float(entry_profile.get("min_next_bar_low_frac_of_trigger_range")),
                         min_next_bar_return_pct=_safe_float(entry_profile.get("min_next_bar_return_pct")),
+                        min_next_close_pos_in_bar=_safe_float(entry_profile.get("min_next_close_pos_in_bar")),
+                        min_next_extension_above_trigger_high_pct=_safe_float(entry_profile.get("min_next_extension_above_trigger_high_pct")),
                         max_pre_entry_pullback_frac=_safe_float(entry_profile.get("max_pre_entry_pullback_frac")),
                         max_pre_entry_red_volume_frac=_safe_float(entry_profile.get("max_pre_entry_red_volume_frac")),
                         min_pre_entry_low_frac_of_trigger_range=_safe_float(entry_profile.get("min_pre_entry_low_frac_of_trigger_range")),
@@ -684,6 +701,8 @@ def _simulate_equity_risk_metrics(
             "equity_mean_neg_trade_pct": 0.0,
             "equity_positive_months_count": 0,
             "equity_non_positive_months_count": len(calendar_months),
+            "equity_stable_positive_months_count": 0,
+            "equity_fragile_positive_months_count": 0,
             "equity_max_notional_fraction": 0.0,
             "equity_max_open_positions": 0,
         }, monthly
@@ -797,17 +816,22 @@ def _simulate_equity_risk_metrics(
         month_trades_count = int(monthly_rows.get(month_key, {}).get("equity_trades_count", 0.0))
         month_wins_count = int(monthly_rows.get(month_key, {}).get("equity_wins_count", 0.0))
         month_return_pct = month_pnl_abs / running_month_equity if running_month_equity > 0.0 else 0.0
+        equity_win_rate = (month_wins_count / month_trades_count) if month_trades_count > 0 else 0.0
+        equity_stable_positive_month = bool(month_return_pct > 0.0 and month_trades_count >= 2 and equity_win_rate >= 0.50)
         monthly_rows_list.append(
             {
                 "month_utc": month_key,
                 "equity_month_pnl_pct": float(month_return_pct),
                 "equity_trades_count": month_trades_count,
-                "equity_win_rate": (month_wins_count / month_trades_count) if month_trades_count > 0 else 0.0,
+                "equity_win_rate": equity_win_rate,
                 "equity_mean_trade_pct": (month_return_pct / month_trades_count) if month_trades_count > 0 else 0.0,
+                "equity_stable_positive_month": equity_stable_positive_month,
             }
         )
         running_month_equity += month_pnl_abs
     monthly_frame = pd.DataFrame(monthly_rows_list)
+    equity_positive_months_count = int((monthly_frame["equity_month_pnl_pct"] > 0.0).sum())
+    equity_stable_positive_months_count = int(monthly_frame["equity_stable_positive_month"].fillna(False).astype(bool).sum())
 
     months_count = max(1, len(calendar_months))
     annualized_return_pct = float(pow(max(equity, 0.0000001), 12.0 / months_count) - 1.0)
@@ -821,8 +845,10 @@ def _simulate_equity_risk_metrics(
         "equity_median_trade_pct": float(account_returns_series.median()) if not account_returns_series.empty else 0.0,
         "equity_mean_pos_trade_pct": float(positive_returns.mean()) if not positive_returns.empty else 0.0,
         "equity_mean_neg_trade_pct": float(negative_returns.mean()) if not negative_returns.empty else 0.0,
-        "equity_positive_months_count": int((monthly_frame["equity_month_pnl_pct"] > 0.0).sum()),
+        "equity_positive_months_count": equity_positive_months_count,
         "equity_non_positive_months_count": int((monthly_frame["equity_month_pnl_pct"] <= 0.0).sum()),
+        "equity_stable_positive_months_count": equity_stable_positive_months_count,
+        "equity_fragile_positive_months_count": int(max(equity_positive_months_count - equity_stable_positive_months_count, 0)),
         "equity_max_notional_fraction": float(max_notional_fraction),
         "equity_max_open_positions": int(max_open_positions),
     }
@@ -890,6 +916,7 @@ def _candidate_meets_goal(row: pd.Series | dict[str, object]) -> bool:
         and float(row.get("annualized_unit_pnl_pct", 0.0) or 0.0) >= _EDGE_MIN_ANNUALIZED_UNIT_PNL_PCT
         and float(row.get("max_drawdown_pct", math.inf) or math.inf) <= _EDGE_MAX_DRAWDOWN_PCT
         and int(row.get("positive_months_count", 0) or 0) >= _EDGE_MIN_POSITIVE_MONTHS
+        and int(row.get("equity_positive_months_count", 0) or 0) >= _EDGE_MIN_POSITIVE_MONTHS
     )
 
 
@@ -905,6 +932,7 @@ def _candidate_meets_distribution_goal(row: pd.Series | dict[str, object]) -> bo
     annualized_remove_top3_symbol = float(row.get("annualized_remove_top3_symbol_pct", 0.0) or 0.0)
     annualized_remove_top5_symbol = float(row.get("annualized_remove_top5_symbol_pct", 0.0) or 0.0)
     stable_positive_months = int(row.get("stable_positive_months_count", 0) or 0)
+    equity_stable_positive_months = int(row.get("equity_stable_positive_months_count", 0) or 0)
     return (
         top3_share is not None
         and top5_share is not None
@@ -922,6 +950,7 @@ def _candidate_meets_distribution_goal(row: pd.Series | dict[str, object]) -> bo
         and annualized_remove_top3_symbol > 0.20
         and annualized_remove_top5_symbol > 0.10
         and stable_positive_months >= _EDGE_MIN_STABLE_POSITIVE_MONTHS
+        and equity_stable_positive_months >= _EDGE_MIN_STABLE_POSITIVE_MONTHS
     )
 
 
@@ -948,6 +977,8 @@ def _candidate_score(row: pd.Series | dict[str, object]) -> float:
     top3_symbol_share = float(_safe_float(row.get("top3_symbol_pnl_share")) or 0.0)
     top5_symbol_share = float(_safe_float(row.get("top5_symbol_pnl_share")) or 0.0)
     stable_positive_months = int(row.get("stable_positive_months_count", 0) or 0)
+    equity_positive_months = int(row.get("equity_positive_months_count", 0) or 0)
+    equity_stable_positive_months = int(row.get("equity_stable_positive_months_count", 0) or 0)
     median_positive_month_top1 = float(_safe_float(row.get("median_positive_month_top1_trade_share")) or 0.0)
     max_positive_month_top1 = float(_safe_float(row.get("max_positive_month_top1_trade_share")) or 0.0)
     equity_annualized = float(row.get("equity_annualized_return_pct", 0.0) or 0.0)
@@ -965,6 +996,8 @@ def _candidate_score(row: pd.Series | dict[str, object]) -> float:
     score += min(trades_per_year, 150.0) * 0.20
     score += min(positive_months, 12) * 10.0
     score += min(stable_positive_months, 12) * 18.0
+    score += min(equity_positive_months, 12) * 16.0
+    score += min(equity_stable_positive_months, 12) * 24.0
     score += max(annualized_remove_top1, -1.0) * 15.0
     score += max(annualized_remove_top3, -1.0) * 35.0
     score += max(annualized_remove_top5, -1.0) * 20.0
@@ -998,6 +1031,10 @@ def _candidate_score(row: pd.Series | dict[str, object]) -> float:
         score -= (_EDGE_MIN_POSITIVE_MONTHS - positive_months) * 14.0
     if stable_positive_months < _EDGE_MIN_STABLE_POSITIVE_MONTHS:
         score -= (_EDGE_MIN_STABLE_POSITIVE_MONTHS - stable_positive_months) * 24.0
+    if equity_positive_months < _EDGE_MIN_POSITIVE_MONTHS:
+        score -= (_EDGE_MIN_POSITIVE_MONTHS - equity_positive_months) * 24.0
+    if equity_stable_positive_months < _EDGE_MIN_STABLE_POSITIVE_MONTHS:
+        score -= (_EDGE_MIN_STABLE_POSITIVE_MONTHS - equity_stable_positive_months) * 32.0
     if _candidate_meets_goal(row):
         score += 1_000.0
     if _candidate_meets_distribution_goal(row):
@@ -1049,6 +1086,13 @@ def _select_combo_candidates(atomic_summary: pd.DataFrame) -> pd.DataFrame:
     if atomic_summary.empty:
         return atomic_summary
 
+    def _sort_existing(frame: pd.DataFrame, columns: Sequence[str], ascending: Sequence[bool]) -> pd.DataFrame:
+        existing_columns = [column for column in columns if column in frame.columns]
+        existing_ascending = [flag for column, flag in zip(columns, ascending, strict=False) if column in frame.columns]
+        if not existing_columns:
+            return frame
+        return frame.sort_values(existing_columns, ascending=existing_ascending)
+
     eligible = atomic_summary[
         (pd.to_numeric(atomic_summary["trades_per_year"], errors="coerce").fillna(0.0) >= 15.0)
         & (pd.to_numeric(atomic_summary["annualized_unit_pnl_pct"], errors="coerce").fillna(0.0) > 0.0)
@@ -1064,6 +1108,7 @@ def _select_combo_candidates(atomic_summary: pd.DataFrame) -> pd.DataFrame:
     quota_months = max(4, _EDGE_COMBO_CANDIDATE_LIMIT // 6)
     quota_robust = max(4, _EDGE_COMBO_CANDIDATE_LIMIT // 6)
     quota_structure = max(8, _EDGE_COMBO_CANDIDATE_LIMIT // 4)
+    quota_confirmed = max(8, _EDGE_COMBO_CANDIDATE_LIMIT // 4)
 
     structure_leaders = pd.DataFrame()
     if not structure_active.empty:
@@ -1079,6 +1124,24 @@ def _select_combo_candidates(atomic_summary: pd.DataFrame) -> pd.DataFrame:
                 ascending=[False, False, False, False],
             )
             .head(quota_structure)
+        )
+
+    confirmed_leaders = pd.DataFrame()
+    confirmed_active = eligible[eligible["entry_profile_id"].astype(str).str.startswith("confirm_")].copy()
+    if not confirmed_active.empty:
+        confirmed_leaders = (
+            _sort_existing(
+                confirmed_active,
+                [
+                    "selection_score",
+                    "positive_months_count",
+                    "stable_positive_months_count",
+                    "mean_return_pct",
+                    "annualized_unit_pnl_pct",
+                ],
+                ascending=[False, False, False, False, False],
+            )
+            .head(quota_confirmed)
         )
 
     buckets = (
@@ -1100,6 +1163,7 @@ def _select_combo_candidates(atomic_summary: pd.DataFrame) -> pd.DataFrame:
             ascending=[False, False, False],
         ).head(quota_robust),
         structure_leaders,
+        confirmed_leaders,
     )
 
     selected_rows: list[dict[str, object]] = []
@@ -1207,6 +1271,9 @@ def _build_combo_summary(
                 "component_ids": "|".join(picked_ids),
                 "components_count": int(len(picked_ids)),
                 "component_variants": ",".join(component_slice["atomic_variant"].astype(str).tolist()),
+                "component_entry_profiles": ",".join(component_slice["entry_profile_id"].astype(str).tolist()),
+                "component_exit_profiles": ",".join(component_slice["exit_profile_id"].astype(str).tolist()),
+                "all_components_confirmed": bool(component_slice["entry_profile_id"].astype(str).str.startswith("confirm_").all()),
                 "component_rule_texts": " || ".join(component_slice["rule_text"].astype(str).tolist()),
                 **summary,
                 **_build_concentration_metrics(combo_events, calendar_months=calendar_months),
@@ -1241,6 +1308,30 @@ def _build_combo_summary(
     combo_summary["combo_variant"] = [_index_to_variant_label(idx - 1) for idx in combo_summary["combo_rank"]]
     combo_summary["combo_priority"] = combo_summary["combo_rank"]
     return combo_summary, combo_events_by_id
+
+
+def _build_risk_ladder_frame(
+    *,
+    events: pd.DataFrame,
+    calendar_months: Sequence[str],
+    risk_levels: Sequence[float] = (0.03, 0.04, 0.05),
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for risk_fraction in risk_levels:
+        metrics, _ = _simulate_equity_risk_metrics(
+            events,
+            calendar_months=calendar_months,
+            risk_fraction=float(risk_fraction),
+        )
+        rows.append(
+            {
+                "risk_fraction": float(risk_fraction),
+                "risk_pct": float(risk_fraction * 100.0),
+                "risk_label": f"{risk_fraction * 100.0:.0f}%",
+                **metrics,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _build_holdout_summary(*, events: pd.DataFrame, calendar_months: Sequence[str]) -> pd.DataFrame:
@@ -1511,12 +1602,18 @@ def _build_report_v2(
     best_summary: pd.DataFrame,
     best_monthly: pd.DataFrame,
     best_holdout: pd.DataFrame,
+    best_risk_ladder: pd.DataFrame,
+    confirmed_best_summary: pd.DataFrame,
+    confirmed_best_monthly: pd.DataFrame,
+    confirmed_best_holdout: pd.DataFrame,
+    confirmed_best_risk_ladder: pd.DataFrame,
     behavior_by_entry: pd.DataFrame,
     behavior_by_stop: pd.DataFrame,
     behavior_by_trail: pd.DataFrame,
     behavior_by_exit: pd.DataFrame,
 ) -> None:
     best_row = best_summary.iloc[0].to_dict() if not best_summary.empty else {}
+    confirmed_row = confirmed_best_summary.iloc[0].to_dict() if not confirmed_best_summary.empty else {}
     lines = [
         "# Единый поиск edge для XX:00",
         "",
@@ -1538,6 +1635,8 @@ def _build_report_v2(
                 "max_drawdown_pct",
                 "positive_months_count",
                 "stable_positive_months_count",
+                "equity_positive_months_count",
+                "equity_stable_positive_months_count",
                 "equity_annualized_return_pct",
                 "equity_max_drawdown_pct",
                 "equity_mean_trade_pct",
@@ -1553,7 +1652,7 @@ def _build_report_v2(
         f"- Состав: `{best_row.get('component_variants', '')}`",
         f"- Компоненты: `{best_row.get('component_rule_texts', '')}`",
         "",
-        "## Капитал и риск",
+        "## Капитал и риск лучшего варианта",
         "",
         _frame_to_markdown(
             best_summary,
@@ -1562,6 +1661,103 @@ def _build_report_v2(
                 "equity_total_return_pct",
                 "equity_annualized_return_pct",
                 "equity_final_equity",
+                "equity_max_drawdown_pct",
+                "equity_mean_trade_pct",
+                "equity_mean_pos_trade_pct",
+                "equity_mean_neg_trade_pct",
+                "equity_positive_months_count",
+                "equity_non_positive_months_count",
+                "equity_stable_positive_months_count",
+                "equity_fragile_positive_months_count",
+                "equity_max_notional_fraction",
+                "equity_max_open_positions",
+            ],
+        ),
+        "",
+        "### Лестница риска 3% / 4% / 5%",
+        "",
+        _frame_to_markdown(
+            best_risk_ladder,
+            columns=[
+                "risk_label",
+                "equity_total_return_pct",
+                "equity_annualized_return_pct",
+                "equity_max_drawdown_pct",
+                "equity_mean_trade_pct",
+                "equity_mean_pos_trade_pct",
+                "equity_mean_neg_trade_pct",
+                "equity_positive_months_count",
+                "equity_non_positive_months_count",
+                "equity_stable_positive_months_count",
+                "equity_fragile_positive_months_count",
+                "equity_max_notional_fraction",
+                "equity_max_open_positions",
+            ],
+        ),
+        "",
+        "## Лучший confirmed-стек",
+        "",
+        _frame_to_markdown(
+            confirmed_best_summary,
+            columns=[
+                "combo_variant",
+                "components_count",
+                "component_variants",
+                "trades_per_year",
+                "mean_return_pct",
+                "median_return_pct",
+                "win_rate",
+                "annualized_unit_pnl_pct",
+                "max_drawdown_pct",
+                "positive_months_count",
+                "stable_positive_months_count",
+                "equity_positive_months_count",
+                "equity_stable_positive_months_count",
+                "equity_annualized_return_pct",
+                "equity_max_drawdown_pct",
+                "equity_mean_trade_pct",
+                "top3_trade_pnl_share",
+                "top5_trade_pnl_share",
+                "top3_symbol_pnl_share",
+                "top5_symbol_pnl_share",
+            ],
+        ),
+        "",
+        "### Правила лучшего confirmed-стека",
+        "",
+        f"- Состав: `{confirmed_row.get('component_variants', '')}`",
+        f"- Компоненты: `{confirmed_row.get('component_rule_texts', '')}`",
+        "",
+        "### Капитал и риск лучшего confirmed-стека",
+        "",
+        _frame_to_markdown(
+            confirmed_best_summary,
+            columns=[
+                "equity_risk_fraction",
+                "equity_total_return_pct",
+                "equity_annualized_return_pct",
+                "equity_final_equity",
+                "equity_max_drawdown_pct",
+                "equity_mean_trade_pct",
+                "equity_mean_pos_trade_pct",
+                "equity_mean_neg_trade_pct",
+                "equity_positive_months_count",
+                "equity_non_positive_months_count",
+                "equity_stable_positive_months_count",
+                "equity_fragile_positive_months_count",
+                "equity_max_notional_fraction",
+                "equity_max_open_positions",
+            ],
+        ),
+        "",
+        "### Лестница риска 3% / 4% / 5% для confirmed-стека",
+        "",
+        _frame_to_markdown(
+            confirmed_best_risk_ladder,
+            columns=[
+                "risk_label",
+                "equity_total_return_pct",
+                "equity_annualized_return_pct",
                 "equity_max_drawdown_pct",
                 "equity_mean_trade_pct",
                 "equity_mean_pos_trade_pct",
@@ -1667,10 +1863,29 @@ def _build_report_v2(
             columns=[
                 "month_utc",
                 "trades_count",
-                "month_return_pct",
-                "win_rate",
-                "mean_return_pct",
+                "total_return_pct",
+                "month_positive",
                 "equity_month_pnl_pct",
+                "equity_win_rate",
+                "equity_mean_trade_pct",
+                "wins_count",
+                "stable_positive_month",
+                "top1_positive_trade_share",
+                "top2_positive_trade_share",
+            ],
+        ),
+        "",
+        "## Месяцы лучшего confirmed-стека",
+        "",
+        _frame_to_markdown(
+            confirmed_best_monthly,
+            columns=[
+                "month_utc",
+                "trades_count",
+                "total_return_pct",
+                "month_positive",
+                "equity_month_pnl_pct",
+                "equity_win_rate",
                 "equity_mean_trade_pct",
                 "wins_count",
                 "stable_positive_month",
@@ -1683,6 +1898,27 @@ def _build_report_v2(
         "",
         _frame_to_markdown(
             best_holdout,
+            columns=[
+                "split_id",
+                "trades_count",
+                "trades_per_year",
+                "mean_return_pct",
+                "win_rate",
+                "annualized_unit_pnl_pct",
+                "equity_annualized_return_pct",
+                "equity_max_drawdown_pct",
+                "positive_months_count",
+                "stable_positive_months_count",
+                "top3_trade_pnl_share",
+                "top3_symbol_pnl_share",
+                "best_month_pnl_share",
+            ],
+        ),
+        "",
+        "## Позднее sanity-окно лучшего confirmed-стека",
+        "",
+        _frame_to_markdown(
+            confirmed_best_holdout,
             columns=[
                 "split_id",
                 "trades_count",
@@ -1751,21 +1987,21 @@ def build_hourly_asia_pump_unified_edge_artifacts(
     combo_summary, combo_events_by_id = _build_combo_summary(atomic_summary=atomic_summary, component_frames=component_frames, calendar_months=calendar_months, logger=active_logger)
     if combo_summary.empty:
         raise ValueError("Не удалось собрать ни одной комбинации unified-edge")
-    best_summary = combo_summary.head(1).copy()
-    best_combo_id = str(best_summary.iloc[0]["combo_id"])
-    best_events = combo_events_by_id[best_combo_id].copy().reset_index(drop=True)
-    best_monthly = _build_monthly_returns_frame(best_events, calendar_months=calendar_months)
-    best_equity_metrics, best_monthly_equity = _simulate_equity_risk_metrics(best_events, calendar_months=calendar_months)
-    best_monthly_stability = pd.merge(
-        best_monthly,
-        best_monthly_equity,
-        on="month_utc",
-        how="left",
-    )
-    if not best_monthly_stability.empty:
+
+    def _build_monthly_stability_frame(events: pd.DataFrame) -> pd.DataFrame:
+        monthly = _build_monthly_returns_frame(events, calendar_months=calendar_months)
+        _, monthly_equity = _simulate_equity_risk_metrics(events, calendar_months=calendar_months)
+        monthly_stability = pd.merge(
+            monthly,
+            monthly_equity,
+            on="month_utc",
+            how="left",
+        )
+        if monthly_stability.empty:
+            return monthly_stability
         month_details_rows: list[dict[str, object]] = []
         for month in calendar_months:
-            month_frame = best_events[best_events["month_utc"].astype(str) == str(month)].copy()
+            month_frame = events[events["month_utc"].astype(str) == str(month)].copy()
             returns = pd.to_numeric(month_frame.get("exit_return_pct"), errors="coerce").fillna(0.0)
             wins = int((returns > 0).sum())
             trades = int(len(month_frame))
@@ -1783,8 +2019,33 @@ def build_hourly_asia_pump_unified_edge_artifacts(
                     "top2_positive_trade_share": top2_share,
                 }
             )
-        best_monthly_stability = best_monthly_stability.merge(pd.DataFrame(month_details_rows), on="month_utc", how="left")
+        return monthly_stability.merge(pd.DataFrame(month_details_rows), on="month_utc", how="left")
+
+    best_summary = combo_summary.head(1).copy()
+    best_combo_id = str(best_summary.iloc[0]["combo_id"])
+    best_events = combo_events_by_id[best_combo_id].copy().reset_index(drop=True)
+    best_equity_metrics, best_monthly_equity = _simulate_equity_risk_metrics(best_events, calendar_months=calendar_months)
+    best_monthly = _build_monthly_returns_frame(best_events, calendar_months=calendar_months)
+    best_monthly_stability = _build_monthly_stability_frame(best_events)
     best_holdout = _build_holdout_summary(events=best_events, calendar_months=calendar_months)
+    best_risk_ladder = _build_risk_ladder_frame(events=best_events, calendar_months=calendar_months)
+
+    confirmed_combo_summary = combo_summary[combo_summary["all_components_confirmed"].astype(bool)].copy().reset_index(drop=True)
+    if confirmed_combo_summary.empty:
+        confirmed_best_summary = pd.DataFrame(columns=combo_summary.columns)
+        confirmed_best_events = pd.DataFrame(columns=best_events.columns)
+        confirmed_best_monthly = pd.DataFrame(columns=best_monthly.columns)
+        confirmed_best_holdout = pd.DataFrame(columns=best_holdout.columns)
+        confirmed_best_risk_ladder = pd.DataFrame(columns=best_risk_ladder.columns)
+        confirmed_best_monthly_stability = pd.DataFrame(columns=best_monthly_stability.columns)
+    else:
+        confirmed_best_summary = confirmed_combo_summary.head(1).copy()
+        confirmed_best_combo_id = str(confirmed_best_summary.iloc[0]["combo_id"])
+        confirmed_best_events = combo_events_by_id[confirmed_best_combo_id].copy().reset_index(drop=True)
+        confirmed_best_monthly = _build_monthly_returns_frame(confirmed_best_events, calendar_months=calendar_months)
+        confirmed_best_monthly_stability = _build_monthly_stability_frame(confirmed_best_events)
+        confirmed_best_holdout = _build_holdout_summary(events=confirmed_best_events, calendar_months=calendar_months)
+        confirmed_best_risk_ladder = _build_risk_ladder_frame(events=confirmed_best_events, calendar_months=calendar_months)
 
     behavior_by_entry = atomic_summary.groupby("entry_profile_id", sort=True).agg(models_count=("trade_model_id", "count"), mean_of_mean_return_pct=("mean_return_pct", "mean"), median_of_mean_return_pct=("mean_return_pct", "median"), mean_of_win_rate=("win_rate", "mean"), mean_of_annualized_unit_pnl_pct=("annualized_unit_pnl_pct", "mean"), mean_of_max_drawdown_pct=("max_drawdown_pct", "mean"), mean_of_top3_trade_pnl_share=("top3_trade_pnl_share", "mean")).reset_index().sort_values("mean_of_mean_return_pct", ascending=False).reset_index(drop=True)
     behavior_by_stop = atomic_summary.groupby("initial_stop_style", sort=True).agg(models_count=("trade_model_id", "count"), mean_of_mean_return_pct=("mean_return_pct", "mean"), median_of_mean_return_pct=("mean_return_pct", "median"), mean_of_win_rate=("win_rate", "mean"), mean_of_annualized_unit_pnl_pct=("annualized_unit_pnl_pct", "mean"), mean_of_max_drawdown_pct=("max_drawdown_pct", "mean"), mean_of_top3_trade_pnl_share=("top3_trade_pnl_share", "mean")).reset_index().sort_values("mean_of_mean_return_pct", ascending=False).reset_index(drop=True)
@@ -1816,6 +2077,7 @@ def build_hourly_asia_pump_unified_edge_artifacts(
             "round_trip_taker_fee_pct": float(commission_rate * 2.0),
             "equity_risk_fraction": float(_EDGE_EQUITY_RISK_FRACTION),
             "equity_max_total_notional_fraction": float(_EDGE_EQUITY_MAX_NOTIONAL_FRACTION),
+            "risk_ladder_levels": [0.03, 0.04, 0.05],
         },
         "criteria": {
             "min_trades_per_year": _EDGE_MIN_TRADES_PER_YEAR,
@@ -1833,6 +2095,8 @@ def build_hourly_asia_pump_unified_edge_artifacts(
         "best_combo_id": best_combo_id,
         "best_combo_variant": best_summary.iloc[0]["combo_variant"],
         "best_combo_equity_metrics": best_equity_metrics,
+        "best_confirmed_combo_variant": confirmed_best_summary.iloc[0]["combo_variant"] if not confirmed_best_summary.empty else None,
+        "best_confirmed_combo_equity_metrics": confirmed_best_summary.iloc[0].to_dict() if not confirmed_best_summary.empty else None,
     }
 
     artifacts = {
@@ -1843,6 +2107,14 @@ def build_hourly_asia_pump_unified_edge_artifacts(
         "best_monthly_stability": output_dir / "unified_edge_best_monthly_stability.csv",
         "best_holdout": output_dir / "unified_edge_best_holdout.csv",
         "best_events": output_dir / "unified_edge_best_events.csv",
+        "best_risk_ladder": output_dir / "unified_edge_best_risk_ladder.csv",
+        "confirmed_combo_summary": output_dir / "unified_edge_confirmed_combo_summary.csv",
+        "confirmed_best_summary": output_dir / "unified_edge_best_confirmed_summary.csv",
+        "confirmed_best_monthly": output_dir / "unified_edge_best_confirmed_monthly.csv",
+        "confirmed_best_monthly_stability": output_dir / "unified_edge_best_confirmed_monthly_stability.csv",
+        "confirmed_best_holdout": output_dir / "unified_edge_best_confirmed_holdout.csv",
+        "confirmed_best_events": output_dir / "unified_edge_best_confirmed_events.csv",
+        "confirmed_best_risk_ladder": output_dir / "unified_edge_best_confirmed_risk_ladder.csv",
         "behavior_by_entry": output_dir / "unified_edge_behavior_by_entry.csv",
         "behavior_by_stop": output_dir / "unified_edge_behavior_by_stop.csv",
         "behavior_by_trail": output_dir / "unified_edge_behavior_by_trail.csv",
@@ -1859,6 +2131,14 @@ def build_hourly_asia_pump_unified_edge_artifacts(
     best_monthly_stability.to_csv(artifacts["best_monthly_stability"], index=False)
     best_holdout.to_csv(artifacts["best_holdout"], index=False)
     best_events.to_csv(artifacts["best_events"], index=False)
+    best_risk_ladder.to_csv(artifacts["best_risk_ladder"], index=False)
+    confirmed_combo_summary.to_csv(artifacts["confirmed_combo_summary"], index=False)
+    confirmed_best_summary.to_csv(artifacts["confirmed_best_summary"], index=False)
+    confirmed_best_monthly.to_csv(artifacts["confirmed_best_monthly"], index=False)
+    confirmed_best_monthly_stability.to_csv(artifacts["confirmed_best_monthly_stability"], index=False)
+    confirmed_best_holdout.to_csv(artifacts["confirmed_best_holdout"], index=False)
+    confirmed_best_events.to_csv(artifacts["confirmed_best_events"], index=False)
+    confirmed_best_risk_ladder.to_csv(artifacts["confirmed_best_risk_ladder"], index=False)
     behavior_by_entry.to_csv(artifacts["behavior_by_entry"], index=False)
     behavior_by_stop.to_csv(artifacts["behavior_by_stop"], index=False)
     behavior_by_trail.to_csv(artifacts["behavior_by_trail"], index=False)
@@ -1871,6 +2151,11 @@ def build_hourly_asia_pump_unified_edge_artifacts(
         best_summary=best_summary,
         best_monthly=best_monthly_stability,
         best_holdout=best_holdout,
+        best_risk_ladder=best_risk_ladder,
+        confirmed_best_summary=confirmed_best_summary,
+        confirmed_best_monthly=confirmed_best_monthly_stability,
+        confirmed_best_holdout=confirmed_best_holdout,
+        confirmed_best_risk_ladder=confirmed_best_risk_ladder,
         behavior_by_entry=behavior_by_entry,
         behavior_by_stop=behavior_by_stop,
         behavior_by_trail=behavior_by_trail,

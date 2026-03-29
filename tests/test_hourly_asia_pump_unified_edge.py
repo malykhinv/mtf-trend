@@ -8,6 +8,8 @@ import pandas as pd
 from domain.enums.timeframe import Timeframe
 import strategy.hourly_asia_pump.unified_edge as unified_edge_module
 from strategy.hourly_asia_pump.unified_edge import (
+    _build_execution_models,
+    _build_rule_text,
     _select_combo_candidates,
     build_hourly_asia_pump_unified_edge_artifacts,
 )
@@ -173,6 +175,8 @@ def test_build_hourly_asia_pump_unified_edge_artifacts(tmp_path: Path, monkeypat
     combo_summary = pd.read_csv(artifacts["combo_summary"])
     best_summary = pd.read_csv(artifacts["best_summary"])
     best_monthly_stability = pd.read_csv(artifacts["best_monthly_stability"])
+    best_risk_ladder = pd.read_csv(artifacts["best_risk_ladder"])
+    confirmed_best_summary = pd.read_csv(artifacts["confirmed_best_summary"])
     context = json.loads(Path(artifacts["context"]).read_text(encoding="utf-8"))
 
     assert not atomic_summary.empty
@@ -183,13 +187,20 @@ def test_build_hourly_asia_pump_unified_edge_artifacts(tmp_path: Path, monkeypat
     assert "stable_positive_months_count" in best_summary.columns
     assert "equity_month_pnl_pct" in best_monthly_stability.columns
     assert "stable_positive_month" in best_monthly_stability.columns
+    assert not best_risk_ladder.empty
+    assert set(best_risk_ladder["risk_pct"].round(2).tolist()) == {3.0, 4.0, 5.0}
+    assert "all_components_confirmed" in combo_summary.columns
+    assert Path(artifacts["confirmed_best_summary"]).exists()
+    assert Path(artifacts["confirmed_best_risk_ladder"]).exists()
     assert context["search_scope"]["uses_hour_utc_in_optimization"] is False
     assert context["search_scope"]["same_rules_for_all_xx00"] is True
+    assert context["search_scope"]["risk_ladder_levels"] == [0.03, 0.04, 0.05]
     assert Path(artifacts["report"]).exists()
     assert Path(artifacts["behavior_by_stop"]).exists()
     assert Path(artifacts["behavior_by_trail"]).exists()
     assert Path(artifacts["top_winners_manifest"]).exists()
     assert Path(artifacts["top_losers_manifest"]).exists()
+    assert confirmed_best_summary is not None
 
 
 def test_select_combo_candidates_keeps_structural_high_mean_model() -> None:
@@ -290,3 +301,14 @@ def test_select_combo_candidates_keeps_structural_high_mean_model() -> None:
     selected = _select_combo_candidates(pd.DataFrame(rows))
 
     assert "target_partial" in set(selected["trade_model_id"].astype(str))
+
+
+def test_build_execution_models_includes_confirmed_pressure_profiles() -> None:
+    models = _build_execution_models()
+    labels = {model.label for model in models}
+    rule_texts = {_build_rule_text(model) for model in models}
+
+    assert any("confirm_50g_pos50_ext5" in label for label in labels)
+    assert any("confirm_25g_strong_pos50_ext5_ret5" in label for label in labels)
+    assert any("next_close_pos>=" in text for text in rule_texts)
+    assert any("next_ext>=" in text for text in rule_texts)
