@@ -254,6 +254,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory for unified edge-search artifacts",
     )
 
+    hourly_pump_short_edge = subparsers.add_parser(
+        "run-hourly-pump-short-edge-search",
+        help="Run unified short-side search after XX:00 anomalies without hour-specific branches",
+    )
+    hourly_pump_short_edge.add_argument(
+        "--base-events",
+        required=True,
+        help="Path to trade_model_events.csv produced by hourly pump research",
+    )
+    hourly_pump_short_edge.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory for short edge-search artifacts",
+    )
+
     ppa_stage = subparsers.add_parser(
         "ppa-stage",
         help="Run compact post_pump_absorption stage review across micro timeframes",
@@ -311,6 +326,7 @@ def resolve_handler(command_name: str) -> Handler:
         "run-hourly-pump-production-report": commands.run_hourly_pump_production_report,
         "run-hourly-pump-unified-analysis": commands.run_hourly_pump_unified_analysis,
         "run-hourly-pump-unified-edge-search": commands.run_hourly_pump_unified_edge_search,
+        "run-hourly-pump-short-edge-search": commands.run_hourly_pump_short_edge_search,
         "ppa-stage": commands.run_ppa_stage,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,

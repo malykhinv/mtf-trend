@@ -77,6 +77,7 @@ from strategy.hourly_asia_pump import (
     HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES,
     build_hourly_asia_pump_production_artifacts,
     build_hourly_asia_pump_research_artifacts,
+    build_hourly_asia_pump_short_edge_artifacts,
     build_hourly_asia_pump_static_combo_artifacts,
     build_hourly_asia_pump_unified_edge_artifacts,
     build_hourly_asia_pump_unified_artifacts,
@@ -2338,6 +2339,41 @@ def _run_hourly_pump_unified_edge_search_inner(config: AppConfig, args: argparse
     return 0
 
 
+def _run_hourly_pump_short_edge_search_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("run-hourly-pump-short-edge-search", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    base_events_path = Path(getattr(args, "base_events", ""))
+    if not base_events_path.exists():
+        raise FileNotFoundError(f"Не найден base events csv: {base_events_path}")
+
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else base_events_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "run-hourly-pump-short-edge-search: base_events=%s output_dir=%s cache_dir=%s commission_rate=%.5f",
+        base_events_path,
+        output_dir,
+        config.backtest.cache_dir,
+        float(config.simulation.commission_rate),
+    )
+    artifacts = build_hourly_asia_pump_short_edge_artifacts(
+        base_events_path=base_events_path,
+        output_dir=output_dir,
+        cache_dir=config.backtest.cache_dir,
+        commission_rate=float(config.simulation.commission_rate),
+        logger=logger,
+    )
+    logger.info(
+        "run-hourly-pump-short-edge-search: артефакты отчёт=%s atomic=%s best=%s months=%s holdout=%s goal_passed=%s",
+        artifacts["report"],
+        artifacts["atomic_summary"],
+        artifacts["best_summary"],
+        artifacts["best_monthly"],
+        artifacts["best_holdout"],
+        artifacts["goal_passed"],
+    )
+    return 0
+
+
 def _collect_ppa_stage_summary_rows(
     *,
     timeframe: Timeframe,
@@ -2771,6 +2807,15 @@ def run_hourly_pump_unified_edge_search(config: AppConfig, args: argparse.Namesp
         "run-hourly-pump-unified-edge-search",
         config,
         lambda: _run_hourly_pump_unified_edge_search_inner(config, args),
+    )
+
+
+def run_hourly_pump_short_edge_search(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs a unified short-side search after XX:00 anomalies."""
+    return _run_with_logging(
+        "run-hourly-pump-short-edge-search",
+        config,
+        lambda: _run_hourly_pump_short_edge_search_inner(config, args),
     )
 
 
