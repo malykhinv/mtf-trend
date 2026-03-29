@@ -182,6 +182,8 @@ def test_build_hourly_asia_pump_unified_edge_artifacts(tmp_path: Path, monkeypat
     assert Path(artifacts["report"]).exists()
     assert Path(artifacts["behavior_by_stop"]).exists()
     assert Path(artifacts["behavior_by_trail"]).exists()
+    assert Path(artifacts["top_winners_manifest"]).exists()
+    assert Path(artifacts["top_losers_manifest"]).exists()
 
 
 def test_select_combo_candidates_keeps_structural_high_mean_model() -> None:

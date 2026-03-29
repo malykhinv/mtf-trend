@@ -33,6 +33,10 @@ from strategy.hourly_asia_pump.static_combo import (
     _sort_summary_frame,
     _summarize_events,
 )
+from strategy.hourly_asia_pump.static_combo_trade_plotter import (
+    StaticComboTradePlotSpec,
+    StaticComboTradePlotter,
+)
 from vectorbt_runner.data_preparer import DataPreparer
 
 module_logger = logging.getLogger(__name__)
@@ -109,6 +113,20 @@ def _safe_float(value: object) -> float | None:
     if math.isnan(numeric):
         return None
     return numeric
+
+
+def _sanitize_filename(value: str) -> str:
+    sanitized = "".join(character if character.isalnum() or character in {"-", "_"} else "_" for character in value)
+    while "__" in sanitized:
+        sanitized = sanitized.replace("__", "_")
+    return sanitized.strip("_") or "item"
+
+
+def _clear_png_files(directory: Path) -> None:
+    if not directory.exists():
+        return
+    for path in directory.glob("*.png"):
+        path.unlink(missing_ok=True)
 
 
 def _prepare_selected_events(path: Path) -> pd.DataFrame:
@@ -913,6 +931,174 @@ def _build_holdout_summary(*, events: pd.DataFrame, calendar_months: Sequence[st
     return pd.DataFrame(rows)
 
 
+def _build_top_trade_charts(
+    *,
+    events: pd.DataFrame,
+    preparer: DataPreparer,
+    charts_dir: Path,
+    logger: logging.Logger,
+    top_n: int = 10,
+) -> dict[str, Path]:
+    winners_dir = charts_dir / "top_winners"
+    losers_dir = charts_dir / "top_losers"
+    winners_dir.mkdir(parents=True, exist_ok=True)
+    losers_dir.mkdir(parents=True, exist_ok=True)
+    _clear_png_files(winners_dir)
+    _clear_png_files(losers_dir)
+
+    plotter = StaticComboTradePlotter()
+    frame_cache: dict[tuple[str, str], pd.DataFrame] = {}
+
+    def _render_subset(*, ordered: pd.DataFrame, target_dir: Path, prefix: str) -> pd.DataFrame:
+        manifest_rows: list[dict[str, object]] = []
+        total = len(ordered)
+        if total == 0:
+            return pd.DataFrame(
+                columns=[
+                    "chart_rank",
+                    "symbol",
+                    "trade_model_label",
+                    "entry_timestamp_utc",
+                    "exit_return_pct",
+                    "chart_status",
+                    "chart_path",
+                ]
+            )
+
+        started_at = time.time()
+        for idx, (_, event) in enumerate(ordered.iterrows(), start=1):
+            symbol = str(event.get("symbol", ""))
+            timeframe = Timeframe(str(event.get("timeframe", "5m")))
+            cache_key = (symbol, timeframe.value)
+            frame = frame_cache.get(cache_key)
+            if frame is None:
+                frame = preparer.load_symbol_data(symbol, timeframe)
+                frame_cache[cache_key] = frame
+
+            chart_status = "создан"
+            chart_path: Path | None = None
+            if frame.empty:
+                chart_status = "нет_данных_в_кеше"
+            else:
+                trigger_timestamp_ms = int(_safe_float(event.get("timestamp_ms")) or 0)
+                entry_timestamp_ms = int(_safe_float(event.get("entry_timestamp_ms")) or trigger_timestamp_ms)
+                exit_timestamp_raw = _safe_float(event.get("exit_timestamp_ms"))
+                exit_timestamp_ms = int(exit_timestamp_raw) if exit_timestamp_raw is not None else None
+                timeframe_ms = timeframe.to_milliseconds()
+                start_ts = int(trigger_timestamp_ms - (timeframe_ms * 18))
+                right_anchor = exit_timestamp_ms if exit_timestamp_ms is not None else entry_timestamp_ms + (timeframe_ms * 24)
+                end_ts = int(right_anchor + (timeframe_ms * 18))
+                scoped = frame[
+                    (pd.to_numeric(frame["timestamp"], errors="coerce") >= start_ts)
+                    & (pd.to_numeric(frame["timestamp"], errors="coerce") <= end_ts)
+                ].copy()
+                if scoped.empty:
+                    chart_status = "пустое_окно_графика"
+                else:
+                    chart_name = (
+                        f"{idx:02d}_{prefix}_{_sanitize_filename(symbol)}_"
+                        f"{pd.to_datetime(entry_timestamp_ms, unit='ms', utc=True).strftime('%Y%m%d_%H%M')}.png"
+                    )
+                    chart_path = target_dir / chart_name
+                    try:
+                        plotter.plot_trade(
+                            frame=scoped,
+                            spec=StaticComboTradePlotSpec(
+                                symbol=symbol,
+                                combo_variant=str(event.get("combo_variant") or "best"),
+                                component_ids=str(event.get("matched_component_ids") or event.get("component_id") or ""),
+                                trigger_timestamp_ms=trigger_timestamp_ms,
+                                entry_timestamp_ms=entry_timestamp_ms,
+                                exit_timestamp_ms=exit_timestamp_ms,
+                                entry_price=_safe_float(event.get("entry_price")),
+                                stop_price=_safe_float(event.get("initial_stop_price")),
+                                exit_price=None,
+                                trigger_open=_safe_float(event.get("trigger_open")),
+                                trigger_high=_safe_float(event.get("trigger_high")),
+                                trigger_low=_safe_float(event.get("trigger_low")),
+                                trigger_close=_safe_float(event.get("trigger_close")),
+                                trigger_return_pct=_safe_float(event.get("trigger_return_pct")),
+                                trigger_range_pct=_safe_float(event.get("trigger_range_pct")),
+                                range_atr=_safe_float(event.get("range_atr")),
+                                body_atr=_safe_float(event.get("body_atr")),
+                                volume_mult=_safe_float(event.get("volume_mult")),
+                                close_to_high_frac=_safe_float(event.get("close_to_high_frac")),
+                                pre_base_range_pct_60m=_safe_float(event.get("pre_base_range_pct_60m")),
+                                pre_base_drift_pct_60m=_safe_float(event.get("pre_base_drift_pct_60m")),
+                                pre_base_range_vs_trigger=_safe_float(event.get("pre_base_range_vs_trigger")),
+                                pre_entry_pullback_frac=_safe_float(event.get("pre_entry_pullback_frac")),
+                                pre_entry_red_volume_frac=_safe_float(event.get("pre_entry_red_volume_frac")),
+                                next_bar_pullback_frac=_safe_float(event.get("next_bar_pullback_frac")),
+                                next_close_to_high_frac=None,
+                                initial_risk_pct=_safe_float(event.get("initial_risk_pct")),
+                                peak_timestamp_ms=int(_safe_float(event.get("peak_timestamp_ms"))) if _safe_float(event.get("peak_timestamp_ms")) is not None else None,
+                                peak_price=_safe_float(event.get("peak_price_before_50pct_retrace")),
+                                exit_return_pct=_safe_float(event.get("exit_return_pct")),
+                                exit_reason=str(event.get("exit_reason", "")) or None,
+                                entry_reason=str(event.get("entry_reason", "")) or None,
+                                initial_stop_reason=str(event.get("initial_stop_reason", "")) or None,
+                                source_trade_model_id=str(event.get("trade_model_id", "")) or None,
+                                source_trade_model_label=str(event.get("trade_model_label", "")) or None,
+                                source_config_id=str(event.get("component_id", "")) or None,
+                                hour_utc=int(_safe_float(event.get("hour_utc"))) if _safe_float(event.get("hour_utc")) is not None else None,
+                            ),
+                            output_path=chart_path,
+                        )
+                    except Exception as exc:
+                        chart_status = f"ошибка_графика:{type(exc).__name__}"
+                        chart_path = None
+                        logger.warning(
+                            "unified-edge: stage=trade-charts warning kind=%s symbol=%s reason=%s",
+                            prefix,
+                            symbol,
+                            exc,
+                        )
+
+            manifest_rows.append(
+                {
+                    "chart_rank": idx,
+                    "symbol": symbol,
+                    "trade_model_label": event.get("trade_model_label"),
+                    "entry_timestamp_utc": event.get("entry_timestamp_utc"),
+                    "exit_return_pct": _safe_float(event.get("exit_return_pct")),
+                    "chart_status": chart_status,
+                    "chart_path": str(chart_path) if chart_path is not None else None,
+                }
+            )
+
+            if idx == 1 or idx == total or idx % 5 == 0:
+                progress_pct, elapsed, eta_seconds = _progress_snapshot(completed=idx, total=total, started_at=started_at)
+                logger.info(
+                    "unified-edge: stage=trade-charts kind=%s progress=%.1f%% charts=%s/%s elapsed=%s eta=%s",
+                    prefix,
+                    progress_pct,
+                    idx,
+                    total,
+                    _format_duration(elapsed),
+                    _format_duration(eta_seconds),
+                )
+
+        return pd.DataFrame(manifest_rows)
+
+    scoped = events.dropna(subset=["exit_return_pct"]).copy()
+    winners_ordered = scoped.sort_values(["exit_return_pct", "entry_timestamp_ms"], ascending=[False, True]).head(top_n).reset_index(drop=True)
+    losers_ordered = scoped.sort_values(["exit_return_pct", "entry_timestamp_ms"], ascending=[True, True]).head(top_n).reset_index(drop=True)
+
+    winners_manifest = _render_subset(ordered=winners_ordered, target_dir=winners_dir, prefix="winner")
+    losers_manifest = _render_subset(ordered=losers_ordered, target_dir=losers_dir, prefix="loser")
+
+    winners_manifest_path = charts_dir / "top_winners_manifest.csv"
+    losers_manifest_path = charts_dir / "top_losers_manifest.csv"
+    winners_manifest.to_csv(winners_manifest_path, index=False)
+    losers_manifest.to_csv(losers_manifest_path, index=False)
+    return {
+        "top_winners_dir": winners_dir,
+        "top_losers_dir": losers_dir,
+        "top_winners_manifest": winners_manifest_path,
+        "top_losers_manifest": losers_manifest_path,
+    }
+
+
 def _build_report(
     *,
     report_path: Path,
@@ -1037,6 +1223,13 @@ def build_hourly_asia_pump_unified_edge_artifacts(
     _save_priority_monthly_returns_chart(best_monthly, charts_dir / "monthly_returns.png")
     _save_priority_trade_distribution_chart(best_events, charts_dir / "trade_distribution.png")
     _save_priority_trade_timeline_chart(best_events, charts_dir / "trade_timeline.png")
+    top_trade_chart_artifacts = _build_top_trade_charts(
+        events=best_events,
+        preparer=active_preparer,
+        charts_dir=charts_dir,
+        logger=active_logger,
+        top_n=10,
+    )
 
     context = {
         "search_scope": {
@@ -1076,6 +1269,7 @@ def build_hourly_asia_pump_unified_edge_artifacts(
         "context": output_dir / "unified_edge_context.json",
         "report": output_dir / "unified_edge_report.md",
         "charts_dir": charts_dir,
+        **top_trade_chart_artifacts,
     }
     atomic_summary.to_csv(artifacts["atomic_summary"], index=False)
     combo_summary.to_csv(artifacts["combo_summary"], index=False)
@@ -1104,3 +1298,33 @@ def build_hourly_asia_pump_unified_edge_artifacts(
     best_distribution_goal = bool(best_summary.iloc[0]["meets_distribution_goal"]) if not best_summary.empty else False
     active_logger.info("unified-edge: stage=done atomic=%s combos=%s best_variant=%s goal=%s distribution_goal=%s", len(atomic_summary), len(combo_summary), best_summary.iloc[0]["combo_variant"] if not best_summary.empty else "n/a", best_goal, best_distribution_goal)
     return {**artifacts, "goal_passed": best_goal, "distribution_goal_passed": best_distribution_goal}
+
+
+def build_hourly_asia_pump_unified_edge_top_trade_charts(
+    *,
+    best_events_path: Path,
+    output_dir: Path,
+    cache_dir: Path | str,
+    logger: logging.Logger | None = None,
+    top_n: int = 10,
+) -> dict[str, Path]:
+    active_logger = logger or module_logger
+    events = pd.read_csv(best_events_path)
+    if events.empty:
+        raise ValueError(f"Не найдены сделки в {best_events_path}")
+    charts_dir = output_dir / "unified_edge_charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    preparer = DataPreparer(Path(cache_dir))
+    artifacts = _build_top_trade_charts(
+        events=events,
+        preparer=preparer,
+        charts_dir=charts_dir,
+        logger=active_logger,
+        top_n=top_n,
+    )
+    active_logger.info(
+        "unified-edge: stage=trade-charts-done winners_dir=%s losers_dir=%s",
+        artifacts["top_winners_dir"],
+        artifacts["top_losers_dir"],
+    )
+    return artifacts
