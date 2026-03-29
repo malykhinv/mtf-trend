@@ -47,12 +47,17 @@ _EDGE_MIN_WIN_RATE = 0.40
 _EDGE_MIN_ANNUALIZED_UNIT_PNL_PCT = 1.0
 _EDGE_MAX_DRAWDOWN_PCT = 0.30
 _EDGE_MIN_POSITIVE_MONTHS = 9
+_EDGE_MIN_STABLE_POSITIVE_MONTHS = 7
 _EDGE_MAX_TOP3_TRADE_SHARE = 0.70
 _EDGE_MAX_TOP5_TRADE_SHARE = 0.85
 _EDGE_MAX_BEST_MONTH_SHARE = 0.55
-_EDGE_COMBO_CANDIDATE_LIMIT = 40
+_EDGE_MAX_TOP3_SYMBOL_SHARE = 0.70
+_EDGE_MAX_TOP5_SYMBOL_SHARE = 0.85
+_EDGE_COMBO_CANDIDATE_LIMIT = 24
 _EDGE_MAX_COMBO_COMPONENTS = 3
 _EDGE_PROGRESS_LOG_EVERY_SYMBOLS = 25
+_EDGE_EQUITY_RISK_FRACTION = 0.04
+_EDGE_EQUITY_MAX_NOTIONAL_FRACTION = 1.0
 _EDGE_HOLDOUT_SPLITS: tuple[tuple[str, int], ...] = (
     ("train8_test4", 8),
     ("train9_test3", 9),
@@ -546,6 +551,284 @@ def _top_share(returns: pd.Series, total_unit_pnl: float, top_n: int) -> float |
     return float(winners.head(top_n).sum() / total_unit_pnl)
 
 
+def _top_group_share(grouped_returns: pd.Series, total_unit_pnl: float, top_n: int) -> float | None:
+    if total_unit_pnl <= 0.0:
+        return None
+    winners = pd.to_numeric(grouped_returns, errors="coerce").dropna()
+    winners = winners[winners > 0].sort_values(ascending=False)
+    if winners.empty:
+        return None
+    return float(winners.head(top_n).sum() / total_unit_pnl)
+
+
+def _build_symbol_concentration_metrics(
+    frame: pd.DataFrame,
+    *,
+    calendar_months: Sequence[str],
+) -> dict[str, object]:
+    if frame.empty:
+        return {
+            "top1_symbol_pnl_share": None,
+            "top3_symbol_pnl_share": None,
+            "top5_symbol_pnl_share": None,
+            "annualized_remove_top1_symbol_pct": 0.0,
+            "annualized_remove_top3_symbol_pct": 0.0,
+            "annualized_remove_top5_symbol_pct": 0.0,
+        }
+    ordered = frame.sort_values("entry_timestamp_ms").copy()
+    returns = pd.to_numeric(ordered["exit_return_pct"], errors="coerce").fillna(0.0)
+    total_unit_pnl = float(returns.sum())
+    symbol_returns = (
+        ordered.assign(exit_return_pct=returns)
+        .groupby("symbol", sort=False)["exit_return_pct"]
+        .sum()
+        .sort_values(ascending=False)
+    )
+
+    def _summary_without_symbols(symbols: Sequence[str]) -> float:
+        scoped = ordered[~ordered["symbol"].astype(str).isin([str(symbol) for symbol in symbols])].copy()
+        summary = _summarize_events(scoped, calendar_months=calendar_months)
+        if summary is None:
+            return 0.0
+        return float(summary.get("annualized_unit_pnl_pct", 0.0) or 0.0)
+
+    top_symbols = symbol_returns.index.astype(str).tolist()
+    return {
+        "top1_symbol_pnl_share": _top_group_share(symbol_returns, total_unit_pnl, 1),
+        "top3_symbol_pnl_share": _top_group_share(symbol_returns, total_unit_pnl, 3),
+        "top5_symbol_pnl_share": _top_group_share(symbol_returns, total_unit_pnl, 5),
+        "annualized_remove_top1_symbol_pct": _summary_without_symbols(top_symbols[:1]),
+        "annualized_remove_top3_symbol_pct": _summary_without_symbols(top_symbols[:3]),
+        "annualized_remove_top5_symbol_pct": _summary_without_symbols(top_symbols[:5]),
+    }
+
+
+def _build_month_stability_metrics(
+    frame: pd.DataFrame,
+    *,
+    calendar_months: Sequence[str],
+) -> dict[str, object]:
+    if frame.empty:
+        return {
+            "stable_positive_months_count": 0,
+            "fragile_positive_months_count": 0,
+            "median_positive_month_top1_trade_share": None,
+            "max_positive_month_top1_trade_share": None,
+            "median_positive_month_top2_trade_share": None,
+            "max_positive_month_top2_trade_share": None,
+        }
+
+    top1_shares: list[float] = []
+    top2_shares: list[float] = []
+    stable_positive_months = 0
+    fragile_positive_months = 0
+
+    for month in calendar_months:
+        scoped = frame[frame["month_utc"].astype(str) == str(month)].copy()
+        if scoped.empty:
+            continue
+        returns = pd.to_numeric(scoped["exit_return_pct"], errors="coerce").fillna(0.0)
+        month_pnl = float(returns.sum())
+        trades_count = int(len(returns))
+        wins_count = int((returns > 0).sum())
+        win_rate = float(wins_count / trades_count) if trades_count > 0 else 0.0
+        if month_pnl <= 0.0:
+            continue
+
+        positive_returns = returns[returns > 0].sort_values(ascending=False)
+        if not positive_returns.empty:
+            top1_shares.append(float(positive_returns.head(1).sum() / month_pnl))
+            top2_shares.append(float(positive_returns.head(2).sum() / month_pnl))
+
+        if wins_count >= 2 and win_rate >= 0.50:
+            stable_positive_months += 1
+        else:
+            fragile_positive_months += 1
+
+    return {
+        "stable_positive_months_count": int(stable_positive_months),
+        "fragile_positive_months_count": int(fragile_positive_months),
+        "median_positive_month_top1_trade_share": float(pd.Series(top1_shares, dtype="float64").median()) if top1_shares else None,
+        "max_positive_month_top1_trade_share": float(max(top1_shares)) if top1_shares else None,
+        "median_positive_month_top2_trade_share": float(pd.Series(top2_shares, dtype="float64").median()) if top2_shares else None,
+        "max_positive_month_top2_trade_share": float(max(top2_shares)) if top2_shares else None,
+    }
+
+
+def _simulate_equity_risk_metrics(
+    frame: pd.DataFrame,
+    *,
+    calendar_months: Sequence[str],
+    risk_fraction: float = _EDGE_EQUITY_RISK_FRACTION,
+    max_total_notional_fraction: float = _EDGE_EQUITY_MAX_NOTIONAL_FRACTION,
+) -> tuple[dict[str, object], pd.DataFrame]:
+    if frame.empty:
+        monthly = pd.DataFrame(
+            {
+                "month_utc": list(calendar_months),
+                "equity_month_pnl_pct": [0.0 for _ in calendar_months],
+                "equity_trades_count": [0 for _ in calendar_months],
+                "equity_win_rate": [0.0 for _ in calendar_months],
+                "equity_mean_trade_pct": [0.0 for _ in calendar_months],
+            }
+        )
+        return {
+            "equity_risk_fraction": float(risk_fraction),
+            "equity_total_return_pct": 0.0,
+            "equity_annualized_return_pct": 0.0,
+            "equity_final_equity": 1.0,
+            "equity_max_drawdown_pct": 0.0,
+            "equity_mean_trade_pct": 0.0,
+            "equity_median_trade_pct": 0.0,
+            "equity_mean_pos_trade_pct": 0.0,
+            "equity_mean_neg_trade_pct": 0.0,
+            "equity_positive_months_count": 0,
+            "equity_non_positive_months_count": len(calendar_months),
+            "equity_max_notional_fraction": 0.0,
+            "equity_max_open_positions": 0,
+        }, monthly
+
+    ordered = frame.copy()
+    ordered["entry_timestamp_ms"] = pd.to_numeric(ordered.get("entry_timestamp_ms"), errors="coerce")
+    ordered["exit_timestamp_ms"] = pd.to_numeric(ordered.get("exit_timestamp_ms"), errors="coerce")
+    ordered["initial_risk_pct"] = pd.to_numeric(ordered.get("initial_risk_pct"), errors="coerce")
+    ordered["exit_return_pct"] = pd.to_numeric(ordered.get("exit_return_pct"), errors="coerce")
+    ordered = ordered.dropna(subset=["entry_timestamp_ms", "exit_timestamp_ms", "initial_risk_pct", "exit_return_pct"]).copy()
+    ordered = ordered[ordered["initial_risk_pct"] > 0.0].copy()
+    if ordered.empty:
+        return _simulate_equity_risk_metrics(pd.DataFrame(), calendar_months=calendar_months, risk_fraction=risk_fraction, max_total_notional_fraction=max_total_notional_fraction)
+
+    ordered["entry_timestamp_ms"] = ordered["entry_timestamp_ms"].astype("int64")
+    ordered["exit_timestamp_ms"] = ordered["exit_timestamp_ms"].astype("int64")
+    ordered = ordered.sort_values(["entry_timestamp_ms", "exit_timestamp_ms", "symbol"], ascending=[True, True, True]).reset_index(drop=True)
+
+    equity = 1.0
+    open_positions: list[dict[str, object]] = []
+    account_trade_returns: list[float] = []
+    monthly_rows: dict[str, dict[str, float]] = {
+        str(month): {"equity_month_pnl_abs": 0.0, "equity_trades_count": 0.0, "equity_wins_count": 0.0}
+        for month in calendar_months
+    }
+    equity_curve = [equity]
+    max_notional_fraction = 0.0
+    max_open_positions = 0
+
+    entries_by_ts = {
+        int(timestamp): group.copy()
+        for timestamp, group in ordered.groupby("entry_timestamp_ms", sort=True)
+    }
+    unique_times = sorted(set(ordered["entry_timestamp_ms"].astype("int64").tolist()) | set(ordered["exit_timestamp_ms"].astype("int64").tolist()))
+
+    for timestamp in unique_times:
+        remaining_positions: list[dict[str, object]] = []
+        for position in open_positions:
+            trade = position["trade"]
+            if int(trade["exit_timestamp_ms"]) == int(timestamp):
+                account_return_pct = float(position["notional_fraction"]) * float(trade["exit_return_pct"])
+                pnl_abs = float(position["equity_at_entry"]) * account_return_pct
+                equity += pnl_abs
+                month = str(trade.get("month_utc", ""))
+                if month not in monthly_rows:
+                    monthly_rows[month] = {"equity_month_pnl_abs": 0.0, "equity_trades_count": 0.0, "equity_wins_count": 0.0}
+                monthly_rows[month]["equity_month_pnl_abs"] += pnl_abs
+                monthly_rows[month]["equity_trades_count"] += 1.0
+                if account_return_pct > 0.0:
+                    monthly_rows[month]["equity_wins_count"] += 1.0
+                account_trade_returns.append(account_return_pct)
+                equity_curve.append(equity)
+            else:
+                remaining_positions.append(position)
+        open_positions = remaining_positions
+
+        entry_group = entries_by_ts.get(int(timestamp))
+        if entry_group is None or entry_group.empty:
+            continue
+
+        for _, trade in entry_group.iterrows():
+            used_notional_fraction = float(sum(float(position["notional_fraction"]) for position in open_positions))
+            raw_notional_fraction = float(risk_fraction / float(trade["initial_risk_pct"]))
+            free_notional_fraction = max(0.0, float(max_total_notional_fraction) - used_notional_fraction)
+            notional_fraction = min(raw_notional_fraction, free_notional_fraction)
+            if notional_fraction <= 0.0:
+                continue
+
+            if int(trade["exit_timestamp_ms"]) == int(timestamp):
+                account_return_pct = notional_fraction * float(trade["exit_return_pct"])
+                pnl_abs = equity * account_return_pct
+                month = str(trade.get("month_utc", ""))
+                if month not in monthly_rows:
+                    monthly_rows[month] = {"equity_month_pnl_abs": 0.0, "equity_trades_count": 0.0, "equity_wins_count": 0.0}
+                monthly_rows[month]["equity_month_pnl_abs"] += pnl_abs
+                monthly_rows[month]["equity_trades_count"] += 1.0
+                if account_return_pct > 0.0:
+                    monthly_rows[month]["equity_wins_count"] += 1.0
+                account_trade_returns.append(account_return_pct)
+                equity += pnl_abs
+                equity_curve.append(equity)
+                continue
+
+            open_positions.append(
+                {
+                    "trade": trade,
+                    "equity_at_entry": equity,
+                    "notional_fraction": float(notional_fraction),
+                }
+            )
+            current_notional_fraction = float(sum(float(position["notional_fraction"]) for position in open_positions))
+            max_notional_fraction = max(max_notional_fraction, current_notional_fraction)
+            max_open_positions = max(max_open_positions, len(open_positions))
+
+    peak_equity = 1.0
+    max_drawdown_pct = 0.0
+    for curve_equity in equity_curve:
+        peak_equity = max(peak_equity, curve_equity)
+        if peak_equity > 0.0:
+            max_drawdown_pct = max(max_drawdown_pct, (peak_equity - curve_equity) / peak_equity)
+
+    account_returns_series = pd.Series(account_trade_returns, dtype="float64")
+    positive_returns = account_returns_series[account_returns_series > 0.0]
+    negative_returns = account_returns_series[account_returns_series <= 0.0]
+
+    monthly_rows_list: list[dict[str, object]] = []
+    running_month_equity = 1.0
+    for month in calendar_months:
+        month_key = str(month)
+        month_pnl_abs = float(monthly_rows.get(month_key, {}).get("equity_month_pnl_abs", 0.0))
+        month_trades_count = int(monthly_rows.get(month_key, {}).get("equity_trades_count", 0.0))
+        month_wins_count = int(monthly_rows.get(month_key, {}).get("equity_wins_count", 0.0))
+        month_return_pct = month_pnl_abs / running_month_equity if running_month_equity > 0.0 else 0.0
+        monthly_rows_list.append(
+            {
+                "month_utc": month_key,
+                "equity_month_pnl_pct": float(month_return_pct),
+                "equity_trades_count": month_trades_count,
+                "equity_win_rate": (month_wins_count / month_trades_count) if month_trades_count > 0 else 0.0,
+                "equity_mean_trade_pct": (month_return_pct / month_trades_count) if month_trades_count > 0 else 0.0,
+            }
+        )
+        running_month_equity += month_pnl_abs
+    monthly_frame = pd.DataFrame(monthly_rows_list)
+
+    months_count = max(1, len(calendar_months))
+    annualized_return_pct = float(pow(max(equity, 0.0000001), 12.0 / months_count) - 1.0)
+    metrics = {
+        "equity_risk_fraction": float(risk_fraction),
+        "equity_total_return_pct": float(equity - 1.0),
+        "equity_annualized_return_pct": annualized_return_pct,
+        "equity_final_equity": float(equity),
+        "equity_max_drawdown_pct": float(max_drawdown_pct),
+        "equity_mean_trade_pct": float(account_returns_series.mean()) if not account_returns_series.empty else 0.0,
+        "equity_median_trade_pct": float(account_returns_series.median()) if not account_returns_series.empty else 0.0,
+        "equity_mean_pos_trade_pct": float(positive_returns.mean()) if not positive_returns.empty else 0.0,
+        "equity_mean_neg_trade_pct": float(negative_returns.mean()) if not negative_returns.empty else 0.0,
+        "equity_positive_months_count": int((monthly_frame["equity_month_pnl_pct"] > 0.0).sum()),
+        "equity_non_positive_months_count": int((monthly_frame["equity_month_pnl_pct"] <= 0.0).sum()),
+        "equity_max_notional_fraction": float(max_notional_fraction),
+        "equity_max_open_positions": int(max_open_positions),
+    }
+    return metrics, monthly_frame
+
+
 def _build_concentration_metrics(
     frame: pd.DataFrame,
     *,
@@ -614,19 +897,31 @@ def _candidate_meets_distribution_goal(row: pd.Series | dict[str, object]) -> bo
     top3_share = _safe_float(row.get("top3_trade_pnl_share"))
     top5_share = _safe_float(row.get("top5_trade_pnl_share"))
     best_month_share = _safe_float(row.get("best_month_pnl_share"))
+    top3_symbol_share = _safe_float(row.get("top3_symbol_pnl_share"))
+    top5_symbol_share = _safe_float(row.get("top5_symbol_pnl_share"))
     annualized_remove_top3 = float(row.get("annualized_remove_top3_trade_pct", 0.0) or 0.0)
     annualized_remove_top5 = float(row.get("annualized_remove_top5_trade_pct", 0.0) or 0.0)
     annualized_remove_best_month = float(row.get("annualized_remove_best_month_pct", 0.0) or 0.0)
+    annualized_remove_top3_symbol = float(row.get("annualized_remove_top3_symbol_pct", 0.0) or 0.0)
+    annualized_remove_top5_symbol = float(row.get("annualized_remove_top5_symbol_pct", 0.0) or 0.0)
+    stable_positive_months = int(row.get("stable_positive_months_count", 0) or 0)
     return (
         top3_share is not None
         and top5_share is not None
         and best_month_share is not None
+        and top3_symbol_share is not None
+        and top5_symbol_share is not None
         and top3_share <= _EDGE_MAX_TOP3_TRADE_SHARE
         and top5_share <= _EDGE_MAX_TOP5_TRADE_SHARE
         and best_month_share <= _EDGE_MAX_BEST_MONTH_SHARE
+        and top3_symbol_share <= _EDGE_MAX_TOP3_SYMBOL_SHARE
+        and top5_symbol_share <= _EDGE_MAX_TOP5_SYMBOL_SHARE
         and annualized_remove_top3 > 0.20
         and annualized_remove_top5 > 0.10
         and annualized_remove_best_month > 0.20
+        and annualized_remove_top3_symbol > 0.20
+        and annualized_remove_top5_symbol > 0.10
+        and stable_positive_months >= _EDGE_MIN_STABLE_POSITIVE_MONTHS
     )
 
 
@@ -642,10 +937,22 @@ def _candidate_score(row: pd.Series | dict[str, object]) -> float:
     annualized_remove_top3 = float(row.get("annualized_remove_top3_trade_pct", 0.0) or 0.0)
     annualized_remove_top5 = float(row.get("annualized_remove_top5_trade_pct", 0.0) or 0.0)
     annualized_remove_best_month = float(row.get("annualized_remove_best_month_pct", 0.0) or 0.0)
+    annualized_remove_top1_symbol = float(row.get("annualized_remove_top1_symbol_pct", 0.0) or 0.0)
+    annualized_remove_top3_symbol = float(row.get("annualized_remove_top3_symbol_pct", 0.0) or 0.0)
+    annualized_remove_top5_symbol = float(row.get("annualized_remove_top5_symbol_pct", 0.0) or 0.0)
     top1_share = float(_safe_float(row.get("top1_trade_pnl_share")) or 0.0)
     top3_share = float(_safe_float(row.get("top3_trade_pnl_share")) or 0.0)
     top5_share = float(_safe_float(row.get("top5_trade_pnl_share")) or 0.0)
     best_month_share = float(_safe_float(row.get("best_month_pnl_share")) or 0.0)
+    top1_symbol_share = float(_safe_float(row.get("top1_symbol_pnl_share")) or 0.0)
+    top3_symbol_share = float(_safe_float(row.get("top3_symbol_pnl_share")) or 0.0)
+    top5_symbol_share = float(_safe_float(row.get("top5_symbol_pnl_share")) or 0.0)
+    stable_positive_months = int(row.get("stable_positive_months_count", 0) or 0)
+    median_positive_month_top1 = float(_safe_float(row.get("median_positive_month_top1_trade_share")) or 0.0)
+    max_positive_month_top1 = float(_safe_float(row.get("max_positive_month_top1_trade_share")) or 0.0)
+    equity_annualized = float(row.get("equity_annualized_return_pct", 0.0) or 0.0)
+    equity_max_drawdown = float(row.get("equity_max_drawdown_pct", 1.0) or 1.0)
+    equity_mean_trade = float(row.get("equity_mean_trade_pct", 0.0) or 0.0)
     components_count = int(row.get("components_count", 1) or 1)
 
     score = 0.0
@@ -653,17 +960,29 @@ def _candidate_score(row: pd.Series | dict[str, object]) -> float:
     score += min(max(median_return_pct, -0.02), 0.04) * 500.0
     score += min(win_rate, 0.70) * 250.0
     score += min(annualized, 3.5) * 55.0
+    score += min(equity_annualized, 3.5) * 75.0
+    score += min(equity_mean_trade, 0.04) * 1400.0
     score += min(trades_per_year, 150.0) * 0.20
     score += min(positive_months, 12) * 10.0
+    score += min(stable_positive_months, 12) * 18.0
     score += max(annualized_remove_top1, -1.0) * 15.0
     score += max(annualized_remove_top3, -1.0) * 35.0
     score += max(annualized_remove_top5, -1.0) * 20.0
     score += max(annualized_remove_best_month, -1.0) * 35.0
+    score += max(annualized_remove_top1_symbol, -1.0) * 18.0
+    score += max(annualized_remove_top3_symbol, -1.0) * 35.0
+    score += max(annualized_remove_top5_symbol, -1.0) * 25.0
     score -= max(max_drawdown - 0.20, 0.0) * 220.0
+    score -= max(equity_max_drawdown - 0.20, 0.0) * 280.0
     score -= top1_share * 20.0
     score -= top3_share * 45.0
     score -= top5_share * 20.0
     score -= best_month_share * 45.0
+    score -= top1_symbol_share * 22.0
+    score -= top3_symbol_share * 45.0
+    score -= top5_symbol_share * 35.0
+    score -= median_positive_month_top1 * 18.0
+    score -= max_positive_month_top1 * 22.0
     score -= max(components_count - 1, 0) * 4.0
     if trades_per_year < _EDGE_MIN_TRADES_PER_YEAR:
         score -= (_EDGE_MIN_TRADES_PER_YEAR - trades_per_year) * 2.5
@@ -677,6 +996,8 @@ def _candidate_score(row: pd.Series | dict[str, object]) -> float:
         score -= (_EDGE_MIN_ANNUALIZED_UNIT_PNL_PCT - annualized) * 90.0
     if positive_months < _EDGE_MIN_POSITIVE_MONTHS:
         score -= (_EDGE_MIN_POSITIVE_MONTHS - positive_months) * 14.0
+    if stable_positive_months < _EDGE_MIN_STABLE_POSITIVE_MONTHS:
+        score -= (_EDGE_MIN_STABLE_POSITIVE_MONTHS - stable_positive_months) * 24.0
     if _candidate_meets_goal(row):
         score += 1_000.0
     if _candidate_meets_distribution_goal(row):
@@ -701,6 +1022,7 @@ def _summarize_trade_frames(
             continue
         row.update(summary)
         row.update(_build_concentration_metrics(frame, calendar_months=calendar_months))
+        row.update(_build_month_stability_metrics(frame, calendar_months=calendar_months))
         row["stop_exit_rate"] = float((frame["exit_reason"].astype(str) == "stop").mean()) if not frame.empty else 0.0
         row["time_exit_rate"] = float((frame["exit_reason"].astype(str) == "time_exit").mean()) if not frame.empty else 0.0
         row["fast_fail_rate"] = float((frame["exit_reason"].astype(str) == "fast_fail").mean()) if not frame.empty else 0.0
@@ -888,7 +1210,11 @@ def _build_combo_summary(
                 "component_rule_texts": " || ".join(component_slice["rule_text"].astype(str).tolist()),
                 **summary,
                 **_build_concentration_metrics(combo_events, calendar_months=calendar_months),
+                **_build_symbol_concentration_metrics(combo_events, calendar_months=calendar_months),
+                **_build_month_stability_metrics(combo_events, calendar_months=calendar_months),
             }
+            equity_metrics, _ = _simulate_equity_risk_metrics(combo_events, calendar_months=calendar_months)
+            row.update(equity_metrics)
             row["meets_goal"] = _candidate_meets_goal(row)
             row["meets_distribution_goal"] = _candidate_meets_distribution_goal(row)
             row["selection_score"] = _candidate_score(row)
@@ -927,7 +1253,20 @@ def _build_holdout_summary(*, events: pd.DataFrame, calendar_months: Sequence[st
         summary = _summarize_events(scoped, calendar_months=test_months)
         if summary is None:
             continue
-        rows.append({"split_id": split_id, "train_months": train_months, "test_months": len(test_months), "test_month_list": ",".join(test_months), **summary, **_build_concentration_metrics(scoped, calendar_months=test_months)})
+        equity_metrics, _ = _simulate_equity_risk_metrics(scoped, calendar_months=test_months)
+        rows.append(
+            {
+                "split_id": split_id,
+                "train_months": train_months,
+                "test_months": len(test_months),
+                "test_month_list": ",".join(test_months),
+                **summary,
+                **_build_concentration_metrics(scoped, calendar_months=test_months),
+                **_build_symbol_concentration_metrics(scoped, calendar_months=test_months),
+                **_build_month_stability_metrics(scoped, calendar_months=test_months),
+                **equity_metrics,
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -1164,6 +1503,212 @@ def _build_report(
     report_path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _build_report_v2(
+    *,
+    report_path: Path,
+    context: dict[str, object],
+    atomic_summary: pd.DataFrame,
+    best_summary: pd.DataFrame,
+    best_monthly: pd.DataFrame,
+    best_holdout: pd.DataFrame,
+    behavior_by_entry: pd.DataFrame,
+    behavior_by_stop: pd.DataFrame,
+    behavior_by_trail: pd.DataFrame,
+    behavior_by_exit: pd.DataFrame,
+) -> None:
+    best_row = best_summary.iloc[0].to_dict() if not best_summary.empty else {}
+    lines = [
+        "# Единый поиск edge для XX:00",
+        "",
+        "Отчёт по единому поиску edge без развилок по часу. Одинаковые правила применяются ко всем XX:00-сигналам.",
+        "",
+        "## Лучший итоговый вариант",
+        "",
+        _frame_to_markdown(
+            best_summary,
+            columns=[
+                "combo_variant",
+                "components_count",
+                "component_variants",
+                "trades_per_year",
+                "mean_return_pct",
+                "median_return_pct",
+                "win_rate",
+                "annualized_unit_pnl_pct",
+                "max_drawdown_pct",
+                "positive_months_count",
+                "stable_positive_months_count",
+                "equity_annualized_return_pct",
+                "equity_max_drawdown_pct",
+                "equity_mean_trade_pct",
+                "top3_trade_pnl_share",
+                "top5_trade_pnl_share",
+                "top3_symbol_pnl_share",
+                "top5_symbol_pnl_share",
+            ],
+        ),
+        "",
+        "## Правила лучшего варианта",
+        "",
+        f"- Состав: `{best_row.get('component_variants', '')}`",
+        f"- Компоненты: `{best_row.get('component_rule_texts', '')}`",
+        "",
+        "## Капитал и риск",
+        "",
+        _frame_to_markdown(
+            best_summary,
+            columns=[
+                "equity_risk_fraction",
+                "equity_total_return_pct",
+                "equity_annualized_return_pct",
+                "equity_final_equity",
+                "equity_max_drawdown_pct",
+                "equity_mean_trade_pct",
+                "equity_mean_pos_trade_pct",
+                "equity_mean_neg_trade_pct",
+                "equity_positive_months_count",
+                "equity_non_positive_months_count",
+                "equity_max_notional_fraction",
+                "equity_max_open_positions",
+            ],
+        ),
+        "",
+        "## Лучшие атомарные модели",
+        "",
+        _frame_to_markdown(
+            atomic_summary,
+            columns=[
+                "atomic_variant",
+                "signal_profile_id",
+                "entry_profile_id",
+                "exit_profile_id",
+                "trades_per_year",
+                "mean_return_pct",
+                "median_return_pct",
+                "win_rate",
+                "annualized_unit_pnl_pct",
+                "equity_annualized_return_pct",
+                "equity_max_drawdown_pct",
+                "stable_positive_months_count",
+                "top3_trade_pnl_share",
+                "top3_symbol_pnl_share",
+            ],
+            limit=15,
+        ),
+        "",
+        "## Что дали разные входы",
+        "",
+        _frame_to_markdown(
+            behavior_by_entry,
+            columns=[
+                "entry_profile_id",
+                "models_count",
+                "mean_of_mean_return_pct",
+                "median_of_mean_return_pct",
+                "mean_of_win_rate",
+                "mean_of_annualized_unit_pnl_pct",
+                "mean_of_max_drawdown_pct",
+                "mean_of_top3_trade_pnl_share",
+            ],
+        ),
+        "",
+        "## Что дали разные типы начального стопа",
+        "",
+        _frame_to_markdown(
+            behavior_by_stop,
+            columns=[
+                "initial_stop_style",
+                "models_count",
+                "mean_of_mean_return_pct",
+                "median_of_mean_return_pct",
+                "mean_of_win_rate",
+                "mean_of_annualized_unit_pnl_pct",
+                "mean_of_max_drawdown_pct",
+                "mean_of_top3_trade_pnl_share",
+            ],
+        ),
+        "",
+        "## Что дали разные варианты трейлинга",
+        "",
+        _frame_to_markdown(
+            behavior_by_trail,
+            columns=[
+                "trail_style",
+                "models_count",
+                "mean_of_mean_return_pct",
+                "median_of_mean_return_pct",
+                "mean_of_win_rate",
+                "mean_of_annualized_unit_pnl_pct",
+                "mean_of_max_drawdown_pct",
+                "mean_of_top3_trade_pnl_share",
+            ],
+        ),
+        "",
+        "## Что дали разные варианты сопровождения",
+        "",
+        _frame_to_markdown(
+            behavior_by_exit,
+            columns=[
+                "exit_profile_id",
+                "models_count",
+                "mean_of_mean_return_pct",
+                "median_of_mean_return_pct",
+                "mean_of_win_rate",
+                "mean_of_annualized_unit_pnl_pct",
+                "mean_of_max_drawdown_pct",
+                "mean_of_top3_trade_pnl_share",
+            ],
+        ),
+        "",
+        "## Месяцы лучшего варианта",
+        "",
+        _frame_to_markdown(
+            best_monthly,
+            columns=[
+                "month_utc",
+                "trades_count",
+                "month_return_pct",
+                "win_rate",
+                "mean_return_pct",
+                "equity_month_pnl_pct",
+                "equity_mean_trade_pct",
+                "wins_count",
+                "stable_positive_month",
+                "top1_positive_trade_share",
+                "top2_positive_trade_share",
+            ],
+        ),
+        "",
+        "## Позднее sanity-окно",
+        "",
+        _frame_to_markdown(
+            best_holdout,
+            columns=[
+                "split_id",
+                "trades_count",
+                "trades_per_year",
+                "mean_return_pct",
+                "win_rate",
+                "annualized_unit_pnl_pct",
+                "equity_annualized_return_pct",
+                "equity_max_drawdown_pct",
+                "positive_months_count",
+                "stable_positive_months_count",
+                "top3_trade_pnl_share",
+                "top3_symbol_pnl_share",
+                "best_month_pnl_share",
+            ],
+        ),
+        "",
+        "## Контекст",
+        "",
+        "```json",
+        json.dumps(context, ensure_ascii=False, indent=2),
+        "```",
+    ]
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def build_hourly_asia_pump_unified_edge_artifacts(
     *,
     base_events_path: Path,
@@ -1210,6 +1755,35 @@ def build_hourly_asia_pump_unified_edge_artifacts(
     best_combo_id = str(best_summary.iloc[0]["combo_id"])
     best_events = combo_events_by_id[best_combo_id].copy().reset_index(drop=True)
     best_monthly = _build_monthly_returns_frame(best_events, calendar_months=calendar_months)
+    best_equity_metrics, best_monthly_equity = _simulate_equity_risk_metrics(best_events, calendar_months=calendar_months)
+    best_monthly_stability = pd.merge(
+        best_monthly,
+        best_monthly_equity,
+        on="month_utc",
+        how="left",
+    )
+    if not best_monthly_stability.empty:
+        month_details_rows: list[dict[str, object]] = []
+        for month in calendar_months:
+            month_frame = best_events[best_events["month_utc"].astype(str) == str(month)].copy()
+            returns = pd.to_numeric(month_frame.get("exit_return_pct"), errors="coerce").fillna(0.0)
+            wins = int((returns > 0).sum())
+            trades = int(len(month_frame))
+            month_pnl = float(returns.sum()) if trades > 0 else 0.0
+            win_rate = float(wins / trades) if trades > 0 else 0.0
+            positive_returns = returns[returns > 0].sort_values(ascending=False)
+            top1_share = float(positive_returns.head(1).sum() / month_pnl) if month_pnl > 0.0 and not positive_returns.empty else None
+            top2_share = float(positive_returns.head(2).sum() / month_pnl) if month_pnl > 0.0 and not positive_returns.empty else None
+            month_details_rows.append(
+                {
+                    "month_utc": str(month),
+                    "wins_count": wins,
+                    "stable_positive_month": bool(month_pnl > 0.0 and wins >= 2 and win_rate >= 0.50),
+                    "top1_positive_trade_share": top1_share,
+                    "top2_positive_trade_share": top2_share,
+                }
+            )
+        best_monthly_stability = best_monthly_stability.merge(pd.DataFrame(month_details_rows), on="month_utc", how="left")
     best_holdout = _build_holdout_summary(events=best_events, calendar_months=calendar_months)
 
     behavior_by_entry = atomic_summary.groupby("entry_profile_id", sort=True).agg(models_count=("trade_model_id", "count"), mean_of_mean_return_pct=("mean_return_pct", "mean"), median_of_mean_return_pct=("mean_return_pct", "median"), mean_of_win_rate=("win_rate", "mean"), mean_of_annualized_unit_pnl_pct=("annualized_unit_pnl_pct", "mean"), mean_of_max_drawdown_pct=("max_drawdown_pct", "mean"), mean_of_top3_trade_pnl_share=("top3_trade_pnl_share", "mean")).reset_index().sort_values("mean_of_mean_return_pct", ascending=False).reset_index(drop=True)
@@ -1240,6 +1814,8 @@ def build_hourly_asia_pump_unified_edge_artifacts(
             "atomic_models_count": int(len(models)),
             "commission_rate": float(commission_rate),
             "round_trip_taker_fee_pct": float(commission_rate * 2.0),
+            "equity_risk_fraction": float(_EDGE_EQUITY_RISK_FRACTION),
+            "equity_max_total_notional_fraction": float(_EDGE_EQUITY_MAX_NOTIONAL_FRACTION),
         },
         "criteria": {
             "min_trades_per_year": _EDGE_MIN_TRADES_PER_YEAR,
@@ -1248,11 +1824,15 @@ def build_hourly_asia_pump_unified_edge_artifacts(
             "min_annualized_unit_pnl_pct": _EDGE_MIN_ANNUALIZED_UNIT_PNL_PCT,
             "max_drawdown_pct": _EDGE_MAX_DRAWDOWN_PCT,
             "min_positive_months": _EDGE_MIN_POSITIVE_MONTHS,
+            "min_stable_positive_months": _EDGE_MIN_STABLE_POSITIVE_MONTHS,
             "max_top3_trade_pnl_share": _EDGE_MAX_TOP3_TRADE_SHARE,
+            "max_top3_symbol_pnl_share": _EDGE_MAX_TOP3_SYMBOL_SHARE,
+            "max_top5_symbol_pnl_share": _EDGE_MAX_TOP5_SYMBOL_SHARE,
             "max_best_month_pnl_share": _EDGE_MAX_BEST_MONTH_SHARE,
         },
         "best_combo_id": best_combo_id,
         "best_combo_variant": best_summary.iloc[0]["combo_variant"],
+        "best_combo_equity_metrics": best_equity_metrics,
     }
 
     artifacts = {
@@ -1260,6 +1840,7 @@ def build_hourly_asia_pump_unified_edge_artifacts(
         "combo_summary": output_dir / "unified_edge_combo_summary.csv",
         "best_summary": output_dir / "unified_edge_best_summary.csv",
         "best_monthly": output_dir / "unified_edge_best_monthly.csv",
+        "best_monthly_stability": output_dir / "unified_edge_best_monthly_stability.csv",
         "best_holdout": output_dir / "unified_edge_best_holdout.csv",
         "best_events": output_dir / "unified_edge_best_events.csv",
         "behavior_by_entry": output_dir / "unified_edge_behavior_by_entry.csv",
@@ -1275,6 +1856,7 @@ def build_hourly_asia_pump_unified_edge_artifacts(
     combo_summary.to_csv(artifacts["combo_summary"], index=False)
     best_summary.to_csv(artifacts["best_summary"], index=False)
     best_monthly.to_csv(artifacts["best_monthly"], index=False)
+    best_monthly_stability.to_csv(artifacts["best_monthly_stability"], index=False)
     best_holdout.to_csv(artifacts["best_holdout"], index=False)
     best_events.to_csv(artifacts["best_events"], index=False)
     behavior_by_entry.to_csv(artifacts["behavior_by_entry"], index=False)
@@ -1282,12 +1864,12 @@ def build_hourly_asia_pump_unified_edge_artifacts(
     behavior_by_trail.to_csv(artifacts["behavior_by_trail"], index=False)
     behavior_by_exit.to_csv(artifacts["behavior_by_exit"], index=False)
     artifacts["context"].write_text(json.dumps(context, ensure_ascii=False, indent=2), encoding="utf-8")
-    _build_report(
+    _build_report_v2(
         report_path=artifacts["report"],
         context=context,
         atomic_summary=atomic_summary.head(12),
         best_summary=best_summary,
-        best_monthly=best_monthly,
+        best_monthly=best_monthly_stability,
         best_holdout=best_holdout,
         behavior_by_entry=behavior_by_entry,
         behavior_by_stop=behavior_by_stop,

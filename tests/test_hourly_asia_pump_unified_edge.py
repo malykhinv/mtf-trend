@@ -172,11 +172,17 @@ def test_build_hourly_asia_pump_unified_edge_artifacts(tmp_path: Path, monkeypat
     atomic_summary = pd.read_csv(artifacts["atomic_summary"])
     combo_summary = pd.read_csv(artifacts["combo_summary"])
     best_summary = pd.read_csv(artifacts["best_summary"])
+    best_monthly_stability = pd.read_csv(artifacts["best_monthly_stability"])
     context = json.loads(Path(artifacts["context"]).read_text(encoding="utf-8"))
 
     assert not atomic_summary.empty
     assert not combo_summary.empty
     assert len(best_summary) == 1
+    assert "equity_annualized_return_pct" in best_summary.columns
+    assert "top3_symbol_pnl_share" in best_summary.columns
+    assert "stable_positive_months_count" in best_summary.columns
+    assert "equity_month_pnl_pct" in best_monthly_stability.columns
+    assert "stable_positive_month" in best_monthly_stability.columns
     assert context["search_scope"]["uses_hour_utc_in_optimization"] is False
     assert context["search_scope"]["same_rules_for_all_xx00"] is True
     assert Path(artifacts["report"]).exists()
