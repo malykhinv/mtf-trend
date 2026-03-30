@@ -61,6 +61,15 @@ class ShortNextPressureProfile:
 
 
 @dataclass(frozen=True, slots=True)
+class ShortContextProfile:
+    profile_id: str
+    min_pre_base_range_pct_60m: float | None = None
+    max_pre_base_range_pct_60m: float | None = None
+    min_pre_base_drift_pct_60m: float | None = None
+    max_pre_base_drift_pct_60m: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ShortGeometry:
     geometry_id: str
     entry_style: str
@@ -78,6 +87,7 @@ class ShortExecutionModel:
     signal_profile: ShortSignalProfile
     trigger_pressure_profile: ShortTriggerPressureProfile
     next_pressure_profile: ShortNextPressureProfile
+    context_profile: ShortContextProfile
     geometry: ShortGeometry
     rule_text: str
 
@@ -121,6 +131,8 @@ def _build_signal_profiles() -> tuple[ShortSignalProfile, ...]:
         ShortSignalProfile("sig_weak", 0.050, 6.0, 7.0, 0.15),
         ShortSignalProfile("sig_mid", 0.065, 6.0, 10.0, 0.10),
         ShortSignalProfile("sig_strong", 0.080, 8.0, 15.0, 0.10),
+        ShortSignalProfile("sig_hotvol30", 0.060, 6.0, 30.0, 0.15),
+        ShortSignalProfile("sig_hotvol50", 0.080, 8.0, 50.0, 0.12),
     )
 
 
@@ -142,6 +154,17 @@ def _build_next_pressure_profiles() -> tuple[ShortNextPressureProfile, ...]:
     )
 
 
+def _build_context_profiles() -> tuple[ShortContextProfile, ...]:
+    return (
+        ShortContextProfile("ctx_none"),
+        ShortContextProfile("ctx_warm", min_pre_base_range_pct_60m=0.03, min_pre_base_drift_pct_60m=0.015),
+        ShortContextProfile("ctx_hot_drift", min_pre_base_drift_pct_60m=0.024),
+        ShortContextProfile("ctx_hot_range", min_pre_base_range_pct_60m=0.043),
+        ShortContextProfile("ctx_hot_combo", min_pre_base_range_pct_60m=0.043, min_pre_base_drift_pct_60m=0.024),
+        ShortContextProfile("ctx_very_hot", min_pre_base_range_pct_60m=0.060, min_pre_base_drift_pct_60m=0.040),
+    )
+
+
 def _build_geometries() -> tuple[ShortGeometry, ...]:
     return (
         ShortGeometry("limit_top05_s05_rr15", "limit_zone", 0.05, 3, 0.05, 1.5),
@@ -159,6 +182,7 @@ def _build_rule_text(
     signal_profile: ShortSignalProfile,
     trigger_pressure_profile: ShortTriggerPressureProfile,
     next_pressure_profile: ShortNextPressureProfile,
+    context_profile: ShortContextProfile,
     geometry: ShortGeometry,
 ) -> str:
     parts = [
@@ -177,9 +201,18 @@ def _build_rule_text(
         f"next_close_from_high>={next_pressure_profile.min_next_close_from_high_frac:.2f}",
         f"next_close_pos<={next_pressure_profile.max_next_close_pos_in_bar:.2f}",
         f"next_ret<={next_pressure_profile.max_next_return_pct:.3f}",
+        f"context={context_profile.profile_id}",
         f"rr={geometry.target_rr:.1f}",
         f"stop_buf={geometry.stop_buffer_frac:.2f}",
     ]
+    if context_profile.min_pre_base_range_pct_60m is not None:
+        parts.append(f"pre_range>={context_profile.min_pre_base_range_pct_60m:.3f}")
+    if context_profile.max_pre_base_range_pct_60m is not None:
+        parts.append(f"pre_range<={context_profile.max_pre_base_range_pct_60m:.3f}")
+    if context_profile.min_pre_base_drift_pct_60m is not None:
+        parts.append(f"pre_drift>={context_profile.min_pre_base_drift_pct_60m:.3f}")
+    if context_profile.max_pre_base_drift_pct_60m is not None:
+        parts.append(f"pre_drift<={context_profile.max_pre_base_drift_pct_60m:.3f}")
     if geometry.entry_style == "limit_zone":
         parts.append(f"entry_top={geometry.entry_from_high_frac:.2f}")
         parts.append(f"wait<={geometry.max_entry_bars}bars")
@@ -193,37 +226,42 @@ def _build_execution_models() -> list[ShortExecutionModel]:
     for signal_profile in _build_signal_profiles():
         for trigger_pressure_profile in _build_trigger_pressure_profiles():
             for next_pressure_profile in _build_next_pressure_profiles():
-                for geometry in _build_geometries():
-                    payload = {
-                        "signal": signal_profile.profile_id,
-                        "trigger_pressure": trigger_pressure_profile.profile_id,
-                        "next_pressure": next_pressure_profile.profile_id,
-                        "geometry": geometry.geometry_id,
-                    }
-                    model_hash = hashlib.md5(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:12]
-                    models.append(
-                        ShortExecutionModel(
-                            model_id=f"short_{model_hash}",
-                            label=" | ".join(
-                                (
-                                    signal_profile.profile_id,
-                                    trigger_pressure_profile.profile_id,
-                                    next_pressure_profile.profile_id,
-                                    geometry.geometry_id,
-                                )
-                            ),
-                            signal_profile=signal_profile,
-                            trigger_pressure_profile=trigger_pressure_profile,
-                            next_pressure_profile=next_pressure_profile,
-                            geometry=geometry,
-                            rule_text=_build_rule_text(
+                for context_profile in _build_context_profiles():
+                    for geometry in _build_geometries():
+                        payload = {
+                            "signal": signal_profile.profile_id,
+                            "trigger_pressure": trigger_pressure_profile.profile_id,
+                            "next_pressure": next_pressure_profile.profile_id,
+                            "context": context_profile.profile_id,
+                            "geometry": geometry.geometry_id,
+                        }
+                        model_hash = hashlib.md5(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:12]
+                        models.append(
+                            ShortExecutionModel(
+                                model_id=f"short_{model_hash}",
+                                label=" | ".join(
+                                    (
+                                        signal_profile.profile_id,
+                                        trigger_pressure_profile.profile_id,
+                                        next_pressure_profile.profile_id,
+                                        context_profile.profile_id,
+                                        geometry.geometry_id,
+                                    )
+                                ),
                                 signal_profile=signal_profile,
                                 trigger_pressure_profile=trigger_pressure_profile,
                                 next_pressure_profile=next_pressure_profile,
+                                context_profile=context_profile,
                                 geometry=geometry,
-                            ),
+                                rule_text=_build_rule_text(
+                                    signal_profile=signal_profile,
+                                    trigger_pressure_profile=trigger_pressure_profile,
+                                    next_pressure_profile=next_pressure_profile,
+                                    context_profile=context_profile,
+                                    geometry=geometry,
+                                ),
+                            )
                         )
-                    )
     return models
 
 
@@ -488,6 +526,8 @@ def _build_geometry_events(
                 "range_atr": float(event["range_atr"]),
                 "volume_mult": float(event["volume_mult"]),
                 "close_to_high_frac": float(event["close_to_high_frac"]),
+                "pre_base_range_pct_60m": _safe_float(event.get("pre_base_range_pct_60m")),
+                "pre_base_drift_pct_60m": _safe_float(event.get("pre_base_drift_pct_60m")),
                 "upper_wick_frac": (trigger_high - trigger_close) / trigger_range,
                 "lower_wick_frac": (trigger_open - trigger_low) / trigger_range,
                 "body_frac": (trigger_close - trigger_open) / trigger_range,
@@ -580,6 +620,20 @@ def _model_matches_row(model: ShortExecutionModel, row: pd.Series) -> bool:
         return False
     if float(row.get("next_return_pct", 1.0) or 1.0) > model.next_pressure_profile.max_next_return_pct:
         return False
+    pre_base_range_pct_60m = _safe_float(row.get("pre_base_range_pct_60m"))
+    pre_base_drift_pct_60m = _safe_float(row.get("pre_base_drift_pct_60m"))
+    if model.context_profile.min_pre_base_range_pct_60m is not None:
+        if pre_base_range_pct_60m is None or pre_base_range_pct_60m < model.context_profile.min_pre_base_range_pct_60m:
+            return False
+    if model.context_profile.max_pre_base_range_pct_60m is not None:
+        if pre_base_range_pct_60m is None or pre_base_range_pct_60m > model.context_profile.max_pre_base_range_pct_60m:
+            return False
+    if model.context_profile.min_pre_base_drift_pct_60m is not None:
+        if pre_base_drift_pct_60m is None or pre_base_drift_pct_60m < model.context_profile.min_pre_base_drift_pct_60m:
+            return False
+    if model.context_profile.max_pre_base_drift_pct_60m is not None:
+        if pre_base_drift_pct_60m is None or pre_base_drift_pct_60m > model.context_profile.max_pre_base_drift_pct_60m:
+            return False
     return True
 
 
@@ -667,6 +721,7 @@ def _summarize_atomic_models(
             "signal_profile_id": model.signal_profile.profile_id,
             "trigger_pressure_id": model.trigger_pressure_profile.profile_id,
             "next_pressure_id": model.next_pressure_profile.profile_id,
+            "context_profile_id": model.context_profile.profile_id,
             "geometry_id": model.geometry.geometry_id,
             "entry_style": model.geometry.entry_style,
             "rule_text": model.rule_text,

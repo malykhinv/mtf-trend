@@ -8,6 +8,7 @@ import pandas as pd
 from domain.enums.timeframe import Timeframe
 import strategy.hourly_asia_pump.short_edge as short_edge_module
 from strategy.hourly_asia_pump.short_edge import (
+    ShortContextProfile,
     ShortExecutionModel,
     ShortGeometry,
     ShortNextPressureProfile,
@@ -126,6 +127,7 @@ def test_build_hourly_asia_pump_short_edge_artifacts(tmp_path: Path, monkeypatch
         signal_profile=ShortSignalProfile("sig_weak", 0.05, 6.0, 7.0, 0.15),
         trigger_pressure_profile=ShortTriggerPressureProfile("tp_none", 0.0, 1.0),
         next_pressure_profile=ShortNextPressureProfile("np_soft", 0.15, 0.50, 0.10, 0.65, 0.01),
+        context_profile=ShortContextProfile("ctx_hot_drift", min_pre_base_drift_pct_60m=0.015),
         geometry=ShortGeometry("open3_s10_rr15", "third_open", None, 0, 0.10, 1.5, max_open_entry_from_high_frac=0.40),
         rule_text="test",
     )
@@ -143,6 +145,7 @@ def test_build_hourly_asia_pump_short_edge_artifacts(tmp_path: Path, monkeypatch
     context = json.loads(Path(artifacts["context"]).read_text(encoding="utf-8"))
 
     assert len(best_summary) == 1
+    assert "context_profile_id" in best_summary.columns
     assert not best_monthly.empty
     assert context["search_scope"]["same_rules_for_all_xx00"] is True
     assert Path(artifacts["report"]).exists()

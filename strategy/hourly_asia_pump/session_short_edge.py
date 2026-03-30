@@ -180,9 +180,15 @@ def _build_symbol_anomalies(
     true_range = pd.to_numeric(frame["high"] - frame["low"], errors="coerce")
     atr = true_range.rolling(36, min_periods=12).mean().shift(1)
     volume_baseline = pd.to_numeric(frame["volume"], errors="coerce").rolling(144, min_periods=36).median().shift(1)
+    pre_base_high = pd.to_numeric(frame["high"], errors="coerce").rolling(12, min_periods=6).max().shift(1)
+    pre_base_low = pd.to_numeric(frame["low"], errors="coerce").rolling(12, min_periods=6).min().shift(1)
+    pre_base_open = pd.to_numeric(frame["open"], errors="coerce").shift(12)
+    pre_base_close = pd.to_numeric(frame["close"], errors="coerce").shift(1)
     close_to_high_frac = (pd.to_numeric(frame["high"], errors="coerce") - pd.to_numeric(frame["close"], errors="coerce")) / true_range.where(true_range > 0)
     trigger_return_pct = pd.to_numeric(frame["close"], errors="coerce") / pd.to_numeric(frame["open"], errors="coerce") - 1.0
     trigger_range_pct = true_range / pd.to_numeric(frame["open"], errors="coerce")
+    pre_base_range_pct = pd.to_numeric((pre_base_high - pre_base_low) / pd.to_numeric(frame["open"], errors="coerce"), errors="coerce")
+    pre_base_drift_pct = pd.to_numeric((pre_base_close / pre_base_open - 1.0).abs(), errors="coerce")
 
     event_mask = (
         minutes.isin([int(value) for value in allowed_trigger_minutes])
@@ -212,6 +218,8 @@ def _build_symbol_anomalies(
             "range_atr": pd.to_numeric(true_range / atr, errors="coerce"),
             "volume_mult": pd.to_numeric(frame["volume"], errors="coerce") / volume_baseline,
             "close_to_high_frac": pd.to_numeric(close_to_high_frac.fillna(1.0), errors="coerce"),
+            "pre_base_range_pct_60m": pre_base_range_pct,
+            "pre_base_drift_pct_60m": pre_base_drift_pct,
         }
     )
     events = events[event_mask].copy()
@@ -337,6 +345,7 @@ def _summarize_filter_candidate(
         "signal_profile_id": str(model.signal_profile.profile_id),
         "trigger_pressure_id": str(model.trigger_pressure_profile.profile_id),
         "next_pressure_id": str(model.next_pressure_profile.profile_id),
+        "context_profile_id": str(model.context_profile.profile_id),
         "geometry_id": str(model.geometry.geometry_id),
         "entry_style": str(model.geometry.entry_style),
         "minute_filter_id": minute_filter.filter_id,
@@ -461,6 +470,7 @@ def _write_report(
                 "candidate_rank",
                 "minute_filter_label",
                 "model_label",
+                "context_profile_id",
                 "trades_per_year",
                 "mean_return_pct",
                 "win_rate",
@@ -483,6 +493,7 @@ def _write_report(
             columns=[
                 "minute_filter_id",
                 "model_label",
+                "context_profile_id",
                 "trades_per_year",
                 "mean_return_pct",
                 "win_rate",
@@ -502,6 +513,7 @@ def _write_report(
             columns=[
                 "minute_filter_id",
                 "model_label",
+                "context_profile_id",
                 "trades_per_year",
                 "mean_return_pct",
                 "win_rate",
@@ -524,6 +536,7 @@ def _write_report(
                 "minute_filter_id",
                 "allowed_minutes",
                 "model_label",
+                "context_profile_id",
                 "trades_per_year",
                 "mean_return_pct",
                 "win_rate",

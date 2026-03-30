@@ -20,3 +20,4 @@
 - [C03 - Aggressive Runner 100+ Equity](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/strategy/hourly_asia_pump/edge_candidates/C03_aggressive_runner_100plus.md)
 - [C04 - America Short Quarter Hours](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/strategy/hourly_asia_pump/edge_candidates/C04_america_short_quarter_hours.md)
 - [C05 - Long Asia Status 2026-03-30](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/strategy/hourly_asia_pump/edge_candidates/C05_long_asia_status_2026_03_30.md)
+- [C06 - Session Short Red Flags Status 2026-03-30](/C:/Users/Ascf/PycharmProjects/mtf-trend-2/strategy/hourly_asia_pump/edge_candidates/C06_session_short_redflags_status_2026_03_30.md)
