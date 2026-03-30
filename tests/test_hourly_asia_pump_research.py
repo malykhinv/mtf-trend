@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -369,3 +370,71 @@ def test_next_bar_open_trade_model_trails_under_last_red_after_new_high() -> Non
     assert bool(trade["entry_bar_stop_hit"]) is False
     assert trade["exit_reason"] == "stop"
     assert round(float(trade["exit_return_pct"]), 8) == round(expected_return_pct, 8)
+
+
+def test_confirmed_next_open_can_place_stop_under_confirmation_bar() -> None:
+    model = SimpleNamespace(
+        model_id="confirmed_bar_low_case",
+        label="Confirmed Bar Low",
+        entry_style="confirmed_next_open",
+        trail_style="none",
+        initial_stop_style="confirmed_bar_low",
+        min_trigger_return_pct=0.0,
+        min_range_atr=0.0,
+        min_body_atr=0.0,
+        min_volume_mult=0.0,
+        max_close_to_high_frac=1.0,
+        max_entry_bars=0,
+        max_pullback_frac=0.0,
+        pullback_volume_frac=1.0,
+        flag_bars=0,
+        flag_max_range_frac=0.0,
+        partial_take_pct=0.05,
+        partial_take_r=0.0,
+        partial_fraction=1.0,
+        move_stop_to_be_after_partial=False,
+        trail_activation_pct=0.0,
+        fast_fail_bars=0,
+        fast_fail_min_return_pct=0.0,
+        max_hold_minutes=720,
+        require_next_bar_green=True,
+        max_next_bar_pullback_frac=0.50,
+        min_next_bar_low_frac_of_trigger_range=0.25,
+        max_pre_entry_pullback_frac=None,
+        max_pre_entry_red_volume_frac=None,
+        min_pre_entry_low_frac_of_trigger_range=None,
+    )
+    open_values = pd.Series([100.0, 108.0, 109.2, 110.0], dtype="float64").to_numpy()
+    high_values = pd.Series([108.5, 110.5, 111.0, 111.5], dtype="float64").to_numpy()
+    low_values = pd.Series([99.8, 107.2, 108.8, 109.0], dtype="float64").to_numpy()
+    close_values = pd.Series([108.0, 109.8, 110.4, 111.0], dtype="float64").to_numpy()
+    volume_values = pd.Series([100.0, 80.0, 60.0, 50.0], dtype="float64").to_numpy()
+    timestamp_values = pd.Series(
+        [1_704_067_200_000, 1_704_067_500_000, 1_704_067_800_000, 1_704_068_100_000],
+        dtype="int64",
+    ).to_numpy()
+    event = {
+        "trigger_return_pct": 0.08,
+        "range_atr": 3.0,
+        "body_atr": 2.0,
+        "volume_mult": 4.0,
+        "close_to_high_frac": 0.10,
+    }
+
+    entry = _find_trade_model_entry(
+        model=model,
+        event=event,
+        open_values=open_values,
+        high_values=high_values,
+        low_values=low_values,
+        close_values=close_values,
+        volume_values=volume_values,
+        timestamp_values=timestamp_values,
+        row_index=0,
+    )
+
+    assert bool(entry["trade_triggered"]) is True
+    assert int(entry["entry_idx"]) == 2
+    assert float(entry["entry_price"]) == 109.2
+    assert float(entry["initial_stop_price"]) == 107.2
+    assert entry["initial_stop_reason"] == "confirmed_bar_low"

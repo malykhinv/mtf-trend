@@ -915,6 +915,7 @@ def _build_next_bar_context(
         "next_bar_open_price": None,
         "next_bar_high_price": None,
         "next_bar_low_price": None,
+        "next_bar_body_low_price": None,
         "next_bar_close_price": None,
         "next_bar_return_pct": None,
         "next_bar_pullback_frac": None,
@@ -932,6 +933,7 @@ def _build_next_bar_context(
     next_high = float(high_values[next_idx])
     next_low = float(low_values[next_idx])
     next_close = float(close_values[next_idx])
+    next_body_low = min(next_open, next_close)
     pullback_frac = max(0.0, (trigger_high - next_low) / trigger_range) if trigger_range > 0 else 0.0
     low_frac_of_trigger_range = ((next_low - trigger_low) / trigger_range) if trigger_range > 0 else 0.0
     next_range = max(1e-12, next_high - next_low)
@@ -943,6 +945,7 @@ def _build_next_bar_context(
             "next_bar_open_price": next_open,
             "next_bar_high_price": next_high,
             "next_bar_low_price": next_low,
+            "next_bar_body_low_price": next_body_low,
             "next_bar_close_price": next_close,
             "next_bar_return_pct": ((next_close / next_open) - 1.0) if next_open > 0 else None,
             "next_bar_pullback_frac": pullback_frac,
@@ -996,6 +999,14 @@ def _find_trade_model_entry(
             return trigger_body_upper_quarter
         if model.initial_stop_style == "trigger_close":
             return trigger_close
+        if model.initial_stop_style == "confirmed_bar_low":
+            next_bar_low_price = _safe_numeric(next_bar_context.get("next_bar_low_price"))
+            if next_bar_low_price is not None:
+                return next_bar_low_price
+        if model.initial_stop_style == "confirmed_bar_body_low":
+            next_bar_body_low_price = _safe_numeric(next_bar_context.get("next_bar_body_low_price"))
+            if next_bar_body_low_price is not None:
+                return next_bar_body_low_price
         return default_price
 
     no_entry: dict[str, object] = {

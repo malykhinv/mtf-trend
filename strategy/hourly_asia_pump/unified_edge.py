@@ -330,6 +330,16 @@ def _build_exit_profiles() -> tuple[dict[str, Any], ...]:
         {"exit_profile_id": "tp4_full", "initial_stop_style": "trigger_low", "trail_style": "none", "partial_take_pct": 0.04, "partial_take_r": 0.0, "partial_fraction": 1.0, "move_stop_to_be_after_partial": False, "trail_activation_pct": 0.0, "fast_fail_bars": 0, "fast_fail_min_return_pct": 0.0, "max_hold_minutes": 720, "breakeven_activation_pct": 0.0},
         {"exit_profile_id": "tp5_full", "initial_stop_style": "trigger_low", "trail_style": "none", "partial_take_pct": 0.05, "partial_take_r": 0.0, "partial_fraction": 1.0, "move_stop_to_be_after_partial": False, "trail_activation_pct": 0.0, "fast_fail_bars": 0, "fast_fail_min_return_pct": 0.0, "max_hold_minutes": 720, "breakeven_activation_pct": 0.0},
         {"exit_profile_id": "tp6_full", "initial_stop_style": "trigger_low", "trail_style": "none", "partial_take_pct": 0.06, "partial_take_r": 0.0, "partial_fraction": 1.0, "move_stop_to_be_after_partial": False, "trail_activation_pct": 0.0, "fast_fail_bars": 0, "fast_fail_min_return_pct": 0.0, "max_hold_minutes": 720, "breakeven_activation_pct": 0.0},
+        {"exit_profile_id": "tp5_confirm_low", "initial_stop_style": "confirmed_bar_low", "trail_style": "none", "partial_take_pct": 0.05, "partial_take_r": 0.0, "partial_fraction": 1.0, "move_stop_to_be_after_partial": False, "trail_activation_pct": 0.0, "fast_fail_bars": 0, "fast_fail_min_return_pct": 0.0, "max_hold_minutes": 720, "breakeven_activation_pct": 0.0},
+        {"exit_profile_id": "tp6_confirm_low", "initial_stop_style": "confirmed_bar_low", "trail_style": "none", "partial_take_pct": 0.06, "partial_take_r": 0.0, "partial_fraction": 1.0, "move_stop_to_be_after_partial": False, "trail_activation_pct": 0.0, "fast_fail_bars": 0, "fast_fail_min_return_pct": 0.0, "max_hold_minutes": 720, "breakeven_activation_pct": 0.0},
+        {"exit_profile_id": "partial5_confirm_low_be", "initial_stop_style": "confirmed_bar_low", "trail_style": "last_red_low", "partial_take_pct": 0.05, "partial_take_r": 0.0, "partial_fraction": 0.50, "move_stop_to_be_after_partial": True, "trail_activation_pct": 0.03, "fast_fail_bars": 1, "fast_fail_min_return_pct": 0.005, "max_hold_minutes": 720, "breakeven_activation_pct": 0.0},
+        {"exit_profile_id": "partial6_confirm_low_be", "initial_stop_style": "confirmed_bar_low", "trail_style": "last_red_low", "partial_take_pct": 0.06, "partial_take_r": 0.0, "partial_fraction": 0.50, "move_stop_to_be_after_partial": True, "trail_activation_pct": 0.03, "fast_fail_bars": 1, "fast_fail_min_return_pct": 0.005, "max_hold_minutes": 720, "breakeven_activation_pct": 0.0},
+        {"exit_profile_id": "runner_confirm_low_be3", "initial_stop_style": "confirmed_bar_low", "trail_style": "last_red_low", "partial_take_pct": 0.0, "partial_take_r": 0.0, "partial_fraction": 0.0, "move_stop_to_be_after_partial": False, "trail_activation_pct": 0.03, "fast_fail_bars": 1, "fast_fail_min_return_pct": 0.005, "max_hold_minutes": 360, "breakeven_activation_pct": 0.03},
+        {"exit_profile_id": "tp5_confirm_body", "initial_stop_style": "confirmed_bar_body_low", "trail_style": "none", "partial_take_pct": 0.05, "partial_take_r": 0.0, "partial_fraction": 1.0, "move_stop_to_be_after_partial": False, "trail_activation_pct": 0.0, "fast_fail_bars": 0, "fast_fail_min_return_pct": 0.0, "max_hold_minutes": 720, "breakeven_activation_pct": 0.0},
+        {"exit_profile_id": "tp6_confirm_body", "initial_stop_style": "confirmed_bar_body_low", "trail_style": "none", "partial_take_pct": 0.06, "partial_take_r": 0.0, "partial_fraction": 1.0, "move_stop_to_be_after_partial": False, "trail_activation_pct": 0.0, "fast_fail_bars": 0, "fast_fail_min_return_pct": 0.0, "max_hold_minutes": 720, "breakeven_activation_pct": 0.0},
+        {"exit_profile_id": "partial5_confirm_body_be", "initial_stop_style": "confirmed_bar_body_low", "trail_style": "last_red_low", "partial_take_pct": 0.05, "partial_take_r": 0.0, "partial_fraction": 0.50, "move_stop_to_be_after_partial": True, "trail_activation_pct": 0.03, "fast_fail_bars": 1, "fast_fail_min_return_pct": 0.005, "max_hold_minutes": 720, "breakeven_activation_pct": 0.0},
+        {"exit_profile_id": "partial6_confirm_body_be", "initial_stop_style": "confirmed_bar_body_low", "trail_style": "last_red_low", "partial_take_pct": 0.06, "partial_take_r": 0.0, "partial_fraction": 0.50, "move_stop_to_be_after_partial": True, "trail_activation_pct": 0.03, "fast_fail_bars": 1, "fast_fail_min_return_pct": 0.005, "max_hold_minutes": 720, "breakeven_activation_pct": 0.0},
+        {"exit_profile_id": "runner_confirm_body_be3", "initial_stop_style": "confirmed_bar_body_low", "trail_style": "last_red_low", "partial_take_pct": 0.0, "partial_take_r": 0.0, "partial_fraction": 0.0, "move_stop_to_be_after_partial": False, "trail_activation_pct": 0.03, "fast_fail_bars": 1, "fast_fail_min_return_pct": 0.005, "max_hold_minutes": 360, "breakeven_activation_pct": 0.03},
     )
 
 
@@ -381,10 +391,16 @@ def _build_human_description(model: UnifiedExecutionModel) -> str:
 
 def _build_execution_models() -> list[UnifiedExecutionModel]:
     models: list[UnifiedExecutionModel] = []
+    confirmed_only_stop_styles = {"confirmed_bar_low", "confirmed_bar_body_low"}
     for signal_profile in _build_signal_profiles():
         for entry_profile in _build_entry_profiles():
             for exit_profile in _build_exit_profiles():
                 if entry_profile["entry_style"] == "next_bar_open" and exit_profile["initial_stop_style"] == "pattern_low":
+                    continue
+                if (
+                    exit_profile["initial_stop_style"] in confirmed_only_stop_styles
+                    and entry_profile["entry_style"] != "confirmed_next_open"
+                ):
                     continue
                 model_hash = hashlib.md5(
                     json.dumps({"signal": signal_profile, "entry": entry_profile, "exit": exit_profile}, sort_keys=True).encode("utf-8")

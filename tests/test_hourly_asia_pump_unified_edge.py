@@ -310,5 +310,9 @@ def test_build_execution_models_includes_confirmed_pressure_profiles() -> None:
 
     assert any("confirm_50g_pos50_ext5" in label for label in labels)
     assert any("confirm_25g_strong_pos50_ext5_ret5" in label for label in labels)
+    assert any("tp5_confirm_low" in label for label in labels)
+    assert any("tp5_confirm_body" in label for label in labels)
     assert any("next_close_pos>=" in text for text in rule_texts)
     assert any("next_ext>=" in text for text in rule_texts)
+    assert any("stop=confirmed_bar_low" in text for text in rule_texts)
+    assert any("stop=confirmed_bar_body_low" in text for text in rule_texts)
