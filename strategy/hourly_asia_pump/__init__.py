@@ -16,6 +16,7 @@ from strategy.hourly_asia_pump.production import (
     build_hourly_asia_pump_production_artifacts,
 )
 from strategy.hourly_asia_pump.research import build_hourly_asia_pump_research_artifacts
+from strategy.hourly_asia_pump.session_short_edge import build_hourly_asia_pump_session_short_edge_artifacts
 from strategy.hourly_asia_pump.short_edge import build_hourly_asia_pump_short_edge_artifacts
 from strategy.hourly_asia_pump.static_combo import build_hourly_asia_pump_static_combo_artifacts
 from strategy.hourly_asia_pump.unified_edge import build_hourly_asia_pump_unified_edge_artifacts
@@ -35,6 +36,7 @@ __all__ = [
     "build_hourly_asia_pump_grid",
     "build_hourly_asia_pump_profile",
     "build_hourly_asia_pump_research_artifacts",
+    "build_hourly_asia_pump_session_short_edge_artifacts",
     "build_hourly_asia_pump_short_edge_artifacts",
     "build_hourly_asia_pump_static_combo_artifacts",
     "build_hourly_asia_pump_unified_edge_artifacts",

@@ -77,6 +77,7 @@ from strategy.hourly_asia_pump import (
     HOURLY_ASIA_PUMP_SUPPORTED_TIMEFRAMES,
     build_hourly_asia_pump_production_artifacts,
     build_hourly_asia_pump_research_artifacts,
+    build_hourly_asia_pump_session_short_edge_artifacts,
     build_hourly_asia_pump_short_edge_artifacts,
     build_hourly_asia_pump_static_combo_artifacts,
     build_hourly_asia_pump_unified_edge_artifacts,
@@ -2374,6 +2375,47 @@ def _run_hourly_pump_short_edge_search_inner(config: AppConfig, args: argparse.N
     return 0
 
 
+def _run_hourly_pump_session_short_search_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("run-hourly-pump-session-short-search", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    session_id = str(getattr(args, "session", "") or "").strip().lower()
+    if not session_id:
+        raise ValueError("Не задана session")
+
+    timestamp_label = time.strftime("%Y%m%d_%H%M%S")
+    output_dir = (
+        Path(args.output_dir)
+        if getattr(args, "output_dir", None)
+        else Path(config.backtest.results_dir) / "research" / "hourly_asia_pump_static_combo" / timestamp_label / f"{session_id}_short_session_search"
+    )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "run-hourly-pump-session-short-search: session=%s output_dir=%s cache_dir=%s commission_rate=%.5f",
+        session_id,
+        output_dir,
+        config.backtest.cache_dir,
+        float(config.simulation.commission_rate),
+    )
+    artifacts = build_hourly_asia_pump_session_short_edge_artifacts(
+        session_id=session_id,
+        output_dir=output_dir,
+        cache_dir=config.backtest.cache_dir,
+        commission_rate=float(config.simulation.commission_rate),
+        symbols=getattr(args, "symbols", None),
+        logger=logger,
+    )
+    logger.info(
+        "run-hourly-pump-session-short-search: артефакты отчёт=%s best=%s exact=%s группы=%s динамика=%s месяцы=%s",
+        artifacts["report"],
+        artifacts["best_overall"],
+        artifacts["best_by_exact_minute"],
+        artifacts["best_by_standard_group"],
+        artifacts["best_by_dynamic_combo"],
+        artifacts["best_monthly"],
+    )
+    return 0
+
+
 def _collect_ppa_stage_summary_rows(
     *,
     timeframe: Timeframe,
@@ -2816,6 +2858,15 @@ def run_hourly_pump_short_edge_search(config: AppConfig, args: argparse.Namespac
         "run-hourly-pump-short-edge-search",
         config,
         lambda: _run_hourly_pump_short_edge_search_inner(config, args),
+    )
+
+
+def run_hourly_pump_session_short_search(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs session-based short-edge search from raw cache with minute-of-hour comparison."""
+    return _run_with_logging(
+        "run-hourly-pump-session-short-search",
+        config,
+        lambda: _run_hourly_pump_session_short_search_inner(config, args),
     )
 
 

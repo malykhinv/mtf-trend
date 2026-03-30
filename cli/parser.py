@@ -269,6 +269,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory for short edge-search artifacts",
     )
 
+    hourly_pump_session_short = subparsers.add_parser(
+        "run-hourly-pump-session-short-search",
+        help="Run short-edge search from raw cache for one session with minute-of-hour comparison",
+    )
+    hourly_pump_session_short.add_argument(
+        "--session",
+        required=True,
+        choices=["asia", "europe", "america"],
+        help="Session to analyze",
+    )
+    hourly_pump_session_short.add_argument(
+        "--output-dir",
+        default=None,
+        help="Directory for session short-search artifacts",
+    )
+    hourly_pump_session_short.add_argument(
+        "--symbols",
+        nargs="*",
+        default=None,
+        help="Optional explicit symbol list",
+    )
+
     ppa_stage = subparsers.add_parser(
         "ppa-stage",
         help="Run compact post_pump_absorption stage review across micro timeframes",
@@ -327,6 +349,7 @@ def resolve_handler(command_name: str) -> Handler:
         "run-hourly-pump-unified-analysis": commands.run_hourly_pump_unified_analysis,
         "run-hourly-pump-unified-edge-search": commands.run_hourly_pump_unified_edge_search,
         "run-hourly-pump-short-edge-search": commands.run_hourly_pump_short_edge_search,
+        "run-hourly-pump-session-short-search": commands.run_hourly_pump_session_short_search,
         "ppa-stage": commands.run_ppa_stage,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
