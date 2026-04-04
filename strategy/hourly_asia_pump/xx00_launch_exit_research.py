@@ -25,7 +25,6 @@ class ExitTemplate:
     label: str
     hold_minutes: int
     tp_rr: float | None = None
-    second_tp_rr: float | None = None
     fast_fail_bars: int = 8
     fast_fail_r: float = 0.25
     breakeven_rr: float | None = None
@@ -34,6 +33,10 @@ class ExitTemplate:
     partial_rr: float | None = None
     partial_fraction: float = 0.0
     move_stop_to_be_after_partial: bool = False
+    stop_rr_after_partial: float | None = None
+    second_partial_rr: float | None = None
+    second_partial_fraction: float = 0.0
+    stop_rr_after_second_partial: float | None = None
 
 
 def _exit_templates() -> tuple[ExitTemplate, ...]:
@@ -54,12 +57,58 @@ def _exit_templates() -> tuple[ExitTemplate, ...]:
             template_id="tp2_half_be_tp3_half",
             label="50% at 2R, BE, 50% at 3R",
             hold_minutes=120,
-            second_tp_rr=3.0,
+            tp_rr=3.0,
             fast_fail_bars=0,
             fast_fail_r=0.0,
             partial_rr=2.0,
             partial_fraction=0.50,
             move_stop_to_be_after_partial=True,
+        ),
+        ExitTemplate(
+            template_id="p25_2r_be_p25_3r_be2_f50_4r",
+            label="25% at 2R, BE; 25% at 3R, stop to 2R; 50% at 4R",
+            hold_minutes=120,
+            tp_rr=4.0,
+            partial_rr=2.0,
+            partial_fraction=0.25,
+            stop_rr_after_partial=0.0,
+            second_partial_rr=3.0,
+            second_partial_fraction=0.25,
+            stop_rr_after_second_partial=2.0,
+        ),
+        ExitTemplate(
+            template_id="p25_2r_be_p50_3r_be2_f25_4r",
+            label="25% at 2R, BE; 50% at 3R, stop to 2R; 25% at 4R",
+            hold_minutes=120,
+            tp_rr=4.0,
+            partial_rr=2.0,
+            partial_fraction=0.25,
+            stop_rr_after_partial=0.0,
+            second_partial_rr=3.0,
+            second_partial_fraction=0.50,
+            stop_rr_after_second_partial=2.0,
+        ),
+        ExitTemplate(
+            template_id="p25_2r_p25_3r_be_f50_4r",
+            label="25% at 2R; 25% at 3R, BE; 50% at 4R",
+            hold_minutes=120,
+            tp_rr=4.0,
+            partial_rr=2.0,
+            partial_fraction=0.25,
+            second_partial_rr=3.0,
+            second_partial_fraction=0.25,
+            stop_rr_after_second_partial=0.0,
+        ),
+        ExitTemplate(
+            template_id="p25_2r_p50_3r_be_f25_4r",
+            label="25% at 2R; 50% at 3R, BE; 25% at 4R",
+            hold_minutes=120,
+            tp_rr=4.0,
+            partial_rr=2.0,
+            partial_fraction=0.25,
+            second_partial_rr=3.0,
+            second_partial_fraction=0.50,
+            stop_rr_after_second_partial=0.0,
         ),
         ExitTemplate(
             template_id="hold120_stop_only",
@@ -232,9 +281,12 @@ def _simulate_template(
     trail_active = template.trail_activation_rr is None or template.trail_activation_rr <= 0.0
     last_red_low: float | None = None
     partial_taken = False
+    second_partial_taken = False
     partial_price = (entry_price + (risk * template.partial_rr)) if template.partial_rr is not None else None
     target_price = (entry_price + (risk * template.tp_rr)) if template.tp_rr is not None else None
-    second_target_price = (entry_price + (risk * template.second_tp_rr)) if template.second_tp_rr is not None else None
+    second_partial_price = (
+        entry_price + (risk * template.second_partial_rr) if template.second_partial_rr is not None else None
+    )
 
     for idx in range(entry_idx, last_idx + 1):
         open_price = float(opens[idx])
@@ -262,7 +314,9 @@ def _simulate_template(
             realized_return_pct += template.partial_fraction * _net_long_return(entry_price, partial_price)
             remaining_fraction = max(0.0, remaining_fraction - template.partial_fraction)
             partial_taken = True
-            if template.move_stop_to_be_after_partial:
+            if template.stop_rr_after_partial is not None:
+                current_stop = max(current_stop, entry_price + (risk * template.stop_rr_after_partial))
+            elif template.move_stop_to_be_after_partial:
                 current_stop = max(current_stop, entry_price)
             if remaining_fraction <= 0.0:
                 return {
@@ -283,25 +337,37 @@ def _simulate_template(
                     "max_return_after_entry_pct": float(max(highest_high, high_price) / entry_price - 1.0),
                 }
 
-            if second_target_price is not None and high_price >= second_target_price:
-                realized_return_pct += remaining_fraction * _net_long_return(entry_price, second_target_price)
+        if (
+            second_partial_price is not None
+            and partial_taken
+            and not second_partial_taken
+            and template.second_partial_fraction > 0.0
+            and high_price >= second_partial_price
+        ):
+            realized_partial_fraction = min(template.second_partial_fraction, remaining_fraction)
+            realized_return_pct += realized_partial_fraction * _net_long_return(entry_price, second_partial_price)
+            remaining_fraction = max(0.0, remaining_fraction - realized_partial_fraction)
+            second_partial_taken = True
+            if template.stop_rr_after_second_partial is not None:
+                current_stop = max(current_stop, entry_price + (risk * template.stop_rr_after_second_partial))
+            if remaining_fraction <= 0.0:
                 return {
                     "exit_idx": idx,
-                    "exit_price": float(second_target_price),
-                    "exit_reason": "tp2",
+                    "exit_price": float(second_partial_price),
+                    "exit_reason": "partial2_full",
                     "exit_return_pct": float(realized_return_pct),
                     "max_return_after_entry_pct": float(max(highest_high, high_price) / entry_price - 1.0),
                 }
 
-        if partial_taken and second_target_price is not None and high_price >= second_target_price:
-            realized_return_pct += remaining_fraction * _net_long_return(entry_price, second_target_price)
-            return {
-                "exit_idx": idx,
-                "exit_price": float(second_target_price),
-                "exit_reason": "tp2",
-                "exit_return_pct": float(realized_return_pct),
-                "max_return_after_entry_pct": float(max(highest_high, high_price) / entry_price - 1.0),
-            }
+            if low_price <= current_stop:
+                realized_return_pct += remaining_fraction * _net_long_return(entry_price, current_stop)
+                return {
+                    "exit_idx": idx,
+                    "exit_price": float(current_stop),
+                    "exit_reason": "partial2_stop_same_bar",
+                    "exit_return_pct": float(realized_return_pct),
+                    "max_return_after_entry_pct": float(max(highest_high, high_price) / entry_price - 1.0),
+                }
 
         if target_price is not None and high_price >= target_price:
             realized_return_pct += remaining_fraction * _net_long_return(entry_price, target_price)
