@@ -1,50 +1,52 @@
 # C09 - XX00 Asia 1m Launch Core 2026-04-04
 
-Status: `Core / validated`
+Status: `Core / validated on Asia research`
 
-This note fixes the first reliable early-entry XX:00 long candidate after an explicit optimistic-bias check on 2026-04-04.
+This note fixes the current best-known Asia XX:00 long candidate after the bias check, session-specific research, and exit-layer review.
 
-## Rule
+## Entry Rule
 
 - candidate_id: `C09_xx00_asia_1m_launch_core`
+- session: `asia`
 - rule_id: `long_launch_r010_c65_v04_p0_rr20`
-- primary cohort: `long_union`
-- confirmation cohort: `long_hot_range`
-- entry timing: minute 1 close, i.e. `00:01` after the XX:00 launch minute
+- primary cohort: `asia__long_union`
+- confirmation cohort: `asia__long_hot_range`
+- decision timing: evaluate only after the `HH:00` minute closes
+- execution timing: enter on the open of `HH:01`
 - conditions:
-- minute-0 return >= `+1.0%`
-- minute-0 close position >= `0.65`
-- minute-0 volume ratio >= `4.0x`
-- `prev240` break is not required
+  - minute-0 return >= `+1.0%`
+  - minute-0 close position >= `0.65`
+  - minute-0 volume ratio >= `4.0x`
+  - `prev240` break is not required
 - stop: below minute-0 low
-- target: `2R`
 
-## Why It Passes Bias Check
+## Best-Known Exit
 
-- Rank `1` across all tested Asia families in both tracked cohorts.
-- Walk-forward check kept selecting the same rule in every available anchored test month.
-- Current `long_union`: `85` cases, `23` trades, `82.61%` win rate, `+4.46%` mean trade, `+129.31%` equity return at `5%` risk, `4.84%` max drawdown.
-- Old `long_union`: `1` trade, `+6.21%` mean return.
-- Current `long_hot_range`: `59` cases, `14` trades, `92.86%` win rate, `+5.07%` mean trade, `+98.74%` equity return at `5%` risk, `2.91%` max drawdown.
-- Symbol concentration stayed controlled on current data: top-1 share `25.8%` in `long_union`, `16.0%` in `long_hot_range`; top-3 share stayed below `50%` in both.
-- Current month distribution stayed clean: `9/9` positive active months in both tracked cohorts.
+The original entry scan used the `rr20` family, but dedicated exit research changed the best-known exit:
 
-## Scope And Limits
+- preferred exit: `fixed_rr30`
+- meaning: hold for a full `3R` target
+- why: it beats the staged templates and the simpler `2R` exit on the strongest Asia XX:00 layer
 
-- Validated status applies to Asia only.
-- Europe and America transfer results are promising, but they come from a broader loose XX:00 anomaly universe rather than the same Asia regime-construction layer.
-- Combined portfolio numbers across sessions are exploratory and should not be treated as final production stats yet.
+## Why It Stays The Asia Core
 
-## Cross-Session Transfer Scan
+- The minute-1 launch rule stayed rank `1` in the earlier Asia bias check and kept getting selected in walk-forward checks.
+- The latest session-separated Asia read still keeps it as the best-known early long:
+  - `asia__long_union`, entry-layer stats: `94` cases, `22` trades, `77.3%` win rate, `+4.22%` mean trade
+  - `asia__long_union`, preferred exit `fixed_rr30`: `22` trades, `72.7%` win rate, `+5.28%` mean trade, about `+251.7%` annualized at `3%` risk, `3.05%` max drawdown
+  - `asia__long_hot_range`, preferred exit `fixed_rr30`: `11` trades, `90.9%` win rate, `+7.42%` mean trade, about `+175.1%` annualized at `3%` risk, `0.70%` max drawdown
+- It still matches the actual trading story we want: an already-hot coin prints a strong launch minute at `XX:00`, and we join only after that minute is closed.
 
-- Europe selected the same rule as `best_ready` on `all_loose_xx00`.
-- Europe current: `13079` cases, `1039` trades, `72.09%` win rate, `+2.60%` mean trade, `+12.46x` equity return at `5%` risk, `17.38%` max drawdown.
-- Europe old: `119` trades, `+2.51%` mean trade.
-- America selected the same rule as `best_ready` on `all_loose_xx00`.
-- America current: `9943` cases, `643` trades, `58.94%` win rate, `+1.90%` mean trade, `+14.96x` equity return at `5%` risk, `15.26%` max drawdown.
-- America old: `134` trades, `+0.88%` mean trade.
+## Limits
+
+- This is still not a full live-ready bot rule by itself.
+- The entry and exit simulation are no-lookahead, but the current research universe still starts from a post-hoc `5m` XX:00 event set.
+- A real deployment still needs an online watchlist builder that knows only what was available before `HH:01`.
+- Trade count is still below the portfolio target by itself, around `20-24` trades per year.
 
 ## Practical Use
 
-- Production status: keep this candidate as the current Asia XX:00 core long.
-- Research status: keep Europe and America as exploratory overlays that still need additional untouched holdout checks before being treated as stable edge layers.
+- Keep this as the current Asia XX:00 long core.
+- Use `Fixed 3R` as the default exit until a fully online scan proves otherwise.
+- Do not enter inside the `HH:00` candle.
+- Do not treat Europe or America transfer results as equally validated just because the same entry rule looks good there.
