@@ -2,6 +2,12 @@
 
 Status: `Core + exploratory + red flags`
 
+Update on `2026-04-05`:
+
+- this note is now historical;
+- the fully online watchlist backtest has become the new source of truth;
+- see [C11 - XX00 Online Watchlist Honest Backtest 2026-04-05](./C11_xx00_online_watchlist_honest_backtest_2026_04_05.md).
+
 This note freezes the current best-known state of the XX:00 work after the separate Asia, Europe, and America research passes.
 
 ## Best-Known Session Map

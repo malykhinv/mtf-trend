@@ -31,7 +31,7 @@ class XX00LongLaunchCandidate:
 XX00_ASIA_1M_LAUNCH_CORE = XX00LongLaunchCandidate(
     candidate_id="C09_xx00_asia_1m_launch_core",
     label="XX:00 Asia 1m Launch Core",
-    status="validated_asia_core",
+    status="historical_candidate_invalidated_online",
     cohort_id="long_union",
     rule_id="long_launch_r010_c65_v04_p0_rr20",
     min_m0_return_pct=0.01,
@@ -46,11 +46,11 @@ XX00_ASIA_1M_LAUNCH_CORE = XX00LongLaunchCandidate(
     best_exit_label="Fixed 3R",
     entry_signal_bar="m0_close",
     entry_fill_bar="m1_open",
-    readiness="validated_research_core",
+    readiness="invalidated_by_online_watchlist_backtest",
     notes=(
-        "Best-known Asia XX:00 long. Entry rule passed bias checks, "
-        "and dedicated exit research now favors Fixed 3R over the original 2R. "
-        "Still needs a fully online watchlist builder before live deployment."
+        "Historical best-known Asia XX:00 long from the post-hoc 5m-universe phase. "
+        "The 2026-04-05 fully online watchlist backtest did not confirm it as a live-ready edge. "
+        "Keep only as research history, not as a validated production candidate."
     ),
 )
 
@@ -58,7 +58,7 @@ XX00_ASIA_1M_LAUNCH_CORE = XX00LongLaunchCandidate(
 XX00_EUROPE_1M_LAUNCH_OVERLAY = XX00LongLaunchCandidate(
     candidate_id="C10_xx00_europe_1m_launch_overlay",
     label="XX:00 Europe 1m Launch Overlay",
-    status="exploratory_best_ready",
+    status="exploratory_not_confirmed_online",
     cohort_id="europe__long_union",
     rule_id="long_launch_r010_c65_v04_p0_rr20",
     min_m0_return_pct=0.01,
@@ -75,22 +75,20 @@ XX00_EUROPE_1M_LAUNCH_OVERLAY = XX00LongLaunchCandidate(
     alternate_exit_label="Fixed 2R",
     entry_signal_bar="m0_close",
     entry_fill_bar="m1_open",
-    readiness="exploratory_overlay",
+    readiness="exploratory_only",
     notes=(
-        "Best-known Europe transfer of the Asia XX:00 launch rule. "
-        "Promising on session-separated research, but still exploratory because "
-        "the event universe comes from post-hoc 5m selection and has not passed "
-        "a clean untouched-holdout deployment check."
+        "Europe still has some current-positive online combos, but the fully online "
+        "2026-04-05 backtest did not find an old-selected rule that survived honestly on current. "
+        "Keep as research only."
     ),
 )
 
 
-XX00_VALIDATED_EDGE_CANDIDATES = (
-    XX00_ASIA_1M_LAUNCH_CORE,
-)
+XX00_VALIDATED_EDGE_CANDIDATES = ()
 
 
 XX00_EXPLORATORY_EDGE_CANDIDATES = (
+    XX00_ASIA_1M_LAUNCH_CORE,
     XX00_EUROPE_1M_LAUNCH_OVERLAY,
 )
 

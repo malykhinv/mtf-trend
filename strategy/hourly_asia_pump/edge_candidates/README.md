@@ -13,8 +13,10 @@ Status labels:
 - `Growth` means a return-focused extension that may still be less stable
 - `Aggressive` means higher upside with more fragility
 - `Exploratory` means promising, but not ready to be treated as a stable edge
+- `Red flag` means the cleaner validation pass did not confirm a deployable edge
 
 Latest XX:00 source of truth:
+- [C11 - XX00 Online Watchlist Honest Backtest 2026-04-05](./C11_xx00_online_watchlist_honest_backtest_2026_04_05.md)
 - [C09 - XX00 Asia 1m Launch Core 2026-04-04](./C09_xx00_asia_1m_launch_core_2026_04_04.md)
 - [C10 - XX00 Session Best Known State 2026-04-04](./C10_xx00_session_best_known_state_2026_04_04.md)
 

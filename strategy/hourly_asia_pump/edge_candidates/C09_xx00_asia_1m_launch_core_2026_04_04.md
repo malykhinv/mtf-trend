@@ -1,6 +1,13 @@
 # C09 - XX00 Asia 1m Launch Core 2026-04-04
 
-Status: `Core / validated on Asia research`
+Status: `Historical candidate / invalidated by honest online backtest`
+
+Update on `2026-04-05`:
+
+- the fully online watchlist backtest removed the post-hoc `5m` universe;
+- under that cleaner setup, this candidate did **not** survive as a validated Asia edge;
+- keep this note as historical research context only;
+- current source of truth is [C11 - XX00 Online Watchlist Honest Backtest 2026-04-05](./C11_xx00_online_watchlist_honest_backtest_2026_04_05.md).
 
 This note fixes the current best-known Asia XX:00 long candidate after the bias check, session-specific research, and exit-layer review.
 
