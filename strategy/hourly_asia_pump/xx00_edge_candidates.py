@@ -46,10 +46,11 @@ XX00_ASIA_1M_LAUNCH_CORE = XX00LongLaunchCandidate(
     best_exit_label="Fixed 3R",
     entry_signal_bar="m0_close",
     entry_fill_bar="m1_open",
-    readiness="invalidated_by_online_watchlist_backtest",
+    readiness="invalidated_by_online_watchlist_and_ranking_backtests",
     notes=(
         "Historical best-known Asia XX:00 long from the post-hoc 5m-universe phase. "
-        "The 2026-04-05 fully online watchlist backtest did not confirm it as a live-ready edge. "
+        "The 2026-04-05 fully online watchlist and ranked-selection backtests did not confirm it "
+        "as a live-ready edge. "
         "Keep only as research history, not as a validated production candidate."
     ),
 )
@@ -78,7 +79,8 @@ XX00_EUROPE_1M_LAUNCH_OVERLAY = XX00LongLaunchCandidate(
     readiness="exploratory_only",
     notes=(
         "Europe still has some current-positive online combos, but the fully online "
-        "2026-04-05 backtest did not find an old-selected rule that survived honestly on current. "
+        "2026-04-05 watchlist and ranked-selection backtests did not find an old-selected rule "
+        "that survived honestly on current. "
         "Keep as research only."
     ),
 )
