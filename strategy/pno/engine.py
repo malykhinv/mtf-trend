@@ -39,6 +39,7 @@ class OneMinuteFrame:
     closes: np.ndarray
     volumes: np.ndarray
     quote_volume: np.ndarray
+    cumulative_quote_volume: np.ndarray
     tr: np.ndarray
     v1: np.ndarray
     red: np.ndarray
@@ -95,6 +96,13 @@ class FiveMinuteFrame:
     activity_prev24_quote: np.ndarray
     activity_last6_trade: np.ndarray
     activity_prev24_trade: np.ndarray
+    cumulative_quote_volume: np.ndarray
+    pre_high_24h: np.ndarray
+    pre_high_1h: np.ndarray
+    ema_cross_count_1h: np.ndarray
+    atr_pre_14: np.ndarray
+    pre_quote_median_24: np.ndarray
+    pre_trade_median_24: np.ndarray
 
 
 @dataclass(slots=True)
@@ -112,6 +120,16 @@ class Stage1Context:
     leg_start: float
     leg_size: float
     hold_floor: float
+    cumulative_quote_volume: float = 0.0
+    pre_pump_ema_crosses_1h: int = 0
+    pre_pump_barcode_fraction_1h: float = 0.0
+    pre_pump_high_24h: float = 0.0
+    pre_pump_high_1h: float = 0.0
+    pump_pre_atr: float = 0.0
+    pump_impulse_atr_pre: float = 0.0
+    pump_peak_bar_tr_atr_pre: float = 0.0
+    pump_volume_ratio_start: float = 0.0
+    pump_volume_ratio_continue: float = 0.0
 
 
 @dataclass(slots=True)
@@ -185,6 +203,9 @@ class Stage4Context:
     hard_block: bool
     is_valid_setup: bool
     hard_block_reason: str | None
+    entry_pos: float = 0.0
+    level_maturity_fraction: float = 0.0
+    level_age_bars: int = 0
 
 
 @dataclass(slots=True)
@@ -309,6 +330,7 @@ class PnoEngine:
         work["tr"] = tr
         work["v1"] = tr.rolling(window=30, min_periods=30).median()
         work["quote_volume"] = work["close"] * work["volume"]
+        work["cumulative_quote_volume"] = work["quote_volume"].cumsum()
         work["red"] = work["close"] < work["open"]
         highs = work["high"].astype("float64").to_numpy()
         lows = work["low"].astype("float64").to_numpy()
@@ -332,6 +354,7 @@ class PnoEngine:
             closes=work["close"].astype("float64").to_numpy(),
             volumes=work["volume"].astype("float64").to_numpy(),
             quote_volume=work["quote_volume"].astype("float64").to_numpy(),
+            cumulative_quote_volume=work["cumulative_quote_volume"].astype("float64").to_numpy(),
             tr=work["tr"].astype("float64").to_numpy(),
             v1=v1,
             red=work["red"].astype("bool").to_numpy(),
@@ -361,6 +384,13 @@ class PnoEngine:
         work["ema50"] = work["close"].ewm(span=50, adjust=False).mean()
         work["ema100"] = work["close"].ewm(span=100, adjust=False).mean()
         work["ema200"] = work["close"].ewm(span=200, adjust=False).mean()
+        ema_sign = work["ema9"] > work["ema20"]
+        ema_cross = (
+            ema_sign.ne(ema_sign.shift(1))
+            & work["ema9"].shift(1).notna()
+            & work["ema20"].shift(1).notna()
+        )
+        work["ema_cross_count_1h"] = ema_cross.shift(1).rolling(window=12, min_periods=12).sum()
         work["r3_quote"] = work["quote_volume"].rolling(window=3, min_periods=3).median()
         work["b24_quote"] = work["quote_volume"].shift(3).rolling(window=24, min_periods=24).median()
         work["l96_quote"] = work["quote_volume"].shift(27).rolling(window=96, min_periods=96).median()
@@ -374,6 +404,12 @@ class PnoEngine:
         work["activity_prev24_quote"] = work["quote_volume"].shift(6).rolling(window=24, min_periods=24).median()
         work["activity_last6_trade"] = work["trade_activity"].rolling(window=6, min_periods=6).median()
         work["activity_prev24_trade"] = work["trade_activity"].shift(6).rolling(window=24, min_periods=24).median()
+        work["cumulative_quote_volume"] = work["quote_volume"].cumsum()
+        work["pre_high_24h"] = work["high"].shift(1).rolling(window=288, min_periods=288).max()
+        work["pre_high_1h"] = work["high"].shift(1).rolling(window=12, min_periods=12).max()
+        work["atr_pre_14"] = work["tr"].shift(1).rolling(window=14, min_periods=14).mean()
+        work["pre_quote_median_24"] = work["quote_volume"].shift(1).rolling(window=24, min_periods=24).median()
+        work["pre_trade_median_24"] = work["trade_activity"].shift(1).rolling(window=24, min_periods=24).median()
         work["close_above_ema20_count12"] = (work["close"] > work["ema20"]).rolling(window=12, min_periods=12).sum()
         work["r3_close_above_ema20_all"] = (work["close"] > work["ema20"]).rolling(window=3, min_periods=3).sum() == 3
         work["r3_close_above_ema9_count"] = (work["close"] > work["ema9"]).rolling(window=3, min_periods=3).sum()
@@ -491,6 +527,13 @@ class PnoEngine:
             activity_prev24_quote=work["activity_prev24_quote"].astype("float64").to_numpy(),
             activity_last6_trade=work["activity_last6_trade"].astype("float64").to_numpy(),
             activity_prev24_trade=work["activity_prev24_trade"].astype("float64").to_numpy(),
+            cumulative_quote_volume=work["cumulative_quote_volume"].astype("float64").to_numpy(),
+            pre_high_24h=work["pre_high_24h"].astype("float64").to_numpy(),
+            pre_high_1h=work["pre_high_1h"].astype("float64").to_numpy(),
+            ema_cross_count_1h=work["ema_cross_count_1h"].fillna(0.0).astype("float64").to_numpy(),
+            atr_pre_14=work["atr_pre_14"].astype("float64").to_numpy(),
+            pre_quote_median_24=work["pre_quote_median_24"].astype("float64").to_numpy(),
+            pre_trade_median_24=work["pre_trade_median_24"].astype("float64").to_numpy(),
         )
 
     def _run(
@@ -628,6 +671,13 @@ class PnoEngine:
                         "leg_start": round(stage1.leg_start, 8),
                         "leg_size": round(stage1.leg_size, 8),
                         "hold_floor": round(stage1.hold_floor, 8),
+                        "cumulative_quote_volume": round(stage1.cumulative_quote_volume, 2),
+                        "pre_pump_ema_crosses_1h": int(stage1.pre_pump_ema_crosses_1h),
+                        "pre_pump_barcode_fraction_1h": round(stage1.pre_pump_barcode_fraction_1h, 4),
+                        "pump_impulse_atr_pre": round(stage1.pump_impulse_atr_pre, 4),
+                        "pump_peak_bar_tr_atr_pre": round(stage1.pump_peak_bar_tr_atr_pre, 4),
+                        "pump_volume_ratio_start": round(stage1.pump_volume_ratio_start, 4),
+                        "pump_volume_ratio_continue": round(stage1.pump_volume_ratio_continue, 4),
                     },
                 )
             else:
@@ -764,6 +814,8 @@ class PnoEngine:
                     "touches": stage4.touches,
                     "score": round(stage4.final_score, 4),
                     "pno_index": stage4.pno_index,
+                    "level_maturity_fraction": round(stage4.level_maturity_fraction, 4),
+                    "entry_pos": round(stage4.entry_pos, 4),
                 },
             )
             if stage4.is_valid_setup and i + 1 < len(one.timestamps):
@@ -771,6 +823,129 @@ class PnoEngine:
 
             i += 1
         return trades
+
+    @staticmethod
+    def _range_sum(cumulative: np.ndarray, start_idx: int, end_idx: int) -> float:
+        if start_idx > end_idx or start_idx < 0 or end_idx >= cumulative.shape[0]:
+            return 0.0
+        start_value = float(cumulative[start_idx - 1]) if start_idx > 0 else 0.0
+        return float(cumulative[end_idx]) - start_value
+
+    @staticmethod
+    def _resolve_level_maturity_fraction(*, active_high_idx: int, cluster_first_idx: int, current_idx: int) -> float:
+        total_age = max(current_idx - active_high_idx, 0)
+        if total_age <= 0:
+            return 0.0
+        level_age = max(current_idx - cluster_first_idx, 0)
+        return max(min(level_age / total_age, 1.0), 0.0)
+
+    @staticmethod
+    def _resolve_entry_pullback_fraction(*, pullback_low: float, active_high: float, entry_price: float) -> float:
+        span = active_high - pullback_low
+        if span <= 0.0:
+            return 1.0
+        return max(min((entry_price - pullback_low) / span, 1.0), 0.0)
+
+    def _resolve_stage1_quality_metrics(
+        self,
+        *,
+        one: OneMinuteFrame,
+        five: FiveMinuteFrame,
+        idx: int,
+        five_idx: int,
+        pump_start_5m_idx: int,
+        start_idx: int,
+        active_high_idx: int,
+        active_high: float,
+        leg_start: float,
+        leg_size: float,
+        params: PnoParams,
+    ) -> dict[str, float | int] | None:
+        if pump_start_5m_idx <= 0 or pump_start_5m_idx >= len(five.timestamps):
+            return None
+        active_high_timestamp = int(one.timestamps[active_high_idx])
+        active_high_5m_idx = int(np.searchsorted(five.timestamps, active_high_timestamp, side="right") - 1)
+        if active_high_5m_idx < pump_start_5m_idx:
+            return None
+
+        pump_pre_atr = float(five.atr_pre_14[pump_start_5m_idx])
+        baseline_quote = float(five.pre_quote_median_24[pump_start_5m_idx])
+        if not np.isfinite(pump_pre_atr) or pump_pre_atr <= 0.0:
+            return None
+        if not np.isfinite(baseline_quote) or baseline_quote <= 0.0:
+            return None
+
+        pump_highs = five.highs[pump_start_5m_idx : active_high_5m_idx + 1]
+        pump_tr = five.tr[pump_start_5m_idx : active_high_5m_idx + 1]
+        if pump_highs.size == 0 or pump_tr.size == 0:
+            return None
+
+        low_before_pump = float(five.lows[pump_start_5m_idx - 1])
+        pump_impulse = float(np.max(pump_highs)) - low_before_pump
+        pump_impulse_atr_pre = self._safe_divide(pump_impulse, pump_pre_atr)
+        pump_peak_bar_tr_atr_pre = self._safe_divide(float(np.max(pump_tr)), pump_pre_atr)
+        if pump_impulse_atr_pre < float(params.stage1_min_impulse_atr_pre):
+            return None
+        if pump_peak_bar_tr_atr_pre < float(params.stage1_min_peak_bar_tr_atr_pre):
+            return None
+
+        start_window_end = min(five_idx, pump_start_5m_idx + 5)
+        pump_start_quote = float(np.mean(five.quote_volume[pump_start_5m_idx : start_window_end + 1]))
+        pump_continue_quote = float(np.mean(five.quote_volume[pump_start_5m_idx : five_idx + 1]))
+        pump_volume_ratio_start = self._safe_divide(pump_start_quote, baseline_quote)
+        pump_volume_ratio_continue = self._safe_divide(pump_continue_quote, baseline_quote)
+        if pump_volume_ratio_start < float(params.stage1_min_volume_ratio_start):
+            return None
+        if pump_volume_ratio_continue < float(params.stage1_min_volume_ratio_continue):
+            return None
+
+        cumulative_quote_volume = self._range_sum(one.cumulative_quote_volume, start_idx, idx)
+        if cumulative_quote_volume < float(params.stage1_min_cumulative_quote_volume):
+            return None
+
+        pre_pump_ema_crosses_1h = int(round(float(five.ema_cross_count_1h[pump_start_5m_idx])))
+        if pre_pump_ema_crosses_1h < int(params.stage1_pre_pump_ema_crosses_min):
+            return None
+
+        pre_start_idx = max(0, pump_start_5m_idx - 12)
+        pre_tr = five.tr[pre_start_idx:pump_start_5m_idx]
+        pre_closes = five.closes[pre_start_idx:pump_start_5m_idx]
+        if pre_tr.size == 0 or pre_closes.size == 0:
+            return None
+        median_pre_close = float(np.median(pre_closes))
+        barcode_threshold = max(
+            float(params.stage1_barcode_tr_atr_fraction) * pump_pre_atr,
+            float(params.stage1_barcode_tr_price_fraction) * median_pre_close,
+        )
+        pre_pump_barcode_fraction_1h = float(np.mean(pre_tr <= barcode_threshold))
+        if pre_pump_barcode_fraction_1h > float(params.stage1_barcode_max_fraction_1h):
+            return None
+
+        pre_pump_high_24h = float(five.pre_high_24h[pump_start_5m_idx])
+        if not np.isfinite(pre_pump_high_24h):
+            return None
+        if pre_pump_high_24h > (active_high + self._EPSILON):
+            return None
+
+        pre_pump_high_1h = float(five.pre_high_1h[pump_start_5m_idx])
+        if not np.isfinite(pre_pump_high_1h):
+            return None
+        half_leg_level = leg_start + (float(params.stage1_pre_pump_high_max_fraction_of_leg) * leg_size)
+        if pre_pump_high_1h > (half_leg_level + self._EPSILON):
+            return None
+
+        return {
+            "cumulative_quote_volume": cumulative_quote_volume,
+            "pre_pump_ema_crosses_1h": pre_pump_ema_crosses_1h,
+            "pre_pump_barcode_fraction_1h": pre_pump_barcode_fraction_1h,
+            "pre_pump_high_24h": pre_pump_high_24h,
+            "pre_pump_high_1h": pre_pump_high_1h,
+            "pump_pre_atr": pump_pre_atr,
+            "pump_impulse_atr_pre": pump_impulse_atr_pre,
+            "pump_peak_bar_tr_atr_pre": pump_peak_bar_tr_atr_pre,
+            "pump_volume_ratio_start": pump_volume_ratio_start,
+            "pump_volume_ratio_continue": pump_volume_ratio_continue,
+        }
 
     def _resolve_stage1_context(
         self,
@@ -813,6 +988,21 @@ class PnoEngine:
             return None
         if float(one.lows[idx]) <= leg_start:
             return None
+        quality_metrics = self._resolve_stage1_quality_metrics(
+            one=one,
+            five=five,
+            idx=idx,
+            five_idx=five_idx,
+            pump_start_5m_idx=pump_start_5m_idx,
+            start_idx=start_idx,
+            active_high_idx=active_high_idx,
+            active_high=active_high,
+            leg_start=leg_start,
+            leg_size=leg_size,
+            params=params,
+        )
+        if quality_metrics is None:
+            return None
         return Stage1Context(
             start_idx=start_idx,
             start_timestamp=int(one.timestamps[start_idx]),
@@ -827,6 +1017,16 @@ class PnoEngine:
             leg_start=leg_start,
             leg_size=leg_size,
             hold_floor=hold_floor,
+            cumulative_quote_volume=float(quality_metrics["cumulative_quote_volume"]),
+            pre_pump_ema_crosses_1h=int(quality_metrics["pre_pump_ema_crosses_1h"]),
+            pre_pump_barcode_fraction_1h=float(quality_metrics["pre_pump_barcode_fraction_1h"]),
+            pre_pump_high_24h=float(quality_metrics["pre_pump_high_24h"]),
+            pre_pump_high_1h=float(quality_metrics["pre_pump_high_1h"]),
+            pump_pre_atr=float(quality_metrics["pump_pre_atr"]),
+            pump_impulse_atr_pre=float(quality_metrics["pump_impulse_atr_pre"]),
+            pump_peak_bar_tr_atr_pre=float(quality_metrics["pump_peak_bar_tr_atr_pre"]),
+            pump_volume_ratio_start=float(quality_metrics["pump_volume_ratio_start"]),
+            pump_volume_ratio_continue=float(quality_metrics["pump_volume_ratio_continue"]),
         )
 
     def _resolve_stage2_context(
@@ -986,6 +1186,14 @@ class PnoEngine:
                 level_low_minor_break = True
                 penalty_level_low_break = 6
 
+            level_maturity_fraction = self._resolve_level_maturity_fraction(
+                active_high_idx=stage3.active_high_idx,
+                cluster_first_idx=previous.cluster_first_idx,
+                current_idx=idx,
+            )
+            if level_maturity_fraction < float(params.level_min_maturity_fraction):
+                return None
+
             return Stage4Context(
                 active_high_idx=stage3.active_high_idx,
                 active_high_timestamp=stage3.active_high_timestamp,
@@ -1031,6 +1239,9 @@ class PnoEngine:
                 hard_block=hard_block,
                 is_valid_setup=False,
                 hard_block_reason=hard_block_reason,
+                entry_pos=0.0,
+                level_maturity_fraction=level_maturity_fraction,
+                level_age_bars=max(idx - previous.cluster_first_idx, 0),
             )
 
         cluster = self._resolve_level_cluster(
@@ -1059,6 +1270,14 @@ class PnoEngine:
             return None
         latest_touch_idx = int(max(touch_indices))
         if (idx - latest_touch_idx) > params.level_latest_high_max_age_bars:
+            return None
+
+        level_maturity_fraction = self._resolve_level_maturity_fraction(
+            active_high_idx=stage3.active_high_idx,
+            cluster_first_idx=int(cluster_indices[0]),
+            current_idx=idx,
+        )
+        if level_maturity_fraction < float(params.level_min_maturity_fraction):
             return None
 
         hard_block = len(touch_indices) > int(params.max_level_touches)
@@ -1105,6 +1324,9 @@ class PnoEngine:
             hard_block=hard_block,
             is_valid_setup=False,
             hard_block_reason=hard_block_reason,
+            entry_pos=0.0,
+            level_maturity_fraction=level_maturity_fraction,
+            level_age_bars=max(idx - int(cluster_indices[0]), 0),
         )
 
     def _rebuild_stage4_scores(
@@ -1123,6 +1345,11 @@ class PnoEngine:
         v5_now = max(float(five.v5[five_idx]), self._EPSILON)
         slip_plan = max(float(stage4.level) * float(params.min_tick_fraction), float(params.slip_plan_v1_fraction) * v1_now)
         entry_plan = float(stage4.level) + slip_plan
+        entry_pos = self._resolve_entry_pullback_fraction(
+            pullback_low=float(stage3.pullback_low),
+            active_high=float(stage3.active_high),
+            entry_price=entry_plan,
+        )
         low_last_red_plan = self._resolve_low_last_red_plan(one=one, stage1=stage1, stage3=stage3, idx=idx)
         sl_plan = min(low_last_red_plan, stage3.pullback_low)
         tp1 = float(stage3.active_high)
@@ -1196,9 +1423,9 @@ class PnoEngine:
         else:
             zigzag_score = 0
         base_bonus = self._resolve_base_bonus(one=one, idx=idx, stage1=stage1, stage3=stage3)
-        if stage4.level_pos <= 0.50:
+        if entry_pos <= 0.50:
             level_pos_score = 7
-        elif stage4.level_pos <= 0.60:
+        elif entry_pos <= 0.60:
             level_pos_score = 4
         else:
             level_pos_score = 0
@@ -1268,6 +1495,12 @@ class PnoEngine:
         elif stage3.pullback_depth > (float(params.pullback_invalid_max_v5) * v5_now):
             hard_block = True
             hard_block_reason = "pullback_too_deep_vs_v5"
+        elif entry_pos > float(params.max_entry_pullback_fraction):
+            hard_block = True
+            hard_block_reason = "entry_above_pullback_half"
+        elif stage4.level_maturity_fraction < float(params.level_min_maturity_fraction):
+            hard_block = True
+            hard_block_reason = "level_not_mature_enough"
         elif dstop_plan <= self._EPSILON:
             hard_block = True
             hard_block_reason = "non_positive_stop_distance"
@@ -1299,6 +1532,7 @@ class PnoEngine:
             hard_block=hard_block,
             is_valid_setup=is_valid_setup,
             hard_block_reason=hard_block_reason,
+            entry_pos=entry_pos,
         )
 
     def _resolve_leg_start(
@@ -1607,12 +1841,25 @@ class PnoEngine:
             "active_high": round(float(armed.stage1.active_high), 8),
             "leg_start": round(float(armed.stage1.leg_start), 8),
             "leg_size": round(float(armed.stage1.leg_size), 8),
+            "pump_cumulative_quote_volume": round(float(armed.stage1.cumulative_quote_volume), 2),
+            "pre_pump_ema_crosses_1h": int(armed.stage1.pre_pump_ema_crosses_1h),
+            "pre_pump_barcode_fraction_1h": round(float(armed.stage1.pre_pump_barcode_fraction_1h), 4),
+            "pre_pump_high_24h": round(float(armed.stage1.pre_pump_high_24h), 8),
+            "pre_pump_high_1h": round(float(armed.stage1.pre_pump_high_1h), 8),
+            "pump_pre_atr": round(float(armed.stage1.pump_pre_atr), 8),
+            "pump_impulse_atr_pre": round(float(armed.stage1.pump_impulse_atr_pre), 4),
+            "pump_peak_bar_tr_atr_pre": round(float(armed.stage1.pump_peak_bar_tr_atr_pre), 4),
+            "pump_volume_ratio_start": round(float(armed.stage1.pump_volume_ratio_start), 4),
+            "pump_volume_ratio_continue": round(float(armed.stage1.pump_volume_ratio_continue), 4),
             "pullback_low": round(float(armed.stage3.pullback_low), 8),
             "pullback_depth": round(float(armed.stage3.pullback_depth), 8),
             "level": round(float(armed.stage4.level), 8),
             "level_first_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_first_idx]),
             "level_last_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_last_idx]),
             "level_valid_timestamp_ms": int(armed.stage4.level_valid_timestamp),
+            "level_maturity_fraction": round(float(armed.stage4.level_maturity_fraction), 4),
+            "level_age_bars": int(armed.stage4.level_age_bars),
+            "entry_pos": round(float(armed.stage4.entry_pos), 4),
             "touches": int(armed.stage4.touches),
             "pno_index": int(armed.stage4.pno_index),
             "entry_plan": round(float(armed.stage4.entry_plan), 8),

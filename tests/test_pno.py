@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from cli import commands
 from cli.parser import build_parser, resolve_handler
@@ -75,6 +76,11 @@ def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:
         pno_r_trade=60.0,
         fee_rate=0.0007,
         min_stage1_leg_v1=1.25,
+        stage1_min_cumulative_quote_volume=750_000.0,
+        stage1_pre_pump_ema_crosses_min=3,
+        stage1_min_impulse_atr_pre=3.0,
+        level_min_maturity_fraction=0.35,
+        max_entry_pullback_fraction=0.45,
         pullback_valid_max_v5=4.0,
         min_score=72.0,
         strong_score=84.0,
@@ -94,6 +100,11 @@ def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:
     assert rebuilt.pno_r_trade == original.pno_r_trade
     assert rebuilt.fee_rate == original.fee_rate
     assert rebuilt.min_stage1_leg_v1 == original.min_stage1_leg_v1
+    assert rebuilt.stage1_min_cumulative_quote_volume == original.stage1_min_cumulative_quote_volume
+    assert rebuilt.stage1_pre_pump_ema_crosses_min == original.stage1_pre_pump_ema_crosses_min
+    assert rebuilt.stage1_min_impulse_atr_pre == original.stage1_min_impulse_atr_pre
+    assert rebuilt.level_min_maturity_fraction == original.level_min_maturity_fraction
+    assert rebuilt.max_entry_pullback_fraction == original.max_entry_pullback_fraction
     assert rebuilt.pullback_valid_max_v5 == original.pullback_valid_max_v5
     assert rebuilt.min_score == original.min_score
     assert rebuilt.strong_score == original.strong_score
@@ -465,3 +476,17 @@ def test_pno_incomplete_trade_is_not_emitted() -> None:
 
     assert trade is None
     assert exit_idx == 1
+
+
+def test_pno_level_maturity_fraction_is_based_on_time_since_main_high() -> None:
+    engine = PnoEngine()
+
+    assert engine._resolve_level_maturity_fraction(active_high_idx=10, cluster_first_idx=16, current_idx=17) == pytest.approx(1 / 7)
+    assert engine._resolve_level_maturity_fraction(active_high_idx=10, cluster_first_idx=12, current_idx=18) == pytest.approx(0.75)
+
+
+def test_pno_entry_pullback_fraction_measures_real_entry_position() -> None:
+    engine = PnoEngine()
+
+    assert engine._resolve_entry_pullback_fraction(pullback_low=8.0, active_high=10.0, entry_price=8.9) == pytest.approx(0.45)
+    assert engine._resolve_entry_pullback_fraction(pullback_low=8.0, active_high=10.0, entry_price=9.4) == pytest.approx(0.7)

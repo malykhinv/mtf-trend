@@ -34,17 +34,29 @@ class PnoParams:
     pullback_valid_max_v5: float = 4.5
     pullback_invalid_max_v5: float = 6.0
     pullback_max_age_bars: int = 12
+    stage1_min_cumulative_quote_volume: float = 500_000.0
+    stage1_pre_pump_ema_crosses_min: int = 2
+    stage1_barcode_max_fraction_1h: float = 0.60
+    stage1_barcode_tr_atr_fraction: float = 0.25
+    stage1_barcode_tr_price_fraction: float = 0.0010
+    stage1_min_impulse_atr_pre: float = 2.5
+    stage1_min_peak_bar_tr_atr_pre: float = 1.5
+    stage1_min_volume_ratio_start: float = 2.0
+    stage1_min_volume_ratio_continue: float = 1.25
+    stage1_pre_pump_high_max_fraction_of_leg: float = 0.50
     level_cluster_spread_v1: float = 0.35
     level_cluster_relaxed_spread_v1: float = 0.50
     level_latest_high_max_age_bars: int = 6
     level_touch_tolerance_v1: float = 0.35
     level_low_minor_break_v1: float = 0.35
     level_low_major_break_v1: float = 0.75
+    level_min_maturity_fraction: float = 0.25
     max_level_touches: int = 4
     min_score: float = 70.0
     strong_score: float = 80.0
     slip_plan_v1_fraction: float = 0.10
     min_tick_fraction: float = 0.0001
+    max_entry_pullback_fraction: float = 0.50
 
 
 def validate_pno_params(params: PnoParams) -> None:
@@ -82,12 +94,34 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("pullback_invalid_max_v5 must be > pullback_valid_max_v5 > 0")
     if params.pullback_max_age_bars < 2:
         raise ValueError("pullback_max_age_bars must be >= 2")
+    if params.stage1_min_cumulative_quote_volume <= 0.0:
+        raise ValueError("stage1_min_cumulative_quote_volume must be > 0")
+    if params.stage1_pre_pump_ema_crosses_min < 1:
+        raise ValueError("stage1_pre_pump_ema_crosses_min must be >= 1")
+    if not 0.0 <= params.stage1_barcode_max_fraction_1h <= 1.0:
+        raise ValueError("stage1_barcode_max_fraction_1h must be in range [0, 1]")
+    if params.stage1_barcode_tr_atr_fraction <= 0.0:
+        raise ValueError("stage1_barcode_tr_atr_fraction must be > 0")
+    if params.stage1_barcode_tr_price_fraction <= 0.0:
+        raise ValueError("stage1_barcode_tr_price_fraction must be > 0")
+    if params.stage1_min_impulse_atr_pre <= 0.0:
+        raise ValueError("stage1_min_impulse_atr_pre must be > 0")
+    if params.stage1_min_peak_bar_tr_atr_pre <= 0.0:
+        raise ValueError("stage1_min_peak_bar_tr_atr_pre must be > 0")
+    if params.stage1_min_volume_ratio_start <= 0.0:
+        raise ValueError("stage1_min_volume_ratio_start must be > 0")
+    if params.stage1_min_volume_ratio_continue <= 0.0:
+        raise ValueError("stage1_min_volume_ratio_continue must be > 0")
+    if not 0.0 < params.stage1_pre_pump_high_max_fraction_of_leg < 1.0:
+        raise ValueError("stage1_pre_pump_high_max_fraction_of_leg must be in range (0, 1)")
     if params.level_cluster_spread_v1 <= 0.0 or params.level_cluster_relaxed_spread_v1 < params.level_cluster_spread_v1:
         raise ValueError("level cluster spread bounds are invalid")
     if params.level_latest_high_max_age_bars < 1:
         raise ValueError("level_latest_high_max_age_bars must be >= 1")
     if params.level_touch_tolerance_v1 <= 0.0:
         raise ValueError("level_touch_tolerance_v1 must be > 0")
+    if not 0.0 < params.level_min_maturity_fraction <= 1.0:
+        raise ValueError("level_min_maturity_fraction must be in range (0, 1]")
     if params.max_level_touches < 2:
         raise ValueError("max_level_touches must be >= 2")
     if params.min_score <= 0.0 or params.strong_score < params.min_score:
@@ -96,6 +130,8 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("slip_plan_v1_fraction must be in range [0, 1]")
     if params.min_tick_fraction <= 0.0:
         raise ValueError("min_tick_fraction must be > 0")
+    if not 0.0 < params.max_entry_pullback_fraction <= 1.0:
+        raise ValueError("max_entry_pullback_fraction must be in range (0, 1]")
 
 
 def build_pno_grid() -> list[PnoParams]:
