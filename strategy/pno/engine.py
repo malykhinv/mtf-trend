@@ -619,8 +619,8 @@ class PnoEngine:
                     continue
                 _reject_stage(
                     PNO_STAGE_5_TRADE,
-                    key=(armed.stage4.active_high_idx, armed.stage4.cluster_first_idx, armed.stage4.cluster_last_idx, entry_idx),
-                    timestamp_ms=int(one.timestamps[min(entry_idx, len(one.timestamps) - 1)]),
+                    key=(armed.stage4.active_high_idx, armed.stage4.cluster_first_idx, armed.stage4.cluster_last_idx, armed.entry_idx),
+                    timestamp_ms=int(one.timestamps[min(armed.entry_idx, len(one.timestamps) - 1)]),
                     reason="entry_not_triggered",
                     extra={
                         "active_high": round(float(armed.stage4.active_high), 8),
