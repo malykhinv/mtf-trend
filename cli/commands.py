@@ -100,12 +100,14 @@ from strategy.post_pump_absorption.research import (
     build_post_pump_absorption_research_artifacts,
     load_post_pump_absorption_research_run,
 )
+from strategy.pno import PnoParams, PnoStrategy
 from strategy.pno.config import (
     PNO_DEFAULT_ENTRY_TIMEFRAME,
     PNO_DEFAULT_LEVELS_TIMEFRAME,
     PNO_SUPPORTED_ENTRY_TIMEFRAMES,
     PNO_SUPPORTED_LEVELS_TIMEFRAMES,
 )
+from strategy.pno.engine import PNO_STAGE_SEQUENCE
 from utils.logger import get_logger
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
@@ -308,6 +310,84 @@ def _build_post_pump_absorption_params_from_row(
         ppa_deposit=deposit,
         ppa_risk_pct=risk_pct,
         ppa_r_trade=resolved_trade_risk,
+    )
+
+
+def _build_pno_params_from_row(
+    row: pd.Series,
+    *,
+    symbol: str,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+) -> PnoParams:
+    def _is_missing_scalar(value: object) -> bool:
+        if value is None or value is pd.NA:
+            return True
+        if isinstance(value, (pd.Series, pd.DataFrame)):
+            return False
+        if isinstance(value, float):
+            return bool(pd.isna(value))
+        return False
+
+    def _optional_float(column_name: str) -> float | None:
+        raw_value = row.get(column_name)
+        return None if _is_missing_scalar(raw_value) else float(raw_value)
+
+    def _optional_int(column_name: str) -> int | None:
+        raw_value = row.get(column_name)
+        return None if _is_missing_scalar(raw_value) else int(raw_value)
+
+    def _float_or_default(column_name: str, default: float) -> float:
+        resolved = _optional_float(column_name)
+        return default if resolved is None else resolved
+
+    def _int_or_default(column_name: str, default: int) -> int:
+        resolved = _optional_int(column_name)
+        return default if resolved is None else resolved
+
+    defaults = PnoParams(
+        symbol=symbol,
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+    )
+    deposit = _optional_float("pno_deposit") or defaults.pno_deposit
+    risk_pct = _optional_float("pno_risk_pct")
+    r_trade = _optional_float("pno_r_trade")
+    if risk_pct is None:
+        risk_pct = (r_trade / deposit) if r_trade is not None else defaults.pno_risk_pct
+    resolved_trade_risk = r_trade if r_trade is not None else deposit * risk_pct
+
+    return PnoParams(
+        symbol=symbol,
+        pno_variant_id=str(row.get("pno_variant_id", defaults.pno_variant_id)),
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+        pno_deposit=deposit,
+        pno_risk_pct=risk_pct,
+        pno_r_trade=resolved_trade_risk,
+        fee_rate=_float_or_default("pno_fee_rate", defaults.fee_rate),
+        min_data_5m=_int_or_default("pno_min_data_5m", defaults.min_data_5m),
+        min_data_1m=_int_or_default("pno_min_data_1m", defaults.min_data_1m),
+        min_stage1_leg_v1=_float_or_default("pno_min_stage1_leg_v1", defaults.min_stage1_leg_v1),
+        min_stage1_leg_v5_fraction=_float_or_default("pno_min_stage1_leg_v5_fraction", defaults.min_stage1_leg_v5_fraction),
+        stage1_hold_fraction=_float_or_default("pno_stage1_hold_fraction", defaults.stage1_hold_fraction),
+        pullback_min_v1=_float_or_default("pno_pullback_min_v1", defaults.pullback_min_v1),
+        pullback_valid_max_leg_fraction=_float_or_default("pno_pullback_valid_max_leg_fraction", defaults.pullback_valid_max_leg_fraction),
+        pullback_invalid_max_leg_fraction=_float_or_default("pno_pullback_invalid_max_leg_fraction", defaults.pullback_invalid_max_leg_fraction),
+        pullback_valid_max_v5=_float_or_default("pno_pullback_valid_max_v5", defaults.pullback_valid_max_v5),
+        pullback_invalid_max_v5=_float_or_default("pno_pullback_invalid_max_v5", defaults.pullback_invalid_max_v5),
+        pullback_max_age_bars=_int_or_default("pno_pullback_max_age_bars", defaults.pullback_max_age_bars),
+        level_cluster_spread_v1=_float_or_default("pno_level_cluster_spread_v1", defaults.level_cluster_spread_v1),
+        level_cluster_relaxed_spread_v1=_float_or_default("pno_level_cluster_relaxed_spread_v1", defaults.level_cluster_relaxed_spread_v1),
+        level_latest_high_max_age_bars=_int_or_default("pno_level_latest_high_max_age_bars", defaults.level_latest_high_max_age_bars),
+        level_touch_tolerance_v1=_float_or_default("pno_level_touch_tolerance_v1", defaults.level_touch_tolerance_v1),
+        level_low_minor_break_v1=_float_or_default("pno_level_low_minor_break_v1", defaults.level_low_minor_break_v1),
+        level_low_major_break_v1=_float_or_default("pno_level_low_major_break_v1", defaults.level_low_major_break_v1),
+        max_level_touches=_int_or_default("pno_max_level_touches", defaults.max_level_touches),
+        min_score=_float_or_default("pno_min_score", defaults.min_score),
+        strong_score=_float_or_default("pno_strong_score", defaults.strong_score),
+        slip_plan_v1_fraction=_float_or_default("pno_slip_plan_v1_fraction", defaults.slip_plan_v1_fraction),
+        min_tick_fraction=_float_or_default("pno_min_tick_fraction", defaults.min_tick_fraction),
     )
 
 
@@ -562,6 +642,96 @@ def _plot_bee_bite_diagnostics_for_symbols(
         logger.warning("%s: не найдено диагностических данных bee_bite для визуализации", log_prefix)
 
 
+def _plot_pno_diagnostics_for_symbols(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    logger: Logger,
+    strategy: PnoStrategy,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    params_row: pd.Series,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+) -> None:
+    output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
+    diagnostics_dir = output_dir / "pno_diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+
+    symbols_with_trades = 0
+    symbols_with_stage_events = 0
+    total_trades_generated = 0
+    total_stage_events = 0
+    stage_rows_by_stage: dict[str, list[dict[str, object]]] = {
+        stage_id: []
+        for stage_id in PNO_STAGE_SEQUENCE
+    }
+
+    for symbol, mtf_frames in symbol_frames.items():
+        params = _build_pno_params_from_row(
+            params_row,
+            symbol=symbol,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+        )
+        trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+        diagnostics = strategy.consume_last_generation_diagnostics()
+        trade_rows = [_flatten_trade_for_diagnostics(trade) for trade in trades]
+        total_trades_generated += len(trade_rows)
+        if trade_rows:
+            symbols_with_trades += 1
+
+        stage_events_raw = diagnostics.get("stage_events", [])
+        symbol_stage_events = 0
+        if isinstance(stage_events_raw, list):
+            for raw_event in stage_events_raw:
+                if not isinstance(raw_event, dict):
+                    continue
+                stage_id = raw_event.get("stage_id")
+                if not isinstance(stage_id, str) or stage_id not in stage_rows_by_stage:
+                    continue
+                symbol_stage_events += 1
+                stage_rows_by_stage[stage_id].append(
+                    {
+                        "symbol": symbol,
+                        **raw_event,
+                    }
+                )
+        total_stage_events += symbol_stage_events
+        if symbol_stage_events > 0:
+            symbols_with_stage_events += 1
+
+        payload = {
+            "symbol": symbol,
+            "trades_generated": len(trade_rows),
+            "diagnostics": diagnostics,
+            "trades": trade_rows,
+        }
+        base_name = symbol.replace("/", "_")
+        (diagnostics_dir / f"{base_name}_diagnostics.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
+
+    _export_ppa_stage_reviews(
+        diagnostics_dir=diagnostics_dir,
+        stage_rows_by_stage=stage_rows_by_stage,
+        selected_stage_ids=PNO_STAGE_SEQUENCE,
+    )
+
+    logger.info(
+        "%s: сохранена диагностика pno stage_symbols=%s stage_events=%s trades_generated=%s output_dir=%s",
+        log_prefix,
+        symbols_with_stage_events,
+        total_stage_events,
+        total_trades_generated,
+        diagnostics_dir,
+    )
+    if total_stage_events == 0 and symbols_with_trades == 0:
+        logger.warning("%s: не найдено событий pno и не сгенерировано сделок для визуализации", log_prefix)
+
+
 def _plot_for_strategy(
     *,
     config: AppConfig,
@@ -614,6 +784,23 @@ def _plot_for_strategy_dispatch(
             logger.error("%s: unsupported visualization type for post_pump_absorption", log_prefix)
             return False
         _plot_post_pump_absorption_diagnostics_for_symbols(
+            config=config,
+            args=args,
+            logger=logger,
+            strategy=strategy,
+            symbol_frames=symbol_frames,
+            params_row=params_row,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            log_prefix=log_prefix,
+        )
+        return True
+
+    if strategy_id == "pno":
+        if not isinstance(strategy, PnoStrategy):
+            logger.error("%s: unsupported visualization type for pno", log_prefix)
+            return False
+        _plot_pno_diagnostics_for_symbols(
             config=config,
             args=args,
             logger=logger,
@@ -809,6 +996,15 @@ def _load_plot_params_row_from_results(
             "ppa_be_buffer_pct",
             "ppa_time_exit_minutes",
             "ppa_r_trade",
+        ],
+        "pno": [
+            "pno_variant_id",
+            "pno_deposit",
+            "pno_risk_pct",
+            "pno_r_trade",
+            "pno_fee_rate",
+            "pno_min_score",
+            "pno_strong_score",
         ],
     }
     required_columns = required_columns_by_strategy.get(strategy_id)
