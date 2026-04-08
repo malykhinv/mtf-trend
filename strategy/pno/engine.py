@@ -619,17 +619,25 @@ class PnoEngine:
         activity_prev24_quote = pd.to_numeric(five["activity_prev24_quote"], errors="coerce").to_numpy(dtype=np.float64)
         activity_last6_trade = pd.to_numeric(five["activity_last6_trade"], errors="coerce").to_numpy(dtype=np.float64)
         activity_prev24_trade = pd.to_numeric(five["activity_prev24_trade"], errors="coerce").to_numpy(dtype=np.float64)
-        local_breakout = np.zeros(bars_count, dtype=bool)
-        for idx in range(bars_count):
-            left = max(0, idx - local_breakout_window)
-            if idx <= left:
-                continue
-            prior_high = float(np.nanmax(highs[left:idx]))
-            local_breakout[idx] = np.isfinite(prior_high) and float(highs[idx]) >= (prior_high - self._EPSILON)
+        prior_highs = (
+            pd.Series(highs, dtype="float64")
+            .shift(1)
+            .rolling(window=local_breakout_window, min_periods=1)
+            .max()
+            .to_numpy(dtype=np.float64)
+        )
+        local_breakout = np.isfinite(prior_highs) & (highs >= (prior_highs - self._EPSILON))
+        if local_breakout.size:
+            local_breakout[0] = False
 
-        recent_support = np.zeros(bars_count, dtype=bool)
-        for idx in range(bars_count):
-            recent_support[idx] = bool(np.any(one_support[max(0, idx - recent_support_window + 1) : idx + 1]))
+        recent_support = (
+            pd.Series(one_support.astype(np.int8), dtype="int8")
+            .rolling(window=recent_support_window, min_periods=1)
+            .max()
+            .fillna(0)
+            .to_numpy(dtype=np.int8)
+            > 0
+        )
 
         active_start_idx: int | None = None
         below_ema20_count = 0
@@ -764,9 +772,9 @@ class PnoEngine:
         if support_indices.size == 0:
             return support
         five_indices = np.searchsorted(five_timestamps, one_timestamps[support_indices], side="right") - 1
-        for five_idx in five_indices:
-            if 0 <= int(five_idx) < len(support):
-                support[int(five_idx)] = True
+        valid_five_indices = five_indices[(five_indices >= 0) & (five_indices < len(support))]
+        if valid_five_indices.size > 0:
+            support[valid_five_indices.astype(np.int64, copy=False)] = True
         return support
 
     @staticmethod
