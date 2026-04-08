@@ -42,6 +42,27 @@ class OneMinuteFrame:
     tr: np.ndarray
     v1: np.ndarray
     red: np.ndarray
+    confirmed_high_indices: np.ndarray
+    confirmed_high_confirmed_at: np.ndarray
+    confirmed_low_indices: np.ndarray
+    confirmed_low_confirmed_at: np.ndarray
+
+
+@dataclass(slots=True)
+class RangeSearchTree:
+    size: int
+    tree: np.ndarray
+    is_min_tree: bool
+
+
+@dataclass(slots=True)
+class RetiredCluster:
+    active_high_idx: int
+    cluster_first_idx: int
+    cluster_last_idx: int
+    level: float
+    pullback_low_idx: int
+    pullback_low: float
 
 
 @dataclass(slots=True)
@@ -289,18 +310,35 @@ class PnoEngine:
         work["v1"] = tr.rolling(window=30, min_periods=30).median()
         work["quote_volume"] = work["close"] * work["volume"]
         work["red"] = work["close"] < work["open"]
+        highs = work["high"].astype("float64").to_numpy()
+        lows = work["low"].astype("float64").to_numpy()
+        v1 = work["v1"].astype("float64").to_numpy()
+        confirmed_high_indices, confirmed_high_confirmed_at = self._build_confirmed_high_map(
+            highs=highs,
+            lows=lows,
+            v1=v1,
+        )
+        confirmed_low_indices, confirmed_low_confirmed_at = self._build_confirmed_low_map(
+            highs=highs,
+            lows=lows,
+            v1=v1,
+        )
         return OneMinuteFrame(
             frame=work,
             timestamps=work["timestamp"].astype("int64").to_numpy(),
             opens=work["open"].astype("float64").to_numpy(),
-            highs=work["high"].astype("float64").to_numpy(),
-            lows=work["low"].astype("float64").to_numpy(),
+            highs=highs,
+            lows=lows,
             closes=work["close"].astype("float64").to_numpy(),
             volumes=work["volume"].astype("float64").to_numpy(),
             quote_volume=work["quote_volume"].astype("float64").to_numpy(),
             tr=work["tr"].astype("float64").to_numpy(),
-            v1=work["v1"].astype("float64").to_numpy(),
+            v1=v1,
             red=work["red"].astype("bool").to_numpy(),
+            confirmed_high_indices=confirmed_high_indices,
+            confirmed_high_confirmed_at=confirmed_high_confirmed_at,
+            confirmed_low_indices=confirmed_low_indices,
+            confirmed_low_confirmed_at=confirmed_low_confirmed_at,
         )
 
     def _prepare_5m_frame(self, frame: pd.DataFrame) -> FiveMinuteFrame:
@@ -472,7 +510,7 @@ class PnoEngine:
         stage4: Stage4Context | None = None
         armed: ArmedContext | None = None
         blocked_active_high_idx: int | None = None
-        retired_cluster_bases: set[tuple[int, int, int]] = set()
+        retired_clusters: list[RetiredCluster] = []
         current_pno_index = 0
         active_pump_start_idx = -1
 
@@ -487,11 +525,14 @@ class PnoEngine:
                 trade, exit_idx = self._try_enter_and_simulate(one=one, params=params, armed=armed)
                 if trade is not None:
                     trades.append(trade)
-                    retired_cluster_bases.add(
-                        (
-                            armed.stage4.active_high_idx,
-                            armed.stage4.cluster_first_idx,
-                            armed.stage4.cluster_last_idx,
+                    retired_clusters.append(
+                        RetiredCluster(
+                            active_high_idx=armed.stage4.active_high_idx,
+                            cluster_first_idx=armed.stage4.cluster_first_idx,
+                            cluster_last_idx=armed.stage4.cluster_last_idx,
+                            level=float(armed.stage4.level),
+                            pullback_low_idx=armed.stage3.pullback_low_idx,
+                            pullback_low=float(armed.stage3.pullback_low),
                         )
                     )
                     self._mark_stage(
@@ -562,7 +603,7 @@ class PnoEngine:
                 active_pump_start_idx = next_stage1.pump_start_5m_idx
                 current_pno_index = 0
                 blocked_active_high_idx = None
-                retired_cluster_bases.clear()
+                retired_clusters.clear()
                 stage2 = None
                 stage3 = None
                 stage4 = None
@@ -667,7 +708,7 @@ class PnoEngine:
                 previous=stage4,
                 params=params,
                 pno_index=max(current_pno_index, 1),
-                retired_cluster_bases=retired_cluster_bases,
+                retired_clusters=retired_clusters,
             )
             if next_stage4 is None:
                 stage4 = None
@@ -696,11 +737,14 @@ class PnoEngine:
 
             if next_stage4.hard_block:
                 diagnostics["blocked_cycles"] = int(diagnostics.get("blocked_cycles", 0)) + 1
-                retired_cluster_bases.add(
-                    (
-                        next_stage4.active_high_idx,
-                        next_stage4.cluster_first_idx,
-                        next_stage4.cluster_last_idx,
+                retired_clusters.append(
+                    RetiredCluster(
+                        active_high_idx=next_stage4.active_high_idx,
+                        cluster_first_idx=next_stage4.cluster_first_idx,
+                        cluster_last_idx=next_stage4.cluster_last_idx,
+                        level=float(next_stage4.level),
+                        pullback_low_idx=stage3.pullback_low_idx,
+                        pullback_low=float(stage3.pullback_low),
                     )
                 )
                 stage4 = None
@@ -793,7 +837,6 @@ class PnoEngine:
         stage1: Stage1Context,
         params: PnoParams,
     ) -> Stage2Context | None:
-        del params
         if idx <= stage1.active_high_idx:
             return None
         start_idx = stage1.active_high_idx + 1
@@ -801,6 +844,11 @@ class PnoEngine:
         if red_indices.size == 0:
             return None
         red_after_high_idx = start_idx + int(red_indices[0])
+        pullback_threshold = stage1.active_high - max(float(params.pullback_min_v1) * float(one.v1[idx]), self._EPSILON)
+        pullback_reached = np.where(one.lows[start_idx : idx + 1] <= pullback_threshold)[0]
+        if pullback_reached.size == 0:
+            return None
+        pullback_trigger_idx = start_idx + int(pullback_reached[0])
         post_high_lows = one.lows[start_idx : idx + 1]
         pullback_low_offset = int(np.argmin(post_high_lows))
         pullback_low_idx = start_idx + pullback_low_offset
@@ -813,7 +861,7 @@ class PnoEngine:
             active_high_timestamp=stage1.active_high_timestamp,
             active_high=stage1.active_high,
             red_after_high_idx=red_after_high_idx,
-            pullback_start_idx=red_after_high_idx,
+            pullback_start_idx=max(red_after_high_idx, pullback_trigger_idx),
             pullback_low_idx=pullback_low_idx,
             pullback_low_timestamp=int(one.timestamps[pullback_low_idx]),
             pullback_low=pullback_low,
@@ -839,7 +887,7 @@ class PnoEngine:
             return None, "pullback_too_deep_vs_leg"
         if stage2.pullback_depth > (params.pullback_invalid_max_v5 * five.v5[five_idx]):
             return None, "pullback_too_deep_vs_v5"
-        if np.any(one.closes[post_high_slice] <= stage1.leg_start):
+        if np.any(one.closes[post_high_slice] < (stage1.leg_start - self._EPSILON)):
             return None, "close_below_leg_start"
         if float(five.closes[five_idx]) <= float(five.ema20[five_idx]):
             return None, "close_below_ema20"
@@ -879,7 +927,7 @@ class PnoEngine:
         previous: Stage4Context | None,
         params: PnoParams,
         pno_index: int,
-        retired_cluster_bases: set[tuple[int, int, int]],
+        retired_clusters: list[RetiredCluster],
     ) -> Stage4Context | None:
         del five
         del five_idx
@@ -900,7 +948,12 @@ class PnoEngine:
 
         if previous is not None and previous.active_high_idx == stage3.active_high_idx:
             base_key = (previous.active_high_idx, previous.cluster_first_idx, previous.cluster_last_idx)
-            if base_key in retired_cluster_bases:
+            if any(
+                retired.active_high_idx == base_key[0]
+                and retired.cluster_first_idx == base_key[1]
+                and retired.cluster_last_idx == base_key[2]
+                for retired in retired_clusters
+            ):
                 return None
             if len(previous.cluster_indices) < 2:
                 return None
@@ -986,7 +1039,7 @@ class PnoEngine:
             stage3=stage3,
             confirmed_highs=confirmed_highs,
             params=params,
-            retired_cluster_bases=retired_cluster_bases,
+            retired_clusters=retired_clusters,
         )
         if cluster is None:
             return None
@@ -1008,7 +1061,7 @@ class PnoEngine:
         if (idx - latest_touch_idx) > params.level_latest_high_max_age_bars:
             return None
 
-        hard_block = len(touch_indices) >= 5
+        hard_block = len(touch_indices) > int(params.max_level_touches)
         hard_block_reason = "too_many_touches" if hard_block else None
         return Stage4Context(
             active_high_idx=stage3.active_high_idx,
@@ -1200,13 +1253,13 @@ class PnoEngine:
         if stage4.level >= stage3.active_high:
             hard_block = True
             hard_block_reason = "level_not_below_active_high"
-        elif stage4.touches >= 5:
+        elif stage4.touches > int(params.max_level_touches):
             hard_block = True
             hard_block_reason = "too_many_touches"
         elif float(five.closes[five_idx]) <= float(five.ema20[five_idx]):
             hard_block = True
             hard_block_reason = "close_below_ema20"
-        elif stage3.pullback_low <= stage1.leg_start:
+        elif stage3.pullback_low <= (stage1.leg_start + self._EPSILON):
             hard_block = True
             hard_block_reason = "pullback_below_leg_start"
         elif stage3.pullback_depth > (float(params.pullback_invalid_max_leg_fraction) * stage1.leg_size):
@@ -1279,7 +1332,7 @@ class PnoEngine:
         stage3: Stage3Context,
         confirmed_highs: list[int],
         params: PnoParams,
-        retired_cluster_bases: set[tuple[int, int, int]],
+        retired_clusters: list[RetiredCluster],
     ) -> tuple[tuple[int, ...], tuple[float, ...]] | None:
         if len(confirmed_highs) < 2:
             return None
@@ -1303,10 +1356,46 @@ class PnoEngine:
                 if spread > max_spread:
                     continue
                 base_key = (stage3.active_high_idx, int(indices[0]), int(indices[-1]))
-                if base_key in retired_cluster_bases:
+                if any(
+                    retired.active_high_idx == base_key[0]
+                    and retired.cluster_first_idx == base_key[1]
+                    and retired.cluster_last_idx == base_key[2]
+                    for retired in retired_clusters
+                ):
+                    continue
+                candidate_level = float(np.median(np.asarray(prices, dtype=np.float64)))
+                if not self._is_cluster_rearm_allowed(
+                    active_high_idx=stage3.active_high_idx,
+                    candidate_level=candidate_level,
+                    stage3=stage3,
+                    retired_clusters=retired_clusters,
+                    v1_now=v1_now,
+                ):
                     continue
                 return indices, prices
         return None
+
+    def _is_cluster_rearm_allowed(
+        self,
+        *,
+        active_high_idx: int,
+        candidate_level: float,
+        stage3: Stage3Context,
+        retired_clusters: list[RetiredCluster],
+        v1_now: float,
+    ) -> bool:
+        for retired in retired_clusters:
+            if retired.active_high_idx != active_high_idx:
+                continue
+            if abs(candidate_level - retired.level) >= max(v1_now, self._EPSILON):
+                continue
+            if (
+                stage3.pullback_low_idx > retired.pullback_low_idx
+                and stage3.pullback_low < (retired.pullback_low - self._EPSILON)
+            ):
+                continue
+            return False
+        return True
 
     def _resolve_low_last_red_plan(
         self,
@@ -1603,7 +1692,7 @@ class PnoEngine:
         exit_price = float(one.closes[exit_idx])
         result_type = TradeResultType.BE
         realized_pnl = 0.0
-        category = "time_exit"
+        category = "incomplete"
         max_favorable = 0.0
         max_adverse = 0.0
 
@@ -1680,21 +1769,7 @@ class PnoEngine:
                 exit_price = close
 
         if result_type not in {TradeResultType.SL, TradeResultType.TP1_BE, TradeResultType.TP2}:
-            if tp1_hit:
-                realized_pnl += self._net_leg_pnl(
-                    entry_price=entry_price,
-                    exit_price=exit_price,
-                    quantity=position_size * remainder_share,
-                    fee_rate=fee_rate,
-                )
-            else:
-                realized_pnl = self._net_leg_pnl(
-                    entry_price=entry_price,
-                    exit_price=exit_price,
-                    quantity=position_size,
-                    fee_rate=fee_rate,
-                )
-            result_type = self._classify_time_exit_result(realized_pnl)
+            return None, entry_idx
 
         trade_metadata = dict(metadata)
         trade_metadata.update(
@@ -1708,6 +1783,7 @@ class PnoEngine:
                 "mae_pct": round(self._to_percent(max_adverse, entry_price), 6),
                 "tp1_hit": tp1_hit,
                 "tp2_hit": result_type == TradeResultType.TP2,
+                "trade_complete": True,
             }
         )
         trade = TradeResult(
@@ -1738,6 +1814,219 @@ class PnoEngine:
         if trade_risk <= 0.0 or stop_distance <= self._EPSILON:
             return 0.0
         return float(trade_risk) / float(stop_distance)
+
+    def _build_confirmed_high_map(
+        self,
+        *,
+        highs: np.ndarray,
+        lows: np.ndarray,
+        v1: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        local_high_candidates = self._resolve_local_high_candidates(highs)
+        if local_high_candidates.size == 0:
+            return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+
+        next_greater_high = self._resolve_next_strictly_greater_indices(highs)
+        low_tree = self._build_range_tree(lows, is_min_tree=True)
+        confirmed_indices: list[int] = []
+        confirmed_at: list[int] = []
+        for candidate_idx in local_high_candidates:
+            if not np.isfinite(v1[candidate_idx]) or float(v1[candidate_idx]) <= 0.0:
+                continue
+            threshold = float(highs[candidate_idx]) - max(float(v1[candidate_idx]), self._EPSILON)
+            right_bound = int(next_greater_high[candidate_idx]) - 1
+            if right_bound <= candidate_idx:
+                continue
+            confirmation_idx = self._range_tree_first_leq(
+                low_tree,
+                left=int(candidate_idx) + 1,
+                right=right_bound,
+                threshold=threshold,
+            )
+            if confirmation_idx < 0:
+                continue
+            confirmed_indices.append(int(candidate_idx))
+            confirmed_at.append(int(confirmation_idx))
+        return (
+            np.asarray(confirmed_indices, dtype=np.int64),
+            np.asarray(confirmed_at, dtype=np.int64),
+        )
+
+    def _build_confirmed_low_map(
+        self,
+        *,
+        highs: np.ndarray,
+        lows: np.ndarray,
+        v1: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        local_low_candidates = self._resolve_local_low_candidates(lows)
+        if local_low_candidates.size == 0:
+            return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+
+        next_lower_low = self._resolve_next_strictly_lower_indices(lows)
+        high_tree = self._build_range_tree(highs, is_min_tree=False)
+        confirmed_indices: list[int] = []
+        confirmed_at: list[int] = []
+        for candidate_idx in local_low_candidates:
+            if not np.isfinite(v1[candidate_idx]) or float(v1[candidate_idx]) <= 0.0:
+                continue
+            threshold = float(lows[candidate_idx]) + max(float(v1[candidate_idx]), self._EPSILON)
+            right_bound = int(next_lower_low[candidate_idx]) - 1
+            if right_bound <= candidate_idx:
+                continue
+            confirmation_idx = self._range_tree_first_geq(
+                high_tree,
+                left=int(candidate_idx) + 1,
+                right=right_bound,
+                threshold=threshold,
+            )
+            if confirmation_idx < 0:
+                continue
+            confirmed_indices.append(int(candidate_idx))
+            confirmed_at.append(int(confirmation_idx))
+        return (
+            np.asarray(confirmed_indices, dtype=np.int64),
+            np.asarray(confirmed_at, dtype=np.int64),
+        )
+
+    @staticmethod
+    def _resolve_local_high_candidates(highs: np.ndarray) -> np.ndarray:
+        if highs.size < 3:
+            return np.empty(0, dtype=np.int64)
+        mask = (highs[1:-1] >= highs[:-2]) & (highs[1:-1] >= highs[2:])
+        return np.nonzero(mask)[0].astype(np.int64) + 1
+
+    @staticmethod
+    def _resolve_local_low_candidates(lows: np.ndarray) -> np.ndarray:
+        if lows.size < 3:
+            return np.empty(0, dtype=np.int64)
+        mask = (lows[1:-1] <= lows[:-2]) & (lows[1:-1] <= lows[2:])
+        return np.nonzero(mask)[0].astype(np.int64) + 1
+
+    @staticmethod
+    def _resolve_next_strictly_greater_indices(values: np.ndarray) -> np.ndarray:
+        next_indices = np.full(values.shape[0], values.shape[0], dtype=np.int64)
+        stack: list[int] = []
+        for idx in range(values.shape[0] - 1, -1, -1):
+            current_value = float(values[idx])
+            while stack and float(values[stack[-1]]) <= current_value:
+                stack.pop()
+            if stack:
+                next_indices[idx] = stack[-1]
+            stack.append(idx)
+        return next_indices
+
+    @staticmethod
+    def _resolve_next_strictly_lower_indices(values: np.ndarray) -> np.ndarray:
+        next_indices = np.full(values.shape[0], values.shape[0], dtype=np.int64)
+        stack: list[int] = []
+        for idx in range(values.shape[0] - 1, -1, -1):
+            current_value = float(values[idx])
+            while stack and float(values[stack[-1]]) >= current_value:
+                stack.pop()
+            if stack:
+                next_indices[idx] = stack[-1]
+            stack.append(idx)
+        return next_indices
+
+    @staticmethod
+    def _build_range_tree(values: np.ndarray, *, is_min_tree: bool) -> RangeSearchTree:
+        values_count = int(values.shape[0])
+        size = 1
+        while size < values_count:
+            size <<= 1
+        fill_value = np.inf if is_min_tree else -np.inf
+        tree = np.full(size * 2, fill_value, dtype=np.float64)
+        tree[size : size + values_count] = values.astype(np.float64, copy=False)
+        for idx in range(size - 1, 0, -1):
+            if is_min_tree:
+                tree[idx] = min(tree[idx * 2], tree[idx * 2 + 1])
+            else:
+                tree[idx] = max(tree[idx * 2], tree[idx * 2 + 1])
+        return RangeSearchTree(size=size, tree=tree, is_min_tree=is_min_tree)
+
+    def _range_tree_first_leq(
+        self,
+        tree: RangeSearchTree,
+        *,
+        left: int,
+        right: int,
+        threshold: float,
+    ) -> int:
+        if left > right:
+            return -1
+        return self._range_tree_first_match(
+            tree=tree,
+            node=1,
+            node_left=0,
+            node_right=tree.size - 1,
+            query_left=left,
+            query_right=right,
+            threshold=threshold,
+        )
+
+    def _range_tree_first_geq(
+        self,
+        tree: RangeSearchTree,
+        *,
+        left: int,
+        right: int,
+        threshold: float,
+    ) -> int:
+        if left > right:
+            return -1
+        return self._range_tree_first_match(
+            tree=tree,
+            node=1,
+            node_left=0,
+            node_right=tree.size - 1,
+            query_left=left,
+            query_right=right,
+            threshold=threshold,
+        )
+
+    def _range_tree_first_match(
+        self,
+        *,
+        tree: RangeSearchTree,
+        node: int,
+        node_left: int,
+        node_right: int,
+        query_left: int,
+        query_right: int,
+        threshold: float,
+    ) -> int:
+        if query_right < node_left or node_right < query_left:
+            return -1
+        node_value = float(tree.tree[node])
+        if tree.is_min_tree:
+            if node_value > threshold:
+                return -1
+        elif node_value < threshold:
+            return -1
+        if node_left == node_right:
+            return node_left
+        mid = (node_left + node_right) // 2
+        left_result = self._range_tree_first_match(
+            tree=tree,
+            node=node * 2,
+            node_left=node_left,
+            node_right=mid,
+            query_left=query_left,
+            query_right=query_right,
+            threshold=threshold,
+        )
+        if left_result >= 0:
+            return left_result
+        return self._range_tree_first_match(
+            tree=tree,
+            node=node * 2 + 1,
+            node_left=mid + 1,
+            node_right=node_right,
+            query_left=query_left,
+            query_right=query_right,
+            threshold=threshold,
+        )
 
     @staticmethod
     def _mark_stage(
@@ -1773,29 +2062,19 @@ class PnoEngine:
         start_idx: int,
         end_idx: int,
     ) -> list[int]:
-        confirmed: list[int] = []
-        if end_idx - start_idx < 2:
-            return confirmed
+        if end_idx - start_idx < 2 or one.confirmed_high_indices.size == 0:
+            return []
         upper_bound = min(end_idx - 1, len(one.timestamps) - 2)
-        for candidate_idx in range(max(start_idx, 1), upper_bound + 1):
-            if not (
-                float(one.highs[candidate_idx]) >= float(one.highs[candidate_idx - 1])
-                and float(one.highs[candidate_idx]) >= float(one.highs[candidate_idx + 1])
-            ):
-                continue
-            threshold = max(float(one.v1[candidate_idx]), self._EPSILON)
-            candidate_high = float(one.highs[candidate_idx])
-            invalidated = False
-            for future_idx in range(candidate_idx + 1, end_idx + 1):
-                if float(one.highs[future_idx]) > (candidate_high + self._EPSILON):
-                    invalidated = True
-                    break
-                if (candidate_high - float(one.lows[future_idx])) >= threshold:
-                    confirmed.append(candidate_idx)
-                    break
-            if invalidated:
-                continue
-        return confirmed
+        left = int(np.searchsorted(one.confirmed_high_indices, max(start_idx, 1), side="left"))
+        right = int(np.searchsorted(one.confirmed_high_indices, upper_bound, side="right"))
+        if left >= right:
+            return []
+        indices = one.confirmed_high_indices[left:right]
+        confirmed_at = one.confirmed_high_confirmed_at[left:right]
+        mask = confirmed_at <= end_idx
+        if not np.any(mask):
+            return []
+        return [int(item) for item in indices[mask]]
 
     def _resolve_confirmed_lows(
         self,
@@ -1804,29 +2083,19 @@ class PnoEngine:
         start_idx: int,
         end_idx: int,
     ) -> list[int]:
-        confirmed: list[int] = []
-        if end_idx - start_idx < 2:
-            return confirmed
+        if end_idx - start_idx < 2 or one.confirmed_low_indices.size == 0:
+            return []
         upper_bound = min(end_idx - 1, len(one.timestamps) - 2)
-        for candidate_idx in range(max(start_idx, 1), upper_bound + 1):
-            if not (
-                float(one.lows[candidate_idx]) <= float(one.lows[candidate_idx - 1])
-                and float(one.lows[candidate_idx]) <= float(one.lows[candidate_idx + 1])
-            ):
-                continue
-            threshold = max(float(one.v1[candidate_idx]), self._EPSILON)
-            candidate_low = float(one.lows[candidate_idx])
-            invalidated = False
-            for future_idx in range(candidate_idx + 1, end_idx + 1):
-                if float(one.lows[future_idx]) < (candidate_low - self._EPSILON):
-                    invalidated = True
-                    break
-                if (float(one.highs[future_idx]) - candidate_low) >= threshold:
-                    confirmed.append(candidate_idx)
-                    break
-            if invalidated:
-                continue
-        return confirmed
+        left = int(np.searchsorted(one.confirmed_low_indices, max(start_idx, 1), side="left"))
+        right = int(np.searchsorted(one.confirmed_low_indices, upper_bound, side="right"))
+        if left >= right:
+            return []
+        indices = one.confirmed_low_indices[left:right]
+        confirmed_at = one.confirmed_low_confirmed_at[left:right]
+        mask = confirmed_at <= end_idx
+        if not np.any(mask):
+            return []
+        return [int(item) for item in indices[mask]]
 
     @staticmethod
     def _round_to_preferred_step(value: float) -> float:
