@@ -1013,6 +1013,195 @@ def _render_pno_trade_charts_for_symbol(
     return chart_paths
 
 
+def _render_pno_stage_review_chart(
+    *,
+    charts_dir: Path,
+    symbol: str,
+    levels_frame: pd.DataFrame,
+    entry_frame: pd.DataFrame,
+    review_row: dict[str, object],
+    review_index: int,
+) -> str | None:
+    timestamp_ms = _safe_int(review_row.get("timestamp_ms"))
+    if timestamp_ms is None:
+        return None
+    start_timestamp_ms = timestamp_ms - (90 * 60_000)
+    end_timestamp_ms = timestamp_ms + (45 * 60_000)
+    plot_frame = _build_pno_plot_frame(
+        levels_frame=levels_frame,
+        entry_frame=entry_frame,
+        start_timestamp_ms=start_timestamp_ms,
+        end_timestamp_ms=end_timestamp_ms,
+    )
+    if plot_frame.empty:
+        return None
+
+    figure_width = 8.0
+    figure_height = 4.5
+    fig, (ax_price, ax_volume) = plt.subplots(
+        2,
+        1,
+        figsize=(figure_width, figure_height),
+        dpi=72,
+        sharex=True,
+        gridspec_kw={"height_ratios": [3, 1]},
+    )
+    fig.patch.set_facecolor(_PNO_PLOT_FIGURE_FACE)
+    for axis in (ax_price, ax_volume):
+        axis.set_facecolor(_PNO_PLOT_AXIS_FACE)
+        axis.grid(True, color=_PNO_PLOT_GRID, alpha=0.18, linewidth=0.6)
+        for spine in axis.spines.values():
+            spine.set_color(_PNO_PLOT_GRID)
+            spine.set_alpha(0.28)
+        axis.tick_params(colors=_PNO_PLOT_MUTED, labelsize=8)
+
+    close_values = pd.to_numeric(plot_frame["close"], errors="coerce").to_numpy(dtype=np.float64)
+    high_values = pd.to_numeric(plot_frame["high"], errors="coerce").to_numpy(dtype=np.float64)
+    low_values = pd.to_numeric(plot_frame["low"], errors="coerce").to_numpy(dtype=np.float64)
+    volume_values = pd.to_numeric(plot_frame["volume"], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
+    x = np.arange(len(plot_frame), dtype=np.float64)
+    ema9 = pd.to_numeric(plot_frame["ema9"], errors="coerce").to_numpy(dtype=np.float64)
+    ema20 = pd.to_numeric(plot_frame["ema20"], errors="coerce").to_numpy(dtype=np.float64)
+    timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
+    event_idx = int(np.argmin(np.abs(timestamps - int(timestamp_ms))))
+
+    ax_price.plot(x, close_values, color=_PNO_PLOT_TEXT, linewidth=1.05, alpha=0.92, zorder=3)
+    if np.isfinite(ema9).any():
+        ax_price.plot(x, ema9, color=_PNO_PLOT_EMA9, linewidth=0.8, alpha=0.22, zorder=2)
+    if np.isfinite(ema20).any():
+        ax_price.plot(x, ema20, color=_PNO_PLOT_EMA20, linewidth=0.8, alpha=0.20, zorder=2)
+    ax_price.axvline(event_idx, color=_PNO_PLOT_PUMP, linewidth=1.0, alpha=0.8, zorder=4)
+
+    for key, color in (
+        ("active_high", "#ef4444"),
+        ("pullback_low", "#38bdf8"),
+        ("level", _PNO_PLOT_LEVEL),
+        ("entry_price", _PNO_PLOT_ENTRY),
+    ):
+        value = _safe_float(review_row.get(key))
+        if value is None:
+            continue
+        ax_price.axhline(value, color=color, linewidth=0.9, alpha=0.55, zorder=1)
+
+    if volume_values.size > 0:
+        volume_max = float(np.nanmax(volume_values)) if np.isfinite(volume_values).any() else 0.0
+        volume_pct = (volume_values / volume_max) * 100.0 if volume_max > 0.0 else np.zeros_like(volume_values)
+        up_mask = np.r_[False, close_values[1:] >= close_values[:-1]]
+        volume_colors = np.where(up_mask, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
+        ax_volume.bar(x, volume_pct, width=0.82, color=volume_colors, edgecolor="none", alpha=0.8, zorder=2)
+    ax_volume.axvline(event_idx, color=_PNO_PLOT_PUMP, linewidth=1.0, alpha=0.65, zorder=3)
+
+    if np.isfinite(high_values).any() and np.isfinite(low_values).any():
+        padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.06, 1e-9)
+        ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
+    ax_price.set_xlim(-0.5, len(plot_frame) - 0.5)
+    ax_volume.set_ylim(0.0, 100.0)
+    ax_volume.set_yticks([0.0, 50.0, 100.0])
+    ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
+    ax_price.set_ylabel("1m", color=_PNO_PLOT_MUTED, fontsize=8)
+    ax_volume.set_ylabel("Vol %", color=_PNO_PLOT_MUTED, fontsize=8)
+
+    tick_positions = _build_pno_tick_positions(plot_frame)
+    tick_labels = _build_pno_tick_labels(plot_frame, tick_positions)
+    ax_volume.set_xticks(tick_positions)
+    ax_volume.set_xticklabels(tick_labels, fontsize=8, color=_PNO_PLOT_MUTED)
+    ax_price.tick_params(axis="x", labelbottom=False)
+
+    stage_id = str(review_row.get("stage_id", "stage"))
+    status = str(review_row.get("status", "review"))
+    reason = _sanitize_plot_name(str(review_row.get("reason", "ok")))
+    file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{review_index:04d}_{_sanitize_plot_name(stage_id)}_{_sanitize_plot_name(status)}_{reason}.png"
+    output_path = charts_dir / file_name
+    fig.subplots_adjust(left=0.08, right=0.985, top=0.985, bottom=0.10, hspace=0.04)
+    fig.savefig(output_path, dpi=72, facecolor=_PNO_PLOT_FIGURE_FACE)
+    plt.close(fig)
+    return str(output_path)
+
+
+def _export_pno_stage_reviews(
+    *,
+    diagnostics_dir: Path,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    stage_rows_by_stage: dict[str, list[dict[str, object]]],
+    stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
+    selected_stage_ids: tuple[str, ...],
+) -> None:
+    stage_reviews_dir = diagnostics_dir / "stage_reviews"
+    stage_reviews_dir.mkdir(parents=True, exist_ok=True)
+    chart_stage_ids = set(PNO_STAGE_SEQUENCE[1:])
+    manifest_rows: list[dict[str, object]] = []
+
+    for stage_id in selected_stage_ids:
+        stage_dir = stage_reviews_dir / stage_id
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        passed_rows = stage_rows_by_stage.get(stage_id, [])
+        passed_frame = pd.DataFrame(passed_rows)
+        passed_dir = stage_dir / "passed"
+        passed_dir.mkdir(parents=True, exist_ok=True)
+        passed_frame.to_csv(passed_dir / "events.csv", index=False)
+        passed_chart_paths: list[str] = []
+        if stage_id in chart_stage_ids:
+            passed_charts_dir = passed_dir / "charts"
+            passed_charts_dir.mkdir(parents=True, exist_ok=True)
+            for row_index, row in enumerate(passed_rows, start=1):
+                symbol = str(row.get("symbol", ""))
+                mtf_frames = symbol_frames.get(symbol)
+                if mtf_frames is None:
+                    continue
+                chart_path = _render_pno_stage_review_chart(
+                    charts_dir=passed_charts_dir,
+                    symbol=symbol,
+                    levels_frame=mtf_frames.levels_frame,
+                    entry_frame=mtf_frames.entry_frame,
+                    review_row={**row, "status": "passed", "reason": "passed"},
+                    review_index=row_index,
+                )
+                if chart_path is not None:
+                    passed_chart_paths.append(chart_path)
+
+        rejection_groups = stage_rejections_by_stage.get(stage_id, {})
+        rejected_total = 0
+        rejected_chart_paths = 0
+        rejected_dir = stage_dir / "rejected"
+        rejected_dir.mkdir(parents=True, exist_ok=True)
+        for reason, rows in sorted(rejection_groups.items()):
+            rejected_total += len(rows)
+            reason_dir = rejected_dir / _sanitize_plot_name(reason)
+            reason_dir.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame(rows).to_csv(reason_dir / "events.csv", index=False)
+            if stage_id in chart_stage_ids:
+                charts_dir = reason_dir / "charts"
+                charts_dir.mkdir(parents=True, exist_ok=True)
+                for row_index, row in enumerate(rows, start=1):
+                    symbol = str(row.get("symbol", ""))
+                    mtf_frames = symbol_frames.get(symbol)
+                    if mtf_frames is None:
+                        continue
+                    chart_path = _render_pno_stage_review_chart(
+                        charts_dir=charts_dir,
+                        symbol=symbol,
+                        levels_frame=mtf_frames.levels_frame,
+                        entry_frame=mtf_frames.entry_frame,
+                        review_row={**row, "status": "rejected"},
+                        review_index=row_index,
+                    )
+                    if chart_path is not None:
+                        rejected_chart_paths += 1
+
+        manifest_rows.append(
+            {
+                "stage_id": stage_id,
+                "passed_count": int(len(passed_rows)),
+                "rejected_count": int(rejected_total),
+                "passed_events_path": str(passed_dir / "events.csv"),
+                "passed_charts_count": int(len(passed_chart_paths)),
+                "rejected_charts_count": int(rejected_chart_paths),
+            }
+        )
+
+    pd.DataFrame(manifest_rows).to_csv(stage_reviews_dir / "manifest.csv", index=False)
+
+
 def _plot_post_pump_absorption_diagnostics_for_symbols(
     *,
     config: AppConfig,
@@ -1189,6 +1378,10 @@ def _plot_pno_diagnostics_for_symbols(
         stage_id: []
         for stage_id in selected_stage_ids
     }
+    stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]] = {
+        stage_id: {}
+        for stage_id in selected_stage_ids
+    }
 
     for symbol, mtf_frames in symbol_frames.items():
         params = _build_pno_params_from_row(
@@ -1224,6 +1417,22 @@ def _plot_pno_diagnostics_for_symbols(
         if symbol_stage_events > 0:
             symbols_with_stage_events += 1
 
+        stage_rejections_raw = diagnostics.get("stage_rejections", [])
+        if isinstance(stage_rejections_raw, list):
+            for raw_rejection in stage_rejections_raw:
+                if not isinstance(raw_rejection, dict):
+                    continue
+                stage_id = raw_rejection.get("stage_id")
+                if not isinstance(stage_id, str) or stage_id not in stage_rejections_by_stage:
+                    continue
+                reason = str(raw_rejection.get("reason") or "unknown")
+                stage_rejections_by_stage[stage_id].setdefault(reason, []).append(
+                    {
+                        "symbol": symbol,
+                        **raw_rejection,
+                    }
+                )
+
         payload = {
             "symbol": symbol,
             "trades_generated": len(trade_rows),
@@ -1245,9 +1454,11 @@ def _plot_pno_diagnostics_for_symbols(
         )
         pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
 
-    _export_ppa_stage_reviews(
+    _export_pno_stage_reviews(
         diagnostics_dir=diagnostics_dir,
+        symbol_frames=symbol_frames,
         stage_rows_by_stage=stage_rows_by_stage,
+        stage_rejections_by_stage=stage_rejections_by_stage,
         selected_stage_ids=selected_stage_ids,
     )
 
