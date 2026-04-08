@@ -128,7 +128,16 @@ def test_plot_pno_diagnostics_writes_trade_and_stage_artifacts(tmp_path, monkeyp
         result_type=TradeResultType.TP2,
         pnl=10.0,
         pnl_percent=Percentage(1.0),
-        metadata={"category": "tp2", "final_score": 82.0},
+        metadata={
+            "category": "tp2",
+            "final_score": 82.0,
+            "pump_start_timestamp_ms": 60_000,
+            "entry_price_actual": 1.2,
+            "exit_price_actual": 1.3,
+            "sl_actual": 1.0,
+            "tp1": 1.3,
+            "tp2": 1.4,
+        },
     )
 
     monkeypatch.setattr(strategy, "generate_events_multi_tf", lambda **_kwargs: [trade])
@@ -167,6 +176,7 @@ def test_plot_pno_diagnostics_writes_trade_and_stage_artifacts(tmp_path, monkeyp
     diagnostics_dir = tmp_path / "trade_plots" / "pno_diagnostics"
     assert (diagnostics_dir / "BTC_USDT_diagnostics.json").exists()
     assert (diagnostics_dir / "BTC_USDT_trades.csv").exists()
+    assert any((diagnostics_dir / "charts").glob("BTC_USDT_*.png"))
     assert (diagnostics_dir / "stage_reviews" / "manifest.csv").exists()
     manifest = pd.read_csv(diagnostics_dir / "stage_reviews" / "manifest.csv")
     assert "stage_1_pump" in set(manifest["stage_id"])

@@ -19,8 +19,12 @@ from logging import Logger
 from pathlib import Path
 from typing import Callable, cast
 
+import matplotlib
+matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
+from matplotlib import pyplot as plt
+from matplotlib.patches import Rectangle
 
 from config import AppConfig
 from constants import (
@@ -530,6 +534,243 @@ def _read_csv_or_empty(path: Path) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _safe_float(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if np.isfinite(parsed) else None
+
+
+def _safe_int(value: object) -> int | None:
+    parsed = _safe_float(value)
+    return None if parsed is None else int(parsed)
+
+
+def _sanitize_plot_name(value: str) -> str:
+    return "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in value)
+
+
+def _build_pno_plot_frame(
+    *,
+    levels_frame: pd.DataFrame,
+    entry_frame: pd.DataFrame,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+) -> pd.DataFrame:
+    plot_frame = entry_frame.loc[
+        (entry_frame["timestamp"] >= start_timestamp_ms) & (entry_frame["timestamp"] <= end_timestamp_ms),
+        ["timestamp", "open", "high", "low", "close", "volume"],
+    ].copy()
+    if plot_frame.empty:
+        return plot_frame
+
+    levels_ema = levels_frame.loc[:, ["timestamp", "close"]].copy()
+    levels_ema["ema9"] = pd.to_numeric(levels_ema["close"], errors="coerce").ewm(span=9, adjust=False).mean()
+    levels_ema["ema20"] = pd.to_numeric(levels_ema["close"], errors="coerce").ewm(span=20, adjust=False).mean()
+    merged = pd.merge_asof(
+        plot_frame.sort_values("timestamp"),
+        levels_ema.loc[:, ["timestamp", "ema9", "ema20"]].sort_values("timestamp"),
+        on="timestamp",
+        direction="backward",
+    )
+    merged["ema9"] = merged["ema9"].ffill()
+    merged["ema20"] = merged["ema20"].ffill()
+    return merged.reset_index(drop=True)
+
+
+def _draw_minimal_candles(ax: plt.Axes, frame: pd.DataFrame) -> None:
+    x_values = np.arange(len(frame), dtype=np.float64)
+    opens = pd.to_numeric(frame["open"], errors="coerce").to_numpy(dtype=np.float64)
+    highs = pd.to_numeric(frame["high"], errors="coerce").to_numpy(dtype=np.float64)
+    lows = pd.to_numeric(frame["low"], errors="coerce").to_numpy(dtype=np.float64)
+    closes = pd.to_numeric(frame["close"], errors="coerce").to_numpy(dtype=np.float64)
+    candle_width = 0.62
+
+    for idx, x_pos in enumerate(x_values):
+        open_price = float(opens[idx])
+        high_price = float(highs[idx])
+        low_price = float(lows[idx])
+        close_price = float(closes[idx])
+        color = "#2e7d32" if close_price >= open_price else "#c62828"
+        ax.vlines(x_pos, low_price, high_price, color=color, linewidth=0.7, alpha=0.9, zorder=2)
+        body_low = min(open_price, close_price)
+        body_height = max(abs(close_price - open_price), 1e-9)
+        ax.add_patch(
+            Rectangle(
+                (x_pos - candle_width / 2.0, body_low),
+                candle_width,
+                body_height,
+                facecolor=color,
+                edgecolor=color,
+                linewidth=0.5,
+                alpha=0.85,
+                zorder=3,
+            )
+        )
+
+
+def _render_pno_trade_chart(
+    *,
+    charts_dir: Path,
+    symbol: str,
+    levels_frame: pd.DataFrame,
+    entry_frame: pd.DataFrame,
+    trade_row: dict[str, object],
+    trade_index: int,
+) -> Path | None:
+    entry_timestamp_ms = _safe_int(trade_row.get("entry_timestamp_ms"))
+    exit_timestamp_ms = _safe_int(trade_row.get("exit_timestamp_ms"))
+    entry_price = _safe_float(trade_row.get("entry_price_actual"))
+    if entry_price is None:
+        entry_price = _safe_float(trade_row.get("entry_price"))
+    stop_loss = _safe_float(trade_row.get("sl_actual"))
+    if stop_loss is None:
+        stop_loss = _safe_float(trade_row.get("sl_plan"))
+    tp1 = _safe_float(trade_row.get("tp1"))
+    tp2 = _safe_float(trade_row.get("tp2"))
+    pump_start_timestamp_ms = _safe_int(trade_row.get("pump_start_timestamp_ms")) or entry_timestamp_ms
+    if (
+        entry_timestamp_ms is None
+        or exit_timestamp_ms is None
+        or entry_price is None
+        or stop_loss is None
+        or pump_start_timestamp_ms is None
+    ):
+        return None
+
+    category = str(trade_row.get("category") or "")
+    result_type = str(trade_row.get("result_type") or "")
+    target_price = tp2 if category == "tp2" and tp2 is not None else tp1
+    if target_price is None:
+        target_price = max(entry_price, _safe_float(trade_row.get("exit_price")) or entry_price)
+
+    window_start_ms = min(pump_start_timestamp_ms, entry_timestamp_ms - (60 * 60 * 1000))
+    window_end_ms = max(exit_timestamp_ms + (30 * 60 * 1000), entry_timestamp_ms + (30 * 60 * 1000))
+    plot_frame = _build_pno_plot_frame(
+        levels_frame=levels_frame,
+        entry_frame=entry_frame,
+        start_timestamp_ms=window_start_ms,
+        end_timestamp_ms=window_end_ms,
+    )
+    if plot_frame.empty:
+        return None
+
+    x_values = np.arange(len(plot_frame), dtype=np.float64)
+    timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
+    entry_idx = int(np.searchsorted(timestamps, entry_timestamp_ms, side="left"))
+    exit_idx = int(np.searchsorted(timestamps, exit_timestamp_ms, side="left"))
+    pump_idx = int(np.searchsorted(timestamps, pump_start_timestamp_ms, side="left"))
+    entry_idx = min(max(entry_idx, 0), len(plot_frame) - 1)
+    exit_idx = min(max(exit_idx, entry_idx), len(plot_frame) - 1)
+    pump_idx = min(max(pump_idx, 0), len(plot_frame) - 1)
+    rect_width = max(float(exit_idx - entry_idx + 1), 1.0)
+
+    volume = pd.to_numeric(plot_frame["volume"], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
+    opens = pd.to_numeric(plot_frame["open"], errors="coerce").to_numpy(dtype=np.float64)
+    closes = pd.to_numeric(plot_frame["close"], errors="coerce").to_numpy(dtype=np.float64)
+    ema9 = pd.to_numeric(plot_frame["ema9"], errors="coerce").to_numpy(dtype=np.float64)
+    ema20 = pd.to_numeric(plot_frame["ema20"], errors="coerce").to_numpy(dtype=np.float64)
+    high_values = pd.to_numeric(plot_frame["high"], errors="coerce").to_numpy(dtype=np.float64)
+    low_values = pd.to_numeric(plot_frame["low"], errors="coerce").to_numpy(dtype=np.float64)
+
+    fig, (ax_price, ax_volume) = plt.subplots(
+        2,
+        1,
+        figsize=(8, 6),
+        dpi=100,
+        sharex=True,
+        gridspec_kw={"height_ratios": [4, 1], "hspace": 0.05},
+    )
+    fig.patch.set_facecolor("white")
+    ax_price.set_facecolor("white")
+    ax_volume.set_facecolor("white")
+
+    _draw_minimal_candles(ax_price, plot_frame)
+    ax_price.plot(x_values, ema9, color="#ff8f00", linewidth=0.9, alpha=0.9)
+    ax_price.plot(x_values, ema20, color="#1565c0", linewidth=0.9, alpha=0.9)
+    ax_price.axvline(pump_idx, color="#6d4c41", linewidth=0.9, alpha=0.9)
+    ax_price.add_patch(
+        Rectangle(
+            (entry_idx - 0.5, min(stop_loss, entry_price)),
+            rect_width,
+            abs(entry_price - stop_loss),
+            facecolor="#ef5350",
+            edgecolor="none",
+            alpha=0.16,
+            zorder=1,
+        )
+    )
+    ax_price.add_patch(
+        Rectangle(
+            (entry_idx - 0.5, min(entry_price, target_price)),
+            rect_width,
+            abs(target_price - entry_price),
+            facecolor="#66bb6a",
+            edgecolor="none",
+            alpha=0.18,
+            zorder=1,
+        )
+    )
+    ax_price.scatter([entry_idx], [entry_price], color="#111111", s=16, zorder=4)
+    exit_price = _safe_float(trade_row.get("exit_price_actual"))
+    if exit_price is None:
+        exit_price = _safe_float(trade_row.get("exit_price"))
+    if exit_price is not None:
+        ax_price.scatter([exit_idx], [exit_price], color="#424242", s=16, marker="x", zorder=4)
+
+    volume_colors = np.where(closes >= opens, "#81c784", "#ef9a9a")
+    ax_volume.bar(x_values, volume, width=0.72, color=volume_colors, edgecolor="none", alpha=0.9)
+
+    for axis in (ax_price, ax_volume):
+        axis.grid(True, color="#e0e0e0", linewidth=0.5, alpha=0.8)
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+        axis.tick_params(axis="both", labelsize=7, length=2)
+
+    padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.05, 1e-9)
+    ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
+    ax_price.set_xlim(-0.5, len(plot_frame) - 0.5)
+    tick_positions = np.linspace(0, max(len(plot_frame) - 1, 0), num=min(6, len(plot_frame)), dtype=int)
+    tick_positions = np.unique(tick_positions)
+    tick_labels = [
+        pd.to_datetime(int(timestamps[pos]), unit="ms", utc=True).strftime("%m-%d\n%H:%M")
+        for pos in tick_positions
+    ]
+    ax_volume.set_xticks(tick_positions)
+    ax_volume.set_xticklabels(tick_labels)
+
+    file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{trade_index:03d}_{_sanitize_plot_name(result_type.lower() or category.lower() or 'trade')}.png"
+    output_path = charts_dir / file_name
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+    return output_path
+
+
+def _render_pno_trade_charts_for_symbol(
+    *,
+    charts_dir: Path,
+    symbol: str,
+    mtf_frames: SymbolMtfFrames,
+    trade_rows: list[dict[str, object]],
+) -> list[str]:
+    chart_paths: list[str] = []
+    for trade_index, trade_row in enumerate(trade_rows, start=1):
+        chart_path = _render_pno_trade_chart(
+            charts_dir=charts_dir,
+            symbol=symbol,
+            levels_frame=mtf_frames.levels_frame,
+            entry_frame=mtf_frames.entry_frame,
+            trade_row=trade_row,
+            trade_index=trade_index,
+        )
+        if chart_path is not None:
+            chart_paths.append(str(chart_path))
+    return chart_paths
+
+
 def _plot_post_pump_absorption_diagnostics_for_symbols(
     *,
     config: AppConfig,
@@ -693,12 +934,15 @@ def _plot_pno_diagnostics_for_symbols(
     output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
     diagnostics_dir = output_dir / "pno_diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    charts_dir = diagnostics_dir / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
     selected_stage_ids = _resolve_pno_stage_ids(args)
 
     symbols_with_trades = 0
     symbols_with_stage_events = 0
     total_trades_generated = 0
     total_stage_events = 0
+    total_charts_generated = 0
     stage_rows_by_stage: dict[str, list[dict[str, object]]] = {
         stage_id: []
         for stage_id in selected_stage_ids
@@ -744,6 +988,14 @@ def _plot_pno_diagnostics_for_symbols(
             "diagnostics": diagnostics,
             "trades": trade_rows,
         }
+        chart_paths = _render_pno_trade_charts_for_symbol(
+            charts_dir=charts_dir,
+            symbol=symbol,
+            mtf_frames=mtf_frames,
+            trade_rows=trade_rows,
+        )
+        total_charts_generated += len(chart_paths)
+        payload["chart_paths"] = chart_paths
         base_name = symbol.replace("/", "_")
         (diagnostics_dir / f"{base_name}_diagnostics.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -758,11 +1010,12 @@ def _plot_pno_diagnostics_for_symbols(
     )
 
     logger.info(
-        "%s: сохранена диагностика pno stage_symbols=%s stage_events=%s trades_generated=%s stages=%s output_dir=%s",
+        "%s: сохранена диагностика pno stage_symbols=%s stage_events=%s trades_generated=%s charts_generated=%s stages=%s output_dir=%s",
         log_prefix,
         symbols_with_stage_events,
         total_stage_events,
         total_trades_generated,
+        total_charts_generated,
         ",".join(selected_stage_ids),
         diagnostics_dir,
     )
