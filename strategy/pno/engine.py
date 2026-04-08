@@ -138,6 +138,10 @@ class Stage1Context:
     pump_peak_bar_tr_atr_pre: float = 0.0
     pump_volume_ratio_start: float = 0.0
     pump_volume_ratio_continue: float = 0.0
+    pre_pump_range_1h: float = 0.0
+    pre_pump_range_2h: float = 0.0
+    pump_vs_pre_1h_ratio: float = 0.0
+    pump_vs_pre_2h_ratio: float = 0.0
 
 
 @dataclass(slots=True)
@@ -607,6 +611,22 @@ class PnoEngine:
                 )
             if not inplay[idx] or active_start_idx is None or active_start_idx >= idx:
                 continue
+            pump_range = float(np.nanmax(highs[active_start_idx : idx + 1]) - np.nanmin(lows[active_start_idx : idx + 1]))
+            pre_range_1h = self._resolve_window_range(
+                highs=highs,
+                lows=lows,
+                start_idx=max(0, active_start_idx - 12),
+                end_idx=active_start_idx - 1,
+            )
+            pre_range_2h = self._resolve_window_range(
+                highs=highs,
+                lows=lows,
+                start_idx=max(0, active_start_idx - 24),
+                end_idx=active_start_idx - 1,
+            )
+            if pump_range <= max(pre_range_1h, pre_range_2h, self._EPSILON):
+                inplay[idx] = False
+                continue
             pump_start_idx[idx] = int(active_start_idx)
             sleep_start_idx[idx] = int(max(active_start_idx - 84, 0))
             sleep_end_idx[idx] = int(max(active_start_idx - 1, sleep_start_idx[idx]))
@@ -668,6 +688,18 @@ class PnoEngine:
                 start_idx = probe_idx
                 break
         return int(start_idx)
+
+    @staticmethod
+    def _resolve_window_range(*, highs: np.ndarray, lows: np.ndarray, start_idx: int, end_idx: int) -> float:
+        if end_idx < start_idx or start_idx < 0 or end_idx >= len(highs):
+            return 0.0
+        window_highs = highs[start_idx : end_idx + 1]
+        window_lows = lows[start_idx : end_idx + 1]
+        if window_highs.size == 0 or window_lows.size == 0:
+            return 0.0
+        if not np.isfinite(window_highs).any() or not np.isfinite(window_lows).any():
+            return 0.0
+        return float(np.nanmax(window_highs) - np.nanmin(window_lows))
 
     def _run(
         self,
@@ -971,6 +1003,10 @@ class PnoEngine:
                         "pump_peak_bar_tr_atr_pre": round(stage1.pump_peak_bar_tr_atr_pre, 4),
                         "pump_volume_ratio_start": round(stage1.pump_volume_ratio_start, 4),
                         "pump_volume_ratio_continue": round(stage1.pump_volume_ratio_continue, 4),
+                        "pre_pump_range_1h": round(stage1.pre_pump_range_1h, 8),
+                        "pre_pump_range_2h": round(stage1.pre_pump_range_2h, 8),
+                        "pump_vs_pre_1h_ratio": round(stage1.pump_vs_pre_1h_ratio, 4),
+                        "pump_vs_pre_2h_ratio": round(stage1.pump_vs_pre_2h_ratio, 4),
                     },
                 )
             else:
@@ -1334,6 +1370,24 @@ class PnoEngine:
         )
         if quality_metrics is None:
             return None
+        pre_pump_range_1h = self._resolve_window_range(
+            highs=five.highs,
+            lows=five.lows,
+            start_idx=max(0, pump_start_5m_idx - 12),
+            end_idx=pump_start_5m_idx - 1,
+        )
+        pre_pump_range_2h = self._resolve_window_range(
+            highs=five.highs,
+            lows=five.lows,
+            start_idx=max(0, pump_start_5m_idx - 24),
+            end_idx=pump_start_5m_idx - 1,
+        )
+        pump_range = self._resolve_window_range(
+            highs=five.highs,
+            lows=five.lows,
+            start_idx=pump_start_5m_idx,
+            end_idx=five_idx,
+        )
         return Stage1Context(
             start_idx=start_idx,
             start_timestamp=int(one.timestamps[start_idx]),
@@ -1362,6 +1416,10 @@ class PnoEngine:
             pump_peak_bar_tr_atr_pre=float(quality_metrics["pump_peak_bar_tr_atr_pre"]),
             pump_volume_ratio_start=float(quality_metrics["pump_volume_ratio_start"]),
             pump_volume_ratio_continue=float(quality_metrics["pump_volume_ratio_continue"]),
+            pre_pump_range_1h=pre_pump_range_1h,
+            pre_pump_range_2h=pre_pump_range_2h,
+            pump_vs_pre_1h_ratio=self._safe_divide(pump_range, pre_pump_range_1h),
+            pump_vs_pre_2h_ratio=self._safe_divide(pump_range, pre_pump_range_2h),
         )
 
     def _resolve_stage2_context(
