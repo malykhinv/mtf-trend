@@ -100,6 +100,12 @@ from strategy.post_pump_absorption.research import (
     build_post_pump_absorption_research_artifacts,
     load_post_pump_absorption_research_run,
 )
+from strategy.pno.config import (
+    PNO_DEFAULT_ENTRY_TIMEFRAME,
+    PNO_DEFAULT_LEVELS_TIMEFRAME,
+    PNO_SUPPORTED_ENTRY_TIMEFRAMES,
+    PNO_SUPPORTED_LEVELS_TIMEFRAMES,
+)
 from utils.logger import get_logger
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
@@ -134,14 +140,14 @@ def _resolve_strategy_id(args: argparse.Namespace) -> str:
     strategy_override = getattr(args, "strategy", None)
     if strategy_override is not None:
         normalized = str(strategy_override).strip().lower()
-        if normalized not in {"bee_bite", "post_pump_absorption"}:
+        if normalized not in {"bee_bite", "post_pump_absorption", "pno"}:
             raise ValueError(f"Неподдерживаемый strategy_id: {normalized}")
         return normalized
     return "bee_bite"
 
 
 def _resolve_results_dir_for_strategy(base_results_dir: Path, strategy_id: str) -> Path:
-    if strategy_id not in {"bee_bite", "post_pump_absorption"}:
+    if strategy_id not in {"bee_bite", "post_pump_absorption", "pno"}:
         raise ValueError(f"Неподдерживаемый strategy_id: {strategy_id}")
     return base_results_dir / "strategy" / strategy_id
 
@@ -1251,7 +1257,7 @@ def _resolve_backtest_timeframes(
     configured_levels_timeframe: Timeframe,
     configured_entry_timeframe: Timeframe,
 ) -> tuple[Timeframe, Timeframe]:
-    if strategy_id != "post_pump_absorption":
+    if strategy_id not in {"post_pump_absorption", "pno"}:
         levels_timeframe = _resolve_timeframe(
             getattr(args, "levels_tf", None),
             fallback=configured_levels_timeframe,
@@ -1264,37 +1270,63 @@ def _resolve_backtest_timeframes(
         )
         return levels_timeframe, entry_timeframe
 
-    fallback_entry = configured_entry_timeframe
-    if fallback_entry not in POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES:
-        fallback_entry = POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME
+    if strategy_id == "post_pump_absorption":
+        fallback_entry = configured_entry_timeframe
+        if fallback_entry not in POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES:
+            fallback_entry = POST_PUMP_ABSORPTION_DEFAULT_TIMEFRAME
 
+        entry_timeframe = _resolve_timeframe(
+            getattr(args, "entry_tf", None),
+            fallback=fallback_entry,
+            argument_name="--entry-tf",
+        )
+        if entry_timeframe not in POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES:
+            supported_values = ", ".join(tf.value for tf in POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES)
+            raise ValueError(
+                "post_pump_absorption supports only micro timeframes "
+                f"{{{supported_values}}}, got {entry_timeframe.value}"
+            )
+
+        levels_fallback = (
+            POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME
+            if getattr(args, "levels_tf", None) is None and entry_timeframe != Timeframe.M5
+            else entry_timeframe
+        )
+        levels_timeframe = _resolve_timeframe(
+            getattr(args, "levels_tf", None),
+            fallback=levels_fallback,
+            argument_name="--levels-tf",
+        )
+        if levels_timeframe not in {entry_timeframe, POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME}:
+            raise ValueError(
+                "post_pump_absorption supports --levels-tf only as --entry-tf "
+                "or auxiliary 5m OI source"
+            )
+        return levels_timeframe, entry_timeframe
+
+    fallback_entry = configured_entry_timeframe
+    if fallback_entry not in PNO_SUPPORTED_ENTRY_TIMEFRAMES:
+        fallback_entry = PNO_DEFAULT_ENTRY_TIMEFRAME
     entry_timeframe = _resolve_timeframe(
         getattr(args, "entry_tf", None),
         fallback=fallback_entry,
         argument_name="--entry-tf",
     )
-    if entry_timeframe not in POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES:
-        supported_values = ", ".join(tf.value for tf in POST_PUMP_ABSORPTION_SUPPORTED_ENTRY_TIMEFRAMES)
-        raise ValueError(
-            "post_pump_absorption supports only micro timeframes "
-            f"{{{supported_values}}}, got {entry_timeframe.value}"
-        )
+    if entry_timeframe not in PNO_SUPPORTED_ENTRY_TIMEFRAMES:
+        supported_values = ", ".join(tf.value for tf in PNO_SUPPORTED_ENTRY_TIMEFRAMES)
+        raise ValueError(f"pno supports only entry timeframes {{{supported_values}}}, got {entry_timeframe.value}")
 
-    levels_fallback = (
-        POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME
-        if getattr(args, "levels_tf", None) is None and entry_timeframe != Timeframe.M5
-        else entry_timeframe
-    )
+    fallback_levels = configured_levels_timeframe
+    if fallback_levels not in PNO_SUPPORTED_LEVELS_TIMEFRAMES:
+        fallback_levels = PNO_DEFAULT_LEVELS_TIMEFRAME
     levels_timeframe = _resolve_timeframe(
         getattr(args, "levels_tf", None),
-        fallback=levels_fallback,
+        fallback=fallback_levels,
         argument_name="--levels-tf",
     )
-    if levels_timeframe not in {entry_timeframe, POST_PUMP_ABSORPTION_OI_SOURCE_TIMEFRAME}:
-        raise ValueError(
-            "post_pump_absorption supports --levels-tf only as --entry-tf "
-            "or auxiliary 5m OI source"
-        )
+    if levels_timeframe not in PNO_SUPPORTED_LEVELS_TIMEFRAMES:
+        supported_values = ", ".join(tf.value for tf in PNO_SUPPORTED_LEVELS_TIMEFRAMES)
+        raise ValueError(f"pno supports only levels timeframes {{{supported_values}}}, got {levels_timeframe.value}")
     return levels_timeframe, entry_timeframe
 
 
@@ -1736,6 +1768,11 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             config.strategy.post_pump_absorption_deposit = float(args.ppa_deposit)
         if getattr(args, "ppa_risk_pct", None) is not None:
             config.strategy.post_pump_absorption_risk_pct = float(args.ppa_risk_pct)
+    elif strategy_id == "pno":
+        if getattr(args, "pno_deposit", None) is not None:
+            config.strategy.pno_deposit = float(args.pno_deposit)
+        if getattr(args, "pno_risk_pct", None) is not None:
+            config.strategy.pno_risk_pct = float(args.pno_risk_pct)
     levels_timeframe, entry_timeframe = _resolve_backtest_timeframes(
         strategy_id=strategy_id,
         args=args,

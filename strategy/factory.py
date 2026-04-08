@@ -5,6 +5,7 @@ from __future__ import annotations
 from config import AppConfig
 from strategy.base_strategy import BaseStrategy
 from strategy.bee_bite import BeeBiteStrategy
+from strategy.pno import PnoStrategy
 from strategy.post_pump_absorption import PostPumpAbsorptionStrategy
 
 
@@ -27,5 +28,10 @@ def build_strategy(config: AppConfig, _logger: object = None) -> BaseStrategy[ob
             profile_id=config.strategy.post_pump_absorption_profile,
             deposit=config.strategy.post_pump_absorption_deposit,
             risk_pct=config.strategy.post_pump_absorption_risk_pct,
+        )
+    if config.strategy.strategy_id == "pno":
+        return PnoStrategy(
+            deposit=config.strategy.pno_deposit,
+            risk_pct=config.strategy.pno_risk_pct,
         )
     raise ValueError(f"Unsupported strategy_id: {config.strategy.strategy_id}")

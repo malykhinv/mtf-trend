@@ -89,7 +89,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     parser.add_argument("--levels-tf", default=None, help="Levels timeframe")
     parser.add_argument("--entry-tf", default=None, help="Entry timeframe")
-    parser.add_argument("--strategy", choices=["bee_bite", "post_pump_absorption"], default=None, help="Strategy id for analyze-cache mode")
+    parser.add_argument("--strategy", choices=["bee_bite", "post_pump_absorption", "pno"], default=None, help="Strategy id for analyze-cache mode")
     parser.add_argument("--bee-bite-profile", choices=["A", "B", "C"], default=None, help="Bee bite profile")
     parser.add_argument("--bee-bite-grid", choices=["baseline", "expanded", "research"], default=None, help="Bee bite grid mode")
     parser.add_argument("--bee-bite-reclaim-mode", choices=["strict", "balanced", "aggressive"], default=None, help="Bee bite reclaim mode")
@@ -99,6 +99,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ppa-profile", choices=["loose", "balanced", "strict"], default=None, help="Post pump absorption profile")
     parser.add_argument("--ppa-deposit", type=float, default=None, help="Deposit used for post_pump_absorption sizing")
     parser.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
+    parser.add_argument("--pno-deposit", type=float, default=None, help="Deposit used for PNO sizing")
+    parser.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per trade for PNO")
     parser.add_argument("--selection-profile", choices=["loose", "balanced", "strict"], default=None, help="Hourly pump research selection profile")
     parser.add_argument("--asia-start-hour-utc", type=int, default=None, help="Hourly pump research Asia session start hour in UTC")
     parser.add_argument("--asia-end-hour-utc", type=int, default=None, help="Hourly pump research Asia session end hour in UTC")
@@ -134,6 +136,8 @@ def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argpa
         ppa_profile=task.get("ppa_profile", cli_args.ppa_profile),
         ppa_deposit=float(task["ppa_deposit"]) if "ppa_deposit" in task and task.get("ppa_deposit") is not None else cli_args.ppa_deposit,
         ppa_risk_pct=float(task["ppa_risk_pct"]) if "ppa_risk_pct" in task and task.get("ppa_risk_pct") is not None else cli_args.ppa_risk_pct,
+        pno_deposit=float(task["pno_deposit"]) if "pno_deposit" in task and task.get("pno_deposit") is not None else cli_args.pno_deposit,
+        pno_risk_pct=float(task["pno_risk_pct"]) if "pno_risk_pct" in task and task.get("pno_risk_pct") is not None else cli_args.pno_risk_pct,
         selection_profile=task.get("selection_profile", cli_args.selection_profile),
         asia_start_hour_utc=int(task["asia_start_hour_utc"]) if "asia_start_hour_utc" in task and task.get("asia_start_hour_utc") is not None else cli_args.asia_start_hour_utc,
         asia_end_hour_utc=int(task["asia_end_hour_utc"]) if "asia_end_hour_utc" in task and task.get("asia_end_hour_utc") is not None else cli_args.asia_end_hour_utc,

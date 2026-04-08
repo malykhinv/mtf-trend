@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     run_bt.add_argument("--entry-tf", default=None, help="Entry timeframe, e.g. 15m")
     run_bt.add_argument(
         "--strategy",
-        choices=["bee_bite", "post_pump_absorption"],
+        choices=["bee_bite", "post_pump_absorption", "pno"],
         default=None,
         help="Strategy id for backtest",
     )
@@ -96,6 +96,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_bt.add_argument("--ppa-deposit", type=float, default=None, help="Deposit used for post_pump_absorption sizing")
     run_bt.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
+    run_bt.add_argument("--pno-deposit", type=float, default=None, help="Deposit used for PNO position sizing")
+    run_bt.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per trade for PNO")
     run_bt.add_argument(
         "--ppa-stage",
         type=_positive_int_for("--ppa-stage"),

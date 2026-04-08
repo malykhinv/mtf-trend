@@ -34,6 +34,10 @@ from strategy.bee_bite.config import (
     parse_bee_bite_reclaim_mode,
     parse_bee_bite_retest_mode,
 )
+from strategy.pno.config import (
+    PNO_DEFAULT_ENTRY_TIMEFRAME,
+    PNO_DEFAULT_LEVELS_TIMEFRAME,
+)
 from strategy.post_pump_absorption.config import parse_post_pump_absorption_profile_id
 
 __all__ = [
@@ -45,7 +49,7 @@ __all__ = [
     "load_config",
 ]
 
-SUPPORTED_STRATEGY_IDS = {"bee_bite", "post_pump_absorption"}
+SUPPORTED_STRATEGY_IDS = {"bee_bite", "post_pump_absorption", "pno"}
 
 
 # region Приватные
@@ -131,14 +135,22 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     strategy_entry_timeframe = _parse_timeframe(
         os.getenv(
             "ENTRY_TIMEFRAME",
-            Timeframe.M3.value if strategy_id == "post_pump_absorption" else Timeframe.M15.value,
+            (
+                Timeframe.M3.value
+                if strategy_id == "post_pump_absorption"
+                else (PNO_DEFAULT_ENTRY_TIMEFRAME.value if strategy_id == "pno" else Timeframe.M15.value)
+            ),
         ),
         env_name="ENTRY_TIMEFRAME",
     )
     strategy_levels_timeframe = _parse_timeframe(
         os.getenv(
             "LEVELS_TIMEFRAME",
-            strategy_entry_timeframe.value if strategy_id == "post_pump_absorption" else Timeframe.D1.value,
+            (
+                strategy_entry_timeframe.value
+                if strategy_id == "post_pump_absorption"
+                else (PNO_DEFAULT_LEVELS_TIMEFRAME.value if strategy_id == "pno" else Timeframe.D1.value)
+            ),
         ),
         env_name="LEVELS_TIMEFRAME",
     )
@@ -177,6 +189,8 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         post_pump_absorption_risk_pct=float(
             os.getenv("POST_PUMP_ABSORPTION_RISK_PCT", str(DEFAULT_BEE_BITE_RISK_PCT))
         ),
+        pno_deposit=float(os.getenv("PNO_DEPOSIT", str(DEFAULT_BEE_BITE_DEPOSIT))),
+        pno_risk_pct=float(os.getenv("PNO_RISK_PCT", str(DEFAULT_BEE_BITE_RISK_PCT))),
     )
 
     simulation_cfg = SimulationConfig(
