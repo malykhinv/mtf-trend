@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib.patches import Rectangle
+from matplotlib.ticker import LinearLocator
 
 from config import AppConfig
 from constants import (
@@ -568,48 +569,121 @@ def _build_pno_plot_frame(
         return plot_frame
 
     levels_ema = levels_frame.loc[:, ["timestamp", "close"]].copy()
-    levels_ema["ema9"] = pd.to_numeric(levels_ema["close"], errors="coerce").ewm(span=9, adjust=False).mean()
-    levels_ema["ema20"] = pd.to_numeric(levels_ema["close"], errors="coerce").ewm(span=20, adjust=False).mean()
-    merged = pd.merge_asof(
-        plot_frame.sort_values("timestamp"),
-        levels_ema.loc[:, ["timestamp", "ema9", "ema20"]].sort_values("timestamp"),
-        on="timestamp",
-        direction="backward",
+    levels_ema["timestamp"] = pd.to_numeric(levels_ema["timestamp"], errors="coerce")
+    levels_ema["close"] = pd.to_numeric(levels_ema["close"], errors="coerce")
+    levels_ema = levels_ema.dropna(subset=["timestamp", "close"]).sort_values("timestamp").drop_duplicates(
+        subset=["timestamp"], keep="last"
     )
-    merged["ema9"] = merged["ema9"].ffill()
-    merged["ema20"] = merged["ema20"].ffill()
-    return merged.reset_index(drop=True)
+    if levels_ema.empty:
+        plot_frame["ema9"] = np.nan
+        plot_frame["ema20"] = np.nan
+        return plot_frame.reset_index(drop=True)
+
+    levels_ema["ema9"] = levels_ema["close"].ewm(span=9, adjust=False).mean()
+    levels_ema["ema20"] = levels_ema["close"].ewm(span=20, adjust=False).mean()
+    levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64)
+    plot_timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.float64)
+    plot_frame["ema9"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema9"].to_numpy(dtype=np.float64))
+    plot_frame["ema20"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema20"].to_numpy(dtype=np.float64))
+    return plot_frame.reset_index(drop=True)
 
 
-def _draw_minimal_candles(ax: plt.Axes, frame: pd.DataFrame) -> None:
-    x_values = np.arange(len(frame), dtype=np.float64)
+_PNO_PLOT_FIGURE_FACE = "#08111f"
+_PNO_PLOT_AXIS_FACE = "#0f172a"
+_PNO_PLOT_GRID = "#334155"
+_PNO_PLOT_TEXT = "#dbe4f0"
+_PNO_PLOT_MUTED = "#94a3b8"
+_PNO_PLOT_UP = "#22c55e"
+_PNO_PLOT_DOWN = "#f97316"
+_PNO_PLOT_EMA9 = "#f59e0b"
+_PNO_PLOT_EMA20 = "#38bdf8"
+_PNO_PLOT_PUMP = "#a3e635"
+_PNO_PLOT_LEVEL = "#c084fc"
+_PNO_PLOT_ENTRY = "#f8fafc"
+_PNO_PLOT_EXIT = "#fde047"
+_PNO_PLOT_RISK_FACE = "#7f1d1d"
+_PNO_PLOT_RISK_EDGE = "#ef4444"
+_PNO_PLOT_PROFIT_FACE = "#14532d"
+_PNO_PLOT_PROFIT_EDGE = "#22c55e"
+_PNO_PLOT_PANEL_EDGE = "#1e293b"
+_PNO_PLOT_CANDLE_WIDTH = 0.64
+_PNO_PLOT_MAX_X_TICKS = 8
+
+
+def _draw_pno_candles(ax: plt.Axes, frame: pd.DataFrame, x_values: np.ndarray) -> None:
     opens = pd.to_numeric(frame["open"], errors="coerce").to_numpy(dtype=np.float64)
     highs = pd.to_numeric(frame["high"], errors="coerce").to_numpy(dtype=np.float64)
     lows = pd.to_numeric(frame["low"], errors="coerce").to_numpy(dtype=np.float64)
     closes = pd.to_numeric(frame["close"], errors="coerce").to_numpy(dtype=np.float64)
-    candle_width = 0.62
 
     for idx, x_pos in enumerate(x_values):
         open_price = float(opens[idx])
         high_price = float(highs[idx])
         low_price = float(lows[idx])
         close_price = float(closes[idx])
-        color = "#2e7d32" if close_price >= open_price else "#c62828"
-        ax.vlines(x_pos, low_price, high_price, color=color, linewidth=0.7, alpha=0.9, zorder=2)
+        color = _PNO_PLOT_UP if close_price >= open_price else _PNO_PLOT_DOWN
+        ax.vlines(x_pos, low_price, high_price, color=color, linewidth=1.0, alpha=0.92, zorder=3)
         body_low = min(open_price, close_price)
         body_height = max(abs(close_price - open_price), 1e-9)
         ax.add_patch(
             Rectangle(
-                (x_pos - candle_width / 2.0, body_low),
-                candle_width,
+                (x_pos - _PNO_PLOT_CANDLE_WIDTH / 2.0, body_low),
+                _PNO_PLOT_CANDLE_WIDTH,
                 body_height,
                 facecolor=color,
                 edgecolor=color,
-                linewidth=0.5,
-                alpha=0.85,
-                zorder=3,
+                linewidth=0.8,
+                alpha=0.9,
+                zorder=4,
             )
         )
+
+
+def _configure_pno_plot_axes(*, price_ax: plt.Axes, volume_ax: plt.Axes) -> None:
+    for axis in (price_ax, volume_ax):
+        axis.set_facecolor(_PNO_PLOT_AXIS_FACE)
+        axis.grid(True, color=_PNO_PLOT_GRID, linewidth=0.7, alpha=0.18)
+        axis.tick_params(axis="both", colors=_PNO_PLOT_MUTED, labelsize=8, length=0, pad=6)
+        for spine in axis.spines.values():
+            spine.set_color(_PNO_PLOT_PANEL_EDGE)
+            spine.set_linewidth(1.0)
+    price_ax.yaxis.label.set_color(_PNO_PLOT_MUTED)
+    volume_ax.yaxis.label.set_color(_PNO_PLOT_MUTED)
+    price_ax.yaxis.set_major_locator(LinearLocator(6))
+    volume_ax.yaxis.set_major_locator(LinearLocator(3))
+
+
+def _build_pno_tick_positions(frame: pd.DataFrame) -> np.ndarray:
+    timestamps = pd.to_datetime(frame["timestamp"].astype("int64"), unit="ms", utc=True)
+    hour_positions = [idx for idx, value in enumerate(timestamps) if value.minute == 0]
+    if len(hour_positions) >= 3:
+        selected = hour_positions
+    else:
+        half_hour_positions = [idx for idx, value in enumerate(timestamps) if value.minute in {0, 30}]
+        if len(half_hour_positions) >= 3:
+            selected = half_hour_positions
+        else:
+            step = max(len(frame) // 6, 1)
+            selected = list(range(0, len(frame), step))
+            if selected[-1] != len(frame) - 1:
+                selected.append(len(frame) - 1)
+    if len(selected) > _PNO_PLOT_MAX_X_TICKS:
+        source = list(selected)
+        selected = list(np.unique(np.linspace(0, len(source) - 1, _PNO_PLOT_MAX_X_TICKS, dtype=int)))
+        selected = [source[idx] for idx in selected if idx < len(source)]
+    return np.asarray(sorted(set(selected)), dtype=int)
+
+
+def _build_pno_tick_labels(frame: pd.DataFrame, positions: np.ndarray) -> list[str]:
+    timestamps = pd.to_datetime(frame["timestamp"].astype("int64"), unit="ms", utc=True)
+    labels: list[str] = []
+    for pos in positions:
+        timestamp = timestamps.iloc[int(pos)]
+        if timestamp.hour == 0 and timestamp.minute == 0:
+            labels.append(timestamp.strftime("%m-%d"))
+        else:
+            labels.append(timestamp.strftime("%H:%M"))
+    return labels
 
 
 def _render_pno_trade_chart(
@@ -632,6 +706,8 @@ def _render_pno_trade_chart(
     tp1 = _safe_float(trade_row.get("tp1"))
     tp2 = _safe_float(trade_row.get("tp2"))
     pump_start_timestamp_ms = _safe_int(trade_row.get("pump_start_timestamp_ms")) or entry_timestamp_ms
+    level_price = _safe_float(trade_row.get("level"))
+    level_first_timestamp_ms = _safe_int(trade_row.get("level_first_local_high_timestamp_ms"))
     if (
         entry_timestamp_ms is None
         or exit_timestamp_ms is None
@@ -683,23 +759,37 @@ def _render_pno_trade_chart(
         dpi=100,
         sharex=True,
         gridspec_kw={"height_ratios": [4, 1], "hspace": 0.05},
+        facecolor=_PNO_PLOT_FIGURE_FACE,
     )
-    fig.patch.set_facecolor("white")
-    ax_price.set_facecolor("white")
-    ax_volume.set_facecolor("white")
+    _configure_pno_plot_axes(price_ax=ax_price, volume_ax=ax_volume)
 
-    _draw_minimal_candles(ax_price, plot_frame)
-    ax_price.plot(x_values, ema9, color="#ff8f00", linewidth=0.9, alpha=0.9)
-    ax_price.plot(x_values, ema20, color="#1565c0", linewidth=0.9, alpha=0.9)
-    ax_price.axvline(pump_idx, color="#6d4c41", linewidth=0.9, alpha=0.9)
+    _draw_pno_candles(ax_price, plot_frame, x_values)
+    ax_price.plot(x_values, ema9, color=_PNO_PLOT_EMA9, linewidth=1.2, alpha=0.28, zorder=2.2)
+    ax_price.plot(x_values, ema20, color=_PNO_PLOT_EMA20, linewidth=1.2, alpha=0.24, zorder=2.1)
+    ax_price.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=1.15, alpha=0.82, zorder=5)
+    if level_price is not None:
+        level_start_idx = entry_idx
+        if level_first_timestamp_ms is not None:
+            level_start_idx = int(np.searchsorted(timestamps, level_first_timestamp_ms, side="left"))
+            level_start_idx = min(max(level_start_idx, 0), entry_idx)
+        ax_price.hlines(
+            level_price,
+            level_start_idx - 0.48,
+            entry_idx + 0.48,
+            colors=_PNO_PLOT_LEVEL,
+            linewidth=1.4,
+            alpha=0.9,
+            zorder=5,
+        )
     ax_price.add_patch(
         Rectangle(
             (entry_idx - 0.5, min(stop_loss, entry_price)),
             rect_width,
             abs(entry_price - stop_loss),
-            facecolor="#ef5350",
-            edgecolor="none",
-            alpha=0.16,
+            facecolor=_PNO_PLOT_RISK_FACE,
+            edgecolor=_PNO_PLOT_RISK_EDGE,
+            linewidth=0.9,
+            alpha=0.32,
             zorder=1,
         )
     )
@@ -708,43 +798,52 @@ def _render_pno_trade_chart(
             (entry_idx - 0.5, min(entry_price, target_price)),
             rect_width,
             abs(target_price - entry_price),
-            facecolor="#66bb6a",
-            edgecolor="none",
-            alpha=0.18,
+            facecolor=_PNO_PLOT_PROFIT_FACE,
+            edgecolor=_PNO_PLOT_PROFIT_EDGE,
+            linewidth=0.9,
+            alpha=0.28,
             zorder=1,
         )
     )
-    ax_price.scatter([entry_idx], [entry_price], color="#111111", s=16, zorder=4)
+    ax_price.scatter([entry_idx], [entry_price], color=_PNO_PLOT_ENTRY, s=28, zorder=6)
     exit_price = _safe_float(trade_row.get("exit_price_actual"))
     if exit_price is None:
         exit_price = _safe_float(trade_row.get("exit_price"))
     if exit_price is not None:
-        ax_price.scatter([exit_idx], [exit_price], color="#424242", s=16, marker="x", zorder=4)
+        ax_price.scatter([exit_idx], [exit_price], color=_PNO_PLOT_EXIT, s=36, marker="x", linewidths=1.2, zorder=6)
 
-    volume_colors = np.where(closes >= opens, "#81c784", "#ef9a9a")
-    ax_volume.bar(x_values, volume, width=0.72, color=volume_colors, edgecolor="none", alpha=0.9)
-
-    for axis in (ax_price, ax_volume):
-        axis.grid(True, color="#e0e0e0", linewidth=0.5, alpha=0.8)
-        axis.spines["top"].set_visible(False)
-        axis.spines["right"].set_visible(False)
-        axis.tick_params(axis="both", labelsize=7, length=2)
+    volume_max = float(np.nanmax(volume)) if len(volume) > 0 else 0.0
+    volume_pct = (volume / volume_max) * 100.0 if volume_max > 0.0 else np.zeros_like(volume)
+    volume_colors = np.where(closes >= opens, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
+    ax_volume.bar(
+        x_values,
+        volume_pct,
+        width=0.72,
+        color=volume_colors,
+        edgecolor="none",
+        alpha=0.88,
+        zorder=3,
+    )
 
     padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.05, 1e-9)
     ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
     ax_price.set_xlim(-0.5, len(plot_frame) - 0.5)
-    tick_positions = np.linspace(0, max(len(plot_frame) - 1, 0), num=min(6, len(plot_frame)), dtype=int)
-    tick_positions = np.unique(tick_positions)
-    tick_labels = [
-        pd.to_datetime(int(timestamps[pos]), unit="ms", utc=True).strftime("%m-%d\n%H:%M")
-        for pos in tick_positions
-    ]
+    ax_price.set_ylabel("Price")
+    ax_volume.set_ylabel("Vol %")
+    ax_volume.set_ylim(0.0, 100.0)
+    ax_volume.set_yticks([0.0, 50.0, 100.0])
+    ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
+    tick_positions = _build_pno_tick_positions(plot_frame)
+    tick_labels = _build_pno_tick_labels(plot_frame, tick_positions)
     ax_volume.set_xticks(tick_positions)
     ax_volume.set_xticklabels(tick_labels)
+    ax_price.margins(x=0.01)
+    ax_volume.margins(x=0.01)
 
     file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{trade_index:03d}_{_sanitize_plot_name(result_type.lower() or category.lower() or 'trade')}.png"
     output_path = charts_dir / file_name
-    fig.savefig(output_path, bbox_inches="tight")
+    fig.subplots_adjust(left=0.08, right=0.985, top=0.965, bottom=0.08, hspace=0.06)
+    fig.savefig(output_path, dpi=100, facecolor=_PNO_PLOT_FIGURE_FACE)
     plt.close(fig)
     return output_path
 

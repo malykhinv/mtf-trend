@@ -132,6 +132,8 @@ def test_plot_pno_diagnostics_writes_trade_and_stage_artifacts(tmp_path, monkeyp
             "category": "tp2",
             "final_score": 82.0,
             "pump_start_timestamp_ms": 60_000,
+            "level": 1.15,
+            "level_first_local_high_timestamp_ms": 60_000,
             "entry_price_actual": 1.2,
             "exit_price_actual": 1.3,
             "sl_actual": 1.0,
