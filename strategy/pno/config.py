@@ -44,13 +44,14 @@ class PnoParams:
     stage1_min_volume_ratio_start: float = 2.0
     stage1_min_volume_ratio_continue: float = 1.25
     stage1_pre_pump_high_max_fraction_of_leg: float = 0.50
-    level_cluster_spread_v1: float = 0.35
-    level_cluster_relaxed_spread_v1: float = 0.50
-    level_latest_high_max_age_bars: int = 6
+    level_cluster_spread_v1: float = 0.45
+    level_cluster_relaxed_spread_v1: float = 0.75
+    level_latest_high_max_age_bars: int = 10
     level_touch_tolerance_v1: float = 0.35
     level_low_minor_break_v1: float = 0.35
     level_low_major_break_v1: float = 0.75
     level_min_maturity_fraction: float = 0.25
+    level_rearm_min_distance_v1: float = 0.50
     max_level_touches: int = 4
     min_score: float = 70.0
     strong_score: float = 80.0
@@ -122,6 +123,8 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("level_touch_tolerance_v1 must be > 0")
     if not 0.0 < params.level_min_maturity_fraction <= 1.0:
         raise ValueError("level_min_maturity_fraction must be in range (0, 1]")
+    if params.level_rearm_min_distance_v1 <= 0.0:
+        raise ValueError("level_rearm_min_distance_v1 must be > 0")
     if params.max_level_touches < 2:
         raise ValueError("max_level_touches must be >= 2")
     if params.min_score <= 0.0 or params.strong_score < params.min_score:

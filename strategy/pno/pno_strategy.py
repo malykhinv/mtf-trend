@@ -83,6 +83,7 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_level_low_minor_break_v1": params.level_low_minor_break_v1,
             "pno_level_low_major_break_v1": params.level_low_major_break_v1,
             "pno_level_min_maturity_fraction": params.level_min_maturity_fraction,
+            "pno_level_rearm_min_distance_v1": params.level_rearm_min_distance_v1,
             "pno_max_level_touches": params.max_level_touches,
             "pno_min_score": params.min_score,
             "pno_strong_score": params.strong_score,

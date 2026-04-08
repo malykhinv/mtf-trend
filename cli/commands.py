@@ -438,6 +438,10 @@ def _build_pno_params_from_row(
             "pno_level_min_maturity_fraction",
             defaults.level_min_maturity_fraction,
         ),
+        level_rearm_min_distance_v1=_float_or_default(
+            "pno_level_rearm_min_distance_v1",
+            defaults.level_rearm_min_distance_v1,
+        ),
         max_level_touches=_int_or_default("pno_max_level_touches", defaults.max_level_touches),
         min_score=_float_or_default("pno_min_score", defaults.min_score),
         strong_score=_float_or_default("pno_strong_score", defaults.strong_score),

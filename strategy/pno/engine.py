@@ -1604,6 +1604,7 @@ class PnoEngine:
                     stage3=stage3,
                     retired_clusters=retired_clusters,
                     v1_now=v1_now,
+                    rearm_min_distance_v1=float(params.level_rearm_min_distance_v1),
                 ):
                     continue
                 return indices, prices
@@ -1617,11 +1618,12 @@ class PnoEngine:
         stage3: Stage3Context,
         retired_clusters: list[RetiredCluster],
         v1_now: float,
+        rearm_min_distance_v1: float = 0.50,
     ) -> bool:
         for retired in retired_clusters:
             if retired.active_high_idx != active_high_idx:
                 continue
-            if abs(candidate_level - retired.level) >= max(v1_now, self._EPSILON):
+            if abs(candidate_level - retired.level) >= max(float(v1_now) * rearm_min_distance_v1, self._EPSILON):
                 continue
             if (
                 stage3.pullback_low_idx > retired.pullback_low_idx
