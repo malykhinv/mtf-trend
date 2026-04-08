@@ -20,8 +20,10 @@ from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
 from strategy.factory import build_strategy
 from strategy.pno import PnoParams, PnoStrategy
+from strategy.pno.config import build_pno_grid
 from strategy.pno.engine import (
     ArmedContext,
+    OneMinuteFrame,
     PnoEngine,
     RetiredCluster,
     Stage1Context,
@@ -74,6 +76,7 @@ def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:
         pno_deposit=2_000.0,
         pno_risk_pct=0.03,
         pno_r_trade=60.0,
+        entry_confirmation_mode="close_above",
         fee_rate=0.0007,
         min_stage1_leg_v1=1.25,
         stage1_min_cumulative_quote_volume=750_000.0,
@@ -98,6 +101,7 @@ def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:
     assert rebuilt.pno_deposit == original.pno_deposit
     assert rebuilt.pno_risk_pct == original.pno_risk_pct
     assert rebuilt.pno_r_trade == original.pno_r_trade
+    assert rebuilt.entry_confirmation_mode == original.entry_confirmation_mode
     assert rebuilt.fee_rate == original.fee_rate
     assert rebuilt.min_stage1_leg_v1 == original.min_stage1_leg_v1
     assert rebuilt.stage1_min_cumulative_quote_volume == original.stage1_min_cumulative_quote_volume
@@ -108,6 +112,13 @@ def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:
     assert rebuilt.pullback_valid_max_v5 == original.pullback_valid_max_v5
     assert rebuilt.min_score == original.min_score
     assert rebuilt.strong_score == original.strong_score
+
+
+def test_build_pno_grid_includes_cross_and_close_confirmation_variants() -> None:
+    grid = build_pno_grid()
+
+    assert [params.entry_confirmation_mode for params in grid] == ["cross", "close_above"]
+    assert [params.pno_variant_id for params in grid] == ["baseline_cross", "baseline_close"]
 
 
 def test_plot_pno_diagnostics_writes_trade_and_stage_artifacts(tmp_path, monkeypatch) -> None:
@@ -380,6 +391,60 @@ def test_pno_cluster_rearm_requires_new_low_or_distance() -> None:
     ) is True
 
 
+def test_pno_level_cluster_allows_clear_single_touch_level() -> None:
+    engine = PnoEngine()
+    highs = pd.Series([1.0, 2.0, 5.0, 4.8, 3.7, 4.0, 3.8], dtype="float64").to_numpy()
+    lows = pd.Series([0.8, 1.6, 4.2, 3.6, 2.8, 3.3, 3.1], dtype="float64").to_numpy()
+    opens = pd.Series([0.9, 1.8, 4.8, 4.2, 3.0, 3.6, 3.5], dtype="float64").to_numpy()
+    closes = pd.Series([0.95, 1.9, 4.5, 3.8, 3.2, 3.7, 3.6], dtype="float64").to_numpy()
+    timestamps = pd.Series([60_000, 120_000, 180_000, 240_000, 300_000, 360_000, 420_000], dtype="int64").to_numpy()
+    v1 = pd.Series([1.0] * len(highs), dtype="float64").to_numpy()
+    confirmed_high_indices, confirmed_high_confirmed_at = engine._build_confirmed_high_map(highs=highs, lows=lows, v1=v1)
+    confirmed_low_indices, confirmed_low_confirmed_at = engine._build_confirmed_low_map(highs=highs, lows=lows, v1=v1)
+    one = OneMinuteFrame(
+        frame=pd.DataFrame(),
+        timestamps=timestamps,
+        opens=opens,
+        highs=highs,
+        lows=lows,
+        closes=closes,
+        volumes=pd.Series([1.0] * len(highs), dtype="float64").to_numpy(),
+        quote_volume=pd.Series([1.0] * len(highs), dtype="float64").to_numpy(),
+        cumulative_quote_volume=pd.Series(range(1, len(highs) + 1), dtype="float64").to_numpy(),
+        tr=v1,
+        v1=v1,
+        red=pd.Series([False, False, True, True, True, False, False], dtype="bool").to_numpy(),
+        confirmed_high_indices=confirmed_high_indices,
+        confirmed_high_confirmed_at=confirmed_high_confirmed_at,
+        confirmed_low_indices=confirmed_low_indices,
+        confirmed_low_confirmed_at=confirmed_low_confirmed_at,
+    )
+    stage3 = Stage3Context(
+        active_high_idx=1,
+        active_high_timestamp=120_000,
+        active_high=10.0,
+        pullback_start_idx=1,
+        pullback_low_idx=4,
+        pullback_low_timestamp=300_000,
+        pullback_low=2.8,
+        pullback_depth=1.8,
+        pullback_age_bars=5,
+        validation_timestamp=420_000,
+    )
+
+    cluster = engine._resolve_level_cluster(
+        one=one,
+        idx=6,
+        stage3=stage3,
+        confirmed_highs=[2],
+        confirmed_lows=[4],
+        params=PnoParams(symbol="TEST/USDT"),
+        retired_clusters=[],
+    )
+
+    assert cluster == ((2,), (5.0,))
+
+
 def test_pno_incomplete_trade_is_not_emitted() -> None:
     engine = PnoEngine()
     one = engine._prepare_1m_frame(
@@ -476,6 +541,108 @@ def test_pno_incomplete_trade_is_not_emitted() -> None:
 
     assert trade is None
     assert exit_idx == 1
+
+
+def test_pno_close_above_confirmation_enters_on_next_bar() -> None:
+    engine = PnoEngine()
+    one = engine._prepare_1m_frame(
+        pd.DataFrame(
+            {
+                "timestamp": [60_000, 120_000, 180_000, 240_000],
+                "open": [9.8, 9.9, 10.02, 10.05],
+                "high": [10.0, 10.1, 10.1, 11.1],
+                "low": [9.7, 9.85, 9.98, 10.0],
+                "close": [9.9, 10.02, 10.05, 11.0],
+                "volume": [10.0, 11.0, 12.0, 13.0],
+            }
+        )
+    )
+    armed = ArmedContext(
+        entry_idx=1,
+        stage1=Stage1Context(
+            start_idx=0,
+            start_timestamp=60_000,
+            pump_start_5m_idx=0,
+            pump_start_timestamp=60_000,
+            current_5m_idx=0,
+            active_high_idx=0,
+            active_high_timestamp=60_000,
+            active_high=10.5,
+            leg_start_idx=0,
+            leg_start_timestamp=60_000,
+            leg_start=9.0,
+            leg_size=1.5,
+            hold_floor=9.75,
+        ),
+        stage3=Stage3Context(
+            active_high_idx=0,
+            active_high_timestamp=60_000,
+            active_high=10.5,
+            pullback_start_idx=0,
+            pullback_low_idx=0,
+            pullback_low_timestamp=60_000,
+            pullback_low=9.5,
+            pullback_depth=1.0,
+            pullback_age_bars=2,
+            validation_timestamp=60_000,
+        ),
+        stage4=Stage4Context(
+            active_high_idx=0,
+            active_high_timestamp=60_000,
+            active_high=10.5,
+            pullback_low_idx=0,
+            pullback_low_timestamp=60_000,
+            pullback_low=9.5,
+            pullback_depth=1.0,
+            cluster_indices=(0,),
+            cluster_prices=(9.95,),
+            level=9.95,
+            level_pos=0.45,
+            touches=1,
+            cluster_first_idx=0,
+            cluster_last_idx=0,
+            level_valid_idx=0,
+            level_valid_timestamp=60_000,
+            level_low=9.5,
+            level_low_minor_break=False,
+            level_low_major_break=False,
+            penalty_level_low_break=0,
+            penalty_untested_highs=0,
+            base_bonus=0,
+            pno_index=1,
+            maturity_penalty=0,
+            pno_order_adj=8,
+            score_a=10,
+            score_b=10,
+            score_c=10,
+            score_d=4,
+            score_e=7,
+            score_tp2=5,
+            final_score=76.0,
+            entry_plan=10.0,
+            sl_plan=9.5,
+            low_last_red_plan=9.5,
+            tp1=10.5,
+            tp2=11.0,
+            stage4_ready=True,
+            hard_block=False,
+            is_valid_setup=True,
+            hard_block_reason=None,
+        ),
+    )
+
+    trade, exit_idx = engine._try_enter_and_simulate(
+        one=one,
+        params=PnoParams(symbol="TEST/USDT", pno_r_trade=20.0, entry_confirmation_mode="close_above"),
+        armed=armed,
+    )
+
+    assert trade is not None
+    assert trade.entry_timestamp_ms == 180_000
+    assert trade.result_type == TradeResultType.TP2
+    assert trade.metadata["entry_confirmation_mode"] == "close_above"
+    assert trade.metadata["entry_signal_kind"] == "close_above"
+    assert exit_idx == 3
 
 
 def test_pno_level_maturity_fraction_is_based_on_time_since_main_high() -> None:

@@ -11,12 +11,14 @@ PNO_DEFAULT_LEVELS_TIMEFRAME = Timeframe.M5
 PNO_DEFAULT_ENTRY_TIMEFRAME = Timeframe.M1
 PNO_SUPPORTED_LEVELS_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.M5,)
 PNO_SUPPORTED_ENTRY_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.M1,)
+PNO_SUPPORTED_ENTRY_CONFIRMATION_MODES: tuple[str, ...] = ("cross", "close_above")
 
 
 @dataclass(frozen=True, slots=True)
 class PnoParams:
     symbol: str
     pno_variant_id: str = "baseline"
+    entry_confirmation_mode: str = "cross"
     levels_timeframe: Timeframe = PNO_DEFAULT_LEVELS_TIMEFRAME
     entry_timeframe: Timeframe = PNO_DEFAULT_ENTRY_TIMEFRAME
     pno_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
@@ -64,6 +66,11 @@ def validate_pno_params(params: PnoParams) -> None:
     if params.entry_timeframe not in PNO_SUPPORTED_ENTRY_TIMEFRAMES:
         supported = ", ".join(timeframe.value for timeframe in PNO_SUPPORTED_ENTRY_TIMEFRAMES)
         raise ValueError(f"pno supports only entry_timeframe in {{{supported}}}, got {params.entry_timeframe.value}")
+    if params.entry_confirmation_mode not in PNO_SUPPORTED_ENTRY_CONFIRMATION_MODES:
+        supported = ", ".join(PNO_SUPPORTED_ENTRY_CONFIRMATION_MODES)
+        raise ValueError(
+            f"pno supports only entry_confirmation_mode in {{{supported}}}, got {params.entry_confirmation_mode}"
+        )
     if params.levels_timeframe not in PNO_SUPPORTED_LEVELS_TIMEFRAMES:
         supported = ", ".join(timeframe.value for timeframe in PNO_SUPPORTED_LEVELS_TIMEFRAMES)
         raise ValueError(f"pno supports only levels_timeframe in {{{supported}}}, got {params.levels_timeframe.value}")
@@ -125,8 +132,8 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("level_min_maturity_fraction must be in range (0, 1]")
     if params.level_rearm_min_distance_v1 <= 0.0:
         raise ValueError("level_rearm_min_distance_v1 must be > 0")
-    if params.max_level_touches < 2:
-        raise ValueError("max_level_touches must be >= 2")
+    if params.max_level_touches < 1:
+        raise ValueError("max_level_touches must be >= 1")
     if params.min_score <= 0.0 or params.strong_score < params.min_score:
         raise ValueError("score thresholds are invalid")
     if params.slip_plan_v1_fraction < 0.0 or params.slip_plan_v1_fraction > 1.0:
@@ -138,7 +145,10 @@ def validate_pno_params(params: PnoParams) -> None:
 
 
 def build_pno_grid() -> list[PnoParams]:
-    return [PnoParams(symbol="", pno_variant_id="baseline")]
+    return [
+        PnoParams(symbol="", pno_variant_id="baseline_cross", entry_confirmation_mode="cross"),
+        PnoParams(symbol="", pno_variant_id="baseline_close", entry_confirmation_mode="close_above"),
+    ]
 
 
 def with_pno_risk(params: PnoParams, *, deposit: float, risk_pct: float) -> PnoParams:

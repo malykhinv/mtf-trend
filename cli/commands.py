@@ -356,6 +356,10 @@ def _build_pno_params_from_row(
         resolved = _optional_int(column_name)
         return default if resolved is None else resolved
 
+    def _str_or_default(column_name: str, default: str) -> str:
+        raw_value = row.get(column_name)
+        return default if _is_missing_scalar(raw_value) else str(raw_value)
+
     defaults = PnoParams(
         symbol=symbol,
         levels_timeframe=levels_timeframe,
@@ -371,6 +375,10 @@ def _build_pno_params_from_row(
     return PnoParams(
         symbol=symbol,
         pno_variant_id=str(row.get("pno_variant_id", defaults.pno_variant_id)),
+        entry_confirmation_mode=_str_or_default(
+            "pno_entry_confirmation_mode",
+            defaults.entry_confirmation_mode,
+        ),
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
         pno_deposit=deposit,

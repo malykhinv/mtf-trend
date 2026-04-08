@@ -51,6 +51,7 @@ class PnoStrategy(BaseStrategy[PnoParams]):
     def params_to_row(self, params: PnoParams) -> dict[str, int | float | str | None]:
         return {
             "pno_variant_id": params.pno_variant_id,
+            "pno_entry_confirmation_mode": params.entry_confirmation_mode,
             "pno_deposit": params.pno_deposit,
             "pno_risk_pct": params.pno_risk_pct,
             "pno_r_trade": params.pno_r_trade if params.pno_r_trade is not None else params.pno_deposit * params.pno_risk_pct,

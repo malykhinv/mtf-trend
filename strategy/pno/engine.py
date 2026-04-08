@@ -1144,6 +1144,11 @@ class PnoEngine:
             start_idx=stage3.pullback_start_idx + 1,
             end_idx=idx,
         )
+        confirmed_lows = self._resolve_confirmed_lows(
+            one=one,
+            start_idx=stage3.pullback_start_idx + 1,
+            end_idx=idx,
+        )
         tolerance = float(params.level_touch_tolerance_v1) * v1_now
 
         if previous is not None and previous.active_high_idx == stage3.active_high_idx:
@@ -1155,7 +1160,7 @@ class PnoEngine:
                 for retired in retired_clusters
             ):
                 return None
-            if len(previous.cluster_indices) < 2:
+            if len(previous.cluster_indices) < 1:
                 return None
 
             touch_indices = tuple(
@@ -1165,7 +1170,8 @@ class PnoEngine:
                 and float(one.highs[high_idx]) < (stage3.active_high - self._EPSILON)
                 and abs(float(one.highs[high_idx]) - previous.level) <= tolerance
             )
-            if len(touch_indices) < 2:
+            min_required_touches = max(1, len(previous.cluster_indices))
+            if len(touch_indices) < min_required_touches:
                 return None
             latest_touch_idx = int(max(touch_indices))
             if (idx - latest_touch_idx) > params.level_latest_high_max_age_bars:
@@ -1249,6 +1255,7 @@ class PnoEngine:
             idx=idx,
             stage3=stage3,
             confirmed_highs=confirmed_highs,
+            confirmed_lows=confirmed_lows,
             params=params,
             retired_clusters=retired_clusters,
         )
@@ -1266,7 +1273,8 @@ class PnoEngine:
             and float(one.highs[high_idx]) < (stage3.active_high - self._EPSILON)
             and abs(float(one.highs[high_idx]) - level) <= tolerance
         )
-        if len(touch_indices) < 2:
+        min_required_touches = max(1, len(cluster_indices))
+        if len(touch_indices) < min_required_touches:
             return None
         latest_touch_idx = int(max(touch_indices))
         if (idx - latest_touch_idx) > params.level_latest_high_max_age_bars:
@@ -1433,13 +1441,20 @@ class PnoEngine:
 
         cluster_spread = max(stage4.cluster_prices) - min(stage4.cluster_prices)
         if cluster_spread <= (float(params.level_cluster_spread_v1) * v1_now):
-            cluster_clarity_score = 8 if len(stage4.cluster_indices) >= 3 else 7
+            if len(stage4.cluster_indices) >= 3:
+                cluster_clarity_score = 8
+            elif len(stage4.cluster_indices) == 2:
+                cluster_clarity_score = 7
+            else:
+                cluster_clarity_score = 4
         elif cluster_spread <= (float(params.level_cluster_relaxed_spread_v1) * v1_now):
-            cluster_clarity_score = 5
+            cluster_clarity_score = 5 if len(stage4.cluster_indices) >= 2 else 3
         else:
             cluster_clarity_score = 0
         compression_score = self._resolve_compression_score(one=one, stage4=stage4, confirmed_lows=confirmed_lows)
-        if stage4.touches <= 3:
+        if stage4.touches <= 1:
+            touches_score = 1
+        elif stage4.touches <= 3:
             touches_score = 4
         elif stage4.touches == 4:
             touches_score = 2
@@ -1565,19 +1580,20 @@ class PnoEngine:
         idx: int,
         stage3: Stage3Context,
         confirmed_highs: list[int],
+        confirmed_lows: list[int],
         params: PnoParams,
         retired_clusters: list[RetiredCluster],
     ) -> tuple[tuple[int, ...], tuple[float, ...]] | None:
-        if len(confirmed_highs) < 2:
+        if len(confirmed_highs) < 1:
             return None
 
         v1_now = max(float(one.v1[idx]), self._EPSILON)
         max_spread = float(params.level_cluster_relaxed_spread_v1) * v1_now
-        for end_pos in range(len(confirmed_highs) - 1, 0, -1):
+        for end_pos in range(len(confirmed_highs) - 1, -1, -1):
             latest_idx = int(confirmed_highs[end_pos])
             if (idx - latest_idx) > params.level_latest_high_max_age_bars:
                 continue
-            for cluster_size in (3, 2):
+            for cluster_size in (3, 2, 1):
                 if (end_pos + 1) < cluster_size:
                     continue
                 indices = tuple(int(item) for item in confirmed_highs[end_pos - cluster_size + 1 : end_pos + 1])
@@ -1585,6 +1601,13 @@ class PnoEngine:
                     continue
                 prices = tuple(float(one.highs[item]) for item in indices)
                 if any(price >= (stage3.active_high - self._EPSILON) for price in prices):
+                    continue
+                if cluster_size == 1 and not self._is_single_touch_level_candidate(
+                    one=one,
+                    idx=idx,
+                    high_idx=indices[0],
+                    confirmed_lows=confirmed_lows,
+                ):
                     continue
                 spread = max(prices) - min(prices)
                 if spread > max_spread:
@@ -1609,6 +1632,18 @@ class PnoEngine:
                     continue
                 return indices, prices
         return None
+
+    def _is_single_touch_level_candidate(
+        self,
+        *,
+        one: OneMinuteFrame,
+        idx: int,
+        high_idx: int,
+        confirmed_lows: list[int],
+    ) -> bool:
+        if high_idx >= idx:
+            return False
+        return any(low_idx > high_idx and low_idx <= idx for low_idx in confirmed_lows)
 
     def _is_cluster_rearm_allowed(
         self,
@@ -1824,11 +1859,27 @@ class PnoEngine:
         open_price = float(one.opens[entry_idx])
         high_price = float(one.highs[entry_idx])
         low_price = float(one.lows[entry_idx])
-        if open_price >= armed.stage4.level or high_price < armed.stage4.level:
+        close_price = float(one.closes[entry_idx])
+        confirmation_mode = str(getattr(params, "entry_confirmation_mode", "cross"))
+        actual_entry_idx = entry_idx
+        signal_kind = "cross"
+        if confirmation_mode == "cross":
+            if open_price >= armed.stage4.level or high_price < armed.stage4.level:
+                return None, entry_idx
+            entry_price = min(high_price, armed.stage4.entry_plan)
+            stop_loss = min(low_price, armed.stage4.low_last_red_plan)
+        elif confirmation_mode == "close_above":
+            if high_price < armed.stage4.level or close_price <= armed.stage4.level:
+                return None, entry_idx
+            actual_entry_idx = entry_idx + 1
+            if actual_entry_idx >= len(one.timestamps):
+                return None, entry_idx
+            entry_price = float(one.opens[actual_entry_idx])
+            stop_loss = min(low_price, armed.stage4.low_last_red_plan)
+            signal_kind = "close_above"
+        else:
             return None, entry_idx
 
-        entry_price = min(high_price, armed.stage4.entry_plan)
-        stop_loss = min(low_price, armed.stage4.low_last_red_plan)
         position_size = self._resolve_position_size(params=params, entry_price=entry_price, stop_loss=stop_loss)
         if position_size <= 0.0:
             return None, entry_idx
@@ -1864,6 +1915,9 @@ class PnoEngine:
             "entry_pos": round(float(armed.stage4.entry_pos), 4),
             "touches": int(armed.stage4.touches),
             "pno_index": int(armed.stage4.pno_index),
+            "entry_confirmation_mode": confirmation_mode,
+            "entry_signal_kind": signal_kind,
+            "entry_signal_timestamp_ms": int(one.timestamps[entry_idx]),
             "entry_plan": round(float(armed.stage4.entry_plan), 8),
             "sl_plan": round(float(armed.stage4.sl_plan), 8),
             "tp1": round(float(armed.stage4.tp1), 8),
@@ -1886,7 +1940,7 @@ class PnoEngine:
             "sl_actual": round(float(stop_loss), 8),
         }
 
-        if low_price <= armed.stage4.low_last_red_plan:
+        if confirmation_mode == "cross" and low_price <= armed.stage4.low_last_red_plan:
             pnl = self._net_leg_pnl(
                 entry_price=entry_price,
                 exit_price=stop_loss,
@@ -1913,7 +1967,7 @@ class PnoEngine:
             one=one,
             params=params,
             armed=armed,
-            entry_idx=entry_idx,
+            entry_idx=actual_entry_idx,
             entry_price=entry_price,
             stop_loss=stop_loss,
             position_size=position_size,
