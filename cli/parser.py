@@ -110,6 +110,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Export cumulative PPA logical stages 1..N in diagnostics (1..6)",
     )
+    run_bt.add_argument(
+        "--pno-stage",
+        type=_positive_int_for("--pno-stage"),
+        default=None,
+        help="Export only one PNO logical stage in diagnostics (1..5)",
+    )
+    run_bt.add_argument(
+        "--pno-through-stage",
+        type=_positive_int_for("--pno-through-stage"),
+        default=None,
+        help="Export cumulative PNO logical stages 1..N in diagnostics (1..5)",
+    )
     run_bt.add_argument("--plot", default=False, help="Save diagnostic files for the best combination (true/false)")
     run_bt.add_argument("--plot-from-results", action="store_true", help="Build diagnostics from results.csv without a full backtest")
     run_bt.add_argument("--results-input", default=None, help="Path to CSV with results for --plot-from-results")
@@ -330,6 +342,31 @@ def build_parser() -> argparse.ArgumentParser:
     ppa_stage.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
     ppa_stage.add_argument("--output-dir", default=None, help="Root directory for stage review results")
 
+    pno_stage = subparsers.add_parser(
+        "pno-stage",
+        help="Run compact PNO stage review on 1m/5m backtest pipeline",
+    )
+    pno_stage.add_argument(
+        "preset",
+        choices=[
+            "s1", "s2", "s3", "s4", "s5",
+            "t1", "t2", "t3", "t4", "t5",
+            "stage1", "stage2", "stage3", "stage4", "stage5",
+            "through1", "through2", "through3", "through4", "through5",
+        ],
+        help="Stage preset: sN/stageN for one stage, tN/throughN for cumulative 1..N",
+    )
+    pno_stage.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
+    pno_stage.add_argument(
+        "--top-n",
+        type=_positive_int_for("--top-n"),
+        default=None,
+        help="Number of symbols after volume pre-rank",
+    )
+    pno_stage.add_argument("--pno-deposit", type=float, default=None, help="Deposit used for PNO sizing")
+    pno_stage.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per trade for PNO")
+    pno_stage.add_argument("--output-dir", default=None, help="Root directory for stage review results")
+
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     quality.add_argument("--output", default=None, help=f"Path to quality report (.json or .csv). Default: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
@@ -353,6 +390,7 @@ def resolve_handler(command_name: str) -> Handler:
         "run-hourly-pump-short-edge-search": commands.run_hourly_pump_short_edge_search,
         "run-hourly-pump-session-short-search": commands.run_hourly_pump_session_short_search,
         "ppa-stage": commands.run_ppa_stage,
+        "pno-stage": commands.run_pno_stage,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
     }

@@ -121,6 +121,12 @@ _PPA_STAGE_PRESETS: dict[str, tuple[int | None, int | None]] = {
     **{f"t{idx}": (None, idx) for idx in range(1, len(PPA_STAGE_SEQUENCE) + 1)},
     **{f"through{idx}": (None, idx) for idx in range(1, len(PPA_STAGE_SEQUENCE) + 1)},
 }
+_PNO_STAGE_PRESETS: dict[str, tuple[int | None, int | None]] = {
+    **{f"s{idx}": (idx, None) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
+    **{f"stage{idx}": (idx, None) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
+    **{f"t{idx}": (None, idx) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
+    **{f"through{idx}": (None, idx) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
+}
 
 
 def _to_bool_flag(value: object, *, default: bool = False) -> bool:
@@ -426,12 +432,42 @@ def _resolve_ppa_stage_ids(args: argparse.Namespace) -> tuple[str, ...]:
     return tuple(PPA_STAGE_SEQUENCE)
 
 
+def _resolve_pno_stage_ids(args: argparse.Namespace) -> tuple[str, ...]:
+    raw_stage = getattr(args, "pno_stage", None)
+    raw_through_stage = getattr(args, "pno_through_stage", None)
+    if raw_stage is not None and raw_through_stage is not None:
+        raise ValueError("Use only one of --pno-stage or --pno-through-stage")
+
+    if raw_stage is not None:
+        stage_number = int(raw_stage)
+        if stage_number < 1 or stage_number > len(PNO_STAGE_SEQUENCE):
+            raise ValueError(f"--pno-stage must be in range 1..{len(PNO_STAGE_SEQUENCE)}")
+        return (PNO_STAGE_SEQUENCE[stage_number - 1],)
+
+    if raw_through_stage is not None:
+        stage_number = int(raw_through_stage)
+        if stage_number < 1 or stage_number > len(PNO_STAGE_SEQUENCE):
+            raise ValueError(f"--pno-through-stage must be in range 1..{len(PNO_STAGE_SEQUENCE)}")
+        return tuple(PNO_STAGE_SEQUENCE[:stage_number])
+
+    return tuple(PNO_STAGE_SEQUENCE)
+
+
 def _resolve_ppa_stage_preset(raw_value: object) -> tuple[int | None, int | None, str]:
     preset = str(raw_value or "").strip().lower()
     if preset not in _PPA_STAGE_PRESETS:
         supported = ", ".join(sorted(_PPA_STAGE_PRESETS))
         raise ValueError(f"Unsupported ppa-stage preset: {preset}. Supported: {supported}")
     stage, through_stage = _PPA_STAGE_PRESETS[preset]
+    return stage, through_stage, preset
+
+
+def _resolve_pno_stage_preset(raw_value: object) -> tuple[int | None, int | None, str]:
+    preset = str(raw_value or "").strip().lower()
+    if preset not in _PNO_STAGE_PRESETS:
+        supported = ", ".join(sorted(_PNO_STAGE_PRESETS))
+        raise ValueError(f"Unsupported pno-stage preset: {preset}. Supported: {supported}")
+    stage, through_stage = _PNO_STAGE_PRESETS[preset]
     return stage, through_stage, preset
 
 
@@ -657,6 +693,7 @@ def _plot_pno_diagnostics_for_symbols(
     output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
     diagnostics_dir = output_dir / "pno_diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    selected_stage_ids = _resolve_pno_stage_ids(args)
 
     symbols_with_trades = 0
     symbols_with_stage_events = 0
@@ -664,7 +701,7 @@ def _plot_pno_diagnostics_for_symbols(
     total_stage_events = 0
     stage_rows_by_stage: dict[str, list[dict[str, object]]] = {
         stage_id: []
-        for stage_id in PNO_STAGE_SEQUENCE
+        for stage_id in selected_stage_ids
     }
 
     for symbol, mtf_frames in symbol_frames.items():
@@ -717,15 +754,16 @@ def _plot_pno_diagnostics_for_symbols(
     _export_ppa_stage_reviews(
         diagnostics_dir=diagnostics_dir,
         stage_rows_by_stage=stage_rows_by_stage,
-        selected_stage_ids=PNO_STAGE_SEQUENCE,
+        selected_stage_ids=selected_stage_ids,
     )
 
     logger.info(
-        "%s: сохранена диагностика pno stage_symbols=%s stage_events=%s trades_generated=%s output_dir=%s",
+        "%s: сохранена диагностика pno stage_symbols=%s stage_events=%s trades_generated=%s stages=%s output_dir=%s",
         log_prefix,
         symbols_with_stage_events,
         total_stage_events,
         total_trades_generated,
+        ",".join(selected_stage_ids),
         diagnostics_dir,
     )
     if total_stage_events == 0 and symbols_with_trades == 0:
@@ -904,6 +942,86 @@ def _select_ppa_plot_params_row_by_stage(
     best_score = max(scored_rows, key=lambda item: item[:4])
     logger.info(
         "запуск-бэктеста: stage-plot selected row by stage_events=%s trades_generated=%s profit_factor=%.4f",
+        best_score[0],
+        best_score[1],
+        best_score[2],
+    )
+    return best_score[4]
+
+
+def _select_pno_plot_params_row_by_stage(
+    *,
+    args: argparse.Namespace,
+    strategy: PnoStrategy,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    results: pd.DataFrame,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    logger: Logger,
+) -> pd.Series | None:
+    if results.empty or not symbol_frames:
+        return None
+
+    selected_stage_ids = set(_resolve_pno_stage_ids(args))
+    selected_stage_columns = [_ppa_stage_metric_column_name(stage_id) for stage_id in selected_stage_ids]
+    if selected_stage_columns and all(column in results.columns for column in selected_stage_columns):
+        scored_rows: list[tuple[int, int, float, int, pd.Series]] = []
+        for row_index, (_, row) in enumerate(results.iterrows()):
+            stage_events_count = 0
+            for column in selected_stage_columns:
+                raw_value = pd.to_numeric(row.get(column, 0), errors="coerce")
+                if not pd.isna(raw_value):
+                    stage_events_count += int(raw_value)
+            raw_trades_count = pd.to_numeric(row.get("trades_count", 0), errors="coerce")
+            trades_generated = int(raw_trades_count) if not pd.isna(raw_trades_count) else 0
+            profit_factor = float(row.get("profit_factor", 0.0) or 0.0)
+            scored_rows.append((stage_events_count, trades_generated, profit_factor, -row_index, row))
+
+        if not scored_rows:
+            return None
+
+        best_score = max(scored_rows, key=lambda item: item[:4])
+        logger.info(
+            "run-backtest: pno stage-plot selected row from results stage_events=%s trades_generated=%s profit_factor=%.4f",
+            best_score[0],
+            best_score[1],
+            best_score[2],
+        )
+        return best_score[4]
+
+    scored_rows: list[tuple[int, int, float, int, pd.Series]] = []
+    for row_index, (_, row) in enumerate(results.iterrows()):
+        stage_events_count = 0
+        trades_generated = 0
+
+        for symbol, mtf_frames in symbol_frames.items():
+            params = _build_pno_params_from_row(
+                row,
+                symbol=symbol,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+            )
+            strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+            diagnostics = strategy.consume_last_generation_diagnostics()
+
+            stage_events = diagnostics.get("stage_events", [])
+            if isinstance(stage_events, list):
+                stage_events_count += sum(
+                    1
+                    for event in stage_events
+                    if isinstance(event, dict) and event.get("stage_id") in selected_stage_ids
+                )
+            trades_generated += int(diagnostics.get("trades_generated", 0) or 0)
+
+        profit_factor = float(row.get("profit_factor", 0.0) or 0.0)
+        scored_rows.append((stage_events_count, trades_generated, profit_factor, -row_index, row))
+
+    if not scored_rows:
+        return None
+
+    best_score = max(scored_rows, key=lambda item: item[:4])
+    logger.info(
+        "run-backtest: pno stage-plot selected row by stage_events=%s trades_generated=%s profit_factor=%.4f",
         best_score[0],
         best_score[1],
         best_score[2],
@@ -1562,6 +1680,38 @@ def _with_ppa_stage_timeframe(
     cloned.plot = True
     cloned.ppa_stage = preset_stage
     cloned.ppa_through_stage = preset_through_stage
+    return cloned
+
+
+def _with_pno_stage_args(
+    args: argparse.Namespace,
+    *,
+    preset_stage: int | None,
+    preset_through_stage: int | None,
+) -> argparse.Namespace:
+    cloned = argparse.Namespace(**vars(args))
+    cloned.command = "run-backtest"
+    cloned.strategy = "pno"
+    cloned.entry_tf = PNO_DEFAULT_ENTRY_TIMEFRAME.value
+    cloned.levels_tf = PNO_DEFAULT_LEVELS_TIMEFRAME.value
+    cloned.plot = True
+    cloned.plot_from_results = False
+    cloned.results_input = None
+    cloned.id = None
+    cloned.bee_bite_grid = None
+    cloned.bee_bite_reclaim_mode = None
+    cloned.bee_bite_retest_mode = None
+    cloned.bee_bite_cooldown_hours = None
+    cloned.bee_bite_max_age_range_hours = None
+    cloned.bee_bite_deposit = None
+    cloned.bee_bite_risk_pct = None
+    cloned.ppa_profile = None
+    cloned.ppa_deposit = None
+    cloned.ppa_risk_pct = None
+    cloned.ppa_stage = None
+    cloned.ppa_through_stage = None
+    cloned.pno_stage = preset_stage
+    cloned.pno_through_stage = preset_through_stage
     return cloned
 
 
@@ -2238,6 +2388,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         and (getattr(args, "ppa_stage", None) is not None or getattr(args, "ppa_through_stage", None) is not None)
     ):
         stage_metric_ids_for_run = _resolve_ppa_stage_ids(args)
+    elif (
+        should_plot
+        and strategy_id == "pno"
+        and (getattr(args, "pno_stage", None) is not None or getattr(args, "pno_through_stage", None) is not None)
+    ):
+        stage_metric_ids_for_run = _resolve_pno_stage_ids(args)
 
     results = runner.run(
         strategy,
@@ -2292,6 +2448,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             )
             if best_row is None:
                 logger.warning("запуск-бэктеста: stage plot selection returned no params row")
+                return 0
+        elif strategy_id == "pno" and (
+            getattr(args, "pno_stage", None) is not None or getattr(args, "pno_through_stage", None) is not None
+        ):
+            best_row = _select_pno_plot_params_row_by_stage(
+                args=args,
+                strategy=strategy,
+                symbol_frames=symbol_frames,
+                results=results,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                logger=logger,
+            )
+            if best_row is None:
+                logger.warning("запуск-бэктеста: pno stage plot selection returned no params row")
                 return 0
         else:
             best_row = results.iloc[0]
@@ -2679,6 +2850,34 @@ def _collect_ppa_stage_summary_rows(
     return summary_rows
 
 
+def _collect_pno_stage_summary_rows(
+    *,
+    scoped_results_dir: Path,
+    preset_name: str,
+) -> list[dict[str, object]]:
+    strategy_results_dir = _resolve_results_dir_for_strategy(
+        Path(scoped_results_dir),
+        "pno",
+    )
+    stage_reviews_dir = strategy_results_dir / "trade_plots" / "pno_diagnostics" / "stage_reviews"
+    manifest = _read_csv_or_empty(stage_reviews_dir / "manifest.csv")
+    if manifest.empty:
+        return []
+
+    summary_rows: list[dict[str, object]] = []
+    for _, row in manifest.iterrows():
+        summary_rows.append(
+            {
+                "preset": preset_name,
+                "stage_id": row.get("stage_id"),
+                "events_count": row.get("events_count"),
+                "events_path": row.get("events_path"),
+                "summary_path": row.get("summary_path"),
+            }
+        )
+    return summary_rows
+
+
 def _run_ppa_stage_timeframe_job(
     *,
     config: AppConfig,
@@ -2705,6 +2904,66 @@ def _run_ppa_stage_timeframe_job(
         preset_name=preset_name,
     )
     return timeframe.value, exit_code, summary_rows
+
+
+def _run_pno_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("pno-stage", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    preset_stage, preset_through_stage, preset_name = _resolve_pno_stage_preset(getattr(args, "preset", None))
+    timestamp_label = time.strftime("%Y%m%d_%H%M%S")
+    root_output_dir = (
+        Path(args.output_dir)
+        if getattr(args, "output_dir", None)
+        else Path(config.backtest.results_dir) / "stage_review" / "pno" / preset_name / timestamp_label
+    )
+    root_output_dir.mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "pno-stage: preset=%s stage=%s through_stage=%s output_dir=%s",
+        preset_name,
+        preset_stage,
+        preset_through_stage,
+        root_output_dir,
+    )
+
+    scoped_config = deepcopy(config)
+    scoped_config.strategy.strategy_id = "pno"
+    scoped_config.backtest.results_dir = root_output_dir
+    scoped_args = _with_pno_stage_args(
+        args,
+        preset_stage=preset_stage,
+        preset_through_stage=preset_through_stage,
+    )
+    exit_code = _run_backtest_inner(scoped_config, scoped_args)
+    summary_rows = _collect_pno_stage_summary_rows(
+        scoped_results_dir=Path(scoped_config.backtest.results_dir),
+        preset_name=preset_name,
+    )
+
+    summary_path = root_output_dir / "stage_review_summary.csv"
+    pd.DataFrame(summary_rows).to_csv(summary_path, index=False)
+    context_path = root_output_dir / "stage_review_context.json"
+    context_path.write_text(
+        json.dumps(
+            {
+                "preset": preset_name,
+                "stage": preset_stage,
+                "through_stage": preset_through_stage,
+                "symbols": list(getattr(args, "symbols", None) or []),
+                "top_n": getattr(args, "top_n", None),
+                "entry_timeframe": PNO_DEFAULT_ENTRY_TIMEFRAME.value,
+                "levels_timeframe": PNO_DEFAULT_LEVELS_TIMEFRAME.value,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    logger.info(
+        "pno-stage: summary=%s context=%s",
+        summary_path,
+        context_path,
+    )
+    return exit_code
 
 
 def _run_ppa_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
@@ -3106,6 +3365,11 @@ def run_hourly_pump_session_short_search(config: AppConfig, args: argparse.Names
 def run_ppa_stage(config: AppConfig, args: argparse.Namespace) -> int:
     """Runs compact stage review for post_pump_absorption across micro timeframes."""
     return _run_with_logging("ppa-stage", config, lambda: _run_ppa_stage_inner(config, args))
+
+
+def run_pno_stage(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs compact stage review for PNO on the standard 1m/5m pipeline."""
+    return _run_with_logging("pno-stage", config, lambda: _run_pno_stage_inner(config, args))
 
 
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:

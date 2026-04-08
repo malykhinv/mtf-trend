@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import pandas as pd
 
 from cli import commands
+from cli.parser import build_parser, resolve_handler
 from config.app_config import AppConfig
 from config.backtest_config import BacktestConfig
 from config.fetch_config import FetchConfig
@@ -192,3 +193,83 @@ def test_load_plot_params_row_from_results_supports_pno(tmp_path) -> None:
 
     assert row is not None
     assert str(row["pno_variant_id"]) == "baseline"
+
+
+def test_resolve_pno_stage_ids_supports_single_and_through() -> None:
+    single = commands._resolve_pno_stage_ids(
+        argparse.Namespace(pno_stage=3, pno_through_stage=None)
+    )
+    through = commands._resolve_pno_stage_ids(
+        argparse.Namespace(pno_stage=None, pno_through_stage=2)
+    )
+
+    assert single == ("stage_3_valid_pullback",)
+    assert through == ("stage_1_pump", "stage_2_high_pullback")
+
+
+def test_plot_pno_diagnostics_filters_selected_stage_ids(tmp_path, monkeypatch) -> None:
+    strategy = PnoStrategy(deposit=1_000.0, risk_pct=0.02)
+    params_row = pd.Series(strategy.params_to_row(PnoParams(symbol="BTC/USDT")))
+    frame = pd.DataFrame(
+        {
+            "timestamp": [60_000, 120_000],
+            "open": [1.0, 1.1],
+            "high": [1.2, 1.3],
+            "low": [0.9, 1.0],
+            "close": [1.1, 1.2],
+            "volume": [10.0, 11.0],
+        }
+    )
+    symbol_frames = {
+        "BTC/USDT": SymbolMtfFrames(
+            levels_timeframe=Timeframe.M5,
+            entry_timeframe=Timeframe.M1,
+            levels_frame=frame,
+            entry_frame=frame,
+        )
+    }
+
+    monkeypatch.setattr(strategy, "generate_events_multi_tf", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        strategy,
+        "consume_last_generation_diagnostics",
+        lambda: {
+            "trades_generated": 0,
+            "stage_events": [
+                {"stage_id": "stage_1_pump", "timestamp_ms": 60_000},
+                {"stage_id": "stage_2_high_pullback", "timestamp_ms": 120_000},
+                {"stage_id": "stage_4_level", "timestamp_ms": 180_000},
+            ],
+            "stage_hits": {
+                "stage_1_pump": 1,
+                "stage_2_high_pullback": 1,
+                "stage_3_valid_pullback": 0,
+                "stage_4_level": 1,
+                "stage_5_trade": 0,
+            },
+        },
+    )
+
+    commands._plot_pno_diagnostics_for_symbols(
+        config=SimpleNamespace(backtest=SimpleNamespace(results_dir=tmp_path)),
+        args=argparse.Namespace(output_dir=None, pno_stage=2, pno_through_stage=None),
+        logger=logging.getLogger("test-pno-plot-filtered"),
+        strategy=strategy,
+        symbol_frames=symbol_frames,
+        params_row=params_row,
+        levels_timeframe=Timeframe.M5,
+        entry_timeframe=Timeframe.M1,
+        log_prefix="test",
+    )
+
+    manifest = pd.read_csv(tmp_path / "trade_plots" / "pno_diagnostics" / "stage_reviews" / "manifest.csv")
+    assert list(manifest["stage_id"]) == ["stage_2_high_pullback"]
+
+
+def test_parser_supports_pno_stage_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["pno-stage", "s4"])
+
+    assert args.command == "pno-stage"
+    assert args.preset == "s4"
+    assert resolve_handler(args.command) is commands.run_pno_stage
