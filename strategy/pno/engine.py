@@ -327,7 +327,7 @@ class PnoEngine:
             return []
 
         one = self._prepare_1m_frame(prepared_entry)
-        five = self._prepare_5m_frame(prepared_levels, prepared_entry)
+        five = self._prepare_5m_frame(prepared_levels, prepared_entry, params)
         trades = self._run(one=one, five=five, params=params, diagnostics=diagnostics)
         diagnostics["trades_generated"] = len(trades)
         self._last_generation_diagnostics = diagnostics
@@ -381,7 +381,7 @@ class PnoEngine:
             confirmed_low_confirmed_at=confirmed_low_confirmed_at,
         )
 
-    def _prepare_5m_frame(self, frame: pd.DataFrame, entry_frame: pd.DataFrame) -> FiveMinuteFrame:
+    def _prepare_5m_frame(self, frame: pd.DataFrame, entry_frame: pd.DataFrame, params: PnoParams) -> FiveMinuteFrame:
         work = frame.copy()
         work["quote_volume"] = work["close"] * work["volume"]
         work["trade_activity"] = work["volume"]
@@ -454,6 +454,7 @@ class PnoEngine:
             entry_frame=entry_frame,
             timestamps=work["timestamp"].astype("int64").to_numpy(),
             ema20=work["ema20"].astype("float64").to_numpy(),
+            params=params,
         )
         work["inplay"] = inplay
         work["pump_start_idx"] = pump_start_idx
@@ -510,12 +511,14 @@ class PnoEngine:
         entry_frame: pd.DataFrame,
         timestamps: np.ndarray,
         ema20: np.ndarray,
+        params: PnoParams,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return self._build_fallback_stage1_state(
             levels_frame=levels_frame,
             entry_frame=entry_frame,
             timestamps=timestamps,
             ema20=ema20,
+            params=params,
         )
 
     def _build_fallback_stage1_state(
@@ -525,6 +528,7 @@ class PnoEngine:
         entry_frame: pd.DataFrame,
         timestamps: np.ndarray,
         ema20: np.ndarray,
+        params: PnoParams,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         bars_count = int(len(timestamps))
         inplay = np.zeros(bars_count, dtype=bool)
@@ -612,6 +616,7 @@ class PnoEngine:
             if not inplay[idx] or active_start_idx is None or active_start_idx >= idx:
                 continue
             pump_range = float(np.nanmax(highs[active_start_idx : idx + 1]) - np.nanmin(lows[active_start_idx : idx + 1]))
+            pump_pct = self._safe_divide(pump_range, float(np.nanmin(lows[active_start_idx : idx + 1])))
             pre_range_1h = self._resolve_window_range(
                 highs=highs,
                 lows=lows,
@@ -624,7 +629,17 @@ class PnoEngine:
                 start_idx=max(0, active_start_idx - 24),
                 end_idx=active_start_idx - 1,
             )
+            pretrend_ratio_2h = self._safe_divide(pump_range, pre_range_2h)
+            if pump_pct < float(params.stage1_min_pump_pct):
+                inplay[idx] = False
+                continue
             if pump_range <= max(pre_range_1h, pre_range_2h, self._EPSILON):
+                inplay[idx] = False
+                continue
+            if pretrend_ratio_2h < float(params.stage1_min_pretrend_range_ratio_2h):
+                inplay[idx] = False
+                continue
+            if quote_expansion < float(params.stage1_min_volume_ratio_start):
                 inplay[idx] = False
                 continue
             pump_start_idx[idx] = int(active_start_idx)

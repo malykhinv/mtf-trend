@@ -43,8 +43,10 @@ class PnoParams:
     stage1_barcode_tr_price_fraction: float = 0.0010
     stage1_min_impulse_atr_pre: float = 2.5
     stage1_min_peak_bar_tr_atr_pre: float = 1.5
-    stage1_min_volume_ratio_start: float = 2.0
+    stage1_min_volume_ratio_start: float = 5.0
     stage1_min_volume_ratio_continue: float = 1.25
+    stage1_min_pump_pct: float = 0.015
+    stage1_min_pretrend_range_ratio_2h: float = 2.0
     stage1_pre_pump_high_max_fraction_of_leg: float = 0.50
     level_cluster_spread_v1: float = 0.45
     level_cluster_relaxed_spread_v1: float = 0.75
@@ -120,6 +122,10 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("stage1_min_volume_ratio_start must be > 0")
     if params.stage1_min_volume_ratio_continue <= 0.0:
         raise ValueError("stage1_min_volume_ratio_continue must be > 0")
+    if params.stage1_min_pump_pct <= 0.0:
+        raise ValueError("stage1_min_pump_pct must be > 0")
+    if params.stage1_min_pretrend_range_ratio_2h <= 1.0:
+        raise ValueError("stage1_min_pretrend_range_ratio_2h must be > 1")
     if not 0.0 < params.stage1_pre_pump_high_max_fraction_of_leg < 1.0:
         raise ValueError("stage1_pre_pump_high_max_fraction_of_leg must be in range (0, 1)")
     if params.level_cluster_spread_v1 <= 0.0 or params.level_cluster_relaxed_spread_v1 < params.level_cluster_spread_v1:

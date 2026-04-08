@@ -76,6 +76,8 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_stage1_min_peak_bar_tr_atr_pre": params.stage1_min_peak_bar_tr_atr_pre,
             "pno_stage1_min_volume_ratio_start": params.stage1_min_volume_ratio_start,
             "pno_stage1_min_volume_ratio_continue": params.stage1_min_volume_ratio_continue,
+            "pno_stage1_min_pump_pct": params.stage1_min_pump_pct,
+            "pno_stage1_min_pretrend_range_ratio_2h": params.stage1_min_pretrend_range_ratio_2h,
             "pno_stage1_pre_pump_high_max_fraction_of_leg": params.stage1_pre_pump_high_max_fraction_of_leg,
             "pno_level_cluster_spread_v1": params.level_cluster_spread_v1,
             "pno_level_cluster_relaxed_spread_v1": params.level_cluster_relaxed_spread_v1,

@@ -432,6 +432,14 @@ def _build_pno_params_from_row(
             "pno_stage1_min_volume_ratio_continue",
             defaults.stage1_min_volume_ratio_continue,
         ),
+        stage1_min_pump_pct=_float_or_default(
+            "pno_stage1_min_pump_pct",
+            defaults.stage1_min_pump_pct,
+        ),
+        stage1_min_pretrend_range_ratio_2h=_float_or_default(
+            "pno_stage1_min_pretrend_range_ratio_2h",
+            defaults.stage1_min_pretrend_range_ratio_2h,
+        ),
         stage1_pre_pump_high_max_fraction_of_leg=_float_or_default(
             "pno_stage1_pre_pump_high_max_fraction_of_leg",
             defaults.stage1_pre_pump_high_max_fraction_of_leg,
@@ -1029,18 +1037,33 @@ def _render_pno_stage_review_chart(
         return None
     pump_start_timestamp_ms = _safe_int(review_row.get("pump_start_timestamp_ms"))
     sleep_start_timestamp_ms = _safe_int(review_row.get("sleep_start_timestamp_ms"))
-    if stage_id == PNO_STAGE_SEQUENCE[0] and pump_start_timestamp_ms is not None:
-        start_timestamp_ms = (sleep_start_timestamp_ms or pump_start_timestamp_ms) - (30 * 60_000)
-        end_timestamp_ms = timestamp_ms + (15 * 60_000)
+    is_stage1 = stage_id == PNO_STAGE_SEQUENCE[0]
+    if is_stage1 and pump_start_timestamp_ms is not None:
+        start_timestamp_ms = sleep_start_timestamp_ms or max(pump_start_timestamp_ms - (120 * 60_000), 0)
+        end_timestamp_ms = timestamp_ms
     else:
         start_timestamp_ms = timestamp_ms - (90 * 60_000)
         end_timestamp_ms = timestamp_ms + (45 * 60_000)
-    plot_frame = _build_pno_plot_frame(
-        levels_frame=levels_frame,
-        entry_frame=entry_frame,
-        start_timestamp_ms=start_timestamp_ms,
-        end_timestamp_ms=end_timestamp_ms,
-    )
+    if is_stage1:
+        plot_frame = levels_frame.loc[
+            (pd.to_numeric(levels_frame["timestamp"], errors="coerce") >= start_timestamp_ms)
+            & (pd.to_numeric(levels_frame["timestamp"], errors="coerce") <= end_timestamp_ms),
+            ["timestamp", "open", "high", "low", "close", "volume"],
+        ].copy()
+        plot_frame["timestamp"] = pd.to_numeric(plot_frame["timestamp"], errors="coerce")
+        plot_frame = (
+            plot_frame.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
+            .sort_values("timestamp")
+            .drop_duplicates(subset=["timestamp"], keep="last")
+            .reset_index(drop=True)
+        )
+    else:
+        plot_frame = _build_pno_plot_frame(
+            levels_frame=levels_frame,
+            entry_frame=entry_frame,
+            start_timestamp_ms=start_timestamp_ms,
+            end_timestamp_ms=end_timestamp_ms,
+        )
     if plot_frame.empty:
         return None
 
@@ -1063,8 +1086,8 @@ def _render_pno_stage_review_chart(
     low_values = pd.to_numeric(plot_frame["low"], errors="coerce").to_numpy(dtype=np.float64)
     volume_values = pd.to_numeric(plot_frame["volume"], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
     x = np.arange(len(plot_frame), dtype=np.float64)
-    ema9 = pd.to_numeric(plot_frame["ema9"], errors="coerce").to_numpy(dtype=np.float64)
-    ema20 = pd.to_numeric(plot_frame["ema20"], errors="coerce").to_numpy(dtype=np.float64)
+    ema9 = pd.to_numeric(plot_frame["ema9"], errors="coerce").to_numpy(dtype=np.float64) if "ema9" in plot_frame.columns else np.full(len(plot_frame), np.nan, dtype=np.float64)
+    ema20 = pd.to_numeric(plot_frame["ema20"], errors="coerce").to_numpy(dtype=np.float64) if "ema20" in plot_frame.columns else np.full(len(plot_frame), np.nan, dtype=np.float64)
     timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
     event_idx = int(np.argmin(np.abs(timestamps - int(timestamp_ms))))
     pump_idx = None
@@ -1072,9 +1095,9 @@ def _render_pno_stage_review_chart(
         pump_idx = int(np.argmin(np.abs(timestamps - int(pump_start_timestamp_ms))))
 
     _draw_pno_candles(ax_price, plot_frame, x)
-    if np.isfinite(ema9).any():
+    if (not is_stage1) and np.isfinite(ema9).any():
         ax_price.plot(x, ema9, color=_PNO_PLOT_EMA9, linewidth=0.8, alpha=0.22, zorder=2)
-    if np.isfinite(ema20).any():
+    if (not is_stage1) and np.isfinite(ema20).any():
         ax_price.plot(x, ema20, color=_PNO_PLOT_EMA20, linewidth=0.8, alpha=0.20, zorder=2)
     if pump_idx is not None:
         ax_price.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=1.0, alpha=0.86, zorder=5)
@@ -1082,17 +1105,18 @@ def _render_pno_stage_review_chart(
     ax_price.axvline(event_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.68, zorder=5)
     ax_volume.axvline(event_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.58, zorder=4)
 
-    for key, color in (
-        ("active_high", "#ef4444"),
-        ("pullback_low", "#38bdf8"),
-        ("level", _PNO_PLOT_LEVEL),
-        ("entry_price", _PNO_PLOT_ENTRY),
-        ("stage1_hold_price", "#38bdf8"),
-    ):
-        value = _safe_float(review_row.get(key))
-        if value is None:
-            continue
-        ax_price.axhline(value, color=color, linewidth=0.9, alpha=0.55, zorder=1)
+    if not is_stage1:
+        for key, color in (
+            ("active_high", "#ef4444"),
+            ("pullback_low", "#38bdf8"),
+            ("level", _PNO_PLOT_LEVEL),
+            ("entry_price", _PNO_PLOT_ENTRY),
+            ("stage1_hold_price", "#38bdf8"),
+        ):
+            value = _safe_float(review_row.get(key))
+            if value is None:
+                continue
+            ax_price.axhline(value, color=color, linewidth=0.9, alpha=0.55, zorder=1)
 
     if volume_values.size > 0:
         volume_max = float(np.nanmax(volume_values)) if np.isfinite(volume_values).any() else 0.0
@@ -1108,7 +1132,7 @@ def _render_pno_stage_review_chart(
     ax_volume.set_ylim(0.0, 100.0)
     ax_volume.set_yticks([0.0, 50.0, 100.0])
     ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
-    ax_price.set_ylabel("1m", color=_PNO_PLOT_MUTED, fontsize=8)
+    ax_price.set_ylabel("5m" if is_stage1 else "1m", color=_PNO_PLOT_MUTED, fontsize=8)
     ax_volume.set_ylabel("Vol %", color=_PNO_PLOT_MUTED, fontsize=8)
 
     tick_positions = _build_pno_tick_positions(plot_frame)
