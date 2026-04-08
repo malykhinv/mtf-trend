@@ -88,6 +88,10 @@ class FiveMinuteFrame:
     wake: np.ndarray
     inplay: np.ndarray
     pump_start_idx: np.ndarray
+    sleep_start_idx: np.ndarray
+    sleep_end_idx: np.ndarray
+    stage1_confirm_idx: np.ndarray
+    stage1_hold_price: np.ndarray
     r3_quote: np.ndarray
     b24_quote: np.ndarray
     r3_trade: np.ndarray
@@ -120,6 +124,10 @@ class Stage1Context:
     leg_start: float
     leg_size: float
     hold_floor: float
+    sleep_start_timestamp: int = 0
+    sleep_end_timestamp: int = 0
+    stage1_confirm_timestamp: int = 0
+    stage1_hold_price: float = 0.0
     cumulative_quote_volume: float = 0.0
     pre_pump_ema_crosses_1h: int = 0
     pre_pump_barcode_fraction_1h: float = 0.0
@@ -314,8 +322,8 @@ class PnoEngine:
             self._last_generation_diagnostics = diagnostics
             return []
 
-        five = self._prepare_5m_frame(prepared_levels)
         one = self._prepare_1m_frame(prepared_entry)
+        five = self._prepare_5m_frame(prepared_levels, prepared_entry)
         trades = self._run(one=one, five=five, params=params, diagnostics=diagnostics)
         diagnostics["trades_generated"] = len(trades)
         self._last_generation_diagnostics = diagnostics
@@ -369,7 +377,7 @@ class PnoEngine:
             confirmed_low_confirmed_at=confirmed_low_confirmed_at,
         )
 
-    def _prepare_5m_frame(self, frame: pd.DataFrame) -> FiveMinuteFrame:
+    def _prepare_5m_frame(self, frame: pd.DataFrame, entry_frame: pd.DataFrame) -> FiveMinuteFrame:
         work = frame.copy()
         work["quote_volume"] = work["close"] * work["volume"]
         work["trade_activity"] = work["volume"]
@@ -430,79 +438,25 @@ class PnoEngine:
             & (work["r3_close_above_ema9_count"] >= 2)
             & (work["ema9"] > work["ema20"])
         )
-        inplay = np.zeros(len(work), dtype=bool)
-        pump_start_idx = np.full(len(work), -1, dtype=np.int64)
-        stacked = (
-            (work["ema20"] > work["ema50"])
-            & (work["ema50"] > work["ema100"])
-            & (work["ema100"] > work["ema200"])
+        (
+            inplay,
+            pump_start_idx,
+            sleep_start_idx,
+            sleep_end_idx,
+            stage1_confirm_idx,
+            stage1_hold_price,
+        ) = self._build_bee_bite_stage1_state(
+            levels_frame=work,
+            entry_frame=entry_frame,
+            timestamps=work["timestamp"].astype("int64").to_numpy(),
+            ema20=work["ema20"].astype("float64").to_numpy(),
         )
-        stack_start_idx: int | None = None
-        inplay_start_idx: int | None = None
-        last_local_12_high_idx: int | None = None
-        for idx in range(len(work)):
-            if bool(stacked.iloc[idx]):
-                if idx == 0 or not bool(stacked.iloc[idx - 1]):
-                    stack_start_idx = idx
-            else:
-                stack_start_idx = None
-            current_high = float(work["high"].iloc[idx])
-            local_high = float(work["high"].iloc[max(0, idx - 11) : idx + 1].max())
-            if current_high >= (local_high - self._EPSILON):
-                last_local_12_high_idx = idx
-            self_sustain = bool(
-                (work["close_above_ema20_count12"].iloc[idx] >= 8)
-                and (float(work["close"].iloc[idx]) > float(work["ema20"].iloc[idx]))
-                and (float(work["ema9"].iloc[idx]) > float(work["ema20"].iloc[idx]))
-                and (
-                    (
-                        np.isfinite(work["r3_quote"].iloc[idx])
-                        and np.isfinite(work["b24_quote"].iloc[idx])
-                        and float(work["r3_quote"].iloc[idx]) >= (1.5 * float(work["b24_quote"].iloc[idx]))
-                    )
-                    or (
-                        np.isfinite(work["r3_trade"].iloc[idx])
-                        and np.isfinite(work["b24_trade"].iloc[idx])
-                        and float(work["r3_trade"].iloc[idx]) >= (1.5 * float(work["b24_trade"].iloc[idx]))
-                    )
-                )
-            )
-            wake_transition = bool(work["wake"].iloc[idx]) and idx > 0 and bool(work["sleep"].iloc[idx - 1])
-            prev_inplay = bool(inplay[idx - 1]) if idx > 0 else False
-            if prev_inplay:
-                below_ema20_twice = (
-                    idx > 0
-                    and float(work["close"].iloc[idx]) < float(work["ema20"].iloc[idx])
-                    and float(work["close"].iloc[idx - 1]) < float(work["ema20"].iloc[idx - 1])
-                )
-                no_new_high_for_24 = (
-                    last_local_12_high_idx is not None
-                    and (idx - last_local_12_high_idx) >= 24
-                    and (
-                        self._safe_divide(float(work["activity_last6_quote"].iloc[idx]), float(work["activity_prev24_quote"].iloc[idx])) <= 1.0
-                        or self._safe_divide(float(work["activity_last6_trade"].iloc[idx]), float(work["activity_prev24_trade"].iloc[idx])) <= 1.0
-                    )
-                )
-                activity_not_expanding = (
-                    float(work["close"].iloc[idx]) < float(work["ema20"].iloc[idx])
-                    and self._safe_divide(float(work["activity_last6_quote"].iloc[idx]), float(work["activity_prev24_quote"].iloc[idx])) <= 1.0
-                    and self._safe_divide(float(work["activity_last6_trade"].iloc[idx]), float(work["activity_prev24_trade"].iloc[idx])) <= 1.0
-                )
-                inplay[idx] = not (below_ema20_twice or no_new_high_for_24 or activity_not_expanding)
-            else:
-                inplay[idx] = wake_transition or self_sustain
-                if inplay[idx]:
-                    inplay_start_idx = idx
-            if bool(inplay[idx]):
-                if idx > 0 and not bool(inplay[idx - 1]):
-                    inplay_start_idx = idx
-                pump_start_idx[idx] = (
-                    stack_start_idx
-                    if stack_start_idx is not None
-                    else (inplay_start_idx if inplay_start_idx is not None else idx)
-                )
         work["inplay"] = inplay
         work["pump_start_idx"] = pump_start_idx
+        work["sleep_start_idx"] = sleep_start_idx
+        work["sleep_end_idx"] = sleep_end_idx
+        work["stage1_confirm_idx"] = stage1_confirm_idx
+        work["stage1_hold_price"] = stage1_hold_price
         return FiveMinuteFrame(
             frame=work,
             timestamps=work["timestamp"].astype("int64").to_numpy(),
@@ -524,6 +478,10 @@ class PnoEngine:
             wake=work["wake"].astype("bool").to_numpy(),
             inplay=work["inplay"].astype("bool").to_numpy(),
             pump_start_idx=work["pump_start_idx"].astype("int64").to_numpy(),
+            sleep_start_idx=work["sleep_start_idx"].astype("int64").to_numpy(),
+            sleep_end_idx=work["sleep_end_idx"].astype("int64").to_numpy(),
+            stage1_confirm_idx=work["stage1_confirm_idx"].astype("int64").to_numpy(),
+            stage1_hold_price=work["stage1_hold_price"].astype("float64").to_numpy(),
             r3_quote=work["r3_quote"].astype("float64").to_numpy(),
             b24_quote=work["b24_quote"].astype("float64").to_numpy(),
             r3_trade=work["r3_trade"].astype("float64").to_numpy(),
@@ -540,6 +498,176 @@ class PnoEngine:
             pre_quote_median_24=work["pre_quote_median_24"].astype("float64").to_numpy(),
             pre_trade_median_24=work["pre_trade_median_24"].astype("float64").to_numpy(),
         )
+
+    def _build_bee_bite_stage1_state(
+        self,
+        *,
+        levels_frame: pd.DataFrame,
+        entry_frame: pd.DataFrame,
+        timestamps: np.ndarray,
+        ema20: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        return self._build_fallback_stage1_state(
+            levels_frame=levels_frame,
+            entry_frame=entry_frame,
+            timestamps=timestamps,
+            ema20=ema20,
+        )
+
+    def _build_fallback_stage1_state(
+        self,
+        *,
+        levels_frame: pd.DataFrame,
+        entry_frame: pd.DataFrame,
+        timestamps: np.ndarray,
+        ema20: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        bars_count = int(len(timestamps))
+        inplay = np.zeros(bars_count, dtype=bool)
+        pump_start_idx = np.full(bars_count, -1, dtype=np.int64)
+        sleep_start_idx = np.full(bars_count, -1, dtype=np.int64)
+        sleep_end_idx = np.full(bars_count, -1, dtype=np.int64)
+        stage1_confirm_idx = np.full(bars_count, -1, dtype=np.int64)
+        stage1_hold_price = np.full(bars_count, np.nan, dtype=np.float64)
+        if bars_count == 0:
+            return inplay, pump_start_idx, sleep_start_idx, sleep_end_idx, stage1_confirm_idx, stage1_hold_price
+
+        five = levels_frame.reset_index(drop=True)
+        one_support = self._build_one_minute_stage1_support(entry_frame=entry_frame, five_timestamps=timestamps)
+        sleep = five["sleep"].astype("bool").to_numpy() if "sleep" in five.columns else np.zeros(bars_count, dtype=bool)
+        wake = five["wake"].astype("bool").to_numpy() if "wake" in five.columns else np.zeros(bars_count, dtype=bool)
+        highs = pd.to_numeric(five["high"], errors="coerce").to_numpy(dtype=np.float64)
+        lows = pd.to_numeric(five["low"], errors="coerce").to_numpy(dtype=np.float64)
+        closes = pd.to_numeric(five["close"], errors="coerce").to_numpy(dtype=np.float64)
+        ema9 = pd.to_numeric(five["ema9"], errors="coerce").to_numpy(dtype=np.float64)
+        r3_quote = pd.to_numeric(five["r3_quote"], errors="coerce").to_numpy(dtype=np.float64)
+        b24_quote = pd.to_numeric(five["b24_quote"], errors="coerce").to_numpy(dtype=np.float64)
+        r3_trade = pd.to_numeric(five["r3_trade"], errors="coerce").to_numpy(dtype=np.float64)
+        b24_trade = pd.to_numeric(five["b24_trade"], errors="coerce").to_numpy(dtype=np.float64)
+        activity_last6_quote = pd.to_numeric(five["activity_last6_quote"], errors="coerce").to_numpy(dtype=np.float64)
+        activity_prev24_quote = pd.to_numeric(five["activity_prev24_quote"], errors="coerce").to_numpy(dtype=np.float64)
+        activity_last6_trade = pd.to_numeric(five["activity_last6_trade"], errors="coerce").to_numpy(dtype=np.float64)
+        activity_prev24_trade = pd.to_numeric(five["activity_prev24_trade"], errors="coerce").to_numpy(dtype=np.float64)
+        local_breakout = np.zeros(bars_count, dtype=bool)
+        for idx in range(bars_count):
+            left = max(0, idx - 12)
+            if idx <= left:
+                continue
+            prior_high = float(np.nanmax(highs[left:idx]))
+            local_breakout[idx] = np.isfinite(prior_high) and float(highs[idx]) >= (prior_high - self._EPSILON)
+
+        recent_support = np.zeros(bars_count, dtype=bool)
+        for idx in range(bars_count):
+            recent_support[idx] = bool(np.any(one_support[max(0, idx - 1) : idx + 1]))
+
+        active_start_idx: int | None = None
+        below_ema20_count = 0
+        for idx in range(bars_count):
+            quote_expansion = self._safe_divide(float(r3_quote[idx]), float(b24_quote[idx]))
+            trade_expansion = self._safe_divide(float(r3_trade[idx]), float(b24_trade[idx]))
+            sustain_quote = self._safe_divide(float(activity_last6_quote[idx]), float(activity_prev24_quote[idx]))
+            sustain_trade = self._safe_divide(float(activity_last6_trade[idx]), float(activity_prev24_trade[idx]))
+            wake_transition = bool(
+                idx > 0
+                and sleep[idx - 1]
+                and wake[idx]
+                and recent_support[idx]
+                and local_breakout[idx]
+                and quote_expansion >= 2.0
+                and trade_expansion >= 2.0
+            )
+            self_sustain = bool(
+                recent_support[idx]
+                and local_breakout[idx]
+                and np.isfinite(closes[idx])
+                and np.isfinite(ema20[idx])
+                and np.isfinite(ema9[idx])
+                and closes[idx] > ema20[idx]
+                and ema9[idx] > ema20[idx]
+                and (sustain_quote >= 1.35 or sustain_trade >= 1.35)
+            )
+            prev_inplay = bool(inplay[idx - 1]) if idx > 0 else False
+            if prev_inplay:
+                if np.isfinite(ema20[idx]) and closes[idx] < (ema20[idx] - self._EPSILON):
+                    below_ema20_count += 1
+                else:
+                    below_ema20_count = 0
+                if below_ema20_count >= 2 or (sustain_quote < 1.0 and sustain_trade < 1.0):
+                    active_start_idx = None
+                    continue
+                inplay[idx] = True
+            elif wake_transition or self_sustain:
+                inplay[idx] = True
+                below_ema20_count = 0
+                active_start_idx = self._resolve_fallback_pump_start_idx(
+                    wake=wake,
+                    support=recent_support,
+                    local_breakout=local_breakout,
+                    idx=idx,
+                )
+            if not inplay[idx] or active_start_idx is None or active_start_idx >= idx:
+                continue
+            pump_start_idx[idx] = int(active_start_idx)
+            sleep_start_idx[idx] = int(max(active_start_idx - 84, 0))
+            sleep_end_idx[idx] = int(max(active_start_idx - 1, sleep_start_idx[idx]))
+            stage1_confirm_idx[idx] = int(idx)
+            base_price = float(np.nanmin(lows[active_start_idx : idx + 1]))
+            peak_price = float(np.nanmax(highs[active_start_idx : idx + 1]))
+            stage1_hold_price[idx] = base_price + (0.50 * max(peak_price - base_price, 0.0))
+
+        return inplay, pump_start_idx, sleep_start_idx, sleep_end_idx, stage1_confirm_idx, stage1_hold_price
+
+    def _build_one_minute_stage1_support(self, *, entry_frame: pd.DataFrame, five_timestamps: np.ndarray) -> np.ndarray:
+        support = np.zeros(len(five_timestamps), dtype=bool)
+        if entry_frame.empty or len(five_timestamps) == 0:
+            return support
+        one = entry_frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
+        one["quote_volume"] = pd.to_numeric(one["close"], errors="coerce") * pd.to_numeric(one["volume"], errors="coerce")
+        prev_close = pd.to_numeric(one["close"], errors="coerce").shift(1).fillna(one["close"])
+        tr = pd.concat(
+            [
+                pd.to_numeric(one["high"], errors="coerce") - pd.to_numeric(one["low"], errors="coerce"),
+                (pd.to_numeric(one["high"], errors="coerce") - prev_close).abs(),
+                (pd.to_numeric(one["low"], errors="coerce") - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        one["tr"] = tr
+        one["ema9"] = pd.to_numeric(one["close"], errors="coerce").ewm(span=9, adjust=False).mean()
+        one["ema20"] = pd.to_numeric(one["close"], errors="coerce").ewm(span=20, adjust=False).mean()
+        one["r15_quote"] = one["quote_volume"].rolling(window=15, min_periods=15).median()
+        one["b60_quote"] = one["quote_volume"].shift(15).rolling(window=60, min_periods=60).median()
+        one["r15_trade"] = pd.to_numeric(one["volume"], errors="coerce").rolling(window=15, min_periods=15).median()
+        one["b60_trade"] = pd.to_numeric(one["volume"], errors="coerce").shift(15).rolling(window=60, min_periods=60).median()
+        one["r15_tr"] = one["tr"].rolling(window=15, min_periods=15).median()
+        one["b60_tr"] = one["tr"].shift(15).rolling(window=60, min_periods=60).median()
+        one["close_above_ema20"] = (pd.to_numeric(one["close"], errors="coerce") > one["ema20"]).rolling(window=15, min_periods=15).sum()
+        one["close_above_ema9"] = (pd.to_numeric(one["close"], errors="coerce") > one["ema9"]).rolling(window=15, min_periods=15).sum()
+        support_mask = (
+            (one["r15_quote"] >= (1.8 * one["b60_quote"]))
+            & (one["r15_trade"] >= (1.8 * one["b60_trade"]))
+            & (one["r15_tr"] >= (1.5 * one["b60_tr"]))
+            & (one["close_above_ema20"] >= 10)
+            & (one["close_above_ema9"] >= 8)
+        ).fillna(False)
+        one_timestamps = pd.to_numeric(one["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
+        support_indices = np.where(support_mask.to_numpy(dtype=bool))[0]
+        if support_indices.size == 0:
+            return support
+        five_indices = np.searchsorted(five_timestamps, one_timestamps[support_indices], side="right") - 1
+        for five_idx in five_indices:
+            if 0 <= int(five_idx) < len(support):
+                support[int(five_idx)] = True
+        return support
+
+    @staticmethod
+    def _resolve_fallback_pump_start_idx(*, wake: np.ndarray, support: np.ndarray, local_breakout: np.ndarray, idx: int) -> int:
+        start_idx = idx
+        for probe_idx in range(max(0, idx - 5), idx + 1):
+            if bool(wake[probe_idx]) and bool(support[probe_idx]) and bool(local_breakout[probe_idx]):
+                start_idx = probe_idx
+                break
+        return int(start_idx)
 
     def _run(
         self,
@@ -823,11 +951,18 @@ class PnoEngine:
                     stage_keys,
                     PNO_STAGE_1_PUMP,
                     key=(stage1.pump_start_5m_idx, stage1.active_high_idx),
-                    timestamp_ms=stage1.active_high_timestamp,
+                    timestamp_ms=int(one.timestamps[i]),
                     extra={
+                        "sleep_start_timestamp_ms": stage1.sleep_start_timestamp,
+                        "sleep_end_timestamp_ms": stage1.sleep_end_timestamp,
+                        "pump_start_timestamp_ms": stage1.pump_start_timestamp,
+                        "stage1_confirm_timestamp_ms": stage1.stage1_confirm_timestamp,
+                        "active_high_timestamp_ms": stage1.active_high_timestamp,
+                        "current_timestamp_ms": int(one.timestamps[i]),
                         "active_high": round(stage1.active_high, 8),
                         "leg_start": round(stage1.leg_start, 8),
                         "leg_size": round(stage1.leg_size, 8),
+                        "stage1_hold_price": round(stage1.stage1_hold_price, 8),
                         "hold_floor": round(stage1.hold_floor, 8),
                         "cumulative_quote_volume": round(stage1.cumulative_quote_volume, 2),
                         "pre_pump_ema_crosses_1h": int(stage1.pre_pump_ema_crosses_1h),
@@ -1150,6 +1285,11 @@ class PnoEngine:
         pump_start_5m_idx = int(five.pump_start_idx[five_idx])
         if pump_start_5m_idx < 0 or pump_start_5m_idx >= len(five.timestamps):
             return None
+        sleep_start_5m_idx = int(five.sleep_start_idx[five_idx])
+        sleep_end_5m_idx = int(five.sleep_end_idx[five_idx])
+        confirm_5m_idx = int(five.stage1_confirm_idx[five_idx])
+        if sleep_start_5m_idx < 0 or sleep_end_5m_idx < sleep_start_5m_idx or confirm_5m_idx < pump_start_5m_idx:
+            return None
         start_timestamp = int(five.timestamps[pump_start_5m_idx])
         start_idx = int(np.searchsorted(one.timestamps, start_timestamp, side="left"))
         if start_idx >= idx:
@@ -1197,8 +1337,11 @@ class PnoEngine:
         return Stage1Context(
             start_idx=start_idx,
             start_timestamp=int(one.timestamps[start_idx]),
+            sleep_start_timestamp=int(five.timestamps[sleep_start_5m_idx]),
+            sleep_end_timestamp=int(five.timestamps[sleep_end_5m_idx]),
             pump_start_5m_idx=pump_start_5m_idx,
             pump_start_timestamp=start_timestamp,
+            stage1_confirm_timestamp=int(five.timestamps[confirm_5m_idx]),
             current_5m_idx=five_idx,
             active_high_idx=active_high_idx,
             active_high_timestamp=int(one.timestamps[active_high_idx]),
@@ -1208,6 +1351,7 @@ class PnoEngine:
             leg_start=leg_start,
             leg_size=leg_size,
             hold_floor=hold_floor,
+            stage1_hold_price=float(five.stage1_hold_price[five_idx]),
             cumulative_quote_volume=float(quality_metrics["cumulative_quote_volume"]),
             pre_pump_ema_crosses_1h=int(quality_metrics["pre_pump_ema_crosses_1h"]),
             pre_pump_barcode_fraction_1h=float(quality_metrics["pre_pump_barcode_fraction_1h"]),

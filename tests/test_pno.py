@@ -205,6 +205,8 @@ def test_plot_pno_diagnostics_writes_trade_and_stage_artifacts(tmp_path, monkeyp
     manifest = pd.read_csv(diagnostics_dir / "stage_reviews" / "manifest.csv")
     assert "stage_1_pump" in set(manifest["stage_id"])
     assert "stage_5_trade" in set(manifest["stage_id"])
+    stage1_row = manifest.loc[manifest["stage_id"] == "stage_1_pump"].iloc[0]
+    assert int(stage1_row["passed_charts_count"]) == 1
 
 
 def test_load_plot_params_row_from_results_supports_pno(tmp_path) -> None:

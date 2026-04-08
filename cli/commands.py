@@ -1022,11 +1022,19 @@ def _render_pno_stage_review_chart(
     review_row: dict[str, object],
     review_index: int,
 ) -> str | None:
-    timestamp_ms = _safe_int(review_row.get("timestamp_ms"))
+    stage_id = str(review_row.get("stage_id", "stage"))
+    current_timestamp_ms = _safe_int(review_row.get("current_timestamp_ms"))
+    timestamp_ms = current_timestamp_ms or _safe_int(review_row.get("timestamp_ms"))
     if timestamp_ms is None:
         return None
-    start_timestamp_ms = timestamp_ms - (90 * 60_000)
-    end_timestamp_ms = timestamp_ms + (45 * 60_000)
+    pump_start_timestamp_ms = _safe_int(review_row.get("pump_start_timestamp_ms"))
+    sleep_start_timestamp_ms = _safe_int(review_row.get("sleep_start_timestamp_ms"))
+    if stage_id == PNO_STAGE_SEQUENCE[0] and pump_start_timestamp_ms is not None:
+        start_timestamp_ms = (sleep_start_timestamp_ms or pump_start_timestamp_ms) - (30 * 60_000)
+        end_timestamp_ms = timestamp_ms + (15 * 60_000)
+    else:
+        start_timestamp_ms = timestamp_ms - (90 * 60_000)
+        end_timestamp_ms = timestamp_ms + (45 * 60_000)
     plot_frame = _build_pno_plot_frame(
         levels_frame=levels_frame,
         entry_frame=entry_frame,
@@ -1047,14 +1055,9 @@ def _render_pno_stage_review_chart(
         gridspec_kw={"height_ratios": [3, 1]},
     )
     fig.patch.set_facecolor(_PNO_PLOT_FIGURE_FACE)
-    for axis in (ax_price, ax_volume):
-        axis.set_facecolor(_PNO_PLOT_AXIS_FACE)
-        axis.grid(True, color=_PNO_PLOT_GRID, alpha=0.18, linewidth=0.6)
-        for spine in axis.spines.values():
-            spine.set_color(_PNO_PLOT_GRID)
-            spine.set_alpha(0.28)
-        axis.tick_params(colors=_PNO_PLOT_MUTED, labelsize=8)
+    _configure_pno_plot_axes(price_ax=ax_price, volume_ax=ax_volume)
 
+    opens = pd.to_numeric(plot_frame["open"], errors="coerce").to_numpy(dtype=np.float64)
     close_values = pd.to_numeric(plot_frame["close"], errors="coerce").to_numpy(dtype=np.float64)
     high_values = pd.to_numeric(plot_frame["high"], errors="coerce").to_numpy(dtype=np.float64)
     low_values = pd.to_numeric(plot_frame["low"], errors="coerce").to_numpy(dtype=np.float64)
@@ -1064,19 +1067,27 @@ def _render_pno_stage_review_chart(
     ema20 = pd.to_numeric(plot_frame["ema20"], errors="coerce").to_numpy(dtype=np.float64)
     timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
     event_idx = int(np.argmin(np.abs(timestamps - int(timestamp_ms))))
+    pump_idx = None
+    if pump_start_timestamp_ms is not None:
+        pump_idx = int(np.argmin(np.abs(timestamps - int(pump_start_timestamp_ms))))
 
-    ax_price.plot(x, close_values, color=_PNO_PLOT_TEXT, linewidth=1.05, alpha=0.92, zorder=3)
+    _draw_pno_candles(ax_price, plot_frame, x)
     if np.isfinite(ema9).any():
         ax_price.plot(x, ema9, color=_PNO_PLOT_EMA9, linewidth=0.8, alpha=0.22, zorder=2)
     if np.isfinite(ema20).any():
         ax_price.plot(x, ema20, color=_PNO_PLOT_EMA20, linewidth=0.8, alpha=0.20, zorder=2)
-    ax_price.axvline(event_idx, color=_PNO_PLOT_PUMP, linewidth=1.0, alpha=0.8, zorder=4)
+    if pump_idx is not None:
+        ax_price.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=1.0, alpha=0.86, zorder=5)
+        ax_volume.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=1.0, alpha=0.72, zorder=4)
+    ax_price.axvline(event_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.68, zorder=5)
+    ax_volume.axvline(event_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.58, zorder=4)
 
     for key, color in (
         ("active_high", "#ef4444"),
         ("pullback_low", "#38bdf8"),
         ("level", _PNO_PLOT_LEVEL),
         ("entry_price", _PNO_PLOT_ENTRY),
+        ("stage1_hold_price", "#38bdf8"),
     ):
         value = _safe_float(review_row.get(key))
         if value is None:
@@ -1086,10 +1097,9 @@ def _render_pno_stage_review_chart(
     if volume_values.size > 0:
         volume_max = float(np.nanmax(volume_values)) if np.isfinite(volume_values).any() else 0.0
         volume_pct = (volume_values / volume_max) * 100.0 if volume_max > 0.0 else np.zeros_like(volume_values)
-        up_mask = np.r_[False, close_values[1:] >= close_values[:-1]]
+        up_mask = close_values >= opens
         volume_colors = np.where(up_mask, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
         ax_volume.bar(x, volume_pct, width=0.82, color=volume_colors, edgecolor="none", alpha=0.8, zorder=2)
-    ax_volume.axvline(event_idx, color=_PNO_PLOT_PUMP, linewidth=1.0, alpha=0.65, zorder=3)
 
     if np.isfinite(high_values).any() and np.isfinite(low_values).any():
         padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.06, 1e-9)
@@ -1107,7 +1117,6 @@ def _render_pno_stage_review_chart(
     ax_volume.set_xticklabels(tick_labels, fontsize=8, color=_PNO_PLOT_MUTED)
     ax_price.tick_params(axis="x", labelbottom=False)
 
-    stage_id = str(review_row.get("stage_id", "stage"))
     status = str(review_row.get("status", "review"))
     reason = _sanitize_plot_name(str(review_row.get("reason", "ok")))
     file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{review_index:04d}_{_sanitize_plot_name(stage_id)}_{_sanitize_plot_name(status)}_{reason}.png"
@@ -1128,7 +1137,7 @@ def _export_pno_stage_reviews(
 ) -> None:
     stage_reviews_dir = diagnostics_dir / "stage_reviews"
     stage_reviews_dir.mkdir(parents=True, exist_ok=True)
-    chart_stage_ids = set(PNO_STAGE_SEQUENCE[1:])
+    chart_stage_ids = set(PNO_STAGE_SEQUENCE)
     manifest_rows: list[dict[str, object]] = []
 
     for stage_id in selected_stage_ids:
