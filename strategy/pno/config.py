@@ -7,10 +7,29 @@ from dataclasses import dataclass, replace
 from constants import DEFAULT_BEE_BITE_DEPOSIT, DEFAULT_BEE_BITE_RISK_PCT, DEFAULT_COMMISSION_RATE
 from domain.enums.timeframe import Timeframe
 
-PNO_DEFAULT_LEVELS_TIMEFRAME = Timeframe.M5
-PNO_DEFAULT_ENTRY_TIMEFRAME = Timeframe.M1
-PNO_SUPPORTED_LEVELS_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.M5,)
-PNO_SUPPORTED_ENTRY_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.M1,)
+PnoTimeframePair = tuple[Timeframe, Timeframe]
+
+PNO_BACKTEST_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = (
+    (Timeframe.M5, Timeframe.M1),
+)
+PNO_LIVE_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = (
+    (Timeframe.M5, Timeframe.M1),
+    (Timeframe.M1, Timeframe.S10),
+    (Timeframe.M3, Timeframe.S30),
+)
+PNO_SUPPORTED_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = tuple(
+    dict.fromkeys((*PNO_BACKTEST_TIMEFRAME_PAIRS, *PNO_LIVE_TIMEFRAME_PAIRS))
+)
+PNO_DEFAULT_BACKTEST_TIMEFRAME_PAIR: PnoTimeframePair = PNO_BACKTEST_TIMEFRAME_PAIRS[0]
+PNO_DEFAULT_LIVE_TIMEFRAME_PAIR: PnoTimeframePair = PNO_LIVE_TIMEFRAME_PAIRS[0]
+PNO_DEFAULT_LEVELS_TIMEFRAME = PNO_DEFAULT_BACKTEST_TIMEFRAME_PAIR[0]
+PNO_DEFAULT_ENTRY_TIMEFRAME = PNO_DEFAULT_BACKTEST_TIMEFRAME_PAIR[1]
+PNO_SUPPORTED_LEVELS_TIMEFRAMES: tuple[Timeframe, ...] = tuple(
+    dict.fromkeys(levels_timeframe for levels_timeframe, _entry_timeframe in PNO_SUPPORTED_TIMEFRAME_PAIRS)
+)
+PNO_SUPPORTED_ENTRY_TIMEFRAMES: tuple[Timeframe, ...] = tuple(
+    dict.fromkeys(entry_timeframe for _levels_timeframe, entry_timeframe in PNO_SUPPORTED_TIMEFRAME_PAIRS)
+)
 PNO_SUPPORTED_ENTRY_CONFIRMATION_MODES: tuple[str, ...] = ("cross", "close_above")
 
 
@@ -64,18 +83,45 @@ class PnoParams:
     max_entry_pullback_fraction: float = 0.50
 
 
+def _format_pno_timeframe_pairs(timeframe_pairs: tuple[PnoTimeframePair, ...]) -> str:
+    return ", ".join(f"{levels.value}-{entry.value}" for levels, entry in timeframe_pairs)
+
+
+def resolve_pno_default_timeframe_pair(*, mode: str = "backtest") -> PnoTimeframePair:
+    if mode == "backtest":
+        return PNO_DEFAULT_BACKTEST_TIMEFRAME_PAIR
+    if mode == "live":
+        return PNO_DEFAULT_LIVE_TIMEFRAME_PAIR
+    raise ValueError(f"unsupported PNO timeframe mode: {mode}")
+
+
+def validate_pno_timeframe_pair(
+    *,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    supported_pairs: tuple[PnoTimeframePair, ...] = PNO_SUPPORTED_TIMEFRAME_PAIRS,
+    context: str = "pno",
+) -> None:
+    timeframe_pair = (levels_timeframe, entry_timeframe)
+    if timeframe_pair in supported_pairs:
+        return
+    supported = _format_pno_timeframe_pairs(supported_pairs)
+    raise ValueError(
+        f"{context} supports only timeframe pairs {{{supported}}}, "
+        f"got {levels_timeframe.value}-{entry_timeframe.value}"
+    )
+
+
 def validate_pno_params(params: PnoParams) -> None:
-    if params.entry_timeframe not in PNO_SUPPORTED_ENTRY_TIMEFRAMES:
-        supported = ", ".join(timeframe.value for timeframe in PNO_SUPPORTED_ENTRY_TIMEFRAMES)
-        raise ValueError(f"pno supports only entry_timeframe in {{{supported}}}, got {params.entry_timeframe.value}")
+    validate_pno_timeframe_pair(
+        levels_timeframe=params.levels_timeframe,
+        entry_timeframe=params.entry_timeframe,
+    )
     if params.entry_confirmation_mode not in PNO_SUPPORTED_ENTRY_CONFIRMATION_MODES:
         supported = ", ".join(PNO_SUPPORTED_ENTRY_CONFIRMATION_MODES)
         raise ValueError(
             f"pno supports only entry_confirmation_mode in {{{supported}}}, got {params.entry_confirmation_mode}"
         )
-    if params.levels_timeframe not in PNO_SUPPORTED_LEVELS_TIMEFRAMES:
-        supported = ", ".join(timeframe.value for timeframe in PNO_SUPPORTED_LEVELS_TIMEFRAMES)
-        raise ValueError(f"pno supports only levels_timeframe in {{{supported}}}, got {params.levels_timeframe.value}")
     if params.min_data_5m < 200:
         raise ValueError("min_data_5m must be >= 200")
     if params.min_data_1m < 60:

@@ -8,6 +8,7 @@ from typing import TypedDict
 import numpy as np
 import pandas as pd
 
+from domain.enums.timeframe import Timeframe
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
 from domain.value_objects.percentage import Percentage
@@ -124,9 +125,11 @@ class Stage1Context:
     leg_start: float
     leg_size: float
     hold_floor: float
+    levels_timeframe_ms: int = 5 * 60_000
     sleep_start_timestamp: int = 0
     sleep_end_timestamp: int = 0
     stage1_confirm_timestamp: int = 0
+    current_levels_timestamp: int = 0
     stage1_hold_price: float = 0.0
     cumulative_quote_volume: float = 0.0
     pre_pump_ema_crosses_1h: int = 0
@@ -300,10 +303,15 @@ class PnoEngine:
     def generate_events_single_frame(self, *, frame: pd.DataFrame, params: PnoParams) -> list[TradeResult]:
         prepared = self.prepare_data(frame)
         timeframe_ms = self._infer_timeframe_ms(prepared)
-        if timeframe_ms != 60_000:
+        entry_timeframe_ms = params.entry_timeframe.to_milliseconds()
+        if timeframe_ms != entry_timeframe_ms:
             self._last_generation_diagnostics = self._empty_diagnostics()
             return []
-        levels_frame = self._aggregate_to_5m(prepared)
+        levels_timeframe_ms = params.levels_timeframe.to_milliseconds()
+        levels_frame = self._aggregate_frame(prepared, target_timeframe_ms=levels_timeframe_ms)
+        if levels_frame.empty:
+            self._last_generation_diagnostics = self._empty_diagnostics()
+            return []
         return self.generate_events_multi_tf(levels_frame=levels_frame, entry_frame=prepared, params=params)
 
     def generate_events_multi_tf(
@@ -321,19 +329,38 @@ class PnoEngine:
             "symbol": params.symbol,
             "stage_order": list(PNO_STAGE_SEQUENCE),
         }
-        if len(prepared_levels) < params.min_data_5m or len(prepared_entry) < params.min_data_1m:
+        levels_required_bars = self._scale_required_bars(
+            base_bars=params.min_data_5m,
+            base_timeframe_ms=Timeframe.M5.to_milliseconds(),
+            timeframe_ms=params.levels_timeframe.to_milliseconds(),
+        )
+        entry_required_bars = self._scale_required_bars(
+            base_bars=params.min_data_1m,
+            base_timeframe_ms=Timeframe.M1.to_milliseconds(),
+            timeframe_ms=params.entry_timeframe.to_milliseconds(),
+        )
+        if len(prepared_levels) < levels_required_bars or len(prepared_entry) < entry_required_bars:
             diagnostics["skipped_insufficient_data"] = 1
             self._last_generation_diagnostics = diagnostics
             return []
 
-        one = self._prepare_1m_frame(prepared_entry)
-        five = self._prepare_5m_frame(prepared_levels, prepared_entry, params)
+        one = self._prepare_1m_frame(
+            prepared_entry,
+            timeframe_ms=params.entry_timeframe.to_milliseconds(),
+        )
+        five = self._prepare_5m_frame(
+            prepared_levels,
+            prepared_entry,
+            params,
+            levels_timeframe_ms=params.levels_timeframe.to_milliseconds(),
+            entry_timeframe_ms=params.entry_timeframe.to_milliseconds(),
+        )
         trades = self._run(one=one, five=five, params=params, diagnostics=diagnostics)
         diagnostics["trades_generated"] = len(trades)
         self._last_generation_diagnostics = diagnostics
         return trades
 
-    def _prepare_1m_frame(self, frame: pd.DataFrame) -> OneMinuteFrame:
+    def _prepare_1m_frame(self, frame: pd.DataFrame, *, timeframe_ms: int = 60_000) -> OneMinuteFrame:
         work = frame.copy()
         prev_close = work["close"].shift(1).fillna(work["close"])
         tr = pd.concat(
@@ -345,7 +372,8 @@ class PnoEngine:
             axis=1,
         ).max(axis=1)
         work["tr"] = tr
-        work["v1"] = tr.rolling(window=30, min_periods=30).median()
+        volatility_window = self._bars_for_duration(timeframe_ms, 30 * 60_000)
+        work["v1"] = tr.rolling(window=volatility_window, min_periods=volatility_window).median()
         work["quote_volume"] = work["close"] * work["volume"]
         work["cumulative_quote_volume"] = work["quote_volume"].cumsum()
         work["red"] = work["close"] < work["open"]
@@ -381,8 +409,24 @@ class PnoEngine:
             confirmed_low_confirmed_at=confirmed_low_confirmed_at,
         )
 
-    def _prepare_5m_frame(self, frame: pd.DataFrame, entry_frame: pd.DataFrame, params: PnoParams) -> FiveMinuteFrame:
+    def _prepare_5m_frame(
+        self,
+        frame: pd.DataFrame,
+        entry_frame: pd.DataFrame,
+        params: PnoParams,
+        *,
+        levels_timeframe_ms: int,
+        entry_timeframe_ms: int,
+    ) -> FiveMinuteFrame:
         work = frame.copy()
+        v_window = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+        short_window = self._bars_for_duration(levels_timeframe_ms, 15 * 60_000)
+        baseline_window = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+        sleep_window = self._bars_for_duration(levels_timeframe_ms, 8 * 60 * 60_000)
+        activity_window = self._bars_for_duration(levels_timeframe_ms, 30 * 60_000)
+        activity_baseline_window = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+        ema_cross_window = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
+        pre_high_24h_window = self._bars_for_duration(levels_timeframe_ms, 24 * 60 * 60_000)
         work["quote_volume"] = work["close"] * work["volume"]
         work["trade_activity"] = work["volume"]
         prev_close = work["close"].shift(1).fillna(work["close"])
@@ -395,7 +439,7 @@ class PnoEngine:
             axis=1,
         ).max(axis=1)
         work["tr"] = tr
-        work["v5"] = tr.rolling(window=24, min_periods=24).median()
+        work["v5"] = tr.rolling(window=v_window, min_periods=v_window).median()
         work["ema9"] = work["close"].ewm(span=9, adjust=False).mean()
         work["ema20"] = work["close"].ewm(span=20, adjust=False).mean()
         work["ema50"] = work["close"].ewm(span=50, adjust=False).mean()
@@ -407,29 +451,29 @@ class PnoEngine:
             & work["ema9"].shift(1).notna()
             & work["ema20"].shift(1).notna()
         )
-        work["ema_cross_count_1h"] = ema_cross.shift(1).rolling(window=12, min_periods=12).sum()
-        work["r3_quote"] = work["quote_volume"].rolling(window=3, min_periods=3).median()
-        work["b24_quote"] = work["quote_volume"].shift(3).rolling(window=24, min_periods=24).median()
-        work["l96_quote"] = work["quote_volume"].shift(27).rolling(window=96, min_periods=96).median()
-        work["r3_trade"] = work["trade_activity"].rolling(window=3, min_periods=3).median()
-        work["b24_trade"] = work["trade_activity"].shift(3).rolling(window=24, min_periods=24).median()
-        work["l96_trade"] = work["trade_activity"].shift(27).rolling(window=96, min_periods=96).median()
-        work["r3_tr"] = work["tr"].rolling(window=3, min_periods=3).median()
-        work["b24_tr"] = work["tr"].shift(3).rolling(window=24, min_periods=24).median()
-        work["l96_tr"] = work["tr"].shift(27).rolling(window=96, min_periods=96).median()
-        work["activity_last6_quote"] = work["quote_volume"].rolling(window=6, min_periods=6).median()
-        work["activity_prev24_quote"] = work["quote_volume"].shift(6).rolling(window=24, min_periods=24).median()
-        work["activity_last6_trade"] = work["trade_activity"].rolling(window=6, min_periods=6).median()
-        work["activity_prev24_trade"] = work["trade_activity"].shift(6).rolling(window=24, min_periods=24).median()
+        work["ema_cross_count_1h"] = ema_cross.shift(1).rolling(window=ema_cross_window, min_periods=ema_cross_window).sum()
+        work["r3_quote"] = work["quote_volume"].rolling(window=short_window, min_periods=short_window).median()
+        work["b24_quote"] = work["quote_volume"].shift(short_window).rolling(window=baseline_window, min_periods=baseline_window).median()
+        work["l96_quote"] = work["quote_volume"].shift(short_window + baseline_window).rolling(window=sleep_window, min_periods=sleep_window).median()
+        work["r3_trade"] = work["trade_activity"].rolling(window=short_window, min_periods=short_window).median()
+        work["b24_trade"] = work["trade_activity"].shift(short_window).rolling(window=baseline_window, min_periods=baseline_window).median()
+        work["l96_trade"] = work["trade_activity"].shift(short_window + baseline_window).rolling(window=sleep_window, min_periods=sleep_window).median()
+        work["r3_tr"] = work["tr"].rolling(window=short_window, min_periods=short_window).median()
+        work["b24_tr"] = work["tr"].shift(short_window).rolling(window=baseline_window, min_periods=baseline_window).median()
+        work["l96_tr"] = work["tr"].shift(short_window + baseline_window).rolling(window=sleep_window, min_periods=sleep_window).median()
+        work["activity_last6_quote"] = work["quote_volume"].rolling(window=activity_window, min_periods=activity_window).median()
+        work["activity_prev24_quote"] = work["quote_volume"].shift(activity_window).rolling(window=activity_baseline_window, min_periods=activity_baseline_window).median()
+        work["activity_last6_trade"] = work["trade_activity"].rolling(window=activity_window, min_periods=activity_window).median()
+        work["activity_prev24_trade"] = work["trade_activity"].shift(activity_window).rolling(window=activity_baseline_window, min_periods=activity_baseline_window).median()
         work["cumulative_quote_volume"] = work["quote_volume"].cumsum()
-        work["pre_high_24h"] = work["high"].shift(1).rolling(window=288, min_periods=288).max()
-        work["pre_high_1h"] = work["high"].shift(1).rolling(window=12, min_periods=12).max()
+        work["pre_high_24h"] = work["high"].shift(1).rolling(window=pre_high_24h_window, min_periods=pre_high_24h_window).max()
+        work["pre_high_1h"] = work["high"].shift(1).rolling(window=ema_cross_window, min_periods=ema_cross_window).max()
         work["atr_pre_14"] = work["tr"].shift(1).rolling(window=14, min_periods=14).mean()
-        work["pre_quote_median_24"] = work["quote_volume"].shift(1).rolling(window=24, min_periods=24).median()
-        work["pre_trade_median_24"] = work["trade_activity"].shift(1).rolling(window=24, min_periods=24).median()
-        work["close_above_ema20_count12"] = (work["close"] > work["ema20"]).rolling(window=12, min_periods=12).sum()
-        work["r3_close_above_ema20_all"] = (work["close"] > work["ema20"]).rolling(window=3, min_periods=3).sum() == 3
-        work["r3_close_above_ema9_count"] = (work["close"] > work["ema9"]).rolling(window=3, min_periods=3).sum()
+        work["pre_quote_median_24"] = work["quote_volume"].shift(1).rolling(window=baseline_window, min_periods=baseline_window).median()
+        work["pre_trade_median_24"] = work["trade_activity"].shift(1).rolling(window=baseline_window, min_periods=baseline_window).median()
+        work["close_above_ema20_count12"] = (work["close"] > work["ema20"]).rolling(window=ema_cross_window, min_periods=ema_cross_window).sum()
+        work["r3_close_above_ema20_all"] = (work["close"] > work["ema20"]).rolling(window=short_window, min_periods=short_window).sum() == short_window
+        work["r3_close_above_ema9_count"] = (work["close"] > work["ema9"]).rolling(window=short_window, min_periods=short_window).sum()
         work["sleep"] = (
             (work["b24_tr"] <= (0.75 * work["l96_tr"]))
             & (work["b24_quote"] <= (0.75 * work["l96_quote"]))
@@ -455,6 +499,8 @@ class PnoEngine:
             timestamps=work["timestamp"].astype("int64").to_numpy(),
             ema20=work["ema20"].astype("float64").to_numpy(),
             params=params,
+            levels_timeframe_ms=levels_timeframe_ms,
+            entry_timeframe_ms=entry_timeframe_ms,
         )
         work["inplay"] = inplay
         work["pump_start_idx"] = pump_start_idx
@@ -512,6 +558,8 @@ class PnoEngine:
         timestamps: np.ndarray,
         ema20: np.ndarray,
         params: PnoParams,
+        levels_timeframe_ms: int,
+        entry_timeframe_ms: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         return self._build_fallback_stage1_state(
             levels_frame=levels_frame,
@@ -519,6 +567,8 @@ class PnoEngine:
             timestamps=timestamps,
             ema20=ema20,
             params=params,
+            levels_timeframe_ms=levels_timeframe_ms,
+            entry_timeframe_ms=entry_timeframe_ms,
         )
 
     def _build_fallback_stage1_state(
@@ -529,6 +579,8 @@ class PnoEngine:
         timestamps: np.ndarray,
         ema20: np.ndarray,
         params: PnoParams,
+        levels_timeframe_ms: int,
+        entry_timeframe_ms: int,
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         bars_count = int(len(timestamps))
         inplay = np.zeros(bars_count, dtype=bool)
@@ -541,7 +593,18 @@ class PnoEngine:
             return inplay, pump_start_idx, sleep_start_idx, sleep_end_idx, stage1_confirm_idx, stage1_hold_price
 
         five = levels_frame.reset_index(drop=True)
-        one_support = self._build_one_minute_stage1_support(entry_frame=entry_frame, five_timestamps=timestamps)
+        local_breakout_window = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
+        recent_support_window = self._bars_for_duration(levels_timeframe_ms, 10 * 60_000)
+        below_ema20_limit = self._bars_for_duration(levels_timeframe_ms, 10 * 60_000)
+        pump_start_lookback = self._bars_for_duration(levels_timeframe_ms, 30 * 60_000)
+        sleep_lookback = self._bars_for_duration(levels_timeframe_ms, 7 * 60 * 60_000)
+        pretrend_1h_bars = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
+        pretrend_2h_bars = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+        one_support = self._build_one_minute_stage1_support(
+            entry_frame=entry_frame,
+            five_timestamps=timestamps,
+            entry_timeframe_ms=entry_timeframe_ms,
+        )
         sleep = five["sleep"].astype("bool").to_numpy() if "sleep" in five.columns else np.zeros(bars_count, dtype=bool)
         wake = five["wake"].astype("bool").to_numpy() if "wake" in five.columns else np.zeros(bars_count, dtype=bool)
         highs = pd.to_numeric(five["high"], errors="coerce").to_numpy(dtype=np.float64)
@@ -558,7 +621,7 @@ class PnoEngine:
         activity_prev24_trade = pd.to_numeric(five["activity_prev24_trade"], errors="coerce").to_numpy(dtype=np.float64)
         local_breakout = np.zeros(bars_count, dtype=bool)
         for idx in range(bars_count):
-            left = max(0, idx - 12)
+            left = max(0, idx - local_breakout_window)
             if idx <= left:
                 continue
             prior_high = float(np.nanmax(highs[left:idx]))
@@ -566,7 +629,7 @@ class PnoEngine:
 
         recent_support = np.zeros(bars_count, dtype=bool)
         for idx in range(bars_count):
-            recent_support[idx] = bool(np.any(one_support[max(0, idx - 1) : idx + 1]))
+            recent_support[idx] = bool(np.any(one_support[max(0, idx - recent_support_window + 1) : idx + 1]))
 
         active_start_idx: int | None = None
         below_ema20_count = 0
@@ -600,7 +663,7 @@ class PnoEngine:
                     below_ema20_count += 1
                 else:
                     below_ema20_count = 0
-                if below_ema20_count >= 2 or (sustain_quote < 1.0 and sustain_trade < 1.0):
+                if below_ema20_count >= below_ema20_limit or (sustain_quote < 1.0 and sustain_trade < 1.0):
                     active_start_idx = None
                     continue
                 inplay[idx] = True
@@ -612,6 +675,7 @@ class PnoEngine:
                     support=recent_support,
                     local_breakout=local_breakout,
                     idx=idx,
+                    lookback_bars=pump_start_lookback,
                 )
             if not inplay[idx] or active_start_idx is None or active_start_idx >= idx:
                 continue
@@ -620,13 +684,13 @@ class PnoEngine:
             pre_range_1h = self._resolve_window_range(
                 highs=highs,
                 lows=lows,
-                start_idx=max(0, active_start_idx - 12),
+                start_idx=max(0, active_start_idx - pretrend_1h_bars),
                 end_idx=active_start_idx - 1,
             )
             pre_range_2h = self._resolve_window_range(
                 highs=highs,
                 lows=lows,
-                start_idx=max(0, active_start_idx - 24),
+                start_idx=max(0, active_start_idx - pretrend_2h_bars),
                 end_idx=active_start_idx - 1,
             )
             pretrend_ratio_2h = self._safe_divide(pump_range, pre_range_2h)
@@ -643,7 +707,7 @@ class PnoEngine:
                 inplay[idx] = False
                 continue
             pump_start_idx[idx] = int(active_start_idx)
-            sleep_start_idx[idx] = int(max(active_start_idx - 84, 0))
+            sleep_start_idx[idx] = int(max(active_start_idx - sleep_lookback, 0))
             sleep_end_idx[idx] = int(max(active_start_idx - 1, sleep_start_idx[idx]))
             stage1_confirm_idx[idx] = int(idx)
             base_price = float(np.nanmin(lows[active_start_idx : idx + 1]))
@@ -652,10 +716,20 @@ class PnoEngine:
 
         return inplay, pump_start_idx, sleep_start_idx, sleep_end_idx, stage1_confirm_idx, stage1_hold_price
 
-    def _build_one_minute_stage1_support(self, *, entry_frame: pd.DataFrame, five_timestamps: np.ndarray) -> np.ndarray:
+    def _build_one_minute_stage1_support(
+        self,
+        *,
+        entry_frame: pd.DataFrame,
+        five_timestamps: np.ndarray,
+        entry_timeframe_ms: int,
+    ) -> np.ndarray:
         support = np.zeros(len(five_timestamps), dtype=bool)
         if entry_frame.empty or len(five_timestamps) == 0:
             return support
+        recent_window = self._bars_for_duration(entry_timeframe_ms, 15 * 60_000)
+        baseline_window = self._bars_for_duration(entry_timeframe_ms, 60 * 60_000)
+        close_above_ema20_threshold = self._threshold_count(recent_window, numerator=10, denominator=15)
+        close_above_ema9_threshold = self._threshold_count(recent_window, numerator=8, denominator=15)
         one = entry_frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
         one["quote_volume"] = pd.to_numeric(one["close"], errors="coerce") * pd.to_numeric(one["volume"], errors="coerce")
         prev_close = pd.to_numeric(one["close"], errors="coerce").shift(1).fillna(one["close"])
@@ -670,20 +744,20 @@ class PnoEngine:
         one["tr"] = tr
         one["ema9"] = pd.to_numeric(one["close"], errors="coerce").ewm(span=9, adjust=False).mean()
         one["ema20"] = pd.to_numeric(one["close"], errors="coerce").ewm(span=20, adjust=False).mean()
-        one["r15_quote"] = one["quote_volume"].rolling(window=15, min_periods=15).median()
-        one["b60_quote"] = one["quote_volume"].shift(15).rolling(window=60, min_periods=60).median()
-        one["r15_trade"] = pd.to_numeric(one["volume"], errors="coerce").rolling(window=15, min_periods=15).median()
-        one["b60_trade"] = pd.to_numeric(one["volume"], errors="coerce").shift(15).rolling(window=60, min_periods=60).median()
-        one["r15_tr"] = one["tr"].rolling(window=15, min_periods=15).median()
-        one["b60_tr"] = one["tr"].shift(15).rolling(window=60, min_periods=60).median()
-        one["close_above_ema20"] = (pd.to_numeric(one["close"], errors="coerce") > one["ema20"]).rolling(window=15, min_periods=15).sum()
-        one["close_above_ema9"] = (pd.to_numeric(one["close"], errors="coerce") > one["ema9"]).rolling(window=15, min_periods=15).sum()
+        one["r15_quote"] = one["quote_volume"].rolling(window=recent_window, min_periods=recent_window).median()
+        one["b60_quote"] = one["quote_volume"].shift(recent_window).rolling(window=baseline_window, min_periods=baseline_window).median()
+        one["r15_trade"] = pd.to_numeric(one["volume"], errors="coerce").rolling(window=recent_window, min_periods=recent_window).median()
+        one["b60_trade"] = pd.to_numeric(one["volume"], errors="coerce").shift(recent_window).rolling(window=baseline_window, min_periods=baseline_window).median()
+        one["r15_tr"] = one["tr"].rolling(window=recent_window, min_periods=recent_window).median()
+        one["b60_tr"] = one["tr"].shift(recent_window).rolling(window=baseline_window, min_periods=baseline_window).median()
+        one["close_above_ema20"] = (pd.to_numeric(one["close"], errors="coerce") > one["ema20"]).rolling(window=recent_window, min_periods=recent_window).sum()
+        one["close_above_ema9"] = (pd.to_numeric(one["close"], errors="coerce") > one["ema9"]).rolling(window=recent_window, min_periods=recent_window).sum()
         support_mask = (
             (one["r15_quote"] >= (1.8 * one["b60_quote"]))
             & (one["r15_trade"] >= (1.8 * one["b60_trade"]))
             & (one["r15_tr"] >= (1.5 * one["b60_tr"]))
-            & (one["close_above_ema20"] >= 10)
-            & (one["close_above_ema9"] >= 8)
+            & (one["close_above_ema20"] >= close_above_ema20_threshold)
+            & (one["close_above_ema9"] >= close_above_ema9_threshold)
         ).fillna(False)
         one_timestamps = pd.to_numeric(one["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
         support_indices = np.where(support_mask.to_numpy(dtype=bool))[0]
@@ -696,9 +770,16 @@ class PnoEngine:
         return support
 
     @staticmethod
-    def _resolve_fallback_pump_start_idx(*, wake: np.ndarray, support: np.ndarray, local_breakout: np.ndarray, idx: int) -> int:
+    def _resolve_fallback_pump_start_idx(
+        *,
+        wake: np.ndarray,
+        support: np.ndarray,
+        local_breakout: np.ndarray,
+        idx: int,
+        lookback_bars: int,
+    ) -> int:
         start_idx = idx
-        for probe_idx in range(max(0, idx - 5), idx + 1):
+        for probe_idx in range(max(0, idx - lookback_bars), idx + 1):
             if bool(wake[probe_idx]) and bool(support[probe_idx]) and bool(local_breakout[probe_idx]):
                 start_idx = probe_idx
                 break
@@ -737,6 +818,16 @@ class PnoEngine:
         current_pno_index = 0
         active_pump_start_idx = -1
         rejection_keys: dict[str, tuple[object, ...]] = {}
+        min_entry_bars = self._scale_required_bars(
+            base_bars=params.min_data_1m,
+            base_timeframe_ms=Timeframe.M1.to_milliseconds(),
+            timeframe_ms=params.entry_timeframe.to_milliseconds(),
+        )
+        min_levels_bars = self._scale_required_bars(
+            base_bars=params.min_data_5m,
+            base_timeframe_ms=Timeframe.M5.to_milliseconds(),
+            timeframe_ms=params.levels_timeframe.to_milliseconds(),
+        )
 
         def _reject_stage(stage_id: str, *, key: tuple[object, ...], timestamp_ms: int, reason: str, extra: dict[str, object] | None = None) -> None:
             self._mark_stage_rejection(
@@ -807,8 +898,8 @@ class PnoEngine:
                 armed = None
 
             if (
-                i < params.min_data_1m - 1
-                or five_idx < params.min_data_5m - 1
+                i < min_entry_bars - 1
+                or five_idx < min_levels_bars - 1
                 or not np.isfinite(one.v1[i])
                 or not np.isfinite(five.v5[five_idx])
                 or one.v1[i] <= 0.0
@@ -1238,6 +1329,9 @@ class PnoEngine:
         leg_size: float,
         params: PnoParams,
     ) -> dict[str, float | int] | None:
+        levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
+        stage1_start_window = self._bars_for_duration(levels_timeframe_ms, 30 * 60_000)
+        pre_pump_1h_window = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
         if pump_start_5m_idx <= 0 or pump_start_5m_idx >= len(five.timestamps):
             return None
         active_high_timestamp = int(one.timestamps[active_high_idx])
@@ -1266,7 +1360,7 @@ class PnoEngine:
         if pump_peak_bar_tr_atr_pre < float(params.stage1_min_peak_bar_tr_atr_pre):
             return None
 
-        start_window_end = min(five_idx, pump_start_5m_idx + 5)
+        start_window_end = min(five_idx, pump_start_5m_idx + stage1_start_window)
         pump_start_quote = float(np.mean(five.quote_volume[pump_start_5m_idx : start_window_end + 1]))
         pump_continue_quote = float(np.mean(five.quote_volume[pump_start_5m_idx : five_idx + 1]))
         pump_volume_ratio_start = self._safe_divide(pump_start_quote, baseline_quote)
@@ -1284,7 +1378,7 @@ class PnoEngine:
         if pre_pump_ema_crosses_1h < int(params.stage1_pre_pump_ema_crosses_min):
             return None
 
-        pre_start_idx = max(0, pump_start_5m_idx - 12)
+        pre_start_idx = max(0, pump_start_5m_idx - pre_pump_1h_window)
         pre_tr = five.tr[pre_start_idx:pump_start_5m_idx]
         pre_closes = five.closes[pre_start_idx:pump_start_5m_idx]
         if pre_tr.size == 0 or pre_closes.size == 0:
@@ -1333,6 +1427,9 @@ class PnoEngine:
         five_idx: int,
         params: PnoParams,
     ) -> Stage1Context | None:
+        levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
+        pre_pump_1h_bars = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
+        pre_pump_2h_bars = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
         pump_start_5m_idx = int(five.pump_start_idx[five_idx])
         if pump_start_5m_idx < 0 or pump_start_5m_idx >= len(five.timestamps):
             return None
@@ -1388,13 +1485,13 @@ class PnoEngine:
         pre_pump_range_1h = self._resolve_window_range(
             highs=five.highs,
             lows=five.lows,
-            start_idx=max(0, pump_start_5m_idx - 12),
+            start_idx=max(0, pump_start_5m_idx - pre_pump_1h_bars),
             end_idx=pump_start_5m_idx - 1,
         )
         pre_pump_range_2h = self._resolve_window_range(
             highs=five.highs,
             lows=five.lows,
-            start_idx=max(0, pump_start_5m_idx - 24),
+            start_idx=max(0, pump_start_5m_idx - pre_pump_2h_bars),
             end_idx=pump_start_5m_idx - 1,
         )
         pump_range = self._resolve_window_range(
@@ -1406,12 +1503,14 @@ class PnoEngine:
         return Stage1Context(
             start_idx=start_idx,
             start_timestamp=int(one.timestamps[start_idx]),
+            levels_timeframe_ms=levels_timeframe_ms,
             sleep_start_timestamp=int(five.timestamps[sleep_start_5m_idx]),
             sleep_end_timestamp=int(five.timestamps[sleep_end_5m_idx]),
             pump_start_5m_idx=pump_start_5m_idx,
             pump_start_timestamp=start_timestamp,
             stage1_confirm_timestamp=int(five.timestamps[confirm_5m_idx]),
             current_5m_idx=five_idx,
+            current_levels_timestamp=int(five.timestamps[five_idx]),
             active_high_idx=active_high_idx,
             active_high_timestamp=int(one.timestamps[active_high_idx]),
             active_high=active_high,
@@ -2201,12 +2300,12 @@ class PnoEngine:
 
     @staticmethod
     def _resolve_maturity_penalty(*, stage1: Stage1Context, pno_index: int) -> int:
-        age_5m_bars = max(stage1.current_5m_idx - stage1.pump_start_5m_idx + 1, 1)
-        if age_5m_bars <= 6:
+        age_ms = max(stage1.current_levels_timestamp - stage1.pump_start_timestamp, stage1.levels_timeframe_ms)
+        if age_ms <= 30 * 60_000:
             time_penalty = 0
-        elif age_5m_bars <= 12:
+        elif age_ms <= 60 * 60_000:
             time_penalty = 4
-        elif age_5m_bars <= 18:
+        elif age_ms <= 90 * 60_000:
             time_penalty = 8
         else:
             time_penalty = 12
@@ -2872,6 +2971,25 @@ class PnoEngine:
         return (value / base) * 100.0
 
     @staticmethod
+    def _bars_for_duration(timeframe_ms: int, duration_ms: int) -> int:
+        if timeframe_ms <= 0:
+            return 1
+        return max(1, (duration_ms + timeframe_ms - 1) // timeframe_ms)
+
+    @staticmethod
+    def _scale_required_bars(*, base_bars: int, base_timeframe_ms: int, timeframe_ms: int) -> int:
+        if base_bars <= 0 or base_timeframe_ms <= 0 or timeframe_ms <= 0:
+            return 1
+        duration_ms = base_bars * base_timeframe_ms
+        return max(1, (duration_ms + timeframe_ms - 1) // timeframe_ms)
+
+    @staticmethod
+    def _threshold_count(window: int, *, numerator: int, denominator: int) -> int:
+        if window <= 0 or numerator <= 0 or denominator <= 0:
+            return 1
+        return max(1, (window * numerator + denominator - 1) // denominator)
+
+    @staticmethod
     def _infer_timeframe_ms(frame: pd.DataFrame) -> int | None:
         if len(frame) < 2:
             return None
@@ -2884,10 +3002,14 @@ class PnoEngine:
         return int(pd.Series(diffs).mode().iloc[0])
 
     @staticmethod
-    def _aggregate_to_5m(frame: pd.DataFrame) -> pd.DataFrame:
+    def _aggregate_frame(frame: pd.DataFrame, *, target_timeframe_ms: int) -> pd.DataFrame:
         work = frame.copy()
-        timeframe_ms = 5 * 60_000
-        work["bucket"] = (work["timestamp"] // timeframe_ms) * timeframe_ms
+        source_timeframe_ms = PnoEngine._infer_timeframe_ms(work)
+        if source_timeframe_ms is None or source_timeframe_ms <= 0 or target_timeframe_ms <= 0:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        if target_timeframe_ms < source_timeframe_ms or target_timeframe_ms % source_timeframe_ms != 0:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        work["bucket"] = (work["timestamp"] // target_timeframe_ms) * target_timeframe_ms
         aggregated = (
             work.groupby("bucket", as_index=False)
             .agg(
@@ -2900,6 +3022,10 @@ class PnoEngine:
             .rename(columns={"bucket": "timestamp"})
         )
         return aggregated.reset_index(drop=True)
+
+    @staticmethod
+    def _aggregate_to_5m(frame: pd.DataFrame) -> pd.DataFrame:
+        return PnoEngine._aggregate_frame(frame, target_timeframe_ms=Timeframe.M5.to_milliseconds())
 
     @staticmethod
     def _safe_divide(numerator: float, denominator: float) -> float:

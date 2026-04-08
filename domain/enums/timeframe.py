@@ -6,8 +6,9 @@ from enum import Enum
 import re
 
 
-_TIMEFRAME_PATTERN = re.compile(r"^(\d+)([mhdw])$")
+_TIMEFRAME_PATTERN = re.compile(r"^(\d+)([smhdw])$")
 _SECONDS_PER_UNIT = {
+    "s": 1,
     "m": 60,
     "h": 60 * 60,
     "d": 24 * 60 * 60,
@@ -16,6 +17,8 @@ _SECONDS_PER_UNIT = {
 
 
 class Timeframe(str, Enum):
+    S10 = "10s"
+    S30 = "30s"
     M1 = "1m"
     M3 = "3m"
     M5 = "5m"

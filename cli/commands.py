@@ -107,10 +107,9 @@ from strategy.post_pump_absorption.research import (
 )
 from strategy.pno import PnoParams, PnoStrategy
 from strategy.pno.config import (
-    PNO_DEFAULT_ENTRY_TIMEFRAME,
-    PNO_DEFAULT_LEVELS_TIMEFRAME,
-    PNO_SUPPORTED_ENTRY_TIMEFRAMES,
-    PNO_SUPPORTED_LEVELS_TIMEFRAMES,
+    PNO_BACKTEST_TIMEFRAME_PAIRS,
+    resolve_pno_default_timeframe_pair,
+    validate_pno_timeframe_pair,
 )
 from strategy.pno.engine import PNO_STAGE_SEQUENCE
 from utils.logger import get_logger
@@ -2357,29 +2356,28 @@ def _resolve_backtest_timeframes(
             )
         return levels_timeframe, entry_timeframe
 
-    fallback_entry = configured_entry_timeframe
-    if fallback_entry not in PNO_SUPPORTED_ENTRY_TIMEFRAMES:
-        fallback_entry = PNO_DEFAULT_ENTRY_TIMEFRAME
+    fallback_pair = (
+        configured_levels_timeframe,
+        configured_entry_timeframe,
+    )
+    if fallback_pair not in PNO_BACKTEST_TIMEFRAME_PAIRS:
+        fallback_pair = resolve_pno_default_timeframe_pair(mode="backtest")
     entry_timeframe = _resolve_timeframe(
         getattr(args, "entry_tf", None),
-        fallback=fallback_entry,
+        fallback=fallback_pair[1],
         argument_name="--entry-tf",
     )
-    if entry_timeframe not in PNO_SUPPORTED_ENTRY_TIMEFRAMES:
-        supported_values = ", ".join(tf.value for tf in PNO_SUPPORTED_ENTRY_TIMEFRAMES)
-        raise ValueError(f"pno supports only entry timeframes {{{supported_values}}}, got {entry_timeframe.value}")
-
-    fallback_levels = configured_levels_timeframe
-    if fallback_levels not in PNO_SUPPORTED_LEVELS_TIMEFRAMES:
-        fallback_levels = PNO_DEFAULT_LEVELS_TIMEFRAME
     levels_timeframe = _resolve_timeframe(
         getattr(args, "levels_tf", None),
-        fallback=fallback_levels,
+        fallback=fallback_pair[0],
         argument_name="--levels-tf",
     )
-    if levels_timeframe not in PNO_SUPPORTED_LEVELS_TIMEFRAMES:
-        supported_values = ", ".join(tf.value for tf in PNO_SUPPORTED_LEVELS_TIMEFRAMES)
-        raise ValueError(f"pno supports only levels timeframes {{{supported_values}}}, got {levels_timeframe.value}")
+    validate_pno_timeframe_pair(
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+        supported_pairs=PNO_BACKTEST_TIMEFRAME_PAIRS,
+        context="pno backtest",
+    )
     return levels_timeframe, entry_timeframe
 
 
@@ -2429,10 +2427,11 @@ def _with_pno_stage_args(
     preset_through_stage: int | None,
 ) -> argparse.Namespace:
     cloned = argparse.Namespace(**vars(args))
+    default_levels_timeframe, default_entry_timeframe = resolve_pno_default_timeframe_pair(mode="backtest")
     cloned.command = "run-backtest"
     cloned.strategy = "pno"
-    cloned.entry_tf = PNO_DEFAULT_ENTRY_TIMEFRAME.value
-    cloned.levels_tf = PNO_DEFAULT_LEVELS_TIMEFRAME.value
+    cloned.entry_tf = getattr(cloned, "entry_tf", None) or default_entry_timeframe.value
+    cloned.levels_tf = getattr(cloned, "levels_tf", None) or default_levels_timeframe.value
     cloned.plot = True
     cloned.plot_from_results = False
     cloned.results_input = None
@@ -3689,8 +3688,8 @@ def _run_pno_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 "through_stage": preset_through_stage,
                 "symbols": list(getattr(args, "symbols", None) or []),
                 "top_n": getattr(args, "top_n", None),
-                "entry_timeframe": PNO_DEFAULT_ENTRY_TIMEFRAME.value,
-                "levels_timeframe": PNO_DEFAULT_LEVELS_TIMEFRAME.value,
+                "entry_timeframe": scoped_args.entry_tf,
+                "levels_timeframe": scoped_args.levels_tf,
             },
             ensure_ascii=False,
             indent=2,

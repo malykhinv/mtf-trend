@@ -20,7 +20,14 @@ from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
 from strategy.factory import build_strategy
 from strategy.pno import PnoParams, PnoStrategy
-from strategy.pno.config import build_pno_grid
+from strategy.pno.config import (
+    PNO_BACKTEST_TIMEFRAME_PAIRS,
+    PNO_LIVE_TIMEFRAME_PAIRS,
+    build_pno_grid,
+    resolve_pno_default_timeframe_pair,
+    validate_pno_params,
+    validate_pno_timeframe_pair,
+)
 from strategy.pno.engine import (
     ArmedContext,
     OneMinuteFrame,
@@ -64,6 +71,36 @@ def test_resolve_backtest_timeframes_normalizes_pno_defaults() -> None:
 
     assert levels_tf == Timeframe.M5
     assert entry_tf == Timeframe.M1
+
+
+def test_resolve_backtest_timeframes_rejects_live_only_pno_pair() -> None:
+    with pytest.raises(ValueError, match="pno backtest supports only timeframe pairs"):
+        commands._resolve_backtest_timeframes(
+            strategy_id="pno",
+            args=argparse.Namespace(entry_tf="10s", levels_tf="1m"),
+            configured_levels_timeframe=Timeframe.M5,
+            configured_entry_timeframe=Timeframe.M1,
+        )
+
+
+def test_pno_validate_timeframe_pair_supports_live_and_backtest_pairs() -> None:
+    for levels_timeframe, entry_timeframe in (*PNO_BACKTEST_TIMEFRAME_PAIRS, *PNO_LIVE_TIMEFRAME_PAIRS):
+        validate_pno_timeframe_pair(
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+        )
+        validate_pno_params(
+            PnoParams(
+                symbol="TEST/USDT",
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+            )
+        )
+
+
+def test_resolve_pno_default_timeframe_pair_uses_backtest_pair() -> None:
+    assert resolve_pno_default_timeframe_pair(mode="backtest") == (Timeframe.M5, Timeframe.M1)
+    assert resolve_pno_default_timeframe_pair(mode="live") == (Timeframe.M5, Timeframe.M1)
 
 
 def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:

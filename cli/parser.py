@@ -344,7 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     pno_stage = subparsers.add_parser(
         "pno-stage",
-        help="Run compact PNO stage review on 1m/5m backtest pipeline",
+        help="Run compact PNO stage review on the PNO backtest timeframe pair",
     )
     pno_stage.add_argument(
         "preset",
@@ -363,6 +363,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Number of symbols after volume pre-rank",
     )
+    pno_stage.add_argument("--levels-tf", default=None, help="PNO pump/search timeframe, backtest pair only")
+    pno_stage.add_argument("--entry-tf", default=None, help="PNO pullback/entry timeframe, backtest pair only")
     pno_stage.add_argument("--pno-deposit", type=float, default=None, help="Deposit used for PNO sizing")
     pno_stage.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per trade for PNO")
     pno_stage.add_argument("--output-dir", default=None, help="Root directory for stage review results")

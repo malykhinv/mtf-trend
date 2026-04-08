@@ -191,6 +191,15 @@ def test_ppa_stage_parser_accepts_compact_stage_preset() -> None:
     assert args.timeframes == ["1m", "5m"]
 
 
+def test_pno_stage_parser_accepts_explicit_backtest_pair() -> None:
+    args = build_parser().parse_args(["pno-stage", "s4", "--levels-tf", "5m", "--entry-tf", "1m"])
+
+    assert args.command == "pno-stage"
+    assert args.preset == "s4"
+    assert args.levels_tf == "5m"
+    assert args.entry_tf == "1m"
+
+
 def test_hourly_pump_parser_accepts_profile_and_session_arguments() -> None:
     args = build_parser().parse_args(
         [
