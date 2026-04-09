@@ -744,6 +744,81 @@ def _draw_pno_level_segment(
     )
 
 
+def _format_pno_price_label(value: float | None) -> str:
+    if value is None:
+        return ""
+    abs_value = abs(float(value))
+    if abs_value >= 100.0:
+        return f"{value:.2f}"
+    if abs_value >= 1.0:
+        return f"{value:.4f}"
+    if abs_value >= 0.01:
+        return f"{value:.5f}"
+    return f"{value:.6f}"
+
+
+def _annotate_pno_price_level(
+    ax: plt.Axes,
+    *,
+    x: float,
+    y: float | None,
+    label: str,
+    color: str,
+    text_color: str = _PNO_PLOT_TEXT,
+    alpha: float = 0.95,
+) -> None:
+    if y is None:
+        return
+    ax.text(
+        float(x),
+        float(y),
+        f" {label} {_format_pno_price_label(y)} ",
+        ha="left",
+        va="center",
+        fontsize=7,
+        color=text_color,
+        zorder=7,
+        bbox={
+            "boxstyle": "round,pad=0.18",
+            "facecolor": _PNO_PLOT_AXIS_FACE,
+            "edgecolor": color,
+            "linewidth": 0.9,
+            "alpha": alpha,
+        },
+    )
+
+
+def _annotate_pno_point(
+    ax: plt.Axes,
+    *,
+    x: float,
+    y: float | None,
+    label: str,
+    color: str,
+    marker: str = "o",
+    dy_points: float = 8.0,
+) -> None:
+    if y is None:
+        return
+    ax.scatter([x], [y], color=color, s=28, marker=marker, zorder=7)
+    ax.annotate(
+        f"{label} {_format_pno_price_label(y)}",
+        xy=(x, y),
+        xytext=(4, dy_points),
+        textcoords="offset points",
+        fontsize=7,
+        color=_PNO_PLOT_TEXT,
+        bbox={
+            "boxstyle": "round,pad=0.18",
+            "facecolor": _PNO_PLOT_AXIS_FACE,
+            "edgecolor": color,
+            "linewidth": 0.9,
+            "alpha": 0.95,
+        },
+        zorder=8,
+    )
+
+
 def _configure_pno_plot_axes(*, price_ax: plt.Axes, volume_ax: plt.Axes) -> None:
     for axis in (price_ax, volume_ax):
         axis.set_facecolor(_PNO_PLOT_AXIS_FACE)
@@ -849,6 +924,10 @@ def _render_pno_trade_chart(
     pump_start_timestamp_ms = _safe_int(trade_row.get("pump_start_timestamp_ms")) or entry_timestamp_ms
     level_price = _safe_float(trade_row.get("level"))
     level_first_timestamp_ms = _safe_int(trade_row.get("level_first_local_high_timestamp_ms"))
+    active_high = _safe_float(trade_row.get("active_high"))
+    pullback_low = _safe_float(trade_row.get("pullback_low"))
+    active_high_timestamp_ms = _safe_int(trade_row.get("active_high_timestamp_ms"))
+    pullback_low_timestamp_ms = _safe_int(trade_row.get("pullback_low_timestamp_ms"))
     if (
         entry_timestamp_ms is None
         or exit_timestamp_ms is None
@@ -954,6 +1033,61 @@ def _render_pno_trade_chart(
             alpha=0.72,
             zorder=5,
         )
+        _annotate_pno_price_level(
+            ax_price,
+            x=min(float(len(plot_frame) - 1.2), float(entry_idx + 1.4)),
+            y=level_price,
+            label="Level",
+            color=_PNO_PLOT_LEVEL,
+        )
+    if active_high is not None:
+        high_idx = entry_idx
+        if active_high_timestamp_ms is not None:
+            high_idx = int(np.searchsorted(timestamps, active_high_timestamp_ms, side="left"))
+            high_idx = min(max(high_idx, 0), len(plot_frame) - 1)
+        _draw_pno_level_segment(
+            ax_price,
+            timestamps=timestamps,
+            start_timestamp_ms=active_high_timestamp_ms,
+            end_timestamp_ms=entry_timestamp_ms,
+            value=active_high,
+            color="#ef4444",
+            linewidth=1.05,
+            alpha=0.68,
+        )
+        _annotate_pno_point(
+            ax_price,
+            x=float(high_idx),
+            y=active_high,
+            label="High",
+            color="#ef4444",
+            marker="^",
+            dy_points=8.0,
+        )
+    if pullback_low is not None:
+        low_idx = entry_idx
+        if pullback_low_timestamp_ms is not None:
+            low_idx = int(np.searchsorted(timestamps, pullback_low_timestamp_ms, side="left"))
+            low_idx = min(max(low_idx, 0), len(plot_frame) - 1)
+        _draw_pno_level_segment(
+            ax_price,
+            timestamps=timestamps,
+            start_timestamp_ms=pullback_low_timestamp_ms,
+            end_timestamp_ms=entry_timestamp_ms,
+            value=pullback_low,
+            color="#38bdf8",
+            linewidth=1.0,
+            alpha=0.68,
+        )
+        _annotate_pno_point(
+            ax_price,
+            x=float(low_idx),
+            y=pullback_low,
+            label="PB Low",
+            color="#38bdf8",
+            marker="v",
+            dy_points=-14.0,
+        )
     ax_price.add_patch(
         Rectangle(
             (entry_idx - 0.5, min(stop_loss, entry_price)),
@@ -978,12 +1112,44 @@ def _render_pno_trade_chart(
             zorder=1,
         )
     )
-    ax_price.scatter([entry_idx], [entry_price], color=_PNO_PLOT_ENTRY, s=28, zorder=6)
+    _annotate_pno_price_level(
+        ax_price,
+        x=min(float(len(plot_frame) - 1.2), float(exit_idx + 1.2)),
+        y=target_price,
+        label="TP",
+        color=_PNO_PLOT_PROFIT_EDGE,
+        alpha=0.92,
+    )
+    _annotate_pno_price_level(
+        ax_price,
+        x=min(float(len(plot_frame) - 1.2), float(exit_idx + 1.2)),
+        y=stop_loss,
+        label="SL",
+        color=_PNO_PLOT_RISK_EDGE,
+        alpha=0.92,
+    )
+    _annotate_pno_point(
+        ax_price,
+        x=float(entry_idx),
+        y=entry_price,
+        label="Entry",
+        color=_PNO_PLOT_ENTRY,
+        marker="o",
+        dy_points=9.0,
+    )
     exit_price = _safe_float(trade_row.get("exit_price_actual"))
     if exit_price is None:
         exit_price = _safe_float(trade_row.get("exit_price"))
     if exit_price is not None:
-        ax_price.scatter([exit_idx], [exit_price], color=_PNO_PLOT_EXIT, s=36, marker="x", linewidths=1.2, zorder=6)
+        _annotate_pno_point(
+            ax_price,
+            x=float(exit_idx),
+            y=exit_price,
+            label="Exit",
+            color=_PNO_PLOT_EXIT,
+            marker="x",
+            dy_points=-14.0,
+        )
 
     if not levels_window.empty:
         levels_volume = pd.to_numeric(levels_window["volume"], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
@@ -1162,6 +1328,18 @@ def _render_pno_stage_review_chart(
             linewidth=1.1,
             alpha=0.72,
         )
+        if active_high_timestamp_ms is not None:
+            active_high_idx = int(np.searchsorted(timestamps, int(active_high_timestamp_ms), side="left"))
+            active_high_idx = min(max(active_high_idx, 0), len(plot_frame) - 1)
+            _annotate_pno_point(
+                ax_price,
+                x=float(active_high_idx),
+                y=active_high,
+                label="High",
+                color="#ef4444",
+                marker="^",
+                dy_points=8.0,
+            )
         _draw_pno_level_segment(
             ax_price,
             timestamps=timestamps,
@@ -1172,6 +1350,18 @@ def _render_pno_stage_review_chart(
             linewidth=1.0,
             alpha=0.68,
         )
+        if pullback_low_timestamp_ms is not None:
+            pullback_low_idx = int(np.searchsorted(timestamps, int(pullback_low_timestamp_ms), side="left"))
+            pullback_low_idx = min(max(pullback_low_idx, 0), len(plot_frame) - 1)
+            _annotate_pno_point(
+                ax_price,
+                x=float(pullback_low_idx),
+                y=pullback_low,
+                label="PB Low",
+                color="#38bdf8",
+                marker="v",
+                dy_points=-14.0,
+            )
         _draw_pno_level_segment(
             ax_price,
             timestamps=timestamps,
@@ -1181,6 +1371,13 @@ def _render_pno_stage_review_chart(
             color=_PNO_PLOT_LEVEL,
             linewidth=1.25,
             alpha=0.85,
+        )
+        _annotate_pno_price_level(
+            ax_price,
+            x=min(float(len(plot_frame) - 1.2), float(event_idx + 1.0)),
+            y=level_price,
+            label="Level",
+            color=_PNO_PLOT_LEVEL,
         )
         _draw_pno_level_segment(
             ax_price,
@@ -1193,6 +1390,15 @@ def _render_pno_stage_review_chart(
             alpha=0.45,
             linestyle="--",
         )
+        if entry_price is not None:
+            _annotate_pno_price_level(
+                ax_price,
+                x=min(float(len(plot_frame) - 1.2), float(event_idx + 1.0)),
+                y=entry_price,
+                label="Entry",
+                color=_PNO_PLOT_ENTRY,
+                alpha=0.88,
+            )
         _draw_pno_level_segment(
             ax_price,
             timestamps=timestamps,
