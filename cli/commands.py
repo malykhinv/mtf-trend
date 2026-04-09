@@ -1905,6 +1905,368 @@ def _export_pno_stage_reviews(
     pd.DataFrame(manifest_rows).to_csv(stage_reviews_dir / "manifest.csv", index=False)
 
 
+def _bucketize_pno_value(
+    value: float | None,
+    *,
+    thresholds: tuple[float, ...],
+    labels: tuple[str, ...],
+    na_label: str = "na",
+) -> str:
+    if value is None or not np.isfinite(float(value)):
+        return na_label
+    numeric_value = float(value)
+    for threshold, label in zip(thresholds, labels[:-1], strict=False):
+        if numeric_value <= threshold:
+            return label
+    return labels[-1]
+
+
+def _resolve_pno_stage_key_from_row(row: dict[str, object]) -> str | None:
+    symbol = str(row.get("symbol") or "")
+    active_high_timestamp_ms = _safe_int(row.get("active_high_timestamp_ms"))
+    pullback_low_timestamp_ms = _safe_int(row.get("pullback_low_timestamp_ms"))
+    level_valid_timestamp_ms = _safe_int(row.get("level_valid_timestamp_ms"))
+    level = _safe_float(row.get("level"))
+    if not symbol or active_high_timestamp_ms is None or pullback_low_timestamp_ms is None or level_valid_timestamp_ms is None or level is None:
+        return None
+    return f"{symbol}|{active_high_timestamp_ms}|{pullback_low_timestamp_ms}|{level_valid_timestamp_ms}|{level:.8f}"
+
+
+def _resolve_pno_signal_bar_context(
+    *,
+    entry_frame: pd.DataFrame,
+    timestamp_ms: int | None,
+    level: float | None,
+) -> dict[str, object]:
+    if timestamp_ms is None or entry_frame.empty or "timestamp" not in entry_frame.columns:
+        return {}
+    timestamps = entry_frame["timestamp"].to_numpy(dtype=np.int64, copy=False)
+    if timestamps.size == 0:
+        return {}
+    idx = _resolve_pno_timestamp_plot_idx(timestamps, int(timestamp_ms))
+    open_price = float(entry_frame["open"].iloc[idx])
+    high_price = float(entry_frame["high"].iloc[idx])
+    low_price = float(entry_frame["low"].iloc[idx])
+    close_price = float(entry_frame["close"].iloc[idx])
+    volume = float(entry_frame["volume"].iloc[idx])
+    quote_volume = close_price * volume
+    bar_range = max(high_price - low_price, 1e-12)
+    body = abs(close_price - open_price)
+    upper_wick = high_price - max(open_price, close_price)
+    lower_wick = min(open_price, close_price) - low_price
+    recent_start = max(0, idx - 15)
+    recent_slice = entry_frame["volume"].iloc[recent_start:idx]
+    recent_volume_median = float(recent_slice.median()) if not recent_slice.empty else np.nan
+    level_value = float(level) if level is not None and np.isfinite(float(level)) else np.nan
+    signal_high_clearance_pct = ((high_price - level_value) / level_value * 100.0) if np.isfinite(level_value) and level_value > 0.0 else np.nan
+    signal_close_clearance_pct = ((close_price - level_value) / level_value * 100.0) if np.isfinite(level_value) and level_value > 0.0 else np.nan
+    signal_open_clearance_pct = ((open_price - level_value) / level_value * 100.0) if np.isfinite(level_value) and level_value > 0.0 else np.nan
+    return {
+        "signal_bar_timestamp_ms": int(timestamps[idx]),
+        "signal_bar_open": round(open_price, 8),
+        "signal_bar_high": round(high_price, 8),
+        "signal_bar_low": round(low_price, 8),
+        "signal_bar_close": round(close_price, 8),
+        "signal_bar_volume": round(volume, 4),
+        "signal_bar_quote_volume": round(quote_volume, 4),
+        "signal_bar_range": round(bar_range, 8),
+        "signal_bar_body": round(body, 8),
+        "signal_bar_body_share": round(body / bar_range, 4),
+        "signal_bar_upper_wick_share": round(max(upper_wick, 0.0) / bar_range, 4),
+        "signal_bar_lower_wick_share": round(max(lower_wick, 0.0) / bar_range, 4),
+        "signal_bar_close_position": round((close_price - low_price) / bar_range, 4),
+        "signal_bar_is_green": bool(close_price >= open_price),
+        "signal_bar_volume_vs_recent": round(volume / recent_volume_median, 4) if np.isfinite(recent_volume_median) and recent_volume_median > 0.0 else np.nan,
+        "signal_open_clearance_pct": round(signal_open_clearance_pct, 4) if np.isfinite(signal_open_clearance_pct) else np.nan,
+        "signal_high_clearance_pct": round(signal_high_clearance_pct, 4) if np.isfinite(signal_high_clearance_pct) else np.nan,
+        "signal_close_clearance_pct": round(signal_close_clearance_pct, 4) if np.isfinite(signal_close_clearance_pct) else np.nan,
+    }
+
+
+def _build_pno_research_context_row(
+    row: dict[str, object],
+    *,
+    source_stage: str,
+    source_status: str,
+    source_reason: str,
+    signal_context: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload = dict(row)
+    payload["source_stage"] = source_stage
+    payload["source_status"] = source_status
+    payload["source_reason"] = source_reason
+    if signal_context:
+        payload.update(signal_context)
+
+    leg_start = _safe_float(payload.get("leg_start"))
+    leg_size = _safe_float(payload.get("leg_size"))
+    active_high = _safe_float(payload.get("active_high"))
+    pullback_low = _safe_float(payload.get("pullback_low"))
+    pullback_depth = _safe_float(payload.get("pullback_depth"))
+    level = _safe_float(payload.get("level"))
+    entry_pos = _safe_float(payload.get("entry_pos"))
+    level_maturity = _safe_float(payload.get("level_maturity_fraction"))
+    score = _safe_float(payload.get("final_score")) or _safe_float(payload.get("score"))
+    span = (active_high - pullback_low) if active_high is not None and pullback_low is not None else None
+    level_pos = entry_pos
+    if level_pos is None and level is not None and span is not None and span > 0.0:
+        level_pos = (level - pullback_low) / span
+
+    payload["stage_key"] = _resolve_pno_stage_key_from_row(payload)
+    payload["pump_leg_pct"] = round((leg_size / leg_start) * 100.0, 4) if leg_size is not None and leg_start is not None and leg_start > 0.0 else np.nan
+    payload["pullback_fraction_of_leg"] = round(pullback_depth / leg_size, 4) if pullback_depth is not None and leg_size is not None and leg_size > 0.0 else np.nan
+    payload["level_fraction_of_pullback"] = round(level_pos, 4) if level_pos is not None and np.isfinite(level_pos) else np.nan
+    payload["stop_distance_pct"] = round(((_safe_float(payload.get("entry_plan")) or level or 0.0) - (_safe_float(payload.get("sl_plan")) or np.nan)) / (_safe_float(payload.get("entry_plan")) or level or np.nan) * 100.0, 4) if (_safe_float(payload.get("entry_plan")) or level) not in {None, 0.0} and _safe_float(payload.get("sl_plan")) is not None else np.nan
+    payload["tp2_distance_pct"] = round(((_safe_float(payload.get("tp2")) or np.nan) - (_safe_float(payload.get("entry_plan")) or level or np.nan)) / (_safe_float(payload.get("entry_plan")) or level or np.nan) * 100.0, 4) if (_safe_float(payload.get("entry_plan")) or level) not in {None, 0.0} and _safe_float(payload.get("tp2")) is not None else np.nan
+    payload["pump_impulse_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_impulse_atr_pre")), thresholds=(3.5, 5.0, 7.5), labels=("impulse_weak", "impulse_ok", "impulse_strong", "impulse_extreme"))
+    payload["pump_volume_start_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_volume_ratio_start")), thresholds=(3.0, 6.0, 10.0), labels=("vol_start_ok", "vol_start_strong", "vol_start_hot", "vol_start_extreme"))
+    payload["pump_volume_continue_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_volume_ratio_continue")), thresholds=(1.5, 3.0, 6.0), labels=("vol_cont_ok", "vol_cont_strong", "vol_cont_hot", "vol_cont_extreme"))
+    pump_path_efficiency = _safe_float(payload.get("pump_path_efficiency"))
+    pump_wick_share = _safe_float(payload.get("pump_wick_share"))
+    if pump_path_efficiency is None or pump_wick_share is None:
+        payload["pump_cleanliness_bucket"] = "na"
+    elif pump_path_efficiency >= 0.45 and pump_wick_share <= 0.45:
+        payload["pump_cleanliness_bucket"] = "clean"
+    elif pump_path_efficiency >= 0.30 and pump_wick_share <= 0.60:
+        payload["pump_cleanliness_bucket"] = "acceptable"
+    else:
+        payload["pump_cleanliness_bucket"] = "dirty"
+    payload["pump_vs_pre_2h_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_vs_pre_2h_ratio")), thresholds=(1.5, 2.5, 4.0), labels=("pretrend_small", "pretrend_ok", "pretrend_strong", "pretrend_dominant"))
+    payload["pre_pump_ema_cross_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pre_pump_ema_crosses_1h")), thresholds=(1.0, 2.0), labels=("ema_cross_1", "ema_cross_2", "ema_cross_3plus"))
+    payload["pullback_depth_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pullback_fraction_of_leg")), thresholds=(0.25, 0.40, 0.55), labels=("pb_shallow", "pb_balanced", "pb_deep", "pb_very_deep"))
+    payload["pullback_age_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pullback_age_bars")), thresholds=(3.0, 6.0, 10.0), labels=("pb_fast", "pb_normal", "pb_slow", "pb_stale"))
+    payload["level_maturity_bucket"] = _bucketize_pno_value(level_maturity, thresholds=(0.25, 0.50, 0.75), labels=("lvl_young", "lvl_working", "lvl_mature", "lvl_old"))
+    touches_value = _safe_int(payload.get("touches"))
+    payload["touches_bucket"] = "na" if touches_value is None else ("touch_1" if touches_value <= 1 else "touch_2" if touches_value == 2 else "touch_3plus")
+    payload["entry_zone_bucket"] = _bucketize_pno_value(level_pos, thresholds=(0.33, 0.50, 0.60), labels=("zone_low", "zone_midlow", "zone_upper_ok", "zone_high"))
+    payload["score_bucket"] = _bucketize_pno_value(score, thresholds=(70.0, 80.0, 90.0), labels=("score_borderline", "score_ok", "score_strong", "score_elite"))
+    payload["signal_body_bucket"] = _bucketize_pno_value(_safe_float(payload.get("signal_bar_body_share")), thresholds=(0.25, 0.50, 0.75), labels=("signal_small", "signal_medium", "signal_strong", "signal_expansion"))
+    payload["signal_volume_bucket"] = _bucketize_pno_value(_safe_float(payload.get("signal_bar_volume_vs_recent")), thresholds=(1.0, 2.0, 4.0), labels=("signal_vol_flat", "signal_vol_ok", "signal_vol_strong", "signal_vol_spike"))
+    payload["signal_close_clearance_bucket"] = _bucketize_pno_value(_safe_float(payload.get("signal_close_clearance_pct")), thresholds=(0.0, 0.10, 0.40), labels=("signal_close_below", "signal_close_flat", "signal_close_clear", "signal_close_expand"))
+    payload["hold_status_group"] = str(payload.get("hold_status_at_validation") or payload.get("hold_status_at_level_search") or "na")
+    payload["leg_start_status_group"] = str(payload.get("leg_start_status_at_validation") or "na")
+    return payload
+
+
+def _summarize_pno_feature_buckets(frame: pd.DataFrame, *, scope: str) -> pd.DataFrame:
+    if frame.empty:
+        return pd.DataFrame()
+    feature_columns = [
+        "pump_impulse_bucket",
+        "pump_volume_start_bucket",
+        "pump_volume_continue_bucket",
+        "pump_cleanliness_bucket",
+        "pump_vs_pre_2h_bucket",
+        "pre_pump_ema_cross_bucket",
+        "pullback_depth_bucket",
+        "pullback_age_bucket",
+        "level_maturity_bucket",
+        "touches_bucket",
+        "entry_zone_bucket",
+        "score_bucket",
+        "signal_body_bucket",
+        "signal_volume_bucket",
+        "signal_close_clearance_bucket",
+        "hold_status_group",
+        "leg_start_status_group",
+    ]
+    summary_rows: list[dict[str, object]] = []
+    total_count = len(frame)
+    for feature in feature_columns:
+        if feature not in frame.columns:
+            continue
+        scoped = frame.loc[frame[feature].notna()].copy()
+        if scoped.empty:
+            continue
+        for bucket_value, group in scoped.groupby(feature, dropna=False):
+            trade_group = group.loc[group.get("is_trade", False).astype(bool)] if "is_trade" in group.columns else pd.DataFrame()
+            summary_rows.append(
+                {
+                    "scope": scope,
+                    "feature": feature,
+                    "bucket": bucket_value,
+                    "count": int(len(group)),
+                    "share": round(len(group) / total_count, 4) if total_count > 0 else np.nan,
+                    "triggered_rate": round(float(group["is_triggered"].mean()), 4) if "is_triggered" in group.columns else np.nan,
+                    "trade_count": int(len(trade_group)) if not trade_group.empty else 0,
+                    "win_rate": round(float(trade_group["is_win"].mean()), 4) if not trade_group.empty and "is_win" in trade_group.columns else np.nan,
+                    "tp2_rate": round(float((trade_group["stage5_outcome"] == "tp2").mean()), 4) if not trade_group.empty and "stage5_outcome" in trade_group.columns else np.nan,
+                    "mean_pnl_percent": round(float(pd.to_numeric(trade_group["pnl_percent"], errors="coerce").mean()), 4) if not trade_group.empty and "pnl_percent" in trade_group.columns else np.nan,
+                    "median_pnl_percent": round(float(pd.to_numeric(trade_group["pnl_percent"], errors="coerce").median()), 4) if not trade_group.empty and "pnl_percent" in trade_group.columns else np.nan,
+                }
+            )
+    return pd.DataFrame(summary_rows)
+
+
+def _export_pno_research_context(
+    *,
+    diagnostics_dir: Path,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    trade_rows: list[dict[str, object]],
+    stage_rows_by_stage: dict[str, list[dict[str, object]]],
+    stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
+) -> None:
+    research_dir = diagnostics_dir / "research_context"
+    research_dir.mkdir(parents=True, exist_ok=True)
+    prepared_entry_frames: dict[str, pd.DataFrame] = {}
+
+    def _get_prepared_entry_frame(symbol: str) -> pd.DataFrame:
+        cached = prepared_entry_frames.get(symbol)
+        if cached is not None:
+            return cached
+        mtf_frames = symbol_frames.get(symbol)
+        if mtf_frames is None:
+            cached = pd.DataFrame()
+        else:
+            cached = _prepare_pno_entry_plot_source(mtf_frames.entry_frame)
+        prepared_entry_frames[symbol] = cached
+        return cached
+
+    stage_context_rows: list[dict[str, object]] = []
+    for stage_id, rows in stage_rows_by_stage.items():
+        for row in rows:
+            symbol = str(row.get("symbol") or "")
+            signal_timestamp_ms = _safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("timestamp_ms"))
+            signal_context = _resolve_pno_signal_bar_context(
+                entry_frame=_get_prepared_entry_frame(symbol),
+                timestamp_ms=signal_timestamp_ms,
+                level=_safe_float(row.get("level")),
+            )
+            stage_context_rows.append(
+                _build_pno_research_context_row(
+                    row,
+                    source_stage=stage_id,
+                    source_status="passed",
+                    source_reason="passed",
+                    signal_context=signal_context,
+                )
+            )
+    for stage_id, reason_groups in stage_rejections_by_stage.items():
+        for reason, rows in reason_groups.items():
+            for row in rows:
+                symbol = str(row.get("symbol") or "")
+                signal_timestamp_ms = _safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("timestamp_ms"))
+                signal_context = _resolve_pno_signal_bar_context(
+                    entry_frame=_get_prepared_entry_frame(symbol),
+                    timestamp_ms=signal_timestamp_ms,
+                    level=_safe_float(row.get("level")),
+                )
+                stage_context_rows.append(
+                    _build_pno_research_context_row(
+                        row,
+                        source_stage=stage_id,
+                        source_status="rejected",
+                        source_reason=reason,
+                        signal_context=signal_context,
+                    )
+                )
+    stage_context_frame = pd.DataFrame(stage_context_rows)
+    stage_context_frame.to_csv(research_dir / "stage_context_all.csv", index=False)
+
+    trade_context_rows: list[dict[str, object]] = []
+    stage5_outcome_by_key: dict[str, str] = {}
+    for row in trade_rows:
+        symbol = str(row.get("symbol") or "")
+        signal_timestamp_ms = _safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("entry_timestamp_ms"))
+        signal_context = _resolve_pno_signal_bar_context(
+            entry_frame=_get_prepared_entry_frame(symbol),
+            timestamp_ms=signal_timestamp_ms,
+            level=_safe_float(row.get("level")),
+        )
+        enriched = _build_pno_research_context_row(
+            row,
+            source_stage=PNO_STAGE_5_TRADE,
+            source_status="passed",
+            source_reason=str(row.get("result_type") or row.get("category") or "trade"),
+            signal_context=signal_context,
+        )
+        result_type = str(row.get("result_type") or "").lower()
+        enriched["stage5_outcome"] = result_type
+        enriched["is_trade"] = True
+        enriched["is_triggered"] = True
+        enriched["is_win"] = result_type in {"tp1_be", "tp2"}
+        trade_context_rows.append(enriched)
+        stage_key = str(enriched.get("stage_key") or "")
+        if stage_key:
+            stage5_outcome_by_key[stage_key] = result_type
+
+    trade_context_frame = pd.DataFrame(trade_context_rows)
+    trade_context_frame.to_csv(research_dir / "trade_context.csv", index=False)
+
+    stage5_candidate_rows: list[dict[str, object]] = list(trade_context_rows)
+    for reason, rows in stage_rejections_by_stage.get(PNO_STAGE_5_TRADE, {}).items():
+        for row in rows:
+            symbol = str(row.get("symbol") or "")
+            signal_timestamp_ms = _safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("timestamp_ms"))
+            signal_context = _resolve_pno_signal_bar_context(
+                entry_frame=_get_prepared_entry_frame(symbol),
+                timestamp_ms=signal_timestamp_ms,
+                level=_safe_float(row.get("level")),
+            )
+            enriched = _build_pno_research_context_row(
+                row,
+                source_stage=PNO_STAGE_5_TRADE,
+                source_status="rejected",
+                source_reason=reason,
+                signal_context=signal_context,
+            )
+            enriched["stage5_outcome"] = f"rejected_{reason}"
+            enriched["is_trade"] = False
+            enriched["is_triggered"] = False
+            enriched["is_win"] = False
+            stage5_candidate_rows.append(enriched)
+            stage_key = str(enriched.get("stage_key") or "")
+            if stage_key:
+                stage5_outcome_by_key.setdefault(stage_key, f"rejected_{reason}")
+
+    stage5_candidate_frame = pd.DataFrame(stage5_candidate_rows)
+    stage5_candidate_frame.to_csv(research_dir / "stage5_trigger_context.csv", index=False)
+
+    stage4_context_rows: list[dict[str, object]] = []
+    for row in stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, []):
+        enriched = _build_pno_research_context_row(
+            row,
+            source_stage=PNO_STAGE_4_LEVEL,
+            source_status="passed",
+            source_reason="passed",
+        )
+        downstream_outcome = stage5_outcome_by_key.get(str(enriched.get("stage_key") or ""), "not_reached_stage5")
+        enriched["downstream_stage5_outcome"] = downstream_outcome
+        enriched["downstream_triggered"] = downstream_outcome in {"sl", "tp1_be", "tp2"}
+        enriched["downstream_win"] = downstream_outcome in {"tp1_be", "tp2"}
+        stage4_context_rows.append(enriched)
+    for reason, rows in stage_rejections_by_stage.get(PNO_STAGE_4_LEVEL, {}).items():
+        for row in rows:
+            enriched = _build_pno_research_context_row(
+                row,
+                source_stage=PNO_STAGE_4_LEVEL,
+                source_status="rejected",
+                source_reason=reason,
+            )
+            enriched["downstream_stage5_outcome"] = f"rejected_{reason}"
+            enriched["downstream_triggered"] = False
+            enriched["downstream_win"] = False
+            stage4_context_rows.append(enriched)
+    stage4_context_frame = pd.DataFrame(stage4_context_rows)
+    stage4_context_frame.to_csv(research_dir / "stage4_level_context.csv", index=False)
+
+    summary_frames = [
+        _summarize_pno_feature_buckets(trade_context_frame, scope="trades"),
+        _summarize_pno_feature_buckets(stage5_candidate_frame, scope="stage5"),
+        _summarize_pno_feature_buckets(stage4_context_frame.assign(is_trade=stage4_context_frame.get("downstream_triggered", False), is_triggered=stage4_context_frame.get("downstream_triggered", False), is_win=stage4_context_frame.get("downstream_win", False), stage5_outcome=stage4_context_frame.get("downstream_stage5_outcome", pd.Series(dtype=object))), scope="stage4"),
+    ]
+    summary_frame = pd.concat([frame for frame in summary_frames if not frame.empty], ignore_index=True) if any(not frame.empty for frame in summary_frames) else pd.DataFrame()
+    summary_frame.to_csv(research_dir / "feature_summary.csv", index=False)
+
+    stage_reason_summary_rows: list[dict[str, object]] = []
+    for stage_id, rows in stage_rows_by_stage.items():
+        stage_reason_summary_rows.append({"stage_id": stage_id, "status": "passed", "reason": "passed", "count": int(len(rows))})
+    for stage_id, reason_groups in stage_rejections_by_stage.items():
+        for reason, rows in reason_groups.items():
+            stage_reason_summary_rows.append({"stage_id": stage_id, "status": "rejected", "reason": reason, "count": int(len(rows))})
+    pd.DataFrame(stage_reason_summary_rows).to_csv(research_dir / "stage_reason_summary.csv", index=False)
+
+
 def _plot_post_pump_absorption_diagnostics_for_symbols(
     *,
     config: AppConfig,
@@ -2072,19 +2434,21 @@ def _plot_pno_diagnostics_for_symbols(
     charts_dir = diagnostics_dir / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
     selected_stage_ids = _resolve_pno_stage_ids(args)
+    selected_stage_id_set = set(selected_stage_ids)
 
     symbols_with_trades = 0
     symbols_with_stage_events = 0
     total_trades_generated = 0
     total_stage_events = 0
     total_charts_generated = 0
+    all_trade_rows: list[dict[str, object]] = []
     stage_rows_by_stage: dict[str, list[dict[str, object]]] = {
         stage_id: []
-        for stage_id in selected_stage_ids
+        for stage_id in PNO_STAGE_SEQUENCE
     }
     stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]] = {
         stage_id: {}
-        for stage_id in selected_stage_ids
+        for stage_id in PNO_STAGE_SEQUENCE
     }
 
     pno_params_template = _build_pno_params_template_from_row(
@@ -2097,6 +2461,7 @@ def _plot_pno_diagnostics_for_symbols(
         trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
         diagnostics = strategy.consume_last_generation_diagnostics()
         trade_rows = [_flatten_trade_for_diagnostics(trade) for trade in trades]
+        all_trade_rows.extend(trade_rows)
         total_trades_generated += len(trade_rows)
         if trade_rows:
             symbols_with_trades += 1
@@ -2110,7 +2475,8 @@ def _plot_pno_diagnostics_for_symbols(
                 stage_id = raw_event.get("stage_id")
                 if not isinstance(stage_id, str) or stage_id not in stage_rows_by_stage:
                     continue
-                symbol_stage_events += 1
+                if stage_id in selected_stage_id_set:
+                    symbol_stage_events += 1
                 stage_rows_by_stage[stage_id].append(
                     {
                         "symbol": symbol,
@@ -2130,7 +2496,8 @@ def _plot_pno_diagnostics_for_symbols(
                 stage_id = raw_rejection.get("stage_id")
                 if not isinstance(stage_id, str) or stage_id not in stage_rejections_by_stage:
                     continue
-                symbol_stage_rejections += 1
+                if stage_id in selected_stage_id_set:
+                    symbol_stage_rejections += 1
                 reason = str(raw_rejection.get("reason") or "unknown")
                 stage_rejections_by_stage[stage_id].setdefault(reason, []).append(
                     {
@@ -2170,6 +2537,13 @@ def _plot_pno_diagnostics_for_symbols(
         stage_rows_by_stage=stage_rows_by_stage,
         stage_rejections_by_stage=stage_rejections_by_stage,
         selected_stage_ids=selected_stage_ids,
+    )
+    _export_pno_research_context(
+        diagnostics_dir=diagnostics_dir,
+        symbol_frames=symbol_frames,
+        trade_rows=all_trade_rows,
+        stage_rows_by_stage=stage_rows_by_stage,
+        stage_rejections_by_stage=stage_rejections_by_stage,
     )
 
     logger.info(

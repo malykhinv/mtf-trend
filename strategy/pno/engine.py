@@ -144,6 +144,8 @@ class Stage1Context:
     pump_peak_bar_tr_atr_pre: float = 0.0
     pump_volume_ratio_start: float = 0.0
     pump_volume_ratio_continue: float = 0.0
+    pump_path_efficiency: float = 0.0
+    pump_wick_share: float = 0.0
     pre_pump_range_1h: float = 0.0
     pre_pump_range_2h: float = 0.0
     pump_vs_pre_1h_ratio: float = 0.0
@@ -933,7 +935,22 @@ class PnoEngine:
                             "active_high": round(float(live_armed.stage4.active_high), 8),
                             "pullback_low": round(float(live_armed.stage3.pullback_low), 8),
                             "level": round(float(live_armed.stage4.level), 8),
+                            "score": round(float(live_armed.stage4.final_score), 4),
+                            "touches": int(live_armed.stage4.touches),
+                            "entry_pos": round(float(live_armed.stage4.entry_pos), 4),
+                            "level_maturity_fraction": round(float(live_armed.stage4.level_maturity_fraction), 4),
+                            "pump_start_timestamp_ms": int(live_armed.stage1.pump_start_timestamp),
+                            "active_high_timestamp_ms": int(live_armed.stage4.active_high_timestamp),
+                            "pullback_low_timestamp_ms": int(live_armed.stage3.pullback_low_timestamp),
+                            "level_first_local_high_timestamp_ms": int(one.timestamps[live_armed.stage4.cluster_first_idx]),
+                            "level_last_local_high_timestamp_ms": int(one.timestamps[live_armed.stage4.cluster_last_idx]),
+                            "level_valid_timestamp_ms": int(live_armed.stage4.level_valid_timestamp),
                             "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "cross")),
+                            "entry_signal_timestamp_ms": int(one.timestamps[min(i, len(one.timestamps) - 1)]),
+                            "entry_plan": round(float(live_armed.stage4.entry_plan), 8),
+                            "sl_plan": round(float(live_armed.stage4.sl_plan), 8),
+                            "tp1": round(float(live_armed.stage4.tp1), 8),
+                            "tp2": round(float(live_armed.stage4.tp2), 8),
                         },
                     )
                     armed = None
@@ -1172,6 +1189,8 @@ class PnoEngine:
                         "pump_peak_bar_tr_atr_pre": round(stage1.pump_peak_bar_tr_atr_pre, 4),
                         "pump_volume_ratio_start": round(stage1.pump_volume_ratio_start, 4),
                         "pump_volume_ratio_continue": round(stage1.pump_volume_ratio_continue, 4),
+                        "pump_path_efficiency": round(stage1.pump_path_efficiency, 4),
+                        "pump_wick_share": round(stage1.pump_wick_share, 4),
                         "pre_pump_range_1h": round(stage1.pre_pump_range_1h, 8),
                         "pre_pump_range_2h": round(stage1.pre_pump_range_2h, 8),
                         "pump_vs_pre_1h_ratio": round(stage1.pump_vs_pre_1h_ratio, 4),
@@ -1300,7 +1319,22 @@ class PnoEngine:
                             "active_high": round(float(armed.stage4.active_high), 8),
                             "pullback_low": round(float(armed.stage3.pullback_low), 8),
                             "level": round(float(armed.stage4.level), 8),
+                            "score": round(float(armed.stage4.final_score), 4),
+                            "touches": int(armed.stage4.touches),
+                            "entry_pos": round(float(armed.stage4.entry_pos), 4),
+                            "level_maturity_fraction": round(float(armed.stage4.level_maturity_fraction), 4),
+                            "pump_start_timestamp_ms": int(armed.stage1.pump_start_timestamp),
+                            "active_high_timestamp_ms": int(armed.stage4.active_high_timestamp),
+                            "pullback_low_timestamp_ms": int(armed.stage3.pullback_low_timestamp),
+                            "level_first_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_first_idx]),
+                            "level_last_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_last_idx]),
+                            "level_valid_timestamp_ms": int(armed.stage4.level_valid_timestamp),
                             "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "cross")),
+                            "entry_signal_timestamp_ms": int(one.timestamps[min(i, len(one.timestamps) - 1)]),
+                            "entry_plan": round(float(armed.stage4.entry_plan), 8),
+                            "sl_plan": round(float(armed.stage4.sl_plan), 8),
+                            "tp1": round(float(armed.stage4.tp1), 8),
+                            "tp2": round(float(armed.stage4.tp2), 8),
                         },
                     )
                     armed = None
@@ -1694,6 +1728,8 @@ class PnoEngine:
             pump_peak_bar_tr_atr_pre=float(quality_metrics["pump_peak_bar_tr_atr_pre"]),
             pump_volume_ratio_start=float(quality_metrics["pump_volume_ratio_start"]),
             pump_volume_ratio_continue=float(quality_metrics["pump_volume_ratio_continue"]),
+            pump_path_efficiency=float(quality_metrics["pump_path_efficiency"]),
+            pump_wick_share=float(quality_metrics["pump_wick_share"]),
             pre_pump_range_1h=pre_pump_range_1h,
             pre_pump_range_2h=pre_pump_range_2h,
             pump_vs_pre_1h_ratio=self._safe_divide(pump_range, pre_pump_range_1h),
@@ -2663,6 +2699,8 @@ class PnoEngine:
             "pump_peak_bar_tr_atr_pre": round(float(armed.stage1.pump_peak_bar_tr_atr_pre), 4),
             "pump_volume_ratio_start": round(float(armed.stage1.pump_volume_ratio_start), 4),
             "pump_volume_ratio_continue": round(float(armed.stage1.pump_volume_ratio_continue), 4),
+            "pump_path_efficiency": round(float(armed.stage1.pump_path_efficiency), 4),
+            "pump_wick_share": round(float(armed.stage1.pump_wick_share), 4),
             "pullback_low": round(float(armed.stage3.pullback_low), 8),
             "pullback_depth": round(float(armed.stage3.pullback_depth), 8),
             "level": round(float(armed.stage4.level), 8),
