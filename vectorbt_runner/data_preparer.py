@@ -37,6 +37,30 @@ class DataPreparer:
     # region Приватные
     def __init__(self, cache_dir: Path) -> None:
         self._cache_dir = Path(cache_dir)
+        self._symbol_dir_cache: dict[str, str] | None = None
+        self._parquet_columns_cache: dict[Path, tuple[str, ...]] = {}
+
+    def _ensure_symbol_dir_cache(self) -> dict[str, str]:
+        if self._symbol_dir_cache is not None:
+            return self._symbol_dir_cache
+
+        mapping: dict[str, str] = {}
+        if self._cache_dir.exists():
+            for symbol_dir in self._cache_dir.iterdir():
+                if not symbol_dir.is_dir():
+                    continue
+                decoded_symbol = ParquetStorage.decode_symbol_from_path(symbol_dir.name)
+                mapping[normalize_symbol(decoded_symbol)] = symbol_dir.name
+        self._symbol_dir_cache = mapping
+        return mapping
+
+    def _get_available_columns(self, path: Path) -> tuple[str, ...]:
+        cached = self._parquet_columns_cache.get(path)
+        if cached is not None:
+            return cached
+        columns = tuple(pq.ParquetFile(path).schema.names)
+        self._parquet_columns_cache[path] = columns
+        return columns
 
     def _resolve_symbol_dir_name(self, symbol: str) -> str | None:
         exact_dir_name = ParquetStorage.encode_symbol_for_path(symbol)
@@ -45,16 +69,7 @@ class DataPreparer:
             return exact_dir_name
 
         normalized_requested = normalize_symbol(symbol)
-        if not self._cache_dir.exists():
-            return None
-
-        for symbol_dir in self._cache_dir.iterdir():
-            if not symbol_dir.is_dir():
-                continue
-            decoded_symbol = ParquetStorage.decode_symbol_from_path(symbol_dir.name)
-            if normalize_symbol(decoded_symbol) == normalized_requested:
-                return symbol_dir.name
-        return None
+        return self._ensure_symbol_dir_cache().get(normalized_requested)
 
     # endregion Приватные
     def list_symbols(self, timeframe: Timeframe) -> list[str]:
@@ -83,8 +98,7 @@ class DataPreparer:
         if not path.exists():
             return pd.DataFrame()
 
-        parquet_schema = pq.ParquetFile(path).schema
-        available_columns = set(parquet_schema.names)
+        available_columns = set(self._get_available_columns(path))
         required_columns_subset = [column for column in self.INPUT_COLUMNS if column in available_columns]
         frame = pd.read_parquet(path, columns=required_columns_subset)
         missing = [col for col in self.REQUIRED_COLUMNS if col not in frame.columns]
