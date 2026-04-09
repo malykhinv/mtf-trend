@@ -1046,7 +1046,7 @@ def _render_pno_stage_review_chart(
         end_timestamp_ms = timestamp_ms
     else:
         start_timestamp_ms = timestamp_ms - (90 * 60_000)
-        end_timestamp_ms = timestamp_ms + (45 * 60_000)
+        end_timestamp_ms = timestamp_ms
     if is_stage1:
         plot_frame = levels_frame.loc[
             (pd.to_numeric(levels_frame["timestamp"], errors="coerce") >= start_timestamp_ms)
