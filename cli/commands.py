@@ -524,13 +524,21 @@ def _build_pno_plot_frame(
         levels_ema["ema9"] = levels_ema["close"].ewm(span=9, adjust=False).mean()
         levels_ema["ema20"] = levels_ema["close"].ewm(span=20, adjust=False).mean()
 
-    levels_ema = levels_ema.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last")
     if levels_ema.empty:
         plot_frame["ema9"] = np.nan
         plot_frame["ema20"] = np.nan
         return plot_frame
 
     levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64)
+    if levels_timestamps.size > 1 and np.any(levels_timestamps[1:] < levels_timestamps[:-1]):
+        levels_ema = levels_ema.iloc[np.argsort(levels_timestamps, kind="stable")]
+        levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64)
+    if levels_timestamps.size > 1:
+        unique_mask = np.ones(len(levels_ema), dtype=bool)
+        unique_mask[:-1] = levels_timestamps[:-1] != levels_timestamps[1:]
+        if not bool(unique_mask.all()):
+            levels_ema = levels_ema.loc[unique_mask]
+            levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64)
     plot_timestamps = plot_frame["timestamp"].to_numpy(dtype=np.float64)
     plot_frame["ema9"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema9"].to_numpy(dtype=np.float64))
     plot_frame["ema20"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema20"].to_numpy(dtype=np.float64))
@@ -546,17 +554,21 @@ def _prepare_pno_levels_plot_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
     numeric_columns = [column for column in ("open", "high", "low", "close", "volume", "ema9", "ema20") if column in prepared.columns]
     for column in numeric_columns:
         prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-    prepared = (
-        prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
-        .sort_values("timestamp")
-        .drop_duplicates(subset=["timestamp"], keep="last")
-        .reset_index(drop=True)
-    )
+    prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
     if prepared.empty:
         return prepared
+    timestamps = prepared["timestamp"].to_numpy(dtype=np.float64, copy=False)
+    if timestamps.size > 1 and np.any(timestamps[1:] < timestamps[:-1]):
+        prepared = prepared.iloc[np.argsort(timestamps, kind="stable")]
+        timestamps = prepared["timestamp"].to_numpy(dtype=np.float64, copy=False)
+    if timestamps.size > 1:
+        unique_mask = np.ones(len(prepared), dtype=bool)
+        unique_mask[:-1] = timestamps[:-1] != timestamps[1:]
+        if not bool(unique_mask.all()):
+            prepared = prepared.loc[unique_mask]
     if "ema9" not in prepared.columns or "ema20" not in prepared.columns:
-        prepared["ema9"] = pd.to_numeric(prepared["close"], errors="coerce").ewm(span=9, adjust=False).mean()
-        prepared["ema20"] = pd.to_numeric(prepared["close"], errors="coerce").ewm(span=20, adjust=False).mean()
+        prepared["ema9"] = prepared["close"].ewm(span=9, adjust=False).mean()
+        prepared["ema20"] = prepared["close"].ewm(span=20, adjust=False).mean()
     return prepared
 
 
@@ -567,12 +579,19 @@ def _prepare_pno_entry_plot_source(entry_frame: pd.DataFrame) -> pd.DataFrame:
     prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
     for column in ("open", "high", "low", "close", "volume"):
         prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-    return (
-        prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
-        .sort_values("timestamp")
-        .drop_duplicates(subset=["timestamp"], keep="last")
-        .reset_index(drop=True)
-    )
+    prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
+    if prepared.empty:
+        return prepared
+    timestamps = prepared["timestamp"].to_numpy(dtype=np.float64, copy=False)
+    if timestamps.size > 1 and np.any(timestamps[1:] < timestamps[:-1]):
+        prepared = prepared.iloc[np.argsort(timestamps, kind="stable")]
+        timestamps = prepared["timestamp"].to_numpy(dtype=np.float64, copy=False)
+    if timestamps.size > 1:
+        unique_mask = np.ones(len(prepared), dtype=bool)
+        unique_mask[:-1] = timestamps[:-1] != timestamps[1:]
+        if not bool(unique_mask.all()):
+            prepared = prepared.loc[unique_mask]
+    return prepared
 
 
 _PNO_PLOT_FIGURE_FACE = "#08111f"
