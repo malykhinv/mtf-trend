@@ -324,10 +324,9 @@ def _build_post_pump_absorption_params_from_row(
     )
 
 
-def _build_pno_params_from_row(
+def _build_pno_params_template_from_row(
     row: pd.Series,
     *,
-    symbol: str,
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
 ) -> PnoParams:
@@ -361,7 +360,7 @@ def _build_pno_params_from_row(
         return default if _is_missing_scalar(raw_value) else str(raw_value)
 
     defaults = PnoParams(
-        symbol=symbol,
+        symbol="",
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
     )
@@ -373,7 +372,7 @@ def _build_pno_params_from_row(
     resolved_trade_risk = r_trade if r_trade is not None else deposit * risk_pct
 
     return PnoParams(
-        symbol=symbol,
+        symbol="",
         pno_variant_id=str(row.get("pno_variant_id", defaults.pno_variant_id)),
         entry_confirmation_mode=_str_or_default(
             "pno_entry_confirmation_mode",
@@ -420,26 +419,19 @@ def _build_pno_params_from_row(
             "pno_stage1_barcode_tr_price_fraction",
             defaults.stage1_barcode_tr_price_fraction,
         ),
-        stage1_min_impulse_atr_pre=_float_or_default(
-            "pno_stage1_min_impulse_atr_pre",
-            defaults.stage1_min_impulse_atr_pre,
-        ),
+        stage1_min_impulse_atr_pre=_float_or_default("pno_stage1_min_impulse_atr_pre", defaults.stage1_min_impulse_atr_pre),
         stage1_min_peak_bar_tr_atr_pre=_float_or_default(
             "pno_stage1_min_peak_bar_tr_atr_pre",
             defaults.stage1_min_peak_bar_tr_atr_pre,
         ),
-        stage1_min_volume_ratio_start=_float_or_default(
-            "pno_stage1_min_volume_ratio_start",
-            defaults.stage1_min_volume_ratio_start,
-        ),
+        stage1_min_volume_ratio_start=_float_or_default("pno_stage1_min_volume_ratio_start", defaults.stage1_min_volume_ratio_start),
         stage1_min_volume_ratio_continue=_float_or_default(
             "pno_stage1_min_volume_ratio_continue",
             defaults.stage1_min_volume_ratio_continue,
         ),
-        stage1_min_pump_pct=_float_or_default(
-            "pno_stage1_min_pump_pct",
-            defaults.stage1_min_pump_pct,
-        ),
+        stage1_min_path_efficiency=_float_or_default("pno_stage1_min_path_efficiency", defaults.stage1_min_path_efficiency),
+        stage1_max_wick_share=_float_or_default("pno_stage1_max_wick_share", defaults.stage1_max_wick_share),
+        stage1_min_pump_pct=_float_or_default("pno_stage1_min_pump_pct", defaults.stage1_min_pump_pct),
         stage1_min_pretrend_range_ratio_2h=_float_or_default(
             "pno_stage1_min_pretrend_range_ratio_2h",
             defaults.stage1_min_pretrend_range_ratio_2h,
@@ -449,8 +441,14 @@ def _build_pno_params_from_row(
             defaults.stage1_pre_pump_high_max_fraction_of_leg,
         ),
         level_cluster_spread_v1=_float_or_default("pno_level_cluster_spread_v1", defaults.level_cluster_spread_v1),
-        level_cluster_relaxed_spread_v1=_float_or_default("pno_level_cluster_relaxed_spread_v1", defaults.level_cluster_relaxed_spread_v1),
-        level_latest_high_max_age_bars=_int_or_default("pno_level_latest_high_max_age_bars", defaults.level_latest_high_max_age_bars),
+        level_cluster_relaxed_spread_v1=_float_or_default(
+            "pno_level_cluster_relaxed_spread_v1",
+            defaults.level_cluster_relaxed_spread_v1,
+        ),
+        level_latest_high_max_age_bars=_int_or_default(
+            "pno_level_latest_high_max_age_bars",
+            defaults.level_latest_high_max_age_bars,
+        ),
         level_touch_tolerance_v1=_float_or_default("pno_level_touch_tolerance_v1", defaults.level_touch_tolerance_v1),
         level_low_minor_break_v1=_float_or_default("pno_level_low_minor_break_v1", defaults.level_low_minor_break_v1),
         level_low_major_break_v1=_float_or_default("pno_level_low_major_break_v1", defaults.level_low_major_break_v1),
@@ -467,144 +465,23 @@ def _build_pno_params_from_row(
         strong_score=_float_or_default("pno_strong_score", defaults.strong_score),
         slip_plan_v1_fraction=_float_or_default("pno_slip_plan_v1_fraction", defaults.slip_plan_v1_fraction),
         min_tick_fraction=_float_or_default("pno_min_tick_fraction", defaults.min_tick_fraction),
-        max_entry_pullback_fraction=_float_or_default(
-            "pno_max_entry_pullback_fraction",
-            defaults.max_entry_pullback_fraction,
-        ),
+        max_entry_pullback_fraction=_float_or_default("pno_max_entry_pullback_fraction", defaults.max_entry_pullback_fraction),
     )
 
 
-def _flatten_trade_for_diagnostics(trade: object) -> dict[str, object]:
-    payload = {
-        "entry_timestamp_ms": int(getattr(trade, "entry_timestamp_ms")),
-        "exit_timestamp_ms": int(getattr(trade, "exit_timestamp_ms")),
-        "pnl": float(getattr(trade, "pnl")),
-        "pnl_percent": float(getattr(getattr(trade, "pnl_percent"), "value", getattr(trade, "pnl_percent"))),
-        "result_type": str(getattr(getattr(trade, "result_type"), "value", getattr(trade, "result_type"))),
-    }
-    metadata = getattr(trade, "metadata", None)
-    if isinstance(metadata, dict):
-        payload.update(metadata)
-    return payload
-
-
-def _resolve_ppa_stage_ids(args: argparse.Namespace) -> tuple[str, ...]:
-    raw_stage = getattr(args, "ppa_stage", None)
-    raw_through_stage = getattr(args, "ppa_through_stage", None)
-    if raw_stage is not None and raw_through_stage is not None:
-        raise ValueError("Use only one of --ppa-stage or --ppa-through-stage")
-
-    if raw_stage is not None:
-        stage_number = int(raw_stage)
-        if stage_number < 1 or stage_number > len(PPA_STAGE_SEQUENCE):
-            raise ValueError(f"--ppa-stage must be in range 1..{len(PPA_STAGE_SEQUENCE)}")
-        return (PPA_STAGE_SEQUENCE[stage_number - 1],)
-
-    if raw_through_stage is not None:
-        stage_number = int(raw_through_stage)
-        if stage_number < 1 or stage_number > len(PPA_STAGE_SEQUENCE):
-            raise ValueError(f"--ppa-through-stage must be in range 1..{len(PPA_STAGE_SEQUENCE)}")
-        return tuple(PPA_STAGE_SEQUENCE[:stage_number])
-
-    return tuple(PPA_STAGE_SEQUENCE)
-
-
-def _resolve_pno_stage_ids(args: argparse.Namespace) -> tuple[str, ...]:
-    raw_stage = getattr(args, "pno_stage", None)
-    raw_through_stage = getattr(args, "pno_through_stage", None)
-    if raw_stage is not None and raw_through_stage is not None:
-        raise ValueError("Use only one of --pno-stage or --pno-through-stage")
-
-    if raw_stage is not None:
-        stage_number = int(raw_stage)
-        if stage_number < 1 or stage_number > len(PNO_STAGE_SEQUENCE):
-            raise ValueError(f"--pno-stage must be in range 1..{len(PNO_STAGE_SEQUENCE)}")
-        return (PNO_STAGE_SEQUENCE[stage_number - 1],)
-
-    if raw_through_stage is not None:
-        stage_number = int(raw_through_stage)
-        if stage_number < 1 or stage_number > len(PNO_STAGE_SEQUENCE):
-            raise ValueError(f"--pno-through-stage must be in range 1..{len(PNO_STAGE_SEQUENCE)}")
-        return tuple(PNO_STAGE_SEQUENCE[:stage_number])
-
-    return tuple(PNO_STAGE_SEQUENCE)
-
-
-def _resolve_ppa_stage_preset(raw_value: object) -> tuple[int | None, int | None, str]:
-    preset = str(raw_value or "").strip().lower()
-    if preset not in _PPA_STAGE_PRESETS:
-        supported = ", ".join(sorted(_PPA_STAGE_PRESETS))
-        raise ValueError(f"Unsupported ppa-stage preset: {preset}. Supported: {supported}")
-    stage, through_stage = _PPA_STAGE_PRESETS[preset]
-    return stage, through_stage, preset
-
-
-def _resolve_pno_stage_preset(raw_value: object) -> tuple[int | None, int | None, str]:
-    preset = str(raw_value or "").strip().lower()
-    if preset not in _PNO_STAGE_PRESETS:
-        supported = ", ".join(sorted(_PNO_STAGE_PRESETS))
-        raise ValueError(f"Unsupported pno-stage preset: {preset}. Supported: {supported}")
-    stage, through_stage = _PNO_STAGE_PRESETS[preset]
-    return stage, through_stage, preset
-
-
-def _ppa_stage_metric_column_name(stage_id: str) -> str:
-    return f"ppa_stage_hits_{stage_id}"
-
-
-def _export_ppa_stage_reviews(
+def _build_pno_params_from_row(
+    row: pd.Series,
     *,
-    diagnostics_dir: Path,
-    stage_rows_by_stage: dict[str, list[dict[str, object]]],
-    selected_stage_ids: tuple[str, ...],
-) -> None:
-    stage_reviews_dir = diagnostics_dir / "stage_reviews"
-    stage_reviews_dir.mkdir(parents=True, exist_ok=True)
-
-    manifest_rows: list[dict[str, object]] = []
-    for stage_id in selected_stage_ids:
-        rows = stage_rows_by_stage.get(stage_id, [])
-        stage_dir = stage_reviews_dir / stage_id
-        stage_dir.mkdir(parents=True, exist_ok=True)
-        events_frame = pd.DataFrame(rows)
-        events_path = stage_dir / "events.csv"
-        events_frame.to_csv(events_path, index=False)
-
-        summary_rows: list[dict[str, object]] = []
-        if not events_frame.empty and "symbol" in events_frame.columns:
-            for symbol, group in events_frame.groupby("symbol", sort=True):
-                summary_rows.append(
-                    {
-                        "symbol": symbol,
-                        "events_count": int(len(group)),
-                        "first_timestamp_ms": int(pd.to_numeric(group["timestamp_ms"], errors="coerce").dropna().min())
-                        if "timestamp_ms" in group.columns and not group.empty
-                        else None,
-                        "last_timestamp_ms": int(pd.to_numeric(group["timestamp_ms"], errors="coerce").dropna().max())
-                        if "timestamp_ms" in group.columns and not group.empty
-                        else None,
-                    }
-                )
-        pd.DataFrame(summary_rows).to_csv(stage_dir / "summary_by_symbol.csv", index=False)
-        manifest_rows.append(
-            {
-                "stage_id": stage_id,
-                "events_count": int(len(rows)),
-                "events_path": str(events_path),
-                "summary_path": str(stage_dir / "summary_by_symbol.csv"),
-            }
-        )
-
-    pd.DataFrame(manifest_rows).to_csv(stage_reviews_dir / "manifest.csv", index=False)
-
-
-def _read_csv_or_empty(path: Path) -> pd.DataFrame:
-    if not path.exists():
-        return pd.DataFrame()
-    try:
-        return pd.read_csv(path)
-    except pd.errors.EmptyDataError:
-        return pd.DataFrame()
+    symbol: str,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+) -> PnoParams:
+    template = _build_pno_params_template_from_row(
+        row,
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+    )
+    return replace(template, symbol=symbol)
 
 
 def _safe_float(value: object) -> float | None:
@@ -1967,13 +1844,13 @@ def _plot_pno_diagnostics_for_symbols(
         for stage_id in selected_stage_ids
     }
 
+    pno_params_template = _build_pno_params_template_from_row(
+        params_row,
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+    )
     for symbol, mtf_frames in symbol_frames.items():
-        params = _build_pno_params_from_row(
-            params_row,
-            symbol=symbol,
-            levels_timeframe=levels_timeframe,
-            entry_timeframe=entry_timeframe,
-        )
+        params = replace(pno_params_template, symbol=symbol)
         trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
         diagnostics = strategy.consume_last_generation_diagnostics()
         trade_rows = [_flatten_trade_for_diagnostics(trade) for trade in trades]
@@ -2295,13 +2172,13 @@ def _select_pno_plot_params_row_by_stage(
         stage_rejections_count = 0
         trades_generated = 0
 
+        pno_params_template = _build_pno_params_template_from_row(
+            row,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+        )
         for symbol, mtf_frames in symbol_frames.items():
-            params = _build_pno_params_from_row(
-                row,
-                symbol=symbol,
-                levels_timeframe=levels_timeframe,
-                entry_timeframe=entry_timeframe,
-            )
+            params = replace(pno_params_template, symbol=symbol)
             strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
             diagnostics = strategy.consume_last_generation_diagnostics()
 
