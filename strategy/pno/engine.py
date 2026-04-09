@@ -149,6 +149,7 @@ class Stage1Context:
     pump_vs_pre_1h_ratio: float = 0.0
     pump_vs_pre_2h_ratio: float = 0.0
     reference_high_weight: float = 1.0
+    hold_status_at_validation: str = "held_above_hold"
 
 
 @dataclass(slots=True)
@@ -996,6 +997,15 @@ class PnoEngine:
                 prev_stage1 = stage1
                 prev_stage2 = stage2
                 prev_stage3 = stage3
+                hold_status = self._resolve_stage1_hold_status(one=one, idx=i, stage1=prev_stage1)
+                if prev_stage3 is None and prev_stage2 is not None and prev_stage1 is not None:
+                    stage1 = replace(prev_stage1, hold_status_at_validation=hold_status)
+                    stage2 = prev_stage2
+                    stage3 = None
+                    stage4 = None
+                    armed = None
+                    i += 1
+                    continue
                 stage1 = None
                 stage2 = None
                 stage3 = None
@@ -1029,6 +1039,8 @@ class PnoEngine:
                     )
                 i += 1
                 continue
+
+            hold_status = self._resolve_stage1_hold_status(one=one, idx=i, stage1=stage1)
 
             if next_stage1.pump_start_5m_idx != active_pump_start_idx:
                 active_pump_start_idx = next_stage1.pump_start_5m_idx
@@ -1177,6 +1189,9 @@ class PnoEngine:
                         "active_high": round(stage1.active_high, 8),
                         "pullback_low": round(stage2.pullback_low, 8),
                         "pullback_depth": round(stage2.pullback_depth, 8),
+                        "pullback_age_bars": int(stage2.pullback_age_bars),
+                        "hold_status_at_validation": hold_status,
+                        "hold_floor": round(stage1.hold_floor, 8),
                     },
                 )
                 blocked_active_high_idx = stage1.active_high_idx
@@ -1192,6 +1207,7 @@ class PnoEngine:
                 continue
             if stage3 is None or next_stage3.active_high_idx != stage3.active_high_idx:
                 stage3 = next_stage3
+                stage1 = replace(stage1, hold_status_at_validation=hold_status)
                 self._mark_stage(
                     diagnostics,
                     stage_keys,
@@ -1201,6 +1217,9 @@ class PnoEngine:
                     extra={
                         "pullback_low": round(stage3.pullback_low, 8),
                         "pullback_depth": round(stage3.pullback_depth, 8),
+                        "pullback_age_bars": int(stage3.pullback_age_bars),
+                        "hold_status_at_validation": hold_status,
+                        "hold_floor": round(stage1.hold_floor, 8),
                     },
                 )
             else:
@@ -1617,12 +1636,8 @@ class PnoEngine:
         params: PnoParams,
     ) -> tuple[Stage3Context | None, str | None]:
         post_high_slice = slice(stage1.active_high_idx + 1, idx + 1)
-        if stage2.pullback_age_bars > params.pullback_max_age_bars:
-            return None, "pullback_too_old"
         if stage2.pullback_depth > (params.pullback_invalid_max_leg_fraction * stage1.reference_leg_size):
             return None, "pullback_too_deep_vs_leg"
-        if stage2.pullback_depth > (params.pullback_invalid_max_v5 * five.v5[five_idx]):
-            return None, "pullback_too_deep_vs_v5"
         if np.any(one.closes[post_high_slice] < (stage1.leg_start - self._EPSILON)):
             return None, "close_below_leg_start"
         if float(five.closes[five_idx]) <= float(five.ema20[five_idx]):
@@ -1630,7 +1645,6 @@ class PnoEngine:
         valid = (
             stage2.pullback_depth >= (params.pullback_min_v1 * one.v1[idx])
             and stage2.pullback_depth <= (params.pullback_valid_max_leg_fraction * stage1.reference_leg_size)
-            and stage2.pullback_depth <= (params.pullback_valid_max_v5 * five.v5[five_idx])
             and stage2.pullback_low > stage1.leg_start
         )
         if not valid:
@@ -2406,6 +2420,16 @@ class PnoEngine:
 
         reference_high = min(reference_high, float(five.highs[active_high_idx]))
         return float(reference_high), float(last_weight)
+
+    def _resolve_stage1_hold_status(self, *, one: OneMinuteFrame, idx: int, stage1: Stage1Context | None) -> str:
+        if stage1 is None or idx < 0 or idx >= len(one.timestamps):
+            return "unknown"
+        hold_floor = float(stage1.hold_floor)
+        if float(one.closes[idx]) <= hold_floor:
+            return "closed_below_hold"
+        if float(one.lows[idx]) <= hold_floor:
+            return "wick_below_hold"
+        return "held_above_hold"
 
     @staticmethod
     def _resolve_pno_order_adj(pno_index: int) -> int:

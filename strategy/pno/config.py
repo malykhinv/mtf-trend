@@ -51,8 +51,8 @@ class PnoParams:
     stage1_hold_fraction: float = 0.5
     pullback_min_v1: float = 1.0
     pullback_min_pump_fraction_5m: float = 0.20
-    pullback_valid_max_leg_fraction: float = 0.38
-    pullback_invalid_max_leg_fraction: float = 0.50
+    pullback_valid_max_leg_fraction: float = 0.62
+    pullback_invalid_max_leg_fraction: float = 0.90
     pullback_valid_max_v5: float = 4.5
     pullback_invalid_max_v5: float = 6.0
     pullback_max_age_bars: int = 12
