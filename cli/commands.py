@@ -698,12 +698,49 @@ def _prepare_pno_levels_ema_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _prepare_pno_levels_plot_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
-    columns = [column for column in ("timestamp", "open", "high", "low", "close", "volume", "ema9", "ema20") if column in levels_frame.columns]
+    columns = [
+        column
+        for column in (
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "ema9",
+            "ema20",
+            "open_interest",
+            "number_of_trades",
+            "trades",
+            "trade_count",
+            "taker_buy_volume",
+            "taker_buy_quote_volume",
+        )
+        if column in levels_frame.columns
+    ]
     prepared = levels_frame.loc[:, columns].copy()
     if prepared.empty:
         return prepared
     prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
-    numeric_columns = [column for column in ("open", "high", "low", "close", "volume", "ema9", "ema20") if column in prepared.columns]
+    numeric_columns = [
+        column
+        for column in (
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "ema9",
+            "ema20",
+            "open_interest",
+            "number_of_trades",
+            "trades",
+            "trade_count",
+            "taker_buy_volume",
+            "taker_buy_quote_volume",
+        )
+        if column in prepared.columns
+    ]
     for column in numeric_columns:
         prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
     prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
@@ -725,11 +762,43 @@ def _prepare_pno_levels_plot_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _prepare_pno_entry_plot_source(entry_frame: pd.DataFrame) -> pd.DataFrame:
-    prepared = entry_frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
+    columns = [
+        column
+        for column in (
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "open_interest",
+            "number_of_trades",
+            "trades",
+            "trade_count",
+            "taker_buy_volume",
+            "taker_buy_quote_volume",
+        )
+        if column in entry_frame.columns
+    ]
+    prepared = entry_frame.loc[:, columns].copy()
     if prepared.empty:
         return prepared
     prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
-    for column in ("open", "high", "low", "close", "volume"):
+    for column in (
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "open_interest",
+        "number_of_trades",
+        "trades",
+        "trade_count",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+    ):
+        if column not in prepared.columns:
+            continue
         prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
     prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
     if prepared.empty:
@@ -1957,10 +2026,40 @@ def _resolve_pno_signal_bar_context(
     recent_start = max(0, idx - 15)
     recent_slice = entry_frame["volume"].iloc[recent_start:idx]
     recent_volume_median = float(recent_slice.median()) if not recent_slice.empty else np.nan
+    ema9 = float(entry_frame["ema9"].iloc[idx]) if "ema9" in entry_frame.columns else np.nan
+    ema20 = float(entry_frame["ema20"].iloc[idx]) if "ema20" in entry_frame.columns else np.nan
+    ema9_prev = float(entry_frame["ema9"].iloc[max(0, idx - 3)]) if "ema9" in entry_frame.columns else np.nan
+    ema20_prev = float(entry_frame["ema20"].iloc[max(0, idx - 3)]) if "ema20" in entry_frame.columns else np.nan
+    trade_count_column = next(
+        (column for column in ("number_of_trades", "trades", "trade_count") if column in entry_frame.columns),
+        None,
+    )
+    trade_count = float(entry_frame[trade_count_column].iloc[idx]) if trade_count_column is not None else np.nan
+    recent_trade_slice = entry_frame[trade_count_column].iloc[recent_start:idx] if trade_count_column is not None else pd.Series(dtype=float)
+    recent_trade_median = float(recent_trade_slice.median()) if not recent_trade_slice.empty else np.nan
     level_value = float(level) if level is not None and np.isfinite(float(level)) else np.nan
     signal_high_clearance_pct = ((high_price - level_value) / level_value * 100.0) if np.isfinite(level_value) and level_value > 0.0 else np.nan
     signal_close_clearance_pct = ((close_price - level_value) / level_value * 100.0) if np.isfinite(level_value) and level_value > 0.0 else np.nan
     signal_open_clearance_pct = ((open_price - level_value) / level_value * 100.0) if np.isfinite(level_value) and level_value > 0.0 else np.nan
+    ema9_dist_pct = ((close_price - ema9) / ema9 * 100.0) if np.isfinite(ema9) and ema9 > 0.0 else np.nan
+    ema20_dist_pct = ((close_price - ema20) / ema20 * 100.0) if np.isfinite(ema20) and ema20 > 0.0 else np.nan
+    ema_spread_pct = ((ema9 - ema20) / ema20 * 100.0) if np.isfinite(ema9) and np.isfinite(ema20) and ema20 > 0.0 else np.nan
+    ema9_slope_3 = ((ema9 - ema9_prev) / ema9_prev * 100.0) if np.isfinite(ema9) and np.isfinite(ema9_prev) and ema9_prev > 0.0 else np.nan
+    ema20_slope_3 = ((ema20 - ema20_prev) / ema20_prev * 100.0) if np.isfinite(ema20) and np.isfinite(ema20_prev) and ema20_prev > 0.0 else np.nan
+    future_slice = entry_frame.iloc[idx + 1 : idx + 4]
+    signal_followthrough_1bar_pct = np.nan
+    signal_followthrough_3bar_pct = np.nan
+    signal_adverse_1bar_pct = np.nan
+    signal_adverse_3bar_pct = np.nan
+    if not future_slice.empty and close_price > 0.0:
+        future_highs = pd.to_numeric(future_slice["high"], errors="coerce")
+        future_lows = pd.to_numeric(future_slice["low"], errors="coerce")
+        if not future_highs.empty:
+            signal_followthrough_1bar_pct = ((float(future_highs.iloc[0]) - close_price) / close_price) * 100.0
+            signal_followthrough_3bar_pct = ((float(future_highs.max()) - close_price) / close_price) * 100.0
+        if not future_lows.empty:
+            signal_adverse_1bar_pct = ((float(future_lows.iloc[0]) - close_price) / close_price) * 100.0
+            signal_adverse_3bar_pct = ((float(future_lows.min()) - close_price) / close_price) * 100.0
     return {
         "signal_bar_timestamp_ms": int(timestamps[idx]),
         "signal_bar_open": round(open_price, 8),
@@ -1977,10 +2076,295 @@ def _resolve_pno_signal_bar_context(
         "signal_bar_close_position": round((close_price - low_price) / bar_range, 4),
         "signal_bar_is_green": bool(close_price >= open_price),
         "signal_bar_volume_vs_recent": round(volume / recent_volume_median, 4) if np.isfinite(recent_volume_median) and recent_volume_median > 0.0 else np.nan,
+        "signal_bar_trade_count": round(trade_count, 4) if np.isfinite(trade_count) else np.nan,
+        "signal_bar_trade_count_vs_recent": round(trade_count / recent_trade_median, 4) if np.isfinite(trade_count) and np.isfinite(recent_trade_median) and recent_trade_median > 0.0 else np.nan,
+        "signal_bar_ema9_dist_pct": round(ema9_dist_pct, 4) if np.isfinite(ema9_dist_pct) else np.nan,
+        "signal_bar_ema20_dist_pct": round(ema20_dist_pct, 4) if np.isfinite(ema20_dist_pct) else np.nan,
+        "signal_bar_ema_spread_pct": round(ema_spread_pct, 4) if np.isfinite(ema_spread_pct) else np.nan,
+        "signal_bar_ema9_slope_3": round(ema9_slope_3, 4) if np.isfinite(ema9_slope_3) else np.nan,
+        "signal_bar_ema20_slope_3": round(ema20_slope_3, 4) if np.isfinite(ema20_slope_3) else np.nan,
+        "signal_followthrough_1bar_pct": round(signal_followthrough_1bar_pct, 4) if np.isfinite(signal_followthrough_1bar_pct) else np.nan,
+        "signal_followthrough_3bar_pct": round(signal_followthrough_3bar_pct, 4) if np.isfinite(signal_followthrough_3bar_pct) else np.nan,
+        "signal_adverse_1bar_pct": round(signal_adverse_1bar_pct, 4) if np.isfinite(signal_adverse_1bar_pct) else np.nan,
+        "signal_adverse_3bar_pct": round(signal_adverse_3bar_pct, 4) if np.isfinite(signal_adverse_3bar_pct) else np.nan,
         "signal_open_clearance_pct": round(signal_open_clearance_pct, 4) if np.isfinite(signal_open_clearance_pct) else np.nan,
         "signal_high_clearance_pct": round(signal_high_clearance_pct, 4) if np.isfinite(signal_high_clearance_pct) else np.nan,
         "signal_close_clearance_pct": round(signal_close_clearance_pct, 4) if np.isfinite(signal_close_clearance_pct) else np.nan,
     }
+
+
+def _slice_pno_frame_by_timestamp(
+    frame: pd.DataFrame,
+    *,
+    start_timestamp_ms: int | None,
+    end_timestamp_ms: int | None,
+) -> pd.DataFrame:
+    if frame.empty or "timestamp" not in frame.columns or start_timestamp_ms is None or end_timestamp_ms is None:
+        return pd.DataFrame()
+    if end_timestamp_ms < start_timestamp_ms:
+        end_timestamp_ms = start_timestamp_ms
+    timestamps = frame["timestamp"].to_numpy(dtype=np.int64, copy=False)
+    if timestamps.size == 0:
+        return pd.DataFrame()
+    start_idx = int(np.searchsorted(timestamps, int(start_timestamp_ms), side="left"))
+    end_idx = int(np.searchsorted(timestamps, int(end_timestamp_ms), side="right"))
+    if start_idx >= end_idx:
+        return pd.DataFrame()
+    return frame.iloc[start_idx:end_idx]
+
+
+def _resolve_pno_session_bucket(timestamp_ms: int | None) -> str:
+    if timestamp_ms is None:
+        return "na"
+    hour = int(pd.Timestamp(timestamp_ms, unit="ms", tz="UTC").hour)
+    if 0 <= hour < 7:
+        return "asia"
+    if 7 <= hour < 13:
+        return "europe_open"
+    if 13 <= hour < 17:
+        return "us_premarket_overlap"
+    if 17 <= hour < 22:
+        return "us_main"
+    return "late"
+
+
+def _resolve_pno_window_profile(
+    frame: pd.DataFrame,
+    *,
+    prefix: str,
+    anchor_price: float | None = None,
+) -> dict[str, object]:
+    if frame.empty:
+        return {}
+    opens = frame["open"].to_numpy(dtype=np.float64, copy=False)
+    highs = frame["high"].to_numpy(dtype=np.float64, copy=False)
+    lows = frame["low"].to_numpy(dtype=np.float64, copy=False)
+    closes = frame["close"].to_numpy(dtype=np.float64, copy=False)
+    volumes = frame["volume"].to_numpy(dtype=np.float64, copy=False)
+    bar_ranges = np.maximum(highs - lows, 1e-12)
+    bodies = np.abs(closes - opens)
+    green_mask = closes >= opens
+    upper_wicks = np.maximum(highs - np.maximum(opens, closes), 0.0)
+    lower_wicks = np.maximum(np.minimum(opens, closes) - lows, 0.0)
+    path = np.abs(np.diff(closes)).sum() if closes.size > 1 else 0.0
+    direct = abs(closes[-1] - closes[0]) if closes.size > 0 else 0.0
+    alternation_rate = float(np.mean(green_mask[1:] != green_mask[:-1])) if green_mask.size > 1 else np.nan
+    positive_close_share = float(np.mean(np.diff(closes) >= 0.0)) if closes.size > 1 else np.nan
+    volume_chunks = np.array_split(volumes, 3) if volumes.size >= 3 else [volumes]
+    first_chunk = volume_chunks[0] if volume_chunks else np.array([], dtype=np.float64)
+    last_chunk = volume_chunks[-1] if volume_chunks else np.array([], dtype=np.float64)
+    trade_count_column = next((column for column in ("number_of_trades", "trades", "trade_count") if column in frame.columns), None)
+    trade_counts = frame[trade_count_column].to_numpy(dtype=np.float64, copy=False) if trade_count_column is not None else None
+    oi_values = frame["open_interest"].to_numpy(dtype=np.float64, copy=False) if "open_interest" in frame.columns else None
+    quote_volume = closes * volumes
+    result: dict[str, object] = {
+        f"{prefix}_bar_count": int(len(frame)),
+        f"{prefix}_green_share": round(float(np.mean(green_mask)), 4),
+        f"{prefix}_red_share": round(float(np.mean(~green_mask)), 4),
+        f"{prefix}_alternation_rate": round(alternation_rate, 4) if np.isfinite(alternation_rate) else np.nan,
+        f"{prefix}_positive_close_share": round(positive_close_share, 4) if np.isfinite(positive_close_share) else np.nan,
+        f"{prefix}_body_share_avg": round(float(np.mean(bodies / bar_ranges)), 4),
+        f"{prefix}_upper_wick_share_avg": round(float(np.mean(upper_wicks / bar_ranges)), 4),
+        f"{prefix}_lower_wick_share_avg": round(float(np.mean(lower_wicks / bar_ranges)), 4),
+        f"{prefix}_path_efficiency": round(float(direct / max(path, 1e-12)), 4) if closes.size > 1 else np.nan,
+        f"{prefix}_range_abs": round(float(np.max(highs) - np.min(lows)), 8),
+        f"{prefix}_volume_median": round(float(np.nanmedian(volumes)), 4),
+        f"{prefix}_quote_volume_median": round(float(np.nanmedian(quote_volume)), 4),
+        f"{prefix}_volume_last_vs_first": round(float(np.nanmedian(last_chunk) / np.nanmedian(first_chunk)), 4)
+        if first_chunk.size > 0 and last_chunk.size > 0 and np.nanmedian(first_chunk) > 0.0
+        else np.nan,
+    }
+    if anchor_price is not None and np.isfinite(anchor_price) and anchor_price > 0.0:
+        result[f"{prefix}_range_pct"] = round(((float(np.max(highs)) - float(np.min(lows))) / anchor_price) * 100.0, 4)
+    if trade_counts is not None and trade_counts.size:
+        trade_chunks = np.array_split(trade_counts, 3) if trade_counts.size >= 3 else [trade_counts]
+        trade_first = trade_chunks[0] if trade_chunks else np.array([], dtype=np.float64)
+        trade_last = trade_chunks[-1] if trade_chunks else np.array([], dtype=np.float64)
+        result[f"{prefix}_trade_count_median"] = round(float(np.nanmedian(trade_counts)), 4)
+        result[f"{prefix}_trade_count_last_vs_first"] = round(float(np.nanmedian(trade_last) / np.nanmedian(trade_first)), 4) if trade_first.size > 0 and trade_last.size > 0 and np.nanmedian(trade_first) > 0.0 else np.nan
+    if oi_values is not None and oi_values.size:
+        valid_oi = oi_values[np.isfinite(oi_values)]
+        if valid_oi.size >= 2 and valid_oi[0] > 0.0:
+            result[f"{prefix}_oi_delta_pct"] = round(((float(valid_oi[-1]) - float(valid_oi[0])) / float(valid_oi[0])) * 100.0, 4)
+        else:
+            result[f"{prefix}_oi_delta_pct"] = np.nan
+    return result
+
+
+def _resolve_pno_pattern_context(
+    *,
+    levels_frame: pd.DataFrame,
+    entry_frame: pd.DataFrame,
+    row: dict[str, object],
+    signal_timestamp_ms: int | None,
+) -> dict[str, object]:
+    pump_start_timestamp_ms = _safe_int(row.get("pump_start_timestamp_ms"))
+    active_high_timestamp_ms = _safe_int(row.get("active_high_timestamp_ms"))
+    pullback_low_timestamp_ms = _safe_int(row.get("pullback_low_timestamp_ms"))
+    level_first_timestamp_ms = _safe_int(row.get("level_first_local_high_timestamp_ms"))
+    level_last_timestamp_ms = _safe_int(row.get("level_last_local_high_timestamp_ms"))
+    level_valid_timestamp_ms = _safe_int(row.get("level_valid_timestamp_ms"))
+    level = _safe_float(row.get("level"))
+    active_high = _safe_float(row.get("active_high"))
+    pullback_low = _safe_float(row.get("pullback_low"))
+    leg_start = _safe_float(row.get("leg_start"))
+    leg_size = _safe_float(row.get("leg_size"))
+    result: dict[str, object] = {}
+
+    levels_step_ms = _infer_pno_frame_step_ms(levels_frame, default_ms=5 * 60_000)
+    entry_step_ms = _infer_pno_frame_step_ms(entry_frame, default_ms=60_000)
+    signal_ts = signal_timestamp_ms or level_valid_timestamp_ms or _safe_int(row.get("timestamp_ms"))
+
+    if signal_ts is not None:
+        signal_dt = pd.Timestamp(signal_ts, unit="ms", tz="UTC")
+        result["signal_hour_utc"] = int(signal_dt.hour)
+        result["signal_weekday_utc"] = int(signal_dt.weekday())
+        result["signal_session_bucket"] = _resolve_pno_session_bucket(signal_ts)
+    if pump_start_timestamp_ms is not None and signal_ts is not None:
+        result["pump_to_signal_minutes"] = round((signal_ts - pump_start_timestamp_ms) / 60_000.0, 2)
+    if active_high_timestamp_ms is not None and signal_ts is not None:
+        result["active_high_to_signal_minutes"] = round((signal_ts - active_high_timestamp_ms) / 60_000.0, 2)
+
+    if pump_start_timestamp_ms is not None:
+        sleep_window = _slice_pno_frame_by_timestamp(
+            levels_frame,
+            start_timestamp_ms=max(0, pump_start_timestamp_ms - (_PNO_TRADE_SLEEP_LOOKBACK_BARS * levels_step_ms)),
+            end_timestamp_ms=max(0, pump_start_timestamp_ms - levels_step_ms),
+        )
+        sleep_profile = _resolve_pno_window_profile(
+            sleep_window,
+            prefix="sleep",
+            anchor_price=leg_start or _safe_float(row.get("active_high")) or 1.0,
+        )
+        result.update(sleep_profile)
+        if leg_size is not None and leg_start is not None and leg_start > 0.0:
+            sleep_range_pct = _safe_float(sleep_profile.get("sleep_range_pct"))
+            result["sleep_compression_vs_pump"] = round(float(sleep_range_pct / max((leg_size / leg_start) * 100.0, 1e-12)), 4) if sleep_range_pct is not None else np.nan
+
+        prior_6h_window = _slice_pno_frame_by_timestamp(
+            levels_frame,
+            start_timestamp_ms=max(0, pump_start_timestamp_ms - 6 * 60 * 60_000),
+            end_timestamp_ms=max(0, pump_start_timestamp_ms - levels_step_ms),
+        )
+        if not prior_6h_window.empty:
+            prior_ranges = (prior_6h_window["high"] - prior_6h_window["low"]).to_numpy(dtype=np.float64, copy=False)
+            prior_volumes = prior_6h_window["volume"].to_numpy(dtype=np.float64, copy=False)
+            range_threshold = float(np.nanmedian(prior_ranges)) * 2.0 if prior_ranges.size else np.nan
+            volume_threshold = float(np.nanmedian(prior_volumes)) * 2.0 if prior_volumes.size else np.nan
+            if np.isfinite(range_threshold) and np.isfinite(volume_threshold):
+                impulse_mask = (prior_ranges >= range_threshold) & (prior_volumes >= volume_threshold)
+                result["prior_6h_impulse_count"] = int(np.sum(impulse_mask))
+
+    if pump_start_timestamp_ms is not None and active_high_timestamp_ms is not None:
+        pump_window = _slice_pno_frame_by_timestamp(
+            levels_frame,
+            start_timestamp_ms=pump_start_timestamp_ms,
+            end_timestamp_ms=active_high_timestamp_ms,
+        )
+        pump_profile = _resolve_pno_window_profile(
+            pump_window,
+            prefix="pump_shape",
+            anchor_price=leg_start or active_high or 1.0,
+        )
+        result.update(pump_profile)
+        if not pump_window.empty and leg_size is not None and leg_size > 0.0:
+            opens = pump_window["open"].to_numpy(dtype=np.float64, copy=False)
+            highs = pump_window["high"].to_numpy(dtype=np.float64, copy=False)
+            lows = pump_window["low"].to_numpy(dtype=np.float64, copy=False)
+            closes = pump_window["close"].to_numpy(dtype=np.float64, copy=False)
+            green_bodies = np.maximum(closes - opens, 0.0)
+            result["pump_first_bar_share_of_leg"] = round(float(green_bodies[0] / leg_size), 4)
+            result["pump_best_bar_share_of_leg"] = round(float(np.max(green_bodies) / leg_size), 4)
+            result["pump_last_bar_share_of_leg"] = round(float(green_bodies[-1] / leg_size), 4)
+            front_idx = max(1, int(np.ceil(len(pump_window) / 3.0)))
+            front_move = float(np.max(highs[:front_idx]) - np.min(lows[:front_idx])) if front_idx > 0 else 0.0
+            result["pump_front_third_share_of_leg"] = round(front_move / leg_size, 4)
+            running_peak = np.maximum.accumulate(highs)
+            result["pump_internal_drawdown_share"] = round(float(np.max((running_peak - lows) / leg_size)), 4)
+
+    pullback_end_ts = pullback_low_timestamp_ms
+    if active_high_timestamp_ms is not None and pullback_end_ts is not None:
+        pullback_window = _slice_pno_frame_by_timestamp(
+            entry_frame,
+            start_timestamp_ms=active_high_timestamp_ms,
+            end_timestamp_ms=pullback_end_ts,
+        )
+        pullback_profile = _resolve_pno_window_profile(
+            pullback_window,
+            prefix="pullback_shape",
+            anchor_price=active_high or 1.0,
+        )
+        result.update(pullback_profile)
+        if not pullback_window.empty:
+            opens = pullback_window["open"].to_numpy(dtype=np.float64, copy=False)
+            closes = pullback_window["close"].to_numpy(dtype=np.float64, copy=False)
+            red_bodies = np.maximum(opens - closes, 0.0)
+            red_bodies = red_bodies[red_bodies > 0.0]
+            if red_bodies.size >= 1:
+                result["pullback_first_red_body"] = round(float(red_bodies[0]), 8)
+            if red_bodies.size >= 2:
+                result["pullback_second_red_body"] = round(float(red_bodies[1]), 8)
+                result["pullback_first_second_red_ratio"] = round(float(red_bodies[0] / max(red_bodies[1], 1e-12)), 4)
+            if {"ema9", "ema20"}.issubset(pullback_window.columns):
+                lows = pullback_window["low"].to_numpy(dtype=np.float64, copy=False)
+                highs = pullback_window["high"].to_numpy(dtype=np.float64, copy=False)
+                ema9 = pullback_window["ema9"].to_numpy(dtype=np.float64, copy=False)
+                ema20 = pullback_window["ema20"].to_numpy(dtype=np.float64, copy=False)
+                result["pullback_close_below_ema9_share"] = round(float(np.mean(closes < ema9)), 4)
+                result["pullback_close_below_ema20_share"] = round(float(np.mean(closes < ema20)), 4)
+                result["pullback_touch_ema9_count"] = int(np.sum((lows <= ema9) & (highs >= ema9)))
+                result["pullback_touch_ema20_count"] = int(np.sum((lows <= ema20) & (highs >= ema20)))
+
+    if pullback_low_timestamp_ms is not None and signal_ts is not None and signal_ts >= pullback_low_timestamp_ms:
+        rebound_window = _slice_pno_frame_by_timestamp(
+            entry_frame,
+            start_timestamp_ms=pullback_low_timestamp_ms,
+            end_timestamp_ms=signal_ts,
+        )
+        rebound_profile = _resolve_pno_window_profile(
+            rebound_window,
+            prefix="rebound",
+            anchor_price=pullback_low or 1.0,
+        )
+        result.update(rebound_profile)
+        if not rebound_window.empty and pullback_low is not None and pullback_low > 0.0:
+            result["rebound_gain_pct"] = round(((float(rebound_window["high"].max()) - pullback_low) / pullback_low) * 100.0, 4)
+
+    if level is not None and signal_ts is not None:
+        level_start_ts = level_first_timestamp_ms or level_valid_timestamp_ms
+        level_window = _slice_pno_frame_by_timestamp(
+            entry_frame,
+            start_timestamp_ms=level_start_ts,
+            end_timestamp_ms=signal_ts,
+        )
+        if not level_window.empty:
+            level_timestamps = level_window["timestamp"].to_numpy(dtype=np.int64, copy=False)
+            highs = level_window["high"].to_numpy(dtype=np.float64, copy=False)
+            closes = level_window["close"].to_numpy(dtype=np.float64, copy=False)
+            result["level_type"] = "single_touch" if int(_safe_int(row.get("touches")) or 0) <= 1 else "cluster"
+            result["level_life_bars"] = int(len(level_window))
+            result["level_life_minutes"] = round((int(level_timestamps[-1]) - int(level_timestamps[0])) / 60_000.0, 2)
+            result["level_cluster_span_bars"] = int(max(0, round(((level_last_timestamp_ms or signal_ts) - (level_first_timestamp_ms or signal_ts)) / max(entry_step_ms, 1))))
+            result["level_false_break_wick_count"] = int(np.sum((highs > level) & (closes <= level)))
+            result["level_close_above_count_before_signal"] = int(np.sum(closes > level))
+            result["level_respect_bars"] = int(np.sum(highs <= level))
+        if active_high is not None and active_high > 0.0:
+            result["level_distance_to_active_high_pct"] = round(((active_high - level) / active_high) * 100.0, 4)
+        if pullback_low is not None and level > 0.0:
+            result["level_distance_to_pullback_low_pct"] = round(((level - pullback_low) / level) * 100.0, 4)
+        if pump_start_timestamp_ms is not None:
+            supply_24h_window = _slice_pno_frame_by_timestamp(
+                levels_frame,
+                start_timestamp_ms=max(0, pump_start_timestamp_ms - 24 * 60 * 60_000),
+                end_timestamp_ms=max(0, pump_start_timestamp_ms - levels_step_ms),
+            )
+            if not supply_24h_window.empty:
+                highs = supply_24h_window["high"].to_numpy(dtype=np.float64, copy=False)
+                result["left_supply_bars_above_level_24h"] = int(np.sum(highs >= level))
+                if active_high is not None:
+                    result["left_supply_bars_above_active_high_24h"] = int(np.sum(highs >= active_high))
+
+    return result
 
 
 def _build_pno_research_context_row(
@@ -1990,6 +2374,7 @@ def _build_pno_research_context_row(
     source_status: str,
     source_reason: str,
     signal_context: dict[str, object] | None = None,
+    pattern_context: dict[str, object] | None = None,
 ) -> dict[str, object]:
     payload = dict(row)
     payload["source_stage"] = source_stage
@@ -1997,6 +2382,8 @@ def _build_pno_research_context_row(
     payload["source_reason"] = source_reason
     if signal_context:
         payload.update(signal_context)
+    if pattern_context:
+        payload.update(pattern_context)
 
     leg_start = _safe_float(payload.get("leg_start"))
     leg_size = _safe_float(payload.get("leg_size"))
@@ -2043,6 +2430,16 @@ def _build_pno_research_context_row(
     payload["signal_body_bucket"] = _bucketize_pno_value(_safe_float(payload.get("signal_bar_body_share")), thresholds=(0.25, 0.50, 0.75), labels=("signal_small", "signal_medium", "signal_strong", "signal_expansion"))
     payload["signal_volume_bucket"] = _bucketize_pno_value(_safe_float(payload.get("signal_bar_volume_vs_recent")), thresholds=(1.0, 2.0, 4.0), labels=("signal_vol_flat", "signal_vol_ok", "signal_vol_strong", "signal_vol_spike"))
     payload["signal_close_clearance_bucket"] = _bucketize_pno_value(_safe_float(payload.get("signal_close_clearance_pct")), thresholds=(0.0, 0.10, 0.40), labels=("signal_close_below", "signal_close_flat", "signal_close_clear", "signal_close_expand"))
+    payload["sleep_compression_bucket"] = _bucketize_pno_value(_safe_float(payload.get("sleep_compression_vs_pump")), thresholds=(0.15, 0.30, 0.50), labels=("sleep_tight", "sleep_ok", "sleep_loose", "sleep_noisy"))
+    payload["pump_shape_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_shape_positive_close_share")), thresholds=(0.55, 0.70, 0.85), labels=("pump_noisy", "pump_mixed", "pump_orderly", "pump_persistent"))
+    payload["pump_drawdown_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_internal_drawdown_share")), thresholds=(0.10, 0.20, 0.35), labels=("pump_tight", "pump_ok", "pump_loose", "pump_dirty"))
+    payload["pullback_ema_hold_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pullback_close_below_ema9_share")), thresholds=(0.0, 0.20, 0.50), labels=("pb_holds_ema9", "pb_small_break", "pb_mixed", "pb_weak"))
+    payload["level_life_bucket"] = _bucketize_pno_value(_safe_float(payload.get("level_life_bars")), thresholds=(3.0, 8.0, 15.0), labels=("level_fresh", "level_worked", "level_lived", "level_old"))
+    payload["level_false_break_bucket"] = _bucketize_pno_value(_safe_float(payload.get("level_false_break_wick_count")), thresholds=(0.0, 1.0, 2.0), labels=("lvl_clean", "lvl_one_probe", "lvl_two_probes", "lvl_many_probes"))
+    payload["signal_ema_spread_bucket"] = _bucketize_pno_value(_safe_float(payload.get("signal_bar_ema_spread_pct")), thresholds=(0.15, 0.40, 0.80), labels=("ema_tight", "ema_ok", "ema_open", "ema_extended"))
+    payload["signal_followthrough_bucket"] = _bucketize_pno_value(_safe_float(payload.get("signal_followthrough_3bar_pct")), thresholds=(0.1, 0.4, 1.0), labels=("ft_flat", "ft_ok", "ft_strong", "ft_explosive"))
+    payload["prior_impulse_bucket"] = _bucketize_pno_value(_safe_float(payload.get("prior_6h_impulse_count")), thresholds=(0.0, 1.0, 2.0), labels=("prior_clean", "prior_one", "prior_two", "prior_many"))
+    payload["overhead_supply_bucket"] = _bucketize_pno_value(_safe_float(payload.get("left_supply_bars_above_level_24h")), thresholds=(0.0, 3.0, 10.0), labels=("supply_clear", "supply_light", "supply_medium", "supply_heavy"))
     payload["hold_status_group"] = str(payload.get("hold_status_at_validation") or payload.get("hold_status_at_level_search") or "na")
     payload["leg_start_status_group"] = str(payload.get("leg_start_status_at_validation") or "na")
     return payload
@@ -2057,16 +2454,26 @@ def _summarize_pno_feature_buckets(frame: pd.DataFrame, *, scope: str) -> pd.Dat
         "pump_volume_continue_bucket",
         "pump_cleanliness_bucket",
         "pump_vs_pre_2h_bucket",
+        "sleep_compression_bucket",
+        "pump_shape_bucket",
+        "pump_drawdown_bucket",
         "pre_pump_ema_cross_bucket",
         "pullback_depth_bucket",
         "pullback_age_bucket",
+        "pullback_ema_hold_bucket",
         "level_maturity_bucket",
         "touches_bucket",
         "entry_zone_bucket",
+        "level_life_bucket",
+        "level_false_break_bucket",
         "score_bucket",
         "signal_body_bucket",
         "signal_volume_bucket",
         "signal_close_clearance_bucket",
+        "signal_ema_spread_bucket",
+        "signal_followthrough_bucket",
+        "prior_impulse_bucket",
+        "overhead_supply_bucket",
         "hold_status_group",
         "leg_start_status_group",
     ]
@@ -2108,7 +2515,20 @@ def _export_pno_research_context(
 ) -> None:
     research_dir = diagnostics_dir / "research_context"
     research_dir.mkdir(parents=True, exist_ok=True)
+    prepared_levels_frames: dict[str, pd.DataFrame] = {}
     prepared_entry_frames: dict[str, pd.DataFrame] = {}
+
+    def _get_prepared_levels_frame(symbol: str) -> pd.DataFrame:
+        cached = prepared_levels_frames.get(symbol)
+        if cached is not None:
+            return cached
+        mtf_frames = symbol_frames.get(symbol)
+        if mtf_frames is None:
+            cached = pd.DataFrame()
+        else:
+            cached = _prepare_pno_levels_plot_source(mtf_frames.levels_frame)
+        prepared_levels_frames[symbol] = cached
+        return cached
 
     def _get_prepared_entry_frame(symbol: str) -> pd.DataFrame:
         cached = prepared_entry_frames.get(symbol)
@@ -2118,7 +2538,10 @@ def _export_pno_research_context(
         if mtf_frames is None:
             cached = pd.DataFrame()
         else:
-            cached = _prepare_pno_entry_plot_source(mtf_frames.entry_frame)
+            cached = _prepare_pno_entry_plot_source_with_ema(
+                levels_frame=mtf_frames.levels_frame,
+                entry_frame=mtf_frames.entry_frame,
+            )
         prepared_entry_frames[symbol] = cached
         return cached
 
@@ -2132,6 +2555,12 @@ def _export_pno_research_context(
                 timestamp_ms=signal_timestamp_ms,
                 level=_safe_float(row.get("level")),
             )
+            pattern_context = _resolve_pno_pattern_context(
+                levels_frame=_get_prepared_levels_frame(symbol),
+                entry_frame=_get_prepared_entry_frame(symbol),
+                row=row,
+                signal_timestamp_ms=signal_timestamp_ms,
+            )
             stage_context_rows.append(
                 _build_pno_research_context_row(
                     row,
@@ -2139,6 +2568,7 @@ def _export_pno_research_context(
                     source_status="passed",
                     source_reason="passed",
                     signal_context=signal_context,
+                    pattern_context=pattern_context,
                 )
             )
     for stage_id, reason_groups in stage_rejections_by_stage.items():
@@ -2151,6 +2581,12 @@ def _export_pno_research_context(
                     timestamp_ms=signal_timestamp_ms,
                     level=_safe_float(row.get("level")),
                 )
+                pattern_context = _resolve_pno_pattern_context(
+                    levels_frame=_get_prepared_levels_frame(symbol),
+                    entry_frame=_get_prepared_entry_frame(symbol),
+                    row=row,
+                    signal_timestamp_ms=signal_timestamp_ms,
+                )
                 stage_context_rows.append(
                     _build_pno_research_context_row(
                         row,
@@ -2158,6 +2594,7 @@ def _export_pno_research_context(
                         source_status="rejected",
                         source_reason=reason,
                         signal_context=signal_context,
+                        pattern_context=pattern_context,
                     )
                 )
     stage_context_frame = pd.DataFrame(stage_context_rows)
@@ -2173,12 +2610,19 @@ def _export_pno_research_context(
             timestamp_ms=signal_timestamp_ms,
             level=_safe_float(row.get("level")),
         )
+        pattern_context = _resolve_pno_pattern_context(
+            levels_frame=_get_prepared_levels_frame(symbol),
+            entry_frame=_get_prepared_entry_frame(symbol),
+            row=row,
+            signal_timestamp_ms=signal_timestamp_ms,
+        )
         enriched = _build_pno_research_context_row(
             row,
             source_stage=PNO_STAGE_5_TRADE,
             source_status="passed",
             source_reason=str(row.get("result_type") or row.get("category") or "trade"),
             signal_context=signal_context,
+            pattern_context=pattern_context,
         )
         result_type = str(row.get("result_type") or "").lower()
         enriched["stage5_outcome"] = result_type
@@ -2203,12 +2647,19 @@ def _export_pno_research_context(
                 timestamp_ms=signal_timestamp_ms,
                 level=_safe_float(row.get("level")),
             )
+            pattern_context = _resolve_pno_pattern_context(
+                levels_frame=_get_prepared_levels_frame(symbol),
+                entry_frame=_get_prepared_entry_frame(symbol),
+                row=row,
+                signal_timestamp_ms=signal_timestamp_ms,
+            )
             enriched = _build_pno_research_context_row(
                 row,
                 source_stage=PNO_STAGE_5_TRADE,
                 source_status="rejected",
                 source_reason=reason,
                 signal_context=signal_context,
+                pattern_context=pattern_context,
             )
             enriched["stage5_outcome"] = f"rejected_{reason}"
             enriched["is_trade"] = False
@@ -2224,11 +2675,18 @@ def _export_pno_research_context(
 
     stage4_context_rows: list[dict[str, object]] = []
     for row in stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, []):
+        symbol = str(row.get("symbol") or "")
         enriched = _build_pno_research_context_row(
             row,
             source_stage=PNO_STAGE_4_LEVEL,
             source_status="passed",
             source_reason="passed",
+            pattern_context=_resolve_pno_pattern_context(
+                levels_frame=_get_prepared_levels_frame(symbol),
+                entry_frame=_get_prepared_entry_frame(symbol),
+                row=row,
+                signal_timestamp_ms=_safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("timestamp_ms")),
+            ),
         )
         downstream_outcome = stage5_outcome_by_key.get(str(enriched.get("stage_key") or ""), "not_reached_stage5")
         enriched["downstream_stage5_outcome"] = downstream_outcome
@@ -2237,11 +2695,18 @@ def _export_pno_research_context(
         stage4_context_rows.append(enriched)
     for reason, rows in stage_rejections_by_stage.get(PNO_STAGE_4_LEVEL, {}).items():
         for row in rows:
+            symbol = str(row.get("symbol") or "")
             enriched = _build_pno_research_context_row(
                 row,
                 source_stage=PNO_STAGE_4_LEVEL,
                 source_status="rejected",
                 source_reason=reason,
+                pattern_context=_resolve_pno_pattern_context(
+                    levels_frame=_get_prepared_levels_frame(symbol),
+                    entry_frame=_get_prepared_entry_frame(symbol),
+                    row=row,
+                    signal_timestamp_ms=_safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("timestamp_ms")),
+                ),
             )
             enriched["downstream_stage5_outcome"] = f"rejected_{reason}"
             enriched["downstream_triggered"] = False
