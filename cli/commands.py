@@ -1575,22 +1575,23 @@ def _export_pno_stage_reviews(
     stage_reviews_dir.mkdir(parents=True, exist_ok=True)
     chart_stage_ids = set(PNO_STAGE_SEQUENCE)
     manifest_rows: list[dict[str, object]] = []
-    used_symbols: set[str] = set()
-    for rows in stage_rows_by_stage.values():
-        for row in rows:
-            used_symbols.add(str(row.get("symbol", "")))
-    for rejection_groups in stage_rejections_by_stage.values():
-        for rows in rejection_groups.values():
-            for row in rows:
-                used_symbols.add(str(row.get("symbol", "")))
-    prepared_frames_by_symbol: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {
-        symbol: (
+    selected_stage_set = set(selected_stage_ids)
+    needs_entry_frames = bool(selected_stage_set.intersection(PNO_STAGE_SEQUENCE[3:]))
+    prepared_frames_by_symbol: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
+
+    def _get_prepared_frames(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+        cached = prepared_frames_by_symbol.get(symbol)
+        if cached is not None:
+            return cached
+        mtf_frames = symbol_frames.get(symbol)
+        if mtf_frames is None:
+            return None
+        prepared = (
             _prepare_pno_levels_plot_source(mtf_frames.levels_frame),
-            _prepare_pno_entry_plot_source(mtf_frames.entry_frame),
+            _prepare_pno_entry_plot_source(mtf_frames.entry_frame) if needs_entry_frames else mtf_frames.entry_frame,
         )
-        for symbol, mtf_frames in symbol_frames.items()
-        if symbol in used_symbols
-    }
+        prepared_frames_by_symbol[symbol] = prepared
+        return prepared
 
     for stage_id in selected_stage_ids:
         stage_dir = stage_reviews_dir / stage_id
@@ -1606,7 +1607,7 @@ def _export_pno_stage_reviews(
             passed_charts_dir.mkdir(parents=True, exist_ok=True)
             for row_index, row in enumerate(passed_rows, start=1):
                 symbol = str(row.get("symbol", ""))
-                prepared_frames = prepared_frames_by_symbol.get(symbol)
+                prepared_frames = _get_prepared_frames(symbol)
                 if prepared_frames is None:
                     continue
                 chart_path = _render_pno_stage_review_chart(
@@ -1635,7 +1636,7 @@ def _export_pno_stage_reviews(
                 charts_dir.mkdir(parents=True, exist_ok=True)
                 for row_index, row in enumerate(rows, start=1):
                     symbol = str(row.get("symbol", ""))
-                    prepared_frames = prepared_frames_by_symbol.get(symbol)
+                    prepared_frames = _get_prepared_frames(symbol)
                     if prepared_frames is None:
                         continue
                     chart_path = _render_pno_stage_review_chart(
