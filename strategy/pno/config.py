@@ -65,8 +65,8 @@ class PnoParams:
     stage1_min_peak_bar_tr_atr_pre: float = 1.5
     stage1_min_volume_ratio_start: float = 5.0
     stage1_min_volume_ratio_continue: float = 1.25
-    stage1_min_path_efficiency: float = 0.35
-    stage1_max_wick_share: float = 0.55
+    stage1_min_path_efficiency: float = 0.26
+    stage1_max_wick_share: float = 0.60
     stage1_min_pump_pct: float = 0.015
     stage1_min_pretrend_range_ratio_2h: float = 2.0
     stage1_pre_pump_high_max_fraction_of_leg: float = 0.50
