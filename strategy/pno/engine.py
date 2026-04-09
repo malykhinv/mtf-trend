@@ -921,30 +921,22 @@ class PnoEngine:
                     active_pump_start_idx = -1
                     i = max(i + 1, exit_idx + 1)
                     continue
-                entry_wait_bars = max(i - armed.entry_idx, 0)
-                armed_expired = entry_wait_bars >= max(int(params.level_latest_high_max_age_bars), 1)
                 stop_broken_before_entry = float(one.lows[i]) <= (float(live_armed.stage4.low_last_red_plan) + self._EPSILON)
                 pullback_broken_before_entry = float(one.lows[i]) <= (float(live_armed.stage3.pullback_low) + self._EPSILON)
-                if not armed_expired and not stop_broken_before_entry and not pullback_broken_before_entry:
-                    i += 1
-                    continue
-                _reject_stage(
-                    PNO_STAGE_5_TRADE,
-                    key=(armed.stage4.active_high_idx, armed.stage4.cluster_first_idx, armed.stage4.cluster_last_idx, armed.entry_idx),
-                    timestamp_ms=int(one.timestamps[min(i, len(one.timestamps) - 1)]),
-                    reason=(
-                        "entry_invalidated_before_trigger"
-                        if stop_broken_before_entry or pullback_broken_before_entry
-                        else "entry_not_triggered"
-                    ),
-                    extra={
-                        "active_high": round(float(live_armed.stage4.active_high), 8),
-                        "pullback_low": round(float(live_armed.stage3.pullback_low), 8),
-                        "level": round(float(live_armed.stage4.level), 8),
-                        "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "cross")),
-                    },
-                )
-                armed = None
+                if stop_broken_before_entry or pullback_broken_before_entry:
+                    _reject_stage(
+                        PNO_STAGE_5_TRADE,
+                        key=(armed.stage4.active_high_idx, armed.stage4.cluster_first_idx, armed.stage4.cluster_last_idx, armed.entry_idx),
+                        timestamp_ms=int(one.timestamps[min(i, len(one.timestamps) - 1)]),
+                        reason="entry_invalidated_before_trigger",
+                        extra={
+                            "active_high": round(float(live_armed.stage4.active_high), 8),
+                            "pullback_low": round(float(live_armed.stage3.pullback_low), 8),
+                            "level": round(float(live_armed.stage4.level), 8),
+                            "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "cross")),
+                        },
+                    )
+                    armed = None
 
             if (
                 i < min_entry_bars - 1
@@ -1298,6 +1290,20 @@ class PnoEngine:
                 retired_clusters=retired_clusters,
             )
             if next_stage4 is None:
+                if armed is not None:
+                    _reject_stage(
+                        PNO_STAGE_5_TRADE,
+                        key=(armed.stage4.active_high_idx, armed.stage4.cluster_first_idx, armed.stage4.cluster_last_idx, armed.entry_idx),
+                        timestamp_ms=int(one.timestamps[min(i, len(one.timestamps) - 1)]),
+                        reason="entry_not_triggered",
+                        extra={
+                            "active_high": round(float(armed.stage4.active_high), 8),
+                            "pullback_low": round(float(armed.stage3.pullback_low), 8),
+                            "level": round(float(armed.stage4.level), 8),
+                            "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "cross")),
+                        },
+                    )
+                    armed = None
                 if i <= (stage3.pullback_low_idx + 2):
                     stage4 = None
                     i += 1
