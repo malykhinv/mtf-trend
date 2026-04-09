@@ -485,6 +485,139 @@ def _build_pno_params_from_row(
     return replace(template, symbol=symbol)
 
 
+def _flatten_trade_for_diagnostics(trade: object) -> dict[str, object]:
+    payload = {
+        "entry_timestamp_ms": int(getattr(trade, "entry_timestamp_ms")),
+        "exit_timestamp_ms": int(getattr(trade, "exit_timestamp_ms")),
+        "pnl": float(getattr(trade, "pnl")),
+        "pnl_percent": float(getattr(getattr(trade, "pnl_percent"), "value", getattr(trade, "pnl_percent"))),
+        "result_type": str(getattr(getattr(trade, "result_type"), "value", getattr(trade, "result_type"))),
+    }
+    metadata = getattr(trade, "metadata", None)
+    if isinstance(metadata, dict):
+        payload.update(metadata)
+    return payload
+
+
+def _resolve_ppa_stage_ids(args: argparse.Namespace) -> tuple[str, ...]:
+    raw_stage = getattr(args, "ppa_stage", None)
+    raw_through_stage = getattr(args, "ppa_through_stage", None)
+    if raw_stage is not None and raw_through_stage is not None:
+        raise ValueError("Use only one of --ppa-stage or --ppa-through-stage")
+
+    if raw_stage is not None:
+        stage_number = int(raw_stage)
+        if stage_number < 1 or stage_number > len(PPA_STAGE_SEQUENCE):
+            raise ValueError(f"--ppa-stage must be in range 1..{len(PPA_STAGE_SEQUENCE)}")
+        return (PPA_STAGE_SEQUENCE[stage_number - 1],)
+
+    if raw_through_stage is not None:
+        stage_number = int(raw_through_stage)
+        if stage_number < 1 or stage_number > len(PPA_STAGE_SEQUENCE):
+            raise ValueError(f"--ppa-through-stage must be in range 1..{len(PPA_STAGE_SEQUENCE)}")
+        return tuple(PPA_STAGE_SEQUENCE[:stage_number])
+
+    return tuple(PPA_STAGE_SEQUENCE)
+
+
+def _resolve_pno_stage_ids(args: argparse.Namespace) -> tuple[str, ...]:
+    raw_stage = getattr(args, "pno_stage", None)
+    raw_through_stage = getattr(args, "pno_through_stage", None)
+    if raw_stage is not None and raw_through_stage is not None:
+        raise ValueError("Use only one of --pno-stage or --pno-through-stage")
+
+    if raw_stage is not None:
+        stage_number = int(raw_stage)
+        if stage_number < 1 or stage_number > len(PNO_STAGE_SEQUENCE):
+            raise ValueError(f"--pno-stage must be in range 1..{len(PNO_STAGE_SEQUENCE)}")
+        return (PNO_STAGE_SEQUENCE[stage_number - 1],)
+
+    if raw_through_stage is not None:
+        stage_number = int(raw_through_stage)
+        if stage_number < 1 or stage_number > len(PNO_STAGE_SEQUENCE):
+            raise ValueError(f"--pno-through-stage must be in range 1..{len(PNO_STAGE_SEQUENCE)}")
+        return tuple(PNO_STAGE_SEQUENCE[:stage_number])
+
+    return tuple(PNO_STAGE_SEQUENCE)
+
+
+def _resolve_ppa_stage_preset(raw_value: object) -> tuple[int | None, int | None, str]:
+    preset = str(raw_value or "").strip().lower()
+    if preset not in _PPA_STAGE_PRESETS:
+        supported = ", ".join(sorted(_PPA_STAGE_PRESETS))
+        raise ValueError(f"Unsupported ppa-stage preset: {preset}. Supported: {supported}")
+    stage, through_stage = _PPA_STAGE_PRESETS[preset]
+    return stage, through_stage, preset
+
+
+def _resolve_pno_stage_preset(raw_value: object) -> tuple[int | None, int | None, str]:
+    preset = str(raw_value or "").strip().lower()
+    if preset not in _PNO_STAGE_PRESETS:
+        supported = ", ".join(sorted(_PNO_STAGE_PRESETS))
+        raise ValueError(f"Unsupported pno-stage preset: {preset}. Supported: {supported}")
+    stage, through_stage = _PNO_STAGE_PRESETS[preset]
+    return stage, through_stage, preset
+
+
+def _ppa_stage_metric_column_name(stage_id: str) -> str:
+    return f"ppa_stage_hits_{stage_id}"
+
+
+def _export_ppa_stage_reviews(
+    *,
+    diagnostics_dir: Path,
+    stage_rows_by_stage: dict[str, list[dict[str, object]]],
+    selected_stage_ids: tuple[str, ...],
+) -> None:
+    stage_reviews_dir = diagnostics_dir / "stage_reviews"
+    stage_reviews_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest_rows: list[dict[str, object]] = []
+    for stage_id in selected_stage_ids:
+        rows = stage_rows_by_stage.get(stage_id, [])
+        stage_dir = stage_reviews_dir / stage_id
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        events_frame = pd.DataFrame(rows)
+        events_path = stage_dir / "events.csv"
+        events_frame.to_csv(events_path, index=False)
+
+        summary_rows: list[dict[str, object]] = []
+        if not events_frame.empty and "symbol" in events_frame.columns:
+            for symbol, group in events_frame.groupby("symbol", sort=True):
+                summary_rows.append(
+                    {
+                        "symbol": symbol,
+                        "events_count": int(len(group)),
+                        "first_timestamp_ms": int(pd.to_numeric(group["timestamp_ms"], errors="coerce").dropna().min())
+                        if "timestamp_ms" in group.columns and not group.empty
+                        else None,
+                        "last_timestamp_ms": int(pd.to_numeric(group["timestamp_ms"], errors="coerce").dropna().max())
+                        if "timestamp_ms" in group.columns and not group.empty
+                        else None,
+                    }
+                )
+        pd.DataFrame(summary_rows).to_csv(stage_dir / "summary_by_symbol.csv", index=False)
+        manifest_rows.append(
+            {
+                "stage_id": stage_id,
+                "events_count": int(len(rows)),
+                "events_path": str(events_path),
+                "summary_path": str(stage_dir / "summary_by_symbol.csv"),
+            }
+        )
+
+    pd.DataFrame(manifest_rows).to_csv(stage_reviews_dir / "manifest.csv", index=False)
+
+
+def _read_csv_or_empty(path: Path) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
 def _safe_float(value: object) -> float | None:
     if value is None:
         return None
