@@ -1146,7 +1146,14 @@ class PnoEngine:
                 i += 1
                 continue
 
-            next_stage2 = self._resolve_stage2_context(one=one, idx=i, stage1=stage1, params=params)
+            next_stage2 = self._resolve_stage2_context(
+                one=one,
+                five=five,
+                idx=i,
+                five_idx=five_idx,
+                stage1=stage1,
+                params=params,
+            )
             if next_stage2 is None:
                 stage2 = None
                 stage3 = None
@@ -1585,32 +1592,38 @@ class PnoEngine:
         self,
         *,
         one: OneMinuteFrame,
+        five: FiveMinuteFrame,
         idx: int,
+        five_idx: int,
         stage1: Stage1Context,
         params: PnoParams,
     ) -> Stage2Context | None:
-        if idx <= stage1.active_high_idx:
+        active_high_5m_idx = int(np.searchsorted(five.timestamps, stage1.active_high_timestamp, side="right") - 1)
+        if active_high_5m_idx < 0 or five_idx <= active_high_5m_idx:
             return None
-        start_idx = stage1.active_high_idx + 1
-        red_indices = np.where(one.red[start_idx : idx + 1])[0]
+        start_5m_idx = active_high_5m_idx + 1
+        red_indices = np.where(five.closes[start_5m_idx : five_idx + 1] < five.opens[start_5m_idx : five_idx + 1])[0]
         if red_indices.size == 0:
             return None
-        red_after_high_idx = start_idx + int(red_indices[0])
-        pullback_threshold = stage1.reference_high - max(float(params.pullback_min_v1) * float(one.v1[idx]), self._EPSILON)
-        pullback_reached = np.where(one.lows[start_idx : idx + 1] <= pullback_threshold)[0]
+        red_after_high_5m_idx = start_5m_idx + int(red_indices[0])
+        pullback_threshold = stage1.reference_high - max(float(params.pullback_min_v1) * float(five.v5[five_idx]), self._EPSILON)
+        pullback_reached = np.where(five.lows[start_5m_idx : five_idx + 1] <= pullback_threshold)[0]
         if pullback_reached.size == 0:
             return None
-        pullback_trigger_idx = start_idx + int(pullback_reached[0])
-        post_high_lows = one.lows[start_idx : idx + 1]
+        pullback_trigger_5m_idx = start_5m_idx + int(pullback_reached[0])
+        post_high_lows = five.lows[start_5m_idx : five_idx + 1]
         pullback_low_offset = int(np.argmin(post_high_lows))
-        pullback_low_idx = start_idx + pullback_low_offset
-        pullback_low = float(one.lows[pullback_low_idx])
+        pullback_low_5m_idx = start_5m_idx + pullback_low_offset
+        pullback_low = float(five.lows[pullback_low_5m_idx])
         pullback_depth = stage1.reference_high - pullback_low
-        if pullback_depth < max(float(one.v1[idx]), self._EPSILON):
+        if pullback_depth < max(float(five.v5[five_idx]), self._EPSILON):
             return None
         min_pullback_from_pump = float(params.pullback_min_pump_fraction_5m) * max(stage1.pump_range_5m, self._EPSILON)
         if pullback_depth < min_pullback_from_pump:
             return None
+        red_after_high_idx = int(np.searchsorted(one.timestamps, int(five.timestamps[red_after_high_5m_idx]), side="left"))
+        pullback_trigger_idx = int(np.searchsorted(one.timestamps, int(five.timestamps[pullback_trigger_5m_idx]), side="left"))
+        pullback_low_idx = int(np.searchsorted(one.timestamps, int(five.timestamps[pullback_low_5m_idx]), side="left"))
         return Stage2Context(
             active_high_idx=stage1.active_high_idx,
             active_high_timestamp=stage1.active_high_timestamp,
@@ -1618,10 +1631,10 @@ class PnoEngine:
             red_after_high_idx=red_after_high_idx,
             pullback_start_idx=max(red_after_high_idx, pullback_trigger_idx),
             pullback_low_idx=pullback_low_idx,
-            pullback_low_timestamp=int(one.timestamps[pullback_low_idx]),
+            pullback_low_timestamp=int(five.timestamps[pullback_low_5m_idx]),
             pullback_low=pullback_low,
             pullback_depth=pullback_depth,
-            pullback_age_bars=(idx - stage1.active_high_idx),
+            pullback_age_bars=(five_idx - active_high_5m_idx),
         )
 
     def _resolve_stage3_context(
@@ -1635,15 +1648,18 @@ class PnoEngine:
         stage2: Stage2Context,
         params: PnoParams,
     ) -> tuple[Stage3Context | None, str | None]:
-        post_high_slice = slice(stage1.active_high_idx + 1, idx + 1)
+        active_high_5m_idx = int(np.searchsorted(five.timestamps, stage1.active_high_timestamp, side="right") - 1)
+        if active_high_5m_idx < 0 or five_idx <= active_high_5m_idx:
+            return None, None
+        post_high_slice = slice(active_high_5m_idx + 1, five_idx + 1)
         if stage2.pullback_depth > (params.pullback_invalid_max_leg_fraction * stage1.reference_leg_size):
             return None, "pullback_too_deep_vs_leg"
-        if np.any(one.closes[post_high_slice] < (stage1.leg_start - self._EPSILON)):
+        if np.any(five.closes[post_high_slice] < (stage1.leg_start - self._EPSILON)):
             return None, "close_below_leg_start"
         if float(five.closes[five_idx]) <= float(five.ema20[five_idx]):
             return None, "close_below_ema20"
         valid = (
-            stage2.pullback_depth >= (params.pullback_min_v1 * one.v1[idx])
+            stage2.pullback_depth >= (params.pullback_min_v1 * five.v5[five_idx])
             and stage2.pullback_depth <= (params.pullback_valid_max_leg_fraction * stage1.reference_leg_size)
             and stage2.pullback_low > stage1.leg_start
         )

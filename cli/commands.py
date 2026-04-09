@@ -1041,17 +1041,18 @@ def _render_pno_stage_review_chart(
     pump_start_timestamp_ms = _safe_int(review_row.get("pump_start_timestamp_ms"))
     sleep_start_timestamp_ms = _safe_int(review_row.get("sleep_start_timestamp_ms"))
     is_stage1 = stage_id == PNO_STAGE_SEQUENCE[0]
+    use_levels_frame = stage_id in PNO_STAGE_SEQUENCE[:3]
     if is_stage1 and pump_start_timestamp_ms is not None:
         start_timestamp_ms = sleep_start_timestamp_ms or max(pump_start_timestamp_ms - (120 * 60_000), 0)
         end_timestamp_ms = timestamp_ms
     else:
         start_timestamp_ms = timestamp_ms - (90 * 60_000)
         end_timestamp_ms = timestamp_ms
-    if is_stage1:
+    if use_levels_frame:
         plot_frame = levels_frame.loc[
             (pd.to_numeric(levels_frame["timestamp"], errors="coerce") >= start_timestamp_ms)
             & (pd.to_numeric(levels_frame["timestamp"], errors="coerce") <= end_timestamp_ms),
-            ["timestamp", "open", "high", "low", "close", "volume"],
+            [column for column in ("timestamp", "open", "high", "low", "close", "volume", "ema9", "ema20") if column in levels_frame.columns],
         ].copy()
         plot_frame["timestamp"] = pd.to_numeric(plot_frame["timestamp"], errors="coerce")
         plot_frame = (
@@ -1135,7 +1136,7 @@ def _render_pno_stage_review_chart(
     ax_volume.set_ylim(0.0, 100.0)
     ax_volume.set_yticks([0.0, 50.0, 100.0])
     ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
-    ax_price.set_ylabel("5m" if is_stage1 else "1m", color=_PNO_PLOT_MUTED, fontsize=8)
+    ax_price.set_ylabel("5m" if use_levels_frame else "1m", color=_PNO_PLOT_MUTED, fontsize=8)
     ax_volume.set_ylabel("Vol %", color=_PNO_PLOT_MUTED, fontsize=8)
 
     tick_positions = _build_pno_tick_positions(plot_frame)
