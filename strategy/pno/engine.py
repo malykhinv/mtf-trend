@@ -1877,7 +1877,7 @@ class PnoEngine:
         if cluster is None:
             return None
         cluster_indices, cluster_prices = cluster
-        level = float(np.median(np.asarray(cluster_prices, dtype=np.float64)))
+        level = float(np.max(np.asarray(cluster_prices, dtype=np.float64)))
         if level >= (stage3.active_high - self._EPSILON):
             return None
 
@@ -2233,7 +2233,7 @@ class PnoEngine:
                     for retired in retired_clusters
                 ):
                     continue
-                candidate_level = float(np.median(np.asarray(prices, dtype=np.float64)))
+                candidate_level = float(np.max(np.asarray(prices, dtype=np.float64)))
                 if not self._is_cluster_rearm_allowed(
                     active_high_idx=stage3.active_high_idx,
                     candidate_level=candidate_level,
