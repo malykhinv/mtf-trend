@@ -7,6 +7,7 @@ from typing import Iterable
 
 import numpy as np
 import pandas as pd
+from pandas.api.types import is_numeric_dtype
 from pyarrow import parquet as pq
 
 from constants import (
@@ -106,11 +107,13 @@ class DataPreparer:
             return pd.DataFrame()
 
         prepared = frame
-        prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+        if not is_numeric_dtype(prepared["timestamp"]):
+            prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
 
         numeric_cols = [col for col in DATA_PREPARER_NUMERIC_COLUMNS if col in prepared.columns]
         for col in numeric_cols:
-            prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
+            if not is_numeric_dtype(prepared[col]):
+                prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
 
         required_mask = np.ones(len(prepared), dtype=bool)
         for column in ("timestamp", "open", "high", "low", "close", "volume"):
