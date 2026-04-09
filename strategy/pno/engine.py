@@ -691,6 +691,11 @@ class PnoEngine:
                     idx=idx,
                     lookback_bars=pump_start_lookback,
                 )
+                active_start_idx = self._shift_pump_start_left_to_ema_reset(
+                    ema9=ema9,
+                    ema20=ema20,
+                    pump_start_idx=active_start_idx,
+                )
             if not inplay[idx] or active_start_idx is None or active_start_idx >= idx:
                 continue
             pump_range = float(np.nanmax(highs[active_start_idx : idx + 1]) - np.nanmin(lows[active_start_idx : idx + 1]))
@@ -798,6 +803,24 @@ class PnoEngine:
                 start_idx = probe_idx
                 break
         return int(start_idx)
+
+    @staticmethod
+    def _shift_pump_start_left_to_ema_reset(
+        *,
+        ema9: np.ndarray,
+        ema20: np.ndarray,
+        pump_start_idx: int,
+    ) -> int:
+        shifted_idx = int(pump_start_idx)
+        for idx in range(int(pump_start_idx), -1, -1):
+            ema9_value = float(ema9[idx])
+            ema20_value = float(ema20[idx])
+            if not np.isfinite(ema9_value) or not np.isfinite(ema20_value):
+                continue
+            shifted_idx = int(idx)
+            if ema9_value < ema20_value:
+                break
+        return shifted_idx
 
     @staticmethod
     def _resolve_window_range(*, highs: np.ndarray, lows: np.ndarray, start_idx: int, end_idx: int) -> float:

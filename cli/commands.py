@@ -833,6 +833,32 @@ def _configure_pno_plot_axes(*, price_ax: plt.Axes, volume_ax: plt.Axes) -> None
     volume_ax.yaxis.set_major_locator(LinearLocator(3))
 
 
+def _resolve_pno_pump_plot_idx(
+    *,
+    timestamps: np.ndarray,
+    pump_start_timestamp_ms: int | None,
+    ema9: np.ndarray | None,
+    ema20: np.ndarray | None,
+) -> int | None:
+    if pump_start_timestamp_ms is None or timestamps.size == 0:
+        return None
+    pump_idx = int(np.argmin(np.abs(timestamps - int(pump_start_timestamp_ms))))
+    pump_idx = min(max(pump_idx, 0), len(timestamps) - 1)
+    if ema9 is None or ema20 is None or len(ema9) != len(timestamps) or len(ema20) != len(timestamps):
+        return pump_idx
+
+    shifted_idx = pump_idx
+    for idx in range(pump_idx, -1, -1):
+        ema9_value = float(ema9[idx])
+        ema20_value = float(ema20[idx])
+        if not np.isfinite(ema9_value) or not np.isfinite(ema20_value):
+            continue
+        shifted_idx = idx
+        if ema9_value < ema20_value:
+            break
+    return shifted_idx
+
+
 def _draw_pno_candles_on_columns(
     ax: plt.Axes,
     frame: pd.DataFrame,
@@ -975,14 +1001,6 @@ def _render_pno_trade_chart(
             x_values,
         )
         levels_window["plot_x"] = level_positions
-    entry_idx = int(np.searchsorted(timestamps, entry_timestamp_ms, side="left"))
-    exit_idx = int(np.searchsorted(timestamps, exit_timestamp_ms, side="left"))
-    pump_idx = int(np.searchsorted(timestamps, pump_start_timestamp_ms, side="left"))
-    entry_idx = min(max(entry_idx, 0), len(plot_frame) - 1)
-    exit_idx = min(max(exit_idx, entry_idx), len(plot_frame) - 1)
-    pump_idx = min(max(pump_idx, 0), len(plot_frame) - 1)
-    rect_width = max(float(exit_idx - entry_idx + 1), 1.0)
-
     volume = pd.to_numeric(plot_frame["volume"], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
     opens = pd.to_numeric(plot_frame["open"], errors="coerce").to_numpy(dtype=np.float64)
     closes = pd.to_numeric(plot_frame["close"], errors="coerce").to_numpy(dtype=np.float64)
@@ -990,6 +1008,19 @@ def _render_pno_trade_chart(
     ema20 = pd.to_numeric(plot_frame["ema20"], errors="coerce").to_numpy(dtype=np.float64)
     high_values = pd.to_numeric(plot_frame["high"], errors="coerce").to_numpy(dtype=np.float64)
     low_values = pd.to_numeric(plot_frame["low"], errors="coerce").to_numpy(dtype=np.float64)
+    entry_idx = int(np.searchsorted(timestamps, entry_timestamp_ms, side="left"))
+    exit_idx = int(np.searchsorted(timestamps, exit_timestamp_ms, side="left"))
+    pump_idx = _resolve_pno_pump_plot_idx(
+        timestamps=timestamps,
+        pump_start_timestamp_ms=pump_start_timestamp_ms,
+        ema9=ema9,
+        ema20=ema20,
+    )
+    entry_idx = min(max(entry_idx, 0), len(plot_frame) - 1)
+    exit_idx = min(max(exit_idx, entry_idx), len(plot_frame) - 1)
+    if pump_idx is None:
+        pump_idx = entry_idx
+    rect_width = max(float(exit_idx - entry_idx + 1), 1.0)
 
     fig, (ax_price, ax_levels, ax_volume) = plt.subplots(
         3,
@@ -1293,9 +1324,12 @@ def _render_pno_stage_review_chart(
     ema20 = pd.to_numeric(plot_frame["ema20"], errors="coerce").to_numpy(dtype=np.float64) if "ema20" in plot_frame.columns else np.full(len(plot_frame), np.nan, dtype=np.float64)
     timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
     event_idx = int(np.argmin(np.abs(timestamps - int(timestamp_ms))))
-    pump_idx = None
-    if pump_start_timestamp_ms is not None:
-        pump_idx = int(np.argmin(np.abs(timestamps - int(pump_start_timestamp_ms))))
+    pump_idx = _resolve_pno_pump_plot_idx(
+        timestamps=timestamps,
+        pump_start_timestamp_ms=pump_start_timestamp_ms,
+        ema9=ema9,
+        ema20=ema20,
+    )
 
     _draw_pno_candles(ax_price, plot_frame, x)
     if (not is_stage1) and np.isfinite(ema9).any():
