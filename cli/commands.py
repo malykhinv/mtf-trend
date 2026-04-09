@@ -1005,7 +1005,13 @@ def _resolve_pno_pump_plot_idx(
 ) -> int | None:
     if pump_start_timestamp_ms is None or timestamps.size == 0:
         return None
-    pump_idx = int(np.argmin(np.abs(timestamps - int(pump_start_timestamp_ms))))
+    pump_idx = int(np.searchsorted(timestamps, int(pump_start_timestamp_ms), side="left"))
+    if pump_idx >= len(timestamps):
+        pump_idx = len(timestamps) - 1
+    elif pump_idx > 0:
+        left_idx = pump_idx - 1
+        if abs(int(timestamps[left_idx]) - int(pump_start_timestamp_ms)) <= abs(int(timestamps[pump_idx]) - int(pump_start_timestamp_ms)):
+            pump_idx = left_idx
     pump_idx = min(max(pump_idx, 0), len(timestamps) - 1)
     if ema9 is None or ema20 is None or len(ema9) != len(timestamps) or len(ema20) != len(timestamps):
         return pump_idx
@@ -1058,8 +1064,11 @@ def _draw_pno_candles_on_columns(
         )
 
 
-def _build_pno_tick_positions(frame: pd.DataFrame) -> np.ndarray:
-    timestamps = pd.to_datetime(frame["timestamp"].astype("int64"), unit="ms", utc=True)
+def _build_pno_tick_timestamps(frame: pd.DataFrame) -> pd.Series:
+    return pd.to_datetime(frame["timestamp"].astype("int64"), unit="ms", utc=True)
+
+
+def _build_pno_tick_positions_from_timestamps(timestamps: pd.Series, frame_length: int) -> np.ndarray:
     hour_positions = [idx for idx, value in enumerate(timestamps) if value.minute == 0]
     if len(hour_positions) >= 3:
         selected = hour_positions
@@ -1068,10 +1077,10 @@ def _build_pno_tick_positions(frame: pd.DataFrame) -> np.ndarray:
         if len(half_hour_positions) >= 3:
             selected = half_hour_positions
         else:
-            step = max(len(frame) // 6, 1)
-            selected = list(range(0, len(frame), step))
-            if selected[-1] != len(frame) - 1:
-                selected.append(len(frame) - 1)
+            step = max(frame_length // 6, 1)
+            selected = list(range(0, frame_length, step))
+            if selected[-1] != frame_length - 1:
+                selected.append(frame_length - 1)
     if len(selected) > _PNO_PLOT_MAX_X_TICKS:
         source = list(selected)
         selected = list(np.unique(np.linspace(0, len(source) - 1, _PNO_PLOT_MAX_X_TICKS, dtype=int)))
@@ -1079,8 +1088,12 @@ def _build_pno_tick_positions(frame: pd.DataFrame) -> np.ndarray:
     return np.asarray(sorted(set(selected)), dtype=int)
 
 
-def _build_pno_tick_labels(frame: pd.DataFrame, positions: np.ndarray) -> list[str]:
-    timestamps = pd.to_datetime(frame["timestamp"].astype("int64"), unit="ms", utc=True)
+def _build_pno_tick_positions(frame: pd.DataFrame) -> np.ndarray:
+    timestamps = _build_pno_tick_timestamps(frame)
+    return _build_pno_tick_positions_from_timestamps(timestamps, len(frame))
+
+
+def _build_pno_tick_labels_from_timestamps(timestamps: pd.Series, positions: np.ndarray) -> list[str]:
     labels: list[str] = []
     for pos in positions:
         timestamp = timestamps.iloc[int(pos)]
@@ -1089,6 +1102,10 @@ def _build_pno_tick_labels(frame: pd.DataFrame, positions: np.ndarray) -> list[s
         else:
             labels.append(timestamp.strftime("%H:%M"))
     return labels
+
+
+def _build_pno_tick_labels(frame: pd.DataFrame, positions: np.ndarray) -> list[str]:
+    return _build_pno_tick_labels_from_timestamps(_build_pno_tick_timestamps(frame), positions)
 
 
 def _render_pno_trade_chart(
@@ -1413,8 +1430,9 @@ def _render_pno_trade_chart(
     ax_volume.set_ylim(0.0, 100.0)
     ax_volume.set_yticks([0.0, 50.0, 100.0])
     ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
-    tick_positions = _build_pno_tick_positions(plot_frame)
-    tick_labels = _build_pno_tick_labels(plot_frame, tick_positions)
+    tick_timestamps = _build_pno_tick_timestamps(plot_frame)
+    tick_positions = _build_pno_tick_positions_from_timestamps(tick_timestamps, len(plot_frame))
+    tick_labels = _build_pno_tick_labels_from_timestamps(tick_timestamps, tick_positions)
     ax_volume.set_xticks(tick_positions)
     ax_volume.set_xticklabels(tick_labels)
     ax_price.tick_params(axis="x", labelbottom=False)
@@ -1656,8 +1674,9 @@ def _render_pno_stage_review_chart(
     ax_price.set_ylabel("5m" if use_levels_frame else "1m", color=_PNO_PLOT_MUTED, fontsize=8)
     ax_volume.set_ylabel("Vol %", color=_PNO_PLOT_MUTED, fontsize=8)
 
-    tick_positions = _build_pno_tick_positions(plot_frame)
-    tick_labels = _build_pno_tick_labels(plot_frame, tick_positions)
+    tick_timestamps = _build_pno_tick_timestamps(plot_frame)
+    tick_positions = _build_pno_tick_positions_from_timestamps(tick_timestamps, len(plot_frame))
+    tick_labels = _build_pno_tick_labels_from_timestamps(tick_timestamps, tick_positions)
     ax_volume.set_xticks(tick_positions)
     ax_volume.set_xticklabels(tick_labels, fontsize=8, color=_PNO_PLOT_MUTED)
     ax_price.tick_params(axis="x", labelbottom=False)
@@ -1684,12 +1703,21 @@ def _export_pno_stage_reviews(
     stage_reviews_dir.mkdir(parents=True, exist_ok=True)
     chart_stage_ids = set(PNO_STAGE_SEQUENCE)
     manifest_rows: list[dict[str, object]] = []
+    used_symbols: set[str] = set()
+    for rows in stage_rows_by_stage.values():
+        for row in rows:
+            used_symbols.add(str(row.get("symbol", "")))
+    for rejection_groups in stage_rejections_by_stage.values():
+        for rows in rejection_groups.values():
+            for row in rows:
+                used_symbols.add(str(row.get("symbol", "")))
     prepared_frames_by_symbol: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {
         symbol: (
             _prepare_pno_levels_plot_source(mtf_frames.levels_frame),
             _prepare_pno_entry_plot_source(mtf_frames.entry_frame),
         )
         for symbol, mtf_frames in symbol_frames.items()
+        if symbol in used_symbols
     }
 
     for stage_id in selected_stage_ids:
