@@ -57,7 +57,7 @@ class PnoParams:
     pullback_invalid_max_v5: float = 6.0
     pullback_max_age_bars: int = 12
     stage1_min_cumulative_quote_volume: float = 500_000.0
-    stage1_pre_pump_ema_crosses_min: int = 2
+    stage1_pre_pump_ema_crosses_min: int = 1
     stage1_barcode_max_fraction_1h: float = 0.60
     stage1_barcode_tr_atr_fraction: float = 0.25
     stage1_barcode_tr_price_fraction: float = 0.0010
