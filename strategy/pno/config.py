@@ -70,7 +70,7 @@ class PnoParams:
     stage1_pre_pump_high_max_fraction_of_leg: float = 0.50
     level_cluster_spread_v1: float = 0.45
     level_cluster_relaxed_spread_v1: float = 0.75
-    level_latest_high_max_age_bars: int = 10
+    level_latest_high_max_age_bars: int = 18
     level_touch_tolerance_v1: float = 0.35
     level_low_minor_break_v1: float = 0.35
     level_low_major_break_v1: float = 0.75
@@ -81,7 +81,7 @@ class PnoParams:
     strong_score: float = 80.0
     slip_plan_v1_fraction: float = 0.10
     min_tick_fraction: float = 0.0001
-    max_entry_pullback_fraction: float = 0.50
+    max_entry_pullback_fraction: float = 0.60
 
 
 def _format_pno_timeframe_pairs(timeframe_pairs: tuple[PnoTimeframePair, ...]) -> str:

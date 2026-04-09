@@ -1008,48 +1008,48 @@ class PnoEngine:
                     stage3 = None
                     stage4 = None
                     armed = None
-                    i += 1
-                    continue
-                if prev_stage3 is not None and prev_stage1 is not None:
+                    next_stage1 = stage1
+                elif prev_stage3 is not None and prev_stage1 is not None:
                     stage1 = replace(prev_stage1, hold_status_at_validation=hold_status)
                     stage2 = prev_stage2
                     stage3 = prev_stage3
+                    stage4 = None
                     armed = None
+                    next_stage1 = stage1
+                else:
+                    stage1 = None
+                    stage2 = None
+                    stage3 = None
+                    stage4 = None
+                    armed = None
+                    blocked_active_high_idx = None
+                    active_pump_start_idx = -1
+                    if prev_stage2 is None and prev_stage1 is not None:
+                        _reject_stage(
+                            PNO_STAGE_2_HIGH_PULLBACK,
+                            key=(prev_stage1.pump_start_5m_idx, prev_stage1.active_high_idx),
+                            timestamp_ms=int(one.timestamps[i]),
+                            reason="stage1_lost_before_pullback",
+                            extra={"active_high": round(prev_stage1.active_high, 8)},
+                        )
+                    elif prev_stage3 is None and prev_stage2 is not None:
+                        _reject_stage(
+                            PNO_STAGE_3_VALID_PULLBACK,
+                            key=(prev_stage2.active_high_idx, prev_stage2.pullback_low_idx),
+                            timestamp_ms=int(one.timestamps[i]),
+                            reason="stage1_lost_before_validation",
+                            extra={"pullback_low": round(prev_stage2.pullback_low, 8)},
+                        )
+                    elif prev_stage3 is not None:
+                        _reject_stage(
+                            PNO_STAGE_4_LEVEL,
+                            key=(prev_stage3.active_high_idx, prev_stage3.pullback_low_idx),
+                            timestamp_ms=int(one.timestamps[i]),
+                            reason="stage1_lost_before_level_found",
+                            extra={"pullback_low": round(prev_stage3.pullback_low, 8)},
+                        )
                     i += 1
                     continue
-                stage1 = None
-                stage2 = None
-                stage3 = None
-                stage4 = None
-                armed = None
-                blocked_active_high_idx = None
-                active_pump_start_idx = -1
-                if prev_stage2 is None and prev_stage1 is not None:
-                    _reject_stage(
-                        PNO_STAGE_2_HIGH_PULLBACK,
-                        key=(prev_stage1.pump_start_5m_idx, prev_stage1.active_high_idx),
-                        timestamp_ms=int(one.timestamps[i]),
-                        reason="stage1_lost_before_pullback",
-                        extra={"active_high": round(prev_stage1.active_high, 8)},
-                    )
-                elif prev_stage3 is None and prev_stage2 is not None:
-                    _reject_stage(
-                        PNO_STAGE_3_VALID_PULLBACK,
-                        key=(prev_stage2.active_high_idx, prev_stage2.pullback_low_idx),
-                        timestamp_ms=int(one.timestamps[i]),
-                        reason="stage1_lost_before_validation",
-                        extra={"pullback_low": round(prev_stage2.pullback_low, 8)},
-                    )
-                elif prev_stage3 is not None:
-                    _reject_stage(
-                        PNO_STAGE_4_LEVEL,
-                        key=(prev_stage3.active_high_idx, prev_stage3.pullback_low_idx),
-                        timestamp_ms=int(one.timestamps[i]),
-                        reason="stage1_lost_before_level_found",
-                        extra={"pullback_low": round(prev_stage3.pullback_low, 8)},
-                    )
-                i += 1
-                continue
 
             hold_status = self._resolve_stage1_hold_status(one=one, idx=i, stage1=stage1)
             leg_start_status = self._resolve_leg_start_status(five=five, five_idx=five_idx, stage1=stage1)
@@ -1263,6 +1263,10 @@ class PnoEngine:
                 retired_clusters=retired_clusters,
             )
             if next_stage4 is None:
+                if i <= (stage3.pullback_low_idx + 2):
+                    stage4 = None
+                    i += 1
+                    continue
                 if stage3 is not None:
                     _reject_stage(
                         PNO_STAGE_4_LEVEL,
