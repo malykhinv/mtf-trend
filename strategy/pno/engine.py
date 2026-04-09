@@ -958,6 +958,9 @@ class PnoEngine:
                 prev_stage1 = stage1
                 prev_stage2 = stage2
                 prev_stage3 = stage3
+                if prev_stage1 is not None and (prev_stage2 is not None or prev_stage3 is not None):
+                    i += 1
+                    continue
                 stage1 = None
                 stage2 = None
                 stage3 = None
@@ -1652,7 +1655,8 @@ class PnoEngine:
         if active_high_5m_idx < 0 or five_idx <= active_high_5m_idx:
             return None, None
         post_high_slice = slice(active_high_5m_idx + 1, five_idx + 1)
-        if stage2.pullback_depth > (params.pullback_invalid_max_leg_fraction * stage1.reference_leg_size):
+        depth_reference = max(stage1.reference_leg_size, stage1.pump_range_5m, self._EPSILON)
+        if stage2.pullback_depth > (params.pullback_invalid_max_leg_fraction * depth_reference):
             return None, "pullback_too_deep_vs_leg"
         if np.any(five.closes[post_high_slice] < (stage1.leg_start - self._EPSILON)):
             return None, "close_below_leg_start"
@@ -1660,7 +1664,7 @@ class PnoEngine:
             return None, "close_below_ema20"
         valid = (
             stage2.pullback_depth >= (params.pullback_min_v1 * five.v5[five_idx])
-            and stage2.pullback_depth <= (params.pullback_valid_max_leg_fraction * stage1.reference_leg_size)
+            and stage2.pullback_depth <= (params.pullback_valid_max_leg_fraction * depth_reference)
             and stage2.pullback_low > stage1.leg_start
         )
         if not valid:
