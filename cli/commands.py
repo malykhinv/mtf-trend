@@ -26,6 +26,7 @@ import pandas as pd
 from matplotlib import pyplot as plt
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import LinearLocator
+from matplotlib.transforms import blended_transform_factory
 
 from config import AppConfig
 from constants import (
@@ -680,6 +681,11 @@ _PNO_PLOT_PANEL_EDGE = "#1e293b"
 _PNO_PLOT_CANDLE_WIDTH = 0.64
 _PNO_PLOT_5M_CANDLE_WIDTH = 4.0
 _PNO_PLOT_MAX_X_TICKS = 8
+_PNO_TRADE_CHART_FIGSIZE = (8.0, 8.0)
+_PNO_TRADE_CHART_HEIGHT_RATIOS = [4, 2, 1]
+_PNO_TRADE_SLEEP_LOOKBACK_BARS = 12
+_PNO_PLOT_AXIS_TAG_LABEL_WIDTH = 7
+_PNO_PLOT_AXIS_TAG_TEXT_WIDTH = 20
 
 
 def _draw_pno_candles(ax: plt.Axes, frame: pd.DataFrame, x_values: np.ndarray) -> None:
@@ -694,7 +700,7 @@ def _draw_pno_candles(ax: plt.Axes, frame: pd.DataFrame, x_values: np.ndarray) -
         low_price = float(lows[idx])
         close_price = float(closes[idx])
         color = _PNO_PLOT_UP if close_price >= open_price else _PNO_PLOT_DOWN
-        ax.vlines(x_pos, low_price, high_price, color=color, linewidth=1.0, alpha=0.92, zorder=3)
+        ax.vlines(x_pos, low_price, high_price, color=color, linewidth=1.0, alpha=1.0, zorder=3)
         body_low = min(open_price, close_price)
         body_height = max(abs(close_price - open_price), 1e-9)
         ax.add_patch(
@@ -705,7 +711,7 @@ def _draw_pno_candles(ax: plt.Axes, frame: pd.DataFrame, x_values: np.ndarray) -
                 facecolor=color,
                 edgecolor=color,
                 linewidth=0.8,
-                alpha=0.9,
+                alpha=1.0,
                 zorder=4,
             )
         )
@@ -755,6 +761,85 @@ def _format_pno_price_label(value: float | None) -> str:
     if abs_value >= 0.01:
         return f"{value:.5f}"
     return f"{value:.6f}"
+
+
+def _format_pno_axis_tag_text(label: str, value: float | None) -> str:
+    base = f"{label.upper():<{_PNO_PLOT_AXIS_TAG_LABEL_WIDTH}} {_format_pno_price_label(value)}"
+    return f" {base:<{_PNO_PLOT_AXIS_TAG_TEXT_WIDTH}} "
+
+
+def _annotate_pno_axis_price_tag(
+    ax: plt.Axes,
+    *,
+    y: float | None,
+    label: str,
+    color: str,
+    leader_start_x: float | None,
+    leader_end_x: float | None = None,
+    text_color: str = _PNO_PLOT_TEXT,
+    alpha: float = 0.96,
+) -> None:
+    if y is None:
+        return
+    right_edge = float(ax.get_xlim()[1]) if leader_end_x is None else float(leader_end_x)
+    if leader_start_x is not None and right_edge > float(leader_start_x):
+        ax.hlines(
+            float(y),
+            float(leader_start_x),
+            right_edge,
+            color=color,
+            linewidth=0.8,
+            alpha=0.8,
+            linestyle=(0, (1.2, 1.2)),
+            zorder=6.2,
+        )
+    axis_transform = blended_transform_factory(ax.transAxes, ax.transData)
+    ax.text(
+        1.002,
+        float(y),
+        _format_pno_axis_tag_text(label, y),
+        transform=axis_transform,
+        ha="left",
+        va="center",
+        clip_on=False,
+        fontsize=7,
+        fontfamily="DejaVu Sans Mono",
+        color=text_color,
+        zorder=7.2,
+        bbox={
+            "boxstyle": "round,pad=0.16",
+            "facecolor": _PNO_PLOT_AXIS_FACE,
+            "edgecolor": color,
+            "linewidth": 0.9,
+            "alpha": alpha,
+        },
+    )
+
+
+def _infer_pno_frame_step_ms(frame: pd.DataFrame, default_ms: int) -> int:
+    if frame.empty or "timestamp" not in frame.columns:
+        return default_ms
+    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce").dropna().to_numpy(dtype=np.int64)
+    if timestamps.size < 2:
+        return default_ms
+    diffs = np.diff(np.sort(timestamps))
+    diffs = diffs[diffs > 0]
+    if diffs.size == 0:
+        return default_ms
+    return int(np.median(diffs))
+
+
+def _format_pno_chart_symbol(symbol: str) -> str:
+    base = str(symbol).split(":", 1)[0]
+    if base.endswith("/USDT"):
+        base = base[:-5]
+    return base
+
+
+def _plot_pno_marker(ax: plt.Axes, *, x: float, y: float | None, color: str, marker: str = "o") -> None:
+    if y is None:
+        return
+    ax.scatter([x], [y], color=color, s=28, marker=marker, linewidths=0.9, zorder=7.4)
 
 
 def _annotate_pno_price_level(
@@ -831,6 +916,8 @@ def _configure_pno_plot_axes(*, price_ax: plt.Axes, volume_ax: plt.Axes) -> None
     volume_ax.yaxis.label.set_color(_PNO_PLOT_MUTED)
     price_ax.yaxis.set_major_locator(LinearLocator(6))
     volume_ax.yaxis.set_major_locator(LinearLocator(3))
+    price_ax.yaxis.set_label_coords(-0.072, 0.5)
+    volume_ax.yaxis.set_label_coords(-0.072, 0.5)
 
 
 def _resolve_pno_pump_plot_idx(
@@ -878,7 +965,7 @@ def _draw_pno_candles_on_columns(
         low_price = float(lows[idx])
         close_price = float(closes[idx])
         color = _PNO_PLOT_UP if close_price >= open_price else _PNO_PLOT_DOWN
-        ax.vlines(x_pos, low_price, high_price, color=color, linewidth=1.0, alpha=0.92, zorder=3)
+        ax.vlines(x_pos, low_price, high_price, color=color, linewidth=1.0, alpha=1.0, zorder=3)
         body_low = min(open_price, close_price)
         body_height = max(abs(close_price - open_price), 1e-9)
         ax.add_patch(
@@ -889,7 +976,7 @@ def _draw_pno_candles_on_columns(
                 facecolor=color,
                 edgecolor=color,
                 linewidth=0.8,
-                alpha=0.9,
+                alpha=1.0,
                 zorder=4,
             )
         )
@@ -969,7 +1056,9 @@ def _render_pno_trade_chart(
     if target_price is None:
         target_price = max(entry_price, _safe_float(trade_row.get("exit_price")) or entry_price)
 
-    window_start_ms = min(pump_start_timestamp_ms, entry_timestamp_ms - (60 * 60 * 1000))
+    levels_step_ms = _infer_pno_frame_step_ms(levels_frame, default_ms=5 * 60 * 1000)
+    sleep_lookback_ms = _PNO_TRADE_SLEEP_LOOKBACK_BARS * levels_step_ms
+    window_start_ms = max(pump_start_timestamp_ms - sleep_lookback_ms, 0)
     window_end_ms = max(exit_timestamp_ms + (30 * 60 * 1000), entry_timestamp_ms + (30 * 60 * 1000))
     plot_frame = _build_pno_plot_frame(
         levels_frame=levels_frame,
@@ -1021,20 +1110,22 @@ def _render_pno_trade_chart(
     if pump_idx is None:
         pump_idx = entry_idx
     rect_width = max(float(exit_idx - entry_idx + 1), 1.0)
+    price_axis_right_x = float(len(plot_frame) - 0.5)
 
     fig, (ax_price, ax_levels, ax_volume) = plt.subplots(
         3,
         1,
-        figsize=(8, 12),
+        figsize=_PNO_TRADE_CHART_FIGSIZE,
         dpi=100,
         sharex=True,
-        gridspec_kw={"height_ratios": [2, 1, 1], "hspace": 0.05},
+        gridspec_kw={"height_ratios": _PNO_TRADE_CHART_HEIGHT_RATIOS, "hspace": 0.05},
         facecolor=_PNO_PLOT_FIGURE_FACE,
     )
     _configure_pno_plot_axes(price_ax=ax_price, volume_ax=ax_volume)
     _configure_pno_plot_axes(price_ax=ax_levels, volume_ax=ax_volume)
 
     _draw_pno_candles(ax_price, plot_frame, x_values)
+    ax_price.set_title(_format_pno_chart_symbol(symbol), loc="left", color=_PNO_PLOT_TEXT, fontsize=11, pad=10, fontweight="semibold")
     if not levels_window.empty:
         _draw_pno_candles_on_columns(ax_levels, levels_window, x_column="plot_x", candle_width=_PNO_PLOT_5M_CANDLE_WIDTH)
     ax_price.plot(x_values, ema9, color=_PNO_PLOT_EMA9, linewidth=1.2, alpha=0.28, zorder=2.2)
@@ -1064,12 +1155,13 @@ def _render_pno_trade_chart(
             alpha=0.72,
             zorder=5,
         )
-        _annotate_pno_price_level(
+        _annotate_pno_axis_price_tag(
             ax_price,
-            x=min(float(len(plot_frame) - 1.2), float(entry_idx + 1.4)),
             y=level_price,
             label="Level",
             color=_PNO_PLOT_LEVEL,
+            leader_start_x=float(level_start_idx - 0.48),
+            leader_end_x=price_axis_right_x,
         )
     if active_high is not None:
         high_idx = entry_idx
@@ -1086,14 +1178,14 @@ def _render_pno_trade_chart(
             linewidth=1.05,
             alpha=0.68,
         )
-        _annotate_pno_point(
+        _plot_pno_marker(ax_price, x=float(high_idx), y=active_high, color="#ef4444", marker="^")
+        _annotate_pno_axis_price_tag(
             ax_price,
-            x=float(high_idx),
             y=active_high,
             label="High",
             color="#ef4444",
-            marker="^",
-            dy_points=8.0,
+            leader_start_x=float(high_idx),
+            leader_end_x=price_axis_right_x,
         )
     if pullback_low is not None:
         low_idx = entry_idx
@@ -1110,14 +1202,14 @@ def _render_pno_trade_chart(
             linewidth=1.0,
             alpha=0.68,
         )
-        _annotate_pno_point(
+        _plot_pno_marker(ax_price, x=float(low_idx), y=pullback_low, color="#38bdf8", marker="v")
+        _annotate_pno_axis_price_tag(
             ax_price,
-            x=float(low_idx),
             y=pullback_low,
             label="PB Low",
             color="#38bdf8",
-            marker="v",
-            dy_points=-14.0,
+            leader_start_x=float(low_idx),
+            leader_end_x=price_axis_right_x,
         )
     ax_price.add_patch(
         Rectangle(
@@ -1143,43 +1235,47 @@ def _render_pno_trade_chart(
             zorder=1,
         )
     )
-    _annotate_pno_price_level(
+    _annotate_pno_axis_price_tag(
         ax_price,
-        x=min(float(len(plot_frame) - 1.2), float(exit_idx + 1.2)),
         y=target_price,
         label="TP",
         color=_PNO_PLOT_PROFIT_EDGE,
+        leader_start_x=float(entry_idx - 0.5),
+        leader_end_x=price_axis_right_x,
         alpha=0.92,
     )
-    _annotate_pno_price_level(
+    _annotate_pno_axis_price_tag(
         ax_price,
-        x=min(float(len(plot_frame) - 1.2), float(exit_idx + 1.2)),
         y=stop_loss,
         label="SL",
         color=_PNO_PLOT_RISK_EDGE,
+        leader_start_x=float(entry_idx - 0.5),
+        leader_end_x=price_axis_right_x,
         alpha=0.92,
     )
-    _annotate_pno_point(
+    _plot_pno_marker(ax_price, x=float(entry_idx), y=entry_price, color=_PNO_PLOT_ENTRY, marker="o")
+    _annotate_pno_axis_price_tag(
         ax_price,
-        x=float(entry_idx),
         y=entry_price,
         label="Entry",
         color=_PNO_PLOT_ENTRY,
-        marker="o",
-        dy_points=9.0,
+        leader_start_x=float(entry_idx),
+        leader_end_x=price_axis_right_x,
+        alpha=0.9,
     )
     exit_price = _safe_float(trade_row.get("exit_price_actual"))
     if exit_price is None:
         exit_price = _safe_float(trade_row.get("exit_price"))
     if exit_price is not None:
-        _annotate_pno_point(
+        _plot_pno_marker(ax_price, x=float(exit_idx), y=exit_price, color=_PNO_PLOT_EXIT, marker="x")
+        _annotate_pno_axis_price_tag(
             ax_price,
-            x=float(exit_idx),
             y=exit_price,
             label="Exit",
             color=_PNO_PLOT_EXIT,
-            marker="x",
-            dy_points=-14.0,
+            leader_start_x=float(exit_idx),
+            leader_end_x=price_axis_right_x,
+            alpha=0.9,
         )
 
     if not levels_window.empty:
@@ -1211,6 +1307,7 @@ def _render_pno_trade_chart(
     ax_price.set_ylabel("1m")
     ax_levels.set_ylabel("5m")
     ax_volume.set_ylabel("Vol %")
+    ax_levels.yaxis.set_label_coords(-0.072, 0.5)
     ax_volume.set_ylim(0.0, 100.0)
     ax_volume.set_yticks([0.0, 50.0, 100.0])
     ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
@@ -1226,7 +1323,7 @@ def _render_pno_trade_chart(
 
     file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{trade_index:03d}_{_sanitize_plot_name(result_type.lower() or category.lower() or 'trade')}.png"
     output_path = charts_dir / file_name
-    fig.subplots_adjust(left=0.10, right=0.985, top=0.985, bottom=0.055, hspace=0.05)
+    fig.subplots_adjust(left=0.10, right=0.84, top=0.94, bottom=0.06, hspace=0.05)
     fig.savefig(output_path, dpi=100, facecolor=_PNO_PLOT_FIGURE_FACE)
     plt.close(fig)
     return output_path
