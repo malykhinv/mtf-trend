@@ -518,16 +518,9 @@ def _build_pno_plot_frame(
         return plot_frame
 
     if {"timestamp", "ema9", "ema20"}.issubset(levels_frame.columns):
-        levels_ema = levels_frame.loc[:, ["timestamp", "ema9", "ema20"]].copy()
-        levels_ema["timestamp"] = pd.to_numeric(levels_ema["timestamp"], errors="coerce")
-        levels_ema["ema9"] = pd.to_numeric(levels_ema["ema9"], errors="coerce")
-        levels_ema["ema20"] = pd.to_numeric(levels_ema["ema20"], errors="coerce")
-        levels_ema = levels_ema.dropna(subset=["timestamp", "ema9", "ema20"])
+        levels_ema = levels_frame.loc[:, ["timestamp", "ema9", "ema20"]].dropna(subset=["timestamp", "ema9", "ema20"])
     else:
-        levels_ema = levels_frame.loc[:, ["timestamp", "close"]].copy()
-        levels_ema["timestamp"] = pd.to_numeric(levels_ema["timestamp"], errors="coerce")
-        levels_ema["close"] = pd.to_numeric(levels_ema["close"], errors="coerce")
-        levels_ema = levels_ema.dropna(subset=["timestamp", "close"])
+        levels_ema = levels_frame.loc[:, ["timestamp", "close"]].dropna(subset=["timestamp", "close"]).copy()
         levels_ema["ema9"] = levels_ema["close"].ewm(span=9, adjust=False).mean()
         levels_ema["ema20"] = levels_ema["close"].ewm(span=20, adjust=False).mean()
 
@@ -538,7 +531,7 @@ def _build_pno_plot_frame(
         return plot_frame
 
     levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64)
-    plot_timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.float64)
+    plot_timestamps = plot_frame["timestamp"].to_numpy(dtype=np.float64)
     plot_frame["ema9"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema9"].to_numpy(dtype=np.float64))
     plot_frame["ema20"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema20"].to_numpy(dtype=np.float64))
     return plot_frame
@@ -611,10 +604,10 @@ _PNO_PLOT_AXIS_TAG_TEXT_WIDTH = 20
 
 
 def _draw_pno_candles(ax: plt.Axes, frame: pd.DataFrame, x_values: np.ndarray) -> None:
-    opens = pd.to_numeric(frame["open"], errors="coerce").to_numpy(dtype=np.float64)
-    highs = pd.to_numeric(frame["high"], errors="coerce").to_numpy(dtype=np.float64)
-    lows = pd.to_numeric(frame["low"], errors="coerce").to_numpy(dtype=np.float64)
-    closes = pd.to_numeric(frame["close"], errors="coerce").to_numpy(dtype=np.float64)
+    opens = frame["open"].to_numpy(dtype=np.float64)
+    highs = frame["high"].to_numpy(dtype=np.float64)
+    lows = frame["low"].to_numpy(dtype=np.float64)
+    closes = frame["close"].to_numpy(dtype=np.float64)
 
     for idx, x_pos in enumerate(x_values):
         open_price = float(opens[idx])
@@ -926,11 +919,11 @@ def _draw_pno_candles_on_columns(
     x_column: str,
     candle_width: float,
 ) -> None:
-    x_values = pd.to_numeric(frame[x_column], errors="coerce").to_numpy(dtype=np.float64)
-    opens = pd.to_numeric(frame["open"], errors="coerce").to_numpy(dtype=np.float64)
-    highs = pd.to_numeric(frame["high"], errors="coerce").to_numpy(dtype=np.float64)
-    lows = pd.to_numeric(frame["low"], errors="coerce").to_numpy(dtype=np.float64)
-    closes = pd.to_numeric(frame["close"], errors="coerce").to_numpy(dtype=np.float64)
+    x_values = frame[x_column].to_numpy(dtype=np.float64)
+    opens = frame["open"].to_numpy(dtype=np.float64)
+    highs = frame["high"].to_numpy(dtype=np.float64)
+    lows = frame["low"].to_numpy(dtype=np.float64)
+    closes = frame["close"].to_numpy(dtype=np.float64)
 
     for idx, x_pos in enumerate(x_values):
         open_price = float(opens[idx])
@@ -1061,7 +1054,7 @@ def _render_pno_trade_chart(
         return None
 
     x_values = np.arange(len(plot_frame), dtype=np.float64)
-    timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
+    timestamps = plot_frame["timestamp"].to_numpy(dtype=np.int64)
     levels_window = levels_frame.loc[
         (levels_frame["timestamp"] >= window_start_ms)
         & (levels_frame["timestamp"] <= window_end_ms),
@@ -1074,13 +1067,13 @@ def _render_pno_trade_chart(
             x_values,
         )
         levels_window["plot_x"] = level_positions
-    volume = pd.to_numeric(plot_frame["volume"], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
-    opens = pd.to_numeric(plot_frame["open"], errors="coerce").to_numpy(dtype=np.float64)
-    closes = pd.to_numeric(plot_frame["close"], errors="coerce").to_numpy(dtype=np.float64)
-    ema9 = pd.to_numeric(plot_frame["ema9"], errors="coerce").to_numpy(dtype=np.float64)
-    ema20 = pd.to_numeric(plot_frame["ema20"], errors="coerce").to_numpy(dtype=np.float64)
-    high_values = pd.to_numeric(plot_frame["high"], errors="coerce").to_numpy(dtype=np.float64)
-    low_values = pd.to_numeric(plot_frame["low"], errors="coerce").to_numpy(dtype=np.float64)
+    volume = plot_frame["volume"].fillna(0.0).to_numpy(dtype=np.float64)
+    opens = plot_frame["open"].to_numpy(dtype=np.float64)
+    closes = plot_frame["close"].to_numpy(dtype=np.float64)
+    ema9 = plot_frame["ema9"].to_numpy(dtype=np.float64)
+    ema20 = plot_frame["ema20"].to_numpy(dtype=np.float64)
+    high_values = plot_frame["high"].to_numpy(dtype=np.float64)
+    low_values = plot_frame["low"].to_numpy(dtype=np.float64)
     entry_idx = int(np.searchsorted(timestamps, entry_timestamp_ms, side="left"))
     exit_idx = int(np.searchsorted(timestamps, exit_timestamp_ms, side="left"))
     pump_idx = _resolve_pno_pump_plot_idx(
@@ -1280,14 +1273,14 @@ def _render_pno_trade_chart(
         )
 
     if not levels_window.empty:
-        levels_volume = pd.to_numeric(levels_window["volume"], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
-        levels_open = pd.to_numeric(levels_window["open"], errors="coerce").to_numpy(dtype=np.float64)
-        levels_close = pd.to_numeric(levels_window["close"], errors="coerce").to_numpy(dtype=np.float64)
+        levels_volume = levels_window["volume"].fillna(0.0).to_numpy(dtype=np.float64)
+        levels_open = levels_window["open"].to_numpy(dtype=np.float64)
+        levels_close = levels_window["close"].to_numpy(dtype=np.float64)
         levels_volume_max = float(np.nanmax(levels_volume)) if len(levels_volume) > 0 else 0.0
         levels_volume_pct = (levels_volume / levels_volume_max) * 100.0 if levels_volume_max > 0.0 else np.zeros_like(levels_volume)
         levels_volume_colors = np.where(levels_close >= levels_open, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
         ax_volume.bar(
-            pd.to_numeric(levels_window["plot_x"], errors="coerce").to_numpy(dtype=np.float64),
+            levels_window["plot_x"].to_numpy(dtype=np.float64),
             levels_volume_pct,
             width=_PNO_PLOT_5M_CANDLE_WIDTH,
             color=levels_volume_colors,
@@ -1300,8 +1293,8 @@ def _render_pno_trade_chart(
     ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
     ax_price.set_xlim(-0.5, len(plot_frame) - 0.5)
     if not levels_window.empty:
-        levels_high = pd.to_numeric(levels_window["high"], errors="coerce").to_numpy(dtype=np.float64)
-        levels_low = pd.to_numeric(levels_window["low"], errors="coerce").to_numpy(dtype=np.float64)
+        levels_high = levels_window["high"].to_numpy(dtype=np.float64)
+        levels_low = levels_window["low"].to_numpy(dtype=np.float64)
         levels_padding = max((float(np.nanmax(levels_high)) - float(np.nanmin(levels_low))) * 0.08, 1e-9)
         ax_levels.set_ylim(float(np.nanmin(levels_low)) - levels_padding, float(np.nanmax(levels_high)) + levels_padding)
     ax_levels.set_xlim(-0.5, len(plot_frame) - 0.5)
@@ -1409,15 +1402,15 @@ def _render_pno_stage_review_chart(
     fig.patch.set_facecolor(_PNO_PLOT_FIGURE_FACE)
     _configure_pno_plot_axes(price_ax=ax_price, volume_ax=ax_volume)
 
-    opens = pd.to_numeric(plot_frame["open"], errors="coerce").to_numpy(dtype=np.float64)
-    close_values = pd.to_numeric(plot_frame["close"], errors="coerce").to_numpy(dtype=np.float64)
-    high_values = pd.to_numeric(plot_frame["high"], errors="coerce").to_numpy(dtype=np.float64)
-    low_values = pd.to_numeric(plot_frame["low"], errors="coerce").to_numpy(dtype=np.float64)
-    volume_values = pd.to_numeric(plot_frame["volume"], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
+    opens = plot_frame["open"].to_numpy(dtype=np.float64)
+    close_values = plot_frame["close"].to_numpy(dtype=np.float64)
+    high_values = plot_frame["high"].to_numpy(dtype=np.float64)
+    low_values = plot_frame["low"].to_numpy(dtype=np.float64)
+    volume_values = plot_frame["volume"].fillna(0.0).to_numpy(dtype=np.float64)
     x = np.arange(len(plot_frame), dtype=np.float64)
-    ema9 = pd.to_numeric(plot_frame["ema9"], errors="coerce").to_numpy(dtype=np.float64) if "ema9" in plot_frame.columns else np.full(len(plot_frame), np.nan, dtype=np.float64)
-    ema20 = pd.to_numeric(plot_frame["ema20"], errors="coerce").to_numpy(dtype=np.float64) if "ema20" in plot_frame.columns else np.full(len(plot_frame), np.nan, dtype=np.float64)
-    timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
+    ema9 = plot_frame["ema9"].to_numpy(dtype=np.float64) if "ema9" in plot_frame.columns else np.full(len(plot_frame), np.nan, dtype=np.float64)
+    ema20 = plot_frame["ema20"].to_numpy(dtype=np.float64) if "ema20" in plot_frame.columns else np.full(len(plot_frame), np.nan, dtype=np.float64)
+    timestamps = plot_frame["timestamp"].to_numpy(dtype=np.int64)
     event_idx = _resolve_pno_timestamp_plot_idx(timestamps, int(timestamp_ms))
     pump_idx = _resolve_pno_pump_plot_idx(
         timestamps=timestamps,
