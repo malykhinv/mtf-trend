@@ -640,24 +640,69 @@ def _build_pno_plot_frame(
     if plot_frame.empty:
         return plot_frame
 
-    levels_ema = levels_frame.loc[:, ["timestamp", "close"]].copy()
-    levels_ema["timestamp"] = pd.to_numeric(levels_ema["timestamp"], errors="coerce")
-    levels_ema["close"] = pd.to_numeric(levels_ema["close"], errors="coerce")
-    levels_ema = levels_ema.dropna(subset=["timestamp", "close"]).sort_values("timestamp").drop_duplicates(
-        subset=["timestamp"], keep="last"
-    )
+    if {"timestamp", "ema9", "ema20"}.issubset(levels_frame.columns):
+        levels_ema = levels_frame.loc[:, ["timestamp", "ema9", "ema20"]].copy()
+        levels_ema["timestamp"] = pd.to_numeric(levels_ema["timestamp"], errors="coerce")
+        levels_ema["ema9"] = pd.to_numeric(levels_ema["ema9"], errors="coerce")
+        levels_ema["ema20"] = pd.to_numeric(levels_ema["ema20"], errors="coerce")
+        levels_ema = levels_ema.dropna(subset=["timestamp", "ema9", "ema20"])
+    else:
+        levels_ema = levels_frame.loc[:, ["timestamp", "close"]].copy()
+        levels_ema["timestamp"] = pd.to_numeric(levels_ema["timestamp"], errors="coerce")
+        levels_ema["close"] = pd.to_numeric(levels_ema["close"], errors="coerce")
+        levels_ema = levels_ema.dropna(subset=["timestamp", "close"])
+        levels_ema["ema9"] = levels_ema["close"].ewm(span=9, adjust=False).mean()
+        levels_ema["ema20"] = levels_ema["close"].ewm(span=20, adjust=False).mean()
+
+    levels_ema = levels_ema.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last")
     if levels_ema.empty:
         plot_frame["ema9"] = np.nan
         plot_frame["ema20"] = np.nan
         return plot_frame.reset_index(drop=True)
 
-    levels_ema["ema9"] = levels_ema["close"].ewm(span=9, adjust=False).mean()
-    levels_ema["ema20"] = levels_ema["close"].ewm(span=20, adjust=False).mean()
     levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64)
     plot_timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.float64)
     plot_frame["ema9"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema9"].to_numpy(dtype=np.float64))
     plot_frame["ema20"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema20"].to_numpy(dtype=np.float64))
     return plot_frame.reset_index(drop=True)
+
+
+def _prepare_pno_levels_plot_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
+    columns = [column for column in ("timestamp", "open", "high", "low", "close", "volume", "ema9", "ema20") if column in levels_frame.columns]
+    prepared = levels_frame.loc[:, columns].copy()
+    if prepared.empty:
+        return prepared
+    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    numeric_columns = [column for column in ("open", "high", "low", "close", "volume", "ema9", "ema20") if column in prepared.columns]
+    for column in numeric_columns:
+        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    prepared = (
+        prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
+        .sort_values("timestamp")
+        .drop_duplicates(subset=["timestamp"], keep="last")
+        .reset_index(drop=True)
+    )
+    if prepared.empty:
+        return prepared
+    if "ema9" not in prepared.columns or "ema20" not in prepared.columns:
+        prepared["ema9"] = pd.to_numeric(prepared["close"], errors="coerce").ewm(span=9, adjust=False).mean()
+        prepared["ema20"] = pd.to_numeric(prepared["close"], errors="coerce").ewm(span=20, adjust=False).mean()
+    return prepared
+
+
+def _prepare_pno_entry_plot_source(entry_frame: pd.DataFrame) -> pd.DataFrame:
+    prepared = entry_frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
+    if prepared.empty:
+        return prepared
+    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    for column in ("open", "high", "low", "close", "volume"):
+        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    return (
+        prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
+        .sort_values("timestamp")
+        .drop_duplicates(subset=["timestamp"], keep="last")
+        .reset_index(drop=True)
+    )
 
 
 _PNO_PLOT_FIGURE_FACE = "#08111f"
@@ -1393,13 +1438,15 @@ def _render_pno_trade_charts_for_symbol(
     mtf_frames: SymbolMtfFrames,
     trade_rows: list[dict[str, object]],
 ) -> list[str]:
+    levels_plot_frame = _prepare_pno_levels_plot_source(mtf_frames.levels_frame)
+    entry_plot_frame = _prepare_pno_entry_plot_source(mtf_frames.entry_frame)
     chart_paths: list[str] = []
     for trade_index, trade_row in enumerate(trade_rows, start=1):
         chart_path = _render_pno_trade_chart(
             charts_dir=charts_dir,
             symbol=symbol,
-            levels_frame=mtf_frames.levels_frame,
-            entry_frame=mtf_frames.entry_frame,
+            levels_frame=levels_plot_frame,
+            entry_frame=entry_plot_frame,
             trade_row=trade_row,
             trade_index=trade_index,
         )
@@ -1434,17 +1481,9 @@ def _render_pno_stage_review_chart(
         end_timestamp_ms = timestamp_ms
     if use_levels_frame:
         plot_frame = levels_frame.loc[
-            (pd.to_numeric(levels_frame["timestamp"], errors="coerce") >= start_timestamp_ms)
-            & (pd.to_numeric(levels_frame["timestamp"], errors="coerce") <= end_timestamp_ms),
-            [column for column in ("timestamp", "open", "high", "low", "close", "volume", "ema9", "ema20") if column in levels_frame.columns],
+            (levels_frame["timestamp"] >= start_timestamp_ms)
+            & (levels_frame["timestamp"] <= end_timestamp_ms)
         ].copy()
-        plot_frame["timestamp"] = pd.to_numeric(plot_frame["timestamp"], errors="coerce")
-        plot_frame = (
-            plot_frame.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
-            .sort_values("timestamp")
-            .drop_duplicates(subset=["timestamp"], keep="last")
-            .reset_index(drop=True)
-        )
     else:
         plot_frame = _build_pno_plot_frame(
             levels_frame=levels_frame,
@@ -1645,6 +1684,13 @@ def _export_pno_stage_reviews(
     stage_reviews_dir.mkdir(parents=True, exist_ok=True)
     chart_stage_ids = set(PNO_STAGE_SEQUENCE)
     manifest_rows: list[dict[str, object]] = []
+    prepared_frames_by_symbol: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {
+        symbol: (
+            _prepare_pno_levels_plot_source(mtf_frames.levels_frame),
+            _prepare_pno_entry_plot_source(mtf_frames.entry_frame),
+        )
+        for symbol, mtf_frames in symbol_frames.items()
+    }
 
     for stage_id in selected_stage_ids:
         stage_dir = stage_reviews_dir / stage_id
@@ -1660,14 +1706,14 @@ def _export_pno_stage_reviews(
             passed_charts_dir.mkdir(parents=True, exist_ok=True)
             for row_index, row in enumerate(passed_rows, start=1):
                 symbol = str(row.get("symbol", ""))
-                mtf_frames = symbol_frames.get(symbol)
-                if mtf_frames is None:
+                prepared_frames = prepared_frames_by_symbol.get(symbol)
+                if prepared_frames is None:
                     continue
                 chart_path = _render_pno_stage_review_chart(
                     charts_dir=passed_charts_dir,
                     symbol=symbol,
-                    levels_frame=mtf_frames.levels_frame,
-                    entry_frame=mtf_frames.entry_frame,
+                    levels_frame=prepared_frames[0],
+                    entry_frame=prepared_frames[1],
                     review_row={**row, "status": "passed", "reason": "passed"},
                     review_index=row_index,
                 )
@@ -1689,14 +1735,14 @@ def _export_pno_stage_reviews(
                 charts_dir.mkdir(parents=True, exist_ok=True)
                 for row_index, row in enumerate(rows, start=1):
                     symbol = str(row.get("symbol", ""))
-                    mtf_frames = symbol_frames.get(symbol)
-                    if mtf_frames is None:
+                    prepared_frames = prepared_frames_by_symbol.get(symbol)
+                    if prepared_frames is None:
                         continue
                     chart_path = _render_pno_stage_review_chart(
                         charts_dir=charts_dir,
                         symbol=symbol,
-                        levels_frame=mtf_frames.levels_frame,
-                        entry_frame=mtf_frames.entry_frame,
+                        levels_frame=prepared_frames[0],
+                        entry_frame=prepared_frames[1],
                         review_row={**row, "status": "rejected"},
                         review_index=row_index,
                     )
