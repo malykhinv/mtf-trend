@@ -1442,6 +1442,9 @@ class PnoEngine:
             return None
 
         pump_highs = five.highs[pump_start_5m_idx : active_high_5m_idx + 1]
+        pump_opens = five.opens[pump_start_5m_idx : active_high_5m_idx + 1]
+        pump_lows = five.lows[pump_start_5m_idx : active_high_5m_idx + 1]
+        pump_closes = five.closes[pump_start_5m_idx : active_high_5m_idx + 1]
         pump_tr = five.tr[pump_start_5m_idx : active_high_5m_idx + 1]
         if pump_highs.size == 0 or pump_tr.size == 0:
             return None
@@ -1463,6 +1466,22 @@ class PnoEngine:
         if pump_volume_ratio_start < float(params.stage1_min_volume_ratio_start):
             return None
         if pump_volume_ratio_continue < float(params.stage1_min_volume_ratio_continue):
+            return None
+
+        pump_net_move = max(float(pump_closes[-1]) - float(pump_opens[0]), 0.0)
+        pump_path_efficiency = self._safe_divide(pump_net_move, float(np.sum(pump_tr)))
+        pump_wick_share = self._safe_divide(
+            float(
+                np.sum(
+                    (pump_highs - np.maximum(pump_opens, pump_closes))
+                    + (np.minimum(pump_opens, pump_closes) - pump_lows)
+                )
+            ),
+            float(np.sum(pump_tr)),
+        )
+        if pump_path_efficiency < float(params.stage1_min_path_efficiency):
+            return None
+        if pump_wick_share > float(params.stage1_max_wick_share):
             return None
 
         cumulative_quote_volume = self._range_sum(one.cumulative_quote_volume, start_idx, idx)
@@ -1511,6 +1530,8 @@ class PnoEngine:
             "pump_peak_bar_tr_atr_pre": pump_peak_bar_tr_atr_pre,
             "pump_volume_ratio_start": pump_volume_ratio_start,
             "pump_volume_ratio_continue": pump_volume_ratio_continue,
+            "pump_path_efficiency": pump_path_efficiency,
+            "pump_wick_share": pump_wick_share,
             "reference_high": reference_high,
             "reference_high_weight": reference_high_weight,
         }
