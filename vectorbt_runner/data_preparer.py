@@ -112,7 +112,9 @@ class DataPreparer:
         for col in numeric_cols:
             prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
 
-        required_mask = prepared[["timestamp", "open", "high", "low", "close", "volume"]].notna().all(axis=1)
+        required_mask = np.ones(len(prepared), dtype=bool)
+        for column in ("timestamp", "open", "high", "low", "close", "volume"):
+            required_mask &= prepared[column].notna().to_numpy(dtype=bool, copy=False)
         if not bool(required_mask.all()):
             prepared = prepared.loc[required_mask]
         if prepared.empty:
