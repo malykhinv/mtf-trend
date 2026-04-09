@@ -50,6 +50,7 @@ class PnoParams:
     min_stage1_leg_v5_fraction: float = 0.5
     stage1_hold_fraction: float = 0.5
     pullback_min_v1: float = 1.0
+    pullback_min_pump_fraction_5m: float = 0.20
     pullback_valid_max_leg_fraction: float = 0.38
     pullback_invalid_max_leg_fraction: float = 0.50
     pullback_valid_max_v5: float = 4.5
@@ -142,6 +143,8 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("stage1_hold_fraction must be in range (0, 1)")
     if params.pullback_min_v1 <= 0.0:
         raise ValueError("pullback_min_v1 must be > 0")
+    if not 0.0 < params.pullback_min_pump_fraction_5m < 1.0:
+        raise ValueError("pullback_min_pump_fraction_5m must be in range (0, 1)")
     if not 0.0 < params.pullback_valid_max_leg_fraction < params.pullback_invalid_max_leg_fraction:
         raise ValueError(
             "pullback_valid_max_leg_fraction must be > 0 and smaller than pullback_invalid_max_leg_fraction"

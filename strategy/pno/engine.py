@@ -127,6 +127,7 @@ class Stage1Context:
     leg_size: float
     reference_leg_size: float
     hold_floor: float
+    pump_range_5m: float = 0.0
     levels_timeframe_ms: int = 5 * 60_000
     sleep_start_timestamp: int = 0
     sleep_end_timestamp: int = 0
@@ -1541,6 +1542,7 @@ class PnoEngine:
             leg_start=leg_start,
             leg_size=leg_size,
             reference_leg_size=reference_leg_size,
+            pump_range_5m=pump_range,
             hold_floor=hold_floor,
             stage1_hold_price=float(five.stage1_hold_price[five_idx]),
             cumulative_quote_volume=float(quality_metrics["cumulative_quote_volume"]),
@@ -1586,6 +1588,9 @@ class PnoEngine:
         pullback_low = float(one.lows[pullback_low_idx])
         pullback_depth = stage1.reference_high - pullback_low
         if pullback_depth < max(float(one.v1[idx]), self._EPSILON):
+            return None
+        min_pullback_from_pump = float(params.pullback_min_pump_fraction_5m) * max(stage1.pump_range_5m, self._EPSILON)
+        if pullback_depth < min_pullback_from_pump:
             return None
         return Stage2Context(
             active_high_idx=stage1.active_high_idx,

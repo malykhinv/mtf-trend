@@ -390,6 +390,10 @@ def _build_pno_params_from_row(
         min_stage1_leg_v5_fraction=_float_or_default("pno_min_stage1_leg_v5_fraction", defaults.min_stage1_leg_v5_fraction),
         stage1_hold_fraction=_float_or_default("pno_stage1_hold_fraction", defaults.stage1_hold_fraction),
         pullback_min_v1=_float_or_default("pno_pullback_min_v1", defaults.pullback_min_v1),
+        pullback_min_pump_fraction_5m=_float_or_default(
+            "pno_pullback_min_pump_fraction_5m",
+            defaults.pullback_min_pump_fraction_5m,
+        ),
         pullback_valid_max_leg_fraction=_float_or_default("pno_pullback_valid_max_leg_fraction", defaults.pullback_valid_max_leg_fraction),
         pullback_invalid_max_leg_fraction=_float_or_default("pno_pullback_invalid_max_leg_fraction", defaults.pullback_invalid_max_leg_fraction),
         pullback_valid_max_v5=_float_or_default("pno_pullback_valid_max_v5", defaults.pullback_valid_max_v5),

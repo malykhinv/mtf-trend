@@ -64,6 +64,7 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_min_stage1_leg_v5_fraction": params.min_stage1_leg_v5_fraction,
             "pno_stage1_hold_fraction": params.stage1_hold_fraction,
             "pno_pullback_min_v1": params.pullback_min_v1,
+            "pno_pullback_min_pump_fraction_5m": params.pullback_min_pump_fraction_5m,
             "pno_pullback_valid_max_leg_fraction": params.pullback_valid_max_leg_fraction,
             "pno_pullback_invalid_max_leg_fraction": params.pullback_invalid_max_leg_fraction,
             "pno_pullback_valid_max_v5": params.pullback_valid_max_v5,

@@ -121,6 +121,7 @@ def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:
         stage1_min_impulse_atr_pre=3.0,
         level_min_maturity_fraction=0.35,
         max_entry_pullback_fraction=0.45,
+        pullback_min_pump_fraction_5m=0.22,
         pullback_valid_max_v5=4.0,
         min_score=72.0,
         strong_score=84.0,
@@ -146,6 +147,7 @@ def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:
     assert rebuilt.stage1_min_impulse_atr_pre == original.stage1_min_impulse_atr_pre
     assert rebuilt.level_min_maturity_fraction == original.level_min_maturity_fraction
     assert rebuilt.max_entry_pullback_fraction == original.max_entry_pullback_fraction
+    assert rebuilt.pullback_min_pump_fraction_5m == original.pullback_min_pump_fraction_5m
     assert rebuilt.pullback_valid_max_v5 == original.pullback_valid_max_v5
     assert rebuilt.min_score == original.min_score
     assert rebuilt.strong_score == original.strong_score
@@ -515,6 +517,7 @@ def test_pno_incomplete_trade_is_not_emitted() -> None:
             leg_start=9.0,
             leg_size=1.5,
             reference_leg_size=1.5,
+            pump_range_5m=1.5,
             hold_floor=9.75,
         ),
         stage3=Stage3Context(
@@ -615,6 +618,7 @@ def test_pno_close_above_confirmation_enters_on_next_bar() -> None:
             leg_start=9.0,
             leg_size=1.5,
             reference_leg_size=1.5,
+            pump_range_5m=1.5,
             hold_floor=9.75,
         ),
         stage3=Stage3Context(
