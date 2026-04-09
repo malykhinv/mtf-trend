@@ -905,6 +905,20 @@ def _resolve_pno_pump_plot_idx(
     return shifted_idx
 
 
+def _resolve_pno_timestamp_plot_idx(timestamps: np.ndarray, target_timestamp_ms: int) -> int:
+    if timestamps.size == 0:
+        return 0
+    candidate_idx = int(np.searchsorted(timestamps, int(target_timestamp_ms), side="left"))
+    if candidate_idx >= len(timestamps):
+        return len(timestamps) - 1
+    if candidate_idx <= 0:
+        return 0
+    left_idx = candidate_idx - 1
+    if abs(int(timestamps[left_idx]) - int(target_timestamp_ms)) <= abs(int(timestamps[candidate_idx]) - int(target_timestamp_ms)):
+        return left_idx
+    return candidate_idx
+
+
 def _draw_pno_candles_on_columns(
     ax: plt.Axes,
     frame: pd.DataFrame,
@@ -946,11 +960,12 @@ def _build_pno_tick_timestamps(frame: pd.DataFrame) -> pd.Series:
 
 
 def _build_pno_tick_positions_from_timestamps(timestamps: pd.Series, frame_length: int) -> np.ndarray:
-    hour_positions = [idx for idx, value in enumerate(timestamps) if value.minute == 0]
+    timestamp_index = pd.DatetimeIndex(timestamps)
+    hour_positions = np.flatnonzero(timestamp_index.minute == 0).tolist()
     if len(hour_positions) >= 3:
         selected = hour_positions
     else:
-        half_hour_positions = [idx for idx, value in enumerate(timestamps) if value.minute in {0, 30}]
+        half_hour_positions = np.flatnonzero(np.isin(timestamp_index.minute, [0, 30])).tolist()
         if len(half_hour_positions) >= 3:
             selected = half_hour_positions
         else:
@@ -971,14 +986,11 @@ def _build_pno_tick_positions(frame: pd.DataFrame) -> np.ndarray:
 
 
 def _build_pno_tick_labels_from_timestamps(timestamps: pd.Series, positions: np.ndarray) -> list[str]:
-    labels: list[str] = []
-    for pos in positions:
-        timestamp = timestamps.iloc[int(pos)]
-        if timestamp.hour == 0 and timestamp.minute == 0:
-            labels.append(timestamp.strftime("%m-%d"))
-        else:
-            labels.append(timestamp.strftime("%H:%M"))
-    return labels
+    selected = pd.DatetimeIndex(timestamps).take(positions)
+    full_day_mask = (selected.hour == 0) & (selected.minute == 0)
+    day_labels = selected.strftime("%m-%d")
+    time_labels = selected.strftime("%H:%M")
+    return np.where(full_day_mask, day_labels, time_labels).tolist()
 
 
 def _build_pno_tick_labels(frame: pd.DataFrame, positions: np.ndarray) -> list[str]:
@@ -1406,7 +1418,7 @@ def _render_pno_stage_review_chart(
     ema9 = pd.to_numeric(plot_frame["ema9"], errors="coerce").to_numpy(dtype=np.float64) if "ema9" in plot_frame.columns else np.full(len(plot_frame), np.nan, dtype=np.float64)
     ema20 = pd.to_numeric(plot_frame["ema20"], errors="coerce").to_numpy(dtype=np.float64) if "ema20" in plot_frame.columns else np.full(len(plot_frame), np.nan, dtype=np.float64)
     timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
-    event_idx = int(np.argmin(np.abs(timestamps - int(timestamp_ms))))
+    event_idx = _resolve_pno_timestamp_plot_idx(timestamps, int(timestamp_ms))
     pump_idx = _resolve_pno_pump_plot_idx(
         timestamps=timestamps,
         pump_start_timestamp_ms=pump_start_timestamp_ms,
