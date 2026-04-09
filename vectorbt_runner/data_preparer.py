@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable
 
+import numpy as np
 import pandas as pd
 from pyarrow import parquet as pq
 
@@ -90,17 +91,32 @@ class DataPreparer:
         if missing:
             return pd.DataFrame()
 
-        prepared = frame.copy()
-        prepared["symbol"] = symbol
-        prepared = prepared.dropna(subset=["timestamp"])
+        prepared = frame
+        prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
 
         numeric_cols = [col for col in DATA_PREPARER_NUMERIC_COLUMNS if col in prepared.columns]
         for col in numeric_cols:
             prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
 
-        prepared = prepared.dropna(subset=["open", "high", "low", "close", "volume"])
-        prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last")
-        return prepared.reset_index(drop=True)
+        required_mask = prepared[["timestamp", "open", "high", "low", "close", "volume"]].notna().all(axis=1)
+        if not bool(required_mask.all()):
+            prepared = prepared.loc[required_mask]
+        if prepared.empty:
+            return pd.DataFrame()
+
+        timestamps = prepared["timestamp"].to_numpy(dtype=np.int64, copy=False)
+        needs_sort = bool(timestamps.size > 1 and np.any(timestamps[1:] < timestamps[:-1]))
+        if needs_sort:
+            prepared = prepared.iloc[np.argsort(timestamps, kind="stable")]
+            timestamps = prepared["timestamp"].to_numpy(dtype=np.int64, copy=False)
+        if timestamps.size > 1:
+            unique_mask = np.ones(len(prepared), dtype=bool)
+            unique_mask[:-1] = timestamps[:-1] != timestamps[1:]
+            if not bool(unique_mask.all()):
+                prepared = prepared.loc[unique_mask]
+
+        prepared["symbol"] = symbol
+        return prepared
 
 
     def load_symbol_data_multi(self, symbol: str, timeframes: Iterable[Timeframe]) -> dict[Timeframe, pd.DataFrame]:
