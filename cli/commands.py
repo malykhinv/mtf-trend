@@ -1410,6 +1410,8 @@ def _render_pno_stage_review_chart(
     entry_frame: pd.DataFrame,
     review_row: dict[str, object],
     review_index: int,
+    status: str = "review",
+    reason: str | None = None,
 ) -> str | None:
     stage_id = str(review_row.get("stage_id", "stage"))
     current_timestamp_ms = _safe_int(review_row.get("current_timestamp_ms"))
@@ -1610,9 +1612,9 @@ def _render_pno_stage_review_chart(
     ax_volume.set_xticklabels(tick_labels, fontsize=8, color=_PNO_PLOT_MUTED)
     ax_price.tick_params(axis="x", labelbottom=False)
 
-    status = str(review_row.get("status", "review"))
-    reason = _sanitize_plot_name(str(review_row.get("reason", "ok")))
-    file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{review_index:04d}_{_sanitize_plot_name(stage_id)}_{_sanitize_plot_name(status)}_{reason}.png"
+    sanitized_status = _sanitize_plot_name(status)
+    sanitized_reason = _sanitize_plot_name(reason if reason is not None else str(review_row.get("reason", "ok")))
+    file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{review_index:04d}_{_sanitize_plot_name(stage_id)}_{sanitized_status}_{sanitized_reason}.png"
     output_path = charts_dir / file_name
     fig.subplots_adjust(left=0.08, right=0.985, top=0.985, bottom=0.10, hspace=0.04)
     fig.savefig(output_path, dpi=72, facecolor=_PNO_PLOT_FIGURE_FACE)
@@ -1678,8 +1680,10 @@ def _export_pno_stage_reviews(
                     symbol=symbol,
                     levels_frame=prepared_frames[0],
                     entry_frame=prepared_frames[1],
-                    review_row={**row, "status": "passed", "reason": "passed"},
+                    review_row=row,
                     review_index=row_index,
+                    status="passed",
+                    reason="passed",
                 )
                 if chart_path is not None:
                     passed_chart_paths.append(chart_path)
@@ -1707,8 +1711,10 @@ def _export_pno_stage_reviews(
                         symbol=symbol,
                         levels_frame=prepared_frames[0],
                         entry_frame=prepared_frames[1],
-                        review_row={**row, "status": "rejected"},
+                        review_row=row,
                         review_index=row_index,
+                        status="rejected",
+                        reason=reason,
                     )
                     if chart_path is not None:
                         rejected_chart_paths += 1
