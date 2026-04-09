@@ -503,6 +503,10 @@ def _sanitize_plot_name(value: str) -> str:
     return "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in value)
 
 
+def _to_compact_json(payload: object) -> str:
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
 def _build_pno_plot_frame(
     *,
     levels_frame: pd.DataFrame,
@@ -1801,10 +1805,11 @@ def _plot_post_pump_absorption_diagnostics_for_symbols(
         }
         base_name = symbol.replace("/", "_")
         (diagnostics_dir / f"{base_name}_diagnostics.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
+            _to_compact_json(payload),
             encoding="utf-8",
         )
-        pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
+        if trade_rows:
+            pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
 
     _export_ppa_stage_reviews(
         diagnostics_dir=diagnostics_dir,
@@ -1868,7 +1873,7 @@ def _plot_bee_bite_diagnostics_for_symbols(
             "diagnostics": diagnostics,
         }
         output_path = diagnostics_dir / f"{symbol.replace('/', '_')}_diagnostics.json"
-        output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        output_path.write_text(_to_compact_json(payload), encoding="utf-8")
 
     logger.info(
         "%s: сохранена диагностическая визуализация bee_bite symbols=%s trades_generated=%s output_dir=%s",
@@ -1985,10 +1990,11 @@ def _plot_pno_diagnostics_for_symbols(
         payload["chart_paths"] = chart_paths
         base_name = symbol.replace("/", "_")
         (diagnostics_dir / f"{base_name}_diagnostics.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
+            _to_compact_json(payload),
             encoding="utf-8",
         )
-        pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
+        if trade_rows:
+            pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
 
     _export_pno_stage_reviews(
         diagnostics_dir=diagnostics_dir,
