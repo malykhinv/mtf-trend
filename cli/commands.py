@@ -658,13 +658,13 @@ def _build_pno_plot_frame(
     if levels_ema.empty:
         plot_frame["ema9"] = np.nan
         plot_frame["ema20"] = np.nan
-        return plot_frame.reset_index(drop=True)
+        return plot_frame
 
     levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64)
     plot_timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.float64)
     plot_frame["ema9"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema9"].to_numpy(dtype=np.float64))
     plot_frame["ema20"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema20"].to_numpy(dtype=np.float64))
-    return plot_frame.reset_index(drop=True)
+    return plot_frame
 
 
 def _prepare_pno_levels_plot_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
@@ -1174,17 +1174,10 @@ def _render_pno_trade_chart(
     x_values = np.arange(len(plot_frame), dtype=np.float64)
     timestamps = pd.to_numeric(plot_frame["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
     levels_window = levels_frame.loc[
-        (pd.to_numeric(levels_frame["timestamp"], errors="coerce") >= window_start_ms)
-        & (pd.to_numeric(levels_frame["timestamp"], errors="coerce") <= window_end_ms),
+        (levels_frame["timestamp"] >= window_start_ms)
+        & (levels_frame["timestamp"] <= window_end_ms),
         ["timestamp", "open", "high", "low", "close", "volume"],
     ].copy()
-    levels_window["timestamp"] = pd.to_numeric(levels_window["timestamp"], errors="coerce")
-    levels_window = (
-        levels_window.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
-        .sort_values("timestamp")
-        .drop_duplicates(subset=["timestamp"], keep="last")
-        .reset_index(drop=True)
-    )
     if not levels_window.empty:
         level_positions = np.interp(
             levels_window["timestamp"].to_numpy(dtype=np.float64),
@@ -1456,6 +1449,8 @@ def _render_pno_trade_charts_for_symbol(
     mtf_frames: SymbolMtfFrames,
     trade_rows: list[dict[str, object]],
 ) -> list[str]:
+    if not trade_rows:
+        return []
     levels_plot_frame = _prepare_pno_levels_plot_source(mtf_frames.levels_frame)
     entry_plot_frame = _prepare_pno_entry_plot_source(mtf_frames.entry_frame)
     chart_paths: list[str] = []
