@@ -2002,6 +2002,7 @@ def _plot_pno_diagnostics_for_symbols(
             symbols_with_stage_events += 1
 
         stage_rejections_raw = diagnostics.get("stage_rejections", [])
+        symbol_stage_rejections = 0
         if isinstance(stage_rejections_raw, list):
             for raw_rejection in stage_rejections_raw:
                 if not isinstance(raw_rejection, dict):
@@ -2009,6 +2010,7 @@ def _plot_pno_diagnostics_for_symbols(
                 stage_id = raw_rejection.get("stage_id")
                 if not isinstance(stage_id, str) or stage_id not in stage_rejections_by_stage:
                     continue
+                symbol_stage_rejections += 1
                 reason = str(raw_rejection.get("reason") or "unknown")
                 stage_rejections_by_stage[stage_id].setdefault(reason, []).append(
                     {
@@ -2016,6 +2018,9 @@ def _plot_pno_diagnostics_for_symbols(
                         **raw_rejection,
                     }
                 )
+
+        if not trade_rows and symbol_stage_events == 0 and symbol_stage_rejections == 0:
+            continue
 
         payload = {
             "symbol": symbol,
