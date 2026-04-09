@@ -1010,6 +1010,13 @@ class PnoEngine:
                     armed = None
                     i += 1
                     continue
+                if prev_stage3 is not None and prev_stage1 is not None:
+                    stage1 = replace(prev_stage1, hold_status_at_validation=hold_status)
+                    stage2 = prev_stage2
+                    stage3 = prev_stage3
+                    armed = None
+                    i += 1
+                    continue
                 stage1 = None
                 stage2 = None
                 stage3 = None
@@ -1265,6 +1272,12 @@ class PnoEngine:
                         extra={
                             "active_high": round(stage3.active_high, 8),
                             "pullback_low": round(stage3.pullback_low, 8),
+                            "pump_start_timestamp_ms": int(stage1.pump_start_timestamp),
+                            "active_high_timestamp_ms": int(stage3.active_high_timestamp),
+                            "pullback_low_timestamp_ms": int(stage3.pullback_low_timestamp),
+                            "stage1_hold_price": round(float(stage1.stage1_hold_price), 8),
+                            "hold_floor": round(float(stage1.hold_floor), 8),
+                            "hold_status_at_level_search": str(stage1.hold_status_at_validation),
                         },
                     )
                 stage4 = None
@@ -1299,9 +1312,21 @@ class PnoEngine:
                     timestamp_ms=int(next_stage4.level_valid_timestamp),
                     reason=str(next_stage4.hard_block_reason or "hard_block"),
                     extra={
+                        "active_high": round(float(next_stage4.active_high), 8),
+                        "pullback_low": round(float(stage3.pullback_low), 8),
                         "level": round(next_stage4.level, 8),
                         "touches": int(next_stage4.touches),
                         "entry_pos": round(float(next_stage4.entry_pos), 4),
+                        "score": round(float(next_stage4.final_score), 4),
+                        "pump_start_timestamp_ms": int(stage1.pump_start_timestamp),
+                        "active_high_timestamp_ms": int(stage3.active_high_timestamp),
+                        "pullback_low_timestamp_ms": int(stage3.pullback_low_timestamp),
+                        "level_first_local_high_timestamp_ms": int(one.timestamps[next_stage4.cluster_first_idx]),
+                        "level_last_local_high_timestamp_ms": int(one.timestamps[next_stage4.cluster_last_idx]),
+                        "level_valid_timestamp_ms": int(next_stage4.level_valid_timestamp),
+                        "stage1_hold_price": round(float(stage1.stage1_hold_price), 8),
+                        "hold_floor": round(float(stage1.hold_floor), 8),
+                        "hold_status_at_level_search": str(stage1.hold_status_at_validation),
                     },
                 )
                 retired_clusters.append(
@@ -1327,12 +1352,23 @@ class PnoEngine:
                 key=cycle_key,
                 timestamp_ms=stage4.level_valid_timestamp,
                 extra={
+                    "active_high": round(float(stage4.active_high), 8),
+                    "pullback_low": round(float(stage3.pullback_low), 8),
                     "level": round(stage4.level, 8),
                     "touches": stage4.touches,
                     "score": round(stage4.final_score, 4),
                     "pno_index": stage4.pno_index,
                     "level_maturity_fraction": round(stage4.level_maturity_fraction, 4),
                     "entry_pos": round(stage4.entry_pos, 4),
+                    "pump_start_timestamp_ms": int(stage1.pump_start_timestamp),
+                    "active_high_timestamp_ms": int(stage3.active_high_timestamp),
+                    "pullback_low_timestamp_ms": int(stage3.pullback_low_timestamp),
+                    "level_first_local_high_timestamp_ms": int(one.timestamps[stage4.cluster_first_idx]),
+                    "level_last_local_high_timestamp_ms": int(one.timestamps[stage4.cluster_last_idx]),
+                    "level_valid_timestamp_ms": int(stage4.level_valid_timestamp),
+                    "stage1_hold_price": round(float(stage1.stage1_hold_price), 8),
+                    "hold_floor": round(float(stage1.hold_floor), 8),
+                    "hold_status_at_level_search": str(stage1.hold_status_at_validation),
                 },
             )
             if stage4.is_valid_setup and i + 1 < len(one.timestamps):
@@ -1926,6 +1962,7 @@ class PnoEngine:
     ) -> Stage4Context:
         v1_now = max(float(one.v1[idx]), self._EPSILON)
         v5_now = max(float(five.v5[five_idx]), self._EPSILON)
+        depth_reference = max(stage1.reference_leg_size, stage1.pump_range_5m, self._EPSILON)
         slip_plan = max(float(stage4.level) * float(params.min_tick_fraction), float(params.slip_plan_v1_fraction) * v1_now)
         entry_plan = float(stage4.level) + slip_plan
         entry_pos = self._resolve_entry_pullback_fraction(
@@ -1965,7 +2002,7 @@ class PnoEngine:
             score_a_hold = 0
         score_a = score_a_activity + score_a_hold
 
-        leg_v5 = self._safe_divide(stage1.leg_size, v5_now)
+        leg_v5 = self._safe_divide(depth_reference, v5_now)
         if leg_v5 >= 4.0:
             score_b_leg = 8
         elif leg_v5 >= 3.0:
@@ -1976,7 +2013,7 @@ class PnoEngine:
             score_b_leg = 2
         else:
             score_b_leg = 0
-        depth_frac = self._safe_divide(stage3.pullback_depth, stage1.leg_size)
+        depth_frac = self._safe_divide(stage3.pullback_depth, depth_reference)
         if 0.12 <= depth_frac <= 0.30:
             score_b_depth = 10
         elif depth_frac <= float(params.pullback_valid_max_leg_fraction):
@@ -2079,12 +2116,9 @@ class PnoEngine:
         elif stage3.pullback_low <= (stage1.leg_start + self._EPSILON):
             hard_block = True
             hard_block_reason = "pullback_below_leg_start"
-        elif stage3.pullback_depth > (float(params.pullback_invalid_max_leg_fraction) * stage1.reference_leg_size):
+        elif stage3.pullback_depth > (float(params.pullback_invalid_max_leg_fraction) * depth_reference):
             hard_block = True
             hard_block_reason = "pullback_too_deep_vs_leg"
-        elif stage3.pullback_depth > (float(params.pullback_invalid_max_v5) * v5_now):
-            hard_block = True
-            hard_block_reason = "pullback_too_deep_vs_v5"
         elif entry_pos > float(params.max_entry_pullback_fraction):
             hard_block = True
             hard_block_reason = "entry_above_pullback_half"

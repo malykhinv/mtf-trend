@@ -711,6 +711,39 @@ def _draw_pno_candles(ax: plt.Axes, frame: pd.DataFrame, x_values: np.ndarray) -
         )
 
 
+def _draw_pno_level_segment(
+    ax: plt.Axes,
+    *,
+    timestamps: np.ndarray,
+    start_timestamp_ms: int | None,
+    end_timestamp_ms: int | None,
+    value: float | None,
+    color: str,
+    linewidth: float = 1.1,
+    alpha: float = 0.75,
+    linestyle: str = "-",
+    zorder: float = 3.5,
+) -> None:
+    if value is None or start_timestamp_ms is None or end_timestamp_ms is None or timestamps.size == 0:
+        return
+    if end_timestamp_ms < start_timestamp_ms:
+        end_timestamp_ms = start_timestamp_ms
+    start_idx = int(np.searchsorted(timestamps, int(start_timestamp_ms), side="left"))
+    end_idx = int(np.searchsorted(timestamps, int(end_timestamp_ms), side="right") - 1)
+    start_idx = max(0, min(start_idx, len(timestamps) - 1))
+    end_idx = max(start_idx, min(end_idx, len(timestamps) - 1))
+    ax.hlines(
+        float(value),
+        start_idx - 0.45,
+        end_idx + 0.45,
+        color=color,
+        linewidth=linewidth,
+        alpha=alpha,
+        linestyle=linestyle,
+        zorder=zorder,
+    )
+
+
 def _configure_pno_plot_axes(*, price_ax: plt.Axes, volume_ax: plt.Axes) -> None:
     for axis in (price_ax, volume_ax):
         axis.set_facecolor(_PNO_PLOT_AXIS_FACE)
@@ -1106,21 +1139,72 @@ def _render_pno_stage_review_chart(
     if pump_idx is not None:
         ax_price.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=1.0, alpha=0.86, zorder=5)
         ax_volume.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=1.0, alpha=0.72, zorder=4)
-    ax_price.axvline(event_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.68, zorder=5)
-    ax_volume.axvline(event_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.58, zorder=4)
 
     if not is_stage1:
-        for key, color in (
-            ("active_high", "#ef4444"),
-            ("pullback_low", "#38bdf8"),
-            ("level", _PNO_PLOT_LEVEL),
-            ("entry_price", _PNO_PLOT_ENTRY),
-            ("stage1_hold_price", "#38bdf8"),
-        ):
-            value = _safe_float(review_row.get(key))
-            if value is None:
-                continue
-            ax_price.axhline(value, color=color, linewidth=0.9, alpha=0.55, zorder=1)
+        active_high = _safe_float(review_row.get("active_high"))
+        pullback_low = _safe_float(review_row.get("pullback_low"))
+        level_price = _safe_float(review_row.get("level"))
+        entry_price = _safe_float(review_row.get("entry_price"))
+        stage1_hold_price = _safe_float(review_row.get("stage1_hold_price"))
+        active_high_timestamp_ms = _safe_int(review_row.get("active_high_timestamp_ms"))
+        pullback_low_timestamp_ms = _safe_int(review_row.get("pullback_low_timestamp_ms"))
+        level_first_timestamp_ms = _safe_int(review_row.get("level_first_local_high_timestamp_ms"))
+        level_last_timestamp_ms = _safe_int(review_row.get("level_valid_timestamp_ms")) or timestamp_ms
+        event_timestamp_ms = int(timestamp_ms)
+
+        _draw_pno_level_segment(
+            ax_price,
+            timestamps=timestamps,
+            start_timestamp_ms=active_high_timestamp_ms,
+            end_timestamp_ms=event_timestamp_ms,
+            value=active_high,
+            color="#ef4444",
+            linewidth=1.1,
+            alpha=0.72,
+        )
+        _draw_pno_level_segment(
+            ax_price,
+            timestamps=timestamps,
+            start_timestamp_ms=pullback_low_timestamp_ms,
+            end_timestamp_ms=event_timestamp_ms,
+            value=pullback_low,
+            color="#38bdf8",
+            linewidth=1.0,
+            alpha=0.68,
+        )
+        _draw_pno_level_segment(
+            ax_price,
+            timestamps=timestamps,
+            start_timestamp_ms=level_first_timestamp_ms,
+            end_timestamp_ms=level_last_timestamp_ms,
+            value=level_price,
+            color=_PNO_PLOT_LEVEL,
+            linewidth=1.25,
+            alpha=0.85,
+        )
+        _draw_pno_level_segment(
+            ax_price,
+            timestamps=timestamps,
+            start_timestamp_ms=level_first_timestamp_ms,
+            end_timestamp_ms=event_timestamp_ms,
+            value=entry_price,
+            color=_PNO_PLOT_ENTRY,
+            linewidth=0.95,
+            alpha=0.45,
+            linestyle="--",
+        )
+        _draw_pno_level_segment(
+            ax_price,
+            timestamps=timestamps,
+            start_timestamp_ms=pump_start_timestamp_ms,
+            end_timestamp_ms=event_timestamp_ms,
+            value=stage1_hold_price,
+            color="#22d3ee",
+            linewidth=0.9,
+            alpha=0.35,
+            linestyle=":",
+            zorder=2.6,
+        )
 
     if volume_values.size > 0:
         volume_max = float(np.nanmax(volume_values)) if np.isfinite(volume_values).any() else 0.0
