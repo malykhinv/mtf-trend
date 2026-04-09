@@ -24,6 +24,7 @@ matplotlib.use("Agg")
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
+from matplotlib.collections import LineCollection, PatchCollection
 from matplotlib.patches import Rectangle
 from matplotlib.ticker import LinearLocator
 from matplotlib.transforms import blended_transform_factory
@@ -661,28 +662,45 @@ def _draw_pno_candles(ax: plt.Axes, frame: pd.DataFrame, x_values: np.ndarray) -
     highs = frame["high"].to_numpy(dtype=np.float64)
     lows = frame["low"].to_numpy(dtype=np.float64)
     closes = frame["close"].to_numpy(dtype=np.float64)
-
-    for idx, x_pos in enumerate(x_values):
-        open_price = float(opens[idx])
-        high_price = float(highs[idx])
-        low_price = float(lows[idx])
-        close_price = float(closes[idx])
-        color = _PNO_PLOT_UP if close_price >= open_price else _PNO_PLOT_DOWN
-        ax.vlines(x_pos, low_price, high_price, color=color, linewidth=1.0, alpha=1.0, zorder=3)
-        body_low = min(open_price, close_price)
-        body_height = max(abs(close_price - open_price), 1e-9)
-        ax.add_patch(
-            Rectangle(
-                (x_pos - _PNO_PLOT_CANDLE_WIDTH / 2.0, body_low),
-                _PNO_PLOT_CANDLE_WIDTH,
-                body_height,
-                facecolor=color,
-                edgecolor=color,
-                linewidth=0.8,
-                alpha=1.0,
-                zorder=4,
-            )
+    up_mask = closes >= opens
+    wick_segments = np.stack(
+        [
+            np.column_stack([x_values, lows]),
+            np.column_stack([x_values, highs]),
+        ],
+        axis=1,
+    )
+    wick_colors = np.where(up_mask, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
+    ax.add_collection(
+        LineCollection(
+            wick_segments,
+            colors=wick_colors.tolist(),
+            linewidths=1.0,
+            alpha=1.0,
+            zorder=3,
         )
+    )
+    body_lows = np.minimum(opens, closes)
+    body_heights = np.maximum(np.abs(closes - opens), 1e-9)
+    body_patches = [
+        Rectangle(
+            (float(x_pos) - _PNO_PLOT_CANDLE_WIDTH / 2.0, float(body_low)),
+            _PNO_PLOT_CANDLE_WIDTH,
+            float(body_height),
+        )
+        for x_pos, body_low, body_height in zip(x_values, body_lows, body_heights, strict=False)
+    ]
+    ax.add_collection(
+        PatchCollection(
+            body_patches,
+            facecolor=wick_colors.tolist(),
+            edgecolor=wick_colors.tolist(),
+            linewidth=0.8,
+            alpha=1.0,
+            zorder=4,
+            match_original=False,
+        )
+    )
 
 
 def _draw_pno_level_segment(
@@ -977,28 +995,45 @@ def _draw_pno_candles_on_columns(
     highs = frame["high"].to_numpy(dtype=np.float64)
     lows = frame["low"].to_numpy(dtype=np.float64)
     closes = frame["close"].to_numpy(dtype=np.float64)
-
-    for idx, x_pos in enumerate(x_values):
-        open_price = float(opens[idx])
-        high_price = float(highs[idx])
-        low_price = float(lows[idx])
-        close_price = float(closes[idx])
-        color = _PNO_PLOT_UP if close_price >= open_price else _PNO_PLOT_DOWN
-        ax.vlines(x_pos, low_price, high_price, color=color, linewidth=1.0, alpha=1.0, zorder=3)
-        body_low = min(open_price, close_price)
-        body_height = max(abs(close_price - open_price), 1e-9)
-        ax.add_patch(
-            Rectangle(
-                (x_pos - candle_width / 2.0, body_low),
-                candle_width,
-                body_height,
-                facecolor=color,
-                edgecolor=color,
-                linewidth=0.8,
-                alpha=1.0,
-                zorder=4,
-            )
+    up_mask = closes >= opens
+    wick_segments = np.stack(
+        [
+            np.column_stack([x_values, lows]),
+            np.column_stack([x_values, highs]),
+        ],
+        axis=1,
+    )
+    wick_colors = np.where(up_mask, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
+    ax.add_collection(
+        LineCollection(
+            wick_segments,
+            colors=wick_colors.tolist(),
+            linewidths=1.0,
+            alpha=1.0,
+            zorder=3,
         )
+    )
+    body_lows = np.minimum(opens, closes)
+    body_heights = np.maximum(np.abs(closes - opens), 1e-9)
+    body_patches = [
+        Rectangle(
+            (float(x_pos) - candle_width / 2.0, float(body_low)),
+            candle_width,
+            float(body_height),
+        )
+        for x_pos, body_low, body_height in zip(x_values, body_lows, body_heights, strict=False)
+    ]
+    ax.add_collection(
+        PatchCollection(
+            body_patches,
+            facecolor=wick_colors.tolist(),
+            edgecolor=wick_colors.tolist(),
+            linewidth=0.8,
+            alpha=1.0,
+            zorder=4,
+            match_original=False,
+        )
+    )
 
 
 def _build_pno_tick_timestamps(frame: pd.DataFrame) -> pd.Series:
