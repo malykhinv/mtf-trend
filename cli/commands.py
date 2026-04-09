@@ -510,39 +510,53 @@ def _build_pno_plot_frame(
     start_timestamp_ms: int,
     end_timestamp_ms: int,
 ) -> pd.DataFrame:
+    selected_columns = ["timestamp", "open", "high", "low", "close", "volume"]
+    if {"ema9", "ema20"}.issubset(entry_frame.columns):
+        selected_columns.extend(["ema9", "ema20"])
     plot_frame = entry_frame.loc[
         (entry_frame["timestamp"] >= start_timestamp_ms) & (entry_frame["timestamp"] <= end_timestamp_ms),
-        ["timestamp", "open", "high", "low", "close", "volume"],
+        selected_columns,
     ].copy()
     if plot_frame.empty:
         return plot_frame
+    if {"ema9", "ema20"}.issubset(plot_frame.columns):
+        return plot_frame
 
-    if {"timestamp", "ema9", "ema20"}.issubset(levels_frame.columns):
-        levels_ema = levels_frame.loc[:, ["timestamp", "ema9", "ema20"]].dropna(subset=["timestamp", "ema9", "ema20"])
-    else:
-        levels_ema = levels_frame.loc[:, ["timestamp", "close"]].dropna(subset=["timestamp", "close"]).copy()
-        levels_ema["ema9"] = levels_ema["close"].ewm(span=9, adjust=False).mean()
-        levels_ema["ema20"] = levels_ema["close"].ewm(span=20, adjust=False).mean()
-
+    levels_ema = _prepare_pno_levels_ema_source(levels_frame)
     if levels_ema.empty:
         plot_frame["ema9"] = np.nan
         plot_frame["ema20"] = np.nan
         return plot_frame
 
     levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64)
+    plot_timestamps = plot_frame["timestamp"].to_numpy(dtype=np.float64)
+    plot_frame["ema9"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema9"].to_numpy(dtype=np.float64))
+    plot_frame["ema20"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema20"].to_numpy(dtype=np.float64))
+    return plot_frame
+
+
+def _prepare_pno_levels_ema_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
+    if {"timestamp", "ema9", "ema20"}.issubset(levels_frame.columns):
+        levels_ema = levels_frame.loc[:, ["timestamp", "ema9", "ema20"]].dropna(subset=["timestamp", "ema9", "ema20"])
+    else:
+        levels_ema = levels_frame.loc[:, ["timestamp", "close"]].dropna(subset=["timestamp", "close"]).copy()
+        if levels_ema.empty:
+            return levels_ema
+        levels_ema["ema9"] = levels_ema["close"].ewm(span=9, adjust=False).mean()
+        levels_ema["ema20"] = levels_ema["close"].ewm(span=20, adjust=False).mean()
+
+    if levels_ema.empty:
+        return levels_ema
+    levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64, copy=False)
     if levels_timestamps.size > 1 and np.any(levels_timestamps[1:] < levels_timestamps[:-1]):
         levels_ema = levels_ema.iloc[np.argsort(levels_timestamps, kind="stable")]
-        levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64)
+        levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64, copy=False)
     if levels_timestamps.size > 1:
         unique_mask = np.ones(len(levels_ema), dtype=bool)
         unique_mask[:-1] = levels_timestamps[:-1] != levels_timestamps[1:]
         if not bool(unique_mask.all()):
             levels_ema = levels_ema.loc[unique_mask]
-            levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64)
-    plot_timestamps = plot_frame["timestamp"].to_numpy(dtype=np.float64)
-    plot_frame["ema9"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema9"].to_numpy(dtype=np.float64))
-    plot_frame["ema20"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema20"].to_numpy(dtype=np.float64))
-    return plot_frame
+    return levels_ema
 
 
 def _prepare_pno_levels_plot_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
@@ -591,6 +605,22 @@ def _prepare_pno_entry_plot_source(entry_frame: pd.DataFrame) -> pd.DataFrame:
         unique_mask[:-1] = timestamps[:-1] != timestamps[1:]
         if not bool(unique_mask.all()):
             prepared = prepared.loc[unique_mask]
+    return prepared
+
+
+def _prepare_pno_entry_plot_source_with_ema(*, levels_frame: pd.DataFrame, entry_frame: pd.DataFrame) -> pd.DataFrame:
+    prepared = _prepare_pno_entry_plot_source(entry_frame)
+    if prepared.empty or {"ema9", "ema20"}.issubset(prepared.columns):
+        return prepared
+    levels_ema = _prepare_pno_levels_ema_source(levels_frame)
+    if levels_ema.empty:
+        prepared["ema9"] = np.nan
+        prepared["ema20"] = np.nan
+        return prepared
+    entry_timestamps = prepared["timestamp"].to_numpy(dtype=np.float64, copy=False)
+    levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64, copy=False)
+    prepared["ema9"] = np.interp(entry_timestamps, levels_timestamps, levels_ema["ema9"].to_numpy(dtype=np.float64))
+    prepared["ema20"] = np.interp(entry_timestamps, levels_timestamps, levels_ema["ema20"].to_numpy(dtype=np.float64))
     return prepared
 
 
@@ -1353,7 +1383,10 @@ def _render_pno_trade_charts_for_symbol(
     if not trade_rows:
         return []
     levels_plot_frame = _prepare_pno_levels_plot_source(mtf_frames.levels_frame)
-    entry_plot_frame = _prepare_pno_entry_plot_source(mtf_frames.entry_frame)
+    entry_plot_frame = _prepare_pno_entry_plot_source_with_ema(
+        levels_frame=levels_plot_frame,
+        entry_frame=mtf_frames.entry_frame,
+    )
     chart_paths: list[str] = []
     for trade_index, trade_row in enumerate(trade_rows, start=1):
         chart_path = _render_pno_trade_chart(
@@ -1610,9 +1643,15 @@ def _export_pno_stage_reviews(
         mtf_frames = symbol_frames.get(symbol)
         if mtf_frames is None:
             return None
+        levels_prepared = _prepare_pno_levels_plot_source(mtf_frames.levels_frame)
         prepared = (
-            _prepare_pno_levels_plot_source(mtf_frames.levels_frame),
-            _prepare_pno_entry_plot_source(mtf_frames.entry_frame) if needs_entry_frames else mtf_frames.entry_frame,
+            levels_prepared,
+            _prepare_pno_entry_plot_source_with_ema(
+                levels_frame=levels_prepared,
+                entry_frame=mtf_frames.entry_frame,
+            )
+            if needs_entry_frames
+            else mtf_frames.entry_frame,
         )
         prepared_frames_by_symbol[symbol] = prepared
         return prepared
