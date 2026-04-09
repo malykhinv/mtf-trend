@@ -120,10 +120,12 @@ class Stage1Context:
     active_high_idx: int
     active_high_timestamp: int
     active_high: float
+    reference_high: float
     leg_start_idx: int
     leg_start_timestamp: int
     leg_start: float
     leg_size: float
+    reference_leg_size: float
     hold_floor: float
     levels_timeframe_ms: int = 5 * 60_000
     sleep_start_timestamp: int = 0
@@ -145,6 +147,7 @@ class Stage1Context:
     pre_pump_range_2h: float = 0.0
     pump_vs_pre_1h_ratio: float = 0.0
     pump_vs_pre_2h_ratio: float = 0.0
+    reference_high_weight: float = 1.0
 
 
 @dataclass(slots=True)
@@ -1346,6 +1349,12 @@ class PnoEngine:
         active_high_5m_idx = int(np.searchsorted(five.timestamps, active_high_timestamp, side="right") - 1)
         if active_high_5m_idx < pump_start_5m_idx:
             return None
+        reference_high, reference_high_weight = self._resolve_reference_high(
+            five=five,
+            pump_start_idx=pump_start_5m_idx,
+            active_high_idx=active_high_5m_idx,
+            params=params,
+        )
 
         pump_pre_atr = float(five.atr_pre_14[pump_start_5m_idx])
         baseline_quote = float(five.pre_quote_median_24[pump_start_5m_idx])
@@ -1424,6 +1433,8 @@ class PnoEngine:
             "pump_peak_bar_tr_atr_pre": pump_peak_bar_tr_atr_pre,
             "pump_volume_ratio_start": pump_volume_ratio_start,
             "pump_volume_ratio_continue": pump_volume_ratio_continue,
+            "reference_high": reference_high,
+            "reference_high_weight": reference_high_weight,
         }
 
     def _resolve_stage1_context(
@@ -1467,14 +1478,6 @@ class PnoEngine:
         )
         if leg_size < max(min_leg, self._EPSILON):
             return None
-        hold_floor = max(
-            float(five.ema20[five_idx]),
-            active_high - (float(params.stage1_hold_fraction) * leg_size),
-        )
-        if float(one.closes[idx]) <= hold_floor:
-            return None
-        if float(one.lows[idx]) <= leg_start:
-            return None
         quality_metrics = self._resolve_stage1_quality_metrics(
             one=one,
             five=five,
@@ -1489,6 +1492,16 @@ class PnoEngine:
             params=params,
         )
         if quality_metrics is None:
+            return None
+        reference_high = float(quality_metrics["reference_high"])
+        reference_leg_size = max(reference_high - leg_start, self._EPSILON)
+        hold_floor = max(
+            float(five.ema20[five_idx]),
+            reference_high - (float(params.stage1_hold_fraction) * reference_leg_size),
+        )
+        if float(one.closes[idx]) <= hold_floor:
+            return None
+        if float(one.lows[idx]) <= leg_start:
             return None
         pre_pump_range_1h = self._resolve_window_range(
             highs=five.highs,
@@ -1522,10 +1535,12 @@ class PnoEngine:
             active_high_idx=active_high_idx,
             active_high_timestamp=int(one.timestamps[active_high_idx]),
             active_high=active_high,
+            reference_high=reference_high,
             leg_start_idx=leg_start_idx,
             leg_start_timestamp=int(one.timestamps[leg_start_idx]),
             leg_start=leg_start,
             leg_size=leg_size,
+            reference_leg_size=reference_leg_size,
             hold_floor=hold_floor,
             stage1_hold_price=float(five.stage1_hold_price[five_idx]),
             cumulative_quote_volume=float(quality_metrics["cumulative_quote_volume"]),
@@ -1542,6 +1557,7 @@ class PnoEngine:
             pre_pump_range_2h=pre_pump_range_2h,
             pump_vs_pre_1h_ratio=self._safe_divide(pump_range, pre_pump_range_1h),
             pump_vs_pre_2h_ratio=self._safe_divide(pump_range, pre_pump_range_2h),
+            reference_high_weight=float(quality_metrics["reference_high_weight"]),
         )
 
     def _resolve_stage2_context(
@@ -1559,7 +1575,7 @@ class PnoEngine:
         if red_indices.size == 0:
             return None
         red_after_high_idx = start_idx + int(red_indices[0])
-        pullback_threshold = stage1.active_high - max(float(params.pullback_min_v1) * float(one.v1[idx]), self._EPSILON)
+        pullback_threshold = stage1.reference_high - max(float(params.pullback_min_v1) * float(one.v1[idx]), self._EPSILON)
         pullback_reached = np.where(one.lows[start_idx : idx + 1] <= pullback_threshold)[0]
         if pullback_reached.size == 0:
             return None
@@ -1568,7 +1584,7 @@ class PnoEngine:
         pullback_low_offset = int(np.argmin(post_high_lows))
         pullback_low_idx = start_idx + pullback_low_offset
         pullback_low = float(one.lows[pullback_low_idx])
-        pullback_depth = stage1.active_high - pullback_low
+        pullback_depth = stage1.reference_high - pullback_low
         if pullback_depth < max(float(one.v1[idx]), self._EPSILON):
             return None
         return Stage2Context(
@@ -1598,7 +1614,7 @@ class PnoEngine:
         post_high_slice = slice(stage1.active_high_idx + 1, idx + 1)
         if stage2.pullback_age_bars > params.pullback_max_age_bars:
             return None, "pullback_too_old"
-        if stage2.pullback_depth > (params.pullback_invalid_max_leg_fraction * stage1.leg_size):
+        if stage2.pullback_depth > (params.pullback_invalid_max_leg_fraction * stage1.reference_leg_size):
             return None, "pullback_too_deep_vs_leg"
         if stage2.pullback_depth > (params.pullback_invalid_max_v5 * five.v5[five_idx]):
             return None, "pullback_too_deep_vs_v5"
@@ -1608,7 +1624,7 @@ class PnoEngine:
             return None, "close_below_ema20"
         valid = (
             stage2.pullback_depth >= (params.pullback_min_v1 * one.v1[idx])
-            and stage2.pullback_depth <= (params.pullback_valid_max_leg_fraction * stage1.leg_size)
+            and stage2.pullback_depth <= (params.pullback_valid_max_leg_fraction * stage1.reference_leg_size)
             and stage2.pullback_depth <= (params.pullback_valid_max_v5 * five.v5[five_idx])
             and stage2.pullback_low > stage1.leg_start
         )
@@ -2019,7 +2035,7 @@ class PnoEngine:
         elif stage3.pullback_low <= (stage1.leg_start + self._EPSILON):
             hard_block = True
             hard_block_reason = "pullback_below_leg_start"
-        elif stage3.pullback_depth > (float(params.pullback_invalid_max_leg_fraction) * stage1.leg_size):
+        elif stage3.pullback_depth > (float(params.pullback_invalid_max_leg_fraction) * stage1.reference_leg_size):
             hard_block = True
             hard_block_reason = "pullback_too_deep_vs_leg"
         elif stage3.pullback_depth > (float(params.pullback_invalid_max_v5) * v5_now):
@@ -2327,6 +2343,64 @@ class PnoEngine:
         else:
             index_penalty = 12
         return max(time_penalty, index_penalty)
+
+    def _resolve_reference_high(
+        self,
+        *,
+        five: FiveMinuteFrame,
+        pump_start_idx: int,
+        active_high_idx: int,
+        params: PnoParams,
+    ) -> tuple[float, float]:
+        del params
+        if active_high_idx < pump_start_idx:
+            return float(five.highs[active_high_idx]), 1.0
+
+        pump_pre_atr = float(five.atr_pre_14[pump_start_idx])
+        baseline_quote = float(five.pre_quote_median_24[pump_start_idx])
+        reference_high = float(five.highs[pump_start_idx])
+        last_weight = 1.0
+
+        for probe_idx in range(pump_start_idx + 1, active_high_idx + 1):
+            bar_high = float(five.highs[probe_idx])
+            extension = bar_high - reference_high
+            if extension <= self._EPSILON:
+                continue
+
+            bar_open = float(five.opens[probe_idx])
+            bar_close = float(five.closes[probe_idx])
+            bar_tr = float(five.tr[probe_idx])
+            bar_quote = float(five.quote_volume[probe_idx])
+            bar_low = float(five.lows[probe_idx])
+            body = abs(bar_close - bar_open)
+
+            tr_strength = self._safe_divide(bar_tr, pump_pre_atr)
+            volume_strength = self._safe_divide(bar_quote, baseline_quote)
+            body_strength = self._safe_divide(body, max(bar_tr, self._EPSILON))
+            extension_strength = self._safe_divide(extension, pump_pre_atr)
+            close_position = self._safe_divide(bar_close - bar_low, max(bar_tr, self._EPSILON))
+            green_strength = 1.0 if bar_close >= bar_open else 0.0
+
+            tr_score = min(max((tr_strength - 1.1) / 1.2, 0.0), 1.0)
+            volume_score = min(max((volume_strength - 1.25) / 1.5, 0.0), 1.0)
+            body_score = min(max((body_strength - 0.45) / 0.35, 0.0), 1.0)
+            extension_score = min(max((extension_strength - 0.12) / 0.38, 0.0), 1.0)
+            close_score = min(max((close_position - 0.55) / 0.3, 0.0), 1.0)
+            quality_score = (
+                (0.32 * tr_score)
+                + (0.18 * volume_score)
+                + (0.16 * body_score)
+                + (0.24 * extension_score)
+                + (0.06 * close_score)
+                + (0.04 * green_strength)
+            )
+            weight = quality_score * quality_score
+
+            reference_high += weight * extension
+            last_weight = weight
+
+        reference_high = min(reference_high, float(five.highs[active_high_idx]))
+        return float(reference_high), float(last_weight)
 
     @staticmethod
     def _resolve_pno_order_adj(pno_index: int) -> int:
