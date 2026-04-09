@@ -150,6 +150,7 @@ class Stage1Context:
     pump_vs_pre_2h_ratio: float = 0.0
     reference_high_weight: float = 1.0
     hold_status_at_validation: str = "held_above_hold"
+    leg_start_status_at_validation: str = "held_above_leg_start"
 
 
 @dataclass(slots=True)
@@ -1044,6 +1045,7 @@ class PnoEngine:
                 continue
 
             hold_status = self._resolve_stage1_hold_status(one=one, idx=i, stage1=stage1)
+            leg_start_status = self._resolve_leg_start_status(five=five, five_idx=five_idx, stage1=stage1)
 
             if next_stage1.pump_start_5m_idx != active_pump_start_idx:
                 active_pump_start_idx = next_stage1.pump_start_5m_idx
@@ -1201,6 +1203,7 @@ class PnoEngine:
                         "pullback_depth": round(stage2.pullback_depth, 8),
                         "pullback_age_bars": int(stage2.pullback_age_bars),
                         "hold_status_at_validation": hold_status,
+                        "leg_start_status_at_validation": leg_start_status,
                         "hold_floor": round(stage1.hold_floor, 8),
                     },
                 )
@@ -1217,7 +1220,11 @@ class PnoEngine:
                 continue
             if stage3 is None or next_stage3.active_high_idx != stage3.active_high_idx:
                 stage3 = next_stage3
-                stage1 = replace(stage1, hold_status_at_validation=hold_status)
+                stage1 = replace(
+                    stage1,
+                    hold_status_at_validation=hold_status,
+                    leg_start_status_at_validation=leg_start_status,
+                )
                 self._mark_stage(
                     diagnostics,
                     stage_keys,
@@ -1229,6 +1236,7 @@ class PnoEngine:
                         "pullback_depth": round(stage3.pullback_depth, 8),
                         "pullback_age_bars": int(stage3.pullback_age_bars),
                         "hold_status_at_validation": hold_status,
+                        "leg_start_status_at_validation": leg_start_status,
                         "hold_floor": round(stage1.hold_floor, 8),
                     },
                 )
@@ -1654,12 +1662,9 @@ class PnoEngine:
         active_high_5m_idx = int(np.searchsorted(five.timestamps, stage1.active_high_timestamp, side="right") - 1)
         if active_high_5m_idx < 0 or five_idx <= active_high_5m_idx:
             return None, None
-        post_high_slice = slice(active_high_5m_idx + 1, five_idx + 1)
         depth_reference = max(stage1.reference_leg_size, stage1.pump_range_5m, self._EPSILON)
         if stage2.pullback_depth > (params.pullback_invalid_max_leg_fraction * depth_reference):
             return None, "pullback_too_deep_vs_leg"
-        if np.any(five.closes[post_high_slice] < (stage1.leg_start - self._EPSILON)):
-            return None, "close_below_leg_start"
         if float(five.closes[five_idx]) <= float(five.ema20[five_idx]):
             return None, "close_below_ema20"
         valid = (
@@ -2450,6 +2455,22 @@ class PnoEngine:
         if float(one.lows[idx]) <= hold_floor:
             return "wick_below_hold"
         return "held_above_hold"
+
+    def _resolve_leg_start_status(
+        self,
+        *,
+        five: FiveMinuteFrame,
+        five_idx: int,
+        stage1: Stage1Context | None,
+    ) -> str:
+        if stage1 is None or five_idx < 0 or five_idx >= len(five.timestamps):
+            return "unknown"
+        leg_start = float(stage1.leg_start)
+        if float(five.closes[five_idx]) <= leg_start:
+            return "closed_below_leg_start"
+        if float(five.lows[five_idx]) <= leg_start:
+            return "wick_below_leg_start"
+        return "held_above_leg_start"
 
     @staticmethod
     def _resolve_pno_order_adj(pno_index: int) -> int:
