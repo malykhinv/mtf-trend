@@ -884,18 +884,19 @@ class PnoEngine:
                 i += 1
                 continue
 
-            if armed is not None and armed.entry_idx == i:
-                trade, exit_idx = self._try_enter_and_simulate(one=one, params=params, armed=armed)
+            if armed is not None and armed.entry_idx <= i:
+                live_armed = armed if armed.entry_idx == i else replace(armed, entry_idx=i)
+                trade, exit_idx = self._try_enter_and_simulate(one=one, params=params, armed=live_armed)
                 if trade is not None:
                     trades.append(trade)
                     retired_clusters.append(
                         RetiredCluster(
-                            active_high_idx=armed.stage4.active_high_idx,
-                            cluster_first_idx=armed.stage4.cluster_first_idx,
-                            cluster_last_idx=armed.stage4.cluster_last_idx,
-                            level=float(armed.stage4.level),
-                            pullback_low_idx=armed.stage3.pullback_low_idx,
-                            pullback_low=float(armed.stage3.pullback_low),
+                            active_high_idx=live_armed.stage4.active_high_idx,
+                            cluster_first_idx=live_armed.stage4.cluster_first_idx,
+                            cluster_last_idx=live_armed.stage4.cluster_last_idx,
+                            level=float(live_armed.stage4.level),
+                            pullback_low_idx=live_armed.stage3.pullback_low_idx,
+                            pullback_low=float(live_armed.stage3.pullback_low),
                         )
                     )
                     self._mark_stage(
@@ -908,7 +909,7 @@ class PnoEngine:
                             "entry_price": round(float(trade.entry_price.value), 8),
                             "exit_price": round(float(trade.exit_price.value), 8),
                             "result_type": trade.result_type.value,
-                            "score": armed.stage4.final_score,
+                            "score": live_armed.stage4.final_score,
                         },
                     )
                     stage1 = None
@@ -920,15 +921,26 @@ class PnoEngine:
                     active_pump_start_idx = -1
                     i = max(i + 1, exit_idx + 1)
                     continue
+                entry_wait_bars = max(i - armed.entry_idx, 0)
+                armed_expired = entry_wait_bars >= max(int(params.level_latest_high_max_age_bars), 1)
+                stop_broken_before_entry = float(one.lows[i]) <= (float(live_armed.stage4.low_last_red_plan) + self._EPSILON)
+                pullback_broken_before_entry = float(one.lows[i]) <= (float(live_armed.stage3.pullback_low) + self._EPSILON)
+                if not armed_expired and not stop_broken_before_entry and not pullback_broken_before_entry:
+                    i += 1
+                    continue
                 _reject_stage(
                     PNO_STAGE_5_TRADE,
                     key=(armed.stage4.active_high_idx, armed.stage4.cluster_first_idx, armed.stage4.cluster_last_idx, armed.entry_idx),
-                    timestamp_ms=int(one.timestamps[min(armed.entry_idx, len(one.timestamps) - 1)]),
-                    reason="entry_not_triggered",
+                    timestamp_ms=int(one.timestamps[min(i, len(one.timestamps) - 1)]),
+                    reason=(
+                        "entry_invalidated_before_trigger"
+                        if stop_broken_before_entry or pullback_broken_before_entry
+                        else "entry_not_triggered"
+                    ),
                     extra={
-                        "active_high": round(float(armed.stage4.active_high), 8),
-                        "pullback_low": round(float(armed.stage3.pullback_low), 8),
-                        "level": round(float(armed.stage4.level), 8),
+                        "active_high": round(float(live_armed.stage4.active_high), 8),
+                        "pullback_low": round(float(live_armed.stage3.pullback_low), 8),
+                        "level": round(float(live_armed.stage4.level), 8),
                         "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "cross")),
                     },
                 )
