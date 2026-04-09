@@ -134,7 +134,10 @@ class DataPreparer:
             if not bool(unique_mask.all()):
                 prepared = prepared.loc[unique_mask]
 
-        prepared["symbol"] = symbol
+        prepared["symbol"] = pd.Categorical.from_codes(
+            np.zeros(len(prepared), dtype=np.int8),
+            categories=[symbol],
+        )
         return prepared
 
 
