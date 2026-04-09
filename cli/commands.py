@@ -2032,7 +2032,8 @@ def _select_pno_plot_params_row_by_stage(
     selected_stage_ids = set(_resolve_pno_stage_ids(args))
     selected_stage_columns = [_ppa_stage_metric_column_name(stage_id) for stage_id in selected_stage_ids]
     if selected_stage_columns and all(column in results.columns for column in selected_stage_columns):
-        scored_rows: list[tuple[int, int, float, int, pd.Series]] = []
+        scored_rows: list[tuple[int, int, int, float, int, pd.Series]] = []
+        needs_rejection_fallback = False
         for row_index, (_, row) in enumerate(results.iterrows()):
             stage_events_count = 0
             for column in selected_stage_columns:
@@ -2042,23 +2043,28 @@ def _select_pno_plot_params_row_by_stage(
             raw_trades_count = pd.to_numeric(row.get("trades_count", 0), errors="coerce")
             trades_generated = int(raw_trades_count) if not pd.isna(raw_trades_count) else 0
             profit_factor = float(row.get("profit_factor", 0.0) or 0.0)
-            scored_rows.append((stage_events_count, trades_generated, profit_factor, -row_index, row))
+            scored_rows.append((stage_events_count, 0, trades_generated, profit_factor, -row_index, row))
+            if stage_events_count == 0:
+                needs_rejection_fallback = True
 
         if not scored_rows:
             return None
 
-        best_score = max(scored_rows, key=lambda item: item[:4])
-        logger.info(
-            "run-backtest: pno stage-plot selected row from results stage_events=%s trades_generated=%s profit_factor=%.4f",
-            best_score[0],
-            best_score[1],
-            best_score[2],
-        )
-        return best_score[4]
+        best_score = max(scored_rows, key=lambda item: item[:5])
+        if best_score[0] > 0 or not needs_rejection_fallback:
+            logger.info(
+                "run-backtest: pno stage-plot selected row from results stage_events=%s stage_rejections=%s trades_generated=%s profit_factor=%.4f",
+                best_score[0],
+                best_score[1],
+                best_score[2],
+                best_score[3],
+            )
+            return best_score[5]
 
-    scored_rows: list[tuple[int, int, float, int, pd.Series]] = []
+    scored_rows: list[tuple[int, int, int, float, int, pd.Series]] = []
     for row_index, (_, row) in enumerate(results.iterrows()):
         stage_events_count = 0
+        stage_rejections_count = 0
         trades_generated = 0
 
         for symbol, mtf_frames in symbol_frames.items():
@@ -2078,22 +2084,30 @@ def _select_pno_plot_params_row_by_stage(
                     for event in stage_events
                     if isinstance(event, dict) and event.get("stage_id") in selected_stage_ids
                 )
+            stage_rejections = diagnostics.get("stage_rejections", [])
+            if isinstance(stage_rejections, list):
+                stage_rejections_count += sum(
+                    1
+                    for rejection in stage_rejections
+                    if isinstance(rejection, dict) and rejection.get("stage_id") in selected_stage_ids
+                )
             trades_generated += int(diagnostics.get("trades_generated", 0) or 0)
 
         profit_factor = float(row.get("profit_factor", 0.0) or 0.0)
-        scored_rows.append((stage_events_count, trades_generated, profit_factor, -row_index, row))
+        scored_rows.append((stage_events_count, stage_rejections_count, trades_generated, profit_factor, -row_index, row))
 
     if not scored_rows:
         return None
 
-    best_score = max(scored_rows, key=lambda item: item[:4])
+    best_score = max(scored_rows, key=lambda item: item[:5])
     logger.info(
-        "run-backtest: pno stage-plot selected row by stage_events=%s trades_generated=%s profit_factor=%.4f",
+        "run-backtest: pno stage-plot selected row by stage_events=%s stage_rejections=%s trades_generated=%s profit_factor=%.4f",
         best_score[0],
         best_score[1],
         best_score[2],
+        best_score[3],
     )
-    return best_score[4]
+    return best_score[5]
 
 
 def _load_plot_params_row_from_results(

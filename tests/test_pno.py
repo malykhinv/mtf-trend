@@ -358,6 +358,64 @@ def test_parser_supports_pno_stage_command() -> None:
     assert resolve_handler(args.command) is commands.run_pno_stage
 
 
+def test_select_pno_plot_params_row_by_stage_falls_back_to_rejections() -> None:
+    frame = pd.DataFrame(
+        {
+            "timestamp": [60_000, 120_000],
+            "open": [1.0, 1.1],
+            "high": [1.2, 1.3],
+            "low": [0.9, 1.0],
+            "close": [1.1, 1.2],
+            "volume": [10.0, 11.0],
+        }
+    )
+    symbol_frames = {
+        "BTC/USDT": SymbolMtfFrames(
+            levels_timeframe=Timeframe.M5,
+            entry_timeframe=Timeframe.M1,
+            levels_frame=frame,
+            entry_frame=frame,
+        )
+    }
+    results = pd.DataFrame(
+        [
+            {"pno_variant_id": "baseline_cross", "trades_count": 0, "profit_factor": 0.0, "ppa_stage_hits_stage_2_high_pullback": 0},
+            {"pno_variant_id": "baseline_close", "trades_count": 0, "profit_factor": 0.0, "ppa_stage_hits_stage_2_high_pullback": 0},
+        ]
+    )
+    strategy = PnoStrategy(deposit=1_000.0, risk_pct=0.02)
+    call_idx = {"value": 0}
+
+    def _generate_events_multi_tf(**_kwargs):
+        call_idx["value"] += 1
+        return []
+
+    def _consume_last_generation_diagnostics():
+        if call_idx["value"] == 1:
+            return {"stage_events": [], "stage_rejections": [], "trades_generated": 0}
+        return {
+            "stage_events": [],
+            "stage_rejections": [{"stage_id": "stage_2_high_pullback", "reason": "new_main_high_before_pullback"}],
+            "trades_generated": 0,
+        }
+
+    strategy.generate_events_multi_tf = _generate_events_multi_tf  # type: ignore[method-assign]
+    strategy.consume_last_generation_diagnostics = _consume_last_generation_diagnostics  # type: ignore[method-assign]
+
+    best_row = commands._select_pno_plot_params_row_by_stage(
+        args=argparse.Namespace(pno_stage=2, pno_through_stage=None),
+        strategy=strategy,
+        symbol_frames=symbol_frames,
+        results=results,
+        levels_timeframe=Timeframe.M5,
+        entry_timeframe=Timeframe.M1,
+        logger=logging.getLogger("test-pno-stage-select"),
+    )
+
+    assert best_row is not None
+    assert str(best_row["pno_variant_id"]) == "baseline_close"
+
+
 def test_pno_engine_builds_confirmed_pivot_maps() -> None:
     engine = PnoEngine()
     highs = pd.Series([1.0, 2.0, 5.0, 4.8, 3.7, 4.0, 3.8], dtype="float64").to_numpy()
