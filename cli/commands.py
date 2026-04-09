@@ -14,7 +14,7 @@ import time
 import traceback
 from collections import Counter
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from logging import Logger
 from pathlib import Path
 from typing import Callable, cast
@@ -3231,7 +3231,7 @@ def _clone_fetch_args(
     timeframes: list[str],
     skip_open_interest: bool,
 ) -> argparse.Namespace:
-    cloned = deepcopy(args)
+    cloned = argparse.Namespace(**vars(args))
     cloned.symbols = list(symbols)
     cloned.timeframes = list(timeframes)
     cloned.skip_open_interest = skip_open_interest
@@ -3806,9 +3806,11 @@ def _run_ppa_research_inner(config: AppConfig, args: argparse.Namespace) -> int:
     run_exit_codes: list[int] = []
     runs: list[PostPumpAbsorptionResearchRun] = []
     for timeframe in timeframes:
-        scoped_config = deepcopy(config)
-        scoped_config.strategy.strategy_id = "post_pump_absorption"
-        scoped_config.backtest.results_dir = root_output_dir / timeframe.value
+        scoped_config = replace(
+            config,
+            strategy=replace(config.strategy, strategy_id="post_pump_absorption"),
+            backtest=replace(config.backtest, results_dir=root_output_dir / timeframe.value),
+        )
         scoped_args = _with_ppa_research_timeframe(args, timeframe)
         logger.info(
             "run-ppa-research: start timeframe=%s results_base=%s",
@@ -4192,9 +4194,11 @@ def _run_ppa_stage_timeframe_job(
     preset_name: str,
     root_output_dir: Path,
 ) -> tuple[str, int, list[dict[str, object]]]:
-    scoped_config = deepcopy(config)
-    scoped_config.strategy.strategy_id = "post_pump_absorption"
-    scoped_config.backtest.results_dir = root_output_dir / timeframe.value
+    scoped_config = replace(
+        config,
+        strategy=replace(config.strategy, strategy_id="post_pump_absorption"),
+        backtest=replace(config.backtest, results_dir=root_output_dir / timeframe.value),
+    )
     scoped_args = _with_ppa_stage_timeframe(
         args,
         timeframe,
@@ -4229,9 +4233,11 @@ def _run_pno_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
         root_output_dir,
     )
 
-    scoped_config = deepcopy(config)
-    scoped_config.strategy.strategy_id = "pno"
-    scoped_config.backtest.results_dir = root_output_dir
+    scoped_config = replace(
+        config,
+        strategy=replace(config.strategy, strategy_id="pno"),
+        backtest=replace(config.backtest, results_dir=root_output_dir),
+    )
     scoped_args = _with_pno_stage_args(
         args,
         preset_stage=preset_stage,
