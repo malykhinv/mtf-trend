@@ -641,6 +641,19 @@ def _to_compact_json(payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def _format_eta_compact(seconds: float | None) -> str:
+    if seconds is None or not np.isfinite(seconds) or seconds < 0.0:
+        return "n/a"
+    total_seconds = int(round(seconds))
+    minutes, secs = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours}h {minutes:02d}m"
+    if minutes > 0:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
 def _build_pno_plot_frame(
     *,
     levels_frame: pd.DataFrame,
@@ -1870,6 +1883,8 @@ def _export_pno_stage_reviews(
     stage_rows_by_stage: dict[str, list[dict[str, object]]],
     stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
     selected_stage_ids: tuple[str, ...],
+    logger: Logger | None = None,
+    log_prefix: str = "pno",
 ) -> None:
     stage_reviews_dir = diagnostics_dir / "stage_reviews"
     stage_reviews_dir.mkdir(parents=True, exist_ok=True)
@@ -1878,6 +1893,41 @@ def _export_pno_stage_reviews(
     selected_stage_set = set(selected_stage_ids)
     needs_entry_frames = bool(selected_stage_set.intersection(PNO_STAGE_SEQUENCE[3:]))
     prepared_frames_by_symbol: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
+    total_review_charts = 0
+    for stage_id in selected_stage_ids:
+        total_review_charts += len(stage_rows_by_stage.get(stage_id, []))
+        rejection_groups = stage_rejections_by_stage.get(stage_id, {})
+        total_review_charts += sum(len(rows) for rows in rejection_groups.values())
+    rendered_review_charts = 0
+    review_start_time = time.monotonic()
+
+    def _log_review_progress(stage_id: str) -> None:
+        if logger is None or total_review_charts <= 0:
+            return
+        if rendered_review_charts <= 0:
+            return
+        if rendered_review_charts == total_review_charts or rendered_review_charts % 50 == 0:
+            elapsed = max(time.monotonic() - review_start_time, 1e-9)
+            rate = rendered_review_charts / elapsed
+            remaining = total_review_charts - rendered_review_charts
+            eta_seconds = remaining / rate if rate > 0.0 else None
+            logger.info(
+                "%s: pno stage-review charts %s/%s (%.1f%%) current_stage=%s eta=%s",
+                log_prefix,
+                rendered_review_charts,
+                total_review_charts,
+                (rendered_review_charts / total_review_charts) * 100.0,
+                stage_id,
+                _format_eta_compact(eta_seconds),
+            )
+
+    if logger is not None and total_review_charts > 0:
+        logger.info(
+            "%s: pno stage-review charts start total=%s stages=%s",
+            log_prefix,
+            total_review_charts,
+            ",".join(selected_stage_ids),
+        )
 
     def _get_prepared_frames(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame] | None:
         cached = prepared_frames_by_symbol.get(symbol)
@@ -1928,6 +1978,8 @@ def _export_pno_stage_reviews(
                 )
                 if chart_path is not None:
                     passed_chart_paths.append(chart_path)
+                rendered_review_charts += 1
+                _log_review_progress(stage_id)
 
         rejection_groups = stage_rejections_by_stage.get(stage_id, {})
         rejected_total = 0
@@ -1959,6 +2011,8 @@ def _export_pno_stage_reviews(
                     )
                     if chart_path is not None:
                         rejected_chart_paths += 1
+                    rendered_review_charts += 1
+                    _log_review_progress(stage_id)
 
         manifest_rows.append(
             {
@@ -1972,6 +2026,12 @@ def _export_pno_stage_reviews(
         )
 
     pd.DataFrame(manifest_rows).to_csv(stage_reviews_dir / "manifest.csv", index=False)
+    if logger is not None and total_review_charts > 0:
+        logger.info(
+            "%s: pno stage-review charts finished total=%s",
+            log_prefix,
+            rendered_review_charts,
+        )
 
 
 def _bucketize_pno_value(
@@ -2907,6 +2967,8 @@ def _plot_pno_diagnostics_for_symbols(
     total_stage_events = 0
     total_charts_generated = 0
     all_trade_rows: list[dict[str, object]] = []
+    total_symbols = len(symbol_frames)
+    symbol_render_start_time = time.monotonic()
     stage_rows_by_stage: dict[str, list[dict[str, object]]] = {
         stage_id: []
         for stage_id in PNO_STAGE_SEQUENCE
@@ -2921,7 +2983,13 @@ def _plot_pno_diagnostics_for_symbols(
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
     )
-    for symbol, mtf_frames in symbol_frames.items():
+    logger.info(
+        "%s: pno plot export start symbols=%s stages=%s",
+        log_prefix,
+        total_symbols,
+        ",".join(selected_stage_ids),
+    )
+    for symbol_index, (symbol, mtf_frames) in enumerate(symbol_frames.items(), start=1):
         params = replace(pno_params_template, symbol=symbol)
         trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
         diagnostics = strategy.consume_last_generation_diagnostics()
@@ -2996,12 +3064,31 @@ def _plot_pno_diagnostics_for_symbols(
         if trade_rows:
             pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
 
+        if symbol_index == total_symbols or symbol_index % 25 == 0:
+            elapsed = max(time.monotonic() - symbol_render_start_time, 1e-9)
+            rate = symbol_index / elapsed
+            remaining = total_symbols - symbol_index
+            eta_seconds = remaining / rate if rate > 0.0 else None
+            logger.info(
+                "%s: pno plot export symbols %s/%s (%.1f%%) charts=%s stage_events=%s trades=%s eta=%s",
+                log_prefix,
+                symbol_index,
+                total_symbols,
+                (symbol_index / max(total_symbols, 1)) * 100.0,
+                total_charts_generated,
+                total_stage_events,
+                total_trades_generated,
+                _format_eta_compact(eta_seconds),
+            )
+
     _export_pno_stage_reviews(
         diagnostics_dir=diagnostics_dir,
         symbol_frames=symbol_frames,
         stage_rows_by_stage=stage_rows_by_stage,
         stage_rejections_by_stage=stage_rejections_by_stage,
         selected_stage_ids=selected_stage_ids,
+        logger=logger,
+        log_prefix=log_prefix,
     )
     _export_pno_research_context(
         diagnostics_dir=diagnostics_dir,
