@@ -34,3 +34,4 @@ class StrategyConfig:
     post_pump_absorption_risk_pct: float = DEFAULT_BEE_BITE_RISK_PCT
     pno_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
     pno_risk_pct: float = 0.05
+    pno_entry_confirmation_mode: str | None = None

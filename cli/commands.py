@@ -5166,6 +5166,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             config.strategy.pno_deposit = float(args.pno_deposit)
         if getattr(args, "pno_risk_pct", None) is not None:
             config.strategy.pno_risk_pct = float(args.pno_risk_pct)
+        if getattr(args, "pno_entry_confirmation_mode", None) is not None:
+            config.strategy.pno_entry_confirmation_mode = str(args.pno_entry_confirmation_mode)
     levels_timeframe, entry_timeframe = _resolve_backtest_timeframes(
         strategy_id=strategy_id,
         args=args,

@@ -12,9 +12,10 @@ from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
 
 class PnoStrategy(BaseStrategy[PnoParams]):
-    def __init__(self, *, deposit: float, risk_pct: float) -> None:
+    def __init__(self, *, deposit: float, risk_pct: float, entry_confirmation_mode_filter: str | None = None) -> None:
         self._deposit = deposit
         self._risk_pct = risk_pct
+        self._entry_confirmation_mode_filter = entry_confirmation_mode_filter
         self._engine = PnoEngine()
 
     def validate_config(self, params: PnoParams) -> None:
@@ -43,9 +44,12 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         )
 
     def build_parameter_grid(self) -> list[PnoParams]:
+        grid = build_pno_grid()
+        if self._entry_confirmation_mode_filter is not None:
+            grid = [params for params in grid if params.entry_confirmation_mode == self._entry_confirmation_mode_filter]
         return [
             with_pno_risk(params, deposit=self._deposit, risk_pct=self._risk_pct)
-            for params in build_pno_grid()
+            for params in grid
         ]
 
     def params_to_row(self, params: PnoParams) -> dict[str, int | float | str | None]:

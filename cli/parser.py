@@ -99,6 +99,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_bt.add_argument("--pno-deposit", type=float, default=None, help="Deposit used for PNO position sizing")
     run_bt.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per trade for PNO")
     run_bt.add_argument(
+        "--pno-entry-confirmation-mode",
+        choices=["cross", "close_above"],
+        default=None,
+        help="Filter PNO grid by entry confirmation mode (cross or close_above)",
+    )
+    run_bt.add_argument(
         "--ppa-stage",
         type=_positive_int_for("--ppa-stage"),
         default=None,
