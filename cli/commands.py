@@ -436,6 +436,9 @@ def _build_pno_params_template_from_row(
         ),
         stage1_min_path_efficiency=_float_or_default("pno_stage1_min_path_efficiency", defaults.stage1_min_path_efficiency),
         stage1_max_wick_share=_float_or_default("pno_stage1_max_wick_share", defaults.stage1_max_wick_share),
+        stage1_min_body_share_mean=_float_or_default("pno_stage1_min_body_share_mean", defaults.stage1_min_body_share_mean),
+        stage1_max_flat_body_share=_float_or_default("pno_stage1_max_flat_body_share", defaults.stage1_max_flat_body_share),
+        stage1_min_body_wick_edge=_float_or_default("pno_stage1_min_body_wick_edge", defaults.stage1_min_body_wick_edge),
         stage1_min_pump_pct=_float_or_default("pno_stage1_min_pump_pct", defaults.stage1_min_pump_pct),
         stage1_min_pretrend_range_ratio_2h=_float_or_default(
             "pno_stage1_min_pretrend_range_ratio_2h",
@@ -471,6 +474,12 @@ def _build_pno_params_template_from_row(
         slip_plan_v1_fraction=_float_or_default("pno_slip_plan_v1_fraction", defaults.slip_plan_v1_fraction),
         min_tick_fraction=_float_or_default("pno_min_tick_fraction", defaults.min_tick_fraction),
         max_entry_pullback_fraction=_float_or_default("pno_max_entry_pullback_fraction", defaults.max_entry_pullback_fraction),
+        tp1_share=_float_or_default("pno_tp1_share", defaults.tp1_share),
+        be_arm_to_active_high_fraction=_float_or_default(
+            "pno_be_arm_to_active_high_fraction",
+            defaults.be_arm_to_active_high_fraction,
+        ),
+        be_buffer_r_fraction=_float_or_default("pno_be_buffer_r_fraction", defaults.be_buffer_r_fraction),
     )
 
 
@@ -865,6 +874,10 @@ _PNO_PLOT_RISK_FACE = "#7f1d1d"
 _PNO_PLOT_RISK_EDGE = "#ef4444"
 _PNO_PLOT_PROFIT_FACE = "#14532d"
 _PNO_PLOT_PROFIT_EDGE = "#22c55e"
+_PNO_PLOT_PROTECT_FACE = "#14532d"
+_PNO_PLOT_PROTECT_EDGE = "#86efac"
+_PNO_PLOT_BASE_FACE = "#1d4ed8"
+_PNO_PLOT_BASE_EDGE = "#60a5fa"
 _PNO_PLOT_PANEL_EDGE = "#1e293b"
 _PNO_PLOT_CANDLE_WIDTH = 0.64
 _PNO_PLOT_5M_CANDLE_WIDTH = 4.0
@@ -872,6 +885,7 @@ _PNO_PLOT_MAX_X_TICKS = 8
 _PNO_TRADE_CHART_FIGSIZE = (8.0, 8.0)
 _PNO_TRADE_CHART_HEIGHT_RATIOS = [4, 2, 1]
 _PNO_TRADE_SLEEP_LOOKBACK_BARS = 12
+_PNO_RESEARCH_TRADE_PATH_MAX_BARS = 240
 _PNO_PLOT_AXIS_TAG_LABEL_WIDTH = 7
 _PNO_PLOT_AXIS_TAG_TEXT_WIDTH = 20
 _PNO_PLOT_SAVEFIG_KWARGS = {"dpi": 100, "facecolor": _PNO_PLOT_FIGURE_FACE, "pil_kwargs": {"compress_level": 1}}
@@ -954,6 +968,65 @@ def _draw_pno_level_segment(
         alpha=alpha,
         linestyle=linestyle,
         zorder=zorder,
+    )
+
+
+def _resolve_pno_plot_index_span(
+    timestamps: np.ndarray,
+    *,
+    start_timestamp_ms: int | None,
+    end_timestamp_ms: int | None,
+) -> tuple[int, int] | None:
+    if start_timestamp_ms is None or end_timestamp_ms is None or timestamps.size == 0:
+        return None
+    if end_timestamp_ms < start_timestamp_ms:
+        end_timestamp_ms = start_timestamp_ms
+    start_idx = int(np.searchsorted(timestamps, int(start_timestamp_ms), side="left"))
+    end_idx = int(np.searchsorted(timestamps, int(end_timestamp_ms), side="right") - 1)
+    start_idx = max(0, min(start_idx, len(timestamps) - 1))
+    end_idx = max(start_idx, min(end_idx, len(timestamps) - 1))
+    return start_idx, end_idx
+
+
+def _draw_pno_price_zone(
+    ax: plt.Axes,
+    *,
+    timestamps: np.ndarray,
+    start_timestamp_ms: int | None,
+    end_timestamp_ms: int | None,
+    low: float | None,
+    high: float | None,
+    facecolor: str,
+    edgecolor: str,
+    alpha: float = 0.14,
+    linewidth: float = 0.9,
+    linestyle: str = "-",
+    zorder: float = 2.4,
+) -> None:
+    if low is None or high is None:
+        return
+    span = _resolve_pno_plot_index_span(
+        timestamps,
+        start_timestamp_ms=start_timestamp_ms,
+        end_timestamp_ms=end_timestamp_ms,
+    )
+    if span is None:
+        return
+    start_idx, end_idx = span
+    zone_low = min(float(low), float(high))
+    zone_high = max(float(low), float(high))
+    ax.add_patch(
+        Rectangle(
+            (start_idx - 0.45, zone_low),
+            max(float(end_idx - start_idx + 1), 1.0),
+            max(zone_high - zone_low, 1e-9),
+            facecolor=facecolor,
+            edgecolor=edgecolor,
+            linewidth=linewidth,
+            linestyle=linestyle,
+            alpha=alpha,
+            zorder=zorder,
+        )
     )
 
 
@@ -1318,8 +1391,16 @@ def _render_pno_trade_chart(
     stop_loss = _safe_float(trade_row.get("sl_plan"))
     if stop_loss is None:
         stop_loss = _safe_float(trade_row.get("sl_actual"))
+    initial_stop_loss = _safe_float(trade_row.get("initial_stop_loss")) or stop_loss
     tp1 = _safe_float(trade_row.get("tp1"))
     tp2 = _safe_float(trade_row.get("tp2"))
+    be_protect_price = _safe_float(trade_row.get("be_protect_price"))
+    be_arm_timestamp_ms = _safe_int(trade_row.get("be_arm_timestamp_ms"))
+    tp1_hit_timestamp_ms = _safe_int(trade_row.get("tp1_hit_timestamp_ms"))
+    tp2_hit_timestamp_ms = _safe_int(trade_row.get("tp2_hit_timestamp_ms"))
+    partial_exit_timestamp_ms = _safe_int(trade_row.get("partial_exit_timestamp_ms")) or tp1_hit_timestamp_ms
+    partial_exit_price = _safe_float(trade_row.get("partial_exit_price")) or tp1
+    runner_exit_price = _safe_float(trade_row.get("runner_exit_price"))
     pump_start_timestamp_ms = _safe_int(trade_row.get("pump_start_timestamp_ms")) or entry_timestamp_ms
     level_price = _safe_float(trade_row.get("level"))
     level_first_timestamp_ms = _safe_int(trade_row.get("level_first_local_high_timestamp_ms"))
@@ -1327,11 +1408,16 @@ def _render_pno_trade_chart(
     pullback_low = _safe_float(trade_row.get("pullback_low"))
     active_high_timestamp_ms = _safe_int(trade_row.get("active_high_timestamp_ms"))
     pullback_low_timestamp_ms = _safe_int(trade_row.get("pullback_low_timestamp_ms"))
+    pullback_base_low = _safe_float(trade_row.get("pullback_base_low"))
+    pullback_base_high = _safe_float(trade_row.get("pullback_base_high"))
+    pullback_base_start_timestamp_ms = _safe_int(trade_row.get("pullback_base_start_timestamp_ms"))
+    pullback_base_end_timestamp_ms = _safe_int(trade_row.get("pullback_base_end_timestamp_ms"))
     if (
         entry_timestamp_ms is None
         or exit_timestamp_ms is None
         or entry_price is None
         or stop_loss is None
+        or initial_stop_loss is None
         or pump_start_timestamp_ms is None
     ):
         return None
@@ -1343,11 +1429,9 @@ def _render_pno_trade_chart(
 
     category = str(trade_row.get("category") or "")
     result_type = str(trade_row.get("result_type") or "")
-    target_price = tp2 if category == "tp2" and tp2 is not None else tp1
-    if target_price is None:
-        target_price = max(display_entry_price, _safe_float(trade_row.get("exit_price")) or display_entry_price)
-    show_high_tag = not _pno_prices_close(active_high, target_price)
-    show_pullback_low_tag = not _pno_prices_close(pullback_low, stop_loss)
+    exit_price_actual = _safe_float(trade_row.get("exit_price_actual")) or _safe_float(trade_row.get("exit_price"))
+    show_high_tag = not _pno_prices_close(active_high, tp1)
+    show_pullback_low_tag = not _pno_prices_close(pullback_low, initial_stop_loss)
 
     levels_step_ms = _infer_pno_frame_step_ms(levels_frame, default_ms=5 * 60 * 1000)
     sleep_lookback_ms = _PNO_TRADE_SLEEP_LOOKBACK_BARS * levels_step_ms
@@ -1385,6 +1469,9 @@ def _render_pno_trade_chart(
     low_values = plot_frame["low"].to_numpy(dtype=np.float64)
     entry_idx = int(np.searchsorted(timestamps, entry_timestamp_ms, side="left"))
     exit_idx = int(np.searchsorted(timestamps, exit_timestamp_ms, side="left"))
+    be_arm_idx = _resolve_pno_timestamp_plot_idx(timestamps, be_arm_timestamp_ms) if be_arm_timestamp_ms is not None else None
+    tp1_hit_idx = _resolve_pno_timestamp_plot_idx(timestamps, tp1_hit_timestamp_ms) if tp1_hit_timestamp_ms is not None else None
+    tp2_hit_idx = _resolve_pno_timestamp_plot_idx(timestamps, tp2_hit_timestamp_ms) if tp2_hit_timestamp_ms is not None else None
     pump_idx = _resolve_pno_pump_plot_idx(
         timestamps=timestamps,
         pump_start_timestamp_ms=pump_start_timestamp_ms,
@@ -1395,7 +1482,6 @@ def _render_pno_trade_chart(
     exit_idx = min(max(exit_idx, entry_idx), len(plot_frame) - 1)
     if pump_idx is None:
         pump_idx = entry_idx
-    rect_width = max(float(exit_idx - entry_idx + 1), 1.0)
     price_axis_right_x = float(len(plot_frame) - 0.5)
 
     fig, (ax_price, ax_levels, ax_volume) = plt.subplots(
@@ -1418,17 +1504,79 @@ def _render_pno_trade_chart(
     ax_price.plot(x_values, ema20, color=_PNO_PLOT_EMA20, linewidth=1.2, alpha=0.24, zorder=2.1)
     ax_price.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=0.95, alpha=0.26, zorder=5)
 
+    def _add_trade_block(
+        *,
+        start_idx: int | None,
+        end_idx: int | None,
+        lower_price: float | None,
+        upper_price: float | None,
+        facecolor: str,
+        edgecolor: str,
+        alpha: float,
+        zorder: float,
+    ) -> None:
+        if start_idx is None or end_idx is None or lower_price is None or upper_price is None:
+            return
+        block_start = min(max(int(start_idx), 0), len(plot_frame) - 1)
+        block_end = min(max(int(end_idx), block_start), len(plot_frame) - 1)
+        price_low = min(float(lower_price), float(upper_price))
+        price_high = max(float(lower_price), float(upper_price))
+        ax_price.add_patch(
+            Rectangle(
+                (block_start - 0.5, price_low),
+                max(float(block_end - block_start + 1), 1.0),
+                max(price_high - price_low, 1e-9),
+                facecolor=facecolor,
+                edgecolor=edgecolor,
+                linewidth=0.9,
+                alpha=alpha,
+                zorder=zorder,
+            )
+        )
+
+    tp1_label_price = partial_exit_price or tp1
+    tp2_label_price = tp2
+    be_label_price = be_protect_price if be_arm_idx is not None else None
     tag_positions = _resolve_pno_axis_tag_positions(
         [
-            ("TP", target_price),
+            ("TP2", tp2_label_price),
+            ("TP1", tp1_label_price),
             ("High", active_high if show_high_tag else None),
+            ("BE", be_label_price),
             ("Entry", display_entry_price),
             ("Level", level_price),
-            ("SL", stop_loss),
+            ("SL", initial_stop_loss),
             ("PB Low", pullback_low if show_pullback_low_tag else None),
-            ("Exit", _safe_float(trade_row.get("exit_price_actual")) or _safe_float(trade_row.get("exit_price"))),
+            ("Exit", exit_price_actual),
         ]
     )
+    if pullback_base_low is not None and pullback_base_high is not None:
+        _draw_pno_price_zone(
+            ax_price,
+            timestamps=timestamps,
+            start_timestamp_ms=pullback_base_start_timestamp_ms,
+            end_timestamp_ms=pullback_base_end_timestamp_ms or entry_timestamp_ms,
+            low=pullback_base_low,
+            high=pullback_base_high,
+            facecolor=_PNO_PLOT_BASE_FACE,
+            edgecolor=_PNO_PLOT_BASE_EDGE,
+            alpha=0.12,
+            linewidth=0.95,
+            zorder=2.35,
+        )
+        _draw_pno_price_zone(
+            ax_levels,
+            timestamps=timestamps,
+            start_timestamp_ms=pullback_base_start_timestamp_ms,
+            end_timestamp_ms=pullback_base_end_timestamp_ms or entry_timestamp_ms,
+            low=pullback_base_low,
+            high=pullback_base_high,
+            facecolor=_PNO_PLOT_BASE_FACE,
+            edgecolor=_PNO_PLOT_BASE_EDGE,
+            alpha=0.10,
+            linewidth=0.85,
+            zorder=2.2,
+        )
     if level_price is not None:
         level_start_idx = entry_idx
         if level_first_timestamp_ms is not None:
@@ -1511,43 +1659,91 @@ def _render_pno_trade_chart(
                 leader_end_x=price_axis_right_x,
                 text_y=tag_positions.get("PB Low"),
             )
-    ax_price.add_patch(
-        Rectangle(
-            (entry_idx - 0.5, min(stop_loss, display_entry_price)),
-            rect_width,
-            abs(display_entry_price - stop_loss),
-            facecolor=_PNO_PLOT_RISK_FACE,
-            edgecolor=_PNO_PLOT_RISK_EDGE,
-            linewidth=0.9,
-            alpha=0.32,
-            zorder=1,
-        )
+
+    initial_phase_end_idx = exit_idx
+    for candidate_idx in (be_arm_idx, tp1_hit_idx, tp2_hit_idx):
+        if candidate_idx is not None:
+            initial_phase_end_idx = min(initial_phase_end_idx, int(candidate_idx))
+    _add_trade_block(
+        start_idx=entry_idx,
+        end_idx=initial_phase_end_idx,
+        lower_price=initial_stop_loss,
+        upper_price=display_entry_price,
+        facecolor=_PNO_PLOT_RISK_FACE,
+        edgecolor=_PNO_PLOT_RISK_EDGE,
+        alpha=0.30,
+        zorder=1.05,
     )
-    ax_price.add_patch(
-        Rectangle(
-            (entry_idx - 0.5, min(display_entry_price, target_price)),
-            rect_width,
-            abs(target_price - display_entry_price),
+    if tp1_hit_idx is not None and tp1_label_price is not None:
+        _add_trade_block(
+            start_idx=entry_idx,
+            end_idx=tp1_hit_idx,
+            lower_price=display_entry_price,
+            upper_price=tp1_label_price,
             facecolor=_PNO_PLOT_PROFIT_FACE,
             edgecolor=_PNO_PLOT_PROFIT_EDGE,
-            linewidth=0.9,
-            alpha=0.28,
-            zorder=1,
+            alpha=0.24,
+            zorder=1.08,
         )
-    )
+    if be_arm_idx is not None and be_protect_price is not None and exit_idx >= be_arm_idx:
+        _add_trade_block(
+            start_idx=be_arm_idx,
+            end_idx=exit_idx,
+            lower_price=display_entry_price,
+            upper_price=be_protect_price,
+            facecolor=_PNO_PLOT_PROTECT_FACE,
+            edgecolor=_PNO_PLOT_PROTECT_EDGE,
+            alpha=0.18,
+            zorder=1.07,
+        )
+    if tp2_hit_idx is not None and tp2_label_price is not None:
+        runner_floor = be_protect_price if be_protect_price is not None else display_entry_price
+        _add_trade_block(
+            start_idx=tp1_hit_idx or be_arm_idx or entry_idx,
+            end_idx=tp2_hit_idx,
+            lower_price=runner_floor,
+            upper_price=tp2_label_price,
+            facecolor=_PNO_PLOT_PROFIT_FACE,
+            edgecolor=_PNO_PLOT_PROFIT_EDGE,
+            alpha=0.28,
+            zorder=1.1,
+        )
+    if tp1_label_price is not None:
+        _annotate_pno_axis_price_tag(
+            ax_price,
+            y=tp1_label_price,
+            label="TP1",
+            color=_PNO_PLOT_PROFIT_EDGE,
+            leader_start_x=float(entry_idx - 0.5),
+            leader_end_x=price_axis_right_x,
+            text_y=tag_positions.get("TP1"),
+            alpha=0.92,
+        )
+    if tp2_label_price is not None and not _pno_prices_close(tp2_label_price, tp1_label_price):
+        _annotate_pno_axis_price_tag(
+            ax_price,
+            y=tp2_label_price,
+            label="TP2",
+            color=_PNO_PLOT_PROFIT_EDGE,
+            leader_start_x=float(tp1_hit_idx or entry_idx),
+            leader_end_x=price_axis_right_x,
+            text_y=tag_positions.get("TP2"),
+            alpha=0.92,
+        )
+    if be_label_price is not None:
+        _annotate_pno_axis_price_tag(
+            ax_price,
+            y=be_label_price,
+            label="BE",
+            color=_PNO_PLOT_PROTECT_EDGE,
+            leader_start_x=float(be_arm_idx or entry_idx),
+            leader_end_x=price_axis_right_x,
+            text_y=tag_positions.get("BE"),
+            alpha=0.90,
+        )
     _annotate_pno_axis_price_tag(
         ax_price,
-        y=target_price,
-        label="TP",
-        color=_PNO_PLOT_PROFIT_EDGE,
-        leader_start_x=float(entry_idx - 0.5),
-        leader_end_x=price_axis_right_x,
-        text_y=tag_positions.get("TP"),
-        alpha=0.92,
-    )
-    _annotate_pno_axis_price_tag(
-        ax_price,
-        y=stop_loss,
+        y=initial_stop_loss,
         label="SL",
         color=_PNO_PLOT_RISK_EDGE,
         leader_start_x=float(entry_idx - 0.5),
@@ -1565,13 +1761,10 @@ def _render_pno_trade_chart(
         text_y=tag_positions.get("Entry"),
         alpha=0.9,
     )
-    exit_price = _safe_float(trade_row.get("exit_price_actual"))
-    if exit_price is None:
-        exit_price = _safe_float(trade_row.get("exit_price"))
-    if exit_price is not None:
+    if exit_price_actual is not None:
         _annotate_pno_axis_price_tag(
             ax_price,
-            y=exit_price,
+            y=exit_price_actual,
             label="Exit",
             color=_PNO_PLOT_EXIT,
             leader_start_x=float(exit_idx),
@@ -1750,6 +1943,10 @@ def _render_pno_stage_review_chart(
         pullback_low_timestamp_ms = _safe_int(review_row.get("pullback_low_timestamp_ms"))
         level_first_timestamp_ms = _safe_int(review_row.get("level_first_local_high_timestamp_ms"))
         level_last_timestamp_ms = _safe_int(review_row.get("level_valid_timestamp_ms")) or timestamp_ms
+        pullback_base_low = _safe_float(review_row.get("pullback_base_low"))
+        pullback_base_high = _safe_float(review_row.get("pullback_base_high"))
+        pullback_base_start_timestamp_ms = _safe_int(review_row.get("pullback_base_start_timestamp_ms"))
+        pullback_base_end_timestamp_ms = _safe_int(review_row.get("pullback_base_end_timestamp_ms")) or timestamp_ms
         event_timestamp_ms = int(timestamp_ms)
 
         _draw_pno_level_segment(
@@ -1796,6 +1993,19 @@ def _render_pno_stage_review_chart(
                 marker="v",
                 dy_points=-14.0,
             )
+        _draw_pno_price_zone(
+            ax_price,
+            timestamps=timestamps,
+            start_timestamp_ms=pullback_base_start_timestamp_ms,
+            end_timestamp_ms=pullback_base_end_timestamp_ms,
+            low=pullback_base_low,
+            high=pullback_base_high,
+            facecolor=_PNO_PLOT_BASE_FACE,
+            edgecolor=_PNO_PLOT_BASE_EDGE,
+            alpha=0.12,
+            linewidth=0.9,
+            zorder=2.35,
+        )
         _draw_pno_level_segment(
             ax_price,
             timestamps=timestamps,
@@ -2063,6 +2273,153 @@ def _resolve_pno_stage_key_from_row(row: dict[str, object]) -> str | None:
     if not symbol or active_high_timestamp_ms is None or pullback_low_timestamp_ms is None or level_valid_timestamp_ms is None or level is None:
         return None
     return f"{symbol}|{active_high_timestamp_ms}|{pullback_low_timestamp_ms}|{level_valid_timestamp_ms}|{level:.8f}"
+
+
+def _resolve_pno_trade_key(row: dict[str, object]) -> str | None:
+    symbol = str(row.get("symbol") or "")
+    entry_timestamp_ms = _safe_int(row.get("entry_timestamp_ms"))
+    if not symbol or entry_timestamp_ms is None:
+        return None
+    stage_key = _resolve_pno_stage_key_from_row(row)
+    if stage_key:
+        return f"{stage_key}|{entry_timestamp_ms}"
+    entry_price = _safe_float(row.get("entry_price_actual")) or _safe_float(row.get("entry_price")) or _safe_float(row.get("entry_plan"))
+    if entry_price is not None:
+        return f"{symbol}|{entry_timestamp_ms}|{entry_price:.8f}"
+    return f"{symbol}|{entry_timestamp_ms}"
+
+
+def _build_pno_trade_exit_reference_row(row: dict[str, object]) -> dict[str, object]:
+    entry_price = _safe_float(row.get("entry_price_actual")) or _safe_float(row.get("entry_price")) or _safe_float(row.get("entry_plan"))
+    initial_stop_loss = _safe_float(row.get("initial_stop_loss")) or _safe_float(row.get("sl_actual")) or _safe_float(row.get("sl_plan"))
+    initial_risk = _safe_float(row.get("initial_risk"))
+    if initial_risk is None and entry_price is not None and initial_stop_loss is not None:
+        initial_risk = max(entry_price - initial_stop_loss, 0.0)
+    tp1 = _safe_float(row.get("tp1"))
+    tp2 = _safe_float(row.get("tp2"))
+    active_high = _safe_float(row.get("active_high"))
+    be_arm_price = _safe_float(row.get("be_arm_price"))
+    be_protect_price = _safe_float(row.get("be_protect_price"))
+    reference: dict[str, object] = {
+        "trade_key": _resolve_pno_trade_key(row),
+        "stage_key": _resolve_pno_stage_key_from_row(row),
+        "symbol": row.get("symbol"),
+        "entry_timestamp_ms": _safe_int(row.get("entry_timestamp_ms")),
+        "exit_timestamp_ms": _safe_int(row.get("exit_timestamp_ms")),
+        "result_type": row.get("result_type"),
+        "category": row.get("category"),
+        "entry_price": entry_price,
+        "initial_stop_loss": initial_stop_loss,
+        "initial_risk": initial_risk,
+        "initial_risk_pct": round((initial_risk / entry_price) * 100.0, 4) if initial_risk is not None and entry_price is not None and entry_price > 0.0 else np.nan,
+        "fee_rate": _safe_float(row.get("fee_rate")),
+        "active_high": active_high,
+        "active_high_r": _safe_float(row.get("active_high_r")),
+        "tp1": tp1,
+        "tp1_r": _safe_float(row.get("tp1_r")),
+        "tp2": tp2,
+        "tp2_r": _safe_float(row.get("tp2_r")),
+        "tp1_share": _safe_float(row.get("tp1_share")),
+        "runner_share": _safe_float(row.get("runner_share")),
+        "be_arm_price": be_arm_price,
+        "be_arm_r": _safe_float(row.get("be_arm_r")),
+        "be_protect_price": be_protect_price,
+        "be_protect_r": _safe_float(row.get("be_protect_r")),
+        "be_arm_timestamp_ms": _safe_int(row.get("be_arm_timestamp_ms")),
+        "partial_exit_price": _safe_float(row.get("partial_exit_price")),
+        "partial_exit_timestamp_ms": _safe_int(row.get("partial_exit_timestamp_ms")),
+        "runner_exit_price": _safe_float(row.get("runner_exit_price")),
+        "runner_exit_timestamp_ms": _safe_int(row.get("runner_exit_timestamp_ms")),
+        "runner_exit_reason": row.get("runner_exit_reason"),
+        "be_armed_pre_tp1": row.get("be_armed_pre_tp1"),
+        "pnl": _safe_float(row.get("pnl")),
+        "pnl_percent": _safe_float(row.get("pnl_percent")),
+        "mfe_r": _safe_float(row.get("mfe_r")),
+        "mae_r": _safe_float(row.get("mae_r")),
+        "level": _safe_float(row.get("level")),
+        "entry_plan": _safe_float(row.get("entry_plan")),
+        "entry_confirmation_mode": row.get("entry_confirmation_mode"),
+        "pullback_base_low": _safe_float(row.get("pullback_base_low")),
+        "pullback_base_high": _safe_float(row.get("pullback_base_high")),
+        "pullback_base_quality": _safe_float(row.get("pullback_base_quality")),
+        "overhead_resistance_score": _safe_float(row.get("overhead_resistance_score")),
+        "overhead_red_body_share": _safe_float(row.get("overhead_red_body_share")),
+        "overhead_red_count": _safe_int(row.get("overhead_red_count")),
+        "dominant_overhead_red_high": _safe_float(row.get("dominant_overhead_red_high")),
+        "dominant_overhead_red_body": _safe_float(row.get("dominant_overhead_red_body")),
+        "be_arm_to_active_high_fraction": _safe_float(row.get("be_arm_to_active_high_fraction")),
+        "be_buffer_r_fraction": _safe_float(row.get("be_buffer_r_fraction")),
+    }
+    return reference
+
+
+def _build_pno_trade_path_rows(
+    *,
+    entry_frame: pd.DataFrame,
+    row: dict[str, object],
+    max_bars: int = _PNO_RESEARCH_TRADE_PATH_MAX_BARS,
+) -> list[dict[str, object]]:
+    entry_timestamp_ms = _safe_int(row.get("entry_timestamp_ms"))
+    if entry_frame.empty or entry_timestamp_ms is None:
+        return []
+    trade_key = _resolve_pno_trade_key(row)
+    entry_price = _safe_float(row.get("entry_price_actual")) or _safe_float(row.get("entry_price")) or _safe_float(row.get("entry_plan"))
+    initial_stop_loss = _safe_float(row.get("initial_stop_loss")) or _safe_float(row.get("sl_actual")) or _safe_float(row.get("sl_plan"))
+    initial_risk = _safe_float(row.get("initial_risk"))
+    if initial_risk is None and entry_price is not None and initial_stop_loss is not None:
+        initial_risk = max(entry_price - initial_stop_loss, 0.0)
+    entry_idx = int(np.searchsorted(entry_frame["timestamp"].to_numpy(dtype=np.int64, copy=False), int(entry_timestamp_ms), side="left"))
+    if entry_idx >= len(entry_frame):
+        return []
+    path_frame = entry_frame.iloc[entry_idx : min(entry_idx + max_bars + 1, len(entry_frame))].copy()
+    if path_frame.empty:
+        return []
+    active_high = _safe_float(row.get("active_high"))
+    level = _safe_float(row.get("level"))
+    be_arm_price = _safe_float(row.get("be_arm_price"))
+    be_protect_price = _safe_float(row.get("be_protect_price"))
+    tp1 = _safe_float(row.get("tp1"))
+    tp2 = _safe_float(row.get("tp2"))
+    trade_rows: list[dict[str, object]] = []
+    running_high = -np.inf
+    running_low = np.inf
+    for offset, (_, path_row) in enumerate(path_frame.iterrows()):
+        open_price = float(path_row["open"])
+        high_price = float(path_row["high"])
+        low_price = float(path_row["low"])
+        close_price = float(path_row["close"])
+        volume = float(path_row["volume"])
+        running_high = max(running_high, high_price)
+        running_low = min(running_low, low_price)
+        trade_rows.append(
+            {
+                "trade_key": trade_key,
+                "symbol": row.get("symbol"),
+                "result_type": row.get("result_type"),
+                "bar_offset": int(offset),
+                "timestamp_ms": int(path_row["timestamp"]),
+                "open": open_price,
+                "high": high_price,
+                "low": low_price,
+                "close": close_price,
+                "volume": volume,
+                "open_r": round((open_price - entry_price) / initial_risk, 6) if entry_price is not None and initial_risk and initial_risk > 0.0 else np.nan,
+                "high_r": round((high_price - entry_price) / initial_risk, 6) if entry_price is not None and initial_risk and initial_risk > 0.0 else np.nan,
+                "low_r": round((low_price - entry_price) / initial_risk, 6) if entry_price is not None and initial_risk and initial_risk > 0.0 else np.nan,
+                "close_r": round((close_price - entry_price) / initial_risk, 6) if entry_price is not None and initial_risk and initial_risk > 0.0 else np.nan,
+                "cum_mfe_r": round((running_high - entry_price) / initial_risk, 6) if entry_price is not None and initial_risk and initial_risk > 0.0 else np.nan,
+                "cum_mae_r": round((entry_price - running_low) / initial_risk, 6) if entry_price is not None and initial_risk and initial_risk > 0.0 else np.nan,
+                "crossed_initial_stop": bool(initial_stop_loss is not None and low_price <= initial_stop_loss),
+                "crossed_be_arm": bool(be_arm_price is not None and high_price >= be_arm_price),
+                "crossed_be_protect": bool(be_protect_price is not None and low_price <= be_protect_price),
+                "crossed_active_high": bool(active_high is not None and high_price >= active_high),
+                "crossed_tp1": bool(tp1 is not None and high_price >= tp1),
+                "crossed_tp2": bool(tp2 is not None and high_price >= tp2),
+                "crossed_level_down": bool(level is not None and low_price <= level),
+                "signal_close_above_level": bool(level is not None and close_price > level),
+            }
+        )
+    return trade_rows
 
 
 def _resolve_pno_signal_bar_context(
@@ -2458,15 +2815,34 @@ def _build_pno_research_context_row(
     entry_pos = _safe_float(payload.get("entry_pos"))
     level_maturity = _safe_float(payload.get("level_maturity_fraction"))
     score = _safe_float(payload.get("final_score")) or _safe_float(payload.get("score"))
+    pump_body_share_mean = _safe_float(payload.get("pump_body_share_mean")) or _safe_float(payload.get("pump_shape_body_share_avg"))
+    pump_wick_share = _safe_float(payload.get("pump_wick_share"))
+    pullback_base_low = _safe_float(payload.get("pullback_base_low"))
+    pullback_base_high = _safe_float(payload.get("pullback_base_high"))
+    overhead_resistance_score = _safe_float(payload.get("overhead_resistance_score"))
+    overhead_red_body_share = _safe_float(payload.get("overhead_red_body_share"))
+    dominant_overhead_red_body = _safe_float(payload.get("dominant_overhead_red_body"))
     span = (active_high - pullback_low) if active_high is not None and pullback_low is not None else None
     level_pos = entry_pos
     if level_pos is None and level is not None and span is not None and span > 0.0:
         level_pos = (level - pullback_low) / span
 
     payload["stage_key"] = _resolve_pno_stage_key_from_row(payload)
+    payload["trade_key"] = _resolve_pno_trade_key(payload)
     payload["pump_leg_pct"] = round((leg_size / leg_start) * 100.0, 4) if leg_size is not None and leg_start is not None and leg_start > 0.0 else np.nan
     payload["pullback_fraction_of_leg"] = round(pullback_depth / leg_size, 4) if pullback_depth is not None and leg_size is not None and leg_size > 0.0 else np.nan
     payload["level_fraction_of_pullback"] = round(level_pos, 4) if level_pos is not None and np.isfinite(level_pos) else np.nan
+    payload["pump_body_wick_edge"] = round(float(pump_body_share_mean - pump_wick_share), 4) if pump_body_share_mean is not None and pump_wick_share is not None else np.nan
+    payload["pullback_base_height"] = round(float(pullback_base_high - pullback_base_low), 8) if pullback_base_low is not None and pullback_base_high is not None else np.nan
+    payload["pullback_base_contains_low"] = bool(
+        pullback_base_low is not None
+        and pullback_base_high is not None
+        and pullback_low is not None
+        and pullback_base_low <= pullback_low <= pullback_base_high
+    )
+    payload["dominant_overhead_red_body_r"] = round(float(dominant_overhead_red_body / leg_size), 6) if dominant_overhead_red_body is not None and leg_size is not None and leg_size > 0.0 else np.nan
+    payload["overhead_resistance_score_norm"] = round(float(overhead_resistance_score), 4) if overhead_resistance_score is not None else np.nan
+    payload["overhead_red_body_share_norm"] = round(float(overhead_red_body_share), 4) if overhead_red_body_share is not None else np.nan
     payload["stop_distance_pct"] = round(((_safe_float(payload.get("entry_plan")) or level or 0.0) - (_safe_float(payload.get("sl_plan")) or np.nan)) / (_safe_float(payload.get("entry_plan")) or level or np.nan) * 100.0, 4) if (_safe_float(payload.get("entry_plan")) or level) not in {None, 0.0} and _safe_float(payload.get("sl_plan")) is not None else np.nan
     payload["tp2_distance_pct"] = round(((_safe_float(payload.get("tp2")) or np.nan) - (_safe_float(payload.get("entry_plan")) or level or np.nan)) / (_safe_float(payload.get("entry_plan")) or level or np.nan) * 100.0, 4) if (_safe_float(payload.get("entry_plan")) or level) not in {None, 0.0} and _safe_float(payload.get("tp2")) is not None else np.nan
     payload["pump_impulse_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_impulse_atr_pre")), thresholds=(3.5, 5.0, 7.5), labels=("impulse_weak", "impulse_ok", "impulse_strong", "impulse_extreme"))
@@ -2483,6 +2859,9 @@ def _build_pno_research_context_row(
     else:
         payload["pump_cleanliness_bucket"] = "dirty"
     payload["pump_vs_pre_2h_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_vs_pre_2h_ratio")), thresholds=(1.5, 2.5, 4.0), labels=("pretrend_small", "pretrend_ok", "pretrend_strong", "pretrend_dominant"))
+    payload["pump_body_share_bucket"] = _bucketize_pno_value(pump_body_share_mean, thresholds=(0.35, 0.50, 0.65), labels=("body_small", "body_ok", "body_strong", "body_expansion"))
+    payload["pump_flat_body_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_flat_body_share")), thresholds=(0.10, 0.20, 0.35), labels=("flat_low", "flat_ok", "flat_high", "flat_excessive"))
+    payload["pump_body_wick_edge_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_body_wick_edge")), thresholds=(-0.05, 0.05, 0.20), labels=("body_lt_wick", "body_eq_wick", "body_gt_wick", "body_dominant"))
     payload["pre_pump_ema_cross_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pre_pump_ema_crosses_1h")), thresholds=(1.0, 2.0), labels=("ema_cross_1", "ema_cross_2", "ema_cross_3plus"))
     payload["pullback_depth_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pullback_fraction_of_leg")), thresholds=(0.25, 0.40, 0.55), labels=("pb_shallow", "pb_balanced", "pb_deep", "pb_very_deep"))
     payload["pullback_age_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pullback_age_bars")), thresholds=(3.0, 6.0, 10.0), labels=("pb_fast", "pb_normal", "pb_slow", "pb_stale"))
@@ -2500,6 +2879,11 @@ def _build_pno_research_context_row(
     payload["pullback_ema_hold_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pullback_close_below_ema9_share")), thresholds=(0.0, 0.20, 0.50), labels=("pb_holds_ema9", "pb_small_break", "pb_mixed", "pb_weak"))
     payload["level_life_bucket"] = _bucketize_pno_value(_safe_float(payload.get("level_life_bars")), thresholds=(3.0, 8.0, 15.0), labels=("level_fresh", "level_worked", "level_lived", "level_old"))
     payload["level_false_break_bucket"] = _bucketize_pno_value(_safe_float(payload.get("level_false_break_wick_count")), thresholds=(0.0, 1.0, 2.0), labels=("lvl_clean", "lvl_one_probe", "lvl_two_probes", "lvl_many_probes"))
+    payload["pullback_base_quality_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pullback_base_quality")), thresholds=(0.3, 0.8, 1.2), labels=("base_weak", "base_ok", "base_strong", "base_elite"))
+    payload["pullback_base_left_vacuum_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pullback_base_left_vacuum")), thresholds=(0.25, 0.50, 0.75), labels=("vacuum_low", "vacuum_ok", "vacuum_strong", "vacuum_clear"))
+    payload["overhead_resistance_bucket"] = _bucketize_pno_value(overhead_resistance_score, thresholds=(0.20, 0.45, 0.80), labels=("overhead_light", "overhead_working", "overhead_heavy", "overhead_extreme"))
+    payload["overhead_red_body_bucket"] = _bucketize_pno_value(overhead_red_body_share, thresholds=(0.10, 0.25, 0.45), labels=("red_light", "red_working", "red_heavy", "red_extreme"))
+    payload["overhead_red_count_bucket"] = _bucketize_pno_value(_safe_float(payload.get("overhead_red_count")), thresholds=(0.0, 1.0, 3.0), labels=("red_0", "red_1", "red_2_3", "red_4plus"))
     payload["signal_ema_spread_bucket"] = _bucketize_pno_value(_safe_float(payload.get("signal_bar_ema_spread_pct")), thresholds=(0.15, 0.40, 0.80), labels=("ema_tight", "ema_ok", "ema_open", "ema_extended"))
     payload["signal_followthrough_bucket"] = _bucketize_pno_value(_safe_float(payload.get("signal_followthrough_3bar_pct")), thresholds=(0.1, 0.4, 1.0), labels=("ft_flat", "ft_ok", "ft_strong", "ft_explosive"))
     payload["prior_impulse_bucket"] = _bucketize_pno_value(_safe_float(payload.get("prior_6h_impulse_count")), thresholds=(0.0, 1.0, 2.0), labels=("prior_clean", "prior_one", "prior_two", "prior_many"))
@@ -2518,6 +2902,9 @@ def _summarize_pno_feature_buckets(frame: pd.DataFrame, *, scope: str) -> pd.Dat
         "pump_volume_continue_bucket",
         "pump_cleanliness_bucket",
         "pump_vs_pre_2h_bucket",
+        "pump_body_share_bucket",
+        "pump_flat_body_bucket",
+        "pump_body_wick_edge_bucket",
         "sleep_compression_bucket",
         "pump_shape_bucket",
         "pump_drawdown_bucket",
@@ -2530,6 +2917,11 @@ def _summarize_pno_feature_buckets(frame: pd.DataFrame, *, scope: str) -> pd.Dat
         "entry_zone_bucket",
         "level_life_bucket",
         "level_false_break_bucket",
+        "pullback_base_quality_bucket",
+        "pullback_base_left_vacuum_bucket",
+        "overhead_resistance_bucket",
+        "overhead_red_body_bucket",
+        "overhead_red_count_bucket",
         "score_bucket",
         "signal_body_bucket",
         "signal_volume_bucket",
@@ -2665,18 +3057,21 @@ def _export_pno_research_context(
     stage_context_frame.to_csv(research_dir / "stage_context_all.csv", index=False)
 
     trade_context_rows: list[dict[str, object]] = []
+    trade_exit_reference_rows: list[dict[str, object]] = []
+    trade_path_rows: list[dict[str, object]] = []
     stage5_outcome_by_key: dict[str, str] = {}
     for row in trade_rows:
         symbol = str(row.get("symbol") or "")
+        prepared_entry_frame = _get_prepared_entry_frame(symbol)
         signal_timestamp_ms = _safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("entry_timestamp_ms"))
         signal_context = _resolve_pno_signal_bar_context(
-            entry_frame=_get_prepared_entry_frame(symbol),
+            entry_frame=prepared_entry_frame,
             timestamp_ms=signal_timestamp_ms,
             level=_safe_float(row.get("level")),
         )
         pattern_context = _resolve_pno_pattern_context(
             levels_frame=_get_prepared_levels_frame(symbol),
-            entry_frame=_get_prepared_entry_frame(symbol),
+            entry_frame=prepared_entry_frame,
             row=row,
             signal_timestamp_ms=signal_timestamp_ms,
         )
@@ -2692,14 +3087,18 @@ def _export_pno_research_context(
         enriched["stage5_outcome"] = result_type
         enriched["is_trade"] = True
         enriched["is_triggered"] = True
-        enriched["is_win"] = result_type in {"tp1_be", "tp2"}
+        enriched["is_win"] = result_type in {"be", "tp1_be", "tp2"}
         trade_context_rows.append(enriched)
+        trade_exit_reference_rows.append(_build_pno_trade_exit_reference_row(row))
+        trade_path_rows.extend(_build_pno_trade_path_rows(entry_frame=prepared_entry_frame, row=row))
         stage_key = str(enriched.get("stage_key") or "")
         if stage_key:
             stage5_outcome_by_key[stage_key] = result_type
 
     trade_context_frame = pd.DataFrame(trade_context_rows)
     trade_context_frame.to_csv(research_dir / "trade_context.csv", index=False)
+    pd.DataFrame(trade_exit_reference_rows).to_csv(research_dir / "trade_exit_reference.csv", index=False)
+    pd.DataFrame(trade_path_rows).to_csv(research_dir / "trade_path_context.csv", index=False)
 
     stage5_candidate_rows: list[dict[str, object]] = list(trade_context_rows)
     for reason, rows in stage_rejections_by_stage.get(PNO_STAGE_5_TRADE, {}).items():
@@ -2754,8 +3153,8 @@ def _export_pno_research_context(
         )
         downstream_outcome = stage5_outcome_by_key.get(str(enriched.get("stage_key") or ""), "not_reached_stage5")
         enriched["downstream_stage5_outcome"] = downstream_outcome
-        enriched["downstream_triggered"] = downstream_outcome in {"sl", "tp1_be", "tp2"}
-        enriched["downstream_win"] = downstream_outcome in {"tp1_be", "tp2"}
+        enriched["downstream_triggered"] = downstream_outcome in {"sl", "be", "tp1_be", "tp2"}
+        enriched["downstream_win"] = downstream_outcome in {"be", "tp1_be", "tp2"}
         stage4_context_rows.append(enriched)
     for reason, rows in stage_rejections_by_stage.get(PNO_STAGE_4_LEVEL, {}).items():
         for row in rows:

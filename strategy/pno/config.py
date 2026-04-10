@@ -67,6 +67,9 @@ class PnoParams:
     stage1_min_volume_ratio_continue: float = 1.25
     stage1_min_path_efficiency: float = 0.26
     stage1_max_wick_share: float = 0.60
+    stage1_min_body_share_mean: float = 0.22
+    stage1_max_flat_body_share: float = 0.40
+    stage1_min_body_wick_edge: float = -0.02
     stage1_min_pump_pct: float = 0.015
     stage1_min_pretrend_range_ratio_2h: float = 2.0
     stage1_pre_pump_high_max_fraction_of_leg: float = 0.50
@@ -84,6 +87,9 @@ class PnoParams:
     slip_plan_v1_fraction: float = 0.10
     min_tick_fraction: float = 0.0001
     max_entry_pullback_fraction: float = 0.60
+    tp1_share: float = 0.50
+    be_arm_to_active_high_fraction: float = 0.50
+    be_buffer_r_fraction: float = 0.05
 
 
 def _format_pno_timeframe_pairs(timeframe_pairs: tuple[PnoTimeframePair, ...]) -> str:
@@ -177,6 +183,12 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("stage1_min_path_efficiency must be in range (0, 1]")
     if not 0.0 <= params.stage1_max_wick_share < 1.0:
         raise ValueError("stage1_max_wick_share must be in range [0, 1)")
+    if not 0.0 < params.stage1_min_body_share_mean <= 1.0:
+        raise ValueError("stage1_min_body_share_mean must be in range (0, 1]")
+    if not 0.0 <= params.stage1_max_flat_body_share <= 1.0:
+        raise ValueError("stage1_max_flat_body_share must be in range [0, 1]")
+    if params.stage1_min_body_wick_edge < -1.0 or params.stage1_min_body_wick_edge > 1.0:
+        raise ValueError("stage1_min_body_wick_edge must be in range [-1, 1]")
     if params.stage1_min_pump_pct <= 0.0:
         raise ValueError("stage1_min_pump_pct must be > 0")
     if params.stage1_min_pretrend_range_ratio_2h <= 1.0:
@@ -197,6 +209,12 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("max_level_touches must be >= 1")
     if params.min_score <= 0.0 or params.strong_score < params.min_score:
         raise ValueError("score thresholds are invalid")
+    if not 0.0 < params.tp1_share < 1.0:
+        raise ValueError("tp1_share must be in range (0, 1)")
+    if not 0.0 < params.be_arm_to_active_high_fraction <= 1.0:
+        raise ValueError("be_arm_to_active_high_fraction must be in range (0, 1]")
+    if params.be_buffer_r_fraction < 0.0 or params.be_buffer_r_fraction > 1.0:
+        raise ValueError("be_buffer_r_fraction must be in range [0, 1]")
     if params.slip_plan_v1_fraction < 0.0 or params.slip_plan_v1_fraction > 1.0:
         raise ValueError("slip_plan_v1_fraction must be in range [0, 1]")
     if params.min_tick_fraction <= 0.0:

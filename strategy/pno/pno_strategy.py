@@ -81,6 +81,9 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_stage1_min_volume_ratio_continue": params.stage1_min_volume_ratio_continue,
             "pno_stage1_min_path_efficiency": params.stage1_min_path_efficiency,
             "pno_stage1_max_wick_share": params.stage1_max_wick_share,
+            "pno_stage1_min_body_share_mean": params.stage1_min_body_share_mean,
+            "pno_stage1_max_flat_body_share": params.stage1_max_flat_body_share,
+            "pno_stage1_min_body_wick_edge": params.stage1_min_body_wick_edge,
             "pno_stage1_min_pump_pct": params.stage1_min_pump_pct,
             "pno_stage1_min_pretrend_range_ratio_2h": params.stage1_min_pretrend_range_ratio_2h,
             "pno_stage1_pre_pump_high_max_fraction_of_leg": params.stage1_pre_pump_high_max_fraction_of_leg,
@@ -98,6 +101,9 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_slip_plan_v1_fraction": params.slip_plan_v1_fraction,
             "pno_min_tick_fraction": params.min_tick_fraction,
             "pno_max_entry_pullback_fraction": params.max_entry_pullback_fraction,
+            "pno_tp1_share": params.tp1_share,
+            "pno_be_arm_to_active_high_fraction": params.be_arm_to_active_high_fraction,
+            "pno_be_buffer_r_fraction": params.be_buffer_r_fraction,
             "deposit": params.pno_deposit,
         }
 

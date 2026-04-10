@@ -146,6 +146,9 @@ class Stage1Context:
     pump_volume_ratio_continue: float = 0.0
     pump_path_efficiency: float = 0.0
     pump_wick_share: float = 0.0
+    pump_body_share_mean: float = 0.0
+    pump_flat_body_share: float = 0.0
+    pump_body_wick_edge: float = 0.0
     pre_pump_range_1h: float = 0.0
     pre_pump_range_2h: float = 0.0
     pump_vs_pre_1h_ratio: float = 0.0
@@ -229,6 +232,19 @@ class Stage4Context:
     entry_pos: float = 0.0
     level_maturity_fraction: float = 0.0
     level_age_bars: int = 0
+    pullback_base_start_idx: int | None = None
+    pullback_base_end_idx: int | None = None
+    pullback_base_low: float | None = None
+    pullback_base_high: float | None = None
+    pullback_base_quality: float = 0.0
+    pullback_base_left_vacuum: float = 0.0
+    overhead_resistance_score: float = 0.0
+    overhead_resistance_penalty: int = 0
+    overhead_red_body_share: float = 0.0
+    overhead_red_count: int = 0
+    dominant_overhead_red_timestamp: int | None = None
+    dominant_overhead_red_high: float | None = None
+    dominant_overhead_red_body: float = 0.0
 
 
 @dataclass(slots=True)
@@ -1191,6 +1207,9 @@ class PnoEngine:
                         "pump_volume_ratio_continue": round(stage1.pump_volume_ratio_continue, 4),
                         "pump_path_efficiency": round(stage1.pump_path_efficiency, 4),
                         "pump_wick_share": round(stage1.pump_wick_share, 4),
+                        "pump_body_share_mean": round(stage1.pump_body_share_mean, 4),
+                        "pump_flat_body_share": round(stage1.pump_flat_body_share, 4),
+                        "pump_body_wick_edge": round(stage1.pump_body_wick_edge, 4),
                         "pre_pump_range_1h": round(stage1.pre_pump_range_1h, 8),
                         "pre_pump_range_2h": round(stage1.pre_pump_range_2h, 8),
                         "pump_vs_pre_1h_ratio": round(stage1.pump_vs_pre_1h_ratio, 4),
@@ -1401,16 +1420,27 @@ class PnoEngine:
                     key=cycle_key,
                     timestamp_ms=int(next_stage4.level_valid_timestamp),
                     reason=str(next_stage4.hard_block_reason or "hard_block"),
-                    extra={
-                        "active_high": round(float(next_stage4.active_high), 8),
-                        "pullback_low": round(float(stage3.pullback_low), 8),
-                        "level": round(next_stage4.level, 8),
-                        "touches": int(next_stage4.touches),
-                        "entry_pos": round(float(next_stage4.entry_pos), 4),
-                        "score": round(float(next_stage4.final_score), 4),
-                        "pump_start_timestamp_ms": int(stage1.pump_start_timestamp),
-                        "active_high_timestamp_ms": int(stage3.active_high_timestamp),
-                        "pullback_low_timestamp_ms": int(stage3.pullback_low_timestamp),
+                        extra={
+                            "active_high": round(float(next_stage4.active_high), 8),
+                            "pullback_low": round(float(stage3.pullback_low), 8),
+                            "level": round(next_stage4.level, 8),
+                            "touches": int(next_stage4.touches),
+                            "entry_pos": round(float(next_stage4.entry_pos), 4),
+                            "score": round(float(next_stage4.final_score), 4),
+                            "pullback_base_low": round(float(next_stage4.pullback_base_low), 8) if next_stage4.pullback_base_low is not None else None,
+                            "pullback_base_high": round(float(next_stage4.pullback_base_high), 8) if next_stage4.pullback_base_high is not None else None,
+                            "pullback_base_start_timestamp_ms": int(one.timestamps[next_stage4.pullback_base_start_idx]) if next_stage4.pullback_base_start_idx is not None else None,
+                            "pullback_base_end_timestamp_ms": int(one.timestamps[next_stage4.pullback_base_end_idx]) if next_stage4.pullback_base_end_idx is not None else None,
+                            "pullback_base_quality": round(float(next_stage4.pullback_base_quality), 4),
+                            "overhead_resistance_score": round(float(next_stage4.overhead_resistance_score), 4),
+                            "overhead_resistance_penalty": int(next_stage4.overhead_resistance_penalty),
+                            "overhead_red_body_share": round(float(next_stage4.overhead_red_body_share), 4),
+                            "overhead_red_count": int(next_stage4.overhead_red_count),
+                            "dominant_overhead_red_timestamp_ms": int(next_stage4.dominant_overhead_red_timestamp) if next_stage4.dominant_overhead_red_timestamp is not None else None,
+                            "dominant_overhead_red_high": round(float(next_stage4.dominant_overhead_red_high), 8) if next_stage4.dominant_overhead_red_high is not None else None,
+                            "pump_start_timestamp_ms": int(stage1.pump_start_timestamp),
+                            "active_high_timestamp_ms": int(stage3.active_high_timestamp),
+                            "pullback_low_timestamp_ms": int(stage3.pullback_low_timestamp),
                         "level_first_local_high_timestamp_ms": int(one.timestamps[next_stage4.cluster_first_idx]),
                         "level_last_local_high_timestamp_ms": int(one.timestamps[next_stage4.cluster_last_idx]),
                         "level_valid_timestamp_ms": int(next_stage4.level_valid_timestamp),
@@ -1450,6 +1480,17 @@ class PnoEngine:
                     "pno_index": stage4.pno_index,
                     "level_maturity_fraction": round(stage4.level_maturity_fraction, 4),
                     "entry_pos": round(stage4.entry_pos, 4),
+                    "pullback_base_low": round(float(stage4.pullback_base_low), 8) if stage4.pullback_base_low is not None else None,
+                    "pullback_base_high": round(float(stage4.pullback_base_high), 8) if stage4.pullback_base_high is not None else None,
+                    "pullback_base_start_timestamp_ms": int(one.timestamps[stage4.pullback_base_start_idx]) if stage4.pullback_base_start_idx is not None else None,
+                    "pullback_base_end_timestamp_ms": int(one.timestamps[stage4.pullback_base_end_idx]) if stage4.pullback_base_end_idx is not None else None,
+                    "pullback_base_quality": round(float(stage4.pullback_base_quality), 4),
+                    "overhead_resistance_score": round(float(stage4.overhead_resistance_score), 4),
+                    "overhead_resistance_penalty": int(stage4.overhead_resistance_penalty),
+                    "overhead_red_body_share": round(float(stage4.overhead_red_body_share), 4),
+                    "overhead_red_count": int(stage4.overhead_red_count),
+                    "dominant_overhead_red_timestamp_ms": int(stage4.dominant_overhead_red_timestamp) if stage4.dominant_overhead_red_timestamp is not None else None,
+                    "dominant_overhead_red_high": round(float(stage4.dominant_overhead_red_high), 8) if stage4.dominant_overhead_red_high is not None else None,
                     "pump_start_timestamp_ms": int(stage1.pump_start_timestamp),
                     "active_high_timestamp_ms": int(stage3.active_high_timestamp),
                     "pullback_low_timestamp_ms": int(stage3.pullback_low_timestamp),
@@ -1556,6 +1597,7 @@ class PnoEngine:
 
         pump_net_move = max(float(pump_closes[-1]) - float(pump_opens[0]), 0.0)
         pump_path_efficiency = self._safe_divide(pump_net_move, float(np.sum(pump_tr)))
+        pump_body_share_mean = float(np.mean(np.abs(pump_closes - pump_opens) / np.maximum(pump_tr, self._EPSILON)))
         pump_wick_share = self._safe_divide(
             float(
                 np.sum(
@@ -1565,9 +1607,18 @@ class PnoEngine:
             ),
             float(np.sum(pump_tr)),
         )
+        flat_body_threshold = np.maximum(0.18 * pump_tr, 0.08 * pump_pre_atr)
+        pump_flat_body_share = float(np.mean(np.abs(pump_closes - pump_opens) <= flat_body_threshold))
+        pump_body_wick_edge = pump_body_share_mean - pump_wick_share
         if pump_path_efficiency < float(params.stage1_min_path_efficiency):
             return None
         if pump_wick_share > float(params.stage1_max_wick_share):
+            return None
+        if pump_body_share_mean < float(params.stage1_min_body_share_mean):
+            return None
+        if pump_flat_body_share > float(params.stage1_max_flat_body_share):
+            return None
+        if pump_body_wick_edge < float(params.stage1_min_body_wick_edge):
             return None
 
         cumulative_quote_volume = self._range_sum(one.cumulative_quote_volume, start_idx, idx)
@@ -1618,6 +1669,9 @@ class PnoEngine:
             "pump_volume_ratio_continue": pump_volume_ratio_continue,
             "pump_path_efficiency": pump_path_efficiency,
             "pump_wick_share": pump_wick_share,
+            "pump_body_share_mean": pump_body_share_mean,
+            "pump_flat_body_share": pump_flat_body_share,
+            "pump_body_wick_edge": pump_body_wick_edge,
             "reference_high": reference_high,
             "reference_high_weight": reference_high_weight,
         }
@@ -1741,6 +1795,9 @@ class PnoEngine:
             pump_volume_ratio_continue=float(quality_metrics["pump_volume_ratio_continue"]),
             pump_path_efficiency=float(quality_metrics["pump_path_efficiency"]),
             pump_wick_share=float(quality_metrics["pump_wick_share"]),
+            pump_body_share_mean=float(quality_metrics["pump_body_share_mean"]),
+            pump_flat_body_share=float(quality_metrics["pump_flat_body_share"]),
+            pump_body_wick_edge=float(quality_metrics["pump_body_wick_edge"]),
             pre_pump_range_1h=pre_pump_range_1h,
             pre_pump_range_2h=pre_pump_range_2h,
             pump_vs_pre_1h_ratio=self._safe_divide(pump_range, pre_pump_range_1h),
@@ -2155,7 +2212,8 @@ class PnoEngine:
             zigzag_score = 4
         else:
             zigzag_score = 0
-        base_bonus = self._resolve_base_bonus(one=one, idx=idx, stage1=stage1, stage3=stage3)
+        base_profile = self._resolve_pullback_base_profile(one=one, idx=idx, stage1=stage1, stage3=stage3)
+        base_bonus = int(base_profile.get("bonus") or 0)
         if entry_pos <= 0.50:
             level_pos_score = 7
         elif entry_pos <= 0.60:
@@ -2200,6 +2258,7 @@ class PnoEngine:
 
         score_tp2 = self._resolve_tp2_score(tp2=tp2, active_high=tp1, v1=v1_now)
         penalty_untested_highs = self._resolve_untested_high_penalty(one=one, idx=idx, stage3=stage3, stage4=stage4)
+        overhead_profile = self._resolve_overhead_resistance_profile(one=one, stage1=stage1, stage4=stage4)
         pno_order_adj = self._resolve_pno_order_adj(stage4.pno_index)
         maturity_penalty = self._resolve_maturity_penalty(stage1=stage1, pno_index=stage4.pno_index)
         final_score = float(
@@ -2211,6 +2270,7 @@ class PnoEngine:
             + score_tp2
             + pno_order_adj
             + penalty_untested_highs
+            + int(overhead_profile.get("penalty") or 0)
             - stage4.penalty_level_low_break
             - maturity_penalty
         )
@@ -2270,6 +2330,35 @@ class PnoEngine:
             is_valid_setup=is_valid_setup,
             hard_block_reason=hard_block_reason,
             entry_pos=entry_pos,
+            pullback_base_start_idx=(
+                int(base_profile["start_idx"]) if base_profile.get("start_idx") is not None else None
+            ),
+            pullback_base_end_idx=(
+                int(base_profile["end_idx"]) if base_profile.get("end_idx") is not None else None
+            ),
+            pullback_base_low=(
+                float(base_profile["low"]) if base_profile.get("low") is not None else None
+            ),
+            pullback_base_high=(
+                float(base_profile["high"]) if base_profile.get("high") is not None else None
+            ),
+            pullback_base_quality=float(base_profile.get("quality") or 0.0),
+            pullback_base_left_vacuum=float(base_profile.get("left_vacuum") or 0.0),
+            overhead_resistance_score=float(overhead_profile.get("score") or 0.0),
+            overhead_resistance_penalty=int(overhead_profile.get("penalty") or 0),
+            overhead_red_body_share=float(overhead_profile.get("red_body_share") or 0.0),
+            overhead_red_count=int(overhead_profile.get("red_count") or 0),
+            dominant_overhead_red_timestamp=(
+                int(overhead_profile["dominant_timestamp"])
+                if overhead_profile.get("dominant_timestamp") is not None
+                else None
+            ),
+            dominant_overhead_red_high=(
+                float(overhead_profile["dominant_high"])
+                if overhead_profile.get("dominant_high") is not None
+                else None
+            ),
+            dominant_overhead_red_body=float(overhead_profile.get("dominant_body") or 0.0),
         )
 
     def _resolve_leg_start(
@@ -2441,35 +2530,137 @@ class PnoEngine:
             return 4
         return 0
 
-    def _resolve_base_bonus(
+    def _resolve_pullback_base_profile(
         self,
         *,
         one: OneMinuteFrame,
         idx: int,
         stage1: Stage1Context,
         stage3: Stage3Context,
-    ) -> int:
+    ) -> dict[str, int | float | None]:
         v1_now = max(float(one.v1[idx]), self._EPSILON)
-        best_bonus = 0
-        for block_end in range(stage1.active_high_idx - 1, stage1.start_idx + 1, -1):
-            for block_size in range(3, 13):
-                block_start = block_end - block_size + 1
-                if block_start < stage1.start_idx:
+        search_start = max(stage1.active_high_idx + 1, stage3.pullback_low_idx - 3)
+        search_end = min(idx, stage3.pullback_low_idx + 8)
+        best_profile: dict[str, int | float | None] = {
+            "bonus": 0,
+            "start_idx": None,
+            "end_idx": None,
+            "low": None,
+            "high": None,
+            "quality": 0.0,
+            "left_vacuum": 0.0,
+        }
+        if search_end <= search_start:
+            return best_profile
+        for block_size in range(2, 7):
+            for block_start in range(search_start, search_end - block_size + 2):
+                block_end = block_start + block_size - 1
+                if not (block_start <= stage3.pullback_low_idx <= block_end):
                     continue
                 block_high = float(np.max(one.highs[block_start : block_end + 1]))
                 block_low = float(np.min(one.lows[block_start : block_end + 1]))
-                if (block_high - block_low) > (1.5 * v1_now):
+                block_range = block_high - block_low
+                if block_range <= 0.0 or block_range > (1.20 * v1_now):
                     continue
-                if (stage1.active_high - block_high) < (2.0 * v1_now):
+                left_start = max(stage1.active_high_idx + 1, block_start - 12)
+                left_slice_highs = one.highs[left_start:block_start]
+                right_slice_highs = one.highs[block_end + 1 : idx + 1]
+                if left_slice_highs.size == 0 or right_slice_highs.size == 0:
                     continue
-                if block_low <= stage3.pullback_low <= block_high:
-                    return 5
-                distance_to_block = min(abs(stage3.pullback_low - block_low), abs(stage3.pullback_low - block_high))
-                if distance_to_block <= (0.5 * v1_now):
-                    return 5
-                if distance_to_block <= (1.0 * v1_now):
-                    best_bonus = max(best_bonus, 2)
-        return best_bonus
+                left_drop = float(np.max(left_slice_highs)) - block_high
+                right_lift = float(np.max(right_slice_highs)) - block_high
+                if left_drop < (1.5 * v1_now) or right_lift < (0.5 * v1_now):
+                    continue
+                left_overlap = np.sum((left_slice_highs >= (block_low - self._EPSILON)) & (left_slice_highs <= (block_high + self._EPSILON)))
+                left_vacuum = 1.0 - min(float(left_overlap) / max(len(left_slice_highs), 1), 1.0)
+                quality = (
+                    0.40 * min(right_lift / max(v1_now, self._EPSILON), 2.5)
+                    + 0.35 * max(1.0 - (block_range / max(1.20 * v1_now, self._EPSILON)), 0.0)
+                    + 0.25 * left_vacuum
+                )
+                bonus = 5 if quality >= 1.20 else 3 if quality >= 0.80 else 1 if quality >= 0.50 else 0
+                if quality > float(best_profile["quality"] or 0.0):
+                    best_profile = {
+                        "bonus": bonus,
+                        "start_idx": int(block_start),
+                        "end_idx": int(block_end),
+                        "low": block_low,
+                        "high": block_high,
+                        "quality": float(quality),
+                        "left_vacuum": float(left_vacuum),
+                    }
+        return best_profile
+
+    def _resolve_overhead_resistance_profile(
+        self,
+        *,
+        one: OneMinuteFrame,
+        stage1: Stage1Context,
+        stage4: Stage4Context,
+    ) -> dict[str, int | float | None]:
+        zone_high = float(stage1.active_high)
+        zone_low = float(stage4.level)
+        if zone_high <= zone_low:
+            return {
+                "score": 0.0,
+                "penalty": 0,
+                "red_body_share": 0.0,
+                "red_count": 0,
+                "dominant_timestamp": None,
+                "dominant_high": None,
+                "dominant_body": 0.0,
+            }
+        start_idx = min(stage1.active_high_idx + 1, stage4.level_valid_idx)
+        end_idx = max(stage1.active_high_idx + 1, stage4.level_valid_idx)
+        weighted_red_body = 0.0
+        dominant_weighted_body = 0.0
+        dominant_timestamp: int | None = None
+        dominant_high: float | None = None
+        dominant_body = 0.0
+        red_count = 0
+        bars_considered = 0
+        zone_span = max(zone_high - zone_low, self._EPSILON)
+        for probe_idx in range(start_idx, end_idx + 1):
+            bar_high = float(one.highs[probe_idx])
+            bar_low = float(one.lows[probe_idx])
+            overlap = max(min(bar_high, zone_high) - max(bar_low, zone_low), 0.0)
+            if overlap <= 0.0:
+                continue
+            bars_considered += 1
+            bar_open = float(one.opens[probe_idx])
+            bar_close = float(one.closes[probe_idx])
+            if bar_close >= bar_open:
+                continue
+            red_count += 1
+            bar_body = bar_open - bar_close
+            bar_range = max(bar_high - bar_low, self._EPSILON)
+            weighted_body = bar_body * (overlap / bar_range)
+            weighted_red_body += weighted_body
+            if weighted_body > dominant_weighted_body:
+                dominant_weighted_body = weighted_body
+                dominant_body = bar_body
+                dominant_timestamp = int(one.timestamps[probe_idx])
+                dominant_high = bar_high
+        red_body_share = weighted_red_body / zone_span
+        red_density = (red_count / bars_considered) if bars_considered > 0 else 0.0
+        score = (0.70 * red_body_share) + (0.30 * red_density)
+        if score >= 1.0 or dominant_weighted_body >= (0.35 * zone_span):
+            penalty = -8
+        elif score >= 0.65 or dominant_weighted_body >= (0.22 * zone_span):
+            penalty = -5
+        elif score >= 0.35:
+            penalty = -3
+        else:
+            penalty = 0
+        return {
+            "score": float(score),
+            "penalty": int(penalty),
+            "red_body_share": float(red_body_share),
+            "red_count": int(red_count),
+            "dominant_timestamp": dominant_timestamp,
+            "dominant_high": dominant_high,
+            "dominant_body": float(dominant_body),
+        }
 
     def _resolve_untested_high_penalty(
         self,
@@ -2695,6 +2886,7 @@ class PnoEngine:
             "strategy_id": "pno",
             "symbol": params.symbol,
             "stage_path": PNO_STAGE_PATH,
+            "fee_rate": round(float(params.fee_rate), 6),
             "sleep_start_timestamp_ms": int(armed.stage1.sleep_start_timestamp),
             "sleep_end_timestamp_ms": int(armed.stage1.sleep_end_timestamp),
             "pump_start_timestamp_ms": int(armed.stage1.pump_start_timestamp),
@@ -2717,6 +2909,9 @@ class PnoEngine:
             "pump_volume_ratio_continue": round(float(armed.stage1.pump_volume_ratio_continue), 4),
             "pump_path_efficiency": round(float(armed.stage1.pump_path_efficiency), 4),
             "pump_wick_share": round(float(armed.stage1.pump_wick_share), 4),
+            "pump_body_share_mean": round(float(armed.stage1.pump_body_share_mean), 4),
+            "pump_flat_body_share": round(float(armed.stage1.pump_flat_body_share), 4),
+            "pump_body_wick_edge": round(float(armed.stage1.pump_body_wick_edge), 4),
             "hold_status_at_validation": str(armed.stage1.hold_status_at_validation),
             "leg_start_status_at_validation": str(armed.stage1.leg_start_status_at_validation),
             "pullback_low": round(float(armed.stage3.pullback_low), 8),
@@ -2730,8 +2925,23 @@ class PnoEngine:
             "entry_pos": round(float(armed.stage4.entry_pos), 4),
             "touches": int(armed.stage4.touches),
             "pno_index": int(armed.stage4.pno_index),
+            "pullback_base_low": round(float(armed.stage4.pullback_base_low), 8) if armed.stage4.pullback_base_low is not None else None,
+            "pullback_base_high": round(float(armed.stage4.pullback_base_high), 8) if armed.stage4.pullback_base_high is not None else None,
+            "pullback_base_start_timestamp_ms": int(one.timestamps[armed.stage4.pullback_base_start_idx]) if armed.stage4.pullback_base_start_idx is not None else None,
+            "pullback_base_end_timestamp_ms": int(one.timestamps[armed.stage4.pullback_base_end_idx]) if armed.stage4.pullback_base_end_idx is not None else None,
+            "pullback_base_quality": round(float(armed.stage4.pullback_base_quality), 4),
+            "pullback_base_left_vacuum": round(float(armed.stage4.pullback_base_left_vacuum), 4),
+            "overhead_resistance_score": round(float(armed.stage4.overhead_resistance_score), 4),
+            "overhead_resistance_penalty": int(armed.stage4.overhead_resistance_penalty),
+            "overhead_red_body_share": round(float(armed.stage4.overhead_red_body_share), 4),
+            "overhead_red_count": int(armed.stage4.overhead_red_count),
+            "dominant_overhead_red_timestamp_ms": int(armed.stage4.dominant_overhead_red_timestamp) if armed.stage4.dominant_overhead_red_timestamp is not None else None,
+            "dominant_overhead_red_high": round(float(armed.stage4.dominant_overhead_red_high), 8) if armed.stage4.dominant_overhead_red_high is not None else None,
+            "dominant_overhead_red_body": round(float(armed.stage4.dominant_overhead_red_body), 8),
             "entry_confirmation_mode": confirmation_mode,
             "entry_signal_kind": signal_kind,
+            "be_arm_to_active_high_fraction": round(float(params.be_arm_to_active_high_fraction), 4),
+            "be_buffer_r_fraction": round(float(params.be_buffer_r_fraction), 4),
             "entry_signal_timestamp_ms": int(one.timestamps[entry_idx]),
             "entry_plan": round(float(armed.stage4.entry_plan), 8),
             "sl_plan": round(float(armed.stage4.sl_plan), 8),
@@ -2805,10 +3015,26 @@ class PnoEngine:
         tp2 = float(armed.stage4.tp2)
         fee_rate = float(params.fee_rate)
         be_fee = entry_price * (1.0 + fee_rate) / max(1.0 - fee_rate, self._EPSILON)
-        tp1_share = 0.5
-        remainder_share = 0.5
+        initial_stop_loss = float(stop_loss)
+        initial_risk = max(entry_price - initial_stop_loss, self._EPSILON)
+        tp1_share = float(params.tp1_share)
+        remainder_share = max(1.0 - tp1_share, 0.0)
+        be_arm_price = entry_price + (float(params.be_arm_to_active_high_fraction) * max(tp1 - entry_price, 0.0))
+        be_buffer = max(entry_price * float(params.min_tick_fraction), float(params.be_buffer_r_fraction) * initial_risk)
+        be_protect_price = max(be_fee, entry_price + be_buffer)
+        be_arm_r = self._safe_divide(be_arm_price - entry_price, initial_risk)
+        be_armed = False
+        be_arm_idx: int | None = None
         tp1_hit = False
         tp1_hit_idx: int | None = None
+        tp2_hit_idx: int | None = None
+        partial_exit_price: float | None = None
+        partial_exit_idx: int | None = None
+        partial_realized_pnl = 0.0
+        runner_exit_price: float | None = None
+        runner_exit_idx: int | None = None
+        runner_realized_pnl = 0.0
+        runner_exit_reason: str | None = None
         exit_idx = len(one.timestamps) - 1
         exit_price = float(one.closes[exit_idx])
         result_type = TradeResultType.BE
@@ -2823,65 +3049,93 @@ class PnoEngine:
             close = float(one.closes[idx])
             max_favorable = max(max_favorable, high - entry_price)
             max_adverse = max(max_adverse, entry_price - low)
+            active_stop = be_protect_price if be_armed else initial_stop_loss
 
             if not tp1_hit:
-                if low <= stop_loss:
-                    exit_price = stop_loss
+                if low <= active_stop:
+                    exit_price = active_stop
                     exit_idx = idx
-                    result_type = TradeResultType.SL
-                    realized_pnl = self._net_leg_pnl(
+                    result_type = TradeResultType.BE if be_armed else TradeResultType.SL
+                    runner_exit_price = active_stop
+                    runner_exit_idx = idx
+                    runner_exit_reason = "be_pre_tp1" if be_armed else "sl_non_entry"
+                    runner_realized_pnl = self._net_leg_pnl(
                         entry_price=entry_price,
-                        exit_price=stop_loss,
+                        exit_price=active_stop,
                         quantity=position_size,
                         fee_rate=fee_rate,
                     )
-                    category = "sl_non_entry"
+                    realized_pnl = runner_realized_pnl
+                    category = str(runner_exit_reason)
                     break
                 if high >= tp1:
                     tp1_hit = True
                     tp1_hit_idx = idx
-                    realized_pnl += self._net_leg_pnl(
+                    partial_exit_price = tp1
+                    partial_exit_idx = idx
+                    if not be_armed:
+                        be_armed = True
+                        be_arm_idx = idx
+                    partial_realized_pnl = self._net_leg_pnl(
                         entry_price=entry_price,
                         exit_price=tp1,
                         quantity=position_size * tp1_share,
                         fee_rate=fee_rate,
                     )
+                    realized_pnl += partial_realized_pnl
                     if high >= tp2:
                         exit_price = tp2
                         exit_idx = idx
+                        tp2_hit_idx = idx
                         result_type = TradeResultType.TP2
-                        realized_pnl += self._net_leg_pnl(
+                        runner_exit_price = tp2
+                        runner_exit_idx = idx
+                        runner_exit_reason = "tp2"
+                        runner_realized_pnl = self._net_leg_pnl(
                             entry_price=entry_price,
                             exit_price=tp2,
                             quantity=position_size * remainder_share,
                             fee_rate=fee_rate,
                         )
+                        realized_pnl += runner_realized_pnl
                         category = "tp2"
                         break
                     continue
+                if (not be_armed) and high >= be_arm_price:
+                    be_armed = True
+                    be_arm_idx = idx
             elif tp1_hit_idx is not None and idx > tp1_hit_idx:
-                if low <= be_fee:
-                    exit_price = be_fee
+                if low <= be_protect_price:
+                    exit_price = be_protect_price
                     exit_idx = idx
                     result_type = TradeResultType.TP1_BE
-                    realized_pnl += self._net_leg_pnl(
+                    runner_exit_price = be_protect_price
+                    runner_exit_idx = idx
+                    runner_exit_reason = "tp1_be"
+                    runner_realized_pnl = self._net_leg_pnl(
                         entry_price=entry_price,
-                        exit_price=be_fee,
+                        exit_price=be_protect_price,
                         quantity=position_size * remainder_share,
                         fee_rate=fee_rate,
                     )
+                    realized_pnl += runner_realized_pnl
                     category = "tp1_be"
                     break
                 if high >= tp2:
                     exit_price = tp2
                     exit_idx = idx
+                    tp2_hit_idx = idx
                     result_type = TradeResultType.TP2
-                    realized_pnl += self._net_leg_pnl(
+                    runner_exit_price = tp2
+                    runner_exit_idx = idx
+                    runner_exit_reason = "tp2"
+                    runner_realized_pnl = self._net_leg_pnl(
                         entry_price=entry_price,
                         exit_price=tp2,
                         quantity=position_size * remainder_share,
                         fee_rate=fee_rate,
                     )
+                    realized_pnl += runner_realized_pnl
                     category = "tp2"
                     break
 
@@ -2889,7 +3143,9 @@ class PnoEngine:
                 exit_idx = idx
                 exit_price = close
 
-        if result_type not in {TradeResultType.SL, TradeResultType.TP1_BE, TradeResultType.TP2}:
+        if category == "incomplete":
+            return None, entry_idx
+        if result_type not in {TradeResultType.SL, TradeResultType.BE, TradeResultType.TP1_BE, TradeResultType.TP2}:
             return None, entry_idx
 
         trade_metadata = dict(metadata)
@@ -2897,12 +3153,39 @@ class PnoEngine:
             {
                 "category": category,
                 "be_fee": round(float(be_fee), 8),
+                "initial_stop_loss": round(float(initial_stop_loss), 8),
+                "initial_risk": round(float(initial_risk), 8),
+                "tp1_share": round(float(tp1_share), 4),
+                "runner_share": round(float(remainder_share), 4),
+                "be_arm_price": round(float(be_arm_price), 8),
+                "be_arm_r": round(float(be_arm_r), 6) if np.isfinite(be_arm_r) else np.nan,
+                "be_buffer": round(float(be_buffer), 8),
+                "be_protect_price": round(float(be_protect_price), 8),
+                "be_protect_r": round(self._safe_divide(be_protect_price - entry_price, initial_risk), 6),
+                "be_armed": bool(be_armed),
+                "be_arm_timestamp_ms": int(one.timestamps[be_arm_idx]) if be_arm_idx is not None else None,
+                "tp1_hit_timestamp_ms": int(one.timestamps[tp1_hit_idx]) if tp1_hit_idx is not None else None,
+                "tp2_hit_timestamp_ms": int(one.timestamps[tp2_hit_idx]) if tp2_hit_idx is not None else None,
+                "tp1_r": round(self._safe_divide(tp1 - entry_price, initial_risk), 6),
+                "tp2_r": round(self._safe_divide(tp2 - entry_price, initial_risk), 6),
+                "active_high_r": round(self._safe_divide(tp1 - entry_price, initial_risk), 6),
+                "partial_exit_price": round(float(partial_exit_price), 8) if partial_exit_price is not None else None,
+                "partial_exit_timestamp_ms": int(one.timestamps[partial_exit_idx]) if partial_exit_idx is not None else None,
+                "partial_exit_share": round(float(tp1_share), 4) if tp1_hit else 0.0,
+                "partial_realized_pnl": round(float(partial_realized_pnl), 8),
+                "runner_exit_price": round(float(runner_exit_price), 8) if runner_exit_price is not None else None,
+                "runner_exit_timestamp_ms": int(one.timestamps[runner_exit_idx]) if runner_exit_idx is not None else None,
+                "runner_exit_share": round(float(remainder_share if tp1_hit else 1.0), 4),
+                "runner_realized_pnl": round(float(runner_realized_pnl), 8),
+                "runner_exit_reason": runner_exit_reason,
+                "be_armed_pre_tp1": bool(be_arm_idx is not None and (tp1_hit_idx is None or be_arm_idx < tp1_hit_idx)),
                 "holding_bars": int(exit_idx - entry_idx),
-                "mfe_r": round(self._safe_divide(max_favorable, entry_price - stop_loss), 6),
-                "mae_r": round(self._safe_divide(max_adverse, entry_price - stop_loss), 6),
+                "mfe_r": round(self._safe_divide(max_favorable, initial_risk), 6),
+                "mae_r": round(self._safe_divide(max_adverse, initial_risk), 6),
                 "mfe_pct": round(self._to_percent(max_favorable, entry_price), 6),
                 "mae_pct": round(self._to_percent(max_adverse, entry_price), 6),
                 "tp1_hit": tp1_hit,
+                "tp1_hit_share": round(float(tp1_share), 4) if tp1_hit else 0.0,
                 "tp2_hit": result_type == TradeResultType.TP2,
                 "trade_complete": True,
             }
