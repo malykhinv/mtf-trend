@@ -506,6 +506,7 @@ def _build_pno_params_template_from_row(
         slip_plan_v1_fraction=_float_or_default("pno_slip_plan_v1_fraction", defaults.slip_plan_v1_fraction),
         min_tick_fraction=_float_or_default("pno_min_tick_fraction", defaults.min_tick_fraction),
         max_entry_pullback_fraction=_float_or_default("pno_max_entry_pullback_fraction", defaults.max_entry_pullback_fraction),
+        min_entry_rr=_float_or_default("pno_min_entry_rr", defaults.min_entry_rr),
         tp1_share=_float_or_default("pno_tp1_share", defaults.tp1_share),
         be_arm_to_active_high_fraction=_float_or_default(
             "pno_be_arm_to_active_high_fraction",

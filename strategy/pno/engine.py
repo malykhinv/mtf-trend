@@ -2426,6 +2426,9 @@ class PnoEngine:
         elif net_tp1_move <= 0.0:
             hard_block = True
             hard_block_reason = "non_positive_tp1_after_fee"
+        elif self._safe_divide(net_tp1_move, dstop_plan) < float(params.min_entry_rr):
+            hard_block = True
+            hard_block_reason = "rr_below_minimum"
 
         stage4_ready = not hard_block
         is_valid_setup = stage4_ready and final_score >= float(params.min_score)

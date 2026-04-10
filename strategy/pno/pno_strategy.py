@@ -109,6 +109,7 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_slip_plan_v1_fraction": params.slip_plan_v1_fraction,
             "pno_min_tick_fraction": params.min_tick_fraction,
             "pno_max_entry_pullback_fraction": params.max_entry_pullback_fraction,
+            "pno_min_entry_rr": params.min_entry_rr,
             "pno_tp1_share": params.tp1_share,
             "pno_be_arm_to_active_high_fraction": params.be_arm_to_active_high_fraction,
             "pno_be_buffer_r_fraction": params.be_buffer_r_fraction,

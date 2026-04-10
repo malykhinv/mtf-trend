@@ -121,6 +121,7 @@ def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:
         stage1_min_impulse_atr_pre=3.0,
         level_min_maturity_fraction=0.35,
         max_entry_pullback_fraction=0.45,
+        min_entry_rr=1.1,
         pullback_min_pump_fraction_5m=0.22,
         pullback_valid_max_v5=4.0,
         min_score=72.0,
@@ -147,6 +148,7 @@ def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:
     assert rebuilt.stage1_min_impulse_atr_pre == original.stage1_min_impulse_atr_pre
     assert rebuilt.level_min_maturity_fraction == original.level_min_maturity_fraction
     assert rebuilt.max_entry_pullback_fraction == original.max_entry_pullback_fraction
+    assert rebuilt.min_entry_rr == original.min_entry_rr
     assert rebuilt.pullback_min_pump_fraction_5m == original.pullback_min_pump_fraction_5m
     assert rebuilt.pullback_valid_max_v5 == original.pullback_valid_max_v5
     assert rebuilt.min_score == original.min_score
@@ -747,7 +749,114 @@ def test_pno_close_above_confirmation_enters_on_next_bar() -> None:
     assert trade.result_type == TradeResultType.TP2
     assert trade.metadata["entry_confirmation_mode"] == "close_above"
     assert trade.metadata["entry_signal_kind"] == "close_above"
+    assert trade.metadata["entry_price_actual"] == pytest.approx(10.02)
+    assert trade.metadata["sl_actual"] == pytest.approx(9.5)
+    assert trade.metadata["tp1"] == pytest.approx(10.5)
+    assert trade.metadata["tp2"] == pytest.approx(11.0)
+    assert trade.metadata["be_protect_price"] >= trade.metadata["entry_price_actual"]
+    assert trade.metadata["tp1"] > trade.metadata["entry_price_actual"]
     assert exit_idx == 3
+
+
+def test_pno_close_above_rejects_late_gap_when_entry_geometry_is_broken() -> None:
+    engine = PnoEngine()
+    one = engine._prepare_1m_frame(
+        pd.DataFrame(
+            {
+                "timestamp": [60_000, 120_000, 180_000, 240_000],
+                "open": [9.8, 9.9, 10.6, 10.7],
+                "high": [10.0, 10.2, 10.7, 10.8],
+                "low": [9.7, 9.85, 10.55, 10.65],
+                "close": [9.9, 10.05, 10.65, 10.75],
+                "volume": [10.0, 11.0, 12.0, 13.0],
+            }
+        )
+    )
+    armed = ArmedContext(
+        entry_idx=1,
+        stage1=Stage1Context(
+            start_idx=0,
+            start_timestamp=60_000,
+            pump_start_5m_idx=0,
+            pump_start_timestamp=60_000,
+            current_5m_idx=0,
+            active_high_idx=0,
+            active_high_timestamp=60_000,
+            active_high=10.5,
+            reference_high=10.5,
+            leg_start_idx=0,
+            leg_start_timestamp=60_000,
+            leg_start=9.0,
+            leg_size=1.5,
+            reference_leg_size=1.5,
+            pump_range_5m=1.5,
+            hold_floor=9.75,
+        ),
+        stage3=Stage3Context(
+            active_high_idx=0,
+            active_high_timestamp=60_000,
+            active_high=10.5,
+            pullback_start_idx=0,
+            pullback_low_idx=0,
+            pullback_low_timestamp=60_000,
+            pullback_low=9.5,
+            pullback_depth=1.0,
+            pullback_age_bars=2,
+            validation_timestamp=60_000,
+        ),
+        stage4=Stage4Context(
+            active_high_idx=0,
+            active_high_timestamp=60_000,
+            active_high=10.5,
+            pullback_low_idx=0,
+            pullback_low_timestamp=60_000,
+            pullback_low=9.5,
+            pullback_depth=1.0,
+            cluster_indices=(0,),
+            cluster_prices=(9.95,),
+            level=9.95,
+            level_pos=0.45,
+            touches=1,
+            cluster_first_idx=0,
+            cluster_last_idx=0,
+            level_valid_idx=0,
+            level_valid_timestamp=60_000,
+            level_low=9.5,
+            level_low_minor_break=False,
+            level_low_major_break=False,
+            penalty_level_low_break=0,
+            penalty_untested_highs=0,
+            base_bonus=0,
+            pno_index=1,
+            maturity_penalty=0,
+            pno_order_adj=8,
+            score_a=10,
+            score_b=10,
+            score_c=10,
+            score_d=4,
+            score_e=7,
+            score_tp2=5,
+            final_score=76.0,
+            entry_plan=10.0,
+            sl_plan=9.5,
+            low_last_red_plan=9.5,
+            tp1=10.5,
+            tp2=11.0,
+            stage4_ready=True,
+            hard_block=False,
+            is_valid_setup=True,
+            hard_block_reason=None,
+        ),
+    )
+
+    trade, exit_idx = engine._try_enter_and_simulate(
+        one=one,
+        params=PnoParams(symbol="TEST/USDT", pno_r_trade=20.0, entry_confirmation_mode="close_above"),
+        armed=armed,
+    )
+
+    assert trade is None
+    assert exit_idx == 1
 
 
 def test_pno_level_maturity_fraction_is_based_on_time_since_main_high() -> None:
