@@ -939,7 +939,7 @@ class PnoEngine:
                             "entry_price": round(float(trade.entry_price.value), 8),
                             "exit_price": round(float(trade.exit_price.value), 8),
                             "result_type": trade.result_type.value,
-                            "score": live_armed.stage4.final_score,
+                            "score": float(trade.metadata.get("final_score", live_armed.stage4.final_score)),
                         },
                     )
                     stage1 = None
@@ -2967,6 +2967,83 @@ class PnoEngine:
             return 3
         return 0
 
+    def _resolve_signal_bar_context_online(
+        self,
+        *,
+        one: OneMinuteFrame,
+        idx: int,
+        level: float,
+    ) -> dict[str, float]:
+        open_price = float(one.opens[idx])
+        high_price = float(one.highs[idx])
+        low_price = float(one.lows[idx])
+        close_price = float(one.closes[idx])
+        volume = float(one.volumes[idx])
+        bar_range = max(high_price - low_price, self._EPSILON)
+        body = abs(close_price - open_price)
+        recent_start = max(0, idx - 15)
+        recent_volumes = one.volumes[recent_start:idx]
+        recent_volume_median = float(np.nanmedian(recent_volumes)) if recent_volumes.size > 0 else np.nan
+        volume_vs_recent = (
+            self._safe_divide(volume, recent_volume_median)
+            if np.isfinite(recent_volume_median) and recent_volume_median > 0.0
+            else np.nan
+        )
+        close_clearance_pct = (
+            ((close_price - level) / level) * 100.0
+            if np.isfinite(level) and level > 0.0
+            else np.nan
+        )
+        return {
+            "signal_bar_body_share": body / bar_range,
+            "signal_bar_close_position": (close_price - low_price) / bar_range,
+            "signal_bar_volume_vs_recent": volume_vs_recent,
+            "signal_close_clearance_pct": close_clearance_pct,
+        }
+
+    def _resolve_close_trigger_score_adjustment(
+        self,
+        *,
+        stage4: Stage4Context,
+        signal_context: dict[str, float],
+    ) -> tuple[int, int, int, int]:
+        body_share = float(signal_context.get("signal_bar_body_share") or 0.0)
+        close_position = float(signal_context.get("signal_bar_close_position") or 0.0)
+        volume_vs_recent = float(signal_context.get("signal_bar_volume_vs_recent") or np.nan)
+        overhead_score = float(stage4.overhead_resistance_score)
+
+        if body_share >= 0.50 and close_position >= 0.66:
+            body_close_adj = 4
+        elif body_share >= 0.45 and close_position >= 0.60:
+            body_close_adj = 2
+        elif body_share < 0.35 or close_position < 0.55:
+            body_close_adj = -4
+        elif body_share < 0.45 or close_position < 0.60:
+            body_close_adj = -2
+        else:
+            body_close_adj = 0
+
+        if overhead_score <= 0.55:
+            overhead_adj = 3
+        elif overhead_score <= 0.60:
+            overhead_adj = 1
+        elif overhead_score >= 0.68:
+            overhead_adj = -3
+        elif overhead_score >= 0.60:
+            overhead_adj = -1
+        else:
+            overhead_adj = 0
+
+        if np.isfinite(volume_vs_recent) and volume_vs_recent >= 1.25:
+            volume_adj = 1
+        elif np.isfinite(volume_vs_recent) and volume_vs_recent < 1.0:
+            volume_adj = -1
+        else:
+            volume_adj = 0
+
+        total_adj = int(body_close_adj + overhead_adj + volume_adj)
+        return body_close_adj, overhead_adj, volume_adj, total_adj
+
     def _try_enter_and_simulate(
         self,
         *,
@@ -3001,6 +3078,31 @@ class PnoEngine:
             signal_kind = "close_above"
         else:
             return None, entry_idx
+
+        trigger_body_close_adj = 0
+        trigger_overhead_adj = 0
+        trigger_volume_adj = 0
+        trigger_score_adjustment = 0
+        trigger_adjusted_final_score = float(armed.stage4.final_score)
+        signal_context: dict[str, float] = {}
+        if confirmation_mode == "close_above":
+            signal_context = self._resolve_signal_bar_context_online(
+                one=one,
+                idx=entry_idx,
+                level=float(armed.stage4.level),
+            )
+            (
+                trigger_body_close_adj,
+                trigger_overhead_adj,
+                trigger_volume_adj,
+                trigger_score_adjustment,
+            ) = self._resolve_close_trigger_score_adjustment(
+                stage4=armed.stage4,
+                signal_context=signal_context,
+            )
+            trigger_adjusted_final_score = float(armed.stage4.final_score + trigger_score_adjustment)
+            if trigger_adjusted_final_score < float(params.min_score):
+                return None, entry_idx
 
         # If the actual executable entry is already above the original payoff geometry,
         # the setup has decayed and should wait for a new valid level/high cycle instead
@@ -3107,7 +3209,12 @@ class PnoEngine:
             "penalty_untested_highs": int(armed.stage4.penalty_untested_highs),
             "penalty_level_low_break": int(armed.stage4.penalty_level_low_break),
             "maturity_penalty": int(armed.stage4.maturity_penalty),
-            "final_score": round(float(armed.stage4.final_score), 4),
+            "base_final_score": round(float(armed.stage4.final_score), 4),
+            "final_score": round(float(trigger_adjusted_final_score), 4),
+            "trigger_score_body_close": int(trigger_body_close_adj),
+            "trigger_score_overhead": int(trigger_overhead_adj),
+            "trigger_score_volume": int(trigger_volume_adj),
+            "trigger_score_adjustment": int(trigger_score_adjustment),
             "low_last_red_plan": round(float(armed.stage4.low_last_red_plan), 8),
             "entry_price_planned_slip": round(float(armed.stage4.entry_plan - armed.stage4.level), 8),
             "pump_to_peak_bars": int(pump_to_peak_bars),
@@ -3115,6 +3222,21 @@ class PnoEngine:
             "entry_price_actual": round(float(entry_price), 8),
             "sl_actual": round(float(stop_loss), 8),
         }
+        if signal_context:
+            signal_volume_vs_recent = float(signal_context["signal_bar_volume_vs_recent"])
+            signal_close_clearance_pct = float(signal_context["signal_close_clearance_pct"])
+            metadata.update(
+                {
+                    "signal_bar_body_share": round(float(signal_context["signal_bar_body_share"]), 4),
+                    "signal_bar_close_position": round(float(signal_context["signal_bar_close_position"]), 4),
+                    "signal_bar_volume_vs_recent": (
+                        round(signal_volume_vs_recent, 4) if np.isfinite(signal_volume_vs_recent) else np.nan
+                    ),
+                    "signal_close_clearance_pct": (
+                        round(signal_close_clearance_pct, 4) if np.isfinite(signal_close_clearance_pct) else np.nan
+                    ),
+                }
+            )
 
         if confirmation_mode == "cross" and low_price <= armed.stage4.low_last_red_plan:
             pnl = self._net_leg_pnl(
