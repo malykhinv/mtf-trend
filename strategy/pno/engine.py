@@ -149,6 +149,14 @@ class Stage1Context:
     pump_body_share_mean: float = 0.0
     pump_flat_body_share: float = 0.0
     pump_body_wick_edge: float = 0.0
+    pump_micro_flat_bar_share: float = 0.0
+    active_high_bar_body_share: float = 0.0
+    active_high_bar_upper_wick_share: float = 0.0
+    active_high_bar_close_position: float = 0.0
+    pump_max_red_body_share_5m: float = 0.0
+    pump_counterflow_ratio_5m: float = 0.0
+    pump_max_red_body_share_1m: float = 0.0
+    pump_counterflow_ratio_1m: float = 0.0
     pre_pump_range_1h: float = 0.0
     pre_pump_range_2h: float = 0.0
     pump_vs_pre_1h_ratio: float = 0.0
@@ -184,6 +192,10 @@ class Stage3Context:
     pullback_depth: float
     pullback_age_bars: int
     validation_timestamp: int
+    post_high_ema20_pierce_count: int = 0
+    post_high_wick_share: float = 0.0
+    post_high_body_overlap_rate: float = 0.0
+    post_high_max_red_body_share: float = 0.0
 
 
 @dataclass(slots=True)
@@ -1210,6 +1222,14 @@ class PnoEngine:
                         "pump_body_share_mean": round(stage1.pump_body_share_mean, 4),
                         "pump_flat_body_share": round(stage1.pump_flat_body_share, 4),
                         "pump_body_wick_edge": round(stage1.pump_body_wick_edge, 4),
+                        "pump_micro_flat_bar_share": round(stage1.pump_micro_flat_bar_share, 4),
+                        "active_high_bar_body_share": round(stage1.active_high_bar_body_share, 4),
+                        "active_high_bar_upper_wick_share": round(stage1.active_high_bar_upper_wick_share, 4),
+                        "active_high_bar_close_position": round(stage1.active_high_bar_close_position, 4),
+                        "pump_max_red_body_share_5m": round(stage1.pump_max_red_body_share_5m, 4),
+                        "pump_counterflow_ratio_5m": round(stage1.pump_counterflow_ratio_5m, 4),
+                        "pump_max_red_body_share_1m": round(stage1.pump_max_red_body_share_1m, 4),
+                        "pump_counterflow_ratio_1m": round(stage1.pump_counterflow_ratio_1m, 4),
                         "pre_pump_range_1h": round(stage1.pre_pump_range_1h, 8),
                         "pre_pump_range_2h": round(stage1.pre_pump_range_2h, 8),
                         "pump_vs_pre_1h_ratio": round(stage1.pump_vs_pre_1h_ratio, 4),
@@ -1321,6 +1341,10 @@ class PnoEngine:
                         "hold_status_at_validation": hold_status,
                         "leg_start_status_at_validation": leg_start_status,
                         "hold_floor": round(stage1.hold_floor, 8),
+                        "post_high_ema20_pierce_count": int(stage3.post_high_ema20_pierce_count),
+                        "post_high_wick_share": round(stage3.post_high_wick_share, 4),
+                        "post_high_body_overlap_rate": round(stage3.post_high_body_overlap_rate, 4),
+                        "post_high_max_red_body_share": round(stage3.post_high_max_red_body_share, 4),
                     },
                 )
             else:
@@ -1610,6 +1634,37 @@ class PnoEngine:
         flat_body_threshold = np.maximum(0.18 * pump_tr, 0.08 * pump_pre_atr)
         pump_flat_body_share = float(np.mean(np.abs(pump_closes - pump_opens) <= flat_body_threshold))
         pump_body_wick_edge = pump_body_share_mean - pump_wick_share
+        pump_body_share = np.abs(pump_closes - pump_opens) / np.maximum(pump_tr, self._EPSILON)
+        micro_flat_threshold = np.maximum(0.45 * pump_pre_atr, 0.10 * leg_size)
+        pump_micro_flat_bar_share = float(
+            np.mean((pump_body_share <= 0.12) & (pump_tr <= micro_flat_threshold))
+        )
+        high_bar_open = float(five.opens[active_high_5m_idx])
+        high_bar_high = float(five.highs[active_high_5m_idx])
+        high_bar_low = float(five.lows[active_high_5m_idx])
+        high_bar_close = float(five.closes[active_high_5m_idx])
+        high_bar_range = max(high_bar_high - high_bar_low, self._EPSILON)
+        active_high_bar_body_share = abs(high_bar_close - high_bar_open) / high_bar_range
+        active_high_bar_upper_wick_share = (high_bar_high - max(high_bar_open, high_bar_close)) / high_bar_range
+        active_high_bar_close_position = (high_bar_close - high_bar_low) / high_bar_range
+        red_bodies_5m = np.maximum(pump_opens - pump_closes, 0.0)
+        green_bodies_5m = np.maximum(pump_closes - pump_opens, 0.0)
+        pump_max_red_body_share_5m = self._safe_divide(float(np.max(red_bodies_5m)), leg_size)
+        pump_counterflow_ratio_5m = self._safe_divide(
+            float(np.sum(red_bodies_5m)),
+            float(np.sum(green_bodies_5m)),
+        )
+        one_pump_opens = one.opens[start_idx : active_high_idx + 1]
+        one_pump_closes = one.closes[start_idx : active_high_idx + 1]
+        if one_pump_opens.size == 0 or one_pump_closes.size == 0:
+            return None
+        red_bodies_1m = np.maximum(one_pump_opens - one_pump_closes, 0.0)
+        green_bodies_1m = np.maximum(one_pump_closes - one_pump_opens, 0.0)
+        pump_max_red_body_share_1m = self._safe_divide(float(np.max(red_bodies_1m)), leg_size)
+        pump_counterflow_ratio_1m = self._safe_divide(
+            float(np.sum(red_bodies_1m)),
+            float(np.sum(green_bodies_1m)),
+        )
         if pump_path_efficiency < float(params.stage1_min_path_efficiency):
             return None
         if pump_wick_share > float(params.stage1_max_wick_share):
@@ -1619,6 +1674,18 @@ class PnoEngine:
         if pump_flat_body_share > float(params.stage1_max_flat_body_share):
             return None
         if pump_body_wick_edge < float(params.stage1_min_body_wick_edge):
+            return None
+        if pump_micro_flat_bar_share > float(params.stage1_max_micro_flat_bar_share):
+            return None
+        if active_high_bar_upper_wick_share > float(params.stage1_max_active_high_upper_wick_share):
+            return None
+        if pump_max_red_body_share_5m > float(params.stage1_max_red_body_share_5m):
+            return None
+        if pump_counterflow_ratio_5m > float(params.stage1_max_counterflow_ratio_5m):
+            return None
+        if pump_max_red_body_share_1m > float(params.stage1_max_red_body_share_1m):
+            return None
+        if pump_counterflow_ratio_1m > float(params.stage1_max_counterflow_ratio_1m):
             return None
 
         cumulative_quote_volume = self._range_sum(one.cumulative_quote_volume, start_idx, idx)
@@ -1672,6 +1739,14 @@ class PnoEngine:
             "pump_body_share_mean": pump_body_share_mean,
             "pump_flat_body_share": pump_flat_body_share,
             "pump_body_wick_edge": pump_body_wick_edge,
+            "pump_micro_flat_bar_share": pump_micro_flat_bar_share,
+            "active_high_bar_body_share": active_high_bar_body_share,
+            "active_high_bar_upper_wick_share": active_high_bar_upper_wick_share,
+            "active_high_bar_close_position": active_high_bar_close_position,
+            "pump_max_red_body_share_5m": pump_max_red_body_share_5m,
+            "pump_counterflow_ratio_5m": pump_counterflow_ratio_5m,
+            "pump_max_red_body_share_1m": pump_max_red_body_share_1m,
+            "pump_counterflow_ratio_1m": pump_counterflow_ratio_1m,
             "reference_high": reference_high,
             "reference_high_weight": reference_high_weight,
         }
@@ -1798,6 +1873,14 @@ class PnoEngine:
             pump_body_share_mean=float(quality_metrics["pump_body_share_mean"]),
             pump_flat_body_share=float(quality_metrics["pump_flat_body_share"]),
             pump_body_wick_edge=float(quality_metrics["pump_body_wick_edge"]),
+            pump_micro_flat_bar_share=float(quality_metrics["pump_micro_flat_bar_share"]),
+            active_high_bar_body_share=float(quality_metrics["active_high_bar_body_share"]),
+            active_high_bar_upper_wick_share=float(quality_metrics["active_high_bar_upper_wick_share"]),
+            active_high_bar_close_position=float(quality_metrics["active_high_bar_close_position"]),
+            pump_max_red_body_share_5m=float(quality_metrics["pump_max_red_body_share_5m"]),
+            pump_counterflow_ratio_5m=float(quality_metrics["pump_counterflow_ratio_5m"]),
+            pump_max_red_body_share_1m=float(quality_metrics["pump_max_red_body_share_1m"]),
+            pump_counterflow_ratio_1m=float(quality_metrics["pump_counterflow_ratio_1m"]),
             pre_pump_range_1h=pre_pump_range_1h,
             pre_pump_range_2h=pre_pump_range_2h,
             pump_vs_pre_1h_ratio=self._safe_divide(pump_range, pre_pump_range_1h),
@@ -1880,6 +1963,41 @@ class PnoEngine:
         )
         if not valid:
             return None, None
+        post_high_window = slice(active_high_5m_idx + 1, five_idx + 1)
+        post_high_opens = five.opens[post_high_window]
+        post_high_highs = five.highs[post_high_window]
+        post_high_lows = five.lows[post_high_window]
+        post_high_closes = five.closes[post_high_window]
+        post_high_ema20 = five.ema20[post_high_window]
+        post_high_ema20_pierce_count = 0
+        post_high_wick_share = 0.0
+        post_high_body_overlap_rate = 0.0
+        post_high_max_red_body_share = 0.0
+        if post_high_opens.size > 0:
+            post_high_ema20_pierce_count = int(
+                np.sum(post_high_lows <= (post_high_ema20 + self._EPSILON))
+            )
+            if post_high_ema20_pierce_count > 0:
+                return None, "post_high_pierced_ema20"
+            post_high_range = np.maximum(post_high_highs - post_high_lows, self._EPSILON)
+            upper_wicks = post_high_highs - np.maximum(post_high_opens, post_high_closes)
+            lower_wicks = np.minimum(post_high_opens, post_high_closes) - post_high_lows
+            post_high_wick_share = self._safe_divide(
+                float(np.sum(upper_wicks + lower_wicks)),
+                float(np.sum(post_high_range)),
+            )
+            red_bodies = np.maximum(post_high_opens - post_high_closes, 0.0)
+            post_high_max_red_body_share = self._safe_divide(float(np.max(red_bodies)), depth_reference)
+            if post_high_opens.size >= 2:
+                body_lows = np.minimum(post_high_opens, post_high_closes)
+                body_highs = np.maximum(post_high_opens, post_high_closes)
+                overlaps = (body_lows[1:] <= body_highs[:-1]) & (body_highs[1:] >= body_lows[:-1])
+                post_high_body_overlap_rate = float(np.mean(overlaps))
+            if (
+                post_high_wick_share > float(params.stage3_max_post_high_wick_share)
+                and post_high_body_overlap_rate > float(params.stage3_max_post_high_body_overlap_rate)
+            ):
+                return None, "post_high_too_noisy"
         return (
             Stage3Context(
                 active_high_idx=stage2.active_high_idx,
@@ -1892,6 +2010,10 @@ class PnoEngine:
                 pullback_depth=stage2.pullback_depth,
                 pullback_age_bars=stage2.pullback_age_bars,
                 validation_timestamp=int(one.timestamps[idx]),
+                post_high_ema20_pierce_count=post_high_ema20_pierce_count,
+                post_high_wick_share=post_high_wick_share,
+                post_high_body_overlap_rate=post_high_body_overlap_rate,
+                post_high_max_red_body_share=post_high_max_red_body_share,
             ),
             None,
         )
@@ -2912,10 +3034,22 @@ class PnoEngine:
             "pump_body_share_mean": round(float(armed.stage1.pump_body_share_mean), 4),
             "pump_flat_body_share": round(float(armed.stage1.pump_flat_body_share), 4),
             "pump_body_wick_edge": round(float(armed.stage1.pump_body_wick_edge), 4),
+            "pump_micro_flat_bar_share": round(float(armed.stage1.pump_micro_flat_bar_share), 4),
+            "active_high_bar_body_share": round(float(armed.stage1.active_high_bar_body_share), 4),
+            "active_high_bar_upper_wick_share": round(float(armed.stage1.active_high_bar_upper_wick_share), 4),
+            "active_high_bar_close_position": round(float(armed.stage1.active_high_bar_close_position), 4),
+            "pump_max_red_body_share_5m": round(float(armed.stage1.pump_max_red_body_share_5m), 4),
+            "pump_counterflow_ratio_5m": round(float(armed.stage1.pump_counterflow_ratio_5m), 4),
+            "pump_max_red_body_share_1m": round(float(armed.stage1.pump_max_red_body_share_1m), 4),
+            "pump_counterflow_ratio_1m": round(float(armed.stage1.pump_counterflow_ratio_1m), 4),
             "hold_status_at_validation": str(armed.stage1.hold_status_at_validation),
             "leg_start_status_at_validation": str(armed.stage1.leg_start_status_at_validation),
             "pullback_low": round(float(armed.stage3.pullback_low), 8),
             "pullback_depth": round(float(armed.stage3.pullback_depth), 8),
+            "post_high_ema20_pierce_count": int(armed.stage3.post_high_ema20_pierce_count),
+            "post_high_wick_share": round(float(armed.stage3.post_high_wick_share), 4),
+            "post_high_body_overlap_rate": round(float(armed.stage3.post_high_body_overlap_rate), 4),
+            "post_high_max_red_body_share": round(float(armed.stage3.post_high_max_red_body_share), 4),
             "level": round(float(armed.stage4.level), 8),
             "level_first_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_first_idx]),
             "level_last_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_last_idx]),

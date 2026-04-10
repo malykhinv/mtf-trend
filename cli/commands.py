@@ -439,6 +439,30 @@ def _build_pno_params_template_from_row(
         stage1_min_body_share_mean=_float_or_default("pno_stage1_min_body_share_mean", defaults.stage1_min_body_share_mean),
         stage1_max_flat_body_share=_float_or_default("pno_stage1_max_flat_body_share", defaults.stage1_max_flat_body_share),
         stage1_min_body_wick_edge=_float_or_default("pno_stage1_min_body_wick_edge", defaults.stage1_min_body_wick_edge),
+        stage1_max_micro_flat_bar_share=_float_or_default(
+            "pno_stage1_max_micro_flat_bar_share",
+            defaults.stage1_max_micro_flat_bar_share,
+        ),
+        stage1_max_active_high_upper_wick_share=_float_or_default(
+            "pno_stage1_max_active_high_upper_wick_share",
+            defaults.stage1_max_active_high_upper_wick_share,
+        ),
+        stage1_max_red_body_share_5m=_float_or_default(
+            "pno_stage1_max_red_body_share_5m",
+            defaults.stage1_max_red_body_share_5m,
+        ),
+        stage1_max_counterflow_ratio_5m=_float_or_default(
+            "pno_stage1_max_counterflow_ratio_5m",
+            defaults.stage1_max_counterflow_ratio_5m,
+        ),
+        stage1_max_red_body_share_1m=_float_or_default(
+            "pno_stage1_max_red_body_share_1m",
+            defaults.stage1_max_red_body_share_1m,
+        ),
+        stage1_max_counterflow_ratio_1m=_float_or_default(
+            "pno_stage1_max_counterflow_ratio_1m",
+            defaults.stage1_max_counterflow_ratio_1m,
+        ),
         stage1_min_pump_pct=_float_or_default("pno_stage1_min_pump_pct", defaults.stage1_min_pump_pct),
         stage1_min_pretrend_range_ratio_2h=_float_or_default(
             "pno_stage1_min_pretrend_range_ratio_2h",
@@ -447,6 +471,14 @@ def _build_pno_params_template_from_row(
         stage1_pre_pump_high_max_fraction_of_leg=_float_or_default(
             "pno_stage1_pre_pump_high_max_fraction_of_leg",
             defaults.stage1_pre_pump_high_max_fraction_of_leg,
+        ),
+        stage3_max_post_high_wick_share=_float_or_default(
+            "pno_stage3_max_post_high_wick_share",
+            defaults.stage3_max_post_high_wick_share,
+        ),
+        stage3_max_post_high_body_overlap_rate=_float_or_default(
+            "pno_stage3_max_post_high_body_overlap_rate",
+            defaults.stage3_max_post_high_body_overlap_rate,
         ),
         level_cluster_spread_v1=_float_or_default("pno_level_cluster_spread_v1", defaults.level_cluster_spread_v1),
         level_cluster_relaxed_spread_v1=_float_or_default(
@@ -2422,6 +2454,102 @@ def _build_pno_trade_path_rows(
     return trade_rows
 
 
+def _build_pno_levels_path_rows(
+    *,
+    levels_frame: pd.DataFrame,
+    row: dict[str, object],
+    source_status: str,
+    source_reason: str,
+) -> list[dict[str, object]]:
+    pump_start_timestamp_ms = _safe_int(row.get("pump_start_timestamp_ms"))
+    signal_timestamp_ms = (
+        _safe_int(row.get("entry_signal_timestamp_ms"))
+        or _safe_int(row.get("timestamp_ms"))
+        or _safe_int(row.get("entry_timestamp_ms"))
+    )
+    if levels_frame.empty or pump_start_timestamp_ms is None or signal_timestamp_ms is None:
+        return []
+    path_frame = _slice_pno_frame_by_timestamp(
+        levels_frame,
+        start_timestamp_ms=pump_start_timestamp_ms,
+        end_timestamp_ms=signal_timestamp_ms,
+    )
+    if path_frame.empty:
+        return []
+    active_high_timestamp_ms = _safe_int(row.get("active_high_timestamp_ms"))
+    pullback_low_timestamp_ms = _safe_int(row.get("pullback_low_timestamp_ms"))
+    level_first_timestamp_ms = _safe_int(row.get("level_first_local_high_timestamp_ms"))
+    level_last_timestamp_ms = _safe_int(row.get("level_last_local_high_timestamp_ms"))
+    trade_key = _resolve_pno_trade_key(row)
+    stage_key = _resolve_pno_stage_key_from_row(row)
+    path_timestamps = path_frame["timestamp"].to_numpy(dtype=np.int64, copy=False)
+
+    def _resolve_levels_idx(timestamp_ms: int | None) -> int | None:
+        if timestamp_ms is None or path_timestamps.size == 0:
+            return None
+        idx = int(np.searchsorted(path_timestamps, int(timestamp_ms), side="right") - 1)
+        if idx < 0:
+            return None
+        return min(idx, path_timestamps.size - 1)
+
+    active_high_levels_idx = _resolve_levels_idx(active_high_timestamp_ms)
+    pullback_low_levels_idx = _resolve_levels_idx(pullback_low_timestamp_ms)
+    level_first_levels_idx = _resolve_levels_idx(level_first_timestamp_ms)
+    level_last_levels_idx = _resolve_levels_idx(level_last_timestamp_ms)
+    signal_levels_idx = _resolve_levels_idx(signal_timestamp_ms)
+    path_rows: list[dict[str, object]] = []
+    prev_body_low: float | None = None
+    prev_body_high: float | None = None
+    for offset, (_, path_row) in enumerate(path_frame.iterrows()):
+        open_price = float(path_row["open"])
+        high_price = float(path_row["high"])
+        low_price = float(path_row["low"])
+        close_price = float(path_row["close"])
+        bar_range = max(high_price - low_price, 1e-12)
+        body_low = min(open_price, close_price)
+        body_high = max(open_price, close_price)
+        overlap_prev = (
+            prev_body_low is not None
+            and prev_body_high is not None
+            and body_low <= prev_body_high
+            and body_high >= prev_body_low
+        )
+        timestamp_ms = int(path_row["timestamp"])
+        path_rows.append(
+            {
+                "trade_key": trade_key,
+                "stage_key": stage_key,
+                "symbol": row.get("symbol"),
+                "source_stage": PNO_STAGE_5_TRADE,
+                "source_status": source_status,
+                "source_reason": source_reason,
+                "bar_offset": int(offset),
+                "timestamp_ms": timestamp_ms,
+                "open": open_price,
+                "high": high_price,
+                "low": low_price,
+                "close": close_price,
+                "volume": float(path_row["volume"]),
+                "ema9": float(path_row["ema9"]) if "ema9" in path_row.index else np.nan,
+                "ema20": float(path_row["ema20"]) if "ema20" in path_row.index else np.nan,
+                "body_share": round(abs(close_price - open_price) / bar_range, 4),
+                "upper_wick_share": round((high_price - max(open_price, close_price)) / bar_range, 4),
+                "lower_wick_share": round((min(open_price, close_price) - low_price) / bar_range, 4),
+                "body_overlap_prev": bool(overlap_prev),
+                "is_green": bool(close_price >= open_price),
+                "is_pump_start_bar": bool(timestamp_ms == pump_start_timestamp_ms),
+                "is_active_high_bar": bool(active_high_levels_idx is not None and offset == active_high_levels_idx),
+                "is_pullback_low_bar": bool(pullback_low_levels_idx is not None and offset == pullback_low_levels_idx),
+                "is_level_first_bar": bool(level_first_levels_idx is not None and offset == level_first_levels_idx),
+                "is_level_last_bar": bool(level_last_levels_idx is not None and offset == level_last_levels_idx),
+                "is_signal_bar": bool(signal_levels_idx is not None and offset == signal_levels_idx),
+            }
+        )
+        prev_body_low = body_low
+        prev_body_high = body_high
+    return path_rows
+
+
 def _resolve_pno_signal_bar_context(
     *,
     entry_frame: pd.DataFrame,
@@ -2635,6 +2763,7 @@ def _resolve_pno_pattern_context(
     levels_step_ms = _infer_pno_frame_step_ms(levels_frame, default_ms=5 * 60_000)
     entry_step_ms = _infer_pno_frame_step_ms(entry_frame, default_ms=60_000)
     signal_ts = signal_timestamp_ms or level_valid_timestamp_ms or _safe_int(row.get("timestamp_ms"))
+    active_high_levels_timestamp_ms: int | None = None
 
     if signal_ts is not None:
         signal_dt = pd.Timestamp(signal_ts, unit="ms", tz="UTC")
@@ -2693,15 +2822,74 @@ def _resolve_pno_pattern_context(
             highs = pump_window["high"].to_numpy(dtype=np.float64, copy=False)
             lows = pump_window["low"].to_numpy(dtype=np.float64, copy=False)
             closes = pump_window["close"].to_numpy(dtype=np.float64, copy=False)
+            pump_timestamps = pump_window["timestamp"].to_numpy(dtype=np.int64, copy=False)
             green_bodies = np.maximum(closes - opens, 0.0)
+            red_bodies = np.maximum(opens - closes, 0.0)
+            ranges = np.maximum(highs - lows, 1e-12)
             result["pump_first_bar_share_of_leg"] = round(float(green_bodies[0] / leg_size), 4)
             result["pump_best_bar_share_of_leg"] = round(float(np.max(green_bodies) / leg_size), 4)
             result["pump_last_bar_share_of_leg"] = round(float(green_bodies[-1] / leg_size), 4)
+            result["pump_shape_max_red_body_share_leg"] = round(float(np.max(red_bodies) / leg_size), 4)
+            result["pump_shape_counterflow_ratio"] = round(float(np.sum(red_bodies) / max(np.sum(green_bodies), 1e-12)), 4)
+            result["pump_shape_micro_flat_share"] = round(float(np.mean((np.abs(closes - opens) / ranges) <= 0.12)), 4)
             front_idx = max(1, int(np.ceil(len(pump_window) / 3.0)))
             front_move = float(np.max(highs[:front_idx]) - np.min(lows[:front_idx])) if front_idx > 0 else 0.0
             result["pump_front_third_share_of_leg"] = round(front_move / leg_size, 4)
             running_peak = np.maximum.accumulate(highs)
             result["pump_internal_drawdown_share"] = round(float(np.max((running_peak - lows) / leg_size)), 4)
+            active_high_idx = max(0, int(np.searchsorted(pump_timestamps, int(active_high_timestamp_ms), side="right") - 1))
+            active_high_levels_timestamp_ms = int(pump_timestamps[min(active_high_idx, len(pump_timestamps) - 1)])
+            result["active_high_levels_timestamp_ms"] = active_high_levels_timestamp_ms
+            high_bar_open = float(opens[active_high_idx])
+            high_bar_high = float(highs[active_high_idx])
+            high_bar_low = float(lows[active_high_idx])
+            high_bar_close = float(closes[active_high_idx])
+            high_bar_range = max(high_bar_high - high_bar_low, 1e-12)
+            high_bar_volume = float(pump_window["volume"].iloc[active_high_idx])
+            result["active_high_bar_body_share"] = round(abs(high_bar_close - high_bar_open) / high_bar_range, 4)
+            result["active_high_bar_upper_wick_share"] = round((high_bar_high - max(high_bar_open, high_bar_close)) / high_bar_range, 4)
+            result["active_high_bar_lower_wick_share"] = round((min(high_bar_open, high_bar_close) - high_bar_low) / high_bar_range, 4)
+            result["active_high_bar_close_position"] = round((high_bar_close - high_bar_low) / high_bar_range, 4)
+            result["active_high_bar_is_green"] = bool(high_bar_close >= high_bar_open)
+            result["active_high_bar_volume_vs_pump_median"] = round(
+                high_bar_volume / float(np.nanmedian(pump_window["volume"].to_numpy(dtype=np.float64, copy=False))),
+                4,
+            ) if float(np.nanmedian(pump_window["volume"].to_numpy(dtype=np.float64, copy=False))) > 0.0 else np.nan
+
+    if active_high_timestamp_ms is not None and signal_ts is not None and signal_ts > active_high_timestamp_ms:
+        post_high_levels_window = _slice_pno_frame_by_timestamp(
+            levels_frame,
+            start_timestamp_ms=(active_high_levels_timestamp_ms + levels_step_ms) if active_high_levels_timestamp_ms is not None else (active_high_timestamp_ms + levels_step_ms),
+            end_timestamp_ms=signal_ts,
+        )
+        post_high_levels_profile = _resolve_pno_window_profile(
+            post_high_levels_window,
+            prefix="post_high_levels",
+            anchor_price=active_high or 1.0,
+        )
+        result.update(post_high_levels_profile)
+        if not post_high_levels_window.empty:
+            opens = post_high_levels_window["open"].to_numpy(dtype=np.float64, copy=False)
+            highs = post_high_levels_window["high"].to_numpy(dtype=np.float64, copy=False)
+            lows = post_high_levels_window["low"].to_numpy(dtype=np.float64, copy=False)
+            closes = post_high_levels_window["close"].to_numpy(dtype=np.float64, copy=False)
+            red_bodies = np.maximum(opens - closes, 0.0)
+            ranges = np.maximum(highs - lows, 1e-12)
+            upper_wicks = np.maximum(highs - np.maximum(opens, closes), 0.0)
+            lower_wicks = np.maximum(np.minimum(opens, closes) - lows, 0.0)
+            if "ema20" in post_high_levels_window.columns:
+                ema20 = post_high_levels_window["ema20"].to_numpy(dtype=np.float64, copy=False)
+                result["post_high_levels_ema20_pierce_count"] = int(np.sum(lows <= ema20))
+                result["post_high_levels_close_below_ema20_share"] = round(float(np.mean(closes <= ema20)), 4)
+            body_lows = np.minimum(opens, closes)
+            body_highs = np.maximum(opens, closes)
+            overlap_rate = np.nan
+            if body_lows.size >= 2:
+                overlaps = (body_lows[1:] <= body_highs[:-1]) & (body_highs[1:] >= body_lows[:-1])
+                overlap_rate = float(np.mean(overlaps))
+            result["post_high_levels_body_overlap_rate"] = round(overlap_rate, 4) if np.isfinite(overlap_rate) else np.nan
+            result["post_high_levels_wick_share"] = round(float(np.sum(upper_wicks + lower_wicks) / max(np.sum(ranges), 1e-12)), 4)
+            result["post_high_levels_max_red_body_share_leg"] = round(float(np.max(red_bodies) / max(leg_size or np.nan, 1e-12)), 4) if leg_size is not None and leg_size > 0.0 else np.nan
 
     pullback_end_ts = pullback_low_timestamp_ms
     if active_high_timestamp_ms is not None and pullback_end_ts is not None:
@@ -2817,6 +3005,21 @@ def _build_pno_research_context_row(
     score = _safe_float(payload.get("final_score")) or _safe_float(payload.get("score"))
     pump_body_share_mean = _safe_float(payload.get("pump_body_share_mean")) or _safe_float(payload.get("pump_shape_body_share_avg"))
     pump_wick_share = _safe_float(payload.get("pump_wick_share"))
+    pump_micro_flat_share = _safe_float(payload.get("pump_micro_flat_bar_share"))
+    if pump_micro_flat_share is None:
+        pump_micro_flat_share = _safe_float(payload.get("pump_shape_micro_flat_share"))
+    pump_max_red_5m_share = _safe_float(payload.get("pump_max_red_body_share_5m"))
+    if pump_max_red_5m_share is None:
+        pump_max_red_5m_share = _safe_float(payload.get("pump_shape_max_red_body_share_leg"))
+    pump_counterflow_5m = _safe_float(payload.get("pump_counterflow_ratio_5m"))
+    if pump_counterflow_5m is None:
+        pump_counterflow_5m = _safe_float(payload.get("pump_shape_counterflow_ratio"))
+    post_high_wick_share = _safe_float(payload.get("post_high_wick_share"))
+    if post_high_wick_share is None:
+        post_high_wick_share = _safe_float(payload.get("post_high_levels_wick_share"))
+    post_high_overlap_rate = _safe_float(payload.get("post_high_body_overlap_rate"))
+    if post_high_overlap_rate is None:
+        post_high_overlap_rate = _safe_float(payload.get("post_high_levels_body_overlap_rate"))
     pullback_base_low = _safe_float(payload.get("pullback_base_low"))
     pullback_base_high = _safe_float(payload.get("pullback_base_high"))
     overhead_resistance_score = _safe_float(payload.get("overhead_resistance_score"))
@@ -2862,9 +3065,20 @@ def _build_pno_research_context_row(
     payload["pump_body_share_bucket"] = _bucketize_pno_value(pump_body_share_mean, thresholds=(0.35, 0.50, 0.65), labels=("body_small", "body_ok", "body_strong", "body_expansion"))
     payload["pump_flat_body_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_flat_body_share")), thresholds=(0.10, 0.20, 0.35), labels=("flat_low", "flat_ok", "flat_high", "flat_excessive"))
     payload["pump_body_wick_edge_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_body_wick_edge")), thresholds=(-0.05, 0.05, 0.20), labels=("body_lt_wick", "body_eq_wick", "body_gt_wick", "body_dominant"))
+    payload["pump_micro_flat_bucket"] = _bucketize_pno_value(pump_micro_flat_share, thresholds=(0.05, 0.15, 0.30), labels=("microflat_low", "microflat_ok", "microflat_high", "microflat_excessive"))
+    payload["active_high_upper_wick_bucket"] = _bucketize_pno_value(_safe_float(payload.get("active_high_bar_upper_wick_share")), thresholds=(0.15, 0.35, 0.55), labels=("high_wick_tight", "high_wick_ok", "high_wick_heavy", "high_wick_extreme"))
+    payload["active_high_close_position_bucket"] = _bucketize_pno_value(_safe_float(payload.get("active_high_bar_close_position")), thresholds=(0.35, 0.60, 0.80), labels=("high_close_low", "high_close_mid", "high_close_high", "high_close_top"))
+    payload["pump_max_red_5m_bucket"] = _bucketize_pno_value(pump_max_red_5m_share, thresholds=(0.10, 0.25, 0.40), labels=("red5m_small", "red5m_ok", "red5m_heavy", "red5m_extreme"))
+    payload["pump_counterflow_5m_bucket"] = _bucketize_pno_value(pump_counterflow_5m, thresholds=(0.15, 0.35, 0.60), labels=("counter5m_low", "counter5m_ok", "counter5m_heavy", "counter5m_extreme"))
+    payload["pump_max_red_1m_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_max_red_body_share_1m")), thresholds=(0.15, 0.30, 0.50), labels=("red1m_small", "red1m_ok", "red1m_heavy", "red1m_extreme"))
+    payload["pump_counterflow_1m_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pump_counterflow_ratio_1m")), thresholds=(0.20, 0.45, 0.75), labels=("counter1m_low", "counter1m_ok", "counter1m_heavy", "counter1m_extreme"))
     payload["pre_pump_ema_cross_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pre_pump_ema_crosses_1h")), thresholds=(1.0, 2.0), labels=("ema_cross_1", "ema_cross_2", "ema_cross_3plus"))
     payload["pullback_depth_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pullback_fraction_of_leg")), thresholds=(0.25, 0.40, 0.55), labels=("pb_shallow", "pb_balanced", "pb_deep", "pb_very_deep"))
     payload["pullback_age_bucket"] = _bucketize_pno_value(_safe_float(payload.get("pullback_age_bars")), thresholds=(3.0, 6.0, 10.0), labels=("pb_fast", "pb_normal", "pb_slow", "pb_stale"))
+    payload["post_high_wick_bucket"] = _bucketize_pno_value(post_high_wick_share, thresholds=(0.35, 0.55, 0.75), labels=("post_wick_light", "post_wick_ok", "post_wick_heavy", "post_wick_extreme"))
+    payload["post_high_overlap_bucket"] = _bucketize_pno_value(post_high_overlap_rate, thresholds=(0.20, 0.45, 0.70), labels=("post_overlap_low", "post_overlap_ok", "post_overlap_high", "post_overlap_extreme"))
+    post_high_pierces = _safe_int(payload.get("post_high_ema20_pierce_count"))
+    payload["post_high_ema20_pierce_bucket"] = "na" if post_high_pierces is None else ("pierce_0" if post_high_pierces <= 0 else "pierce_1" if post_high_pierces == 1 else "pierce_2plus")
     payload["level_maturity_bucket"] = _bucketize_pno_value(level_maturity, thresholds=(0.25, 0.50, 0.75), labels=("lvl_young", "lvl_working", "lvl_mature", "lvl_old"))
     touches_value = _safe_int(payload.get("touches"))
     payload["touches_bucket"] = "na" if touches_value is None else ("touch_1" if touches_value <= 1 else "touch_2" if touches_value == 2 else "touch_3plus")
@@ -2905,12 +3119,22 @@ def _summarize_pno_feature_buckets(frame: pd.DataFrame, *, scope: str) -> pd.Dat
         "pump_body_share_bucket",
         "pump_flat_body_bucket",
         "pump_body_wick_edge_bucket",
+        "pump_micro_flat_bucket",
+        "active_high_upper_wick_bucket",
+        "active_high_close_position_bucket",
+        "pump_max_red_5m_bucket",
+        "pump_counterflow_5m_bucket",
+        "pump_max_red_1m_bucket",
+        "pump_counterflow_1m_bucket",
         "sleep_compression_bucket",
         "pump_shape_bucket",
         "pump_drawdown_bucket",
         "pre_pump_ema_cross_bucket",
         "pullback_depth_bucket",
         "pullback_age_bucket",
+        "post_high_wick_bucket",
+        "post_high_overlap_bucket",
+        "post_high_ema20_pierce_bucket",
         "pullback_ema_hold_bucket",
         "level_maturity_bucket",
         "touches_bucket",
@@ -3059,9 +3283,11 @@ def _export_pno_research_context(
     trade_context_rows: list[dict[str, object]] = []
     trade_exit_reference_rows: list[dict[str, object]] = []
     trade_path_rows: list[dict[str, object]] = []
+    stage5_levels_path_rows: list[dict[str, object]] = []
     stage5_outcome_by_key: dict[str, str] = {}
     for row in trade_rows:
         symbol = str(row.get("symbol") or "")
+        prepared_levels_frame = _get_prepared_levels_frame(symbol)
         prepared_entry_frame = _get_prepared_entry_frame(symbol)
         signal_timestamp_ms = _safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("entry_timestamp_ms"))
         signal_context = _resolve_pno_signal_bar_context(
@@ -3091,6 +3317,14 @@ def _export_pno_research_context(
         trade_context_rows.append(enriched)
         trade_exit_reference_rows.append(_build_pno_trade_exit_reference_row(row))
         trade_path_rows.extend(_build_pno_trade_path_rows(entry_frame=prepared_entry_frame, row=row))
+        stage5_levels_path_rows.extend(
+            _build_pno_levels_path_rows(
+                levels_frame=prepared_levels_frame,
+                row=row,
+                source_status="passed",
+                source_reason=str(row.get("result_type") or row.get("category") or "trade"),
+            )
+        )
         stage_key = str(enriched.get("stage_key") or "")
         if stage_key:
             stage5_outcome_by_key[stage_key] = result_type
@@ -3104,6 +3338,7 @@ def _export_pno_research_context(
     for reason, rows in stage_rejections_by_stage.get(PNO_STAGE_5_TRADE, {}).items():
         for row in rows:
             symbol = str(row.get("symbol") or "")
+            prepared_levels_frame = _get_prepared_levels_frame(symbol)
             signal_timestamp_ms = _safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("timestamp_ms"))
             signal_context = _resolve_pno_signal_bar_context(
                 entry_frame=_get_prepared_entry_frame(symbol),
@@ -3129,12 +3364,21 @@ def _export_pno_research_context(
             enriched["is_triggered"] = False
             enriched["is_win"] = False
             stage5_candidate_rows.append(enriched)
+            stage5_levels_path_rows.extend(
+                _build_pno_levels_path_rows(
+                    levels_frame=prepared_levels_frame,
+                    row=row,
+                    source_status="rejected",
+                    source_reason=reason,
+                )
+            )
             stage_key = str(enriched.get("stage_key") or "")
             if stage_key:
                 stage5_outcome_by_key.setdefault(stage_key, f"rejected_{reason}")
 
     stage5_candidate_frame = pd.DataFrame(stage5_candidate_rows)
     stage5_candidate_frame.to_csv(research_dir / "stage5_trigger_context.csv", index=False)
+    pd.DataFrame(stage5_levels_path_rows).to_csv(research_dir / "stage5_levels_path_context.csv", index=False)
 
     stage4_context_rows: list[dict[str, object]] = []
     for row in stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, []):

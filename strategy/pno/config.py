@@ -56,6 +56,8 @@ class PnoParams:
     pullback_valid_max_v5: float = 4.5
     pullback_invalid_max_v5: float = 6.0
     pullback_max_age_bars: int = 12
+    stage3_max_post_high_wick_share: float = 0.72
+    stage3_max_post_high_body_overlap_rate: float = 0.65
     stage1_min_cumulative_quote_volume: float = 500_000.0
     stage1_pre_pump_ema_crosses_min: int = 1
     stage1_barcode_max_fraction_1h: float = 0.60
@@ -70,6 +72,12 @@ class PnoParams:
     stage1_min_body_share_mean: float = 0.22
     stage1_max_flat_body_share: float = 0.40
     stage1_min_body_wick_edge: float = -0.02
+    stage1_max_micro_flat_bar_share: float = 0.30
+    stage1_max_active_high_upper_wick_share: float = 0.58
+    stage1_max_red_body_share_5m: float = 0.38
+    stage1_max_counterflow_ratio_5m: float = 0.58
+    stage1_max_red_body_share_1m: float = 0.50
+    stage1_max_counterflow_ratio_1m: float = 0.72
     stage1_min_pump_pct: float = 0.015
     stage1_min_pretrend_range_ratio_2h: float = 2.0
     stage1_pre_pump_high_max_fraction_of_leg: float = 0.50
@@ -161,6 +169,10 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("pullback_invalid_max_v5 must be > pullback_valid_max_v5 > 0")
     if params.pullback_max_age_bars < 2:
         raise ValueError("pullback_max_age_bars must be >= 2")
+    if not 0.0 <= params.stage3_max_post_high_wick_share <= 1.0:
+        raise ValueError("stage3_max_post_high_wick_share must be in range [0, 1]")
+    if not 0.0 <= params.stage3_max_post_high_body_overlap_rate <= 1.0:
+        raise ValueError("stage3_max_post_high_body_overlap_rate must be in range [0, 1]")
     if params.stage1_min_cumulative_quote_volume <= 0.0:
         raise ValueError("stage1_min_cumulative_quote_volume must be > 0")
     if params.stage1_pre_pump_ema_crosses_min < 1:
@@ -189,6 +201,18 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("stage1_max_flat_body_share must be in range [0, 1]")
     if params.stage1_min_body_wick_edge < -1.0 or params.stage1_min_body_wick_edge > 1.0:
         raise ValueError("stage1_min_body_wick_edge must be in range [-1, 1]")
+    if not 0.0 <= params.stage1_max_micro_flat_bar_share <= 1.0:
+        raise ValueError("stage1_max_micro_flat_bar_share must be in range [0, 1]")
+    if not 0.0 <= params.stage1_max_active_high_upper_wick_share < 1.0:
+        raise ValueError("stage1_max_active_high_upper_wick_share must be in range [0, 1)")
+    if not 0.0 <= params.stage1_max_red_body_share_5m <= 1.0:
+        raise ValueError("stage1_max_red_body_share_5m must be in range [0, 1]")
+    if params.stage1_max_counterflow_ratio_5m < 0.0:
+        raise ValueError("stage1_max_counterflow_ratio_5m must be >= 0")
+    if not 0.0 <= params.stage1_max_red_body_share_1m <= 1.0:
+        raise ValueError("stage1_max_red_body_share_1m must be in range [0, 1]")
+    if params.stage1_max_counterflow_ratio_1m < 0.0:
+        raise ValueError("stage1_max_counterflow_ratio_1m must be >= 0")
     if params.stage1_min_pump_pct <= 0.0:
         raise ValueError("stage1_min_pump_pct must be > 0")
     if params.stage1_min_pretrend_range_ratio_2h <= 1.0:
