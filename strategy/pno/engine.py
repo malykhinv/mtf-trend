@@ -3272,6 +3272,19 @@ class PnoEngine:
             metadata=metadata,
         )
 
+    def _resolve_be_arm_fraction(
+        self,
+        *,
+        params: PnoParams,
+        confirmation_mode: str,
+        bars_since_entry_after: int,
+    ) -> float:
+        if confirmation_mode != "close_above":
+            return float(params.be_arm_to_active_high_fraction)
+        steps = max(int(bars_since_entry_after), 0) // max(int(params.close_above_be_step_bars), 1)
+        fraction = float(params.close_above_be_start_fraction) - (float(params.close_above_be_step_fraction) * steps)
+        return max(float(params.close_above_be_min_fraction), fraction)
+
     def _simulate_trade_path(
         self,
         *,
@@ -3292,12 +3305,20 @@ class PnoEngine:
         initial_risk = max(entry_price - initial_stop_loss, self._EPSILON)
         tp1_share = float(params.tp1_share)
         remainder_share = max(1.0 - tp1_share, 0.0)
-        be_arm_price = entry_price + (float(params.be_arm_to_active_high_fraction) * max(tp1 - entry_price, 0.0))
+        confirmation_mode = str(metadata.get("entry_confirmation_mode", getattr(params, "entry_confirmation_mode", "cross")))
+        initial_be_arm_fraction = self._resolve_be_arm_fraction(
+            params=params,
+            confirmation_mode=confirmation_mode,
+            bars_since_entry_after=0,
+        )
+        be_arm_price = entry_price + (initial_be_arm_fraction * max(tp1 - entry_price, 0.0))
         be_buffer = max(entry_price * float(params.min_tick_fraction), float(params.be_buffer_r_fraction) * initial_risk)
         be_protect_price = max(be_fee, entry_price + be_buffer)
         be_arm_r = self._safe_divide(be_arm_price - entry_price, initial_risk)
         be_armed = False
         be_arm_idx: int | None = None
+        be_arm_fraction_at_trigger: float | None = None
+        be_arm_price_at_trigger: float | None = None
         tp1_hit = False
         tp1_hit_idx: int | None = None
         tp2_hit_idx: int | None = None
@@ -3320,6 +3341,13 @@ class PnoEngine:
             low = float(one.lows[idx])
             high = float(one.highs[idx])
             close = float(one.closes[idx])
+            bars_since_entry_after = max(idx - entry_idx - 1, 0)
+            current_be_arm_fraction = self._resolve_be_arm_fraction(
+                params=params,
+                confirmation_mode=confirmation_mode,
+                bars_since_entry_after=bars_since_entry_after,
+            )
+            current_be_arm_price = entry_price + (current_be_arm_fraction * max(tp1 - entry_price, 0.0))
             max_favorable = max(max_favorable, high - entry_price)
             max_adverse = max(max_adverse, entry_price - low)
             active_stop = be_protect_price if be_armed else initial_stop_loss
@@ -3349,6 +3377,8 @@ class PnoEngine:
                     if not be_armed:
                         be_armed = True
                         be_arm_idx = idx
+                        be_arm_fraction_at_trigger = current_be_arm_fraction
+                        be_arm_price_at_trigger = current_be_arm_price
                     partial_realized_pnl = self._net_leg_pnl(
                         entry_price=entry_price,
                         exit_price=tp1,
@@ -3374,9 +3404,11 @@ class PnoEngine:
                         category = "tp2"
                         break
                     continue
-                if (not be_armed) and high >= be_arm_price:
+                if (not be_armed) and high >= current_be_arm_price:
                     be_armed = True
                     be_arm_idx = idx
+                    be_arm_fraction_at_trigger = current_be_arm_fraction
+                    be_arm_price_at_trigger = current_be_arm_price
             elif tp1_hit_idx is not None and idx > tp1_hit_idx:
                 if low <= be_protect_price:
                     exit_price = be_protect_price
@@ -3431,6 +3463,12 @@ class PnoEngine:
                 "tp1_share": round(float(tp1_share), 4),
                 "runner_share": round(float(remainder_share), 4),
                 "be_arm_price": round(float(be_arm_price), 8),
+                "be_arm_start_fraction": round(float(initial_be_arm_fraction), 4),
+                "be_arm_step_fraction": round(float(params.close_above_be_step_fraction), 4),
+                "be_arm_step_bars": int(params.close_above_be_step_bars),
+                "be_arm_min_fraction": round(float(params.close_above_be_min_fraction), 4),
+                "be_arm_price_at_trigger": round(float(be_arm_price_at_trigger), 8) if be_arm_price_at_trigger is not None else None,
+                "be_arm_fraction_at_trigger": round(float(be_arm_fraction_at_trigger), 4) if be_arm_fraction_at_trigger is not None else None,
                 "be_arm_r": round(float(be_arm_r), 6) if np.isfinite(be_arm_r) else np.nan,
                 "be_buffer": round(float(be_buffer), 8),
                 "be_protect_price": round(float(be_protect_price), 8),

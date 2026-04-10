@@ -99,6 +99,10 @@ class PnoParams:
     min_entry_rr: float = 1.0
     tp1_share: float = 0.50
     be_arm_to_active_high_fraction: float = 0.50
+    close_above_be_start_fraction: float = 0.70
+    close_above_be_step_fraction: float = 0.05
+    close_above_be_step_bars: int = 1
+    close_above_be_min_fraction: float = 0.25
     be_buffer_r_fraction: float = 0.05
 
 
@@ -239,6 +243,14 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("tp1_share must be in range (0, 1)")
     if not 0.0 < params.be_arm_to_active_high_fraction <= 1.0:
         raise ValueError("be_arm_to_active_high_fraction must be in range (0, 1]")
+    if not 0.0 < params.close_above_be_start_fraction <= 1.0:
+        raise ValueError("close_above_be_start_fraction must be in range (0, 1]")
+    if params.close_above_be_step_fraction < 0.0 or params.close_above_be_step_fraction > 1.0:
+        raise ValueError("close_above_be_step_fraction must be in range [0, 1]")
+    if params.close_above_be_step_bars < 1:
+        raise ValueError("close_above_be_step_bars must be >= 1")
+    if not 0.0 < params.close_above_be_min_fraction <= params.close_above_be_start_fraction:
+        raise ValueError("close_above_be_min_fraction must be in range (0, close_above_be_start_fraction]")
     if params.be_buffer_r_fraction < 0.0 or params.be_buffer_r_fraction > 1.0:
         raise ValueError("be_buffer_r_fraction must be in range [0, 1]")
     if params.slip_plan_v1_fraction < 0.0 or params.slip_plan_v1_fraction > 1.0:

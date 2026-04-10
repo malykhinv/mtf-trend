@@ -126,6 +126,10 @@ def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:
         min_entry_rr=1.1,
         pullback_min_pump_fraction_5m=0.22,
         pullback_valid_max_v5=4.0,
+        close_above_be_start_fraction=0.7,
+        close_above_be_step_fraction=0.05,
+        close_above_be_step_bars=2,
+        close_above_be_min_fraction=0.25,
         min_score=72.0,
         strong_score=84.0,
     )
@@ -153,6 +157,10 @@ def test_build_pno_params_from_row_roundtrips_strategy_params() -> None:
     assert rebuilt.min_entry_rr == original.min_entry_rr
     assert rebuilt.pullback_min_pump_fraction_5m == original.pullback_min_pump_fraction_5m
     assert rebuilt.pullback_valid_max_v5 == original.pullback_valid_max_v5
+    assert rebuilt.close_above_be_start_fraction == original.close_above_be_start_fraction
+    assert rebuilt.close_above_be_step_fraction == original.close_above_be_step_fraction
+    assert rebuilt.close_above_be_step_bars == original.close_above_be_step_bars
+    assert rebuilt.close_above_be_min_fraction == original.close_above_be_min_fraction
     assert rebuilt.min_score == original.min_score
     assert rebuilt.strong_score == original.strong_score
 
@@ -973,6 +981,120 @@ def test_pno_close_above_waits_for_better_trigger_when_signal_score_is_weak() ->
 
     assert trade is None
     assert exit_idx == 1
+
+
+def test_pno_close_above_uses_dynamic_be_ladder() -> None:
+    engine = PnoEngine()
+    one = engine._prepare_1m_frame(
+        pd.DataFrame(
+            {
+                "timestamp": [60_000, 120_000, 180_000, 240_000, 300_000, 360_000],
+                "open": [9.8, 9.9, 10.02, 10.10, 10.18, 10.03],
+                "high": [10.0, 10.1, 10.12, 10.18, 10.21, 10.08],
+                "low": [9.7, 9.85, 9.98, 10.05, 10.01, 9.99],
+                "close": [9.9, 10.02, 10.08, 10.16, 10.03, 10.01],
+                "volume": [10.0, 11.0, 12.0, 13.0, 12.0, 11.0],
+            }
+        )
+    )
+    armed = ArmedContext(
+        entry_idx=1,
+        stage1=Stage1Context(
+            start_idx=0,
+            start_timestamp=60_000,
+            pump_start_5m_idx=0,
+            pump_start_timestamp=60_000,
+            current_5m_idx=0,
+            active_high_idx=0,
+            active_high_timestamp=60_000,
+            active_high=10.3,
+            reference_high=10.3,
+            leg_start_idx=0,
+            leg_start_timestamp=60_000,
+            leg_start=9.0,
+            leg_size=1.5,
+            reference_leg_size=1.5,
+            pump_range_5m=1.5,
+            hold_floor=9.75,
+        ),
+        stage3=Stage3Context(
+            active_high_idx=0,
+            active_high_timestamp=60_000,
+            active_high=10.3,
+            pullback_start_idx=0,
+            pullback_low_idx=0,
+            pullback_low_timestamp=60_000,
+            pullback_low=9.5,
+            pullback_depth=1.0,
+            pullback_age_bars=2,
+            validation_timestamp=60_000,
+        ),
+        stage4=Stage4Context(
+            active_high_idx=0,
+            active_high_timestamp=60_000,
+            active_high=10.5,
+            pullback_low_idx=0,
+            pullback_low_timestamp=60_000,
+            pullback_low=9.5,
+            pullback_depth=1.0,
+            cluster_indices=(0,),
+            cluster_prices=(9.95,),
+            level=9.95,
+            level_pos=0.45,
+            touches=1,
+            cluster_first_idx=0,
+            cluster_last_idx=0,
+            level_valid_idx=0,
+            level_valid_timestamp=60_000,
+            level_low=9.5,
+            level_low_minor_break=False,
+            level_low_major_break=False,
+            penalty_level_low_break=0,
+            penalty_untested_highs=0,
+            base_bonus=0,
+            pno_index=1,
+            maturity_penalty=0,
+            pno_order_adj=8,
+            score_a=10,
+            score_b=10,
+            score_c=10,
+            score_d=4,
+            score_e=7,
+            score_tp2=5,
+            final_score=76.0,
+            entry_plan=10.0,
+            sl_plan=9.5,
+            low_last_red_plan=9.5,
+            tp1=10.3,
+            tp2=10.6,
+            stage4_ready=True,
+            hard_block=False,
+            is_valid_setup=True,
+            hard_block_reason=None,
+        ),
+    )
+
+    trade, exit_idx = engine._try_enter_and_simulate(
+        one=one,
+        params=PnoParams(
+            symbol="TEST/USDT",
+            pno_r_trade=20.0,
+            entry_confirmation_mode="close_above",
+            close_above_be_start_fraction=0.70,
+            close_above_be_step_fraction=0.05,
+            close_above_be_step_bars=1,
+            close_above_be_min_fraction=0.25,
+        ),
+        armed=armed,
+    )
+
+    assert trade is not None
+    assert trade.result_type == TradeResultType.BE
+    assert trade.metadata["be_armed"] is True
+    assert trade.metadata["be_arm_start_fraction"] == pytest.approx(0.7)
+    assert trade.metadata["be_arm_fraction_at_trigger"] == pytest.approx(0.65)
+    assert trade.metadata["be_arm_timestamp_ms"] == 300_000
+    assert exit_idx == 5
 
 
 def test_pno_level_maturity_fraction_is_based_on_time_since_main_high() -> None:

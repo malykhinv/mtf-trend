@@ -512,6 +512,22 @@ def _build_pno_params_template_from_row(
             "pno_be_arm_to_active_high_fraction",
             defaults.be_arm_to_active_high_fraction,
         ),
+        close_above_be_start_fraction=_float_or_default(
+            "pno_close_above_be_start_fraction",
+            defaults.close_above_be_start_fraction,
+        ),
+        close_above_be_step_fraction=_float_or_default(
+            "pno_close_above_be_step_fraction",
+            defaults.close_above_be_step_fraction,
+        ),
+        close_above_be_step_bars=_int_or_default(
+            "pno_close_above_be_step_bars",
+            defaults.close_above_be_step_bars,
+        ),
+        close_above_be_min_fraction=_float_or_default(
+            "pno_close_above_be_min_fraction",
+            defaults.close_above_be_min_fraction,
+        ),
         be_buffer_r_fraction=_float_or_default("pno_be_buffer_r_fraction", defaults.be_buffer_r_fraction),
     )
 

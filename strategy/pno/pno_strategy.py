@@ -112,6 +112,10 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_min_entry_rr": params.min_entry_rr,
             "pno_tp1_share": params.tp1_share,
             "pno_be_arm_to_active_high_fraction": params.be_arm_to_active_high_fraction,
+            "pno_close_above_be_start_fraction": params.close_above_be_start_fraction,
+            "pno_close_above_be_step_fraction": params.close_above_be_step_fraction,
+            "pno_close_above_be_step_bars": params.close_above_be_step_bars,
+            "pno_close_above_be_min_fraction": params.close_above_be_min_fraction,
             "pno_be_buffer_r_fraction": params.be_buffer_r_fraction,
             "deposit": params.pno_deposit,
         }
