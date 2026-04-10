@@ -1982,8 +1982,12 @@ def _build_trade_portfolio_component_events(
 
 
 def _month_labels_from_entry(frame: pd.DataFrame) -> pd.Series:
-    entry_timestamps = pd.to_datetime(
+    entry_values = pd.to_numeric(
         frame.get("entry_timestamp_ms", pd.Series(dtype="float64")),
+        errors="coerce",
+    )
+    entry_timestamps = pd.to_datetime(
+        entry_values,
         unit="ms",
         utc=True,
         errors="coerce",
@@ -2780,7 +2784,7 @@ def _build_holdout_search_summary(
             continue
 
         candidate_components = _build_search_component_candidates(
-            trade_model_events=trade_model_events,
+            trade_model_events=prepared_events,
             timeframe=str(timeframe),
             months_subset=train_months,
         )
@@ -2796,7 +2800,7 @@ def _build_holdout_search_summary(
         combo_specs = _build_search_combo_specs(candidate_components)
         combo_specs["timeframe"] = str(timeframe)
         combo_component_events = _build_search_combo_component_events(
-            trade_model_events=trade_model_events,
+            trade_model_events=prepared_events,
             timeframe=str(timeframe),
             candidate_components=candidate_components,
             combo_specs=combo_specs,
@@ -2953,7 +2957,7 @@ def _build_search_walk_forward(
             train_months = months[:fold_index]
             test_month = months[fold_index]
             candidate_components = _build_search_component_candidates(
-                trade_model_events=trade_model_events,
+                trade_model_events=prepared_events,
                 timeframe=str(timeframe),
                 months_subset=train_months,
             )
@@ -2972,7 +2976,7 @@ def _build_search_walk_forward(
                 continue
             combo_specs = _build_search_combo_specs(candidate_components)
             combo_component_events = _build_search_combo_component_events(
-                trade_model_events=trade_model_events,
+                trade_model_events=prepared_events,
                 timeframe=str(timeframe),
                 candidate_components=candidate_components,
                 combo_specs=combo_specs,
