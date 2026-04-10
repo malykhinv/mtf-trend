@@ -3044,6 +3044,29 @@ class PnoEngine:
         total_adj = int(body_close_adj + overhead_adj + volume_adj)
         return body_close_adj, overhead_adj, volume_adj, total_adj
 
+    def _resolve_close_trigger_filter_reason(
+        self,
+        *,
+        params: PnoParams,
+        stage3: Stage3Context,
+        stage4: Stage4Context,
+        signal_context: dict[str, float],
+    ) -> str | None:
+        entry_pos = float(stage4.entry_pos)
+        if entry_pos > float(params.close_above_max_entry_pos):
+            return "close_above_entry_pos_too_high"
+        pullback_fraction = self._safe_divide(float(stage3.pullback_depth), max(float(stage4.active_high) - float(stage3.pullback_low), self._EPSILON))
+        if pullback_fraction > float(params.close_above_max_pullback_fraction_of_leg):
+            return "close_above_pullback_too_deep"
+        if float(stage3.post_high_wick_share) > float(params.close_above_max_post_high_wick_share):
+            return "close_above_post_high_wick_too_high"
+        signal_volume_vs_recent = float(signal_context.get("signal_bar_volume_vs_recent") or np.nan)
+        if np.isfinite(signal_volume_vs_recent) and signal_volume_vs_recent < float(params.close_above_min_signal_volume_vs_recent):
+            return "close_above_signal_volume_too_low"
+        if not np.isfinite(signal_volume_vs_recent) and float(params.close_above_min_signal_volume_vs_recent) > 0.0:
+            return "close_above_signal_volume_missing"
+        return None
+
     def _try_enter_and_simulate(
         self,
         *,
@@ -3100,6 +3123,14 @@ class PnoEngine:
                 stage4=armed.stage4,
                 signal_context=signal_context,
             )
+            close_trigger_filter_reason = self._resolve_close_trigger_filter_reason(
+                params=params,
+                stage3=armed.stage3,
+                stage4=armed.stage4,
+                signal_context=signal_context,
+            )
+            if close_trigger_filter_reason is not None:
+                return None, entry_idx
             trigger_adjusted_final_score = float(armed.stage4.final_score + trigger_score_adjustment)
             if trigger_adjusted_final_score < float(params.min_score):
                 return None, entry_idx
@@ -3176,6 +3207,13 @@ class PnoEngine:
             "level_maturity_fraction": round(float(armed.stage4.level_maturity_fraction), 4),
             "level_age_bars": int(armed.stage4.level_age_bars),
             "entry_pos": round(float(armed.stage4.entry_pos), 4),
+            "pullback_fraction_of_leg": round(
+                self._safe_divide(
+                    float(armed.stage3.pullback_depth),
+                    max(float(armed.stage4.active_high) - float(armed.stage3.pullback_low), self._EPSILON),
+                ),
+                4,
+            ),
             "touches": int(armed.stage4.touches),
             "pno_index": int(armed.stage4.pno_index),
             "pullback_base_low": round(float(armed.stage4.pullback_base_low), 8) if armed.stage4.pullback_base_low is not None else None,

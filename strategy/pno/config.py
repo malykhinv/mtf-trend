@@ -97,6 +97,10 @@ class PnoParams:
     min_tick_fraction: float = 0.0001
     max_entry_pullback_fraction: float = 0.60
     min_entry_rr: float = 1.0
+    close_above_max_entry_pos: float = 0.55
+    close_above_max_pullback_fraction_of_leg: float = 0.55
+    close_above_max_post_high_wick_share: float = 0.60
+    close_above_min_signal_volume_vs_recent: float = 0.75
     tp1_share: float = 0.50
     be_arm_to_active_high_fraction: float = 0.50
     close_above_be_start_fraction: float = 0.70
@@ -261,6 +265,14 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("max_entry_pullback_fraction must be in range (0, 1]")
     if params.min_entry_rr <= 0.0:
         raise ValueError("min_entry_rr must be > 0")
+    if not 0.0 < params.close_above_max_entry_pos <= 1.0:
+        raise ValueError("close_above_max_entry_pos must be in range (0, 1]")
+    if not 0.0 < params.close_above_max_pullback_fraction_of_leg <= 1.0:
+        raise ValueError("close_above_max_pullback_fraction_of_leg must be in range (0, 1]")
+    if not 0.0 <= params.close_above_max_post_high_wick_share <= 1.0:
+        raise ValueError("close_above_max_post_high_wick_share must be in range [0, 1]")
+    if params.close_above_min_signal_volume_vs_recent < 0.0:
+        raise ValueError("close_above_min_signal_volume_vs_recent must be >= 0")
 
 
 def build_pno_grid() -> list[PnoParams]:

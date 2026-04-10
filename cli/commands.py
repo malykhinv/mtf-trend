@@ -507,6 +507,22 @@ def _build_pno_params_template_from_row(
         min_tick_fraction=_float_or_default("pno_min_tick_fraction", defaults.min_tick_fraction),
         max_entry_pullback_fraction=_float_or_default("pno_max_entry_pullback_fraction", defaults.max_entry_pullback_fraction),
         min_entry_rr=_float_or_default("pno_min_entry_rr", defaults.min_entry_rr),
+        close_above_max_entry_pos=_float_or_default(
+            "pno_close_above_max_entry_pos",
+            defaults.close_above_max_entry_pos,
+        ),
+        close_above_max_pullback_fraction_of_leg=_float_or_default(
+            "pno_close_above_max_pullback_fraction_of_leg",
+            defaults.close_above_max_pullback_fraction_of_leg,
+        ),
+        close_above_max_post_high_wick_share=_float_or_default(
+            "pno_close_above_max_post_high_wick_share",
+            defaults.close_above_max_post_high_wick_share,
+        ),
+        close_above_min_signal_volume_vs_recent=_float_or_default(
+            "pno_close_above_min_signal_volume_vs_recent",
+            defaults.close_above_min_signal_volume_vs_recent,
+        ),
         tp1_share=_float_or_default("pno_tp1_share", defaults.tp1_share),
         be_arm_to_active_high_fraction=_float_or_default(
             "pno_be_arm_to_active_high_fraction",
