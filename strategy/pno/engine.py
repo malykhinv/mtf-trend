@@ -13,7 +13,7 @@ from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
 from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
-from strategy.pno.config import PnoParams
+from strategy.pno.config import PNO_DEFAULT_RISK_PCT, PnoParams
 
 PNO_STAGE_1_PUMP = "stage_1_pump"
 PNO_STAGE_2_HIGH_PULLBACK = "stage_2_high_pullback"
@@ -3486,7 +3486,8 @@ class PnoEngine:
         entry_price: float,
         stop_loss: float,
     ) -> float:
-        trade_risk = params.pno_r_trade if params.pno_r_trade is not None else (params.pno_deposit * params.pno_risk_pct)
+        configured_trade_risk = params.pno_r_trade if params.pno_r_trade is not None else (params.pno_deposit * params.pno_risk_pct)
+        trade_risk = min(float(configured_trade_risk), float(params.pno_deposit) * float(PNO_DEFAULT_RISK_PCT))
         stop_distance = entry_price - stop_loss
         if trade_risk <= 0.0 or stop_distance <= self._EPSILON:
             return 0.0

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from constants import DEFAULT_BEE_BITE_DEPOSIT, DEFAULT_BEE_BITE_RISK_PCT, DEFAULT_COMMISSION_RATE
+from constants import DEFAULT_BEE_BITE_DEPOSIT, DEFAULT_COMMISSION_RATE
 from domain.enums.timeframe import Timeframe
 
 PnoTimeframePair = tuple[Timeframe, Timeframe]
@@ -31,6 +31,7 @@ PNO_SUPPORTED_ENTRY_TIMEFRAMES: tuple[Timeframe, ...] = tuple(
     dict.fromkeys(entry_timeframe for _levels_timeframe, entry_timeframe in PNO_SUPPORTED_TIMEFRAME_PAIRS)
 )
 PNO_SUPPORTED_ENTRY_CONFIRMATION_MODES: tuple[str, ...] = ("cross", "close_above")
+PNO_DEFAULT_RISK_PCT = 0.05
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +42,7 @@ class PnoParams:
     levels_timeframe: Timeframe = PNO_DEFAULT_LEVELS_TIMEFRAME
     entry_timeframe: Timeframe = PNO_DEFAULT_ENTRY_TIMEFRAME
     pno_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
-    pno_risk_pct: float = DEFAULT_BEE_BITE_RISK_PCT
+    pno_risk_pct: float = PNO_DEFAULT_RISK_PCT
     pno_r_trade: float | None = None
     fee_rate: float = DEFAULT_COMMISSION_RATE
     min_data_5m: int = 200
@@ -258,9 +259,10 @@ def build_pno_grid() -> list[PnoParams]:
 
 
 def with_pno_risk(params: PnoParams, *, deposit: float, risk_pct: float) -> PnoParams:
+    effective_risk_pct = min(float(risk_pct), PNO_DEFAULT_RISK_PCT)
     return replace(
         params,
         pno_deposit=deposit,
-        pno_risk_pct=risk_pct,
-        pno_r_trade=deposit * risk_pct,
+        pno_risk_pct=effective_risk_pct,
+        pno_r_trade=deposit * effective_risk_pct,
     )

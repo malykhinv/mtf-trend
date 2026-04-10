@@ -21,12 +21,14 @@ from domain.value_objects.price import Price
 from strategy.factory import build_strategy
 from strategy.pno import PnoParams, PnoStrategy
 from strategy.pno.config import (
+    PNO_DEFAULT_RISK_PCT,
     PNO_BACKTEST_TIMEFRAME_PAIRS,
     PNO_LIVE_TIMEFRAME_PAIRS,
     build_pno_grid,
     resolve_pno_default_timeframe_pair,
     validate_pno_params,
     validate_pno_timeframe_pair,
+    with_pno_risk,
 )
 from strategy.pno.engine import (
     ArmedContext,
@@ -160,6 +162,13 @@ def test_build_pno_grid_includes_cross_and_close_confirmation_variants() -> None
 
     assert [params.entry_confirmation_mode for params in grid] == ["cross", "close_above"]
     assert [params.pno_variant_id for params in grid] == ["baseline_cross", "baseline_close"]
+
+
+def test_with_pno_risk_caps_to_five_percent() -> None:
+    params = with_pno_risk(PnoParams(symbol="TEST/USDT"), deposit=1_000.0, risk_pct=0.20)
+
+    assert params.pno_risk_pct == pytest.approx(PNO_DEFAULT_RISK_PCT)
+    assert params.pno_r_trade == pytest.approx(50.0)
 
 
 def test_plot_pno_diagnostics_writes_trade_and_stage_artifacts(tmp_path, monkeypatch) -> None:
