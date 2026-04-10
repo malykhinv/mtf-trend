@@ -2999,6 +2999,20 @@ class PnoEngine:
         else:
             return None, entry_idx
 
+        # If the actual executable entry is already above the original payoff geometry,
+        # the setup has decayed and should wait for a new valid level/high cycle instead
+        # of forcing a nonsensical late entry.
+        active_high_price = float(armed.stage4.active_high)
+        tp1_price = float(armed.stage4.tp1)
+        tp2_price = float(armed.stage4.tp2)
+        if (
+            stop_loss >= (entry_price - self._EPSILON)
+            or entry_price >= (active_high_price - self._EPSILON)
+            or entry_price >= (tp1_price - self._EPSILON)
+            or tp2_price <= (entry_price + self._EPSILON)
+        ):
+            return None, entry_idx
+
         position_size = self._resolve_position_size(params=params, entry_price=entry_price, stop_loss=stop_loss)
         if position_size <= 0.0:
             return None, entry_idx

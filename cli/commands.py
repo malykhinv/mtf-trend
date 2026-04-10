@@ -1457,7 +1457,7 @@ def _render_pno_trade_chart(
     if entry_confirmation_mode == "cross":
         display_entry_price = level_price or entry_plan_price or entry_price
     else:
-        display_entry_price = entry_plan_price or entry_price
+        display_entry_price = entry_price or entry_plan_price
 
     category = str(trade_row.get("category") or "")
     result_type = str(trade_row.get("result_type") or "")
@@ -1578,7 +1578,6 @@ def _render_pno_trade_chart(
             ("Entry", display_entry_price),
             ("Level", level_price),
             ("SL", initial_stop_loss),
-            ("PB Low", pullback_low if show_pullback_low_tag else None),
             ("Exit", exit_price_actual),
         ]
     )
@@ -1619,7 +1618,7 @@ def _render_pno_trade_chart(
             level_start_idx - 0.48,
             entry_idx + 0.48,
             colors=_PNO_PLOT_LEVEL,
-            linewidth=1.4,
+            linewidth=0.95,
             alpha=0.9,
             zorder=5,
         )
@@ -1628,7 +1627,7 @@ def _render_pno_trade_chart(
             level_start_idx - 0.48,
             entry_idx + 0.48,
             colors=_PNO_PLOT_LEVEL,
-            linewidth=1.2,
+            linewidth=0.85,
             alpha=0.72,
             zorder=5,
         )
@@ -1666,32 +1665,6 @@ def _render_pno_trade_chart(
                 leader_end_x=price_axis_right_x,
                 text_y=tag_positions.get("High"),
             )
-    if pullback_low is not None:
-        low_idx = entry_idx
-        if pullback_low_timestamp_ms is not None:
-            low_idx = int(np.searchsorted(timestamps, pullback_low_timestamp_ms, side="left"))
-            low_idx = min(max(low_idx, 0), len(plot_frame) - 1)
-        _draw_pno_level_segment(
-            ax_price,
-            timestamps=timestamps,
-            start_timestamp_ms=pullback_low_timestamp_ms,
-            end_timestamp_ms=entry_timestamp_ms,
-            value=pullback_low,
-            color="#38bdf8",
-            linewidth=1.0,
-            alpha=0.68,
-        )
-        if show_pullback_low_tag:
-            _annotate_pno_axis_price_tag(
-                ax_price,
-                y=pullback_low,
-                label="PB Low",
-                color="#38bdf8",
-                leader_start_x=float(low_idx),
-                leader_end_x=price_axis_right_x,
-                text_y=tag_positions.get("PB Low"),
-            )
-
     initial_phase_end_idx = exit_idx
     for candidate_idx in (be_arm_idx, tp1_hit_idx, tp2_hit_idx):
         if candidate_idx is not None:
