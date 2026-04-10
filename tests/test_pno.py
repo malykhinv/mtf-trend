@@ -749,6 +749,7 @@ def test_pno_close_above_confirmation_enters_on_next_bar() -> None:
     assert trade.result_type == TradeResultType.TP2
     assert trade.metadata["entry_confirmation_mode"] == "close_above"
     assert trade.metadata["entry_signal_kind"] == "close_above"
+    assert trade.metadata["entry_signal_timestamp_ms"] == 120_000
     assert trade.metadata["entry_price_actual"] == pytest.approx(10.02)
     assert trade.metadata["sl_actual"] == pytest.approx(9.5)
     assert trade.metadata["tp1"] == pytest.approx(10.5)
