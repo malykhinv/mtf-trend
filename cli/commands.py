@@ -874,6 +874,8 @@ _PNO_TRADE_CHART_HEIGHT_RATIOS = [4, 2, 1]
 _PNO_TRADE_SLEEP_LOOKBACK_BARS = 12
 _PNO_PLOT_AXIS_TAG_LABEL_WIDTH = 7
 _PNO_PLOT_AXIS_TAG_TEXT_WIDTH = 20
+_PNO_PLOT_SAVEFIG_KWARGS = {"dpi": 100, "facecolor": _PNO_PLOT_FIGURE_FACE, "pil_kwargs": {"compress_level": 1}}
+_PNO_STAGE_REVIEW_SAVEFIG_KWARGS = {"dpi": 72, "facecolor": _PNO_PLOT_FIGURE_FACE, "pil_kwargs": {"compress_level": 1}}
 
 
 def _draw_pno_candles(ax: plt.Axes, frame: pd.DataFrame, x_values: np.ndarray) -> None:
@@ -1414,8 +1416,7 @@ def _render_pno_trade_chart(
         _draw_pno_candles_on_columns(ax_levels, levels_window, x_column="plot_x", candle_width=_PNO_PLOT_5M_CANDLE_WIDTH)
     ax_price.plot(x_values, ema9, color=_PNO_PLOT_EMA9, linewidth=1.2, alpha=0.28, zorder=2.2)
     ax_price.plot(x_values, ema20, color=_PNO_PLOT_EMA20, linewidth=1.2, alpha=0.24, zorder=2.1)
-    for axis in (ax_levels, ax_price):
-        axis.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=1.15, alpha=0.82, zorder=5)
+    ax_price.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=0.95, alpha=0.26, zorder=5)
 
     tag_positions = _resolve_pno_axis_tag_positions(
         [
@@ -1626,7 +1627,7 @@ def _render_pno_trade_chart(
     file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{trade_index:03d}_{_sanitize_plot_name(result_type.lower() or category.lower() or 'trade')}.png"
     output_path = charts_dir / file_name
     fig.subplots_adjust(left=0.10, right=0.80, top=0.94, bottom=0.06, hspace=0.05)
-    fig.savefig(output_path, dpi=100, facecolor=_PNO_PLOT_FIGURE_FACE)
+    fig.savefig(output_path, **_PNO_PLOT_SAVEFIG_KWARGS)
     plt.close(fig)
     return output_path
 
@@ -1737,8 +1738,7 @@ def _render_pno_stage_review_chart(
     if (not is_stage1) and np.isfinite(ema20).any():
         ax_price.plot(x, ema20, color=_PNO_PLOT_EMA20, linewidth=0.8, alpha=0.20, zorder=2)
     if pump_idx is not None:
-        ax_price.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=1.0, alpha=0.86, zorder=5)
-        ax_volume.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=1.0, alpha=0.72, zorder=4)
+        ax_price.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=0.9, alpha=0.24, zorder=5)
 
     if not is_stage1:
         active_high = _safe_float(review_row.get("active_high"))
@@ -1875,7 +1875,7 @@ def _render_pno_stage_review_chart(
     file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{review_index:04d}_{_sanitize_plot_name(stage_id)}_{sanitized_status}_{sanitized_reason}.png"
     output_path = charts_dir / file_name
     fig.subplots_adjust(left=0.08, right=0.985, top=0.985, bottom=0.10, hspace=0.04)
-    fig.savefig(output_path, dpi=72, facecolor=_PNO_PLOT_FIGURE_FACE)
+    fig.savefig(output_path, **_PNO_STAGE_REVIEW_SAVEFIG_KWARGS)
     plt.close(fig)
     return str(output_path)
 
@@ -2971,6 +2971,7 @@ def _plot_pno_diagnostics_for_symbols(
     total_stage_events = 0
     total_charts_generated = 0
     all_trade_rows: list[dict[str, object]] = []
+    diagnostics_payloads: list[dict[str, object]] = []
     total_symbols = len(symbol_frames)
     symbol_render_start_time = time.monotonic()
     stage_rows_by_stage: dict[str, list[dict[str, object]]] = {
@@ -3046,21 +3047,21 @@ def _plot_pno_diagnostics_for_symbols(
         if not trade_rows and symbol_stage_events == 0 and symbol_stage_rejections == 0:
             continue
 
+        diagnostics_payloads.append(
+            {
+                "symbol": symbol,
+                "mtf_frames": mtf_frames,
+                "trade_rows": trade_rows,
+                "diagnostics": diagnostics,
+            }
+        )
+        base_name = symbol.replace("/", "_")
         payload = {
             "symbol": symbol,
             "trades_generated": len(trade_rows),
             "diagnostics": diagnostics,
             "trades": trade_rows,
         }
-        chart_paths = _render_pno_trade_charts_for_symbol(
-            charts_dir=charts_dir,
-            symbol=symbol,
-            mtf_frames=mtf_frames,
-            trade_rows=trade_rows,
-        )
-        total_charts_generated += len(chart_paths)
-        payload["chart_paths"] = chart_paths
-        base_name = symbol.replace("/", "_")
         (diagnostics_dir / f"{base_name}_diagnostics.json").write_text(
             _to_compact_json(payload),
             encoding="utf-8",
@@ -3085,6 +3086,50 @@ def _plot_pno_diagnostics_for_symbols(
                 _format_eta_compact(eta_seconds),
             )
 
+    _export_pno_research_context(
+        diagnostics_dir=diagnostics_dir,
+        symbol_frames=symbol_frames,
+        trade_rows=all_trade_rows,
+        stage_rows_by_stage=stage_rows_by_stage,
+        stage_rejections_by_stage=stage_rejections_by_stage,
+    )
+
+    chart_symbols_total = sum(1 for item in diagnostics_payloads if item["trade_rows"])
+    chart_symbols_done = 0
+    chart_render_start_time = time.monotonic()
+    for item in diagnostics_payloads:
+        symbol = str(item["symbol"])
+        trade_rows = list(item["trade_rows"])
+        if not trade_rows:
+            continue
+        chart_paths = _render_pno_trade_charts_for_symbol(
+            charts_dir=charts_dir,
+            symbol=symbol,
+            mtf_frames=item["mtf_frames"],
+            trade_rows=trade_rows,
+        )
+        total_charts_generated += len(chart_paths)
+        base_name = symbol.replace("/", "_")
+        diagnostics_path = diagnostics_dir / f"{base_name}_diagnostics.json"
+        payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+        payload["chart_paths"] = chart_paths
+        diagnostics_path.write_text(_to_compact_json(payload), encoding="utf-8")
+        chart_symbols_done += 1
+        if chart_symbols_total > 0 and (chart_symbols_done == chart_symbols_total or chart_symbols_done % 10 == 0):
+            elapsed = max(time.monotonic() - chart_render_start_time, 1e-9)
+            rate = chart_symbols_done / elapsed
+            remaining = chart_symbols_total - chart_symbols_done
+            eta_seconds = remaining / rate if rate > 0.0 else None
+            logger.info(
+                "%s: pno trade charts %s/%s (%.1f%%) png=%s eta=%s",
+                log_prefix,
+                chart_symbols_done,
+                chart_symbols_total,
+                (chart_symbols_done / chart_symbols_total) * 100.0,
+                total_charts_generated,
+                _format_eta_compact(eta_seconds),
+            )
+
     _export_pno_stage_reviews(
         diagnostics_dir=diagnostics_dir,
         symbol_frames=symbol_frames,
@@ -3093,13 +3138,6 @@ def _plot_pno_diagnostics_for_symbols(
         selected_stage_ids=selected_stage_ids,
         logger=logger,
         log_prefix=log_prefix,
-    )
-    _export_pno_research_context(
-        diagnostics_dir=diagnostics_dir,
-        symbol_frames=symbol_frames,
-        trade_rows=all_trade_rows,
-        stage_rows_by_stage=stage_rows_by_stage,
-        stage_rejections_by_stage=stage_rejections_by_stage,
     )
 
     logger.info(
