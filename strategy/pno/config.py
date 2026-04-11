@@ -96,7 +96,7 @@ class PnoParams:
     slip_plan_v1_fraction: float = 0.10
     min_tick_fraction: float = 0.0001
     max_entry_pullback_fraction: float = 0.60
-    min_entry_rr: float = 1.0
+    min_entry_rr: float = 0.0
     close_above_max_entry_pos: float = 1.0
     close_above_max_pullback_fraction_of_leg: float = 1.0
     close_above_max_post_high_wick_share: float = 1.0

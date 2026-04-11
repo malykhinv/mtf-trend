@@ -529,7 +529,7 @@ class PnoEngine:
             sleep_end_idx,
             stage1_confirm_idx,
             stage1_hold_price,
-        ) = self._build_bee_bite_stage1_state(
+        ) = self._build_stage1_state(
             levels_frame=work,
             entry_frame=entry_frame,
             timestamps=work["timestamp"].astype("int64").to_numpy(),
@@ -586,7 +586,7 @@ class PnoEngine:
             pre_trade_median_24=work["pre_trade_median_24"].astype("float64").to_numpy(),
         )
 
-    def _build_bee_bite_stage1_state(
+    def _build_stage1_state(
         self,
         *,
         levels_frame: pd.DataFrame,
@@ -2426,7 +2426,7 @@ class PnoEngine:
         elif net_tp1_move <= 0.0:
             hard_block = True
             hard_block_reason = "non_positive_tp1_after_fee"
-        elif self._safe_divide(net_tp1_move, dstop_plan) <= float(params.min_entry_rr):
+        elif self._safe_divide(net_tp1_move, dstop_plan) < float(params.min_entry_rr):
             hard_block = True
             hard_block_reason = "rr_below_minimum"
 

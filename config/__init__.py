@@ -27,18 +27,10 @@ from constants import (
     DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD,
 )
 from domain.enums.timeframe import Timeframe
-from strategy.bee_bite.config import (
-    get_bee_bite_runtime,
-    parse_bee_bite_grid_mode,
-    parse_bee_bite_profile_id,
-    parse_bee_bite_reclaim_mode,
-    parse_bee_bite_retest_mode,
-)
 from strategy.pno.config import (
     PNO_DEFAULT_ENTRY_TIMEFRAME,
     PNO_DEFAULT_LEVELS_TIMEFRAME,
 )
-from strategy.post_pump_absorption.config import parse_post_pump_absorption_profile_id
 
 __all__ = [
     "AppConfig",
@@ -49,7 +41,7 @@ __all__ = [
     "load_config",
 ]
 
-SUPPORTED_STRATEGY_IDS = {"bee_bite", "post_pump_absorption", "pno"}
+SUPPORTED_STRATEGY_IDS = {"pno"}
 
 
 # region Приватные
@@ -77,7 +69,7 @@ def _parse_timeframe(value: str, *, env_name: str) -> Timeframe:
     raise ValueError(f"Invalid {env_name}: {value}. Supported values: {supported}")
 
 
-def _parse_strategy_id(value: str | None, *, default: str = "bee_bite") -> str:
+def _parse_strategy_id(value: str | None, *, default: str = "pno") -> str:
     strategy_id = (value or default).strip().lower()
     if strategy_id not in SUPPORTED_STRATEGY_IDS:
         supported = ", ".join(sorted(SUPPORTED_STRATEGY_IDS))
@@ -135,60 +127,22 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     strategy_entry_timeframe = _parse_timeframe(
         os.getenv(
             "ENTRY_TIMEFRAME",
-            (
-                Timeframe.M3.value
-                if strategy_id == "post_pump_absorption"
-                else (PNO_DEFAULT_ENTRY_TIMEFRAME.value if strategy_id == "pno" else Timeframe.M15.value)
-            ),
+            PNO_DEFAULT_ENTRY_TIMEFRAME.value,
         ),
         env_name="ENTRY_TIMEFRAME",
     )
     strategy_levels_timeframe = _parse_timeframe(
         os.getenv(
             "LEVELS_TIMEFRAME",
-            (
-                strategy_entry_timeframe.value
-                if strategy_id == "post_pump_absorption"
-                else (PNO_DEFAULT_LEVELS_TIMEFRAME.value if strategy_id == "pno" else Timeframe.D1.value)
-            ),
+            PNO_DEFAULT_LEVELS_TIMEFRAME.value,
         ),
         env_name="LEVELS_TIMEFRAME",
     )
 
-    bee_bite_profile = parse_bee_bite_profile_id(os.getenv("BEE_BITE_PROFILE"))
-    bee_bite_runtime = get_bee_bite_runtime(bee_bite_profile)
     strategy_cfg = StrategyConfig(
         strategy_id=strategy_id,
         levels_timeframe=strategy_levels_timeframe,
         entry_timeframe=strategy_entry_timeframe,
-        bee_bite_profile=bee_bite_profile,
-        bee_bite_grid_mode=parse_bee_bite_grid_mode(os.getenv("BEE_BITE_GRID_MODE")),
-        bee_bite_reclaim_mode=parse_bee_bite_reclaim_mode(
-            os.getenv("BEE_BITE_RECLAIM_MODE"),
-            default=bee_bite_runtime.reclaim_mode,
-        ),
-        bee_bite_retest_mode=parse_bee_bite_retest_mode(
-            os.getenv("BEE_BITE_RETEST_MODE"),
-            default=bee_bite_runtime.retest_mode,
-        ),
-        bee_bite_cooldown_hours=int(os.getenv("BEE_BITE_COOLDOWN_HOURS", os.getenv("BEE_BITE_COOLDOWN_BARS", str(bee_bite_runtime.cooldown_hours)))),
-        bee_bite_max_age_range_hours=int(os.getenv("BEE_BITE_MAX_AGE_RANGE_HOURS", os.getenv("BEE_BITE_MAX_AGE_RANGE", str(bee_bite_runtime.max_age_range_hours)))),
-        bee_bite_portfolio_top_n=(
-            int(os.getenv("BEE_BITE_TOP_N"))
-            if os.getenv("BEE_BITE_TOP_N") is not None
-            else None
-        ),
-        bee_bite_deposit=float(os.getenv("BEE_BITE_DEPOSIT", str(DEFAULT_BEE_BITE_DEPOSIT))),
-        bee_bite_risk_pct=float(os.getenv("BEE_BITE_RISK_PCT", str(DEFAULT_BEE_BITE_RISK_PCT))),
-        post_pump_absorption_profile=parse_post_pump_absorption_profile_id(
-            os.getenv("POST_PUMP_ABSORPTION_PROFILE")
-        ),
-        post_pump_absorption_deposit=float(
-            os.getenv("POST_PUMP_ABSORPTION_DEPOSIT", str(DEFAULT_BEE_BITE_DEPOSIT))
-        ),
-        post_pump_absorption_risk_pct=float(
-            os.getenv("POST_PUMP_ABSORPTION_RISK_PCT", str(DEFAULT_BEE_BITE_RISK_PCT))
-        ),
         pno_deposit=float(os.getenv("PNO_DEPOSIT", str(DEFAULT_BEE_BITE_DEPOSIT))),
         pno_risk_pct=float(os.getenv("PNO_RISK_PCT", str(DEFAULT_BEE_BITE_RISK_PCT))),
     )

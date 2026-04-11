@@ -16,7 +16,7 @@ class ExitManagerConfig:
     tp1_close_ratio: float = TP1_CLOSE_RATIO
     be_plus_offset_ratio: float = 0.0
     trailing_offset_ratio: float | None = None
-    bee_bite_mode: bool = False
+    atr_trailing_after_tp1: bool = False
 
 
 @dataclass(slots=True)
@@ -67,7 +67,7 @@ class ExitManager:
             close_leg(tp1_size, position.take_profit_1.value)
             position.tp1_done = True
             position.sl_moved_to_be = True
-            if self.config.bee_bite_mode:
+            if self.config.atr_trailing_after_tp1:
                 update_stop(position.entry_price.value * 1.001)
                 position.highest_close_since_tp1 = candle.close.value
             else:
@@ -102,7 +102,7 @@ class ExitManager:
             close_leg(tp1_size, position.take_profit_1.value)
             position.tp1_done = True
             position.sl_moved_to_be = True
-            if self.config.bee_bite_mode:
+            if self.config.atr_trailing_after_tp1:
                 update_stop(position.entry_price.value * 0.999)
                 position.lowest_close_since_tp1 = candle.close.value
             else:
@@ -127,7 +127,7 @@ class ExitManager:
         side: PositionSide,
         update_stop: Callable[[float], None],
     ) -> None:
-        if self.config.bee_bite_mode and position.tp1_done and position.atr_bg is not None and position.atr_bg > 0:
+        if self.config.atr_trailing_after_tp1 and position.tp1_done and position.atr_bg is not None and position.atr_bg > 0:
             if side == PositionSide.LONG:
                 if position.highest_close_since_tp1 is None:
                     position.highest_close_since_tp1 = candle.close.value

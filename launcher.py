@@ -1,33 +1,29 @@
-"""Run predefined modes without typing the raw CLI command."""
+"""PNO-only launcher for common project modes."""
 
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from ctypes import windll
-from pathlib import Path
 from typing import Any
 
 from cli import commands
 from config import AppConfig, load_config
 
-MODE_FETCH_CACHE = "fetch-cache"
+MODE_FETCH_DATA = "fetch-data"
 MODE_UPDATE_CACHE = "update-cache"
-MODE_BACKTEST = "analyze-cache"
-MODE_PPA_RESEARCH = "ppa-research"
-MODE_HOURLY_PUMP_RESEARCH = "hourly-pump-research"
-MODE_QUALITY = "check-quality"
+MODE_RUN_BACKTEST = "run-backtest"
+MODE_PNO_STAGE = "pno-stage"
+MODE_CHECK_QUALITY = "check-quality"
 MODE_CLEAR_CACHE = "clear-cache"
 
 MODE_LABELS: dict[str, str] = {
-    MODE_FETCH_CACHE: "Cache fetch",
-    MODE_UPDATE_CACHE: "Cache update",
-    MODE_BACKTEST: "Analyze cache with strategy",
-    MODE_PPA_RESEARCH: "Run PPA research",
-    MODE_HOURLY_PUMP_RESEARCH: "Run hourly pump research",
-    MODE_QUALITY: "Check cache quality",
+    MODE_FETCH_DATA: "Fetch market cache",
+    MODE_UPDATE_CACHE: "Update market cache",
+    MODE_RUN_BACKTEST: "Run PNO backtest",
+    MODE_PNO_STAGE: "Run PNO stage diagnostics",
+    MODE_CHECK_QUALITY: "Check cache quality",
     MODE_CLEAR_CACHE: "Clear cache",
 }
 
@@ -76,90 +72,66 @@ def _configure_console_encoding() -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="launcher", description="Run project modes without typing raw CLI commands")
+    parser = argparse.ArgumentParser(prog="launcher", description="Run PNO project modes without typing raw CLI commands")
     parser.add_argument("--env", default=".env", help="Path to env file")
     parser.add_argument("--mode", choices=tuple(MODE_LABELS.keys()), default=None, help="Single run mode")
-    parser.add_argument("--config", default=None, help="JSON file with a batch of tasks")
-    parser.add_argument("--top-n", type=int, default=None, help="Top symbols for fetch/update or limit after stage-1 filter")
+    parser.add_argument("--top-n", type=int, default=None, help="Limit symbols after liquidity ranking")
     parser.add_argument("--min-volume-usd", type=float, default=None, help="Minimum 24h volume in USD")
-    parser.add_argument("--days", type=int, default=30, help="Number of days for fetch/update")
-    parser.add_argument("--timeframes", nargs="*", default=None, help="Fetch/update timeframes, e.g. 15m 10m 5m 3m")
-    parser.add_argument("--skip-open-interest", action="store_true", default=False, help="Skip open interest fetching for fetch/update")
+    parser.add_argument("--days", type=int, default=30, help="Number of trailing days")
+    parser.add_argument("--timeframes", nargs="*", default=None, help="Cache timeframes, e.g. 5m 1m")
+    parser.add_argument("--skip-open-interest", action="store_true", default=False, help="Skip open interest fetching")
     parser.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
-    parser.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
-    parser.add_argument("--levels-tf", default=None, help="Levels timeframe")
-    parser.add_argument("--entry-tf", default=None, help="Entry timeframe")
-    parser.add_argument("--strategy", choices=["bee_bite", "post_pump_absorption", "pno"], default=None, help="Strategy id for analyze-cache mode")
-    parser.add_argument("--bee-bite-profile", choices=["A", "B", "C"], default=None, help="Bee bite profile")
-    parser.add_argument("--bee-bite-grid", choices=["baseline", "expanded", "research"], default=None, help="Bee bite grid mode")
-    parser.add_argument("--bee-bite-reclaim-mode", choices=["strict", "balanced", "aggressive"], default=None, help="Bee bite reclaim mode")
-    parser.add_argument("--bee-bite-retest-mode", choices=["confirmation", "immediate"], default=None, help="Bee bite entry mode")
-    parser.add_argument("--bee-bite-cooldown-hours", "--bee-bite-cooldown-bars", dest="bee_bite_cooldown_hours", type=int, default=None, help="Cooldown for bee_bite in hours")
-    parser.add_argument("--bee-bite-max-age-range-hours", "--bee-bite-max-age-range", dest="bee_bite_max_age_range_hours", type=int, default=None, help="Max range age for bee_bite in hours")
-    parser.add_argument("--ppa-profile", choices=["loose", "balanced", "strict"], default=None, help="Post pump absorption profile")
-    parser.add_argument("--ppa-deposit", type=float, default=None, help="Deposit used for post_pump_absorption sizing")
-    parser.add_argument("--ppa-risk-pct", type=float, default=None, help="Risk per trade for post_pump_absorption")
+    parser.add_argument("--symbols", nargs="*", default=None, help="Explicit symbol list, e.g. BTC/USDT ETH/USDT")
+    parser.add_argument("--levels-tf", default=None, help="Levels timeframe for PNO")
+    parser.add_argument("--entry-tf", default=None, help="Entry timeframe for PNO")
+    parser.add_argument("--strategy", choices=["pno"], default="pno", help="Strategy id")
     parser.add_argument("--pno-deposit", type=float, default=None, help="Deposit used for PNO sizing")
     parser.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per trade for PNO")
-    parser.add_argument("--selection-profile", choices=["loose", "balanced", "strict"], default=None, help="Hourly pump research selection profile")
-    parser.add_argument("--asia-start-hour-utc", type=int, default=None, help="Hourly pump research Asia session start hour in UTC")
-    parser.add_argument("--asia-end-hour-utc", type=int, default=None, help="Hourly pump research Asia session end hour in UTC")
-    parser.add_argument("--trigger-minute", type=int, default=None, help="Hourly pump research trigger minute inside the hour")
-    parser.add_argument("--max-follow-minutes", type=int, default=None, help="Hourly pump research max follow window in minutes")
-    parser.add_argument("--output-dir", default=None, help="Directory for diagnostic files")
+    parser.add_argument("--pno-entry-confirmation-mode", choices=["baseline_cross", "close_above"], default=None, help="PNO entry confirmation mode")
+    parser.add_argument("--pno-stage", type=int, default=None, help="Single PNO stage to export")
+    parser.add_argument("--pno-through-stage", type=int, default=None, help="Export all PNO stages through this number")
+    parser.add_argument("--output-dir", default=None, help="Directory for results or diagnostics")
     parser.add_argument("--output", default=None, help="Output JSON/CSV path")
-    parser.add_argument("--plot", default=None, help="Save diagnostic files for the best combination (true/false)")
+    parser.add_argument("--plot", default=None, help="Save diagnostic files (true/false)")
     parser.add_argument("--id", type=int, default=None, help="Combination ID for plot-from-results mode")
     parser.add_argument("--plot-from-results", action="store_true", help="Build diagnostics from results.csv without a full backtest")
     parser.add_argument("--results-input", default=None, help="Path to CSV with results for --plot-from-results")
     return parser
 
 
-def _task_namespace(task: dict[str, Any], cli_args: argparse.Namespace) -> argparse.Namespace:
+def _task_namespace(cli_args: argparse.Namespace) -> argparse.Namespace:
     return argparse.Namespace(
-        top_n=int(task["top_n"]) if "top_n" in task and task.get("top_n") is not None else cli_args.top_n,
-        min_volume_usd=task.get("min_volume_usd", cli_args.min_volume_usd),
-        days=int(task.get("days", cli_args.days)),
-        timeframes=task.get("timeframes", cli_args.timeframes),
-        skip_open_interest=_to_bool(task.get("skip_open_interest"), fallback=cli_args.skip_open_interest) if "skip_open_interest" in task else cli_args.skip_open_interest,
-        end_timestamp_ms=task.get("end_timestamp_ms", cli_args.end_timestamp_ms),
-        symbols=task.get("symbols", cli_args.symbols),
-        levels_tf=task.get("levels_tf", cli_args.levels_tf),
-        entry_tf=task.get("entry_tf", cli_args.entry_tf),
-        strategy=task.get("strategy", cli_args.strategy),
-        bee_bite_profile=task.get("bee_bite_profile", cli_args.bee_bite_profile),
-        bee_bite_grid=task.get("bee_bite_grid", cli_args.bee_bite_grid),
-        bee_bite_reclaim_mode=task.get("bee_bite_reclaim_mode", cli_args.bee_bite_reclaim_mode),
-        bee_bite_retest_mode=task.get("bee_bite_retest_mode", cli_args.bee_bite_retest_mode),
-        bee_bite_cooldown_hours=int(task["bee_bite_cooldown_hours"]) if "bee_bite_cooldown_hours" in task and task.get("bee_bite_cooldown_hours") is not None else (int(task["bee_bite_cooldown_bars"]) if "bee_bite_cooldown_bars" in task and task.get("bee_bite_cooldown_bars") is not None else cli_args.bee_bite_cooldown_hours),
-        bee_bite_max_age_range_hours=int(task["bee_bite_max_age_range_hours"]) if "bee_bite_max_age_range_hours" in task and task.get("bee_bite_max_age_range_hours") is not None else (int(task["bee_bite_max_age_range"]) if "bee_bite_max_age_range" in task and task.get("bee_bite_max_age_range") is not None else cli_args.bee_bite_max_age_range_hours),
-        ppa_profile=task.get("ppa_profile", cli_args.ppa_profile),
-        ppa_deposit=float(task["ppa_deposit"]) if "ppa_deposit" in task and task.get("ppa_deposit") is not None else cli_args.ppa_deposit,
-        ppa_risk_pct=float(task["ppa_risk_pct"]) if "ppa_risk_pct" in task and task.get("ppa_risk_pct") is not None else cli_args.ppa_risk_pct,
-        pno_deposit=float(task["pno_deposit"]) if "pno_deposit" in task and task.get("pno_deposit") is not None else cli_args.pno_deposit,
-        pno_risk_pct=float(task["pno_risk_pct"]) if "pno_risk_pct" in task and task.get("pno_risk_pct") is not None else cli_args.pno_risk_pct,
-        selection_profile=task.get("selection_profile", cli_args.selection_profile),
-        asia_start_hour_utc=int(task["asia_start_hour_utc"]) if "asia_start_hour_utc" in task and task.get("asia_start_hour_utc") is not None else cli_args.asia_start_hour_utc,
-        asia_end_hour_utc=int(task["asia_end_hour_utc"]) if "asia_end_hour_utc" in task and task.get("asia_end_hour_utc") is not None else cli_args.asia_end_hour_utc,
-        trigger_minute=int(task["trigger_minute"]) if "trigger_minute" in task and task.get("trigger_minute") is not None else cli_args.trigger_minute,
-        max_follow_minutes=int(task["max_follow_minutes"]) if "max_follow_minutes" in task and task.get("max_follow_minutes") is not None else cli_args.max_follow_minutes,
-        output_dir=task.get("output_dir", cli_args.output_dir),
-        output=task.get("output", cli_args.output),
-        results_input=task.get("results_input", cli_args.results_input),
-        plot=_to_bool(task.get("plot"), fallback=cli_args.plot) if "plot" in task else _to_bool(cli_args.plot, fallback=False),
-        plot_from_results=_to_bool(task.get("plot_from_results"), fallback=cli_args.plot_from_results) if "plot_from_results" in task else cli_args.plot_from_results,
-        id=int(task["id"]) if "id" in task and task.get("id") is not None else cli_args.id,
+        top_n=cli_args.top_n,
+        min_volume_usd=cli_args.min_volume_usd,
+        days=cli_args.days,
+        timeframes=cli_args.timeframes,
+        skip_open_interest=cli_args.skip_open_interest,
+        end_timestamp_ms=cli_args.end_timestamp_ms,
+        symbols=cli_args.symbols,
+        levels_tf=cli_args.levels_tf,
+        entry_tf=cli_args.entry_tf,
+        strategy="pno",
+        pno_deposit=cli_args.pno_deposit,
+        pno_risk_pct=cli_args.pno_risk_pct,
+        pno_entry_confirmation_mode=cli_args.pno_entry_confirmation_mode,
+        pno_stage=cli_args.pno_stage,
+        pno_through_stage=cli_args.pno_through_stage,
+        output_dir=cli_args.output_dir,
+        output=cli_args.output,
+        results_input=cli_args.results_input,
+        plot=_to_bool(cli_args.plot, fallback=False),
+        plot_from_results=cli_args.plot_from_results,
+        id=cli_args.id,
     )
 
 
 def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> int:
     handlers = {
-        MODE_FETCH_CACHE: commands.fetch_data,
+        MODE_FETCH_DATA: commands.fetch_data,
         MODE_UPDATE_CACHE: commands.update_cache,
-        MODE_BACKTEST: commands.run_backtest,
-        MODE_PPA_RESEARCH: commands.run_ppa_research,
-        MODE_HOURLY_PUMP_RESEARCH: commands.run_hourly_pump_research,
-        MODE_QUALITY: commands.check_quality,
+        MODE_RUN_BACKTEST: commands.run_backtest,
+        MODE_PNO_STAGE: commands.run_pno_stage,
+        MODE_CHECK_QUALITY: commands.check_quality,
         MODE_CLEAR_CACHE: commands.clear_cache,
     }
     return handlers[mode](config, task_args)
@@ -177,47 +149,14 @@ def _prompt_menu() -> str:
         print("Invalid number. Try again.")
 
 
-def _load_tasks(config_path: Path) -> dict[str, Any]:
-    return json.loads(config_path.read_text(encoding="utf-8"))
-
-
-def _run_batch(config: AppConfig, cli_args: argparse.Namespace, payload: dict[str, Any]) -> int:
-    tasks = payload.get("tasks", [])
-    if not tasks:
-        print("Config file has no tasks: key 'tasks' is empty.")
-        return 1
-    continue_on_error = bool(_to_bool(payload.get("continue_on_error"), fallback=False))
-    for index, task in enumerate(tasks, start=1):
-        mode = str(task.get("mode", "")).strip()
-        if mode not in MODE_LABELS:
-            print(f"[{index}] Unknown mode '{mode}'")
-            if continue_on_error:
-                continue
-            return 1
-        print(f"[{index}] {MODE_LABELS[mode]}: start")
-        task_args = _task_namespace(task, cli_args)
-        code = _run_mode(config, mode, task_args)
-        print(f"[{index}] {MODE_LABELS[mode]}: completed with code={code}")
-        if code != 0 and not continue_on_error:
-            return code
-    return 0
-
-
 def main() -> int:
     _force_single_thread_mode()
     _configure_console_encoding()
     parser = _build_parser()
     args = parser.parse_args()
-    config_payload = None
-    env_path = args.env
-    if args.config:
-        config_payload = _load_tasks(Path(args.config))
-        env_path = str(config_payload.get("env_path", env_path))
-    app_config = load_config(env_path)
-    if config_payload:
-        return _run_batch(app_config, args, config_payload)
+    app_config = load_config(args.env)
     mode = args.mode or _prompt_menu()
-    task_args = _task_namespace({}, args)
+    task_args = _task_namespace(args)
     return _run_mode(app_config, mode, task_args)
 
 

@@ -406,8 +406,8 @@ def test_select_pno_plot_params_row_by_stage_falls_back_to_rejections() -> None:
     }
     results = pd.DataFrame(
         [
-            {"pno_variant_id": "baseline_cross", "trades_count": 0, "profit_factor": 0.0, "ppa_stage_hits_stage_2_high_pullback": 0},
-            {"pno_variant_id": "baseline_close", "trades_count": 0, "profit_factor": 0.0, "ppa_stage_hits_stage_2_high_pullback": 0},
+            {"pno_variant_id": "baseline_cross", "trades_count": 0, "profit_factor": 0.0, "pno_stage_hits_stage_2_high_pullback": 0},
+            {"pno_variant_id": "baseline_close", "trades_count": 0, "profit_factor": 0.0, "pno_stage_hits_stage_2_high_pullback": 0},
         ]
     )
     strategy = PnoStrategy(deposit=1_000.0, risk_pct=0.02)
