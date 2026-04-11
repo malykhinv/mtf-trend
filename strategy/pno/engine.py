@@ -193,6 +193,7 @@ class Stage3Context:
     pullback_age_bars: int
     validation_timestamp: int
     post_high_ema20_pierce_count: int = 0
+    post_high_close_below_ema20_count: int = 0
     post_high_wick_share: float = 0.0
     post_high_body_overlap_rate: float = 0.0
     post_high_max_red_body_share: float = 0.0
@@ -1342,6 +1343,7 @@ class PnoEngine:
                         "leg_start_status_at_validation": leg_start_status,
                         "hold_floor": round(stage1.hold_floor, 8),
                         "post_high_ema20_pierce_count": int(stage3.post_high_ema20_pierce_count),
+                        "post_high_close_below_ema20_count": int(stage3.post_high_close_below_ema20_count),
                         "post_high_wick_share": round(stage3.post_high_wick_share, 4),
                         "post_high_body_overlap_rate": round(stage3.post_high_body_overlap_rate, 4),
                         "post_high_max_red_body_share": round(stage3.post_high_max_red_body_share, 4),
@@ -1970,6 +1972,7 @@ class PnoEngine:
         post_high_closes = five.closes[post_high_window]
         post_high_ema20 = five.ema20[post_high_window]
         post_high_ema20_pierce_count = 0
+        post_high_close_below_ema20_count = 0
         post_high_wick_share = 0.0
         post_high_body_overlap_rate = 0.0
         post_high_max_red_body_share = 0.0
@@ -1977,8 +1980,11 @@ class PnoEngine:
             post_high_ema20_pierce_count = int(
                 np.sum(post_high_lows <= (post_high_ema20 + self._EPSILON))
             )
-            if post_high_ema20_pierce_count > 0:
-                return None, "post_high_pierced_ema20"
+            post_high_close_below_ema20_count = int(
+                np.sum(post_high_closes < (post_high_ema20 - self._EPSILON))
+            )
+            if post_high_close_below_ema20_count > 0:
+                return None, "post_high_closed_below_ema20"
             post_high_range = np.maximum(post_high_highs - post_high_lows, self._EPSILON)
             upper_wicks = post_high_highs - np.maximum(post_high_opens, post_high_closes)
             lower_wicks = np.minimum(post_high_opens, post_high_closes) - post_high_lows
@@ -2011,6 +2017,7 @@ class PnoEngine:
                 pullback_age_bars=stage2.pullback_age_bars,
                 validation_timestamp=int(one.timestamps[idx]),
                 post_high_ema20_pierce_count=post_high_ema20_pierce_count,
+                post_high_close_below_ema20_count=post_high_close_below_ema20_count,
                 post_high_wick_share=post_high_wick_share,
                 post_high_body_overlap_rate=post_high_body_overlap_rate,
                 post_high_max_red_body_share=post_high_max_red_body_share,
@@ -3197,6 +3204,7 @@ class PnoEngine:
             "pullback_low": round(float(armed.stage3.pullback_low), 8),
             "pullback_depth": round(float(armed.stage3.pullback_depth), 8),
             "post_high_ema20_pierce_count": int(armed.stage3.post_high_ema20_pierce_count),
+            "post_high_close_below_ema20_count": int(armed.stage3.post_high_close_below_ema20_count),
             "post_high_wick_share": round(float(armed.stage3.post_high_wick_share), 4),
             "post_high_body_overlap_rate": round(float(armed.stage3.post_high_body_overlap_rate), 4),
             "post_high_max_red_body_share": round(float(armed.stage3.post_high_max_red_body_share), 4),

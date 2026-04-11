@@ -32,14 +32,114 @@ from strategy.pno.config import (
 )
 from strategy.pno.engine import (
     ArmedContext,
+    FiveMinuteFrame,
     OneMinuteFrame,
     PnoEngine,
     RetiredCluster,
     Stage1Context,
+    Stage2Context,
     Stage3Context,
     Stage4Context,
 )
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
+
+
+def _build_test_one_frame(*, timestamp_ms: int) -> OneMinuteFrame:
+    frame = pd.DataFrame(
+        {
+            "timestamp": [timestamp_ms],
+            "open": [1.0],
+            "high": [1.0],
+            "low": [1.0],
+            "close": [1.0],
+            "volume": [1.0],
+        }
+    )
+    zeros = pd.Series([0.0], dtype="float64").to_numpy()
+    return OneMinuteFrame(
+        frame=frame,
+        timestamps=pd.Series([timestamp_ms], dtype="int64").to_numpy(),
+        opens=pd.Series([1.0], dtype="float64").to_numpy(),
+        highs=pd.Series([1.0], dtype="float64").to_numpy(),
+        lows=pd.Series([1.0], dtype="float64").to_numpy(),
+        closes=pd.Series([1.0], dtype="float64").to_numpy(),
+        volumes=pd.Series([1.0], dtype="float64").to_numpy(),
+        quote_volume=pd.Series([1.0], dtype="float64").to_numpy(),
+        cumulative_quote_volume=pd.Series([1.0], dtype="float64").to_numpy(),
+        tr=zeros.copy(),
+        v1=pd.Series([0.5], dtype="float64").to_numpy(),
+        red=pd.Series([False]).to_numpy(dtype=bool),
+        confirmed_high_indices=pd.Series([], dtype="int64").to_numpy(),
+        confirmed_high_confirmed_at=pd.Series([], dtype="int64").to_numpy(),
+        confirmed_low_indices=pd.Series([], dtype="int64").to_numpy(),
+        confirmed_low_confirmed_at=pd.Series([], dtype="int64").to_numpy(),
+    )
+
+
+def _build_test_five_frame(
+    *,
+    opens: list[float],
+    highs: list[float],
+    lows: list[float],
+    closes: list[float],
+    ema20: list[float],
+) -> FiveMinuteFrame:
+    size = len(opens)
+    timestamps = (pd.Series(range(size), dtype="int64") * 300_000).to_numpy()
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": opens,
+            "high": highs,
+            "low": lows,
+            "close": closes,
+            "volume": [1.0] * size,
+        }
+    )
+    zeros = pd.Series([0.0] * size, dtype="float64").to_numpy()
+    bools = pd.Series([False] * size).to_numpy(dtype=bool)
+    ints = pd.Series([0] * size, dtype="int64").to_numpy()
+    return FiveMinuteFrame(
+        frame=frame,
+        timestamps=timestamps,
+        opens=pd.Series(opens, dtype="float64").to_numpy(),
+        highs=pd.Series(highs, dtype="float64").to_numpy(),
+        lows=pd.Series(lows, dtype="float64").to_numpy(),
+        closes=pd.Series(closes, dtype="float64").to_numpy(),
+        volumes=pd.Series([1.0] * size, dtype="float64").to_numpy(),
+        quote_volume=pd.Series([1.0] * size, dtype="float64").to_numpy(),
+        trade_activity=pd.Series([1.0] * size, dtype="float64").to_numpy(),
+        tr=pd.Series([0.5] * size, dtype="float64").to_numpy(),
+        v5=pd.Series([0.5] * size, dtype="float64").to_numpy(),
+        ema9=pd.Series([10.5] * size, dtype="float64").to_numpy(),
+        ema20=pd.Series(ema20, dtype="float64").to_numpy(),
+        ema50=pd.Series([10.0] * size, dtype="float64").to_numpy(),
+        ema100=pd.Series([9.8] * size, dtype="float64").to_numpy(),
+        ema200=pd.Series([9.6] * size, dtype="float64").to_numpy(),
+        sleep=bools.copy(),
+        wake=bools.copy(),
+        inplay=~bools.copy(),
+        pump_start_idx=ints.copy(),
+        sleep_start_idx=ints.copy(),
+        sleep_end_idx=ints.copy(),
+        stage1_confirm_idx=ints.copy(),
+        stage1_hold_price=zeros.copy(),
+        r3_quote=zeros.copy(),
+        b24_quote=zeros.copy(),
+        r3_trade=zeros.copy(),
+        b24_trade=zeros.copy(),
+        activity_last6_quote=zeros.copy(),
+        activity_prev24_quote=zeros.copy(),
+        activity_last6_trade=zeros.copy(),
+        activity_prev24_trade=zeros.copy(),
+        cumulative_quote_volume=pd.Series([1.0] * size, dtype="float64").to_numpy(),
+        pre_high_24h=zeros.copy(),
+        pre_high_1h=zeros.copy(),
+        ema_cross_count_1h=zeros.copy(),
+        atr_pre_14=pd.Series([0.25] * size, dtype="float64").to_numpy(),
+        pre_quote_median_24=pd.Series([1.0] * size, dtype="float64").to_numpy(),
+        pre_trade_median_24=pd.Series([1.0] * size, dtype="float64").to_numpy(),
+    )
 
 
 def test_build_strategy_supports_pno() -> None:
@@ -515,6 +615,120 @@ def test_pno_cluster_rearm_requires_new_low_or_distance() -> None:
         retired_clusters=retired,
         v1_now=1.0,
     ) is True
+
+
+def test_stage3_allows_post_high_ema20_wick_touch_without_close_below() -> None:
+    engine = PnoEngine()
+    params = PnoParams(symbol="TEST/USDT")
+    one = _build_test_one_frame(timestamp_ms=600_000)
+    five = _build_test_five_frame(
+        opens=[10.0, 10.8, 10.7],
+        highs=[11.0, 11.1, 11.0],
+        lows=[9.8, 10.0, 10.5],
+        closes=[10.9, 10.8, 10.75],
+        ema20=[9.9, 10.1, 10.2],
+    )
+    stage1 = Stage1Context(
+        start_idx=0,
+        start_timestamp=0,
+        pump_start_5m_idx=0,
+        pump_start_timestamp=0,
+        current_5m_idx=2,
+        active_high_idx=0,
+        active_high_timestamp=0,
+        active_high=11.0,
+        reference_high=11.0,
+        leg_start_idx=0,
+        leg_start_timestamp=0,
+        leg_start=10.0,
+        leg_size=1.0,
+        reference_leg_size=1.0,
+        hold_floor=10.2,
+        pump_range_5m=1.0,
+    )
+    stage2 = Stage2Context(
+        active_high_idx=0,
+        active_high_timestamp=0,
+        active_high=11.0,
+        red_after_high_idx=1,
+        pullback_start_idx=1,
+        pullback_low_idx=1,
+        pullback_low_timestamp=300_000,
+        pullback_low=10.4,
+        pullback_depth=0.6,
+        pullback_age_bars=2,
+    )
+
+    stage3, reason = engine._resolve_stage3_context(
+        one=one,
+        five=five,
+        idx=0,
+        five_idx=2,
+        stage1=stage1,
+        stage2=stage2,
+        params=params,
+    )
+
+    assert reason is None
+    assert stage3 is not None
+    assert stage3.post_high_ema20_pierce_count == 1
+    assert stage3.post_high_close_below_ema20_count == 0
+
+
+def test_stage3_rejects_post_high_close_below_ema20() -> None:
+    engine = PnoEngine()
+    params = PnoParams(symbol="TEST/USDT")
+    one = _build_test_one_frame(timestamp_ms=600_000)
+    five = _build_test_five_frame(
+        opens=[10.0, 10.8, 10.7],
+        highs=[11.0, 11.1, 11.0],
+        lows=[9.8, 10.0, 10.5],
+        closes=[10.9, 10.05, 10.75],
+        ema20=[9.9, 10.1, 10.2],
+    )
+    stage1 = Stage1Context(
+        start_idx=0,
+        start_timestamp=0,
+        pump_start_5m_idx=0,
+        pump_start_timestamp=0,
+        current_5m_idx=2,
+        active_high_idx=0,
+        active_high_timestamp=0,
+        active_high=11.0,
+        reference_high=11.0,
+        leg_start_idx=0,
+        leg_start_timestamp=0,
+        leg_start=10.0,
+        leg_size=1.0,
+        reference_leg_size=1.0,
+        hold_floor=10.2,
+        pump_range_5m=1.0,
+    )
+    stage2 = Stage2Context(
+        active_high_idx=0,
+        active_high_timestamp=0,
+        active_high=11.0,
+        red_after_high_idx=1,
+        pullback_start_idx=1,
+        pullback_low_idx=1,
+        pullback_low_timestamp=300_000,
+        pullback_low=10.4,
+        pullback_depth=0.6,
+        pullback_age_bars=2,
+    )
+
+    stage3, reason = engine._resolve_stage3_context(
+        one=one,
+        five=five,
+        idx=0,
+        five_idx=2,
+        stage1=stage1,
+        stage2=stage2,
+        params=params,
+    )
+
+    assert stage3 is None
+    assert reason == "post_high_closed_below_ema20"
 
 
 def test_pno_level_cluster_allows_clear_single_touch_level() -> None:
