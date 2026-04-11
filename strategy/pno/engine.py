@@ -2421,9 +2421,6 @@ class PnoEngine:
         elif stage3.pullback_depth > (float(params.pullback_invalid_max_leg_fraction) * depth_reference):
             hard_block = True
             hard_block_reason = "pullback_too_deep_vs_leg"
-        elif entry_pos > float(params.max_entry_pullback_fraction):
-            hard_block = True
-            hard_block_reason = "entry_above_pullback_half"
         elif stage4.level_maturity_fraction < float(params.level_min_maturity_fraction):
             hard_block = True
             hard_block_reason = "level_not_mature_enough"
