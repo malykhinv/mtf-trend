@@ -982,7 +982,9 @@ class PnoEngine:
                             "tp2": round(float(live_armed.stage4.tp2), 8),
                         },
                     )
-                    armed = None
+                    # Неблокирующее отклонение: продолжаем искать entry trigger
+                    i += 1
+                    continue
 
             if (
                 i < min_entry_bars - 1
@@ -2428,9 +2430,6 @@ class PnoEngine:
         elif net_tp1_move <= 0.0:
             hard_block = True
             hard_block_reason = "non_positive_tp1_after_fee"
-        elif self._safe_divide(net_tp1_move, dstop_plan) < float(params.min_entry_rr):
-            hard_block = True
-            hard_block_reason = "rr_below_minimum"
 
         stage4_ready = not hard_block
         is_valid_setup = stage4_ready and final_score >= float(params.min_score)
@@ -2540,13 +2539,24 @@ class PnoEngine:
                 prices = tuple(float(one.highs[item]) for item in indices)
                 if any(price >= (stage3.active_high - self._EPSILON) for price in prices):
                     continue
-                if cluster_size == 1 and not self._is_single_touch_level_candidate(
-                    one=one,
-                    idx=idx,
-                    high_idx=indices[0],
-                    confirmed_lows=confirmed_lows,
-                ):
-                    continue
+                if cluster_size == 1:
+                    # Primary check: confirmed_low after high
+                    has_confirmed_low = self._is_single_touch_level_candidate(
+                        one=one,
+                        idx=idx,
+                        high_idx=indices[0],
+                        confirmed_lows=confirmed_lows,
+                    )
+                    # Alternative check: price consolidation near high (3+ bars within 0.3*v1)
+                    if not has_confirmed_low:
+                        consolidation_bars = 0
+                        tolerance_consolidation = 0.30 * v1_now
+                        high_price = float(one.highs[indices[0]])
+                        for check_idx in range(indices[0], min(idx + 1, len(one.closes))):
+                            if abs(float(one.closes[check_idx]) - high_price) <= tolerance_consolidation:
+                                consolidation_bars += 1
+                        if consolidation_bars < 3:
+                            continue
                 spread = max(prices) - min(prices)
                 if spread > max_spread:
                     continue
@@ -3149,6 +3159,12 @@ class PnoEngine:
             or entry_price >= (tp1_price - self._EPSILON)
             or tp2_price <= (entry_price + self._EPSILON)
         ):
+            return None, entry_idx
+
+        # Check RR using actual entry price and stop loss (stage 5 validation)
+        actual_risk = entry_price - stop_loss
+        net_tp1_move = tp1_price - entry_price - (float(params.fee_rate) * entry_price) - (0.5 * float(params.fee_rate) * tp1_price)
+        if actual_risk <= self._EPSILON or self._safe_divide(net_tp1_move, actual_risk) < float(params.min_entry_rr):
             return None, entry_idx
 
         position_size = self._resolve_position_size(params=params, entry_price=entry_price, stop_loss=stop_loss)

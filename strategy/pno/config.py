@@ -83,8 +83,8 @@ class PnoParams:
     stage1_min_pretrend_range_ratio_2h: float = 2.0
     stage1_pre_pump_high_max_fraction_of_leg: float = 0.50
     level_cluster_spread_v1: float = 0.45
-    level_cluster_relaxed_spread_v1: float = 0.75
-    level_latest_high_max_age_bars: int = 18
+    level_cluster_relaxed_spread_v1: float = 1.00
+    level_latest_high_max_age_bars: int = 30
     level_touch_tolerance_v1: float = 0.35
     level_low_minor_break_v1: float = 0.35
     level_low_major_break_v1: float = 0.75
