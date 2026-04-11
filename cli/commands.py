@@ -541,12 +541,24 @@ def _plot_pno_diagnostics_for_symbols(
                 _format_eta_compact(eta_seconds),
             )
 
+    research_export_start = time.monotonic()
+    logger.info(
+        "%s: pno research export dispatch start",
+        log_prefix,
+    )
     _export_pno_research_context(
         diagnostics_dir=diagnostics_dir,
         symbol_frames=symbol_frames,
         trade_rows=all_trade_rows,
         stage_rows_by_stage=stage_rows_by_stage,
         stage_rejections_by_stage=stage_rejections_by_stage,
+        logger=logger,
+        log_prefix=log_prefix,
+    )
+    logger.info(
+        "%s: pno research export dispatch finished elapsed=%s",
+        log_prefix,
+        _format_eta_compact(max(time.monotonic() - research_export_start, 0.0)),
     )
 
     chart_symbols_total = sum(1 for item in diagnostics_payloads if item["trade_rows"])

@@ -1562,13 +1562,20 @@ def _export_pno_stage_reviews(
         total_review_charts += sum(len(rows) for rows in rejection_groups.values())
     rendered_review_charts = 0
     review_start_time = time.monotonic()
+    last_progress_log_time = review_start_time
 
     def _log_review_progress(stage_id: str) -> None:
+        nonlocal last_progress_log_time
         if logger is None or total_review_charts <= 0:
             return
         if rendered_review_charts <= 0:
             return
-        if rendered_review_charts == total_review_charts or rendered_review_charts % 50 == 0:
+        now = time.monotonic()
+        if (
+            rendered_review_charts == total_review_charts
+            or rendered_review_charts % 50 == 0
+            or (now - last_progress_log_time) >= 180.0
+        ):
             elapsed = max(time.monotonic() - review_start_time, 1e-9)
             rate = rendered_review_charts / elapsed
             remaining = total_review_charts - rendered_review_charts
@@ -1582,6 +1589,7 @@ def _export_pno_stage_reviews(
                 stage_id,
                 _format_eta_compact(eta_seconds),
             )
+            last_progress_log_time = now
 
     if logger is not None and total_review_charts > 0:
         logger.info(
@@ -2630,11 +2638,52 @@ def _export_pno_research_context(
     trade_rows: list[dict[str, object]],
     stage_rows_by_stage: dict[str, list[dict[str, object]]],
     stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
+    logger: Logger | None = None,
+    log_prefix: str = "pno",
 ) -> None:
     research_dir = diagnostics_dir / "research_context"
     research_dir.mkdir(parents=True, exist_ok=True)
     prepared_levels_frames: dict[str, pd.DataFrame] = {}
     prepared_entry_frames: dict[str, pd.DataFrame] = {}
+    export_start_time = time.monotonic()
+    last_progress_log_time = export_start_time
+
+    def _log_progress(phase: str, done: int, total: int, *, force: bool = False) -> None:
+        nonlocal last_progress_log_time
+        if logger is None or total <= 0:
+            return
+        now = time.monotonic()
+        if not force and (now - last_progress_log_time) < 30.0:
+            return
+        elapsed = max(now - export_start_time, 1e-9)
+        rate = done / elapsed
+        remaining = total - done
+        eta_seconds = remaining / rate if rate > 0.0 else None
+        logger.info(
+            "%s: pno research export phase=%s %s/%s (%.1f%%) eta=%s",
+            log_prefix,
+            phase,
+            done,
+            total,
+            (done / total) * 100.0,
+            _format_eta_compact(eta_seconds),
+        )
+        last_progress_log_time = now
+
+    if logger is not None:
+        stage_passed_total = sum(len(rows) for rows in stage_rows_by_stage.values())
+        stage_rejected_total = sum(
+            len(rows)
+            for reason_groups in stage_rejections_by_stage.values()
+            for rows in reason_groups.values()
+        )
+        logger.info(
+            "%s: pno research export start stage_passed=%s stage_rejected=%s trades=%s",
+            log_prefix,
+            stage_passed_total,
+            stage_rejected_total,
+            len(trade_rows),
+        )
 
     def _get_prepared_levels_frame(symbol: str) -> pd.DataFrame:
         cached = prepared_levels_frames.get(symbol)
@@ -2664,6 +2713,12 @@ def _export_pno_research_context(
         return cached
 
     stage_context_rows: list[dict[str, object]] = []
+    stage_context_total = sum(len(rows) for rows in stage_rows_by_stage.values()) + sum(
+        len(rows)
+        for reason_groups in stage_rejections_by_stage.values()
+        for rows in reason_groups.values()
+    )
+    stage_context_done = 0
     for stage_id, rows in stage_rows_by_stage.items():
         for row in rows:
             symbol = str(row.get("symbol") or "")
@@ -2689,6 +2744,8 @@ def _export_pno_research_context(
                     pattern_context=pattern_context,
                 )
             )
+            stage_context_done += 1
+            _log_progress("stage_context", stage_context_done, stage_context_total)
     for stage_id, reason_groups in stage_rejections_by_stage.items():
         for reason, rows in reason_groups.items():
             for row in rows:
@@ -2715,14 +2772,19 @@ def _export_pno_research_context(
                         pattern_context=pattern_context,
                     )
                 )
+                stage_context_done += 1
+                _log_progress("stage_context", stage_context_done, stage_context_total)
     stage_context_frame = pd.DataFrame(stage_context_rows)
     stage_context_frame.to_csv(research_dir / "stage_context_all.csv", index=False)
+    _log_progress("stage_context", stage_context_done, stage_context_total, force=True)
 
     trade_context_rows: list[dict[str, object]] = []
     trade_exit_reference_rows: list[dict[str, object]] = []
     trade_path_rows: list[dict[str, object]] = []
     stage5_levels_path_rows: list[dict[str, object]] = []
     stage5_outcome_by_key: dict[str, str] = {}
+    trades_total = len(trade_rows)
+    trades_done = 0
     for row in trade_rows:
         symbol = str(row.get("symbol") or "")
         prepared_levels_frame = _get_prepared_levels_frame(symbol)
@@ -2766,11 +2828,14 @@ def _export_pno_research_context(
         stage_key = str(enriched.get("stage_key") or "")
         if stage_key:
             stage5_outcome_by_key[stage_key] = result_type
+        trades_done += 1
+        _log_progress("trade_context", trades_done, trades_total)
 
     trade_context_frame = pd.DataFrame(trade_context_rows)
     trade_context_frame.to_csv(research_dir / "trade_context.csv", index=False)
     pd.DataFrame(trade_exit_reference_rows).to_csv(research_dir / "trade_exit_reference.csv", index=False)
     pd.DataFrame(trade_path_rows).to_csv(research_dir / "trade_path_context.csv", index=False)
+    _log_progress("trade_context", trades_done, trades_total, force=True)
 
     stage5_candidate_rows: list[dict[str, object]] = list(trade_context_rows)
     for reason, rows in stage_rejections_by_stage.get(PNO_STAGE_5_TRADE, {}).items():
@@ -2819,6 +2884,10 @@ def _export_pno_research_context(
     pd.DataFrame(stage5_levels_path_rows).to_csv(research_dir / "stage5_levels_path_context.csv", index=False)
 
     stage4_context_rows: list[dict[str, object]] = []
+    stage4_total = len(stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, [])) + sum(
+        len(rows) for rows in stage_rejections_by_stage.get(PNO_STAGE_4_LEVEL, {}).values()
+    )
+    stage4_done = 0
     for row in stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, []):
         symbol = str(row.get("symbol") or "")
         enriched = _build_pno_research_context_row(
@@ -2838,6 +2907,8 @@ def _export_pno_research_context(
         enriched["downstream_triggered"] = downstream_outcome in {"sl", "be", "tp1_be", "tp2"}
         enriched["downstream_win"] = downstream_outcome in {"be", "tp1_be", "tp2"}
         stage4_context_rows.append(enriched)
+        stage4_done += 1
+        _log_progress("stage4_context", stage4_done, stage4_total)
     for reason, rows in stage_rejections_by_stage.get(PNO_STAGE_4_LEVEL, {}).items():
         for row in rows:
             symbol = str(row.get("symbol") or "")
@@ -2857,8 +2928,11 @@ def _export_pno_research_context(
             enriched["downstream_triggered"] = False
             enriched["downstream_win"] = False
             stage4_context_rows.append(enriched)
+            stage4_done += 1
+            _log_progress("stage4_context", stage4_done, stage4_total)
     stage4_context_frame = pd.DataFrame(stage4_context_rows)
     stage4_context_frame.to_csv(research_dir / "stage4_level_context.csv", index=False)
+    _log_progress("stage4_context", stage4_done, stage4_total, force=True)
 
     summary_frames = [
         _summarize_pno_feature_buckets(trade_context_frame, scope="trades"),
@@ -2875,5 +2949,14 @@ def _export_pno_research_context(
         for reason, rows in reason_groups.items():
             stage_reason_summary_rows.append({"stage_id": stage_id, "status": "rejected", "reason": reason, "count": int(len(rows))})
     pd.DataFrame(stage_reason_summary_rows).to_csv(research_dir / "stage_reason_summary.csv", index=False)
+
+    if logger is not None:
+        elapsed = max(time.monotonic() - export_start_time, 0.0)
+        logger.info(
+            "%s: pno research export finished elapsed=%s output_dir=%s",
+            log_prefix,
+            _format_eta_compact(elapsed),
+            research_dir,
+        )
 
 
