@@ -2096,8 +2096,6 @@ class PnoEngine:
             hard_block_reason = previous.hard_block_reason
             if break_depth > (float(params.level_low_major_break_v1) * v1_now):
                 level_low_major_break = True
-                hard_block = True
-                hard_block_reason = "level_low_major_break"
             elif break_depth > (float(params.level_low_minor_break_v1) * v1_now):
                 level_low_minor_break = True
                 penalty_level_low_break = 6
