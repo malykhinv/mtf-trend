@@ -769,6 +769,29 @@ def _build_pno_tick_labels(frame: pd.DataFrame, positions: np.ndarray) -> list[s
     return _build_pno_tick_labels_from_timestamps(_build_pno_tick_timestamps(frame), positions)
 
 
+def _resolve_pno_trade_chart_entry_visuals(
+    trade_row: dict[str, object],
+) -> tuple[float | None, float | None, int | None]:
+    entry_confirmation_mode = str(trade_row.get("entry_confirmation_mode") or "")
+    entry_signal_timestamp_ms = _safe_int(trade_row.get("entry_signal_timestamp_ms"))
+    entry_plan_price = _safe_float(trade_row.get("entry_plan"))
+    level_price = _safe_float(trade_row.get("level"))
+    execution_price = _safe_float(trade_row.get("entry_price"))
+    if execution_price is None:
+        execution_price = _safe_float(trade_row.get("entry_price_actual"))
+
+    display_entry_price = execution_price
+    execution_tag_price: float | None = None
+    if entry_confirmation_mode == "cross":
+        display_entry_price = level_price or entry_plan_price or execution_price
+    elif entry_confirmation_mode == "close_above":
+        display_entry_price = entry_plan_price or level_price or execution_price
+        if not _pno_prices_close(display_entry_price, execution_price):
+            execution_tag_price = execution_price
+
+    return display_entry_price, execution_tag_price, entry_signal_timestamp_ms
+
+
 def _render_pno_trade_chart(
     *,
     charts_dir: Path,
@@ -781,7 +804,6 @@ def _render_pno_trade_chart(
     entry_timestamp_ms = _safe_int(trade_row.get("entry_timestamp_ms"))
     exit_timestamp_ms = _safe_int(trade_row.get("exit_timestamp_ms"))
     entry_confirmation_mode = str(trade_row.get("entry_confirmation_mode") or "")
-    entry_plan_price = _safe_float(trade_row.get("entry_plan"))
     entry_price = _safe_float(trade_row.get("entry_price"))
     if entry_price is None:
         entry_price = _safe_float(trade_row.get("entry_price_actual"))
@@ -818,11 +840,8 @@ def _render_pno_trade_chart(
         or pump_start_timestamp_ms is None
     ):
         return None
-    display_entry_price = entry_price
-    if entry_confirmation_mode == "cross":
-        display_entry_price = level_price or entry_plan_price or entry_price
-    else:
-        display_entry_price = entry_price or entry_plan_price
+    display_entry_price, execution_tag_price, entry_signal_timestamp_ms = _resolve_pno_trade_chart_entry_visuals(trade_row)
+    risk_entry_price = entry_price
 
     category = str(trade_row.get("category") or "")
     result_type = str(trade_row.get("result_type") or "")
@@ -866,6 +885,7 @@ def _render_pno_trade_chart(
     low_values = plot_frame["low"].to_numpy(dtype=np.float64)
     entry_idx = int(np.searchsorted(timestamps, entry_timestamp_ms, side="left"))
     exit_idx = int(np.searchsorted(timestamps, exit_timestamp_ms, side="left"))
+    signal_idx = _resolve_pno_timestamp_plot_idx(timestamps, entry_signal_timestamp_ms) if entry_signal_timestamp_ms is not None else None
     be_arm_idx = _resolve_pno_timestamp_plot_idx(timestamps, be_arm_timestamp_ms) if be_arm_timestamp_ms is not None else None
     tp1_hit_idx = _resolve_pno_timestamp_plot_idx(timestamps, tp1_hit_timestamp_ms) if tp1_hit_timestamp_ms is not None else None
     tp2_hit_idx = _resolve_pno_timestamp_plot_idx(timestamps, tp2_hit_timestamp_ms) if tp2_hit_timestamp_ms is not None else None
@@ -877,6 +897,8 @@ def _render_pno_trade_chart(
     )
     entry_idx = min(max(entry_idx, 0), len(plot_frame) - 1)
     exit_idx = min(max(exit_idx, entry_idx), len(plot_frame) - 1)
+    if signal_idx is not None:
+        signal_idx = min(max(signal_idx, 0), entry_idx)
     if pump_idx is None:
         pump_idx = entry_idx
     price_axis_right_x = float(len(plot_frame) - 0.5)
@@ -941,6 +963,7 @@ def _render_pno_trade_chart(
             ("High", active_high if show_high_tag else None),
             ("BE", be_label_price),
             ("Entry", display_entry_price),
+            ("Exec", execution_tag_price),
             ("Level", level_price),
             ("SL", initial_stop_loss),
             ("Exit", exit_price_actual),
@@ -974,14 +997,15 @@ def _render_pno_trade_chart(
             zorder=2.2,
         )
     if level_price is not None:
-        level_start_idx = entry_idx
+        level_end_idx = signal_idx if signal_idx is not None else entry_idx
+        level_start_idx = level_end_idx
         if level_first_timestamp_ms is not None:
             level_start_idx = int(np.searchsorted(timestamps, level_first_timestamp_ms, side="left"))
-            level_start_idx = min(max(level_start_idx, 0), entry_idx)
+            level_start_idx = min(max(level_start_idx, 0), level_end_idx)
         ax_price.hlines(
             level_price,
             level_start_idx - 0.48,
-            entry_idx + 0.48,
+            level_end_idx + 0.48,
             colors=_PNO_PLOT_LEVEL,
             linewidth=0.95,
             alpha=0.9,
@@ -990,7 +1014,7 @@ def _render_pno_trade_chart(
         ax_levels.hlines(
             level_price,
             level_start_idx - 0.48,
-            entry_idx + 0.48,
+            level_end_idx + 0.48,
             colors=_PNO_PLOT_LEVEL,
             linewidth=0.85,
             alpha=0.72,
@@ -1014,7 +1038,7 @@ def _render_pno_trade_chart(
             ax_price,
             timestamps=timestamps,
             start_timestamp_ms=active_high_timestamp_ms,
-            end_timestamp_ms=entry_timestamp_ms,
+            end_timestamp_ms=entry_signal_timestamp_ms or entry_timestamp_ms,
             value=active_high,
             color="#ef4444",
             linewidth=1.05,
@@ -1030,6 +1054,17 @@ def _render_pno_trade_chart(
                 leader_end_x=price_axis_right_x,
                 text_y=tag_positions.get("High"),
             )
+    if entry_confirmation_mode == "close_above" and signal_idx is not None and signal_idx != entry_idx:
+        signal_price = float(plot_frame["close"].iloc[signal_idx])
+        ax_price.axvline(signal_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.18, linestyle="--", zorder=4.8)
+        _annotate_pno_point(
+            ax_price,
+            x=float(signal_idx),
+            y=signal_price,
+            label="SIG",
+            color=_PNO_PLOT_ENTRY,
+            dy_points=10.0,
+        )
     initial_phase_end_idx = exit_idx
     for candidate_idx in (be_arm_idx, tp1_hit_idx, tp2_hit_idx):
         if candidate_idx is not None:
@@ -1038,7 +1073,7 @@ def _render_pno_trade_chart(
         start_idx=entry_idx,
         end_idx=initial_phase_end_idx,
         lower_price=initial_stop_loss,
-        upper_price=display_entry_price,
+        upper_price=risk_entry_price,
         facecolor=_PNO_PLOT_RISK_FACE,
         edgecolor=_PNO_PLOT_RISK_EDGE,
         alpha=0.30,
@@ -1048,7 +1083,7 @@ def _render_pno_trade_chart(
         _add_trade_block(
             start_idx=entry_idx,
             end_idx=tp1_hit_idx,
-            lower_price=display_entry_price,
+            lower_price=risk_entry_price,
             upper_price=tp1_label_price,
             facecolor=_PNO_PLOT_PROFIT_FACE,
             edgecolor=_PNO_PLOT_PROFIT_EDGE,
@@ -1059,7 +1094,7 @@ def _render_pno_trade_chart(
         _add_trade_block(
             start_idx=be_arm_idx,
             end_idx=exit_idx,
-            lower_price=display_entry_price,
+            lower_price=risk_entry_price,
             upper_price=be_protect_price,
             facecolor=_PNO_PLOT_PROTECT_FACE,
             edgecolor=_PNO_PLOT_PROTECT_EDGE,
@@ -1067,7 +1102,7 @@ def _render_pno_trade_chart(
             zorder=1.07,
         )
     if tp2_hit_idx is not None and tp2_label_price is not None:
-        runner_floor = be_protect_price if be_protect_price is not None else display_entry_price
+        runner_floor = be_protect_price if be_protect_price is not None else risk_entry_price
         _add_trade_block(
             start_idx=tp1_hit_idx or be_arm_idx or entry_idx,
             end_idx=tp2_hit_idx,
@@ -1126,11 +1161,22 @@ def _render_pno_trade_chart(
         y=display_entry_price,
         label="Entry",
         color=_PNO_PLOT_ENTRY,
-        leader_start_x=float(entry_idx),
+        leader_start_x=float(signal_idx if signal_idx is not None else entry_idx),
         leader_end_x=price_axis_right_x,
         text_y=tag_positions.get("Entry"),
         alpha=0.9,
     )
+    if execution_tag_price is not None:
+        _annotate_pno_axis_price_tag(
+            ax_price,
+            y=execution_tag_price,
+            label="Exec",
+            color=_PNO_PLOT_ENTRY,
+            leader_start_x=float(entry_idx),
+            leader_end_x=price_axis_right_x,
+            text_y=tag_positions.get("Exec"),
+            alpha=0.82,
+        )
     if exit_price_actual is not None:
         _annotate_pno_axis_price_tag(
             ax_price,

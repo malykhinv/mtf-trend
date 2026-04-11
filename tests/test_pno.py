@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from cli import commands
+from cli import commands, pno_diagnostics
 from cli.parser import build_parser, resolve_handler
 from config.app_config import AppConfig
 from config.backtest_config import BacktestConfig
@@ -73,6 +73,7 @@ def _build_test_one_frame(*, timestamp_ms: int) -> OneMinuteFrame:
         confirmed_high_confirmed_at=pd.Series([], dtype="int64").to_numpy(),
         confirmed_low_indices=pd.Series([], dtype="int64").to_numpy(),
         confirmed_low_confirmed_at=pd.Series([], dtype="int64").to_numpy(),
+        low_range_tree=PnoEngine._build_range_tree(pd.Series([1.0], dtype="float64").to_numpy(), is_min_tree=True),
     )
 
 
@@ -476,6 +477,38 @@ def test_plot_pno_diagnostics_filters_selected_stage_ids(tmp_path, monkeypatch) 
     assert list(manifest["stage_id"]) == ["stage_2_high_pullback"]
 
 
+def test_pno_trade_chart_visuals_use_plan_for_close_above_and_keep_exec_fill() -> None:
+    display_entry_price, execution_tag_price, signal_timestamp_ms = pno_diagnostics._resolve_pno_trade_chart_entry_visuals(
+        {
+            "entry_confirmation_mode": "close_above",
+            "entry_signal_timestamp_ms": 120_000,
+            "entry_plan": 0.412875,
+            "level": 0.4128,
+            "entry_price_actual": 0.4141,
+        }
+    )
+
+    assert display_entry_price == pytest.approx(0.412875)
+    assert execution_tag_price == pytest.approx(0.4141)
+    assert signal_timestamp_ms == 120_000
+
+
+def test_pno_trade_chart_visuals_use_level_for_cross_without_exec_tag() -> None:
+    display_entry_price, execution_tag_price, signal_timestamp_ms = pno_diagnostics._resolve_pno_trade_chart_entry_visuals(
+        {
+            "entry_confirmation_mode": "cross",
+            "entry_signal_timestamp_ms": 60_000,
+            "entry_plan": 10.02,
+            "level": 10.0,
+            "entry_price_actual": 10.01,
+        }
+    )
+
+    assert display_entry_price == pytest.approx(10.0)
+    assert execution_tag_price is None
+    assert signal_timestamp_ms == 60_000
+
+
 def test_parser_supports_pno_stage_command() -> None:
     parser = build_parser()
     args = parser.parse_args(["pno-stage", "s4"])
@@ -758,6 +791,7 @@ def test_pno_level_cluster_allows_clear_single_touch_level() -> None:
         confirmed_high_confirmed_at=confirmed_high_confirmed_at,
         confirmed_low_indices=confirmed_low_indices,
         confirmed_low_confirmed_at=confirmed_low_confirmed_at,
+        low_range_tree=engine._build_range_tree(lows, is_min_tree=True),
     )
     stage3 = Stage3Context(
         active_high_idx=1,

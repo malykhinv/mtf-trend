@@ -14,5 +14,6 @@ def build_strategy(config: AppConfig, _logger: object = None) -> BaseStrategy[ob
             deposit=config.strategy.pno_deposit,
             risk_pct=config.strategy.pno_risk_pct,
             entry_confirmation_mode_filter=config.strategy.pno_entry_confirmation_mode,
+            cache_dir=config.backtest.cache_dir,
         )
     raise ValueError(f"Unsupported strategy_id: {config.strategy.strategy_id}")

@@ -1560,9 +1560,9 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     pre_rank_started_at = time.perf_counter()
     if pre_rank_enabled:
         for symbol in symbols:
-            levels_frame = preparer.load_symbol_data(symbol, levels_timeframe)
-            levels_frame = _slice_backtest_frame_window(
-                levels_frame,
+            levels_frame = preparer.load_symbol_data(
+                symbol,
+                levels_timeframe,
                 days=backtest_days,
                 end_timestamp_ms=backtest_end_timestamp_ms,
             )
@@ -1654,34 +1654,35 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     symbols_missing_entry_tf = 0
     symbols_used = 0
     for idx, symbol in enumerate(symbols, start=1):
+        resolved_end_timestamp_ms = backtest_end_timestamp_ms
+        if backtest_days is not None and resolved_end_timestamp_ms is None:
+            candidate_ends: list[int] = []
+            levels_end = preparer.get_symbol_last_timestamp_ms(symbol, levels_timeframe)
+            if levels_end is not None:
+                candidate_ends.append(int(levels_end))
+            entry_end = preparer.get_symbol_last_timestamp_ms(symbol, entry_timeframe)
+            if entry_end is not None:
+                candidate_ends.append(int(entry_end))
+            resolved_end_timestamp_ms = min(candidate_ends) if candidate_ends else None
+
         levels_frame = preloaded_levels_frames.get(symbol)
         if levels_frame is None:
-            levels_frame = preparer.load_symbol_data(symbol, levels_timeframe)
+            levels_frame = preparer.load_symbol_data(
+                symbol,
+                levels_timeframe,
+                days=backtest_days,
+                end_timestamp_ms=resolved_end_timestamp_ms,
+            )
         entry_frame: pd.DataFrame | None = preloaded_entry_frames.get(symbol)
         if levels_timeframe == entry_timeframe:
             entry_frame = levels_frame if entry_frame is None else entry_frame
         elif entry_frame is None:
-            entry_frame = preparer.load_symbol_data(symbol, entry_timeframe)
-        if backtest_days is not None:
-            resolved_end_timestamp_ms = backtest_end_timestamp_ms
-            if resolved_end_timestamp_ms is None:
-                candidate_ends: list[int] = []
-                if not levels_frame.empty and "timestamp" in levels_frame.columns:
-                    candidate_ends.append(int(levels_frame["timestamp"].iloc[-1]))
-                if entry_frame is not None and not entry_frame.empty and "timestamp" in entry_frame.columns:
-                    candidate_ends.append(int(entry_frame["timestamp"].iloc[-1]))
-                resolved_end_timestamp_ms = min(candidate_ends) if candidate_ends else None
-            levels_frame = _slice_backtest_frame_window(
-                levels_frame,
+            entry_frame = preparer.load_symbol_data(
+                symbol,
+                entry_timeframe,
                 days=backtest_days,
                 end_timestamp_ms=resolved_end_timestamp_ms,
             )
-            if entry_frame is not None:
-                entry_frame = _slice_backtest_frame_window(
-                    entry_frame,
-                    days=backtest_days,
-                    end_timestamp_ms=resolved_end_timestamp_ms,
-                )
         if levels_frame.empty:
             symbols_missing_levels_tf += 1
         if entry_frame.empty:

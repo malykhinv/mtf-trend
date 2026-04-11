@@ -9,14 +9,22 @@ from strategy.base_strategy import BaseStrategy
 from strategy.pno.config import PnoParams, build_pno_grid, validate_pno_params, with_pno_risk
 from strategy.pno.engine import PnoEngine
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
+from pathlib import Path
 
 
 class PnoStrategy(BaseStrategy[PnoParams]):
-    def __init__(self, *, deposit: float, risk_pct: float, entry_confirmation_mode_filter: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        deposit: float,
+        risk_pct: float,
+        entry_confirmation_mode_filter: str | None = None,
+        cache_dir: str | Path | None = None,
+    ) -> None:
         self._deposit = deposit
         self._risk_pct = risk_pct
         self._entry_confirmation_mode_filter = entry_confirmation_mode_filter
-        self._engine = PnoEngine()
+        self._engine = PnoEngine(cache_dir=cache_dir)
 
     def validate_config(self, params: PnoParams) -> None:
         validate_pno_params(params)

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import TypedDict
 
 import numpy as np
@@ -48,6 +51,7 @@ class OneMinuteFrame:
     confirmed_high_confirmed_at: np.ndarray
     confirmed_low_indices: np.ndarray
     confirmed_low_confirmed_at: np.ndarray
+    low_range_tree: RangeSearchTree
 
 
 @dataclass(slots=True)
@@ -268,6 +272,20 @@ class ArmedContext:
     stage4: Stage4Context
 
 
+@dataclass(slots=True)
+class Stage1StateArrays:
+    inplay: np.ndarray
+    pump_start_idx: np.ndarray
+    sleep_start_idx: np.ndarray
+    sleep_end_idx: np.ndarray
+    stage1_confirm_idx: np.ndarray
+    stage1_hold_price: np.ndarray
+
+    @property
+    def has_inplay(self) -> bool:
+        return bool(self.inplay.size and np.any(self.inplay))
+
+
 class GenerationDiagnostics(TypedDict, total=False):
     trades_generated: int
     blocked_cycles: int
@@ -282,9 +300,15 @@ class GenerationDiagnostics(TypedDict, total=False):
 class PnoEngine:
     REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
     _EPSILON = 1e-12
+    _STAGE1_CACHE_VERSION = 1
 
-    def __init__(self) -> None:
+    def __init__(self, *, cache_dir: str | Path | None = None) -> None:
         self._last_generation_diagnostics = self._empty_diagnostics()
+        base_cache_dir = Path(cache_dir) if cache_dir is not None else Path("./.output/cache")
+        self._stage1_cache_dir = base_cache_dir / "_derived" / "pno_stage1_state"
+        self._stage1_cache_dir.mkdir(parents=True, exist_ok=True)
+        self._stage1_state_memory_cache: dict[str, Stage1StateArrays] = {}
+        self._runtime_reference_high_cache: dict[tuple[int, int], tuple[float, float]] = {}
 
     def consume_last_generation_diagnostics(self) -> GenerationDiagnostics:
         diagnostics = dict(self._last_generation_diagnostics)
@@ -318,6 +342,168 @@ class PnoEngine:
                 "quote_volume_proxy": "close*volume",
             },
         }
+
+    def _build_stage1_cache_metadata(
+        self,
+        *,
+        levels_frame: pd.DataFrame,
+        entry_frame: pd.DataFrame,
+        params: PnoParams,
+        levels_timeframe_ms: int,
+        entry_timeframe_ms: int,
+    ) -> dict[str, int | float | str]:
+        levels_timestamps = pd.to_numeric(levels_frame["timestamp"], errors="coerce").dropna().astype("int64")
+        entry_timestamps = pd.to_numeric(entry_frame["timestamp"], errors="coerce").dropna().astype("int64")
+        return {
+            "version": self._STAGE1_CACHE_VERSION,
+            "symbol": str(params.symbol),
+            "levels_timeframe_ms": int(levels_timeframe_ms),
+            "entry_timeframe_ms": int(entry_timeframe_ms),
+            "levels_rows": int(len(levels_frame)),
+            "entry_rows": int(len(entry_frame)),
+            "levels_start_ts": int(levels_timestamps.iloc[0]) if not levels_timestamps.empty else -1,
+            "levels_end_ts": int(levels_timestamps.iloc[-1]) if not levels_timestamps.empty else -1,
+            "entry_start_ts": int(entry_timestamps.iloc[0]) if not entry_timestamps.empty else -1,
+            "entry_end_ts": int(entry_timestamps.iloc[-1]) if not entry_timestamps.empty else -1,
+            "stage1_min_pump_pct": float(params.stage1_min_pump_pct),
+            "stage1_min_pretrend_range_ratio_2h": float(params.stage1_min_pretrend_range_ratio_2h),
+            "stage1_min_volume_ratio_start": float(params.stage1_min_volume_ratio_start),
+        }
+
+    @staticmethod
+    def _stage1_cache_key(metadata: dict[str, int | float | str]) -> str:
+        payload = json.dumps(metadata, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(payload.encode("utf-8")).hexdigest()
+
+    def _stage1_cache_path(self, cache_key: str) -> Path:
+        return self._stage1_cache_dir / f"{cache_key}.npz"
+
+    def _load_stage1_state_cache(
+        self,
+        *,
+        levels_frame: pd.DataFrame,
+        entry_frame: pd.DataFrame,
+        params: PnoParams,
+        levels_timeframe_ms: int,
+        entry_timeframe_ms: int,
+    ) -> tuple[str, Stage1StateArrays | None]:
+        metadata = self._build_stage1_cache_metadata(
+            levels_frame=levels_frame,
+            entry_frame=entry_frame,
+            params=params,
+            levels_timeframe_ms=levels_timeframe_ms,
+            entry_timeframe_ms=entry_timeframe_ms,
+        )
+        cache_key = self._stage1_cache_key(metadata)
+        cached = self._stage1_state_memory_cache.get(cache_key)
+        if cached is not None:
+            return cache_key, cached
+
+        cache_path = self._stage1_cache_path(cache_key)
+        if not cache_path.exists():
+            return cache_key, None
+
+        try:
+            with np.load(cache_path, allow_pickle=False) as payload:
+                state = Stage1StateArrays(
+                    inplay=payload["inplay"].astype(bool, copy=False),
+                    pump_start_idx=payload["pump_start_idx"].astype(np.int64, copy=False),
+                    sleep_start_idx=payload["sleep_start_idx"].astype(np.int64, copy=False),
+                    sleep_end_idx=payload["sleep_end_idx"].astype(np.int64, copy=False),
+                    stage1_confirm_idx=payload["stage1_confirm_idx"].astype(np.int64, copy=False),
+                    stage1_hold_price=payload["stage1_hold_price"].astype(np.float64, copy=False),
+                )
+        except Exception:
+            return cache_key, None
+
+        self._stage1_state_memory_cache[cache_key] = state
+        return cache_key, state
+
+    def _store_stage1_state_cache(
+        self,
+        *,
+        cache_key: str,
+        state: Stage1StateArrays,
+    ) -> None:
+        self._stage1_state_memory_cache[cache_key] = state
+        cache_path = self._stage1_cache_path(cache_key)
+        tmp_path = cache_path.with_suffix(".tmp")
+        try:
+            with tmp_path.open("wb") as handle:
+                np.savez_compressed(
+                    handle,
+                    inplay=state.inplay.astype(bool, copy=False),
+                    pump_start_idx=state.pump_start_idx.astype(np.int64, copy=False),
+                    sleep_start_idx=state.sleep_start_idx.astype(np.int64, copy=False),
+                    sleep_end_idx=state.sleep_end_idx.astype(np.int64, copy=False),
+                    stage1_confirm_idx=state.stage1_confirm_idx.astype(np.int64, copy=False),
+                    stage1_hold_price=state.stage1_hold_price.astype(np.float64, copy=False),
+                )
+            tmp_path.replace(cache_path)
+        except Exception:
+            if tmp_path.exists():
+                tmp_path.unlink(missing_ok=True)
+
+    def _fast_stage1_candidate_count(
+        self,
+        *,
+        levels_frame: pd.DataFrame,
+        params: PnoParams,
+        levels_timeframe_ms: int,
+    ) -> int:
+        if levels_frame.empty:
+            return 0
+
+        five = levels_frame.reset_index(drop=True)
+        highs = pd.to_numeric(five["high"], errors="coerce")
+        lows = pd.to_numeric(five["low"], errors="coerce")
+        closes = pd.to_numeric(five["close"], errors="coerce")
+        volumes = pd.to_numeric(five["volume"], errors="coerce")
+        if highs.empty or lows.empty or closes.empty or volumes.empty:
+            return 0
+
+        prev_close = closes.shift(1).fillna(closes)
+        tr = pd.concat(
+            [
+                highs - lows,
+                (highs - prev_close).abs(),
+                (lows - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        ema9 = closes.ewm(span=9, adjust=False).mean()
+        ema20 = closes.ewm(span=20, adjust=False).mean()
+        quote_volume = closes * volumes
+        short_window = self._bars_for_duration(levels_timeframe_ms, 15 * 60_000)
+        baseline_window = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+        pretrend_1h_bars = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
+        pretrend_2h_bars = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+        pump_window = max(pretrend_2h_bars, self._bars_for_duration(levels_timeframe_ms, 30 * 60_000))
+
+        r3_quote = quote_volume.rolling(window=short_window, min_periods=short_window).median()
+        b24_quote = quote_volume.shift(short_window).rolling(window=baseline_window, min_periods=baseline_window).median()
+        rolling_peak = highs.rolling(window=pump_window, min_periods=1).max()
+        rolling_base = lows.rolling(window=pump_window, min_periods=1).min()
+        pump_range = rolling_peak - rolling_base
+        pump_pct = pump_range / rolling_base.replace(0.0, np.nan)
+        pre_max_1h = highs.shift(1).rolling(window=pretrend_1h_bars, min_periods=1).max()
+        pre_min_1h = lows.shift(1).rolling(window=pretrend_1h_bars, min_periods=1).min()
+        pre_range_1h = pre_max_1h - pre_min_1h
+        pre_max_2h = highs.shift(1).rolling(window=pretrend_2h_bars, min_periods=1).max()
+        pre_min_2h = lows.shift(1).rolling(window=pretrend_2h_bars, min_periods=1).min()
+        pre_range_2h = pre_max_2h - pre_min_2h
+        quote_expansion = r3_quote / b24_quote.replace(0.0, np.nan)
+        trend_ok = closes.gt(ema20) & ema9.gt(ema20)
+        pretrend_ratio_2h = pump_range / pre_range_2h.replace(0.0, np.nan)
+
+        candidate_mask = (
+            trend_ok.fillna(False)
+            & quote_expansion.ge(float(params.stage1_min_volume_ratio_start)).fillna(False)
+            & pump_pct.ge(float(params.stage1_min_pump_pct)).fillna(False)
+            & pump_range.gt(pre_range_1h).fillna(False)
+            & pretrend_ratio_2h.ge(float(params.stage1_min_pretrend_range_ratio_2h)).fillna(False)
+        )
+        return int(candidate_mask.sum())
 
     @staticmethod
     def validate_config(params: PnoParams) -> None:
@@ -358,6 +544,7 @@ class PnoEngine:
         entry_frame: pd.DataFrame,
         params: PnoParams,
     ) -> list[TradeResult]:
+        self._runtime_reference_high_cache.clear()
         prepared_levels = self.prepare_data(levels_frame)
         prepared_entry = self.prepare_data(entry_frame)
         diagnostics = self._empty_diagnostics()
@@ -381,16 +568,56 @@ class PnoEngine:
             self._last_generation_diagnostics = diagnostics
             return []
 
+        levels_timeframe_ms = params.levels_timeframe.to_milliseconds()
+        entry_timeframe_ms = params.entry_timeframe.to_milliseconds()
+        stage1_cache_entry = self._load_stage1_state_cache(
+            levels_frame=prepared_levels,
+            entry_frame=prepared_entry,
+            params=params,
+            levels_timeframe_ms=levels_timeframe_ms,
+            entry_timeframe_ms=entry_timeframe_ms,
+        )
+        cache_key, cached_stage1_state = stage1_cache_entry
+        diagnostics["context"]["stage1_cache"] = "hit" if cached_stage1_state is not None else "miss"
+        if cached_stage1_state is None:
+            fast_candidate_count = self._fast_stage1_candidate_count(
+                levels_frame=prepared_levels,
+                params=params,
+                levels_timeframe_ms=levels_timeframe_ms,
+            )
+            diagnostics["context"]["stage1_fast_candidates"] = int(fast_candidate_count)
+            if fast_candidate_count <= 0:
+                empty_state = Stage1StateArrays(
+                    inplay=np.zeros(len(prepared_levels), dtype=bool),
+                    pump_start_idx=np.full(len(prepared_levels), -1, dtype=np.int64),
+                    sleep_start_idx=np.full(len(prepared_levels), -1, dtype=np.int64),
+                    sleep_end_idx=np.full(len(prepared_levels), -1, dtype=np.int64),
+                    stage1_confirm_idx=np.full(len(prepared_levels), -1, dtype=np.int64),
+                    stage1_hold_price=np.full(len(prepared_levels), np.nan, dtype=np.float64),
+                )
+                self._store_stage1_state_cache(cache_key=cache_key, state=empty_state)
+                diagnostics["context"]["stage1_fast_reject"] = "no_5m_candidates"
+                self._last_generation_diagnostics = diagnostics
+                return []
+        else:
+            diagnostics["context"]["stage1_fast_candidates"] = int(np.sum(cached_stage1_state.inplay))
+            if not cached_stage1_state.has_inplay:
+                diagnostics["context"]["stage1_fast_reject"] = "cached_empty_stage1"
+                self._last_generation_diagnostics = diagnostics
+                return []
+
         one = self._prepare_1m_frame(
             prepared_entry,
-            timeframe_ms=params.entry_timeframe.to_milliseconds(),
+            timeframe_ms=entry_timeframe_ms,
         )
         five = self._prepare_5m_frame(
             prepared_levels,
             prepared_entry,
             params,
-            levels_timeframe_ms=params.levels_timeframe.to_milliseconds(),
-            entry_timeframe_ms=params.entry_timeframe.to_milliseconds(),
+            levels_timeframe_ms=levels_timeframe_ms,
+            entry_timeframe_ms=entry_timeframe_ms,
+            stage1_cache_key=cache_key,
+            cached_stage1_state=cached_stage1_state,
         )
         trades = self._run(one=one, five=five, params=params, diagnostics=diagnostics)
         diagnostics["trades_generated"] = len(trades)
@@ -427,6 +654,7 @@ class PnoEngine:
             lows=lows,
             v1=v1,
         )
+        low_range_tree = self._build_range_tree(lows, is_min_tree=True)
         return OneMinuteFrame(
             frame=work,
             timestamps=work["timestamp"].astype("int64").to_numpy(),
@@ -444,6 +672,7 @@ class PnoEngine:
             confirmed_high_confirmed_at=confirmed_high_confirmed_at,
             confirmed_low_indices=confirmed_low_indices,
             confirmed_low_confirmed_at=confirmed_low_confirmed_at,
+            low_range_tree=low_range_tree,
         )
 
     def _prepare_5m_frame(
@@ -454,6 +683,8 @@ class PnoEngine:
         *,
         levels_timeframe_ms: int,
         entry_timeframe_ms: int,
+        stage1_cache_key: str | None = None,
+        cached_stage1_state: Stage1StateArrays | None = None,
     ) -> FiveMinuteFrame:
         work = frame.copy()
         v_window = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
@@ -523,22 +754,24 @@ class PnoEngine:
             & (work["r3_close_above_ema9_count"] >= 2)
             & (work["ema9"] > work["ema20"])
         )
-        (
-            inplay,
-            pump_start_idx,
-            sleep_start_idx,
-            sleep_end_idx,
-            stage1_confirm_idx,
-            stage1_hold_price,
-        ) = self._build_stage1_state(
-            levels_frame=work,
-            entry_frame=entry_frame,
-            timestamps=work["timestamp"].astype("int64").to_numpy(),
-            ema20=work["ema20"].astype("float64").to_numpy(),
-            params=params,
-            levels_timeframe_ms=levels_timeframe_ms,
-            entry_timeframe_ms=entry_timeframe_ms,
-        )
+        if cached_stage1_state is None:
+            cached_stage1_state = self._build_stage1_state(
+                levels_frame=work,
+                entry_frame=entry_frame,
+                timestamps=work["timestamp"].astype("int64").to_numpy(),
+                ema20=work["ema20"].astype("float64").to_numpy(),
+                params=params,
+                levels_timeframe_ms=levels_timeframe_ms,
+                entry_timeframe_ms=entry_timeframe_ms,
+            )
+            if stage1_cache_key is not None:
+                self._store_stage1_state_cache(cache_key=stage1_cache_key, state=cached_stage1_state)
+        inplay = cached_stage1_state.inplay
+        pump_start_idx = cached_stage1_state.pump_start_idx
+        sleep_start_idx = cached_stage1_state.sleep_start_idx
+        sleep_end_idx = cached_stage1_state.sleep_end_idx
+        stage1_confirm_idx = cached_stage1_state.stage1_confirm_idx
+        stage1_hold_price = cached_stage1_state.stage1_hold_price
         work["inplay"] = inplay
         work["pump_start_idx"] = pump_start_idx
         work["sleep_start_idx"] = sleep_start_idx
@@ -597,7 +830,7 @@ class PnoEngine:
         params: PnoParams,
         levels_timeframe_ms: int,
         entry_timeframe_ms: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Stage1StateArrays:
         return self._build_fallback_stage1_state(
             levels_frame=levels_frame,
             entry_frame=entry_frame,
@@ -618,7 +851,7 @@ class PnoEngine:
         params: PnoParams,
         levels_timeframe_ms: int,
         entry_timeframe_ms: int,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    ) -> Stage1StateArrays:
         bars_count = int(len(timestamps))
         inplay = np.zeros(bars_count, dtype=bool)
         pump_start_idx = np.full(bars_count, -1, dtype=np.int64)
@@ -627,7 +860,14 @@ class PnoEngine:
         stage1_confirm_idx = np.full(bars_count, -1, dtype=np.int64)
         stage1_hold_price = np.full(bars_count, np.nan, dtype=np.float64)
         if bars_count == 0:
-            return inplay, pump_start_idx, sleep_start_idx, sleep_end_idx, stage1_confirm_idx, stage1_hold_price
+            return Stage1StateArrays(
+                inplay=inplay,
+                pump_start_idx=pump_start_idx,
+                sleep_start_idx=sleep_start_idx,
+                sleep_end_idx=sleep_end_idx,
+                stage1_confirm_idx=stage1_confirm_idx,
+                stage1_hold_price=stage1_hold_price,
+            )
 
         five = levels_frame.reset_index(drop=True)
         local_breakout_window = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
@@ -777,7 +1017,14 @@ class PnoEngine:
             peak_price = float(np.nanmax(highs[active_start_idx : idx + 1]))
             stage1_hold_price[idx] = base_price + (0.50 * max(peak_price - base_price, 0.0))
 
-        return inplay, pump_start_idx, sleep_start_idx, sleep_end_idx, stage1_confirm_idx, stage1_hold_price
+        return Stage1StateArrays(
+            inplay=inplay,
+            pump_start_idx=pump_start_idx,
+            sleep_start_idx=sleep_start_idx,
+            sleep_end_idx=sleep_end_idx,
+            stage1_confirm_idx=stage1_confirm_idx,
+            stage1_hold_price=stage1_hold_price,
+        )
 
     def _build_one_minute_stage1_support(
         self,
@@ -2510,11 +2757,12 @@ class PnoEngine:
     ) -> tuple[int, float]:
         confirmed_lows = self._resolve_confirmed_lows(one=one, start_idx=start_idx, end_idx=end_idx)
         active_high = float(one.highs[end_idx])
-        for low_idx in reversed(confirmed_lows):
+        for position in range(len(confirmed_lows) - 1, -1, -1):
+            low_idx = int(confirmed_lows[position])
             low_price = float(one.lows[low_idx])
             if (active_high - low_price) < max(required_rebound, self._EPSILON):
                 continue
-            if float(np.min(one.lows[low_idx : end_idx + 1])) < (low_price - self._EPSILON):
+            if self._range_tree_query_value(one.low_range_tree, left=low_idx, right=end_idx) < (low_price - self._EPSILON):
                 continue
             return int(low_idx), low_price
 
@@ -2600,11 +2848,12 @@ class PnoEngine:
         one: OneMinuteFrame,
         idx: int,
         high_idx: int,
-        confirmed_lows: list[int],
+        confirmed_lows: np.ndarray | list[int],
     ) -> bool:
         if high_idx >= idx:
             return False
-        return any(low_idx > high_idx and low_idx <= idx for low_idx in confirmed_lows)
+        confirmed_lows_arr = np.asarray(confirmed_lows, dtype=np.int64)
+        return bool(np.any((confirmed_lows_arr > high_idx) & (confirmed_lows_arr <= idx)))
 
     def _is_cluster_rearm_allowed(
         self,
@@ -2887,6 +3136,10 @@ class PnoEngine:
         del params
         if active_high_idx < pump_start_idx:
             return float(five.highs[active_high_idx]), 1.0
+        cache_key = (int(pump_start_idx), int(active_high_idx))
+        cached = self._runtime_reference_high_cache.get(cache_key)
+        if cached is not None:
+            return cached
 
         pump_pre_atr = float(five.atr_pre_14[pump_start_idx])
         baseline_quote = float(five.pre_quote_median_24[pump_start_idx])
@@ -2932,7 +3185,9 @@ class PnoEngine:
             last_weight = weight
 
         reference_high = min(reference_high, float(five.highs[active_high_idx]))
-        return float(reference_high), float(last_weight)
+        resolved = (float(reference_high), float(last_weight))
+        self._runtime_reference_high_cache[cache_key] = resolved
+        return resolved
 
     def _resolve_stage1_hold_status(self, *, one: OneMinuteFrame, idx: int, stage1: Stage1Context | None) -> str:
         if stage1 is None or idx < 0 or idx >= len(one.timestamps):
@@ -3824,6 +4079,26 @@ class PnoEngine:
         )
 
     @staticmethod
+    def _range_tree_query_value(tree: RangeSearchTree, *, left: int, right: int) -> float:
+        if left > right:
+            return np.inf if tree.is_min_tree else -np.inf
+        left_idx = left + tree.size
+        right_idx = right + tree.size
+        result = np.inf if tree.is_min_tree else -np.inf
+        while left_idx <= right_idx:
+            if left_idx & 1:
+                node_value = float(tree.tree[left_idx])
+                result = min(result, node_value) if tree.is_min_tree else max(result, node_value)
+                left_idx += 1
+            if not (right_idx & 1):
+                node_value = float(tree.tree[right_idx])
+                result = min(result, node_value) if tree.is_min_tree else max(result, node_value)
+                right_idx -= 1
+            left_idx //= 2
+            right_idx //= 2
+        return float(result)
+
+    @staticmethod
     def _mark_stage(
         diagnostics: GenerationDiagnostics,
         stage_keys: dict[str, tuple[object, ...]],
@@ -3883,20 +4158,20 @@ class PnoEngine:
         one: OneMinuteFrame,
         start_idx: int,
         end_idx: int,
-    ) -> list[int]:
+    ) -> np.ndarray:
         if end_idx - start_idx < 2 or one.confirmed_high_indices.size == 0:
-            return []
+            return np.empty(0, dtype=np.int64)
         upper_bound = min(end_idx - 1, len(one.timestamps) - 2)
         left = int(np.searchsorted(one.confirmed_high_indices, max(start_idx, 1), side="left"))
         right = int(np.searchsorted(one.confirmed_high_indices, upper_bound, side="right"))
         if left >= right:
-            return []
+            return np.empty(0, dtype=np.int64)
         indices = one.confirmed_high_indices[left:right]
         confirmed_at = one.confirmed_high_confirmed_at[left:right]
         mask = confirmed_at <= end_idx
         if not np.any(mask):
-            return []
-        return [int(item) for item in indices[mask]]
+            return np.empty(0, dtype=np.int64)
+        return indices[mask]
 
     def _resolve_confirmed_lows(
         self,
@@ -3904,20 +4179,20 @@ class PnoEngine:
         one: OneMinuteFrame,
         start_idx: int,
         end_idx: int,
-    ) -> list[int]:
+    ) -> np.ndarray:
         if end_idx - start_idx < 2 or one.confirmed_low_indices.size == 0:
-            return []
+            return np.empty(0, dtype=np.int64)
         upper_bound = min(end_idx - 1, len(one.timestamps) - 2)
         left = int(np.searchsorted(one.confirmed_low_indices, max(start_idx, 1), side="left"))
         right = int(np.searchsorted(one.confirmed_low_indices, upper_bound, side="right"))
         if left >= right:
-            return []
+            return np.empty(0, dtype=np.int64)
         indices = one.confirmed_low_indices[left:right]
         confirmed_at = one.confirmed_low_confirmed_at[left:right]
         mask = confirmed_at <= end_idx
         if not np.any(mask):
-            return []
-        return [int(item) for item in indices[mask]]
+            return np.empty(0, dtype=np.int64)
+        return indices[mask]
 
     @staticmethod
     def _round_to_preferred_step(value: float) -> float:

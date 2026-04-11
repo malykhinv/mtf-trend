@@ -72,6 +72,48 @@ class DataPreparer:
         normalized_requested = normalize_symbol(symbol)
         return self._ensure_symbol_dir_cache().get(normalized_requested)
 
+    @staticmethod
+    def _resolve_window_start_ms(*, days: int, end_timestamp_ms: int) -> int:
+        if days <= 0:
+            raise ValueError("days must be > 0")
+        return int(end_timestamp_ms) - int(days) * 86_400_000
+
+    @staticmethod
+    def _read_parquet_min_max_timestamp_ms(path: Path) -> tuple[int | None, int | None]:
+        """Best-effort min/max timestamp from Parquet metadata statistics (no full scan).
+
+        Returns (None, None) when statistics are missing or unreadable.
+        """
+        try:
+            parquet_file = pq.ParquetFile(path)
+            try:
+                ts_idx = parquet_file.schema.names.index("timestamp")
+            except ValueError:
+                return None, None
+
+            meta = parquet_file.metadata
+            if meta is None:
+                return None, None
+
+            min_ts: int | None = None
+            max_ts: int | None = None
+            for rg_idx in range(meta.num_row_groups):
+                col = meta.row_group(rg_idx).column(ts_idx)
+                stats = col.statistics
+                if stats is None or not getattr(stats, "has_min_max", False):
+                    continue
+                rg_min = getattr(stats, "min", None)
+                rg_max = getattr(stats, "max", None)
+                if rg_min is not None:
+                    rg_min_i = int(rg_min)
+                    min_ts = rg_min_i if min_ts is None else min(min_ts, rg_min_i)
+                if rg_max is not None:
+                    rg_max_i = int(rg_max)
+                    max_ts = rg_max_i if max_ts is None else max(max_ts, rg_max_i)
+            return min_ts, max_ts
+        except Exception:
+            return None, None
+
     # endregion Приватные
     def list_symbols(self, timeframe: Timeframe) -> list[str]:
         """Возвращает список символов, доступных для расчёта."""
@@ -85,7 +127,24 @@ class DataPreparer:
                 symbols.append(ParquetStorage.decode_symbol_from_path(symbol_dir.name))
         return sorted(symbols)
 
-    def load_symbol_data(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
+    def get_symbol_last_timestamp_ms(self, symbol: str, timeframe: Timeframe) -> int | None:
+        symbol_dir_name = self._resolve_symbol_dir_name(symbol)
+        if symbol_dir_name is None:
+            return None
+        path = self._cache_dir / symbol_dir_name / timeframe.value / SIMULATION_PARQUET_FILE_NAME
+        if not path.exists():
+            return None
+        _min_ts, max_ts = self._read_parquet_min_max_timestamp_ms(path)
+        return max_ts
+
+    def load_symbol_data(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        days: int | None = None,
+        end_timestamp_ms: int | None = None,
+    ) -> pd.DataFrame:
         """Загружает данные по одному символу для бэктеста.
 
         Читает из parquet только колонки, используемые в downstream-подготовке:
@@ -101,7 +160,18 @@ class DataPreparer:
 
         available_columns = set(self._get_available_columns(path))
         required_columns_subset = [column for column in self.INPUT_COLUMNS if column in available_columns]
-        frame = pd.read_parquet(path, columns=required_columns_subset)
+
+        filters = None
+        if days is not None:
+            resolved_end_ms = int(end_timestamp_ms) if end_timestamp_ms is not None else None
+            if resolved_end_ms is None:
+                _min_ts, max_ts = self._read_parquet_min_max_timestamp_ms(path)
+                resolved_end_ms = max_ts
+            if resolved_end_ms is not None:
+                start_ms = self._resolve_window_start_ms(days=int(days), end_timestamp_ms=int(resolved_end_ms))
+                filters = [("timestamp", ">=", int(start_ms)), ("timestamp", "<=", int(resolved_end_ms))]
+
+        frame = pd.read_parquet(path, columns=required_columns_subset, filters=filters)
         missing = [col for col in self.REQUIRED_COLUMNS if col not in frame.columns]
         if missing:
             return pd.DataFrame()
