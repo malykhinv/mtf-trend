@@ -1383,12 +1383,19 @@ class PnoEngine:
                     blocked_active_high_idx = None
                     active_pump_start_idx = -1
                     if prev_stage2 is None and prev_stage1 is not None:
+                        hold_status = self._resolve_stage1_hold_status(one=one, idx=i, stage1=prev_stage1)
+                        if hold_status == "closed_below_hold":
+                            rejection_reason = "hold_floor_lost_before_stage2"
+                        elif hold_status == "wick_below_hold":
+                            rejection_reason = "hold_floor_wick_before_stage2"
+                        else:
+                            rejection_reason = "stage1_lost_before_stage2"
                         _reject_stage(
-                            PNO_STAGE_2_HIGH_PULLBACK,
+                            PNO_STAGE_1_PUMP,
                             key=(prev_stage1.pump_start_5m_idx, prev_stage1.active_high_idx),
                             timestamp_ms=int(one.timestamps[i]),
-                            reason="stage1_lost_before_pullback",
-                            extra={"active_high": round(prev_stage1.active_high, 8)},
+                            reason=rejection_reason,
+                            extra={"active_high": round(prev_stage1.active_high, 8), "hold_status": hold_status},
                         )
                     elif prev_stage3 is None and prev_stage2 is not None:
                         _reject_stage(
