@@ -73,6 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Number of symbols after strategy pre-filtering or generic volume pre-rank",
     )
+    run_bt.add_argument("--days", type=_positive_int_for("--days"), default=None, help="Limit backtest to the last N days of cached data")
+    run_bt.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for --days window (unix ms)")
     run_bt.add_argument("--levels-tf", default=None, help="Levels timeframe, e.g. 1d")
     run_bt.add_argument("--entry-tf", default=None, help="Entry timeframe, e.g. 15m")
     run_bt.add_argument(

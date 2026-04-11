@@ -2668,6 +2668,28 @@ def _slice_pno_frame_by_timestamp(
     return frame.iloc[start_idx:end_idx]
 
 
+def _slice_backtest_frame_window(
+    frame: pd.DataFrame,
+    *,
+    days: int | None,
+    end_timestamp_ms: int | None,
+) -> pd.DataFrame:
+    if frame.empty or days is None:
+        return frame
+    if "timestamp" not in frame.columns:
+        return frame
+    timestamps = frame["timestamp"].to_numpy(dtype=np.int64, copy=False)
+    if timestamps.size == 0:
+        return frame
+    resolved_end = int(end_timestamp_ms) if end_timestamp_ms is not None else int(timestamps[-1])
+    start_timestamp_ms = resolved_end - (int(days) * 86_400_000)
+    return _slice_pno_frame_by_timestamp(
+        frame,
+        start_timestamp_ms=start_timestamp_ms,
+        end_timestamp_ms=resolved_end,
+    )
+
+
 def _resolve_pno_session_bucket(timestamp_ms: int | None) -> str:
     if timestamp_ms is None:
         return "na"
@@ -5181,10 +5203,18 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
 
     preparer = DataPreparer(config.backtest.cache_dir)
+    backtest_days = getattr(args, "days", None)
+    backtest_end_timestamp_ms = getattr(args, "end_timestamp_ms", None)
     symbols = args.symbols or preparer.list_symbols(entry_timeframe)
     if not symbols:
         logger.info("запуск-бектеста: нет данных в кэше")
         return 0
+    if backtest_days is not None:
+        logger.info(
+            "запуск-бэктеста: ограничение окна days=%s end_timestamp_ms=%s",
+            backtest_days,
+            backtest_end_timestamp_ms if backtest_end_timestamp_ms is not None else "auto_from_cache",
+        )
 
     symbols_before_ranking = len(symbols)
     top_n = getattr(args, "top_n", None)
@@ -5201,6 +5231,11 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         stage1_reason_counts: Counter[str] = Counter()
         for symbol in symbols:
             entry_frame = preparer.load_symbol_data(symbol, entry_timeframe)
+            entry_frame = _slice_backtest_frame_window(
+                entry_frame,
+                days=backtest_days,
+                end_timestamp_ms=backtest_end_timestamp_ms,
+            )
             preloaded_entry_frames[symbol] = entry_frame
             if levels_timeframe == entry_timeframe:
                 preloaded_levels_frames[symbol] = entry_frame
@@ -5246,6 +5281,11 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     elif pre_rank_enabled:
         for symbol in symbols:
             levels_frame = preparer.load_symbol_data(symbol, levels_timeframe)
+            levels_frame = _slice_backtest_frame_window(
+                levels_frame,
+                days=backtest_days,
+                end_timestamp_ms=backtest_end_timestamp_ms,
+            )
             preloaded_levels_frames[symbol] = levels_frame
             if levels_frame.empty:
                 logger.debug(
@@ -5359,6 +5399,26 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             entry_frame = levels_frame if entry_frame is None else entry_frame
         elif entry_frame is None:
             entry_frame = preparer.load_symbol_data(symbol, entry_timeframe)
+        if backtest_days is not None:
+            resolved_end_timestamp_ms = backtest_end_timestamp_ms
+            if resolved_end_timestamp_ms is None:
+                candidate_ends: list[int] = []
+                if not levels_frame.empty and "timestamp" in levels_frame.columns:
+                    candidate_ends.append(int(levels_frame["timestamp"].iloc[-1]))
+                if entry_frame is not None and not entry_frame.empty and "timestamp" in entry_frame.columns:
+                    candidate_ends.append(int(entry_frame["timestamp"].iloc[-1]))
+                resolved_end_timestamp_ms = min(candidate_ends) if candidate_ends else None
+            levels_frame = _slice_backtest_frame_window(
+                levels_frame,
+                days=backtest_days,
+                end_timestamp_ms=resolved_end_timestamp_ms,
+            )
+            if entry_frame is not None:
+                entry_frame = _slice_backtest_frame_window(
+                    entry_frame,
+                    days=backtest_days,
+                    end_timestamp_ms=resolved_end_timestamp_ms,
+                )
         if levels_frame.empty:
             symbols_missing_levels_tf += 1
         if entry_frame.empty:
