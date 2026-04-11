@@ -703,14 +703,17 @@ class PnoEngine:
                 and (sustain_quote >= 1.35 or sustain_trade >= 1.35)
             )
             prev_inplay = bool(inplay[idx - 1]) if idx > 0 else False
+            stage1_already_confirmed = prev_inplay and (idx > 0 and pump_start_idx[idx - 1] != -1)
             if prev_inplay:
                 if np.isfinite(ema20[idx]) and closes[idx] < (ema20[idx] - self._EPSILON):
                     below_ema20_count += 1
                 else:
                     below_ema20_count = 0
-                if below_ema20_count >= below_ema20_limit or (sustain_quote < 1.0 and sustain_trade < 1.0):
-                    active_start_idx = None
-                    continue
+                # После подтверждения Stage 1 снижение активности не прерывает inplay
+                if not stage1_already_confirmed:
+                    if below_ema20_count >= below_ema20_limit or (sustain_quote < 1.0 and sustain_trade < 1.0):
+                        active_start_idx = None
+                        continue
                 inplay[idx] = True
             elif wake_transition or self_sustain:
                 inplay[idx] = True
@@ -728,6 +731,16 @@ class PnoEngine:
                     pump_start_idx=active_start_idx,
                 )
             if not inplay[idx] or active_start_idx is None or active_start_idx >= idx:
+                continue
+            # Если Stage 1 уже подтвержден, пропускаем проверки и устанавливаем индексы
+            if stage1_already_confirmed:
+                pump_start_idx[idx] = int(active_start_idx)
+                sleep_start_idx[idx] = int(max(active_start_idx - sleep_lookback, 0))
+                sleep_end_idx[idx] = int(max(active_start_idx - 1, sleep_start_idx[idx]))
+                stage1_confirm_idx[idx] = int(idx)
+                base_price = float(np.nanmin(lows[active_start_idx : idx + 1]))
+                peak_price = float(np.nanmax(highs[active_start_idx : idx + 1]))
+                stage1_hold_price[idx] = base_price + (0.50 * max(peak_price - base_price, 0.0))
                 continue
             pump_range = float(np.nanmax(highs[active_start_idx : idx + 1]) - np.nanmin(lows[active_start_idx : idx + 1]))
             pump_pct = self._safe_divide(pump_range, float(np.nanmin(lows[active_start_idx : idx + 1])))
