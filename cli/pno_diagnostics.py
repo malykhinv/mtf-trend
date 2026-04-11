@@ -1242,13 +1242,26 @@ def _render_pno_stage_review_chart(
         return None
     pump_start_timestamp_ms = _safe_int(review_row.get("pump_start_timestamp_ms"))
     sleep_start_timestamp_ms = _safe_int(review_row.get("sleep_start_timestamp_ms"))
+    active_high_timestamp_ms = _safe_int(review_row.get("active_high_timestamp_ms"))
+    pullback_low_timestamp_ms = _safe_int(review_row.get("pullback_low_timestamp_ms"))
+    level_first_timestamp_ms = _safe_int(review_row.get("level_first_local_high_timestamp_ms"))
+    pullback_base_start_timestamp_ms = _safe_int(review_row.get("pullback_base_start_timestamp_ms"))
     is_stage1 = stage_id == PNO_STAGE_SEQUENCE[0]
     use_levels_frame = stage_id in PNO_STAGE_SEQUENCE[:3]
     if is_stage1 and pump_start_timestamp_ms is not None:
         start_timestamp_ms = sleep_start_timestamp_ms or max(pump_start_timestamp_ms - (120 * 60_000), 0)
         end_timestamp_ms = timestamp_ms
     else:
-        start_timestamp_ms = timestamp_ms - (90 * 60_000)
+        frame_step_ms = _infer_pno_frame_step_ms(levels_frame if use_levels_frame else entry_frame, 5 * 60_000)
+        context_candidates = [
+            timestamp_ms - (90 * 60_000),
+            (active_high_timestamp_ms - (12 * frame_step_ms)) if active_high_timestamp_ms is not None else None,
+            (pullback_low_timestamp_ms - (6 * frame_step_ms)) if pullback_low_timestamp_ms is not None else None,
+            (level_first_timestamp_ms - (6 * frame_step_ms)) if level_first_timestamp_ms is not None else None,
+            (pullback_base_start_timestamp_ms - (4 * frame_step_ms)) if pullback_base_start_timestamp_ms is not None else None,
+        ]
+        finite_candidates = [int(value) for value in context_candidates if value is not None]
+        start_timestamp_ms = max(min(finite_candidates), 0) if finite_candidates else max(timestamp_ms - (90 * 60_000), 0)
         end_timestamp_ms = timestamp_ms
     if use_levels_frame:
         plot_frame = levels_frame.loc[
@@ -1309,15 +1322,20 @@ def _render_pno_stage_review_chart(
         level_price = _safe_float(review_row.get("level"))
         entry_price = _safe_float(review_row.get("entry_price"))
         stage1_hold_price = _safe_float(review_row.get("stage1_hold_price"))
-        active_high_timestamp_ms = _safe_int(review_row.get("active_high_timestamp_ms"))
-        pullback_low_timestamp_ms = _safe_int(review_row.get("pullback_low_timestamp_ms"))
-        level_first_timestamp_ms = _safe_int(review_row.get("level_first_local_high_timestamp_ms"))
         level_last_timestamp_ms = _safe_int(review_row.get("level_valid_timestamp_ms")) or timestamp_ms
         pullback_base_low = _safe_float(review_row.get("pullback_base_low"))
         pullback_base_high = _safe_float(review_row.get("pullback_base_high"))
-        pullback_base_start_timestamp_ms = _safe_int(review_row.get("pullback_base_start_timestamp_ms"))
         pullback_base_end_timestamp_ms = _safe_int(review_row.get("pullback_base_end_timestamp_ms")) or timestamp_ms
         event_timestamp_ms = int(timestamp_ms)
+        right_axis_x = float(ax_price.get_xlim()[1])
+        label_positions = _resolve_pno_axis_tag_positions(
+            [
+                ("High", active_high),
+                ("PB Low", pullback_low),
+                ("Level", level_price),
+                ("Entry", entry_price),
+            ]
+        )
 
         _draw_pno_level_segment(
             ax_price,
@@ -1332,14 +1350,15 @@ def _render_pno_stage_review_chart(
         if active_high_timestamp_ms is not None:
             active_high_idx = int(np.searchsorted(timestamps, int(active_high_timestamp_ms), side="left"))
             active_high_idx = min(max(active_high_idx, 0), len(plot_frame) - 1)
-            _annotate_pno_point(
+            _annotate_pno_axis_price_tag(
                 ax_price,
-                x=float(active_high_idx),
                 y=active_high,
                 label="High",
                 color="#ef4444",
-                marker="^",
-                dy_points=8.0,
+                leader_start_x=float(active_high_idx),
+                leader_end_x=right_axis_x,
+                text_y=label_positions.get("High"),
+                alpha=0.92,
             )
         _draw_pno_level_segment(
             ax_price,
@@ -1354,14 +1373,15 @@ def _render_pno_stage_review_chart(
         if pullback_low_timestamp_ms is not None:
             pullback_low_idx = int(np.searchsorted(timestamps, int(pullback_low_timestamp_ms), side="left"))
             pullback_low_idx = min(max(pullback_low_idx, 0), len(plot_frame) - 1)
-            _annotate_pno_point(
+            _annotate_pno_axis_price_tag(
                 ax_price,
-                x=float(pullback_low_idx),
                 y=pullback_low,
                 label="PB Low",
                 color="#38bdf8",
-                marker="v",
-                dy_points=-14.0,
+                leader_start_x=float(pullback_low_idx),
+                leader_end_x=right_axis_x,
+                text_y=label_positions.get("PB Low"),
+                alpha=0.92,
             )
         _draw_pno_price_zone(
             ax_price,
@@ -1386,12 +1406,23 @@ def _render_pno_stage_review_chart(
             linewidth=1.25,
             alpha=0.85,
         )
-        _annotate_pno_price_level(
+        level_leader_start_x = None
+        if level_first_timestamp_ms is not None:
+            level_leader_start_x = float(
+                min(
+                    max(int(np.searchsorted(timestamps, int(level_first_timestamp_ms), side="left")), 0),
+                    len(plot_frame) - 1,
+                )
+            )
+        _annotate_pno_axis_price_tag(
             ax_price,
-            x=min(float(len(plot_frame) - 1.2), float(event_idx + 1.0)),
             y=level_price,
             label="Level",
             color=_PNO_PLOT_LEVEL,
+            leader_start_x=level_leader_start_x,
+            leader_end_x=right_axis_x,
+            text_y=label_positions.get("Level"),
+            alpha=0.90,
         )
         _draw_pno_level_segment(
             ax_price,
@@ -1404,15 +1435,16 @@ def _render_pno_stage_review_chart(
             alpha=0.45,
             linestyle="--",
         )
-        if entry_price is not None:
-            _annotate_pno_price_level(
-                ax_price,
-                x=min(float(len(plot_frame) - 1.2), float(event_idx + 1.0)),
-                y=entry_price,
-                label="Entry",
-                color=_PNO_PLOT_ENTRY,
-                alpha=0.88,
-            )
+        _annotate_pno_axis_price_tag(
+            ax_price,
+            y=entry_price,
+            label="Entry",
+            color=_PNO_PLOT_ENTRY,
+            leader_start_x=float(event_idx),
+            leader_end_x=right_axis_x,
+            text_y=label_positions.get("Entry"),
+            alpha=0.88,
+        )
         _draw_pno_level_segment(
             ax_price,
             timestamps=timestamps,
@@ -1454,7 +1486,7 @@ def _render_pno_stage_review_chart(
     sanitized_reason = _sanitize_plot_name(reason if reason is not None else str(review_row.get("reason", "ok")))
     file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{review_index:04d}_{_sanitize_plot_name(stage_id)}_{sanitized_status}_{sanitized_reason}.png"
     output_path = charts_dir / file_name
-    fig.subplots_adjust(left=0.08, right=0.985, top=0.985, bottom=0.10, hspace=0.04)
+    fig.subplots_adjust(left=0.08, right=0.80, top=0.985, bottom=0.10, hspace=0.04)
     fig.savefig(output_path, **_PNO_STAGE_REVIEW_SAVEFIG_KWARGS)
     plt.close(fig)
     return str(output_path)
