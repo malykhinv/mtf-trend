@@ -39,56 +39,35 @@ class DailyVolumeRanker:
         for symbol in symbols:
             frame = self._preparer.load_symbol_data(symbol, timeframe)
             if frame.empty:
-                logger.info(
-                    "ликвидность-кэш: символ=%s исключён: отсутствуют данные в кэше (%s)",
-                    symbol,
-                    timeframe.value,
-                )
+                result[symbol] = 0.0
                 continue
 
             if "timestamp" not in frame.columns or "close" not in frame.columns or "volume" not in frame.columns:
-                logger.info(
-                    "ликвидность-кэш: символ=%s исключён: отсутствуют обязательные колонки для расчёта",
-                    symbol,
-                )
+                result[symbol] = 0.0
                 continue
 
             prepared = frame.copy()
             prepared = prepared.dropna(subset=["timestamp", "close", "volume"])
             if prepared.empty:
-                logger.info(
-                    "ликвидность-кэш: символ=%s исключён: после очистки не осталось валидных строк",
-                    symbol,
-                )
+                result[symbol] = 0.0
                 continue
 
             invalid_timestamp_mask = ~prepared["timestamp"].map(self._is_unix_ms)
             invalid_timestamp_count = int(invalid_timestamp_mask.sum())
             if invalid_timestamp_count > 0:
-                logger.info(
-                    "ликвидность-кэш: символ=%s исключён: невалидный timestamp (%d строк), ожидаются целочисленные unix ms без преобразований",
-                    symbol,
-                    invalid_timestamp_count,
-                )
+                result[symbol] = 0.0
                 continue
 
             prepared["daily_volume_usd"] = prepared["close"] * prepared["volume"]
 
             daily_volume = prepared.sort_values("timestamp").dropna(subset=["daily_volume_usd"])["daily_volume_usd"]
             if daily_volume.empty:
-                logger.info(
-                    "ликвидность-кэш: символ=%s исключён: не удалось посчитать дневной USD-объём",
-                    symbol,
-                )
+                result[symbol] = 0.0
                 continue
 
             avg_daily_volume_usd = float(daily_volume.mean())
             if avg_daily_volume_usd <= 0:
-                logger.info(
-                    "ликвидность-кэш: символ=%s исключён: среднедневной объём <= 0 (%.6f)",
-                    symbol,
-                    avg_daily_volume_usd,
-                )
+                result[symbol] = 0.0
                 continue
 
             result[symbol] = avg_daily_volume_usd
