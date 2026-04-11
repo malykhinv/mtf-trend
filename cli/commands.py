@@ -64,6 +64,7 @@ from cli.pno_diagnostics import (
     _format_eta_compact,
     _read_csv_or_empty,
     _render_pno_trade_charts_for_symbol,
+    _slice_backtest_frame_window,
     _to_compact_json,
 )
 
