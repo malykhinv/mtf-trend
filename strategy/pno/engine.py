@@ -3085,6 +3085,15 @@ class PnoEngine:
             return "close_above_pullback_too_deep"
         if float(stage3.post_high_wick_share) > float(params.close_above_max_post_high_wick_share):
             return "close_above_post_high_wick_too_high"
+        
+        # Если главный хай уже есть и достаточный рост, объем не является ключевым фактором
+        active_high = float(stage4.active_high)
+        pullback_depth = float(stage3.pullback_depth)
+        has_sufficient_growth = pullback_depth >= (float(params.pullback_min_v1) * 0.5)  # Используем половину минимального значения как порог
+        
+        if active_high > 0 and has_sufficient_growth:
+            return None
+        
         signal_volume_vs_recent = float(signal_context.get("signal_bar_volume_vs_recent") or np.nan)
         if np.isfinite(signal_volume_vs_recent) and signal_volume_vs_recent < float(params.close_above_min_signal_volume_vs_recent):
             return "close_above_signal_volume_too_low"
