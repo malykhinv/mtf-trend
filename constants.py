@@ -7,7 +7,7 @@ from typing import cast
 from domain.enums.timeframe import Timeframe
 
 SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = cast(tuple[Timeframe, ...], tuple(Timeframe))
-DEFAULT_FETCH_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.M15, Timeframe.M5)
+DEFAULT_FETCH_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.M5,)
 
 # Trading defaults
 DEFAULT_COMMISSION_RATE = 0.0004

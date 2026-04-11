@@ -1199,7 +1199,7 @@ def _resolve_fetch_timeframes(args: argparse.Namespace, fallback: tuple[Timefram
     return _resolve_timeframe_sequence(
         getattr(args, "timeframes", None),
         fallback=fallback,
-        fallback_timeframe=Timeframe.M15,
+        fallback_timeframe=Timeframe.M5,
         argument_name="--timeframes",
     )
 

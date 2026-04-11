@@ -98,10 +98,6 @@ class OiFetcher:
 
             data = data.loc[(data["timestamp"] >= segment_start_ms) & (data["timestamp"] <= segment_end_ms)].copy()
 
-            issues = self._validator.validate(symbol, timeframe, data)
-            if issues:
-                self._logger.info("OI качество: %s найдено %s аномалий", symbol, len(issues))
-
             added_rows += self._storage.save_incremental(symbol, timeframe, data)
 
         self._logger.info("OI завершен: %s, добавлено %s строк", symbol, added_rows)
