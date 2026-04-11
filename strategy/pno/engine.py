@@ -1331,11 +1331,34 @@ class PnoEngine:
                 i += 1
                 continue
 
-            next_stage1 = self._resolve_stage1_context(one=one, five=five, idx=i, five_idx=five_idx, params=params)
+            next_stage1, stage1_rejection = self._resolve_stage1_context(
+                one=one,
+                five=five,
+                idx=i,
+                five_idx=five_idx,
+                params=params,
+            )
             if next_stage1 is None:
                 prev_stage1 = stage1
                 prev_stage2 = stage2
                 prev_stage3 = stage3
+                if prev_stage1 is None and stage1_rejection is not None:
+                    rejection_key = stage1_rejection.get("key")
+                    rejection_timestamp = stage1_rejection.get("timestamp_ms")
+                    rejection_reason = stage1_rejection.get("reason")
+                    rejection_extra = stage1_rejection.get("extra")
+                    if (
+                        isinstance(rejection_key, tuple)
+                        and rejection_timestamp is not None
+                        and rejection_reason is not None
+                    ):
+                        _reject_stage(
+                            PNO_STAGE_1_PUMP,
+                            key=rejection_key,
+                            timestamp_ms=int(rejection_timestamp),
+                            reason=str(rejection_reason),
+                            extra=rejection_extra if isinstance(rejection_extra, dict) else None,
+                        )
                 hold_status = self._resolve_stage1_hold_status(one=one, idx=i, stage1=prev_stage1)
                 if prev_stage3 is None and prev_stage2 is not None and prev_stage1 is not None:
                     stage1 = replace(prev_stage1, hold_status_at_validation=hold_status)
@@ -1832,16 +1855,21 @@ class PnoEngine:
         leg_start: float,
         leg_size: float,
         params: PnoParams,
-    ) -> dict[str, float | int] | None:
+    ) -> tuple[dict[str, float | int] | None, dict[str, object] | None]:
+        def _reject(reason: str, **extra: object) -> tuple[None, dict[str, object]]:
+            payload: dict[str, object] = {"reason": reason}
+            payload.update(extra)
+            return None, payload
+
         levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
         stage1_start_window = self._bars_for_duration(levels_timeframe_ms, 30 * 60_000)
         pre_pump_1h_window = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
         if pump_start_5m_idx <= 0 or pump_start_5m_idx >= len(five.timestamps):
-            return None
+            return None, None
         active_high_timestamp = int(one.timestamps[active_high_idx])
         active_high_5m_idx = int(np.searchsorted(five.timestamps, active_high_timestamp, side="right") - 1)
         if active_high_5m_idx < pump_start_5m_idx:
-            return None
+            return None, None
         reference_high, reference_high_weight = self._resolve_reference_high(
             five=five,
             pump_start_idx=pump_start_5m_idx,
@@ -1852,9 +1880,9 @@ class PnoEngine:
         pump_pre_atr = float(five.atr_pre_14[pump_start_5m_idx])
         baseline_quote = float(five.pre_quote_median_24[pump_start_5m_idx])
         if not np.isfinite(pump_pre_atr) or pump_pre_atr <= 0.0:
-            return None
+            return None, None
         if not np.isfinite(baseline_quote) or baseline_quote <= 0.0:
-            return None
+            return None, None
 
         pump_highs = five.highs[pump_start_5m_idx : active_high_5m_idx + 1]
         pump_opens = five.opens[pump_start_5m_idx : active_high_5m_idx + 1]
@@ -1862,16 +1890,24 @@ class PnoEngine:
         pump_closes = five.closes[pump_start_5m_idx : active_high_5m_idx + 1]
         pump_tr = five.tr[pump_start_5m_idx : active_high_5m_idx + 1]
         if pump_highs.size == 0 or pump_tr.size == 0:
-            return None
+            return None, None
 
         low_before_pump = float(five.lows[pump_start_5m_idx - 1])
         pump_impulse = float(np.max(pump_highs)) - low_before_pump
         pump_impulse_atr_pre = self._safe_divide(pump_impulse, pump_pre_atr)
         pump_peak_bar_tr_atr_pre = self._safe_divide(float(np.max(pump_tr)), pump_pre_atr)
         if pump_impulse_atr_pre < float(params.stage1_min_impulse_atr_pre):
-            return None
+            return _reject(
+                "impulse_atr_pre_too_small",
+                pump_impulse_atr_pre=round(pump_impulse_atr_pre, 4),
+                stage1_min_impulse_atr_pre=round(float(params.stage1_min_impulse_atr_pre), 4),
+            )
         if pump_peak_bar_tr_atr_pre < float(params.stage1_min_peak_bar_tr_atr_pre):
-            return None
+            return _reject(
+                "peak_bar_tr_atr_pre_too_small",
+                pump_peak_bar_tr_atr_pre=round(pump_peak_bar_tr_atr_pre, 4),
+                stage1_min_peak_bar_tr_atr_pre=round(float(params.stage1_min_peak_bar_tr_atr_pre), 4),
+            )
 
         start_window_end = min(five_idx, pump_start_5m_idx + stage1_start_window)
         pump_start_quote = float(np.mean(five.quote_volume[pump_start_5m_idx : start_window_end + 1]))
@@ -1879,9 +1915,17 @@ class PnoEngine:
         pump_volume_ratio_start = self._safe_divide(pump_start_quote, baseline_quote)
         pump_volume_ratio_continue = self._safe_divide(pump_continue_quote, baseline_quote)
         if pump_volume_ratio_start < float(params.stage1_min_volume_ratio_start):
-            return None
+            return _reject(
+                "volume_ratio_start_too_small",
+                pump_volume_ratio_start=round(pump_volume_ratio_start, 4),
+                stage1_min_volume_ratio_start=round(float(params.stage1_min_volume_ratio_start), 4),
+            )
         if pump_volume_ratio_continue < float(params.stage1_min_volume_ratio_continue):
-            return None
+            return _reject(
+                "volume_ratio_continue_too_small",
+                pump_volume_ratio_continue=round(pump_volume_ratio_continue, 4),
+                stage1_min_volume_ratio_continue=round(float(params.stage1_min_volume_ratio_continue), 4),
+            )
 
         pump_net_move = max(float(pump_closes[-1]) - float(pump_opens[0]), 0.0)
         pump_path_efficiency = self._safe_divide(pump_net_move, float(np.sum(pump_tr)))
@@ -1930,41 +1974,93 @@ class PnoEngine:
             float(np.sum(green_bodies_1m)),
         )
         if pump_path_efficiency < float(params.stage1_min_path_efficiency):
-            return None
+            return _reject(
+                "path_efficiency_too_low",
+                pump_path_efficiency=round(pump_path_efficiency, 4),
+                stage1_min_path_efficiency=round(float(params.stage1_min_path_efficiency), 4),
+            )
         if pump_wick_share > float(params.stage1_max_wick_share):
-            return None
+            return _reject(
+                "wick_share_too_high",
+                pump_wick_share=round(pump_wick_share, 4),
+                stage1_max_wick_share=round(float(params.stage1_max_wick_share), 4),
+            )
         if pump_body_share_mean < float(params.stage1_min_body_share_mean):
-            return None
+            return _reject(
+                "body_share_mean_too_low",
+                pump_body_share_mean=round(pump_body_share_mean, 4),
+                stage1_min_body_share_mean=round(float(params.stage1_min_body_share_mean), 4),
+            )
         if pump_flat_body_share > float(params.stage1_max_flat_body_share):
-            return None
+            return _reject(
+                "flat_body_share_too_high",
+                pump_flat_body_share=round(pump_flat_body_share, 4),
+                stage1_max_flat_body_share=round(float(params.stage1_max_flat_body_share), 4),
+            )
         if pump_body_wick_edge < float(params.stage1_min_body_wick_edge):
-            return None
+            return _reject(
+                "body_wick_edge_too_low",
+                pump_body_wick_edge=round(pump_body_wick_edge, 4),
+                stage1_min_body_wick_edge=round(float(params.stage1_min_body_wick_edge), 4),
+            )
         if pump_micro_flat_bar_share > float(params.stage1_max_micro_flat_bar_share):
-            return None
+            return _reject(
+                "micro_flat_bar_share_too_high",
+                pump_micro_flat_bar_share=round(pump_micro_flat_bar_share, 4),
+                stage1_max_micro_flat_bar_share=round(float(params.stage1_max_micro_flat_bar_share), 4),
+            )
         if active_high_bar_upper_wick_share > float(params.stage1_max_active_high_upper_wick_share):
-            return None
+            return _reject(
+                "active_high_upper_wick_too_high",
+                active_high_bar_upper_wick_share=round(active_high_bar_upper_wick_share, 4),
+                stage1_max_active_high_upper_wick_share=round(float(params.stage1_max_active_high_upper_wick_share), 4),
+            )
         if pump_max_red_body_share_5m > float(params.stage1_max_red_body_share_5m):
-            return None
+            return _reject(
+                "red_body_share_5m_too_high",
+                pump_max_red_body_share_5m=round(pump_max_red_body_share_5m, 4),
+                stage1_max_red_body_share_5m=round(float(params.stage1_max_red_body_share_5m), 4),
+            )
         if pump_counterflow_ratio_5m > float(params.stage1_max_counterflow_ratio_5m):
-            return None
+            return _reject(
+                "counterflow_ratio_5m_too_high",
+                pump_counterflow_ratio_5m=round(pump_counterflow_ratio_5m, 4),
+                stage1_max_counterflow_ratio_5m=round(float(params.stage1_max_counterflow_ratio_5m), 4),
+            )
         if pump_max_red_body_share_1m > float(params.stage1_max_red_body_share_1m):
-            return None
+            return _reject(
+                "red_body_share_1m_too_high",
+                pump_max_red_body_share_1m=round(pump_max_red_body_share_1m, 4),
+                stage1_max_red_body_share_1m=round(float(params.stage1_max_red_body_share_1m), 4),
+            )
         if pump_counterflow_ratio_1m > float(params.stage1_max_counterflow_ratio_1m):
-            return None
+            return _reject(
+                "counterflow_ratio_1m_too_high",
+                pump_counterflow_ratio_1m=round(pump_counterflow_ratio_1m, 4),
+                stage1_max_counterflow_ratio_1m=round(float(params.stage1_max_counterflow_ratio_1m), 4),
+            )
 
         cumulative_quote_volume = self._range_sum(one.cumulative_quote_volume, start_idx, idx)
         if cumulative_quote_volume < float(params.stage1_min_cumulative_quote_volume):
-            return None
+            return _reject(
+                "cumulative_quote_volume_too_low",
+                cumulative_quote_volume=round(cumulative_quote_volume, 2),
+                stage1_min_cumulative_quote_volume=round(float(params.stage1_min_cumulative_quote_volume), 2),
+            )
 
         pre_pump_ema_crosses_1h = int(round(float(five.ema_cross_count_1h[pump_start_5m_idx])))
         if pre_pump_ema_crosses_1h < int(params.stage1_pre_pump_ema_crosses_min):
-            return None
+            return _reject(
+                "pre_pump_ema_crosses_too_low",
+                pre_pump_ema_crosses_1h=int(pre_pump_ema_crosses_1h),
+                stage1_pre_pump_ema_crosses_min=int(params.stage1_pre_pump_ema_crosses_min),
+            )
 
         pre_start_idx = max(0, pump_start_5m_idx - pre_pump_1h_window)
         pre_tr = five.tr[pre_start_idx:pump_start_5m_idx]
         pre_closes = five.closes[pre_start_idx:pump_start_5m_idx]
         if pre_tr.size == 0 or pre_closes.size == 0:
-            return None
+            return None, None
         median_pre_close = float(np.median(pre_closes))
         barcode_threshold = max(
             float(params.stage1_barcode_tr_atr_fraction) * pump_pre_atr,
@@ -1972,48 +2068,63 @@ class PnoEngine:
         )
         pre_pump_barcode_fraction_1h = float(np.mean(pre_tr <= barcode_threshold))
         if pre_pump_barcode_fraction_1h > float(params.stage1_barcode_max_fraction_1h):
-            return None
+            return _reject(
+                "barcode_fraction_too_high",
+                pre_pump_barcode_fraction_1h=round(pre_pump_barcode_fraction_1h, 4),
+                stage1_barcode_max_fraction_1h=round(float(params.stage1_barcode_max_fraction_1h), 4),
+            )
 
         pre_pump_high_24h = float(five.pre_high_24h[pump_start_5m_idx])
         if not np.isfinite(pre_pump_high_24h):
-            return None
+            return None, None
         if pre_pump_high_24h > (active_high + self._EPSILON):
-            return None
+            return _reject(
+                "pre_pump_high_24h_above_active_high",
+                pre_pump_high_24h=round(pre_pump_high_24h, 8),
+                active_high=round(active_high, 8),
+            )
 
         pre_pump_high_1h = float(five.pre_high_1h[pump_start_5m_idx])
         if not np.isfinite(pre_pump_high_1h):
-            return None
+            return None, None
         half_leg_level = leg_start + (float(params.stage1_pre_pump_high_max_fraction_of_leg) * leg_size)
         if pre_pump_high_1h > (half_leg_level + self._EPSILON):
-            return None
+            return _reject(
+                "pre_pump_high_1h_too_high",
+                pre_pump_high_1h=round(pre_pump_high_1h, 8),
+                stage1_pre_pump_high_cap=round(half_leg_level, 8),
+            )
 
-        return {
-            "cumulative_quote_volume": cumulative_quote_volume,
-            "pre_pump_ema_crosses_1h": pre_pump_ema_crosses_1h,
-            "pre_pump_barcode_fraction_1h": pre_pump_barcode_fraction_1h,
-            "pre_pump_high_24h": pre_pump_high_24h,
-            "pre_pump_high_1h": pre_pump_high_1h,
-            "pump_pre_atr": pump_pre_atr,
-            "pump_impulse_atr_pre": pump_impulse_atr_pre,
-            "pump_peak_bar_tr_atr_pre": pump_peak_bar_tr_atr_pre,
-            "pump_volume_ratio_start": pump_volume_ratio_start,
-            "pump_volume_ratio_continue": pump_volume_ratio_continue,
-            "pump_path_efficiency": pump_path_efficiency,
-            "pump_wick_share": pump_wick_share,
-            "pump_body_share_mean": pump_body_share_mean,
-            "pump_flat_body_share": pump_flat_body_share,
-            "pump_body_wick_edge": pump_body_wick_edge,
-            "pump_micro_flat_bar_share": pump_micro_flat_bar_share,
-            "active_high_bar_body_share": active_high_bar_body_share,
-            "active_high_bar_upper_wick_share": active_high_bar_upper_wick_share,
-            "active_high_bar_close_position": active_high_bar_close_position,
-            "pump_max_red_body_share_5m": pump_max_red_body_share_5m,
-            "pump_counterflow_ratio_5m": pump_counterflow_ratio_5m,
-            "pump_max_red_body_share_1m": pump_max_red_body_share_1m,
-            "pump_counterflow_ratio_1m": pump_counterflow_ratio_1m,
-            "reference_high": reference_high,
-            "reference_high_weight": reference_high_weight,
-        }
+        return (
+            {
+                "cumulative_quote_volume": cumulative_quote_volume,
+                "pre_pump_ema_crosses_1h": pre_pump_ema_crosses_1h,
+                "pre_pump_barcode_fraction_1h": pre_pump_barcode_fraction_1h,
+                "pre_pump_high_24h": pre_pump_high_24h,
+                "pre_pump_high_1h": pre_pump_high_1h,
+                "pump_pre_atr": pump_pre_atr,
+                "pump_impulse_atr_pre": pump_impulse_atr_pre,
+                "pump_peak_bar_tr_atr_pre": pump_peak_bar_tr_atr_pre,
+                "pump_volume_ratio_start": pump_volume_ratio_start,
+                "pump_volume_ratio_continue": pump_volume_ratio_continue,
+                "pump_path_efficiency": pump_path_efficiency,
+                "pump_wick_share": pump_wick_share,
+                "pump_body_share_mean": pump_body_share_mean,
+                "pump_flat_body_share": pump_flat_body_share,
+                "pump_body_wick_edge": pump_body_wick_edge,
+                "pump_micro_flat_bar_share": pump_micro_flat_bar_share,
+                "active_high_bar_body_share": active_high_bar_body_share,
+                "active_high_bar_upper_wick_share": active_high_bar_upper_wick_share,
+                "active_high_bar_close_position": active_high_bar_close_position,
+                "pump_max_red_body_share_5m": pump_max_red_body_share_5m,
+                "pump_counterflow_ratio_5m": pump_counterflow_ratio_5m,
+                "pump_max_red_body_share_1m": pump_max_red_body_share_1m,
+                "pump_counterflow_ratio_1m": pump_counterflow_ratio_1m,
+                "reference_high": reference_high,
+                "reference_high_weight": reference_high_weight,
+            },
+            None,
+        )
 
     def _resolve_stage1_context(
         self,
@@ -2023,22 +2134,22 @@ class PnoEngine:
         idx: int,
         five_idx: int,
         params: PnoParams,
-    ) -> Stage1Context | None:
+    ) -> tuple[Stage1Context | None, dict[str, object] | None]:
         levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
         pre_pump_1h_bars = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
         pre_pump_2h_bars = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
         pump_start_5m_idx = int(five.pump_start_idx[five_idx])
         if pump_start_5m_idx < 0 or pump_start_5m_idx >= len(five.timestamps):
-            return None
+            return None, None
         sleep_start_5m_idx = int(five.sleep_start_idx[five_idx])
         sleep_end_5m_idx = int(five.sleep_end_idx[five_idx])
         confirm_5m_idx = int(five.stage1_confirm_idx[five_idx])
         if sleep_start_5m_idx < 0 or sleep_end_5m_idx < sleep_start_5m_idx or confirm_5m_idx < pump_start_5m_idx:
-            return None
+            return None, None
         start_timestamp = int(five.timestamps[pump_start_5m_idx])
         start_idx = int(np.searchsorted(one.timestamps, start_timestamp, side="left"))
         if start_idx >= idx:
-            return None
+            return None, None
         current_slice = slice(start_idx, idx + 1)
         local_high_offset = int(np.argmax(one.highs[current_slice]))
         active_high_idx = start_idx + local_high_offset
@@ -2055,8 +2166,20 @@ class PnoEngine:
             float(params.min_stage1_leg_v5_fraction * five.v5[five_idx]),
         )
         if leg_size < max(min_leg, self._EPSILON):
-            return None
-        quality_metrics = self._resolve_stage1_quality_metrics(
+            return None, None
+        rejection_extra_base: dict[str, object] = {
+            "sleep_start_timestamp_ms": int(five.timestamps[sleep_start_5m_idx]),
+            "sleep_end_timestamp_ms": int(five.timestamps[sleep_end_5m_idx]),
+            "pump_start_timestamp_ms": start_timestamp,
+            "stage1_confirm_timestamp_ms": int(five.timestamps[confirm_5m_idx]),
+            "active_high_timestamp_ms": int(one.timestamps[active_high_idx]),
+            "current_timestamp_ms": int(one.timestamps[idx]),
+            "active_high": round(active_high, 8),
+            "leg_start": round(leg_start, 8),
+            "leg_size": round(leg_size, 8),
+            "stage1_hold_price": round(float(five.stage1_hold_price[five_idx]), 8),
+        }
+        quality_metrics, quality_rejection = self._resolve_stage1_quality_metrics(
             one=one,
             five=five,
             idx=idx,
@@ -2070,7 +2193,19 @@ class PnoEngine:
             params=params,
         )
         if quality_metrics is None:
-            return None
+            if quality_rejection is None:
+                return None, None
+            reason = str(quality_rejection.get("reason") or "quality_reject")
+            quality_extra = {key: value for key, value in quality_rejection.items() if key != "reason"}
+            return (
+                None,
+                {
+                    "reason": reason,
+                    "key": (pump_start_5m_idx, confirm_5m_idx),
+                    "timestamp_ms": int(one.timestamps[idx]),
+                    "extra": {**rejection_extra_base, **quality_extra},
+                },
+            )
         reference_high = float(quality_metrics["reference_high"])
         reference_leg_size = max(reference_high - leg_start, self._EPSILON)
         hold_floor = max(
@@ -2078,9 +2213,35 @@ class PnoEngine:
             reference_high - (float(params.stage1_hold_fraction) * reference_leg_size),
         )
         if float(one.closes[idx]) <= hold_floor:
-            return None
+            return (
+                None,
+                {
+                    "reason": "hold_floor_lost",
+                    "key": (pump_start_5m_idx, confirm_5m_idx),
+                    "timestamp_ms": int(one.timestamps[idx]),
+                    "extra": {
+                        **rejection_extra_base,
+                        "hold_floor": round(hold_floor, 8),
+                        "current_close": round(float(one.closes[idx]), 8),
+                        "reference_high": round(reference_high, 8),
+                    },
+                },
+            )
         if float(one.lows[idx]) <= leg_start:
-            return None
+            return (
+                None,
+                {
+                    "reason": "leg_start_lost",
+                    "key": (pump_start_5m_idx, confirm_5m_idx),
+                    "timestamp_ms": int(one.timestamps[idx]),
+                    "extra": {
+                        **rejection_extra_base,
+                        "current_low": round(float(one.lows[idx]), 8),
+                        "leg_start": round(leg_start, 8),
+                        "reference_high": round(reference_high, 8),
+                    },
+                },
+            )
         pre_pump_range_1h = self._resolve_window_range(
             highs=five.highs,
             lows=five.lows,
@@ -2099,57 +2260,60 @@ class PnoEngine:
             start_idx=pump_start_5m_idx,
             end_idx=five_idx,
         )
-        return Stage1Context(
-            start_idx=start_idx,
-            start_timestamp=int(one.timestamps[start_idx]),
-            levels_timeframe_ms=levels_timeframe_ms,
-            sleep_start_timestamp=int(five.timestamps[sleep_start_5m_idx]),
-            sleep_end_timestamp=int(five.timestamps[sleep_end_5m_idx]),
-            pump_start_5m_idx=pump_start_5m_idx,
-            pump_start_timestamp=start_timestamp,
-            stage1_confirm_timestamp=int(five.timestamps[confirm_5m_idx]),
-            current_5m_idx=five_idx,
-            current_levels_timestamp=int(five.timestamps[five_idx]),
-            active_high_idx=active_high_idx,
-            active_high_timestamp=int(one.timestamps[active_high_idx]),
-            active_high=active_high,
-            reference_high=reference_high,
-            leg_start_idx=leg_start_idx,
-            leg_start_timestamp=int(one.timestamps[leg_start_idx]),
-            leg_start=leg_start,
-            leg_size=leg_size,
-            reference_leg_size=reference_leg_size,
-            pump_range_5m=pump_range,
-            hold_floor=hold_floor,
-            stage1_hold_price=float(five.stage1_hold_price[five_idx]),
-            cumulative_quote_volume=float(quality_metrics["cumulative_quote_volume"]),
-            pre_pump_ema_crosses_1h=int(quality_metrics["pre_pump_ema_crosses_1h"]),
-            pre_pump_barcode_fraction_1h=float(quality_metrics["pre_pump_barcode_fraction_1h"]),
-            pre_pump_high_24h=float(quality_metrics["pre_pump_high_24h"]),
-            pre_pump_high_1h=float(quality_metrics["pre_pump_high_1h"]),
-            pump_pre_atr=float(quality_metrics["pump_pre_atr"]),
-            pump_impulse_atr_pre=float(quality_metrics["pump_impulse_atr_pre"]),
-            pump_peak_bar_tr_atr_pre=float(quality_metrics["pump_peak_bar_tr_atr_pre"]),
-            pump_volume_ratio_start=float(quality_metrics["pump_volume_ratio_start"]),
-            pump_volume_ratio_continue=float(quality_metrics["pump_volume_ratio_continue"]),
-            pump_path_efficiency=float(quality_metrics["pump_path_efficiency"]),
-            pump_wick_share=float(quality_metrics["pump_wick_share"]),
-            pump_body_share_mean=float(quality_metrics["pump_body_share_mean"]),
-            pump_flat_body_share=float(quality_metrics["pump_flat_body_share"]),
-            pump_body_wick_edge=float(quality_metrics["pump_body_wick_edge"]),
-            pump_micro_flat_bar_share=float(quality_metrics["pump_micro_flat_bar_share"]),
-            active_high_bar_body_share=float(quality_metrics["active_high_bar_body_share"]),
-            active_high_bar_upper_wick_share=float(quality_metrics["active_high_bar_upper_wick_share"]),
-            active_high_bar_close_position=float(quality_metrics["active_high_bar_close_position"]),
-            pump_max_red_body_share_5m=float(quality_metrics["pump_max_red_body_share_5m"]),
-            pump_counterflow_ratio_5m=float(quality_metrics["pump_counterflow_ratio_5m"]),
-            pump_max_red_body_share_1m=float(quality_metrics["pump_max_red_body_share_1m"]),
-            pump_counterflow_ratio_1m=float(quality_metrics["pump_counterflow_ratio_1m"]),
-            pre_pump_range_1h=pre_pump_range_1h,
-            pre_pump_range_2h=pre_pump_range_2h,
-            pump_vs_pre_1h_ratio=self._safe_divide(pump_range, pre_pump_range_1h),
-            pump_vs_pre_2h_ratio=self._safe_divide(pump_range, pre_pump_range_2h),
-            reference_high_weight=float(quality_metrics["reference_high_weight"]),
+        return (
+            Stage1Context(
+                start_idx=start_idx,
+                start_timestamp=int(one.timestamps[start_idx]),
+                levels_timeframe_ms=levels_timeframe_ms,
+                sleep_start_timestamp=int(five.timestamps[sleep_start_5m_idx]),
+                sleep_end_timestamp=int(five.timestamps[sleep_end_5m_idx]),
+                pump_start_5m_idx=pump_start_5m_idx,
+                pump_start_timestamp=start_timestamp,
+                stage1_confirm_timestamp=int(five.timestamps[confirm_5m_idx]),
+                current_5m_idx=five_idx,
+                current_levels_timestamp=int(five.timestamps[five_idx]),
+                active_high_idx=active_high_idx,
+                active_high_timestamp=int(one.timestamps[active_high_idx]),
+                active_high=active_high,
+                reference_high=reference_high,
+                leg_start_idx=leg_start_idx,
+                leg_start_timestamp=int(one.timestamps[leg_start_idx]),
+                leg_start=leg_start,
+                leg_size=leg_size,
+                reference_leg_size=reference_leg_size,
+                pump_range_5m=pump_range,
+                hold_floor=hold_floor,
+                stage1_hold_price=float(five.stage1_hold_price[five_idx]),
+                cumulative_quote_volume=float(quality_metrics["cumulative_quote_volume"]),
+                pre_pump_ema_crosses_1h=int(quality_metrics["pre_pump_ema_crosses_1h"]),
+                pre_pump_barcode_fraction_1h=float(quality_metrics["pre_pump_barcode_fraction_1h"]),
+                pre_pump_high_24h=float(quality_metrics["pre_pump_high_24h"]),
+                pre_pump_high_1h=float(quality_metrics["pre_pump_high_1h"]),
+                pump_pre_atr=float(quality_metrics["pump_pre_atr"]),
+                pump_impulse_atr_pre=float(quality_metrics["pump_impulse_atr_pre"]),
+                pump_peak_bar_tr_atr_pre=float(quality_metrics["pump_peak_bar_tr_atr_pre"]),
+                pump_volume_ratio_start=float(quality_metrics["pump_volume_ratio_start"]),
+                pump_volume_ratio_continue=float(quality_metrics["pump_volume_ratio_continue"]),
+                pump_path_efficiency=float(quality_metrics["pump_path_efficiency"]),
+                pump_wick_share=float(quality_metrics["pump_wick_share"]),
+                pump_body_share_mean=float(quality_metrics["pump_body_share_mean"]),
+                pump_flat_body_share=float(quality_metrics["pump_flat_body_share"]),
+                pump_body_wick_edge=float(quality_metrics["pump_body_wick_edge"]),
+                pump_micro_flat_bar_share=float(quality_metrics["pump_micro_flat_bar_share"]),
+                active_high_bar_body_share=float(quality_metrics["active_high_bar_body_share"]),
+                active_high_bar_upper_wick_share=float(quality_metrics["active_high_bar_upper_wick_share"]),
+                active_high_bar_close_position=float(quality_metrics["active_high_bar_close_position"]),
+                pump_max_red_body_share_5m=float(quality_metrics["pump_max_red_body_share_5m"]),
+                pump_counterflow_ratio_5m=float(quality_metrics["pump_counterflow_ratio_5m"]),
+                pump_max_red_body_share_1m=float(quality_metrics["pump_max_red_body_share_1m"]),
+                pump_counterflow_ratio_1m=float(quality_metrics["pump_counterflow_ratio_1m"]),
+                pre_pump_range_1h=pre_pump_range_1h,
+                pre_pump_range_2h=pre_pump_range_2h,
+                pump_vs_pre_1h_ratio=self._safe_divide(pump_range, pre_pump_range_1h),
+                pump_vs_pre_2h_ratio=self._safe_divide(pump_range, pre_pump_range_2h),
+                reference_high_weight=float(quality_metrics["reference_high_weight"]),
+            ),
+            None,
         )
 
     def _resolve_stage2_context(

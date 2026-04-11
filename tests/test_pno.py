@@ -77,6 +77,41 @@ def _build_test_one_frame(*, timestamp_ms: int) -> OneMinuteFrame:
     )
 
 
+def _build_test_one_frame_multi(*, timestamps_ms: list[int], price: float = 1.0) -> OneMinuteFrame:
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps_ms,
+            "open": [price] * len(timestamps_ms),
+            "high": [price + 0.1] * len(timestamps_ms),
+            "low": [price - 0.1] * len(timestamps_ms),
+            "close": [price] * len(timestamps_ms),
+            "volume": [1.0] * len(timestamps_ms),
+        }
+    )
+    timestamps = pd.Series(timestamps_ms, dtype="int64").to_numpy()
+    highs = pd.Series([price + 0.1] * len(timestamps_ms), dtype="float64").to_numpy()
+    lows = pd.Series([price - 0.1] * len(timestamps_ms), dtype="float64").to_numpy()
+    return OneMinuteFrame(
+        frame=frame,
+        timestamps=timestamps,
+        opens=pd.Series([price] * len(timestamps_ms), dtype="float64").to_numpy(),
+        highs=highs,
+        lows=lows,
+        closes=pd.Series([price] * len(timestamps_ms), dtype="float64").to_numpy(),
+        volumes=pd.Series([1.0] * len(timestamps_ms), dtype="float64").to_numpy(),
+        quote_volume=pd.Series([price] * len(timestamps_ms), dtype="float64").to_numpy(),
+        cumulative_quote_volume=pd.Series(range(1, len(timestamps_ms) + 1), dtype="float64").to_numpy(),
+        tr=pd.Series([0.2] * len(timestamps_ms), dtype="float64").to_numpy(),
+        v1=pd.Series([0.5] * len(timestamps_ms), dtype="float64").to_numpy(),
+        red=pd.Series([False] * len(timestamps_ms)).to_numpy(dtype=bool),
+        confirmed_high_indices=pd.Series([], dtype="int64").to_numpy(),
+        confirmed_high_confirmed_at=pd.Series([], dtype="int64").to_numpy(),
+        confirmed_low_indices=pd.Series([], dtype="int64").to_numpy(),
+        confirmed_low_confirmed_at=pd.Series([], dtype="int64").to_numpy(),
+        low_range_tree=PnoEngine._build_range_tree(lows, is_min_tree=True),
+    )
+
+
 def _build_test_five_frame(
     *,
     opens: list[float],
@@ -491,6 +526,90 @@ def test_pno_trade_chart_visuals_use_plan_for_close_above_and_keep_exec_fill() -
     assert display_entry_price == pytest.approx(0.412875)
     assert execution_tag_price == pytest.approx(0.4141)
     assert signal_timestamp_ms == 120_000
+
+
+def test_pno_resolve_stage1_context_returns_rejection_payload_for_quality_fail(monkeypatch) -> None:
+    engine = PnoEngine()
+    one = _build_test_one_frame_multi(timestamps_ms=[0, 60_000, 120_000], price=1.5)
+    one.highs[2] = 2.1
+    five = _build_test_five_frame(
+        opens=[1.0],
+        highs=[2.0],
+        lows=[0.9],
+        closes=[1.8],
+        ema20=[1.0],
+    )
+
+    monkeypatch.setattr(engine, "_resolve_leg_start", lambda **_kwargs: (0, 1.0))
+    monkeypatch.setattr(
+        engine,
+        "_resolve_stage1_quality_metrics",
+        lambda **_kwargs: (
+            None,
+            {
+                "reason": "volume_ratio_start_too_small",
+                "pump_volume_ratio_start": 4.2,
+                "stage1_min_volume_ratio_start": 5.0,
+            },
+        ),
+    )
+
+    context, rejection = engine._resolve_stage1_context(
+        one=one,
+        five=five,
+        idx=2,
+        five_idx=0,
+        params=PnoParams(symbol="TEST/USDT"),
+    )
+
+    assert context is None
+    assert rejection is not None
+    assert rejection["reason"] == "volume_ratio_start_too_small"
+    assert rejection["key"] == (0, 0)
+    assert rejection["timestamp_ms"] == 120_000
+    assert rejection["extra"]["pump_volume_ratio_start"] == pytest.approx(4.2)
+
+
+def test_pno_run_records_stage1_rejection_once_per_near_pump_reason(monkeypatch) -> None:
+    engine = PnoEngine()
+    one = _build_test_one_frame_multi(timestamps_ms=[0, 60_000, 120_000], price=1.2)
+    five = _build_test_five_frame(
+        opens=[1.0],
+        highs=[1.5],
+        lows=[0.9],
+        closes=[1.3],
+        ema20=[1.0],
+    )
+    diagnostics = engine._empty_diagnostics()
+    rejection = {
+        "reason": "volume_ratio_start_too_small",
+        "key": (0, 0),
+        "timestamp_ms": 120_000,
+        "extra": {
+            "pump_start_timestamp_ms": 0,
+            "stage1_confirm_timestamp_ms": 0,
+            "active_high_timestamp_ms": 120_000,
+            "current_timestamp_ms": 120_000,
+            "active_high": 1.5,
+            "leg_start": 1.0,
+            "leg_size": 0.5,
+            "stage1_hold_price": 1.2,
+        },
+    }
+
+    monkeypatch.setattr(engine, "_resolve_stage1_context", lambda **_kwargs: (None, rejection))
+
+    trades = engine._run(
+        one=one,
+        five=five,
+        params=PnoParams(symbol="TEST/USDT", min_data_1m=1, min_data_5m=1),
+        diagnostics=diagnostics,
+    )
+
+    assert trades == []
+    stage1_rejections = [row for row in diagnostics["stage_rejections"] if row.get("stage_id") == "stage_1_pump"]
+    assert len(stage1_rejections) == 1
+    assert stage1_rejections[0]["reason"] == "volume_ratio_start_too_small"
 
 
 def test_pno_trade_chart_visuals_use_level_for_cross_without_exec_tag() -> None:
