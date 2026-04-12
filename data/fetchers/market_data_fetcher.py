@@ -1,6 +1,7 @@
 """Модуль проекта."""
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from constants import (
@@ -108,10 +109,25 @@ class MarketDataFetcher:
             end_timestamp_ms,
         )
         if include_open_interest:
+            # Open interest всегда только на 5м и за последние 30 дней
+            oi_timeframe = Timeframe.M5
+            thirty_days_ms = 30 * 24 * 60 * 60 * 1000
+            current_time_ms = int(time.time() * 1000)
+            oi_start_timestamp_ms = max(start_timestamp_ms, current_time_ms - thirty_days_ms)
+            
+            self._logger.info(
+                "OI ограничения: TF=%s период=%s..%s (оригинал=%s..%s)",
+                oi_timeframe.value,
+                oi_start_timestamp_ms,
+                end_timestamp_ms,
+                start_timestamp_ms,
+                end_timestamp_ms,
+            )
+            
             oi_result = self._oi_fetcher.fetch_many(
                 symbols,
-                timeframe,
-                start_timestamp_ms,
+                oi_timeframe,
+                oi_start_timestamp_ms,
                 end_timestamp_ms,
             )
         else:
