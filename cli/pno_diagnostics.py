@@ -16,8 +16,41 @@ from matplotlib.patches import Rectangle
 from matplotlib.ticker import LinearLocator
 from matplotlib.transforms import blended_transform_factory
 
-from strategy.pno.engine import PNO_STAGE_4_LEVEL, PNO_STAGE_5_TRADE, PNO_STAGE_SEQUENCE
+from strategy.pno.engine import PNO_STAGE_1_PUMP, PNO_STAGE_4_LEVEL, PNO_STAGE_5_TRADE, PNO_STAGE_SEQUENCE
 from vectorbt_runner import SymbolMtfFrames
+
+_PNO_STAGE1_REVIEW_MAX_ROWS_PER_REASON = 8
+_PNO_STAGE1_REVIEW_MAX_ROWS_PER_SYMBOL = 2
+_PNO_STAGE1_REVIEW_FALLBACK_ROWS_PER_REASON = 4
+_PNO_STAGE1_REVIEW_DISTANCE_MAX = 0.18
+_PNO_STAGE1_REJECTION_DISTANCE_FIELDS: dict[str, tuple[str, str, str]] = {
+    "impulse_atr_pre_too_small": ("pump_impulse_atr_pre", "stage1_min_impulse_atr_pre", "min"),
+    "peak_bar_tr_atr_pre_too_small": ("pump_peak_bar_tr_atr_pre", "stage1_min_peak_bar_tr_atr_pre", "min"),
+    "volume_ratio_start_too_small": ("pump_volume_ratio_start", "stage1_min_volume_ratio_start", "min"),
+    "volume_ratio_continue_too_small": ("pump_volume_ratio_continue", "stage1_min_volume_ratio_continue", "min"),
+    "path_efficiency_too_low": ("pump_path_efficiency", "stage1_min_path_efficiency", "min"),
+    "wick_share_too_high": ("pump_wick_share", "stage1_max_wick_share", "max"),
+    "body_share_mean_too_low": ("pump_body_share_mean", "stage1_min_body_share_mean", "min"),
+    "flat_body_share_too_high": ("pump_flat_body_share", "stage1_max_flat_body_share", "max"),
+    "body_wick_edge_too_low": ("pump_body_wick_edge", "stage1_min_body_wick_edge", "min"),
+    "micro_flat_bar_share_too_high": ("pump_micro_flat_bar_share", "stage1_max_micro_flat_bar_share", "max"),
+    "active_high_upper_wick_too_high": (
+        "active_high_bar_upper_wick_share",
+        "stage1_max_active_high_upper_wick_share",
+        "max",
+    ),
+    "red_body_share_5m_too_high": ("pump_max_red_body_share_5m", "stage1_max_red_body_share_5m", "max"),
+    "counterflow_ratio_5m_too_high": ("pump_counterflow_ratio_5m", "stage1_max_counterflow_ratio_5m", "max"),
+    "red_body_share_1m_too_high": ("pump_max_red_body_share_1m", "stage1_max_red_body_share_1m", "max"),
+    "counterflow_ratio_1m_too_high": ("pump_counterflow_ratio_1m", "stage1_max_counterflow_ratio_1m", "max"),
+    "cumulative_quote_volume_too_low": ("cumulative_quote_volume", "stage1_min_cumulative_quote_volume", "min"),
+    "pre_pump_ema_crosses_too_low": ("pre_pump_ema_crosses_1h", "stage1_pre_pump_ema_crosses_min", "min"),
+    "barcode_fraction_too_high": ("pre_pump_barcode_fraction_1h", "stage1_barcode_max_fraction_1h", "max"),
+    "pre_pump_high_24h_above_active_high": ("pre_pump_high_24h", "active_high", "max"),
+    "pre_pump_high_1h_too_high": ("pre_pump_high_1h", "stage1_pre_pump_high_cap", "max"),
+    "pump_candidate_barcode": ("pre_pump_barcode_fraction_1h", "stage1_barcode_max_fraction_1h", "max"),
+    "pump_candidate_jerky": ("pump_path_efficiency", "stage1_min_path_efficiency", "min"),
+}
 
 def _read_csv_or_empty(path: Path) -> pd.DataFrame:
     if not path.exists():
@@ -62,6 +95,148 @@ def _format_eta_compact(seconds: float | None) -> str:
     if minutes > 0:
         return f"{minutes}m {secs:02d}s"
     return f"{secs}s"
+
+
+def _resolve_metric_distance(
+    actual: float | None,
+    threshold: float | None,
+    *,
+    direction: str,
+) -> float | None:
+    if actual is None or threshold is None:
+        return None
+    denominator = max(abs(threshold), 1e-9)
+    if direction == "min":
+        gap = threshold - actual
+    else:
+        gap = actual - threshold
+    if gap < 0.0:
+        gap = 0.0
+    return gap / denominator
+
+
+def _resolve_stage1_rejection_review_score(row: dict[str, object]) -> float | None:
+    reason = str(row.get("reason") or "")
+    fields = _PNO_STAGE1_REJECTION_DISTANCE_FIELDS.get(reason)
+    if fields is not None:
+        actual = _safe_float(row.get(fields[0]))
+        threshold = _safe_float(row.get(fields[1]))
+        return _resolve_metric_distance(actual, threshold, direction=fields[2])
+
+    if reason == "pump_candidate_below_ema20":
+        current_close = _safe_float(row.get("current_close_5m"))
+        current_ema20 = _safe_float(row.get("current_ema20_5m"))
+        leg_size = _safe_float(row.get("leg_size"))
+        pump_pct = _safe_float(row.get("pump_pct"))
+        min_pump_pct = _safe_float(row.get("stage1_min_pump_pct"))
+        if (
+            current_close is None
+            or current_ema20 is None
+            or leg_size is None
+            or leg_size <= 0.0
+            or pump_pct is None
+            or min_pump_pct is None
+            or pump_pct <= min_pump_pct
+        ):
+            return None
+        return max(current_ema20 - current_close, 0.0) / max(leg_size, 1e-9)
+
+    if reason == "hold_floor_lost":
+        current_close = _safe_float(row.get("current_close"))
+        hold_floor = _safe_float(row.get("hold_floor"))
+        reference_high = _safe_float(row.get("reference_high"))
+        leg_start = _safe_float(row.get("leg_start"))
+        if current_close is None or hold_floor is None or reference_high is None or leg_start is None:
+            return None
+        return max(hold_floor - current_close, 0.0) / max(reference_high - leg_start, 1e-9)
+
+    if reason == "leg_start_lost":
+        current_low = _safe_float(row.get("current_low"))
+        leg_start = _safe_float(row.get("leg_start"))
+        reference_high = _safe_float(row.get("reference_high"))
+        if current_low is None or leg_start is None or reference_high is None:
+            return None
+        return max(leg_start - current_low, 0.0) / max(reference_high - leg_start, 1e-9)
+
+    return None
+
+
+def _cap_stage1_review_rows(
+    rows: list[dict[str, object]],
+    *,
+    max_rows: int,
+    max_rows_per_symbol: int,
+) -> list[dict[str, object]]:
+    selected: list[dict[str, object]] = []
+    symbol_counts: dict[str, int] = {}
+    ordered_rows = sorted(
+        rows,
+        key=lambda item: (
+            _safe_int(item.get("timestamp_ms")) if _safe_int(item.get("timestamp_ms")) is not None else 0,
+            str(item.get("symbol") or ""),
+        ),
+    )
+    for row in ordered_rows:
+        symbol = str(row.get("symbol") or "")
+        if symbol and symbol_counts.get(symbol, 0) >= max_rows_per_symbol:
+            continue
+        selected.append(row)
+        if symbol:
+            symbol_counts[symbol] = symbol_counts.get(symbol, 0) + 1
+        if len(selected) >= max_rows:
+            break
+    return selected
+
+
+def _select_stage1_review_rejection_rows(
+    *,
+    reason: str,
+    rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    scored_rows: list[tuple[float, dict[str, object]]] = []
+    fallback_rows: list[dict[str, object]] = []
+    for row in rows:
+        score = _resolve_stage1_rejection_review_score(row)
+        if score is None or not np.isfinite(score):
+            fallback_rows.append(row)
+            continue
+        if score > _PNO_STAGE1_REVIEW_DISTANCE_MAX:
+            continue
+        scored_rows.append((score, row))
+
+    if scored_rows:
+        scored_rows.sort(
+            key=lambda item: (
+                item[0],
+                _safe_int(item[1].get("timestamp_ms")) if _safe_int(item[1].get("timestamp_ms")) is not None else 0,
+                str(item[1].get("symbol") or ""),
+            )
+        )
+        return _cap_stage1_review_rows(
+            [row for _, row in scored_rows],
+            max_rows=_PNO_STAGE1_REVIEW_MAX_ROWS_PER_REASON,
+            max_rows_per_symbol=_PNO_STAGE1_REVIEW_MAX_ROWS_PER_SYMBOL,
+        )
+
+    if reason in {"hold_floor_lost_before_stage2", "hold_floor_wick_before_stage2", "stage1_lost_before_stage2"}:
+        return _cap_stage1_review_rows(
+            fallback_rows or rows,
+            max_rows=_PNO_STAGE1_REVIEW_FALLBACK_ROWS_PER_REASON,
+            max_rows_per_symbol=1,
+        )
+
+    return []
+
+
+def _select_stage_review_rejection_rows(
+    *,
+    stage_id: str,
+    reason: str,
+    rows: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if stage_id != PNO_STAGE_1_PUMP:
+        return list(rows)
+    return _select_stage1_review_rejection_rows(reason=reason, rows=rows)
 
 
 def _build_pno_plot_frame(
@@ -1545,21 +1720,34 @@ def _export_pno_stage_reviews(
     stage_rows_by_stage: dict[str, list[dict[str, object]]],
     stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
     selected_stage_ids: tuple[str, ...],
+    render_charts: bool = True,
+    passed_chart_stage_ids: tuple[str, ...] | None = None,
     logger: Logger | None = None,
     log_prefix: str = "pno",
 ) -> None:
     stage_reviews_dir = diagnostics_dir / "stage_reviews"
     stage_reviews_dir.mkdir(parents=True, exist_ok=True)
-    chart_stage_ids = set(PNO_STAGE_SEQUENCE)
+    chart_stage_ids = set(PNO_STAGE_SEQUENCE) if render_charts else set()
     manifest_rows: list[dict[str, object]] = []
     selected_stage_set = set(selected_stage_ids)
+    passed_chart_stage_id_set = set(selected_stage_ids if passed_chart_stage_ids is None else passed_chart_stage_ids)
     needs_entry_frames = bool(selected_stage_set.intersection(PNO_STAGE_SEQUENCE[3:]))
     prepared_frames_by_symbol: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
-    total_review_charts = 0
+    review_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]] = {}
     for stage_id in selected_stage_ids:
-        total_review_charts += len(stage_rows_by_stage.get(stage_id, []))
-        rejection_groups = stage_rejections_by_stage.get(stage_id, {})
-        total_review_charts += sum(len(rows) for rows in rejection_groups.values())
+        filtered_groups: dict[str, list[dict[str, object]]] = {}
+        for reason, rows in stage_rejections_by_stage.get(stage_id, {}).items():
+            selected_rows = _select_stage_review_rejection_rows(stage_id=stage_id, reason=reason, rows=rows)
+            if selected_rows:
+                filtered_groups[reason] = selected_rows
+        review_rejections_by_stage[stage_id] = filtered_groups
+    total_review_charts = 0
+    if render_charts:
+        for stage_id in selected_stage_ids:
+            if stage_id in passed_chart_stage_id_set:
+                total_review_charts += len(stage_rows_by_stage.get(stage_id, []))
+            rejection_groups = review_rejections_by_stage.get(stage_id, {})
+            total_review_charts += sum(len(rows) for rows in rejection_groups.values())
     rendered_review_charts = 0
     review_start_time = time.monotonic()
     last_progress_log_time = review_start_time
@@ -1591,7 +1779,7 @@ def _export_pno_stage_reviews(
             )
             last_progress_log_time = now
 
-    if logger is not None and total_review_charts > 0:
+    if render_charts and logger is not None and total_review_charts > 0:
         logger.info(
             "%s: pno stage-review charts start total=%s stages=%s",
             log_prefix,
@@ -1628,7 +1816,7 @@ def _export_pno_stage_reviews(
         passed_dir.mkdir(parents=True, exist_ok=True)
         passed_frame.to_csv(passed_dir / "events.csv", index=False)
         passed_chart_paths: list[str] = []
-        if stage_id in chart_stage_ids:
+        if stage_id in chart_stage_ids and stage_id in passed_chart_stage_id_set:
             passed_charts_dir = passed_dir / "charts"
             passed_charts_dir.mkdir(parents=True, exist_ok=True)
             for row_index, row in enumerate(passed_rows, start=1):
@@ -1652,19 +1840,25 @@ def _export_pno_stage_reviews(
                 _log_review_progress(stage_id)
 
         rejection_groups = stage_rejections_by_stage.get(stage_id, {})
+        review_rejection_groups = review_rejections_by_stage.get(stage_id, {})
         rejected_total = 0
+        rejected_review_total = 0
         rejected_chart_paths = 0
         rejected_dir = stage_dir / "rejected"
         rejected_dir.mkdir(parents=True, exist_ok=True)
         for reason, rows in sorted(rejection_groups.items()):
             rejected_total += len(rows)
+            review_rows = review_rejection_groups.get(reason, [])
+            if not review_rows:
+                continue
+            rejected_review_total += len(review_rows)
             reason_dir = rejected_dir / _sanitize_plot_name(reason)
             reason_dir.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(rows).to_csv(reason_dir / "events.csv", index=False)
+            pd.DataFrame(review_rows).to_csv(reason_dir / "events.csv", index=False)
             if stage_id in chart_stage_ids:
                 charts_dir = reason_dir / "charts"
                 charts_dir.mkdir(parents=True, exist_ok=True)
-                for row_index, row in enumerate(rows, start=1):
+                for row_index, row in enumerate(review_rows, start=1):
                     symbol = str(row.get("symbol", ""))
                     prepared_frames = _get_prepared_frames(symbol)
                     if prepared_frames is None:
@@ -1689,6 +1883,8 @@ def _export_pno_stage_reviews(
                 "stage_id": stage_id,
                 "passed_count": int(len(passed_rows)),
                 "rejected_count": int(rejected_total),
+                "rejected_review_count": int(rejected_review_total),
+                "rejected_filtered_count": int(rejected_total - rejected_review_total),
                 "passed_events_path": str(passed_dir / "events.csv"),
                 "passed_charts_count": int(len(passed_chart_paths)),
                 "rejected_charts_count": int(rejected_chart_paths),
@@ -1696,7 +1892,7 @@ def _export_pno_stage_reviews(
         )
 
     pd.DataFrame(manifest_rows).to_csv(stage_reviews_dir / "manifest.csv", index=False)
-    if logger is not None and total_review_charts > 0:
+    if render_charts and logger is not None and total_review_charts > 0:
         logger.info(
             "%s: pno stage-review charts finished total=%s",
             log_prefix,

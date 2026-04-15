@@ -300,7 +300,7 @@ class GenerationDiagnostics(TypedDict, total=False):
 class PnoEngine:
     REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
     _EPSILON = 1e-12
-    _STAGE1_CACHE_VERSION = 1
+    _STAGE1_CACHE_VERSION = 3
 
     def __init__(self, *, cache_dir: str | Path | None = None) -> None:
         self._last_generation_diagnostics = self._empty_diagnostics()
@@ -874,6 +874,8 @@ class PnoEngine:
         recent_support_window = self._bars_for_duration(levels_timeframe_ms, 10 * 60_000)
         below_ema20_limit = self._bars_for_duration(levels_timeframe_ms, 10 * 60_000)
         pump_start_lookback = self._bars_for_duration(levels_timeframe_ms, 30 * 60_000)
+        pump_start_shift_lookback = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+        pump_start_precursor_extension = self._bars_for_duration(levels_timeframe_ms, 15 * 60_000)
         sleep_lookback = self._bars_for_duration(levels_timeframe_ms, 7 * 60 * 60_000)
         pretrend_1h_bars = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
         pretrend_2h_bars = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
@@ -943,7 +945,29 @@ class PnoEngine:
                 and (sustain_quote >= 1.35 or sustain_trade >= 1.35)
             )
             prev_inplay = bool(inplay[idx - 1]) if idx > 0 else False
-            stage1_already_confirmed = prev_inplay and (idx > 0 and pump_start_idx[idx - 1] != -1)
+            stale_anchor_rearmed = False
+            if prev_inplay and active_start_idx is not None:
+                rearm_start_idx = self._resolve_stale_pump_rearm_start_idx(
+                    active_start_idx=active_start_idx,
+                    idx=idx,
+                    levels_timeframe_ms=levels_timeframe_ms,
+                    pump_start_lookback=pump_start_lookback,
+                    wake_transition=wake_transition,
+                    self_sustain=self_sustain,
+                    wake=wake,
+                    support=recent_support,
+                    local_breakout=local_breakout,
+                    ema9=ema9,
+                    ema20=ema20,
+                    pump_start_shift_lookback=pump_start_shift_lookback,
+                    pump_start_precursor_extension=pump_start_precursor_extension,
+                    closes=closes,
+                )
+                if rearm_start_idx is not None:
+                    active_start_idx = int(rearm_start_idx)
+                    below_ema20_count = 0
+                    stale_anchor_rearmed = True
+            stage1_already_confirmed = prev_inplay and (idx > 0 and pump_start_idx[idx - 1] != -1) and not stale_anchor_rearmed
             if prev_inplay:
                 if np.isfinite(ema20[idx]) and closes[idx] < (ema20[idx] - self._EPSILON):
                     below_ema20_count += 1
@@ -965,10 +989,18 @@ class PnoEngine:
                     idx=idx,
                     lookback_bars=pump_start_lookback,
                 )
+                active_start_idx = self._extend_pump_start_to_precursor_breakout(
+                    local_breakout=local_breakout,
+                    closes=closes,
+                    ema20=ema20,
+                    pump_start_idx=active_start_idx,
+                    max_extension_bars=pump_start_precursor_extension,
+                )
                 active_start_idx = self._shift_pump_start_left_to_ema_reset(
                     ema9=ema9,
                     ema20=ema20,
                     pump_start_idx=active_start_idx,
+                    max_shift_bars=pump_start_shift_lookback,
                 )
             if not inplay[idx] or active_start_idx is None or active_start_idx >= idx:
                 continue
@@ -997,13 +1029,21 @@ class PnoEngine:
                 end_idx=active_start_idx - 1,
             )
             pretrend_ratio_2h = self._safe_divide(pump_range, pre_range_2h)
+            strong_wake_override = bool(
+                local_breakout[idx]
+                and recent_support[idx]
+                and quote_expansion >= max(float(params.stage1_min_volume_ratio_start), 5.0)
+                and (sustain_quote >= 3.0 or sustain_trade >= 3.0)
+                and pump_range > max(pre_range_1h, self._EPSILON)
+                and pump_pct >= max(float(params.stage1_min_pump_pct), 0.08)
+            )
             if pump_pct < float(params.stage1_min_pump_pct):
                 inplay[idx] = False
                 continue
-            if pump_range <= max(pre_range_1h, pre_range_2h, self._EPSILON):
+            if pump_range <= max(pre_range_1h, pre_range_2h, self._EPSILON) and not strong_wake_override:
                 inplay[idx] = False
                 continue
-            if pretrend_ratio_2h < float(params.stage1_min_pretrend_range_ratio_2h):
+            if pretrend_ratio_2h < float(params.stage1_min_pretrend_range_ratio_2h) and not strong_wake_override:
                 inplay[idx] = False
                 continue
             if quote_expansion < float(params.stage1_min_volume_ratio_start):
@@ -1096,22 +1136,114 @@ class PnoEngine:
         return int(start_idx)
 
     @staticmethod
+    def _extend_pump_start_to_precursor_breakout(
+        *,
+        local_breakout: np.ndarray,
+        closes: np.ndarray,
+        ema20: np.ndarray,
+        pump_start_idx: int,
+        max_extension_bars: int,
+    ) -> int:
+        extended_idx = int(pump_start_idx)
+        lower_bound = max(0, int(pump_start_idx) - max(0, int(max_extension_bars)))
+        for probe_idx in range(int(pump_start_idx) - 1, lower_bound - 1, -1):
+            if not bool(local_breakout[probe_idx]):
+                break
+            close_value = float(closes[probe_idx])
+            ema20_value = float(ema20[probe_idx])
+            if not np.isfinite(close_value) or not np.isfinite(ema20_value):
+                break
+            if close_value <= (ema20_value + PnoEngine._EPSILON):
+                break
+            extended_idx = int(probe_idx)
+        return extended_idx
+
+    @staticmethod
     def _shift_pump_start_left_to_ema_reset(
         *,
         ema9: np.ndarray,
         ema20: np.ndarray,
         pump_start_idx: int,
+        max_shift_bars: int | None = None,
     ) -> int:
         shifted_idx = int(pump_start_idx)
-        for idx in range(int(pump_start_idx), -1, -1):
+        lower_bound = 0
+        if max_shift_bars is not None and max_shift_bars >= 0:
+            lower_bound = max(0, int(pump_start_idx) - int(max_shift_bars))
+        found_reset = False
+        for idx in range(int(pump_start_idx), lower_bound - 1, -1):
             ema9_value = float(ema9[idx])
             ema20_value = float(ema20[idx])
             if not np.isfinite(ema9_value) or not np.isfinite(ema20_value):
                 continue
-            shifted_idx = int(idx)
             if ema9_value < ema20_value:
+                shifted_idx = int(idx)
+                found_reset = True
                 break
+            if max_shift_bars is None:
+                shifted_idx = int(idx)
+        if max_shift_bars is not None and not found_reset:
+            return int(pump_start_idx)
         return shifted_idx
+
+    def _resolve_stale_pump_rearm_start_idx(
+        self,
+        *,
+        active_start_idx: int,
+        idx: int,
+        levels_timeframe_ms: int,
+        pump_start_lookback: int,
+        wake_transition: bool,
+        self_sustain: bool,
+        wake: np.ndarray,
+        support: np.ndarray,
+        local_breakout: np.ndarray,
+        ema9: np.ndarray,
+        ema20: np.ndarray,
+        pump_start_shift_lookback: int,
+        pump_start_precursor_extension: int,
+        closes: np.ndarray,
+    ) -> int | None:
+        stale_anchor_age_bars = self._bars_for_duration(levels_timeframe_ms, 12 * 60 * 60_000)
+        fresh_anchor_max_age_bars = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+        stale_anchor_min_gap_bars = self._bars_for_duration(levels_timeframe_ms, 3 * 60 * 60_000)
+        if idx <= active_start_idx or (idx - active_start_idx) < stale_anchor_age_bars:
+            return None
+        if not (wake_transition or self_sustain):
+            return None
+        search_start_idx = max(0, idx - pump_start_lookback)
+        candidate_idx: int | None = None
+        for probe_idx in range(search_start_idx, idx + 1):
+            if not bool(support[probe_idx]) or not bool(local_breakout[probe_idx]):
+                continue
+            if wake_transition and not bool(wake[probe_idx]):
+                continue
+            candidate_idx = int(probe_idx)
+            break
+        if candidate_idx is None:
+            return None
+        candidate_idx = self._extend_pump_start_to_precursor_breakout(
+            local_breakout=local_breakout,
+            closes=closes,
+            ema20=ema20,
+            pump_start_idx=candidate_idx,
+            max_extension_bars=pump_start_precursor_extension,
+        )
+        shifted_candidate_idx = self._shift_pump_start_left_to_ema_reset(
+            ema9=ema9,
+            ema20=ema20,
+            pump_start_idx=candidate_idx,
+            max_shift_bars=pump_start_shift_lookback,
+        )
+        if (idx - shifted_candidate_idx) <= fresh_anchor_max_age_bars:
+            candidate_idx = shifted_candidate_idx
+        if candidate_idx <= active_start_idx:
+            return None
+        if (candidate_idx - active_start_idx) < stale_anchor_min_gap_bars:
+            return None
+        if (idx - candidate_idx) > fresh_anchor_max_age_bars:
+            return None
+        return int(candidate_idx)
 
     @staticmethod
     def _resolve_window_range(*, highs: np.ndarray, lows: np.ndarray, start_idx: int, end_idx: int) -> float:
@@ -1124,6 +1256,130 @@ class PnoEngine:
         if not np.isfinite(window_highs).any() or not np.isfinite(window_lows).any():
             return 0.0
         return float(np.nanmax(window_highs) - np.nanmin(window_lows))
+
+    def _resolve_stage1_pump_candidate_rejection(
+        self,
+        *,
+        one: OneMinuteFrame,
+        five: FiveMinuteFrame,
+        idx: int,
+        five_idx: int,
+        params: PnoParams,
+    ) -> dict[str, object] | None:
+        if idx < 0 or five_idx <= 0 or five_idx >= len(five.timestamps):
+            return None
+        if not bool(five.inplay[five_idx]):
+            return None
+
+        pump_start_5m_idx = int(five.pump_start_idx[five_idx])
+        confirm_5m_idx = int(five.stage1_confirm_idx[five_idx])
+        if pump_start_5m_idx < 0 or pump_start_5m_idx >= five_idx or confirm_5m_idx < pump_start_5m_idx:
+            return None
+
+        levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
+        pre_pump_1h_bars = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
+        pre_pump_2h_bars = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+
+        highs_after_start = five.highs[pump_start_5m_idx : five_idx + 1]
+        if highs_after_start.size < 2 or not np.isfinite(highs_after_start).any():
+            return None
+        active_high_5m_idx = pump_start_5m_idx + int(np.nanargmax(highs_after_start))
+        if active_high_5m_idx <= pump_start_5m_idx:
+            return None
+
+        pump_start_price = float(five.lows[pump_start_5m_idx])
+        active_high = float(five.highs[active_high_5m_idx])
+        leg_size = active_high - pump_start_price
+        min_leg = max(
+            float(params.min_stage1_leg_v1 * one.v1[idx]),
+            float(params.min_stage1_leg_v5_fraction * five.v5[five_idx]),
+            self._EPSILON,
+        )
+        if leg_size < min_leg:
+            return None
+        pump_pct = self._safe_divide(leg_size, pump_start_price)
+        if pump_pct < float(params.stage1_min_pump_pct):
+            return None
+
+        pump_pre_atr = float(five.atr_pre_14[pump_start_5m_idx])
+        pump_tr = five.tr[pump_start_5m_idx : active_high_5m_idx + 1]
+        pump_opens = five.opens[pump_start_5m_idx : active_high_5m_idx + 1]
+        pump_closes = five.closes[pump_start_5m_idx : active_high_5m_idx + 1]
+        if pump_tr.size == 0 or pump_opens.size == 0 or pump_closes.size == 0:
+            return None
+        pump_net_move = max(float(pump_closes[-1]) - float(pump_opens[0]), 0.0)
+        pump_path_efficiency = self._safe_divide(pump_net_move, float(np.sum(pump_tr)))
+
+        pre_start_idx = max(0, pump_start_5m_idx - pre_pump_1h_bars)
+        pre_tr = five.tr[pre_start_idx:pump_start_5m_idx]
+        pre_closes = five.closes[pre_start_idx:pump_start_5m_idx]
+        pre_pump_barcode_fraction_1h = np.nan
+        if (
+            pre_tr.size > 0
+            and pre_closes.size > 0
+            and np.isfinite(pump_pre_atr)
+            and pump_pre_atr > 0.0
+        ):
+            median_pre_close = float(np.nanmedian(pre_closes))
+            barcode_threshold = max(
+                float(params.stage1_barcode_tr_atr_fraction) * pump_pre_atr,
+                float(params.stage1_barcode_tr_price_fraction) * median_pre_close,
+            )
+            pre_pump_barcode_fraction_1h = float(np.mean(pre_tr <= barcode_threshold))
+
+        current_close = float(five.closes[five_idx])
+        current_ema20 = float(five.ema20[five_idx])
+        reason: str | None = None
+        if np.isfinite(current_close) and np.isfinite(current_ema20) and current_close <= (current_ema20 + self._EPSILON):
+            reason = "pump_candidate_below_ema20"
+        elif (
+            np.isfinite(pre_pump_barcode_fraction_1h)
+            and pre_pump_barcode_fraction_1h > float(params.stage1_barcode_max_fraction_1h)
+        ):
+            reason = "pump_candidate_barcode"
+        elif pump_path_efficiency < float(params.stage1_min_path_efficiency):
+            reason = "pump_candidate_jerky"
+        if reason is None:
+            return None
+
+        pre_pump_range_1h = self._resolve_window_range(
+            highs=five.highs,
+            lows=five.lows,
+            start_idx=max(0, pump_start_5m_idx - pre_pump_1h_bars),
+            end_idx=pump_start_5m_idx - 1,
+        )
+        pre_pump_range_2h = self._resolve_window_range(
+            highs=five.highs,
+            lows=five.lows,
+            start_idx=max(0, pump_start_5m_idx - pre_pump_2h_bars),
+            end_idx=pump_start_5m_idx - 1,
+        )
+        return {
+            "key": (int(pump_start_5m_idx),),
+            "timestamp_ms": int(one.timestamps[idx]),
+            "reason": reason,
+            "extra": {
+                "current_timestamp_ms": int(one.timestamps[idx]),
+                "pump_start_timestamp_ms": int(five.timestamps[pump_start_5m_idx]),
+                "active_high_timestamp_ms": int(five.timestamps[active_high_5m_idx]),
+                "active_high": round(active_high, 8),
+                "leg_start": round(pump_start_price, 8),
+                "leg_size": round(leg_size, 8),
+                "stage1_min_leg": round(min_leg, 8),
+                "pump_pct": round(pump_pct, 4),
+                "stage1_min_pump_pct": round(float(params.stage1_min_pump_pct), 4),
+                "pump_path_efficiency": round(pump_path_efficiency, 4),
+                "stage1_min_path_efficiency": round(float(params.stage1_min_path_efficiency), 4),
+                "pre_pump_barcode_fraction_1h": (
+                    round(pre_pump_barcode_fraction_1h, 4) if np.isfinite(pre_pump_barcode_fraction_1h) else None
+                ),
+                "stage1_barcode_max_fraction_1h": round(float(params.stage1_barcode_max_fraction_1h), 4),
+                "pre_pump_range_1h": round(pre_pump_range_1h, 8),
+                "pre_pump_range_2h": round(pre_pump_range_2h, 8),
+                "current_close_5m": round(current_close, 8) if np.isfinite(current_close) else None,
+                "current_ema20_5m": round(current_ema20, 8) if np.isfinite(current_ema20) else None,
+            },
+        }
 
     def _run(
         self,
@@ -1359,6 +1615,31 @@ class PnoEngine:
                             reason=str(rejection_reason),
                             extra=rejection_extra if isinstance(rejection_extra, dict) else None,
                         )
+                elif prev_stage1 is None:
+                    stage1_candidate_rejection = self._resolve_stage1_pump_candidate_rejection(
+                        one=one,
+                        five=five,
+                        idx=i,
+                        five_idx=five_idx,
+                        params=params,
+                    )
+                    if stage1_candidate_rejection is not None:
+                        rejection_key = stage1_candidate_rejection.get("key")
+                        rejection_timestamp = stage1_candidate_rejection.get("timestamp_ms")
+                        rejection_reason = stage1_candidate_rejection.get("reason")
+                        rejection_extra = stage1_candidate_rejection.get("extra")
+                        if (
+                            isinstance(rejection_key, tuple)
+                            and rejection_timestamp is not None
+                            and rejection_reason is not None
+                        ):
+                            _reject_stage(
+                                PNO_STAGE_1_PUMP,
+                                key=rejection_key,
+                                timestamp_ms=int(rejection_timestamp),
+                                reason=str(rejection_reason),
+                                extra=rejection_extra if isinstance(rejection_extra, dict) else None,
+                            )
                 hold_status = self._resolve_stage1_hold_status(one=one, idx=i, stage1=prev_stage1)
                 if prev_stage3 is None and prev_stage2 is not None and prev_stage1 is not None:
                     stage1 = replace(prev_stage1, hold_status_at_validation=hold_status)
@@ -1371,6 +1652,15 @@ class PnoEngine:
                     stage1 = replace(prev_stage1, hold_status_at_validation=hold_status)
                     stage2 = prev_stage2
                     stage3 = prev_stage3
+                    stage4 = None
+                    armed = None
+                    next_stage1 = stage1
+                elif prev_stage2 is None and prev_stage1 is not None and hold_status == "held_above_hold" and bool(five.inplay[five_idx]):
+                    # Once stage1 is confirmed, don't retroactively kill it on a transient rebuild miss
+                    # while price is still holding and the in-play regime is intact.
+                    stage1 = replace(prev_stage1, hold_status_at_validation=hold_status)
+                    stage2 = None
+                    stage3 = None
                     stage4 = None
                     armed = None
                     next_stage1 = stage1
@@ -2056,7 +2346,20 @@ class PnoEngine:
             )
 
         pre_pump_ema_crosses_1h = int(round(float(five.ema_cross_count_1h[pump_start_5m_idx])))
-        if pre_pump_ema_crosses_1h < int(params.stage1_pre_pump_ema_crosses_min):
+        allows_zero_pre_pump_ema_crosses = self._allows_zero_pre_pump_ema_crosses(
+            five=five,
+            pump_start_5m_idx=pump_start_5m_idx,
+            current_5m_idx=five_idx,
+            params=params,
+            pump_volume_ratio_start=pump_volume_ratio_start,
+            pump_impulse_atr_pre=pump_impulse_atr_pre,
+            pump_path_efficiency=pump_path_efficiency,
+            pump_body_wick_edge=pump_body_wick_edge,
+        )
+        if (
+            pre_pump_ema_crosses_1h < int(params.stage1_pre_pump_ema_crosses_min)
+            and not allows_zero_pre_pump_ema_crosses
+        ):
             return _reject(
                 "pre_pump_ema_crosses_too_low",
                 pre_pump_ema_crosses_1h=int(pre_pump_ema_crosses_1h),
@@ -2132,6 +2435,34 @@ class PnoEngine:
             },
             None,
         )
+
+    @staticmethod
+    def _allows_zero_pre_pump_ema_crosses(
+        *,
+        five: FiveMinuteFrame,
+        pump_start_5m_idx: int,
+        current_5m_idx: int,
+        params: PnoParams,
+        pump_volume_ratio_start: float,
+        pump_impulse_atr_pre: float,
+        pump_path_efficiency: float,
+        pump_body_wick_edge: float,
+    ) -> bool:
+        if int(params.stage1_pre_pump_ema_crosses_min) > 1:
+            return False
+        if pump_start_5m_idx <= 0 or current_5m_idx < pump_start_5m_idx or current_5m_idx >= len(five.sleep_end_idx):
+            return False
+        if int(five.sleep_end_idx[current_5m_idx]) != (pump_start_5m_idx - 1):
+            return False
+        if pump_volume_ratio_start < max(float(params.stage1_min_volume_ratio_start), 5.0):
+            return False
+        if pump_impulse_atr_pre < max(float(params.stage1_min_impulse_atr_pre), 5.0):
+            return False
+        if pump_path_efficiency < max(float(params.stage1_min_path_efficiency), 0.5):
+            return False
+        if pump_body_wick_edge < max(float(params.stage1_min_body_wick_edge), 0.15):
+            return False
+        return True
 
     def _resolve_stage1_context(
         self,
@@ -2215,11 +2546,14 @@ class PnoEngine:
             )
         reference_high = float(quality_metrics["reference_high"])
         reference_leg_size = max(reference_high - leg_start, self._EPSILON)
+        hold_reference_high = min(reference_high, active_high)
+        hold_leg_size = max(hold_reference_high - leg_start, self._EPSILON)
         hold_floor = max(
-            float(five.ema20[five_idx]),
-            reference_high - (float(params.stage1_hold_fraction) * reference_leg_size),
+            float(stage1_hold_price := float(five.stage1_hold_price[five_idx])),
+            hold_reference_high - (float(params.stage1_hold_fraction) * hold_leg_size),
         )
-        if float(one.closes[idx]) <= hold_floor:
+        hold_reject_price = min(hold_floor, stage1_hold_price)
+        if float(one.closes[idx]) <= hold_reject_price:
             return (
                 None,
                 {
@@ -2229,12 +2563,13 @@ class PnoEngine:
                     "extra": {
                         **rejection_extra_base,
                         "hold_floor": round(hold_floor, 8),
+                        "hold_reject_price": round(hold_reject_price, 8),
                         "current_close": round(float(one.closes[idx]), 8),
                         "reference_high": round(reference_high, 8),
                     },
                 },
             )
-        if float(one.lows[idx]) <= leg_start:
+        if float(one.closes[idx]) <= leg_start:
             return (
                 None,
                 {
@@ -2243,6 +2578,7 @@ class PnoEngine:
                     "timestamp_ms": int(one.timestamps[idx]),
                     "extra": {
                         **rejection_extra_base,
+                        "current_close": round(float(one.closes[idx]), 8),
                         "current_low": round(float(one.lows[idx]), 8),
                         "leg_start": round(leg_start, 8),
                         "reference_high": round(reference_high, 8),
@@ -2290,7 +2626,7 @@ class PnoEngine:
                 reference_leg_size=reference_leg_size,
                 pump_range_5m=pump_range,
                 hold_floor=hold_floor,
-                stage1_hold_price=float(five.stage1_hold_price[five_idx]),
+                stage1_hold_price=stage1_hold_price,
                 cumulative_quote_volume=float(quality_metrics["cumulative_quote_volume"]),
                 pre_pump_ema_crosses_1h=int(quality_metrics["pre_pump_ema_crosses_1h"]),
                 pre_pump_barcode_fraction_1h=float(quality_metrics["pre_pump_barcode_fraction_1h"]),
@@ -2389,8 +2725,6 @@ class PnoEngine:
         depth_reference = max(stage1.reference_leg_size, stage1.pump_range_5m, self._EPSILON)
         if stage2.pullback_depth > (params.pullback_invalid_max_leg_fraction * depth_reference):
             return None, "pullback_too_deep_vs_leg"
-        if float(five.closes[five_idx]) <= float(five.ema20[five_idx]):
-            return None, "close_below_ema20"
         valid = (
             stage2.pullback_depth >= (params.pullback_min_v1 * five.v5[five_idx])
             and stage2.pullback_depth <= (params.pullback_valid_max_leg_fraction * depth_reference)
@@ -2416,7 +2750,9 @@ class PnoEngine:
             post_high_close_below_ema20_count = int(
                 np.sum(post_high_closes < (post_high_ema20 - self._EPSILON))
             )
-            if post_high_close_below_ema20_count > 0:
+            # One isolated close below EMA20 can happen inside a still-usable pullback.
+            # We treat repeated closes below EMA20 as the clearer structural failure.
+            if post_high_close_below_ema20_count > 1:
                 return None, "post_high_closed_below_ema20"
             post_high_range = np.maximum(post_high_highs - post_high_lows, self._EPSILON)
             upper_wicks = post_high_highs - np.maximum(post_high_opens, post_high_closes)
@@ -2774,10 +3110,12 @@ class PnoEngine:
             zigzag_score = 0
         base_profile = self._resolve_pullback_base_profile(one=one, idx=idx, stage1=stage1, stage3=stage3)
         base_bonus = int(base_profile.get("bonus") or 0)
-        if entry_pos <= 0.50:
+        if 0.40 <= entry_pos <= 0.55:
             level_pos_score = 7
-        elif entry_pos <= 0.60:
+        elif 0.35 <= entry_pos < 0.40 or 0.55 < entry_pos <= 0.62:
             level_pos_score = 4
+        elif 0.30 <= entry_pos < 0.35 or 0.62 < entry_pos <= 0.70:
+            level_pos_score = 1
         else:
             level_pos_score = 0
         score_c = min(20, zigzag_score + base_bonus + level_pos_score)
@@ -2819,6 +3157,16 @@ class PnoEngine:
         score_tp2 = self._resolve_tp2_score(tp2=tp2, active_high=tp1, v1=v1_now)
         penalty_untested_highs = self._resolve_untested_high_penalty(one=one, idx=idx, stage3=stage3, stage4=stage4)
         overhead_profile = self._resolve_overhead_resistance_profile(one=one, stage1=stage1, stage4=stage4)
+        compact_geometry_adj = self._resolve_compact_geometry_adjustment(
+            entry_plan=entry_plan,
+            sl_plan=sl_plan,
+            tp1=tp1,
+            tp2=tp2,
+        )
+        overhead_quality_adj = self._resolve_overhead_quality_adjustment(
+            overhead_score=float(overhead_profile.get("score") or 0.0),
+            red_count=int(overhead_profile.get("red_count") or 0),
+        )
         pno_order_adj = self._resolve_pno_order_adj(stage4.pno_index)
         maturity_penalty = self._resolve_maturity_penalty(stage1=stage1, pno_index=stage4.pno_index)
         final_score = float(
@@ -2828,6 +3176,8 @@ class PnoEngine:
             + score_d
             + score_e
             + score_tp2
+            + compact_geometry_adj
+            + overhead_quality_adj
             + pno_order_adj
             + penalty_untested_highs
             + int(overhead_profile.get("penalty") or 0)
@@ -2954,6 +3304,14 @@ class PnoEngine:
         retired_clusters: list[RetiredCluster],
     ) -> tuple[tuple[int, ...], tuple[float, ...]] | None:
         if len(confirmed_highs) < 1:
+            confirmed_highs = self._resolve_fallback_level_highs(
+                one=one,
+                start_idx=stage3.pullback_start_idx + 1,
+                end_idx=idx,
+                active_high=stage3.active_high,
+                v1_now=max(float(one.v1[idx]), self._EPSILON),
+            )
+        if len(confirmed_highs) < 1:
             return None
 
         v1_now = max(float(one.v1[idx]), self._EPSILON)
@@ -2985,9 +3343,11 @@ class PnoEngine:
                         tolerance_consolidation = 0.30 * v1_now
                         high_price = float(one.highs[indices[0]])
                         for check_idx in range(indices[0], min(idx + 1, len(one.closes))):
-                            if abs(float(one.closes[check_idx]) - high_price) <= tolerance_consolidation:
+                            high_touch = float(one.highs[check_idx]) >= (high_price - tolerance_consolidation)
+                            close_near_high = abs(float(one.closes[check_idx]) - high_price) <= tolerance_consolidation
+                            if high_touch or close_near_high:
                                 consolidation_bars += 1
-                        if consolidation_bars < 3:
+                        if consolidation_bars < 2:
                             continue
                 spread = max(prices) - min(prices)
                 if spread > max_spread:
@@ -3012,6 +3372,33 @@ class PnoEngine:
                     continue
                 return indices, prices
         return None
+
+    def _resolve_fallback_level_highs(
+        self,
+        *,
+        one: OneMinuteFrame,
+        start_idx: int,
+        end_idx: int,
+        active_high: float,
+        v1_now: float,
+    ) -> list[int]:
+        if end_idx - start_idx < 2:
+            return []
+        candidate_indices: list[int] = []
+        tolerance = max(0.30 * v1_now, self._EPSILON)
+        for probe_idx in range(max(start_idx, 1), min(end_idx, len(one.highs) - 1)):
+            high_price = float(one.highs[probe_idx])
+            if high_price >= (active_high - self._EPSILON):
+                continue
+            if high_price < float(one.highs[probe_idx - 1]) or high_price < float(one.highs[probe_idx + 1]):
+                continue
+            touch_count = 0
+            for check_idx in range(probe_idx, min(end_idx + 1, len(one.highs))):
+                if float(one.highs[check_idx]) >= (high_price - tolerance):
+                    touch_count += 1
+            if touch_count >= 2:
+                candidate_indices.append(int(probe_idx))
+        return candidate_indices
 
     def _is_single_touch_level_candidate(
         self,
@@ -3363,7 +3750,7 @@ class PnoEngine:
     def _resolve_stage1_hold_status(self, *, one: OneMinuteFrame, idx: int, stage1: Stage1Context | None) -> str:
         if stage1 is None or idx < 0 or idx >= len(one.timestamps):
             return "unknown"
-        hold_floor = float(stage1.hold_floor)
+        hold_floor = min(float(stage1.hold_floor), float(stage1.stage1_hold_price))
         if float(one.closes[idx]) <= hold_floor:
             return "closed_below_hold"
         if float(one.lows[idx]) <= hold_floor:
@@ -3418,6 +3805,53 @@ class PnoEngine:
             return 3
         return 0
 
+    @staticmethod
+    def _resolve_compact_geometry_adjustment(
+        *,
+        entry_plan: float,
+        sl_plan: float,
+        tp1: float,
+        tp2: float,
+    ) -> int:
+        risk = entry_plan - sl_plan
+        if risk <= 0.0:
+            return 0
+        tp1_r = (tp1 - entry_plan) / risk
+        tp2_r = (tp2 - entry_plan) / risk
+        adjustment = 0
+        if 0.65 <= tp1_r <= 1.15:
+            adjustment += 6
+        elif 0.55 <= tp1_r < 0.65 or 1.15 < tp1_r <= 1.45:
+            adjustment += 3
+        elif tp1_r > 2.0:
+            adjustment -= 6
+        elif tp1_r > 1.6:
+            adjustment -= 3
+        elif tp1_r < 0.45:
+            adjustment -= 2
+
+        if tp2_r <= 2.0:
+            adjustment += 2
+        elif tp2_r > 3.0:
+            adjustment -= 3
+        return adjustment
+
+    @staticmethod
+    def _resolve_overhead_quality_adjustment(
+        *,
+        overhead_score: float,
+        red_count: int,
+    ) -> int:
+        if overhead_score <= 0.50 and red_count <= 2:
+            return 4
+        if overhead_score <= 0.58 and red_count <= 3:
+            return 2
+        if overhead_score >= 0.70 or red_count >= 5:
+            return -6
+        if overhead_score >= 0.62 or red_count >= 4:
+            return -3
+        return 0
+
     def _resolve_signal_bar_context_online(
         self,
         *,
@@ -3461,33 +3895,41 @@ class PnoEngine:
         body_share = float(signal_context.get("signal_bar_body_share") or 0.0)
         close_position = float(signal_context.get("signal_bar_close_position") or 0.0)
         volume_vs_recent = float(signal_context.get("signal_bar_volume_vs_recent") or np.nan)
+        close_clearance_pct = float(signal_context.get("signal_close_clearance_pct") or np.nan)
         overhead_score = float(stage4.overhead_resistance_score)
+        overhead_red_count = int(stage4.overhead_red_count)
 
-        if body_share >= 0.50 and close_position >= 0.66:
+        if close_position >= 0.90 and close_clearance_pct >= 0.25:
             body_close_adj = 4
-        elif body_share >= 0.45 and close_position >= 0.60:
+        elif close_position >= 0.82 and close_clearance_pct >= 0.12 and body_share >= 0.35:
             body_close_adj = 2
-        elif body_share < 0.35 or close_position < 0.55:
+        elif close_position < 0.72 or close_clearance_pct < 0.08:
             body_close_adj = -4
-        elif body_share < 0.45 or close_position < 0.60:
+        elif close_position < 0.80 or close_clearance_pct < 0.12:
             body_close_adj = -2
         else:
             body_close_adj = 0
 
-        if overhead_score <= 0.55:
-            overhead_adj = 3
-        elif overhead_score <= 0.60:
-            overhead_adj = 1
-        elif overhead_score >= 0.68:
+        if overhead_score <= 0.50 and overhead_red_count <= 2:
+            overhead_adj = 4
+        elif overhead_score <= 0.58 and overhead_red_count <= 3:
+            overhead_adj = 2
+        elif overhead_score >= 0.70 or overhead_red_count >= 5:
+            overhead_adj = -5
+        elif overhead_score >= 0.62 or overhead_red_count >= 4:
             overhead_adj = -3
-        elif overhead_score >= 0.60:
+        elif overhead_score >= 0.58:
             overhead_adj = -1
         else:
             overhead_adj = 0
 
-        if np.isfinite(volume_vs_recent) and volume_vs_recent >= 1.25:
+        if np.isfinite(volume_vs_recent) and volume_vs_recent >= 2.0:
+            volume_adj = 2
+        elif np.isfinite(volume_vs_recent) and volume_vs_recent >= 1.25:
             volume_adj = 1
         elif np.isfinite(volume_vs_recent) and volume_vs_recent < 1.0:
+            volume_adj = -2
+        elif np.isfinite(volume_vs_recent) and volume_vs_recent < 1.15:
             volume_adj = -1
         else:
             volume_adj = 0
@@ -3511,6 +3953,8 @@ class PnoEngine:
             return "close_above_pullback_too_deep"
         if float(stage3.post_high_wick_share) > float(params.close_above_max_post_high_wick_share):
             return "close_above_post_high_wick_too_high"
+
+        return None
         
         # Если главный хай уже есть и достаточный рост, объем не является ключевым фактором
         active_high = float(stage4.active_high)

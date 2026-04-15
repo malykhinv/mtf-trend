@@ -1,8 +1,12 @@
 import argparse
+import json
 import logging
+import shutil
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -13,6 +17,7 @@ from config.backtest_config import BacktestConfig
 from config.fetch_config import FetchConfig
 from config.simulation_config import SimulationConfig
 from config.strategy_config import StrategyConfig
+from constants import SIMULATION_PARQUET_FILE_NAME
 from domain.enums.timeframe import Timeframe
 from domain.enums.trade_result_type import TradeResultType
 from domain.models.trade_result import TradeResult
@@ -41,7 +46,77 @@ from strategy.pno.engine import (
     Stage3Context,
     Stage4Context,
 )
+from data.storage.parquet_storage import ParquetStorage
+from vectorbt_runner import DataPreparer
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
+
+
+_PNO_GOLDEN_CASES_RUN_DIR = Path(
+    r"C:\Users\Ascf\PycharmProjects\mtf-trend-2\.output\results\backtest_runs\20260414_065918_pno"
+)
+_PNO_GOLDEN_CASES_BACKUP_DIR = Path(
+    r"C:\Users\Ascf\PycharmProjects\mtf-trend-2\tests\fixtures\pno_golden_cases\20260414_065918_pno"
+)
+_PNO_GOLDEN_TRADE_CASES: tuple[dict[str, object], ...] = (
+    {
+        "case_id": "rave_2026_04_09_pno_0_6",
+        "symbol": "RAVE/USDT:USDT",
+        "row_number": 1,
+        "window_start_ms": 1775760300000,  # 2026-04-09 18:45 UTC
+        "window_end_ms": 1775764800000,  # 2026-04-09 20:00 UTC
+        "expected_entry_min_ms": 1775761800000,  # 2026-04-09 19:10 UTC
+        "expected_entry_max_ms": 1775763000000,  # 2026-04-09 19:30 UTC
+        "min_pnl_percent": 1.0,
+    },
+)
+
+
+def _build_test_stage4_context(**overrides) -> Stage4Context:
+    base = {
+        "active_high_idx": 0,
+        "active_high_timestamp": 60_000,
+        "active_high": 10.5,
+        "pullback_low_idx": 0,
+        "pullback_low_timestamp": 60_000,
+        "pullback_low": 9.5,
+        "pullback_depth": 0.4,
+        "cluster_indices": (0, 1),
+        "cluster_prices": (9.95, 10.0),
+        "level": 9.95,
+        "level_pos": 0.45,
+        "touches": 2,
+        "cluster_first_idx": 0,
+        "cluster_last_idx": 1,
+        "level_valid_idx": 0,
+        "level_valid_timestamp": 60_000,
+        "level_low": 9.5,
+        "level_low_minor_break": False,
+        "level_low_major_break": False,
+        "penalty_level_low_break": 0,
+        "penalty_untested_highs": 0,
+        "base_bonus": 0,
+        "pno_index": 1,
+        "maturity_penalty": 0,
+        "pno_order_adj": 8,
+        "score_a": 10,
+        "score_b": 10,
+        "score_c": 10,
+        "score_d": 10,
+        "score_e": 7,
+        "score_tp2": 5,
+        "final_score": 80.0,
+        "entry_plan": 10.0,
+        "sl_plan": 9.5,
+        "low_last_red_plan": 9.5,
+        "tp1": 10.5,
+        "tp2": 11.0,
+        "stage4_ready": True,
+        "hard_block": False,
+        "is_valid_setup": True,
+        "hard_block_reason": None,
+    }
+    base.update(overrides)
+    return Stage4Context(**base)
 
 
 def _build_test_one_frame(*, timestamp_ms: int) -> OneMinuteFrame:
@@ -176,6 +251,63 @@ def _build_test_five_frame(
         pre_quote_median_24=pd.Series([1.0] * size, dtype="float64").to_numpy(),
         pre_trade_median_24=pd.Series([1.0] * size, dtype="float64").to_numpy(),
     )
+
+
+def _load_pno_golden_case(
+    *,
+    symbol: str,
+    row_number: int,
+    window_end_ms: int,
+) -> tuple[PnoParams, SymbolMtfFrames]:
+    _sync_pno_golden_case_artifacts(symbol=symbol)
+    results_path = _PNO_GOLDEN_CASES_BACKUP_DIR / "strategy" / "pno" / "results.csv"
+    results = pd.read_csv(results_path)
+    row = results.iloc[int(row_number) - 1]
+    params = commands._build_pno_params_from_row(
+        row,
+        symbol=symbol,
+        levels_timeframe=Timeframe.M5,
+        entry_timeframe=Timeframe.M1,
+    )
+    preparer = DataPreparer(_PNO_GOLDEN_CASES_BACKUP_DIR / "cache")
+    levels_frame = preparer.load_symbol_data(
+        symbol,
+        Timeframe.M5,
+        days=30,
+        end_timestamp_ms=int(window_end_ms),
+    )
+    entry_frame = preparer.load_symbol_data(
+        symbol,
+        Timeframe.M1,
+        days=30,
+        end_timestamp_ms=int(window_end_ms),
+    )
+    return params, SymbolMtfFrames(
+        levels_timeframe=Timeframe.M5,
+        entry_timeframe=Timeframe.M1,
+        levels_frame=levels_frame,
+        entry_frame=entry_frame,
+    )
+
+
+def _sync_pno_golden_case_artifacts(*, symbol: str) -> None:
+    source_results_path = _PNO_GOLDEN_CASES_RUN_DIR / "strategy" / "pno" / "results.csv"
+    backup_results_path = _PNO_GOLDEN_CASES_BACKUP_DIR / "strategy" / "pno" / "results.csv"
+    if source_results_path.exists():
+        backup_results_path.parent.mkdir(parents=True, exist_ok=True)
+        if (not backup_results_path.exists()) or source_results_path.stat().st_mtime > backup_results_path.stat().st_mtime:
+            shutil.copy2(source_results_path, backup_results_path)
+    assert backup_results_path.exists(), "golden-case results backup is missing"
+
+    encoded_symbol = ParquetStorage.encode_symbol_for_path(symbol)
+    for timeframe in (Timeframe.M1, Timeframe.M5):
+        source_cache_path = Path(".output/cache") / encoded_symbol / timeframe.value / SIMULATION_PARQUET_FILE_NAME
+        backup_cache_path = _PNO_GOLDEN_CASES_BACKUP_DIR / "cache" / encoded_symbol / timeframe.value / SIMULATION_PARQUET_FILE_NAME
+        if source_cache_path.exists():
+            backup_cache_path.parent.mkdir(parents=True, exist_ok=True)
+            if (not backup_cache_path.exists()) or source_cache_path.stat().st_mtime > backup_cache_path.stat().st_mtime:
+                shutil.copy2(source_cache_path, backup_cache_path)
+        assert backup_cache_path.exists(), f"golden-case cache backup is missing for {symbol} {timeframe.value}"
 
 
 def test_build_strategy_supports_pno() -> None:
@@ -408,7 +540,8 @@ def test_plot_pno_diagnostics_writes_trade_and_stage_artifacts(tmp_path, monkeyp
     assert "stage_1_pump" in set(manifest["stage_id"])
     assert "stage_5_trade" in set(manifest["stage_id"])
     stage1_row = manifest.loc[manifest["stage_id"] == "stage_1_pump"].iloc[0]
-    assert int(stage1_row["passed_charts_count"]) == 1
+    assert int(stage1_row["passed_count"]) == 1
+    assert int(stage1_row["passed_charts_count"]) == 0
 
 
 def test_load_plot_params_row_from_results_supports_pno(tmp_path) -> None:
@@ -510,6 +643,333 @@ def test_plot_pno_diagnostics_filters_selected_stage_ids(tmp_path, monkeypatch) 
 
     manifest = pd.read_csv(tmp_path / "trade_plots" / "pno_diagnostics" / "stage_reviews" / "manifest.csv")
     assert list(manifest["stage_id"]) == ["stage_2_high_pullback"]
+
+
+def test_plot_pno_diagnostics_without_stage_filter_skips_passed_stage_charts(tmp_path, monkeypatch) -> None:
+    strategy = PnoStrategy(deposit=1_000.0, risk_pct=0.02)
+    params_row = pd.Series(strategy.params_to_row(PnoParams(symbol="BTC/USDT")))
+    frame = pd.DataFrame(
+        {
+            "timestamp": [60_000, 120_000],
+            "open": [1.0, 1.1],
+            "high": [1.2, 1.3],
+            "low": [0.9, 1.0],
+            "close": [1.1, 1.2],
+            "volume": [10.0, 11.0],
+        }
+    )
+    symbol_frames = {
+        "BTC/USDT": SymbolMtfFrames(
+            levels_timeframe=Timeframe.M5,
+            entry_timeframe=Timeframe.M1,
+            levels_frame=frame,
+            entry_frame=frame,
+        )
+    }
+    rendered_statuses: list[str] = []
+
+    monkeypatch.setattr(strategy, "generate_events_multi_tf", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        strategy,
+        "consume_last_generation_diagnostics",
+        lambda: {
+            "trades_generated": 0,
+            "stage_events": [
+                {"stage_id": "stage_1_pump", "timestamp_ms": 60_000},
+            ],
+            "stage_rejections": [
+                {
+                    "stage_id": "stage_1_pump",
+                    "timestamp_ms": 120_000,
+                    "reason": "volume_ratio_start_too_small",
+                    "pump_volume_ratio_start": 2.95,
+                    "stage1_min_volume_ratio_start": 3.0,
+                }
+            ],
+            "stage_hits": {
+                "stage_1_pump": 1,
+                "stage_2_high_pullback": 0,
+                "stage_3_valid_pullback": 0,
+                "stage_4_level": 0,
+                "stage_5_trade": 0,
+            },
+        },
+    )
+    monkeypatch.setattr(commands, "_export_pno_research_context", lambda **_kwargs: None)
+
+    def _fake_render_stage_review_chart(**kwargs):
+        rendered_statuses.append(str(kwargs["status"]))
+        return str(Path(kwargs["charts_dir"]) / "chart.png")
+
+    monkeypatch.setattr(pno_diagnostics, "_render_pno_stage_review_chart", _fake_render_stage_review_chart)
+
+    commands._plot_pno_diagnostics_for_symbols(
+        config=SimpleNamespace(backtest=SimpleNamespace(results_dir=tmp_path)),
+        args=argparse.Namespace(output_dir=None, pno_stage=None, pno_through_stage=None),
+        logger=logging.getLogger("test-pno-plot-default-stage-review"),
+        strategy=strategy,
+        symbol_frames=symbol_frames,
+        params_row=params_row,
+        levels_timeframe=Timeframe.M5,
+        entry_timeframe=Timeframe.M1,
+        log_prefix="test",
+    )
+
+    manifest = pd.read_csv(tmp_path / "trade_plots" / "pno_diagnostics" / "stage_reviews" / "manifest.csv")
+    stage1_row = manifest.loc[manifest["stage_id"] == "stage_1_pump"].iloc[0]
+
+    assert int(stage1_row["passed_count"]) == 1
+    assert int(stage1_row["passed_charts_count"]) == 0
+    assert int(stage1_row["rejected_review_count"]) == 1
+    assert int(stage1_row["rejected_charts_count"]) == 1
+    assert rendered_statuses == ["rejected"]
+
+
+def test_plot_pno_diagnostics_without_stage_filter_keeps_stage2_passed_stage_charts(tmp_path, monkeypatch) -> None:
+    strategy = PnoStrategy(deposit=1_000.0, risk_pct=0.02)
+    params_row = pd.Series(strategy.params_to_row(PnoParams(symbol="BTC/USDT")))
+    frame = pd.DataFrame(
+        {
+            "timestamp": [60_000, 120_000],
+            "open": [1.0, 1.1],
+            "high": [1.2, 1.3],
+            "low": [0.9, 1.0],
+            "close": [1.1, 1.2],
+            "volume": [10.0, 11.0],
+        }
+    )
+    symbol_frames = {
+        "BTC/USDT": SymbolMtfFrames(
+            levels_timeframe=Timeframe.M5,
+            entry_timeframe=Timeframe.M1,
+            levels_frame=frame,
+            entry_frame=frame,
+        )
+    }
+    rendered_statuses: list[str] = []
+
+    monkeypatch.setattr(strategy, "generate_events_multi_tf", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        strategy,
+        "consume_last_generation_diagnostics",
+        lambda: {
+            "trades_generated": 0,
+            "stage_events": [
+                {"stage_id": "stage_2_high_pullback", "timestamp_ms": 60_000},
+            ],
+            "stage_rejections": [],
+            "stage_hits": {
+                "stage_1_pump": 0,
+                "stage_2_high_pullback": 1,
+                "stage_3_valid_pullback": 0,
+                "stage_4_level": 0,
+                "stage_5_trade": 0,
+            },
+        },
+    )
+    monkeypatch.setattr(commands, "_export_pno_research_context", lambda **_kwargs: None)
+
+    def _fake_render_stage_review_chart(**kwargs):
+        rendered_statuses.append(str(kwargs["status"]))
+        return str(Path(kwargs["charts_dir"]) / "chart.png")
+
+    monkeypatch.setattr(pno_diagnostics, "_render_pno_stage_review_chart", _fake_render_stage_review_chart)
+
+    commands._plot_pno_diagnostics_for_symbols(
+        config=SimpleNamespace(backtest=SimpleNamespace(results_dir=tmp_path)),
+        args=argparse.Namespace(output_dir=None, pno_stage=None, pno_through_stage=None),
+        logger=logging.getLogger("test-pno-plot-stage2-pass-review"),
+        strategy=strategy,
+        symbol_frames=symbol_frames,
+        params_row=params_row,
+        levels_timeframe=Timeframe.M5,
+        entry_timeframe=Timeframe.M1,
+        log_prefix="test",
+    )
+
+    manifest = pd.read_csv(tmp_path / "trade_plots" / "pno_diagnostics" / "stage_reviews" / "manifest.csv")
+    stage2_row = manifest.loc[manifest["stage_id"] == "stage_2_high_pullback"].iloc[0]
+
+    assert int(stage2_row["passed_count"]) == 1
+    assert int(stage2_row["passed_charts_count"]) == 1
+    assert rendered_statuses == ["passed"]
+
+
+def test_pno_output_symbol_stem_sanitizes_windows_reserved_chars() -> None:
+    assert commands._pno_output_symbol_stem("BTC/USDT:USDT") == "BTC_USDT_USDT"
+
+
+def test_pno_compact_geometry_adjustment_rewards_compact_setups() -> None:
+    compact = PnoEngine._resolve_compact_geometry_adjustment(
+        entry_plan=10.0,
+        sl_plan=9.6,
+        tp1=10.35,
+        tp2=10.65,
+    )
+    stretched = PnoEngine._resolve_compact_geometry_adjustment(
+        entry_plan=10.0,
+        sl_plan=9.6,
+        tp1=10.95,
+        tp2=11.45,
+    )
+
+    assert compact > 0
+    assert stretched < 0
+    assert compact > stretched
+
+
+def test_pno_overhead_quality_adjustment_prefers_clean_air() -> None:
+    clean = PnoEngine._resolve_overhead_quality_adjustment(
+        overhead_score=0.46,
+        red_count=2,
+    )
+    heavy = PnoEngine._resolve_overhead_quality_adjustment(
+        overhead_score=0.74,
+        red_count=5,
+    )
+
+    assert clean > 0
+    assert heavy < 0
+    assert clean > heavy
+
+
+def test_pno_close_trigger_score_adjustment_rewards_clean_signal_and_penalizes_heavy_overhead() -> None:
+    engine = PnoEngine()
+    clean_stage4 = _build_test_stage4_context(
+        overhead_resistance_score=0.46,
+        overhead_red_count=2,
+    )
+    heavy_stage4 = _build_test_stage4_context(
+        overhead_resistance_score=0.74,
+        overhead_red_count=5,
+    )
+
+    clean_adjustments = engine._resolve_close_trigger_score_adjustment(
+        stage4=clean_stage4,
+        signal_context={
+            "signal_bar_body_share": 0.42,
+            "signal_bar_close_position": 0.93,
+            "signal_bar_volume_vs_recent": 2.3,
+            "signal_close_clearance_pct": 0.31,
+        },
+    )
+    heavy_adjustments = engine._resolve_close_trigger_score_adjustment(
+        stage4=heavy_stage4,
+        signal_context={
+            "signal_bar_body_share": 0.28,
+            "signal_bar_close_position": 0.70,
+            "signal_bar_volume_vs_recent": 0.95,
+            "signal_close_clearance_pct": 0.05,
+        },
+    )
+
+    assert clean_adjustments[0] > heavy_adjustments[0]
+    assert clean_adjustments[1] > heavy_adjustments[1]
+    assert clean_adjustments[2] > heavy_adjustments[2]
+    assert clean_adjustments[3] > heavy_adjustments[3]
+
+
+def test_build_filtered_pno_stage_rejections_keeps_stage2_full_and_trims_stage1() -> None:
+    filtered = commands._build_filtered_pno_stage_rejections(
+        stage_rejections_by_stage={
+            "stage_1_pump": {
+                "volume_ratio_start_too_small": [
+                    {
+                        "symbol": "BTC/USDT",
+                        "timestamp_ms": 60_000,
+                        "reason": "volume_ratio_start_too_small",
+                        "pump_volume_ratio_start": 2.95,
+                        "stage1_min_volume_ratio_start": 3.0,
+                    },
+                    {
+                        "symbol": "BTC/USDT",
+                        "timestamp_ms": 120_000,
+                        "reason": "volume_ratio_start_too_small",
+                        "pump_volume_ratio_start": 0.8,
+                        "stage1_min_volume_ratio_start": 3.0,
+                    },
+                ]
+            },
+            "stage_2_high_pullback": {
+                "new_main_high_before_pullback": [
+                    {"symbol": "BTC/USDT", "timestamp_ms": 180_000, "reason": "new_main_high_before_pullback"},
+                    {"symbol": "ETH/USDT", "timestamp_ms": 240_000, "reason": "new_main_high_before_pullback"},
+                ]
+            },
+        },
+        selected_stage_ids=("stage_1_pump", "stage_2_high_pullback"),
+    )
+
+    assert len(filtered["stage_1_pump"]["volume_ratio_start_too_small"]) == 1
+    assert len(filtered["stage_2_high_pullback"]["new_main_high_before_pullback"]) == 2
+
+
+def test_build_stage5_review_rejections_from_stage4_adds_only_crossed_levels() -> None:
+    frame = pd.DataFrame(
+        {
+            "timestamp": [60_000, 120_000, 180_000],
+            "open": [1.0, 1.0, 1.0],
+            "high": [1.01, 1.08, 1.03],
+            "low": [0.99, 0.98, 0.99],
+            "close": [1.0, 1.02, 1.01],
+            "volume": [10.0, 12.0, 9.0],
+        }
+    )
+    symbol_frames = {
+        "BTC/USDT": SymbolMtfFrames(
+            levels_timeframe=Timeframe.M5,
+            entry_timeframe=Timeframe.M1,
+            levels_frame=frame,
+            entry_frame=frame,
+        )
+    }
+    stage_rows_by_stage = {stage_id: [] for stage_id in ("stage_1_pump", "stage_2_high_pullback", "stage_3_valid_pullback", "stage_4_level", "stage_5_trade")}
+    stage_rejections_by_stage = {stage_id: {} for stage_id in ("stage_1_pump", "stage_2_high_pullback", "stage_3_valid_pullback", "stage_4_level", "stage_5_trade")}
+    stage_rows_by_stage["stage_4_level"] = [
+        {
+            "symbol": "BTC/USDT",
+            "stage_id": "stage_4_level",
+            "timestamp_ms": 60_000,
+            "level_valid_timestamp_ms": 60_000,
+            "active_high_timestamp_ms": 30_000,
+            "pullback_low_timestamp_ms": 45_000,
+            "level_first_local_high_timestamp_ms": 60_000,
+            "level_last_local_high_timestamp_ms": 60_000,
+            "level": 1.05,
+            "score": 60.0,
+            "active_high": 1.2,
+            "pullback_low": 0.95,
+            "stage1_hold_price": 0.98,
+        },
+        {
+            "symbol": "BTC/USDT",
+            "stage_id": "stage_4_level",
+            "timestamp_ms": 60_000,
+            "level_valid_timestamp_ms": 60_000,
+            "active_high_timestamp_ms": 30_000,
+            "pullback_low_timestamp_ms": 45_000,
+            "level_first_local_high_timestamp_ms": 90_000,
+            "level_last_local_high_timestamp_ms": 90_000,
+            "level": 1.20,
+            "score": 80.0,
+            "active_high": 1.3,
+            "pullback_low": 0.95,
+            "stage1_hold_price": 0.98,
+        },
+    ]
+
+    commands._build_stage5_review_rejections_from_stage4(
+        symbol_frames=symbol_frames,
+        stage_rows_by_stage=stage_rows_by_stage,
+        stage_rejections_by_stage=stage_rejections_by_stage,
+        trade_rows=[],
+        min_score=70.0,
+    )
+
+    rejected = stage_rejections_by_stage["stage_5_trade"]["level_crossed_below_min_score"]
+    assert len(rejected) == 1
+    assert rejected[0]["timestamp_ms"] == 120_000
+    assert rejected[0]["entry_signal_timestamp_ms"] == 120_000
 
 
 def test_pno_trade_chart_visuals_use_plan_for_close_above_and_keep_exec_fill() -> None:
@@ -635,6 +1095,140 @@ def test_parser_supports_pno_stage_command() -> None:
     assert args.command == "pno-stage"
     assert args.preset == "s4"
     assert resolve_handler(args.command) is commands.run_pno_stage
+
+
+def test_parser_supports_plot_backtest_command() -> None:
+    parser = build_parser()
+    args = parser.parse_args(["plot-backtest", "--run-dir", "C:/tmp/run"])
+
+    assert args.command == "plot-backtest"
+    assert args.run_dir == "C:/tmp/run"
+    assert resolve_handler(args.command) is commands.plot_backtest
+
+
+def test_run_backtest_wraps_results_into_run_subdir(tmp_path, monkeypatch) -> None:
+    config = AppConfig(
+        fetch=FetchConfig(binance_api_key="", binance_secret_key=""),
+        strategy=StrategyConfig(strategy_id="pno"),
+        simulation=SimulationConfig(),
+        backtest=BacktestConfig(
+            log_level="INFO",
+            cache_dir=tmp_path / "cache",
+            logs_dir=tmp_path / "logs",
+            results_dir=tmp_path / "results",
+            results_file_name="results.csv",
+            retry_attempts=1,
+            retry_backoff_seconds=0.0,
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(commands.time, "strftime", lambda _fmt: "20240102_030405")
+
+    def _fake_run_backtest_inner(scoped_config, scoped_args):
+        captured["results_dir"] = scoped_config.backtest.results_dir
+        captured["run_root"] = getattr(scoped_args, "backtest_run_root_dir", None)
+        return 0
+
+    monkeypatch.setattr(commands, "_run_backtest_inner", _fake_run_backtest_inner)
+
+    exit_code = commands.run_backtest(
+        config,
+        argparse.Namespace(
+            strategy="pno",
+            plot_from_results=False,
+            plot=False,
+            symbols=None,
+            levels_tf=None,
+            entry_tf=None,
+            pno_deposit=None,
+            pno_risk_pct=None,
+            pno_entry_confirmation_mode=None,
+            top_n=None,
+            days=None,
+            end_timestamp_ms=None,
+            pno_stage=None,
+            pno_through_stage=None,
+            results_input=None,
+            id=None,
+        ),
+    )
+
+    expected_root = tmp_path / "results" / "backtest_runs" / "20240102_030405_pno"
+    assert exit_code == 0
+    assert captured["results_dir"] == expected_root
+    assert captured["run_root"] == str(expected_root)
+
+
+def test_plot_backtest_reuses_saved_request(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "backtest_runs" / "20240102_030405_pno"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "run_context.json").write_text(
+        json.dumps(
+            {
+                "strategy_id": "pno",
+                "strategy_results_rel_dir": "strategy/pno",
+                "trade_plots_rel_dir": "strategy/pno/trade_plots",
+                "results_file_name": "results.csv",
+                "levels_tf": "5m",
+                "entry_tf": "1m",
+                "days": 30,
+                "end_timestamp_ms": 123456,
+                "symbols": ["BTC/USDT", "ETH/USDT"],
+                "plot_requested": True,
+                "pno_stage": 1,
+                "pno_through_stage": None,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "plot_request.json").write_text(
+        json.dumps({"selected_row_number": 7}),
+        encoding="utf-8",
+    )
+    captured: dict[str, object] = {}
+
+    def _fake_run_backtest_inner(_config, plot_args):
+        captured["command"] = plot_args.command
+        captured["plot_from_results"] = plot_args.plot_from_results
+        captured["results_input"] = plot_args.results_input
+        captured["output_dir"] = plot_args.output_dir
+        captured["row_number"] = plot_args.row_number
+        captured["symbols"] = plot_args.symbols
+        captured["levels_tf"] = plot_args.levels_tf
+        captured["entry_tf"] = plot_args.entry_tf
+        captured["pno_stage"] = plot_args.pno_stage
+        return 0
+
+    monkeypatch.setattr(commands, "_run_backtest_inner", _fake_run_backtest_inner)
+
+    config = AppConfig(
+        fetch=FetchConfig(binance_api_key="", binance_secret_key=""),
+        strategy=StrategyConfig(strategy_id="pno"),
+        simulation=SimulationConfig(),
+        backtest=BacktestConfig(
+            log_level="INFO",
+            cache_dir=tmp_path / "cache",
+            logs_dir=tmp_path / "logs",
+            results_dir=tmp_path / "results",
+            results_file_name="results.csv",
+            retry_attempts=1,
+            retry_backoff_seconds=0.0,
+        ),
+    )
+
+    exit_code = commands.plot_backtest(config, argparse.Namespace(run_dir=str(run_dir)))
+
+    assert exit_code == 0
+    assert captured["command"] == "run-backtest"
+    assert captured["plot_from_results"] is True
+    assert captured["results_input"] == str(run_dir / "strategy" / "pno" / "results.csv")
+    assert captured["output_dir"] == str(run_dir / "strategy" / "pno" / "trade_plots")
+    assert captured["row_number"] == 7
+    assert captured["symbols"] == ["BTC/USDT", "ETH/USDT"]
+    assert captured["levels_tf"] == "5m"
+    assert captured["entry_tf"] == "1m"
+    assert captured["pno_stage"] == 1
 
 
 def test_select_pno_plot_params_row_by_stage_falls_back_to_rejections() -> None:
@@ -827,7 +1421,7 @@ def test_stage3_allows_post_high_ema20_wick_touch_without_close_below() -> None:
     assert stage3.post_high_close_below_ema20_count == 0
 
 
-def test_stage3_rejects_post_high_close_below_ema20() -> None:
+def test_stage3_rejects_multiple_post_high_closes_below_ema20() -> None:
     engine = PnoEngine()
     params = PnoParams(symbol="TEST/USDT")
     one = _build_test_one_frame(timestamp_ms=600_000)
@@ -835,7 +1429,7 @@ def test_stage3_rejects_post_high_close_below_ema20() -> None:
         opens=[10.0, 10.8, 10.7],
         highs=[11.0, 11.1, 11.0],
         lows=[9.8, 10.0, 10.5],
-        closes=[10.9, 10.05, 10.75],
+        closes=[10.9, 10.05, 10.15],
         ema20=[9.9, 10.1, 10.2],
     )
     stage1 = Stage1Context(
@@ -881,6 +1475,354 @@ def test_stage3_rejects_post_high_close_below_ema20() -> None:
 
     assert stage3 is None
     assert reason == "post_high_closed_below_ema20"
+
+
+def test_pno_stage1_pump_candidate_rejection_captures_ema20_failure() -> None:
+    engine = PnoEngine()
+    one = _build_test_one_frame(timestamp_ms=900_000)
+    five = _build_test_five_frame(
+        opens=[10.0, 10.2, 10.4],
+        highs=[10.3, 10.8, 10.7],
+        lows=[9.9, 10.1, 10.0],
+        closes=[10.25, 10.75, 10.05],
+        ema20=[9.8, 10.0, 10.2],
+    )
+    rejection = engine._resolve_stage1_pump_candidate_rejection(
+        one=one,
+        five=five,
+        idx=0,
+        five_idx=2,
+        params=PnoParams(symbol="TEST/USDT"),
+    )
+
+    assert rejection is not None
+    assert rejection["reason"] == "pump_candidate_below_ema20"
+    assert rejection["key"] == (0,)
+
+
+def test_pno_stage1_pump_candidate_rejection_ignores_non_stage1_noise() -> None:
+    engine = PnoEngine()
+    one = _build_test_one_frame(timestamp_ms=900_000)
+    five = _build_test_five_frame(
+        opens=[10.0, 10.2, 10.4],
+        highs=[10.3, 10.8, 10.7],
+        lows=[9.9, 10.1, 10.0],
+        closes=[10.25, 10.75, 10.05],
+        ema20=[9.8, 10.0, 10.2],
+    )
+    five.inplay[:] = False
+    five.pump_start_idx[:] = -1
+    five.stage1_confirm_idx[:] = -1
+
+    rejection = engine._resolve_stage1_pump_candidate_rejection(
+        one=one,
+        five=five,
+        idx=0,
+        five_idx=2,
+        params=PnoParams(symbol="TEST/USDT"),
+    )
+
+    assert rejection is None
+
+
+def test_stage1_context_caps_hold_floor_to_actual_active_high(monkeypatch) -> None:
+    engine = PnoEngine()
+    params = PnoParams(
+        symbol="TEST/USDT",
+        min_stage1_leg_v1=0.05,
+        min_stage1_leg_v5_fraction=0.05,
+        stage1_hold_fraction=0.5,
+    )
+    one = _build_test_one_frame_multi(timestamps_ms=[0, 60_000], price=1.0)
+    one.highs = pd.Series([1.0, 1.2], dtype="float64").to_numpy()
+    one.lows = pd.Series([1.0, 1.05], dtype="float64").to_numpy()
+    one.closes = pd.Series([1.0, 1.15], dtype="float64").to_numpy()
+    five = _build_test_five_frame(
+        opens=[1.0],
+        highs=[1.2],
+        lows=[1.0],
+        closes=[1.15],
+        ema20=[1.0],
+    )
+    five.pump_start_idx[:] = 0
+    five.sleep_start_idx[:] = 0
+    five.sleep_end_idx[:] = 0
+    five.stage1_confirm_idx[:] = 0
+
+    monkeypatch.setattr(engine, "_resolve_leg_start", lambda **_kwargs: (0, 1.0))
+    monkeypatch.setattr(
+        engine,
+        "_resolve_stage1_quality_metrics",
+        lambda **_kwargs: (
+            {
+                "cumulative_quote_volume": 300_000.0,
+                "pre_pump_ema_crosses_1h": 1,
+                "pre_pump_barcode_fraction_1h": 0.1,
+                "pre_pump_high_24h": 1.0,
+                "pre_pump_high_1h": 1.0,
+                "pump_pre_atr": 0.1,
+                "pump_impulse_atr_pre": 2.0,
+                "pump_peak_bar_tr_atr_pre": 1.5,
+                "pump_volume_ratio_start": 4.0,
+                "pump_volume_ratio_continue": 1.2,
+                "pump_path_efficiency": 0.4,
+                "pump_wick_share": 0.4,
+                "pump_body_share_mean": 0.5,
+                "pump_flat_body_share": 0.2,
+                "pump_body_wick_edge": 0.1,
+                "pump_micro_flat_bar_share": 0.2,
+                "active_high_bar_body_share": 0.6,
+                "active_high_bar_upper_wick_share": 0.3,
+                "active_high_bar_close_position": 0.8,
+                "pump_max_red_body_share_5m": 0.1,
+                "pump_counterflow_ratio_5m": 0.1,
+                "pump_max_red_body_share_1m": 0.1,
+                "pump_counterflow_ratio_1m": 0.1,
+                "reference_high": 1.4,
+                "reference_high_weight": 1.0,
+            },
+            None,
+        ),
+    )
+
+    stage1, rejection = engine._resolve_stage1_context(
+        one=one,
+        five=five,
+        idx=1,
+        five_idx=0,
+        params=params,
+    )
+
+    assert rejection is None
+    assert stage1 is not None
+    assert stage1.hold_floor == pytest.approx(1.1)
+
+
+def test_stage1_hold_status_uses_stage1_hold_price_as_floor() -> None:
+    engine = PnoEngine()
+    one = _build_test_one_frame_multi(timestamps_ms=[0, 60_000], price=1.0)
+    one.closes = pd.Series([1.0, 1.06], dtype="float64").to_numpy()
+    one.lows = pd.Series([1.0, 1.055], dtype="float64").to_numpy()
+    stage1 = Stage1Context(
+        start_idx=0,
+        start_timestamp=0,
+        pump_start_5m_idx=0,
+        pump_start_timestamp=0,
+        current_5m_idx=0,
+        active_high_idx=1,
+        active_high_timestamp=60_000,
+        active_high=1.2,
+        reference_high=1.2,
+        leg_start_idx=0,
+        leg_start_timestamp=0,
+        leg_start=1.0,
+        leg_size=0.2,
+        reference_leg_size=0.2,
+        hold_floor=1.10,
+        stage1_hold_price=1.05,
+        pump_range_5m=0.2,
+    )
+
+    assert engine._resolve_stage1_hold_status(one=one, idx=1, stage1=stage1) == "held_above_hold"
+
+
+def test_stage1_context_allows_leg_start_wick_touch_when_close_holds(monkeypatch) -> None:
+    engine = PnoEngine()
+    params = PnoParams(
+        symbol="TEST/USDT",
+        min_stage1_leg_v1=0.05,
+        min_stage1_leg_v5_fraction=0.05,
+        stage1_hold_fraction=0.5,
+    )
+    one = _build_test_one_frame_multi(timestamps_ms=[0, 60_000], price=1.0)
+    one.highs = pd.Series([1.0, 1.2], dtype="float64").to_numpy()
+    one.lows = pd.Series([1.0, 1.0], dtype="float64").to_numpy()
+    one.closes = pd.Series([1.0, 1.15], dtype="float64").to_numpy()
+    five = _build_test_five_frame(
+        opens=[1.0],
+        highs=[1.2],
+        lows=[1.0],
+        closes=[1.15],
+        ema20=[1.0],
+    )
+    five.pump_start_idx[:] = 0
+    five.sleep_start_idx[:] = 0
+    five.sleep_end_idx[:] = 0
+    five.stage1_confirm_idx[:] = 0
+
+    monkeypatch.setattr(engine, "_resolve_leg_start", lambda **_kwargs: (0, 1.0))
+    monkeypatch.setattr(
+        engine,
+        "_resolve_stage1_quality_metrics",
+        lambda **_kwargs: (
+            {
+                "cumulative_quote_volume": 300_000.0,
+                "pre_pump_ema_crosses_1h": 1,
+                "pre_pump_barcode_fraction_1h": 0.1,
+                "pre_pump_high_24h": 1.0,
+                "pre_pump_high_1h": 1.0,
+                "pump_pre_atr": 0.1,
+                "pump_impulse_atr_pre": 2.0,
+                "pump_peak_bar_tr_atr_pre": 1.5,
+                "pump_volume_ratio_start": 4.0,
+                "pump_volume_ratio_continue": 1.2,
+                "pump_path_efficiency": 0.4,
+                "pump_wick_share": 0.4,
+                "pump_body_share_mean": 0.5,
+                "pump_flat_body_share": 0.2,
+                "pump_body_wick_edge": 0.1,
+                "pump_micro_flat_bar_share": 0.2,
+                "active_high_bar_body_share": 0.6,
+                "active_high_bar_upper_wick_share": 0.3,
+                "active_high_bar_close_position": 0.8,
+                "pump_max_red_body_share_5m": 0.1,
+                "pump_counterflow_ratio_5m": 0.1,
+                "pump_max_red_body_share_1m": 0.1,
+                "pump_counterflow_ratio_1m": 0.1,
+                "reference_high": 1.2,
+                "reference_high_weight": 1.0,
+            },
+            None,
+        ),
+    )
+
+    stage1, rejection = engine._resolve_stage1_context(
+        one=one,
+        five=five,
+        idx=1,
+        five_idx=0,
+        params=params,
+    )
+
+    assert rejection is None
+    assert stage1 is not None
+
+
+def test_run_keeps_confirmed_stage1_alive_when_rebuild_drops_but_hold_is_intact(monkeypatch) -> None:
+    engine = PnoEngine()
+    params = PnoParams(symbol="TEST/USDT")
+    one = _build_test_one_frame_multi(timestamps_ms=[0, 60_000, 120_000], price=1.0)
+    five = _build_test_five_frame(
+        opens=[1.0],
+        highs=[1.2],
+        lows=[1.0],
+        closes=[1.15],
+        ema20=[1.0],
+    )
+    stage1 = Stage1Context(
+        start_idx=0,
+        start_timestamp=0,
+        pump_start_5m_idx=0,
+        pump_start_timestamp=0,
+        current_5m_idx=0,
+        active_high_idx=1,
+        active_high_timestamp=60_000,
+        active_high=1.2,
+        reference_high=1.2,
+        leg_start_idx=0,
+        leg_start_timestamp=0,
+        leg_start=1.0,
+        leg_size=0.2,
+        reference_leg_size=0.2,
+        hold_floor=1.1,
+        pump_range_5m=0.2,
+    )
+    call_count = {"value": 0}
+
+    def _fake_resolve_stage1_context(**_kwargs):
+        call_count["value"] += 1
+        if call_count["value"] == 1:
+            return stage1, None
+        return None, None
+
+    monkeypatch.setattr(engine, "_scale_required_bars", lambda **_kwargs: 1)
+    monkeypatch.setattr(engine, "_resolve_stage1_context", _fake_resolve_stage1_context)
+    monkeypatch.setattr(engine, "_resolve_stage1_hold_status", lambda **_kwargs: "held_above_hold")
+    monkeypatch.setattr(engine, "_resolve_leg_start_status", lambda **_kwargs: "held_above_leg_start")
+    monkeypatch.setattr(engine, "_resolve_stage1_pump_candidate_rejection", lambda **_kwargs: None)
+    monkeypatch.setattr(engine, "_resolve_stage2_context", lambda **_kwargs: None)
+
+    diagnostics: dict[str, object] = {}
+    trades = engine._run(one=one, five=five, params=params, diagnostics=diagnostics)
+
+    assert trades == []
+    assert int(diagnostics["stage_hits"]["stage_1_pump"]) == 1
+    assert diagnostics.get("stage_rejections", []) == []
+
+
+def test_export_stage_reviews_filters_stage1_rejections_to_borderline_cases(tmp_path, monkeypatch) -> None:
+    frame = pd.DataFrame(
+        {
+            "timestamp": [60_000, 120_000],
+            "open": [1.0, 1.1],
+            "high": [1.2, 1.3],
+            "low": [0.9, 1.0],
+            "close": [1.1, 1.2],
+            "volume": [10.0, 11.0],
+        }
+    )
+    symbol_frames = {
+        "BTC/USDT": SymbolMtfFrames(
+            levels_timeframe=Timeframe.M5,
+            entry_timeframe=Timeframe.M1,
+            levels_frame=frame,
+            entry_frame=frame,
+        )
+    }
+
+    rendered_reasons: list[str] = []
+
+    def _fake_render_stage_review_chart(**kwargs):
+        rendered_reasons.append(str(kwargs["reason"]))
+        return str(Path(kwargs["charts_dir"]) / "chart.png")
+
+    monkeypatch.setattr(pno_diagnostics, "_render_pno_stage_review_chart", _fake_render_stage_review_chart)
+
+    pno_diagnostics._export_pno_stage_reviews(
+        diagnostics_dir=tmp_path,
+        symbol_frames=symbol_frames,
+        stage_rows_by_stage={},
+        stage_rejections_by_stage={
+            "stage_1_pump": {
+                "volume_ratio_start_too_small": [
+                    {
+                        "symbol": "BTC/USDT",
+                        "timestamp_ms": 60_000,
+                        "reason": "volume_ratio_start_too_small",
+                        "pump_volume_ratio_start": 2.95,
+                        "stage1_min_volume_ratio_start": 3.0,
+                    },
+                    {
+                        "symbol": "BTC/USDT",
+                        "timestamp_ms": 120_000,
+                        "reason": "volume_ratio_start_too_small",
+                        "pump_volume_ratio_start": 0.8,
+                        "stage1_min_volume_ratio_start": 3.0,
+                    },
+                ]
+            }
+        },
+        selected_stage_ids=("stage_1_pump",),
+    )
+
+    manifest = pd.read_csv(tmp_path / "stage_reviews" / "manifest.csv")
+    stage1_row = manifest.loc[manifest["stage_id"] == "stage_1_pump"].iloc[0]
+    assert int(stage1_row["rejected_count"]) == 2
+    assert int(stage1_row["rejected_review_count"]) == 1
+    assert int(stage1_row["rejected_filtered_count"]) == 1
+    assert int(stage1_row["rejected_charts_count"]) == 1
+
+    events = pd.read_csv(
+        tmp_path
+        / "stage_reviews"
+        / "stage_1_pump"
+        / "rejected"
+        / "volume_ratio_start_too_small"
+        / "events.csv"
+    )
+    assert len(events) == 1
+    assert float(events.iloc[0]["pump_volume_ratio_start"]) == pytest.approx(2.95)
+    assert rendered_reasons == ["volume_ratio_start_too_small"]
 
 
 def test_pno_level_cluster_allows_clear_single_touch_level() -> None:
@@ -931,6 +1873,59 @@ def test_pno_level_cluster_allows_clear_single_touch_level() -> None:
         stage3=stage3,
         confirmed_highs=[2],
         confirmed_lows=[4],
+        params=PnoParams(symbol="TEST/USDT"),
+        retired_clusters=[],
+    )
+
+    assert cluster == ((2,), (5.0,))
+
+
+def test_pno_level_cluster_uses_local_peak_fallback_when_confirmed_highs_missing() -> None:
+    engine = PnoEngine()
+    highs = pd.Series([1.0, 2.0, 5.0, 4.6, 4.9, 4.2], dtype="float64").to_numpy()
+    lows = pd.Series([0.8, 1.6, 4.2, 3.8, 4.0, 3.7], dtype="float64").to_numpy()
+    opens = pd.Series([0.9, 1.8, 4.8, 4.2, 4.5, 3.9], dtype="float64").to_numpy()
+    closes = pd.Series([0.95, 1.9, 4.6, 4.0, 4.7, 3.8], dtype="float64").to_numpy()
+    timestamps = pd.Series([60_000, 120_000, 180_000, 240_000, 300_000, 360_000], dtype="int64").to_numpy()
+    v1 = pd.Series([1.0] * len(highs), dtype="float64").to_numpy()
+    one = OneMinuteFrame(
+        frame=pd.DataFrame(),
+        timestamps=timestamps,
+        opens=opens,
+        highs=highs,
+        lows=lows,
+        closes=closes,
+        volumes=pd.Series([1.0] * len(highs), dtype="float64").to_numpy(),
+        quote_volume=pd.Series([1.0] * len(highs), dtype="float64").to_numpy(),
+        cumulative_quote_volume=pd.Series(range(1, len(highs) + 1), dtype="float64").to_numpy(),
+        tr=v1,
+        v1=v1,
+        red=pd.Series([False, False, True, True, False, True], dtype="bool").to_numpy(),
+        confirmed_high_indices=pd.Series([], dtype="int64").to_numpy(),
+        confirmed_high_confirmed_at=pd.Series([], dtype="int64").to_numpy(),
+        confirmed_low_indices=pd.Series([], dtype="int64").to_numpy(),
+        confirmed_low_confirmed_at=pd.Series([], dtype="int64").to_numpy(),
+        low_range_tree=engine._build_range_tree(lows, is_min_tree=True),
+    )
+    stage3 = Stage3Context(
+        active_high_idx=1,
+        active_high_timestamp=120_000,
+        active_high=10.0,
+        pullback_start_idx=1,
+        pullback_low_idx=3,
+        pullback_low_timestamp=240_000,
+        pullback_low=3.8,
+        pullback_depth=1.8,
+        pullback_age_bars=4,
+        validation_timestamp=360_000,
+    )
+
+    cluster = engine._resolve_level_cluster(
+        one=one,
+        idx=5,
+        stage3=stage3,
+        confirmed_highs=[],
+        confirmed_lows=[],
         params=PnoParams(symbol="TEST/USDT"),
         retired_clusters=[],
     )
@@ -1595,3 +2590,160 @@ def test_pno_entry_pullback_fraction_measures_real_entry_position() -> None:
 
     assert engine._resolve_entry_pullback_fraction(pullback_low=8.0, active_high=10.0, entry_price=8.9) == pytest.approx(0.45)
     assert engine._resolve_entry_pullback_fraction(pullback_low=8.0, active_high=10.0, entry_price=9.4) == pytest.approx(0.7)
+
+
+def test_stale_stage1_anchor_rearms_only_for_fresh_breakout() -> None:
+    engine = PnoEngine()
+    bars_count = 181
+    wake = np.zeros(bars_count, dtype=bool)
+    support = np.zeros(bars_count, dtype=bool)
+    local_breakout = np.zeros(bars_count, dtype=bool)
+    support[175:] = True
+    local_breakout[175:] = True
+    ema9 = np.full(bars_count, 2.0, dtype=np.float64)
+    ema20 = np.full(bars_count, 1.0, dtype=np.float64)
+    ema9[173] = 0.9
+    ema20[173] = 1.0
+
+    rearm_idx = engine._resolve_stale_pump_rearm_start_idx(
+        active_start_idx=0,
+        idx=180,
+        levels_timeframe_ms=300_000,
+        pump_start_lookback=6,
+        wake_transition=False,
+        self_sustain=True,
+        wake=wake,
+        support=support,
+        local_breakout=local_breakout,
+        ema9=ema9,
+        ema20=ema20,
+        pump_start_shift_lookback=24,
+        pump_start_precursor_extension=3,
+        closes=np.full(bars_count, 2.0, dtype=np.float64),
+    )
+
+    assert rearm_idx == 173
+    assert (
+        engine._resolve_stale_pump_rearm_start_idx(
+            active_start_idx=100,
+            idx=180,
+            levels_timeframe_ms=300_000,
+            pump_start_lookback=6,
+            wake_transition=False,
+            self_sustain=True,
+            wake=wake,
+            support=support,
+            local_breakout=local_breakout,
+            ema9=ema9,
+            ema20=ema20,
+            pump_start_shift_lookback=24,
+            pump_start_precursor_extension=3,
+            closes=np.full(bars_count, 2.0, dtype=np.float64),
+        )
+        is None
+    )
+
+
+def test_shift_pump_start_left_to_recent_ema_reset_stays_near_breakout_without_reset() -> None:
+    ema9 = np.array([2.0, 2.0, 2.0, 2.0], dtype=np.float64)
+    ema20 = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float64)
+
+    assert (
+        PnoEngine._shift_pump_start_left_to_ema_reset(
+            ema9=ema9,
+            ema20=ema20,
+            pump_start_idx=3,
+            max_shift_bars=2,
+        )
+        == 3
+    )
+
+
+def test_extend_pump_start_to_precursor_breakout_captures_previous_breakout_bar() -> None:
+    local_breakout = np.array([False, False, True, True, True], dtype=bool)
+    closes = np.array([1.0, 1.0, 1.2, 1.3, 1.4], dtype=np.float64)
+    ema20 = np.array([1.0, 1.0, 1.1, 1.2, 1.3], dtype=np.float64)
+
+    assert (
+        PnoEngine._extend_pump_start_to_precursor_breakout(
+            local_breakout=local_breakout,
+            closes=closes,
+            ema20=ema20,
+            pump_start_idx=4,
+            max_extension_bars=3,
+        )
+        == 2
+    )
+
+
+def test_allows_zero_pre_pump_ema_crosses_only_for_strong_sleep_wake_breakout() -> None:
+    five = _build_test_five_frame(
+        opens=[1.0, 1.1, 1.2],
+        highs=[1.1, 1.3, 1.5],
+        lows=[0.9, 1.05, 1.15],
+        closes=[1.05, 1.25, 1.45],
+        ema20=[1.0, 1.1, 1.2],
+    )
+    five.sleep_end_idx = pd.Series([-1, 0, 1], dtype="int64").to_numpy()
+
+    assert PnoEngine._allows_zero_pre_pump_ema_crosses(
+        five=five,
+        pump_start_5m_idx=2,
+        current_5m_idx=2,
+        params=PnoParams(symbol="TEST/USDT"),
+        pump_volume_ratio_start=5.5,
+        pump_impulse_atr_pre=6.0,
+        pump_path_efficiency=0.6,
+        pump_body_wick_edge=0.2,
+    )
+
+
+@pytest.mark.parametrize(
+    ("case_id", "symbol", "row_number", "window_start_ms", "window_end_ms", "expected_entry_min_ms", "expected_entry_max_ms", "min_pnl_percent"),
+    [
+        (
+            case["case_id"],
+            case["symbol"],
+            case["row_number"],
+            case["window_start_ms"],
+            case["window_end_ms"],
+            case["expected_entry_min_ms"],
+            case["expected_entry_max_ms"],
+            case["min_pnl_percent"],
+        )
+        for case in _PNO_GOLDEN_TRADE_CASES
+    ],
+)
+def test_pno_golden_trade_cases_keep_positive_example_alive(
+    case_id: str,
+    symbol: str,
+    row_number: int,
+    window_start_ms: int,
+    window_end_ms: int,
+    expected_entry_min_ms: int,
+    expected_entry_max_ms: int,
+    min_pnl_percent: float,
+) -> None:
+    del case_id
+    params, mtf_frames = _load_pno_golden_case(
+        symbol=symbol,
+        row_number=row_number,
+        window_end_ms=window_end_ms,
+    )
+    strategy = PnoStrategy(
+        deposit=float(params.pno_deposit),
+        risk_pct=float(params.pno_risk_pct),
+        cache_dir=Path(tempfile.mkdtemp()),
+    )
+
+    trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+
+    matching_trades = [
+        trade
+        for trade in trades
+        if window_start_ms <= int(trade.entry_timestamp_ms) <= window_end_ms
+        and expected_entry_min_ms <= int(trade.entry_timestamp_ms) <= expected_entry_max_ms
+        and float(trade.pnl_percent.value) >= float(min_pnl_percent)
+    ]
+
+    assert matching_trades, f"expected profitable golden trade for {symbol} inside regression window"

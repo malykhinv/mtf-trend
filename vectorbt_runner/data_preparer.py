@@ -189,20 +189,20 @@ class DataPreparer:
         for column in ("timestamp", "open", "high", "low", "close", "volume"):
             required_mask &= prepared[column].notna().to_numpy(dtype=bool, copy=False)
         if not bool(required_mask.all()):
-            prepared = prepared.loc[required_mask]
+            prepared = prepared.loc[required_mask].copy()
         if prepared.empty:
             return pd.DataFrame()
 
         timestamps = prepared["timestamp"].to_numpy(dtype=np.int64, copy=False)
         needs_sort = bool(timestamps.size > 1 and np.any(timestamps[1:] < timestamps[:-1]))
         if needs_sort:
-            prepared = prepared.iloc[np.argsort(timestamps, kind="stable")]
+            prepared = prepared.iloc[np.argsort(timestamps, kind="stable")].copy()
             timestamps = prepared["timestamp"].to_numpy(dtype=np.int64, copy=False)
         if timestamps.size > 1:
             unique_mask = np.ones(len(prepared), dtype=bool)
             unique_mask[:-1] = timestamps[:-1] != timestamps[1:]
             if not bool(unique_mask.all()):
-                prepared = prepared.loc[unique_mask]
+                prepared = prepared.loc[unique_mask].copy()
 
         prepared["symbol"] = pd.Categorical.from_codes(
             np.zeros(len(prepared), dtype=np.int8),

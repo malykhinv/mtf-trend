@@ -98,6 +98,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_bt.add_argument("--results-input", default=None, help="Path to CSV with results for --plot-from-results")
     run_bt.add_argument("--id", type=_positive_int_for("--id"), default=None, help="Combination ID in the CSV")
 
+    plot_bt = subparsers.add_parser(
+        "plot-backtest",
+        help="Rebuild plots for a saved backtest run",
+    )
+    plot_bt.add_argument("--run-dir", required=True, help="Path to the saved backtest run directory")
+
     pno_stage = subparsers.add_parser(
         "pno-stage",
         help="Run compact PNO stage review on the PNO backtest timeframe pair",
@@ -138,6 +144,7 @@ def resolve_handler(command_name: str) -> Handler:
         "fetch-data": commands.fetch_data,
         "update-cache": commands.update_cache,
         "run-backtest": commands.run_backtest,
+        "plot-backtest": commands.plot_backtest,
         "pno-stage": commands.run_pno_stage,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,

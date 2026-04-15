@@ -54,7 +54,7 @@ from strategy.pno.config import (
     resolve_pno_default_timeframe_pair,
     validate_pno_timeframe_pair,
 )
-from strategy.pno.engine import PNO_STAGE_SEQUENCE
+from strategy.pno.engine import PNO_STAGE_4_LEVEL, PNO_STAGE_5_TRADE, PNO_STAGE_SEQUENCE
 from utils.logger import get_logger
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
@@ -64,6 +64,9 @@ from cli.pno_diagnostics import (
     _format_eta_compact,
     _read_csv_or_empty,
     _render_pno_trade_charts_for_symbol,
+    _safe_float,
+    _safe_int,
+    _select_stage_review_rejection_rows,
     _slice_backtest_frame_window,
     _to_compact_json,
 )
@@ -71,12 +74,40 @@ from cli.pno_diagnostics import (
 # region Приватные
 
 _PROGRESS_LOG_EVERY = 100
+_BACKTEST_RUNS_DIR_NAME = "backtest_runs"
+_BACKTEST_RUN_CONTEXT_FILE_NAME = "run_context.json"
+_BACKTEST_PLOT_REQUEST_FILE_NAME = "plot_request.json"
 _PNO_STAGE_PRESETS: dict[str, tuple[int | None, int | None]] = {
     **{f"s{idx}": (idx, None) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
     **{f"stage{idx}": (idx, None) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
     **{f"t{idx}": (None, idx) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
     **{f"through{idx}": (None, idx) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
 }
+
+
+def _pno_output_symbol_stem(symbol: object) -> str:
+    normalized = str(symbol).replace("/", "_")
+    return "".join(char if char.isalnum() or char in {"_", "-"} else "_" for char in normalized)
+
+
+def _build_filtered_pno_stage_rejections(
+    *,
+    stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
+    selected_stage_ids: tuple[str, ...],
+) -> dict[str, dict[str, list[dict[str, object]]]]:
+    filtered: dict[str, dict[str, list[dict[str, object]]]] = {}
+    selected_stage_set = set(selected_stage_ids)
+    for stage_id in PNO_STAGE_SEQUENCE:
+        if stage_id not in selected_stage_set:
+            filtered[stage_id] = {}
+            continue
+        filtered_groups: dict[str, list[dict[str, object]]] = {}
+        for reason, rows in stage_rejections_by_stage.get(stage_id, {}).items():
+            selected_rows = _select_stage_review_rejection_rows(stage_id=stage_id, reason=reason, rows=rows)
+            if selected_rows:
+                filtered_groups[reason] = selected_rows
+        filtered[stage_id] = filtered_groups
+    return filtered
 
 
 def _to_bool_flag(value: object, *, default: bool = False) -> bool:
@@ -94,6 +125,100 @@ def _to_bool_flag(value: object, *, default: bool = False) -> bool:
     return default
 
 
+def _resolve_pno_stage_cycle_key(row: dict[str, object]) -> str | None:
+    symbol = str(row.get("symbol") or "")
+    active_high_timestamp_ms = _safe_int(row.get("active_high_timestamp_ms"))
+    pullback_low_timestamp_ms = _safe_int(row.get("pullback_low_timestamp_ms"))
+    level = _safe_float(row.get("level"))
+    level_first_timestamp_ms = _safe_int(row.get("level_first_local_high_timestamp_ms"))
+    level_last_timestamp_ms = _safe_int(row.get("level_last_local_high_timestamp_ms"))
+    if (
+        not symbol
+        or active_high_timestamp_ms is None
+        or pullback_low_timestamp_ms is None
+        or level is None
+        or level_first_timestamp_ms is None
+        or level_last_timestamp_ms is None
+    ):
+        return None
+    return (
+        f"{symbol}|{active_high_timestamp_ms}|{pullback_low_timestamp_ms}|"
+        f"{level_first_timestamp_ms}|{level_last_timestamp_ms}|{level:.8f}"
+    )
+
+
+def _build_stage5_review_rejections_from_stage4(
+    *,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    stage_rows_by_stage: dict[str, list[dict[str, object]]],
+    stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
+    trade_rows: list[dict[str, object]],
+    min_score: float,
+) -> None:
+    existing_stage5_keys: set[str] = set()
+    for row in trade_rows:
+        key = _resolve_pno_stage_cycle_key(row)
+        if key is not None:
+            existing_stage5_keys.add(key)
+    for rows in stage_rejections_by_stage.get(PNO_STAGE_5_TRADE, {}).values():
+        for row in rows:
+            key = _resolve_pno_stage_cycle_key(row)
+            if key is not None:
+                existing_stage5_keys.add(key)
+
+    latest_stage4_by_key: dict[str, dict[str, object]] = {}
+    for row in stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, []):
+        key = _resolve_pno_stage_cycle_key(row)
+        if key is None:
+            continue
+        prev = latest_stage4_by_key.get(key)
+        row_timestamp_ms = _safe_int(row.get("timestamp_ms")) or 0
+        prev_timestamp_ms = _safe_int(prev.get("timestamp_ms")) or -1 if prev is not None else -1
+        if prev is None or row_timestamp_ms >= prev_timestamp_ms:
+            latest_stage4_by_key[key] = row
+
+    synthetic_rows: dict[str, list[dict[str, object]]] = {}
+    for key, row in latest_stage4_by_key.items():
+        if key in existing_stage5_keys:
+            continue
+        symbol = str(row.get("symbol") or "")
+        mtf_frames = symbol_frames.get(symbol)
+        if mtf_frames is None or mtf_frames.entry_frame.empty:
+            continue
+        level = _safe_float(row.get("level"))
+        if level is None:
+            continue
+        level_valid_timestamp_ms = _safe_int(row.get("level_valid_timestamp_ms")) or _safe_int(row.get("timestamp_ms"))
+        if level_valid_timestamp_ms is None:
+            continue
+        entry_frame = mtf_frames.entry_frame
+        if "timestamp" not in entry_frame.columns or "high" not in entry_frame.columns:
+            continue
+        post_level_frame = entry_frame.loc[entry_frame["timestamp"] >= level_valid_timestamp_ms]
+        if post_level_frame.empty:
+            continue
+        crossed_frame = post_level_frame.loc[post_level_frame["high"] >= level]
+        if crossed_frame.empty:
+            continue
+        signal_row = crossed_frame.iloc[0]
+        score = _safe_float(row.get("score")) or 0.0
+        reason = "level_crossed_below_min_score" if score < float(min_score) else "level_crossed_no_trade"
+        synthetic_rows.setdefault(reason, []).append(
+            {
+                **row,
+                "stage_id": PNO_STAGE_5_TRADE,
+                "reason": reason,
+                "timestamp_ms": int(signal_row["timestamp"]),
+                "entry_signal_timestamp_ms": int(signal_row["timestamp"]),
+                "entry_price": float(level),
+                "entry_plan": float(level),
+            }
+        )
+
+    for reason, rows in synthetic_rows.items():
+        stage_rejections_by_stage[PNO_STAGE_5_TRADE].setdefault(reason, []).extend(rows)
+
+
 def _resolve_strategy_id(args: argparse.Namespace) -> str:
     strategy_override = getattr(args, "strategy", None)
     if strategy_override is None:
@@ -108,6 +233,125 @@ def _resolve_results_dir_for_strategy(base_results_dir: Path, strategy_id: str) 
     if strategy_id != "pno":
         raise ValueError(f"Неподдерживаемый strategy_id: {strategy_id}")
     return base_results_dir / "strategy" / strategy_id
+
+
+def _resolve_backtest_run_root_dir(base_results_dir: Path, strategy_id: str) -> Path:
+    timestamp_label = time.strftime("%Y%m%d_%H%M%S")
+    return Path(base_results_dir) / _BACKTEST_RUNS_DIR_NAME / f"{timestamp_label}_{strategy_id}"
+
+
+def _resolve_saved_backtest_root_dir(path: Path) -> Path:
+    normalized = Path(path)
+    candidates = [normalized, normalized.parent, normalized.parent.parent]
+    for candidate in candidates:
+        if (candidate / _BACKTEST_RUN_CONTEXT_FILE_NAME).exists():
+            return candidate
+    return normalized
+
+
+def _resolve_results_row_number(results: pd.DataFrame, selected_row: pd.Series) -> int:
+    selected_index = selected_row.name
+    for row_number, (row_index, _) in enumerate(results.iterrows(), start=1):
+        if row_index == selected_index:
+            return row_number
+    return 1
+
+
+def _write_backtest_run_context(
+    run_root_dir: Path,
+    *,
+    strategy_id: str,
+    results_file_name: str,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    backtest_days: int | None,
+    end_timestamp_ms: int | None,
+    symbols: list[str],
+    plot_requested: bool,
+    pno_stage: int | None,
+    pno_through_stage: int | None,
+) -> None:
+    payload = {
+        "strategy_id": strategy_id,
+        "strategy_results_rel_dir": str(Path("strategy") / strategy_id),
+        "trade_plots_rel_dir": str(Path("strategy") / strategy_id / "trade_plots"),
+        "results_file_name": results_file_name,
+        "levels_tf": levels_timeframe.value,
+        "entry_tf": entry_timeframe.value,
+        "days": int(backtest_days) if backtest_days is not None else None,
+        "end_timestamp_ms": int(end_timestamp_ms) if end_timestamp_ms is not None else None,
+        "symbols": list(symbols),
+        "symbols_count": int(len(symbols)),
+        "plot_requested": bool(plot_requested),
+        "pno_stage": int(pno_stage) if pno_stage is not None else None,
+        "pno_through_stage": int(pno_through_stage) if pno_through_stage is not None else None,
+    }
+    (run_root_dir / _BACKTEST_RUN_CONTEXT_FILE_NAME).write_text(
+        _to_compact_json(payload),
+        encoding="utf-8",
+    )
+
+
+def _write_backtest_plot_request(
+    run_root_dir: Path,
+    *,
+    selected_row_number: int,
+) -> None:
+    payload = {
+        "selected_row_number": int(selected_row_number),
+    }
+    (run_root_dir / _BACKTEST_PLOT_REQUEST_FILE_NAME).write_text(
+        _to_compact_json(payload),
+        encoding="utf-8",
+    )
+
+
+def _load_saved_backtest_request(run_dir: Path) -> tuple[Path, dict[str, object], dict[str, object]]:
+    run_root_dir = _resolve_saved_backtest_root_dir(run_dir)
+    context_path = run_root_dir / _BACKTEST_RUN_CONTEXT_FILE_NAME
+    if not context_path.exists():
+        raise FileNotFoundError(f"run context not found: {context_path}")
+    context = json.loads(context_path.read_text(encoding="utf-8"))
+    request_path = run_root_dir / _BACKTEST_PLOT_REQUEST_FILE_NAME
+    request: dict[str, object] = {}
+    if request_path.exists():
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+    return run_root_dir, context, request
+
+
+def _build_plot_backtest_args(
+    *,
+    run_root_dir: Path,
+    context: dict[str, object],
+    request: dict[str, object],
+) -> argparse.Namespace:
+    strategy_id = str(context.get("strategy_id") or "pno")
+    strategy_results_rel_dir = Path(str(context.get("strategy_results_rel_dir") or (Path("strategy") / strategy_id)))
+    trade_plots_rel_dir = Path(str(context.get("trade_plots_rel_dir") or (strategy_results_rel_dir / "trade_plots")))
+    results_file_name = str(context.get("results_file_name") or DEFAULT_BACKTEST_OUTPUT_FILE)
+    raw_symbols = context.get("symbols")
+    symbols = list(raw_symbols) if isinstance(raw_symbols, list) else None
+    return argparse.Namespace(
+        command="run-backtest",
+        symbols=symbols,
+        top_n=None,
+        days=context.get("days"),
+        end_timestamp_ms=context.get("end_timestamp_ms"),
+        levels_tf=context.get("levels_tf"),
+        entry_tf=context.get("entry_tf"),
+        strategy=strategy_id,
+        pno_deposit=None,
+        pno_risk_pct=None,
+        pno_entry_confirmation_mode=None,
+        pno_stage=context.get("pno_stage"),
+        pno_through_stage=context.get("pno_through_stage"),
+        plot=False,
+        plot_from_results=True,
+        results_input=str(run_root_dir / strategy_results_rel_dir / results_file_name),
+        output_dir=str(run_root_dir / trade_plots_rel_dir),
+        id=None,
+        row_number=request.get("selected_row_number"),
+    )
 
 
 
@@ -419,6 +663,7 @@ def _plot_pno_diagnostics_for_symbols(
     charts_dir.mkdir(parents=True, exist_ok=True)
     selected_stage_ids = _resolve_pno_stage_ids(args)
     selected_stage_id_set = set(selected_stage_ids)
+    passed_chart_stage_ids = tuple(stage_id for stage_id in selected_stage_ids if stage_id != PNO_STAGE_SEQUENCE[0])
 
     symbols_with_trades = 0
     symbols_with_stage_events = 0
@@ -510,7 +755,7 @@ def _plot_pno_diagnostics_for_symbols(
                 "diagnostics": diagnostics,
             }
         )
-        base_name = symbol.replace("/", "_")
+        base_name = _pno_output_symbol_stem(symbol)
         payload = {
             "symbol": symbol,
             "trades_generated": len(trade_rows),
@@ -546,12 +791,23 @@ def _plot_pno_diagnostics_for_symbols(
         "%s: pno research export dispatch start",
         log_prefix,
     )
+    _build_stage5_review_rejections_from_stage4(
+        symbol_frames=symbol_frames,
+        stage_rows_by_stage=stage_rows_by_stage,
+        stage_rejections_by_stage=stage_rejections_by_stage,
+        trade_rows=all_trade_rows,
+        min_score=float(params_row.get("pno_min_score", 0.0) or 0.0),
+    )
+    research_rejections_by_stage = _build_filtered_pno_stage_rejections(
+        stage_rejections_by_stage=stage_rejections_by_stage,
+        selected_stage_ids=selected_stage_ids,
+    )
     _export_pno_research_context(
         diagnostics_dir=diagnostics_dir,
         symbol_frames=symbol_frames,
         trade_rows=all_trade_rows,
         stage_rows_by_stage=stage_rows_by_stage,
-        stage_rejections_by_stage=stage_rejections_by_stage,
+        stage_rejections_by_stage=research_rejections_by_stage,
         logger=logger,
         log_prefix=log_prefix,
     )
@@ -559,6 +815,22 @@ def _plot_pno_diagnostics_for_symbols(
         "%s: pno research export dispatch finished elapsed=%s",
         log_prefix,
         _format_eta_compact(max(time.monotonic() - research_export_start, 0.0)),
+    )
+    _export_pno_stage_reviews(
+        diagnostics_dir=diagnostics_dir,
+        symbol_frames=symbol_frames,
+        stage_rows_by_stage=stage_rows_by_stage,
+        stage_rejections_by_stage=stage_rejections_by_stage,
+        selected_stage_ids=selected_stage_ids,
+        render_charts=False,
+        passed_chart_stage_ids=passed_chart_stage_ids,
+        logger=logger,
+        log_prefix=log_prefix,
+    )
+    logger.info(
+        "%s: pno stage-review tables saved stages=%s",
+        log_prefix,
+        ",".join(selected_stage_ids),
     )
 
     chart_symbols_total = sum(1 for item in diagnostics_payloads if item["trade_rows"])
@@ -576,7 +848,7 @@ def _plot_pno_diagnostics_for_symbols(
             trade_rows=trade_rows,
         )
         total_charts_generated += len(chart_paths)
-        base_name = symbol.replace("/", "_")
+        base_name = _pno_output_symbol_stem(symbol)
         diagnostics_path = diagnostics_dir / f"{base_name}_diagnostics.json"
         payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
         payload["chart_paths"] = chart_paths
@@ -603,6 +875,8 @@ def _plot_pno_diagnostics_for_symbols(
         stage_rows_by_stage=stage_rows_by_stage,
         stage_rejections_by_stage=stage_rejections_by_stage,
         selected_stage_ids=selected_stage_ids,
+        render_charts=True,
+        passed_chart_stage_ids=passed_chart_stage_ids,
         logger=logger,
         log_prefix=log_prefix,
     )
@@ -793,6 +1067,27 @@ def _load_plot_params_row_from_results(
     if missing_columns:
         logger.error("plot-from-results: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
         return None
+
+    selected_row_number_raw = getattr(args, "row_number", None)
+    if selected_row_number_raw is not None:
+        row_number = int(selected_row_number_raw)
+        row_index = row_number - 1
+        if row_index < 0 or row_index >= len(frame):
+            logger.error(
+                "plot-from-results: row_number=%s вне диапазона 1..%s",
+                row_number,
+                len(frame),
+            )
+            return None
+        selected_row = frame.iloc[row_index]
+        logger.info(
+            "plot-from-results: использована строка=%s из %s (pf=%s, trades_count=%s)",
+            row_number,
+            csv_path,
+            selected_row.get("profit_factor", "n/a"),
+            selected_row.get("trades_count", "n/a"),
+        )
+        return selected_row
 
     selected_id_raw = getattr(args, "id", None)
     selected_row: pd.Series
@@ -1529,6 +1824,14 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     config.strategy.strategy_id = strategy_id
     config.backtest.results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, strategy_id)
+    run_root_dir_raw = getattr(args, "backtest_run_root_dir", None)
+    run_root_dir = Path(run_root_dir_raw) if run_root_dir_raw is not None else None
+    if run_root_dir is not None:
+        logger.info(
+            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: output_root=%s strategy_output=%s",
+            run_root_dir,
+            config.backtest.results_dir,
+        )
     if getattr(args, "pno_deposit", None) is not None:
         config.strategy.pno_deposit = float(args.pno_deposit)
     if getattr(args, "pno_risk_pct", None) is not None:
@@ -1724,6 +2027,22 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("запуск-бектеста: не удалось подготовить данные")
         return 0
 
+    should_plot = _to_bool_flag(getattr(args, "plot", None), default=False)
+    if run_root_dir is not None:
+        _write_backtest_run_context(
+            run_root_dir,
+            strategy_id=strategy_id,
+            results_file_name=config.backtest.results_file_name,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            backtest_days=backtest_days,
+            end_timestamp_ms=backtest_end_timestamp_ms,
+            symbols=list(symbol_frames.keys()),
+            plot_requested=should_plot,
+            pno_stage=getattr(args, "pno_stage", None),
+            pno_through_stage=getattr(args, "pno_through_stage", None),
+        )
+
     strategy = build_strategy(config, logger)
     runner = BacktestRunner(
         config.backtest.results_dir,
@@ -1765,7 +2084,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             return 1
         return 0
 
-    should_plot = _to_bool_flag(getattr(args, "plot", None), default=False)
     stage_metric_ids_for_run: tuple[str, ...] | None = None
     if (
         should_plot
@@ -1830,6 +2148,11 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 return 0
         else:
             best_row = results.iloc[0]
+        if run_root_dir is not None:
+            _write_backtest_plot_request(
+                run_root_dir,
+                selected_row_number=_resolve_results_row_number(results, best_row),
+            )
         if not _plot_for_strategy_dispatch(
             config=config,
             args=args,
@@ -2144,6 +2467,40 @@ def _clear_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 
+def _plot_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    logger = get_logger("plot-backtest", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    raw_run_dir = getattr(args, "run_dir", None)
+    if raw_run_dir is None or not str(raw_run_dir).strip():
+        logger.error("plot-backtest: --run-dir is required")
+        return 1
+    run_dir = Path(str(raw_run_dir))
+
+    try:
+        run_root_dir, context, request = _load_saved_backtest_request(run_dir)
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        logger.error("plot-backtest: %s", exc)
+        return 1
+
+    plot_args = _build_plot_backtest_args(
+        run_root_dir=run_root_dir,
+        context=context,
+        request=request,
+    )
+    logger.info(
+        "plot-backtest: run_dir=%s results=%s output_dir=%s row_number=%s",
+        run_root_dir,
+        getattr(plot_args, "results_input", None),
+        getattr(plot_args, "output_dir", None),
+        getattr(plot_args, "row_number", None) if getattr(plot_args, "row_number", None) is not None else "best",
+    )
+    scoped_config = replace(
+        config,
+        strategy=replace(config.strategy),
+        backtest=replace(config.backtest),
+    )
+    return _run_backtest_inner(scoped_config, plot_args)
+
+
 # endregion Приватные
 
 # Публичные точки входа
@@ -2159,7 +2516,29 @@ def update_cache(config: AppConfig, args: argparse.Namespace) -> int:
 
 def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
     """Запускает бэктест по текущей конфигурации."""
-    return _run_with_logging("run-backtest", config, lambda: _run_backtest_inner(config, args))
+    if _to_bool_flag(getattr(args, "plot_from_results", None), default=False):
+        return _run_with_logging("run-backtest", config, lambda: _run_backtest_inner(config, args))
+
+    strategy_id = (
+        _resolve_strategy_id(args)
+        if getattr(args, "strategy", None) is not None
+        else str(config.strategy.strategy_id).strip().lower()
+    )
+    run_root_dir = _resolve_backtest_run_root_dir(config.backtest.results_dir, strategy_id)
+    run_root_dir.mkdir(parents=True, exist_ok=True)
+    scoped_config = replace(
+        config,
+        strategy=replace(config.strategy),
+        backtest=replace(config.backtest, results_dir=run_root_dir),
+    )
+    scoped_args = argparse.Namespace(**vars(args))
+    scoped_args.backtest_run_root_dir = str(run_root_dir)
+    return _run_with_logging("run-backtest", scoped_config, lambda: _run_backtest_inner(scoped_config, scoped_args))
+
+
+def plot_backtest(config: AppConfig, args: argparse.Namespace) -> int:
+    """Rebuilds plots for a saved backtest run without rerunning the grid."""
+    return _run_with_logging("plot-backtest", config, lambda: _plot_backtest_inner(config, args))
 
 
 def run_pno_stage(config: AppConfig, args: argparse.Namespace) -> int:
