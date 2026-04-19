@@ -560,7 +560,7 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
         ),
         selected_stage_ids=(PNO_STAGE_5_TRADE,),
         render_charts=True,
-        passed_chart_stage_ids=(PNO_STAGE_5_TRADE,),
+        passed_chart_stage_ids=(),
         logger=logger,
         log_prefix=log_prefix,
     )
@@ -1041,7 +1041,7 @@ def _export_pno_diagnostics_context_for_symbols(
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     selected_stage_ids = _resolve_pno_stage_ids(args)
     selected_stage_id_set = set(selected_stage_ids)
-    passed_chart_stage_ids = tuple(stage_id for stage_id in selected_stage_ids if stage_id != PNO_STAGE_SEQUENCE[0])
+    passed_chart_stage_ids = ()
 
     symbols_with_trades = 0
     symbols_with_stage_events = 0

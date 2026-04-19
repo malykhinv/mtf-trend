@@ -784,7 +784,7 @@ def test_plot_pno_diagnostics_without_stage_filter_skips_passed_stage_charts(tmp
     assert rendered_statuses == ["rejected"]
 
 
-def test_plot_pno_diagnostics_without_stage_filter_keeps_stage2_passed_stage_charts(tmp_path, monkeypatch) -> None:
+def test_plot_pno_diagnostics_without_stage_filter_skips_stage2_passed_stage_charts(tmp_path, monkeypatch) -> None:
     strategy = PnoStrategy(deposit=1_000.0, risk_pct=0.02)
     params_row = pd.Series(strategy.params_to_row(PnoParams(symbol="BTC/USDT")))
     frame = pd.DataFrame(
@@ -850,8 +850,8 @@ def test_plot_pno_diagnostics_without_stage_filter_keeps_stage2_passed_stage_cha
     stage2_row = manifest.loc[manifest["stage_id"] == "stage_2_high_pullback"].iloc[0]
 
     assert int(stage2_row["passed_count"]) == 1
-    assert int(stage2_row["passed_charts_count"]) == 1
-    assert rendered_statuses == ["passed"]
+    assert int(stage2_row["passed_charts_count"]) == 0
+    assert rendered_statuses == []
 
 
 def test_export_pno_diagnostics_context_writes_research_artifacts_without_charts(tmp_path, monkeypatch) -> None:
@@ -2902,7 +2902,7 @@ def test_sync_shared_stage_reviews_copies_common_stages_and_merges_manifest(tmp_
                 "rejected_review_count": 0,
                 "rejected_filtered_count": 0,
                 "passed_events_path": str(shared_stage_dir / "events.csv"),
-                "passed_charts_count": 1,
+                "passed_charts_count": 0,
                 "rejected_charts_count": 0,
             }
         ]
@@ -2916,7 +2916,7 @@ def test_sync_shared_stage_reviews_copies_common_stages_and_merges_manifest(tmp_
                 "rejected_review_count": 0,
                 "rejected_filtered_count": 0,
                 "passed_events_path": str(target_stage5_dir / "events.csv"),
-                "passed_charts_count": 2,
+                "passed_charts_count": 0,
                 "rejected_charts_count": 0,
             }
         ]
