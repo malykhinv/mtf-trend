@@ -2618,6 +2618,99 @@ def _resolve_pno_pattern_context(
     return result
 
 
+def _resolve_pno_setup_family(payload: dict[str, object]) -> tuple[str, str]:
+    signal_ts = _safe_int(payload.get("entry_signal_timestamp_ms")) or _safe_int(payload.get("signal_bar_timestamp_ms"))
+    active_high_ts = _safe_int(payload.get("active_high_timestamp_ms"))
+    pump_start_ts = _safe_int(payload.get("pump_start_timestamp_ms"))
+    level_valid_ts = _safe_int(payload.get("level_valid_timestamp_ms"))
+    active_high_to_signal_minutes = (
+        max((signal_ts - active_high_ts) / 60_000.0, 0.0)
+        if signal_ts is not None and active_high_ts is not None
+        else _safe_float(payload.get("active_high_to_signal_minutes"))
+    )
+    pump_to_signal_minutes = (
+        max((signal_ts - pump_start_ts) / 60_000.0, 0.0)
+        if signal_ts is not None and pump_start_ts is not None
+        else _safe_float(payload.get("pump_to_signal_minutes"))
+    )
+    level_life_minutes = (
+        max((signal_ts - level_valid_ts) / 60_000.0, 0.0)
+        if signal_ts is not None and level_valid_ts is not None
+        else _safe_float(payload.get("level_life_minutes"))
+    )
+    signal_ema_spread_pct = _safe_float(payload.get("signal_bar_ema_spread_pct"))
+    signal_ema20_slope_3 = _safe_float(payload.get("signal_bar_ema20_slope_3"))
+    overhead_resistance_score = _safe_float(payload.get("overhead_resistance_score"))
+    pump_counterflow_ratio_5m = _safe_float(payload.get("pump_counterflow_ratio_5m"))
+    entry_pos = _safe_float(payload.get("entry_pos"))
+
+    if (
+        active_high_to_signal_minutes is not None
+        and level_life_minutes is not None
+        and signal_ema_spread_pct is not None
+        and signal_ema20_slope_3 is not None
+        and entry_pos is not None
+        and pump_counterflow_ratio_5m is not None
+        and active_high_to_signal_minutes <= 35.0
+        and level_life_minutes <= 20.0
+        and entry_pos <= 0.58
+        and pump_counterflow_ratio_5m <= 0.03
+        and (
+            signal_ema_spread_pct >= 1.8
+            or (signal_ema_spread_pct >= 1.2 and signal_ema20_slope_3 >= 0.22)
+        )
+    ):
+        return "impulse_followthrough", "core"
+
+    if (
+        active_high_to_signal_minutes is not None
+        and level_life_minutes is not None
+        and signal_ema_spread_pct is not None
+        and signal_ema20_slope_3 is not None
+        and overhead_resistance_score is not None
+        and entry_pos is not None
+        and pump_counterflow_ratio_5m is not None
+        and active_high_to_signal_minutes <= 35.0
+        and level_life_minutes <= 20.0
+        and entry_pos <= 0.60
+        and overhead_resistance_score <= 0.62
+        and pump_counterflow_ratio_5m <= 0.03
+        and signal_ema_spread_pct >= 0.45
+        and signal_ema20_slope_3 >= 0.08
+    ):
+        return "fresh_reclaim", "research"
+
+    if (
+        active_high_to_signal_minutes is not None
+        and level_life_minutes is not None
+        and signal_ema_spread_pct is not None
+        and signal_ema20_slope_3 is not None
+        and overhead_resistance_score is not None
+        and entry_pos is not None
+        and pump_counterflow_ratio_5m is not None
+        and 35.0 < active_high_to_signal_minutes <= 120.0
+        and level_life_minutes <= 120.0
+        and entry_pos <= 0.66
+        and overhead_resistance_score <= 0.58
+        and pump_counterflow_ratio_5m <= 0.03
+        and signal_ema_spread_pct >= 0.35
+        and signal_ema20_slope_3 >= 0.04
+    ):
+        return "late_shelf_reclaim", "research"
+
+    if (
+        active_high_to_signal_minutes is not None
+        and (
+            active_high_to_signal_minutes > 120.0
+            or (level_life_minutes is not None and level_life_minutes > 35.0)
+            or (pump_to_signal_minutes is not None and pump_to_signal_minutes > 180.0)
+        )
+    ):
+        return "stale_reclaim", "mixed"
+
+    return "mixed_other", "mixed"
+
+
 def _build_pno_research_context_row(
     row: dict[str, object],
     *,
@@ -2746,6 +2839,9 @@ def _build_pno_research_context_row(
     payload["overhead_supply_bucket"] = _bucketize_pno_value(_safe_float(payload.get("left_supply_bars_above_level_24h")), thresholds=(0.0, 3.0, 10.0), labels=("supply_clear", "supply_light", "supply_medium", "supply_heavy"))
     payload["hold_status_group"] = str(payload.get("hold_status_at_validation") or payload.get("hold_status_at_level_search") or "na")
     payload["leg_start_status_group"] = str(payload.get("leg_start_status_at_validation") or "na")
+    setup_family, setup_family_tier = _resolve_pno_setup_family(payload)
+    payload["setup_family"] = setup_family
+    payload["setup_family_tier"] = setup_family_tier
     return payload
 
 
@@ -2798,6 +2894,8 @@ def _summarize_pno_feature_buckets(frame: pd.DataFrame, *, scope: str) -> pd.Dat
         "overhead_supply_bucket",
         "hold_status_group",
         "leg_start_status_group",
+        "setup_family",
+        "setup_family_tier",
     ]
     summary_rows: list[dict[str, object]] = []
     total_count = len(frame)

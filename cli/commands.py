@@ -343,6 +343,7 @@ def _build_plot_backtest_args(
         pno_deposit=None,
         pno_risk_pct=None,
         pno_entry_confirmation_mode=None,
+        pno_category_mode=context.get("pno_category_mode"),
         pno_stage=context.get("pno_stage"),
         pno_through_stage=context.get("pno_through_stage"),
         plot=False,
@@ -351,6 +352,228 @@ def _build_plot_backtest_args(
         output_dir=str(run_root_dir / trade_plots_rel_dir),
         id=None,
         row_number=request.get("selected_row_number"),
+    )
+
+
+def _sanitize_artifact_dir_name(name: str) -> str:
+    sanitized = "".join(ch if ch.isalnum() or ch in ("_", "-") else "_" for ch in name.strip().lower())
+    sanitized = sanitized.strip("_")
+    return sanitized or "combo"
+
+
+def _resolve_pno_artifact_dir_name(params_row: pd.Series, *, fallback_index: int) -> str:
+    entry_mode = str(params_row.get("entry_confirmation_mode") or "").strip().lower()
+    if entry_mode:
+        return _sanitize_artifact_dir_name(entry_mode)
+    variant_id = str(params_row.get("pno_variant_id") or "").strip().lower()
+    if variant_id == "baseline_close":
+        return "close_above"
+    if variant_id.startswith("baseline_"):
+        variant_tail = variant_id.removeprefix("baseline_")
+        if variant_tail:
+            return _sanitize_artifact_dir_name(variant_tail)
+    if variant_id:
+        return _sanitize_artifact_dir_name(variant_id)
+    return f"combo_{fallback_index}"
+
+
+def _resolve_pno_artifact_rows(results: pd.DataFrame) -> list[tuple[str, pd.Series]]:
+    resolved: list[tuple[str, pd.Series]] = []
+    used_names: Counter[str] = Counter()
+    for fallback_index, (_, row) in enumerate(results.iterrows(), start=1):
+        base_name = _resolve_pno_artifact_dir_name(row, fallback_index=fallback_index)
+        used_names[base_name] += 1
+        final_name = base_name if used_names[base_name] == 1 else f"{base_name}_{used_names[base_name]}"
+        resolved.append((final_name, row))
+    return resolved
+
+
+def _clone_args_with_output_dir(args: argparse.Namespace, *, output_dir: Path) -> argparse.Namespace:
+    scoped_args = argparse.Namespace(**vars(args))
+    scoped_args.output_dir = str(output_dir)
+    return scoped_args
+
+
+def _plot_pno_grid_artifacts(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    logger: Logger,
+    strategy: PnoStrategy,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    results: pd.DataFrame,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+) -> bool:
+    resolved_rows = _resolve_pno_artifact_rows(results)
+    shared_stage_ids = tuple(stage_id for stage_id in PNO_STAGE_SEQUENCE if stage_id != PNO_STAGE_5_TRADE)
+    shared_diagnostics_dir: Path | None = None
+    for index, (artifact_name, params_row) in enumerate(resolved_rows):
+        scoped_args = _clone_args_with_output_dir(
+            args,
+            output_dir=Path(config.backtest.results_dir) / "trade_plots" / artifact_name,
+        )
+        if index == 0:
+            if not _plot_for_strategy_dispatch(
+                config=config,
+                args=scoped_args,
+                logger=logger,
+                strategy_id="pno",
+                strategy=strategy,
+                symbol_frames=symbol_frames,
+                params_row=params_row,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                log_prefix=f"{log_prefix} [{artifact_name}]",
+            ):
+                return False
+            shared_diagnostics_dir = Path(scoped_args.output_dir) / "pno_diagnostics"
+            continue
+        if shared_diagnostics_dir is None:
+            return False
+        _plot_pno_diagnostics_with_shared_stage_reviews(
+            config=config,
+            args=scoped_args,
+            logger=logger,
+            strategy=strategy,
+            symbol_frames=symbol_frames,
+            params_row=params_row,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            log_prefix=f"{log_prefix} [{artifact_name}]",
+            shared_diagnostics_dir=shared_diagnostics_dir,
+            shared_stage_ids=shared_stage_ids,
+        )
+    return True
+
+
+def _export_pno_grid_artifacts_without_stage_charts(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    logger: Logger,
+    strategy: PnoStrategy,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    results: pd.DataFrame,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+) -> None:
+    for artifact_name, params_row in _resolve_pno_artifact_rows(results):
+        output_dir = Path(config.backtest.results_dir) / "trade_plots" / artifact_name
+        diagnostics_dir = output_dir / "pno_diagnostics"
+        export_result = _export_pno_diagnostics_context_for_symbols(
+            diagnostics_dir=diagnostics_dir,
+            args=_clone_args_with_output_dir(args, output_dir=output_dir),
+            logger=logger,
+            strategy=strategy,
+            symbol_frames=symbol_frames,
+            params_row=params_row,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            log_prefix=f"{log_prefix} [{artifact_name}]",
+        )
+        _render_pno_trade_charts_from_export_result(
+            diagnostics_dir=diagnostics_dir,
+            export_result=export_result,
+            logger=logger,
+            log_prefix=f"{log_prefix} [{artifact_name}]",
+        )
+
+
+def _sync_shared_stage_reviews(
+    *,
+    shared_diagnostics_dir: Path,
+    target_diagnostics_dir: Path,
+    shared_stage_ids: tuple[str, ...],
+) -> None:
+    shared_stage_reviews_dir = shared_diagnostics_dir / "stage_reviews"
+    target_stage_reviews_dir = target_diagnostics_dir / "stage_reviews"
+    target_stage_reviews_dir.mkdir(parents=True, exist_ok=True)
+    for stage_id in shared_stage_ids:
+        source_stage_dir = shared_stage_reviews_dir / stage_id
+        target_stage_dir = target_stage_reviews_dir / stage_id
+        if not source_stage_dir.exists():
+            continue
+        shutil.copytree(source_stage_dir, target_stage_dir, dirs_exist_ok=True)
+
+    shared_manifest = _read_csv_or_empty(shared_stage_reviews_dir / "manifest.csv")
+    target_manifest = _read_csv_or_empty(target_stage_reviews_dir / "manifest.csv")
+    shared_rows: list[dict[str, object]] = []
+    for _, row in shared_manifest.iterrows():
+        stage_id = str(row.get("stage_id") or "")
+        if stage_id not in shared_stage_ids:
+            continue
+        payload = row.to_dict()
+        payload["passed_events_path"] = str(target_stage_reviews_dir / stage_id / "passed" / "events.csv")
+        shared_rows.append(payload)
+    target_rows = [
+        row.to_dict()
+        for _, row in target_manifest.iterrows()
+        if str(row.get("stage_id") or "") not in shared_stage_ids
+    ]
+    pd.DataFrame([*shared_rows, *target_rows]).to_csv(target_stage_reviews_dir / "manifest.csv", index=False)
+
+
+def _plot_pno_diagnostics_with_shared_stage_reviews(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    logger: Logger,
+    strategy: PnoStrategy,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    params_row: pd.Series,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+    shared_diagnostics_dir: Path,
+    shared_stage_ids: tuple[str, ...],
+) -> None:
+    output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
+    diagnostics_dir = output_dir / "pno_diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    export_result = _export_pno_diagnostics_context_for_symbols(
+        diagnostics_dir=diagnostics_dir,
+        args=args,
+        logger=logger,
+        strategy=strategy,
+        symbol_frames=symbol_frames,
+        params_row=params_row,
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+        log_prefix=log_prefix,
+    )
+    total_charts_generated = _render_pno_trade_charts_from_export_result(
+        diagnostics_dir=diagnostics_dir,
+        export_result=export_result,
+        logger=logger,
+        log_prefix=log_prefix,
+    )
+    _export_pno_stage_reviews(
+        diagnostics_dir=diagnostics_dir,
+        symbol_frames=symbol_frames,
+        stage_rows_by_stage=cast(dict[str, list[dict[str, object]]], export_result["stage_rows_by_stage"]),
+        stage_rejections_by_stage=cast(
+            dict[str, dict[str, list[dict[str, object]]]],
+            export_result["stage_rejections_by_stage"],
+        ),
+        selected_stage_ids=(PNO_STAGE_5_TRADE,),
+        render_charts=True,
+        passed_chart_stage_ids=(PNO_STAGE_5_TRADE,),
+        logger=logger,
+        log_prefix=log_prefix,
+    )
+    _sync_shared_stage_reviews(
+        shared_diagnostics_dir=shared_diagnostics_dir,
+        target_diagnostics_dir=diagnostics_dir,
+        shared_stage_ids=shared_stage_ids,
+    )
+    logger.info(
+        "%s: pno diagnostics with shared stage-reviews saved trade_charts=%s shared_stages=%s",
+        log_prefix,
+        total_charts_generated,
+        ",".join(shared_stage_ids),
     )
 
 
@@ -432,6 +655,7 @@ def _build_pno_params_template_from_row(
             "pno_pullback_min_pump_fraction_5m",
             defaults.pullback_min_pump_fraction_5m,
         ),
+        pullback_valid_min_leg_fraction=_float_or_default("pno_pullback_valid_min_leg_fraction", defaults.pullback_valid_min_leg_fraction),
         pullback_valid_max_leg_fraction=_float_or_default("pno_pullback_valid_max_leg_fraction", defaults.pullback_valid_max_leg_fraction),
         pullback_invalid_max_leg_fraction=_float_or_default("pno_pullback_invalid_max_leg_fraction", defaults.pullback_invalid_max_leg_fraction),
         pullback_valid_max_v5=_float_or_default("pno_pullback_valid_max_v5", defaults.pullback_valid_max_v5),
@@ -556,6 +780,22 @@ def _build_pno_params_template_from_row(
             "pno_close_above_min_signal_volume_vs_recent",
             defaults.close_above_min_signal_volume_vs_recent,
         ),
+        close_above_min_signal_ema20_slope_3=_float_or_default(
+            "pno_close_above_min_signal_ema20_slope_3",
+            defaults.close_above_min_signal_ema20_slope_3,
+        ),
+        close_above_min_signal_ema_spread_pct=_float_or_default(
+            "pno_close_above_min_signal_ema_spread_pct",
+            defaults.close_above_min_signal_ema_spread_pct,
+        ),
+        close_above_min_signal_close_position_in_chop=_float_or_default(
+            "pno_close_above_min_signal_close_position_in_chop",
+            defaults.close_above_min_signal_close_position_in_chop,
+        ),
+        close_above_choppy_overlap_threshold=_float_or_default(
+            "pno_close_above_choppy_overlap_threshold",
+            defaults.close_above_choppy_overlap_threshold,
+        ),
         tp1_share=_float_or_default("pno_tp1_share", defaults.tp1_share),
         be_arm_to_active_high_fraction=_float_or_default(
             "pno_be_arm_to_active_high_fraction",
@@ -659,8 +899,146 @@ def _plot_pno_diagnostics_for_symbols(
     output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
     diagnostics_dir = output_dir / "pno_diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    export_result = _export_pno_diagnostics_context_for_symbols(
+        diagnostics_dir=diagnostics_dir,
+        args=args,
+        logger=logger,
+        strategy=strategy,
+        symbol_frames=symbol_frames,
+        params_row=params_row,
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+        log_prefix=log_prefix,
+    )
     charts_dir = diagnostics_dir / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
+    total_charts_generated = 0
+    chart_symbols_total = sum(1 for item in export_result["diagnostics_payloads"] if item["trade_rows"])
+    chart_symbols_done = 0
+    chart_render_start_time = time.monotonic()
+    for item in export_result["diagnostics_payloads"]:
+        symbol = str(item["symbol"])
+        trade_rows = list(item["trade_rows"])
+        if not trade_rows:
+            continue
+        chart_paths = _render_pno_trade_charts_for_symbol(
+            charts_dir=charts_dir,
+            symbol=symbol,
+            mtf_frames=item["mtf_frames"],
+            trade_rows=trade_rows,
+        )
+        total_charts_generated += len(chart_paths)
+        base_name = _pno_output_symbol_stem(symbol)
+        diagnostics_path = diagnostics_dir / f"{base_name}_diagnostics.json"
+        payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+        payload["chart_paths"] = chart_paths
+        diagnostics_path.write_text(_to_compact_json(payload), encoding="utf-8")
+        chart_symbols_done += 1
+        if chart_symbols_total > 0 and (chart_symbols_done == chart_symbols_total or chart_symbols_done % 10 == 0):
+            elapsed = max(time.monotonic() - chart_render_start_time, 1e-9)
+            rate = chart_symbols_done / elapsed
+            remaining = chart_symbols_total - chart_symbols_done
+            eta_seconds = remaining / rate if rate > 0.0 else None
+            logger.info(
+                "%s: pno trade charts %s/%s (%.1f%%) png=%s eta=%s",
+                log_prefix,
+                chart_symbols_done,
+                chart_symbols_total,
+                (chart_symbols_done / chart_symbols_total) * 100.0,
+                total_charts_generated,
+                _format_eta_compact(eta_seconds),
+            )
+
+    _export_pno_stage_reviews(
+        diagnostics_dir=diagnostics_dir,
+        symbol_frames=symbol_frames,
+        stage_rows_by_stage=cast(dict[str, list[dict[str, object]]], export_result["stage_rows_by_stage"]),
+        stage_rejections_by_stage=cast(
+            dict[str, dict[str, list[dict[str, object]]]],
+            export_result["stage_rejections_by_stage"],
+        ),
+        selected_stage_ids=cast(tuple[str, ...], export_result["selected_stage_ids"]),
+        render_charts=True,
+        passed_chart_stage_ids=cast(tuple[str, ...], export_result["passed_chart_stage_ids"]),
+        logger=logger,
+        log_prefix=log_prefix,
+    )
+
+    logger.info(
+        "%s: сохранена диагностика pno stage_symbols=%s stage_events=%s trades_generated=%s charts_generated=%s stages=%s output_dir=%s",
+        log_prefix,
+        export_result["symbols_with_stage_events"],
+        export_result["total_stage_events"],
+        export_result["total_trades_generated"],
+        total_charts_generated,
+        ",".join(cast(tuple[str, ...], export_result["selected_stage_ids"])),
+        diagnostics_dir,
+    )
+    if export_result["total_stage_events"] == 0 and export_result["symbols_with_trades"] == 0:
+        logger.warning("%s: не найдено событий pno и не сгенерировано сделок для визуализации", log_prefix)
+
+
+def _render_pno_trade_charts_from_export_result(
+    *,
+    diagnostics_dir: Path,
+    export_result: dict[str, object],
+    logger: Logger,
+    log_prefix: str,
+) -> int:
+    charts_dir = diagnostics_dir / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    total_charts_generated = 0
+    chart_symbols_total = sum(1 for item in export_result["diagnostics_payloads"] if item["trade_rows"])
+    chart_symbols_done = 0
+    chart_render_start_time = time.monotonic()
+    for item in export_result["diagnostics_payloads"]:
+        symbol = str(item["symbol"])
+        trade_rows = list(item["trade_rows"])
+        if not trade_rows:
+            continue
+        chart_paths = _render_pno_trade_charts_for_symbol(
+            charts_dir=charts_dir,
+            symbol=symbol,
+            mtf_frames=item["mtf_frames"],
+            trade_rows=trade_rows,
+        )
+        total_charts_generated += len(chart_paths)
+        base_name = _pno_output_symbol_stem(symbol)
+        diagnostics_path = diagnostics_dir / f"{base_name}_diagnostics.json"
+        payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
+        payload["chart_paths"] = chart_paths
+        diagnostics_path.write_text(_to_compact_json(payload), encoding="utf-8")
+        chart_symbols_done += 1
+        if chart_symbols_total > 0 and (chart_symbols_done == chart_symbols_total or chart_symbols_done % 10 == 0):
+            elapsed = max(time.monotonic() - chart_render_start_time, 1e-9)
+            rate = chart_symbols_done / elapsed
+            remaining = chart_symbols_total - chart_symbols_done
+            eta_seconds = remaining / rate if rate > 0.0 else None
+            logger.info(
+                "%s: pno trade charts %s/%s (%.1f%%) png=%s eta=%s",
+                log_prefix,
+                chart_symbols_done,
+                chart_symbols_total,
+                (chart_symbols_done / chart_symbols_total) * 100.0,
+                total_charts_generated,
+                _format_eta_compact(eta_seconds),
+            )
+    return total_charts_generated
+
+
+def _export_pno_diagnostics_context_for_symbols(
+    *,
+    diagnostics_dir: Path,
+    args: argparse.Namespace,
+    logger: Logger,
+    strategy: PnoStrategy,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    params_row: pd.Series,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+) -> dict[str, object]:
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
     selected_stage_ids = _resolve_pno_stage_ids(args)
     selected_stage_id_set = set(selected_stage_ids)
     passed_chart_stage_ids = tuple(stage_id for stage_id in selected_stage_ids if stage_id != PNO_STAGE_SEQUENCE[0])
@@ -669,18 +1047,13 @@ def _plot_pno_diagnostics_for_symbols(
     symbols_with_stage_events = 0
     total_trades_generated = 0
     total_stage_events = 0
-    total_charts_generated = 0
     all_trade_rows: list[dict[str, object]] = []
     diagnostics_payloads: list[dict[str, object]] = []
     total_symbols = len(symbol_frames)
-    symbol_render_start_time = time.monotonic()
-    stage_rows_by_stage: dict[str, list[dict[str, object]]] = {
-        stage_id: []
-        for stage_id in PNO_STAGE_SEQUENCE
-    }
+    symbol_export_start_time = time.monotonic()
+    stage_rows_by_stage: dict[str, list[dict[str, object]]] = {stage_id: [] for stage_id in PNO_STAGE_SEQUENCE}
     stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]] = {
-        stage_id: {}
-        for stage_id in PNO_STAGE_SEQUENCE
+        stage_id: {} for stage_id in PNO_STAGE_SEQUENCE
     }
 
     pno_params_template = _build_pno_params_template_from_row(
@@ -688,12 +1061,7 @@ def _plot_pno_diagnostics_for_symbols(
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
     )
-    logger.info(
-        "%s: pno plot export start symbols=%s stages=%s",
-        log_prefix,
-        total_symbols,
-        ",".join(selected_stage_ids),
-    )
+    logger.info("%s: pno diagnostics export start symbols=%s stages=%s", log_prefix, total_symbols, ",".join(selected_stage_ids))
     for symbol_index, (symbol, mtf_frames) in enumerate(symbol_frames.items(), start=1):
         params = replace(pno_params_template, symbol=symbol)
         trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
@@ -715,12 +1083,7 @@ def _plot_pno_diagnostics_for_symbols(
                     continue
                 if stage_id in selected_stage_id_set:
                     symbol_stage_events += 1
-                stage_rows_by_stage[stage_id].append(
-                    {
-                        "symbol": symbol,
-                        **raw_event,
-                    }
-                )
+                stage_rows_by_stage[stage_id].append({"symbol": symbol, **raw_event})
         total_stage_events += symbol_stage_events
         if symbol_stage_events > 0:
             symbols_with_stage_events += 1
@@ -737,12 +1100,7 @@ def _plot_pno_diagnostics_for_symbols(
                 if stage_id in selected_stage_id_set:
                     symbol_stage_rejections += 1
                 reason = str(raw_rejection.get("reason") or "unknown")
-                stage_rejections_by_stage[stage_id].setdefault(reason, []).append(
-                    {
-                        "symbol": symbol,
-                        **raw_rejection,
-                    }
-                )
+                stage_rejections_by_stage[stage_id].setdefault(reason, []).append({"symbol": symbol, **raw_rejection})
 
         if not trade_rows and symbol_stage_events == 0 and symbol_stage_rejections == 0:
             continue
@@ -762,35 +1120,28 @@ def _plot_pno_diagnostics_for_symbols(
             "diagnostics": diagnostics,
             "trades": trade_rows,
         }
-        (diagnostics_dir / f"{base_name}_diagnostics.json").write_text(
-            _to_compact_json(payload),
-            encoding="utf-8",
-        )
+        (diagnostics_dir / f"{base_name}_diagnostics.json").write_text(_to_compact_json(payload), encoding="utf-8")
         if trade_rows:
             pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
 
         if symbol_index == total_symbols or symbol_index % 25 == 0:
-            elapsed = max(time.monotonic() - symbol_render_start_time, 1e-9)
+            elapsed = max(time.monotonic() - symbol_export_start_time, 1e-9)
             rate = symbol_index / elapsed
             remaining = total_symbols - symbol_index
             eta_seconds = remaining / rate if rate > 0.0 else None
             logger.info(
-                "%s: pno plot export symbols %s/%s (%.1f%%) charts=%s stage_events=%s trades=%s eta=%s",
+                "%s: pno diagnostics export symbols %s/%s (%.1f%%) stage_events=%s trades=%s eta=%s",
                 log_prefix,
                 symbol_index,
                 total_symbols,
                 (symbol_index / max(total_symbols, 1)) * 100.0,
-                total_charts_generated,
                 total_stage_events,
                 total_trades_generated,
                 _format_eta_compact(eta_seconds),
             )
 
     research_export_start = time.monotonic()
-    logger.info(
-        "%s: pno research export dispatch start",
-        log_prefix,
-    )
+    logger.info("%s: pno research export dispatch start", log_prefix)
     _build_stage5_review_rejections_from_stage4(
         symbol_frames=symbol_frames,
         stage_rows_by_stage=stage_rows_by_stage,
@@ -827,72 +1178,18 @@ def _plot_pno_diagnostics_for_symbols(
         logger=logger,
         log_prefix=log_prefix,
     )
-    logger.info(
-        "%s: pno stage-review tables saved stages=%s",
-        log_prefix,
-        ",".join(selected_stage_ids),
-    )
-
-    chart_symbols_total = sum(1 for item in diagnostics_payloads if item["trade_rows"])
-    chart_symbols_done = 0
-    chart_render_start_time = time.monotonic()
-    for item in diagnostics_payloads:
-        symbol = str(item["symbol"])
-        trade_rows = list(item["trade_rows"])
-        if not trade_rows:
-            continue
-        chart_paths = _render_pno_trade_charts_for_symbol(
-            charts_dir=charts_dir,
-            symbol=symbol,
-            mtf_frames=item["mtf_frames"],
-            trade_rows=trade_rows,
-        )
-        total_charts_generated += len(chart_paths)
-        base_name = _pno_output_symbol_stem(symbol)
-        diagnostics_path = diagnostics_dir / f"{base_name}_diagnostics.json"
-        payload = json.loads(diagnostics_path.read_text(encoding="utf-8"))
-        payload["chart_paths"] = chart_paths
-        diagnostics_path.write_text(_to_compact_json(payload), encoding="utf-8")
-        chart_symbols_done += 1
-        if chart_symbols_total > 0 and (chart_symbols_done == chart_symbols_total or chart_symbols_done % 10 == 0):
-            elapsed = max(time.monotonic() - chart_render_start_time, 1e-9)
-            rate = chart_symbols_done / elapsed
-            remaining = chart_symbols_total - chart_symbols_done
-            eta_seconds = remaining / rate if rate > 0.0 else None
-            logger.info(
-                "%s: pno trade charts %s/%s (%.1f%%) png=%s eta=%s",
-                log_prefix,
-                chart_symbols_done,
-                chart_symbols_total,
-                (chart_symbols_done / chart_symbols_total) * 100.0,
-                total_charts_generated,
-                _format_eta_compact(eta_seconds),
-            )
-
-    _export_pno_stage_reviews(
-        diagnostics_dir=diagnostics_dir,
-        symbol_frames=symbol_frames,
-        stage_rows_by_stage=stage_rows_by_stage,
-        stage_rejections_by_stage=stage_rejections_by_stage,
-        selected_stage_ids=selected_stage_ids,
-        render_charts=True,
-        passed_chart_stage_ids=passed_chart_stage_ids,
-        logger=logger,
-        log_prefix=log_prefix,
-    )
-
-    logger.info(
-        "%s: сохранена диагностика pno stage_symbols=%s stage_events=%s trades_generated=%s charts_generated=%s stages=%s output_dir=%s",
-        log_prefix,
-        symbols_with_stage_events,
-        total_stage_events,
-        total_trades_generated,
-        total_charts_generated,
-        ",".join(selected_stage_ids),
-        diagnostics_dir,
-    )
-    if total_stage_events == 0 and symbols_with_trades == 0:
-        logger.warning("%s: не найдено событий pno и не сгенерировано сделок для визуализации", log_prefix)
+    logger.info("%s: pno stage-review tables saved stages=%s", log_prefix, ",".join(selected_stage_ids))
+    return {
+        "diagnostics_payloads": diagnostics_payloads,
+        "stage_rows_by_stage": stage_rows_by_stage,
+        "stage_rejections_by_stage": stage_rejections_by_stage,
+        "selected_stage_ids": selected_stage_ids,
+        "passed_chart_stage_ids": passed_chart_stage_ids,
+        "symbols_with_trades": symbols_with_trades,
+        "symbols_with_stage_events": symbols_with_stage_events,
+        "total_trades_generated": total_trades_generated,
+        "total_stage_events": total_stage_events,
+    }
 
 
 def _plot_for_strategy_dispatch(
@@ -1828,7 +2125,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     run_root_dir = Path(run_root_dir_raw) if run_root_dir_raw is not None else None
     if run_root_dir is not None:
         logger.info(
-            "Ð·Ð°Ð¿ÑƒÑÐº-Ð±ÑÐºÑ‚ÐµÑÑ‚Ð°: output_root=%s strategy_output=%s",
+            "run-backtest: output_root=%s strategy_output=%s",
             run_root_dir,
             config.backtest.results_dir,
         )
@@ -1838,6 +2135,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         config.strategy.pno_risk_pct = float(args.pno_risk_pct)
     if getattr(args, "pno_entry_confirmation_mode", None) is not None:
         config.strategy.pno_entry_confirmation_mode = str(args.pno_entry_confirmation_mode)
+    if getattr(args, "pno_category_mode", None) is not None:
+        config.strategy.pno_category_mode = str(args.pno_category_mode)
     levels_timeframe, entry_timeframe = _resolve_backtest_timeframes(
         strategy_id=strategy_id,
         args=args,
@@ -2131,6 +2430,26 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             logger.warning("запуск-бэктеста: plot=true, но результаты пустые")
             return 0
 
+        if strategy_id == "pno" and isinstance(strategy, PnoStrategy):
+            if run_root_dir is not None:
+                _write_backtest_plot_request(
+                    run_root_dir,
+                    selected_row_number=_resolve_results_row_number(results, results.iloc[0]),
+                )
+            if not _plot_pno_grid_artifacts(
+                config=config,
+                args=args,
+                logger=logger,
+                strategy=strategy,
+                symbol_frames=symbol_frames,
+                results=results,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                log_prefix="запуск-бэктеста: plot=true",
+            ):
+                return 1
+            return 0
+
         if strategy_id == "pno" and (
             getattr(args, "pno_stage", None) is not None or getattr(args, "pno_through_stage", None) is not None
         ):
@@ -2166,6 +2485,18 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             log_prefix="запуск-бэктеста: plot=true",
         ):
             return 1
+    elif strategy_id == "pno" and not results.empty and isinstance(strategy, PnoStrategy):
+        _export_pno_grid_artifacts_without_stage_charts(
+            config=config,
+            args=args,
+            logger=logger,
+            strategy=strategy,
+            symbol_frames=symbol_frames,
+            results=results,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            log_prefix="run-backtest: plot=false",
+        )
     return 0
 
 

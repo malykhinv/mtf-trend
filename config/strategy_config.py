@@ -17,3 +17,4 @@ class StrategyConfig:
     pno_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
     pno_risk_pct: float = 0.05
     pno_entry_confirmation_mode: str | None = None
+    pno_category_mode: str = "all"

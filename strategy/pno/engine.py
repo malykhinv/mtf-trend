@@ -201,6 +201,8 @@ class Stage3Context:
     post_high_wick_share: float = 0.0
     post_high_body_overlap_rate: float = 0.0
     post_high_max_red_body_share: float = 0.0
+    pullback_wick_broke_leg_start: bool = False
+    pullback_close_broke_leg_start: bool = False
 
 
 @dataclass(slots=True)
@@ -262,6 +264,7 @@ class Stage4Context:
     dominant_overhead_red_timestamp: int | None = None
     dominant_overhead_red_high: float | None = None
     dominant_overhead_red_body: float = 0.0
+    level_life_ema_spread_growth_share: float = 0.0
 
 
 @dataclass(slots=True)
@@ -1468,9 +1471,11 @@ class PnoEngine:
                     active_pump_start_idx = -1
                     i = max(i + 1, exit_idx + 1)
                     continue
-                stop_broken_before_entry = float(one.lows[i]) <= (float(live_armed.stage4.low_last_red_plan) + self._EPSILON)
-                pullback_broken_before_entry = float(one.lows[i]) <= (float(live_armed.stage3.pullback_low) + self._EPSILON)
-                if stop_broken_before_entry or pullback_broken_before_entry:
+                if self._is_armed_entry_invalidated_before_trigger(
+                    one=one,
+                    idx=i,
+                    armed=live_armed,
+                ):
                     _reject_stage(
                         PNO_STAGE_5_TRADE,
                         key=(armed.stage4.active_high_idx, armed.stage4.cluster_first_idx, armed.stage4.cluster_last_idx, armed.entry_idx),
@@ -1546,7 +1551,19 @@ class PnoEngine:
                 i += 1
                 continue
 
-            if not bool(five.inplay[five_idx]):
+            allow_pullback_search_after_inplay_end = (
+                stage1 is not None
+                and stage2 is None
+                and stage3 is None
+                and self._allows_pullback_search_after_inplay_end(
+                    one=one,
+                    five=five,
+                    idx=i,
+                    five_idx=five_idx,
+                    stage1=stage1,
+                )
+            )
+            if not bool(five.inplay[five_idx]) and not allow_pullback_search_after_inplay_end:
                 prev_stage1 = stage1
                 prev_stage2 = stage2
                 prev_stage3 = stage3
@@ -1967,6 +1984,7 @@ class PnoEngine:
                             "level_first_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_first_idx]),
                             "level_last_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_last_idx]),
                             "level_valid_timestamp_ms": int(armed.stage4.level_valid_timestamp),
+                            "level_life_ema_spread_growth_share": round(float(armed.stage4.level_life_ema_spread_growth_share), 4),
                             "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "cross")),
                             "entry_signal_timestamp_ms": int(one.timestamps[min(i, len(one.timestamps) - 1)]),
                             "entry_plan": round(float(armed.stage4.entry_plan), 8),
@@ -2010,16 +2028,16 @@ class PnoEngine:
             if stage_keys.get(PNO_STAGE_4_LEVEL) != cycle_key:
                 current_pno_index += 1
                 next_stage4 = replace(next_stage4, pno_index=current_pno_index)
-                next_stage4 = self._rebuild_stage4_scores(
-                    one=one,
-                    five=five,
-                    idx=i,
-                    five_idx=five_idx,
-                    stage1=stage1,
-                    stage3=stage3,
-                    stage4=next_stage4,
-                    params=params,
-                )
+            next_stage4 = self._rebuild_stage4_scores(
+                one=one,
+                five=five,
+                idx=i,
+                five_idx=five_idx,
+                stage1=stage1,
+                stage3=stage3,
+                stage4=next_stage4,
+                params=params,
+            )
 
             if next_stage4.hard_block:
                 diagnostics["blocked_cycles"] = int(diagnostics.get("blocked_cycles", 0)) + 1
@@ -2052,6 +2070,7 @@ class PnoEngine:
                         "level_first_local_high_timestamp_ms": int(one.timestamps[next_stage4.cluster_first_idx]),
                         "level_last_local_high_timestamp_ms": int(one.timestamps[next_stage4.cluster_last_idx]),
                         "level_valid_timestamp_ms": int(next_stage4.level_valid_timestamp),
+                        "level_life_ema_spread_growth_share": round(float(next_stage4.level_life_ema_spread_growth_share), 4),
                         "stage1_hold_price": round(float(stage1.stage1_hold_price), 8),
                         "hold_floor": round(float(stage1.hold_floor), 8),
                         "hold_status_at_level_search": str(stage1.hold_status_at_validation),
@@ -2105,13 +2124,52 @@ class PnoEngine:
                     "level_first_local_high_timestamp_ms": int(one.timestamps[stage4.cluster_first_idx]),
                     "level_last_local_high_timestamp_ms": int(one.timestamps[stage4.cluster_last_idx]),
                     "level_valid_timestamp_ms": int(stage4.level_valid_timestamp),
+                    "level_life_ema_spread_growth_share": round(float(stage4.level_life_ema_spread_growth_share), 4),
                     "stage1_hold_price": round(float(stage1.stage1_hold_price), 8),
                     "hold_floor": round(float(stage1.hold_floor), 8),
                     "hold_status_at_level_search": str(stage1.hold_status_at_validation),
                 },
             )
             if stage4.is_valid_setup and i + 1 < len(one.timestamps):
-                armed = ArmedContext(entry_idx=i + 1, stage1=stage1, stage3=stage3, stage4=stage4)
+                confirmation_mode = str(getattr(params, "entry_confirmation_mode", "cross"))
+                arm_entry_idx = i if confirmation_mode == "close_above" else i + 1
+                armed = ArmedContext(entry_idx=arm_entry_idx, stage1=stage1, stage3=stage3, stage4=stage4)
+                if confirmation_mode == "close_above":
+                    trade, exit_idx = self._try_enter_and_simulate(one=one, params=params, armed=armed)
+                    if trade is not None:
+                        trades.append(trade)
+                        retired_clusters.append(
+                            RetiredCluster(
+                                active_high_idx=armed.stage4.active_high_idx,
+                                cluster_first_idx=armed.stage4.cluster_first_idx,
+                                cluster_last_idx=armed.stage4.cluster_last_idx,
+                                level=float(armed.stage4.level),
+                                pullback_low_idx=armed.stage3.pullback_low_idx,
+                                pullback_low=float(armed.stage3.pullback_low),
+                            )
+                        )
+                        self._mark_stage(
+                            diagnostics,
+                            stage_keys,
+                            PNO_STAGE_5_TRADE,
+                            key=(trade.entry_timestamp_ms, trade.exit_timestamp_ms),
+                            timestamp_ms=int(trade.entry_timestamp_ms),
+                            extra={
+                                "entry_price": round(float(trade.entry_price.value), 8),
+                                "exit_price": round(float(trade.exit_price.value), 8),
+                                "result_type": trade.result_type.value,
+                                "score": float(trade.metadata.get("final_score", armed.stage4.final_score)),
+                            },
+                        )
+                        stage1 = None
+                        stage2 = None
+                        stage3 = None
+                        stage4 = None
+                        armed = None
+                        blocked_active_high_idx = None
+                        active_pump_start_idx = -1
+                        i = max(i + 1, exit_idx + 1)
+                        continue
 
             i += 1
         return trades
@@ -2131,12 +2189,132 @@ class PnoEngine:
         level_age = max(current_idx - cluster_first_idx, 0)
         return max(min(level_age / total_age, 1.0), 0.0)
 
+    def _resolve_required_level_maturity_fraction(
+        self,
+        *,
+        one: OneMinuteFrame,
+        idx: int,
+        stage3: Stage3Context,
+        cluster_first_idx: int,
+        cluster_indices: tuple[int, ...],
+        level: float,
+        params: PnoParams,
+    ) -> float:
+        required = float(params.level_min_maturity_fraction)
+        if len(cluster_indices) != 1:
+            return required
+        high_price = float(one.highs[idx])
+        low_price = float(one.lows[idx])
+        close_price = float(one.closes[idx])
+        tolerance = max(float(params.level_touch_tolerance_v1) * max(float(one.v1[idx]), self._EPSILON), self._EPSILON)
+        reclaimed_above_level = high_price >= (level - self._EPSILON) and close_price > (level + self._EPSILON)
+        held_near_level = low_price >= (level - tolerance)
+        if reclaimed_above_level and held_near_level:
+            return min(required, 0.05)
+        return required
+
+    def _has_stale_reclaim_above_level(
+        self,
+        *,
+        one: OneMinuteFrame,
+        idx: int,
+        stage4: Stage4Context,
+        params: PnoParams,
+    ) -> bool:
+        if len(stage4.cluster_indices) != 1:
+            return False
+        if float(stage4.entry_pos) <= 0.60:
+            return False
+        if (idx - int(stage4.level_valid_idx)) < 3:
+            return False
+        tolerance = max(float(params.level_touch_tolerance_v1) * max(float(one.v1[idx]), self._EPSILON), self._EPSILON)
+        body_clearance = max(tolerance * 0.5, float(stage4.pullback_depth) * 0.12)
+        bars_fully_above = 0
+        start_idx = max(stage4.cluster_first_idx + 1, idx - 4)
+        for bar_idx in range(start_idx, idx + 1):
+            open_price = float(one.opens[bar_idx])
+            close_price = float(one.closes[bar_idx])
+            low_price = float(one.lows[bar_idx])
+            body_low = min(open_price, close_price)
+            if body_low > (float(stage4.level) + body_clearance) and low_price > (float(stage4.level) + self._EPSILON):
+                bars_fully_above += 1
+        return bars_fully_above >= 3
+
+    def _has_deep_stale_break_below_pullback_after_level(
+        self,
+        *,
+        one: OneMinuteFrame,
+        idx: int,
+        stage3: Stage3Context,
+        stage4: Stage4Context,
+    ) -> bool:
+        if idx <= stage4.level_valid_idx:
+            return False
+        bars_since_level = idx - stage4.level_valid_idx
+        if bars_since_level < 3:
+            return False
+        deep_break_threshold = float(stage3.pullback_low) - (0.25 * max(float(stage3.pullback_depth), self._EPSILON))
+        closes = one.closes[stage4.level_valid_idx + 1 : idx + 1]
+        if closes.size < 3:
+            return False
+        consecutive_bars = 0
+        for close_price in closes:
+            if float(close_price) < (deep_break_threshold - self._EPSILON):
+                consecutive_bars += 1
+                if consecutive_bars >= 3:
+                    return True
+            else:
+                consecutive_bars = 0
+        return False
+
     @staticmethod
     def _resolve_entry_pullback_fraction(*, pullback_low: float, active_high: float, entry_price: float) -> float:
         span = active_high - pullback_low
         if span <= 0.0:
             return 1.0
         return max(min((entry_price - pullback_low) / span, 1.0), 0.0)
+
+    def _resolve_level_life_ema_spread_growth_share(
+        self,
+        *,
+        one: OneMinuteFrame,
+        stage4: Stage4Context,
+        idx: int,
+    ) -> float:
+        start_idx = max(int(stage4.cluster_first_idx), 0)
+        end_idx = max(int(idx), start_idx)
+        closes = one.closes[start_idx : end_idx + 1]
+        ema9_series = one.frame["ema9"] if "ema9" in one.frame.columns else None
+        ema20_series = one.frame["ema20"] if "ema20" in one.frame.columns else None
+        if ema9_series is None or ema20_series is None:
+            closes_series = pd.Series(one.closes[: end_idx + 1], dtype="float64")
+            if ema9_series is None:
+                ema9_series = closes_series.ewm(span=9, adjust=False).mean()
+            if ema20_series is None:
+                ema20_series = closes_series.ewm(span=20, adjust=False).mean()
+        ema9 = np.asarray(ema9_series.iloc[start_idx : end_idx + 1], dtype=np.float64)
+        ema20 = np.asarray(ema20_series.iloc[start_idx : end_idx + 1], dtype=np.float64)
+        valid_spreads: list[float] = []
+        for close_price, ema9_value, ema20_value in zip(closes, ema9, ema20):
+            close_float = float(close_price)
+            ema9_float = float(ema9_value)
+            ema20_float = float(ema20_value)
+            if (
+                not np.isfinite(close_float)
+                or not np.isfinite(ema9_float)
+                or not np.isfinite(ema20_float)
+                or close_float <= self._EPSILON
+                or ema9_float <= ema20_float
+            ):
+                continue
+            valid_spreads.append(((ema9_float - ema20_float) / close_float) * 100.0)
+        if len(valid_spreads) <= 1:
+            return 0.0
+        non_decreasing_steps = 0
+        for previous_spread, current_spread in zip(valid_spreads[:-1], valid_spreads[1:]):
+            if current_spread >= (previous_spread - 1e-9):
+                non_decreasing_steps += 1
+        return self._safe_divide(float(non_decreasing_steps), float(len(valid_spreads) - 1))
 
     def _resolve_stage1_quality_metrics(
         self,
@@ -2167,6 +2345,31 @@ class PnoEngine:
         active_high_5m_idx = int(np.searchsorted(five.timestamps, active_high_timestamp, side="right") - 1)
         if active_high_5m_idx < pump_start_5m_idx:
             return None, None
+        one_pump_frame = one.frame.iloc[start_idx : active_high_idx + 1]
+        # Zero-body 1m candles (open == close) are common as doji/noise even in good pumps.
+        # We reject only when they are frequent or form a streak (typical for illiquid "frozen" tape).
+        one_pump_opens = one_pump_frame["open"].to_numpy(dtype="float64")
+        one_pump_closes = one_pump_frame["close"].to_numpy(dtype="float64")
+        zero_body_mask = np.isclose(one_pump_closes, one_pump_opens, rtol=0.0, atol=self._EPSILON)
+        zero_body_bar_count_1m = int(np.sum(zero_body_mask))
+        zero_body_share_1m = float(zero_body_bar_count_1m / max(1, len(zero_body_mask)))
+        max_zero_body_streak_1m = 0
+        if zero_body_bar_count_1m > 0:
+            cur = 0
+            for is_zero in zero_body_mask.tolist():
+                if is_zero:
+                    cur += 1
+                    if cur > max_zero_body_streak_1m:
+                        max_zero_body_streak_1m = cur
+                else:
+                    cur = 0
+        if (max_zero_body_streak_1m >= 3) or (zero_body_bar_count_1m >= 3 and zero_body_share_1m >= 0.15):
+            return _reject(
+                "zero_body_bar_present_1m",
+                zero_body_bar_count_1m=zero_body_bar_count_1m,
+                zero_body_share_1m=zero_body_share_1m,
+                max_zero_body_streak_1m=max_zero_body_streak_1m,
+            )
         reference_high, reference_high_weight = self._resolve_reference_high(
             five=five,
             pump_start_idx=pump_start_5m_idx,
@@ -2553,7 +2756,20 @@ class PnoEngine:
             hold_reference_high - (float(params.stage1_hold_fraction) * hold_leg_size),
         )
         hold_reject_price = min(hold_floor, stage1_hold_price)
-        if float(one.closes[idx]) <= hold_reject_price:
+        stage1_hold_close_tolerance = self._resolve_stage1_hold_close_tolerance(
+            active_high=active_high,
+            stage1_hold_price=float(stage1_hold_price),
+            leg_size=hold_leg_size,
+            reference_leg_size=reference_leg_size,
+        )
+        hold_close_grace = max(
+            abs(float(stage1_hold_price) - active_high) * 1.5,
+            hold_leg_size * 0.04,
+            stage1_hold_close_tolerance,
+            active_high * float(params.min_tick_fraction) * 4.0,
+            self._EPSILON,
+        )
+        if float(one.closes[idx]) <= (hold_reject_price - hold_close_grace):
             return (
                 None,
                 {
@@ -2564,6 +2780,7 @@ class PnoEngine:
                         **rejection_extra_base,
                         "hold_floor": round(hold_floor, 8),
                         "hold_reject_price": round(hold_reject_price, 8),
+                        "hold_close_grace": round(hold_close_grace, 8),
                         "current_close": round(float(one.closes[idx]), 8),
                         "reference_high": round(reference_high, 8),
                     },
@@ -2725,14 +2942,24 @@ class PnoEngine:
         depth_reference = max(stage1.reference_leg_size, stage1.pump_range_5m, self._EPSILON)
         if stage2.pullback_depth > (params.pullback_invalid_max_leg_fraction * depth_reference):
             return None, "pullback_too_deep_vs_leg"
+        depth_frac = self._safe_divide(stage2.pullback_depth, depth_reference)
+        close_broke_leg_start = bool(
+            np.any(
+                one.closes[stage2.pullback_start_idx : idx + 1]
+                < (stage1.leg_start - self._EPSILON)
+            )
+        )
+        wick_broke_leg_start = bool(stage2.pullback_low <= (stage1.leg_start + self._EPSILON))
         valid = (
             stage2.pullback_depth >= (params.pullback_min_v1 * five.v5[five_idx])
+            and depth_frac >= float(params.pullback_valid_min_leg_fraction)
             and stage2.pullback_depth <= (params.pullback_valid_max_leg_fraction * depth_reference)
-            and stage2.pullback_low > stage1.leg_start
+            and not close_broke_leg_start
         )
         if not valid:
             return None, None
         post_high_window = slice(active_high_5m_idx + 1, five_idx + 1)
+        post_high_one_window = slice(stage1.active_high_idx + 1, idx + 1)
         post_high_opens = five.opens[post_high_window]
         post_high_highs = five.highs[post_high_window]
         post_high_lows = five.lows[post_high_window]
@@ -2743,6 +2970,23 @@ class PnoEngine:
         post_high_wick_share = 0.0
         post_high_body_overlap_rate = 0.0
         post_high_max_red_body_share = 0.0
+        post_high_chop_alternation_rate = 0.0
+        post_high_chop_path_efficiency = 1.0
+        if idx > stage1.active_high_idx:
+            post_high_one_opens = one.opens[post_high_one_window]
+            post_high_one_highs = one.highs[post_high_one_window]
+            post_high_one_lows = one.lows[post_high_one_window]
+            post_high_one_closes = one.closes[post_high_one_window]
+            if post_high_one_opens.size >= 4:
+                post_high_one_green = post_high_one_closes >= post_high_one_opens
+                post_high_chop_alternation_rate = float(
+                    np.mean(post_high_one_green[1:] != post_high_one_green[:-1])
+                )
+                one_total_range = float(np.sum(np.maximum(post_high_one_highs - post_high_one_lows, self._EPSILON)))
+                post_high_chop_path_efficiency = self._safe_divide(
+                    abs(float(post_high_one_closes[-1]) - float(post_high_one_opens[0])),
+                    one_total_range,
+                )
         if post_high_opens.size > 0:
             post_high_ema20_pierce_count = int(
                 np.sum(post_high_lows <= (post_high_ema20 + self._EPSILON))
@@ -2750,10 +2994,6 @@ class PnoEngine:
             post_high_close_below_ema20_count = int(
                 np.sum(post_high_closes < (post_high_ema20 - self._EPSILON))
             )
-            # One isolated close below EMA20 can happen inside a still-usable pullback.
-            # We treat repeated closes below EMA20 as the clearer structural failure.
-            if post_high_close_below_ema20_count > 1:
-                return None, "post_high_closed_below_ema20"
             post_high_range = np.maximum(post_high_highs - post_high_lows, self._EPSILON)
             upper_wicks = post_high_highs - np.maximum(post_high_opens, post_high_closes)
             lower_wicks = np.minimum(post_high_opens, post_high_closes) - post_high_lows
@@ -2769,10 +3009,55 @@ class PnoEngine:
                 overlaps = (body_lows[1:] <= body_highs[:-1]) & (body_highs[1:] >= body_lows[:-1])
                 post_high_body_overlap_rate = float(np.mean(overlaps))
             if (
+                post_high_close_below_ema20_count > 2
+                or (
+                    post_high_close_below_ema20_count > 1
+                    and post_high_body_overlap_rate
+                    > max(float(params.stage3_max_post_high_body_overlap_rate), 0.72)
+                )
+            ):
+                return None, "post_high_closed_below_ema20"
+            completed_post_high_five = five.volumes[active_high_5m_idx + 1 : five_idx]
+            post_high_peak_volume_support_fraction = 0.0
+            if completed_post_high_five.size > 0:
+                active_high_volume = float(five.volumes[active_high_5m_idx])
+                post_high_peak_volume = float(np.max(completed_post_high_five))
+                post_high_peak_volume_support_fraction = self._safe_divide(
+                    post_high_peak_volume,
+                    active_high_volume,
+                )
+            noisy_follow_through_exception = (
+                post_high_close_below_ema20_count == 0
+                and post_high_chop_path_efficiency >= max(float(params.stage3_max_post_high_chop_path_efficiency) * 0.67, 0.12)
+                and post_high_max_red_body_share <= 0.42
+                and (
+                    post_high_peak_volume_support_fraction >= 0.25
+                    or stage2.pullback_age_bars <= 2
+                )
+            )
+            if (
                 post_high_wick_share > float(params.stage3_max_post_high_wick_share)
                 and post_high_body_overlap_rate > float(params.stage3_max_post_high_body_overlap_rate)
+                and not noisy_follow_through_exception
             ):
                 return None, "post_high_too_noisy"
+            if (
+                completed_post_high_five.size > 0
+                and post_high_peak_volume_support_fraction < float(params.stage3_min_post_high_5m_volume_support_fraction)
+            ):
+                return None, "post_high_no_supporting_5m_volume"
+            chop_walk_has_support = (
+                post_high_peak_volume_support_fraction
+                >= max(float(params.stage3_min_post_high_5m_volume_support_fraction), 0.70)
+            )
+            if (
+                (idx - stage1.active_high_idx) >= 8
+                and post_high_body_overlap_rate >= 0.88
+                and post_high_chop_alternation_rate >= float(params.stage3_max_post_high_chop_alternation_rate)
+                and post_high_chop_path_efficiency <= float(params.stage3_max_post_high_chop_path_efficiency)
+                and not (chop_walk_has_support and stage2.pullback_age_bars <= 3)
+            ):
+                return None, "post_high_chop_walk"
         return (
             Stage3Context(
                 active_high_idx=stage2.active_high_idx,
@@ -2790,6 +3075,8 @@ class PnoEngine:
                 post_high_wick_share=post_high_wick_share,
                 post_high_body_overlap_rate=post_high_body_overlap_rate,
                 post_high_max_red_body_share=post_high_max_red_body_share,
+                pullback_wick_broke_leg_start=wick_broke_leg_start,
+                pullback_close_broke_leg_start=close_broke_leg_start,
             ),
             None,
         )
@@ -2874,7 +3161,16 @@ class PnoEngine:
                 cluster_first_idx=previous.cluster_first_idx,
                 current_idx=idx,
             )
-            if level_maturity_fraction < float(params.level_min_maturity_fraction):
+            required_maturity_fraction = self._resolve_required_level_maturity_fraction(
+                one=one,
+                idx=idx,
+                stage3=stage3,
+                cluster_first_idx=previous.cluster_first_idx,
+                cluster_indices=previous.cluster_indices,
+                level=float(previous.level),
+                params=params,
+            )
+            if level_maturity_fraction < required_maturity_fraction:
                 return None
 
             return Stage4Context(
@@ -2962,7 +3258,16 @@ class PnoEngine:
             cluster_first_idx=int(cluster_indices[0]),
             current_idx=idx,
         )
-        if level_maturity_fraction < float(params.level_min_maturity_fraction):
+        required_maturity_fraction = self._resolve_required_level_maturity_fraction(
+            one=one,
+            idx=idx,
+            stage3=stage3,
+            cluster_first_idx=int(cluster_indices[0]),
+            cluster_indices=cluster_indices,
+            level=level,
+            params=params,
+        )
+        if level_maturity_fraction < required_maturity_fraction:
             return None
 
         hard_block = len(touch_indices) > int(params.max_level_touches)
@@ -3036,10 +3341,34 @@ class PnoEngine:
             active_high=float(stage3.active_high),
             entry_price=entry_plan,
         )
-        low_last_red_plan = self._resolve_low_last_red_plan(one=one, stage1=stage1, stage3=stage3, idx=idx)
-        sl_plan = min(low_last_red_plan, stage3.pullback_low)
+        low_last_red_plan = self._resolve_low_last_red_plan(
+            one=one,
+            stage1=stage1,
+            stage3=stage3,
+            stage4=stage4,
+            idx=idx,
+            confirmation_mode=str(getattr(params, "entry_confirmation_mode", "cross")),
+        )
+        # Keep planned risk anchored to the actionable reclaim extremum.
+        sl_plan = low_last_red_plan
         tp1 = float(stage3.active_high)
-        tp2 = self._resolve_tp2(active_high=tp1, v1=v1_now)
+        current_reference_high = float(
+            max(
+                tp1,
+                float(np.max(one.highs[max(stage1.active_high_idx, 0) : idx + 1])),
+            )
+        )
+        tp2 = self._resolve_tp2(
+            active_high=tp1,
+            current_reference_high=current_reference_high,
+            pullback_height=float(stage3.pullback_depth),
+            v1=v1_now,
+        )
+        level_life_ema_spread_growth_share = self._resolve_level_life_ema_spread_growth_share(
+            one=one,
+            stage4=stage4,
+            idx=idx,
+        )
 
         activity_ratio = max(
             self._safe_divide(float(five.r3_quote[five_idx]), float(five.b24_quote[five_idx])),
@@ -3080,10 +3409,12 @@ class PnoEngine:
         else:
             score_b_leg = 0
         depth_frac = self._safe_divide(stage3.pullback_depth, depth_reference)
-        if 0.12 <= depth_frac <= 0.30:
+        if 0.30 <= depth_frac <= 0.75:
             score_b_depth = 10
+        elif 0.20 <= depth_frac < 0.30 or 0.75 < depth_frac <= 1.0:
+            score_b_depth = 7
         elif depth_frac <= float(params.pullback_valid_max_leg_fraction):
-            score_b_depth = 8
+            score_b_depth = 3
         elif depth_frac <= float(params.pullback_invalid_max_leg_fraction):
             score_b_depth = 4
         else:
@@ -3167,8 +3498,27 @@ class PnoEngine:
             overhead_score=float(overhead_profile.get("score") or 0.0),
             red_count=int(overhead_profile.get("red_count") or 0),
         )
+        overhead_score = float(overhead_profile.get("score") or 0.0)
+        overhead_red_count = int(overhead_profile.get("red_count") or 0)
+        current_timestamp_ms = int(one.timestamps[idx])
+        active_high_to_signal_minutes = max((current_timestamp_ms - int(stage3.active_high_timestamp)) / 60_000.0, 0.0)
+        fresh_overhead_exception = (
+            active_high_to_signal_minutes <= 12.0
+            and stage4.touches <= 3
+            and entry_pos <= 0.75
+            and overhead_score <= 1.10
+            and overhead_red_count <= 7
+        )
+        freshness_adj = self._resolve_setup_freshness_adjustment(
+            current_timestamp_ms=current_timestamp_ms,
+            pump_start_timestamp_ms=int(stage1.pump_start_timestamp),
+            active_high_timestamp_ms=int(stage3.active_high_timestamp),
+            level_valid_timestamp_ms=int(stage4.level_valid_timestamp),
+        )
+        impulse_quality_adj = self._resolve_impulse_quality_adjustment(stage1=stage1)
         pno_order_adj = self._resolve_pno_order_adj(stage4.pno_index)
         maturity_penalty = self._resolve_maturity_penalty(stage1=stage1, pno_index=stage4.pno_index)
+        leg_start_wick_break_penalty = 8 if stage3.pullback_wick_broke_leg_start else 0
         final_score = float(
             score_a
             + score_b
@@ -3178,11 +3528,14 @@ class PnoEngine:
             + score_tp2
             + compact_geometry_adj
             + overhead_quality_adj
+            + freshness_adj
+            + impulse_quality_adj
             + pno_order_adj
             + penalty_untested_highs
             + int(overhead_profile.get("penalty") or 0)
             - stage4.penalty_level_low_break
             - maturity_penalty
+            - leg_start_wick_break_penalty
         )
 
         hard_block_reason = stage4.hard_block_reason
@@ -3193,18 +3546,62 @@ class PnoEngine:
         elif stage4.touches > int(params.max_level_touches):
             hard_block = True
             hard_block_reason = "too_many_touches"
-        elif float(five.closes[five_idx]) <= float(five.ema20[five_idx]):
+        elif self._has_deep_stale_break_below_pullback_after_level(
+            one=one,
+            idx=idx,
+            stage3=stage3,
+            stage4=stage4,
+        ):
+            hard_block = True
+            hard_block_reason = "traded_too_far_below_pullback_after_level"
+        elif float(five.closes[five_idx]) <= (
+            float(five.ema20[five_idx])
+            - max((0.15 * v5_now), (float(five.closes[five_idx]) * 0.0005), self._EPSILON)
+        ):
             hard_block = True
             hard_block_reason = "close_below_ema20"
-        elif stage3.pullback_low <= (stage1.leg_start + self._EPSILON):
+        elif stage3.pullback_close_broke_leg_start:
             hard_block = True
-            hard_block_reason = "pullback_below_leg_start"
+            hard_block_reason = "pullback_closed_below_leg_start"
         elif stage3.pullback_depth > (float(params.pullback_invalid_max_leg_fraction) * depth_reference):
             hard_block = True
             hard_block_reason = "pullback_too_deep_vs_leg"
         elif stage4.level_maturity_fraction < float(params.level_min_maturity_fraction):
             hard_block = True
             hard_block_reason = "level_not_mature_enough"
+        elif entry_pos > float(params.close_above_max_entry_pos):
+            hard_block = True
+            hard_block_reason = "entry_pos_too_high"
+        elif (
+            stage4.level_maturity_fraction >= 0.90
+            and stage4.touches >= 5
+            and entry_pos >= 0.78
+            and level_life_ema_spread_growth_share < 0.20
+        ):
+            hard_block = True
+            hard_block_reason = "level_too_stale"
+        elif self._has_stale_reclaim_above_level(one=one, idx=idx, stage4=stage4, params=params):
+            hard_block = True
+            hard_block_reason = "level_already_reclaimed_too_far"
+        elif (
+            stage1.pre_pump_ema_crosses_1h >= 5
+            and stage1.pre_pump_barcode_fraction_1h >= 0.50
+            and (
+                stage1.pump_counterflow_ratio_5m >= 0.08
+                or stage1.pump_path_efficiency < 0.24
+            )
+        ):
+            hard_block = True
+            hard_block_reason = "precursor_too_choppy"
+        elif active_high_to_signal_minutes > 90.0 and overhead_score >= 0.58:
+            hard_block = True
+            hard_block_reason = "stale_setup_into_overhead"
+        elif overhead_score > 0.76 and not fresh_overhead_exception:
+            hard_block = True
+            hard_block_reason = "overhead_too_heavy"
+        elif overhead_score >= 0.82 and overhead_red_count >= 5 and not fresh_overhead_exception:
+            hard_block = True
+            hard_block_reason = "overhead_too_heavy"
         elif dstop_plan <= self._EPSILON:
             hard_block = True
             hard_block_reason = "non_positive_stop_distance"
@@ -3213,7 +3610,7 @@ class PnoEngine:
             hard_block_reason = "non_positive_tp1_after_fee"
 
         stage4_ready = not hard_block
-        is_valid_setup = stage4_ready and final_score >= float(params.min_score)
+        is_valid_setup = stage4_ready
         return replace(
             stage4,
             penalty_untested_highs=penalty_untested_highs,
@@ -3266,6 +3663,7 @@ class PnoEngine:
                 else None
             ),
             dominant_overhead_red_body=float(overhead_profile.get("dominant_body") or 0.0),
+            level_life_ema_spread_growth_share=level_life_ema_spread_growth_share,
         )
 
     def _resolve_leg_start(
@@ -3304,6 +3702,14 @@ class PnoEngine:
         retired_clusters: list[RetiredCluster],
     ) -> tuple[tuple[int, ...], tuple[float, ...]] | None:
         if len(confirmed_highs) < 1:
+            confirmed_highs = self._resolve_recent_shelf_highs(
+                one=one,
+                start_idx=stage3.pullback_start_idx + 1,
+                end_idx=idx,
+                active_high=stage3.active_high,
+                v1_now=max(float(one.v1[idx]), self._EPSILON),
+            )
+        if len(confirmed_highs) < 1:
             confirmed_highs = self._resolve_fallback_level_highs(
                 one=one,
                 start_idx=stage3.pullback_start_idx + 1,
@@ -3340,7 +3746,7 @@ class PnoEngine:
                     # Alternative check: price consolidation near high (3+ bars within 0.3*v1)
                     if not has_confirmed_low:
                         consolidation_bars = 0
-                        tolerance_consolidation = 0.30 * v1_now
+                        tolerance_consolidation = 0.35 * v1_now
                         high_price = float(one.highs[indices[0]])
                         for check_idx in range(indices[0], min(idx + 1, len(one.closes))):
                             high_touch = float(one.highs[check_idx]) >= (high_price - tolerance_consolidation)
@@ -3373,6 +3779,41 @@ class PnoEngine:
                 return indices, prices
         return None
 
+    def _resolve_recent_shelf_highs(
+        self,
+        *,
+        one: OneMinuteFrame,
+        start_idx: int,
+        end_idx: int,
+        active_high: float,
+        v1_now: float,
+    ) -> list[int]:
+        if end_idx - start_idx < 1:
+            return []
+        window_start = max(start_idx, end_idx - 7)
+        candidate_indices: list[int] = []
+        for probe_idx in range(window_start, end_idx + 1):
+            high_price = float(one.highs[probe_idx])
+            if high_price >= (active_high - self._EPSILON):
+                continue
+            bar_range = max(float(one.highs[probe_idx]) - float(one.lows[probe_idx]), self._EPSILON)
+            close_position = self._safe_divide(float(one.closes[probe_idx]) - float(one.lows[probe_idx]), bar_range)
+            if close_position < 0.45:
+                continue
+            candidate_indices.append(int(probe_idx))
+        if len(candidate_indices) < 2:
+            return []
+        ceiling = max(float(one.highs[probe_idx]) for probe_idx in candidate_indices)
+        tolerance = max(0.40 * v1_now, self._EPSILON)
+        shelf_indices = [
+            int(probe_idx)
+            for probe_idx in candidate_indices
+            if float(one.highs[probe_idx]) >= (ceiling - tolerance)
+        ]
+        if len(shelf_indices) < 2:
+            return []
+        return shelf_indices[-3:]
+
     def _resolve_fallback_level_highs(
         self,
         *,
@@ -3385,7 +3826,7 @@ class PnoEngine:
         if end_idx - start_idx < 2:
             return []
         candidate_indices: list[int] = []
-        tolerance = max(0.30 * v1_now, self._EPSILON)
+        tolerance = max(0.35 * v1_now, self._EPSILON)
         for probe_idx in range(max(start_idx, 1), min(end_idx, len(one.highs) - 1)):
             high_price = float(one.highs[probe_idx])
             if high_price >= (active_high - self._EPSILON):
@@ -3442,14 +3883,143 @@ class PnoEngine:
         one: OneMinuteFrame,
         stage1: Stage1Context,
         stage3: Stage3Context,
+        stage4: Stage4Context,
         idx: int,
+        confirmation_mode: str = "cross",
     ) -> float:
-        search_slice = one.red[stage1.active_high_idx + 1 : idx + 1]
+        del stage1
+        search_start = max(int(stage4.level_valid_idx), 0)
+        first_cross_idx = self._resolve_level_first_cross_idx(
+            one=one,
+            stage4=stage4,
+            idx=idx,
+        )
+        if first_cross_idx is None:
+            search_end = idx
+        elif confirmation_mode == "close_above":
+            search_end = first_cross_idx
+        else:
+            search_end = first_cross_idx - 1
+        if confirmation_mode != "close_above":
+            search_end = min(search_end, idx - 1)
+        if search_end < search_start:
+            return float(stage3.pullback_low)
+        search_slice = one.red[search_start : search_end + 1]
         red_indices = np.where(search_slice)[0]
         if red_indices.size == 0:
             return float(stage3.pullback_low)
-        last_red_idx = stage1.active_high_idx + 1 + int(red_indices[-1])
-        return float(one.lows[last_red_idx])
+        for red_offset in red_indices[::-1]:
+            last_red_idx = search_start + int(red_offset)
+            last_red_low = float(one.lows[last_red_idx])
+            if last_red_low <= (float(stage4.level) - self._EPSILON):
+                return last_red_low
+        return float(stage3.pullback_low)
+
+    def _resolve_level_first_cross_idx(
+        self,
+        *,
+        one: OneMinuteFrame,
+        stage4: Stage4Context,
+        idx: int,
+    ) -> int | None:
+        search_start = max(min(int(stage4.level_valid_idx) + 1, idx), 0)
+        if search_start > idx:
+            return None
+        cross_offsets = np.where(one.highs[search_start : idx + 1] >= (float(stage4.level) - self._EPSILON))[0]
+        if cross_offsets.size == 0:
+            return None
+        return search_start + int(cross_offsets[0])
+
+    def _resolve_level_life_profile(
+        self,
+        *,
+        one: OneMinuteFrame,
+        stage4: Stage4Context,
+        signal_idx: int,
+    ) -> dict[str, int | float | bool]:
+        start_idx = max(int(stage4.cluster_first_idx) + 1, 0)
+        end_idx = min(signal_idx - 1, len(one.timestamps) - 1)
+        if end_idx < start_idx:
+            return {
+                "bar_count": 0,
+                "close_above_count": 0,
+                "false_break_wick_count": 0,
+                "prior_full_above_bar": False,
+                "prior_tp1_hit": False,
+                "path_efficiency": 1.0,
+            }
+        highs = one.highs[start_idx : end_idx + 1]
+        lows = one.lows[start_idx : end_idx + 1]
+        closes = one.closes[start_idx : end_idx + 1]
+        level = float(stage4.level)
+        close_above_mask = closes > (level + self._EPSILON)
+        full_above_mask = close_above_mask & (lows > (level + self._EPSILON))
+        false_break_mask = (highs > (level + self._EPSILON)) & ~close_above_mask
+        path_efficiency = 1.0
+        if closes.size >= 2:
+            path_efficiency = self._safe_divide(
+                abs(float(closes[-1]) - float(closes[0])),
+                float(np.sum(np.abs(np.diff(closes)))),
+            )
+        return {
+            "bar_count": int(closes.size),
+            "close_above_count": int(np.sum(close_above_mask)),
+            "false_break_wick_count": int(np.sum(false_break_mask)),
+            "prior_full_above_bar": bool(np.any(full_above_mask)),
+            "prior_tp1_hit": bool(np.any(highs >= (float(stage4.tp1) - self._EPSILON))),
+            "path_efficiency": float(path_efficiency),
+        }
+
+    def _resolve_close_above_pre_signal_decay_reason(
+        self,
+        *,
+        one: OneMinuteFrame,
+        signal_idx: int,
+        stage4: Stage4Context,
+    ) -> str | None:
+        level_profile = self._resolve_level_life_profile(
+            one=one,
+            stage4=stage4,
+            signal_idx=signal_idx,
+        )
+        if bool(level_profile["prior_tp1_hit"]):
+            return "tp1_already_tagged_before_signal"
+        if bool(level_profile["prior_full_above_bar"]):
+            return "level_already_accepted_before_signal"
+        if (
+            int(level_profile["bar_count"]) >= 40
+            and int(level_profile["close_above_count"]) >= 4
+            and int(level_profile["false_break_wick_count"]) >= 4
+            and float(level_profile["path_efficiency"]) <= 0.08
+        ):
+            return "level_drifted_too_long_before_signal"
+        return None
+
+    def _is_armed_entry_invalidated_before_trigger(
+        self,
+        *,
+        one: OneMinuteFrame,
+        idx: int,
+        armed: ArmedContext,
+    ) -> bool:
+        risk_distance = max(float(armed.stage4.entry_plan) - float(armed.stage4.sl_plan), self._EPSILON)
+        close_tolerance = max(0.05 * risk_distance, self._EPSILON)
+        wick_tolerance = max(0.15 * risk_distance, close_tolerance)
+        current_close = float(one.closes[idx])
+        current_low = float(one.lows[idx])
+        stop_level = float(armed.stage4.low_last_red_plan)
+        pullback_low = float(armed.stage3.pullback_low)
+        stop_broken = current_close <= (stop_level - close_tolerance) or current_low <= (stop_level - wick_tolerance)
+        pullback_broken = current_close <= (pullback_low - close_tolerance) or current_low <= (pullback_low - wick_tolerance)
+        close_above_decay_broken = (
+            self._resolve_close_above_pre_signal_decay_reason(
+                one=one,
+                signal_idx=idx,
+                stage4=armed.stage4,
+            )
+            is not None
+        )
+        return stop_broken or pullback_broken or close_above_decay_broken
 
     def _resolve_compression_score(
         self,
@@ -3751,11 +4321,60 @@ class PnoEngine:
         if stage1 is None or idx < 0 or idx >= len(one.timestamps):
             return "unknown"
         hold_floor = min(float(stage1.hold_floor), float(stage1.stage1_hold_price))
-        if float(one.closes[idx]) <= hold_floor:
+        # Allow brief intrabar sweeps around the hold floor before stage2 is formed.
+        close_tolerance = self._resolve_stage1_hold_close_tolerance(
+            active_high=float(stage1.active_high),
+            stage1_hold_price=float(stage1.stage1_hold_price),
+            leg_size=float(stage1.leg_size),
+            reference_leg_size=float(stage1.reference_leg_size),
+        )
+        wick_tolerance = max(float(stage1.leg_size) * 0.30, close_tolerance)
+        if float(one.closes[idx]) <= (hold_floor - close_tolerance):
             return "closed_below_hold"
-        if float(one.lows[idx]) <= hold_floor:
+        if float(one.lows[idx]) <= (hold_floor - wick_tolerance):
             return "wick_below_hold"
         return "held_above_hold"
+
+    def _resolve_stage1_hold_close_tolerance(
+        self,
+        *,
+        active_high: float,
+        stage1_hold_price: float,
+        leg_size: float,
+        reference_leg_size: float,
+    ) -> float:
+        resolved_leg_size = max(float(leg_size), self._EPSILON)
+        resolved_reference_leg_size = max(float(reference_leg_size), resolved_leg_size, self._EPSILON)
+        tolerance = max(
+            resolved_leg_size * 0.05,
+            resolved_reference_leg_size * 0.08,
+            self._EPSILON,
+        )
+        if float(stage1_hold_price) > (float(active_high) + self._EPSILON):
+            tolerance = max(tolerance, resolved_reference_leg_size * 0.18)
+        return tolerance
+
+    def _allows_pullback_search_after_inplay_end(
+        self,
+        *,
+        one: OneMinuteFrame,
+        five: FiveMinuteFrame,
+        idx: int,
+        five_idx: int,
+        stage1: Stage1Context | None,
+    ) -> bool:
+        if stage1 is None or idx < 0 or idx >= len(one.timestamps) or five_idx < 0 or five_idx >= len(five.timestamps):
+            return False
+        hold_status = self._resolve_stage1_hold_status(one=one, idx=idx, stage1=stage1)
+        if hold_status != "held_above_hold":
+            return False
+        bars_since_active_high = idx - int(stage1.active_high_idx)
+        if bars_since_active_high > 6:
+            return False
+        current_close_5m = float(five.closes[five_idx])
+        current_ema20_5m = float(five.ema20[five_idx])
+        ema_tolerance = max(float(five.v5[five_idx]) * 0.20, current_close_5m * 0.0005, self._EPSILON)
+        return current_close_5m >= (current_ema20_5m - ema_tolerance)
 
     def _resolve_leg_start_status(
         self,
@@ -3767,9 +4386,10 @@ class PnoEngine:
         if stage1 is None or five_idx < 0 or five_idx >= len(five.timestamps):
             return "unknown"
         leg_start = float(stage1.leg_start)
-        if float(five.closes[five_idx]) <= leg_start:
+        leg_break_tolerance = max(float(stage1.leg_size) * 0.08, self._EPSILON)
+        if float(five.closes[five_idx]) <= (leg_start - leg_break_tolerance):
             return "closed_below_leg_start"
-        if float(five.lows[five_idx]) <= leg_start:
+        if float(five.lows[five_idx]) <= (leg_start - leg_break_tolerance):
             return "wick_below_leg_start"
         return "held_above_leg_start"
 
@@ -3785,13 +4405,21 @@ class PnoEngine:
             return -6
         return -10
 
-    def _resolve_tp2(self, *, active_high: float, v1: float) -> float:
-        target_step = max(4.0 * v1, 0.0005 * active_high)
+    def _resolve_tp2(
+        self,
+        *,
+        active_high: float,
+        pullback_height: float,
+        v1: float,
+        current_reference_high: float | None = None,
+    ) -> float:
+        base_high = max(float(active_high), float(current_reference_high) if current_reference_high is not None else float(active_high))
+        projected_tp2 = base_high + max(float(pullback_height), self._EPSILON)
+        target_step = max(float(v1), 0.0005 * base_high, self._EPSILON)
         round_step = self._round_to_preferred_step(target_step)
-        multiples = np.floor(active_high / max(round_step, self._EPSILON)) + 1.0
-        tp2 = multiples * round_step
-        while tp2 <= (active_high + self._EPSILON):
-            tp2 += round_step
+        tp2 = np.floor(projected_tp2 / max(round_step, self._EPSILON)) * round_step
+        if tp2 <= (base_high + self._EPSILON):
+            tp2 = projected_tp2
         return float(tp2)
 
     @staticmethod
@@ -3837,19 +4465,130 @@ class PnoEngine:
         return adjustment
 
     @staticmethod
+    def _resolve_setup_freshness_adjustment(
+        *,
+        current_timestamp_ms: int,
+        pump_start_timestamp_ms: int,
+        active_high_timestamp_ms: int,
+        level_valid_timestamp_ms: int,
+    ) -> int:
+        pump_to_signal_minutes = max((current_timestamp_ms - pump_start_timestamp_ms) / 60_000.0, 0.0)
+        active_high_to_signal_minutes = max((current_timestamp_ms - active_high_timestamp_ms) / 60_000.0, 0.0)
+        level_life_minutes = max((current_timestamp_ms - level_valid_timestamp_ms) / 60_000.0, 0.0)
+
+        adjustment = 0
+        if active_high_to_signal_minutes <= 15.0:
+            adjustment += 7
+        elif active_high_to_signal_minutes <= 30.0:
+            adjustment += 4
+        elif active_high_to_signal_minutes <= 45.0:
+            adjustment += 1
+        elif active_high_to_signal_minutes <= 75.0:
+            adjustment -= 2
+        elif active_high_to_signal_minutes <= 120.0:
+            adjustment -= 5
+        elif active_high_to_signal_minutes <= 180.0:
+            adjustment -= 8
+        else:
+            adjustment -= 11
+
+        if pump_to_signal_minutes <= 35.0:
+            adjustment += 3
+        elif pump_to_signal_minutes <= 60.0:
+            adjustment += 1
+        elif pump_to_signal_minutes > 150.0:
+            adjustment -= 4
+        elif pump_to_signal_minutes > 90.0:
+            adjustment -= 2
+
+        if level_life_minutes <= 8.0:
+            adjustment += 2
+        elif level_life_minutes <= 16.0:
+            adjustment += 1
+        elif level_life_minutes > 35.0:
+            adjustment -= 4
+        elif level_life_minutes > 24.0:
+            adjustment -= 2
+        elif level_life_minutes > 16.0:
+            adjustment -= 2
+        return adjustment
+
+    @staticmethod
+    def _resolve_impulse_quality_adjustment(*, stage1: Stage1Context) -> int:
+        adjustment = 0
+
+        if stage1.pump_volume_ratio_start >= 40.0:
+            adjustment += 6
+        elif stage1.pump_volume_ratio_start >= 20.0:
+            adjustment += 4
+        elif stage1.pump_volume_ratio_start >= 8.0:
+            adjustment += 2
+        elif stage1.pump_volume_ratio_start < 4.0:
+            adjustment -= 2
+
+        if stage1.pump_volume_ratio_continue >= 20.0:
+            adjustment += 2
+        elif stage1.pump_volume_ratio_continue < 2.0:
+            adjustment -= 1
+
+        if stage1.pump_path_efficiency >= 0.55:
+            adjustment += 3
+        elif stage1.pump_path_efficiency >= 0.40:
+            adjustment += 1
+        elif stage1.pump_path_efficiency < 0.22:
+            adjustment -= 4
+        elif stage1.pump_path_efficiency < 0.30:
+            adjustment -= 2
+
+        if stage1.pump_counterflow_ratio_5m <= 0.01:
+            adjustment += 4
+        elif stage1.pump_counterflow_ratio_5m <= 0.03:
+            adjustment += 2
+        elif stage1.pump_counterflow_ratio_5m <= 0.06:
+            adjustment += 0
+        elif stage1.pump_counterflow_ratio_5m <= 0.10:
+            adjustment -= 2
+        elif stage1.pump_counterflow_ratio_5m <= 0.18:
+            adjustment -= 4
+        else:
+            adjustment -= 7
+
+        if stage1.pre_pump_ema_crosses_1h <= 1:
+            adjustment += 2
+        elif stage1.pre_pump_ema_crosses_1h == 2:
+            adjustment += 0
+        elif stage1.pre_pump_ema_crosses_1h == 3:
+            adjustment -= 2
+        elif stage1.pre_pump_ema_crosses_1h == 4:
+            adjustment -= 4
+        else:
+            adjustment -= 6
+
+        if stage1.pre_pump_barcode_fraction_1h <= 0.20:
+            adjustment += 1
+        elif stage1.pre_pump_barcode_fraction_1h >= 0.55:
+            adjustment -= 3
+        elif stage1.pre_pump_barcode_fraction_1h >= 0.45:
+            adjustment -= 1
+
+        return adjustment
+
+    @staticmethod
     def _resolve_overhead_quality_adjustment(
         *,
         overhead_score: float,
         red_count: int,
     ) -> int:
-        if overhead_score <= 0.50 and red_count <= 2:
-            return 4
-        if overhead_score <= 0.58 and red_count <= 3:
+        if overhead_score <= 0.42 and red_count <= 2:
             return 2
-        if overhead_score >= 0.70 or red_count >= 5:
-            return -6
+        if overhead_score <= 0.54 and red_count <= 3:
+            return 1
+        if overhead_score >= 0.85 or red_count >= 7:
+            return -5
+        if overhead_score >= 0.72 or red_count >= 5:
+            return -4
         if overhead_score >= 0.62 or red_count >= 4:
-            return -3
+            return -2
         return 0
 
     def _resolve_signal_bar_context_online(
@@ -3874,6 +4613,28 @@ class PnoEngine:
             if np.isfinite(recent_volume_median) and recent_volume_median > 0.0
             else np.nan
         )
+        ema9_series = one.frame["ema9"] if "ema9" in one.frame.columns else None
+        ema20_series = one.frame["ema20"] if "ema20" in one.frame.columns else None
+        if ema9_series is None or ema20_series is None:
+            closes_series = pd.Series(one.closes[: idx + 1], dtype="float64")
+            if ema9_series is None:
+                ema9_series = closes_series.ewm(span=9, adjust=False).mean()
+            if ema20_series is None:
+                ema20_series = closes_series.ewm(span=20, adjust=False).mean()
+        ema9 = float(ema9_series.iloc[idx]) if idx < len(ema9_series) else np.nan
+        ema20 = float(ema20_series.iloc[idx]) if idx < len(ema20_series) else np.nan
+        ema20_prev_idx = max(0, idx - 3)
+        ema20_prev = float(ema20_series.iloc[ema20_prev_idx]) if ema20_prev_idx < len(ema20_series) else np.nan
+        ema_spread_pct = (
+            ((ema9 - ema20) / ema20) * 100.0
+            if np.isfinite(ema9) and np.isfinite(ema20) and ema20 > 0.0
+            else np.nan
+        )
+        ema20_slope_3 = (
+            ((ema20 - ema20_prev) / ema20_prev) * 100.0
+            if np.isfinite(ema20) and np.isfinite(ema20_prev) and ema20_prev > 0.0
+            else np.nan
+        )
         close_clearance_pct = (
             ((close_price - level) / level) * 100.0
             if np.isfinite(level) and level > 0.0
@@ -3884,6 +4645,8 @@ class PnoEngine:
             "signal_bar_close_position": (close_price - low_price) / bar_range,
             "signal_bar_volume_vs_recent": volume_vs_recent,
             "signal_close_clearance_pct": close_clearance_pct,
+            "signal_bar_ema_spread_pct": ema_spread_pct,
+            "signal_bar_ema20_slope_3": ema20_slope_3,
         }
 
     def _resolve_close_trigger_score_adjustment(
@@ -3900,13 +4663,13 @@ class PnoEngine:
         overhead_red_count = int(stage4.overhead_red_count)
 
         if close_position >= 0.90 and close_clearance_pct >= 0.25:
-            body_close_adj = 4
-        elif close_position >= 0.82 and close_clearance_pct >= 0.12 and body_share >= 0.35:
             body_close_adj = 2
+        elif close_position >= 0.82 and close_clearance_pct >= 0.12 and body_share >= 0.35:
+            body_close_adj = 1
         elif close_position < 0.72 or close_clearance_pct < 0.08:
-            body_close_adj = -4
-        elif close_position < 0.80 or close_clearance_pct < 0.12:
             body_close_adj = -2
+        elif close_position < 0.80 or close_clearance_pct < 0.12:
+            body_close_adj = -1
         else:
             body_close_adj = 0
 
@@ -3923,13 +4686,9 @@ class PnoEngine:
         else:
             overhead_adj = 0
 
-        if np.isfinite(volume_vs_recent) and volume_vs_recent >= 2.0:
-            volume_adj = 2
-        elif np.isfinite(volume_vs_recent) and volume_vs_recent >= 1.25:
+        if np.isfinite(volume_vs_recent) and volume_vs_recent >= 3.0:
             volume_adj = 1
-        elif np.isfinite(volume_vs_recent) and volume_vs_recent < 1.0:
-            volume_adj = -2
-        elif np.isfinite(volume_vs_recent) and volume_vs_recent < 1.15:
+        elif np.isfinite(volume_vs_recent) and volume_vs_recent < 0.70:
             volume_adj = -1
         else:
             volume_adj = 0
@@ -3946,6 +4705,13 @@ class PnoEngine:
         signal_context: dict[str, float],
     ) -> str | None:
         entry_pos = float(stage4.entry_pos)
+        clean_structure_override = bool(
+            entry_pos <= 0.55
+            and float(stage4.overhead_resistance_score) <= 0.58
+            and int(stage4.touches) <= 3
+            and float(stage3.post_high_body_overlap_rate) <= 0.82
+            and float(stage3.post_high_wick_share) <= min(float(params.close_above_max_post_high_wick_share), 0.72)
+        )
         if entry_pos > float(params.close_above_max_entry_pos):
             return "close_above_entry_pos_too_high"
         pullback_fraction = self._safe_divide(float(stage3.pullback_depth), max(float(stage4.active_high) - float(stage3.pullback_low), self._EPSILON))
@@ -3953,6 +4719,57 @@ class PnoEngine:
             return "close_above_pullback_too_deep"
         if float(stage3.post_high_wick_share) > float(params.close_above_max_post_high_wick_share):
             return "close_above_post_high_wick_too_high"
+        if (
+            stage4.level_maturity_fraction >= 0.90
+            and int(stage4.touches) >= 5
+            and entry_pos >= 0.78
+            and float(stage4.level_life_ema_spread_growth_share) < 0.20
+        ):
+            return "close_above_level_too_stale"
+        if float(stage4.overhead_resistance_score) >= 0.76 and int(stage4.overhead_red_count) >= 5:
+            return "close_above_overhead_too_heavy"
+        signal_close_position = float(signal_context.get("signal_bar_close_position") or np.nan)
+        if (
+            np.isfinite(signal_close_position)
+            and signal_close_position < float(params.close_above_min_signal_close_position_in_chop)
+            and float(stage3.post_high_body_overlap_rate) >= float(params.close_above_choppy_overlap_threshold)
+        ):
+            return "close_above_signal_closed_too_low_in_chop"
+        if (
+            np.isfinite(signal_close_position)
+            and float(stage3.post_high_body_overlap_rate) >= 0.95
+            and float(stage3.post_high_wick_share) >= 0.55
+            and signal_close_position < 0.72
+        ):
+            return "close_above_chop_reclaim_too_noisy"
+        signal_ema20_slope_3 = float(signal_context.get("signal_bar_ema20_slope_3") or np.nan)
+        min_signal_ema20_slope_3 = float(params.close_above_min_signal_ema20_slope_3)
+        if min_signal_ema20_slope_3 > 0.0:
+            if not np.isfinite(signal_ema20_slope_3):
+                if not clean_structure_override:
+                    return "close_above_signal_ema20_slope_missing"
+            elif (
+                signal_ema20_slope_3 < min_signal_ema20_slope_3
+                and (
+                    not clean_structure_override
+                    or signal_ema20_slope_3 < (0.65 * min_signal_ema20_slope_3)
+                )
+            ):
+                return "close_above_signal_ema20_slope_too_low"
+        signal_ema_spread_pct = float(signal_context.get("signal_bar_ema_spread_pct") or np.nan)
+        min_signal_ema_spread_pct = float(params.close_above_min_signal_ema_spread_pct)
+        if min_signal_ema_spread_pct > 0.0:
+            if not np.isfinite(signal_ema_spread_pct):
+                if not clean_structure_override:
+                    return "close_above_signal_ema_spread_missing"
+            elif (
+                signal_ema_spread_pct < min_signal_ema_spread_pct
+                and (
+                    not clean_structure_override
+                    or signal_ema_spread_pct < (0.70 * min_signal_ema_spread_pct)
+                )
+            ):
+                return "close_above_signal_ema_spread_too_tight"
 
         return None
         
@@ -3990,20 +4807,40 @@ class PnoEngine:
         actual_entry_idx = entry_idx
         signal_kind = "cross"
         if confirmation_mode == "cross":
-            if open_price >= armed.stage4.level or high_price < armed.stage4.level:
+            if high_price < armed.stage4.level:
                 return None, entry_idx
-            entry_price = min(high_price, armed.stage4.entry_plan)
-            stop_loss = min(low_price, armed.stage4.low_last_red_plan)
+            entry_price = max(open_price, float(armed.stage4.entry_plan))
+            stop_loss = float(armed.stage4.low_last_red_plan)
         elif confirmation_mode == "close_above":
             if high_price < armed.stage4.level or close_price <= armed.stage4.level:
+                return None, entry_idx
+            close_above_decay_reason = self._resolve_close_above_pre_signal_decay_reason(
+                one=one,
+                signal_idx=entry_idx,
+                stage4=armed.stage4,
+            )
+            if close_above_decay_reason is not None:
                 return None, entry_idx
             actual_entry_idx = entry_idx + 1
             if actual_entry_idx >= len(one.timestamps):
                 return None, entry_idx
             entry_price = float(one.opens[actual_entry_idx])
-            stop_loss = min(low_price, armed.stage4.low_last_red_plan)
+            stop_loss = float(armed.stage4.low_last_red_plan)
             signal_kind = "close_above"
         else:
+            return None, entry_idx
+
+        actual_entry_pos = self._resolve_entry_pullback_fraction(
+            pullback_low=float(armed.stage3.pullback_low),
+            active_high=float(armed.stage4.active_high),
+            entry_price=float(entry_price),
+        )
+        max_actual_entry_pos = (
+            float(params.close_above_max_entry_pos)
+            if confirmation_mode == "close_above"
+            else float(params.max_entry_pullback_fraction)
+        )
+        if actual_entry_pos > max_actual_entry_pos:
             return None, entry_idx
 
         trigger_body_close_adj = 0
@@ -4036,8 +4873,6 @@ class PnoEngine:
             if close_trigger_filter_reason is not None:
                 return None, entry_idx
             trigger_adjusted_final_score = float(armed.stage4.final_score + trigger_score_adjustment)
-            if trigger_adjusted_final_score < float(params.min_score):
-                return None, entry_idx
 
         # If the actual executable entry is already above the original payoff geometry,
         # the setup has decayed and should wait for a new valid level/high cycle instead
@@ -4056,7 +4891,9 @@ class PnoEngine:
         # Check RR using actual entry price and stop loss (stage 5 validation)
         actual_risk = entry_price - stop_loss
         net_tp1_move = tp1_price - entry_price - (float(params.fee_rate) * entry_price) - (0.5 * float(params.fee_rate) * tp1_price)
-        if actual_risk <= self._EPSILON or self._safe_divide(net_tp1_move, actual_risk) < float(params.min_entry_rr):
+        if actual_risk <= self._EPSILON or self._safe_divide(net_tp1_move, actual_risk) <= (
+            float(params.min_entry_rr) + self._EPSILON
+        ):
             return None, entry_idx
 
         position_size = self._resolve_position_size(params=params, entry_price=entry_price, stop_loss=stop_loss)
@@ -4184,31 +5021,18 @@ class PnoEngine:
                     "signal_close_clearance_pct": (
                         round(signal_close_clearance_pct, 4) if np.isfinite(signal_close_clearance_pct) else np.nan
                     ),
+                    "signal_bar_ema_spread_pct": (
+                        round(float(signal_context["signal_bar_ema_spread_pct"]), 4)
+                        if np.isfinite(float(signal_context["signal_bar_ema_spread_pct"]))
+                        else np.nan
+                    ),
+                    "signal_bar_ema20_slope_3": (
+                        round(float(signal_context["signal_bar_ema20_slope_3"]), 4)
+                        if np.isfinite(float(signal_context["signal_bar_ema20_slope_3"]))
+                        else np.nan
+                    ),
                 }
             )
-
-        if confirmation_mode == "cross" and low_price <= armed.stage4.low_last_red_plan:
-            pnl = self._net_leg_pnl(
-                entry_price=entry_price,
-                exit_price=stop_loss,
-                quantity=position_size,
-                fee_rate=float(params.fee_rate),
-            )
-            trade = TradeResult(
-                entry_price=Price(entry_price),
-                exit_price=Price(stop_loss),
-                entry_timestamp_ms=int(one.timestamps[entry_idx]),
-                exit_timestamp_ms=int(one.timestamps[entry_idx]),
-                result_type=TradeResultType.SL,
-                pnl=pnl,
-                pnl_percent=Percentage(self._to_percent(pnl, entry_price * position_size)),
-                breakout_timestamp_ms=int(one.timestamps[entry_idx]),
-                retest_timestamp_ms=None,
-                pump_to_peak_bars=int(pump_to_peak_bars),
-                pump_to_peak_minutes=float(pump_to_peak_bars),
-                metadata={**metadata, "category": "sl_entry"},
-            )
-            return trade, entry_idx
 
         return self._simulate_trade_path(
             one=one,
@@ -4263,6 +5087,10 @@ class PnoEngine:
         be_arm_price = entry_price + (initial_be_arm_fraction * max(tp1 - entry_price, 0.0))
         be_buffer = max(entry_price * float(params.min_tick_fraction), float(params.be_buffer_r_fraction) * initial_risk)
         be_protect_price = max(be_fee, entry_price + be_buffer)
+        tp1_be_protect_price = max(
+            entry_price + (0.5 * max(tp1 - entry_price, 0.0)),
+            float(armed.stage4.low_last_red_plan),
+        )
         be_arm_r = self._safe_divide(be_arm_price - entry_price, initial_risk)
         be_armed = False
         be_arm_idx: int | None = None
@@ -4359,16 +5187,16 @@ class PnoEngine:
                     be_arm_fraction_at_trigger = current_be_arm_fraction
                     be_arm_price_at_trigger = current_be_arm_price
             elif tp1_hit_idx is not None and idx > tp1_hit_idx:
-                if low <= be_protect_price:
-                    exit_price = be_protect_price
+                if low <= tp1_be_protect_price:
+                    exit_price = tp1_be_protect_price
                     exit_idx = idx
                     result_type = TradeResultType.TP1_BE
-                    runner_exit_price = be_protect_price
+                    runner_exit_price = tp1_be_protect_price
                     runner_exit_idx = idx
                     runner_exit_reason = "tp1_be"
                     runner_realized_pnl = self._net_leg_pnl(
                         entry_price=entry_price,
-                        exit_price=be_protect_price,
+                        exit_price=tp1_be_protect_price,
                         quantity=position_size * remainder_share,
                         fee_rate=fee_rate,
                     )
@@ -4422,6 +5250,8 @@ class PnoEngine:
                 "be_buffer": round(float(be_buffer), 8),
                 "be_protect_price": round(float(be_protect_price), 8),
                 "be_protect_r": round(self._safe_divide(be_protect_price - entry_price, initial_risk), 6),
+                "tp1_be_protect_price": round(float(tp1_be_protect_price), 8),
+                "tp1_be_protect_r": round(self._safe_divide(tp1_be_protect_price - entry_price, initial_risk), 6),
                 "be_armed": bool(be_armed),
                 "be_arm_timestamp_ms": int(one.timestamps[be_arm_idx]) if be_arm_idx is not None else None,
                 "tp1_hit_timestamp_ms": int(one.timestamps[tp1_hit_idx]) if tp1_hit_idx is not None else None,

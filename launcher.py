@@ -88,6 +88,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pno-deposit", type=float, default=None, help="Deposit used for PNO sizing")
     parser.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per trade for PNO")
     parser.add_argument("--pno-entry-confirmation-mode", choices=["baseline_cross", "close_above"], default=None, help="PNO entry confirmation mode")
+    parser.add_argument("--pno-category-mode", choices=["all", "core", "discovery"], default=None, help="PNO category runtime mode")
     parser.add_argument("--pno-stage", type=int, default=None, help="Single PNO stage to export")
     parser.add_argument("--pno-through-stage", type=int, default=None, help="Export all PNO stages through this number")
     parser.add_argument("--output-dir", default=None, help="Directory for results or diagnostics")
@@ -114,6 +115,7 @@ def _task_namespace(cli_args: argparse.Namespace) -> argparse.Namespace:
         pno_deposit=cli_args.pno_deposit,
         pno_risk_pct=cli_args.pno_risk_pct,
         pno_entry_confirmation_mode=cli_args.pno_entry_confirmation_mode,
+        pno_category_mode=getattr(cli_args, "pno_category_mode", None),
         pno_stage=cli_args.pno_stage,
         pno_through_stage=cli_args.pno_through_stage,
         output_dir=cli_args.output_dir,

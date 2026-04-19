@@ -31,6 +31,7 @@ PNO_SUPPORTED_ENTRY_TIMEFRAMES: tuple[Timeframe, ...] = tuple(
     dict.fromkeys(entry_timeframe for _levels_timeframe, entry_timeframe in PNO_SUPPORTED_TIMEFRAME_PAIRS)
 )
 PNO_SUPPORTED_ENTRY_CONFIRMATION_MODES: tuple[str, ...] = ("cross", "close_above")
+PNO_SUPPORTED_CATEGORY_MODES: tuple[str, ...] = ("all", "core", "discovery")
 PNO_DEFAULT_RISK_PCT = 0.05
 
 
@@ -52,32 +53,36 @@ class PnoParams:
     stage1_hold_fraction: float = 0.55
     pullback_min_v1: float = 1.0
     pullback_min_pump_fraction_5m: float = 0.15
-    pullback_valid_max_leg_fraction: float = 0.62
-    pullback_invalid_max_leg_fraction: float = 0.90
+    pullback_valid_min_leg_fraction: float = 0.20
+    pullback_valid_max_leg_fraction: float = 1.20
+    pullback_invalid_max_leg_fraction: float = 1.25
     pullback_valid_max_v5: float = 4.5
     pullback_invalid_max_v5: float = 6.0
     pullback_max_age_bars: int = 12
     stage3_max_post_high_wick_share: float = 0.72
     stage3_max_post_high_body_overlap_rate: float = 0.65
+    stage3_max_post_high_chop_alternation_rate: float = 0.55
+    stage3_max_post_high_chop_path_efficiency: float = 0.18
+    stage3_min_post_high_5m_volume_support_fraction: float = 0.50
     stage1_min_cumulative_quote_volume: float = 255_000.0
     stage1_pre_pump_ema_crosses_min: int = 1
-    stage1_barcode_max_fraction_1h: float = 0.60
+    stage1_barcode_max_fraction_1h: float = 1.00
     stage1_barcode_tr_atr_fraction: float = 0.25
     stage1_barcode_tr_price_fraction: float = 0.0010
-    stage1_min_impulse_atr_pre: float = 1.8
+    stage1_min_impulse_atr_pre: float = 1.5
     stage1_min_peak_bar_tr_atr_pre: float = 1.1
     stage1_min_volume_ratio_start: float = 3.0
     stage1_min_volume_ratio_continue: float = 1.05
     stage1_min_path_efficiency: float = 0.18
     stage1_max_wick_share: float = 0.68
     stage1_min_body_share_mean: float = 0.18
-    stage1_max_flat_body_share: float = 0.58
-    stage1_min_body_wick_edge: float = -0.022
-    stage1_max_micro_flat_bar_share: float = 0.45
-    stage1_max_active_high_upper_wick_share: float = 0.73
+    stage1_max_flat_body_share: float = 1.0
+    stage1_min_body_wick_edge: float = -0.028
+    stage1_max_micro_flat_bar_share: float = 0.65
+    stage1_max_active_high_upper_wick_share: float = 0.79
     stage1_max_red_body_share_5m: float = 0.45
-    stage1_max_counterflow_ratio_5m: float = 0.75
-    stage1_max_red_body_share_1m: float = 0.68
+    stage1_max_counterflow_ratio_5m: float = 0.04
+    stage1_max_red_body_share_1m: float = 0.78
     stage1_max_counterflow_ratio_1m: float = 0.92
     stage1_min_pump_pct: float = 0.015
     stage1_min_pretrend_range_ratio_2h: float = 2.0
@@ -95,12 +100,16 @@ class PnoParams:
     strong_score: float = 80.0
     slip_plan_v1_fraction: float = 0.10
     min_tick_fraction: float = 0.0001
-    max_entry_pullback_fraction: float = 0.60
-    min_entry_rr: float = 0.0
-    close_above_max_entry_pos: float = 1.0
+    max_entry_pullback_fraction: float = 0.58
+    min_entry_rr: float = 1.0
+    close_above_max_entry_pos: float = 0.70
     close_above_max_pullback_fraction_of_leg: float = 1.0
-    close_above_max_post_high_wick_share: float = 1.0
+    close_above_max_post_high_wick_share: float = 0.85
     close_above_min_signal_volume_vs_recent: float = 0.0
+    close_above_min_signal_ema20_slope_3: float = 0.12
+    close_above_min_signal_ema_spread_pct: float = 0.90
+    close_above_min_signal_close_position_in_chop: float = 0.25
+    close_above_choppy_overlap_threshold: float = 0.95
     tp1_share: float = 0.50
     be_arm_to_active_high_fraction: float = 0.50
     close_above_be_start_fraction: float = 0.70
@@ -108,6 +117,14 @@ class PnoParams:
     close_above_be_step_bars: int = 1
     close_above_be_min_fraction: float = 0.25
     be_buffer_r_fraction: float = 0.05
+
+
+@dataclass(frozen=True, slots=True)
+class PnoCategoryProfile:
+    category_id: str
+    label: str
+    priority: int
+    params: PnoParams
 
 
 def _format_pno_timeframe_pairs(timeframe_pairs: tuple[PnoTimeframePair, ...]) -> str:
@@ -171,6 +188,10 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("pullback_min_v1 must be > 0")
     if not 0.0 < params.pullback_min_pump_fraction_5m < 1.0:
         raise ValueError("pullback_min_pump_fraction_5m must be in range (0, 1)")
+    if not 0.0 < params.pullback_valid_min_leg_fraction < params.pullback_valid_max_leg_fraction:
+        raise ValueError(
+            "pullback_valid_min_leg_fraction must be > 0 and smaller than pullback_valid_max_leg_fraction"
+        )
     if not 0.0 < params.pullback_valid_max_leg_fraction < params.pullback_invalid_max_leg_fraction:
         raise ValueError(
             "pullback_valid_max_leg_fraction must be > 0 and smaller than pullback_invalid_max_leg_fraction"
@@ -183,6 +204,12 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("stage3_max_post_high_wick_share must be in range [0, 1]")
     if not 0.0 <= params.stage3_max_post_high_body_overlap_rate <= 1.0:
         raise ValueError("stage3_max_post_high_body_overlap_rate must be in range [0, 1]")
+    if not 0.0 <= params.stage3_max_post_high_chop_alternation_rate <= 1.0:
+        raise ValueError("stage3_max_post_high_chop_alternation_rate must be in range [0, 1]")
+    if not 0.0 <= params.stage3_max_post_high_chop_path_efficiency <= 1.0:
+        raise ValueError("stage3_max_post_high_chop_path_efficiency must be in range [0, 1]")
+    if params.stage3_min_post_high_5m_volume_support_fraction < 0.0:
+        raise ValueError("stage3_min_post_high_5m_volume_support_fraction must be >= 0")
     if params.stage1_min_cumulative_quote_volume <= 0.0:
         raise ValueError("stage1_min_cumulative_quote_volume must be > 0")
     if params.stage1_pre_pump_ema_crosses_min < 1:
@@ -213,6 +240,14 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("stage1_min_body_wick_edge must be in range [-1, 1]")
     if not 0.0 <= params.stage1_max_micro_flat_bar_share <= 1.0:
         raise ValueError("stage1_max_micro_flat_bar_share must be in range [0, 1]")
+    if params.close_above_min_signal_ema20_slope_3 < 0.0:
+        raise ValueError("close_above_min_signal_ema20_slope_3 must be >= 0")
+    if params.close_above_min_signal_ema_spread_pct < 0.0:
+        raise ValueError("close_above_min_signal_ema_spread_pct must be >= 0")
+    if not 0.0 <= params.close_above_min_signal_close_position_in_chop <= 1.0:
+        raise ValueError("close_above_min_signal_close_position_in_chop must be in range [0, 1]")
+    if not 0.0 <= params.close_above_choppy_overlap_threshold <= 1.0:
+        raise ValueError("close_above_choppy_overlap_threshold must be in range [0, 1]")
     if not 0.0 <= params.stage1_max_active_high_upper_wick_share < 1.0:
         raise ValueError("stage1_max_active_high_upper_wick_share must be in range [0, 1)")
     if not 0.0 <= params.stage1_max_red_body_share_5m <= 1.0:
@@ -280,6 +315,84 @@ def build_pno_grid() -> list[PnoParams]:
         PnoParams(symbol="", pno_variant_id="baseline_cross", entry_confirmation_mode="cross"),
         PnoParams(symbol="", pno_variant_id="baseline_close", entry_confirmation_mode="close_above"),
     ]
+
+
+def resolve_pno_category_profiles(
+    params: PnoParams,
+    *,
+    category_mode: str = "all",
+) -> tuple[PnoCategoryProfile, ...]:
+    if category_mode not in PNO_SUPPORTED_CATEGORY_MODES:
+        supported = ", ".join(PNO_SUPPORTED_CATEGORY_MODES)
+        raise ValueError(f"pno category_mode must be one of {{{supported}}}, got {category_mode}")
+    core_params = replace(
+        params,
+        pno_variant_id=f"{params.pno_variant_id}__cat_a_core",
+        stage1_min_impulse_atr_pre=1.8,
+        stage1_min_body_wick_edge=-0.022,
+        stage1_max_active_high_upper_wick_share=0.73,
+        stage1_max_counterflow_ratio_5m=0.035,
+        stage1_max_red_body_share_1m=0.72,
+    )
+    core_profile = PnoCategoryProfile(
+        category_id="cat_a_core",
+        label="core",
+        priority=1,
+        params=core_params,
+    )
+    if category_mode == "core":
+        return (core_profile,)
+
+    # Common discovery relaxations (entry-mode agnostic).
+    discovery_common = dict(
+        pno_variant_id=f"{params.pno_variant_id}__cat_b_discovery",
+        stage1_min_cumulative_quote_volume=min(float(params.stage1_min_cumulative_quote_volume), 140_000.0),
+        stage1_min_impulse_atr_pre=min(float(params.stage1_min_impulse_atr_pre), 0.95),
+        stage1_min_body_wick_edge=min(float(params.stage1_min_body_wick_edge), -0.09),
+        stage1_max_active_high_upper_wick_share=max(float(params.stage1_max_active_high_upper_wick_share), 0.84),
+        stage1_max_counterflow_ratio_5m=max(float(params.stage1_max_counterflow_ratio_5m), 0.09),
+        stage1_max_red_body_share_1m=max(float(params.stage1_max_red_body_share_1m), 0.93),
+        stage1_max_micro_flat_bar_share=max(float(params.stage1_max_micro_flat_bar_share), 0.70),
+        stage3_max_post_high_wick_share=max(float(params.stage3_max_post_high_wick_share), 0.88),
+        stage3_max_post_high_body_overlap_rate=max(float(params.stage3_max_post_high_body_overlap_rate), 0.90),
+        stage3_min_post_high_5m_volume_support_fraction=min(
+            float(params.stage3_min_post_high_5m_volume_support_fraction),
+            0.35,
+        ),
+        max_entry_pullback_fraction=max(float(params.max_entry_pullback_fraction), 0.75),
+    )
+
+    if params.entry_confirmation_mode == "close_above":
+        discovery_params = replace(
+            params,
+            **discovery_common,
+            close_above_max_entry_pos=max(float(params.close_above_max_entry_pos), 0.90),
+            close_above_max_post_high_wick_share=max(float(params.close_above_max_post_high_wick_share), 0.95),
+            close_above_min_signal_ema20_slope_3=min(float(params.close_above_min_signal_ema20_slope_3), 0.04),
+            close_above_min_signal_ema_spread_pct=min(float(params.close_above_min_signal_ema_spread_pct), 0.45),
+            close_above_min_signal_close_position_in_chop=min(
+                float(params.close_above_min_signal_close_position_in_chop),
+                0.15,
+            ),
+        )
+    else:
+        discovery_params = replace(params, **discovery_common)
+
+    discovery_profile = PnoCategoryProfile(
+        category_id="cat_b_discovery",
+        label="discovery",
+        priority=2,
+        params=discovery_params,
+    )
+
+    if category_mode == "discovery":
+        return (discovery_profile,)
+    return (core_profile, discovery_profile)
+
+
+def describe_pno_category_profile_set(params: PnoParams, *, category_mode: str = "all") -> str:
+    profiles = resolve_pno_category_profiles(params, category_mode=category_mode)
+    return "+".join(profile.category_id for profile in profiles)
 
 
 def with_pno_risk(params: PnoParams, *, deposit: float, risk_pct: float) -> PnoParams:

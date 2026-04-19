@@ -82,6 +82,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filter PNO grid by entry confirmation mode (cross or close_above)",
     )
     run_bt.add_argument(
+        "--pno-category-mode",
+        choices=["all", "core", "discovery"],
+        default=None,
+        help="PNO category runtime mode: all, core only, or discovery only",
+    )
+    run_bt.add_argument(
         "--pno-stage",
         type=_positive_int_for("--pno-stage"),
         default=None,
@@ -129,6 +135,12 @@ def build_parser() -> argparse.ArgumentParser:
     pno_stage.add_argument("--entry-tf", default=None, help="PNO pullback/entry timeframe, backtest pair only")
     pno_stage.add_argument("--pno-deposit", type=float, default=None, help="Deposit used for PNO sizing")
     pno_stage.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per trade for PNO")
+    pno_stage.add_argument(
+        "--pno-category-mode",
+        choices=["all", "core", "discovery"],
+        default=None,
+        help="PNO category runtime mode: all, core only, or discovery only",
+    )
     pno_stage.add_argument("--output-dir", default=None, help="Root directory for stage review results")
 
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
