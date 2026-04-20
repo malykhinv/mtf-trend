@@ -424,8 +424,8 @@ def resolve_pno_category_profiles(
         params=category2_params,
     )
 
-    discovery_common = dict(
-        pno_variant_id=f"{params.pno_variant_id}__cat_c_discovery",
+    category3_common = dict(
+        pno_variant_id=f"{params.pno_variant_id}__cat_c_category_3",
         stage3_min_post_high_5m_volume_support_fraction=category2_params.stage3_min_post_high_5m_volume_support_fraction,
         stage3_fast_reclaim_min_post_high_5m_volume_support_fraction=max(
             float(params.stage3_fast_reclaim_min_post_high_5m_volume_support_fraction),
@@ -453,17 +453,17 @@ def resolve_pno_category_profiles(
         ideal_like_level_latest_high_max_age_bars=max(int(params.ideal_like_level_latest_high_max_age_bars), 60),
         ideal_like_ignore_decay_invalidation=True,
     )
-    discovery_params = replace(category2_params, **discovery_common)
-    discovery_profile = PnoCategoryProfile(
-        category_id="cat_c_discovery",
-        label="discovery",
+    category3_params = replace(category2_params, **category3_common)
+    category3_profile = PnoCategoryProfile(
+        category_id="cat_c_category_3",
+        label="category_3",
         priority=3,
-        params=discovery_params,
+        params=category3_params,
     )
 
     if category_mode == "discovery":
-        return (discovery_profile,)
-    return (core_profile, category2_profile, discovery_profile)
+        return (category3_profile,)
+    return (core_profile, category2_profile, category3_profile)
 
 
 def describe_pno_category_profile_set(params: PnoParams, *, category_mode: str = "all") -> str:

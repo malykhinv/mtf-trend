@@ -3705,6 +3705,14 @@ class PnoEngine:
         elif self._has_stale_reclaim_above_level(one=one, idx=idx, stage4=stage4, params=params):
             hard_block = True
             hard_block_reason = "level_already_reclaimed_too_far"
+        elif self._has_prior_upper_tf_atr_reclaim_above_level(
+            one=one,
+            five=five,
+            five_idx=five_idx,
+            stage4=stage4,
+        ):
+            hard_block = True
+            hard_block_reason = "level_already_reclaimed_too_far"
         elif (
             stage1.pre_pump_ema_crosses_1h >= 5
             and stage1.pre_pump_barcode_fraction_1h >= 0.50
@@ -4064,7 +4072,7 @@ class PnoEngine:
         confirmation_mode: str = "cross",
     ) -> float:
         del stage1
-        search_start = max(int(stage4.level_valid_idx), 0)
+        search_start = max(int(stage4.cluster_first_idx), 0)
         first_cross_idx = self._resolve_level_first_cross_idx(
             one=one,
             stage4=stage4,
@@ -4072,8 +4080,6 @@ class PnoEngine:
         )
         if first_cross_idx is None:
             search_end = idx
-        elif confirmation_mode == "close_above":
-            search_end = first_cross_idx
         else:
             search_end = first_cross_idx - 1
         if confirmation_mode != "close_above":
@@ -4091,6 +4097,32 @@ class PnoEngine:
                 return last_red_low
         return float(stage3.pullback_low)
 
+    def _has_prior_upper_tf_atr_reclaim_above_level(
+        self,
+        *,
+        one: OneMinuteFrame,
+        five: FiveMinuteFrame,
+        five_idx: int,
+        stage4: Stage4Context,
+    ) -> bool:
+        if five_idx <= 0:
+            return False
+        level_valid_five_idx = int(
+            np.searchsorted(five.timestamps, int(one.timestamps[max(int(stage4.cluster_first_idx), 0)]), side="right") - 1
+        )
+        if level_valid_five_idx < 0:
+            return False
+        search_start = max(level_valid_five_idx + 1, 0)
+        search_end = min(int(five_idx) - 1, len(five.timestamps) - 1)
+        if search_end < search_start:
+            return False
+        level = float(stage4.level)
+        for probe_idx in range(search_start, search_end + 1):
+            atr_like_threshold = max(float(five.v5[probe_idx]), self._EPSILON)
+            if float(five.highs[probe_idx]) >= (level + atr_like_threshold - self._EPSILON):
+                return True
+        return False
+
     def _resolve_level_first_cross_idx(
         self,
         *,
@@ -4098,7 +4130,7 @@ class PnoEngine:
         stage4: Stage4Context,
         idx: int,
     ) -> int | None:
-        search_start = max(min(int(stage4.level_valid_idx) + 1, idx), 0)
+        search_start = max(min(int(stage4.cluster_first_idx) + 1, idx), 0)
         if search_start > idx:
             return None
         cross_offsets = np.where(one.highs[search_start : idx + 1] >= (float(stage4.level) - self._EPSILON))[0]

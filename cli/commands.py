@@ -394,6 +394,202 @@ def _clone_args_with_output_dir(args: argparse.Namespace, *, output_dir: Path) -
     return scoped_args
 
 
+def _filter_pno_rows_by_category(
+    rows: list[dict[str, object]],
+    *,
+    category_id: str,
+) -> list[dict[str, object]]:
+    return [
+        dict(row)
+        for row in rows
+        if str(row.get("pno_category_id") or "") == category_id
+    ]
+
+
+def _filter_pno_rejections_by_category(
+    groups: dict[str, list[dict[str, object]]],
+    *,
+    category_id: str,
+) -> dict[str, list[dict[str, object]]]:
+    filtered: dict[str, list[dict[str, object]]] = {}
+    for reason, rows in groups.items():
+        filtered_rows = _filter_pno_rows_by_category(rows, category_id=category_id)
+        if filtered_rows:
+            filtered[reason] = filtered_rows
+    return filtered
+
+
+def _write_pno_category_research_context(
+    *,
+    source_diagnostics_dir: Path,
+    target_diagnostics_dir: Path,
+    category_id: str,
+) -> None:
+    source_research_dir = source_diagnostics_dir / "research_context"
+    if not source_research_dir.exists():
+        return
+    target_research_dir = target_diagnostics_dir / "research_context"
+    target_research_dir.mkdir(parents=True, exist_ok=True)
+    for csv_path in source_research_dir.glob("*.csv"):
+        frame = _read_csv_or_empty(csv_path)
+        if frame.empty:
+            frame.to_csv(target_research_dir / csv_path.name, index=False)
+            continue
+        if "pno_category_id" not in frame.columns:
+            continue
+        filtered = frame.loc[frame["pno_category_id"].astype(str) == category_id].copy()
+        filtered.to_csv(target_research_dir / csv_path.name, index=False)
+
+
+def _export_pno_category_artifacts(
+    *,
+    diagnostics_dir: Path,
+    export_result: dict[str, object],
+    symbol_frames: dict[str, SymbolMtfFrames],
+    logger: Logger,
+    log_prefix: str,
+) -> None:
+    category_meta: dict[str, tuple[str, int]] = {}
+    for trade_row in cast(list[dict[str, object]], export_result.get("all_trade_rows", [])):
+        category_id = str(trade_row.get("pno_category_id") or "")
+        if not category_id:
+            continue
+        category_meta.setdefault(
+            category_id,
+            (
+                str(trade_row.get("pno_category_label") or category_id),
+                int(trade_row.get("pno_category_priority") or 0),
+            ),
+        )
+    for rows in cast(dict[str, list[dict[str, object]]], export_result.get("stage_rows_by_stage", {})).values():
+        for row in rows:
+            category_id = str(row.get("pno_category_id") or "")
+            if not category_id:
+                continue
+            category_meta.setdefault(
+                category_id,
+                (
+                    str(row.get("pno_category_label") or category_id),
+                    int(row.get("pno_category_priority") or 0),
+                ),
+            )
+    for reason_groups in cast(dict[str, dict[str, list[dict[str, object]]]], export_result.get("stage_rejections_by_stage", {})).values():
+        for rows in reason_groups.values():
+            for row in rows:
+                category_id = str(row.get("pno_category_id") or "")
+                if not category_id:
+                    continue
+                category_meta.setdefault(
+                    category_id,
+                    (
+                        str(row.get("pno_category_label") or category_id),
+                        int(row.get("pno_category_priority") or 0),
+                    ),
+                )
+    if not category_meta:
+        return
+
+    categories_root = diagnostics_dir.parent / "categories"
+    categories_root.mkdir(parents=True, exist_ok=True)
+    root_charts_dir = diagnostics_dir / "charts"
+    diagnostics_payloads = cast(list[dict[str, object]], export_result.get("diagnostics_payloads", []))
+    stage_rows_by_stage = cast(dict[str, list[dict[str, object]]], export_result.get("stage_rows_by_stage", {}))
+    stage_rejections_by_stage = cast(dict[str, dict[str, list[dict[str, object]]]], export_result.get("stage_rejections_by_stage", {}))
+    selected_stage_ids = cast(tuple[str, ...], export_result.get("selected_stage_ids", ()))
+
+    for category_id, (category_label, category_priority) in sorted(category_meta.items(), key=lambda item: (item[1][1], item[0])):
+        category_root = categories_root / category_id
+        if category_root.exists():
+            shutil.rmtree(category_root)
+        category_diagnostics_dir = category_root / "pno_diagnostics"
+        category_diagnostics_dir.mkdir(parents=True, exist_ok=True)
+        category_charts_dir = category_diagnostics_dir / "charts"
+        category_charts_dir.mkdir(parents=True, exist_ok=True)
+
+        category_trade_rows_all: list[dict[str, object]] = []
+        category_symbols = 0
+        for item in diagnostics_payloads:
+            symbol = str(item["symbol"])
+            base_name = _pno_output_symbol_stem(symbol)
+            root_payload_path = diagnostics_dir / f"{base_name}_diagnostics.json"
+            if not root_payload_path.exists():
+                continue
+            root_payload = json.loads(root_payload_path.read_text(encoding="utf-8"))
+            trade_rows_all = list(item.get("trade_rows") or [])
+            filtered_trade_rows = _filter_pno_rows_by_category(trade_rows_all, category_id=category_id)
+            diagnostics_payload = dict(item.get("diagnostics") or {})
+            stage_events = _filter_pno_rows_by_category(list(diagnostics_payload.get("stage_events") or []), category_id=category_id)
+            stage_rejections = _filter_pno_rows_by_category(list(diagnostics_payload.get("stage_rejections") or []), category_id=category_id)
+            if not filtered_trade_rows and not stage_events and not stage_rejections:
+                continue
+            category_symbols += 1
+            category_trade_rows_all.extend(filtered_trade_rows)
+            chart_paths_root = list(root_payload.get("chart_paths") or [])
+            selected_chart_paths: list[str] = []
+            if chart_paths_root and len(chart_paths_root) == len(trade_rows_all):
+                for trade_index, trade_row in enumerate(trade_rows_all):
+                    if str(trade_row.get("pno_category_id") or "") != category_id:
+                        continue
+                    source_chart = Path(str(chart_paths_root[trade_index]))
+                    if not source_chart.exists():
+                        continue
+                    target_chart = category_charts_dir / source_chart.name
+                    shutil.copy2(source_chart, target_chart)
+                    selected_chart_paths.append(str(target_chart))
+            payload = {
+                "symbol": symbol,
+                "trades_generated": len(filtered_trade_rows),
+                "diagnostics": {
+                    **diagnostics_payload,
+                    "trades_generated": len(filtered_trade_rows),
+                    "stage_events": stage_events,
+                    "stage_rejections": stage_rejections,
+                },
+                "trades": filtered_trade_rows,
+                "chart_paths": selected_chart_paths,
+            }
+            (category_diagnostics_dir / f"{base_name}_diagnostics.json").write_text(
+                _to_compact_json(payload),
+                encoding="utf-8",
+            )
+            if filtered_trade_rows:
+                pd.DataFrame(filtered_trade_rows).to_csv(category_diagnostics_dir / f"{base_name}_trades.csv", index=False)
+
+        _write_pno_category_research_context(
+            source_diagnostics_dir=diagnostics_dir,
+            target_diagnostics_dir=category_diagnostics_dir,
+            category_id=category_id,
+        )
+        category_stage_rows = {
+            stage_id: _filter_pno_rows_by_category(rows, category_id=category_id)
+            for stage_id, rows in stage_rows_by_stage.items()
+        }
+        category_stage_rejections = {
+            stage_id: _filter_pno_rejections_by_category(reason_groups, category_id=category_id)
+            for stage_id, reason_groups in stage_rejections_by_stage.items()
+        }
+        _export_pno_stage_reviews(
+            diagnostics_dir=category_diagnostics_dir,
+            symbol_frames=symbol_frames,
+            stage_rows_by_stage=category_stage_rows,
+            stage_rejections_by_stage=category_stage_rejections,
+            selected_stage_ids=selected_stage_ids,
+            render_charts=False,
+            passed_chart_stage_ids=(),
+            logger=logger,
+            log_prefix=f"{log_prefix} [{category_id}]",
+        )
+        context_payload = {
+            "category_id": category_id,
+            "category_label": category_label,
+            "category_priority": category_priority,
+            "symbols": category_symbols,
+            "trades_generated": len(category_trade_rows_all),
+        }
+        (category_root / "category_context.json").write_text(_to_compact_json(context_payload), encoding="utf-8")
+    logger.info("%s: pno category artifacts saved categories=%s", log_prefix, ",".join(sorted(category_meta)))
+
+
 def _plot_pno_grid_artifacts(
     *,
     config: AppConfig,

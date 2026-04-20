@@ -1080,9 +1080,9 @@ def test_resolve_pno_category_profiles_splits_close_above_into_core_category2_an
     discovery_only = resolve_pno_category_profiles(params, category_mode="discovery")
     core_only = resolve_pno_category_profiles(params, category_mode="core")
 
-    assert [profile.category_id for profile in discovery_only] == ["cat_c_discovery"]
+    assert [profile.category_id for profile in discovery_only] == ["cat_c_category_3"]
     assert [profile.category_id for profile in core_only] == ["cat_a_core"]
-    assert [profile.category_id for profile in profiles] == ["cat_a_core", "cat_b_category_2", "cat_c_discovery"]
+    assert [profile.category_id for profile in profiles] == ["cat_a_core", "cat_b_category_2", "cat_c_category_3"]
     assert profiles[0].params.stage1_max_active_high_upper_wick_share == pytest.approx(0.73)
     assert profiles[1].params.stage1_min_cumulative_quote_volume == pytest.approx(140_000.0)
     assert profiles[1].params.stage1_max_active_high_upper_wick_share == pytest.approx(0.84)
@@ -1107,8 +1107,8 @@ def test_resolve_pno_category_profiles_splits_close_above_into_core_category2_an
     assert profiles[2].params.ideal_like_min_volume_ratio_start == pytest.approx(7.0)
     assert profiles[2].params.ideal_like_relaxed_level_maturity_fraction == pytest.approx(0.05)
     assert profiles[2].params.ideal_like_ignore_decay_invalidation is True
-    assert describe_pno_category_profile_set(params) == "cat_a_core+cat_b_category_2+cat_c_discovery"
-    assert describe_pno_category_profile_set(params, category_mode="discovery") == "cat_c_discovery"
+    assert describe_pno_category_profile_set(params) == "cat_a_core+cat_b_category_2+cat_c_category_3"
+    assert describe_pno_category_profile_set(params, category_mode="discovery") == "cat_c_category_3"
     assert describe_pno_category_profile_set(params, category_mode="core") == "cat_a_core"
 
 
@@ -1207,19 +1207,19 @@ def test_pno_strategy_merges_category_profiles_and_dedups_trade_entries(monkeypa
     assert profile_calls == [
         "baseline_close__cat_a_core",
         "baseline_close__cat_b_category_2",
-        "baseline_close__cat_c_discovery",
+        "baseline_close__cat_c_category_3",
     ]
     assert len(trades) == 2
     assert trades[0].metadata["pno_category_id"] == "cat_a_core"
-    assert trades[1].metadata["pno_category_id"] == "cat_c_discovery"
+    assert trades[1].metadata["pno_category_id"] == "cat_c_category_3"
     diagnostics = strategy.consume_last_generation_diagnostics()
     assert diagnostics["trades_generated"] == 2
-    assert diagnostics["context"]["category_profiles_run"] == ["cat_a_core", "cat_b_category_2", "cat_c_discovery"]
+    assert diagnostics["context"]["category_profiles_run"] == ["cat_a_core", "cat_b_category_2", "cat_c_category_3"]
     assert diagnostics["stage_hits"]["stage_5_trade"] == 3
     assert {event["pno_category_id"] for event in diagnostics["stage_events"]} == {
         "cat_a_core",
         "cat_b_category_2",
-        "cat_c_discovery",
+        "cat_c_category_3",
     }
 
 
@@ -1737,6 +1737,170 @@ def test_resolve_low_last_red_plan_ignores_reclaimed_red_bar_above_level() -> No
     )
 
     assert stop_level == pytest.approx(9.95)
+
+
+def test_resolve_low_last_red_plan_uses_level_life_before_first_cross_only() -> None:
+    engine = PnoEngine()
+    one = _build_test_one_frame_multi(timestamps_ms=[0, 60_000, 120_000, 180_000, 240_000], price=10.0)
+    one.red[:] = np.array([False, True, False, True, False], dtype=bool)
+    one.highs[:] = np.array([10.0, 10.0, 10.05, 10.08, 10.25], dtype=np.float64)
+    one.lows[:] = np.array([9.9, 9.96, 10.05, 10.12, 10.1], dtype=np.float64)
+    one.frame.loc[:, "high"] = one.highs
+    one.frame.loc[:, "low"] = one.lows
+    stage1 = Stage1Context(
+        start_idx=0,
+        start_timestamp=0,
+        pump_start_5m_idx=0,
+        pump_start_timestamp=0,
+        current_5m_idx=0,
+        active_high_idx=0,
+        active_high_timestamp=0,
+        active_high=10.4,
+        reference_high=10.4,
+        leg_start_idx=0,
+        leg_start_timestamp=0,
+        leg_start=9.8,
+        leg_size=0.6,
+        reference_leg_size=0.6,
+        hold_floor=10.0,
+    )
+    stage3 = Stage3Context(
+        active_high_idx=0,
+        active_high_timestamp=0,
+        active_high=10.4,
+        pullback_start_idx=1,
+        pullback_low_idx=1,
+        pullback_low_timestamp=60_000,
+        pullback_low=9.9,
+        pullback_depth=0.5,
+        pullback_age_bars=2,
+        validation_timestamp=240_000,
+    )
+    stage4 = _build_test_stage4_context(
+        level=10.1,
+        cluster_first_idx=1,
+        level_valid_idx=3,
+        level_valid_timestamp=180_000,
+    )
+
+    stop_level = engine._resolve_low_last_red_plan(
+        one=one,
+        stage1=stage1,
+        stage3=stage3,
+        stage4=stage4,
+        idx=4,
+        confirmation_mode="close_above",
+    )
+
+    assert stop_level == pytest.approx(9.96)
+
+
+def test_rebuild_stage4_scores_blocks_level_after_prior_upper_tf_atr_reclaim(monkeypatch) -> None:
+    engine = PnoEngine()
+    one = _build_test_one_frame_multi(
+        timestamps_ms=[0, 60_000, 120_000, 180_000, 240_000, 300_000, 360_000, 420_000, 480_000, 540_000],
+        price=10.0,
+    )
+    five = _build_test_five_frame(
+        opens=[10.0, 10.1, 10.2],
+        highs=[10.2, 10.45, 10.3],
+        lows=[9.9, 10.0, 10.15],
+        closes=[10.1, 10.22, 10.25],
+        ema20=[9.9, 10.0, 10.1],
+    )
+    five.atr_pre_14[:] = np.array([0.1, 0.1, 0.1], dtype=np.float64)
+    stage1 = Stage1Context(
+        start_idx=0,
+        start_timestamp=0,
+        pump_start_5m_idx=0,
+        pump_start_timestamp=0,
+        current_5m_idx=2,
+        active_high_idx=1,
+        active_high_timestamp=60_000,
+        active_high=10.6,
+        reference_high=10.6,
+        leg_start_idx=0,
+        leg_start_timestamp=0,
+        leg_start=9.8,
+        leg_size=0.8,
+        reference_leg_size=0.8,
+        hold_floor=10.0,
+        pump_range_5m=0.8,
+    )
+    stage3 = Stage3Context(
+        active_high_idx=1,
+        active_high_timestamp=60_000,
+        active_high=10.6,
+        pullback_start_idx=1,
+        pullback_low_idx=1,
+        pullback_low_timestamp=60_000,
+        pullback_low=10.0,
+        pullback_depth=0.6,
+        pullback_age_bars=2,
+        validation_timestamp=540_000,
+    )
+    stage4 = _build_test_stage4_context(
+        active_high=10.6,
+        active_high_timestamp=60_000,
+        pullback_low=10.0,
+        pullback_low_timestamp=60_000,
+        pullback_depth=0.6,
+        level=10.2,
+        cluster_indices=(1,),
+        cluster_prices=(10.2,),
+        cluster_first_idx=1,
+        cluster_last_idx=1,
+        level_valid_idx=2,
+        level_valid_timestamp=120_000,
+        touches=1,
+        entry_pos=0.65,
+    )
+
+    monkeypatch.setattr(engine, "_resolve_confirmed_highs", lambda **_kwargs: [])
+    monkeypatch.setattr(engine, "_resolve_confirmed_lows", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        engine,
+        "_resolve_pullback_base_profile",
+        lambda **_kwargs: {
+            "bonus": 0,
+            "start_idx": None,
+            "end_idx": None,
+            "low": None,
+            "high": None,
+            "quality": 0.0,
+            "left_vacuum": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        engine,
+        "_resolve_overhead_resistance_profile",
+        lambda **_kwargs: {
+            "score": 0.2,
+            "penalty": 0,
+            "red_body_share": 0.0,
+            "red_count": 0,
+            "dominant_timestamp": None,
+            "dominant_high": None,
+            "dominant_body": 0.0,
+        },
+    )
+    monkeypatch.setattr(engine, "_resolve_untested_high_penalty", lambda **_kwargs: 0)
+    monkeypatch.setattr(engine, "_resolve_low_last_red_plan", lambda **_kwargs: 9.95)
+    monkeypatch.setattr(engine, "_resolve_tp2", lambda **_kwargs: 10.9)
+
+    rebuilt = engine._rebuild_stage4_scores(
+        one=one,
+        five=five,
+        idx=9,
+        five_idx=2,
+        stage1=stage1,
+        stage3=stage3,
+        stage4=stage4,
+        params=PnoParams(symbol="TEST/USDT"),
+    )
+
+    assert rebuilt.hard_block is True
+    assert rebuilt.hard_block_reason == "level_already_reclaimed_too_far"
 
 
 def test_shallow_pre_trigger_wick_does_not_invalidate_armed_entry() -> None:
