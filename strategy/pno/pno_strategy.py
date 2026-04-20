@@ -133,6 +133,25 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_stage1_pre_pump_high_max_fraction_of_leg": params.stage1_pre_pump_high_max_fraction_of_leg,
             "pno_stage3_max_post_high_wick_share": params.stage3_max_post_high_wick_share,
             "pno_stage3_max_post_high_body_overlap_rate": params.stage3_max_post_high_body_overlap_rate,
+            "pno_stage3_min_post_high_5m_volume_support_fraction": params.stage3_min_post_high_5m_volume_support_fraction,
+            "pno_stage3_fast_reclaim_min_post_high_5m_volume_support_fraction": (
+                params.stage3_fast_reclaim_min_post_high_5m_volume_support_fraction
+            ),
+            "pno_stage3_fast_reclaim_max_pullback_age_bars": params.stage3_fast_reclaim_max_pullback_age_bars,
+            "pno_ideal_like_impulse_enabled": params.ideal_like_impulse_enabled,
+            "pno_ideal_like_min_impulse_atr_pre": params.ideal_like_min_impulse_atr_pre,
+            "pno_ideal_like_min_peak_bar_tr_atr_pre": params.ideal_like_min_peak_bar_tr_atr_pre,
+            "pno_ideal_like_min_volume_ratio_start": params.ideal_like_min_volume_ratio_start,
+            "pno_ideal_like_min_path_efficiency": params.ideal_like_min_path_efficiency,
+            "pno_ideal_like_max_wick_share": params.ideal_like_max_wick_share,
+            "pno_ideal_like_min_body_share_mean": params.ideal_like_min_body_share_mean,
+            "pno_ideal_like_min_body_wick_edge": params.ideal_like_min_body_wick_edge,
+            "pno_ideal_like_max_micro_flat_bar_share": params.ideal_like_max_micro_flat_bar_share,
+            "pno_ideal_like_max_active_high_upper_wick_share": params.ideal_like_max_active_high_upper_wick_share,
+            "pno_ideal_like_max_counterflow_ratio_5m": params.ideal_like_max_counterflow_ratio_5m,
+            "pno_ideal_like_relaxed_level_maturity_fraction": params.ideal_like_relaxed_level_maturity_fraction,
+            "pno_ideal_like_level_latest_high_max_age_bars": params.ideal_like_level_latest_high_max_age_bars,
+            "pno_ideal_like_ignore_decay_invalidation": params.ideal_like_ignore_decay_invalidation,
             "pno_level_cluster_spread_v1": params.level_cluster_spread_v1,
             "pno_level_cluster_relaxed_spread_v1": params.level_cluster_relaxed_spread_v1,
             "pno_level_latest_high_max_age_bars": params.level_latest_high_max_age_bars,
@@ -193,21 +212,24 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         seen_trade_keys: set[tuple[object, ...]] = set()
         trades: list[TradeResult] = []
         profile_contexts: dict[str, object] = {}
+        self._engine.begin_runtime_batch()
+        try:
+            for profile in profiles:
+                profile_trades = runner(profile.params)
+                profile_diagnostics = self._engine.consume_last_generation_diagnostics()
+                tagged_diagnostics = self._tag_profile_diagnostics(profile_diagnostics, profile=profile)
+                self._merge_generation_diagnostics(combined_diagnostics, tagged_diagnostics)
+                profile_contexts[profile.category_id] = dict(tagged_diagnostics.get("context", {}))
 
-        for profile in profiles:
-            profile_trades = runner(profile.params)
-            profile_diagnostics = self._engine.consume_last_generation_diagnostics()
-            tagged_diagnostics = self._tag_profile_diagnostics(profile_diagnostics, profile=profile)
-            self._merge_generation_diagnostics(combined_diagnostics, tagged_diagnostics)
-            profile_contexts[profile.category_id] = dict(tagged_diagnostics.get("context", {}))
-
-            for trade in profile_trades:
-                tagged_trade = self._tag_trade_result(trade, profile=profile)
-                trade_key = self._trade_dedup_key(tagged_trade, symbol=profile.params.symbol)
-                if trade_key in seen_trade_keys:
-                    continue
-                seen_trade_keys.add(trade_key)
-                trades.append(tagged_trade)
+                for trade in profile_trades:
+                    tagged_trade = self._tag_trade_result(trade, profile=profile)
+                    trade_key = self._trade_dedup_key(tagged_trade, symbol=profile.params.symbol)
+                    if trade_key in seen_trade_keys:
+                        continue
+                    seen_trade_keys.add(trade_key)
+                    trades.append(tagged_trade)
+        finally:
+            self._engine.end_runtime_batch()
 
         trades.sort(key=lambda trade: (trade.entry_timestamp_ms, trade.exit_timestamp_ms))
         combined_diagnostics["trades_generated"] = len(trades)

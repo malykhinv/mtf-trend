@@ -1067,7 +1067,7 @@ def test_pno_setup_family_marks_stale_reclaim_as_mixed() -> None:
     assert tier == "mixed"
 
 
-def test_resolve_pno_category_profiles_splits_close_above_into_core_and_discovery() -> None:
+def test_resolve_pno_category_profiles_splits_close_above_into_core_category2_and_discovery() -> None:
     params = PnoParams(
         symbol="BTC/USDT",
         pno_variant_id="baseline_close",
@@ -1080,9 +1080,9 @@ def test_resolve_pno_category_profiles_splits_close_above_into_core_and_discover
     discovery_only = resolve_pno_category_profiles(params, category_mode="discovery")
     core_only = resolve_pno_category_profiles(params, category_mode="core")
 
-    assert [profile.category_id for profile in discovery_only] == ["cat_b_discovery"]
+    assert [profile.category_id for profile in discovery_only] == ["cat_c_discovery"]
     assert [profile.category_id for profile in core_only] == ["cat_a_core"]
-    assert [profile.category_id for profile in profiles] == ["cat_a_core", "cat_b_discovery"]
+    assert [profile.category_id for profile in profiles] == ["cat_a_core", "cat_b_category_2", "cat_c_discovery"]
     assert profiles[0].params.stage1_max_active_high_upper_wick_share == pytest.approx(0.73)
     assert profiles[1].params.stage1_min_cumulative_quote_volume == pytest.approx(140_000.0)
     assert profiles[1].params.stage1_max_active_high_upper_wick_share == pytest.approx(0.84)
@@ -1094,11 +1094,21 @@ def test_resolve_pno_category_profiles_splits_close_above_into_core_and_discover
     assert profiles[1].params.stage3_max_post_high_wick_share == pytest.approx(0.88)
     assert profiles[1].params.stage3_max_post_high_body_overlap_rate == pytest.approx(0.90)
     assert profiles[1].params.stage3_min_post_high_5m_volume_support_fraction == pytest.approx(0.35)
+    assert profiles[1].params.stage3_fast_reclaim_min_post_high_5m_volume_support_fraction == pytest.approx(0.0)
     assert profiles[0].params.close_above_min_signal_ema_spread_pct == pytest.approx(0.90)
     assert profiles[1].params.close_above_min_signal_ema_spread_pct == pytest.approx(0.45)
     assert profiles[1].params.close_above_max_entry_pos == pytest.approx(0.90)
-    assert describe_pno_category_profile_set(params) == "cat_a_core+cat_b_discovery"
-    assert describe_pno_category_profile_set(params, category_mode="discovery") == "cat_b_discovery"
+    assert profiles[2].params.stage3_min_post_high_5m_volume_support_fraction == pytest.approx(0.35)
+    assert profiles[2].params.stage3_fast_reclaim_min_post_high_5m_volume_support_fraction == pytest.approx(0.30)
+    assert profiles[2].params.stage3_fast_reclaim_max_pullback_age_bars == 2
+    assert profiles[2].params.ideal_like_impulse_enabled is True
+    assert profiles[2].params.ideal_like_min_impulse_atr_pre == pytest.approx(14.0)
+    assert profiles[2].params.ideal_like_min_peak_bar_tr_atr_pre == pytest.approx(6.0)
+    assert profiles[2].params.ideal_like_min_volume_ratio_start == pytest.approx(7.0)
+    assert profiles[2].params.ideal_like_relaxed_level_maturity_fraction == pytest.approx(0.05)
+    assert profiles[2].params.ideal_like_ignore_decay_invalidation is True
+    assert describe_pno_category_profile_set(params) == "cat_a_core+cat_b_category_2+cat_c_discovery"
+    assert describe_pno_category_profile_set(params, category_mode="discovery") == "cat_c_discovery"
     assert describe_pno_category_profile_set(params, category_mode="core") == "cat_a_core"
 
 
@@ -1135,7 +1145,7 @@ def test_pno_strategy_merges_category_profiles_and_dedups_trade_entries(monkeypa
         pnl_percent=Percentage(2.0),
         metadata={"symbol": "BTC/USDT", "level": 1.18, "entry_price_actual": 1.2},
     )
-    duplicate_discovery_trade = TradeResult(
+    duplicate_category2_trade = TradeResult(
         entry_price=Price(1.2),
         exit_price=Price(1.32),
         entry_timestamp_ms=180_000,
@@ -1170,6 +1180,13 @@ def test_pno_strategy_merges_category_profiles_and_dedups_trade_entries(monkeypa
             "stage_hits": {"stage_3_valid_pullback": 1, "stage_5_trade": 1},
             "context": {"symbol": "BTC/USDT", "stage_order": ["stage_1_pump", "stage_5_trade"]},
         },
+        {
+            "trades_generated": 1,
+            "stage_events": [{"stage_id": "stage_4_level", "timestamp_ms": 300_000}],
+            "stage_rejections": [],
+            "stage_hits": {"stage_4_level": 1, "stage_5_trade": 1},
+            "context": {"symbol": "BTC/USDT", "stage_order": ["stage_1_pump", "stage_5_trade"]},
+        },
     ]
     profile_calls: list[str] = []
 
@@ -1178,24 +1195,31 @@ def test_pno_strategy_merges_category_profiles_and_dedups_trade_entries(monkeypa
         profile_calls.append(params.pno_variant_id)
         if params.pno_variant_id.endswith("__cat_a_core"):
             return [core_trade]
-        return [duplicate_discovery_trade, discovery_trade]
+        if params.pno_variant_id.endswith("__cat_b_category_2"):
+            return [duplicate_category2_trade]
+        return [discovery_trade]
 
     monkeypatch.setattr(strategy._engine, "generate_events_multi_tf", _fake_generate_events_multi_tf)
     monkeypatch.setattr(strategy._engine, "consume_last_generation_diagnostics", lambda: diagnostics_queue.pop(0))
 
     trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
 
-    assert profile_calls == ["baseline_close__cat_a_core", "baseline_close__cat_b_discovery"]
+    assert profile_calls == [
+        "baseline_close__cat_a_core",
+        "baseline_close__cat_b_category_2",
+        "baseline_close__cat_c_discovery",
+    ]
     assert len(trades) == 2
     assert trades[0].metadata["pno_category_id"] == "cat_a_core"
-    assert trades[1].metadata["pno_category_id"] == "cat_b_discovery"
+    assert trades[1].metadata["pno_category_id"] == "cat_c_discovery"
     diagnostics = strategy.consume_last_generation_diagnostics()
     assert diagnostics["trades_generated"] == 2
-    assert diagnostics["context"]["category_profiles_run"] == ["cat_a_core", "cat_b_discovery"]
-    assert diagnostics["stage_hits"]["stage_5_trade"] == 2
+    assert diagnostics["context"]["category_profiles_run"] == ["cat_a_core", "cat_b_category_2", "cat_c_discovery"]
+    assert diagnostics["stage_hits"]["stage_5_trade"] == 3
     assert {event["pno_category_id"] for event in diagnostics["stage_events"]} == {
         "cat_a_core",
-        "cat_b_discovery",
+        "cat_b_category_2",
+        "cat_c_discovery",
     }
 
 
@@ -3554,6 +3578,115 @@ def test_stage3_allows_two_post_high_closes_below_ema20_when_base_is_clean() -> 
     assert stage3.post_high_close_below_ema20_count == 2
 
 
+def test_stage3_fast_reclaim_exception_allows_fresh_low_support_pullback() -> None:
+    engine = PnoEngine()
+    params = PnoParams(
+        symbol="TEST/USDT",
+        pullback_valid_min_leg_fraction=0.5,
+        stage3_min_post_high_5m_volume_support_fraction=0.35,
+        stage3_fast_reclaim_min_post_high_5m_volume_support_fraction=0.30,
+        stage3_fast_reclaim_max_pullback_age_bars=2,
+    )
+    one = _build_test_one_frame(timestamp_ms=600_000)
+    five = _build_test_five_frame(
+        opens=[10.0, 10.8, 10.6],
+        highs=[11.0, 10.85, 10.7],
+        lows=[9.8, 10.45, 10.5],
+        closes=[10.9, 10.55, 10.62],
+        ema20=[9.9, 10.2, 10.25],
+    )
+    five.volumes[:] = np.array([100.0, 32.0, 28.0], dtype="float64")
+    five.frame.loc[:, "volume"] = five.volumes
+    stage1 = Stage1Context(
+        start_idx=0,
+        start_timestamp=0,
+        pump_start_5m_idx=0,
+        pump_start_timestamp=0,
+        current_5m_idx=2,
+        active_high_idx=0,
+        active_high_timestamp=0,
+        active_high=11.0,
+        reference_high=11.0,
+        leg_start_idx=0,
+        leg_start_timestamp=0,
+        leg_start=10.0,
+        leg_size=1.0,
+        reference_leg_size=1.0,
+        hold_floor=10.2,
+        pump_range_5m=1.0,
+    )
+    stage2 = Stage2Context(
+        active_high_idx=0,
+        active_high_timestamp=0,
+        active_high=11.0,
+        red_after_high_idx=1,
+        pullback_start_idx=1,
+        pullback_low_idx=1,
+        pullback_low_timestamp=300_000,
+        pullback_low=10.4,
+        pullback_depth=0.6,
+        pullback_age_bars=2,
+    )
+
+    stage3, reason = engine._resolve_stage3_context(
+        one=one,
+        five=five,
+        idx=0,
+        five_idx=2,
+        stage1=stage1,
+        stage2=stage2,
+        params=params,
+    )
+
+    assert reason is None
+    assert stage3 is not None
+
+
+def test_ideal_like_level_cluster_fallback_recovers_recent_reclaim_high() -> None:
+    engine = PnoEngine()
+    one = engine._prepare_1m_frame(
+        pd.DataFrame(
+            {
+                "timestamp": [0, 60_000, 120_000, 180_000, 240_000, 300_000],
+                "open": [10.0, 10.8, 10.45, 10.56, 10.60, 10.61],
+                "high": [11.0, 10.82, 10.58, 10.68, 10.67, 10.66],
+                "low": [9.8, 10.40, 10.42, 10.54, 10.58, 10.60],
+                "close": [10.9, 10.44, 10.56, 10.66, 10.63, 10.64],
+                "volume": [10.0, 15.0, 12.0, 11.0, 10.0, 9.0],
+            }
+        )
+    )
+    stage3 = Stage3Context(
+        active_high_idx=0,
+        active_high_timestamp=0,
+        active_high=11.0,
+        pullback_start_idx=1,
+        pullback_low_idx=2,
+        pullback_low_timestamp=120_000,
+        pullback_low=10.42,
+        pullback_depth=0.58,
+        pullback_age_bars=2,
+        validation_timestamp=300_000,
+    )
+    params = PnoParams(
+        symbol="TEST/USDT",
+        ideal_like_level_latest_high_max_age_bars=60,
+    )
+
+    cluster = engine._resolve_ideal_like_level_cluster(
+        one=one,
+        idx=5,
+        stage3=stage3,
+        retired_clusters=[],
+        params=params,
+    )
+
+    assert cluster is not None
+    cluster_indices, cluster_prices = cluster
+    assert cluster_indices == (3,)
+    assert cluster_prices == (pytest.approx(10.68),)
+
+
 def test_stage3_allows_wick_below_leg_start_if_closes_hold_above() -> None:
     engine = PnoEngine()
     params = PnoParams(
@@ -4565,6 +4698,95 @@ def test_pno_incomplete_trade_is_not_emitted() -> None:
 
     assert trade is None
     assert exit_idx == 1
+
+
+def test_ideal_like_impulse_can_ignore_decay_only_in_discovery_mode(monkeypatch) -> None:
+    engine = PnoEngine()
+    one = engine._prepare_1m_frame(
+        pd.DataFrame(
+            {
+                "timestamp": [60_000, 120_000, 180_000],
+                "open": [10.0, 10.1, 10.2],
+                "high": [10.2, 10.25, 10.3],
+                "low": [9.98, 10.05, 10.15],
+                "close": [10.1, 10.2, 10.25],
+                "volume": [10.0, 11.0, 12.0],
+            }
+        )
+    )
+    armed = ArmedContext(
+        entry_idx=1,
+        stage1=Stage1Context(
+            start_idx=0,
+            start_timestamp=60_000,
+            pump_start_5m_idx=0,
+            pump_start_timestamp=60_000,
+            current_5m_idx=0,
+            active_high_idx=0,
+            active_high_timestamp=60_000,
+            active_high=10.8,
+            reference_high=10.8,
+            leg_start_idx=0,
+            leg_start_timestamp=60_000,
+            leg_start=10.0,
+            leg_size=0.8,
+            reference_leg_size=0.8,
+            pump_range_5m=0.8,
+            hold_floor=10.2,
+            pump_impulse_atr_pre=20.0,
+            pump_peak_bar_tr_atr_pre=8.0,
+            pump_volume_ratio_start=10.0,
+            pump_path_efficiency=0.7,
+            pump_wick_share=0.3,
+            pump_body_share_mean=0.6,
+            pump_body_wick_edge=0.2,
+            pump_micro_flat_bar_share=0.0,
+            active_high_bar_upper_wick_share=0.2,
+            pump_counterflow_ratio_5m=0.0,
+        ),
+        stage3=Stage3Context(
+            active_high_idx=0,
+            active_high_timestamp=60_000,
+            active_high=10.8,
+            pullback_start_idx=0,
+            pullback_low_idx=0,
+            pullback_low_timestamp=60_000,
+            pullback_low=10.0,
+            pullback_depth=0.8,
+            pullback_age_bars=2,
+            validation_timestamp=120_000,
+        ),
+        stage4=_build_test_stage4_context(
+            active_high=10.8,
+            pullback_low=10.0,
+            level=10.2,
+            level_valid_idx=0,
+            level_valid_timestamp=60_000,
+            entry_plan=10.25,
+            sl_plan=10.0,
+            low_last_red_plan=10.0,
+            tp1=10.8,
+            tp2=11.6,
+        ),
+    )
+
+    monkeypatch.setattr(engine, "_resolve_close_above_pre_signal_decay_reason", lambda **kwargs: "level_drifted_too_long_before_signal")
+
+    blocked = engine._is_armed_entry_invalidated_before_trigger(
+        one=one,
+        idx=1,
+        armed=armed,
+        params=PnoParams(symbol="TEST/USDT"),
+    )
+    allowed = engine._is_armed_entry_invalidated_before_trigger(
+        one=one,
+        idx=1,
+        armed=armed,
+        params=PnoParams(symbol="TEST/USDT", ideal_like_impulse_enabled=True, ideal_like_ignore_decay_invalidation=True),
+    )
+
+    assert blocked is True
+    assert allowed is False
 
 
 def test_pno_close_above_confirmation_enters_on_next_bar() -> None:

@@ -312,6 +312,44 @@ class PnoEngine:
         self._stage1_cache_dir.mkdir(parents=True, exist_ok=True)
         self._stage1_state_memory_cache: dict[str, Stage1StateArrays] = {}
         self._runtime_reference_high_cache: dict[tuple[int, int], tuple[float, float]] = {}
+        self._runtime_batch_depth = 0
+        self._runtime_prepared_data_cache: dict[tuple[int, int, tuple[str, ...]], pd.DataFrame] = {}
+        self._runtime_prepared_1m_cache: dict[tuple[int, int, int, int], OneMinuteFrame] = {}
+        self._runtime_prepared_5m_cache: dict[tuple[int, int, int, int, str | None], FiveMinuteFrame] = {}
+
+    def begin_runtime_batch(self) -> None:
+        self._runtime_batch_depth += 1
+        if self._runtime_batch_depth == 1:
+            self._clear_runtime_frame_caches()
+
+    def end_runtime_batch(self) -> None:
+        if self._runtime_batch_depth <= 0:
+            self._clear_runtime_frame_caches()
+            self._runtime_batch_depth = 0
+            return
+        self._runtime_batch_depth -= 1
+        if self._runtime_batch_depth == 0:
+            self._clear_runtime_frame_caches()
+
+    def _clear_runtime_frame_caches(self) -> None:
+        self._runtime_prepared_data_cache.clear()
+        self._runtime_prepared_1m_cache.clear()
+        self._runtime_prepared_5m_cache.clear()
+
+    @staticmethod
+    def _runtime_frame_signature(frame: pd.DataFrame) -> tuple[int, int, tuple[str, ...]]:
+        return (id(frame), len(frame), tuple(str(col) for col in frame.columns))
+
+    def _prepare_data_cached(self, frame: pd.DataFrame) -> pd.DataFrame:
+        if self._runtime_batch_depth <= 0:
+            return self.prepare_data(frame)
+        cache_key = self._runtime_frame_signature(frame)
+        cached = self._runtime_prepared_data_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        prepared = self.prepare_data(frame)
+        self._runtime_prepared_data_cache[cache_key] = prepared
+        return prepared
 
     def consume_last_generation_diagnostics(self) -> GenerationDiagnostics:
         diagnostics = dict(self._last_generation_diagnostics)
@@ -548,8 +586,8 @@ class PnoEngine:
         params: PnoParams,
     ) -> list[TradeResult]:
         self._runtime_reference_high_cache.clear()
-        prepared_levels = self.prepare_data(levels_frame)
-        prepared_entry = self.prepare_data(entry_frame)
+        prepared_levels = self._prepare_data_cached(levels_frame)
+        prepared_entry = self._prepare_data_cached(entry_frame)
         diagnostics = self._empty_diagnostics()
         diagnostics["context"] = {
             **diagnostics["context"],
@@ -609,19 +647,40 @@ class PnoEngine:
                 self._last_generation_diagnostics = diagnostics
                 return []
 
-        one = self._prepare_1m_frame(
-            prepared_entry,
-            timeframe_ms=entry_timeframe_ms,
+        one_cache_key = (
+            id(prepared_entry),
+            len(prepared_entry),
+            int(entry_timeframe_ms),
+            self._runtime_batch_depth,
         )
-        five = self._prepare_5m_frame(
-            prepared_levels,
-            prepared_entry,
-            params,
-            levels_timeframe_ms=levels_timeframe_ms,
-            entry_timeframe_ms=entry_timeframe_ms,
-            stage1_cache_key=cache_key,
-            cached_stage1_state=cached_stage1_state,
+        one = self._runtime_prepared_1m_cache.get(one_cache_key)
+        if one is None:
+            one = self._prepare_1m_frame(
+                prepared_entry,
+                timeframe_ms=entry_timeframe_ms,
+            )
+            if self._runtime_batch_depth > 0:
+                self._runtime_prepared_1m_cache[one_cache_key] = one
+        five_cache_key = (
+            id(prepared_levels),
+            len(prepared_levels),
+            int(levels_timeframe_ms),
+            int(entry_timeframe_ms),
+            cache_key,
         )
+        five = self._runtime_prepared_5m_cache.get(five_cache_key)
+        if five is None:
+            five = self._prepare_5m_frame(
+                prepared_levels,
+                prepared_entry,
+                params,
+                levels_timeframe_ms=levels_timeframe_ms,
+                entry_timeframe_ms=entry_timeframe_ms,
+                stage1_cache_key=cache_key,
+                cached_stage1_state=cached_stage1_state,
+            )
+            if self._runtime_batch_depth > 0:
+                self._runtime_prepared_5m_cache[five_cache_key] = five
         trades = self._run(one=one, five=five, params=params, diagnostics=diagnostics)
         diagnostics["trades_generated"] = len(trades)
         self._last_generation_diagnostics = diagnostics
@@ -1475,6 +1534,7 @@ class PnoEngine:
                     one=one,
                     idx=i,
                     armed=live_armed,
+                    params=params,
                 ):
                     _reject_stage(
                         PNO_STAGE_5_TRADE,
@@ -2213,6 +2273,23 @@ class PnoEngine:
             return min(required, 0.05)
         return required
 
+    @staticmethod
+    def _is_ideal_like_impulse(*, stage1: Stage1Context, params: PnoParams) -> bool:
+        if not bool(getattr(params, "ideal_like_impulse_enabled", False)):
+            return False
+        return bool(
+            float(stage1.pump_impulse_atr_pre) >= float(params.ideal_like_min_impulse_atr_pre)
+            and float(stage1.pump_peak_bar_tr_atr_pre) >= float(params.ideal_like_min_peak_bar_tr_atr_pre)
+            and float(stage1.pump_volume_ratio_start) >= float(params.ideal_like_min_volume_ratio_start)
+            and float(stage1.pump_path_efficiency) >= float(params.ideal_like_min_path_efficiency)
+            and float(stage1.pump_wick_share) <= float(params.ideal_like_max_wick_share)
+            and float(stage1.pump_body_share_mean) >= float(params.ideal_like_min_body_share_mean)
+            and float(stage1.pump_body_wick_edge) >= float(params.ideal_like_min_body_wick_edge)
+            and float(stage1.pump_micro_flat_bar_share) <= float(params.ideal_like_max_micro_flat_bar_share)
+            and float(stage1.active_high_bar_upper_wick_share) <= float(params.ideal_like_max_active_high_upper_wick_share)
+            and float(stage1.pump_counterflow_ratio_5m) <= float(params.ideal_like_max_counterflow_ratio_5m)
+        )
+
     def _has_stale_reclaim_above_level(
         self,
         *,
@@ -2345,12 +2422,11 @@ class PnoEngine:
         active_high_5m_idx = int(np.searchsorted(five.timestamps, active_high_timestamp, side="right") - 1)
         if active_high_5m_idx < pump_start_5m_idx:
             return None, None
-        one_pump_frame = one.frame.iloc[start_idx : active_high_idx + 1]
+        one_pump_opens = one.opens[start_idx : active_high_idx + 1]
+        one_pump_closes = one.closes[start_idx : active_high_idx + 1]
         # Zero-body 1m candles (open == close) are common as doji/noise even in good pumps.
         # We reject only when they are frequent or form a streak (typical for illiquid "frozen" tape).
-        one_pump_opens = one_pump_frame["open"].to_numpy(dtype="float64")
-        one_pump_closes = one_pump_frame["close"].to_numpy(dtype="float64")
-        zero_body_mask = np.isclose(one_pump_closes, one_pump_opens, rtol=0.0, atol=self._EPSILON)
+        zero_body_mask = np.abs(one_pump_closes - one_pump_opens) <= self._EPSILON
         zero_body_bar_count_1m = int(np.sum(zero_body_mask))
         zero_body_share_1m = float(zero_body_bar_count_1m / max(1, len(zero_body_mask)))
         max_zero_body_streak_1m = 0
@@ -2462,8 +2538,6 @@ class PnoEngine:
             float(np.sum(red_bodies_5m)),
             float(np.sum(green_bodies_5m)),
         )
-        one_pump_opens = one.opens[start_idx : active_high_idx + 1]
-        one_pump_closes = one.closes[start_idx : active_high_idx + 1]
         if one_pump_opens.size == 0 or one_pump_closes.size == 0:
             return None
         red_bodies_1m = np.maximum(one_pump_opens - one_pump_closes, 0.0)
@@ -3045,7 +3119,15 @@ class PnoEngine:
                 completed_post_high_five.size > 0
                 and post_high_peak_volume_support_fraction < float(params.stage3_min_post_high_5m_volume_support_fraction)
             ):
-                return None, "post_high_no_supporting_5m_volume"
+                fast_reclaim_exception = (
+                    int(params.stage3_fast_reclaim_max_pullback_age_bars) > 0
+                    and stage2.pullback_age_bars <= int(params.stage3_fast_reclaim_max_pullback_age_bars)
+                    and post_high_close_below_ema20_count == 0
+                    and post_high_peak_volume_support_fraction
+                    >= float(params.stage3_fast_reclaim_min_post_high_5m_volume_support_fraction)
+                )
+                if not fast_reclaim_exception:
+                    return None, "post_high_no_supporting_5m_volume"
             chop_walk_has_support = (
                 post_high_peak_volume_support_fraction
                 >= max(float(params.stage3_min_post_high_5m_volume_support_fraction), 0.70)
@@ -3097,7 +3179,7 @@ class PnoEngine:
     ) -> Stage4Context | None:
         del five
         del five_idx
-        del stage1
+        ideal_like_impulse = self._is_ideal_like_impulse(stage1=stage1, params=params)
         if idx <= stage3.pullback_start_idx:
             return None
 
@@ -3140,7 +3222,13 @@ class PnoEngine:
             if len(touch_indices) < min_required_touches:
                 return None
             latest_touch_idx = int(max(touch_indices))
-            if (idx - latest_touch_idx) > params.level_latest_high_max_age_bars:
+            latest_high_max_age_bars = int(params.level_latest_high_max_age_bars)
+            if ideal_like_impulse and int(params.ideal_like_level_latest_high_max_age_bars) > 0:
+                latest_high_max_age_bars = max(
+                    latest_high_max_age_bars,
+                    int(params.ideal_like_level_latest_high_max_age_bars),
+                )
+            if (idx - latest_touch_idx) > latest_high_max_age_bars:
                 return None
 
             current_level_low = float(np.min(one.lows[previous.cluster_first_idx : idx + 1]))
@@ -3170,6 +3258,11 @@ class PnoEngine:
                 level=float(previous.level),
                 params=params,
             )
+            if ideal_like_impulse:
+                required_maturity_fraction = min(
+                    required_maturity_fraction,
+                    float(params.ideal_like_relaxed_level_maturity_fraction),
+                )
             if level_maturity_fraction < required_maturity_fraction:
                 return None
 
@@ -3231,6 +3324,7 @@ class PnoEngine:
             confirmed_lows=confirmed_lows,
             params=params,
             retired_clusters=retired_clusters,
+            ideal_like_impulse=ideal_like_impulse,
         )
         if cluster is None:
             return None
@@ -3250,7 +3344,13 @@ class PnoEngine:
         if len(touch_indices) < min_required_touches:
             return None
         latest_touch_idx = int(max(touch_indices))
-        if (idx - latest_touch_idx) > params.level_latest_high_max_age_bars:
+        latest_high_max_age_bars = int(params.level_latest_high_max_age_bars)
+        if ideal_like_impulse and int(params.ideal_like_level_latest_high_max_age_bars) > 0:
+            latest_high_max_age_bars = max(
+                latest_high_max_age_bars,
+                int(params.ideal_like_level_latest_high_max_age_bars),
+            )
+        if (idx - latest_touch_idx) > latest_high_max_age_bars:
             return None
 
         level_maturity_fraction = self._resolve_level_maturity_fraction(
@@ -3267,6 +3367,11 @@ class PnoEngine:
             level=level,
             params=params,
         )
+        if ideal_like_impulse:
+            required_maturity_fraction = min(
+                required_maturity_fraction,
+                float(params.ideal_like_relaxed_level_maturity_fraction),
+            )
         if level_maturity_fraction < required_maturity_fraction:
             return None
 
@@ -3502,6 +3607,7 @@ class PnoEngine:
         overhead_red_count = int(overhead_profile.get("red_count") or 0)
         current_timestamp_ms = int(one.timestamps[idx])
         active_high_to_signal_minutes = max((current_timestamp_ms - int(stage3.active_high_timestamp)) / 60_000.0, 0.0)
+        ideal_like_impulse = self._is_ideal_like_impulse(stage1=stage1, params=params)
         fresh_overhead_exception = (
             active_high_to_signal_minutes <= 12.0
             and stage4.touches <= 3
@@ -3566,7 +3672,11 @@ class PnoEngine:
         elif stage3.pullback_depth > (float(params.pullback_invalid_max_leg_fraction) * depth_reference):
             hard_block = True
             hard_block_reason = "pullback_too_deep_vs_leg"
-        elif stage4.level_maturity_fraction < float(params.level_min_maturity_fraction):
+        elif stage4.level_maturity_fraction < (
+            min(float(params.level_min_maturity_fraction), float(params.ideal_like_relaxed_level_maturity_fraction))
+            if ideal_like_impulse
+            else float(params.level_min_maturity_fraction)
+        ):
             hard_block = True
             hard_block_reason = "level_not_mature_enough"
         elif entry_pos > float(params.close_above_max_entry_pos):
@@ -3700,6 +3810,7 @@ class PnoEngine:
         confirmed_lows: list[int],
         params: PnoParams,
         retired_clusters: list[RetiredCluster],
+        ideal_like_impulse: bool = False,
     ) -> tuple[tuple[int, ...], tuple[float, ...]] | None:
         if len(confirmed_highs) < 1:
             confirmed_highs = self._resolve_recent_shelf_highs(
@@ -3777,7 +3888,60 @@ class PnoEngine:
                 ):
                     continue
                 return indices, prices
+        if ideal_like_impulse:
+            fallback = self._resolve_ideal_like_level_cluster(
+                one=one,
+                idx=idx,
+                stage3=stage3,
+                retired_clusters=retired_clusters,
+                params=params,
+            )
+            if fallback is not None:
+                return fallback
         return None
+
+    def _resolve_ideal_like_level_cluster(
+        self,
+        *,
+        one: OneMinuteFrame,
+        idx: int,
+        stage3: Stage3Context,
+        retired_clusters: list[RetiredCluster],
+        params: PnoParams,
+    ) -> tuple[tuple[int, ...], tuple[float, ...]] | None:
+        if idx <= stage3.pullback_low_idx:
+            return None
+        v1_now = max(float(one.v1[idx]), self._EPSILON)
+        tolerance = max(float(params.level_touch_tolerance_v1) * v1_now, self._EPSILON)
+        search_start = max(stage3.pullback_low_idx, idx - max(int(params.ideal_like_level_latest_high_max_age_bars), 6))
+        candidate_idx: int | None = None
+        candidate_price = -np.inf
+        for probe_idx in range(search_start, idx + 1):
+            high_price = float(one.highs[probe_idx])
+            if high_price >= (stage3.active_high - self._EPSILON):
+                continue
+            close_price = float(one.closes[probe_idx])
+            low_price = float(one.lows[probe_idx])
+            body_low = min(float(one.opens[probe_idx]), close_price)
+            if close_price <= (high_price - max(0.65 * (high_price - low_price), tolerance)):
+                continue
+            if body_low < (stage3.pullback_low - tolerance):
+                continue
+            if high_price > candidate_price:
+                candidate_idx = int(probe_idx)
+                candidate_price = high_price
+        if candidate_idx is None:
+            return None
+        if not self._is_cluster_rearm_allowed(
+            active_high_idx=stage3.active_high_idx,
+            candidate_level=float(candidate_price),
+            stage3=stage3,
+            retired_clusters=retired_clusters,
+            v1_now=v1_now,
+            rearm_min_distance_v1=float(params.level_rearm_min_distance_v1),
+        ):
+            return None
+        return (candidate_idx,), (float(candidate_price),)
 
     def _resolve_recent_shelf_highs(
         self,
@@ -3943,6 +4107,8 @@ class PnoEngine:
             return {
                 "bar_count": 0,
                 "close_above_count": 0,
+                "close_below_pullback_count": 0,
+                "low_below_pullback_count": 0,
                 "false_break_wick_count": 0,
                 "prior_full_above_bar": False,
                 "prior_tp1_hit": False,
@@ -3952,9 +4118,12 @@ class PnoEngine:
         lows = one.lows[start_idx : end_idx + 1]
         closes = one.closes[start_idx : end_idx + 1]
         level = float(stage4.level)
+        pullback_low = float(stage4.pullback_low)
         close_above_mask = closes > (level + self._EPSILON)
         full_above_mask = close_above_mask & (lows > (level + self._EPSILON))
         false_break_mask = (highs > (level + self._EPSILON)) & ~close_above_mask
+        close_below_pullback_mask = closes < (pullback_low - self._EPSILON)
+        low_below_pullback_mask = lows < (pullback_low - self._EPSILON)
         path_efficiency = 1.0
         if closes.size >= 2:
             path_efficiency = self._safe_divide(
@@ -3964,6 +4133,8 @@ class PnoEngine:
         return {
             "bar_count": int(closes.size),
             "close_above_count": int(np.sum(close_above_mask)),
+            "close_below_pullback_count": int(np.sum(close_below_pullback_mask)),
+            "low_below_pullback_count": int(np.sum(low_below_pullback_mask)),
             "false_break_wick_count": int(np.sum(false_break_mask)),
             "prior_full_above_bar": bool(np.any(full_above_mask)),
             "prior_tp1_hit": bool(np.any(highs >= (float(stage4.tp1) - self._EPSILON))),
@@ -3993,6 +4164,14 @@ class PnoEngine:
             and float(level_profile["path_efficiency"]) <= 0.08
         ):
             return "level_drifted_too_long_before_signal"
+        if (
+            int(level_profile["bar_count"]) >= 120
+            and int(level_profile["close_above_count"]) <= 1
+            and int(level_profile["close_below_pullback_count"]) >= 20
+            and int(level_profile["low_below_pullback_count"]) >= 40
+            and float(level_profile["path_efficiency"]) <= 0.03
+        ):
+            return "level_spent_too_long_below_pullback"
         return None
 
     def _is_armed_entry_invalidated_before_trigger(
@@ -4001,6 +4180,7 @@ class PnoEngine:
         one: OneMinuteFrame,
         idx: int,
         armed: ArmedContext,
+        params: PnoParams | None = None,
     ) -> bool:
         risk_distance = max(float(armed.stage4.entry_plan) - float(armed.stage4.sl_plan), self._EPSILON)
         close_tolerance = max(0.05 * risk_distance, self._EPSILON)
@@ -4019,6 +4199,12 @@ class PnoEngine:
             )
             is not None
         )
+        if (
+            params is not None
+            and bool(getattr(params, "ideal_like_ignore_decay_invalidation", False))
+            and self._is_ideal_like_impulse(stage1=armed.stage1, params=params)
+        ):
+            close_above_decay_broken = False
         return stop_broken or pullback_broken or close_above_decay_broken
 
     def _resolve_compression_score(

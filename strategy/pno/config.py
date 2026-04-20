@@ -64,6 +64,22 @@ class PnoParams:
     stage3_max_post_high_chop_alternation_rate: float = 0.55
     stage3_max_post_high_chop_path_efficiency: float = 0.18
     stage3_min_post_high_5m_volume_support_fraction: float = 0.50
+    stage3_fast_reclaim_min_post_high_5m_volume_support_fraction: float = 0.0
+    stage3_fast_reclaim_max_pullback_age_bars: int = 0
+    ideal_like_impulse_enabled: bool = False
+    ideal_like_min_impulse_atr_pre: float = 0.0
+    ideal_like_min_peak_bar_tr_atr_pre: float = 0.0
+    ideal_like_min_volume_ratio_start: float = 0.0
+    ideal_like_min_path_efficiency: float = 0.0
+    ideal_like_max_wick_share: float = 1.0
+    ideal_like_min_body_share_mean: float = 0.0
+    ideal_like_min_body_wick_edge: float = -1.0
+    ideal_like_max_micro_flat_bar_share: float = 1.0
+    ideal_like_max_active_high_upper_wick_share: float = 1.0
+    ideal_like_max_counterflow_ratio_5m: float = 1.0
+    ideal_like_relaxed_level_maturity_fraction: float = 0.0
+    ideal_like_level_latest_high_max_age_bars: int = 0
+    ideal_like_ignore_decay_invalidation: bool = False
     stage1_min_cumulative_quote_volume: float = 255_000.0
     stage1_pre_pump_ema_crosses_min: int = 1
     stage1_barcode_max_fraction_1h: float = 1.00
@@ -210,6 +226,26 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("stage3_max_post_high_chop_path_efficiency must be in range [0, 1]")
     if params.stage3_min_post_high_5m_volume_support_fraction < 0.0:
         raise ValueError("stage3_min_post_high_5m_volume_support_fraction must be >= 0")
+    if params.stage3_fast_reclaim_min_post_high_5m_volume_support_fraction < 0.0:
+        raise ValueError("stage3_fast_reclaim_min_post_high_5m_volume_support_fraction must be >= 0")
+    if params.stage3_fast_reclaim_max_pullback_age_bars < 0:
+        raise ValueError("stage3_fast_reclaim_max_pullback_age_bars must be >= 0")
+    if not 0.0 <= params.ideal_like_max_wick_share <= 1.0:
+        raise ValueError("ideal_like_max_wick_share must be in range [0, 1]")
+    if not 0.0 <= params.ideal_like_min_body_share_mean <= 1.0:
+        raise ValueError("ideal_like_min_body_share_mean must be in range [0, 1]")
+    if not -1.0 <= params.ideal_like_min_body_wick_edge <= 1.0:
+        raise ValueError("ideal_like_min_body_wick_edge must be in range [-1, 1]")
+    if not 0.0 <= params.ideal_like_max_micro_flat_bar_share <= 1.0:
+        raise ValueError("ideal_like_max_micro_flat_bar_share must be in range [0, 1]")
+    if not 0.0 <= params.ideal_like_max_active_high_upper_wick_share <= 1.0:
+        raise ValueError("ideal_like_max_active_high_upper_wick_share must be in range [0, 1]")
+    if params.ideal_like_max_counterflow_ratio_5m < 0.0:
+        raise ValueError("ideal_like_max_counterflow_ratio_5m must be >= 0")
+    if not 0.0 <= params.ideal_like_relaxed_level_maturity_fraction <= 1.0:
+        raise ValueError("ideal_like_relaxed_level_maturity_fraction must be in range [0, 1]")
+    if params.ideal_like_level_latest_high_max_age_bars < 0:
+        raise ValueError("ideal_like_level_latest_high_max_age_bars must be >= 0")
     if params.stage1_min_cumulative_quote_volume <= 0.0:
         raise ValueError("stage1_min_cumulative_quote_volume must be > 0")
     if params.stage1_pre_pump_ema_crosses_min < 1:
@@ -343,9 +379,9 @@ def resolve_pno_category_profiles(
     if category_mode == "core":
         return (core_profile,)
 
-    # Common discovery relaxations (entry-mode agnostic).
-    discovery_common = dict(
-        pno_variant_id=f"{params.pno_variant_id}__cat_b_discovery",
+    # Fixed category 2 profile (current close_above / discovery baseline).
+    category2_common = dict(
+        pno_variant_id=f"{params.pno_variant_id}__cat_b_category_2",
         stage1_min_cumulative_quote_volume=min(float(params.stage1_min_cumulative_quote_volume), 140_000.0),
         stage1_min_impulse_atr_pre=min(float(params.stage1_min_impulse_atr_pre), 0.95),
         stage1_min_body_wick_edge=min(float(params.stage1_min_body_wick_edge), -0.09),
@@ -363,9 +399,9 @@ def resolve_pno_category_profiles(
     )
 
     if params.entry_confirmation_mode == "close_above":
-        discovery_params = replace(
+        category2_params = replace(
             params,
-            **discovery_common,
+            **category2_common,
             close_above_max_entry_pos=max(float(params.close_above_max_entry_pos), 0.90),
             close_above_max_post_high_wick_share=max(float(params.close_above_max_post_high_wick_share), 0.95),
             close_above_min_signal_ema20_slope_3=min(float(params.close_above_min_signal_ema20_slope_3), 0.04),
@@ -376,18 +412,55 @@ def resolve_pno_category_profiles(
             ),
         )
     else:
-        discovery_params = replace(params, **discovery_common)
+        category2_params = replace(params, **category2_common)
 
-    discovery_profile = PnoCategoryProfile(
-        category_id="cat_b_discovery",
-        label="discovery",
+    category2_profile = PnoCategoryProfile(
+        category_id="cat_b_category_2",
+        label="category_2",
         priority=2,
+        params=category2_params,
+    )
+
+    discovery_common = dict(
+        pno_variant_id=f"{params.pno_variant_id}__cat_c_discovery",
+        stage3_min_post_high_5m_volume_support_fraction=category2_params.stage3_min_post_high_5m_volume_support_fraction,
+        stage3_fast_reclaim_min_post_high_5m_volume_support_fraction=max(
+            float(params.stage3_fast_reclaim_min_post_high_5m_volume_support_fraction),
+            0.30,
+        ),
+        stage3_fast_reclaim_max_pullback_age_bars=max(int(params.stage3_fast_reclaim_max_pullback_age_bars), 2),
+        ideal_like_impulse_enabled=True,
+        ideal_like_min_impulse_atr_pre=max(float(params.ideal_like_min_impulse_atr_pre), 14.0),
+        ideal_like_min_peak_bar_tr_atr_pre=max(float(params.ideal_like_min_peak_bar_tr_atr_pre), 6.0),
+        ideal_like_min_volume_ratio_start=max(float(params.ideal_like_min_volume_ratio_start), 7.0),
+        ideal_like_min_path_efficiency=max(float(params.ideal_like_min_path_efficiency), 0.52),
+        ideal_like_max_wick_share=min(float(params.ideal_like_max_wick_share), 0.46),
+        ideal_like_min_body_share_mean=max(float(params.ideal_like_min_body_share_mean), 0.50),
+        ideal_like_min_body_wick_edge=max(float(params.ideal_like_min_body_wick_edge), 0.05),
+        ideal_like_max_micro_flat_bar_share=min(float(params.ideal_like_max_micro_flat_bar_share), 0.05),
+        ideal_like_max_active_high_upper_wick_share=min(
+            float(params.ideal_like_max_active_high_upper_wick_share),
+            0.40,
+        ),
+        ideal_like_max_counterflow_ratio_5m=min(float(params.ideal_like_max_counterflow_ratio_5m), 0.02),
+        ideal_like_relaxed_level_maturity_fraction=max(
+            float(params.ideal_like_relaxed_level_maturity_fraction),
+            0.05,
+        ),
+        ideal_like_level_latest_high_max_age_bars=max(int(params.ideal_like_level_latest_high_max_age_bars), 60),
+        ideal_like_ignore_decay_invalidation=True,
+    )
+    discovery_params = replace(category2_params, **discovery_common)
+    discovery_profile = PnoCategoryProfile(
+        category_id="cat_c_discovery",
+        label="discovery",
+        priority=3,
         params=discovery_params,
     )
 
     if category_mode == "discovery":
         return (discovery_profile,)
-    return (core_profile, discovery_profile)
+    return (core_profile, category2_profile, discovery_profile)
 
 
 def describe_pno_category_profile_set(params: PnoParams, *, category_mode: str = "all") -> str:
