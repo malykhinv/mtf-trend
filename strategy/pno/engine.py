@@ -3315,6 +3315,11 @@ class PnoEngine:
                 level_maturity_fraction=level_maturity_fraction,
                 level_age_bars=max(idx - previous.cluster_first_idx, 0),
             )
+            level_age_bars_upper_tf = max(
+                int(previous.level_age_bars / (params.levels_timeframe.to_milliseconds() / 60000)), 1
+            )
+            if level_age_bars_upper_tf > params.level_max_age_bars_upper_tf:
+                return None
 
         cluster = self._resolve_level_cluster(
             one=one,
@@ -3373,6 +3378,13 @@ class PnoEngine:
                 float(params.ideal_like_relaxed_level_maturity_fraction),
             )
         if level_maturity_fraction < required_maturity_fraction:
+            return None
+
+        level_age_bars_1m = max(idx - int(cluster_indices[0]), 0)
+        level_age_bars_upper_tf = max(
+            int(level_age_bars_1m / (params.levels_timeframe.to_milliseconds() / 60000)), 1
+        )
+        if level_age_bars_upper_tf > params.level_max_age_bars_upper_tf:
             return None
 
         hard_block = len(touch_indices) > int(params.max_level_touches)

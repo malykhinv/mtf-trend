@@ -106,6 +106,7 @@ class PnoParams:
     level_cluster_spread_v1: float = 0.45
     level_cluster_relaxed_spread_v1: float = 1.00
     level_latest_high_max_age_bars: int = 30
+    level_max_age_bars_upper_tf: int = 24
     level_touch_tolerance_v1: float = 0.35
     level_low_minor_break_v1: float = 0.35
     level_low_major_break_v1: float = 0.75
@@ -304,6 +305,8 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("level cluster spread bounds are invalid")
     if params.level_latest_high_max_age_bars < 1:
         raise ValueError("level_latest_high_max_age_bars must be >= 1")
+    if params.level_max_age_bars_upper_tf < 1:
+        raise ValueError("level_max_age_bars_upper_tf must be >= 1")
     if params.level_touch_tolerance_v1 <= 0.0:
         raise ValueError("level_touch_tolerance_v1 must be > 0")
     if not 0.0 < params.level_min_maturity_fraction <= 1.0:

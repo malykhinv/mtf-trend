@@ -155,6 +155,7 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_level_cluster_spread_v1": params.level_cluster_spread_v1,
             "pno_level_cluster_relaxed_spread_v1": params.level_cluster_relaxed_spread_v1,
             "pno_level_latest_high_max_age_bars": params.level_latest_high_max_age_bars,
+            "pno_level_max_age_bars_upper_tf": params.level_max_age_bars_upper_tf,
             "pno_level_touch_tolerance_v1": params.level_touch_tolerance_v1,
             "pno_level_low_minor_break_v1": params.level_low_minor_break_v1,
             "pno_level_low_major_break_v1": params.level_low_major_break_v1,
