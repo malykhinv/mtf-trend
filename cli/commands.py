@@ -590,6 +590,34 @@ def _export_pno_category_artifacts(
     logger.info("%s: pno category artifacts saved categories=%s", log_prefix, ",".join(sorted(category_meta)))
 
 
+def _export_pno_category_csv_split(
+    *,
+    results_dir: Path,
+    logger: Logger,
+) -> None:
+    """Разделяет results.csv по категориям в отдельные CSV файлы."""
+    results_path = results_dir / "results.csv"
+    if not results_path.exists():
+        return
+
+    results = pd.read_csv(results_path)
+    if "pno_category_id" not in results.columns:
+        return
+
+    categories_root = results_dir / "categories"
+    categories_root.mkdir(parents=True, exist_ok=True)
+
+    category_ids = results["pno_category_id"].dropna().unique()
+    for category_id in category_ids:
+        category_df = results[results["pno_category_id"] == category_id].copy()
+        if category_df.empty:
+            continue
+        category_path = categories_root / f"{category_id}_results.csv"
+        category_df.to_csv(category_path, index=False)
+
+    logger.info(f"Category CSV split saved to {categories_root}")
+
+
 def _plot_pno_grid_artifacts(
     *,
     config: AppConfig,
@@ -2595,6 +2623,15 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         stage_metric_ids=stage_metric_ids_for_run,
     )
     summary = runner.build_summary(results)
+    if (
+        strategy_id == "pno"
+        and not should_plot
+        and getattr(config.strategy, "pno_category_mode", None) == "all"
+    ):
+        _export_pno_category_csv_split(
+            results_dir=config.backtest.results_dir,
+            logger=logger,
+        )
     combinations_with_trades = int((results["trades_count"] > 0).sum()) if not results.empty else 0
     total_trades = int(results["trades_count"].sum()) if not results.empty else 0
     average_trades_per_combination = (
