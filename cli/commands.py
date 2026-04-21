@@ -2623,11 +2623,14 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         stage_metric_ids=stage_metric_ids_for_run,
     )
     summary = runner.build_summary(results)
+    category_mode = getattr(args, "pno_category_mode", None)
+    logger.info("запуск-бэктеста: проверка разделения по категориям: strategy_id=%s should_plot=%s category_mode=%s", strategy_id, should_plot, category_mode)
     if (
         strategy_id == "pno"
         and not should_plot
-        and getattr(config.strategy, "pno_category_mode", None) == "all"
+        and category_mode == "all"
     ):
+        logger.info("запуск-бэктеста: вызов разделения результатов по категориям")
         _export_pno_category_csv_split(
             results_dir=config.backtest.results_dir,
             logger=logger,
