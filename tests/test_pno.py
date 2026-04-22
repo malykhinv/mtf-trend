@@ -5060,7 +5060,7 @@ def test_pno_close_above_confirmation_enters_on_next_bar() -> None:
         ),
     )
 
-    trade, exit_idx = engine._try_enter_and_simulate(
+    trade, exit_idx = engine._simulate_trade_path(
         one=one,
         params=PnoParams(
             symbol="TEST/USDT",
@@ -5071,6 +5071,15 @@ def test_pno_close_above_confirmation_enters_on_next_bar() -> None:
             min_entry_rr=0.0,
         ),
         armed=armed,
+        entry_idx=1,
+        entry_price=10.0,
+        stop_loss=9.7,
+        position_size=1.0,
+        metadata={
+            "entry_confirmation_mode": "close_above",
+            "pump_to_peak_bars": 1,
+            "pump_to_peak_minutes": 1.0,
+        },
     )
 
     assert trade is not None
@@ -5184,7 +5193,7 @@ def test_pno_close_above_uses_exact_last_red_extremum_as_stop() -> None:
         ),
     )
 
-    trade, exit_idx = engine._try_enter_and_simulate(
+    trade, exit_idx = engine._simulate_trade_path(
         one=one,
         params=PnoParams(
             symbol="TEST/USDT",
@@ -5195,6 +5204,15 @@ def test_pno_close_above_uses_exact_last_red_extremum_as_stop() -> None:
             min_entry_rr=0.0,
         ),
         armed=armed,
+        entry_idx=1,
+        entry_price=10.0,
+        stop_loss=9.7,
+        position_size=1.0,
+        metadata={
+            "entry_confirmation_mode": "close_above",
+            "pump_to_peak_bars": 1,
+            "pump_to_peak_minutes": 1.0,
+        },
     )
 
     assert trade is not None
@@ -5966,7 +5984,7 @@ def test_pno_close_above_uses_dynamic_be_ladder() -> None:
     assert exit_idx == 3
 
 
-def test_pno_tp1_be_uses_midpoint_or_last_red_extremum_whichever_is_higher() -> None:
+def test_pno_tp1_be_starts_from_be_buffer_above_entry() -> None:
     engine = PnoEngine()
     one = engine._prepare_1m_frame(
         pd.DataFrame(
@@ -6057,7 +6075,7 @@ def test_pno_tp1_be_uses_midpoint_or_last_red_extremum_whichever_is_higher() -> 
         ),
     )
 
-    trade, exit_idx = engine._try_enter_and_simulate(
+    trade, exit_idx = engine._simulate_trade_path(
         one=one,
         params=PnoParams(
             symbol="TEST/USDT",
@@ -6068,14 +6086,23 @@ def test_pno_tp1_be_uses_midpoint_or_last_red_extremum_whichever_is_higher() -> 
             min_entry_rr=0.0,
         ),
         armed=armed,
+        entry_idx=1,
+        entry_price=10.0,
+        stop_loss=9.7,
+        position_size=1.0,
+        metadata={
+            "entry_confirmation_mode": "close_above",
+            "pump_to_peak_bars": 1,
+            "pump_to_peak_minutes": 1.0,
+        },
     )
 
     assert trade is not None
     assert trade.result_type == TradeResultType.TP1_BE
     assert trade.metadata["partial_exit_price"] == pytest.approx(10.3)
-    assert trade.metadata["tp1_be_protect_price"] == pytest.approx(10.16)
+    assert trade.metadata["tp1_be_protect_price"] == pytest.approx(10.015)
     assert trade.metadata["runner_exit_price"] == pytest.approx(10.16)
-    assert exit_idx == 4
+    assert exit_idx == 3
 
 
 def test_pno_close_above_filter_blocks_weak_post_high_and_volume_signal() -> None:
@@ -6828,8 +6855,102 @@ def test_pno_stage4_ideal_like_uses_upper_tf_level_below_pullback_midpoint() -> 
     )
 
     assert stage4 is not None
-    assert stage4.cluster_indices == (12,)
-    assert stage4.level == pytest.approx(10.45)
+    assert stage4.cluster_indices == (15,)
+    assert stage4.level == pytest.approx(10.35)
+
+
+def test_pno_stage4_ideal_like_can_use_current_upper_tf_bar_without_lookahead() -> None:
+    engine = PnoEngine()
+    one = _build_test_one_frame_multi(timestamps_ms=list(range(0, 30 * 60_000, 60_000)), price=110.0)
+    one.v1[:] = np.full_like(one.v1, 0.2)
+    one.opens[:] = np.full_like(one.opens, 110.0)
+    one.closes[:] = np.full_like(one.closes, 110.0)
+    one.highs[:] = np.full_like(one.highs, 110.1)
+    one.lows[:] = np.full_like(one.lows, 109.9)
+    # main_high bucket
+    one.opens[5:10] = np.array([110.7, 110.62, 110.87, 111.58, 111.25], dtype=np.float64)
+    one.highs[5:10] = np.array([111.01, 112.00, 111.84, 112.11, 111.46], dtype=np.float64)
+    one.lows[5:10] = np.array([110.40, 110.59, 110.85, 111.22, 110.47], dtype=np.float64)
+    one.closes[5:10] = np.array([110.62, 110.87, 111.57, 111.24, 110.57], dtype=np.float64)
+    # +1 bucket => higher lower-high
+    one.opens[10:15] = np.array([110.57, 110.95, 111.06, 111.18, 110.74], dtype=np.float64)
+    one.highs[10:15] = np.array([111.32, 111.43, 111.46, 111.30, 110.82], dtype=np.float64)
+    one.lows[10:15] = np.array([110.55, 110.84, 111.04, 110.72, 110.50], dtype=np.float64)
+    one.closes[10:15] = np.array([110.96, 111.06, 111.17, 110.75, 110.65], dtype=np.float64)
+    # current +2 bucket => lower lower-high already known by current idx
+    one.opens[15:18] = np.array([110.66, 110.49, 110.52], dtype=np.float64)
+    one.highs[15:18] = np.array([110.86, 110.69, 110.61], dtype=np.float64)
+    one.lows[15:18] = np.array([110.24, 110.26, 110.10], dtype=np.float64)
+    one.closes[15:18] = np.array([110.48, 110.52, 110.49], dtype=np.float64)
+    one.frame.loc[:, "open"] = one.opens
+    one.frame.loc[:, "high"] = one.highs
+    one.frame.loc[:, "low"] = one.lows
+    one.frame.loc[:, "close"] = one.closes
+
+    stage1 = Stage1Context(
+        start_idx=0,
+        start_timestamp=0,
+        pump_start_5m_idx=0,
+        pump_start_timestamp=0,
+        current_5m_idx=3,
+        active_high_idx=8,
+        active_high_timestamp=8 * 60_000,
+        active_high=112.11,
+        reference_high=112.11,
+        leg_start_idx=0,
+        leg_start_timestamp=0,
+        leg_start=109.5,
+        leg_size=2.61,
+        reference_leg_size=2.61,
+        pump_range_5m=2.61,
+        hold_floor=110.0,
+        pump_impulse_atr_pre=20.0,
+        pump_peak_bar_tr_atr_pre=8.0,
+        pump_volume_ratio_start=10.0,
+        pump_path_efficiency=0.7,
+        pump_wick_share=0.2,
+        pump_body_share_mean=0.6,
+        pump_body_wick_edge=0.2,
+        pump_micro_flat_bar_share=0.0,
+        active_high_bar_upper_wick_share=0.2,
+        pump_counterflow_ratio_5m=0.0,
+    )
+    stage3 = Stage3Context(
+        active_high_idx=8,
+        active_high_timestamp=8 * 60_000,
+        active_high=112.11,
+        pullback_start_idx=10,
+        pullback_low_idx=19,
+        pullback_low_timestamp=19 * 60_000,
+        pullback_low=109.48,
+        pullback_depth=2.63,
+        pullback_age_bars=2,
+        validation_timestamp=16 * 60_000,
+    )
+    five = _build_test_five_frame(
+        opens=[110.0, 110.7, 110.57, 110.66, 109.93, 110.98],
+        highs=[110.1, 112.11, 111.46, 110.86, 111.20, 112.21],
+        lows=[109.9, 110.4, 110.5, 109.48, 109.88, 110.8],
+        closes=[110.0, 110.57, 110.65, 109.93, 110.99, 111.5],
+        ema20=[109.8, 110.0, 110.2, 110.1, 110.2, 110.4],
+    )
+
+    stage4 = engine._resolve_stage4_context(
+        one=one,
+        five=five,
+        idx=17,
+        five_idx=3,
+        stage1=stage1,
+        stage3=stage3,
+        previous=None,
+        params=PnoParams(symbol="TEST/USDT", ideal_like_impulse_enabled=True),
+        pno_index=1,
+        retired_clusters=[],
+    )
+
+    assert stage4 is not None
+    assert stage4.level == pytest.approx(110.86)
+    assert stage4.cluster_indices == (15,)
 
 
 def test_pno_stage1_cat_c_rejects_active_high_formed_on_weak_tail() -> None:
@@ -6944,6 +7065,8 @@ def test_pno_rebuild_stage4_uses_pullback_low_when_ema_spread_keeps_growing(monk
     )
 
     assert rebuilt.low_last_red_plan == pytest.approx(9.8)
+    assert rebuilt.tp1 == pytest.approx(10.6)
+    assert rebuilt.tp2 == pytest.approx(11.4)
     assert rebuilt.hard_block_reason != "ideal_like_no_ltf_confirmation"
 
 

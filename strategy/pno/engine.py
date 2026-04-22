@@ -2637,19 +2637,35 @@ class PnoEngine:
         pullback_low_5m_idx = int(np.searchsorted(five.timestamps, int(stage3.pullback_low_timestamp), side="right") - 1)
         if pullback_low_5m_idx < 0 or active_high_5m_idx < 0:
             return None
-        latest_closed_5m_idx = min(int(five_idx) - 1, len(five.timestamps) - 1)
-        if latest_closed_5m_idx <= active_high_5m_idx:
+        latest_available_5m_idx = min(int(five_idx), len(five.timestamps) - 1)
+        if latest_available_5m_idx <= active_high_5m_idx:
             return None
         search_start = max(active_high_5m_idx + 1, 0)
-        search_end = min(latest_closed_5m_idx, pullback_low_5m_idx + 2)
+        search_end = min(latest_available_5m_idx, pullback_low_5m_idx + 2)
         selected_probe_idx: int | None = None
+        selected_probe_high = np.inf
         for probe_five_idx in range(search_start, search_end + 1):
-            high_price = float(five.highs[probe_five_idx])
+            bucket_start = int(five.timestamps[probe_five_idx])
+            bucket_end = bucket_start + int(params.levels_timeframe.to_milliseconds())
+            one_start = int(np.searchsorted(one.timestamps, bucket_start, side="left"))
+            one_end = int(np.searchsorted(one.timestamps, bucket_end, side="left"))
+            if one_end <= one_start:
+                continue
+            local_end = min(one_end, idx + 1)
+            if local_end <= one_start:
+                continue
+            bucket_highs = np.asarray(one.highs[one_start:local_end], dtype=np.float64)
+            bucket_lows = np.asarray(one.lows[one_start:local_end], dtype=np.float64)
+            bucket_opens = np.asarray(one.opens[one_start:local_end], dtype=np.float64)
+            bucket_closes = np.asarray(one.closes[one_start:local_end], dtype=np.float64)
+            if bucket_highs.size == 0:
+                continue
+            high_price = float(np.max(bucket_highs))
             if high_price >= (float(stage3.active_high) - self._EPSILON):
                 continue
-            low_price = float(five.lows[probe_five_idx])
-            close_price = float(five.closes[probe_five_idx])
-            open_price = float(five.opens[probe_five_idx])
+            low_price = float(np.min(bucket_lows))
+            close_price = float(bucket_closes[-1])
+            open_price = float(bucket_opens[0])
             bar_range = max(high_price - low_price, self._EPSILON)
             close_position = self._safe_divide(close_price - low_price, bar_range)
             if close_price <= (float(stage3.pullback_low) - self._EPSILON):
@@ -2658,17 +2674,18 @@ class PnoEngine:
                 continue
             if close_position < 0.20 and close_price <= open_price:
                 continue
-            selected_probe_idx = probe_five_idx
+            if (selected_probe_idx is None) or (high_price < (selected_probe_high - self._EPSILON)):
+                selected_probe_idx = probe_five_idx
+                selected_probe_high = high_price
         if selected_probe_idx is None:
             return None
         probe_five_idx = int(selected_probe_idx)
         if (
             probe_five_idx == pullback_low_5m_idx
-            and latest_closed_5m_idx <= pullback_low_5m_idx
+            and latest_available_5m_idx <= pullback_low_5m_idx
             and int(stage3.pullback_age_bars) < 2
         ):
             return None
-        high_price = float(five.highs[probe_five_idx])
         bucket_start = int(five.timestamps[probe_five_idx])
         bucket_end = bucket_start + int(params.levels_timeframe.to_milliseconds())
         one_start = int(np.searchsorted(one.timestamps, bucket_start, side="left"))
@@ -2682,7 +2699,7 @@ class PnoEngine:
         if bucket_highs.size == 0:
             return None
         candidate_idx = one_start + int(np.argmax(bucket_highs))
-        candidate_level = high_price
+        candidate_level = float(np.max(np.asarray(bucket_highs, dtype=np.float64)))
         if not self._is_cluster_rearm_allowed(
             active_high_idx=stage3.active_high_idx,
             candidate_level=candidate_level,
@@ -3876,8 +3893,6 @@ class PnoEngine:
         # Keep planned risk anchored to the actionable reclaim extremum.
         sl_plan = low_last_red_plan
         tp1 = float(stage3.active_high)
-        if ideal_like_impulse:
-            tp1 = self._resolve_ideal_like_tp1(stage3=stage3, stage4=stage4)
         tp2 = self._resolve_tp2(
             active_high=tp1,
             pullback_height=float(stage3.pullback_depth),
@@ -3901,12 +3916,6 @@ class PnoEngine:
                 low_last_red_plan = float(stage3.pullback_low)
             else:
                 low_last_red_plan = float(stage3.pullback_low)
-            tp1 = float(tp2)
-        tp2 = self._resolve_tp2(
-            active_high=tp1,
-            pullback_height=float(stage3.pullback_depth),
-            v1=v1_now,
-        )
 
         activity_ratio = max(
             self._safe_divide(float(five.r3_quote[five_idx]), float(five.b24_quote[five_idx])),
@@ -5789,10 +5798,7 @@ class PnoEngine:
         be_arm_price = entry_price + (initial_be_arm_fraction * max(tp1 - entry_price, 0.0))
         be_buffer = max(entry_price * float(params.min_tick_fraction), float(params.be_buffer_r_fraction) * initial_risk)
         be_protect_price = max(be_fee, entry_price + be_buffer)
-        tp1_be_protect_price = max(
-            entry_price + (0.5 * max(tp1 - entry_price, 0.0)),
-            float(armed.stage4.low_last_red_plan),
-        )
+        tp1_be_protect_price = float(be_protect_price)
         be_arm_r = self._safe_divide(be_arm_price - entry_price, initial_risk)
         be_armed = False
         be_arm_idx: int | None = None
