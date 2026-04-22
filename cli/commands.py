@@ -704,6 +704,13 @@ def _export_pno_grid_artifacts_without_stage_charts(
             logger=logger,
             log_prefix=f"{log_prefix} [{artifact_name}]",
         )
+        _export_pno_category_artifacts(
+            diagnostics_dir=diagnostics_dir,
+            export_result=export_result,
+            symbol_frames=symbol_frames,
+            logger=logger,
+            log_prefix=f"{log_prefix} [{artifact_name}]",
+        )
 
 
 def _sync_shared_stage_reviews(
@@ -792,6 +799,13 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
         shared_diagnostics_dir=shared_diagnostics_dir,
         target_diagnostics_dir=diagnostics_dir,
         shared_stage_ids=shared_stage_ids,
+    )
+    _export_pno_category_artifacts(
+        diagnostics_dir=diagnostics_dir,
+        export_result=export_result,
+        symbol_frames=symbol_frames,
+        logger=logger,
+        log_prefix=log_prefix,
     )
     logger.info(
         "%s: pno diagnostics with shared stage-reviews saved trade_charts=%s shared_stages=%s",
@@ -1187,6 +1201,13 @@ def _plot_pno_diagnostics_for_symbols(
         logger=logger,
         log_prefix=log_prefix,
     )
+    _export_pno_category_artifacts(
+        diagnostics_dir=diagnostics_dir,
+        export_result=export_result,
+        symbol_frames=symbol_frames,
+        logger=logger,
+        log_prefix=log_prefix,
+    )
 
     logger.info(
         "%s: сохранена диагностика pno stage_symbols=%s stage_events=%s trades_generated=%s charts_generated=%s stages=%s output_dir=%s",
@@ -1404,6 +1425,7 @@ def _export_pno_diagnostics_context_for_symbols(
     )
     logger.info("%s: pno stage-review tables saved stages=%s", log_prefix, ",".join(selected_stage_ids))
     return {
+        "all_trade_rows": all_trade_rows,
         "diagnostics_payloads": diagnostics_payloads,
         "stage_rows_by_stage": stage_rows_by_stage,
         "stage_rejections_by_stage": stage_rejections_by_stage,
@@ -2623,14 +2645,10 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         stage_metric_ids=stage_metric_ids_for_run,
     )
     summary = runner.build_summary(results)
-    category_mode = getattr(args, "pno_category_mode", None)
-    logger.info("запуск-бэктеста: проверка разделения по категориям: strategy_id=%s should_plot=%s category_mode=%s", strategy_id, should_plot, category_mode)
     if (
         strategy_id == "pno"
-        and not should_plot
-        and category_mode == "all"
+        and getattr(config.strategy, "pno_category_mode", None) == "all"
     ):
-        logger.info("запуск-бэктеста: вызов разделения результатов по категориям")
         _export_pno_category_csv_split(
             results_dir=config.backtest.results_dir,
             logger=logger,

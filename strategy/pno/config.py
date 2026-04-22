@@ -119,6 +119,7 @@ class PnoParams:
     min_tick_fraction: float = 0.0001
     max_entry_pullback_fraction: float = 0.58
     min_entry_rr: float = 1.0
+    max_htf_bars_since_active_high: int = 6
     close_above_max_entry_pos: float = 0.70
     close_above_max_pullback_fraction_of_leg: float = 1.0
     close_above_max_post_high_wick_share: float = 0.85
@@ -249,8 +250,8 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("ideal_like_level_latest_high_max_age_bars must be >= 0")
     if params.stage1_min_cumulative_quote_volume <= 0.0:
         raise ValueError("stage1_min_cumulative_quote_volume must be > 0")
-    if params.stage1_pre_pump_ema_crosses_min < 1:
-        raise ValueError("stage1_pre_pump_ema_crosses_min must be >= 1")
+    if params.stage1_pre_pump_ema_crosses_min < 0:
+        raise ValueError("stage1_pre_pump_ema_crosses_min must be >= 0")
     if not 0.0 <= params.stage1_barcode_max_fraction_1h <= 1.0:
         raise ValueError("stage1_barcode_max_fraction_1h must be in range [0, 1]")
     if params.stage1_barcode_tr_atr_fraction <= 0.0:
@@ -339,6 +340,8 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("max_entry_pullback_fraction must be in range (0, 1]")
     if params.min_entry_rr < 0.0:
         raise ValueError("min_entry_rr must be >= 0")
+    if params.max_htf_bars_since_active_high < 0:
+        raise ValueError("max_htf_bars_since_active_high must be >= 0")
     if not 0.0 < params.close_above_max_entry_pos <= 1.0:
         raise ValueError("close_above_max_entry_pos must be in range (0, 1]")
     if not 0.0 < params.close_above_max_pullback_fraction_of_leg <= 1.0:
@@ -452,6 +455,7 @@ def resolve_pno_category_profiles(
         ),
         ideal_like_level_latest_high_max_age_bars=max(int(params.ideal_like_level_latest_high_max_age_bars), 60),
         ideal_like_ignore_decay_invalidation=True,
+        min_entry_rr=max(float(params.min_entry_rr), 3.0),
     )
     category3_params = replace(category2_params, **category3_common)
     category3_profile = PnoCategoryProfile(
@@ -461,8 +465,60 @@ def resolve_pno_category_profiles(
         params=category3_params,
     )
 
+    category4_params = replace(
+        category2_params,
+        pno_variant_id=f"{params.pno_variant_id}__cat_d_category_4",
+        stage1_min_cumulative_quote_volume=min(float(params.stage1_min_cumulative_quote_volume), 80_000.0),
+        stage1_min_impulse_atr_pre=min(float(params.stage1_min_impulse_atr_pre), 0.55),
+        stage1_min_volume_ratio_start=min(float(params.stage1_min_volume_ratio_start), 2.0),
+        stage1_pre_pump_ema_crosses_min=min(int(params.stage1_pre_pump_ema_crosses_min), 0),
+        stage1_min_body_wick_edge=min(float(params.stage1_min_body_wick_edge), -0.18),
+        stage1_max_active_high_upper_wick_share=max(float(params.stage1_max_active_high_upper_wick_share), 0.92),
+        stage1_max_red_body_share_5m=max(float(params.stage1_max_red_body_share_5m), 0.60),
+        stage1_max_counterflow_ratio_5m=max(float(params.stage1_max_counterflow_ratio_5m), 0.50),
+        stage1_max_counterflow_ratio_1m=max(float(params.stage1_max_counterflow_ratio_1m), 2.0),
+        stage1_max_red_body_share_1m=max(float(params.stage1_max_red_body_share_1m), 0.97),
+        stage1_max_micro_flat_bar_share=max(float(params.stage1_max_micro_flat_bar_share), 0.85),
+        stage3_max_post_high_wick_share=max(float(params.stage3_max_post_high_wick_share), 0.95),
+        stage3_max_post_high_body_overlap_rate=max(float(params.stage3_max_post_high_body_overlap_rate), 0.95),
+        stage3_fast_reclaim_min_post_high_5m_volume_support_fraction=max(
+            float(params.stage3_fast_reclaim_min_post_high_5m_volume_support_fraction),
+            0.15,
+        ),
+        stage3_fast_reclaim_max_pullback_age_bars=max(int(params.stage3_fast_reclaim_max_pullback_age_bars), 3),
+        ideal_like_impulse_enabled=True,
+        ideal_like_min_impulse_atr_pre=max(float(params.ideal_like_min_impulse_atr_pre), 6.0),
+        ideal_like_min_peak_bar_tr_atr_pre=max(float(params.ideal_like_min_peak_bar_tr_atr_pre), 2.5),
+        ideal_like_min_volume_ratio_start=max(float(params.ideal_like_min_volume_ratio_start), 2.0),
+        ideal_like_min_path_efficiency=max(float(params.ideal_like_min_path_efficiency), 0.30),
+        ideal_like_max_wick_share=min(float(params.ideal_like_max_wick_share), 0.70),
+        ideal_like_min_body_share_mean=max(float(params.ideal_like_min_body_share_mean), 0.18),
+        ideal_like_min_body_wick_edge=max(float(params.ideal_like_min_body_wick_edge), -0.20),
+        ideal_like_max_micro_flat_bar_share=min(float(params.ideal_like_max_micro_flat_bar_share), 0.70),
+        ideal_like_max_active_high_upper_wick_share=min(
+            float(params.ideal_like_max_active_high_upper_wick_share),
+            0.88,
+        ),
+        ideal_like_max_counterflow_ratio_5m=min(float(params.ideal_like_max_counterflow_ratio_5m), 0.12),
+        ideal_like_relaxed_level_maturity_fraction=max(
+            float(params.ideal_like_relaxed_level_maturity_fraction),
+            0.02,
+        ),
+        ideal_like_level_latest_high_max_age_bars=max(int(params.ideal_like_level_latest_high_max_age_bars), 90),
+        ideal_like_ignore_decay_invalidation=True,
+        close_above_min_signal_ema20_slope_3=min(float(params.close_above_min_signal_ema20_slope_3), 0.0),
+        close_above_min_signal_ema_spread_pct=min(float(params.close_above_min_signal_ema_spread_pct), 0.0),
+        min_entry_rr=max(float(params.min_entry_rr), 1.0),
+    )
+    category4_profile = PnoCategoryProfile(
+        category_id="cat_d_category_4",
+        label="category_4",
+        priority=4,
+        params=category4_params,
+    )
+
     if category_mode == "discovery":
-        return (category3_profile,)
+        return (category3_profile, category4_profile)
     return (core_profile, category2_profile, category3_profile)
 
 
