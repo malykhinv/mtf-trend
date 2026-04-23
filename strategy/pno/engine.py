@@ -168,6 +168,16 @@ class Stage1Context:
     reference_high_weight: float = 1.0
     hold_status_at_validation: str = "held_above_hold"
     leg_start_status_at_validation: str = "held_above_leg_start"
+    active_high_5m_idx: int = -1
+    htf_pullback_start_5m_idx: int = -1
+    htf_pullback_end_5m_idx: int = -1
+    htf_pullback_low_5m_idx: int = -1
+    htf_pullback_low: float = 0.0
+    htf_level: float = 0.0
+    htf_level_timestamp: int = 0
+    htf_pump_bars: int = 0
+    htf_pullback_bars: int = 0
+    htf_min_allowed_low: float = 0.0
 
 
 @dataclass(slots=True)
@@ -182,6 +192,15 @@ class Stage2Context:
     pullback_low: float
     pullback_depth: float
     pullback_age_bars: int
+    structure_high_idx: int = -1
+    structure_high_timestamp: int = 0
+    structure_high: float = 0.0
+    structure_low_idx: int = -1
+    structure_low_timestamp: int = 0
+    structure_low: float = 0.0
+    structure_pivot_indices: tuple[int, ...] = ()
+    structure_pivot_prices: tuple[float, ...] = ()
+    structure_pivot_kinds: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -201,8 +220,21 @@ class Stage3Context:
     post_high_wick_share: float = 0.0
     post_high_body_overlap_rate: float = 0.0
     post_high_max_red_body_share: float = 0.0
+    post_high_chop_alternation_rate: float = 0.0
     pullback_wick_broke_leg_start: bool = False
     pullback_close_broke_leg_start: bool = False
+    structure_high_idx: int = -1
+    structure_high_timestamp: int = 0
+    structure_high: float = 0.0
+    structure_low_idx: int = -1
+    structure_low_timestamp: int = 0
+    structure_low: float = 0.0
+    structure_break_idx: int = -1
+    structure_break_timestamp: int = 0
+    structure_break_close: float = 0.0
+    structure_pivot_indices: tuple[int, ...] = ()
+    structure_pivot_prices: tuple[float, ...] = ()
+    structure_pivot_kinds: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -265,6 +297,7 @@ class Stage4Context:
     dominant_overhead_red_high: float | None = None
     dominant_overhead_red_body: float = 0.0
     level_life_ema_spread_growth_share: float = 0.0
+    structure_source: str = ""
 
 
 @dataclass(slots=True)
@@ -593,6 +626,7 @@ class PnoEngine:
         levels_frame: pd.DataFrame,
         entry_frame: pd.DataFrame,
         params: PnoParams,
+        seconds_frame_provider: object | None = None,
     ) -> list[TradeResult]:
         self._runtime_reference_high_cache.clear()
         prepared_levels = self._prepare_data_cached(levels_frame)
@@ -608,18 +642,34 @@ class PnoEngine:
             base_timeframe_ms=Timeframe.M5.to_milliseconds(),
             timeframe_ms=params.levels_timeframe.to_milliseconds(),
         )
-        entry_required_bars = self._scale_required_bars(
-            base_bars=params.min_data_1m,
-            base_timeframe_ms=Timeframe.M1.to_milliseconds(),
-            timeframe_ms=params.entry_timeframe.to_milliseconds(),
+        entry_timeframe_ms = params.entry_timeframe.to_milliseconds()
+        source_entry_timeframe_ms = self._infer_timeframe_ms(prepared_entry) or entry_timeframe_ms
+        uses_local_seconds_materialization = (
+            entry_timeframe_ms < source_entry_timeframe_ms and seconds_frame_provider is not None
         )
-        if len(prepared_levels) < levels_required_bars or len(prepared_entry) < entry_required_bars:
+        entry_required_bars = (
+            max(
+                12,
+                self._bars_for_duration(
+                    entry_timeframe_ms,
+                    (params.stage1_pump_max_bars + params.stage1_pullback_max_bars + params.stage1_fetch_post_bars)
+                    * params.levels_timeframe.to_milliseconds(),
+                ),
+            )
+            if uses_local_seconds_materialization
+            else self._scale_required_bars(
+                base_bars=params.min_data_1m,
+                base_timeframe_ms=Timeframe.M1.to_milliseconds(),
+                timeframe_ms=entry_timeframe_ms,
+            )
+        )
+        source_entry_required_bars = 2 if uses_local_seconds_materialization else entry_required_bars
+        if len(prepared_levels) < levels_required_bars or len(prepared_entry) < source_entry_required_bars:
             diagnostics["skipped_insufficient_data"] = 1
             self._last_generation_diagnostics = diagnostics
             return []
 
         levels_timeframe_ms = params.levels_timeframe.to_milliseconds()
-        entry_timeframe_ms = params.entry_timeframe.to_milliseconds()
         stage1_cache_entry = self._load_stage1_state_cache(
             levels_frame=prepared_levels,
             entry_frame=prepared_entry,
@@ -656,16 +706,33 @@ class PnoEngine:
                 self._last_generation_diagnostics = diagnostics
                 return []
 
+        actual_entry_frame = prepared_entry
+        if uses_local_seconds_materialization:
+            actual_entry_frame = self._materialize_sparse_entry_frame(
+                levels_frame=prepared_levels,
+                source_entry_frame=prepared_entry,
+                params=params,
+                stage1_state=cached_stage1_state,
+                seconds_frame_provider=seconds_frame_provider,
+            )
+            diagnostics["context"]["seconds_materialized"] = not actual_entry_frame.empty
+            diagnostics["context"]["seconds_source_timeframe_ms"] = int(source_entry_timeframe_ms)
+            if len(actual_entry_frame) < entry_required_bars:
+                diagnostics["skipped_insufficient_data"] = 1
+                diagnostics["context"]["seconds_materialized_bars"] = int(len(actual_entry_frame))
+                self._last_generation_diagnostics = diagnostics
+                return []
+
         one_cache_key = (
-            id(prepared_entry),
-            len(prepared_entry),
+            id(actual_entry_frame),
+            len(actual_entry_frame),
             int(entry_timeframe_ms),
             self._runtime_batch_depth,
         )
         one = self._runtime_prepared_1m_cache.get(one_cache_key)
         if one is None:
             one = self._prepare_1m_frame(
-                prepared_entry,
+                actual_entry_frame,
                 timeframe_ms=entry_timeframe_ms,
             )
             if self._runtime_batch_depth > 0:
@@ -2232,7 +2299,7 @@ class PnoEngine:
                     "hold_status_at_level_search": str(stage1.hold_status_at_validation),
                 },
             )
-            if stage4.is_valid_setup and i + 1 < len(one.timestamps):
+            if armed is None and stage4.is_valid_setup and i + 1 < len(one.timestamps):
                 confirmation_mode = str(getattr(params, "entry_confirmation_mode", "cross"))
                 arm_entry_idx = i if confirmation_mode == "close_above" else i + 1
                 armed = ArmedContext(entry_idx=arm_entry_idx, stage1=stage1, stage3=stage3, stage4=stage4)
@@ -3141,201 +3208,117 @@ class PnoEngine:
         params: PnoParams,
     ) -> tuple[Stage1Context | None, dict[str, object] | None]:
         levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
-        pre_pump_1h_bars = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
-        pre_pump_2h_bars = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
-        pump_start_5m_idx = int(five.pump_start_idx[five_idx])
-        if pump_start_5m_idx < 0 or pump_start_5m_idx >= len(five.timestamps):
-            return None, None
-        sleep_start_5m_idx = int(five.sleep_start_idx[five_idx])
-        sleep_end_5m_idx = int(five.sleep_end_idx[five_idx])
-        confirm_5m_idx = int(five.stage1_confirm_idx[five_idx])
-        if sleep_start_5m_idx < 0 or sleep_end_5m_idx < sleep_start_5m_idx or confirm_5m_idx < pump_start_5m_idx:
-            return None, None
-        start_timestamp = int(five.timestamps[pump_start_5m_idx])
-        start_idx = int(np.searchsorted(one.timestamps, start_timestamp, side="left"))
-        if start_idx >= idx:
-            return None, None
-        current_slice = slice(start_idx, idx + 1)
-        local_high_offset = int(np.argmax(one.highs[current_slice]))
-        active_high_idx = start_idx + local_high_offset
-        active_high = float(one.highs[active_high_idx])
-        leg_start_idx, leg_start = self._resolve_leg_start(
-            one=one,
-            start_idx=start_idx,
-            end_idx=active_high_idx,
-            required_rebound=float(one.v1[idx]),
+        candidate = self._resolve_htf_stage1_candidate_from_arrays(
+            timestamps=five.timestamps,
+            highs=five.highs,
+            lows=five.lows,
+            five_idx=five_idx,
+            params=params,
         )
+        if candidate is None:
+            return None, None
+
+        start_timestamp = int(candidate["pump_start_timestamp"])
+        start_idx = int(np.searchsorted(one.timestamps, start_timestamp, side="left"))
+        active_high_timestamp = int(candidate["active_high_timestamp"])
+        active_high_window_end = active_high_timestamp + levels_timeframe_ms
+        active_high_start_idx = int(np.searchsorted(one.timestamps, active_high_timestamp, side="left"))
+        active_high_end_idx = int(np.searchsorted(one.timestamps, active_high_window_end, side="left"))
+        if active_high_end_idx > active_high_start_idx:
+            active_high_idx = int(
+                active_high_start_idx
+                + np.argmax(one.highs[active_high_start_idx:active_high_end_idx])
+            )
+        else:
+            active_high_idx = int(np.searchsorted(one.timestamps, active_high_timestamp, side="right") - 1)
+        if start_idx < 0 or start_idx >= len(one.timestamps) or active_high_idx <= start_idx or active_high_idx >= len(one.timestamps):
+            return None, None
+        if idx <= active_high_idx:
+            return None, None
+
+        leg_start_idx = int(start_idx + np.argmin(one.lows[start_idx : active_high_idx + 1]))
+        leg_start = float(one.lows[leg_start_idx])
+        active_high = float(candidate["active_high"])
         leg_size = active_high - leg_start
         min_leg = max(
-            float(params.min_stage1_leg_v1 * one.v1[idx]),
-            float(params.min_stage1_leg_v5_fraction * five.v5[five_idx]),
+            float(params.min_stage1_leg_v1) * max(float(one.v1[idx]), self._EPSILON),
+            float(params.min_stage1_leg_v5_fraction) * max(float(five.v5[five_idx]), self._EPSILON),
         )
         if leg_size < max(min_leg, self._EPSILON):
             return None, None
-        rejection_extra_base: dict[str, object] = {
-            "sleep_start_timestamp_ms": int(five.timestamps[sleep_start_5m_idx]),
-            "sleep_end_timestamp_ms": int(five.timestamps[sleep_end_5m_idx]),
-            "pump_start_timestamp_ms": start_timestamp,
-            "stage1_confirm_timestamp_ms": int(five.timestamps[confirm_5m_idx]),
-            "active_high_timestamp_ms": int(one.timestamps[active_high_idx]),
-            "current_timestamp_ms": int(one.timestamps[idx]),
-            "active_high": round(active_high, 8),
-            "leg_start": round(leg_start, 8),
-            "leg_size": round(leg_size, 8),
-            "stage1_hold_price": round(float(five.stage1_hold_price[five_idx]), 8),
-        }
-        quality_metrics, quality_rejection = self._resolve_stage1_quality_metrics(
-            one=one,
-            five=five,
-            idx=idx,
-            five_idx=five_idx,
-            pump_start_5m_idx=pump_start_5m_idx,
-            start_idx=start_idx,
-            active_high_idx=active_high_idx,
-            active_high=active_high,
-            leg_start=leg_start,
-            leg_size=leg_size,
-            params=params,
-        )
-        if quality_metrics is None:
-            if quality_rejection is None:
-                return None, None
-            reason = str(quality_rejection.get("reason") or "quality_reject")
-            quality_extra = {key: value for key, value in quality_rejection.items() if key != "reason"}
+
+        htf_pullback_low = float(candidate["pullback_low"])
+        min_allowed_low = float(candidate["min_allowed_low"])
+        if htf_pullback_low < (min_allowed_low - self._EPSILON):
+            return None, None
+        if float(one.lows[idx]) < (min_allowed_low - self._EPSILON):
             return (
                 None,
                 {
-                    "reason": reason,
-                    "key": (pump_start_5m_idx, confirm_5m_idx),
-                    "timestamp_ms": int(one.timestamps[idx]),
-                    "extra": {**rejection_extra_base, **quality_extra},
-                },
-            )
-        reference_high = float(quality_metrics["reference_high"])
-        reference_leg_size = max(reference_high - leg_start, self._EPSILON)
-        hold_reference_high = min(reference_high, active_high)
-        hold_leg_size = max(hold_reference_high - leg_start, self._EPSILON)
-        hold_floor = max(
-            float(stage1_hold_price := float(five.stage1_hold_price[five_idx])),
-            hold_reference_high - (float(params.stage1_hold_fraction) * hold_leg_size),
-        )
-        hold_reject_price = min(hold_floor, stage1_hold_price)
-        stage1_hold_close_tolerance = self._resolve_stage1_hold_close_tolerance(
-            active_high=active_high,
-            stage1_hold_price=float(stage1_hold_price),
-            leg_size=hold_leg_size,
-            reference_leg_size=reference_leg_size,
-        )
-        hold_close_grace = max(
-            abs(float(stage1_hold_price) - active_high) * 1.5,
-            hold_leg_size * 0.04,
-            stage1_hold_close_tolerance,
-            active_high * float(params.min_tick_fraction) * 4.0,
-            self._EPSILON,
-        )
-        if float(one.closes[idx]) <= (hold_reject_price - hold_close_grace):
-            return (
-                None,
-                {
-                    "reason": "hold_floor_lost",
-                    "key": (pump_start_5m_idx, confirm_5m_idx),
+                    "reason": "pullback_below_min_allowed_low",
+                    "key": (int(candidate["pump_start_5m_idx"]), int(candidate["pullback_end_5m_idx"])),
                     "timestamp_ms": int(one.timestamps[idx]),
                     "extra": {
-                        **rejection_extra_base,
-                        "hold_floor": round(hold_floor, 8),
-                        "hold_reject_price": round(hold_reject_price, 8),
-                        "hold_close_grace": round(hold_close_grace, 8),
-                        "current_close": round(float(one.closes[idx]), 8),
-                        "reference_high": round(reference_high, 8),
-                    },
-                },
-            )
-        if float(one.closes[idx]) <= leg_start:
-            return (
-                None,
-                {
-                    "reason": "leg_start_lost",
-                    "key": (pump_start_5m_idx, confirm_5m_idx),
-                    "timestamp_ms": int(one.timestamps[idx]),
-                    "extra": {
-                        **rejection_extra_base,
-                        "current_close": round(float(one.closes[idx]), 8),
-                        "current_low": round(float(one.lows[idx]), 8),
+                        "active_high": round(active_high, 8),
                         "leg_start": round(leg_start, 8),
-                        "reference_high": round(reference_high, 8),
+                        "min_allowed_low": round(min_allowed_low, 8),
+                        "current_low": round(float(one.lows[idx]), 8),
                     },
                 },
             )
-        pre_pump_range_1h = self._resolve_window_range(
-            highs=five.highs,
-            lows=five.lows,
-            start_idx=max(0, pump_start_5m_idx - pre_pump_1h_bars),
-            end_idx=pump_start_5m_idx - 1,
-        )
-        pre_pump_range_2h = self._resolve_window_range(
-            highs=five.highs,
-            lows=five.lows,
-            start_idx=max(0, pump_start_5m_idx - pre_pump_2h_bars),
-            end_idx=pump_start_5m_idx - 1,
-        )
+
         pump_range = self._resolve_window_range(
             highs=five.highs,
             lows=five.lows,
-            start_idx=pump_start_5m_idx,
-            end_idx=five_idx,
+            start_idx=int(candidate["pump_start_5m_idx"]),
+            end_idx=int(candidate["pullback_end_5m_idx"]),
+        )
+        stage1_hold_price = float(candidate["level"])
+        hold_floor = min_allowed_low
+        allowed_pullback_end_5m_idx = min(
+            len(five.timestamps) - 1,
+            int(candidate["active_high_5m_idx"]) + int(params.stage1_pullback_max_bars),
+        )
+        cumulative_quote_volume = self._range_sum(
+            five.cumulative_quote_volume,
+            int(candidate["pump_start_5m_idx"]),
+            int(candidate["pullback_end_5m_idx"]),
         )
         return (
             Stage1Context(
                 start_idx=start_idx,
                 start_timestamp=int(one.timestamps[start_idx]),
                 levels_timeframe_ms=levels_timeframe_ms,
-                sleep_start_timestamp=int(five.timestamps[sleep_start_5m_idx]),
-                sleep_end_timestamp=int(five.timestamps[sleep_end_5m_idx]),
-                pump_start_5m_idx=pump_start_5m_idx,
+                sleep_start_timestamp=int(five.timestamps[max(int(candidate["pump_start_5m_idx"]) - 1, 0)]),
+                sleep_end_timestamp=int(five.timestamps[max(int(candidate["pump_start_5m_idx"]) - 1, 0)]),
+                pump_start_5m_idx=int(candidate["pump_start_5m_idx"]),
                 pump_start_timestamp=start_timestamp,
-                stage1_confirm_timestamp=int(five.timestamps[confirm_5m_idx]),
+                stage1_confirm_timestamp=int(candidate["level_timestamp"]),
                 current_5m_idx=five_idx,
                 current_levels_timestamp=int(five.timestamps[five_idx]),
                 active_high_idx=active_high_idx,
                 active_high_timestamp=int(one.timestamps[active_high_idx]),
                 active_high=active_high,
-                reference_high=reference_high,
+                reference_high=active_high,
                 leg_start_idx=leg_start_idx,
                 leg_start_timestamp=int(one.timestamps[leg_start_idx]),
                 leg_start=leg_start,
                 leg_size=leg_size,
-                reference_leg_size=reference_leg_size,
+                reference_leg_size=leg_size,
                 pump_range_5m=pump_range,
                 hold_floor=hold_floor,
                 stage1_hold_price=stage1_hold_price,
-                cumulative_quote_volume=float(quality_metrics["cumulative_quote_volume"]),
-                pre_pump_ema_crosses_1h=int(quality_metrics["pre_pump_ema_crosses_1h"]),
-                pre_pump_barcode_fraction_1h=float(quality_metrics["pre_pump_barcode_fraction_1h"]),
-                pre_pump_high_24h=float(quality_metrics["pre_pump_high_24h"]),
-                pre_pump_high_1h=float(quality_metrics["pre_pump_high_1h"]),
-                pump_pre_atr=float(quality_metrics["pump_pre_atr"]),
-                pump_impulse_atr_pre=float(quality_metrics["pump_impulse_atr_pre"]),
-                pump_peak_bar_tr_atr_pre=float(quality_metrics["pump_peak_bar_tr_atr_pre"]),
-                pump_volume_ratio_start=float(quality_metrics["pump_volume_ratio_start"]),
-                pump_volume_ratio_continue=float(quality_metrics["pump_volume_ratio_continue"]),
-                pump_path_efficiency=float(quality_metrics["pump_path_efficiency"]),
-                pump_wick_share=float(quality_metrics["pump_wick_share"]),
-                pump_body_share_mean=float(quality_metrics["pump_body_share_mean"]),
-                pump_flat_body_share=float(quality_metrics["pump_flat_body_share"]),
-                pump_body_wick_edge=float(quality_metrics["pump_body_wick_edge"]),
-                pump_micro_flat_bar_share=float(quality_metrics["pump_micro_flat_bar_share"]),
-                active_high_bar_body_share=float(quality_metrics["active_high_bar_body_share"]),
-                active_high_bar_upper_wick_share=float(quality_metrics["active_high_bar_upper_wick_share"]),
-                active_high_bar_close_position=float(quality_metrics["active_high_bar_close_position"]),
-                pump_max_red_body_share_5m=float(quality_metrics["pump_max_red_body_share_5m"]),
-                pump_counterflow_ratio_5m=float(quality_metrics["pump_counterflow_ratio_5m"]),
-                pump_max_red_body_share_1m=float(quality_metrics["pump_max_red_body_share_1m"]),
-                pump_counterflow_ratio_1m=float(quality_metrics["pump_counterflow_ratio_1m"]),
-                pre_pump_range_1h=pre_pump_range_1h,
-                pre_pump_range_2h=pre_pump_range_2h,
-                pump_vs_pre_1h_ratio=self._safe_divide(pump_range, pre_pump_range_1h),
-                pump_vs_pre_2h_ratio=self._safe_divide(pump_range, pre_pump_range_2h),
-                reference_high_weight=float(quality_metrics["reference_high_weight"]),
+                cumulative_quote_volume=float(cumulative_quote_volume),
+                active_high_5m_idx=int(candidate["active_high_5m_idx"]),
+                htf_pullback_start_5m_idx=int(candidate["pullback_start_5m_idx"]),
+                htf_pullback_end_5m_idx=int(allowed_pullback_end_5m_idx),
+                htf_pullback_low_5m_idx=int(candidate["pullback_low_5m_idx"]),
+                htf_pullback_low=htf_pullback_low,
+                htf_level=float(candidate["level"]),
+                htf_level_timestamp=int(candidate["level_timestamp"]),
+                htf_pump_bars=int(candidate["pump_bars"]),
+                htf_pullback_bars=int(candidate["pullback_bars"]),
+                htf_min_allowed_low=min_allowed_low,
             ),
             None,
         )
@@ -3350,43 +3333,47 @@ class PnoEngine:
         stage1: Stage1Context,
         params: PnoParams,
     ) -> Stage2Context | None:
-        active_high_5m_idx = int(np.searchsorted(five.timestamps, stage1.active_high_timestamp, side="right") - 1)
+        active_high_5m_idx = int(stage1.active_high_5m_idx)
         if active_high_5m_idx < 0 or five_idx <= active_high_5m_idx:
             return None
-        start_5m_idx = active_high_5m_idx + 1
-        red_indices = np.where(five.closes[start_5m_idx : five_idx + 1] < five.opens[start_5m_idx : five_idx + 1])[0]
-        if red_indices.size == 0:
+        if five_idx > int(stage1.htf_pullback_end_5m_idx):
             return None
-        red_after_high_5m_idx = start_5m_idx + int(red_indices[0])
-        pullback_threshold = stage1.reference_high - max(float(params.pullback_min_v1) * float(five.v5[five_idx]), self._EPSILON)
-        pullback_reached = np.where(five.lows[start_5m_idx : five_idx + 1] <= pullback_threshold)[0]
-        if pullback_reached.size == 0:
+        pullback_start_timestamp = int(five.timestamps[active_high_5m_idx + 1])
+        pullback_start_idx = int(np.searchsorted(one.timestamps, pullback_start_timestamp, side="left"))
+        if pullback_start_idx >= idx:
             return None
-        pullback_trigger_5m_idx = start_5m_idx + int(pullback_reached[0])
-        post_high_lows = five.lows[start_5m_idx : five_idx + 1]
-        pullback_low_offset = int(np.argmin(post_high_lows))
-        pullback_low_5m_idx = start_5m_idx + pullback_low_offset
-        pullback_low = float(five.lows[pullback_low_5m_idx])
+        pullback_low_idx = int(pullback_start_idx + np.argmin(one.lows[pullback_start_idx : idx + 1]))
+        pullback_low = float(one.lows[pullback_low_idx])
         pullback_depth = stage1.reference_high - pullback_low
-        if pullback_depth < max(float(five.v5[five_idx]), self._EPSILON):
-            return None
-        min_pullback_from_pump = float(params.pullback_min_pump_fraction_5m) * max(stage1.pump_range_5m, self._EPSILON)
+        min_pullback_from_pump = float(params.pullback_min_pump_fraction_5m) * max(stage1.leg_size, self._EPSILON)
         if pullback_depth < min_pullback_from_pump:
             return None
-        red_after_high_idx = int(np.searchsorted(one.timestamps, int(five.timestamps[red_after_high_5m_idx]), side="left"))
-        pullback_trigger_idx = int(np.searchsorted(one.timestamps, int(five.timestamps[pullback_trigger_5m_idx]), side="left"))
-        pullback_low_idx = int(np.searchsorted(one.timestamps, int(five.timestamps[pullback_low_5m_idx]), side="left"))
+        structure = self._resolve_pullback_structure(
+            one=one,
+            start_idx=stage1.active_high_idx,
+            end_idx=idx,
+            params=params,
+        )
         return Stage2Context(
             active_high_idx=stage1.active_high_idx,
             active_high_timestamp=stage1.active_high_timestamp,
             active_high=stage1.active_high,
-            red_after_high_idx=red_after_high_idx,
-            pullback_start_idx=max(red_after_high_idx, pullback_trigger_idx),
+            red_after_high_idx=pullback_start_idx,
+            pullback_start_idx=pullback_start_idx,
             pullback_low_idx=pullback_low_idx,
-            pullback_low_timestamp=int(five.timestamps[pullback_low_5m_idx]),
+            pullback_low_timestamp=int(one.timestamps[pullback_low_idx]),
             pullback_low=pullback_low,
             pullback_depth=pullback_depth,
             pullback_age_bars=(five_idx - active_high_5m_idx),
+            structure_high_idx=int(structure["last_high_idx"]) if structure is not None else -1,
+            structure_high_timestamp=int(structure["last_high_timestamp"]) if structure is not None else 0,
+            structure_high=float(structure["last_high"]) if structure is not None else 0.0,
+            structure_low_idx=int(structure["last_low_idx"]) if structure is not None else -1,
+            structure_low_timestamp=int(structure["last_low_timestamp"]) if structure is not None else 0,
+            structure_low=float(structure["last_low"]) if structure is not None else 0.0,
+            structure_pivot_indices=tuple(structure["pivot_indices"]) if structure is not None else (),
+            structure_pivot_prices=tuple(structure["pivot_prices"]) if structure is not None else (),
+            structure_pivot_kinds=tuple(structure["pivot_kinds"]) if structure is not None else (),
         )
 
     def _resolve_stage3_context(
@@ -3400,13 +3387,19 @@ class PnoEngine:
         stage2: Stage2Context,
         params: PnoParams,
     ) -> tuple[Stage3Context | None, str | None]:
-        active_high_5m_idx = int(np.searchsorted(five.timestamps, stage1.active_high_timestamp, side="right") - 1)
+        active_high_5m_idx = int(stage1.active_high_5m_idx)
         if active_high_5m_idx < 0 or five_idx <= active_high_5m_idx:
             return None, None
-        depth_reference = max(stage1.reference_leg_size, stage1.pump_range_5m, self._EPSILON)
-        if stage2.pullback_depth > (params.pullback_invalid_max_leg_fraction * depth_reference):
-            return None, "pullback_too_deep_vs_leg"
-        depth_frac = self._safe_divide(stage2.pullback_depth, depth_reference)
+        if five_idx > int(stage1.htf_pullback_end_5m_idx):
+            return None, "htf_pullback_limit_reached"
+        if float(one.lows[idx]) < (float(stage1.htf_min_allowed_low) - self._EPSILON):
+            return None, "price_too_low"
+        max_breakout_close = float(stage1.active_high) + (
+            float(params.structure_max_breakout_extension_fraction)
+            * max(float(stage2.pullback_depth), self._EPSILON)
+        )
+        if float(one.closes[idx]) > (max_breakout_close + self._EPSILON):
+            return None, "price_too_high"
         close_broke_leg_start = bool(
             np.any(
                 one.closes[stage2.pullback_start_idx : idx + 1]
@@ -3414,129 +3407,14 @@ class PnoEngine:
             )
         )
         wick_broke_leg_start = bool(stage2.pullback_low <= (stage1.leg_start + self._EPSILON))
-        valid = (
-            stage2.pullback_depth >= (params.pullback_min_v1 * five.v5[five_idx])
-            and depth_frac >= float(params.pullback_valid_min_leg_fraction)
-            and stage2.pullback_depth <= (params.pullback_valid_max_leg_fraction * depth_reference)
-            and not close_broke_leg_start
+        structure = self._resolve_pullback_structure(
+            one=one,
+            start_idx=stage1.active_high_idx,
+            end_idx=idx,
+            params=params,
         )
-        if not valid:
+        if structure is None or int(structure["break_idx"]) != idx:
             return None, None
-        post_high_window = slice(active_high_5m_idx + 1, five_idx + 1)
-        post_high_one_window = slice(stage1.active_high_idx + 1, idx + 1)
-        post_high_opens = five.opens[post_high_window]
-        post_high_highs = five.highs[post_high_window]
-        post_high_lows = five.lows[post_high_window]
-        post_high_closes = five.closes[post_high_window]
-        post_high_ema20 = five.ema20[post_high_window]
-        post_high_ema20_pierce_count = 0
-        post_high_close_below_ema20_count = 0
-        post_high_wick_share = 0.0
-        post_high_body_overlap_rate = 0.0
-        post_high_max_red_body_share = 0.0
-        post_high_chop_alternation_rate = 0.0
-        post_high_chop_path_efficiency = 1.0
-        if idx > stage1.active_high_idx:
-            post_high_one_opens = one.opens[post_high_one_window]
-            post_high_one_highs = one.highs[post_high_one_window]
-            post_high_one_lows = one.lows[post_high_one_window]
-            post_high_one_closes = one.closes[post_high_one_window]
-            if post_high_one_opens.size >= 4:
-                post_high_one_green = post_high_one_closes >= post_high_one_opens
-                post_high_chop_alternation_rate = float(
-                    np.mean(post_high_one_green[1:] != post_high_one_green[:-1])
-                )
-                one_total_range = float(np.sum(np.maximum(post_high_one_highs - post_high_one_lows, self._EPSILON)))
-                post_high_chop_path_efficiency = self._safe_divide(
-                    abs(float(post_high_one_closes[-1]) - float(post_high_one_opens[0])),
-                    one_total_range,
-                )
-        if post_high_opens.size > 0:
-            post_high_ema20_pierce_count = int(
-                np.sum(post_high_lows <= (post_high_ema20 + self._EPSILON))
-            )
-            post_high_close_below_ema20_count = int(
-                np.sum(post_high_closes < (post_high_ema20 - self._EPSILON))
-            )
-            post_high_range = np.maximum(post_high_highs - post_high_lows, self._EPSILON)
-            upper_wicks = post_high_highs - np.maximum(post_high_opens, post_high_closes)
-            lower_wicks = np.minimum(post_high_opens, post_high_closes) - post_high_lows
-            post_high_wick_share = self._safe_divide(
-                float(np.sum(upper_wicks + lower_wicks)),
-                float(np.sum(post_high_range)),
-            )
-            red_bodies = np.maximum(post_high_opens - post_high_closes, 0.0)
-            post_high_max_red_body_share = self._safe_divide(float(np.max(red_bodies)), depth_reference)
-            if post_high_opens.size >= 2:
-                body_lows = np.minimum(post_high_opens, post_high_closes)
-                body_highs = np.maximum(post_high_opens, post_high_closes)
-                overlaps = (body_lows[1:] <= body_highs[:-1]) & (body_highs[1:] >= body_lows[:-1])
-                post_high_body_overlap_rate = float(np.mean(overlaps))
-            if (
-                post_high_close_below_ema20_count > 2
-                or (
-                    post_high_close_below_ema20_count > 1
-                    and post_high_body_overlap_rate
-                    > max(float(params.stage3_max_post_high_body_overlap_rate), 0.72)
-                )
-            ):
-                return None, "post_high_closed_below_ema20"
-            completed_post_high_five = five.volumes[active_high_5m_idx + 1 : five_idx]
-            post_high_peak_volume_support_fraction = 0.0
-            if completed_post_high_five.size > 0:
-                active_high_volume = float(five.volumes[active_high_5m_idx])
-                post_high_peak_volume = float(np.max(completed_post_high_five))
-                post_high_peak_volume_support_fraction = self._safe_divide(
-                    post_high_peak_volume,
-                    active_high_volume,
-                )
-            noisy_follow_through_exception = (
-                post_high_close_below_ema20_count == 0
-                and post_high_chop_path_efficiency >= max(float(params.stage3_max_post_high_chop_path_efficiency) * 0.67, 0.12)
-                and post_high_max_red_body_share <= 0.42
-                and (
-                    post_high_peak_volume_support_fraction >= 0.25
-                    or stage2.pullback_age_bars <= 2
-                )
-            )
-            if (
-                post_high_wick_share > float(params.stage3_max_post_high_wick_share)
-                and post_high_body_overlap_rate > float(params.stage3_max_post_high_body_overlap_rate)
-                and not noisy_follow_through_exception
-            ):
-                return None, "post_high_too_noisy"
-            if (
-                completed_post_high_five.size > 0
-                and post_high_peak_volume_support_fraction < float(params.stage3_min_post_high_5m_volume_support_fraction)
-            ):
-                fast_reclaim_exception = (
-                    int(params.stage3_fast_reclaim_max_pullback_age_bars) > 0
-                    and stage2.pullback_age_bars <= int(params.stage3_fast_reclaim_max_pullback_age_bars)
-                    and post_high_close_below_ema20_count == 0
-                    and post_high_peak_volume_support_fraction
-                    >= float(params.stage3_fast_reclaim_min_post_high_5m_volume_support_fraction)
-                )
-                if not fast_reclaim_exception:
-                    return None, "post_high_no_supporting_5m_volume"
-            chop_walk_has_support = (
-                post_high_peak_volume_support_fraction
-                >= max(float(params.stage3_min_post_high_5m_volume_support_fraction), 0.70)
-            )
-            cat_d_chop_walk_exception = bool(
-                self._is_cat_d_profile(params)
-                and stage2.pullback_age_bars <= 3
-                and post_high_close_below_ema20_count == 0
-                and post_high_max_red_body_share <= 0.30
-            )
-            if (
-                (idx - stage1.active_high_idx) >= 8
-                and post_high_body_overlap_rate >= 0.88
-                and post_high_chop_alternation_rate >= float(params.stage3_max_post_high_chop_alternation_rate)
-                and post_high_chop_path_efficiency <= float(params.stage3_max_post_high_chop_path_efficiency)
-                and not (chop_walk_has_support and stage2.pullback_age_bars <= 3)
-                and not cat_d_chop_walk_exception
-            ):
-                return None, "post_high_chop_walk"
         return (
             Stage3Context(
                 active_high_idx=stage2.active_high_idx,
@@ -3549,16 +3427,136 @@ class PnoEngine:
                 pullback_depth=stage2.pullback_depth,
                 pullback_age_bars=stage2.pullback_age_bars,
                 validation_timestamp=int(one.timestamps[idx]),
-                post_high_ema20_pierce_count=post_high_ema20_pierce_count,
-                post_high_close_below_ema20_count=post_high_close_below_ema20_count,
-                post_high_wick_share=post_high_wick_share,
-                post_high_body_overlap_rate=post_high_body_overlap_rate,
-                post_high_max_red_body_share=post_high_max_red_body_share,
                 pullback_wick_broke_leg_start=wick_broke_leg_start,
                 pullback_close_broke_leg_start=close_broke_leg_start,
+                structure_high_idx=int(structure["last_high_idx"]),
+                structure_high_timestamp=int(structure["last_high_timestamp"]),
+                structure_high=float(structure["last_high"]),
+                structure_low_idx=int(structure["last_low_idx"]),
+                structure_low_timestamp=int(structure["last_low_timestamp"]),
+                structure_low=float(structure["last_low"]),
+                structure_break_idx=int(structure["break_idx"]),
+                structure_break_timestamp=int(one.timestamps[idx]),
+                structure_break_close=float(one.closes[idx]),
+                structure_pivot_indices=tuple(structure["pivot_indices"]),
+                structure_pivot_prices=tuple(structure["pivot_prices"]),
+                structure_pivot_kinds=tuple(structure["pivot_kinds"]),
             ),
             None,
         )
+
+    def _resolve_pullback_structure(
+        self,
+        *,
+        one: OneMinuteFrame,
+        start_idx: int,
+        end_idx: int,
+        params: PnoParams,
+    ) -> dict[str, object] | None:
+        if end_idx <= start_idx or start_idx < 0 or end_idx >= len(one.timestamps):
+            return None
+
+        v1_now = max(float(one.v1[end_idx]), self._EPSILON)
+        reversal_threshold = max(
+            float(params.structure_reversal_min_v1_fraction) * v1_now,
+            float(one.closes[end_idx]) * float(params.min_tick_fraction) * 4.0,
+            self._EPSILON,
+        )
+        min_body_fraction = float(params.structure_reversal_min_body_fraction)
+        confirmation_end_idx = int(end_idx - 1)
+        pivot_indices: list[int] = [int(start_idx)]
+        pivot_prices: list[float] = [float(one.highs[start_idx])]
+        pivot_kinds: list[str] = ["H"]
+        direction = "down"
+        swing_idx = int(start_idx + 1)
+        if swing_idx > confirmation_end_idx:
+            return None
+
+        def _append_pivot(kind: str, pivot_idx: int, pivot_price: float) -> None:
+            if pivot_idx <= pivot_indices[-1]:
+                return
+            if pivot_kinds[-1] == kind:
+                if kind == "H" and pivot_price > pivot_prices[-1]:
+                    pivot_indices[-1] = int(pivot_idx)
+                    pivot_prices[-1] = float(pivot_price)
+                elif kind == "L" and pivot_price < pivot_prices[-1]:
+                    pivot_indices[-1] = int(pivot_idx)
+                    pivot_prices[-1] = float(pivot_price)
+                return
+            pivot_indices.append(int(pivot_idx))
+            pivot_prices.append(float(pivot_price))
+            pivot_kinds.append(kind)
+
+        for probe_idx in range(start_idx + 1, confirmation_end_idx + 1):
+            bar_range = max(float(one.highs[probe_idx]) - float(one.lows[probe_idx]), self._EPSILON)
+            body_share = self._safe_divide(abs(float(one.closes[probe_idx]) - float(one.opens[probe_idx])), bar_range)
+            if direction == "down":
+                if float(one.lows[probe_idx]) <= float(one.lows[swing_idx]):
+                    swing_idx = int(probe_idx)
+                rebound = float(one.highs[probe_idx]) - float(one.lows[swing_idx])
+                if probe_idx > swing_idx and rebound >= reversal_threshold and body_share >= min_body_fraction:
+                    _append_pivot("L", int(swing_idx), float(one.lows[swing_idx]))
+                    direction = "up"
+                    swing_idx = int(probe_idx)
+            else:
+                if float(one.highs[probe_idx]) >= float(one.highs[swing_idx]):
+                    swing_idx = int(probe_idx)
+                rollback = float(one.highs[swing_idx]) - float(one.lows[probe_idx])
+                if probe_idx > swing_idx and rollback >= reversal_threshold and body_share >= min_body_fraction:
+                    _append_pivot("H", int(swing_idx), float(one.highs[swing_idx]))
+                    direction = "down"
+                    swing_idx = int(probe_idx)
+
+        if len(pivot_indices) < 2:
+            return None
+
+        last_low_pos = -1
+        for pos in range(len(pivot_kinds) - 1, -1, -1):
+            if pivot_kinds[pos] == "L":
+                last_low_pos = pos
+                break
+        if last_low_pos <= 0:
+            return None
+        last_high_pos = -1
+        for pos in range(last_low_pos - 1, -1, -1):
+            if pivot_kinds[pos] == "H":
+                last_high_pos = pos
+                break
+        if last_high_pos < 0:
+            return None
+
+        last_high_idx = int(pivot_indices[last_high_pos])
+        last_high = float(pivot_prices[last_high_pos])
+        last_low_idx = int(pivot_indices[last_low_pos])
+        last_low = float(pivot_prices[last_low_pos])
+        breakout_buffer = float(params.structure_break_min_close_v1_fraction) * v1_now
+        breakout_close = float(one.closes[end_idx])
+        breakout_close_position = self._safe_divide(
+            breakout_close - float(one.lows[end_idx]),
+            max(float(one.highs[end_idx]) - float(one.lows[end_idx]), self._EPSILON),
+        )
+        break_idx = -1
+        if (
+            last_low_pos == (len(pivot_kinds) - 1)
+            and
+            end_idx > last_low_idx
+            and breakout_close > (last_high + breakout_buffer)
+            and breakout_close_position >= float(params.structure_break_min_close_position)
+        ):
+            break_idx = int(end_idx)
+
+        return {
+            "pivot_indices": tuple(int(item) for item in pivot_indices),
+            "pivot_prices": tuple(float(item) for item in pivot_prices),
+            "pivot_kinds": tuple(str(item) for item in pivot_kinds),
+            "last_high_idx": int(last_high_idx),
+            "last_high_timestamp": int(one.timestamps[last_high_idx]),
+            "last_high": float(last_high),
+            "last_low_idx": int(last_low_idx),
+            "last_low_timestamp": int(one.timestamps[last_low_idx]),
+            "last_low": float(last_low),
+            "break_idx": int(break_idx),
+        }
 
     def _resolve_stage4_context(
         self,
@@ -3582,6 +3580,72 @@ class PnoEngine:
         if not np.isfinite(v1_now) or v1_now <= 0.0:
             return None
 
+        if stage3.structure_high_idx >= 0 and stage3.structure_low_idx >= 0:
+            slip_plan = max(float(stage3.structure_high) * float(params.min_tick_fraction), float(params.slip_plan_v1_fraction) * v1_now)
+            entry_plan = float(stage3.structure_high) + slip_plan
+            tp1 = float(stage3.active_high)
+            tp2 = self._resolve_tp2(
+                active_high=tp1,
+                entry_price=entry_plan,
+                pullback_height=float(stage3.pullback_depth),
+                v1=v1_now,
+            )
+            return Stage4Context(
+                active_high_idx=stage3.active_high_idx,
+                active_high_timestamp=stage3.active_high_timestamp,
+                active_high=stage3.active_high,
+                pullback_low_idx=stage3.pullback_low_idx,
+                pullback_low_timestamp=stage3.pullback_low_timestamp,
+                pullback_low=stage3.pullback_low,
+                pullback_depth=stage3.pullback_depth,
+                cluster_indices=(int(stage3.structure_high_idx),),
+                cluster_prices=(float(stage3.structure_high),),
+                level=float(stage3.structure_high),
+                level_pos=self._resolve_entry_pullback_fraction(
+                    pullback_low=float(stage3.structure_low),
+                    active_high=float(stage3.active_high),
+                    entry_price=float(stage3.structure_high),
+                ),
+                touches=1,
+                cluster_first_idx=int(stage3.structure_high_idx),
+                cluster_last_idx=int(stage3.structure_high_idx),
+                level_valid_idx=int(stage3.structure_break_idx),
+                level_valid_timestamp=int(stage3.structure_break_timestamp),
+                level_low=float(stage3.structure_low),
+                level_low_minor_break=False,
+                level_low_major_break=False,
+                penalty_level_low_break=0,
+                penalty_untested_highs=0,
+                base_bonus=0,
+                pno_index=pno_index,
+                maturity_penalty=0,
+                pno_order_adj=0,
+                score_a=20,
+                score_b=20,
+                score_c=20,
+                score_d=20,
+                score_e=20,
+                score_tp2=self._resolve_tp2_score(tp2=tp2, active_high=tp1, v1=v1_now),
+                final_score=max(float(params.min_score), 90.0),
+                entry_plan=entry_plan,
+                sl_plan=float(stage3.structure_low),
+                low_last_red_plan=float(stage3.structure_low),
+                tp1=tp1,
+                tp2=tp2,
+                stage4_ready=True,
+                hard_block=False,
+                is_valid_setup=True,
+                hard_block_reason=None,
+                entry_pos=self._resolve_entry_pullback_fraction(
+                    pullback_low=float(stage3.structure_low),
+                    active_high=float(stage3.active_high),
+                    entry_price=entry_plan,
+                ),
+                level_maturity_fraction=1.0,
+                level_age_bars=max(idx - int(stage3.structure_high_idx), 0),
+                structure_source="human_bos",
+            )
+
         confirmed_highs = self._resolve_confirmed_highs(
             one=one,
             start_idx=stage3.pullback_start_idx + 1,
@@ -3595,134 +3659,150 @@ class PnoEngine:
         tolerance = float(params.level_touch_tolerance_v1) * v1_now
 
         if previous is not None and previous.active_high_idx == stage3.active_high_idx:
-            base_key = (previous.active_high_idx, previous.cluster_first_idx, previous.cluster_last_idx)
-            if any(
-                retired.active_high_idx == base_key[0]
-                and retired.cluster_first_idx == base_key[1]
-                and retired.cluster_last_idx == base_key[2]
-                for retired in retired_clusters
-            ):
-                return None
-            if len(previous.cluster_indices) < 1:
-                return None
-
-            touch_indices = tuple(
-                high_idx
-                for high_idx in confirmed_highs
-                if high_idx >= previous.cluster_first_idx
-                and float(one.highs[high_idx]) < (stage3.active_high - self._EPSILON)
-                and abs(float(one.highs[high_idx]) - previous.level) <= tolerance
-            )
-            if not touch_indices and len(previous.cluster_indices) == 1:
-                synthetic_touch_idx = int(previous.cluster_indices[0])
-                if (
-                    synthetic_touch_idx <= idx
-                    and float(one.highs[synthetic_touch_idx]) < (stage3.active_high - self._EPSILON)
-                    and abs(float(one.highs[synthetic_touch_idx]) - previous.level) <= tolerance
-                ):
-                    touch_indices = (synthetic_touch_idx,)
-            min_required_touches = max(1, len(previous.cluster_indices))
-            if len(touch_indices) < min_required_touches:
-                return None
-            latest_touch_idx = int(max(touch_indices))
-            latest_high_max_age_bars = int(params.level_latest_high_max_age_bars)
-            if ideal_like_impulse and int(params.ideal_like_level_latest_high_max_age_bars) > 0:
-                latest_high_max_age_bars = max(
-                    latest_high_max_age_bars,
-                    int(params.ideal_like_level_latest_high_max_age_bars),
-                )
-            if (idx - latest_touch_idx) > latest_high_max_age_bars:
-                return None
-
-            current_level_low = float(np.min(one.lows[previous.cluster_first_idx : idx + 1]))
-            break_depth = max(previous.level_low - current_level_low, 0.0)
-            level_low_minor_break = False
-            level_low_major_break = False
-            penalty_level_low_break = 0
-            hard_block = bool(previous.hard_block)
-            hard_block_reason = previous.hard_block_reason
-            if break_depth > (float(params.level_low_major_break_v1) * v1_now):
-                level_low_major_break = True
-            elif break_depth > (float(params.level_low_minor_break_v1) * v1_now):
-                level_low_minor_break = True
-                penalty_level_low_break = 6
-
-            level_maturity_fraction = self._resolve_level_maturity_fraction(
-                active_high_idx=stage3.active_high_idx,
-                cluster_first_idx=previous.cluster_first_idx,
-                current_idx=idx,
-            )
-            required_maturity_fraction = self._resolve_required_level_maturity_fraction(
-                one=one,
-                idx=idx,
-                stage3=stage3,
-                cluster_first_idx=previous.cluster_first_idx,
-                cluster_indices=previous.cluster_indices,
-                level=float(previous.level),
-                params=params,
-            )
             if ideal_like_impulse:
-                required_maturity_fraction = min(
-                    required_maturity_fraction,
-                    float(params.ideal_like_relaxed_level_maturity_fraction),
+                refreshed_cluster = self._resolve_ideal_like_upper_tf_level_cluster(
+                    one=one,
+                    five=five,
+                    idx=idx,
+                    five_idx=five_idx,
+                    stage3=stage3,
+                    retired_clusters=retired_clusters,
+                    params=params,
                 )
-            if level_maturity_fraction < required_maturity_fraction:
-                return None
+                if refreshed_cluster is not None:
+                    refreshed_indices, refreshed_prices = refreshed_cluster
+                    refreshed_level = float(np.max(np.asarray(refreshed_prices, dtype=np.float64)))
+                    if (
+                        refreshed_level < (float(previous.level) - self._EPSILON)
+                        and int(refreshed_indices[0]) > int(previous.cluster_first_idx)
+                    ):
+                        previous = None
+            if previous is None:
+                pass
+            else:
+                base_key = (previous.active_high_idx, previous.cluster_first_idx, previous.cluster_last_idx)
+                if any(
+                    retired.active_high_idx == base_key[0]
+                    and retired.cluster_first_idx == base_key[1]
+                    and retired.cluster_last_idx == base_key[2]
+                    for retired in retired_clusters
+                ):
+                    return None
+                if len(previous.cluster_indices) < 1:
+                    return None
 
-            return Stage4Context(
-                active_high_idx=stage3.active_high_idx,
-                active_high_timestamp=stage3.active_high_timestamp,
-                active_high=stage3.active_high,
-                pullback_low_idx=stage3.pullback_low_idx,
-                pullback_low_timestamp=stage3.pullback_low_timestamp,
-                pullback_low=stage3.pullback_low,
-                pullback_depth=stage3.pullback_depth,
-                cluster_indices=previous.cluster_indices,
-                cluster_prices=previous.cluster_prices,
-                level=previous.level,
-                level_pos=self._safe_divide(
-                    previous.level - stage3.pullback_low,
-                    stage3.active_high - stage3.pullback_low,
-                ),
-                touches=len(touch_indices),
-                cluster_first_idx=previous.cluster_first_idx,
-                cluster_last_idx=previous.cluster_last_idx,
-                level_valid_idx=previous.level_valid_idx,
-                level_valid_timestamp=previous.level_valid_timestamp,
-                level_low=previous.level_low,
-                level_low_minor_break=level_low_minor_break,
-                level_low_major_break=level_low_major_break,
-                penalty_level_low_break=penalty_level_low_break,
-                penalty_untested_highs=0,
-                base_bonus=0,
-                pno_index=previous.pno_index,
-                maturity_penalty=0,
-                pno_order_adj=0,
-                score_a=0,
-                score_b=0,
-                score_c=0,
-                score_d=0,
-                score_e=0,
-                score_tp2=0,
-                final_score=0.0,
-                entry_plan=0.0,
-                sl_plan=0.0,
-                low_last_red_plan=0.0,
-                tp1=stage3.active_high,
-                tp2=0.0,
-                stage4_ready=not hard_block,
-                hard_block=hard_block,
-                is_valid_setup=False,
-                hard_block_reason=hard_block_reason,
-                entry_pos=0.0,
-                level_maturity_fraction=level_maturity_fraction,
-                level_age_bars=max(idx - previous.cluster_first_idx, 0),
-            )
-            level_age_bars_upper_tf = max(
-                int(previous.level_age_bars / (params.levels_timeframe.to_milliseconds() / 60000)), 1
-            )
-            if level_age_bars_upper_tf > params.level_max_age_bars_upper_tf:
-                return None
+                touch_indices = tuple(
+                    high_idx
+                    for high_idx in confirmed_highs
+                    if high_idx >= previous.cluster_first_idx
+                    and float(one.highs[high_idx]) < (stage3.active_high - self._EPSILON)
+                    and abs(float(one.highs[high_idx]) - previous.level) <= tolerance
+                )
+                if not touch_indices and len(previous.cluster_indices) == 1:
+                    synthetic_touch_idx = int(previous.cluster_indices[0])
+                    if (
+                        synthetic_touch_idx <= idx
+                        and float(one.highs[synthetic_touch_idx]) < (stage3.active_high - self._EPSILON)
+                        and abs(float(one.highs[synthetic_touch_idx]) - previous.level) <= tolerance
+                    ):
+                        touch_indices = (synthetic_touch_idx,)
+                min_required_touches = max(1, len(previous.cluster_indices))
+                if len(touch_indices) < min_required_touches:
+                    return None
+                latest_touch_idx = int(max(touch_indices))
+                latest_high_max_age_bars = int(params.level_latest_high_max_age_bars)
+                if ideal_like_impulse and int(params.ideal_like_level_latest_high_max_age_bars) > 0:
+                    latest_high_max_age_bars = max(
+                        latest_high_max_age_bars,
+                        int(params.ideal_like_level_latest_high_max_age_bars),
+                    )
+                if (idx - latest_touch_idx) > latest_high_max_age_bars:
+                    return None
+
+                current_level_low = float(np.min(one.lows[previous.cluster_first_idx : idx + 1]))
+                break_depth = max(previous.level_low - current_level_low, 0.0)
+                level_low_minor_break = False
+                level_low_major_break = False
+                penalty_level_low_break = 0
+                hard_block = bool(previous.hard_block)
+                hard_block_reason = previous.hard_block_reason
+                if break_depth > (float(params.level_low_major_break_v1) * v1_now):
+                    level_low_major_break = True
+                elif break_depth > (float(params.level_low_minor_break_v1) * v1_now):
+                    level_low_minor_break = True
+                    penalty_level_low_break = 6
+
+                level_maturity_fraction = self._resolve_level_maturity_fraction(
+                    active_high_idx=stage3.active_high_idx,
+                    cluster_first_idx=previous.cluster_first_idx,
+                    current_idx=idx,
+                )
+                required_maturity_fraction = self._resolve_required_level_maturity_fraction(
+                    one=one,
+                    idx=idx,
+                    stage3=stage3,
+                    cluster_first_idx=previous.cluster_first_idx,
+                    cluster_indices=previous.cluster_indices,
+                    level=float(previous.level),
+                    params=params,
+                )
+                if ideal_like_impulse:
+                    required_maturity_fraction = min(
+                        required_maturity_fraction,
+                        float(params.ideal_like_relaxed_level_maturity_fraction),
+                    )
+                if level_maturity_fraction < required_maturity_fraction:
+                    return None
+
+                return Stage4Context(
+                    active_high_idx=stage3.active_high_idx,
+                    active_high_timestamp=stage3.active_high_timestamp,
+                    active_high=stage3.active_high,
+                    pullback_low_idx=stage3.pullback_low_idx,
+                    pullback_low_timestamp=stage3.pullback_low_timestamp,
+                    pullback_low=stage3.pullback_low,
+                    pullback_depth=stage3.pullback_depth,
+                    cluster_indices=previous.cluster_indices,
+                    cluster_prices=previous.cluster_prices,
+                    level=previous.level,
+                    level_pos=self._safe_divide(
+                        previous.level - stage3.pullback_low,
+                        stage3.active_high - stage3.pullback_low,
+                    ),
+                    touches=len(touch_indices),
+                    cluster_first_idx=previous.cluster_first_idx,
+                    cluster_last_idx=previous.cluster_last_idx,
+                    level_valid_idx=previous.level_valid_idx,
+                    level_valid_timestamp=previous.level_valid_timestamp,
+                    level_low=previous.level_low,
+                    level_low_minor_break=level_low_minor_break,
+                    level_low_major_break=level_low_major_break,
+                    penalty_level_low_break=penalty_level_low_break,
+                    penalty_untested_highs=0,
+                    base_bonus=0,
+                    pno_index=previous.pno_index,
+                    maturity_penalty=0,
+                    pno_order_adj=0,
+                    score_a=0,
+                    score_b=0,
+                    score_c=0,
+                    score_d=0,
+                    score_e=0,
+                    score_tp2=0,
+                    final_score=0.0,
+                    entry_plan=0.0,
+                    sl_plan=0.0,
+                    low_last_red_plan=0.0,
+                    tp1=stage3.active_high,
+                    tp2=0.0,
+                    stage4_ready=not hard_block,
+                    hard_block=hard_block,
+                    is_valid_setup=False,
+                    hard_block_reason=hard_block_reason,
+                    entry_pos=0.0,
+                    level_maturity_fraction=level_maturity_fraction,
+                    level_age_bars=max(idx - previous.cluster_first_idx, 0),
+                )
 
         cluster = None
         if ideal_like_impulse:
@@ -3871,6 +3951,8 @@ class PnoEngine:
         stage4: Stage4Context,
         params: PnoParams,
     ) -> Stage4Context:
+        if stage4.structure_source == "human_bos":
+            return stage4
         v1_now = max(float(one.v1[idx]), self._EPSILON)
         v5_now = max(float(five.v5[five_idx]), self._EPSILON)
         ideal_like_impulse = self._is_ideal_like_impulse(stage1=stage1, params=params)
@@ -3895,6 +3977,7 @@ class PnoEngine:
         tp1 = float(stage3.active_high)
         tp2 = self._resolve_tp2(
             active_high=tp1,
+            entry_price=entry_plan,
             pullback_height=float(stage3.pullback_depth),
             v1=v1_now,
         )
@@ -4567,6 +4650,18 @@ class PnoEngine:
             return None
         return search_start + int(cross_offsets[0])
 
+    def _resolve_level_first_cross_bars(
+        self,
+        *,
+        one: OneMinuteFrame,
+        stage4: Stage4Context,
+        idx: int,
+    ) -> int | None:
+        first_cross_idx = self._resolve_level_first_cross_idx(one=one, stage4=stage4, idx=idx)
+        if first_cross_idx is None:
+            return None
+        return max(int(first_cross_idx) - int(stage4.cluster_first_idx), 0)
+
     def _resolve_level_life_profile(
         self,
         *,
@@ -4586,10 +4681,12 @@ class PnoEngine:
                 "prior_full_above_bar": False,
                 "prior_tp1_hit": False,
                 "path_efficiency": 1.0,
+                "quote_volume_median": 0.0,
             }
         highs = one.highs[start_idx : end_idx + 1]
         lows = one.lows[start_idx : end_idx + 1]
         closes = one.closes[start_idx : end_idx + 1]
+        quote_volume = one.quote_volume[start_idx : end_idx + 1]
         level = float(stage4.level)
         pullback_low = float(stage4.pullback_low)
         close_above_mask = closes > (level + self._EPSILON)
@@ -4612,6 +4709,7 @@ class PnoEngine:
             "prior_full_above_bar": bool(np.any(full_above_mask)),
             "prior_tp1_hit": bool(np.any(highs >= (float(stage4.tp1) - self._EPSILON))),
             "path_efficiency": float(path_efficiency),
+            "quote_volume_median": float(np.nanmedian(quote_volume)) if quote_volume.size > 0 else 0.0,
         }
 
     def _resolve_close_above_pre_signal_decay_reason(
@@ -4619,6 +4717,7 @@ class PnoEngine:
         *,
         one: OneMinuteFrame,
         signal_idx: int,
+        params: PnoParams,
         stage4: Stage4Context,
     ) -> str | None:
         level_profile = self._resolve_level_life_profile(
@@ -4626,6 +4725,9 @@ class PnoEngine:
             stage4=stage4,
             signal_idx=signal_idx,
         )
+        first_cross_bars = self._resolve_level_first_cross_bars(one=one, stage4=stage4, idx=signal_idx)
+        if first_cross_bars is not None and first_cross_bars > int(params.close_above_max_level_cross_bars):
+            return "level_crossed_too_late"
         if bool(level_profile["prior_tp1_hit"]):
             return "tp1_already_tagged_before_signal"
         if bool(level_profile["prior_full_above_bar"]):
@@ -4645,6 +4747,11 @@ class PnoEngine:
             and float(level_profile["path_efficiency"]) <= 0.03
         ):
             return "level_spent_too_long_below_pullback"
+        if (
+            float(level_profile["quote_volume_median"]) < float(params.close_above_min_level_life_quote_volume_median)
+            and float(level_profile["path_efficiency"]) <= 0.22
+        ):
+            return "level_life_too_illiquid"
         return None
 
     def _is_armed_entry_invalidated_before_trigger(
@@ -4664,10 +4771,13 @@ class PnoEngine:
         pullback_low = float(armed.stage3.pullback_low)
         stop_broken = current_close <= (stop_level - close_tolerance) or current_low <= (stop_level - wick_tolerance)
         pullback_broken = current_close <= (pullback_low - close_tolerance) or current_low <= (pullback_low - wick_tolerance)
+        if armed.stage4.structure_source == "human_bos":
+            return stop_broken or pullback_broken
         close_above_decay_broken = (
             self._resolve_close_above_pre_signal_decay_reason(
                 one=one,
                 signal_idx=idx,
+                params=params or PnoParams(symbol=""),
                 stage4=armed.stage4,
             )
             is not None
@@ -5068,11 +5178,13 @@ class PnoEngine:
         self,
         *,
         active_high: float,
+        entry_price: float,
         pullback_height: float,
         v1: float,
     ) -> float:
         base_high = float(active_high)
-        projected_tp2 = base_high + max(float(pullback_height), self._EPSILON)
+        entry = min(float(entry_price), base_high)
+        projected_tp2 = base_high + max(base_high - entry, self._EPSILON)
         target_step = max(float(v1), 0.0005 * base_high, self._EPSILON)
         round_step = self._round_to_preferred_step(target_step)
         tp2 = np.floor(projected_tp2 / max(round_step, self._EPSILON)) * round_step
@@ -5306,7 +5418,14 @@ class PnoEngine:
         ema9 = float(ema9_series.iloc[idx]) if idx < len(ema9_series) else np.nan
         ema20 = float(ema20_series.iloc[idx]) if idx < len(ema20_series) else np.nan
         ema20_prev_idx = max(0, idx - 3)
+        ema9_prev_idx = max(0, idx - 3)
         ema20_prev = float(ema20_series.iloc[ema20_prev_idx]) if ema20_prev_idx < len(ema20_series) else np.nan
+        ema9_prev = float(ema9_series.iloc[ema9_prev_idx]) if ema9_prev_idx < len(ema9_series) else np.nan
+        ema9_slope_3 = (
+            ((ema9 - ema9_prev) / ema9_prev) * 100.0
+            if np.isfinite(ema9) and np.isfinite(ema9_prev) and ema9_prev > 0.0
+            else np.nan
+        )
         ema_spread_pct = (
             ((ema9 - ema20) / ema20) * 100.0
             if np.isfinite(ema9) and np.isfinite(ema20) and ema20 > 0.0
@@ -5327,6 +5446,7 @@ class PnoEngine:
             "signal_bar_close_position": (close_price - low_price) / bar_range,
             "signal_bar_volume_vs_recent": volume_vs_recent,
             "signal_close_clearance_pct": close_clearance_pct,
+            "signal_bar_ema9_slope_3": ema9_slope_3,
             "signal_bar_ema_spread_pct": ema_spread_pct,
             "signal_bar_ema20_slope_3": ema20_slope_3,
         }
@@ -5382,6 +5502,7 @@ class PnoEngine:
         self,
         *,
         params: PnoParams,
+        stage1: Stage1Context,
         stage3: Stage3Context,
         stage4: Stage4Context,
         signal_context: dict[str, float],
@@ -5401,11 +5522,35 @@ class PnoEngine:
             and float(stage4.level_life_ema_spread_growth_share) < 0.20
         ):
             return "close_above_level_too_stale"
+        if entry_pos < float(params.close_above_min_entry_pos):
+            return "close_above_entry_pos_too_low"
         if entry_pos > float(params.close_above_max_entry_pos):
             return "close_above_entry_pos_too_high"
         pullback_fraction = self._safe_divide(float(stage3.pullback_depth), max(float(stage4.active_high) - float(stage3.pullback_low), self._EPSILON))
         if pullback_fraction > float(params.close_above_max_pullback_fraction_of_leg):
             return "close_above_pullback_too_deep"
+        if float(stage1.active_high_bar_upper_wick_share) > float(params.close_above_max_active_high_upper_wick_share):
+            return "close_above_active_high_upper_wick_too_heavy"
+        if float(stage1.active_high_bar_close_position) < float(params.close_above_min_active_high_close_position):
+            return "close_above_active_high_closed_too_low"
+        if float(stage3.post_high_chop_alternation_rate) < float(params.close_above_min_post_high_alternation_rate):
+            return "close_above_post_high_alternation_too_low"
+        signal_volume_vs_recent = float(signal_context.get("signal_bar_volume_vs_recent") or np.nan)
+        if (
+            float(stage1.pump_volume_ratio_start) < 2.5
+            and float(stage1.pump_path_efficiency) < 0.50
+        ):
+            return "close_above_pump_too_weak_into_active_high"
+        if (
+            float(stage1.pump_volume_ratio_start) < 4.0
+            and float(stage1.pump_path_efficiency) < 0.40
+        ):
+            return "close_above_pump_tape_too_thin"
+        if (
+            float(stage1.active_high_bar_upper_wick_share) >= 0.60
+            and float(stage1.active_high_bar_close_position) <= 0.40
+        ):
+            return "close_above_active_high_too_exhausted"
         if float(stage3.post_high_wick_share) > float(params.close_above_max_post_high_wick_share):
             return "close_above_post_high_wick_too_high"
         if float(stage4.overhead_resistance_score) >= 0.76 and int(stage4.overhead_red_count) >= 5:
@@ -5424,6 +5569,20 @@ class PnoEngine:
             and signal_close_position < 0.72
         ):
             return "close_above_chop_reclaim_too_noisy"
+        signal_ema9_slope_3 = float(signal_context.get("signal_bar_ema9_slope_3") or np.nan)
+        min_signal_ema9_slope_3 = float(params.close_above_min_signal_ema9_slope_3)
+        if min_signal_ema9_slope_3 > 0.0:
+            if not np.isfinite(signal_ema9_slope_3):
+                if not clean_structure_override:
+                    return "close_above_signal_ema9_slope_missing"
+            elif (
+                signal_ema9_slope_3 < min_signal_ema9_slope_3
+                and (
+                    not clean_structure_override
+                    or signal_ema9_slope_3 < (0.65 * min_signal_ema9_slope_3)
+                )
+            ):
+                return "close_above_signal_ema9_slope_too_low"
         signal_ema20_slope_3 = float(signal_context.get("signal_bar_ema20_slope_3") or np.nan)
         min_signal_ema20_slope_3 = float(params.close_above_min_signal_ema20_slope_3)
         if min_signal_ema20_slope_3 > 0.0:
@@ -5452,7 +5611,10 @@ class PnoEngine:
                 )
             ):
                 return "close_above_signal_ema_spread_too_tight"
-
+        if np.isfinite(signal_volume_vs_recent) and signal_volume_vs_recent < float(params.close_above_min_signal_volume_vs_recent):
+            return "close_above_signal_volume_too_low"
+        if not np.isfinite(signal_volume_vs_recent) and float(params.close_above_min_signal_volume_vs_recent) > 0.0:
+            return "close_above_signal_volume_missing"
         return None
         
         # Если главный хай уже есть и достаточный рост, объем не является ключевым фактором
@@ -5500,6 +5662,7 @@ class PnoEngine:
             close_above_decay_reason = self._resolve_close_above_pre_signal_decay_reason(
                 one=one,
                 signal_idx=entry_idx,
+                params=params,
                 stage4=armed.stage4,
             )
             if (
@@ -5508,12 +5671,17 @@ class PnoEngine:
                 and close_above_decay_reason == "level_already_accepted_before_signal"
             ):
                 close_above_decay_reason = None
+            if armed.stage4.structure_source == "human_bos":
+                close_above_decay_reason = None
             if close_above_decay_reason is not None:
                 return None, entry_idx
-            actual_entry_idx = entry_idx + 1
-            if actual_entry_idx >= len(one.timestamps):
-                return None, entry_idx
-            entry_price = float(one.opens[actual_entry_idx])
+            if armed.stage4.structure_source == "human_bos":
+                entry_price = max(open_price, float(armed.stage4.entry_plan))
+            else:
+                actual_entry_idx = entry_idx + 1
+                if actual_entry_idx >= len(one.timestamps):
+                    return None, entry_idx
+                entry_price = float(one.opens[actual_entry_idx])
             stop_loss = float(armed.stage4.low_last_red_plan)
             signal_kind = "close_above"
         else:
@@ -5548,21 +5716,25 @@ class PnoEngine:
                 idx=entry_idx,
                 level=float(armed.stage4.level),
             )
-            (
-                trigger_body_close_adj,
-                trigger_overhead_adj,
-                trigger_volume_adj,
-                trigger_score_adjustment,
-            ) = self._resolve_close_trigger_score_adjustment(
-                stage4=armed.stage4,
-                signal_context=signal_context,
-            )
-            close_trigger_filter_reason = self._resolve_close_trigger_filter_reason(
-                params=params,
-                stage3=armed.stage3,
-                stage4=armed.stage4,
-                signal_context=signal_context,
-            )
+            if armed.stage4.structure_source != "human_bos":
+                (
+                    trigger_body_close_adj,
+                    trigger_overhead_adj,
+                    trigger_volume_adj,
+                    trigger_score_adjustment,
+                ) = self._resolve_close_trigger_score_adjustment(
+                    stage4=armed.stage4,
+                    signal_context=signal_context,
+                )
+                close_trigger_filter_reason = self._resolve_close_trigger_filter_reason(
+                    params=params,
+                    stage1=armed.stage1,
+                    stage3=armed.stage3,
+                    stage4=armed.stage4,
+                    signal_context=signal_context,
+                )
+            else:
+                close_trigger_filter_reason = None
             if (
                 ideal_like_impulse
                 and close_trigger_filter_reason in {
@@ -5731,6 +5903,11 @@ class PnoEngine:
                     ),
                     "signal_close_clearance_pct": (
                         round(signal_close_clearance_pct, 4) if np.isfinite(signal_close_clearance_pct) else np.nan
+                    ),
+                    "signal_bar_ema9_slope_3": (
+                        round(float(signal_context["signal_bar_ema9_slope_3"]), 4)
+                        if np.isfinite(float(signal_context["signal_bar_ema9_slope_3"]))
+                        else np.nan
                     ),
                     "signal_bar_ema_spread_pct": (
                         round(float(signal_context["signal_bar_ema_spread_pct"]), 4)
@@ -6448,6 +6625,175 @@ class PnoEngine:
     @staticmethod
     def _aggregate_to_5m(frame: pd.DataFrame) -> pd.DataFrame:
         return PnoEngine._aggregate_frame(frame, target_timeframe_ms=Timeframe.M5.to_milliseconds())
+
+    def _materialize_sparse_entry_frame(
+        self,
+        *,
+        levels_frame: pd.DataFrame,
+        source_entry_frame: pd.DataFrame,
+        params: PnoParams,
+        stage1_state: Stage1StateArrays | None,
+        seconds_frame_provider: object,
+    ) -> pd.DataFrame:
+        del source_entry_frame
+        loader = getattr(seconds_frame_provider, "load_aggregated_window", None)
+        if not callable(loader):
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+        windows = self._resolve_stage1_fetch_windows(
+            levels_frame=levels_frame,
+            params=params,
+            stage1_state=stage1_state,
+        )
+        if not windows:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+        frames: list[pd.DataFrame] = []
+        for start_timestamp_ms, end_timestamp_ms in windows:
+            frame = loader(
+                symbol=params.symbol,
+                start_timestamp_ms=int(start_timestamp_ms),
+                end_timestamp_ms=int(end_timestamp_ms),
+                target_timeframe=params.entry_timeframe,
+            )
+            if isinstance(frame, pd.DataFrame) and not frame.empty:
+                frames.append(self.prepare_data(frame))
+        if not frames:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        materialized = pd.concat(frames, ignore_index=True)
+        return self.prepare_data(materialized)
+
+    def _resolve_stage1_fetch_windows(
+        self,
+        *,
+        levels_frame: pd.DataFrame,
+        params: PnoParams,
+        stage1_state: Stage1StateArrays | None,
+    ) -> list[tuple[int, int]]:
+        timestamps = pd.to_numeric(levels_frame["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
+        highs = pd.to_numeric(levels_frame["high"], errors="coerce").to_numpy(dtype=np.float64)
+        lows = pd.to_numeric(levels_frame["low"], errors="coerce").to_numpy(dtype=np.float64)
+        if timestamps.size == 0:
+            return []
+
+        candidate_indices = (
+            np.nonzero(stage1_state.inplay)[0].astype(np.int64, copy=False)
+            if stage1_state is not None and stage1_state.has_inplay
+            else np.arange(len(timestamps), dtype=np.int64)
+        )
+        raw_windows: list[tuple[int, int]] = []
+        levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
+        entry_preroll_ms = max(30 * 60_000, 6 * int(params.entry_timeframe.to_milliseconds()))
+        for five_idx in candidate_indices.tolist():
+            candidate = self._resolve_htf_stage1_candidate_from_arrays(
+                timestamps=timestamps,
+                highs=highs,
+                lows=lows,
+                five_idx=int(five_idx),
+                params=params,
+            )
+            if candidate is None:
+                continue
+            end_idx = min(
+                int(candidate["active_high_5m_idx"])
+                + int(params.stage1_pullback_max_bars)
+                + int(params.stage1_fetch_post_bars),
+                len(timestamps) - 1,
+            )
+            raw_windows.append(
+                (
+                    max(int(timestamps[0]), int(candidate["pump_start_timestamp"]) - entry_preroll_ms),
+                    int(timestamps[end_idx]) + levels_timeframe_ms - 1,
+                )
+            )
+        return self._merge_timestamp_windows(raw_windows)
+
+    @staticmethod
+    def _merge_timestamp_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        if not windows:
+            return []
+        merged: list[tuple[int, int]] = []
+        for start_timestamp_ms, end_timestamp_ms in sorted(windows):
+            if not merged or start_timestamp_ms > (merged[-1][1] + 1):
+                merged.append((int(start_timestamp_ms), int(end_timestamp_ms)))
+                continue
+            merged[-1] = (merged[-1][0], max(merged[-1][1], int(end_timestamp_ms)))
+        return merged
+
+    def _resolve_htf_stage1_candidate_from_arrays(
+        self,
+        *,
+        timestamps: np.ndarray,
+        highs: np.ndarray,
+        lows: np.ndarray,
+        five_idx: int,
+        params: PnoParams,
+    ) -> dict[str, int | float] | None:
+        if five_idx <= 0 or five_idx >= len(timestamps):
+            return None
+
+        best_candidate: dict[str, int | float] | None = None
+        for active_high_5m_idx in range(max(0, five_idx - params.stage1_pullback_max_bars), five_idx):
+            pump_start_min_idx = max(0, active_high_5m_idx - params.stage1_pump_max_bars + 1)
+            pump_start_max_idx = active_high_5m_idx - params.stage1_pump_min_bars + 1
+            if pump_start_max_idx < pump_start_min_idx:
+                continue
+            for pump_start_5m_idx in range(pump_start_max_idx, pump_start_min_idx - 1, -1):
+                pump_bars = active_high_5m_idx - pump_start_5m_idx + 1
+                pullback_bars = five_idx - active_high_5m_idx
+                if pullback_bars < params.stage1_pullback_min_bars or pullback_bars > params.stage1_pullback_max_bars:
+                    continue
+                segment_highs = highs[pump_start_5m_idx : five_idx + 1]
+                if segment_highs.size == 0:
+                    continue
+                relative_peak_idx = int(np.argmax(segment_highs))
+                if (pump_start_5m_idx + relative_peak_idx) != active_high_5m_idx:
+                    continue
+                pump_low = float(np.nanmin(lows[pump_start_5m_idx : active_high_5m_idx + 1]))
+                active_high = float(highs[active_high_5m_idx])
+                pump_height = active_high - pump_low
+                if pump_height <= self._EPSILON:
+                    continue
+                pullback_low = float(np.nanmin(lows[active_high_5m_idx + 1 : five_idx + 1]))
+                min_allowed_low = pump_low + (float(params.stage1_pullback_low_min_pump_fraction) * pump_height)
+                if pullback_low < (min_allowed_low - self._EPSILON):
+                    continue
+                pullback_height = active_high - pullback_low
+                if pullback_height <= self._EPSILON:
+                    continue
+                level_ceiling = pullback_low + (float(params.stage1_level_max_pullback_reclaim_fraction) * pullback_height)
+                level = float(highs[five_idx])
+                if level > (level_ceiling + self._EPSILON):
+                    continue
+                pullback_low_5m_idx = int(active_high_5m_idx + 1 + np.argmin(lows[active_high_5m_idx + 1 : five_idx + 1]))
+                candidate = {
+                    "pump_start_5m_idx": int(pump_start_5m_idx),
+                    "pump_start_timestamp": int(timestamps[pump_start_5m_idx]),
+                    "active_high_5m_idx": int(active_high_5m_idx),
+                    "active_high_timestamp": int(timestamps[active_high_5m_idx]),
+                    "active_high": active_high,
+                    "pullback_start_5m_idx": int(active_high_5m_idx + 1),
+                    "pullback_end_5m_idx": int(five_idx),
+                    "pullback_low_5m_idx": int(pullback_low_5m_idx),
+                    "pullback_low": pullback_low,
+                    "level": level,
+                    "level_timestamp": int(timestamps[five_idx]),
+                    "pump_low": pump_low,
+                    "pump_height": pump_height,
+                    "min_allowed_low": min_allowed_low,
+                    "pump_bars": int(pump_bars),
+                    "pullback_bars": int(pullback_bars),
+                }
+                if best_candidate is None:
+                    best_candidate = candidate
+                    continue
+                best_active_high = float(best_candidate["active_high"])
+                best_pullback_low = float(best_candidate["pullback_low"])
+                if active_high > (best_active_high + self._EPSILON) or (
+                    abs(active_high - best_active_high) <= self._EPSILON and pullback_low > best_pullback_low
+                ):
+                    best_candidate = candidate
+        return best_candidate
 
     @staticmethod
     def _safe_divide(numerator: float, denominator: float) -> float:

@@ -100,6 +100,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Export cumulative PNO logical stages 1..N in diagnostics (1..5)",
     )
     run_bt.add_argument("--plot", default=False, help="Save diagnostic files for the best combination (true/false)")
+    run_bt.add_argument(
+        "--light-run",
+        default=False,
+        help="Fast mode: skip diagnostics collection and save only trade charts when plot=true (true/false)",
+    )
     run_bt.add_argument("--plot-from-results", action="store_true", help="Build diagnostics from results.csv without a full backtest")
     run_bt.add_argument("--results-input", default=None, help="Path to CSV with results for --plot-from-results")
     run_bt.add_argument("--id", type=_positive_int_for("--id"), default=None, help="Combination ID in the CSV")

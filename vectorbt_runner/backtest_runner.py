@@ -416,6 +416,7 @@ class BacktestRunner:
         levels_timeframe: Timeframe = Timeframe.D1,
         entry_timeframe: Timeframe = Timeframe.M15,
         stage_metric_ids: tuple[str, ...] | None = None,
+        collect_diagnostics: bool | None = None,
     ) -> pd.DataFrame:
         """Запускает полный расчёт бэктеста в vectorbt."""
         rows: list[dict[str, int | float | str | None]] = []
@@ -433,7 +434,7 @@ class BacktestRunner:
         total = len(prepared_grid)
         symbols_count = len(symbol_frames)
         started_at = perf_counter()
-        collect_diagnostics = self._logger.isEnabledFor(logging.DEBUG)
+        collect_diagnostics = self._logger.isEnabledFor(logging.DEBUG) if collect_diagnostics is None else bool(collect_diagnostics)
         collect_stage_metrics = bool(stage_metric_ids)
         tracked_stage_ids = tuple(stage_metric_ids or ())
 

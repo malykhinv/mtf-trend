@@ -1271,6 +1271,126 @@ def _render_pno_trade_charts_from_export_result(
     return total_charts_generated
 
 
+def _render_pno_trade_charts_only(
+    *,
+    output_dir: Path,
+    logger: Logger,
+    strategy: PnoStrategy,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    params_row: pd.Series,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+) -> int:
+    charts_dir = output_dir / "charts"
+    charts_dir.mkdir(parents=True, exist_ok=True)
+    pno_params_template = _build_pno_params_template_from_row(
+        params_row,
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+    )
+    total_symbols = len(symbol_frames)
+    total_charts_generated = 0
+    processed_symbols = 0
+    render_started_at = time.monotonic()
+    for symbol, mtf_frames in symbol_frames.items():
+        params = replace(pno_params_template, symbol=symbol)
+        trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+        trade_rows = [_flatten_trade_for_diagnostics(trade) for trade in trades]
+        if trade_rows:
+            chart_paths = _render_pno_trade_charts_for_symbol(
+                charts_dir=charts_dir,
+                symbol=symbol,
+                mtf_frames=mtf_frames,
+                trade_rows=trade_rows,
+            )
+            total_charts_generated += len(chart_paths)
+        processed_symbols += 1
+        if total_symbols > 0 and (processed_symbols == total_symbols or processed_symbols % 25 == 0):
+            elapsed = max(time.monotonic() - render_started_at, 1e-9)
+            rate = processed_symbols / elapsed
+            remaining = total_symbols - processed_symbols
+            eta_seconds = remaining / rate if rate > 0.0 else None
+            logger.info(
+                "%s: light charts %s/%s (%.1f%%) png=%s eta=%s",
+                log_prefix,
+                processed_symbols,
+                total_symbols,
+                (processed_symbols / total_symbols) * 100.0,
+                total_charts_generated,
+                _format_eta_compact(eta_seconds),
+            )
+    logger.info("%s: light charts saved png=%s output_dir=%s", log_prefix, total_charts_generated, charts_dir)
+    return total_charts_generated
+
+
+def _export_pno_grid_trade_charts_only(
+    *,
+    config: AppConfig,
+    logger: Logger,
+    strategy: PnoStrategy,
+    symbol_frames: dict[str, SymbolMtfFrames],
+    results: pd.DataFrame,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    log_prefix: str,
+) -> None:
+    for artifact_name, params_row in _resolve_pno_artifact_rows(results):
+        output_dir = Path(config.backtest.results_dir) / "trade_plots" / artifact_name
+        _render_pno_trade_charts_only(
+            output_dir=output_dir,
+            logger=logger,
+            strategy=strategy,
+            symbol_frames=symbol_frames,
+            params_row=params_row,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            log_prefix=f"{log_prefix} [{artifact_name}]",
+        )
+
+
+def _log_human_backtest_summary(
+    *,
+    logger: Logger,
+    results: pd.DataFrame,
+    summary: BacktestSummary,
+    log_prefix: str,
+) -> None:
+    if results.empty:
+        logger.info("%s: итог бэктеста пустой: сделок нет, комбинации не дали результата.", log_prefix)
+        return
+    best_row = results.iloc[0]
+    trades_count = int(best_row.get("trades_count", 0) or 0)
+    win_rate = float(best_row.get("win_rate", 0.0) or 0.0) * 100.0
+    pnl_percent = float(best_row.get("pnl_percent", 0.0) or 0.0)
+    profit_factor = float(best_row.get("profit_factor", 0.0) or 0.0)
+    max_drawdown_pct = float(best_row.get("max_drawdown_pct", 0.0) or 0.0)
+    avg_trade_pct = (pnl_percent / trades_count) if trades_count else 0.0
+    tp2_count = int(best_row.get("tp2_count", 0) or 0)
+    tp1_be_count = int(best_row.get("tp1_be_count", 0) or 0)
+    sl_count = int(best_row.get("sl_count", 0) or 0)
+    logger.info(
+        "%s: трейдерская сводка: лучшая комбинация дала %s сделок, winrate %.1f%%, средний трейд %.2f%%, итог %.2f%%, PF %.2f, max DD %.2f%%.",
+        log_prefix,
+        trades_count,
+        win_rate,
+        avg_trade_pct,
+        pnl_percent,
+        profit_factor,
+        max_drawdown_pct,
+    )
+    logger.info(
+        "%s: по сетке: комбинаций=%s, прибыльных=%s, со сделками=%s. У лучшей комбинации исходы: TP2=%s, TP1+runner=%s, SL=%s.",
+        log_prefix,
+        summary.total_combinations,
+        summary.profitable_combinations,
+        int((results["trades_count"] > 0).sum()),
+        tp2_count,
+        tp1_be_count,
+        sl_count,
+    )
+
+
 def _export_pno_diagnostics_context_for_symbols(
     *,
     diagnostics_dir: Path,
@@ -2513,6 +2633,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     symbols_missing_levels_tf = 0
     symbols_missing_entry_tf = 0
     symbols_used = 0
+    pno_seconds_entry_pair = strategy_id == "pno" and entry_timeframe in {Timeframe.S30, Timeframe.S5}
+    source_entry_timeframe = Timeframe.M1 if pno_seconds_entry_pair else entry_timeframe
     for idx, symbol in enumerate(symbols, start=1):
         resolved_end_timestamp_ms = backtest_end_timestamp_ms
         if backtest_days is not None and resolved_end_timestamp_ms is None:
@@ -2520,7 +2642,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             levels_end = preparer.get_symbol_last_timestamp_ms(symbol, levels_timeframe)
             if levels_end is not None:
                 candidate_ends.append(int(levels_end))
-            entry_end = preparer.get_symbol_last_timestamp_ms(symbol, entry_timeframe)
+            entry_end = preparer.get_symbol_last_timestamp_ms(symbol, source_entry_timeframe)
             if entry_end is not None:
                 candidate_ends.append(int(entry_end))
             resolved_end_timestamp_ms = min(candidate_ends) if candidate_ends else None
@@ -2534,12 +2656,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 end_timestamp_ms=resolved_end_timestamp_ms,
             )
         entry_frame: pd.DataFrame | None = preloaded_entry_frames.get(symbol)
-        if levels_timeframe == entry_timeframe:
+        if levels_timeframe == source_entry_timeframe:
             entry_frame = levels_frame if entry_frame is None else entry_frame
         elif entry_frame is None:
             entry_frame = preparer.load_symbol_data(
                 symbol,
-                entry_timeframe,
+                source_entry_timeframe,
                 days=backtest_days,
                 end_timestamp_ms=resolved_end_timestamp_ms,
             )
@@ -2573,6 +2695,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     should_plot = _to_bool_flag(getattr(args, "plot", None), default=False)
+    light_run = _to_bool_flag(getattr(args, "light_run", None), default=False)
     if run_root_dir is not None:
         _write_backtest_run_context(
             run_root_dir,
@@ -2643,6 +2766,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
         stage_metric_ids=stage_metric_ids_for_run,
+        collect_diagnostics=not light_run,
     )
     summary = runner.build_summary(results)
     if (
@@ -2671,6 +2795,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         average_trades_per_combination,
         median_trades_per_combination,
     )
+    _log_human_backtest_summary(
+        logger=logger,
+        results=results,
+        summary=summary,
+        log_prefix="run-backtest",
+    )
     if summary.best_pf == 0 and total_trades == 0:
         logger.warning(
             "запуск-бэктеста: отсутствуют сделки по всем комбинациям; проверьте достаточность истории для levels_tf=%s и соответствие таймфреймов в кэше (%s/%s)",
@@ -2682,6 +2812,19 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     if should_plot:
         if results.empty:
             logger.warning("запуск-бэктеста: plot=true, но результаты пустые")
+            return 0
+
+        if light_run and strategy_id == "pno" and isinstance(strategy, PnoStrategy):
+            _export_pno_grid_trade_charts_only(
+                config=config,
+                logger=logger,
+                strategy=strategy,
+                symbol_frames=symbol_frames,
+                results=results,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                log_prefix="run-backtest: light-run plot=true",
+            )
             return 0
 
         if strategy_id == "pno" and isinstance(strategy, PnoStrategy):
@@ -2739,7 +2882,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             log_prefix="запуск-бэктеста: plot=true",
         ):
             return 1
-    elif strategy_id == "pno" and not results.empty and isinstance(strategy, PnoStrategy):
+    elif strategy_id == "pno" and not light_run and not results.empty and isinstance(strategy, PnoStrategy):
         _export_pno_grid_artifacts_without_stage_charts(
             config=config,
             args=args,

@@ -10,12 +10,12 @@ from domain.enums.timeframe import Timeframe
 PnoTimeframePair = tuple[Timeframe, Timeframe]
 
 PNO_BACKTEST_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = (
-    (Timeframe.M5, Timeframe.M1),
+    (Timeframe.M5, Timeframe.S30),
+    (Timeframe.M1, Timeframe.S5),
 )
 PNO_LIVE_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = (
-    (Timeframe.M5, Timeframe.M1),
-    (Timeframe.M1, Timeframe.S10),
-    (Timeframe.M3, Timeframe.S30),
+    (Timeframe.M5, Timeframe.S30),
+    (Timeframe.M1, Timeframe.S5),
 )
 PNO_SUPPORTED_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = tuple(
     dict.fromkeys((*PNO_BACKTEST_TIMEFRAME_PAIRS, *PNO_LIVE_TIMEFRAME_PAIRS))
@@ -48,6 +48,13 @@ class PnoParams:
     fee_rate: float = DEFAULT_COMMISSION_RATE
     min_data_5m: int = 200
     min_data_1m: int = 60
+    stage1_pump_min_bars: int = 1
+    stage1_pump_max_bars: int = 4
+    stage1_pullback_min_bars: int = 1
+    stage1_pullback_max_bars: int = 3
+    stage1_pullback_low_min_pump_fraction: float = 0.40
+    stage1_level_max_pullback_reclaim_fraction: float = 0.60
+    stage1_fetch_post_bars: int = 3
     min_stage1_leg_v1: float = 1.0
     min_stage1_leg_v5_fraction: float = 0.5
     stage1_hold_fraction: float = 0.55
@@ -59,6 +66,11 @@ class PnoParams:
     pullback_valid_max_v5: float = 4.5
     pullback_invalid_max_v5: float = 6.0
     pullback_max_age_bars: int = 12
+    structure_reversal_min_v1_fraction: float = 0.35
+    structure_reversal_min_body_fraction: float = 0.20
+    structure_break_min_close_v1_fraction: float = 0.05
+    structure_break_min_close_position: float = 0.55
+    structure_max_breakout_extension_fraction: float = 0.92
     stage3_max_post_high_wick_share: float = 0.72
     stage3_max_post_high_body_overlap_rate: float = 0.65
     stage3_max_post_high_chop_alternation_rate: float = 0.55
@@ -121,10 +133,17 @@ class PnoParams:
     min_entry_rr: float = 1.0
     max_htf_bars_since_active_high: int = 6
     close_above_max_entry_pos: float = 0.70
+    close_above_min_entry_pos: float = 0.24
     close_above_max_pullback_fraction_of_leg: float = 1.0
     close_above_max_post_high_wick_share: float = 0.85
+    close_above_max_active_high_upper_wick_share: float = 0.50
+    close_above_min_active_high_close_position: float = 0.0
+    close_above_min_post_high_alternation_rate: float = 0.0
+    close_above_max_level_cross_bars: int = 4
+    close_above_min_level_life_quote_volume_median: float = 10_000.0
     close_above_min_signal_volume_vs_recent: float = 0.0
-    close_above_min_signal_ema20_slope_3: float = 0.12
+    close_above_min_signal_ema9_slope_3: float = 0.10
+    close_above_min_signal_ema20_slope_3: float = 0.08
     close_above_min_signal_ema_spread_pct: float = 0.90
     close_above_min_signal_close_position_in_chop: float = 0.25
     close_above_choppy_overlap_threshold: float = 0.95
@@ -188,6 +207,16 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("min_data_5m must be >= 200")
     if params.min_data_1m < 60:
         raise ValueError("min_data_1m must be >= 60")
+    if params.stage1_pump_min_bars < 1 or params.stage1_pump_max_bars < params.stage1_pump_min_bars:
+        raise ValueError("stage1 pump bars bounds are invalid")
+    if params.stage1_pullback_min_bars < 1 or params.stage1_pullback_max_bars < params.stage1_pullback_min_bars:
+        raise ValueError("stage1 pullback bars bounds are invalid")
+    if not 0.0 < params.stage1_pullback_low_min_pump_fraction < 1.0:
+        raise ValueError("stage1_pullback_low_min_pump_fraction must be in range (0, 1)")
+    if not 0.0 < params.stage1_level_max_pullback_reclaim_fraction <= 1.0:
+        raise ValueError("stage1_level_max_pullback_reclaim_fraction must be in range (0, 1]")
+    if params.stage1_fetch_post_bars < 1:
+        raise ValueError("stage1_fetch_post_bars must be >= 1")
     if params.fee_rate < 0.0 or params.fee_rate > 0.01:
         raise ValueError("fee_rate must be in range [0, 0.01]")
     if params.pno_deposit <= 0.0:
@@ -218,6 +247,16 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("pullback_invalid_max_v5 must be > pullback_valid_max_v5 > 0")
     if params.pullback_max_age_bars < 2:
         raise ValueError("pullback_max_age_bars must be >= 2")
+    if params.structure_reversal_min_v1_fraction <= 0.0:
+        raise ValueError("structure_reversal_min_v1_fraction must be > 0")
+    if not 0.0 <= params.structure_reversal_min_body_fraction <= 1.0:
+        raise ValueError("structure_reversal_min_body_fraction must be in range [0, 1]")
+    if params.structure_break_min_close_v1_fraction < 0.0:
+        raise ValueError("structure_break_min_close_v1_fraction must be >= 0")
+    if not 0.0 <= params.structure_break_min_close_position <= 1.0:
+        raise ValueError("structure_break_min_close_position must be in range [0, 1]")
+    if not 0.0 < params.structure_max_breakout_extension_fraction <= 1.0:
+        raise ValueError("structure_max_breakout_extension_fraction must be in range (0, 1]")
     if not 0.0 <= params.stage3_max_post_high_wick_share <= 1.0:
         raise ValueError("stage3_max_post_high_wick_share must be in range [0, 1]")
     if not 0.0 <= params.stage3_max_post_high_body_overlap_rate <= 1.0:
@@ -344,17 +383,30 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("max_htf_bars_since_active_high must be >= 0")
     if not 0.0 < params.close_above_max_entry_pos <= 1.0:
         raise ValueError("close_above_max_entry_pos must be in range (0, 1]")
+    if not 0.0 <= params.close_above_min_entry_pos < params.close_above_max_entry_pos:
+        raise ValueError("close_above_min_entry_pos must be in range [0, close_above_max_entry_pos)")
     if not 0.0 < params.close_above_max_pullback_fraction_of_leg <= 1.0:
         raise ValueError("close_above_max_pullback_fraction_of_leg must be in range (0, 1]")
     if not 0.0 <= params.close_above_max_post_high_wick_share <= 1.0:
         raise ValueError("close_above_max_post_high_wick_share must be in range [0, 1]")
+    if not 0.0 <= params.close_above_max_active_high_upper_wick_share <= 1.0:
+        raise ValueError("close_above_max_active_high_upper_wick_share must be in range [0, 1]")
+    if not 0.0 <= params.close_above_min_active_high_close_position <= 1.0:
+        raise ValueError("close_above_min_active_high_close_position must be in range [0, 1]")
+    if not 0.0 <= params.close_above_min_post_high_alternation_rate <= 1.0:
+        raise ValueError("close_above_min_post_high_alternation_rate must be in range [0, 1]")
+    if params.close_above_max_level_cross_bars < 1:
+        raise ValueError("close_above_max_level_cross_bars must be >= 1")
+    if params.close_above_min_level_life_quote_volume_median < 0.0:
+        raise ValueError("close_above_min_level_life_quote_volume_median must be >= 0")
     if params.close_above_min_signal_volume_vs_recent < 0.0:
         raise ValueError("close_above_min_signal_volume_vs_recent must be >= 0")
+    if params.close_above_min_signal_ema9_slope_3 < 0.0:
+        raise ValueError("close_above_min_signal_ema9_slope_3 must be >= 0")
 
 
 def build_pno_grid() -> list[PnoParams]:
     return [
-        PnoParams(symbol="", pno_variant_id="baseline_cross", entry_confirmation_mode="cross"),
         PnoParams(symbol="", pno_variant_id="baseline_close", entry_confirmation_mode="close_above"),
     ]
 
@@ -410,8 +462,6 @@ def resolve_pno_category_profiles(
             **category2_common,
             close_above_max_entry_pos=max(float(params.close_above_max_entry_pos), 0.90),
             close_above_max_post_high_wick_share=max(float(params.close_above_max_post_high_wick_share), 0.95),
-            close_above_min_signal_ema20_slope_3=min(float(params.close_above_min_signal_ema20_slope_3), 0.04),
-            close_above_min_signal_ema_spread_pct=min(float(params.close_above_min_signal_ema_spread_pct), 0.45),
             close_above_min_signal_close_position_in_chop=min(
                 float(params.close_above_min_signal_close_position_in_chop),
                 0.15,

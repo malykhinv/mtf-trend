@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+import io
 from typing import Any
+import zipfile
 
 import pandas as pd
+import requests
 
+from data.exchanges.ccxt_futures_client import CcxtFuturesClient
+from data.storage.parquet_storage import ParquetStorage
+from domain.enums.exchange import Exchange
+from domain.enums.timeframe import Timeframe
 from domain.models.trade_result import TradeResult
 from strategy.base_strategy import BaseStrategy
 from strategy.pno.config import (
@@ -21,6 +30,230 @@ from strategy.pno.config import (
 from strategy.pno.engine import PnoEngine
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 from pathlib import Path
+from vectorbt_runner.data_preparer import DataPreparer
+
+
+@dataclass
+class _PnoSecondsFrameProvider:
+    cache_dir: Path
+
+    def __post_init__(self) -> None:
+        self._preparer = DataPreparer(self.cache_dir)
+        self._storage = ParquetStorage(self.cache_dir)
+        self._client: CcxtFuturesClient | None = None
+        self._window_cache: dict[tuple[str, int, int], pd.DataFrame] = {}
+        self._day_cache: dict[tuple[str, str], pd.DataFrame] = {}
+
+    def load_aggregated_window(
+        self,
+        *,
+        symbol: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+        target_timeframe: Timeframe,
+    ) -> pd.DataFrame:
+        seconds_frame = self._ensure_seconds_window(
+            symbol=symbol,
+            start_timestamp_ms=start_timestamp_ms,
+            end_timestamp_ms=end_timestamp_ms,
+        )
+        if seconds_frame.empty:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        return PnoEngine._aggregate_frame(
+            seconds_frame,
+            target_timeframe_ms=target_timeframe.to_milliseconds(),
+        )
+
+    def _ensure_seconds_window(
+        self,
+        *,
+        symbol: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
+        cache_key = (symbol, int(start_timestamp_ms), int(end_timestamp_ms))
+        cached = self._window_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        seconds_frame = self._preparer.load_symbol_data_range(
+            symbol,
+            Timeframe.S1,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+        )
+        fetched_parts: list[pd.DataFrame] = []
+        for utc_day in self._iter_utc_days(
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+        ):
+            day_key = (symbol, utc_day.isoformat())
+            day_frame = self._day_cache.get(day_key)
+            if day_frame is None:
+                day_frame = self._fetch_seconds_for_day(symbol=symbol, utc_day=utc_day)
+                self._day_cache[day_key] = day_frame
+            if day_frame.empty:
+                continue
+            day_slice = day_frame.loc[
+                (day_frame["timestamp"] >= int(start_timestamp_ms))
+                & (day_frame["timestamp"] <= int(end_timestamp_ms))
+            ].copy()
+            if not day_slice.empty:
+                fetched_parts.append(day_slice)
+
+        if fetched_parts:
+            fetched = (
+                pd.concat(fetched_parts, ignore_index=True)
+                .drop_duplicates(subset=["timestamp"], keep="last")
+                .sort_values("timestamp")
+                .reset_index(drop=True)
+            )
+            self._storage.save_incremental(symbol, Timeframe.S1, fetched)
+            seconds_frame = (
+                pd.concat([seconds_frame, fetched], ignore_index=True)
+                .drop_duplicates(subset=["timestamp"], keep="last")
+                .sort_values("timestamp")
+                .reset_index(drop=True)
+            )
+        self._window_cache[cache_key] = seconds_frame
+        return seconds_frame
+
+    @staticmethod
+    def _iter_utc_days(
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> tuple[date, ...]:
+        start_day = datetime.fromtimestamp(int(start_timestamp_ms) / 1000, tz=timezone.utc).date()
+        end_day = datetime.fromtimestamp(int(end_timestamp_ms) / 1000, tz=timezone.utc).date()
+        days: list[date] = []
+        cursor = start_day
+        while cursor <= end_day:
+            days.append(cursor)
+            cursor += timedelta(days=1)
+        return tuple(days)
+
+    def _fetch_seconds_for_day(
+        self,
+        *,
+        symbol: str,
+        utc_day: date,
+    ) -> pd.DataFrame:
+        archive_frame = self._fetch_seconds_from_archive(symbol=symbol, utc_day=utc_day)
+        if not archive_frame.empty:
+            return archive_frame
+        day_start_ms = int(datetime.combine(utc_day, datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000)
+        day_end_ms = day_start_ms + (24 * 60 * 60 * 1000) - 1
+        return self._fetch_seconds_from_live_trades(
+            symbol=symbol,
+            start_timestamp_ms=day_start_ms,
+            end_timestamp_ms=day_end_ms,
+        )
+
+    def _fetch_seconds_from_archive(
+        self,
+        *,
+        symbol: str,
+        utc_day: date,
+    ) -> pd.DataFrame:
+        market_id = self._resolve_market_id(symbol)
+        url = (
+            "https://data.binance.vision/data/futures/um/daily/aggTrades/"
+            f"{market_id}/{market_id}-aggTrades-{utc_day.isoformat()}.zip"
+        )
+        response = requests.get(url, timeout=60)
+        if response.status_code == 404:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        response.raise_for_status()
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            names = archive.namelist()
+            if not names:
+                return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            raw = archive.read(names[0])
+        trades = pd.read_csv(io.BytesIO(raw))
+        if trades.empty:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        return self._aggregate_agg_trades_to_seconds(trades)
+
+    def _fetch_seconds_from_live_trades(
+        self,
+        *,
+        symbol: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
+        if self._client is None:
+            self._client = CcxtFuturesClient(exchange=Exchange.BINANCE)
+        self._client._ensure_markets_loaded()
+        market_id = self._client._client.market_id(symbol)
+        all_rows: list[dict[str, object]] = []
+        since = int(start_timestamp_ms)
+        while since <= int(end_timestamp_ms):
+            batch = self._client._retry_exchange_call(
+                operation="binance_fetch_agg_trades",
+                symbol=symbol,
+                endpoint="fapiPublicGetAggTrades",
+                call=self._client._client.fapiPublicGetAggTrades,
+                params={
+                    "symbol": market_id,
+                    "startTime": since,
+                    "endTime": int(end_timestamp_ms),
+                    "limit": 1000,
+                },
+            )
+            if not isinstance(batch, list) or not batch:
+                break
+            all_rows.extend(batch)
+            last_ts = int(batch[-1].get("T") or 0)
+            if last_ts >= int(end_timestamp_ms):
+                break
+            since = max(last_ts + 1, since + 1)
+        if not all_rows:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        trades = pd.DataFrame(all_rows)
+        return self._aggregate_agg_trades_to_seconds(trades)
+
+    def _resolve_market_id(self, symbol: str) -> str:
+        if self._client is None:
+            self._client = CcxtFuturesClient(exchange=Exchange.BINANCE)
+        self._client._ensure_markets_loaded()
+        return str(self._client._client.market_id(symbol))
+
+    @staticmethod
+    def _aggregate_agg_trades_to_seconds(trades: pd.DataFrame) -> pd.DataFrame:
+        if trades.empty:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        work = trades.copy()
+        timestamp_column = "transact_time" if "transact_time" in work.columns else "T"
+        quantity_column = "quantity" if "quantity" in work.columns else "q"
+        work["price"] = pd.to_numeric(work["price"] if "price" in work.columns else work["p"], errors="coerce")
+        work["quantity"] = pd.to_numeric(work[quantity_column], errors="coerce")
+        work["timestamp"] = ((pd.to_numeric(work[timestamp_column], errors="coerce") // 1000) * 1000).astype("Int64")
+        work = work.loc[work["timestamp"].notna() & work["price"].notna() & work["quantity"].notna()].copy()
+        if work.empty:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        work["timestamp"] = work["timestamp"].astype("int64")
+        aggregated = (
+            work.groupby("timestamp", sort=True)
+            .agg(
+                open=("price", "first"),
+                high=("price", "max"),
+                low=("price", "min"),
+                close=("price", "last"),
+                volume=("quantity", "sum"),
+            )
+            .reset_index()
+        )
+        return aggregated.astype(
+            {
+                "timestamp": "int64",
+                "open": "float64",
+                "high": "float64",
+                "low": "float64",
+                "close": "float64",
+                "volume": "float64",
+            }
+        )
 
 
 class PnoStrategy(BaseStrategy[PnoParams]):
@@ -37,7 +270,9 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         self._risk_pct = risk_pct
         self._entry_confirmation_mode_filter = entry_confirmation_mode_filter
         self._category_mode_filter = category_mode_filter
-        self._engine = PnoEngine(cache_dir=cache_dir)
+        self._cache_dir = Path(cache_dir) if cache_dir is not None else Path("./.output/cache")
+        self._engine = PnoEngine(cache_dir=self._cache_dir)
+        self._seconds_provider = _PnoSecondsFrameProvider(self._cache_dir)
         self._last_generation_diagnostics: dict[str, object] = {}
 
     def validate_config(self, params: PnoParams) -> None:
@@ -61,15 +296,27 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         params: PnoParams,
         **context: object,
     ) -> list[TradeResult]:
-        del context
+        engine_context = {"seconds_frame_provider": self._seconds_provider}
+        engine_context.update(context)
         return self._generate_events_for_profiles(
             profiles=resolve_pno_category_profiles(params, category_mode=self._category_mode_filter),
             runner=lambda profile_params: self._engine.generate_events_multi_tf(
                 levels_frame=mtf_frames.levels_frame,
                 entry_frame=mtf_frames.entry_frame,
                 params=profile_params,
+                **engine_context,
             ),
         )
+
+    def prepare_symbol_context(
+        self,
+        *,
+        symbol: str,
+        mtf_frames: SymbolMtfFrames,
+        params: PnoParams,
+    ) -> dict[str, Any] | None:
+        del symbol, mtf_frames, params
+        return {"seconds_frame_provider": self._seconds_provider}
 
     def build_parameter_grid(self) -> list[PnoParams]:
         grid = build_pno_grid()
@@ -169,9 +416,14 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_max_entry_pullback_fraction": params.max_entry_pullback_fraction,
             "pno_min_entry_rr": params.min_entry_rr,
             "pno_close_above_max_entry_pos": params.close_above_max_entry_pos,
+            "pno_close_above_min_entry_pos": params.close_above_min_entry_pos,
             "pno_close_above_max_pullback_fraction_of_leg": params.close_above_max_pullback_fraction_of_leg,
             "pno_close_above_max_post_high_wick_share": params.close_above_max_post_high_wick_share,
+            "pno_close_above_max_active_high_upper_wick_share": params.close_above_max_active_high_upper_wick_share,
+            "pno_close_above_min_active_high_close_position": params.close_above_min_active_high_close_position,
+            "pno_close_above_min_post_high_alternation_rate": params.close_above_min_post_high_alternation_rate,
             "pno_close_above_min_signal_volume_vs_recent": params.close_above_min_signal_volume_vs_recent,
+            "pno_close_above_min_signal_ema9_slope_3": params.close_above_min_signal_ema9_slope_3,
             "pno_close_above_min_signal_ema20_slope_3": params.close_above_min_signal_ema20_slope_3,
             "pno_close_above_min_signal_ema_spread_pct": params.close_above_min_signal_ema_spread_pct,
             "pno_close_above_min_signal_close_position_in_chop": params.close_above_min_signal_close_position_in_chop,

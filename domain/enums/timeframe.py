@@ -17,6 +17,8 @@ _SECONDS_PER_UNIT = {
 
 
 class Timeframe(str, Enum):
+    S1 = "1s"
+    S5 = "5s"
     S10 = "10s"
     S30 = "30s"
     M1 = "1m"

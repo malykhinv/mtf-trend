@@ -210,6 +210,68 @@ class DataPreparer:
         )
         return prepared
 
+    def load_symbol_data_range(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
+        """Loads an exact timestamp window for one symbol from parquet cache."""
+        symbol_dir_name = self._resolve_symbol_dir_name(symbol)
+        if symbol_dir_name is None:
+            return pd.DataFrame()
+
+        path = self._cache_dir / symbol_dir_name / timeframe.value / SIMULATION_PARQUET_FILE_NAME
+        if not path.exists():
+            return pd.DataFrame()
+
+        available_columns = set(self._get_available_columns(path))
+        required_columns_subset = [column for column in self.INPUT_COLUMNS if column in available_columns]
+        filters = [
+            ("timestamp", ">=", int(start_timestamp_ms)),
+            ("timestamp", "<=", int(end_timestamp_ms)),
+        ]
+        frame = pd.read_parquet(path, columns=required_columns_subset, filters=filters)
+        missing = [col for col in self.REQUIRED_COLUMNS if col not in frame.columns]
+        if missing:
+            return pd.DataFrame()
+
+        prepared = frame
+        if not is_numeric_dtype(prepared["timestamp"]):
+            prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+
+        numeric_cols = [col for col in DATA_PREPARER_NUMERIC_COLUMNS if col in prepared.columns]
+        for col in numeric_cols:
+            if not is_numeric_dtype(prepared[col]):
+                prepared[col] = pd.to_numeric(prepared[col], errors="coerce")
+
+        required_mask = np.ones(len(prepared), dtype=bool)
+        for column in ("timestamp", "open", "high", "low", "close", "volume"):
+            required_mask &= prepared[column].notna().to_numpy(dtype=bool, copy=False)
+        if not bool(required_mask.all()):
+            prepared = prepared.loc[required_mask].copy()
+        if prepared.empty:
+            return pd.DataFrame()
+
+        timestamps = prepared["timestamp"].to_numpy(dtype=np.int64, copy=False)
+        needs_sort = bool(timestamps.size > 1 and np.any(timestamps[1:] < timestamps[:-1]))
+        if needs_sort:
+            prepared = prepared.iloc[np.argsort(timestamps, kind="stable")].copy()
+            timestamps = prepared["timestamp"].to_numpy(dtype=np.int64, copy=False)
+        if timestamps.size > 1:
+            unique_mask = np.ones(len(prepared), dtype=bool)
+            unique_mask[:-1] = timestamps[:-1] != timestamps[1:]
+            if not bool(unique_mask.all()):
+                prepared = prepared.loc[unique_mask].copy()
+
+        prepared["symbol"] = pd.Categorical.from_codes(
+            np.zeros(len(prepared), dtype=np.int8),
+            categories=[symbol],
+        )
+        return prepared
+
 
     def load_symbol_data_multi(self, symbol: str, timeframes: Iterable[Timeframe]) -> dict[Timeframe, pd.DataFrame]:
         """Загружает данные по нескольким символам сразу."""
