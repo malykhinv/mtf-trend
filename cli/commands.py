@@ -2518,7 +2518,9 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     preparer = DataPreparer(config.backtest.cache_dir)
     backtest_days = getattr(args, "days", None)
     backtest_end_timestamp_ms = getattr(args, "end_timestamp_ms", None)
-    symbols = args.symbols or preparer.list_symbols(entry_timeframe)
+    pno_seconds_entry_pair = strategy_id == "pno" and entry_timeframe in {Timeframe.S30, Timeframe.S5}
+    source_entry_timeframe = Timeframe.M1 if pno_seconds_entry_pair else entry_timeframe
+    symbols = args.symbols or preparer.list_symbols(source_entry_timeframe)
     if not symbols:
         logger.info("запуск-бектеста: нет данных в кэше")
         return 0
@@ -2633,8 +2635,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     symbols_missing_levels_tf = 0
     symbols_missing_entry_tf = 0
     symbols_used = 0
-    pno_seconds_entry_pair = strategy_id == "pno" and entry_timeframe in {Timeframe.S30, Timeframe.S5}
-    source_entry_timeframe = Timeframe.M1 if pno_seconds_entry_pair else entry_timeframe
     for idx, symbol in enumerate(symbols, start=1):
         resolved_end_timestamp_ms = backtest_end_timestamp_ms
         if backtest_days is not None and resolved_end_timestamp_ms is None:

@@ -3129,6 +3129,72 @@ def test_run_backtest_wraps_results_into_run_subdir(tmp_path, monkeypatch) -> No
     assert captured["run_root"] == str(expected_root)
 
 
+def test_run_backtest_uses_m1_symbol_cache_for_pno_seconds_entry_pairs(tmp_path, monkeypatch) -> None:
+    requested_timeframes: list[Timeframe] = []
+
+    class _FakePreparer:
+        def __init__(self, _cache_dir):
+            pass
+
+        def list_symbols(self, timeframe):
+            requested_timeframes.append(timeframe)
+            return ["DOGS/USDT:USDT"]
+
+        def load_symbol_data(self, symbol, timeframe, days=None, end_timestamp_ms=None):
+            del symbol, timeframe, days, end_timestamp_ms
+            return pd.DataFrame()
+
+        def get_symbol_last_timestamp_ms(self, symbol, timeframe):
+            del symbol, timeframe
+            return None
+
+    monkeypatch.setattr(commands, "DataPreparer", _FakePreparer)
+
+    config = AppConfig(
+        fetch=FetchConfig(binance_api_key="", binance_secret_key=""),
+        strategy=StrategyConfig(strategy_id="pno"),
+        simulation=SimulationConfig(),
+        backtest=BacktestConfig(
+            log_level="INFO",
+            cache_dir=tmp_path / "cache",
+            logs_dir=tmp_path / "logs",
+            results_dir=tmp_path / "results",
+            results_file_name="results.csv",
+            retry_attempts=1,
+            retry_backoff_seconds=0.0,
+        ),
+    )
+
+    exit_code = commands._run_backtest_inner(
+        config,
+        argparse.Namespace(
+            strategy="pno",
+            plot_from_results=False,
+            plot=False,
+            symbols=None,
+            levels_tf="5m",
+            entry_tf="30s",
+            pno_deposit=None,
+            pno_risk_pct=None,
+            pno_entry_confirmation_mode="close_above",
+            pno_category_mode="discovery",
+            pno_all_tf_pairs=False,
+            top_n=None,
+            days=None,
+            end_timestamp_ms=None,
+            pno_stage=None,
+            pno_through_stage=None,
+            results_input=None,
+            id=None,
+            light_run=False,
+            backtest_run_root_dir=None,
+        ),
+    )
+
+    assert exit_code == 0
+    assert requested_timeframes == [Timeframe.M1]
+
+
 def test_render_pno_trade_charts_from_export_result_updates_diagnostics_json(tmp_path, monkeypatch) -> None:
     diagnostics_dir = tmp_path / "trade_plots" / "pno_diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
