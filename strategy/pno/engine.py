@@ -627,7 +627,10 @@ class PnoEngine:
         entry_frame: pd.DataFrame,
         params: PnoParams,
         seconds_frame_provider: object | None = None,
+        collect_diagnostics: bool | None = None,
+        collect_stage_metrics: bool | None = None,
     ) -> list[TradeResult]:
+        del collect_diagnostics, collect_stage_metrics
         self._runtime_reference_high_cache.clear()
         prepared_levels = self._prepare_data_cached(levels_frame)
         prepared_entry = self._prepare_data_cached(entry_frame)

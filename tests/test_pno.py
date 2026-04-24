@@ -1177,6 +1177,50 @@ def test_resolve_pno_category_profiles_splits_close_above_into_core_category2_an
     assert describe_pno_category_profile_set(params, category_mode="core") == "cat_a_core"
 
 
+def test_pno_strategy_accepts_runtime_diagnostic_flags_for_multi_tf(monkeypatch) -> None:
+    strategy = PnoStrategy(deposit=1_000.0, risk_pct=0.02)
+    params = PnoParams(
+        symbol="BTC/USDT",
+        pno_variant_id="baseline_close",
+        entry_confirmation_mode="close_above",
+    )
+    frame = pd.DataFrame(
+        {
+            "timestamp": [60_000, 120_000, 180_000],
+            "open": [1.0, 1.1, 1.2],
+            "high": [1.1, 1.2, 1.3],
+            "low": [0.9, 1.0, 1.1],
+            "close": [1.05, 1.15, 1.25],
+            "volume": [10.0, 11.0, 12.0],
+        }
+    )
+    mtf_frames = SymbolMtfFrames(
+        levels_timeframe=Timeframe.M5,
+        entry_timeframe=Timeframe.M1,
+        levels_frame=frame,
+        entry_frame=frame,
+    )
+    captured_contexts: list[dict[str, object]] = []
+
+    def _fake_generate_events_multi_tf(**kwargs):
+        captured_contexts.append(kwargs)
+        return []
+
+    monkeypatch.setattr(strategy._engine, "generate_events_multi_tf", _fake_generate_events_multi_tf)
+
+    trades = strategy.generate_events_multi_tf(
+        mtf_frames=mtf_frames,
+        params=params,
+        collect_diagnostics=True,
+        collect_stage_metrics=True,
+    )
+
+    assert trades == []
+    assert captured_contexts
+    assert captured_contexts[0]["collect_diagnostics"] is True
+    assert captured_contexts[0]["collect_stage_metrics"] is True
+
+
 def test_pno_strategy_merges_category_profiles_and_dedups_trade_entries(monkeypatch) -> None:
     strategy = PnoStrategy(deposit=1_000.0, risk_pct=0.02)
     params = PnoParams(
