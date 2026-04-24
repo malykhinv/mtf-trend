@@ -8000,6 +8000,66 @@ def test_pno_seconds_cache_persists_across_temp_runtime_dirs(tmp_path: Path, mon
     )
 
 
+def test_pno_sparse_aggregated_window_cache_persists_across_temp_runtime_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    persistent_cache_dir = tmp_path / "persistent-cache"
+    monkeypatch.setenv("CACHE_DIR", str(persistent_cache_dir))
+    provider = _PnoSecondsFrameProvider(cache_dir=Path(tempfile.mkdtemp()))
+    provider._aggregated_window_cache.clear()
+    provider._shared_aggregated_window_cache.clear()
+
+    start_timestamp_ms = 1_720_000_000_000
+    end_timestamp_ms = start_timestamp_ms + 14_000
+    seconds_frame = pd.DataFrame(
+        {
+            "timestamp": [start_timestamp_ms + offset * 1_000 for offset in range(15)],
+            "open": [1.0 + (0.01 * offset) for offset in range(15)],
+            "high": [1.02 + (0.01 * offset) for offset in range(15)],
+            "low": [0.98 + (0.01 * offset) for offset in range(15)],
+            "close": [1.01 + (0.01 * offset) for offset in range(15)],
+            "volume": [10.0 + offset for offset in range(15)],
+        }
+    )
+    expected = PnoEngine._aggregate_frame(seconds_frame, target_timeframe_ms=Timeframe.S5.to_milliseconds())
+
+    ensure_calls = {"count": 0}
+
+    def _ensure_seconds_window(*, symbol: str, start_timestamp_ms: int, end_timestamp_ms: int) -> pd.DataFrame:
+        del symbol, start_timestamp_ms, end_timestamp_ms
+        ensure_calls["count"] += 1
+        return seconds_frame.copy()
+
+    monkeypatch.setattr(provider, "_ensure_seconds_window", _ensure_seconds_window)
+    first = provider.load_aggregated_window(
+        symbol="TEST/USDT:USDT",
+        start_timestamp_ms=start_timestamp_ms,
+        end_timestamp_ms=end_timestamp_ms,
+        target_timeframe=Timeframe.S5,
+    )
+
+    assert ensure_calls["count"] == 1
+    pd.testing.assert_frame_equal(first.reset_index(drop=True), expected.reset_index(drop=True))
+
+    second_provider = _PnoSecondsFrameProvider(cache_dir=Path(tempfile.mkdtemp()))
+    second_provider._aggregated_window_cache.clear()
+    second_provider._shared_aggregated_window_cache.clear()
+
+    def _unexpected_ensure(*, symbol: str, start_timestamp_ms: int, end_timestamp_ms: int) -> pd.DataFrame:
+        del symbol, start_timestamp_ms, end_timestamp_ms
+        raise AssertionError("aggregated sparse window should be loaded from persistent cache without seconds reload")
+
+    monkeypatch.setattr(second_provider, "_ensure_seconds_window", _unexpected_ensure)
+    second = second_provider.load_aggregated_window(
+        symbol="TEST/USDT:USDT",
+        start_timestamp_ms=start_timestamp_ms,
+        end_timestamp_ms=end_timestamp_ms,
+        target_timeframe=Timeframe.S5,
+    )
+
+    pd.testing.assert_frame_equal(second.reset_index(drop=True), expected.reset_index(drop=True))
+
+
 def test_pno_aevo_cat_d_upper_tf_level_regression_window_produces_trade() -> None:
     cache_dir = Path(r"C:\Users\Ascf\PycharmProjects\mtf-trend-2\.output\cache")
     aevo_cache_dir = cache_dir / "AEVO%2FUSDT%3AUSDT"

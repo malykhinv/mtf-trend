@@ -41,6 +41,7 @@ class _PnoSecondsFrameProvider:
     cache_dir: Path
     _shared_window_cache: ClassVar[dict[tuple[str, int, int], pd.DataFrame]] = {}
     _shared_day_cache: ClassVar[dict[tuple[str, str], pd.DataFrame]] = {}
+    _shared_aggregated_window_cache: ClassVar[dict[tuple[str, str, int, int], pd.DataFrame]] = {}
 
     def __post_init__(self) -> None:
         self._runtime_cache_dir = Path(self.cache_dir)
@@ -51,6 +52,7 @@ class _PnoSecondsFrameProvider:
         self._client: CcxtFuturesClient | None = None
         self._window_cache: dict[tuple[str, int, int], pd.DataFrame] = {}
         self._day_cache: dict[tuple[str, str], pd.DataFrame] = {}
+        self._aggregated_window_cache: dict[tuple[str, str, int, int], pd.DataFrame] = {}
 
     @staticmethod
     def _resolve_persistent_cache_dir(cache_dir: Path) -> Path:
@@ -68,6 +70,25 @@ class _PnoSecondsFrameProvider:
         end_timestamp_ms: int,
         target_timeframe: Timeframe,
     ) -> pd.DataFrame:
+        cache_key = (symbol, target_timeframe.value, int(start_timestamp_ms), int(end_timestamp_ms))
+        cached = self._aggregated_window_cache.get(cache_key)
+        if cached is not None:
+            return cached.copy()
+        shared_cached = self._shared_aggregated_window_cache.get(cache_key)
+        if shared_cached is not None:
+            local_copy = shared_cached.copy()
+            self._aggregated_window_cache[cache_key] = local_copy
+            return local_copy.copy()
+        persisted = self._load_persisted_aggregated_window(
+            symbol=symbol,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+            target_timeframe=target_timeframe,
+        )
+        if persisted is not None:
+            self._aggregated_window_cache[cache_key] = persisted.copy()
+            self._shared_aggregated_window_cache[cache_key] = persisted.copy()
+            return persisted.copy()
         seconds_frame = self._ensure_seconds_window(
             symbol=symbol,
             start_timestamp_ms=start_timestamp_ms,
@@ -75,10 +96,21 @@ class _PnoSecondsFrameProvider:
         )
         if seconds_frame.empty:
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-        return PnoEngine._aggregate_frame(
+        aggregated = PnoEngine._aggregate_frame(
             seconds_frame,
             target_timeframe_ms=target_timeframe.to_milliseconds(),
         )
+        self._aggregated_window_cache[cache_key] = aggregated.copy()
+        self._shared_aggregated_window_cache[cache_key] = aggregated.copy()
+        if not aggregated.empty:
+            self._persist_aggregated_window(
+                symbol=symbol,
+                start_timestamp_ms=int(start_timestamp_ms),
+                end_timestamp_ms=int(end_timestamp_ms),
+                target_timeframe=target_timeframe,
+                frame=aggregated,
+            )
+        return aggregated
 
     def _ensure_seconds_window(
         self,
@@ -193,6 +225,64 @@ class _PnoSecondsFrameProvider:
         ].drop_duplicates()
         expected_points = ((int(end_timestamp_ms) - int(start_timestamp_ms)) // 1_000) + 1
         return len(clipped) >= expected_points
+
+    def _aggregated_window_path(
+        self,
+        *,
+        symbol: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+        target_timeframe: Timeframe,
+    ) -> Path:
+        encoded_symbol = ParquetStorage.encode_symbol_for_path(symbol)
+        return (
+            self._persistent_cache_dir
+            / encoded_symbol
+            / "_pno_sparse"
+            / target_timeframe.value
+            / f"{int(start_timestamp_ms)}_{int(end_timestamp_ms)}.parquet"
+        )
+
+    def _load_persisted_aggregated_window(
+        self,
+        *,
+        symbol: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+        target_timeframe: Timeframe,
+    ) -> pd.DataFrame | None:
+        path = self._aggregated_window_path(
+            symbol=symbol,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+            target_timeframe=target_timeframe,
+        )
+        if not path.exists():
+            return None
+        frame = pd.read_parquet(path)
+        if frame.empty:
+            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        return frame.sort_values("timestamp").reset_index(drop=True)
+
+    def _persist_aggregated_window(
+        self,
+        *,
+        symbol: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+        target_timeframe: Timeframe,
+        frame: pd.DataFrame,
+    ) -> None:
+        path = self._aggregated_window_path(
+            symbol=symbol,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+            target_timeframe=target_timeframe,
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        frame.to_parquet(tmp_path, index=False)
+        tmp_path.replace(path)
 
     @staticmethod
     def _iter_utc_days(
