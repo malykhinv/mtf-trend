@@ -7854,6 +7854,75 @@ def test_pno_dogs_ideal_like_regression_window_produces_trade() -> None:
     assert matching_trades, "expected DOGS continuation trade in 2024-08-28 regression window on 5m-30s"
 
 
+def test_pno_dogs_human_bos_regression_window_produces_structured_1m_5s_trade() -> None:
+    cache_dir = Path(r"C:\Users\Ascf\PycharmProjects\mtf-trend-2\.output\cache")
+    dogs_cache_dir = cache_dir / "DOGS%2FUSDT%3AUSDT"
+    if not dogs_cache_dir.exists():
+        pytest.skip("DOGS cache is not available locally")
+
+    symbol = "DOGS/USDT:USDT"
+    end_timestamp_ms = 1724845000000
+    preparer = DataPreparer(cache_dir)
+    mtf_frames = SymbolMtfFrames(
+        levels_timeframe=Timeframe.M1,
+        entry_timeframe=Timeframe.S5,
+        levels_frame=preparer.load_symbol_data(symbol, Timeframe.M1, days=1, end_timestamp_ms=end_timestamp_ms),
+        entry_frame=preparer.load_symbol_data(symbol, Timeframe.M1, days=1, end_timestamp_ms=end_timestamp_ms),
+    )
+    params = PnoParams(
+        symbol=symbol,
+        entry_confirmation_mode="close_above",
+        levels_timeframe=Timeframe.M1,
+        entry_timeframe=Timeframe.S5,
+        min_entry_rr=1.0,
+    )
+    strategy = PnoStrategy(
+        deposit=float(params.pno_deposit),
+        risk_pct=float(params.pno_risk_pct),
+        cache_dir=Path(tempfile.mkdtemp()),
+        category_mode_filter="discovery",
+    )
+
+    trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+    diagnostics = strategy.consume_last_generation_diagnostics()
+
+    matching_trades = [
+        trade
+        for trade in trades
+        if int(trade.entry_timestamp_ms) == 1724843700000
+        and float(trade.pnl_percent.value) > 0.0
+        and str(trade.metadata.get("structure_source")) == "human_bos"
+    ]
+    assert matching_trades, "expected DOGS 1m-5s profitable BOS trade in the 2024-08-28 regression window"
+
+    trade = matching_trades[0]
+    pivot_timestamps = tuple(int(value) for value in trade.metadata.get("structure_pivot_timestamps_ms", ()))
+    pivot_prices = tuple(float(value) for value in trade.metadata.get("structure_pivot_prices", ()))
+    pivot_kinds = tuple(str(value) for value in trade.metadata.get("structure_pivot_kinds", ()))
+
+    assert int(trade.metadata.get("structure_break_timestamp_ms", 0)) == int(trade.entry_timestamp_ms)
+    assert len(pivot_timestamps) >= 4
+    assert len(pivot_timestamps) == len(pivot_prices) == len(pivot_kinds)
+    assert pivot_timestamps == tuple(sorted(pivot_timestamps))
+    assert set(pivot_kinds).issubset({"H", "L"})
+    assert all(left != right for left, right in zip(pivot_kinds, pivot_kinds[1:], strict=False))
+    assert pivot_kinds[-2:] == ("H", "L")
+    assert pivot_timestamps[-2] == int(trade.metadata.get("structure_high_timestamp_ms", 0))
+    assert pivot_timestamps[-1] == int(trade.metadata.get("structure_low_timestamp_ms", 0))
+
+    stage3_rows = [
+        row
+        for row in diagnostics.get("stage_events", [])
+        if row.get("stage_id") == "stage_3_valid_pullback"
+        and int(row.get("structure_break_timestamp_ms") or 0) == int(trade.entry_timestamp_ms)
+    ]
+    assert stage3_rows, "expected matching stage3 BOS diagnostics row for DOGS 1m-5s regression"
+
+    stage3_row = stage3_rows[0]
+    assert tuple(int(value) for value in stage3_row.get("structure_pivot_timestamps_ms", ())) == pivot_timestamps
+    assert tuple(str(value) for value in stage3_row.get("structure_pivot_kinds", ())) == pivot_kinds
+
+
 def test_pno_aevo_cat_d_upper_tf_level_regression_window_produces_trade() -> None:
     cache_dir = Path(r"C:\Users\Ascf\PycharmProjects\mtf-trend-2\.output\cache")
     aevo_cache_dir = cache_dir / "AEVO%2FUSDT%3AUSDT"
