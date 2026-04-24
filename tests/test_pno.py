@@ -533,6 +533,11 @@ def test_build_pno_grid_includes_cross_and_close_confirmation_variants() -> None
     assert [params.pno_variant_id for params in grid] == ["baseline_close"]
 
 
+def test_validate_pno_params_rejects_legacy_cross_confirmation_mode() -> None:
+    with pytest.raises(ValueError, match="entry_confirmation_mode"):
+        validate_pno_params(PnoParams(symbol="TEST/USDT", entry_confirmation_mode="cross"))
+
+
 def test_resolve_pno_artifact_rows_uses_entry_mode_names() -> None:
     results = pd.DataFrame(
         [
@@ -544,6 +549,14 @@ def test_resolve_pno_artifact_rows_uses_entry_mode_names() -> None:
     resolved = commands._resolve_pno_artifact_rows(results)
 
     assert [name for name, _ in resolved] == ["cross", "close_above"]
+
+
+def test_parser_restricts_pno_entry_confirmation_mode_to_close_above() -> None:
+    parser = build_parser()
+
+    args = parser.parse_args(["run-backtest", "--pno-entry-confirmation-mode", "close_above"])
+
+    assert args.pno_entry_confirmation_mode == "close_above"
 
 
 def test_with_pno_risk_caps_to_five_percent() -> None:
@@ -2855,6 +2868,18 @@ def test_pno_trade_chart_visuals_use_plan_for_close_above_and_keep_exec_fill() -
     assert display_entry_price == pytest.approx(0.412875)
     assert execution_tag_price == pytest.approx(0.4141)
     assert signal_timestamp_ms == 120_000
+
+
+def test_resolve_pno_structure_points_supports_json_like_payloads() -> None:
+    points = pno_diagnostics._resolve_pno_structure_points(
+        {
+            "structure_pivot_timestamps_ms": "[60000, 120000, 180000]",
+            "structure_pivot_prices": "[1.2, 1.0, 1.15]",
+            "structure_pivot_kinds": "['H', 'L', 'H']",
+        }
+    )
+
+    assert points == [(60_000, 1.2, "H"), (120_000, 1.0, "L"), (180_000, 1.15, "H")]
 
 
 def test_pno_resolve_stage1_context_returns_rejection_payload_for_quality_fail(monkeypatch) -> None:

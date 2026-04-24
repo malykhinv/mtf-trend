@@ -1571,7 +1571,7 @@ class PnoEngine:
 
             if armed is not None and armed.entry_idx <= i:
                 levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
-                confirmation_mode = str(getattr(params, "entry_confirmation_mode", "cross"))
+                confirmation_mode = str(getattr(params, "entry_confirmation_mode", "close_above"))
                 entry_ts_idx = i + 1 if confirmation_mode == "close_above" else i
                 if entry_ts_idx < len(one.timestamps):
                     bars_since_active_high = int(
@@ -1664,12 +1664,21 @@ class PnoEngine:
                             "level_first_local_high_timestamp_ms": int(one.timestamps[live_armed.stage4.cluster_first_idx]),
                             "level_last_local_high_timestamp_ms": int(one.timestamps[live_armed.stage4.cluster_last_idx]),
                             "level_valid_timestamp_ms": int(live_armed.stage4.level_valid_timestamp),
-                            "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "cross")),
+                            "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "close_above")),
                             "entry_signal_timestamp_ms": int(one.timestamps[min(i, len(one.timestamps) - 1)]),
                             "entry_plan": round(float(live_armed.stage4.entry_plan), 8),
                             "sl_plan": round(float(live_armed.stage4.sl_plan), 8),
                             "tp1": round(float(live_armed.stage4.tp1), 8),
                             "tp2": round(float(live_armed.stage4.tp2), 8),
+                            "structure_high_timestamp_ms": int(live_armed.stage3.structure_high_timestamp),
+                            "structure_low_timestamp_ms": int(live_armed.stage3.structure_low_timestamp),
+                            "structure_break_timestamp_ms": int(live_armed.stage3.structure_break_timestamp),
+                            **self._build_structure_points_payload(
+                                one=one,
+                                pivot_indices=live_armed.stage3.structure_pivot_indices,
+                                pivot_prices=live_armed.stage3.structure_pivot_prices,
+                                pivot_kinds=live_armed.stage3.structure_pivot_kinds,
+                            ),
                         },
                     )
                     # Неблокирующее отклонение: продолжаем искать entry trigger
@@ -2041,6 +2050,12 @@ class PnoEngine:
                         "active_high": round(stage1.active_high, 8),
                         "pullback_low": round(stage2.pullback_low, 8),
                         "pullback_depth": round(stage2.pullback_depth, 8),
+                        **self._build_structure_points_payload(
+                            one=one,
+                            pivot_indices=stage2.structure_pivot_indices,
+                            pivot_prices=stage2.structure_pivot_prices,
+                            pivot_kinds=stage2.structure_pivot_kinds,
+                        ),
                     },
                 )
             else:
@@ -2073,6 +2088,12 @@ class PnoEngine:
                         "hold_status_at_validation": hold_status,
                         "leg_start_status_at_validation": leg_start_status,
                         "hold_floor": round(stage1.hold_floor, 8),
+                        **self._build_structure_points_payload(
+                            one=one,
+                            pivot_indices=stage2.structure_pivot_indices,
+                            pivot_prices=stage2.structure_pivot_prices,
+                            pivot_kinds=stage2.structure_pivot_kinds,
+                        ),
                     },
                 )
                 blocked_active_high_idx = stage1.active_high_idx
@@ -2115,6 +2136,15 @@ class PnoEngine:
                         "post_high_wick_share": round(stage3.post_high_wick_share, 4),
                         "post_high_body_overlap_rate": round(stage3.post_high_body_overlap_rate, 4),
                         "post_high_max_red_body_share": round(stage3.post_high_max_red_body_share, 4),
+                        "structure_high_timestamp_ms": int(stage3.structure_high_timestamp),
+                        "structure_low_timestamp_ms": int(stage3.structure_low_timestamp),
+                        "structure_break_timestamp_ms": int(stage3.structure_break_timestamp),
+                        **self._build_structure_points_payload(
+                            one=one,
+                            pivot_indices=stage3.structure_pivot_indices,
+                            pivot_prices=stage3.structure_pivot_prices,
+                            pivot_kinds=stage3.structure_pivot_kinds,
+                        ),
                     },
                 )
             else:
@@ -2154,12 +2184,21 @@ class PnoEngine:
                             "level_last_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_last_idx]),
                             "level_valid_timestamp_ms": int(armed.stage4.level_valid_timestamp),
                             "level_life_ema_spread_growth_share": round(float(armed.stage4.level_life_ema_spread_growth_share), 4),
-                            "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "cross")),
+                            "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "close_above")),
                             "entry_signal_timestamp_ms": int(one.timestamps[min(i, len(one.timestamps) - 1)]),
                             "entry_plan": round(float(armed.stage4.entry_plan), 8),
                             "sl_plan": round(float(armed.stage4.sl_plan), 8),
                             "tp1": round(float(armed.stage4.tp1), 8),
                             "tp2": round(float(armed.stage4.tp2), 8),
+                            "structure_high_timestamp_ms": int(armed.stage3.structure_high_timestamp),
+                            "structure_low_timestamp_ms": int(armed.stage3.structure_low_timestamp),
+                            "structure_break_timestamp_ms": int(armed.stage3.structure_break_timestamp),
+                            **self._build_structure_points_payload(
+                                one=one,
+                                pivot_indices=armed.stage3.structure_pivot_indices,
+                                pivot_prices=armed.stage3.structure_pivot_prices,
+                                pivot_kinds=armed.stage3.structure_pivot_kinds,
+                            ),
                         },
                     )
                     armed = None
@@ -2182,6 +2221,15 @@ class PnoEngine:
                             "stage1_hold_price": round(float(stage1.stage1_hold_price), 8),
                             "hold_floor": round(float(stage1.hold_floor), 8),
                             "hold_status_at_level_search": str(stage1.hold_status_at_validation),
+                            "structure_high_timestamp_ms": int(stage3.structure_high_timestamp),
+                            "structure_low_timestamp_ms": int(stage3.structure_low_timestamp),
+                            "structure_break_timestamp_ms": int(stage3.structure_break_timestamp),
+                            **self._build_structure_points_payload(
+                                one=one,
+                                pivot_indices=stage3.structure_pivot_indices,
+                                pivot_prices=stage3.structure_pivot_prices,
+                                pivot_kinds=stage3.structure_pivot_kinds,
+                            ),
                         },
                     )
                 stage4 = None
@@ -2243,6 +2291,15 @@ class PnoEngine:
                         "stage1_hold_price": round(float(stage1.stage1_hold_price), 8),
                         "hold_floor": round(float(stage1.hold_floor), 8),
                         "hold_status_at_level_search": str(stage1.hold_status_at_validation),
+                        "structure_high_timestamp_ms": int(stage3.structure_high_timestamp),
+                        "structure_low_timestamp_ms": int(stage3.structure_low_timestamp),
+                        "structure_break_timestamp_ms": int(stage3.structure_break_timestamp),
+                        **self._build_structure_points_payload(
+                            one=one,
+                            pivot_indices=stage3.structure_pivot_indices,
+                            pivot_prices=stage3.structure_pivot_prices,
+                            pivot_kinds=stage3.structure_pivot_kinds,
+                        ),
                     },
                 )
                 retired_clusters.append(
@@ -2297,10 +2354,20 @@ class PnoEngine:
                     "stage1_hold_price": round(float(stage1.stage1_hold_price), 8),
                     "hold_floor": round(float(stage1.hold_floor), 8),
                     "hold_status_at_level_search": str(stage1.hold_status_at_validation),
+                    "structure_high_timestamp_ms": int(stage3.structure_high_timestamp),
+                    "structure_low_timestamp_ms": int(stage3.structure_low_timestamp),
+                    "structure_break_timestamp_ms": int(stage3.structure_break_timestamp),
+                    "structure_source": str(stage4.structure_source),
+                    **self._build_structure_points_payload(
+                        one=one,
+                        pivot_indices=stage3.structure_pivot_indices,
+                        pivot_prices=stage3.structure_pivot_prices,
+                        pivot_kinds=stage3.structure_pivot_kinds,
+                    ),
                 },
             )
             if armed is None and stage4.is_valid_setup and i + 1 < len(one.timestamps):
-                confirmation_mode = str(getattr(params, "entry_confirmation_mode", "cross"))
+                confirmation_mode = str(getattr(params, "entry_confirmation_mode", "close_above"))
                 arm_entry_idx = i if confirmation_mode == "close_above" else i + 1
                 armed = ArmedContext(entry_idx=arm_entry_idx, stage1=stage1, stage3=stage3, stage4=stage4)
                 if confirmation_mode == "close_above":
@@ -3970,7 +4037,7 @@ class PnoEngine:
             stage3=stage3,
             stage4=stage4,
             idx=idx,
-            confirmation_mode=str(getattr(params, "entry_confirmation_mode", "cross")),
+            confirmation_mode=str(getattr(params, "entry_confirmation_mode", "close_above")),
         )
         # Keep planned risk anchored to the actionable reclaim extremum.
         sl_plan = low_last_red_plan
@@ -4581,7 +4648,7 @@ class PnoEngine:
         stage3: Stage3Context,
         stage4: Stage4Context,
         idx: int,
-        confirmation_mode: str = "cross",
+        confirmation_mode: str = "close_above",
     ) -> float:
         del stage1
         search_start = max(int(stage4.cluster_first_idx), 0)
@@ -5647,7 +5714,7 @@ class PnoEngine:
         high_price = float(one.highs[entry_idx])
         low_price = float(one.lows[entry_idx])
         close_price = float(one.closes[entry_idx])
-        confirmation_mode = str(getattr(params, "entry_confirmation_mode", "cross"))
+        confirmation_mode = str(getattr(params, "entry_confirmation_mode", "close_above"))
         actual_entry_idx = entry_idx
         signal_kind = "cross"
         if confirmation_mode == "cross":
@@ -5890,7 +5957,19 @@ class PnoEngine:
             "entry_price_actual": round(float(entry_price), 8),
             "sl_actual": round(float(stop_loss), 8),
             "htf_bars_since_active_high": int(htf_bars_since_active_high),
+            "structure_high_timestamp_ms": int(armed.stage3.structure_high_timestamp),
+            "structure_low_timestamp_ms": int(armed.stage3.structure_low_timestamp),
+            "structure_break_timestamp_ms": int(armed.stage3.structure_break_timestamp),
+            "structure_source": str(armed.stage4.structure_source),
         }
+        metadata.update(
+            self._build_structure_points_payload(
+                one=one,
+                pivot_indices=armed.stage3.structure_pivot_indices,
+                pivot_prices=armed.stage3.structure_pivot_prices,
+                pivot_kinds=armed.stage3.structure_pivot_kinds,
+            )
+        )
         if signal_context:
             signal_volume_vs_recent = float(signal_context["signal_bar_volume_vs_recent"])
             signal_close_clearance_pct = float(signal_context["signal_close_clearance_pct"])
@@ -5966,7 +6045,7 @@ class PnoEngine:
         initial_risk = max(entry_price - initial_stop_loss, self._EPSILON)
         tp1_share = float(params.tp1_share)
         remainder_share = max(1.0 - tp1_share, 0.0)
-        confirmation_mode = str(metadata.get("entry_confirmation_mode", getattr(params, "entry_confirmation_mode", "cross")))
+        confirmation_mode = str(metadata.get("entry_confirmation_mode", getattr(params, "entry_confirmation_mode", "close_above")))
         initial_be_arm_fraction = self._resolve_be_arm_fraction(
             params=params,
             confirmation_mode=confirmation_mode,
@@ -6719,6 +6798,34 @@ class PnoEngine:
                 continue
             merged[-1] = (merged[-1][0], max(merged[-1][1], int(end_timestamp_ms)))
         return merged
+
+    @staticmethod
+    def _build_structure_points_payload(
+        *,
+        one: OneMinuteFrame,
+        pivot_indices: tuple[int, ...] | list[int],
+        pivot_prices: tuple[float, ...] | list[float],
+        pivot_kinds: tuple[str, ...] | list[str],
+    ) -> dict[str, object]:
+        if not pivot_indices or not pivot_prices or not pivot_kinds:
+            return {}
+        timestamps_ms: list[int] = []
+        prices: list[float] = []
+        kinds: list[str] = []
+        for pivot_idx, pivot_price, pivot_kind in zip(pivot_indices, pivot_prices, pivot_kinds, strict=False):
+            resolved_idx = int(pivot_idx)
+            if resolved_idx < 0 or resolved_idx >= len(one.timestamps):
+                continue
+            timestamps_ms.append(int(one.timestamps[resolved_idx]))
+            prices.append(round(float(pivot_price), 8))
+            kinds.append(str(pivot_kind))
+        if not timestamps_ms:
+            return {}
+        return {
+            "structure_pivot_timestamps_ms": tuple(timestamps_ms),
+            "structure_pivot_prices": tuple(prices),
+            "structure_pivot_kinds": tuple(kinds),
+        }
 
     def _resolve_htf_stage1_candidate_from_arrays(
         self,

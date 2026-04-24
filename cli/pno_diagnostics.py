@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import time
 from pathlib import Path
@@ -450,6 +451,9 @@ _PNO_PLOT_PROTECT_FACE = "#14532d"
 _PNO_PLOT_PROTECT_EDGE = "#86efac"
 _PNO_PLOT_BASE_FACE = "#1d4ed8"
 _PNO_PLOT_BASE_EDGE = "#60a5fa"
+_PNO_PLOT_STRUCTURE_LINE = "#e2e8f0"
+_PNO_PLOT_STRUCTURE_HIGH = "#fda4af"
+_PNO_PLOT_STRUCTURE_LOW = "#7dd3fc"
 _PNO_PLOT_PANEL_EDGE = "#1e293b"
 _PNO_PLOT_CANDLE_WIDTH = 0.64
 _PNO_PLOT_5M_CANDLE_WIDTH = 4.0
@@ -691,6 +695,19 @@ def _format_pno_chart_symbol(symbol: str) -> str:
     return base
 
 
+def _format_pno_timeframe_label(step_ms: int) -> str:
+    if step_ms <= 0:
+        return "TF"
+    if step_ms % 60_000 == 0:
+        minutes = step_ms // 60_000
+        if minutes % 60 == 0:
+            hours = minutes // 60
+            return f"{hours}h"
+        return f"{minutes}m"
+    seconds = max(step_ms // 1000, 1)
+    return f"{seconds}s"
+
+
 def _plot_pno_marker(ax: plt.Axes, *, x: float, y: float | None, color: str, marker: str = "o") -> None:
     if y is None:
         return
@@ -847,6 +864,86 @@ def _resolve_pno_timestamp_plot_idx(timestamps: np.ndarray, target_timestamp_ms:
     if abs(int(timestamps[left_idx]) - int(target_timestamp_ms)) <= abs(int(timestamps[candidate_idx]) - int(target_timestamp_ms)):
         return left_idx
     return candidate_idx
+
+
+def _coerce_pno_sequence(raw: object) -> list[object]:
+    if raw is None:
+        return []
+    if isinstance(raw, np.ndarray):
+        return raw.tolist()
+    if isinstance(raw, (list, tuple)):
+        return list(raw)
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return []
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                parsed = parser(text)
+            except (ValueError, SyntaxError, TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(parsed, (list, tuple)):
+                return list(parsed)
+        return []
+    return []
+
+
+def _resolve_pno_structure_points(row: dict[str, object]) -> list[tuple[int, float, str]]:
+    timestamps_ms = _coerce_pno_sequence(row.get("structure_pivot_timestamps_ms"))
+    prices = _coerce_pno_sequence(row.get("structure_pivot_prices"))
+    kinds = _coerce_pno_sequence(row.get("structure_pivot_kinds"))
+    points: list[tuple[int, float, str]] = []
+    for timestamp_ms, price, kind in zip(timestamps_ms, prices, kinds, strict=False):
+        resolved_timestamp = _safe_int(timestamp_ms)
+        resolved_price = _safe_float(price)
+        resolved_kind = str(kind or "").upper()
+        if resolved_timestamp is None or resolved_price is None or resolved_kind not in {"H", "L"}:
+            continue
+        points.append((resolved_timestamp, float(resolved_price), resolved_kind))
+    return points
+
+
+def _draw_pno_structure_overlay(ax: plt.Axes, *, timestamps: np.ndarray, row: dict[str, object]) -> None:
+    points = _resolve_pno_structure_points(row)
+    if not points or timestamps.size == 0:
+        return
+    x_values = np.array(
+        [_resolve_pno_timestamp_plot_idx(timestamps, int(timestamp_ms)) for timestamp_ms, _price, _kind in points],
+        dtype=np.float64,
+    )
+    y_values = np.array([float(price) for _timestamp_ms, price, _kind in points], dtype=np.float64)
+    ax.plot(
+        x_values,
+        y_values,
+        color=_PNO_PLOT_STRUCTURE_LINE,
+        linewidth=0.9,
+        alpha=0.12,
+        zorder=4.55,
+    )
+    high_mask = np.array([kind == "H" for _timestamp_ms, _price, kind in points], dtype=bool)
+    low_mask = ~high_mask
+    if bool(high_mask.any()):
+        ax.scatter(
+            x_values[high_mask],
+            y_values[high_mask],
+            s=14,
+            marker="^",
+            color=_PNO_PLOT_STRUCTURE_HIGH,
+            edgecolors="none",
+            alpha=0.22,
+            zorder=4.7,
+        )
+    if bool(low_mask.any()):
+        ax.scatter(
+            x_values[low_mask],
+            y_values[low_mask],
+            s=14,
+            marker="v",
+            color=_PNO_PLOT_STRUCTURE_LOW,
+            edgecolors="none",
+            alpha=0.22,
+            zorder=4.7,
+        )
 
 
 def _draw_pno_candles_on_columns(
@@ -1091,6 +1188,7 @@ def _render_pno_trade_chart(
     _configure_pno_plot_axes(price_ax=ax_levels, volume_ax=ax_volume)
 
     _draw_pno_candles(ax_price, plot_frame, x_values)
+    _draw_pno_structure_overlay(ax_price, timestamps=timestamps, row=trade_row)
     ax_price.set_title(_format_pno_chart_symbol(symbol), loc="left", color=_PNO_PLOT_TEXT, fontsize=11, pad=10, fontweight="semibold")
     if not levels_window.empty:
         _draw_pno_candles_on_columns(ax_levels, levels_window, x_column="plot_x", candle_width=_PNO_PLOT_5M_CANDLE_WIDTH)
@@ -1468,7 +1566,7 @@ def _render_pno_stage_review_chart(
     level_first_timestamp_ms = _safe_int(review_row.get("level_first_local_high_timestamp_ms"))
     pullback_base_start_timestamp_ms = _safe_int(review_row.get("pullback_base_start_timestamp_ms"))
     is_stage1 = stage_id == PNO_STAGE_SEQUENCE[0]
-    use_levels_frame = stage_id in PNO_STAGE_SEQUENCE[:3]
+    use_levels_frame = is_stage1
     if is_stage1 and pump_start_timestamp_ms is not None:
         start_timestamp_ms = sleep_start_timestamp_ms or max(pump_start_timestamp_ms - (120 * 60_000), 0)
         end_timestamp_ms = timestamp_ms
@@ -1530,6 +1628,8 @@ def _render_pno_stage_review_chart(
     )
 
     _draw_pno_candles(ax_price, plot_frame, x)
+    if not is_stage1:
+        _draw_pno_structure_overlay(ax_price, timestamps=timestamps, row=review_row)
     if (not is_stage1) and np.isfinite(ema9).any():
         ax_price.plot(x, ema9, color=_PNO_PLOT_EMA9, linewidth=0.8, alpha=0.22, zorder=2)
     if (not is_stage1) and np.isfinite(ema20).any():
@@ -1693,7 +1793,11 @@ def _render_pno_stage_review_chart(
     ax_volume.set_ylim(0.0, 100.0)
     ax_volume.set_yticks([0.0, 50.0, 100.0])
     ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
-    ax_price.set_ylabel("5m" if use_levels_frame else "1m", color=_PNO_PLOT_MUTED, fontsize=8)
+    ax_price.set_ylabel(
+        _format_pno_timeframe_label(_infer_pno_frame_step_ms(plot_frame, default_ms=5 * 60_000)),
+        color=_PNO_PLOT_MUTED,
+        fontsize=8,
+    )
     ax_volume.set_ylabel("Vol %", color=_PNO_PLOT_MUTED, fontsize=8)
 
     tick_timestamps = _build_pno_tick_timestamps(plot_frame)
@@ -1731,7 +1835,7 @@ def _export_pno_stage_reviews(
     manifest_rows: list[dict[str, object]] = []
     selected_stage_set = set(selected_stage_ids)
     passed_chart_stage_id_set = set(selected_stage_ids if passed_chart_stage_ids is None else passed_chart_stage_ids)
-    needs_entry_frames = bool(selected_stage_set.intersection(PNO_STAGE_SEQUENCE[3:]))
+    needs_entry_frames = bool(selected_stage_set.intersection(PNO_STAGE_SEQUENCE[1:]))
     prepared_frames_by_symbol: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
     review_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]] = {}
     for stage_id in selected_stage_ids:

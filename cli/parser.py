@@ -77,9 +77,9 @@ def build_parser() -> argparse.ArgumentParser:
     run_bt.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per trade for PNO")
     run_bt.add_argument(
         "--pno-entry-confirmation-mode",
-        choices=["cross", "close_above"],
+        choices=["close_above"],
         default=None,
-        help="Filter PNO grid by entry confirmation mode (cross or close_above)",
+        help="Filter PNO grid by entry confirmation mode (close_above)",
     )
     run_bt.add_argument(
         "--pno-category-mode",

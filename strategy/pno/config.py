@@ -30,7 +30,7 @@ PNO_SUPPORTED_LEVELS_TIMEFRAMES: tuple[Timeframe, ...] = tuple(
 PNO_SUPPORTED_ENTRY_TIMEFRAMES: tuple[Timeframe, ...] = tuple(
     dict.fromkeys(entry_timeframe for _levels_timeframe, entry_timeframe in PNO_SUPPORTED_TIMEFRAME_PAIRS)
 )
-PNO_SUPPORTED_ENTRY_CONFIRMATION_MODES: tuple[str, ...] = ("cross", "close_above")
+PNO_SUPPORTED_ENTRY_CONFIRMATION_MODES: tuple[str, ...] = ("close_above",)
 PNO_SUPPORTED_CATEGORY_MODES: tuple[str, ...] = ("all", "core", "discovery")
 PNO_DEFAULT_RISK_PCT = 0.05
 
@@ -39,7 +39,7 @@ PNO_DEFAULT_RISK_PCT = 0.05
 class PnoParams:
     symbol: str
     pno_variant_id: str = "baseline"
-    entry_confirmation_mode: str = "cross"
+    entry_confirmation_mode: str = "close_above"
     levels_timeframe: Timeframe = PNO_DEFAULT_LEVELS_TIMEFRAME
     entry_timeframe: Timeframe = PNO_DEFAULT_ENTRY_TIMEFRAME
     pno_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
