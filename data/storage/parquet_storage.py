@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import gc
 from logging import INFO
 from pathlib import Path
+import time
 from urllib.parse import quote, unquote
 
 import pandas as pd
@@ -193,5 +195,13 @@ class ParquetStorage:
             path_override=tmp_path,
         )
 
-        tmp_path.replace(path)
+        for attempt in range(5):
+            try:
+                tmp_path.replace(path)
+                break
+            except PermissionError:
+                if attempt == 4:
+                    raise
+                gc.collect()
+                time.sleep(0.05 * (attempt + 1))
         return max(len(merged) - previous_count, 0)

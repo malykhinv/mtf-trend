@@ -49,6 +49,7 @@ from strategy.pno.engine import (
     Stage3Context,
     Stage4Context,
 )
+from strategy.pno.pno_strategy import _PnoSecondsFrameProvider
 from data.storage.parquet_storage import ParquetStorage
 from vectorbt_runner import DataPreparer
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
@@ -7921,6 +7922,82 @@ def test_pno_dogs_human_bos_regression_window_produces_structured_1m_5s_trade() 
     stage3_row = stage3_rows[0]
     assert tuple(int(value) for value in stage3_row.get("structure_pivot_timestamps_ms", ())) == pivot_timestamps
     assert tuple(str(value) for value in stage3_row.get("structure_pivot_kinds", ())) == pivot_kinds
+
+
+def test_pno_seconds_cache_persists_across_temp_runtime_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    persistent_cache_dir = tmp_path / "persistent-cache"
+    monkeypatch.setenv("CACHE_DIR", str(persistent_cache_dir))
+    expected_columns = ["timestamp", "open", "high", "low", "close", "volume"]
+
+    start_timestamp_ms = 1_720_000_000_000
+    end_timestamp_ms = start_timestamp_ms + 4_000
+    seconds_frame = pd.DataFrame(
+        {
+            "timestamp": [start_timestamp_ms + offset * 1_000 for offset in range(5)],
+            "open": [1.0, 1.1, 1.2, 1.3, 1.4],
+            "high": [1.1, 1.2, 1.3, 1.4, 1.5],
+            "low": [0.9, 1.0, 1.1, 1.2, 1.3],
+            "close": [1.05, 1.15, 1.25, 1.35, 1.45],
+            "volume": [10.0, 11.0, 12.0, 13.0, 14.0],
+        }
+    )
+
+    provider = _PnoSecondsFrameProvider(cache_dir=Path(tempfile.mkdtemp()))
+    provider._shared_window_cache.clear()
+    provider._shared_day_cache.clear()
+
+    fetch_calls = {"count": 0}
+
+    def _fetch_seconds_for_day(*, symbol: str, utc_day: object) -> pd.DataFrame:
+        del symbol, utc_day
+        fetch_calls["count"] += 1
+        return seconds_frame.copy()
+
+    monkeypatch.setattr(provider, "_fetch_seconds_for_day", _fetch_seconds_for_day)
+
+    first_frame = provider._ensure_seconds_window(
+        symbol="TEST/USDT:USDT",
+        start_timestamp_ms=start_timestamp_ms,
+        end_timestamp_ms=end_timestamp_ms,
+    )
+
+    assert fetch_calls["count"] == 1
+    pd.testing.assert_frame_equal(
+        first_frame.loc[:, expected_columns].reset_index(drop=True),
+        seconds_frame.loc[:, expected_columns].reset_index(drop=True),
+    )
+
+    persisted_frame = DataPreparer(persistent_cache_dir).load_symbol_data_range(
+        "TEST/USDT:USDT",
+        Timeframe.S1,
+        start_timestamp_ms=start_timestamp_ms,
+        end_timestamp_ms=end_timestamp_ms,
+    )
+    pd.testing.assert_frame_equal(
+        persisted_frame.loc[:, expected_columns].reset_index(drop=True),
+        seconds_frame.loc[:, expected_columns].reset_index(drop=True),
+    )
+
+    second_provider = _PnoSecondsFrameProvider(cache_dir=Path(tempfile.mkdtemp()))
+    second_provider._shared_window_cache.clear()
+    second_provider._shared_day_cache.clear()
+
+    def _unexpected_fetch(*, symbol: str, utc_day: object) -> pd.DataFrame:
+        del symbol, utc_day
+        raise AssertionError("seconds data should be loaded from persistent cache without refetch")
+
+    monkeypatch.setattr(second_provider, "_fetch_seconds_for_day", _unexpected_fetch)
+
+    second_frame = second_provider._ensure_seconds_window(
+        symbol="TEST/USDT:USDT",
+        start_timestamp_ms=start_timestamp_ms,
+        end_timestamp_ms=end_timestamp_ms,
+    )
+
+    pd.testing.assert_frame_equal(
+        second_frame.loc[:, expected_columns].reset_index(drop=True),
+        seconds_frame.loc[:, expected_columns].reset_index(drop=True),
+    )
 
 
 def test_pno_aevo_cat_d_upper_tf_level_regression_window_produces_trade() -> None:

@@ -6,12 +6,15 @@ from dataclasses import replace
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import io
+import os
+import tempfile
 from typing import Any, ClassVar
 import zipfile
 
 import pandas as pd
 import requests
 
+from constants import DEFAULT_CACHE_DIR
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.exchange import Exchange
@@ -40,11 +43,22 @@ class _PnoSecondsFrameProvider:
     _shared_day_cache: ClassVar[dict[tuple[str, str], pd.DataFrame]] = {}
 
     def __post_init__(self) -> None:
-        self._preparer = DataPreparer(self.cache_dir)
-        self._storage = ParquetStorage(self.cache_dir)
+        self._runtime_cache_dir = Path(self.cache_dir)
+        self._persistent_cache_dir = self._resolve_persistent_cache_dir(self._runtime_cache_dir)
+        self._runtime_preparer = DataPreparer(self._runtime_cache_dir)
+        self._persistent_preparer = DataPreparer(self._persistent_cache_dir)
+        self._storage = ParquetStorage(self._persistent_cache_dir)
         self._client: CcxtFuturesClient | None = None
         self._window_cache: dict[tuple[str, int, int], pd.DataFrame] = {}
         self._day_cache: dict[tuple[str, str], pd.DataFrame] = {}
+
+    @staticmethod
+    def _resolve_persistent_cache_dir(cache_dir: Path) -> Path:
+        resolved_cache_dir = cache_dir.expanduser().resolve()
+        temp_root = Path(tempfile.gettempdir()).expanduser().resolve()
+        if resolved_cache_dir == temp_root or temp_root in resolved_cache_dir.parents:
+            return Path(os.getenv("CACHE_DIR", DEFAULT_CACHE_DIR)).expanduser().resolve()
+        return resolved_cache_dir
 
     def load_aggregated_window(
         self,
@@ -83,12 +97,34 @@ class _PnoSecondsFrameProvider:
             self._window_cache[cache_key] = local_copy
             return local_copy
 
-        seconds_frame = self._preparer.load_symbol_data_range(
+        seconds_frame = self._runtime_preparer.load_symbol_data_range(
             symbol,
             Timeframe.S1,
             start_timestamp_ms=int(start_timestamp_ms),
             end_timestamp_ms=int(end_timestamp_ms),
         )
+        if self._persistent_cache_dir != self._runtime_cache_dir:
+            persistent_seconds_frame = self._persistent_preparer.load_symbol_data_range(
+                symbol,
+                Timeframe.S1,
+                start_timestamp_ms=int(start_timestamp_ms),
+                end_timestamp_ms=int(end_timestamp_ms),
+            )
+            if not persistent_seconds_frame.empty:
+                seconds_frame = (
+                    pd.concat([seconds_frame, persistent_seconds_frame], ignore_index=True)
+                    .drop_duplicates(subset=["timestamp"], keep="last")
+                    .sort_values("timestamp")
+                    .reset_index(drop=True)
+                )
+        if self._frame_covers_window(
+            seconds_frame,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+        ):
+            self._window_cache[cache_key] = seconds_frame.copy()
+            self._shared_window_cache[cache_key] = seconds_frame.copy()
+            return seconds_frame
         fetched_parts: list[pd.DataFrame] = []
         for utc_day in self._iter_utc_days(
             start_timestamp_ms=int(start_timestamp_ms),
@@ -130,6 +166,23 @@ class _PnoSecondsFrameProvider:
         self._window_cache[cache_key] = seconds_frame.copy()
         self._shared_window_cache[cache_key] = seconds_frame.copy()
         return seconds_frame
+
+    @staticmethod
+    def _frame_covers_window(
+        frame: pd.DataFrame,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> bool:
+        if frame.empty:
+            return False
+        clipped = frame.loc[
+            (frame["timestamp"] >= int(start_timestamp_ms))
+            & (frame["timestamp"] <= int(end_timestamp_ms)),
+            ["timestamp"],
+        ].drop_duplicates()
+        expected_points = ((int(end_timestamp_ms) - int(start_timestamp_ms)) // 1_000) + 1
+        return len(clipped) >= expected_points
 
     @staticmethod
     def _iter_utc_days(
