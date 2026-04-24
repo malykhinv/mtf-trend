@@ -6,7 +6,7 @@ from dataclasses import replace
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 import io
-from typing import Any
+from typing import Any, ClassVar
 import zipfile
 
 import pandas as pd
@@ -36,6 +36,8 @@ from vectorbt_runner.data_preparer import DataPreparer
 @dataclass
 class _PnoSecondsFrameProvider:
     cache_dir: Path
+    _shared_window_cache: ClassVar[dict[tuple[str, int, int], pd.DataFrame]] = {}
+    _shared_day_cache: ClassVar[dict[tuple[str, str], pd.DataFrame]] = {}
 
     def __post_init__(self) -> None:
         self._preparer = DataPreparer(self.cache_dir)
@@ -75,6 +77,11 @@ class _PnoSecondsFrameProvider:
         cached = self._window_cache.get(cache_key)
         if cached is not None:
             return cached
+        shared_cached = self._shared_window_cache.get(cache_key)
+        if shared_cached is not None:
+            local_copy = shared_cached.copy()
+            self._window_cache[cache_key] = local_copy
+            return local_copy
 
         seconds_frame = self._preparer.load_symbol_data_range(
             symbol,
@@ -90,8 +97,13 @@ class _PnoSecondsFrameProvider:
             day_key = (symbol, utc_day.isoformat())
             day_frame = self._day_cache.get(day_key)
             if day_frame is None:
+                day_frame = self._shared_day_cache.get(day_key)
+            if day_frame is None:
                 day_frame = self._fetch_seconds_for_day(symbol=symbol, utc_day=utc_day)
                 self._day_cache[day_key] = day_frame
+                self._shared_day_cache[day_key] = day_frame.copy()
+            else:
+                self._day_cache[day_key] = day_frame.copy()
             if day_frame.empty:
                 continue
             day_slice = day_frame.loc[
@@ -115,7 +127,8 @@ class _PnoSecondsFrameProvider:
                 .sort_values("timestamp")
                 .reset_index(drop=True)
             )
-        self._window_cache[cache_key] = seconds_frame
+        self._window_cache[cache_key] = seconds_frame.copy()
+        self._shared_window_cache[cache_key] = seconds_frame.copy()
         return seconds_frame
 
     @staticmethod
