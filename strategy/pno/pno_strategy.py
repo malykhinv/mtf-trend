@@ -126,6 +126,7 @@ class _PnoSecondsFrameProvider:
             self._shared_window_cache[cache_key] = seconds_frame.copy()
             return seconds_frame
         fetched_parts: list[pd.DataFrame] = []
+        newly_fetched_day_parts: list[pd.DataFrame] = []
         for utc_day in self._iter_utc_days(
             start_timestamp_ms=int(start_timestamp_ms),
             end_timestamp_ms=int(end_timestamp_ms),
@@ -138,6 +139,8 @@ class _PnoSecondsFrameProvider:
                 day_frame = self._fetch_seconds_for_day(symbol=symbol, utc_day=utc_day)
                 self._day_cache[day_key] = day_frame
                 self._shared_day_cache[day_key] = day_frame.copy()
+                if not day_frame.empty:
+                    newly_fetched_day_parts.append(day_frame.copy())
             else:
                 self._day_cache[day_key] = day_frame.copy()
             if day_frame.empty:
@@ -156,13 +159,20 @@ class _PnoSecondsFrameProvider:
                 .sort_values("timestamp")
                 .reset_index(drop=True)
             )
-            self._storage.save_incremental(symbol, Timeframe.S1, fetched)
             seconds_frame = (
                 pd.concat([seconds_frame, fetched], ignore_index=True)
                 .drop_duplicates(subset=["timestamp"], keep="last")
                 .sort_values("timestamp")
                 .reset_index(drop=True)
             )
+        if newly_fetched_day_parts:
+            newly_fetched = (
+                pd.concat(newly_fetched_day_parts, ignore_index=True)
+                .drop_duplicates(subset=["timestamp"], keep="last")
+                .sort_values("timestamp")
+                .reset_index(drop=True)
+            )
+            self._storage.save_incremental(symbol, Timeframe.S1, newly_fetched)
         self._window_cache[cache_key] = seconds_frame.copy()
         self._shared_window_cache[cache_key] = seconds_frame.copy()
         return seconds_frame
