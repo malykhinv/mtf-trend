@@ -88,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="PNO category runtime mode: all, core only, or discovery only",
     )
     run_bt.add_argument(
+        "--pno-all-tf-pairs",
+        action="store_true",
+        help="Run all supported PNO backtest timeframe pairs in one command and save each pair into its own subdirectory",
+    )
+    run_bt.add_argument(
         "--pno-stage",
         type=_positive_int_for("--pno-stage"),
         default=None,

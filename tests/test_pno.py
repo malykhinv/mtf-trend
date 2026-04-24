@@ -3382,6 +3382,81 @@ def test_build_parser_accepts_pno_category_mode() -> None:
     assert args.pno_category_mode == "discovery"
 
 
+def test_build_parser_accepts_pno_all_tf_pairs() -> None:
+    parser = build_parser()
+
+    args = parser.parse_args(["run-backtest", "--strategy", "pno", "--pno-all-tf-pairs"])
+
+    assert args.command == "run-backtest"
+    assert args.pno_all_tf_pairs is True
+
+
+def test_run_backtest_pno_all_tf_pairs_saves_each_pair_into_own_subdir(tmp_path, monkeypatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    def _fake_run_backtest_inner(scoped_config, scoped_args):
+        captured.append(
+            {
+                "results_dir": Path(scoped_config.backtest.results_dir),
+                "run_root": Path(scoped_args.backtest_run_root_dir),
+                "levels_tf": scoped_args.levels_tf,
+                "entry_tf": scoped_args.entry_tf,
+            }
+        )
+        return 0
+
+    monkeypatch.setattr(commands, "_run_backtest_inner", _fake_run_backtest_inner)
+
+    config = AppConfig(
+        fetch=FetchConfig(binance_api_key="", binance_secret_key=""),
+        strategy=StrategyConfig(strategy_id="pno"),
+        simulation=SimulationConfig(),
+        backtest=BacktestConfig(
+            log_level="INFO",
+            cache_dir=tmp_path / "cache",
+            logs_dir=tmp_path / "logs",
+            results_dir=tmp_path / "results",
+            results_file_name="results.csv",
+            retry_attempts=1,
+            retry_backoff_seconds=0.0,
+        ),
+    )
+
+    exit_code = commands.run_backtest(
+        config,
+        argparse.Namespace(
+            strategy="pno",
+            plot_from_results=False,
+            plot=False,
+            symbols=None,
+            levels_tf=None,
+            entry_tf=None,
+            top_n=None,
+            days=15,
+            end_timestamp_ms=None,
+            pno_deposit=10_000.0,
+            pno_risk_pct=0.05,
+            pno_entry_confirmation_mode="close_above",
+            pno_category_mode="discovery",
+            pno_all_tf_pairs=True,
+            pno_stage=None,
+            pno_through_stage=None,
+            light_run=False,
+            results_input=None,
+            id=None,
+        ),
+    )
+
+    assert exit_code == 0
+    assert len(captured) == len(PNO_BACKTEST_TIMEFRAME_PAIRS)
+    assert [(item["levels_tf"], item["entry_tf"]) for item in captured] == [
+        (levels_tf.value, entry_tf.value) for levels_tf, entry_tf in PNO_BACKTEST_TIMEFRAME_PAIRS
+    ]
+    pair_dirs = [item["run_root"].name for item in captured]
+    assert pair_dirs == [f"{levels_tf.value}_{entry_tf.value}" for levels_tf, entry_tf in PNO_BACKTEST_TIMEFRAME_PAIRS]
+    assert all(item["results_dir"] == item["run_root"] for item in captured)
+
+
 def test_select_pno_plot_params_row_by_stage_falls_back_to_rejections() -> None:
     frame = pd.DataFrame(
         {

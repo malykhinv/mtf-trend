@@ -3254,6 +3254,17 @@ def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
     )
     run_root_dir = _resolve_backtest_run_root_dir(config.backtest.results_dir, strategy_id)
     run_root_dir.mkdir(parents=True, exist_ok=True)
+    if strategy_id == "pno" and bool(getattr(args, "pno_all_tf_pairs", False)):
+        return _run_with_logging(
+            "run-backtest",
+            config,
+            lambda: _run_backtest_all_pno_timeframe_pairs(
+                config=config,
+                args=args,
+                strategy_id=strategy_id,
+                run_root_dir=run_root_dir,
+            ),
+        )
     scoped_config = replace(
         config,
         strategy=replace(config.strategy),
@@ -3262,6 +3273,34 @@ def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
     scoped_args = argparse.Namespace(**vars(args))
     scoped_args.backtest_run_root_dir = str(run_root_dir)
     return _run_with_logging("run-backtest", scoped_config, lambda: _run_backtest_inner(scoped_config, scoped_args))
+
+
+def _run_backtest_all_pno_timeframe_pairs(
+    *,
+    config: AppConfig,
+    args: argparse.Namespace,
+    strategy_id: str,
+    run_root_dir: Path,
+) -> int:
+    if str(strategy_id).strip().lower() != "pno":
+        raise ValueError("multi-timeframe backtest run is supported only for PNO")
+
+    exit_codes: list[int] = []
+    for levels_timeframe, entry_timeframe in PNO_BACKTEST_TIMEFRAME_PAIRS:
+        pair_label = f"{levels_timeframe.value}_{entry_timeframe.value}"
+        pair_root_dir = run_root_dir / pair_label
+        pair_root_dir.mkdir(parents=True, exist_ok=True)
+        scoped_config = replace(
+            config,
+            strategy=replace(config.strategy),
+            backtest=replace(config.backtest, results_dir=pair_root_dir),
+        )
+        scoped_args = argparse.Namespace(**vars(args))
+        scoped_args.levels_tf = levels_timeframe.value
+        scoped_args.entry_tf = entry_timeframe.value
+        scoped_args.backtest_run_root_dir = str(pair_root_dir)
+        exit_codes.append(_run_backtest_inner(scoped_config, scoped_args))
+    return max(exit_codes, default=0)
 
 
 def plot_backtest(config: AppConfig, args: argparse.Namespace) -> int:
