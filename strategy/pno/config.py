@@ -46,15 +46,15 @@ class PnoParams:
     pno_risk_pct: float = PNO_DEFAULT_RISK_PCT
     pno_r_trade: float | None = None
     fee_rate: float = DEFAULT_COMMISSION_RATE
-    min_data_5m: int = 200
+    min_data_5m: int = 300
     min_data_1m: int = 60
     stage1_pump_min_bars: int = 1
     stage1_pump_max_bars: int = 4
     stage1_pullback_min_bars: int = 1
-    stage1_pullback_max_bars: int = 3
-    stage1_pullback_low_min_pump_fraction: float = 0.40
+    stage1_pullback_max_bars: int = 9
+    stage1_pullback_low_min_pump_fraction: float = 0.50
     stage1_level_max_pullback_reclaim_fraction: float = 0.60
-    stage1_fetch_post_bars: int = 3
+    stage1_fetch_post_bars: int = 9
     min_stage1_leg_v1: float = 1.0
     min_stage1_leg_v5_fraction: float = 0.5
     stage1_hold_fraction: float = 0.55
@@ -68,9 +68,17 @@ class PnoParams:
     pullback_max_age_bars: int = 12
     structure_reversal_min_v1_fraction: float = 0.35
     structure_reversal_min_body_fraction: float = 0.20
+    structure_pivot_merge_v1_fraction: float = 0.0
+    structure_min_swing_vs_previous_avg: float = 0.50
+    structure_min_leg_v1_fraction: float = 0.50
+    structure_min_leg_bars: int = 1
+    structure_terminal_retrace_fraction: float = 0.50
     structure_break_min_close_v1_fraction: float = 0.05
     structure_break_min_close_position: float = 0.55
     structure_max_breakout_extension_fraction: float = 0.92
+    structure_min_descending_pivots: int = 4
+    pullback_min_trade_activity_vs_sleep: float = 3.0
+    pullback_min_quote_volume_vs_sleep: float = 3.0
     stage3_max_post_high_wick_share: float = 0.72
     stage3_max_post_high_body_overlap_rate: float = 0.65
     stage3_max_post_high_chop_alternation_rate: float = 0.55
@@ -99,8 +107,15 @@ class PnoParams:
     stage1_barcode_tr_price_fraction: float = 0.0010
     stage1_min_impulse_atr_pre: float = 1.5
     stage1_min_peak_bar_tr_atr_pre: float = 1.1
-    stage1_min_volume_ratio_start: float = 3.0
-    stage1_min_volume_ratio_continue: float = 1.05
+    stage1_min_volume_ratio_start: float = 10.0
+    stage1_min_trade_ratio_start: float = 10.0
+    stage1_min_volume_ratio_continue: float = 3.0
+    stage1_min_trade_ratio_continue: float = 3.0
+    stage1_flow_hold_bars: int = 2
+    stage1_flow_hold_window_bars: int = 4
+    stage1_flow_hold_min_start_fraction: float = 0.35
+    stage1_active_context_min_start_fraction: float = 0.35
+    stage1_active_context_min_baseline_ratio: float = 3.0
     stage1_min_path_efficiency: float = 0.18
     stage1_max_wick_share: float = 0.68
     stage1_min_body_share_mean: float = 0.18
@@ -131,7 +146,7 @@ class PnoParams:
     min_tick_fraction: float = 0.0001
     max_entry_pullback_fraction: float = 0.58
     min_entry_rr: float = 1.0
-    max_htf_bars_since_active_high: int = 6
+    max_htf_bars_since_active_high: int = 10
     close_above_max_entry_pos: float = 0.70
     close_above_min_entry_pos: float = 0.24
     close_above_max_pullback_fraction_of_leg: float = 1.0
@@ -148,8 +163,8 @@ class PnoParams:
     close_above_min_signal_close_position_in_chop: float = 0.25
     close_above_choppy_overlap_threshold: float = 0.95
     tp1_share: float = 0.50
-    be_arm_to_active_high_fraction: float = 0.50
-    close_above_be_start_fraction: float = 0.70
+    be_arm_to_active_high_fraction: float = 0.80
+    close_above_be_start_fraction: float = 0.80
     close_above_be_step_fraction: float = 0.05
     close_above_be_step_bars: int = 1
     close_above_be_min_fraction: float = 0.25
@@ -203,8 +218,8 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError(
             f"pno supports only entry_confirmation_mode in {{{supported}}}, got {params.entry_confirmation_mode}"
         )
-    if params.min_data_5m < 200:
-        raise ValueError("min_data_5m must be >= 200")
+    if params.min_data_5m < 300:
+        raise ValueError("min_data_5m must be >= 300")
     if params.min_data_1m < 60:
         raise ValueError("min_data_1m must be >= 60")
     if params.stage1_pump_min_bars < 1 or params.stage1_pump_max_bars < params.stage1_pump_min_bars:
@@ -251,12 +266,28 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("structure_reversal_min_v1_fraction must be > 0")
     if not 0.0 <= params.structure_reversal_min_body_fraction <= 1.0:
         raise ValueError("structure_reversal_min_body_fraction must be in range [0, 1]")
+    if params.structure_pivot_merge_v1_fraction < 0.0:
+        raise ValueError("structure_pivot_merge_v1_fraction must be >= 0")
+    if params.structure_min_swing_vs_previous_avg < 0.0:
+        raise ValueError("structure_min_swing_vs_previous_avg must be >= 0")
+    if params.structure_min_leg_v1_fraction < 0.0:
+        raise ValueError("structure_min_leg_v1_fraction must be >= 0")
+    if params.structure_min_leg_bars < 1:
+        raise ValueError("structure_min_leg_bars must be >= 1")
+    if not 0.0 < params.structure_terminal_retrace_fraction <= 1.0:
+        raise ValueError("structure_terminal_retrace_fraction must be in range (0, 1]")
     if params.structure_break_min_close_v1_fraction < 0.0:
         raise ValueError("structure_break_min_close_v1_fraction must be >= 0")
     if not 0.0 <= params.structure_break_min_close_position <= 1.0:
         raise ValueError("structure_break_min_close_position must be in range [0, 1]")
     if not 0.0 < params.structure_max_breakout_extension_fraction <= 1.0:
         raise ValueError("structure_max_breakout_extension_fraction must be in range (0, 1]")
+    if params.structure_min_descending_pivots < 4:
+        raise ValueError("structure_min_descending_pivots must be >= 4")
+    if params.pullback_min_trade_activity_vs_sleep <= 0.0:
+        raise ValueError("pullback_min_trade_activity_vs_sleep must be > 0")
+    if params.pullback_min_quote_volume_vs_sleep <= 0.0:
+        raise ValueError("pullback_min_quote_volume_vs_sleep must be > 0")
     if not 0.0 <= params.stage3_max_post_high_wick_share <= 1.0:
         raise ValueError("stage3_max_post_high_wick_share must be in range [0, 1]")
     if not 0.0 <= params.stage3_max_post_high_body_overlap_rate <= 1.0:
@@ -303,8 +334,22 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("stage1_min_peak_bar_tr_atr_pre must be > 0")
     if params.stage1_min_volume_ratio_start <= 0.0:
         raise ValueError("stage1_min_volume_ratio_start must be > 0")
+    if params.stage1_min_trade_ratio_start <= 0.0:
+        raise ValueError("stage1_min_trade_ratio_start must be > 0")
     if params.stage1_min_volume_ratio_continue <= 0.0:
         raise ValueError("stage1_min_volume_ratio_continue must be > 0")
+    if params.stage1_min_trade_ratio_continue <= 0.0:
+        raise ValueError("stage1_min_trade_ratio_continue must be > 0")
+    if params.stage1_flow_hold_bars < 1:
+        raise ValueError("stage1_flow_hold_bars must be >= 1")
+    if params.stage1_flow_hold_window_bars < params.stage1_flow_hold_bars:
+        raise ValueError("stage1_flow_hold_window_bars must be >= stage1_flow_hold_bars")
+    if not 0.0 < params.stage1_flow_hold_min_start_fraction <= 1.0:
+        raise ValueError("stage1_flow_hold_min_start_fraction must be in range (0, 1]")
+    if not 0.0 < params.stage1_active_context_min_start_fraction <= 1.0:
+        raise ValueError("stage1_active_context_min_start_fraction must be in range (0, 1]")
+    if params.stage1_active_context_min_baseline_ratio <= 0.0:
+        raise ValueError("stage1_active_context_min_baseline_ratio must be > 0")
     if not 0.0 < params.stage1_min_path_efficiency <= 1.0:
         raise ValueError("stage1_min_path_efficiency must be in range (0, 1]")
     if not 0.0 <= params.stage1_max_wick_share < 1.0:
@@ -520,7 +565,6 @@ def resolve_pno_category_profiles(
         pno_variant_id=f"{params.pno_variant_id}__cat_d_category_4",
         stage1_min_cumulative_quote_volume=min(float(params.stage1_min_cumulative_quote_volume), 80_000.0),
         stage1_min_impulse_atr_pre=min(float(params.stage1_min_impulse_atr_pre), 0.55),
-        stage1_min_volume_ratio_start=min(float(params.stage1_min_volume_ratio_start), 2.0),
         stage1_pre_pump_ema_crosses_min=min(int(params.stage1_pre_pump_ema_crosses_min), 0),
         stage1_min_body_wick_edge=min(float(params.stage1_min_body_wick_edge), -0.18),
         stage1_max_active_high_upper_wick_share=max(float(params.stage1_max_active_high_upper_wick_share), 0.92),
@@ -567,8 +611,14 @@ def resolve_pno_category_profiles(
         params=category4_params,
     )
 
+    discovery_profile = PnoCategoryProfile(
+        category_id="discovery",
+        label="discovery",
+        priority=1,
+        params=params,
+    )
     if category_mode == "discovery":
-        return (category3_profile, category4_profile)
+        return (discovery_profile,)
     return (core_profile, category2_profile, category3_profile)
 
 

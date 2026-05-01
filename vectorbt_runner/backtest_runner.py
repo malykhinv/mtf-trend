@@ -127,6 +127,15 @@ class BacktestRunner:
             metrics["ppa_setup_lsb_count"] = int(setup_counts.get("LSB", BACKTEST_ZERO_COUNT))
             metrics["ppa_setup_mbb_count"] = int(setup_counts.get("MBB", BACKTEST_ZERO_COUNT))
 
+        runner_final_counts = Counter(
+            str(metadata["runner_final_classification"])
+            for metadata in metadata_rows
+            if metadata.get("runner_final_classification") is not None
+        )
+        metrics["ppa_runner_success_above_tp1_count"] = int(runner_final_counts.get("success_above_tp1", BACKTEST_ZERO_COUNT))
+        metrics["ppa_runner_be_below_tp1_count"] = int(runner_final_counts.get("be_below_tp1", BACKTEST_ZERO_COUNT))
+        metrics["ppa_runner_loss_below_entry_count"] = int(runner_final_counts.get("loss_below_entry", BACKTEST_ZERO_COUNT))
+
         numeric_keys = (
             "entry_range_fraction",
             "aggression_ratio",
@@ -194,6 +203,9 @@ class BacktestRunner:
                 "time_exit_profit_count": BACKTEST_ZERO_COUNT,
                 "tp1_be_count": BACKTEST_ZERO_COUNT,
                 "tp2_count": BACKTEST_ZERO_COUNT,
+                "ppa_runner_success_above_tp1_count": BACKTEST_ZERO_COUNT,
+                "ppa_runner_be_below_tp1_count": BACKTEST_ZERO_COUNT,
+                "ppa_runner_loss_below_entry_count": BACKTEST_ZERO_COUNT,
             }
 
         profits = BACKTEST_EMPTY_PNL_PERCENT

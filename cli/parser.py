@@ -104,11 +104,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Export cumulative PNO logical stages 1..N in diagnostics (1..5)",
     )
-    run_bt.add_argument("--plot", default=False, help="Save diagnostic files for the best combination (true/false)")
+    run_bt.add_argument(
+        "--plot-rejected",
+        default=None,
+        help="Export PNO rejected stage-review artifacts when plotting (true/false)",
+    )
+    run_bt.add_argument(
+        "--collect-diagnostics",
+        default=None,
+        help="Collect full PNO diagnostics during the backtest pass (true/false)",
+    )
+    run_bt.add_argument("--plot", default=None, help="Deprecated alias for --plot-rejected (true/false)")
     run_bt.add_argument(
         "--light-run",
-        default=False,
-        help="Fast mode: skip diagnostics collection and save only trade charts when plot=true (true/false)",
+        default=None,
+        help="Deprecated inverse alias for --collect-diagnostics (true/false)",
     )
     run_bt.add_argument("--plot-from-results", action="store_true", help="Build diagnostics from results.csv without a full backtest")
     run_bt.add_argument("--results-input", default=None, help="Path to CSV with results for --plot-from-results")

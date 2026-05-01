@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TypedDict
@@ -147,7 +148,13 @@ class Stage1Context:
     pump_impulse_atr_pre: float = 0.0
     pump_peak_bar_tr_atr_pre: float = 0.0
     pump_volume_ratio_start: float = 0.0
+    pump_trade_ratio_start: float = 0.0
     pump_volume_ratio_continue: float = 0.0
+    pump_trade_ratio_continue: float = 0.0
+    flow_hold_bar_count: int = 0
+    flow_hold_required_bars: int = 0
+    active_context_quote_fraction: float = 0.0
+    active_context_trade_fraction: float = 0.0
     pump_path_efficiency: float = 0.0
     pump_wick_share: float = 0.0
     pump_body_share_mean: float = 0.0
@@ -192,6 +199,8 @@ class Stage2Context:
     pullback_low: float
     pullback_depth: float
     pullback_age_bars: int
+    pullback_trade_activity_vs_sleep: float = 0.0
+    pullback_quote_volume_vs_sleep: float = 0.0
     structure_high_idx: int = -1
     structure_high_timestamp: int = 0
     structure_high: float = 0.0
@@ -221,6 +230,7 @@ class Stage3Context:
     post_high_body_overlap_rate: float = 0.0
     post_high_max_red_body_share: float = 0.0
     post_high_chop_alternation_rate: float = 0.0
+    post_high_peak_volume_support_fraction: float = 0.0
     pullback_wick_broke_leg_start: bool = False
     pullback_close_broke_leg_start: bool = False
     structure_high_idx: int = -1
@@ -232,6 +242,31 @@ class Stage3Context:
     structure_break_idx: int = -1
     structure_break_timestamp: int = 0
     structure_break_close: float = 0.0
+    structure_break_trade_activity_vs_prebreak: float = 0.0
+    structure_break_atr_vs_prebreak: float = 0.0
+    structure_break_volume_vs_pump_leg_avg: float = 0.0
+    structure_break_aligns_1m_open: bool = False
+    structure_break_aligns_5m_open: bool = False
+    structure_break_aligns_30m_open: bool = False
+    structure_break_aligns_1h_open: bool = False
+    structure_low_updates_pullback_depth: bool = False
+    structure_low_below_prev_up_leg_midpoint: bool = False
+    structure_low_depth_delta: float = 0.0
+    structure_last_leg_v1: float = 0.0
+    structure_last_leg_vs_prev_median: float = 0.0
+    pullback_absorption_score: float = 0.0
+    pullback_volume_expansion_no_low_update_share: float = 0.0
+    pullback_volume_expansion_no_low_update_count: int = 0
+    buy_pressure_recovery: float = 0.0
+    buy_pressure_break: float = 0.0
+    buy_pressure_pullback_avg: float = 0.0
+    low_to_bos_reclaim_bars: int = 0
+    low_to_bos_reclaim_speed_v1_per_bar: float = 0.0
+    pump_pause_zone_density: float = 0.0
+    pump_pause_zone_count: int = 0
+    prebreak_range_compression: float = 0.0
+    pullback_trade_activity_vs_sleep: float = 0.0
+    pullback_quote_volume_vs_sleep: float = 0.0
     structure_pivot_indices: tuple[int, ...] = ()
     structure_pivot_prices: tuple[float, ...] = ()
     structure_pivot_kinds: tuple[str, ...] = ()
@@ -336,7 +371,7 @@ class GenerationDiagnostics(TypedDict, total=False):
 class PnoEngine:
     REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
     _EPSILON = 1e-12
-    _STAGE1_CACHE_VERSION = 3
+    _STAGE1_CACHE_VERSION = 30
 
     def __init__(self, *, cache_dir: str | Path | None = None) -> None:
         self._last_generation_diagnostics = self._empty_diagnostics()
@@ -428,20 +463,41 @@ class PnoEngine:
     ) -> dict[str, int | float | str]:
         levels_timestamps = pd.to_numeric(levels_frame["timestamp"], errors="coerce").dropna().astype("int64")
         entry_timestamps = pd.to_numeric(entry_frame["timestamp"], errors="coerce").dropna().astype("int64")
+        source_entry_timeframe_ms = self._infer_timeframe_ms(entry_frame) or int(entry_timeframe_ms)
         return {
             "version": self._STAGE1_CACHE_VERSION,
             "symbol": str(params.symbol),
             "levels_timeframe_ms": int(levels_timeframe_ms),
             "entry_timeframe_ms": int(entry_timeframe_ms),
+            "source_entry_timeframe_ms": int(source_entry_timeframe_ms),
             "levels_rows": int(len(levels_frame)),
             "entry_rows": int(len(entry_frame)),
             "levels_start_ts": int(levels_timestamps.iloc[0]) if not levels_timestamps.empty else -1,
             "levels_end_ts": int(levels_timestamps.iloc[-1]) if not levels_timestamps.empty else -1,
             "entry_start_ts": int(entry_timestamps.iloc[0]) if not entry_timestamps.empty else -1,
             "entry_end_ts": int(entry_timestamps.iloc[-1]) if not entry_timestamps.empty else -1,
+            "pno_variant_id": str(params.pno_variant_id),
             "stage1_min_pump_pct": float(params.stage1_min_pump_pct),
             "stage1_min_pretrend_range_ratio_2h": float(params.stage1_min_pretrend_range_ratio_2h),
+            "stage1_min_impulse_atr_pre": float(params.stage1_min_impulse_atr_pre),
+            "stage1_min_peak_bar_tr_atr_pre": float(params.stage1_min_peak_bar_tr_atr_pre),
             "stage1_min_volume_ratio_start": float(params.stage1_min_volume_ratio_start),
+            "stage1_min_trade_ratio_start": float(params.stage1_min_trade_ratio_start),
+            "stage1_min_volume_ratio_continue": float(params.stage1_min_volume_ratio_continue),
+            "stage1_min_trade_ratio_continue": float(params.stage1_min_trade_ratio_continue),
+            "stage1_flow_hold_bars": int(params.stage1_flow_hold_bars),
+            "stage1_flow_hold_window_bars": int(params.stage1_flow_hold_window_bars),
+            "stage1_flow_hold_min_start_fraction": float(params.stage1_flow_hold_min_start_fraction),
+            "stage1_active_context_min_start_fraction": float(params.stage1_active_context_min_start_fraction),
+            "stage1_active_context_min_baseline_ratio": float(params.stage1_active_context_min_baseline_ratio),
+            "stage1_min_path_efficiency": float(params.stage1_min_path_efficiency),
+            "stage1_max_wick_share": float(params.stage1_max_wick_share),
+            "stage1_min_body_share_mean": float(params.stage1_min_body_share_mean),
+            "stage1_min_body_wick_edge": float(params.stage1_min_body_wick_edge),
+            "stage1_max_micro_flat_bar_share": float(params.stage1_max_micro_flat_bar_share),
+            "stage1_max_active_high_upper_wick_share": float(params.stage1_max_active_high_upper_wick_share),
+            "stage1_max_counterflow_ratio_5m": float(params.stage1_max_counterflow_ratio_5m),
+            "ideal_like_impulse_enabled": int(bool(params.ideal_like_impulse_enabled)),
         }
 
     @staticmethod
@@ -524,9 +580,9 @@ class PnoEngine:
         levels_frame: pd.DataFrame,
         params: PnoParams,
         levels_timeframe_ms: int,
-    ) -> int:
+    ) -> tuple[int, dict[str, object] | None]:
         if levels_frame.empty:
-            return 0
+            return 0, None
 
         five = levels_frame.reset_index(drop=True)
         highs = pd.to_numeric(five["high"], errors="coerce")
@@ -534,28 +590,26 @@ class PnoEngine:
         closes = pd.to_numeric(five["close"], errors="coerce")
         volumes = pd.to_numeric(five["volume"], errors="coerce")
         if highs.empty or lows.empty or closes.empty or volumes.empty:
-            return 0
+            return 0, None
 
-        prev_close = closes.shift(1).fillna(closes)
-        tr = pd.concat(
-            [
-                highs - lows,
-                (highs - prev_close).abs(),
-                (lows - prev_close).abs(),
-            ],
-            axis=1,
-        ).max(axis=1)
-        ema9 = closes.ewm(span=9, adjust=False).mean()
-        ema20 = closes.ewm(span=20, adjust=False).mean()
         quote_volume = closes * volumes
-        short_window = self._bars_for_duration(levels_timeframe_ms, 15 * 60_000)
-        baseline_window = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+        trade_activity = next(
+            (
+                pd.to_numeric(five[column], errors="coerce")
+                for column in ("number_of_trades", "trades", "trade_count")
+                if column in five.columns
+            ),
+            volumes,
+        )
+        baseline_window = self._bars_for_duration(levels_timeframe_ms, 24 * 60 * 60_000)
         pretrend_1h_bars = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
         pretrend_2h_bars = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
         pump_window = max(pretrend_2h_bars, self._bars_for_duration(levels_timeframe_ms, 30 * 60_000))
+        stage1_flow_hold_bars = self._scale_5m_stage_bars(int(params.stage1_flow_hold_bars), levels_timeframe_ms)
+        stage1_flow_hold_window_bars = self._scale_5m_stage_bars(int(params.stage1_flow_hold_window_bars), levels_timeframe_ms)
 
-        r3_quote = quote_volume.rolling(window=short_window, min_periods=short_window).median()
-        b24_quote = quote_volume.shift(short_window).rolling(window=baseline_window, min_periods=baseline_window).median()
+        pre_quote = quote_volume.shift(1).rolling(window=baseline_window, min_periods=baseline_window).median()
+        pre_trade = trade_activity.shift(1).rolling(window=baseline_window, min_periods=baseline_window).median()
         rolling_peak = highs.rolling(window=pump_window, min_periods=1).max()
         rolling_base = lows.rolling(window=pump_window, min_periods=1).min()
         pump_range = rolling_peak - rolling_base
@@ -566,27 +620,169 @@ class PnoEngine:
         pre_max_2h = highs.shift(1).rolling(window=pretrend_2h_bars, min_periods=1).max()
         pre_min_2h = lows.shift(1).rolling(window=pretrend_2h_bars, min_periods=1).min()
         pre_range_2h = pre_max_2h - pre_min_2h
-        quote_expansion = r3_quote / b24_quote.replace(0.0, np.nan)
-        trend_ok = closes.gt(ema20) & ema9.gt(ema20)
+        quote_expansion = quote_volume / pre_quote.replace(0.0, np.nan)
+        trade_expansion = trade_activity / pre_trade.replace(0.0, np.nan)
         pretrend_ratio_2h = pump_range / pre_range_2h.replace(0.0, np.nan)
-
-        candidate_mask = (
-            trend_ok.fillna(False)
-            & quote_expansion.ge(float(params.stage1_min_volume_ratio_start)).fillna(False)
-            & pump_pct.ge(float(params.stage1_min_pump_pct)).fillna(False)
-            & pump_range.gt(pre_range_1h).fillna(False)
-            & pretrend_ratio_2h.ge(float(params.stage1_min_pretrend_range_ratio_2h)).fillna(False)
-        )
-        if bool(getattr(params, "ideal_like_impulse_enabled", False)):
-            ideal_like_candidate_mask = (
-                trend_ok.fillna(False)
-                & quote_expansion.ge(max(float(params.stage1_min_volume_ratio_start), 3.0)).fillna(False)
-                & pump_pct.ge(max(float(params.stage1_min_pump_pct), 0.10)).fillna(False)
-                & pump_range.ge(pre_range_1h.mul(0.70)).fillna(False)
-                & pretrend_ratio_2h.ge(max(float(params.stage1_min_pretrend_range_ratio_2h) * 0.60, 1.20)).fillna(False)
+        quote_values = quote_volume.to_numpy(dtype=np.float64)
+        trade_values = trade_activity.to_numpy(dtype=np.float64)
+        pre_quote_values = pre_quote.to_numpy(dtype=np.float64)
+        pre_trade_values = pre_trade.to_numpy(dtype=np.float64)
+        highs_values = highs.to_numpy(dtype=np.float64)
+        lows_values = lows.to_numpy(dtype=np.float64)
+        flow_step_candidate_count = 0
+        for anchor_idx in range(1, len(five)):
+            baseline_quote = float(pre_quote_values[anchor_idx])
+            baseline_trade = float(pre_trade_values[anchor_idx])
+            anchor_quote = float(quote_values[anchor_idx])
+            anchor_trade = float(trade_values[anchor_idx])
+            if (
+                not np.isfinite(baseline_quote)
+                or not np.isfinite(baseline_trade)
+                or baseline_quote <= 0.0
+                or baseline_trade <= 0.0
+            ):
+                continue
+            if (
+                self._safe_divide(anchor_quote, baseline_quote) < float(params.stage1_min_volume_ratio_start)
+                or self._safe_divide(anchor_trade, baseline_trade) < float(params.stage1_min_trade_ratio_start)
+            ):
+                continue
+            step_end_idx = min(anchor_idx + stage1_flow_hold_window_bars, len(five) - 1)
+            if step_end_idx < anchor_idx + stage1_flow_hold_bars:
+                continue
+            step_quotes = quote_values[anchor_idx : step_end_idx + 1]
+            step_trades = trade_values[anchor_idx : step_end_idx + 1]
+            step_quote_threshold = max(
+                float(params.stage1_flow_hold_min_start_fraction) * anchor_quote,
+                float(params.stage1_min_volume_ratio_continue) * baseline_quote,
             )
-            candidate_mask = candidate_mask | ideal_like_candidate_mask
-        return int(candidate_mask.sum())
+            step_trade_threshold = max(
+                float(params.stage1_flow_hold_min_start_fraction) * anchor_trade,
+                float(params.stage1_min_trade_ratio_continue) * baseline_trade,
+            )
+            strong_quote_threshold = float(params.stage1_min_volume_ratio_start) * baseline_quote
+            strong_trade_threshold = float(params.stage1_min_trade_ratio_start) * baseline_trade
+            step_mask = (
+                ((step_quotes >= step_quote_threshold) & (step_trades >= step_trade_threshold))
+                | ((step_quotes >= strong_quote_threshold) & (step_trades >= strong_trade_threshold))
+            )
+            initial_run = 0
+            for is_elevated in step_mask.tolist():
+                if not is_elevated:
+                    break
+                initial_run += 1
+            if initial_run < (stage1_flow_hold_bars + 1) or float(np.mean(step_mask)) < 0.75:
+                continue
+            pre_window_bars = min(24, anchor_idx)
+            pre_start_idx = max(0, anchor_idx - pre_window_bars)
+            pre_quotes = quote_values[pre_start_idx:anchor_idx]
+            pre_trades = trade_values[pre_start_idx:anchor_idx]
+            if pre_quotes.size > 0 and pre_trades.size > 0:
+                pre_mask = (
+                    (pre_quotes >= (float(params.stage1_min_volume_ratio_continue) * baseline_quote))
+                    & (pre_trades >= (float(params.stage1_min_trade_ratio_continue) * baseline_trade))
+                )
+                pre_elevated_share = float(np.mean(pre_mask))
+                pre_max_run = 0
+                current_pre_run = 0
+                for is_elevated in pre_mask.tolist():
+                    if is_elevated:
+                        current_pre_run += 1
+                        pre_max_run = max(pre_max_run, current_pre_run)
+                    else:
+                        current_pre_run = 0
+                step_median_quote = float(np.nanmedian(step_quotes))
+                step_median_trade = float(np.nanmedian(step_trades))
+                if (
+                    pre_elevated_share > 0.25
+                    or pre_max_run > 2
+                    or self._safe_divide(float(np.nanmax(pre_quotes)), step_median_quote) > 1.8
+                    or self._safe_divide(float(np.nanmax(pre_trades)), step_median_trade) > 1.8
+                ):
+                    continue
+            step_low = float(np.nanmin(lows_values[anchor_idx : step_end_idx + 1]))
+            step_high = float(np.nanmax(highs_values[anchor_idx : step_end_idx + 1]))
+            step_pct = self._safe_divide(step_high - step_low, step_low)
+            if step_pct < float(params.stage1_min_pump_pct):
+                continue
+            pre_price_high = float(np.nanmax(highs_values[pre_start_idx:anchor_idx])) if anchor_idx > pre_start_idx else np.nan
+            pre_price_low = float(np.nanmin(lows_values[pre_start_idx:anchor_idx])) if anchor_idx > pre_start_idx else np.nan
+            pre_price_range = pre_price_high - pre_price_low
+            step_price_range = step_high - step_low
+            if np.isfinite(pre_price_range) and pre_price_range > self._EPSILON:
+                if self._safe_divide(step_price_range, pre_price_range) < 2.0:
+                    continue
+            flow_step_candidate_count += 1
+        if flow_step_candidate_count > 0:
+            return int(flow_step_candidate_count), None
+
+        timestamps = pd.to_numeric(five["timestamp"], errors="coerce") if "timestamp" in five.columns else pd.Series(dtype="float64")
+        eligible = (
+            pre_quote.gt(0.0).fillna(False)
+            & pre_trade.gt(0.0).fillna(False)
+            & quote_volume.gt(0.0).fillna(False)
+            & trade_activity.gt(0.0).fillna(False)
+        )
+        if not bool(eligible.any()):
+            timestamp_ms = int(timestamps.dropna().iloc[-1]) if not timestamps.dropna().empty else 0
+            return 0, {
+                "reason": "insufficient_24h_flow_baseline",
+                "timestamp_ms": timestamp_ms,
+                "key": (str(params.symbol), "fast_stage1", timestamp_ms),
+                "extra": {
+                    "stage1_min_volume_ratio_start": round(float(params.stage1_min_volume_ratio_start), 4),
+                    "stage1_min_trade_ratio_start": round(float(params.stage1_min_trade_ratio_start), 4),
+                },
+            }
+
+        quote_score = quote_expansion / max(float(params.stage1_min_volume_ratio_start), self._EPSILON)
+        trade_score = trade_expansion / max(float(params.stage1_min_trade_ratio_start), self._EPSILON)
+        flow_score = pd.concat([quote_score, trade_score], axis=1).min(axis=1).where(eligible)
+        best_idx = int(flow_score.idxmax()) if not flow_score.dropna().empty else int(eligible[eligible].index[-1])
+        timestamp_ms = int(timestamps.iloc[best_idx]) if best_idx < len(timestamps) and np.isfinite(timestamps.iloc[best_idx]) else best_idx
+        pump_volume_ratio_start = self._safe_divide(float(quote_volume.iloc[best_idx]), float(pre_quote.iloc[best_idx]))
+        pump_trade_ratio_start = self._safe_divide(float(trade_activity.iloc[best_idx]), float(pre_trade.iloc[best_idx]))
+        if pump_volume_ratio_start < float(params.stage1_min_volume_ratio_start):
+            reason = "volume_ratio_start_too_small"
+        elif pump_trade_ratio_start < float(params.stage1_min_trade_ratio_start):
+            reason = "trade_ratio_start_too_small"
+        elif float(pump_pct.iloc[best_idx]) < float(params.stage1_min_pump_pct):
+            reason = "pump_candidate_too_small"
+        elif float(pump_range.iloc[best_idx]) <= float(pre_range_1h.iloc[best_idx]):
+            reason = "pump_candidate_range_not_expanded"
+        else:
+            reason = "pump_candidate_pretrend_too_weak"
+        return 0, {
+            "reason": reason,
+            "timestamp_ms": timestamp_ms,
+            "key": (str(params.symbol), "fast_stage1", timestamp_ms),
+            "extra": {
+                "pump_volume_ratio_start": round(float(pump_volume_ratio_start), 4),
+                "stage1_min_volume_ratio_start": round(float(params.stage1_min_volume_ratio_start), 4),
+                "pump_trade_ratio_start": round(float(pump_trade_ratio_start), 4),
+                "stage1_min_trade_ratio_start": round(float(params.stage1_min_trade_ratio_start), 4),
+                "pump_pct": round(float(pump_pct.iloc[best_idx]), 6) if np.isfinite(float(pump_pct.iloc[best_idx])) else 0.0,
+                "stage1_min_pump_pct": round(float(params.stage1_min_pump_pct), 6),
+                "flow_hold_bar_count": 0,
+                "stage1_flow_hold_bars": int(stage1_flow_hold_bars),
+                "current_close_5m": round(float(closes.iloc[best_idx]), 8),
+                "leg_size": round(float(pump_range.iloc[best_idx]), 8) if np.isfinite(float(pump_range.iloc[best_idx])) else 0.0,
+            },
+        }
+
+    def fast_stage1_candidate_count(
+        self,
+        *,
+        levels_frame: pd.DataFrame,
+        params: PnoParams,
+        levels_timeframe_ms: int,
+    ) -> int:
+        candidate_count, _rejection = self._fast_stage1_candidate_count(
+            levels_frame=levels_frame,
+            params=params,
+            levels_timeframe_ms=int(levels_timeframe_ms),
+        )
+        return int(candidate_count)
 
     @staticmethod
     def validate_config(params: PnoParams) -> None:
@@ -596,11 +792,22 @@ class PnoEngine:
         missing = [column for column in self.REQUIRED_COLUMNS if column not in data.columns]
         if missing:
             raise ValueError(f"Missing required columns: {missing}")
-        prepared = data.loc[:, list(self.REQUIRED_COLUMNS)].copy()
+        optional_columns = [
+            column
+            for column in (
+                "taker_buy_volume",
+                "taker_buy_quote_volume",
+                "number_of_trades",
+                "trades",
+                "trade_count",
+            )
+            if column in data.columns
+        ]
+        prepared = data.loc[:, list(self.REQUIRED_COLUMNS) + optional_columns].copy()
         prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
         prepared = prepared.dropna(subset=["timestamp"])
         prepared["timestamp"] = prepared["timestamp"].astype("int64")
-        for column in self.REQUIRED_COLUMNS[1:]:
+        for column in list(self.REQUIRED_COLUMNS[1:]) + optional_columns:
             prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
         prepared = prepared.dropna(subset=["open", "high", "low", "close", "volume"])
         prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last")
@@ -669,6 +876,27 @@ class PnoEngine:
         source_entry_required_bars = 2 if uses_local_seconds_materialization else entry_required_bars
         if len(prepared_levels) < levels_required_bars or len(prepared_entry) < source_entry_required_bars:
             diagnostics["skipped_insufficient_data"] = 1
+            last_ts = 0
+            if "timestamp" in prepared_levels.columns and not prepared_levels.empty:
+                level_timestamps = pd.to_numeric(prepared_levels["timestamp"], errors="coerce").dropna()
+                last_ts = int(level_timestamps.iloc[-1]) if not level_timestamps.empty else 0
+            elif "timestamp" in prepared_entry.columns and not prepared_entry.empty:
+                entry_timestamps = pd.to_numeric(prepared_entry["timestamp"], errors="coerce").dropna()
+                last_ts = int(entry_timestamps.iloc[-1]) if not entry_timestamps.empty else 0
+            self._mark_stage_rejection(
+                diagnostics,
+                {},
+                PNO_STAGE_1_PUMP,
+                key=(str(params.symbol), "insufficient_data", last_ts),
+                timestamp_ms=last_ts,
+                reason="insufficient_data",
+                extra={
+                    "levels_rows": int(len(prepared_levels)),
+                    "levels_required_bars": int(levels_required_bars),
+                    "entry_rows": int(len(prepared_entry)),
+                    "entry_required_bars": int(source_entry_required_bars),
+                },
+            )
             self._last_generation_diagnostics = diagnostics
             return []
 
@@ -682,8 +910,9 @@ class PnoEngine:
         )
         cache_key, cached_stage1_state = stage1_cache_entry
         diagnostics["context"]["stage1_cache"] = "hit" if cached_stage1_state is not None else "miss"
+        precomputed_five: FiveMinuteFrame | None = None
         if cached_stage1_state is None:
-            fast_candidate_count = self._fast_stage1_candidate_count(
+            fast_candidate_count, fast_rejection = self._fast_stage1_candidate_count(
                 levels_frame=prepared_levels,
                 params=params,
                 levels_timeframe_ms=levels_timeframe_ms,
@@ -700,12 +929,54 @@ class PnoEngine:
                 )
                 self._store_stage1_state_cache(cache_key=cache_key, state=empty_state)
                 diagnostics["context"]["stage1_fast_reject"] = "no_5m_candidates"
+                if fast_rejection is not None:
+                    self._mark_stage_rejection(
+                        diagnostics,
+                        {},
+                        PNO_STAGE_1_PUMP,
+                        key=tuple(fast_rejection.get("key") or (str(params.symbol), "fast_stage1")),
+                        timestamp_ms=int(fast_rejection.get("timestamp_ms") or 0),
+                        reason=str(fast_rejection.get("reason") or "no_5m_candidates"),
+                        extra=dict(fast_rejection.get("extra") or {}),
+                    )
                 self._last_generation_diagnostics = diagnostics
                 return []
+            precomputed_five = self._prepare_5m_frame(
+                prepared_levels,
+                prepared_entry,
+                params,
+                levels_timeframe_ms=levels_timeframe_ms,
+                entry_timeframe_ms=entry_timeframe_ms,
+                stage1_cache_key=cache_key,
+                cached_stage1_state=None,
+            )
+            cached_stage1_state = Stage1StateArrays(
+                inplay=precomputed_five.inplay.astype(bool, copy=False),
+                pump_start_idx=precomputed_five.pump_start_idx.astype(np.int64, copy=False),
+                sleep_start_idx=precomputed_five.sleep_start_idx.astype(np.int64, copy=False),
+                sleep_end_idx=precomputed_five.sleep_end_idx.astype(np.int64, copy=False),
+                stage1_confirm_idx=precomputed_five.stage1_confirm_idx.astype(np.int64, copy=False),
+                stage1_hold_price=precomputed_five.stage1_hold_price.astype(np.float64, copy=False),
+            )
         else:
             diagnostics["context"]["stage1_fast_candidates"] = int(np.sum(cached_stage1_state.inplay))
             if not cached_stage1_state.has_inplay:
                 diagnostics["context"]["stage1_fast_reject"] = "cached_empty_stage1"
+                _, fast_rejection = self._fast_stage1_candidate_count(
+                    levels_frame=prepared_levels,
+                    params=params,
+                    levels_timeframe_ms=levels_timeframe_ms,
+                )
+                if fast_rejection is not None:
+                    self._mark_stage_rejection(
+                        diagnostics,
+                        {},
+                        PNO_STAGE_1_PUMP,
+                        key=tuple(fast_rejection.get("key") or (str(params.symbol), "fast_stage1")),
+                        timestamp_ms=int(fast_rejection.get("timestamp_ms") or 0),
+                        reason=str(fast_rejection.get("reason") or "cached_empty_stage1"),
+                        extra=dict(fast_rejection.get("extra") or {}),
+                    )
                 self._last_generation_diagnostics = diagnostics
                 return []
 
@@ -732,6 +1003,28 @@ class PnoEngine:
             int(entry_timeframe_ms),
             self._runtime_batch_depth,
         )
+        if not actual_entry_frame.empty and "htf_ema9" not in actual_entry_frame.columns and "ema9" in prepared_levels.columns:
+            entry_timestamps_for_ema = pd.to_numeric(actual_entry_frame["timestamp"], errors="coerce").to_numpy(dtype=np.float64)
+            levels_timestamps_for_ema = pd.to_numeric(prepared_levels["timestamp"], errors="coerce").to_numpy(dtype=np.float64)
+            if entry_timestamps_for_ema.size > 0 and levels_timestamps_for_ema.size > 0:
+                actual_entry_frame = actual_entry_frame.copy()
+                actual_entry_frame["htf_ema9"] = np.interp(
+                    entry_timestamps_for_ema,
+                    levels_timestamps_for_ema,
+                    pd.to_numeric(prepared_levels["ema9"], errors="coerce").to_numpy(dtype=np.float64),
+                )
+                if "ema20" in prepared_levels.columns:
+                    actual_entry_frame["htf_ema20"] = np.interp(
+                        entry_timestamps_for_ema,
+                        levels_timestamps_for_ema,
+                        pd.to_numeric(prepared_levels["ema20"], errors="coerce").to_numpy(dtype=np.float64),
+                    )
+                one_cache_key = (
+                    id(actual_entry_frame),
+                    len(actual_entry_frame),
+                    int(entry_timeframe_ms),
+                    self._runtime_batch_depth,
+                )
         one = self._runtime_prepared_1m_cache.get(one_cache_key)
         if one is None:
             one = self._prepare_1m_frame(
@@ -747,7 +1040,7 @@ class PnoEngine:
             int(entry_timeframe_ms),
             cache_key,
         )
-        five = self._runtime_prepared_5m_cache.get(five_cache_key)
+        five = precomputed_five or self._runtime_prepared_5m_cache.get(five_cache_key)
         if five is None:
             five = self._prepare_5m_frame(
                 prepared_levels,
@@ -760,7 +1053,72 @@ class PnoEngine:
             )
             if self._runtime_batch_depth > 0:
                 self._runtime_prepared_5m_cache[five_cache_key] = five
+        if not bool(np.any(five.inplay)):
+            quote_ratio = np.divide(
+                five.quote_volume,
+                np.where(np.abs(five.pre_quote_median_24) > self._EPSILON, five.pre_quote_median_24, np.nan),
+            )
+            trade_ratio = np.divide(
+                five.trade_activity,
+                np.where(np.abs(five.pre_trade_median_24) > self._EPSILON, five.pre_trade_median_24, np.nan),
+            )
+            flow_score = np.minimum(
+                quote_ratio / max(float(params.stage1_min_volume_ratio_start), self._EPSILON),
+                trade_ratio / max(float(params.stage1_min_trade_ratio_start), self._EPSILON),
+            )
+            if np.any(np.isfinite(flow_score)):
+                best_idx = int(np.nanargmax(flow_score))
+                self._mark_stage_rejection(
+                    diagnostics,
+                    {},
+                    PNO_STAGE_1_PUMP,
+                    key=(str(params.symbol), "stage1_state_empty", int(five.timestamps[best_idx])),
+                    timestamp_ms=int(five.timestamps[best_idx]),
+                    reason="flow_candidate_failed_stage1_confirmation",
+                    extra={
+                        "pump_volume_ratio_start": round(float(quote_ratio[best_idx]), 4) if np.isfinite(quote_ratio[best_idx]) else 0.0,
+                        "stage1_min_volume_ratio_start": round(float(params.stage1_min_volume_ratio_start), 4),
+                        "pump_trade_ratio_start": round(float(trade_ratio[best_idx]), 4) if np.isfinite(trade_ratio[best_idx]) else 0.0,
+                        "stage1_min_trade_ratio_start": round(float(params.stage1_min_trade_ratio_start), 4),
+                    },
+                )
         trades = self._run(one=one, five=five, params=params, diagnostics=diagnostics)
+        stage_events = diagnostics.get("stage_events")
+        stage_rejections = diagnostics.get("stage_rejections")
+        if (
+            not trades
+            and isinstance(stage_events, list)
+            and isinstance(stage_rejections, list)
+            and not stage_events
+            and not stage_rejections
+        ):
+            if bool(np.any(five.inplay)):
+                best_idx = int(np.flatnonzero(five.inplay)[0])
+                reason = "flow_context_no_structural_setup"
+            else:
+                quote_ratio = np.divide(
+                    five.quote_volume,
+                    np.where(np.abs(five.pre_quote_median_24) > self._EPSILON, five.pre_quote_median_24, np.nan),
+                )
+                trade_ratio = np.divide(
+                    five.trade_activity,
+                    np.where(np.abs(five.pre_trade_median_24) > self._EPSILON, five.pre_trade_median_24, np.nan),
+                )
+                flow_score = np.minimum(
+                    quote_ratio / max(float(params.stage1_min_volume_ratio_start), self._EPSILON),
+                    trade_ratio / max(float(params.stage1_min_trade_ratio_start), self._EPSILON),
+                )
+                best_idx = int(np.nanargmax(flow_score)) if np.any(np.isfinite(flow_score)) else max(len(five.timestamps) - 1, 0)
+                reason = "flow_candidate_failed_stage1_confirmation"
+            self._mark_stage_rejection(
+                diagnostics,
+                {},
+                PNO_STAGE_1_PUMP,
+                key=(str(params.symbol), reason, int(five.timestamps[best_idx]) if len(five.timestamps) else 0),
+                timestamp_ms=int(five.timestamps[best_idx]) if len(five.timestamps) else 0,
+                reason=reason,
+                extra={},
+            )
         diagnostics["trades_generated"] = len(trades)
         self._last_generation_diagnostics = diagnostics
         return trades
@@ -782,6 +1140,9 @@ class PnoEngine:
         work["quote_volume"] = work["close"] * work["volume"]
         work["cumulative_quote_volume"] = work["quote_volume"].cumsum()
         work["red"] = work["close"] < work["open"]
+        for optional_column in ("taker_buy_volume", "taker_buy_quote_volume", "number_of_trades", "trades", "trade_count"):
+            if optional_column in work.columns:
+                work[optional_column] = pd.to_numeric(work[optional_column], errors="coerce")
         highs = work["high"].astype("float64").to_numpy()
         lows = work["low"].astype("float64").to_numpy()
         v1 = work["v1"].astype("float64").to_numpy()
@@ -830,14 +1191,24 @@ class PnoEngine:
         work = frame.copy()
         v_window = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
         short_window = self._bars_for_duration(levels_timeframe_ms, 15 * 60_000)
-        baseline_window = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
-        sleep_window = self._bars_for_duration(levels_timeframe_ms, 8 * 60 * 60_000)
+        baseline_window = self._bars_for_duration(levels_timeframe_ms, 24 * 60 * 60_000)
+        sleep_window = self._bars_for_duration(levels_timeframe_ms, 24 * 60 * 60_000)
         activity_window = self._bars_for_duration(levels_timeframe_ms, 30 * 60_000)
-        activity_baseline_window = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+        activity_baseline_window = self._bars_for_duration(levels_timeframe_ms, 24 * 60 * 60_000)
         ema_cross_window = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
         pre_high_24h_window = self._bars_for_duration(levels_timeframe_ms, 24 * 60 * 60_000)
+        stage1_flow_hold_bars = self._scale_5m_stage_bars(int(params.stage1_flow_hold_bars), levels_timeframe_ms)
+        stage1_flow_hold_window_bars = self._scale_5m_stage_bars(int(params.stage1_flow_hold_window_bars), levels_timeframe_ms)
         work["quote_volume"] = work["close"] * work["volume"]
-        work["trade_activity"] = work["volume"]
+        trade_column = next(
+            (
+                column
+                for column in ("number_of_trades", "trades", "trade_count")
+                if column in work.columns
+            ),
+            "volume",
+        )
+        work["trade_activity"] = pd.to_numeric(work[trade_column], errors="coerce")
         prev_close = work["close"].shift(1).fillna(work["close"])
         tr = pd.concat(
             [
@@ -880,6 +1251,10 @@ class PnoEngine:
         work["atr_pre_14"] = work["tr"].shift(1).rolling(window=14, min_periods=14).mean()
         work["pre_quote_median_24"] = work["quote_volume"].shift(1).rolling(window=baseline_window, min_periods=baseline_window).median()
         work["pre_trade_median_24"] = work["trade_activity"].shift(1).rolling(window=baseline_window, min_periods=baseline_window).median()
+        work["flow_quote_ratio"] = work["quote_volume"] / work["pre_quote_median_24"].replace(0.0, np.nan)
+        work["flow_trade_ratio"] = work["trade_activity"] / work["pre_trade_median_24"].replace(0.0, np.nan)
+        work["flow_hold_count"] = 0
+        work["flow_hold_ok"] = False
         work["close_above_ema20_count12"] = (work["close"] > work["ema20"]).rolling(window=ema_cross_window, min_periods=ema_cross_window).sum()
         work["r3_close_above_ema20_all"] = (work["close"] > work["ema20"]).rolling(window=short_window, min_periods=short_window).sum() == short_window
         work["r3_close_above_ema9_count"] = (work["close"] > work["ema9"]).rolling(window=short_window, min_periods=short_window).sum()
@@ -889,11 +1264,8 @@ class PnoEngine:
             & (work["b24_trade"] <= (0.75 * work["l96_trade"]))
         )
         work["wake"] = (
-            (work["r3_quote"] >= (2.0 * work["b24_quote"]))
-            & (work["r3_trade"] >= (2.0 * work["b24_trade"]))
-            & work["r3_close_above_ema20_all"]
-            & (work["r3_close_above_ema9_count"] >= 2)
-            & (work["ema9"] > work["ema20"])
+            work["flow_quote_ratio"].ge(float(params.stage1_min_volume_ratio_start)).fillna(False)
+            & work["flow_trade_ratio"].ge(float(params.stage1_min_trade_ratio_start)).fillna(False)
         )
         if cached_stage1_state is None:
             cached_stage1_state = self._build_stage1_state(
@@ -1020,10 +1392,21 @@ class PnoEngine:
         sleep_lookback = self._bars_for_duration(levels_timeframe_ms, 7 * 60 * 60_000)
         pretrend_1h_bars = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
         pretrend_2h_bars = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
+        stage1_pump_max_bars = self._scale_5m_stage_bars(int(params.stage1_pump_max_bars), levels_timeframe_ms)
+        stage1_pullback_max_bars = self._scale_5m_stage_bars(int(params.stage1_pullback_max_bars), levels_timeframe_ms)
+        stage1_fetch_post_bars = self._scale_5m_stage_bars(int(params.stage1_fetch_post_bars), levels_timeframe_ms)
+        stage1_pullback_min_bars = self._scale_5m_stage_bars(int(params.stage1_pullback_min_bars), levels_timeframe_ms)
+        stage1_flow_hold_bars = self._scale_5m_stage_bars(int(params.stage1_flow_hold_bars), levels_timeframe_ms)
+        stage1_flow_hold_window_bars = self._scale_5m_stage_bars(int(params.stage1_flow_hold_window_bars), levels_timeframe_ms)
+        anchor_context_max_bars = max(
+            stage1_pump_max_bars + stage1_pullback_max_bars + stage1_fetch_post_bars,
+            stage1_flow_hold_window_bars + stage1_pullback_min_bars,
+        )
+        source_entry_timeframe_ms = self._infer_timeframe_ms(entry_frame) or int(entry_timeframe_ms)
         one_support = self._build_one_minute_stage1_support(
             entry_frame=entry_frame,
             five_timestamps=timestamps,
-            entry_timeframe_ms=entry_timeframe_ms,
+            entry_timeframe_ms=source_entry_timeframe_ms,
         )
         sleep = five["sleep"].astype("bool").to_numpy() if "sleep" in five.columns else np.zeros(bars_count, dtype=bool)
         wake = five["wake"].astype("bool").to_numpy() if "wake" in five.columns else np.zeros(bars_count, dtype=bool)
@@ -1031,10 +1414,11 @@ class PnoEngine:
         lows = pd.to_numeric(five["low"], errors="coerce").to_numpy(dtype=np.float64)
         closes = pd.to_numeric(five["close"], errors="coerce").to_numpy(dtype=np.float64)
         ema9 = pd.to_numeric(five["ema9"], errors="coerce").to_numpy(dtype=np.float64)
-        r3_quote = pd.to_numeric(five["r3_quote"], errors="coerce").to_numpy(dtype=np.float64)
-        b24_quote = pd.to_numeric(five["b24_quote"], errors="coerce").to_numpy(dtype=np.float64)
-        r3_trade = pd.to_numeric(five["r3_trade"], errors="coerce").to_numpy(dtype=np.float64)
-        b24_trade = pd.to_numeric(five["b24_trade"], errors="coerce").to_numpy(dtype=np.float64)
+        ema20 = pd.to_numeric(five["ema20"], errors="coerce").to_numpy(dtype=np.float64)
+        quote_volume = pd.to_numeric(five["quote_volume"], errors="coerce").to_numpy(dtype=np.float64)
+        trade_activity = pd.to_numeric(five["trade_activity"], errors="coerce").to_numpy(dtype=np.float64)
+        pre_quote = pd.to_numeric(five["pre_quote_median_24"], errors="coerce").to_numpy(dtype=np.float64)
+        pre_trade = pd.to_numeric(five["pre_trade_median_24"], errors="coerce").to_numpy(dtype=np.float64)
         activity_last6_quote = pd.to_numeric(five["activity_last6_quote"], errors="coerce").to_numpy(dtype=np.float64)
         activity_prev24_quote = pd.to_numeric(five["activity_prev24_quote"], errors="coerce").to_numpy(dtype=np.float64)
         activity_last6_trade = pd.to_numeric(five["activity_last6_trade"], errors="coerce").to_numpy(dtype=np.float64)
@@ -1059,21 +1443,158 @@ class PnoEngine:
             > 0
         )
 
+        def _resolve_flow_step_anchor_idx(current_idx: int) -> tuple[int | None, float]:
+            candidate_start = max(1, int(current_idx) - stage1_flow_hold_window_bars)
+            candidate_end = int(current_idx) - stage1_flow_hold_bars
+            if candidate_end < candidate_start:
+                return None, 0.0
+            best_anchor_idx: int | None = None
+            best_score = 0.0
+            for anchor_idx in range(candidate_start, candidate_end + 1):
+                anchor_quote_baseline = float(pre_quote[anchor_idx])
+                anchor_trade_baseline = float(pre_trade[anchor_idx])
+                anchor_quote = float(quote_volume[anchor_idx])
+                anchor_trade = float(trade_activity[anchor_idx])
+                if (
+                    not np.isfinite(anchor_quote_baseline)
+                    or not np.isfinite(anchor_trade_baseline)
+                    or anchor_quote_baseline <= 0.0
+                    or anchor_trade_baseline <= 0.0
+                ):
+                    continue
+                quote_start_ratio = self._safe_divide(anchor_quote, anchor_quote_baseline)
+                trade_start_ratio = self._safe_divide(anchor_trade, anchor_trade_baseline)
+                if (
+                    quote_start_ratio < float(params.stage1_min_volume_ratio_start)
+                    or trade_start_ratio < float(params.stage1_min_trade_ratio_start)
+                ):
+                    continue
+                step_end_idx = min(int(current_idx), anchor_idx + stage1_flow_hold_window_bars)
+                step_quotes = quote_volume[anchor_idx : step_end_idx + 1]
+                step_trades = trade_activity[anchor_idx : step_end_idx + 1]
+                step_quote_threshold = max(
+                    float(params.stage1_flow_hold_min_start_fraction) * anchor_quote,
+                    float(params.stage1_min_volume_ratio_continue) * anchor_quote_baseline,
+                )
+                step_trade_threshold = max(
+                    float(params.stage1_flow_hold_min_start_fraction) * anchor_trade,
+                    float(params.stage1_min_trade_ratio_continue) * anchor_trade_baseline,
+                )
+                strong_quote_threshold = float(params.stage1_min_volume_ratio_start) * anchor_quote_baseline
+                strong_trade_threshold = float(params.stage1_min_trade_ratio_start) * anchor_trade_baseline
+                step_mask = (
+                    ((step_quotes >= step_quote_threshold) & (step_trades >= step_trade_threshold))
+                    | ((step_quotes >= strong_quote_threshold) & (step_trades >= strong_trade_threshold))
+                )
+                initial_run = 0
+                for is_elevated in step_mask.tolist():
+                    if not is_elevated:
+                        break
+                    initial_run += 1
+                if initial_run < (stage1_flow_hold_bars + 1):
+                    continue
+                if step_mask.size == 0 or float(np.mean(step_mask)) < 0.75:
+                    continue
+                pre_window_bars = min(24, anchor_idx)
+                pre_start_idx = max(0, anchor_idx - pre_window_bars)
+                pre_quotes = quote_volume[pre_start_idx:anchor_idx]
+                pre_trades = trade_activity[pre_start_idx:anchor_idx]
+                if pre_quotes.size > 0 and pre_trades.size > 0:
+                    pre_mask = (
+                        (pre_quotes >= (float(params.stage1_min_volume_ratio_continue) * anchor_quote_baseline))
+                        & (pre_trades >= (float(params.stage1_min_trade_ratio_continue) * anchor_trade_baseline))
+                    )
+                    pre_elevated_share = float(np.mean(pre_mask))
+                    pre_max_run = 0
+                    current_pre_run = 0
+                    for is_elevated in pre_mask.tolist():
+                        if is_elevated:
+                            current_pre_run += 1
+                            pre_max_run = max(pre_max_run, current_pre_run)
+                        else:
+                            current_pre_run = 0
+                step_median_quote = float(np.nanmedian(step_quotes))
+                step_median_trade = float(np.nanmedian(step_trades))
+                pre_median_quote = float(np.nanmedian(pre_quotes))
+                pre_median_trade = float(np.nanmedian(pre_trades))
+                pre_tail_quotes = pre_quotes[-min(6, pre_quotes.size) :]
+                pre_tail_trades = pre_trades[-min(6, pre_trades.size) :]
+                pre_tail_median_quote = float(np.nanmedian(pre_tail_quotes)) if pre_tail_quotes.size > 0 else 0.0
+                pre_tail_median_trade = float(np.nanmedian(pre_tail_trades)) if pre_tail_trades.size > 0 else 0.0
+                pre_peak_quote_to_step = self._safe_divide(float(np.nanmax(pre_quotes)), step_median_quote)
+                pre_peak_trade_to_step = self._safe_divide(float(np.nanmax(pre_trades)), step_median_trade)
+                if (
+                    pre_elevated_share > 0.25
+                    or pre_max_run > 2
+                    or pre_peak_quote_to_step > 1.8
+                    or pre_peak_trade_to_step > 1.8
+                    or self._safe_divide(step_median_quote, pre_median_quote) < 2.5
+                    or self._safe_divide(step_median_trade, pre_median_trade) < 2.5
+                    or self._safe_divide(step_median_quote, pre_tail_median_quote) < 2.5
+                    or self._safe_divide(step_median_trade, pre_tail_median_trade) < 2.5
+                ):
+                    continue
+                pre_price_high = float(np.nanmax(highs[pre_start_idx:anchor_idx])) if anchor_idx > pre_start_idx else np.nan
+                pre_price_low = float(np.nanmin(lows[pre_start_idx:anchor_idx])) if anchor_idx > pre_start_idx else np.nan
+                step_price_high = float(np.nanmax(highs[anchor_idx : step_end_idx + 1]))
+                step_price_low = float(np.nanmin(lows[anchor_idx : step_end_idx + 1]))
+                pre_price_range = pre_price_high - pre_price_low
+                step_price_range = step_price_high - step_price_low
+                if np.isfinite(pre_price_range) and pre_price_range > self._EPSILON:
+                    if self._safe_divide(step_price_range, pre_price_range) < 2.0:
+                        continue
+                score = min(
+                    self._safe_divide(quote_start_ratio, float(params.stage1_min_volume_ratio_start)),
+                    self._safe_divide(trade_start_ratio, float(params.stage1_min_trade_ratio_start)),
+                )
+                if best_anchor_idx is None or anchor_idx < best_anchor_idx or score > best_score * 1.5:
+                    best_anchor_idx = int(anchor_idx)
+                    best_score = float(score)
+            return best_anchor_idx, best_score
+
         active_start_idx: int | None = None
+        active_anchor_score = 0.0
         below_ema20_count = 0
         for idx in range(bars_count):
-            quote_expansion = self._safe_divide(float(r3_quote[idx]), float(b24_quote[idx]))
-            trade_expansion = self._safe_divide(float(r3_trade[idx]), float(b24_trade[idx]))
+            quote_expansion = self._safe_divide(float(quote_volume[idx]), float(pre_quote[idx]))
+            trade_expansion = self._safe_divide(float(trade_activity[idx]), float(pre_trade[idx]))
             sustain_quote = self._safe_divide(float(activity_last6_quote[idx]), float(activity_prev24_quote[idx]))
             sustain_trade = self._safe_divide(float(activity_last6_trade[idx]), float(activity_prev24_trade[idx]))
+            anchor_expired = active_start_idx is not None and (idx - int(active_start_idx)) > anchor_context_max_bars
+            if anchor_expired:
+                active_start_idx = None
+                active_anchor_score = 0.0
+                below_ema20_count = 0
             wake_transition = bool(
                 idx > 0
                 and sleep[idx - 1]
                 and wake[idx]
                 and recent_support[idx]
                 and local_breakout[idx]
-                and quote_expansion >= 2.0
-                and trade_expansion >= 2.0
+                and quote_expansion >= float(params.stage1_min_volume_ratio_start)
+                and trade_expansion >= float(params.stage1_min_trade_ratio_start)
+            )
+            flow_anchor = bool(
+                wake[idx]
+                and quote_expansion >= float(params.stage1_min_volume_ratio_start)
+                and trade_expansion >= float(params.stage1_min_trade_ratio_start)
+            )
+            previous_flow_anchor_start_idx = max(0, idx - stage1_flow_hold_window_bars)
+            previous_flow_anchor = bool(
+                np.any(wake[previous_flow_anchor_start_idx:idx])
+            )
+            flow_anchor_score = min(
+                self._safe_divide(quote_expansion, float(params.stage1_min_volume_ratio_start)),
+                self._safe_divide(trade_expansion, float(params.stage1_min_trade_ratio_start)),
+            )
+            step_anchor_idx, step_anchor_score = _resolve_flow_step_anchor_idx(idx)
+            flow_anchor_start = step_anchor_idx is not None
+            stronger_unconfirmed_flow_anchor = bool(
+                step_anchor_idx is not None
+                and active_start_idx is not None
+                and (idx > 0 and pump_start_idx[idx - 1] == -1)
+                and int(step_anchor_idx) != int(active_start_idx)
+                and step_anchor_score >= max(active_anchor_score * 2.0, 2.0)
             )
             self_sustain = bool(
                 recent_support[idx]
@@ -1083,31 +1604,57 @@ class PnoEngine:
                 and np.isfinite(ema9[idx])
                 and closes[idx] > ema20[idx]
                 and ema9[idx] > ema20[idx]
-                and (sustain_quote >= 1.35 or sustain_trade >= 1.35)
+                and sustain_quote >= float(params.stage1_active_context_min_baseline_ratio)
+                and sustain_trade >= float(params.stage1_active_context_min_baseline_ratio)
             )
-            prev_inplay = bool(inplay[idx - 1]) if idx > 0 else False
+            prev_inplay = bool(inplay[idx - 1]) and not anchor_expired if idx > 0 else False
             stale_anchor_rearmed = False
-            if prev_inplay and active_start_idx is not None:
-                rearm_start_idx = self._resolve_stale_pump_rearm_start_idx(
-                    active_start_idx=active_start_idx,
-                    idx=idx,
-                    levels_timeframe_ms=levels_timeframe_ms,
-                    pump_start_lookback=pump_start_lookback,
-                    wake_transition=wake_transition,
-                    self_sustain=self_sustain,
-                    wake=wake,
-                    support=recent_support,
-                    local_breakout=local_breakout,
-                    ema9=ema9,
-                    ema20=ema20,
-                    pump_start_shift_lookback=pump_start_shift_lookback,
-                    pump_start_precursor_extension=pump_start_precursor_extension,
-                    closes=closes,
+            if (
+                (flow_anchor_start or stronger_unconfirmed_flow_anchor)
+                and step_anchor_idx is not None
+                and (active_start_idx is None or int(step_anchor_idx) != int(active_start_idx))
+            ):
+                active_start_idx = int(step_anchor_idx)
+                active_anchor_score = float(step_anchor_score)
+                below_ema20_count = 0
+                stale_anchor_rearmed = True
+            observed_flow_hold_count = 0
+            flow_hold_confirmed = False
+            if active_start_idx is not None and idx > int(active_start_idx):
+                hold_anchor_idx = int(active_start_idx)
+                hold_end_idx = min(idx, hold_anchor_idx + stage1_flow_hold_window_bars)
+                hold_quote_threshold = max(
+                    float(quote_volume[hold_anchor_idx]) * float(params.stage1_flow_hold_min_start_fraction),
+                    float(pre_quote[hold_anchor_idx]) * float(params.stage1_min_volume_ratio_continue),
                 )
-                if rearm_start_idx is not None:
-                    active_start_idx = int(rearm_start_idx)
-                    below_ema20_count = 0
-                    stale_anchor_rearmed = True
+                hold_trade_threshold = max(
+                    float(trade_activity[hold_anchor_idx]) * float(params.stage1_flow_hold_min_start_fraction),
+                    float(pre_trade[hold_anchor_idx]) * float(params.stage1_min_trade_ratio_continue),
+                )
+                baseline_hold_quote_threshold = float(pre_quote[hold_anchor_idx]) * float(params.stage1_min_volume_ratio_start)
+                baseline_hold_trade_threshold = float(pre_trade[hold_anchor_idx]) * float(params.stage1_min_trade_ratio_start)
+                if (
+                    np.isfinite(hold_quote_threshold)
+                    and np.isfinite(hold_trade_threshold)
+                    and np.isfinite(baseline_hold_quote_threshold)
+                    and np.isfinite(baseline_hold_trade_threshold)
+                    and hold_end_idx > hold_anchor_idx
+                ):
+                    hold_quotes = quote_volume[hold_anchor_idx + 1 : hold_end_idx + 1]
+                    hold_trades = trade_activity[hold_anchor_idx + 1 : hold_end_idx + 1]
+                    observed_flow_hold_count = int(
+                        np.sum(
+                            (
+                                (hold_quotes >= hold_quote_threshold)
+                                & (hold_trades >= hold_trade_threshold)
+                            )
+                            | (
+                                (hold_quotes >= baseline_hold_quote_threshold)
+                                & (hold_trades >= baseline_hold_trade_threshold)
+                            )
+                        )
+                    )
+                    flow_hold_confirmed = observed_flow_hold_count >= stage1_flow_hold_bars
             stage1_already_confirmed = prev_inplay and (idx > 0 and pump_start_idx[idx - 1] != -1) and not stale_anchor_rearmed
             if prev_inplay:
                 if np.isfinite(ema20[idx]) and closes[idx] < (ema20[idx] - self._EPSILON):
@@ -1116,33 +1663,25 @@ class PnoEngine:
                     below_ema20_count = 0
                 # После подтверждения Stage 1 снижение активности не прерывает inplay
                 if not stage1_already_confirmed:
-                    if below_ema20_count >= below_ema20_limit or (sustain_quote < 1.0 and sustain_trade < 1.0):
+                    waiting_for_hold = (
+                        active_start_idx is not None
+                        and not flow_hold_confirmed
+                        and (idx - int(active_start_idx)) <= stage1_flow_hold_window_bars
+                    )
+                    if below_ema20_count >= below_ema20_limit or (
+                        not waiting_for_hold
+                        and not flow_hold_confirmed
+                        and sustain_quote < 1.0
+                        and sustain_trade < 1.0
+                    ):
                         active_start_idx = None
                         continue
                 inplay[idx] = True
-            elif wake_transition or self_sustain:
+            elif flow_anchor_start:
                 inplay[idx] = True
                 below_ema20_count = 0
-                active_start_idx = self._resolve_fallback_pump_start_idx(
-                    wake=wake,
-                    support=recent_support,
-                    local_breakout=local_breakout,
-                    idx=idx,
-                    lookback_bars=pump_start_lookback,
-                )
-                active_start_idx = self._extend_pump_start_to_precursor_breakout(
-                    local_breakout=local_breakout,
-                    closes=closes,
-                    ema20=ema20,
-                    pump_start_idx=active_start_idx,
-                    max_extension_bars=pump_start_precursor_extension,
-                )
-                active_start_idx = self._shift_pump_start_left_to_ema_reset(
-                    ema9=ema9,
-                    ema20=ema20,
-                    pump_start_idx=active_start_idx,
-                    max_shift_bars=pump_start_shift_lookback,
-                )
+                active_start_idx = int(step_anchor_idx)
+                active_anchor_score = float(step_anchor_score)
             if not inplay[idx] or active_start_idx is None or active_start_idx >= idx:
                 continue
             # Если Stage 1 уже подтвержден, пропускаем проверки и устанавливаем индексы
@@ -1150,7 +1689,7 @@ class PnoEngine:
                 pump_start_idx[idx] = int(active_start_idx)
                 sleep_start_idx[idx] = int(max(active_start_idx - sleep_lookback, 0))
                 sleep_end_idx[idx] = int(max(active_start_idx - 1, sleep_start_idx[idx]))
-                stage1_confirm_idx[idx] = int(idx)
+                stage1_confirm_idx[idx] = int(stage1_confirm_idx[idx - 1]) if idx > 0 else int(idx)
                 base_price = float(np.nanmin(lows[active_start_idx : idx + 1]))
                 peak_price = float(np.nanmax(highs[active_start_idx : idx + 1]))
                 stage1_hold_price[idx] = base_price + (0.50 * max(peak_price - base_price, 0.0))
@@ -1171,24 +1710,13 @@ class PnoEngine:
             )
             pretrend_ratio_2h = self._safe_divide(pump_range, pre_range_2h)
             strong_wake_override = bool(
-                local_breakout[idx]
-                and recent_support[idx]
-                and quote_expansion >= max(float(params.stage1_min_volume_ratio_start), 5.0)
-                and (sustain_quote >= 3.0 or sustain_trade >= 3.0)
+                flow_anchor
+                and sustain_quote >= float(params.stage1_active_context_min_baseline_ratio)
+                and sustain_trade >= float(params.stage1_active_context_min_baseline_ratio)
                 and pump_range > max(pre_range_1h, self._EPSILON)
                 and pump_pct >= max(float(params.stage1_min_pump_pct), 0.08)
             )
-            if pump_pct < float(params.stage1_min_pump_pct):
-                inplay[idx] = False
-                continue
-            if pump_range <= max(pre_range_1h, pre_range_2h, self._EPSILON) and not strong_wake_override:
-                inplay[idx] = False
-                continue
-            if pretrend_ratio_2h < float(params.stage1_min_pretrend_range_ratio_2h) and not strong_wake_override:
-                inplay[idx] = False
-                continue
-            if quote_expansion < float(params.stage1_min_volume_ratio_start):
-                inplay[idx] = False
+            if not flow_hold_confirmed or pump_pct < float(params.stage1_min_pump_pct):
                 continue
             pump_start_idx[idx] = int(active_start_idx)
             sleep_start_idx[idx] = int(max(active_start_idx - sleep_lookback, 0))
@@ -1357,7 +1885,7 @@ class PnoEngine:
         for probe_idx in range(search_start_idx, idx + 1):
             if not bool(support[probe_idx]) or not bool(local_breakout[probe_idx]):
                 continue
-            if wake_transition and not bool(wake[probe_idx]):
+            if not bool(wake[probe_idx]):
                 continue
             candidate_idx = int(probe_idx)
             break
@@ -1470,8 +1998,13 @@ class PnoEngine:
 
         current_close = float(five.closes[five_idx])
         current_ema20 = float(five.ema20[five_idx])
+        flow_start_price_reference = max(float(five.opens[pump_start_5m_idx]), float(five.closes[pump_start_5m_idx]))
+        flow_window_price_growth = current_close - flow_start_price_reference
+        flow_window_price_growth_pct = self._safe_divide(flow_window_price_growth, flow_start_price_reference)
         reason: str | None = None
-        if np.isfinite(current_close) and np.isfinite(current_ema20) and current_close <= (current_ema20 + self._EPSILON):
+        if flow_window_price_growth <= self._EPSILON:
+            reason = "flow_window_no_price_growth"
+        elif np.isfinite(current_close) and np.isfinite(current_ema20) and current_close <= (current_ema20 + self._EPSILON):
             reason = "pump_candidate_below_ema20"
         elif (
             np.isfinite(pre_pump_barcode_fraction_1h)
@@ -1519,6 +2052,8 @@ class PnoEngine:
                 "pre_pump_range_2h": round(pre_pump_range_2h, 8),
                 "current_close_5m": round(current_close, 8) if np.isfinite(current_close) else None,
                 "current_ema20_5m": round(current_ema20, 8) if np.isfinite(current_ema20) else None,
+                "flow_start_price_reference": round(flow_start_price_reference, 8),
+                "flow_window_price_growth_pct": round(flow_window_price_growth_pct, 6),
             },
         }
 
@@ -1584,7 +2119,11 @@ class PnoEngine:
                             0,
                         )
                     )
-                    if bars_since_active_high > int(params.max_htf_bars_since_active_high):
+                    max_htf_bars_since_active_high = self._scale_5m_stage_bars(
+                        int(params.max_htf_bars_since_active_high),
+                        levels_timeframe_ms,
+                    )
+                    if bars_since_active_high > max_htf_bars_since_active_high:
                         _reject_stage(
                             PNO_STAGE_5_TRADE,
                             key=(
@@ -1597,7 +2136,7 @@ class PnoEngine:
                             reason="too_many_htf_bars_since_active_high",
                             extra={
                                 "htf_bars_since_active_high": bars_since_active_high,
-                                "max_htf_bars_since_active_high": int(params.max_htf_bars_since_active_high),
+                                "max_htf_bars_since_active_high": int(max_htf_bars_since_active_high),
                                 "active_high_timestamp_ms": int(armed.stage4.active_high_timestamp),
                                 "entry_signal_timestamp_ms": int(one.timestamps[min(i, len(one.timestamps) - 1)]),
                                 "entry_timestamp_ms": int(one.timestamps[entry_ts_idx]),
@@ -1943,7 +2482,12 @@ class PnoEngine:
 
             if stage1 is None or next_stage1.active_high_idx != stage1.active_high_idx:
                 if stage1 is not None and next_stage1.active_high_idx != stage1.active_high_idx:
-                    if stage2 is None:
+                    same_flow_higher_high_before_pullback = bool(
+                        stage2 is None
+                        and next_stage1.pump_start_5m_idx == stage1.pump_start_5m_idx
+                        and next_stage1.active_high > (stage1.active_high + self._EPSILON)
+                    )
+                    if stage2 is None and not same_flow_higher_high_before_pullback:
                         _reject_stage(
                             PNO_STAGE_2_HIGH_PULLBACK,
                             key=(stage1.pump_start_5m_idx, stage1.active_high_idx),
@@ -1951,7 +2495,7 @@ class PnoEngine:
                             reason="new_main_high_before_pullback",
                             extra={"active_high": round(stage1.active_high, 8)},
                         )
-                    elif stage3 is None:
+                    elif stage2 is not None and stage3 is None:
                         _reject_stage(
                             PNO_STAGE_3_VALID_PULLBACK,
                             key=(stage2.active_high_idx, stage2.pullback_low_idx),
@@ -1959,7 +2503,7 @@ class PnoEngine:
                             reason="new_main_high_before_validation",
                             extra={"pullback_low": round(stage2.pullback_low, 8)},
                         )
-                    elif stage4 is None:
+                    elif stage3 is not None and stage4 is None:
                         _reject_stage(
                             PNO_STAGE_4_LEVEL,
                             key=(stage3.active_high_idx, stage3.pullback_low_idx),
@@ -1997,7 +2541,13 @@ class PnoEngine:
                         "pump_impulse_atr_pre": round(stage1.pump_impulse_atr_pre, 4),
                         "pump_peak_bar_tr_atr_pre": round(stage1.pump_peak_bar_tr_atr_pre, 4),
                         "pump_volume_ratio_start": round(stage1.pump_volume_ratio_start, 4),
+                        "pump_trade_ratio_start": round(stage1.pump_trade_ratio_start, 4),
                         "pump_volume_ratio_continue": round(stage1.pump_volume_ratio_continue, 4),
+                        "pump_trade_ratio_continue": round(stage1.pump_trade_ratio_continue, 4),
+                        "flow_hold_bar_count": int(stage1.flow_hold_bar_count),
+                        "flow_hold_required_bars": int(stage1.flow_hold_required_bars),
+                        "active_context_quote_fraction": round(stage1.active_context_quote_fraction, 4),
+                        "active_context_trade_fraction": round(stage1.active_context_trade_fraction, 4),
                         "pump_path_efficiency": round(stage1.pump_path_efficiency, 4),
                         "pump_wick_share": round(stage1.pump_wick_share, 4),
                         "pump_body_share_mean": round(stage1.pump_body_share_mean, 4),
@@ -2053,6 +2603,8 @@ class PnoEngine:
                         "active_high": round(stage1.active_high, 8),
                         "pullback_low": round(stage2.pullback_low, 8),
                         "pullback_depth": round(stage2.pullback_depth, 8),
+                        "pullback_trade_activity_vs_sleep": round(stage2.pullback_trade_activity_vs_sleep, 4),
+                        "pullback_quote_volume_vs_sleep": round(stage2.pullback_quote_volume_vs_sleep, 4),
                         **self._build_structure_points_payload(
                             one=one,
                             pivot_indices=stage2.structure_pivot_indices,
@@ -2139,9 +2691,35 @@ class PnoEngine:
                         "post_high_wick_share": round(stage3.post_high_wick_share, 4),
                         "post_high_body_overlap_rate": round(stage3.post_high_body_overlap_rate, 4),
                         "post_high_max_red_body_share": round(stage3.post_high_max_red_body_share, 4),
+                        "post_high_peak_volume_support_fraction": round(stage3.post_high_peak_volume_support_fraction, 4),
                         "structure_high_timestamp_ms": int(stage3.structure_high_timestamp),
                         "structure_low_timestamp_ms": int(stage3.structure_low_timestamp),
                         "structure_break_timestamp_ms": int(stage3.structure_break_timestamp),
+                        "structure_break_trade_activity_vs_prebreak": round(stage3.structure_break_trade_activity_vs_prebreak, 4),
+                        "structure_break_atr_vs_prebreak": round(stage3.structure_break_atr_vs_prebreak, 4),
+                        "structure_break_volume_vs_pump_leg_avg": round(stage3.structure_break_volume_vs_pump_leg_avg, 4),
+                        "structure_break_aligns_1m_open": bool(stage3.structure_break_aligns_1m_open),
+                        "structure_break_aligns_5m_open": bool(stage3.structure_break_aligns_5m_open),
+                        "structure_break_aligns_30m_open": bool(stage3.structure_break_aligns_30m_open),
+                        "structure_break_aligns_1h_open": bool(stage3.structure_break_aligns_1h_open),
+                        "structure_low_updates_pullback_depth": bool(stage3.structure_low_updates_pullback_depth),
+                        "structure_low_below_prev_up_leg_midpoint": bool(stage3.structure_low_below_prev_up_leg_midpoint),
+                        "structure_low_depth_delta": round(stage3.structure_low_depth_delta, 8),
+                        "structure_last_leg_v1": round(stage3.structure_last_leg_v1, 4),
+                        "structure_last_leg_vs_prev_median": round(stage3.structure_last_leg_vs_prev_median, 4),
+                        "pullback_absorption_score": round(stage3.pullback_absorption_score, 4),
+                        "pullback_volume_expansion_no_low_update_share": round(stage3.pullback_volume_expansion_no_low_update_share, 4),
+                        "pullback_volume_expansion_no_low_update_count": int(stage3.pullback_volume_expansion_no_low_update_count),
+                        "buy_pressure_recovery": round(stage3.buy_pressure_recovery, 4) if np.isfinite(stage3.buy_pressure_recovery) else np.nan,
+                        "buy_pressure_break": round(stage3.buy_pressure_break, 4) if np.isfinite(stage3.buy_pressure_break) else np.nan,
+                        "buy_pressure_pullback_avg": round(stage3.buy_pressure_pullback_avg, 4) if np.isfinite(stage3.buy_pressure_pullback_avg) else np.nan,
+                        "low_to_bos_reclaim_bars": int(stage3.low_to_bos_reclaim_bars),
+                        "low_to_bos_reclaim_speed_v1_per_bar": round(stage3.low_to_bos_reclaim_speed_v1_per_bar, 4),
+                        "pump_pause_zone_density": round(stage3.pump_pause_zone_density, 4),
+                        "pump_pause_zone_count": int(stage3.pump_pause_zone_count),
+                        "prebreak_range_compression": round(stage3.prebreak_range_compression, 4) if np.isfinite(stage3.prebreak_range_compression) else np.nan,
+                        "pullback_trade_activity_vs_sleep": round(stage3.pullback_trade_activity_vs_sleep, 4),
+                        "pullback_quote_volume_vs_sleep": round(stage3.pullback_quote_volume_vs_sleep, 4),
                         **self._build_structure_points_payload(
                             one=one,
                             pivot_indices=stage3.structure_pivot_indices,
@@ -2870,8 +3448,9 @@ class PnoEngine:
             return None, payload
 
         levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
-        stage1_start_window = self._bars_for_duration(levels_timeframe_ms, 30 * 60_000)
         pre_pump_1h_window = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
+        stage1_flow_hold_bars = self._scale_5m_stage_bars(int(params.stage1_flow_hold_bars), levels_timeframe_ms)
+        stage1_flow_hold_window_bars = self._scale_5m_stage_bars(int(params.stage1_flow_hold_window_bars), levels_timeframe_ms)
         if pump_start_5m_idx <= 0 or pump_start_5m_idx >= len(five.timestamps):
             return None, None
         active_high_timestamp = int(one.timestamps[active_high_idx])
@@ -2946,9 +3525,12 @@ class PnoEngine:
 
         pump_pre_atr = float(five.atr_pre_14[pump_start_5m_idx])
         baseline_quote = float(five.pre_quote_median_24[pump_start_5m_idx])
+        baseline_trade = float(five.pre_trade_median_24[pump_start_5m_idx])
         if not np.isfinite(pump_pre_atr) or pump_pre_atr <= 0.0:
             return None, None
         if not np.isfinite(baseline_quote) or baseline_quote <= 0.0:
+            return None, None
+        if not np.isfinite(baseline_trade) or baseline_trade <= 0.0:
             return None, None
         nonorganic_signature = self._resolve_pump_nonorganic_signature(
             one=one,
@@ -3012,22 +3594,248 @@ class PnoEngine:
                 stage1_min_peak_bar_tr_atr_pre=round(float(params.stage1_min_peak_bar_tr_atr_pre), 4),
             )
 
-        start_window_end = min(five_idx, pump_start_5m_idx + stage1_start_window)
-        pump_start_quote = float(np.mean(five.quote_volume[pump_start_5m_idx : start_window_end + 1]))
+        pump_start_quote = float(five.quote_volume[pump_start_5m_idx])
+        pump_start_trade = float(five.trade_activity[pump_start_5m_idx])
         pump_continue_quote = float(np.mean(five.quote_volume[pump_start_5m_idx : five_idx + 1]))
+        pump_continue_trade = float(np.mean(five.trade_activity[pump_start_5m_idx : five_idx + 1]))
+        flow_start_price_reference = max(float(five.opens[pump_start_5m_idx]), float(five.closes[pump_start_5m_idx]))
+        flow_current_close = float(five.closes[five_idx])
+        flow_window_price_growth = flow_current_close - flow_start_price_reference
+        flow_window_price_growth_pct = self._safe_divide(flow_window_price_growth, flow_start_price_reference)
+        if flow_window_price_growth <= self._EPSILON:
+            return _reject(
+                "flow_window_no_price_growth",
+                flow_start_price_reference=round(flow_start_price_reference, 8),
+                flow_current_close=round(flow_current_close, 8),
+                flow_window_price_growth_pct=round(flow_window_price_growth_pct, 6),
+            )
         pump_volume_ratio_start = self._safe_divide(pump_start_quote, baseline_quote)
+        pump_trade_ratio_start = self._safe_divide(pump_start_trade, baseline_trade)
         pump_volume_ratio_continue = self._safe_divide(pump_continue_quote, baseline_quote)
+        pump_trade_ratio_continue = self._safe_divide(pump_continue_trade, baseline_trade)
         if pump_volume_ratio_start < float(params.stage1_min_volume_ratio_start):
             return _reject(
                 "volume_ratio_start_too_small",
                 pump_volume_ratio_start=round(pump_volume_ratio_start, 4),
                 stage1_min_volume_ratio_start=round(float(params.stage1_min_volume_ratio_start), 4),
             )
+        if pump_trade_ratio_start < float(params.stage1_min_trade_ratio_start):
+            return _reject(
+                "trade_ratio_start_too_small",
+                pump_trade_ratio_start=round(pump_trade_ratio_start, 4),
+                stage1_min_trade_ratio_start=round(float(params.stage1_min_trade_ratio_start), 4),
+            )
         if pump_volume_ratio_continue < float(params.stage1_min_volume_ratio_continue):
             return _reject(
                 "volume_ratio_continue_too_small",
                 pump_volume_ratio_continue=round(pump_volume_ratio_continue, 4),
                 stage1_min_volume_ratio_continue=round(float(params.stage1_min_volume_ratio_continue), 4),
+            )
+        if pump_trade_ratio_continue < float(params.stage1_min_trade_ratio_continue):
+            return _reject(
+                "trade_ratio_continue_too_small",
+                pump_trade_ratio_continue=round(pump_trade_ratio_continue, 4),
+                stage1_min_trade_ratio_continue=round(float(params.stage1_min_trade_ratio_continue), 4),
+            )
+
+        flow_hold_start_idx = min(pump_start_5m_idx + 1, len(five.timestamps) - 1)
+        flow_hold_end_idx = min(
+            five_idx,
+            pump_start_5m_idx + max(stage1_flow_hold_window_bars, stage1_flow_hold_bars),
+            len(five.timestamps) - 1,
+        )
+        flow_hold_bar_count = 0
+        if flow_hold_end_idx >= flow_hold_start_idx:
+            hold_quote_threshold = max(
+                float(params.stage1_flow_hold_min_start_fraction) * pump_start_quote,
+                float(params.stage1_min_volume_ratio_continue) * baseline_quote,
+            )
+            hold_trade_threshold = max(
+                float(params.stage1_flow_hold_min_start_fraction) * pump_start_trade,
+                float(params.stage1_min_trade_ratio_continue) * baseline_trade,
+            )
+            hold_quotes = five.quote_volume[flow_hold_start_idx : flow_hold_end_idx + 1]
+            hold_trades = five.trade_activity[flow_hold_start_idx : flow_hold_end_idx + 1]
+            flow_hold_bar_count = int(
+                np.sum(
+                    (
+                        (hold_quotes >= hold_quote_threshold)
+                        & (hold_trades >= hold_trade_threshold)
+                    )
+                    | (
+                        (hold_quotes >= (float(params.stage1_min_volume_ratio_start) * baseline_quote))
+                        & (hold_trades >= (float(params.stage1_min_trade_ratio_start) * baseline_trade))
+                    )
+                )
+            )
+        if flow_hold_bar_count < stage1_flow_hold_bars:
+            return _reject(
+                "flow_hold_not_confirmed",
+                flow_hold_bar_count=int(flow_hold_bar_count),
+                stage1_flow_hold_bars=int(stage1_flow_hold_bars),
+                stage1_flow_hold_window_bars=int(stage1_flow_hold_window_bars),
+            )
+
+        flow_step_start_idx = pump_start_5m_idx
+        flow_step_end_idx = min(
+            five_idx,
+            pump_start_5m_idx + max(stage1_flow_hold_window_bars, stage1_flow_hold_bars),
+            len(five.timestamps) - 1,
+        )
+        flow_step_quotes = five.quote_volume[flow_step_start_idx : flow_step_end_idx + 1]
+        flow_step_trades = five.trade_activity[flow_step_start_idx : flow_step_end_idx + 1]
+        flow_step_quote_threshold = max(
+            float(params.stage1_flow_hold_min_start_fraction) * pump_start_quote,
+            float(params.stage1_min_volume_ratio_continue) * baseline_quote,
+        )
+        flow_step_trade_threshold = max(
+            float(params.stage1_flow_hold_min_start_fraction) * pump_start_trade,
+            float(params.stage1_min_trade_ratio_continue) * baseline_trade,
+        )
+        flow_step_strong_quote_threshold = float(params.stage1_min_volume_ratio_start) * baseline_quote
+        flow_step_strong_trade_threshold = float(params.stage1_min_trade_ratio_start) * baseline_trade
+        flow_step_mask = (
+            (
+                (flow_step_quotes >= flow_step_quote_threshold)
+                & (flow_step_trades >= flow_step_trade_threshold)
+            )
+            | (
+                (flow_step_quotes >= flow_step_strong_quote_threshold)
+                & (flow_step_trades >= flow_step_strong_trade_threshold)
+            )
+        )
+        flow_step_required_run = int(stage1_flow_hold_bars) + 1
+        flow_step_initial_run = 0
+        flow_step_max_run = 0
+        current_run = 0
+        for is_elevated in flow_step_mask.tolist():
+            if is_elevated:
+                current_run += 1
+                if flow_step_initial_run == current_run - 1:
+                    flow_step_initial_run = current_run
+                if current_run > flow_step_max_run:
+                    flow_step_max_run = current_run
+            else:
+                current_run = 0
+        flow_step_quote_median_ratio = self._safe_divide(float(np.nanmedian(flow_step_quotes)), baseline_quote)
+        flow_step_trade_median_ratio = self._safe_divide(float(np.nanmedian(flow_step_trades)), baseline_trade)
+        flow_step_elevated_share = float(np.mean(flow_step_mask)) if flow_step_mask.size > 0 else 0.0
+        pre_step_window_bars = min(24, pump_start_5m_idx)
+        pre_step_start_idx = max(0, pump_start_5m_idx - pre_step_window_bars)
+        pre_step_quotes = five.quote_volume[pre_step_start_idx:pump_start_5m_idx]
+        pre_step_trades = five.trade_activity[pre_step_start_idx:pump_start_5m_idx]
+        pre_step_quote_mask = pre_step_quotes >= (float(params.stage1_min_volume_ratio_continue) * baseline_quote)
+        pre_step_trade_mask = pre_step_trades >= (float(params.stage1_min_trade_ratio_continue) * baseline_trade)
+        pre_step_mask = pre_step_quote_mask & pre_step_trade_mask
+        pre_step_elevated_share = float(np.mean(pre_step_mask)) if pre_step_mask.size > 0 else 0.0
+        pre_step_max_run = 0
+        current_pre_run = 0
+        for is_elevated in pre_step_mask.tolist():
+            if is_elevated:
+                current_pre_run += 1
+                if current_pre_run > pre_step_max_run:
+                    pre_step_max_run = current_pre_run
+            else:
+                current_pre_run = 0
+        pre_step_peak_quote = float(np.nanmax(pre_step_quotes)) if pre_step_quotes.size > 0 else 0.0
+        pre_step_peak_trade = float(np.nanmax(pre_step_trades)) if pre_step_trades.size > 0 else 0.0
+        pre_step_median_quote = float(np.nanmedian(pre_step_quotes)) if pre_step_quotes.size > 0 else 0.0
+        pre_step_median_trade = float(np.nanmedian(pre_step_trades)) if pre_step_trades.size > 0 else 0.0
+        pre_step_tail_quotes = pre_step_quotes[-min(6, pre_step_quotes.size) :]
+        pre_step_tail_trades = pre_step_trades[-min(6, pre_step_trades.size) :]
+        pre_step_tail_median_quote = float(np.nanmedian(pre_step_tail_quotes)) if pre_step_tail_quotes.size > 0 else 0.0
+        pre_step_tail_median_trade = float(np.nanmedian(pre_step_tail_trades)) if pre_step_tail_trades.size > 0 else 0.0
+        flow_step_median_quote = float(np.nanmedian(flow_step_quotes)) if flow_step_quotes.size > 0 else 0.0
+        flow_step_median_trade = float(np.nanmedian(flow_step_trades)) if flow_step_trades.size > 0 else 0.0
+        pre_step_price_high = float(np.nanmax(five.highs[pre_step_start_idx:pump_start_5m_idx])) if pump_start_5m_idx > pre_step_start_idx else np.nan
+        pre_step_price_low = float(np.nanmin(five.lows[pre_step_start_idx:pump_start_5m_idx])) if pump_start_5m_idx > pre_step_start_idx else np.nan
+        flow_step_price_high = float(np.nanmax(five.highs[flow_step_start_idx : flow_step_end_idx + 1])) if flow_step_end_idx >= flow_step_start_idx else np.nan
+        flow_step_price_low = float(np.nanmin(five.lows[flow_step_start_idx : flow_step_end_idx + 1])) if flow_step_end_idx >= flow_step_start_idx else np.nan
+        pre_step_price_range = pre_step_price_high - pre_step_price_low
+        flow_step_price_range = flow_step_price_high - flow_step_price_low
+        flow_step_price_range_vs_pre = self._safe_divide(flow_step_price_range, pre_step_price_range)
+        pre_step_peak_quote_to_flow_step = self._safe_divide(pre_step_peak_quote, flow_step_median_quote)
+        pre_step_peak_trade_to_flow_step = self._safe_divide(pre_step_peak_trade, flow_step_median_trade)
+        flow_step_quote_vs_pre_median = self._safe_divide(flow_step_median_quote, pre_step_median_quote)
+        flow_step_trade_vs_pre_median = self._safe_divide(flow_step_median_trade, pre_step_median_trade)
+        flow_step_quote_vs_pre_tail_median = self._safe_divide(flow_step_median_quote, pre_step_tail_median_quote)
+        flow_step_trade_vs_pre_tail_median = self._safe_divide(flow_step_median_trade, pre_step_tail_median_trade)
+        if flow_step_initial_run < flow_step_required_run:
+            return _reject(
+                "flow_step_not_confirmed",
+                flow_step_initial_run=int(flow_step_initial_run),
+                flow_step_max_run=int(flow_step_max_run),
+                flow_step_required_run=int(flow_step_required_run),
+                flow_step_quote_median_ratio=round(flow_step_quote_median_ratio, 4),
+                flow_step_trade_median_ratio=round(flow_step_trade_median_ratio, 4),
+                flow_step_elevated_share=round(flow_step_elevated_share, 4),
+                stage1_flow_hold_window_bars=int(stage1_flow_hold_window_bars),
+            )
+        if flow_step_elevated_share < 0.75:
+            return _reject(
+                "flow_step_not_dense",
+                flow_step_elevated_share=round(flow_step_elevated_share, 4),
+                flow_step_initial_run=int(flow_step_initial_run),
+                flow_step_max_run=int(flow_step_max_run),
+                stage1_flow_hold_window_bars=int(stage1_flow_hold_window_bars),
+            )
+        if (
+            pre_step_elevated_share > 0.25
+            or pre_step_max_run > 2
+            or pre_step_peak_quote_to_flow_step > 1.8
+            or pre_step_peak_trade_to_flow_step > 1.8
+        ):
+            return _reject(
+                "pre_flow_not_sleepy_before_step",
+                pre_step_elevated_share=round(pre_step_elevated_share, 4),
+                pre_step_max_run=int(pre_step_max_run),
+                pre_step_peak_quote_to_flow_step=round(pre_step_peak_quote_to_flow_step, 4),
+                pre_step_peak_trade_to_flow_step=round(pre_step_peak_trade_to_flow_step, 4),
+                flow_step_quote_median_ratio=round(flow_step_quote_median_ratio, 4),
+                flow_step_trade_median_ratio=round(flow_step_trade_median_ratio, 4),
+            )
+        if (
+            flow_step_quote_vs_pre_median < 2.5
+            or flow_step_trade_vs_pre_median < 2.5
+            or flow_step_quote_vs_pre_tail_median < 2.5
+            or flow_step_trade_vs_pre_tail_median < 2.5
+        ):
+            return _reject(
+                "flow_step_no_volume_stair",
+                flow_step_quote_vs_pre_median=round(flow_step_quote_vs_pre_median, 4),
+                flow_step_trade_vs_pre_median=round(flow_step_trade_vs_pre_median, 4),
+                flow_step_quote_vs_pre_tail_median=round(flow_step_quote_vs_pre_tail_median, 4),
+                flow_step_trade_vs_pre_tail_median=round(flow_step_trade_vs_pre_tail_median, 4),
+                flow_step_quote_median_ratio=round(flow_step_quote_median_ratio, 4),
+                flow_step_trade_median_ratio=round(flow_step_trade_median_ratio, 4),
+            )
+        if np.isfinite(pre_step_price_range) and pre_step_price_range > self._EPSILON and flow_step_price_range_vs_pre < 2.0:
+            return _reject(
+                "flow_step_price_not_distinct",
+                flow_step_price_range_vs_pre=round(flow_step_price_range_vs_pre, 4),
+                flow_step_price_range=round(float(flow_step_price_range), 8),
+                pre_step_price_range=round(float(pre_step_price_range), 8),
+            )
+
+        active_window_start_idx = max(pump_start_5m_idx, five_idx - self._bars_for_duration(levels_timeframe_ms, 30 * 60_000) + 1)
+        active_quote_median = float(np.nanmedian(five.quote_volume[active_window_start_idx : five_idx + 1]))
+        active_trade_median = float(np.nanmedian(five.trade_activity[active_window_start_idx : five_idx + 1]))
+        active_context_quote_fraction = self._safe_divide(active_quote_median, pump_start_quote)
+        active_context_trade_fraction = self._safe_divide(active_trade_median, pump_start_trade)
+        active_context_quote_ratio = self._safe_divide(active_quote_median, baseline_quote)
+        active_context_trade_ratio = self._safe_divide(active_trade_median, baseline_trade)
+        if (
+            active_context_quote_fraction < float(params.stage1_active_context_min_start_fraction)
+            or active_context_trade_fraction < float(params.stage1_active_context_min_start_fraction)
+            or active_context_quote_ratio < float(params.stage1_active_context_min_baseline_ratio)
+            or active_context_trade_ratio < float(params.stage1_active_context_min_baseline_ratio)
+        ):
+            return _reject(
+                "active_flow_faded_before_structure",
+                active_context_quote_fraction=round(active_context_quote_fraction, 4),
+                active_context_trade_fraction=round(active_context_trade_fraction, 4),
+                active_context_quote_ratio=round(active_context_quote_ratio, 4),
+                active_context_trade_ratio=round(active_context_trade_ratio, 4),
             )
 
         pump_net_move = max(float(pump_closes[-1]) - float(pump_opens[0]), 0.0)
@@ -3220,7 +4028,14 @@ class PnoEngine:
                 "pump_impulse_atr_pre": pump_impulse_atr_pre,
                 "pump_peak_bar_tr_atr_pre": pump_peak_bar_tr_atr_pre,
                 "pump_volume_ratio_start": pump_volume_ratio_start,
+                "pump_trade_ratio_start": pump_trade_ratio_start,
                 "pump_volume_ratio_continue": pump_volume_ratio_continue,
+                "pump_trade_ratio_continue": pump_trade_ratio_continue,
+                "flow_window_price_growth_pct": flow_window_price_growth_pct,
+                "flow_hold_bar_count": flow_hold_bar_count,
+                "flow_hold_required_bars": int(stage1_flow_hold_bars),
+                "active_context_quote_fraction": active_context_quote_fraction,
+                "active_context_trade_fraction": active_context_trade_fraction,
                 "pump_path_efficiency": pump_path_efficiency,
                 "pump_wick_share": pump_wick_share,
                 "pump_body_share_mean": pump_body_share_mean,
@@ -3278,12 +4093,15 @@ class PnoEngine:
         params: PnoParams,
     ) -> tuple[Stage1Context | None, dict[str, object] | None]:
         levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
+        flow_pump_start_5m_idx = int(five.pump_start_idx[five_idx])
         candidate = self._resolve_htf_stage1_candidate_from_arrays(
             timestamps=five.timestamps,
             highs=five.highs,
             lows=five.lows,
             five_idx=five_idx,
             params=params,
+            levels_timeframe_ms=levels_timeframe_ms,
+            forced_pump_start_5m_idx=flow_pump_start_5m_idx if flow_pump_start_5m_idx >= 0 else None,
         )
         if candidate is None:
             return None, None
@@ -3308,7 +4126,7 @@ class PnoEngine:
 
         leg_start_idx = int(start_idx + np.argmin(one.lows[start_idx : active_high_idx + 1]))
         leg_start = float(one.lows[leg_start_idx])
-        active_high = float(candidate["active_high"])
+        active_high = float(one.highs[active_high_idx])
         leg_size = active_high - leg_start
         min_leg = max(
             float(params.min_stage1_leg_v1) * max(float(one.v1[idx]), self._EPSILON),
@@ -3319,24 +4137,49 @@ class PnoEngine:
 
         htf_pullback_low = float(candidate["pullback_low"])
         min_allowed_low = float(candidate["min_allowed_low"])
-        if htf_pullback_low < (min_allowed_low - self._EPSILON):
-            return None, None
-        if float(one.lows[idx]) < (min_allowed_low - self._EPSILON):
+
+        rejection_extra_base: dict[str, object] = {
+            "sleep_start_timestamp_ms": int(five.timestamps[max(int(candidate["pump_start_5m_idx"]) - 1, 0)]),
+            "sleep_end_timestamp_ms": int(five.timestamps[max(int(candidate["pump_start_5m_idx"]) - 1, 0)]),
+            "pump_start_timestamp_ms": start_timestamp,
+            "stage1_confirm_timestamp_ms": int(candidate["level_timestamp"]),
+            "active_high_timestamp_ms": int(one.timestamps[active_high_idx]),
+            "current_timestamp_ms": int(one.timestamps[idx]),
+            "active_high": round(active_high, 8),
+            "leg_start": round(leg_start, 8),
+            "leg_size": round(leg_size, 8),
+            "stage1_hold_price": round(float(candidate["level"]), 8),
+        }
+        quality_metrics, quality_rejection = self._resolve_stage1_quality_metrics(
+            one=one,
+            five=five,
+            idx=idx,
+            five_idx=five_idx,
+            pump_start_5m_idx=int(candidate["pump_start_5m_idx"]),
+            start_idx=start_idx,
+            active_high_idx=active_high_idx,
+            active_high=active_high,
+            leg_start=leg_start,
+            leg_size=leg_size,
+            params=params,
+        )
+        if quality_metrics is None:
+            if quality_rejection is None:
+                return None, None
+            reason = str(quality_rejection.get("reason") or "quality_reject")
+            quality_extra = {key: value for key, value in quality_rejection.items() if key != "reason"}
             return (
                 None,
                 {
-                    "reason": "pullback_below_min_allowed_low",
+                    "reason": reason,
                     "key": (int(candidate["pump_start_5m_idx"]), int(candidate["pullback_end_5m_idx"])),
                     "timestamp_ms": int(one.timestamps[idx]),
-                    "extra": {
-                        "active_high": round(active_high, 8),
-                        "leg_start": round(leg_start, 8),
-                        "min_allowed_low": round(min_allowed_low, 8),
-                        "current_low": round(float(one.lows[idx]), 8),
-                    },
+                    "extra": {**rejection_extra_base, **quality_extra},
                 },
             )
 
+        reference_high = float(quality_metrics["reference_high"])
+        reference_leg_size = max(reference_high - leg_start, self._EPSILON)
         pump_range = self._resolve_window_range(
             highs=five.highs,
             lows=five.lows,
@@ -3344,15 +4187,11 @@ class PnoEngine:
             end_idx=int(candidate["pullback_end_5m_idx"]),
         )
         stage1_hold_price = float(candidate["level"])
-        hold_floor = min_allowed_low
+        hold_floor = max(min_allowed_low, min(reference_high, active_high) - (float(params.stage1_hold_fraction) * reference_leg_size))
         allowed_pullback_end_5m_idx = min(
             len(five.timestamps) - 1,
-            int(candidate["active_high_5m_idx"]) + int(params.stage1_pullback_max_bars),
-        )
-        cumulative_quote_volume = self._range_sum(
-            five.cumulative_quote_volume,
-            int(candidate["pump_start_5m_idx"]),
-            int(candidate["pullback_end_5m_idx"]),
+            int(candidate["active_high_5m_idx"])
+            + self._scale_5m_stage_bars(int(params.stage1_pullback_max_bars), levels_timeframe_ms),
         )
         return (
             Stage1Context(
@@ -3369,16 +4208,57 @@ class PnoEngine:
                 active_high_idx=active_high_idx,
                 active_high_timestamp=int(one.timestamps[active_high_idx]),
                 active_high=active_high,
-                reference_high=active_high,
+                reference_high=reference_high,
                 leg_start_idx=leg_start_idx,
                 leg_start_timestamp=int(one.timestamps[leg_start_idx]),
                 leg_start=leg_start,
                 leg_size=leg_size,
-                reference_leg_size=leg_size,
+                reference_leg_size=reference_leg_size,
                 pump_range_5m=pump_range,
                 hold_floor=hold_floor,
                 stage1_hold_price=stage1_hold_price,
-                cumulative_quote_volume=float(cumulative_quote_volume),
+                cumulative_quote_volume=float(quality_metrics["cumulative_quote_volume"]),
+                pre_pump_ema_crosses_1h=int(quality_metrics["pre_pump_ema_crosses_1h"]),
+                pre_pump_barcode_fraction_1h=float(quality_metrics["pre_pump_barcode_fraction_1h"]),
+                pre_pump_high_24h=float(quality_metrics["pre_pump_high_24h"]),
+                pre_pump_high_1h=float(quality_metrics["pre_pump_high_1h"]),
+                pump_pre_atr=float(quality_metrics["pump_pre_atr"]),
+                pump_impulse_atr_pre=float(quality_metrics["pump_impulse_atr_pre"]),
+                pump_peak_bar_tr_atr_pre=float(quality_metrics["pump_peak_bar_tr_atr_pre"]),
+                pump_volume_ratio_start=float(quality_metrics["pump_volume_ratio_start"]),
+                pump_trade_ratio_start=float(quality_metrics["pump_trade_ratio_start"]),
+                pump_volume_ratio_continue=float(quality_metrics["pump_volume_ratio_continue"]),
+                pump_trade_ratio_continue=float(quality_metrics["pump_trade_ratio_continue"]),
+                flow_hold_bar_count=int(quality_metrics["flow_hold_bar_count"]),
+                flow_hold_required_bars=int(quality_metrics["flow_hold_required_bars"]),
+                active_context_quote_fraction=float(quality_metrics["active_context_quote_fraction"]),
+                active_context_trade_fraction=float(quality_metrics["active_context_trade_fraction"]),
+                pump_path_efficiency=float(quality_metrics["pump_path_efficiency"]),
+                pump_wick_share=float(quality_metrics["pump_wick_share"]),
+                pump_body_share_mean=float(quality_metrics["pump_body_share_mean"]),
+                pump_flat_body_share=float(quality_metrics["pump_flat_body_share"]),
+                pump_body_wick_edge=float(quality_metrics["pump_body_wick_edge"]),
+                pump_micro_flat_bar_share=float(quality_metrics["pump_micro_flat_bar_share"]),
+                active_high_bar_body_share=float(quality_metrics["active_high_bar_body_share"]),
+                active_high_bar_upper_wick_share=float(quality_metrics["active_high_bar_upper_wick_share"]),
+                active_high_bar_close_position=float(quality_metrics["active_high_bar_close_position"]),
+                pump_max_red_body_share_5m=float(quality_metrics["pump_max_red_body_share_5m"]),
+                pump_counterflow_ratio_5m=float(quality_metrics["pump_counterflow_ratio_5m"]),
+                pump_max_red_body_share_1m=float(quality_metrics["pump_max_red_body_share_1m"]),
+                pump_counterflow_ratio_1m=float(quality_metrics["pump_counterflow_ratio_1m"]),
+                pre_pump_range_1h=self._resolve_window_range(
+                    highs=five.highs,
+                    lows=five.lows,
+                    start_idx=max(0, int(candidate["pump_start_5m_idx"]) - self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)),
+                    end_idx=int(candidate["pump_start_5m_idx"]) - 1,
+                ),
+                pre_pump_range_2h=self._resolve_window_range(
+                    highs=five.highs,
+                    lows=five.lows,
+                    start_idx=max(0, int(candidate["pump_start_5m_idx"]) - self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)),
+                    end_idx=int(candidate["pump_start_5m_idx"]) - 1,
+                ),
+                reference_high_weight=float(quality_metrics["reference_high_weight"]),
                 active_high_5m_idx=int(candidate["active_high_5m_idx"]),
                 htf_pullback_start_5m_idx=int(candidate["pullback_start_5m_idx"]),
                 htf_pullback_end_5m_idx=int(allowed_pullback_end_5m_idx),
@@ -3414,9 +4294,32 @@ class PnoEngine:
             return None
         pullback_low_idx = int(pullback_start_idx + np.argmin(one.lows[pullback_start_idx : idx + 1]))
         pullback_low = float(one.lows[pullback_low_idx])
+        if pullback_low < (float(stage1.htf_min_allowed_low) - self._EPSILON):
+            return None
         pullback_depth = stage1.reference_high - pullback_low
         min_pullback_from_pump = float(params.pullback_min_pump_fraction_5m) * max(stage1.leg_size, self._EPSILON)
         if pullback_depth < min_pullback_from_pump:
+            return None
+        htf_pullback_start_idx = min(max(active_high_5m_idx + 1, 0), len(five.timestamps) - 1)
+        htf_pullback_end_idx = min(max(five_idx, htf_pullback_start_idx), len(five.timestamps) - 1)
+        pullback_trade_median = float(np.nanmedian(five.trade_activity[htf_pullback_start_idx : htf_pullback_end_idx + 1]))
+        pullback_quote_median = float(np.nanmedian(five.quote_volume[htf_pullback_start_idx : htf_pullback_end_idx + 1]))
+        sleep_trade_reference = float(five.pre_trade_median_24[stage1.pump_start_5m_idx])
+        sleep_quote_reference = float(five.pre_quote_median_24[stage1.pump_start_5m_idx])
+        if (
+            not np.isfinite(pullback_trade_median)
+            or not np.isfinite(pullback_quote_median)
+            or not np.isfinite(sleep_trade_reference)
+            or not np.isfinite(sleep_quote_reference)
+            or sleep_trade_reference <= 0.0
+            or sleep_quote_reference <= 0.0
+        ):
+            return None
+        pullback_trade_activity_vs_sleep = self._safe_divide(pullback_trade_median, sleep_trade_reference)
+        pullback_quote_volume_vs_sleep = self._safe_divide(pullback_quote_median, sleep_quote_reference)
+        if pullback_trade_activity_vs_sleep < float(params.pullback_min_trade_activity_vs_sleep):
+            return None
+        if pullback_quote_volume_vs_sleep < float(params.pullback_min_quote_volume_vs_sleep):
             return None
         structure = self._resolve_pullback_structure(
             one=one,
@@ -3435,6 +4338,8 @@ class PnoEngine:
             pullback_low=pullback_low,
             pullback_depth=pullback_depth,
             pullback_age_bars=(five_idx - active_high_5m_idx),
+            pullback_trade_activity_vs_sleep=pullback_trade_activity_vs_sleep,
+            pullback_quote_volume_vs_sleep=pullback_quote_volume_vs_sleep,
             structure_high_idx=int(structure["last_high_idx"]) if structure is not None else -1,
             structure_high_timestamp=int(structure["last_high_timestamp"]) if structure is not None else 0,
             structure_high=float(structure["last_high"]) if structure is not None else 0.0,
@@ -3462,14 +4367,35 @@ class PnoEngine:
             return None, None
         if five_idx > int(stage1.htf_pullback_end_5m_idx):
             return None, "htf_pullback_limit_reached"
+        start_window_end = min(
+            five_idx,
+            int(stage1.pump_start_5m_idx) + self._bars_for_duration(int(params.levels_timeframe.to_milliseconds()), 15 * 60_000),
+        )
+        pump_start_quote = float(np.nanmean(five.quote_volume[int(stage1.pump_start_5m_idx) : start_window_end + 1]))
+        pump_start_trade = float(np.nanmean(five.trade_activity[int(stage1.pump_start_5m_idx) : start_window_end + 1]))
+        baseline_quote = float(five.pre_quote_median_24[int(stage1.pump_start_5m_idx)])
+        baseline_trade = float(five.pre_trade_median_24[int(stage1.pump_start_5m_idx)])
+        active_window = self._bars_for_duration(int(params.levels_timeframe.to_milliseconds()), 30 * 60_000)
+        active_window_start = max(int(stage1.pump_start_5m_idx), five_idx - active_window + 1)
+        active_quote_median = float(np.nanmedian(five.quote_volume[active_window_start : five_idx + 1]))
+        active_trade_median = float(np.nanmedian(five.trade_activity[active_window_start : five_idx + 1]))
+        active_quote_fraction = self._safe_divide(active_quote_median, pump_start_quote)
+        active_trade_fraction = self._safe_divide(active_trade_median, pump_start_trade)
+        active_quote_ratio = self._safe_divide(active_quote_median, baseline_quote)
+        active_trade_ratio = self._safe_divide(active_trade_median, baseline_trade)
+        scaled_fast_reclaim_max_pullback_age_bars = self._scale_5m_stage_bars(
+            int(params.stage3_fast_reclaim_max_pullback_age_bars),
+            int(params.levels_timeframe.to_milliseconds()),
+        )
+        if (
+            active_quote_fraction < float(params.stage1_active_context_min_start_fraction)
+            or active_trade_fraction < float(params.stage1_active_context_min_start_fraction)
+            or active_quote_ratio < float(params.stage1_active_context_min_baseline_ratio)
+            or active_trade_ratio < float(params.stage1_active_context_min_baseline_ratio)
+        ):
+            return None, "active_flow_faded_before_bos"
         if float(one.lows[idx]) < (float(stage1.htf_min_allowed_low) - self._EPSILON):
             return None, "price_too_low"
-        max_breakout_close = float(stage1.active_high) + (
-            float(params.structure_max_breakout_extension_fraction)
-            * max(float(stage2.pullback_depth), self._EPSILON)
-        )
-        if float(one.closes[idx]) > (max_breakout_close + self._EPSILON):
-            return None, "price_too_high"
         close_broke_leg_start = bool(
             np.any(
                 one.closes[stage2.pullback_start_idx : idx + 1]
@@ -3477,6 +4403,85 @@ class PnoEngine:
             )
         )
         wick_broke_leg_start = bool(stage2.pullback_low <= (stage1.leg_start + self._EPSILON))
+        if close_broke_leg_start:
+            return None, "pullback_closed_below_leg_start"
+        post_active_high_start_idx = int(stage1.active_high_idx) + 1
+        if post_active_high_start_idx <= idx:
+            post_active_highs = one.highs[post_active_high_start_idx : idx + 1]
+            if post_active_highs.size > 0 and float(np.nanmax(post_active_highs)) > (float(stage1.active_high) + self._EPSILON):
+                return None, "main_high_crossed_before_bos"
+        post_high_start_idx = min(max(stage1.active_high_idx + 1, 0), idx)
+        post_high_end_idx = max(idx - 1, post_high_start_idx)
+        post_high_opens = one.opens[post_high_start_idx : post_high_end_idx + 1]
+        post_high_highs = one.highs[post_high_start_idx : post_high_end_idx + 1]
+        post_high_lows = one.lows[post_high_start_idx : post_high_end_idx + 1]
+        post_high_closes = one.closes[post_high_start_idx : post_high_end_idx + 1]
+        post_high_ranges = np.maximum(post_high_highs - post_high_lows, self._EPSILON)
+        post_high_bodies = np.abs(post_high_closes - post_high_opens)
+        post_high_wicks = np.maximum(post_high_ranges - post_high_bodies, 0.0)
+        post_high_wick_share = float(np.nanmean(post_high_wicks / post_high_ranges)) if post_high_ranges.size else 0.0
+        red_mask = post_high_closes < post_high_opens
+        post_high_max_red_body_share = (
+            float(np.nanmax((post_high_bodies / post_high_ranges)[red_mask]))
+            if post_high_ranges.size and np.any(red_mask)
+            else 0.0
+        )
+        post_high_body_overlap_rate = 0.0
+        if post_high_closes.size >= 2:
+            body_lows = np.minimum(post_high_opens, post_high_closes)
+            body_highs = np.maximum(post_high_opens, post_high_closes)
+            overlaps: list[float] = []
+            for prev_low, prev_high, cur_low, cur_high in zip(
+                body_lows[:-1],
+                body_highs[:-1],
+                body_lows[1:],
+                body_highs[1:],
+                strict=False,
+            ):
+                union = max(float(prev_high), float(cur_high)) - min(float(prev_low), float(cur_low))
+                overlap = min(float(prev_high), float(cur_high)) - max(float(prev_low), float(cur_low))
+                overlaps.append(self._safe_divide(max(overlap, 0.0), max(union, self._EPSILON)))
+            post_high_body_overlap_rate = float(np.nanmean(overlaps)) if overlaps else 0.0
+        post_high_chop_alternation_rate = 0.0
+        if post_high_closes.size >= 2:
+            signs = np.sign(post_high_closes - post_high_opens)
+            valid_signs = signs[signs != 0.0]
+            if valid_signs.size >= 2:
+                post_high_chop_alternation_rate = float(np.mean(valid_signs[1:] != valid_signs[:-1]))
+        post_high_ema20_pierce_count = 0
+        post_high_close_below_ema20_count = 0
+        if "ema20" in one.frame.columns and post_high_closes.size:
+            post_high_ema20 = pd.to_numeric(
+                one.frame["ema20"].iloc[post_high_start_idx : post_high_end_idx + 1],
+                errors="coerce",
+            ).to_numpy(dtype=np.float64)
+            post_high_ema20_pierce_count = int(np.sum(post_high_lows <= post_high_ema20))
+            post_high_close_below_ema20_count = int(np.sum(post_high_closes < post_high_ema20))
+        completed_post_high_five = five.volumes[active_high_5m_idx + 1 : five_idx]
+        post_high_peak_volume_support_fraction = 0.0
+        if completed_post_high_five.size > 0:
+            active_high_volume = float(five.volumes[active_high_5m_idx])
+            post_high_peak_volume = float(np.nanmax(completed_post_high_five))
+            post_high_peak_volume_support_fraction = self._safe_divide(post_high_peak_volume, active_high_volume)
+        if (
+            completed_post_high_five.size > 0
+            and post_high_peak_volume_support_fraction < float(params.stage3_min_post_high_5m_volume_support_fraction)
+        ):
+            default_fast_reclaim_max_pullback_age_bars = self._scale_5m_stage_bars(
+                2,
+                int(params.levels_timeframe.to_milliseconds()),
+            )
+            fast_reclaim_max_pullback_age_bars = max(
+                scaled_fast_reclaim_max_pullback_age_bars,
+                default_fast_reclaim_max_pullback_age_bars,
+            )
+            fast_reclaim_exception = (
+                stage2.pullback_age_bars <= fast_reclaim_max_pullback_age_bars
+                and post_high_peak_volume_support_fraction
+                >= float(params.stage3_fast_reclaim_min_post_high_5m_volume_support_fraction)
+            )
+            if not fast_reclaim_exception:
+                return None, "post_high_no_supporting_5m_volume"
         structure = self._resolve_pullback_structure(
             one=one,
             start_idx=stage1.active_high_idx,
@@ -3485,6 +4490,65 @@ class PnoEngine:
         )
         if structure is None or int(structure["break_idx"]) != idx:
             return None, None
+        if not self._has_descending_pullback_structure(
+            pivot_prices=tuple(structure["pivot_prices"]),
+            pivot_kinds=tuple(structure["pivot_kinds"]),
+            min_pivots=int(params.structure_min_descending_pivots),
+        ):
+            return None, None
+        market_quality_metrics = self._resolve_stage3_market_quality_metrics(
+            one=one,
+            stage1=stage1,
+            stage2=stage2,
+            structure=structure,
+            break_idx=idx,
+        )
+        structure_high_idx = int(structure["last_high_idx"])
+        structure_low_idx = int(structure["last_low_idx"])
+        low_to_bos_reclaim_bars = int(market_quality_metrics["low_to_bos_reclaim_bars"])
+        entry_timeframe_ms = int(params.entry_timeframe.to_milliseconds())
+        micro_shelf_high_bars = self._scale_entry_bars(2, entry_timeframe_ms)
+        micro_shelf_reclaim_bars = self._scale_entry_bars(6, entry_timeframe_ms)
+        saw_reclaim_bars = self._scale_entry_bars(3, entry_timeframe_ms)
+        post_high_path_efficiency = 1.0
+        if post_high_closes.size >= 2:
+            post_high_path_efficiency = self._safe_divide(
+                abs(float(post_high_closes[-1]) - float(post_high_closes[0])),
+                float(np.sum(np.abs(np.diff(post_high_closes)))),
+            )
+        pullback_path_closes = one.closes[post_high_start_idx : idx + 1]
+        pullback_path_efficiency = 1.0
+        if pullback_path_closes.size >= 2:
+            pullback_path_efficiency = self._safe_divide(
+                abs(float(pullback_path_closes[-1]) - float(pullback_path_closes[0])),
+                float(np.sum(np.abs(np.diff(pullback_path_closes)))),
+            )
+        if (
+            (structure_high_idx - int(stage1.active_high_idx)) <= micro_shelf_high_bars
+            and low_to_bos_reclaim_bars <= micro_shelf_reclaim_bars
+        ):
+            return None, "structure_micro_shelf_after_active_high"
+        if (
+            low_to_bos_reclaim_bars <= saw_reclaim_bars
+            and not bool(structure["structure_low_updates_pullback_depth"])
+            and float(post_high_wick_share) >= 0.50
+            and float(post_high_chop_alternation_rate) >= float(params.stage3_max_post_high_chop_alternation_rate)
+            and post_high_path_efficiency <= float(params.stage3_max_post_high_chop_path_efficiency)
+            and pullback_path_efficiency <= float(params.stage3_max_post_high_chop_path_efficiency)
+        ):
+            return None, "structure_saw_after_active_high"
+        prebreak_start_idx = min(max(stage1.active_high_idx, 0), idx)
+        prebreak_end_idx = max(idx - 1, prebreak_start_idx)
+        prebreak_volumes = one.volumes[prebreak_start_idx : prebreak_end_idx + 1]
+        prebreak_tr = one.tr[prebreak_start_idx : prebreak_end_idx + 1]
+        average_prebreak_volume = float(np.nanmean(prebreak_volumes)) if prebreak_volumes.size else np.nan
+        average_prebreak_tr = float(np.nanmean(prebreak_tr)) if prebreak_tr.size else np.nan
+        break_trade_activity_vs_prebreak = self._safe_divide(float(one.volumes[idx]), average_prebreak_volume)
+        break_atr_vs_prebreak = self._safe_divide(float(one.tr[idx]), average_prebreak_tr)
+        pump_leg_volumes = one.volumes[stage1.start_idx : stage1.active_high_idx + 1]
+        pump_leg_average_volume = float(np.nanmean(pump_leg_volumes)) if pump_leg_volumes.size else np.nan
+        break_volume_vs_pump_leg_avg = self._safe_divide(float(one.volumes[idx]), pump_leg_average_volume)
+        break_timestamp = int(one.timestamps[idx])
         return (
             Stage3Context(
                 active_high_idx=stage2.active_high_idx,
@@ -3497,6 +4561,13 @@ class PnoEngine:
                 pullback_depth=stage2.pullback_depth,
                 pullback_age_bars=stage2.pullback_age_bars,
                 validation_timestamp=int(one.timestamps[idx]),
+                post_high_ema20_pierce_count=post_high_ema20_pierce_count,
+                post_high_close_below_ema20_count=post_high_close_below_ema20_count,
+                post_high_wick_share=post_high_wick_share,
+                post_high_body_overlap_rate=post_high_body_overlap_rate,
+                post_high_max_red_body_share=post_high_max_red_body_share,
+                post_high_chop_alternation_rate=post_high_chop_alternation_rate,
+                post_high_peak_volume_support_fraction=post_high_peak_volume_support_fraction,
                 pullback_wick_broke_leg_start=wick_broke_leg_start,
                 pullback_close_broke_leg_start=close_broke_leg_start,
                 structure_high_idx=int(structure["last_high_idx"]),
@@ -3508,12 +4579,330 @@ class PnoEngine:
                 structure_break_idx=int(structure["break_idx"]),
                 structure_break_timestamp=int(one.timestamps[idx]),
                 structure_break_close=float(one.closes[idx]),
+                structure_break_trade_activity_vs_prebreak=break_trade_activity_vs_prebreak,
+                structure_break_atr_vs_prebreak=break_atr_vs_prebreak,
+                structure_break_volume_vs_pump_leg_avg=break_volume_vs_pump_leg_avg,
+                structure_break_aligns_1m_open=break_timestamp % 60_000 == 0,
+                structure_break_aligns_5m_open=break_timestamp % (5 * 60_000) == 0,
+                structure_break_aligns_30m_open=break_timestamp % (30 * 60_000) == 0,
+                structure_break_aligns_1h_open=break_timestamp % (60 * 60_000) == 0,
+                structure_low_updates_pullback_depth=bool(structure["structure_low_updates_pullback_depth"]),
+                structure_low_below_prev_up_leg_midpoint=bool(structure["structure_low_below_prev_up_leg_midpoint"]),
+                structure_low_depth_delta=float(structure["structure_low_depth_delta"]),
+                structure_last_leg_v1=float(structure["last_leg_v1"]),
+                structure_last_leg_vs_prev_median=float(structure["last_leg_vs_prev_median"]),
+                pullback_absorption_score=float(market_quality_metrics["pullback_absorption_score"]),
+                pullback_volume_expansion_no_low_update_share=float(
+                    market_quality_metrics["pullback_volume_expansion_no_low_update_share"]
+                ),
+                pullback_volume_expansion_no_low_update_count=int(
+                    market_quality_metrics["pullback_volume_expansion_no_low_update_count"]
+                ),
+                buy_pressure_recovery=float(market_quality_metrics["buy_pressure_recovery"]),
+                buy_pressure_break=float(market_quality_metrics["buy_pressure_break"]),
+                buy_pressure_pullback_avg=float(market_quality_metrics["buy_pressure_pullback_avg"]),
+                low_to_bos_reclaim_bars=int(market_quality_metrics["low_to_bos_reclaim_bars"]),
+                low_to_bos_reclaim_speed_v1_per_bar=float(
+                    market_quality_metrics["low_to_bos_reclaim_speed_v1_per_bar"]
+                ),
+                pump_pause_zone_density=float(market_quality_metrics["pump_pause_zone_density"]),
+                pump_pause_zone_count=int(market_quality_metrics["pump_pause_zone_count"]),
+                prebreak_range_compression=float(market_quality_metrics["prebreak_range_compression"]),
+                pullback_trade_activity_vs_sleep=stage2.pullback_trade_activity_vs_sleep,
+                pullback_quote_volume_vs_sleep=stage2.pullback_quote_volume_vs_sleep,
                 structure_pivot_indices=tuple(structure["pivot_indices"]),
                 structure_pivot_prices=tuple(structure["pivot_prices"]),
                 structure_pivot_kinds=tuple(structure["pivot_kinds"]),
             ),
             None,
         )
+
+    def _resolve_stage3_market_quality_metrics(
+        self,
+        *,
+        one: OneMinuteFrame,
+        stage1: Stage1Context,
+        stage2: Stage2Context,
+        structure: dict[str, object],
+        break_idx: int,
+    ) -> dict[str, float | int]:
+        pullback_start_idx = min(max(int(stage2.pullback_start_idx), 0), int(break_idx))
+        prebreak_end_idx = max(int(break_idx) - 1, pullback_start_idx)
+        pullback_lows = one.lows[pullback_start_idx : prebreak_end_idx + 1]
+        pullback_volumes = one.volumes[pullback_start_idx : prebreak_end_idx + 1]
+        volume_expansion_no_low_update_count = 0
+        pullback_absorption_score = 0.0
+        if pullback_lows.size > 1 and pullback_volumes.size == pullback_lows.size:
+            running_low = np.minimum.accumulate(pullback_lows)
+            prior_running_low = np.r_[np.inf, running_low[:-1]]
+            volume_reference = float(np.nanmedian(pullback_volumes))
+            high_volume_mask = pullback_volumes > max(volume_reference, self._EPSILON)
+            no_low_update_mask = pullback_lows >= (prior_running_low - self._EPSILON)
+            absorption_mask = high_volume_mask & no_low_update_mask
+            volume_expansion_no_low_update_count = int(np.sum(absorption_mask))
+            absorbed_volume = float(np.nansum(pullback_volumes[absorption_mask]))
+            expanded_volume = float(np.nansum(pullback_volumes[high_volume_mask]))
+            pullback_absorption_score = self._safe_divide(absorbed_volume, expanded_volume)
+        volume_expansion_no_low_update_share = self._safe_divide(
+            float(volume_expansion_no_low_update_count),
+            float(max(pullback_lows.size, 1)),
+        )
+
+        buy_pressure_break = np.nan
+        buy_pressure_pullback_avg = np.nan
+        buy_pressure_recovery = np.nan
+        if "taker_buy_volume" in one.frame.columns:
+            taker_buy = pd.to_numeric(one.frame["taker_buy_volume"], errors="coerce").to_numpy(dtype=np.float64)
+            volume = np.maximum(one.volumes, self._EPSILON)
+            buy_pressure = taker_buy / volume
+            buy_pressure_break = float(buy_pressure[break_idx]) if break_idx < buy_pressure.size else np.nan
+            pullback_buy_pressure = buy_pressure[pullback_start_idx : prebreak_end_idx + 1]
+            buy_pressure_pullback_avg = (
+                float(np.nanmean(pullback_buy_pressure)) if pullback_buy_pressure.size else np.nan
+            )
+            buy_pressure_recovery = self._safe_divide(buy_pressure_break, buy_pressure_pullback_avg)
+
+        structure_low_idx = int(structure.get("last_low_idx", stage2.pullback_low_idx))
+        structure_high = float(structure.get("last_high", np.nan))
+        low_to_bos_reclaim_bars = max(int(break_idx) - structure_low_idx, 0)
+        v1_now = max(float(one.v1[break_idx]), self._EPSILON)
+        low_price = float(one.lows[structure_low_idx]) if 0 <= structure_low_idx < len(one.lows) else float(stage2.pullback_low)
+        low_to_bos_reclaim_speed = self._safe_divide(
+            self._safe_divide(max(structure_high - low_price, 0.0), v1_now),
+            float(max(low_to_bos_reclaim_bars, 1)),
+        )
+
+        pump_pause_zone_count = self._count_pump_pause_zones(
+            one=one,
+            start_idx=int(stage1.start_idx),
+            end_idx=int(stage1.active_high_idx),
+        )
+        pump_pause_zone_density = self._safe_divide(
+            float(pump_pause_zone_count),
+            float(max(int(stage1.active_high_idx) - int(stage1.start_idx) + 1, 1)),
+        )
+
+        last_window = one.tr[max(pullback_start_idx, int(break_idx) - 3) : int(break_idx)]
+        prior_window = one.tr[pullback_start_idx : max(pullback_start_idx, int(break_idx) - 3)]
+        last_range = float(np.nanmedian(last_window)) if last_window.size else np.nan
+        prior_range = float(np.nanmedian(prior_window)) if prior_window.size else np.nan
+        prebreak_range_compression = self._safe_divide(last_range, prior_range)
+
+        return {
+            "pullback_absorption_score": pullback_absorption_score,
+            "pullback_volume_expansion_no_low_update_share": volume_expansion_no_low_update_share,
+            "pullback_volume_expansion_no_low_update_count": volume_expansion_no_low_update_count,
+            "buy_pressure_recovery": buy_pressure_recovery,
+            "buy_pressure_break": buy_pressure_break,
+            "buy_pressure_pullback_avg": buy_pressure_pullback_avg,
+            "low_to_bos_reclaim_bars": low_to_bos_reclaim_bars,
+            "low_to_bos_reclaim_speed_v1_per_bar": low_to_bos_reclaim_speed,
+            "pump_pause_zone_density": pump_pause_zone_density,
+            "pump_pause_zone_count": pump_pause_zone_count,
+            "prebreak_range_compression": prebreak_range_compression,
+        }
+
+    def _count_pump_pause_zones(self, *, one: OneMinuteFrame, start_idx: int, end_idx: int) -> int:
+        start_idx = min(max(int(start_idx), 0), len(one.timestamps) - 1)
+        end_idx = min(max(int(end_idx), start_idx), len(one.timestamps) - 1)
+        if (end_idx - start_idx + 1) < 4:
+            return 0
+        highs = one.highs[start_idx : end_idx + 1]
+        lows = one.lows[start_idx : end_idx + 1]
+        closes = one.closes[start_idx : end_idx + 1]
+        tr = np.maximum(highs - lows, self._EPSILON)
+        atr_ref = float(np.nanmedian(tr)) if tr.size else np.nan
+        if not np.isfinite(atr_ref) or atr_ref <= 0.0:
+            return 0
+        selected_spans: list[tuple[int, int]] = []
+        for length in (5, 4, 3):
+            if highs.size < length:
+                continue
+            for offset in range(0, highs.size - length + 1):
+                local_high = float(np.nanmax(highs[offset : offset + length]))
+                local_low = float(np.nanmin(lows[offset : offset + length]))
+                zone_range = local_high - local_low
+                close_drift = abs(float(closes[offset + length - 1]) - float(closes[offset]))
+                if zone_range > 1.35 * atr_ref or close_drift > 0.75 * max(zone_range, self._EPSILON):
+                    continue
+                span = (offset, offset + length - 1)
+                if any(not (span[1] < existing[0] or span[0] > existing[1]) for existing in selected_spans):
+                    continue
+                selected_spans.append(span)
+        return len(selected_spans)
+
+    @staticmethod
+    def _has_descending_pullback_structure(
+        *,
+        pivot_prices: tuple[float, ...],
+        pivot_kinds: tuple[str, ...],
+        min_pivots: int,
+    ) -> bool:
+        if len(pivot_prices) < min_pivots or len(pivot_prices) != len(pivot_kinds):
+            return False
+        previous_high: float | None = None
+        previous_low: float | None = None
+        has_lower_high = False
+        has_lower_low = False
+        for price, kind in zip(pivot_prices, pivot_kinds, strict=False):
+            pivot_price = float(price)
+            if kind == "H":
+                if previous_high is not None and pivot_price < previous_high:
+                    has_lower_high = True
+                previous_high = pivot_price
+            elif kind == "L":
+                if previous_low is not None and pivot_price < previous_low:
+                    has_lower_low = True
+                previous_low = pivot_price
+        return has_lower_high and has_lower_low
+
+    @staticmethod
+    def _merge_adjacent_same_kind_pivots(
+        *,
+        pivot_indices: list[int],
+        pivot_prices: list[float],
+        pivot_kinds: list[str],
+    ) -> None:
+        pos = 1
+        while pos < len(pivot_kinds):
+            if pivot_kinds[pos] != pivot_kinds[pos - 1]:
+                pos += 1
+                continue
+            kind = pivot_kinds[pos]
+            keep_current = (
+                (kind == "H" and pivot_prices[pos] >= pivot_prices[pos - 1])
+                or (kind == "L" and pivot_prices[pos] <= pivot_prices[pos - 1])
+            )
+            remove_pos = pos - 1 if keep_current else pos
+            pivot_indices.pop(remove_pos)
+            pivot_prices.pop(remove_pos)
+            pivot_kinds.pop(remove_pos)
+            pos = max(pos - 1, 1)
+
+    def _simplify_pullback_structure_pivots(
+        self,
+        *,
+        pivot_indices: list[int],
+        pivot_prices: list[float],
+        pivot_kinds: list[str],
+        min_swing: float,
+        min_swing_vs_previous_avg: float,
+        min_leg_bars: int,
+    ) -> None:
+        if len(pivot_indices) <= 2:
+            return
+        min_swing = max(float(min_swing), self._EPSILON)
+        min_leg_bars = max(int(min_leg_bars), 1)
+        changed = True
+        while changed and len(pivot_indices) > 4:
+            changed = False
+            weakest_pos = -1
+            weakest_swing = np.inf
+            for pos in range(1, len(pivot_indices) - 1):
+                prev_swing = abs(float(pivot_prices[pos]) - float(pivot_prices[pos - 1]))
+                next_swing = abs(float(pivot_prices[pos + 1]) - float(pivot_prices[pos]))
+                local_swing = min(prev_swing, next_swing)
+                if local_swing < weakest_swing:
+                    weakest_swing = local_swing
+                    weakest_pos = pos
+            if weakest_pos < 0 or weakest_swing >= min_swing:
+                break
+            pivot_indices.pop(weakest_pos)
+            pivot_prices.pop(weakest_pos)
+            pivot_kinds.pop(weakest_pos)
+            self._merge_adjacent_same_kind_pivots(
+                pivot_indices=pivot_indices,
+                pivot_prices=pivot_prices,
+                pivot_kinds=pivot_kinds,
+            )
+            changed = True
+
+        min_ratio = float(min_swing_vs_previous_avg)
+        changed = True
+        while min_ratio > 0.0 and changed and len(pivot_indices) > 4:
+            changed = False
+            swings = [
+                abs(float(current_price) - float(previous_price))
+                for previous_price, current_price in zip(pivot_prices[:-1], pivot_prices[1:], strict=False)
+            ]
+            for swing_pos in range(3, len(swings)):
+                previous_swings = [
+                    float(item)
+                    for item in swings[:swing_pos]
+                    if np.isfinite(float(item)) and float(item) > self._EPSILON
+                ]
+                if len(previous_swings) < 3:
+                    continue
+                reference_average = float(np.median(previous_swings))
+                current_swing = float(swings[swing_pos])
+                if (
+                    np.isfinite(reference_average)
+                    and reference_average > self._EPSILON
+                    and current_swing < (min_ratio * reference_average)
+                ):
+                    if pivot_kinds[swing_pos] == "L" and float(pivot_prices[swing_pos]) <= (
+                        min(float(price) for price, kind in zip(pivot_prices, pivot_kinds, strict=False) if kind == "L") + self._EPSILON
+                    ):
+                        continue
+                    remove_pos = swing_pos + 1
+                    if remove_pos <= 0 or remove_pos >= len(pivot_indices):
+                        remove_pos = swing_pos
+                    pivot_indices.pop(remove_pos)
+                    pivot_prices.pop(remove_pos)
+                    pivot_kinds.pop(remove_pos)
+                    self._merge_adjacent_same_kind_pivots(
+                        pivot_indices=pivot_indices,
+                        pivot_prices=pivot_prices,
+                        pivot_kinds=pivot_kinds,
+                    )
+                    changed = True
+                    break
+
+        changed = True
+        while min_leg_bars > 1 and changed and len(pivot_indices) > 2:
+            changed = False
+            for pos in range(1, len(pivot_indices)):
+                if (int(pivot_indices[pos]) - int(pivot_indices[pos - 1])) >= min_leg_bars:
+                    continue
+                remove_pos = pos
+                if pos < len(pivot_indices) - 1:
+                    previous_swing = abs(float(pivot_prices[pos]) - float(pivot_prices[pos - 1]))
+                    next_swing = abs(float(pivot_prices[pos + 1]) - float(pivot_prices[pos]))
+                    remove_pos = pos if previous_swing <= next_swing else pos - 1
+                    remove_pos = min(max(remove_pos, 1), len(pivot_indices) - 2)
+                pivot_indices.pop(remove_pos)
+                pivot_prices.pop(remove_pos)
+                pivot_kinds.pop(remove_pos)
+                self._merge_adjacent_same_kind_pivots(
+                    pivot_indices=pivot_indices,
+                    pivot_prices=pivot_prices,
+                    pivot_kinds=pivot_kinds,
+                )
+                changed = True
+                break
+
+    def _has_terminal_retrace_after_high(
+        self,
+        *,
+        one: OneMinuteFrame,
+        high_idx: int,
+        previous_low: float,
+        break_idx: int,
+        required_fraction: float,
+    ) -> tuple[bool, int, float]:
+        if break_idx <= high_idx + 1:
+            return False, -1, 0.0
+        search_start = min(max(int(high_idx) + 1, 0), len(one.lows) - 1)
+        search_end = min(max(int(break_idx) - 1, search_start), len(one.lows) - 1)
+        if search_start > search_end:
+            return False, -1, 0.0
+        low_offset = int(np.argmin(one.lows[search_start : search_end + 1]))
+        low_idx = int(search_start + low_offset)
+        high_price = float(one.highs[high_idx])
+        retrace = high_price - float(one.lows[low_idx])
+        up_leg = high_price - float(previous_low)
+        retrace_fraction = self._safe_divide(retrace, max(up_leg, self._EPSILON))
+        return retrace_fraction >= (float(required_fraction) - self._EPSILON), low_idx, retrace_fraction
 
     def _resolve_pullback_structure(
         self,
@@ -3532,6 +4921,7 @@ class PnoEngine:
             float(one.closes[end_idx]) * float(params.min_tick_fraction) * 4.0,
             self._EPSILON,
         )
+        merge_threshold = max(float(params.structure_pivot_merge_v1_fraction) * v1_now, 0.0)
         min_body_fraction = float(params.structure_reversal_min_body_fraction)
         confirmation_end_idx = int(end_idx - 1)
         pivot_indices: list[int] = [int(start_idx)]
@@ -3552,6 +4942,19 @@ class PnoEngine:
                 elif kind == "L" and pivot_price < pivot_prices[-1]:
                     pivot_indices[-1] = int(pivot_idx)
                     pivot_prices[-1] = float(pivot_price)
+                return
+            if (
+                merge_threshold > 0.0
+                and len(pivot_indices) >= 2
+                and pivot_kinds[-2] == kind
+                and abs(float(pivot_price) - float(pivot_prices[-2])) <= merge_threshold
+            ):
+                if kind == "H" and pivot_price >= pivot_prices[-2]:
+                    pivot_indices[-2] = int(pivot_idx)
+                    pivot_prices[-2] = float(pivot_price)
+                elif kind == "L" and pivot_price <= pivot_prices[-2]:
+                    pivot_indices[-2] = int(pivot_idx)
+                    pivot_prices[-2] = float(pivot_price)
                 return
             pivot_indices.append(int(pivot_idx))
             pivot_prices.append(float(pivot_price))
@@ -3580,6 +4983,28 @@ class PnoEngine:
         if len(pivot_indices) < 2:
             return None
 
+        pullback_low_price = float(np.nanmin(one.lows[start_idx : end_idx + 1]))
+        pullback_span = max(float(one.highs[start_idx]) - pullback_low_price, self._EPSILON)
+        human_min_swing = max(
+            reversal_threshold,
+            pullback_span * 0.09,
+            float(params.structure_min_leg_v1_fraction) * v1_now,
+        )
+        scaled_structure_min_leg_bars = self._scale_entry_bars(
+            int(params.structure_min_leg_bars),
+            int(params.entry_timeframe.to_milliseconds()),
+        )
+        self._simplify_pullback_structure_pivots(
+            pivot_indices=pivot_indices,
+            pivot_prices=pivot_prices,
+            pivot_kinds=pivot_kinds,
+            min_swing=human_min_swing,
+            min_swing_vs_previous_avg=float(params.structure_min_swing_vs_previous_avg),
+            min_leg_bars=scaled_structure_min_leg_bars,
+        )
+        if len(pivot_indices) < 2:
+            return None
+
         last_low_pos = -1
         for pos in range(len(pivot_kinds) - 1, -1, -1):
             if pivot_kinds[pos] == "L":
@@ -3592,6 +5017,8 @@ class PnoEngine:
             if pivot_kinds[pos] == "H":
                 last_high_pos = pos
                 break
+        if last_low_pos <= 0:
+            return None
         if last_high_pos < 0:
             return None
 
@@ -3599,21 +5026,217 @@ class PnoEngine:
         last_high = float(pivot_prices[last_high_pos])
         last_low_idx = int(pivot_indices[last_low_pos])
         last_low = float(pivot_prices[last_low_pos])
-        breakout_buffer = float(params.structure_break_min_close_v1_fraction) * v1_now
-        breakout_close = float(one.closes[end_idx])
+        prior_lows = [
+            float(price)
+            for pos, (price, kind) in enumerate(zip(pivot_prices, pivot_kinds, strict=False))
+            if kind == "L" and pos < last_low_pos
+        ]
+        prior_pullback_low = min(prior_lows, default=np.inf)
+        structure_low_updates_pullback_depth = bool(last_low < (prior_pullback_low - self._EPSILON))
+        nearest_high_swing = abs(last_high - last_low)
+        prospective_breakout_buffer = float(params.structure_break_min_close_v1_fraction) * v1_now
+        prospective_breakout_close = float(one.closes[end_idx])
+        terminal_break_candidate = bool(
+            pivot_kinds[-1] == "H"
+            and last_high_pos < (len(pivot_kinds) - 1)
+            and int(pivot_indices[-1]) <= int(end_idx)
+        )
+        if not structure_low_updates_pullback_depth and not terminal_break_candidate:
+            for candidate_pos in range(last_high_pos - 1, -1, -1):
+                if pivot_kinds[candidate_pos] != "H":
+                    continue
+                candidate_high = float(pivot_prices[candidate_pos])
+                candidate_swing = abs(candidate_high - last_low)
+                if (
+                    candidate_high > (last_high + self._EPSILON)
+                    and candidate_swing >= max(nearest_high_swing * 1.35, float(params.structure_min_leg_v1_fraction) * v1_now)
+                ):
+                    if prospective_breakout_close <= (candidate_high + prospective_breakout_buffer):
+                        continue
+                    last_high_pos = candidate_pos
+                    last_high_idx = int(pivot_indices[last_high_pos])
+                    last_high = candidate_high
+                    break
+        deepest_pivot_low = min(
+            (float(price) for price, kind in zip(pivot_prices, pivot_kinds, strict=False) if kind == "L"),
+            default=last_low,
+        )
+        previous_low_pos = -1
+        for pos in range(last_high_pos - 1, -1, -1):
+            if pivot_kinds[pos] == "L":
+                previous_low_pos = pos
+                break
+        previous_up_leg_midpoint = np.nan
+        if previous_low_pos >= 0:
+            previous_up_leg_midpoint = 0.5 * (float(pivot_prices[previous_low_pos]) + last_high)
+        structure_low_below_prev_up_leg_midpoint = bool(
+            np.isfinite(previous_up_leg_midpoint)
+            and last_low < (previous_up_leg_midpoint - self._EPSILON)
+        )
+        swings = [
+            abs(float(current_price) - float(previous_price))
+            for previous_price, current_price in zip(pivot_prices[:-1], pivot_prices[1:], strict=False)
+        ]
+        last_leg_size = abs(last_high - last_low)
+        previous_leg_reference = float(np.nanmedian(swings[:-1])) if len(swings) > 1 else np.nan
+        last_leg_vs_prev_median = self._safe_divide(last_leg_size, previous_leg_reference)
+        breakout_buffer = prospective_breakout_buffer
+        breakout_close = prospective_breakout_close
         breakout_close_position = self._safe_divide(
             breakout_close - float(one.lows[end_idx]),
             max(float(one.highs[end_idx]) - float(one.lows[end_idx]), self._EPSILON),
         )
         break_idx = -1
+        structure_ready_for_break = last_low_pos == (len(pivot_kinds) - 1) and end_idx > last_low_idx
+        broke_structure_level = breakout_close > (last_high + breakout_buffer)
+        min_break_close_position = float(params.structure_break_min_close_position)
         if (
-            last_low_pos == (len(pivot_kinds) - 1)
-            and
-            end_idx > last_low_idx
-            and breakout_close > (last_high + breakout_buffer)
-            and breakout_close_position >= float(params.structure_break_min_close_position)
+            structure_ready_for_break
+            and broke_structure_level
+            and breakout_close_position >= min_break_close_position
         ):
             break_idx = int(end_idx)
+
+        if (
+            break_idx < 0
+            and pivot_kinds[-1] == "H"
+            and last_high_pos < (len(pivot_kinds) - 1)
+            and broke_structure_level
+            and breakout_close_position >= min_break_close_position
+        ):
+            later_highs = [
+                float(price)
+                for pivot_idx, price, kind in zip(
+                    pivot_indices[last_high_pos + 1 :],
+                    pivot_prices[last_high_pos + 1 :],
+                    pivot_kinds[last_high_pos + 1 :],
+                    strict=False,
+                )
+                if kind == "H" and int(pivot_idx) < int(end_idx)
+            ]
+            retrace_ok, _, _ = self._has_terminal_retrace_after_high(
+                one=one,
+                high_idx=last_high_idx,
+                previous_low=float(pivot_prices[previous_low_pos]) if previous_low_pos >= 0 else last_low,
+                break_idx=end_idx,
+                required_fraction=float(params.structure_terminal_retrace_fraction),
+            )
+            current_bar_is_terminal_high = int(pivot_indices[-1]) == int(end_idx)
+            prior_terminal_pivot_prices = tuple(pivot_prices[:-1] if current_bar_is_terminal_high else pivot_prices)
+            prior_terminal_pivot_kinds = tuple(pivot_kinds[:-1] if current_bar_is_terminal_high else pivot_kinds)
+            prior_pivots_form_pullback = self._has_descending_pullback_structure(
+                pivot_prices=prior_terminal_pivot_prices,
+                pivot_kinds=prior_terminal_pivot_kinds,
+                min_pivots=int(params.structure_min_descending_pivots),
+            )
+            prior_high_count = sum(1 for kind in prior_terminal_pivot_kinds if kind == "H")
+            prior_low_count = sum(1 for kind in prior_terminal_pivot_kinds if kind == "L")
+            terminal_breaks_local_pullback_high = bool(
+                current_bar_is_terminal_high
+                and len(prior_terminal_pivot_kinds) >= 4
+                and prior_high_count >= 2
+                and prior_low_count >= 2
+                and last_high < (float(one.highs[start_idx]) - breakout_buffer)
+                and retrace_ok
+                and end_idx > last_low_idx
+            )
+            if (
+                (
+                    last_high < (float(one.highs[start_idx]) - breakout_buffer)
+                    and retrace_ok
+                    and end_idx > last_low_idx
+                )
+                or (
+                    current_bar_is_terminal_high
+                    and (prior_pivots_form_pullback or terminal_breaks_local_pullback_high)
+                    and retrace_ok
+                    and end_idx > last_low_idx
+                )
+            ):
+                break_idx = int(end_idx)
+
+        if (
+            break_idx < 0
+            and len(pivot_kinds) >= int(params.structure_min_descending_pivots)
+            and pivot_kinds[-1] == "H"
+            and end_idx > int(pivot_indices[-1]) + 1
+        ):
+            terminal_high_pos = len(pivot_kinds) - 1
+            terminal_previous_low_pos = -1
+            for candidate_pos in range(terminal_high_pos - 1, -1, -1):
+                if pivot_kinds[candidate_pos] == "L":
+                    terminal_previous_low_pos = candidate_pos
+                    break
+            if terminal_previous_low_pos >= 0:
+                terminal_high_idx = int(pivot_indices[terminal_high_pos])
+                terminal_high = float(pivot_prices[terminal_high_pos])
+                post_high_low_start = terminal_high_idx + 1
+                post_high_low_end = end_idx - 1
+                if post_high_low_start <= post_high_low_end:
+                    terminal_low_idx = int(
+                        post_high_low_start
+                        + np.argmin(one.lows[post_high_low_start : post_high_low_end + 1])
+                    )
+                    terminal_low = float(one.lows[terminal_low_idx])
+                    terminal_digestion = terminal_high - terminal_low
+                    terminal_up_leg = abs(terminal_high - float(pivot_prices[terminal_previous_low_pos]))
+                    terminal_previous_leg_reference = float(np.nanmedian(swings)) if swings else np.nan
+                    terminal_leg_ratio = self._safe_divide(terminal_up_leg, terminal_previous_leg_reference)
+                    terminal_digestion_ratio = self._safe_divide(terminal_digestion, terminal_up_leg)
+                    terminal_min_digestion = max(
+                        0.30 * max(terminal_up_leg, self._EPSILON),
+                        float(one.closes[end_idx]) * float(params.min_tick_fraction) * 2.0,
+                        0.50 * human_min_swing,
+                        self._EPSILON,
+                    )
+                    terminal_retrace_ok, _, terminal_retrace_fraction = self._has_terminal_retrace_after_high(
+                        one=one,
+                        high_idx=terminal_high_idx,
+                        previous_low=float(pivot_prices[terminal_previous_low_pos]),
+                        break_idx=end_idx,
+                        required_fraction=float(params.structure_terminal_retrace_fraction),
+                    )
+                    terminal_broke_structure_level = breakout_close > (terminal_high + breakout_buffer)
+                    terminal_structure_ok = self._has_descending_pullback_structure(
+                        pivot_prices=tuple(pivot_prices),
+                        pivot_kinds=tuple(pivot_kinds),
+                        min_pivots=int(params.structure_min_descending_pivots),
+                    )
+                    if (
+                        terminal_structure_ok
+                        and terminal_digestion >= terminal_min_digestion
+                        and terminal_digestion_ratio >= float(params.structure_terminal_retrace_fraction)
+                        and terminal_retrace_ok
+                        and terminal_up_leg >= human_min_swing
+                        and (int(end_idx) - int(terminal_high_idx)) >= scaled_structure_min_leg_bars
+                        and terminal_leg_ratio >= max(float(params.structure_min_swing_vs_previous_avg), 0.90)
+                        and terminal_broke_structure_level
+                        and breakout_close_position >= min_break_close_position
+                    ):
+                        last_high_pos = terminal_high_pos
+                        last_high_idx = terminal_high_idx
+                        last_high = terminal_high
+                        last_low_pos = terminal_previous_low_pos
+                        last_low_idx = terminal_low_idx
+                        last_low = terminal_low
+                        prior_lows = [
+                            float(price)
+                            for pos, (price, kind) in enumerate(zip(pivot_prices, pivot_kinds, strict=False))
+                            if kind == "L" and pos < terminal_high_pos
+                        ]
+                        prior_pullback_low = min(prior_lows, default=np.inf)
+                        structure_low_updates_pullback_depth = bool(last_low < (prior_pullback_low - self._EPSILON))
+                        previous_low_pos = terminal_previous_low_pos
+                        previous_up_leg_midpoint = 0.5 * (float(pivot_prices[previous_low_pos]) + last_high)
+                        structure_low_below_prev_up_leg_midpoint = bool(
+                            np.isfinite(previous_up_leg_midpoint)
+                            and last_low < (previous_up_leg_midpoint - self._EPSILON)
+                        )
+                        last_leg_size = terminal_up_leg
+                        previous_leg_reference = float(np.nanmedian(swings)) if swings else np.nan
+                        last_leg_vs_prev_median = self._safe_divide(last_leg_size, previous_leg_reference)
+                        terminal_digestion_ratio = terminal_retrace_fraction
+                        break_idx = int(end_idx)
 
         return {
             "pivot_indices": tuple(int(item) for item in pivot_indices),
@@ -3626,6 +5249,11 @@ class PnoEngine:
             "last_low_timestamp": int(one.timestamps[last_low_idx]),
             "last_low": float(last_low),
             "break_idx": int(break_idx),
+            "structure_low_updates_pullback_depth": structure_low_updates_pullback_depth,
+            "structure_low_below_prev_up_leg_midpoint": structure_low_below_prev_up_leg_midpoint,
+            "structure_low_depth_delta": float(last_low - prior_pullback_low) if np.isfinite(prior_pullback_low) else 0.0,
+            "last_leg_v1": self._safe_divide(last_leg_size, v1_now),
+            "last_leg_vs_prev_median": float(last_leg_vs_prev_median),
         }
 
     def _resolve_stage4_context(
@@ -3780,11 +5408,17 @@ class PnoEngine:
                 if len(touch_indices) < min_required_touches:
                     return None
                 latest_touch_idx = int(max(touch_indices))
-                latest_high_max_age_bars = int(params.level_latest_high_max_age_bars)
+                latest_high_max_age_bars = self._scale_entry_bars(
+                    int(params.level_latest_high_max_age_bars),
+                    int(params.entry_timeframe.to_milliseconds()),
+                )
                 if ideal_like_impulse and int(params.ideal_like_level_latest_high_max_age_bars) > 0:
                     latest_high_max_age_bars = max(
                         latest_high_max_age_bars,
-                        int(params.ideal_like_level_latest_high_max_age_bars),
+                        self._scale_entry_bars(
+                            int(params.ideal_like_level_latest_high_max_age_bars),
+                            int(params.entry_timeframe.to_milliseconds()),
+                        ),
                     )
                 if (idx - latest_touch_idx) > latest_high_max_age_bars:
                     return None
@@ -3922,11 +5556,17 @@ class PnoEngine:
         if len(touch_indices) < min_required_touches:
             return None
         latest_touch_idx = int(max(touch_indices))
-        latest_high_max_age_bars = int(params.level_latest_high_max_age_bars)
+        latest_high_max_age_bars = self._scale_entry_bars(
+            int(params.level_latest_high_max_age_bars),
+            int(params.entry_timeframe.to_milliseconds()),
+        )
         if ideal_like_impulse and int(params.ideal_like_level_latest_high_max_age_bars) > 0:
             latest_high_max_age_bars = max(
                 latest_high_max_age_bars,
-                int(params.ideal_like_level_latest_high_max_age_bars),
+                self._scale_entry_bars(
+                    int(params.ideal_like_level_latest_high_max_age_bars),
+                    int(params.entry_timeframe.to_milliseconds()),
+                ),
             )
         if (idx - latest_touch_idx) > latest_high_max_age_bars:
             return None
@@ -3954,10 +5594,16 @@ class PnoEngine:
             return None
 
         level_age_bars_1m = max(idx - int(cluster_indices[0]), 0)
+        level_age_ms = max(int(one.timestamps[idx]) - int(one.timestamps[int(cluster_indices[0])]), 0)
         level_age_bars_upper_tf = max(
-            int(level_age_bars_1m / (params.levels_timeframe.to_milliseconds() / 60000)), 1
+            int(level_age_ms // max(int(params.levels_timeframe.to_milliseconds()), 1)),
+            1,
         )
-        if level_age_bars_upper_tf > params.level_max_age_bars_upper_tf:
+        max_level_age_bars_upper_tf = self._scale_5m_stage_bars(
+            int(params.level_max_age_bars_upper_tf),
+            int(params.levels_timeframe.to_milliseconds()),
+        )
+        if level_age_bars_upper_tf > max_level_age_bars_upper_tf:
             return None
 
         hard_block = len(touch_indices) > int(params.max_level_touches)
@@ -4163,7 +5809,7 @@ class PnoEngine:
             cluster_clarity_score = 5 if len(stage4.cluster_indices) >= 2 else 3
         else:
             cluster_clarity_score = 0
-        compression_score = self._resolve_compression_score(one=one, stage4=stage4, confirmed_lows=confirmed_lows)
+        compression_score = self._resolve_compression_score(one=one, idx=idx, stage4=stage4, confirmed_lows=confirmed_lows)
         if stage4.touches <= 1:
             touches_score = 1
         elif stage4.touches <= 3:
@@ -4435,9 +6081,13 @@ class PnoEngine:
 
         v1_now = max(float(one.v1[idx]), self._EPSILON)
         max_spread = float(params.level_cluster_relaxed_spread_v1) * v1_now
+        latest_high_max_age_bars = self._scale_entry_bars(
+            int(params.level_latest_high_max_age_bars),
+            int(params.entry_timeframe.to_milliseconds()),
+        )
         for end_pos in range(len(confirmed_highs) - 1, -1, -1):
             latest_idx = int(confirmed_highs[end_pos])
-            if (idx - latest_idx) > params.level_latest_high_max_age_bars:
+            if (idx - latest_idx) > latest_high_max_age_bars:
                 continue
             for cluster_size in (3, 2, 1):
                 if (end_pos + 1) < cluster_size:
@@ -4515,7 +6165,18 @@ class PnoEngine:
             return None
         v1_now = max(float(one.v1[idx]), self._EPSILON)
         tolerance = max(float(params.level_touch_tolerance_v1) * v1_now, self._EPSILON)
-        search_start = max(stage3.pullback_low_idx, idx - max(int(params.ideal_like_level_latest_high_max_age_bars), 6))
+        ideal_latest_high_max_age_bars = (
+            self._scale_entry_bars(
+                int(params.ideal_like_level_latest_high_max_age_bars),
+                int(params.entry_timeframe.to_milliseconds()),
+            )
+            if int(params.ideal_like_level_latest_high_max_age_bars) > 0
+            else 0
+        )
+        search_start = max(
+            stage3.pullback_low_idx,
+            idx - max(ideal_latest_high_max_age_bars, self._scale_entry_bars(6, int(params.entry_timeframe.to_milliseconds()))),
+        )
         candidate_idx: int | None = None
         candidate_price = -np.inf
         for probe_idx in range(search_start, idx + 1):
@@ -4796,7 +6457,11 @@ class PnoEngine:
             signal_idx=signal_idx,
         )
         first_cross_bars = self._resolve_level_first_cross_bars(one=one, stage4=stage4, idx=signal_idx)
-        if first_cross_bars is not None and first_cross_bars > int(params.close_above_max_level_cross_bars):
+        max_level_cross_bars = self._scale_entry_bars(
+            int(params.close_above_max_level_cross_bars),
+            int(params.entry_timeframe.to_milliseconds()),
+        )
+        if first_cross_bars is not None and first_cross_bars > max_level_cross_bars:
             return "level_crossed_too_late"
         if bool(level_profile["prior_tp1_hit"]):
             return "tp1_already_tagged_before_signal"
@@ -4836,7 +6501,10 @@ class PnoEngine:
         close_tolerance = max(0.05 * risk_distance, self._EPSILON)
         wick_tolerance = max(0.15 * risk_distance, close_tolerance)
         current_close = float(one.closes[idx])
+        current_high = float(one.highs[idx])
         current_low = float(one.lows[idx])
+        if current_high > (float(armed.stage4.active_high) + self._EPSILON):
+            return True
         stop_level = float(armed.stage4.low_last_red_plan)
         pullback_low = float(armed.stage3.pullback_low)
         stop_broken = current_close <= (stop_level - close_tolerance) or current_low <= (stop_level - wick_tolerance)
@@ -4864,6 +6532,7 @@ class PnoEngine:
         self,
         *,
         one: OneMinuteFrame,
+        idx: int,
         stage4: Stage4Context,
         confirmed_lows: list[int],
     ) -> int:
@@ -4874,7 +6543,7 @@ class PnoEngine:
         for high_idx in stage4.cluster_indices[:2]:
             next_low_idx = next((low_idx for low_idx in confirmed_lows if low_idx > high_idx), None)
             if next_low_idx is None:
-                local_slice = one.lows[high_idx + 1 :]
+                local_slice = one.lows[high_idx + 1 : min(int(idx) + 1, len(one.lows))]
                 if local_slice.size == 0:
                     return 0
                 next_low_idx = high_idx + 1 + int(np.argmin(local_slice))
@@ -5266,25 +6935,39 @@ class PnoEngine:
         self,
         *,
         one: OneMinuteFrame,
-        tp1_hit_idx: int,
         current_idx: int,
         previous_high_watermark: float,
-        current_high: float,
+        previous_high_watermark_idx: int,
+        current_close: float,
         current_stop: float,
-        be_protect_price: float,
-    ) -> tuple[float, float]:
-        new_high_watermark = max(float(previous_high_watermark), float(current_high))
-        if float(current_high) <= (float(previous_high_watermark) + self._EPSILON):
-            return float(current_stop), new_high_watermark
-        search_start = max(int(tp1_hit_idx) + 1, 0)
-        search_end = max(int(current_idx), search_start)
-        search_slice = one.red[search_start : search_end + 1]
-        candidate_stop = max(float(current_stop), float(be_protect_price))
-        red_indices = np.where(search_slice)[0]
-        if red_indices.size > 0:
-            last_red_idx = search_start + int(red_indices[-1])
-            candidate_stop = max(candidate_stop, float(one.lows[last_red_idx]))
-        return candidate_stop, new_high_watermark
+    ) -> tuple[float, float, int]:
+        if float(current_close) <= (float(previous_high_watermark) + self._EPSILON):
+            return float(current_stop), float(previous_high_watermark), int(previous_high_watermark_idx)
+        new_high_watermark = float(current_close)
+        new_high_watermark_idx = int(current_idx)
+        candidate_stop = float(current_stop)
+        segment_start = min(max(int(previous_high_watermark_idx), 0), len(one.lows) - 1)
+        segment_end = min(max(int(current_idx), segment_start), len(one.lows) - 1)
+        segment_low = float(np.nanmin(one.lows[segment_start : segment_end + 1]))
+        if np.isfinite(segment_low):
+            candidate_stop = max(candidate_stop, segment_low)
+        return candidate_stop, new_high_watermark, new_high_watermark_idx
+
+    def _resolve_last_red_low(
+        self,
+        *,
+        one: OneMinuteFrame,
+        start_idx: int,
+        end_idx: int,
+        fallback: float,
+    ) -> float:
+        search_start = min(max(int(start_idx), 0), len(one.timestamps) - 1)
+        search_end = min(max(int(end_idx), search_start), len(one.timestamps) - 1)
+        red_indices = np.where(one.red[search_start : search_end + 1])[0]
+        if red_indices.size <= 0:
+            return float(fallback)
+        last_red_idx = search_start + int(red_indices[-1])
+        return float(one.lows[last_red_idx])
 
     @staticmethod
     def _resolve_tp2_score(*, tp2: float, active_high: float, v1: float) -> int:
@@ -5745,13 +7428,10 @@ class PnoEngine:
                 close_above_decay_reason = None
             if close_above_decay_reason is not None:
                 return None, entry_idx
-            if armed.stage4.structure_source == "human_bos":
-                entry_price = max(open_price, float(armed.stage4.entry_plan))
-            else:
-                actual_entry_idx = entry_idx + 1
-                if actual_entry_idx >= len(one.timestamps):
-                    return None, entry_idx
-                entry_price = float(one.opens[actual_entry_idx])
+            actual_entry_idx = entry_idx + 1
+            if actual_entry_idx >= len(one.timestamps):
+                return None, entry_idx
+            entry_price = float(one.opens[actual_entry_idx])
             stop_loss = float(armed.stage4.low_last_red_plan)
             signal_kind = "close_above"
         else:
@@ -5822,13 +7502,11 @@ class PnoEngine:
         # of forcing a nonsensical late entry.
         active_high_price = float(armed.stage4.active_high)
         tp1_price = float(armed.stage4.tp1)
-        tp2_price = float(armed.stage4.tp2)
         allow_entry_above_active_high = ideal_like_impulse and tp1_price > (active_high_price + self._EPSILON)
         if (
             stop_loss >= (entry_price - self._EPSILON)
             or ((not allow_entry_above_active_high) and entry_price >= (active_high_price - self._EPSILON))
             or entry_price >= (tp1_price - self._EPSILON)
-            or tp2_price <= (entry_price + self._EPSILON)
         ):
             return None, entry_idx
 
@@ -5877,7 +7555,13 @@ class PnoEngine:
             "pump_impulse_atr_pre": round(float(armed.stage1.pump_impulse_atr_pre), 4),
             "pump_peak_bar_tr_atr_pre": round(float(armed.stage1.pump_peak_bar_tr_atr_pre), 4),
             "pump_volume_ratio_start": round(float(armed.stage1.pump_volume_ratio_start), 4),
+            "pump_trade_ratio_start": round(float(armed.stage1.pump_trade_ratio_start), 4),
             "pump_volume_ratio_continue": round(float(armed.stage1.pump_volume_ratio_continue), 4),
+            "pump_trade_ratio_continue": round(float(armed.stage1.pump_trade_ratio_continue), 4),
+            "flow_hold_bar_count": int(armed.stage1.flow_hold_bar_count),
+            "flow_hold_required_bars": int(armed.stage1.flow_hold_required_bars),
+            "active_context_quote_fraction": round(float(armed.stage1.active_context_quote_fraction), 4),
+            "active_context_trade_fraction": round(float(armed.stage1.active_context_trade_fraction), 4),
             "pump_path_efficiency": round(float(armed.stage1.pump_path_efficiency), 4),
             "pump_wick_share": round(float(armed.stage1.pump_wick_share), 4),
             "pump_body_share_mean": round(float(armed.stage1.pump_body_share_mean), 4),
@@ -5895,11 +7579,14 @@ class PnoEngine:
             "leg_start_status_at_validation": str(armed.stage1.leg_start_status_at_validation),
             "pullback_low": round(float(armed.stage3.pullback_low), 8),
             "pullback_depth": round(float(armed.stage3.pullback_depth), 8),
+            "pullback_trade_activity_vs_sleep": round(float(armed.stage3.pullback_trade_activity_vs_sleep), 4),
+            "pullback_quote_volume_vs_sleep": round(float(armed.stage3.pullback_quote_volume_vs_sleep), 4),
             "post_high_ema20_pierce_count": int(armed.stage3.post_high_ema20_pierce_count),
             "post_high_close_below_ema20_count": int(armed.stage3.post_high_close_below_ema20_count),
             "post_high_wick_share": round(float(armed.stage3.post_high_wick_share), 4),
             "post_high_body_overlap_rate": round(float(armed.stage3.post_high_body_overlap_rate), 4),
             "post_high_max_red_body_share": round(float(armed.stage3.post_high_max_red_body_share), 4),
+            "post_high_peak_volume_support_fraction": round(float(armed.stage3.post_high_peak_volume_support_fraction), 4),
             "level": round(float(armed.stage4.level), 8),
             "level_first_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_first_idx]),
             "level_last_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_last_idx]),
@@ -5937,7 +7624,7 @@ class PnoEngine:
             "entry_plan": round(float(armed.stage4.entry_plan), 8),
             "sl_plan": round(float(armed.stage4.sl_plan), 8),
             "tp1": round(float(armed.stage4.tp1), 8),
-            "tp2": round(float(armed.stage4.tp2), 8),
+            "tp2": None,
             "score_a": int(armed.stage4.score_a),
             "score_b": int(armed.stage4.score_b),
             "score_c": int(armed.stage4.score_c),
@@ -5963,6 +7650,53 @@ class PnoEngine:
             "structure_high_timestamp_ms": int(armed.stage3.structure_high_timestamp),
             "structure_low_timestamp_ms": int(armed.stage3.structure_low_timestamp),
             "structure_break_timestamp_ms": int(armed.stage3.structure_break_timestamp),
+            "structure_break_trade_activity_vs_prebreak": round(float(armed.stage3.structure_break_trade_activity_vs_prebreak), 4),
+            "structure_break_atr_vs_prebreak": round(float(armed.stage3.structure_break_atr_vs_prebreak), 4),
+            "structure_break_volume_vs_pump_leg_avg": round(float(armed.stage3.structure_break_volume_vs_pump_leg_avg), 4),
+            "structure_break_aligns_1m_open": bool(armed.stage3.structure_break_aligns_1m_open),
+            "structure_break_aligns_5m_open": bool(armed.stage3.structure_break_aligns_5m_open),
+            "structure_break_aligns_30m_open": bool(armed.stage3.structure_break_aligns_30m_open),
+            "structure_break_aligns_1h_open": bool(armed.stage3.structure_break_aligns_1h_open),
+            "structure_low_updates_pullback_depth": bool(armed.stage3.structure_low_updates_pullback_depth),
+            "structure_low_below_prev_up_leg_midpoint": bool(armed.stage3.structure_low_below_prev_up_leg_midpoint),
+            "structure_low_depth_delta": round(float(armed.stage3.structure_low_depth_delta), 8),
+            "structure_last_leg_v1": round(float(armed.stage3.structure_last_leg_v1), 4),
+            "structure_last_leg_vs_prev_median": round(float(armed.stage3.structure_last_leg_vs_prev_median), 4),
+            "pullback_absorption_score": round(float(armed.stage3.pullback_absorption_score), 4),
+            "pullback_volume_expansion_no_low_update_share": round(
+                float(armed.stage3.pullback_volume_expansion_no_low_update_share),
+                4,
+            ),
+            "pullback_volume_expansion_no_low_update_count": int(
+                armed.stage3.pullback_volume_expansion_no_low_update_count
+            ),
+            "buy_pressure_recovery": (
+                round(float(armed.stage3.buy_pressure_recovery), 4)
+                if np.isfinite(float(armed.stage3.buy_pressure_recovery))
+                else np.nan
+            ),
+            "buy_pressure_break": (
+                round(float(armed.stage3.buy_pressure_break), 4)
+                if np.isfinite(float(armed.stage3.buy_pressure_break))
+                else np.nan
+            ),
+            "buy_pressure_pullback_avg": (
+                round(float(armed.stage3.buy_pressure_pullback_avg), 4)
+                if np.isfinite(float(armed.stage3.buy_pressure_pullback_avg))
+                else np.nan
+            ),
+            "low_to_bos_reclaim_bars": int(armed.stage3.low_to_bos_reclaim_bars),
+            "low_to_bos_reclaim_speed_v1_per_bar": round(
+                float(armed.stage3.low_to_bos_reclaim_speed_v1_per_bar),
+                4,
+            ),
+            "pump_pause_zone_density": round(float(armed.stage3.pump_pause_zone_density), 4),
+            "pump_pause_zone_count": int(armed.stage3.pump_pause_zone_count),
+            "prebreak_range_compression": (
+                round(float(armed.stage3.prebreak_range_compression), 4)
+                if np.isfinite(float(armed.stage3.prebreak_range_compression))
+                else np.nan
+            ),
             "structure_source": str(armed.stage4.structure_source),
         }
         metadata.update(
@@ -6022,11 +7756,10 @@ class PnoEngine:
         confirmation_mode: str,
         bars_since_entry_after: int,
     ) -> float:
+        del bars_since_entry_after
         if confirmation_mode != "close_above":
             return float(params.be_arm_to_active_high_fraction)
-        steps = max(int(bars_since_entry_after), 0) // max(int(params.close_above_be_step_bars), 1)
-        fraction = float(params.close_above_be_start_fraction) - (float(params.close_above_be_step_fraction) * steps)
-        return max(float(params.close_above_be_min_fraction), fraction)
+        return float(params.close_above_be_start_fraction)
 
     def _simulate_trade_path(
         self,
@@ -6039,9 +7772,9 @@ class PnoEngine:
         stop_loss: float,
         position_size: float,
         metadata: dict[str, int | float | str | bool | None],
-    ) -> tuple[TradeResult | None, int]:
+        ) -> tuple[TradeResult | None, int]:
         tp1 = float(armed.stage4.tp1)
-        tp2 = float(armed.stage4.tp2)
+        tp2 = float("nan")
         fee_rate = float(params.fee_rate)
         be_fee = entry_price * (1.0 + fee_rate) / max(1.0 - fee_rate, self._EPSILON)
         initial_stop_loss = float(stop_loss)
@@ -6067,7 +7800,10 @@ class PnoEngine:
         tp1_hit_idx: int | None = None
         tp2_hit_idx: int | None = None
         runner_stop_after_tp1 = float(tp1_be_protect_price)
+        runner_stop_after_tp1_idx: int | None = None
         runner_high_watermark = float(tp1)
+        runner_high_watermark_idx = int(entry_idx)
+        runner_final_classification: str | None = None
         partial_exit_price: float | None = None
         partial_exit_idx: int | None = None
         partial_realized_pnl = 0.0
@@ -6082,6 +7818,21 @@ class PnoEngine:
         category = "incomplete"
         max_favorable = 0.0
         max_adverse = 0.0
+        if "htf_ema9" in one.frame.columns:
+            runner_ema9 = pd.to_numeric(one.frame["htf_ema9"], errors="coerce").to_numpy(dtype=np.float64)
+        else:
+            runner_ema9 = pd.Series(one.closes, dtype="float64").ewm(span=9, adjust=False).mean().to_numpy(dtype=np.float64)
+        pump_start_timestamp_ms = int(metadata.get("pump_start_timestamp_ms") or one.timestamps[max(entry_idx, 0)])
+        pump_start_idx = int(np.searchsorted(one.timestamps, pump_start_timestamp_ms, side="left"))
+        pump_start_idx = min(max(pump_start_idx, 0), len(one.timestamps) - 1)
+        runner_ema9_exit_level = np.full(len(one.timestamps), np.nan, dtype=np.float64)
+        max_ema9_since_pump = -np.inf
+        for ema_idx in range(pump_start_idx, len(one.timestamps)):
+            ema9_value = float(runner_ema9[ema_idx]) if ema_idx < len(runner_ema9) else np.nan
+            if np.isfinite(ema9_value):
+                max_ema9_since_pump = max(max_ema9_since_pump, ema9_value)
+            if np.isfinite(max_ema9_since_pump):
+                runner_ema9_exit_level[ema_idx] = max_ema9_since_pump
 
         for idx in range(entry_idx + 1, len(one.timestamps)):
             low = float(one.lows[idx])
@@ -6096,16 +7847,16 @@ class PnoEngine:
             current_be_arm_price = entry_price + (current_be_arm_fraction * max(tp1 - entry_price, 0.0))
             max_favorable = max(max_favorable, high - entry_price)
             max_adverse = max(max_adverse, entry_price - low)
-            active_stop = be_protect_price if be_armed else initial_stop_loss
+            active_stop = tp1_be_protect_price if be_armed else initial_stop_loss
 
             if not tp1_hit:
                 if low <= active_stop:
                     exit_price = active_stop
                     exit_idx = idx
-                    result_type = TradeResultType.BE if be_armed else TradeResultType.SL
+                    result_type = TradeResultType.TP1_BE if be_armed else TradeResultType.SL
                     runner_exit_price = active_stop
                     runner_exit_idx = idx
-                    runner_exit_reason = "be_pre_tp1" if be_armed else "sl_non_entry"
+                    runner_exit_reason = "be_arm_stop" if be_armed else "sl_non_entry"
                     runner_realized_pnl = self._net_leg_pnl(
                         entry_price=entry_price,
                         exit_price=active_stop,
@@ -6115,6 +7866,12 @@ class PnoEngine:
                     realized_pnl = runner_realized_pnl
                     category = str(runner_exit_reason)
                     break
+                if not be_armed and high >= current_be_arm_price:
+                    be_armed = True
+                    be_arm_idx = idx
+                    be_arm_fraction_at_trigger = current_be_arm_fraction
+                    be_arm_price_at_trigger = current_be_arm_price
+                    active_stop = tp1_be_protect_price
                 if high >= tp1:
                     tp1_hit = True
                     tp1_hit_idx = idx
@@ -6132,46 +7889,100 @@ class PnoEngine:
                         fee_rate=fee_rate,
                     )
                     realized_pnl += partial_realized_pnl
-                    if high >= tp2:
-                        exit_price = tp2
+                    runner_stop_after_tp1 = max(
+                        active_stop,
+                        tp1_be_protect_price,
+                    )
+                    runner_stop_after_tp1_idx = idx
+                    runner_high_watermark_idx = idx
+                    if idx == (len(one.timestamps) - 1):
+                        exit_price = close
                         exit_idx = idx
-                        tp2_hit_idx = idx
-                        result_type = TradeResultType.TP2
-                        runner_exit_price = tp2
+                        runner_exit_price = close
                         runner_exit_idx = idx
-                        runner_exit_reason = "tp2"
+                        if close > (tp1 + self._EPSILON):
+                            result_type = TradeResultType.TIME_EXIT_PROFIT
+                            runner_exit_reason = "final_success_above_tp1"
+                            runner_final_classification = "success_above_tp1"
+                        elif close < (entry_price - self._EPSILON):
+                            result_type = TradeResultType.SL
+                            runner_exit_reason = "final_loss_below_entry"
+                            runner_final_classification = "loss_below_entry"
+                        else:
+                            result_type = TradeResultType.TP1_BE
+                            runner_exit_reason = "final_be_below_tp1"
+                            runner_final_classification = "be_below_tp1"
                         runner_realized_pnl = self._net_leg_pnl(
                             entry_price=entry_price,
-                            exit_price=tp2,
+                            exit_price=close,
                             quantity=position_size * remainder_share,
                             fee_rate=fee_rate,
                         )
                         realized_pnl += runner_realized_pnl
-                        category = "tp2"
+                        category = str(runner_exit_reason)
                         break
                     continue
-                if (not be_armed) and high >= current_be_arm_price:
-                    be_armed = True
-                    be_arm_idx = idx
-                    be_arm_fraction_at_trigger = current_be_arm_fraction
-                    be_arm_price_at_trigger = current_be_arm_price
+                if be_armed and low <= active_stop:
+                    exit_price = active_stop
+                    exit_idx = idx
+                    result_type = TradeResultType.TP1_BE
+                    runner_exit_price = active_stop
+                    runner_exit_idx = idx
+                    runner_exit_reason = "be_arm_stop_same_bar"
+                    runner_realized_pnl = self._net_leg_pnl(
+                        entry_price=entry_price,
+                        exit_price=active_stop,
+                        quantity=position_size,
+                        fee_rate=fee_rate,
+                    )
+                    realized_pnl = runner_realized_pnl
+                    category = str(runner_exit_reason)
+                    break
             elif tp1_hit_idx is not None and idx > tp1_hit_idx:
-                runner_stop_after_tp1, runner_high_watermark = self._resolve_post_tp1_trailing_stop(
-                    one=one,
-                    tp1_hit_idx=tp1_hit_idx,
-                    current_idx=idx,
-                    previous_high_watermark=runner_high_watermark,
-                    current_high=high,
-                    current_stop=runner_stop_after_tp1,
-                    be_protect_price=be_protect_price,
-                )
+                ema9_exit_value = float(runner_ema9_exit_level[idx]) if idx < len(runner_ema9_exit_level) else np.nan
+                if np.isfinite(ema9_exit_value) and close < (ema9_exit_value - self._EPSILON):
+                    exit_price = close
+                    exit_idx = idx
+                    runner_exit_price = close
+                    runner_exit_idx = idx
+                    if close > (tp1 + self._EPSILON):
+                        result_type = TradeResultType.TIME_EXIT_PROFIT
+                        runner_exit_reason = "ema9_max_success_above_tp1"
+                        runner_final_classification = "success_above_tp1"
+                    elif close < (entry_price - self._EPSILON):
+                        result_type = TradeResultType.SL
+                        runner_exit_reason = "ema9_max_loss_below_entry"
+                        runner_final_classification = "loss_below_entry"
+                    else:
+                        result_type = TradeResultType.TP1_BE
+                        runner_exit_reason = "ema9_max_be_below_tp1"
+                        runner_final_classification = "be_below_tp1"
+                    runner_realized_pnl = self._net_leg_pnl(
+                        entry_price=entry_price,
+                        exit_price=close,
+                        quantity=position_size * remainder_share,
+                        fee_rate=fee_rate,
+                    )
+                    realized_pnl += runner_realized_pnl
+                    category = str(runner_exit_reason)
+                    break
                 if low <= runner_stop_after_tp1:
                     exit_price = runner_stop_after_tp1
                     exit_idx = idx
-                    result_type = TradeResultType.TP1_BE
                     runner_exit_price = runner_stop_after_tp1
                     runner_exit_idx = idx
-                    runner_exit_reason = "tp1_be"
+                    if runner_stop_after_tp1 > (tp1 + self._EPSILON):
+                        result_type = TradeResultType.TIME_EXIT_PROFIT
+                        runner_exit_reason = "trail_success_above_tp1"
+                        runner_final_classification = "success_above_tp1"
+                    elif runner_stop_after_tp1 < (entry_price - self._EPSILON):
+                        result_type = TradeResultType.SL
+                        runner_exit_reason = "trail_loss_below_entry"
+                        runner_final_classification = "loss_below_entry"
+                    else:
+                        result_type = TradeResultType.TP1_BE
+                        runner_exit_reason = "trail_be_below_tp1"
+                        runner_final_classification = "be_below_tp1"
                     runner_realized_pnl = self._net_leg_pnl(
                         entry_price=entry_price,
                         exit_price=runner_stop_after_tp1,
@@ -6179,33 +7990,50 @@ class PnoEngine:
                         fee_rate=fee_rate,
                     )
                     realized_pnl += runner_realized_pnl
-                    category = "tp1_be"
+                    category = str(runner_exit_reason)
                     break
-                if high >= tp2:
-                    exit_price = tp2
-                    exit_idx = idx
-                    tp2_hit_idx = idx
-                    result_type = TradeResultType.TP2
-                    runner_exit_price = tp2
-                    runner_exit_idx = idx
-                    runner_exit_reason = "tp2"
-                    runner_realized_pnl = self._net_leg_pnl(
-                        entry_price=entry_price,
-                        exit_price=tp2,
-                        quantity=position_size * remainder_share,
-                        fee_rate=fee_rate,
-                    )
-                    realized_pnl += runner_realized_pnl
-                    category = "tp2"
-                    break
+                previous_runner_stop = float(runner_stop_after_tp1)
+                runner_stop_after_tp1, runner_high_watermark, runner_high_watermark_idx = self._resolve_post_tp1_trailing_stop(
+                    one=one,
+                    current_idx=idx,
+                    previous_high_watermark=runner_high_watermark,
+                    previous_high_watermark_idx=runner_high_watermark_idx,
+                    current_close=close,
+                    current_stop=runner_stop_after_tp1,
+                )
+                if runner_stop_after_tp1 > previous_runner_stop + self._EPSILON:
+                    runner_stop_after_tp1_idx = idx
 
             if idx == (len(one.timestamps) - 1):
                 exit_idx = idx
                 exit_price = close
+                if tp1_hit:
+                    runner_exit_price = close
+                    runner_exit_idx = idx
+                    if close > (tp1 + self._EPSILON):
+                        result_type = TradeResultType.TIME_EXIT_PROFIT
+                        runner_exit_reason = "final_success_above_tp1"
+                        runner_final_classification = "success_above_tp1"
+                    elif close < (entry_price - self._EPSILON):
+                        result_type = TradeResultType.SL
+                        runner_exit_reason = "final_loss_below_entry"
+                        runner_final_classification = "loss_below_entry"
+                    else:
+                        result_type = TradeResultType.TP1_BE
+                        runner_exit_reason = "final_be_below_tp1"
+                        runner_final_classification = "be_below_tp1"
+                    runner_realized_pnl = self._net_leg_pnl(
+                        entry_price=entry_price,
+                        exit_price=close,
+                        quantity=position_size * remainder_share,
+                        fee_rate=fee_rate,
+                    )
+                    realized_pnl += runner_realized_pnl
+                    category = str(runner_exit_reason)
 
         if category == "incomplete":
             return None, entry_idx
-        if result_type not in {TradeResultType.SL, TradeResultType.BE, TradeResultType.TP1_BE, TradeResultType.TP2}:
+        if result_type not in {TradeResultType.SL, TradeResultType.BE, TradeResultType.TP1_BE, TradeResultType.TIME_EXIT_PROFIT}:
             return None, entry_idx
 
         trade_metadata = dict(metadata)
@@ -6228,15 +8056,16 @@ class PnoEngine:
                 "be_buffer": round(float(be_buffer), 8),
                 "be_protect_price": round(float(be_protect_price), 8),
                 "be_protect_r": round(self._safe_divide(be_protect_price - entry_price, initial_risk), 6),
-            "tp1_be_protect_price": round(float(tp1_be_protect_price), 8),
-            "runner_stop_after_tp1": round(float(runner_stop_after_tp1), 8),
-            "tp1_be_protect_r": round(self._safe_divide(tp1_be_protect_price - entry_price, initial_risk), 6),
+                "tp1_be_protect_price": round(float(tp1_be_protect_price), 8),
+                "runner_stop_after_tp1": round(float(runner_stop_after_tp1), 8),
+                "runner_stop_after_tp1_timestamp_ms": int(one.timestamps[runner_stop_after_tp1_idx]) if runner_stop_after_tp1_idx is not None else None,
+                "tp1_be_protect_r": round(self._safe_divide(tp1_be_protect_price - entry_price, initial_risk), 6),
                 "be_armed": bool(be_armed),
                 "be_arm_timestamp_ms": int(one.timestamps[be_arm_idx]) if be_arm_idx is not None else None,
                 "tp1_hit_timestamp_ms": int(one.timestamps[tp1_hit_idx]) if tp1_hit_idx is not None else None,
                 "tp2_hit_timestamp_ms": int(one.timestamps[tp2_hit_idx]) if tp2_hit_idx is not None else None,
                 "tp1_r": round(self._safe_divide(tp1 - entry_price, initial_risk), 6),
-                "tp2_r": round(self._safe_divide(tp2 - entry_price, initial_risk), 6),
+                "tp2_r": np.nan,
                 "active_high_r": round(self._safe_divide(tp1 - entry_price, initial_risk), 6),
                 "partial_exit_price": round(float(partial_exit_price), 8) if partial_exit_price is not None else None,
                 "partial_exit_timestamp_ms": int(one.timestamps[partial_exit_idx]) if partial_exit_idx is not None else None,
@@ -6247,6 +8076,9 @@ class PnoEngine:
                 "runner_exit_share": round(float(remainder_share if tp1_hit else 1.0), 4),
                 "runner_realized_pnl": round(float(runner_realized_pnl), 8),
                 "runner_exit_reason": runner_exit_reason,
+                "runner_final_classification": runner_final_classification,
+                "runner_final_vs_tp1": round(float((runner_exit_price if runner_exit_price is not None else exit_price) - tp1), 8),
+                "runner_final_vs_entry": round(float((runner_exit_price if runner_exit_price is not None else exit_price) - entry_price), 8),
                 "be_armed_pre_tp1": bool(be_arm_idx is not None and (tp1_hit_idx is None or be_arm_idx < tp1_hit_idx)),
                 "holding_bars": int(exit_idx - entry_idx),
                 "mfe_r": round(self._safe_divide(max_favorable, initial_risk), 6),
@@ -6255,7 +8087,8 @@ class PnoEngine:
                 "mae_pct": round(self._to_percent(max_adverse, entry_price), 6),
                 "tp1_hit": tp1_hit,
                 "tp1_hit_share": round(float(tp1_share), 4) if tp1_hit else 0.0,
-                "tp2_hit": result_type == TradeResultType.TP2,
+                "tp2_hit": False,
+                "tp2_disabled": True,
                 "trade_complete": True,
             }
         )
@@ -6691,15 +8524,25 @@ class PnoEngine:
         if target_timeframe_ms < source_timeframe_ms or target_timeframe_ms % source_timeframe_ms != 0:
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
         work["bucket"] = (work["timestamp"] // target_timeframe_ms) * target_timeframe_ms
+        aggregation: dict[str, tuple[str, str]] = {
+            "open": ("open", "first"),
+            "high": ("high", "max"),
+            "low": ("low", "min"),
+            "close": ("close", "last"),
+            "volume": ("volume", "sum"),
+        }
+        for optional_column in (
+            "taker_buy_volume",
+            "taker_buy_quote_volume",
+            "number_of_trades",
+            "trades",
+            "trade_count",
+        ):
+            if optional_column in work.columns:
+                aggregation[optional_column] = (optional_column, "sum")
         aggregated = (
             work.groupby("bucket", as_index=False)
-            .agg(
-                open=("open", "first"),
-                high=("high", "max"),
-                low=("low", "min"),
-                close=("close", "last"),
-                volume=("volume", "sum"),
-            )
+            .agg(**aggregation)
             .rename(columns={"bucket": "timestamp"})
         )
         return aggregated.reset_index(drop=True)
@@ -6758,11 +8601,45 @@ class PnoEngine:
         if timestamps.size == 0:
             return []
 
-        candidate_indices = (
-            np.nonzero(stage1_state.inplay)[0].astype(np.int64, copy=False)
-            if stage1_state is not None and stage1_state.has_inplay
-            else np.arange(len(timestamps), dtype=np.int64)
-        )
+        if stage1_state is not None and not stage1_state.has_inplay:
+            return []
+        if stage1_state is not None:
+            valid_mask = (
+                stage1_state.inplay
+                & (stage1_state.pump_start_idx >= 0)
+                & (stage1_state.stage1_confirm_idx >= 0)
+            )
+            if not bool(np.any(valid_mask)):
+                return []
+            anchor_pairs = np.unique(
+                np.column_stack(
+                    [
+                        stage1_state.pump_start_idx[valid_mask],
+                        stage1_state.stage1_confirm_idx[valid_mask],
+                    ]
+                ),
+                axis=0,
+            )
+            levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
+            entry_preroll_ms = max(30 * 60_000, 6 * int(params.entry_timeframe.to_milliseconds()))
+            raw_windows: list[tuple[int, int]] = []
+            post_bars = (
+                self._scale_5m_stage_bars(int(params.stage1_pullback_max_bars), levels_timeframe_ms)
+                + self._scale_5m_stage_bars(int(params.stage1_fetch_post_bars), levels_timeframe_ms)
+            )
+            for pump_start_idx, confirm_idx in anchor_pairs.tolist():
+                if pump_start_idx < 0 or confirm_idx < 0 or pump_start_idx >= len(timestamps) or confirm_idx >= len(timestamps):
+                    continue
+                end_idx = min(max(int(confirm_idx), int(pump_start_idx)) + post_bars, len(timestamps) - 1)
+                raw_windows.append(
+                    (
+                        max(int(timestamps[0]), int(timestamps[int(pump_start_idx)]) - entry_preroll_ms),
+                        int(timestamps[end_idx]) + levels_timeframe_ms - 1,
+                    )
+                )
+            return self._merge_timestamp_windows(raw_windows)
+        else:
+            candidate_indices = np.arange(len(timestamps), dtype=np.int64)
         raw_windows: list[tuple[int, int]] = []
         levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
         entry_preroll_ms = max(30 * 60_000, 6 * int(params.entry_timeframe.to_milliseconds()))
@@ -6773,13 +8650,14 @@ class PnoEngine:
                 lows=lows,
                 five_idx=int(five_idx),
                 params=params,
+                levels_timeframe_ms=levels_timeframe_ms,
             )
             if candidate is None:
                 continue
             end_idx = min(
                 int(candidate["active_high_5m_idx"])
-                + int(params.stage1_pullback_max_bars)
-                + int(params.stage1_fetch_post_bars),
+                + self._scale_5m_stage_bars(int(params.stage1_pullback_max_bars), levels_timeframe_ms)
+                + self._scale_5m_stage_bars(int(params.stage1_fetch_post_bars), levels_timeframe_ms),
                 len(timestamps) - 1,
             )
             raw_windows.append(
@@ -6838,20 +8716,32 @@ class PnoEngine:
         lows: np.ndarray,
         five_idx: int,
         params: PnoParams,
+        levels_timeframe_ms: int,
+        forced_pump_start_5m_idx: int | None = None,
     ) -> dict[str, int | float] | None:
         if five_idx <= 0 or five_idx >= len(timestamps):
             return None
 
         best_candidate: dict[str, int | float] | None = None
-        for active_high_5m_idx in range(max(0, five_idx - params.stage1_pullback_max_bars), five_idx):
-            pump_start_min_idx = max(0, active_high_5m_idx - params.stage1_pump_max_bars + 1)
-            pump_start_max_idx = active_high_5m_idx - params.stage1_pump_min_bars + 1
+        stage1_pump_min_bars = self._scale_5m_stage_bars(int(params.stage1_pump_min_bars), levels_timeframe_ms)
+        stage1_pump_max_bars = self._scale_5m_stage_bars(int(params.stage1_pump_max_bars), levels_timeframe_ms)
+        stage1_pullback_min_bars = self._scale_5m_stage_bars(int(params.stage1_pullback_min_bars), levels_timeframe_ms)
+        stage1_pullback_max_bars = self._scale_5m_stage_bars(int(params.stage1_pullback_max_bars), levels_timeframe_ms)
+        for active_high_5m_idx in range(max(0, five_idx - stage1_pullback_max_bars), five_idx):
+            pump_start_min_idx = max(0, active_high_5m_idx - stage1_pump_max_bars + 1)
+            pump_start_max_idx = active_high_5m_idx - stage1_pump_min_bars + 1
             if pump_start_max_idx < pump_start_min_idx:
                 continue
-            for pump_start_5m_idx in range(pump_start_max_idx, pump_start_min_idx - 1, -1):
+            if forced_pump_start_5m_idx is not None:
+                if forced_pump_start_5m_idx < pump_start_min_idx or forced_pump_start_5m_idx > pump_start_max_idx:
+                    continue
+                pump_start_candidates = (int(forced_pump_start_5m_idx),)
+            else:
+                pump_start_candidates = range(pump_start_max_idx, pump_start_min_idx - 1, -1)
+            for pump_start_5m_idx in pump_start_candidates:
                 pump_bars = active_high_5m_idx - pump_start_5m_idx + 1
                 pullback_bars = five_idx - active_high_5m_idx
-                if pullback_bars < params.stage1_pullback_min_bars or pullback_bars > params.stage1_pullback_max_bars:
+                if pullback_bars < stage1_pullback_min_bars or pullback_bars > stage1_pullback_max_bars:
                     continue
                 segment_highs = highs[pump_start_5m_idx : five_idx + 1]
                 if segment_highs.size == 0:
@@ -6864,17 +8754,13 @@ class PnoEngine:
                 pump_height = active_high - pump_low
                 if pump_height <= self._EPSILON:
                     continue
-                pullback_low = float(np.nanmin(lows[active_high_5m_idx + 1 : five_idx + 1]))
+                pullback_slice = lows[active_high_5m_idx + 1 : five_idx + 1]
+                if pullback_slice.size == 0:
+                    continue
+                pullback_low = float(np.nanmin(pullback_slice))
                 min_allowed_low = pump_low + (float(params.stage1_pullback_low_min_pump_fraction) * pump_height)
-                if pullback_low < (min_allowed_low - self._EPSILON):
-                    continue
                 pullback_height = active_high - pullback_low
-                if pullback_height <= self._EPSILON:
-                    continue
-                level_ceiling = pullback_low + (float(params.stage1_level_max_pullback_reclaim_fraction) * pullback_height)
                 level = float(highs[five_idx])
-                if level > (level_ceiling + self._EPSILON):
-                    continue
                 pullback_low_5m_idx = int(active_high_5m_idx + 1 + np.argmin(lows[active_high_5m_idx + 1 : five_idx + 1]))
                 candidate = {
                     "pump_start_5m_idx": int(pump_start_5m_idx),
@@ -6910,3 +8796,13 @@ class PnoEngine:
         if not np.isfinite(numerator) or not np.isfinite(denominator) or denominator <= 0.0:
             return 0.0
         return numerator / denominator
+
+    def _scale_5m_stage_bars(self, bars: int, levels_timeframe_ms: int) -> int:
+        if levels_timeframe_ms <= 0:
+            return max(int(bars), 1)
+        return max(int(math.ceil(int(bars) * Timeframe.M5.to_milliseconds() / int(levels_timeframe_ms))), 1)
+
+    def _scale_entry_bars(self, bars: int, entry_timeframe_ms: int) -> int:
+        if entry_timeframe_ms <= 0:
+            return max(int(bars), 1)
+        return max(int(math.ceil(int(bars) * Timeframe.S30.to_milliseconds() / int(entry_timeframe_ms))), 1)

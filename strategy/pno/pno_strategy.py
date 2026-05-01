@@ -11,6 +11,7 @@ import tempfile
 from typing import Any, ClassVar
 import zipfile
 
+import numpy as np
 import pandas as pd
 import requests
 
@@ -153,10 +154,22 @@ class _PnoSecondsFrameProvider:
             seconds_frame,
             start_timestamp_ms=int(start_timestamp_ms),
             end_timestamp_ms=int(end_timestamp_ms),
-        ):
+        ) and {"taker_buy_volume", "number_of_trades"}.issubset(seconds_frame.columns):
             self._window_cache[cache_key] = seconds_frame.copy()
             self._shared_window_cache[cache_key] = seconds_frame.copy()
             return seconds_frame
+        if self._sparse_frame_has_window_activity(
+            seconds_frame,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+        ) and {"taker_buy_volume", "number_of_trades"}.issubset(seconds_frame.columns):
+            clipped = seconds_frame.loc[
+                (seconds_frame["timestamp"] >= int(start_timestamp_ms))
+                & (seconds_frame["timestamp"] <= int(end_timestamp_ms))
+            ].copy()
+            self._window_cache[cache_key] = clipped.copy()
+            self._shared_window_cache[cache_key] = clipped.copy()
+            return clipped
         fetched_parts: list[pd.DataFrame] = []
         newly_fetched_day_parts: list[pd.DataFrame] = []
         for utc_day in self._iter_utc_days(
@@ -226,6 +239,25 @@ class _PnoSecondsFrameProvider:
         expected_points = ((int(end_timestamp_ms) - int(start_timestamp_ms)) // 1_000) + 1
         return len(clipped) >= expected_points
 
+    @staticmethod
+    def _sparse_frame_has_window_activity(
+        frame: pd.DataFrame,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> bool:
+        if frame.empty or "timestamp" not in frame.columns:
+            return False
+        timestamps = pd.to_numeric(frame["timestamp"], errors="coerce")
+        if timestamps.dropna().empty:
+            return False
+        return bool(
+            (
+                (timestamps >= int(start_timestamp_ms))
+                & (timestamps <= int(end_timestamp_ms))
+            ).any()
+        )
+
     def _aggregated_window_path(
         self,
         *,
@@ -262,6 +294,8 @@ class _PnoSecondsFrameProvider:
         frame = pd.read_parquet(path)
         if frame.empty:
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        if not {"taker_buy_volume", "number_of_trades"}.issubset(frame.columns):
+            return None
         return frame.sort_values("timestamp").reset_index(drop=True)
 
     def _persist_aggregated_window(
@@ -392,6 +426,7 @@ class _PnoSecondsFrameProvider:
         work = trades.copy()
         timestamp_column = "transact_time" if "transact_time" in work.columns else "T"
         quantity_column = "quantity" if "quantity" in work.columns else "q"
+        maker_column = "is_buyer_maker" if "is_buyer_maker" in work.columns else "m"
         work["price"] = pd.to_numeric(work["price"] if "price" in work.columns else work["p"], errors="coerce")
         work["quantity"] = pd.to_numeric(work[quantity_column], errors="coerce")
         work["timestamp"] = ((pd.to_numeric(work[timestamp_column], errors="coerce") // 1000) * 1000).astype("Int64")
@@ -399,6 +434,8 @@ class _PnoSecondsFrameProvider:
         if work.empty:
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
         work["timestamp"] = work["timestamp"].astype("int64")
+        buyer_is_maker = work[maker_column].astype(str).str.lower().isin(("true", "1"))
+        work["taker_buy_volume"] = np.where(buyer_is_maker, 0.0, work["quantity"].astype("float64"))
         aggregated = (
             work.groupby("timestamp", sort=True)
             .agg(
@@ -407,6 +444,8 @@ class _PnoSecondsFrameProvider:
                 low=("price", "min"),
                 close=("price", "last"),
                 volume=("quantity", "sum"),
+                taker_buy_volume=("taker_buy_volume", "sum"),
+                number_of_trades=("quantity", "size"),
             )
             .reset_index()
         )
@@ -418,6 +457,8 @@ class _PnoSecondsFrameProvider:
                 "low": "float64",
                 "close": "float64",
                 "volume": "float64",
+                "taker_buy_volume": "float64",
+                "number_of_trades": "float64",
             }
         )
 
@@ -484,6 +525,32 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         del symbol, mtf_frames, params
         return {"seconds_frame_provider": self._seconds_provider}
 
+    def has_fast_stage1_candidate(
+        self,
+        *,
+        symbol: str,
+        levels_frame: pd.DataFrame,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+    ) -> bool:
+        if levels_frame.empty:
+            return False
+        for params in self.build_parameter_grid():
+            runtime_params = replace(
+                params,
+                symbol=symbol,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+            )
+            for profile in resolve_pno_category_profiles(runtime_params, category_mode=self._category_mode_filter):
+                if self._engine.fast_stage1_candidate_count(
+                    levels_frame=levels_frame,
+                    params=profile.params,
+                    levels_timeframe_ms=levels_timeframe.to_milliseconds(),
+                ) > 0:
+                    return True
+        return False
+
     def build_parameter_grid(self) -> list[PnoParams]:
         grid = build_pno_grid()
         if self._entry_confirmation_mode_filter is not None:
@@ -521,6 +588,8 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_pullback_valid_max_v5": params.pullback_valid_max_v5,
             "pno_pullback_invalid_max_v5": params.pullback_invalid_max_v5,
             "pno_pullback_max_age_bars": params.pullback_max_age_bars,
+            "pno_structure_min_leg_bars": params.structure_min_leg_bars,
+            "pno_structure_terminal_retrace_fraction": params.structure_terminal_retrace_fraction,
             "pno_stage1_min_cumulative_quote_volume": params.stage1_min_cumulative_quote_volume,
             "pno_stage1_pre_pump_ema_crosses_min": params.stage1_pre_pump_ema_crosses_min,
             "pno_stage1_barcode_max_fraction_1h": params.stage1_barcode_max_fraction_1h,
@@ -529,7 +598,14 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             "pno_stage1_min_impulse_atr_pre": params.stage1_min_impulse_atr_pre,
             "pno_stage1_min_peak_bar_tr_atr_pre": params.stage1_min_peak_bar_tr_atr_pre,
             "pno_stage1_min_volume_ratio_start": params.stage1_min_volume_ratio_start,
+            "pno_stage1_min_trade_ratio_start": params.stage1_min_trade_ratio_start,
             "pno_stage1_min_volume_ratio_continue": params.stage1_min_volume_ratio_continue,
+            "pno_stage1_min_trade_ratio_continue": params.stage1_min_trade_ratio_continue,
+            "pno_stage1_flow_hold_bars": params.stage1_flow_hold_bars,
+            "pno_stage1_flow_hold_window_bars": params.stage1_flow_hold_window_bars,
+            "pno_stage1_flow_hold_min_start_fraction": params.stage1_flow_hold_min_start_fraction,
+            "pno_stage1_active_context_min_start_fraction": params.stage1_active_context_min_start_fraction,
+            "pno_stage1_active_context_min_baseline_ratio": params.stage1_active_context_min_baseline_ratio,
             "pno_stage1_min_path_efficiency": params.stage1_min_path_efficiency,
             "pno_stage1_max_wick_share": params.stage1_max_wick_share,
             "pno_stage1_min_body_share_mean": params.stage1_min_body_share_mean,

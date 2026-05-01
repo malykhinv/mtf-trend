@@ -28,7 +28,20 @@ _PNO_STAGE1_REJECTION_DISTANCE_FIELDS: dict[str, tuple[str, str, str]] = {
     "impulse_atr_pre_too_small": ("pump_impulse_atr_pre", "stage1_min_impulse_atr_pre", "min"),
     "peak_bar_tr_atr_pre_too_small": ("pump_peak_bar_tr_atr_pre", "stage1_min_peak_bar_tr_atr_pre", "min"),
     "volume_ratio_start_too_small": ("pump_volume_ratio_start", "stage1_min_volume_ratio_start", "min"),
+    "trade_ratio_start_too_small": ("pump_trade_ratio_start", "stage1_min_trade_ratio_start", "min"),
     "volume_ratio_continue_too_small": ("pump_volume_ratio_continue", "stage1_min_volume_ratio_continue", "min"),
+    "trade_ratio_continue_too_small": ("pump_trade_ratio_continue", "stage1_min_trade_ratio_continue", "min"),
+    "flow_hold_not_confirmed": ("flow_hold_bar_count", "stage1_flow_hold_bars", "min"),
+    "flow_candidate_failed_stage1_confirmation": (
+        "pump_trade_ratio_start",
+        "stage1_min_trade_ratio_start",
+        "min",
+    ),
+    "active_flow_faded_before_structure": (
+        "active_context_quote_ratio",
+        "stage1_active_context_min_baseline_ratio",
+        "min",
+    ),
     "path_efficiency_too_low": ("pump_path_efficiency", "stage1_min_path_efficiency", "min"),
     "wick_share_too_high": ("pump_wick_share", "stage1_max_wick_share", "max"),
     "body_share_mean_too_low": ("pump_body_share_mean", "stage1_min_body_share_mean", "min"),
@@ -248,8 +261,6 @@ def _build_pno_plot_frame(
     end_timestamp_ms: int,
 ) -> pd.DataFrame:
     selected_columns = ["timestamp", "open", "high", "low", "close", "volume"]
-    if {"ema9", "ema20"}.issubset(entry_frame.columns):
-        selected_columns.extend(["ema9", "ema20"])
     plot_frame = entry_frame.loc[
         (entry_frame["timestamp"] >= start_timestamp_ms) & (entry_frame["timestamp"] <= end_timestamp_ms),
         selected_columns,
@@ -416,7 +427,7 @@ def _prepare_pno_entry_plot_source(entry_frame: pd.DataFrame) -> pd.DataFrame:
 
 def _prepare_pno_entry_plot_source_with_ema(*, levels_frame: pd.DataFrame, entry_frame: pd.DataFrame) -> pd.DataFrame:
     prepared = _prepare_pno_entry_plot_source(entry_frame)
-    if prepared.empty or {"ema9", "ema20"}.issubset(prepared.columns):
+    if prepared.empty:
         return prepared
     levels_ema = _prepare_pno_levels_ema_source(levels_frame)
     if levels_ema.empty:
@@ -451,7 +462,11 @@ _PNO_PLOT_PROTECT_FACE = "#14532d"
 _PNO_PLOT_PROTECT_EDGE = "#86efac"
 _PNO_PLOT_BASE_FACE = "#1d4ed8"
 _PNO_PLOT_BASE_EDGE = "#60a5fa"
+_PNO_PLOT_PUMP_ZONE_FACE = "#facc15"
+_PNO_PLOT_PUMP_ZONE_EDGE = "#fde68a"
 _PNO_PLOT_STRUCTURE_LINE = "#e2e8f0"
+_PNO_PLOT_STRUCTURE_INSET_LINE = "#facc15"
+_PNO_PLOT_STRUCTURE_INSET_BOS = "#38bdf8"
 _PNO_PLOT_STRUCTURE_HIGH = "#fda4af"
 _PNO_PLOT_STRUCTURE_LOW = "#7dd3fc"
 _PNO_PLOT_PANEL_EDGE = "#1e293b"
@@ -461,6 +476,12 @@ _PNO_PLOT_MAX_X_TICKS = 8
 _PNO_TRADE_CHART_FIGSIZE = (8.0, 8.0)
 _PNO_TRADE_CHART_HEIGHT_RATIOS = [4, 2, 1]
 _PNO_TRADE_SLEEP_LOOKBACK_BARS = 12
+_PNO_STAGE_REVIEW_FIGSIZE = (12.8, 6.4)
+_PNO_STAGE_REVIEW_HEIGHT_RATIOS = [4.4, 1.15]
+_PNO_STAGE_REVIEW_SLEEP_BASELINE_MS = 24 * 60 * 60_000
+_PNO_STAGE_REVIEW_SLEEP_CONTEXT_BARS = 24
+_PNO_STAGE_REVIEW_MAX_ENTRY_LOOKBACK_MS = 6 * 60 * 60_000
+_PNO_STAGE_REVIEW_BASELINE_COLOR = "#facc15"
 _PNO_RESEARCH_TRADE_PATH_MAX_BARS = 240
 _PNO_PLOT_AXIS_TAG_LABEL_WIDTH = 7
 _PNO_PLOT_AXIS_TAG_TEXT_WIDTH = 20
@@ -468,7 +489,31 @@ _PNO_PLOT_SAVEFIG_KWARGS = {"dpi": 100, "facecolor": _PNO_PLOT_FIGURE_FACE, "pil
 _PNO_STAGE_REVIEW_SAVEFIG_KWARGS = {"dpi": 72, "facecolor": _PNO_PLOT_FIGURE_FACE, "pil_kwargs": {"compress_level": 1}}
 
 
-def _draw_pno_candles(ax: plt.Axes, frame: pd.DataFrame, x_values: np.ndarray) -> None:
+def _resolve_pno_candle_width(x_values: np.ndarray, *, default: float = _PNO_PLOT_CANDLE_WIDTH) -> float:
+    finite_x = np.asarray(x_values[np.isfinite(x_values)], dtype=np.float64)
+    if finite_x.size < 2:
+        return float(default)
+    diffs = np.diff(np.sort(np.unique(finite_x)))
+    diffs = diffs[diffs > 0.0]
+    if diffs.size == 0:
+        return float(default)
+    return max(min(float(np.median(diffs)) * 0.72, float(np.min(diffs)) * 0.92), 0.18)
+
+
+def _draw_pno_candles(
+    ax: plt.Axes,
+    frame: pd.DataFrame,
+    x_values: np.ndarray,
+    *,
+    up_color: str = _PNO_PLOT_UP,
+    down_color: str = _PNO_PLOT_DOWN,
+    wick_linewidth: float = 1.0,
+    body_linewidth: float = 0.8,
+    alpha: float = 1.0,
+    zorder: float = 3,
+) -> None:
+    if frame.empty or len(x_values) == 0:
+        return
     opens = frame["open"].to_numpy(dtype=np.float64)
     highs = frame["high"].to_numpy(dtype=np.float64)
     lows = frame["low"].to_numpy(dtype=np.float64)
@@ -481,22 +526,23 @@ def _draw_pno_candles(ax: plt.Axes, frame: pd.DataFrame, x_values: np.ndarray) -
         ],
         axis=1,
     )
-    wick_colors = np.where(up_mask, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
+    wick_colors = np.where(up_mask, up_color, down_color)
     ax.add_collection(
         LineCollection(
             wick_segments,
             colors=wick_colors.tolist(),
-            linewidths=1.0,
-            alpha=1.0,
-            zorder=3,
+            linewidths=wick_linewidth,
+            alpha=alpha,
+            zorder=zorder,
         )
     )
     body_lows = np.minimum(opens, closes)
     body_heights = np.maximum(np.abs(closes - opens), 1e-9)
+    candle_width = _resolve_pno_candle_width(x_values)
     body_patches = [
         Rectangle(
-            (float(x_pos) - _PNO_PLOT_CANDLE_WIDTH / 2.0, float(body_low)),
-            _PNO_PLOT_CANDLE_WIDTH,
+            (float(x_pos) - candle_width / 2.0, float(body_low)),
+            candle_width,
             float(body_height),
         )
         for x_pos, body_low, body_height in zip(x_values, body_lows, body_heights, strict=False)
@@ -506,9 +552,9 @@ def _draw_pno_candles(ax: plt.Axes, frame: pd.DataFrame, x_values: np.ndarray) -
             body_patches,
             facecolor=wick_colors.tolist(),
             edgecolor=wick_colors.tolist(),
-            linewidth=0.8,
-            alpha=1.0,
-            zorder=4,
+            linewidth=body_linewidth,
+            alpha=alpha,
+            zorder=zorder + 1,
             match_original=False,
         )
     )
@@ -606,6 +652,99 @@ def _draw_pno_price_zone(
     )
 
 
+def _detect_pno_pump_pause_zones(
+    frame: pd.DataFrame,
+    *,
+    start_timestamp_ms: int | None,
+    end_timestamp_ms: int | None,
+    max_zones: int = 3,
+) -> list[dict[str, float | int]]:
+    if frame.empty or start_timestamp_ms is None or end_timestamp_ms is None:
+        return []
+    window = frame.loc[
+        (frame["timestamp"] >= int(start_timestamp_ms)) & (frame["timestamp"] <= int(end_timestamp_ms))
+    ].copy()
+    if len(window) < 4:
+        return []
+    highs = window["high"].to_numpy(dtype=np.float64)
+    lows = window["low"].to_numpy(dtype=np.float64)
+    closes = window["close"].to_numpy(dtype=np.float64)
+    tr = np.maximum(highs - lows, 1e-12)
+    atr_ref = float(np.nanmedian(tr)) if tr.size else np.nan
+    if not np.isfinite(atr_ref) or atr_ref <= 0.0:
+        return []
+    candidates: list[dict[str, float | int]] = []
+    for length in (5, 4, 3):
+        if len(window) < length:
+            continue
+        for offset in range(0, len(window) - length + 1):
+            local_high = float(np.nanmax(highs[offset : offset + length]))
+            local_low = float(np.nanmin(lows[offset : offset + length]))
+            zone_range = local_high - local_low
+            close_drift = abs(float(closes[offset + length - 1]) - float(closes[offset]))
+            if zone_range <= 1.35 * atr_ref and close_drift <= 0.75 * zone_range:
+                start_ts = int(window["timestamp"].iloc[offset])
+                end_ts = int(window["timestamp"].iloc[offset + length - 1])
+                candidates.append(
+                    {
+                        "start_timestamp_ms": start_ts,
+                        "end_timestamp_ms": end_ts,
+                        "low": local_low,
+                        "high": local_high,
+                        "score": float(length) / max(zone_range / atr_ref, 0.25),
+                    }
+                )
+    if not candidates:
+        return []
+    candidates.sort(key=lambda item: float(item["score"]), reverse=True)
+    selected: list[dict[str, float | int]] = []
+    for candidate in candidates:
+        cand_start = int(candidate["start_timestamp_ms"])
+        cand_end = int(candidate["end_timestamp_ms"])
+        overlaps = any(
+            not (cand_end < int(existing["start_timestamp_ms"]) or cand_start > int(existing["end_timestamp_ms"]))
+            for existing in selected
+        )
+        if overlaps:
+            continue
+        selected.append(candidate)
+        if len(selected) >= max_zones:
+            break
+    selected.sort(key=lambda item: int(item["start_timestamp_ms"]))
+    return selected
+
+
+def _draw_pno_pump_pause_zones(
+    ax: plt.Axes,
+    *,
+    timestamps: np.ndarray,
+    plot_frame: pd.DataFrame,
+    pump_start_timestamp_ms: int | None,
+    active_high_timestamp_ms: int | None,
+    alpha: float = 0.11,
+    zorder: float = 2.15,
+) -> None:
+    for zone in _detect_pno_pump_pause_zones(
+        plot_frame,
+        start_timestamp_ms=pump_start_timestamp_ms,
+        end_timestamp_ms=active_high_timestamp_ms,
+    ):
+        _draw_pno_price_zone(
+            ax,
+            timestamps=timestamps,
+            start_timestamp_ms=int(zone["start_timestamp_ms"]),
+            end_timestamp_ms=int(zone["end_timestamp_ms"]),
+            low=float(zone["low"]),
+            high=float(zone["high"]),
+            facecolor=_PNO_PLOT_PUMP_ZONE_FACE,
+            edgecolor=_PNO_PLOT_PUMP_ZONE_EDGE,
+            alpha=alpha,
+            linewidth=0.75,
+            linestyle=":",
+            zorder=zorder,
+        )
+
+
 def _format_pno_price_label(value: float | None) -> str:
     if value is None:
         return ""
@@ -692,6 +831,10 @@ def _format_pno_chart_symbol(symbol: str) -> str:
     base = str(symbol).split(":", 1)[0]
     if base.endswith("/USDT"):
         base = base[:-5]
+    try:
+        base.encode("latin-1")
+    except UnicodeEncodeError:
+        base = _sanitize_plot_name(base.replace("/", "_"))
     return base
 
 
@@ -917,33 +1060,255 @@ def _draw_pno_structure_overlay(ax: plt.Axes, *, timestamps: np.ndarray, row: di
         y_values,
         color=_PNO_PLOT_STRUCTURE_LINE,
         linewidth=0.9,
-        alpha=0.12,
+        alpha=0.20,
         zorder=4.55,
     )
-    high_mask = np.array([kind == "H" for _timestamp_ms, _price, kind in points], dtype=bool)
-    low_mask = ~high_mask
-    if bool(high_mask.any()):
-        ax.scatter(
-            x_values[high_mask],
-            y_values[high_mask],
-            s=14,
-            marker="^",
-            color=_PNO_PLOT_STRUCTURE_HIGH,
-            edgecolors="none",
-            alpha=0.22,
-            zorder=4.7,
+
+
+def _resolve_pno_bos_level_from_row(row: dict[str, object], points: list[tuple[int, float, str]]) -> tuple[int, float] | None:
+    level_timestamp_ms = _safe_int(row.get("level_first_local_high_timestamp_ms")) or _safe_int(row.get("structure_high_timestamp_ms"))
+    if level_timestamp_ms is not None:
+        matching_highs = [
+            (timestamp_ms, price)
+            for timestamp_ms, price, kind in points
+            if kind == "H" and int(timestamp_ms) == int(level_timestamp_ms)
+        ]
+        if matching_highs:
+            timestamp_ms, price = matching_highs[-1]
+            return int(timestamp_ms), float(price)
+        level_price = _safe_float(row.get("level")) or _safe_float(row.get("structure_high"))
+        if level_price is not None:
+            return int(level_timestamp_ms), float(level_price)
+    if len(points) < 3:
+        return None
+    last_low_pos = -1
+    for pos in range(len(points) - 1, -1, -1):
+        if points[pos][2] == "L":
+            last_low_pos = pos
+            break
+    if last_low_pos <= 0:
+        return None
+    for pos in range(last_low_pos - 1, -1, -1):
+        if points[pos][2] == "H":
+            return int(points[pos][0]), float(points[pos][1])
+    return None
+
+
+def _simplify_pno_structure_points_for_plot(
+    points: list[tuple[int, float, str]],
+    *,
+    preserve_timestamp_ms: int | None = None,
+) -> list[tuple[int, float, str]]:
+    if len(points) <= 5:
+        return points
+    preserve_indices: set[int] = {0, len(points) - 1}
+    if preserve_timestamp_ms is not None:
+        preserve_indices.add(
+            min(
+                range(len(points)),
+                key=lambda index: abs(int(points[index][0]) - int(preserve_timestamp_ms)),
+            )
         )
-    if bool(low_mask.any()):
-        ax.scatter(
-            x_values[low_mask],
-            y_values[low_mask],
-            s=14,
-            marker="v",
-            color=_PNO_PLOT_STRUCTURE_LOW,
-            edgecolors="none",
-            alpha=0.22,
-            zorder=4.7,
+    reduced_points = list(points)
+    reduced_preserve_timestamps = {int(points[index][0]) for index in preserve_indices}
+
+    def _merge_same_kind_neighbors() -> None:
+        pos = 1
+        while pos < len(reduced_points):
+            if reduced_points[pos][2] != reduced_points[pos - 1][2]:
+                pos += 1
+                continue
+            left = reduced_points[pos - 1]
+            right = reduced_points[pos]
+            if int(left[0]) in reduced_preserve_timestamps:
+                remove_pos = pos
+            elif int(right[0]) in reduced_preserve_timestamps:
+                remove_pos = pos - 1
+            elif left[2] == "H":
+                remove_pos = pos - 1 if float(right[1]) >= float(left[1]) else pos
+            else:
+                remove_pos = pos - 1 if float(right[1]) <= float(left[1]) else pos
+            reduced_points.pop(remove_pos)
+            pos = max(pos - 1, 1)
+
+    prices_for_reduction = np.array([float(price) for _timestamp_ms, price, _kind in reduced_points], dtype=np.float64)
+    price_span_for_reduction = float(np.nanmax(prices_for_reduction) - np.nanmin(prices_for_reduction))
+    if np.isfinite(price_span_for_reduction) and price_span_for_reduction > 0.0:
+        min_visible_swing = price_span_for_reduction * 0.12
+        while len(reduced_points) > 6:
+            weakest_index = -1
+            weakest_swing = np.inf
+            for index in range(1, len(reduced_points) - 1):
+                if int(reduced_points[index][0]) in reduced_preserve_timestamps:
+                    continue
+                swing = min(
+                    abs(float(reduced_points[index][1]) - float(reduced_points[index - 1][1])),
+                    abs(float(reduced_points[index + 1][1]) - float(reduced_points[index][1])),
+                )
+                if swing < weakest_swing:
+                    weakest_swing = swing
+                    weakest_index = index
+            if weakest_index < 0 or weakest_swing >= min_visible_swing:
+                break
+            reduced_points.pop(weakest_index)
+            _merge_same_kind_neighbors()
+    points = reduced_points
+    if len(points) <= 5:
+        return points
+    timestamps = np.array([float(timestamp_ms) for timestamp_ms, _price, _kind in points], dtype=np.float64)
+    prices = np.array([float(price) for _timestamp_ms, price, _kind in points], dtype=np.float64)
+    x_span = float(np.nanmax(timestamps) - np.nanmin(timestamps))
+    y_span = float(np.nanmax(prices) - np.nanmin(prices))
+    if not np.isfinite(x_span) or not np.isfinite(y_span) or x_span <= 0.0 or y_span <= 0.0:
+        return points
+    normalized = np.column_stack(((timestamps - float(np.nanmin(timestamps))) / x_span, (prices - float(np.nanmin(prices))) / y_span))
+    keep_indices: set[int] = {0, len(points) - 1}
+    if preserve_timestamp_ms is not None:
+        keep_indices.add(
+            min(
+                range(len(points)),
+                key=lambda index: abs(int(points[index][0]) - int(preserve_timestamp_ms)),
+            )
         )
+
+    def _mark_segment(start: int, end: int) -> None:
+        if end <= start + 1:
+            return
+        segment_start = normalized[start]
+        segment_end = normalized[end]
+        segment = segment_end - segment_start
+        segment_norm = float(np.linalg.norm(segment))
+        max_distance = -1.0
+        max_index = -1
+        for index in range(start + 1, end):
+            point = normalized[index]
+            if segment_norm <= 1e-12:
+                distance = float(np.linalg.norm(point - segment_start))
+            else:
+                delta = point - segment_start
+                distance = float(abs((segment[0] * delta[1]) - (segment[1] * delta[0])) / segment_norm)
+            if distance > max_distance:
+                max_distance = distance
+                max_index = index
+        if max_index >= 0 and (max_distance >= 0.14 or max_index in keep_indices):
+            keep_indices.add(max_index)
+            _mark_segment(start, max_index)
+            _mark_segment(max_index, end)
+
+    _mark_segment(0, len(points) - 1)
+    changed = True
+    while changed:
+        changed = False
+        ordered_indices = sorted(keep_indices)
+        for left, right in zip(ordered_indices, ordered_indices[1:], strict=False):
+            if points[left][2] != points[right][2]:
+                continue
+            opposite_kind = "L" if points[left][2] == "H" else "H"
+            candidates = [index for index in range(left + 1, right) if points[index][2] == opposite_kind]
+            if not candidates:
+                continue
+            if opposite_kind == "L":
+                bridge_index = min(candidates, key=lambda index: float(points[index][1]))
+            else:
+                bridge_index = max(candidates, key=lambda index: float(points[index][1]))
+            keep_indices.add(bridge_index)
+            changed = True
+            break
+    return [points[index] for index in sorted(keep_indices)]
+
+
+def _draw_pno_structure_inset(ax: plt.Axes, *, plot_frame: pd.DataFrame, row: dict[str, object]) -> None:
+    points = _resolve_pno_structure_points(row)
+    if len(points) < 3 or plot_frame.empty:
+        return
+    active_high_timestamp_ms = _safe_int(row.get("active_high_timestamp_ms"))
+    end_timestamp_ms = (
+        _safe_int(row.get("structure_break_timestamp_ms"))
+        or _safe_int(row.get("entry_signal_timestamp_ms"))
+        or _safe_int(row.get("entry_timestamp_ms"))
+    )
+    if active_high_timestamp_ms is None or end_timestamp_ms is None or end_timestamp_ms <= active_high_timestamp_ms:
+        return
+    timestamps = plot_frame["timestamp"].to_numpy(dtype=np.int64)
+    start_idx = int(np.searchsorted(timestamps, active_high_timestamp_ms, side="left"))
+    end_idx = int(np.searchsorted(timestamps, end_timestamp_ms, side="right") - 1)
+    start_idx = min(max(start_idx, 0), len(plot_frame) - 1)
+    end_idx = min(max(end_idx, start_idx), len(plot_frame) - 1)
+    if end_idx - start_idx < 2:
+        return
+
+    inset = ax.inset_axes([0.02, 0.56, 0.35, 0.42], transform=ax.transAxes)
+    inset.set_facecolor(_PNO_PLOT_AXIS_FACE)
+    for spine in inset.spines.values():
+        spine.set_color(_PNO_PLOT_TEXT)
+        spine.set_linewidth(0.7)
+        spine.set_alpha(0.85)
+    inset.set_xticks([])
+    inset.set_yticks([])
+    inset.tick_params(left=False, bottom=False, labelleft=False, labelbottom=False)
+
+    inset_frame = plot_frame.iloc[start_idx : end_idx + 1].copy()
+    x_values = np.arange(len(inset_frame), dtype=np.float64)
+    _draw_pno_candles(
+        inset,
+        inset_frame,
+        x_values,
+        up_color="#94a3b8",
+        down_color="#94a3b8",
+        wick_linewidth=0.75,
+        body_linewidth=0.45,
+        alpha=0.82,
+        zorder=2,
+    )
+
+    inset_timestamps = inset_frame["timestamp"].to_numpy(dtype=np.int64)
+    structure_points = [
+        (timestamp_ms, price, kind)
+        for timestamp_ms, price, kind in points
+        if int(inset_timestamps[0]) <= int(timestamp_ms) <= int(inset_timestamps[-1])
+    ]
+    bos_level = _resolve_pno_bos_level_from_row(row, points)
+    structure_points = _simplify_pno_structure_points_for_plot(
+        structure_points,
+        preserve_timestamp_ms=bos_level[0] if bos_level is not None else None,
+    )
+    if len(structure_points) >= 2:
+        structure_x = np.array(
+            [
+                _resolve_pno_timestamp_plot_idx(inset_timestamps, int(timestamp_ms))
+                for timestamp_ms, _price, _kind in structure_points
+            ],
+            dtype=np.float64,
+        )
+        structure_y = np.array([float(price) for _timestamp_ms, price, _kind in structure_points], dtype=np.float64)
+        inset.plot(
+            structure_x,
+            structure_y,
+            color=_PNO_PLOT_STRUCTURE_INSET_LINE,
+            linewidth=2.0,
+            alpha=0.95,
+            zorder=5,
+        )
+
+    if bos_level is not None:
+        level_timestamp_ms, level_price = bos_level
+        level_x = _resolve_pno_timestamp_plot_idx(inset_timestamps, level_timestamp_ms)
+        inset.hlines(
+            level_price,
+            max(float(level_x) - 0.35, -0.5),
+            len(inset_frame) - 0.5,
+            colors=_PNO_PLOT_STRUCTURE_INSET_BOS,
+            linewidth=1.8,
+            alpha=0.92,
+            zorder=4.8,
+        )
+
+    low = float(np.nanmin(inset_frame["low"].to_numpy(dtype=np.float64)))
+    high = float(np.nanmax(inset_frame["high"].to_numpy(dtype=np.float64)))
+    if np.isfinite(low) and np.isfinite(high) and high > low:
+        padding = max((high - low) * 0.08, 1e-9)
+        inset.set_ylim(low - padding, high + padding)
+    inset.set_xlim(-0.5, len(inset_frame) - 0.5)
 
 
 def _draw_pno_candles_on_columns(
@@ -959,6 +1324,7 @@ def _draw_pno_candles_on_columns(
     lows = frame["low"].to_numpy(dtype=np.float64)
     closes = frame["close"].to_numpy(dtype=np.float64)
     up_mask = closes >= opens
+    resolved_width = _resolve_pno_candle_width(x_values, default=candle_width)
     wick_segments = np.stack(
         [
             np.column_stack([x_values, lows]),
@@ -980,8 +1346,8 @@ def _draw_pno_candles_on_columns(
     body_heights = np.maximum(np.abs(closes - opens), 1e-9)
     body_patches = [
         Rectangle(
-            (float(x_pos) - candle_width / 2.0, float(body_low)),
-            candle_width,
+            (float(x_pos) - resolved_width / 2.0, float(body_low)),
+            resolved_width,
             float(body_height),
         )
         for x_pos, body_low, body_height in zip(x_values, body_lows, body_heights, strict=False)
@@ -1021,7 +1387,18 @@ def _build_pno_tick_positions_from_timestamps(timestamps: pd.Series, frame_lengt
         source = list(selected)
         selected = list(np.unique(np.linspace(0, len(source) - 1, _PNO_PLOT_MAX_X_TICKS, dtype=int)))
         selected = [source[idx] for idx in selected if idx < len(source)]
-    return np.asarray(sorted(set(selected)), dtype=int)
+    deduped: list[int] = []
+    seen_labels: set[str] = set()
+    for pos in sorted(set(selected)):
+        if pos < 0 or pos >= len(timestamp_index):
+            continue
+        ts = timestamp_index[pos]
+        label = ts.strftime("%m-%d") if ts.hour == 0 and ts.minute == 0 else ts.strftime("%H:%M")
+        if label in seen_labels:
+            continue
+        seen_labels.add(label)
+        deduped.append(int(pos))
+    return np.asarray(deduped, dtype=int)
 
 
 def _build_pno_tick_positions(frame: pd.DataFrame) -> np.ndarray:
@@ -1085,6 +1462,8 @@ def _render_pno_trade_chart(
     initial_stop_loss = _safe_float(trade_row.get("initial_stop_loss")) or stop_loss
     tp1 = _safe_float(trade_row.get("tp1"))
     tp2 = _safe_float(trade_row.get("tp2"))
+    runner_stop_after_tp1 = _safe_float(trade_row.get("runner_stop_after_tp1"))
+    runner_stop_after_tp1_timestamp_ms = _safe_int(trade_row.get("runner_stop_after_tp1_timestamp_ms"))
     be_protect_price = _safe_float(trade_row.get("be_protect_price"))
     be_arm_timestamp_ms = _safe_int(trade_row.get("be_arm_timestamp_ms"))
     tp1_hit_timestamp_ms = _safe_int(trade_row.get("tp1_hit_timestamp_ms"))
@@ -1095,6 +1474,9 @@ def _render_pno_trade_chart(
     pump_start_timestamp_ms = _safe_int(trade_row.get("pump_start_timestamp_ms")) or entry_timestamp_ms
     level_price = _safe_float(trade_row.get("level"))
     level_first_timestamp_ms = _safe_int(trade_row.get("level_first_local_high_timestamp_ms"))
+    bos_level = _resolve_pno_bos_level_from_row(trade_row, _resolve_pno_structure_points(trade_row))
+    if bos_level is not None:
+        level_first_timestamp_ms, level_price = bos_level
     active_high = _safe_float(trade_row.get("active_high"))
     pullback_low = _safe_float(trade_row.get("pullback_low"))
     active_high_timestamp_ms = _safe_int(trade_row.get("active_high_timestamp_ms"))
@@ -1117,7 +1499,11 @@ def _render_pno_trade_chart(
 
     category = str(trade_row.get("category") or "")
     result_type = str(trade_row.get("result_type") or "")
-    exit_price_actual = _safe_float(trade_row.get("exit_price_actual")) or _safe_float(trade_row.get("exit_price"))
+    exit_price_actual = (
+        _safe_float(trade_row.get("runner_exit_price"))
+        or _safe_float(trade_row.get("exit_price_actual"))
+        or _safe_float(trade_row.get("exit_price"))
+    )
     show_high_tag = not _pno_prices_close(active_high, tp1)
     show_pullback_low_tag = not _pno_prices_close(pullback_low, initial_stop_loss)
 
@@ -1161,11 +1547,15 @@ def _render_pno_trade_chart(
     be_arm_idx = _resolve_pno_timestamp_plot_idx(timestamps, be_arm_timestamp_ms) if be_arm_timestamp_ms is not None else None
     tp1_hit_idx = _resolve_pno_timestamp_plot_idx(timestamps, tp1_hit_timestamp_ms) if tp1_hit_timestamp_ms is not None else None
     tp2_hit_idx = _resolve_pno_timestamp_plot_idx(timestamps, tp2_hit_timestamp_ms) if tp2_hit_timestamp_ms is not None else None
-    pump_idx = _resolve_pno_pump_plot_idx(
-        timestamps=timestamps,
-        pump_start_timestamp_ms=pump_start_timestamp_ms,
-        ema9=ema9,
-        ema20=ema20,
+    runner_stop_after_tp1_idx = (
+        _resolve_pno_timestamp_plot_idx(timestamps, runner_stop_after_tp1_timestamp_ms)
+        if runner_stop_after_tp1_timestamp_ms is not None
+        else None
+    )
+    pump_idx = (
+        _resolve_pno_timestamp_plot_idx(timestamps, int(pump_start_timestamp_ms))
+        if pump_start_timestamp_ms is not None
+        else None
     )
     entry_idx = min(max(entry_idx, 0), len(plot_frame) - 1)
     exit_idx = min(max(exit_idx, entry_idx), len(plot_frame) - 1)
@@ -1188,13 +1578,31 @@ def _render_pno_trade_chart(
     _configure_pno_plot_axes(price_ax=ax_levels, volume_ax=ax_volume)
 
     _draw_pno_candles(ax_price, plot_frame, x_values)
-    _draw_pno_structure_overlay(ax_price, timestamps=timestamps, row=trade_row)
+    _draw_pno_structure_inset(ax_price, plot_frame=plot_frame, row=trade_row)
     ax_price.set_title(_format_pno_chart_symbol(symbol), loc="left", color=_PNO_PLOT_TEXT, fontsize=11, pad=10, fontweight="semibold")
     if not levels_window.empty:
         _draw_pno_candles_on_columns(ax_levels, levels_window, x_column="plot_x", candle_width=_PNO_PLOT_5M_CANDLE_WIDTH)
     ax_price.plot(x_values, ema9, color=_PNO_PLOT_EMA9, linewidth=1.2, alpha=0.28, zorder=2.2)
     ax_price.plot(x_values, ema20, color=_PNO_PLOT_EMA20, linewidth=1.2, alpha=0.24, zorder=2.1)
     ax_price.axvline(pump_idx, color=_PNO_PLOT_PUMP, linewidth=0.95, alpha=0.26, zorder=5)
+    _draw_pno_pump_pause_zones(
+        ax_price,
+        timestamps=timestamps,
+        plot_frame=plot_frame,
+        pump_start_timestamp_ms=pump_start_timestamp_ms,
+        active_high_timestamp_ms=active_high_timestamp_ms,
+        alpha=0.10,
+        zorder=2.05,
+    )
+    _draw_pno_pump_pause_zones(
+        ax_levels,
+        timestamps=timestamps,
+        plot_frame=plot_frame,
+        pump_start_timestamp_ms=pump_start_timestamp_ms,
+        active_high_timestamp_ms=active_high_timestamp_ms,
+        alpha=0.08,
+        zorder=2.05,
+    )
 
     def _add_trade_block(
         *,
@@ -1231,12 +1639,12 @@ def _render_pno_trade_chart(
     be_label_price = be_protect_price if be_arm_idx is not None else None
     tag_positions = _resolve_pno_axis_tag_positions(
         [
-            ("TP2", tp2_label_price),
-            ("TP1", tp1_label_price),
-            ("High", active_high if show_high_tag else None),
-            ("BE", be_label_price),
-            ("Entry", display_entry_price),
-            ("Exec", execution_tag_price),
+             ("TP2", tp2_label_price),
+             ("TP1", tp1_label_price),
+             ("High", active_high if show_high_tag else None),
+             ("BE", be_label_price),
+             ("Entry", display_entry_price),
+             ("Exec", execution_tag_price),
             ("Level", level_price),
             ("SL", initial_stop_loss),
             ("Exit", exit_price_actual),
@@ -1328,16 +1736,7 @@ def _render_pno_trade_chart(
                 text_y=tag_positions.get("High"),
             )
     if entry_confirmation_mode == "close_above" and signal_idx is not None and signal_idx != entry_idx:
-        signal_price = float(plot_frame["close"].iloc[signal_idx])
         ax_price.axvline(signal_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.18, linestyle="--", zorder=4.8)
-        _annotate_pno_point(
-            ax_price,
-            x=float(signal_idx),
-            y=signal_price,
-            label="SIG",
-            color=_PNO_PLOT_ENTRY,
-            dy_points=10.0,
-        )
     initial_phase_end_idx = exit_idx
     for candidate_idx in (be_arm_idx, tp1_hit_idx, tp2_hit_idx):
         if candidate_idx is not None:
@@ -1352,16 +1751,27 @@ def _render_pno_trade_chart(
         alpha=0.30,
         zorder=1.05,
     )
-    if tp1_hit_idx is not None and tp1_label_price is not None:
+    if tp1_label_price is not None:
         _add_trade_block(
             start_idx=entry_idx,
-            end_idx=tp1_hit_idx,
+            end_idx=tp1_hit_idx if tp1_hit_idx is not None else initial_phase_end_idx,
             lower_price=risk_entry_price,
             upper_price=tp1_label_price,
             facecolor=_PNO_PLOT_PROFIT_FACE,
             edgecolor=_PNO_PLOT_PROFIT_EDGE,
             alpha=0.24,
             zorder=1.08,
+        )
+    if exit_price_actual is not None:
+        ax_price.hlines(
+            exit_price_actual,
+            exit_idx - 0.48,
+            len(plot_frame) - 0.5,
+            colors=_PNO_PLOT_EXIT,
+            linewidth=1.0,
+            alpha=0.88,
+            linestyle="-.",
+            zorder=5.25,
         )
     if be_arm_idx is not None and be_protect_price is not None and exit_idx >= be_arm_idx:
         _add_trade_block(
@@ -1466,13 +1876,15 @@ def _render_pno_trade_chart(
         levels_volume = levels_window["volume"].fillna(0.0).to_numpy(dtype=np.float64)
         levels_open = levels_window["open"].to_numpy(dtype=np.float64)
         levels_close = levels_window["close"].to_numpy(dtype=np.float64)
+        levels_x = levels_window["plot_x"].to_numpy(dtype=np.float64)
+        levels_volume_width = _resolve_pno_candle_width(levels_x, default=_PNO_PLOT_5M_CANDLE_WIDTH)
         levels_volume_max = float(np.nanmax(levels_volume)) if len(levels_volume) > 0 else 0.0
         levels_volume_pct = (levels_volume / levels_volume_max) * 100.0 if levels_volume_max > 0.0 else np.zeros_like(levels_volume)
         levels_volume_colors = np.where(levels_close >= levels_open, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
         ax_volume.bar(
-            levels_window["plot_x"].to_numpy(dtype=np.float64),
+            levels_x,
             levels_volume_pct,
-            width=_PNO_PLOT_5M_CANDLE_WIDTH,
+            width=levels_volume_width,
             color=levels_volume_colors,
             edgecolor="none",
             alpha=0.88,
@@ -1481,15 +1893,18 @@ def _render_pno_trade_chart(
 
     padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.05, 1e-9)
     ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
-    ax_price.set_xlim(-0.5, len(plot_frame) - 0.5)
+    entry_candle_width = _resolve_pno_candle_width(x_values)
+    x_left_pad = max(0.5, entry_candle_width * 0.65)
+    x_right_pad = max(0.5, entry_candle_width * 0.65)
+    ax_price.set_xlim(-x_left_pad, len(plot_frame) - 1 + x_right_pad)
     if not levels_window.empty:
         levels_high = levels_window["high"].to_numpy(dtype=np.float64)
         levels_low = levels_window["low"].to_numpy(dtype=np.float64)
         levels_padding = max((float(np.nanmax(levels_high)) - float(np.nanmin(levels_low))) * 0.08, 1e-9)
         ax_levels.set_ylim(float(np.nanmin(levels_low)) - levels_padding, float(np.nanmax(levels_high)) + levels_padding)
-    ax_levels.set_xlim(-0.5, len(plot_frame) - 0.5)
-    ax_price.set_ylabel("1m")
-    ax_levels.set_ylabel("5m")
+    ax_levels.set_xlim(-x_left_pad, len(plot_frame) - 1 + x_right_pad)
+    ax_price.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(plot_frame, default_ms=60_000)))
+    ax_levels.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(levels_window, default_ms=5 * 60_000)))
     ax_volume.set_ylabel("Vol %")
     ax_levels.yaxis.set_label_coords(-0.072, 0.5)
     ax_volume.set_ylim(0.0, 100.0)
@@ -1520,13 +1935,42 @@ def _render_pno_trade_charts_for_symbol(
     symbol: str,
     mtf_frames: SymbolMtfFrames,
     trade_rows: list[dict[str, object]],
+    seconds_frame_provider: object | None = None,
 ) -> list[str]:
     if not trade_rows:
         return []
     levels_plot_frame = _prepare_pno_levels_plot_source(mtf_frames.levels_frame)
+    entry_source_frame = mtf_frames.entry_frame
+    target_entry_ms = int(mtf_frames.entry_timeframe.to_milliseconds())
+    source_entry_ms = _infer_pno_frame_step_ms(entry_source_frame, target_entry_ms)
+    if source_entry_ms > target_entry_ms and seconds_frame_provider is not None:
+        timestamps: list[int] = []
+        for row in trade_rows:
+            for key in (
+                "pump_start_timestamp_ms",
+                "active_high_timestamp_ms",
+                "pullback_low_timestamp_ms",
+                "structure_break_timestamp_ms",
+                "entry_timestamp_ms",
+                "exit_timestamp_ms",
+            ):
+                value = _safe_int(row.get(key))
+                if value is not None:
+                    timestamps.append(int(value))
+        if timestamps:
+            loader = getattr(seconds_frame_provider, "load_aggregated_window", None)
+            if callable(loader):
+                loaded = loader(
+                    symbol=symbol,
+                    start_timestamp_ms=max(min(timestamps) - 30 * 60_000, 0),
+                    end_timestamp_ms=max(timestamps) + 30 * 60_000,
+                    target_timeframe=mtf_frames.entry_timeframe,
+                )
+                if isinstance(loaded, pd.DataFrame) and not loaded.empty:
+                    entry_source_frame = loaded
     entry_plot_frame = _prepare_pno_entry_plot_source_with_ema(
         levels_frame=levels_plot_frame,
-        entry_frame=mtf_frames.entry_frame,
+        entry_frame=entry_source_frame,
     )
     chart_paths: list[str] = []
     for trade_index, trade_row in enumerate(trade_rows, start=1):
@@ -1543,6 +1987,62 @@ def _render_pno_trade_charts_for_symbol(
     return chart_paths
 
 
+def _resolve_pno_stage_review_start_timestamp(
+    *,
+    timestamp_ms: int,
+    pump_start_timestamp_ms: int | None,
+    sleep_start_timestamp_ms: int | None,
+    levels_step_ms: int,
+    entry_step_ms: int,
+    include_long_sleep_context: bool,
+) -> int:
+    if pump_start_timestamp_ms is None:
+        return max(timestamp_ms - (90 * 60_000), 0)
+    if include_long_sleep_context and sleep_start_timestamp_ms is not None:
+        target_start = int(pump_start_timestamp_ms) - (_PNO_STAGE_REVIEW_SLEEP_CONTEXT_BARS * levels_step_ms)
+        return max(min(int(sleep_start_timestamp_ms), target_start), 0)
+    if include_long_sleep_context:
+        return max(
+            int(pump_start_timestamp_ms) - (_PNO_STAGE_REVIEW_SLEEP_CONTEXT_BARS * levels_step_ms),
+            0,
+        )
+    return max(
+        int(pump_start_timestamp_ms)
+        - min(_PNO_STAGE_REVIEW_MAX_ENTRY_LOOKBACK_MS, max(90 * 60_000, 96 * entry_step_ms)),
+        0,
+    )
+
+
+def _resolve_pno_sleep_volume_baseline(
+    *,
+    levels_frame: pd.DataFrame,
+    entry_frame: pd.DataFrame,
+    plot_frame: pd.DataFrame,
+    pump_start_timestamp_ms: int | None,
+    sleep_start_timestamp_ms: int | None,
+    use_levels_frame: bool,
+) -> float | None:
+    if pump_start_timestamp_ms is None or plot_frame.empty:
+        return None
+    source = levels_frame if use_levels_frame else entry_frame
+    if source.empty or "timestamp" not in source.columns or "volume" not in source.columns:
+        return None
+    step_ms = _infer_pno_frame_step_ms(source, default_ms=5 * 60_000 if use_levels_frame else 60_000)
+    del sleep_start_timestamp_ms
+    start_timestamp_ms = max(0, int(pump_start_timestamp_ms) - _PNO_STAGE_REVIEW_SLEEP_BASELINE_MS)
+    end_timestamp_ms = max(0, int(pump_start_timestamp_ms) - step_ms)
+    sleep_window = source.loc[
+        (source["timestamp"] >= start_timestamp_ms)
+        & (source["timestamp"] <= end_timestamp_ms),
+        "volume",
+    ]
+    sleep_volume = pd.to_numeric(sleep_window, errors="coerce").dropna()
+    if sleep_volume.empty:
+        return None
+    baseline = float(sleep_volume.mean())
+    return baseline if np.isfinite(baseline) and baseline > 0.0 else None
+
+
 def _render_pno_stage_review_chart(
     *,
     charts_dir: Path,
@@ -1553,6 +2053,8 @@ def _render_pno_stage_review_chart(
     review_index: int,
     status: str = "review",
     reason: str | None = None,
+    levels_timeframe_ms: int | None = None,
+    entry_timeframe_ms: int | None = None,
 ) -> str | None:
     stage_id = str(review_row.get("stage_id", "stage"))
     current_timestamp_ms = _safe_int(review_row.get("current_timestamp_ms"))
@@ -1567,13 +2069,31 @@ def _render_pno_stage_review_chart(
     pullback_base_start_timestamp_ms = _safe_int(review_row.get("pullback_base_start_timestamp_ms"))
     is_stage1 = stage_id == PNO_STAGE_SEQUENCE[0]
     use_levels_frame = is_stage1
+    levels_step_ms = int(levels_timeframe_ms or _infer_pno_frame_step_ms(levels_frame, default_ms=5 * 60_000))
+    entry_step_ms = int(entry_timeframe_ms or _infer_pno_frame_step_ms(entry_frame, default_ms=60_000))
     if is_stage1 and pump_start_timestamp_ms is not None:
-        start_timestamp_ms = sleep_start_timestamp_ms or max(pump_start_timestamp_ms - (120 * 60_000), 0)
+        start_timestamp_ms = _resolve_pno_stage_review_start_timestamp(
+            timestamp_ms=int(timestamp_ms),
+            pump_start_timestamp_ms=pump_start_timestamp_ms,
+            sleep_start_timestamp_ms=sleep_start_timestamp_ms,
+            levels_step_ms=levels_step_ms,
+            entry_step_ms=entry_step_ms,
+            include_long_sleep_context=True,
+        )
         end_timestamp_ms = timestamp_ms
     else:
         frame_step_ms = _infer_pno_frame_step_ms(levels_frame if use_levels_frame else entry_frame, 5 * 60_000)
+        sleep_context_start = _resolve_pno_stage_review_start_timestamp(
+            timestamp_ms=int(timestamp_ms),
+            pump_start_timestamp_ms=pump_start_timestamp_ms,
+            sleep_start_timestamp_ms=sleep_start_timestamp_ms,
+            levels_step_ms=levels_step_ms,
+            entry_step_ms=entry_step_ms,
+            include_long_sleep_context=False,
+        )
         context_candidates = [
             timestamp_ms - (90 * 60_000),
+            sleep_context_start,
             (active_high_timestamp_ms - (12 * frame_step_ms)) if active_high_timestamp_ms is not None else None,
             (pullback_low_timestamp_ms - (6 * frame_step_ms)) if pullback_low_timestamp_ms is not None else None,
             (level_first_timestamp_ms - (6 * frame_step_ms)) if level_first_timestamp_ms is not None else None,
@@ -1597,15 +2117,13 @@ def _render_pno_stage_review_chart(
     if plot_frame.empty:
         return None
 
-    figure_width = 8.0
-    figure_height = 4.5
     fig, (ax_price, ax_volume) = plt.subplots(
         2,
         1,
-        figsize=(figure_width, figure_height),
+        figsize=_PNO_STAGE_REVIEW_FIGSIZE,
         dpi=72,
         sharex=True,
-        gridspec_kw={"height_ratios": [3, 1]},
+        gridspec_kw={"height_ratios": _PNO_STAGE_REVIEW_HEIGHT_RATIOS},
     )
     fig.patch.set_facecolor(_PNO_PLOT_FIGURE_FACE)
     _configure_pno_plot_axes(price_ax=ax_price, volume_ax=ax_volume)
@@ -1615,16 +2133,23 @@ def _render_pno_stage_review_chart(
     high_values = plot_frame["high"].to_numpy(dtype=np.float64)
     low_values = plot_frame["low"].to_numpy(dtype=np.float64)
     volume_values = plot_frame["volume"].fillna(0.0).to_numpy(dtype=np.float64)
+    sleep_volume_baseline = _resolve_pno_sleep_volume_baseline(
+        levels_frame=levels_frame,
+        entry_frame=entry_frame,
+        plot_frame=plot_frame,
+        pump_start_timestamp_ms=pump_start_timestamp_ms,
+        sleep_start_timestamp_ms=sleep_start_timestamp_ms,
+        use_levels_frame=use_levels_frame,
+    )
     x = np.arange(len(plot_frame), dtype=np.float64)
     ema9 = plot_frame["ema9"].to_numpy(dtype=np.float64) if "ema9" in plot_frame.columns else np.full(len(plot_frame), np.nan, dtype=np.float64)
     ema20 = plot_frame["ema20"].to_numpy(dtype=np.float64) if "ema20" in plot_frame.columns else np.full(len(plot_frame), np.nan, dtype=np.float64)
     timestamps = plot_frame["timestamp"].to_numpy(dtype=np.int64)
     event_idx = _resolve_pno_timestamp_plot_idx(timestamps, int(timestamp_ms))
-    pump_idx = _resolve_pno_pump_plot_idx(
-        timestamps=timestamps,
-        pump_start_timestamp_ms=pump_start_timestamp_ms,
-        ema9=ema9,
-        ema20=ema20,
+    pump_idx = (
+        _resolve_pno_timestamp_plot_idx(timestamps, int(pump_start_timestamp_ms))
+        if pump_start_timestamp_ms is not None
+        else None
     )
 
     _draw_pno_candles(ax_price, plot_frame, x)
@@ -1784,17 +2309,37 @@ def _render_pno_stage_review_chart(
         volume_pct = (volume_values / volume_max) * 100.0 if volume_max > 0.0 else np.zeros_like(volume_values)
         up_mask = close_values >= opens
         volume_colors = np.where(up_mask, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
-        ax_volume.bar(x, volume_pct, width=0.82, color=volume_colors, edgecolor="none", alpha=0.8, zorder=2)
+        ax_volume.bar(
+            x,
+            volume_pct,
+            width=_resolve_pno_candle_width(x, default=0.82),
+            color=volume_colors,
+            edgecolor="none",
+            alpha=0.8,
+            zorder=2,
+        )
+        if sleep_volume_baseline is not None and volume_max > 0.0:
+            baseline_pct = min(max((float(sleep_volume_baseline) / volume_max) * 100.0, 0.0), 100.0)
+            ax_volume.axhline(
+                baseline_pct,
+                color=_PNO_STAGE_REVIEW_BASELINE_COLOR,
+                linewidth=0.9,
+                alpha=0.72,
+                linestyle="--",
+                zorder=3,
+            )
 
     if np.isfinite(high_values).any() and np.isfinite(low_values).any():
         padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.06, 1e-9)
         ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
-    ax_price.set_xlim(-0.5, len(plot_frame) - 0.5)
+    review_candle_width = _resolve_pno_candle_width(x)
+    review_x_pad = max(0.5, review_candle_width * 0.65)
+    ax_price.set_xlim(-review_x_pad, len(plot_frame) - 1 + review_x_pad)
     ax_volume.set_ylim(0.0, 100.0)
     ax_volume.set_yticks([0.0, 50.0, 100.0])
     ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
     ax_price.set_ylabel(
-        _format_pno_timeframe_label(_infer_pno_frame_step_ms(plot_frame, default_ms=5 * 60_000)),
+        _format_pno_timeframe_label(levels_step_ms if use_levels_frame else entry_step_ms),
         color=_PNO_PLOT_MUTED,
         fontsize=8,
     )
@@ -1836,7 +2381,7 @@ def _export_pno_stage_reviews(
     selected_stage_set = set(selected_stage_ids)
     passed_chart_stage_id_set = set(selected_stage_ids if passed_chart_stage_ids is None else passed_chart_stage_ids)
     needs_entry_frames = bool(selected_stage_set.intersection(PNO_STAGE_SEQUENCE[1:]))
-    prepared_frames_by_symbol: dict[str, tuple[pd.DataFrame, pd.DataFrame]] = {}
+    prepared_frames_by_symbol: dict[str, tuple[pd.DataFrame, pd.DataFrame, int, int]] = {}
     review_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]] = {}
     for stage_id in selected_stage_ids:
         filtered_groups: dict[str, list[dict[str, object]]] = {}
@@ -1891,7 +2436,7 @@ def _export_pno_stage_reviews(
             ",".join(selected_stage_ids),
         )
 
-    def _get_prepared_frames(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame] | None:
+    def _get_prepared_frames(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame, int, int] | None:
         cached = prepared_frames_by_symbol.get(symbol)
         if cached is not None:
             return cached
@@ -1899,6 +2444,8 @@ def _export_pno_stage_reviews(
         if mtf_frames is None:
             return None
         levels_prepared = _prepare_pno_levels_plot_source(mtf_frames.levels_frame)
+        levels_timeframe_ms = int(mtf_frames.levels_timeframe.to_milliseconds())
+        entry_timeframe_ms = int(mtf_frames.entry_timeframe.to_milliseconds())
         prepared = (
             levels_prepared,
             _prepare_pno_entry_plot_source_with_ema(
@@ -1907,6 +2454,8 @@ def _export_pno_stage_reviews(
             )
             if needs_entry_frames
             else mtf_frames.entry_frame,
+            levels_timeframe_ms,
+            entry_timeframe_ms,
         )
         prepared_frames_by_symbol[symbol] = prepared
         return prepared
@@ -1937,6 +2486,8 @@ def _export_pno_stage_reviews(
                     review_index=row_index,
                     status="passed",
                     reason="passed",
+                    levels_timeframe_ms=prepared_frames[2],
+                    entry_timeframe_ms=prepared_frames[3],
                 )
                 if chart_path is not None:
                     passed_chart_paths.append(chart_path)
@@ -1953,13 +2504,12 @@ def _export_pno_stage_reviews(
         for reason, rows in sorted(rejection_groups.items()):
             rejected_total += len(rows)
             review_rows = review_rejection_groups.get(reason, [])
-            if not review_rows:
-                continue
             rejected_review_total += len(review_rows)
             reason_dir = rejected_dir / _sanitize_plot_name(reason)
             reason_dir.mkdir(parents=True, exist_ok=True)
-            pd.DataFrame(review_rows).to_csv(reason_dir / "events.csv", index=False)
-            if stage_id in chart_stage_ids:
+            export_rows = review_rows if review_rows else rows
+            pd.DataFrame(export_rows).to_csv(reason_dir / "events.csv", index=False)
+            if review_rows and stage_id in chart_stage_ids:
                 charts_dir = reason_dir / "charts"
                 charts_dir.mkdir(parents=True, exist_ok=True)
                 for row_index, row in enumerate(review_rows, start=1):
@@ -1976,6 +2526,8 @@ def _export_pno_stage_reviews(
                         review_index=row_index,
                         status="rejected",
                         reason=reason,
+                        levels_timeframe_ms=prepared_frames[2],
+                        entry_timeframe_ms=prepared_frames[3],
                     )
                     if chart_path is not None:
                         rejected_chart_paths += 1

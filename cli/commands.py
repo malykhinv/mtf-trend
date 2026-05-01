@@ -125,6 +125,23 @@ def _to_bool_flag(value: object, *, default: bool = False) -> bool:
     return default
 
 
+def _resolve_plot_rejected_flag(args: argparse.Namespace) -> bool:
+    raw_value = getattr(args, "plot_rejected", None)
+    if raw_value is not None:
+        return _to_bool_flag(raw_value, default=False)
+    return _to_bool_flag(getattr(args, "plot", None), default=False)
+
+
+def _resolve_collect_diagnostics_flag(args: argparse.Namespace) -> bool:
+    raw_value = getattr(args, "collect_diagnostics", None)
+    if raw_value is not None:
+        return _to_bool_flag(raw_value, default=True)
+    light_run = getattr(args, "light_run", None)
+    if light_run is not None:
+        return not _to_bool_flag(light_run, default=False)
+    return True
+
+
 def _resolve_pno_stage_cycle_key(row: dict[str, object]) -> str | None:
     symbol = str(row.get("symbol") or "")
     active_high_timestamp_ms = _safe_int(row.get("active_high_timestamp_ms"))
@@ -187,6 +204,9 @@ def _build_stage5_review_rejections_from_stage4(
             continue
         level = _safe_float(row.get("level"))
         if level is None:
+            continue
+        active_high = _safe_float(row.get("active_high"))
+        if active_high is not None and level >= active_high:
             continue
         level_valid_timestamp_ms = _safe_int(row.get("level_valid_timestamp_ms")) or _safe_int(row.get("timestamp_ms"))
         if level_valid_timestamp_ms is None:
@@ -346,7 +366,10 @@ def _build_plot_backtest_args(
         pno_category_mode=context.get("pno_category_mode"),
         pno_stage=context.get("pno_stage"),
         pno_through_stage=context.get("pno_through_stage"),
-        plot=False,
+        plot_rejected=True,
+        collect_diagnostics=None,
+        plot=None,
+        light_run=None,
         plot_from_results=True,
         results_input=str(run_root_dir / strategy_results_rel_dir / results_file_name),
         output_dir=str(run_root_dir / trade_plots_rel_dir),
@@ -487,6 +510,8 @@ def _export_pno_category_artifacts(
                     ),
                 )
     if not category_meta:
+        return
+    if set(category_meta) == {"discovery"}:
         return
 
     categories_root = diagnostics_dir.parent / "categories"
@@ -899,6 +924,11 @@ def _build_pno_params_template_from_row(
         pullback_valid_max_v5=_float_or_default("pno_pullback_valid_max_v5", defaults.pullback_valid_max_v5),
         pullback_invalid_max_v5=_float_or_default("pno_pullback_invalid_max_v5", defaults.pullback_invalid_max_v5),
         pullback_max_age_bars=_int_or_default("pno_pullback_max_age_bars", defaults.pullback_max_age_bars),
+        structure_min_leg_bars=_int_or_default("pno_structure_min_leg_bars", defaults.structure_min_leg_bars),
+        structure_terminal_retrace_fraction=_float_or_default(
+            "pno_structure_terminal_retrace_fraction",
+            defaults.structure_terminal_retrace_fraction,
+        ),
         stage1_min_cumulative_quote_volume=_float_or_default(
             "pno_stage1_min_cumulative_quote_volume",
             defaults.stage1_min_cumulative_quote_volume,
@@ -925,9 +955,31 @@ def _build_pno_params_template_from_row(
             defaults.stage1_min_peak_bar_tr_atr_pre,
         ),
         stage1_min_volume_ratio_start=_float_or_default("pno_stage1_min_volume_ratio_start", defaults.stage1_min_volume_ratio_start),
+        stage1_min_trade_ratio_start=_float_or_default("pno_stage1_min_trade_ratio_start", defaults.stage1_min_trade_ratio_start),
         stage1_min_volume_ratio_continue=_float_or_default(
             "pno_stage1_min_volume_ratio_continue",
             defaults.stage1_min_volume_ratio_continue,
+        ),
+        stage1_min_trade_ratio_continue=_float_or_default(
+            "pno_stage1_min_trade_ratio_continue",
+            defaults.stage1_min_trade_ratio_continue,
+        ),
+        stage1_flow_hold_bars=_int_or_default("pno_stage1_flow_hold_bars", defaults.stage1_flow_hold_bars),
+        stage1_flow_hold_window_bars=_int_or_default(
+            "pno_stage1_flow_hold_window_bars",
+            defaults.stage1_flow_hold_window_bars,
+        ),
+        stage1_flow_hold_min_start_fraction=_float_or_default(
+            "pno_stage1_flow_hold_min_start_fraction",
+            defaults.stage1_flow_hold_min_start_fraction,
+        ),
+        stage1_active_context_min_start_fraction=_float_or_default(
+            "pno_stage1_active_context_min_start_fraction",
+            defaults.stage1_active_context_min_start_fraction,
+        ),
+        stage1_active_context_min_baseline_ratio=_float_or_default(
+            "pno_stage1_active_context_min_baseline_ratio",
+            defaults.stage1_active_context_min_baseline_ratio,
         ),
         stage1_min_path_efficiency=_float_or_default("pno_stage1_min_path_efficiency", defaults.stage1_min_path_efficiency),
         stage1_max_wick_share=_float_or_default("pno_stage1_max_wick_share", defaults.stage1_max_wick_share),
@@ -1164,6 +1216,7 @@ def _plot_pno_diagnostics_for_symbols(
             symbol=symbol,
             mtf_frames=item["mtf_frames"],
             trade_rows=trade_rows,
+            seconds_frame_provider=item.get("seconds_frame_provider"),
         )
         total_charts_generated += len(chart_paths)
         base_name = _pno_output_symbol_stem(symbol)
@@ -1284,14 +1337,18 @@ def _render_pno_trade_charts_only(
 ) -> int:
     charts_dir = output_dir / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
+    trades_dir = output_dir / "trades"
+    trades_dir.mkdir(parents=True, exist_ok=True)
     pno_params_template = _build_pno_params_template_from_row(
         params_row,
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
     )
+    params_payload = {f"param_{key}": value for key, value in params_row.to_dict().items()}
     total_symbols = len(symbol_frames)
     total_charts_generated = 0
     processed_symbols = 0
+    all_trade_rows: list[dict[str, object]] = []
     render_started_at = time.monotonic()
     for symbol, mtf_frames in symbol_frames.items():
         params = replace(pno_params_template, symbol=symbol)
@@ -1303,8 +1360,24 @@ def _render_pno_trade_charts_only(
                 symbol=symbol,
                 mtf_frames=mtf_frames,
                 trade_rows=trade_rows,
+                seconds_frame_provider=getattr(strategy, "_seconds_provider", None),
             )
             total_charts_generated += len(chart_paths)
+            exported_rows: list[dict[str, object]] = []
+            for trade_index, trade_row in enumerate(trade_rows):
+                chart_path = str(chart_paths[trade_index]) if trade_index < len(chart_paths) else ""
+                exported_row = {
+                    **params_payload,
+                    **trade_row,
+                    "symbol": str(trade_row.get("symbol") or symbol),
+                    "levels_timeframe": levels_timeframe.value,
+                    "entry_timeframe": entry_timeframe.value,
+                    "chart_path": chart_path,
+                }
+                exported_rows.append(exported_row)
+                all_trade_rows.append(exported_row)
+            pd.DataFrame(exported_rows).to_csv(trades_dir / f"{_pno_output_symbol_stem(symbol)}_trades.csv", index=False)
+            pd.DataFrame(all_trade_rows).to_csv(output_dir / "all_trades.csv", index=False)
         processed_symbols += 1
         if total_symbols > 0 and (processed_symbols == total_symbols or processed_symbols % 25 == 0):
             elapsed = max(time.monotonic() - render_started_at, 1e-9)
@@ -1320,6 +1393,10 @@ def _render_pno_trade_charts_only(
                 total_charts_generated,
                 _format_eta_compact(eta_seconds),
             )
+    if all_trade_rows:
+        all_trades_path = output_dir / "all_trades.csv"
+        pd.DataFrame(all_trade_rows).to_csv(all_trades_path, index=False)
+        logger.info("%s: light trade table saved rows=%s path=%s", log_prefix, len(all_trade_rows), all_trades_path)
     logger.info("%s: light charts saved png=%s output_dir=%s", log_prefix, total_charts_generated, charts_dir)
     return total_charts_generated
 
@@ -1369,6 +1446,9 @@ def _log_human_backtest_summary(
     tp2_count = int(best_row.get("tp2_count", 0) or 0)
     tp1_be_count = int(best_row.get("tp1_be_count", 0) or 0)
     sl_count = int(best_row.get("sl_count", 0) or 0)
+    runner_success_count = int(best_row.get("ppa_runner_success_above_tp1_count", 0) or 0)
+    runner_be_count = int(best_row.get("ppa_runner_be_below_tp1_count", 0) or 0)
+    runner_loss_count = int(best_row.get("ppa_runner_loss_below_entry_count", 0) or 0)
     logger.info(
         "%s: трейдерская сводка: лучшая комбинация дала %s сделок, winrate %.1f%%, средний трейд %.2f%%, итог %.2f%%, PF %.2f, max DD %.2f%%.",
         log_prefix,
@@ -1388,6 +1468,13 @@ def _log_human_backtest_summary(
         tp2_count,
         tp1_be_count,
         sl_count,
+    )
+    logger.info(
+        "%s: runner final close: above_TP1=%s, below_TP1_BE=%s, below_entry_loss=%s.",
+        log_prefix,
+        runner_success_count,
+        runner_be_count,
+        runner_loss_count,
     )
 
 
@@ -1474,6 +1561,7 @@ def _export_pno_diagnostics_context_for_symbols(
             {
                 "symbol": symbol,
                 "mtf_frames": mtf_frames,
+                "seconds_frame_provider": getattr(strategy, "_seconds_provider", None),
                 "trade_rows": trade_rows,
                 "diagnostics": diagnostics,
             }
@@ -2531,10 +2619,19 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             backtest_end_timestamp_ms if backtest_end_timestamp_ms is not None else "auto_from_cache",
         )
 
+    should_plot = _resolve_plot_rejected_flag(args)
+    collect_diagnostics = _resolve_collect_diagnostics_flag(args)
+    strategy = build_strategy(config, logger)
+    pno_fast_prefilter_active = (
+        not collect_diagnostics
+        and not should_plot
+        and strategy_id == "pno"
+        and isinstance(strategy, PnoStrategy)
+    )
     symbols_before_ranking = len(symbols)
     top_n = getattr(args, "top_n", None)
     pre_rank_enabled = top_n is not None and top_n > 0
-    pre_filter_active = pre_rank_enabled
+    pre_filter_active = pre_rank_enabled or pno_fast_prefilter_active
     ranked_symbols: list[tuple[str, float]] = []
     rejected_symbols_count = 0
     preloaded_levels_frames: dict[str, pd.DataFrame] = {}
@@ -2635,6 +2732,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     symbols_missing_levels_tf = 0
     symbols_missing_entry_tf = 0
     symbols_used = 0
+    symbols_fast_stage1_rejected = 0
     for idx, symbol in enumerate(symbols, start=1):
         resolved_end_timestamp_ms = backtest_end_timestamp_ms
         if backtest_days is not None and resolved_end_timestamp_ms is None:
@@ -2655,6 +2753,29 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 days=backtest_days,
                 end_timestamp_ms=resolved_end_timestamp_ms,
             )
+        if levels_frame.empty:
+            symbols_missing_levels_tf += 1
+            continue
+        if pno_fast_prefilter_active and isinstance(strategy, PnoStrategy):
+            if not strategy.has_fast_stage1_candidate(
+                symbol=symbol,
+                levels_frame=levels_frame,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+            ):
+                symbols_fast_stage1_rejected += 1
+                if idx % _PROGRESS_LOG_EVERY == 0 or idx == symbols_total:
+                    elapsed_seconds = time.perf_counter() - symbols_prepare_started_at
+                    progress = (idx / symbols_total) * 100 if symbols_total else 0.0
+                    eta_seconds = (elapsed_seconds / idx) * (symbols_total - idx) if idx else 0.0
+                    logger.info(
+                        "анализ-кэша: подготовка-символов %s/%s (%.1f%%), eta=%ss",
+                        idx,
+                        symbols_total,
+                        progress,
+                        int(eta_seconds),
+                    )
+                continue
         entry_frame: pd.DataFrame | None = preloaded_entry_frames.get(symbol)
         if levels_timeframe == source_entry_timeframe:
             entry_frame = levels_frame if entry_frame is None else entry_frame
@@ -2665,11 +2786,9 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 days=backtest_days,
                 end_timestamp_ms=resolved_end_timestamp_ms,
             )
-        if levels_frame.empty:
-            symbols_missing_levels_tf += 1
         if entry_frame.empty:
             symbols_missing_entry_tf += 1
-        if levels_frame.empty or entry_frame.empty:
+        if entry_frame.empty:
             continue
         symbols_used += 1
         symbol_frames[symbol] = SymbolMtfFrames(
@@ -2694,8 +2813,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.info("запуск-бектеста: не удалось подготовить данные")
         return 0
 
-    should_plot = _to_bool_flag(getattr(args, "plot", None), default=False)
-    light_run = _to_bool_flag(getattr(args, "light_run", None), default=False)
     if run_root_dir is not None:
         _write_backtest_run_context(
             run_root_dir,
@@ -2711,7 +2828,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             pno_through_stage=getattr(args, "pno_through_stage", None),
         )
 
-    strategy = build_strategy(config, logger)
     runner = BacktestRunner(
         config.backtest.results_dir,
         config.backtest.results_file_name,
@@ -2725,6 +2841,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         symbols_missing_levels_tf,
         symbols_missing_entry_tf,
     )
+    if pno_fast_prefilter_active:
+        logger.info(
+            "запуск-бэктеста: pno fast stage1 prefilter rejected=%s selected_for_full_pipeline=%s",
+            symbols_fast_stage1_rejected,
+            symbols_used,
+        )
     if symbols_total and symbols_used_ratio < 0.2:
         logger.warning(
             "запуск-бэктеста: используется только %.1f%% символов (%s из %s); результат бэктеста может быть нерепрезентативным",
@@ -2766,7 +2888,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
         stage_metric_ids=stage_metric_ids_for_run,
-        collect_diagnostics=not light_run,
+        collect_diagnostics=collect_diagnostics,
     )
     summary = runner.build_summary(results)
     if (
@@ -2812,19 +2934,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     if should_plot:
         if results.empty:
             logger.warning("запуск-бэктеста: plot=true, но результаты пустые")
-            return 0
-
-        if light_run and strategy_id == "pno" and isinstance(strategy, PnoStrategy):
-            _export_pno_grid_trade_charts_only(
-                config=config,
-                logger=logger,
-                strategy=strategy,
-                symbol_frames=symbol_frames,
-                results=results,
-                levels_timeframe=levels_timeframe,
-                entry_timeframe=entry_timeframe,
-                log_prefix="run-backtest: light-run plot=true",
-            )
             return 0
 
         if strategy_id == "pno" and isinstance(strategy, PnoStrategy):
@@ -2882,18 +2991,30 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             log_prefix="запуск-бэктеста: plot=true",
         ):
             return 1
-    elif strategy_id == "pno" and not light_run and not results.empty and isinstance(strategy, PnoStrategy):
-        _export_pno_grid_artifacts_without_stage_charts(
-            config=config,
-            args=args,
-            logger=logger,
-            strategy=strategy,
-            symbol_frames=symbol_frames,
-            results=results,
-            levels_timeframe=levels_timeframe,
-            entry_timeframe=entry_timeframe,
-            log_prefix="run-backtest: plot=false",
-        )
+    elif strategy_id == "pno" and not results.empty and isinstance(strategy, PnoStrategy):
+        if not collect_diagnostics:
+            _export_pno_grid_trade_charts_only(
+                config=config,
+                logger=logger,
+                strategy=strategy,
+                symbol_frames=symbol_frames,
+                results=results,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                log_prefix="run-backtest: light-run artifacts",
+            )
+        else:
+            _export_pno_grid_artifacts_without_stage_charts(
+                config=config,
+                args=args,
+                logger=logger,
+                strategy=strategy,
+                symbol_frames=symbol_frames,
+                results=results,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                log_prefix="run-backtest: plot=false",
+            )
     return 0
 
 
