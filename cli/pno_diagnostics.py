@@ -474,10 +474,10 @@ _PNO_PLOT_CANDLE_WIDTH = 0.64
 _PNO_PLOT_5M_CANDLE_WIDTH = 4.0
 _PNO_PLOT_MAX_X_TICKS = 8
 _PNO_TRADE_CHART_FIGSIZE = (8.0, 8.0)
-_PNO_TRADE_CHART_HEIGHT_RATIOS = [4, 2, 1]
+_PNO_TRADE_CHART_HEIGHT_RATIOS = [4, 2, 1, 1]
 _PNO_TRADE_SLEEP_LOOKBACK_BARS = 12
 _PNO_STAGE_REVIEW_FIGSIZE = (12.8, 6.4)
-_PNO_STAGE_REVIEW_HEIGHT_RATIOS = [4.4, 1.15]
+_PNO_STAGE_REVIEW_HEIGHT_RATIOS = [4.4, 1.15, 1.0]
 _PNO_STAGE_REVIEW_SLEEP_BASELINE_MS = 24 * 60 * 60_000
 _PNO_STAGE_REVIEW_SLEEP_CONTEXT_BARS = 24
 _PNO_STAGE_REVIEW_MAX_ENTRY_LOOKBACK_MS = 6 * 60 * 60_000
@@ -944,8 +944,11 @@ def _annotate_pno_point(
     )
 
 
-def _configure_pno_plot_axes(*, price_ax: plt.Axes, volume_ax: plt.Axes) -> None:
-    for axis in (price_ax, volume_ax):
+def _configure_pno_plot_axes(*, price_ax: plt.Axes, volume_ax: plt.Axes, trades_ax: plt.Axes | None = None) -> None:
+    axes = [price_ax, volume_ax]
+    if trades_ax is not None:
+        axes.append(trades_ax)
+    for axis in axes:
         axis.set_facecolor(_PNO_PLOT_AXIS_FACE)
         axis.grid(True, color=_PNO_PLOT_GRID, linewidth=0.7, alpha=0.18)
         axis.tick_params(axis="both", colors=_PNO_PLOT_MUTED, labelsize=8, length=0, pad=6)
@@ -954,13 +957,36 @@ def _configure_pno_plot_axes(*, price_ax: plt.Axes, volume_ax: plt.Axes) -> None
             spine.set_linewidth(1.0)
     price_ax.yaxis.label.set_color(_PNO_PLOT_MUTED)
     volume_ax.yaxis.label.set_color(_PNO_PLOT_MUTED)
+    if trades_ax is not None:
+        trades_ax.yaxis.label.set_color(_PNO_PLOT_MUTED)
     price_ax.yaxis.set_major_locator(LinearLocator(6))
     volume_ax.yaxis.set_major_locator(LinearLocator(3))
     price_ax.yaxis.set_label_coords(-0.072, 0.5)
     volume_ax.yaxis.set_label_coords(-0.072, 0.5)
+    if trades_ax is not None:
+        trades_ax.yaxis.set_major_locator(LinearLocator(3))
+        trades_ax.yaxis.set_label_coords(-0.072, 0.5)
     price_ax.yaxis.set_ticks_position("right")
     price_ax.yaxis.tick_right()
     price_ax.tick_params(axis="y", labelleft=False, labelright=True)
+    volume_ax.yaxis.set_ticks_position("right")
+    volume_ax.yaxis.tick_right()
+    volume_ax.tick_params(axis="y", labelleft=False, labelright=True)
+    if trades_ax is not None:
+        trades_ax.yaxis.set_ticks_position("right")
+        trades_ax.yaxis.tick_right()
+        trades_ax.tick_params(axis="y", labelleft=False, labelright=True)
+
+
+def _resolve_trade_count_series(frame: pd.DataFrame) -> np.ndarray:
+    trade_count_column = next(
+        (column for column in ("number_of_trades", "trades", "trade_count") if column in frame.columns),
+        None,
+    )
+    if trade_count_column is None:
+        return np.zeros(len(frame), dtype=np.float64)
+    values = pd.to_numeric(frame[trade_count_column], errors="coerce").fillna(0.0)
+    return values.to_numpy(dtype=np.float64, copy=False)
 
 
 def _resolve_pno_pump_plot_idx(
@@ -1565,8 +1591,8 @@ def _render_pno_trade_chart(
         pump_idx = entry_idx
     price_axis_right_x = float(len(plot_frame) - 0.5)
 
-    fig, (ax_price, ax_levels, ax_volume) = plt.subplots(
-        3,
+    fig, (ax_price, ax_levels, ax_volume, ax_trades) = plt.subplots(
+        4,
         1,
         figsize=_PNO_TRADE_CHART_FIGSIZE,
         dpi=100,
@@ -1574,8 +1600,8 @@ def _render_pno_trade_chart(
         gridspec_kw={"height_ratios": _PNO_TRADE_CHART_HEIGHT_RATIOS, "hspace": 0.05},
         facecolor=_PNO_PLOT_FIGURE_FACE,
     )
-    _configure_pno_plot_axes(price_ax=ax_price, volume_ax=ax_volume)
-    _configure_pno_plot_axes(price_ax=ax_levels, volume_ax=ax_volume)
+    _configure_pno_plot_axes(price_ax=ax_price, volume_ax=ax_volume, trades_ax=ax_trades)
+    _configure_pno_plot_axes(price_ax=ax_levels, volume_ax=ax_volume, trades_ax=ax_trades)
 
     _draw_pno_candles(ax_price, plot_frame, x_values)
     _draw_pno_structure_inset(ax_price, plot_frame=plot_frame, row=trade_row)
@@ -1890,6 +1916,18 @@ def _render_pno_trade_chart(
             alpha=0.88,
             zorder=3,
         )
+        levels_trades = _resolve_trade_count_series(levels_window)
+        levels_trades_max = float(np.nanmax(levels_trades)) if levels_trades.size else 0.0
+        levels_trades_pct = (levels_trades / levels_trades_max) * 100.0 if levels_trades_max > 0.0 else np.zeros_like(levels_trades)
+        ax_trades.bar(
+            levels_x,
+            levels_trades_pct,
+            width=levels_volume_width,
+            color=levels_volume_colors,
+            edgecolor="none",
+            alpha=0.78,
+            zorder=3,
+        )
 
     padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.05, 1e-9)
     ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
@@ -1906,20 +1944,26 @@ def _render_pno_trade_chart(
     ax_price.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(plot_frame, default_ms=60_000)))
     ax_levels.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(levels_window, default_ms=5 * 60_000)))
     ax_volume.set_ylabel("Vol %")
+    ax_trades.set_ylabel("Trades %")
     ax_levels.yaxis.set_label_coords(-0.072, 0.5)
     ax_volume.set_ylim(0.0, 100.0)
     ax_volume.set_yticks([0.0, 50.0, 100.0])
     ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
+    ax_trades.set_ylim(0.0, 100.0)
+    ax_trades.set_yticks([0.0, 50.0, 100.0])
+    ax_trades.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
     tick_timestamps = _build_pno_tick_timestamps(plot_frame)
     tick_positions = _build_pno_tick_positions_from_timestamps(tick_timestamps, len(plot_frame))
     tick_labels = _build_pno_tick_labels_from_timestamps(tick_timestamps, tick_positions)
-    ax_volume.set_xticks(tick_positions)
-    ax_volume.set_xticklabels(tick_labels)
+    ax_trades.set_xticks(tick_positions)
+    ax_trades.set_xticklabels(tick_labels)
     ax_price.tick_params(axis="x", labelbottom=False)
     ax_levels.tick_params(axis="x", labelbottom=False)
+    ax_volume.tick_params(axis="x", labelbottom=False)
     ax_levels.margins(x=0.0)
     ax_price.margins(x=0.01)
     ax_volume.margins(x=0.0)
+    ax_trades.margins(x=0.0)
 
     file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{trade_index:03d}_{_sanitize_plot_name(result_type.lower() or category.lower() or 'trade')}.png"
     output_path = charts_dir / file_name
@@ -2117,8 +2161,8 @@ def _render_pno_stage_review_chart(
     if plot_frame.empty:
         return None
 
-    fig, (ax_price, ax_volume) = plt.subplots(
-        2,
+    fig, (ax_price, ax_volume, ax_trades) = plt.subplots(
+        3,
         1,
         figsize=_PNO_STAGE_REVIEW_FIGSIZE,
         dpi=72,
@@ -2126,13 +2170,14 @@ def _render_pno_stage_review_chart(
         gridspec_kw={"height_ratios": _PNO_STAGE_REVIEW_HEIGHT_RATIOS},
     )
     fig.patch.set_facecolor(_PNO_PLOT_FIGURE_FACE)
-    _configure_pno_plot_axes(price_ax=ax_price, volume_ax=ax_volume)
+    _configure_pno_plot_axes(price_ax=ax_price, volume_ax=ax_volume, trades_ax=ax_trades)
 
     opens = plot_frame["open"].to_numpy(dtype=np.float64)
     close_values = plot_frame["close"].to_numpy(dtype=np.float64)
     high_values = plot_frame["high"].to_numpy(dtype=np.float64)
     low_values = plot_frame["low"].to_numpy(dtype=np.float64)
     volume_values = plot_frame["volume"].fillna(0.0).to_numpy(dtype=np.float64)
+    trade_counts = _resolve_trade_count_series(plot_frame)
     sleep_volume_baseline = _resolve_pno_sleep_volume_baseline(
         levels_frame=levels_frame,
         entry_frame=entry_frame,
@@ -2328,6 +2373,17 @@ def _render_pno_stage_review_chart(
                 linestyle="--",
                 zorder=3,
             )
+        trades_max = float(np.nanmax(trade_counts)) if trade_counts.size and np.isfinite(trade_counts).any() else 0.0
+        trades_pct = (trade_counts / trades_max) * 100.0 if trades_max > 0.0 else np.zeros_like(trade_counts)
+        ax_trades.bar(
+            x,
+            trades_pct,
+            width=_resolve_pno_candle_width(x, default=0.82),
+            color=volume_colors,
+            edgecolor="none",
+            alpha=0.72,
+            zorder=2,
+        )
 
     if np.isfinite(high_values).any() and np.isfinite(low_values).any():
         padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.06, 1e-9)
@@ -2338,19 +2394,24 @@ def _render_pno_stage_review_chart(
     ax_volume.set_ylim(0.0, 100.0)
     ax_volume.set_yticks([0.0, 50.0, 100.0])
     ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
+    ax_trades.set_ylim(0.0, 100.0)
+    ax_trades.set_yticks([0.0, 50.0, 100.0])
+    ax_trades.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
     ax_price.set_ylabel(
         _format_pno_timeframe_label(levels_step_ms if use_levels_frame else entry_step_ms),
         color=_PNO_PLOT_MUTED,
         fontsize=8,
     )
     ax_volume.set_ylabel("Vol %", color=_PNO_PLOT_MUTED, fontsize=8)
+    ax_trades.set_ylabel("Trades %", color=_PNO_PLOT_MUTED, fontsize=8)
 
     tick_timestamps = _build_pno_tick_timestamps(plot_frame)
     tick_positions = _build_pno_tick_positions_from_timestamps(tick_timestamps, len(plot_frame))
     tick_labels = _build_pno_tick_labels_from_timestamps(tick_timestamps, tick_positions)
-    ax_volume.set_xticks(tick_positions)
-    ax_volume.set_xticklabels(tick_labels, fontsize=8, color=_PNO_PLOT_MUTED)
+    ax_trades.set_xticks(tick_positions)
+    ax_trades.set_xticklabels(tick_labels, fontsize=8, color=_PNO_PLOT_MUTED)
     ax_price.tick_params(axis="x", labelbottom=False)
+    ax_volume.tick_params(axis="x", labelbottom=False)
 
     sanitized_status = _sanitize_plot_name(status)
     sanitized_reason = _sanitize_plot_name(reason if reason is not None else str(review_row.get("reason", "ok")))

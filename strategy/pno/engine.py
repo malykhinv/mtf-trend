@@ -344,6 +344,14 @@ class ArmedContext:
 
 
 @dataclass(slots=True)
+class Stage5Decision:
+    trade: TradeResult | None
+    exit_idx: int
+    reject_reason: str | None = None
+    reject_extra: dict[str, object] | None = None
+
+
+@dataclass(slots=True)
 class Stage1StateArrays:
     inplay: np.ndarray
     pump_start_idx: np.ndarray
@@ -2100,6 +2108,23 @@ class PnoEngine:
                 extra=extra,
             )
 
+        def _reject_stage5_decision(armed_ctx: ArmedContext, decision: Stage5Decision) -> None:
+            if decision.reject_reason is None:
+                return
+            ts_idx = min(max(int(armed_ctx.entry_idx), 0), max(len(one.timestamps) - 1, 0))
+            _reject_stage(
+                PNO_STAGE_5_TRADE,
+                key=(
+                    armed_ctx.stage4.active_high_idx,
+                    armed_ctx.stage4.cluster_first_idx,
+                    armed_ctx.stage4.cluster_last_idx,
+                    armed_ctx.entry_idx,
+                ),
+                timestamp_ms=int(one.timestamps[ts_idx]) if len(one.timestamps) else 0,
+                reason=str(decision.reject_reason),
+                extra=decision.reject_extra,
+            )
+
         i = 0
         while i < len(one.timestamps):
             five_idx = int(one_to_five_idx[i])
@@ -2146,7 +2171,9 @@ class PnoEngine:
                         i += 1
                         continue
                 live_armed = armed if armed.entry_idx == i else replace(armed, entry_idx=i)
-                trade, exit_idx = self._try_enter_and_simulate(one=one, params=params, armed=live_armed)
+                stage5_decision = self._try_enter_and_simulate(one=one, params=params, armed=live_armed)
+                trade = stage5_decision.trade
+                exit_idx = stage5_decision.exit_idx
                 if trade is not None:
                     trades.append(trade)
                     retired_clusters.append(
@@ -2181,6 +2208,7 @@ class PnoEngine:
                     active_pump_start_idx = -1
                     i = max(i + 1, exit_idx + 1)
                     continue
+                _reject_stage5_decision(live_armed, stage5_decision)
                 if self._is_armed_entry_invalidated_before_trigger(
                     one=one,
                     idx=i,
@@ -2952,7 +2980,9 @@ class PnoEngine:
                 arm_entry_idx = i if confirmation_mode == "close_above" else i + 1
                 armed = ArmedContext(entry_idx=arm_entry_idx, stage1=stage1, stage3=stage3, stage4=stage4)
                 if confirmation_mode == "close_above":
-                    trade, exit_idx = self._try_enter_and_simulate(one=one, params=params, armed=armed)
+                    stage5_decision = self._try_enter_and_simulate(one=one, params=params, armed=armed)
+                    trade = stage5_decision.trade
+                    exit_idx = stage5_decision.exit_idx
                     if trade is not None:
                         trades.append(trade)
                         retired_clusters.append(
@@ -2987,6 +3017,7 @@ class PnoEngine:
                         active_pump_start_idx = -1
                         i = max(i + 1, exit_idx + 1)
                         continue
+                    _reject_stage5_decision(armed, stage5_decision)
 
             i += 1
         return trades
@@ -7391,10 +7422,98 @@ class PnoEngine:
         one: OneMinuteFrame,
         params: PnoParams,
         armed: ArmedContext,
-    ) -> tuple[TradeResult | None, int]:
+    ) -> Stage5Decision:
         entry_idx = armed.entry_idx
+
+        def _reject(
+            reason: str | None,
+            *,
+            exit_idx: int | None = None,
+            actual_entry_idx: int | None = None,
+            entry_price: float | None = None,
+            stop_loss: float | None = None,
+            actual_entry_pos: float | None = None,
+            max_actual_entry_pos: float | None = None,
+            actual_risk: float | None = None,
+            net_tp1_move: float | None = None,
+            net_rr: float | None = None,
+            signal_context: dict[str, float] | None = None,
+            extra: dict[str, object] | None = None,
+        ) -> Stage5Decision:
+            safe_entry_idx = min(max(int(entry_idx), 0), max(len(one.timestamps) - 1, 0))
+            payload: dict[str, object] = {
+                "active_high": round(float(armed.stage4.active_high), 8),
+                "pullback_low": round(float(armed.stage3.pullback_low), 8),
+                "level": round(float(armed.stage4.level), 8),
+                "score": round(float(armed.stage4.final_score), 4),
+                "touches": int(armed.stage4.touches),
+                "entry_pos": round(float(armed.stage4.entry_pos), 4),
+                "level_maturity_fraction": round(float(armed.stage4.level_maturity_fraction), 4),
+                "pump_start_timestamp_ms": int(armed.stage1.pump_start_timestamp),
+                "active_high_timestamp_ms": int(armed.stage4.active_high_timestamp),
+                "pullback_low_timestamp_ms": int(armed.stage3.pullback_low_timestamp),
+                "level_first_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_first_idx]),
+                "level_last_local_high_timestamp_ms": int(one.timestamps[armed.stage4.cluster_last_idx]),
+                "level_valid_timestamp_ms": int(armed.stage4.level_valid_timestamp),
+                "level_life_ema_spread_growth_share": round(float(armed.stage4.level_life_ema_spread_growth_share), 4),
+                "entry_confirmation_mode": str(getattr(params, "entry_confirmation_mode", "close_above")),
+                "entry_signal_timestamp_ms": int(one.timestamps[safe_entry_idx]) if len(one.timestamps) else None,
+                "entry_plan": round(float(armed.stage4.entry_plan), 8),
+                "sl_plan": round(float(armed.stage4.sl_plan), 8),
+                "tp1": round(float(armed.stage4.tp1), 8),
+                "tp2": round(float(armed.stage4.tp2), 8),
+                "structure_high_timestamp_ms": int(armed.stage3.structure_high_timestamp),
+                "structure_low_timestamp_ms": int(armed.stage3.structure_low_timestamp),
+                "structure_break_timestamp_ms": int(armed.stage3.structure_break_timestamp),
+                "structure_source": str(armed.stage4.structure_source),
+            }
+            if len(one.timestamps):
+                payload.update(
+                    {
+                        "signal_open": round(float(one.opens[safe_entry_idx]), 8),
+                        "signal_high": round(float(one.highs[safe_entry_idx]), 8),
+                        "signal_low": round(float(one.lows[safe_entry_idx]), 8),
+                        "signal_close": round(float(one.closes[safe_entry_idx]), 8),
+                    }
+                )
+            if actual_entry_idx is not None and 0 <= int(actual_entry_idx) < len(one.timestamps):
+                payload["actual_entry_timestamp_ms"] = int(one.timestamps[int(actual_entry_idx)])
+            if entry_price is not None:
+                payload["entry_price_actual"] = round(float(entry_price), 8)
+            if stop_loss is not None:
+                payload["sl_actual"] = round(float(stop_loss), 8)
+            if actual_entry_pos is not None:
+                payload["actual_entry_pos"] = round(float(actual_entry_pos), 4)
+            if max_actual_entry_pos is not None:
+                payload["max_actual_entry_pos"] = round(float(max_actual_entry_pos), 4)
+            if actual_risk is not None:
+                payload["actual_risk"] = round(float(actual_risk), 8)
+            if net_tp1_move is not None:
+                payload["net_tp1_move"] = round(float(net_tp1_move), 8)
+            if net_rr is not None:
+                payload["net_rr"] = round(float(net_rr), 4) if np.isfinite(float(net_rr)) else np.nan
+            if signal_context:
+                for key, value in signal_context.items():
+                    payload[key] = round(float(value), 4) if np.isfinite(float(value)) else np.nan
+            payload.update(
+                self._build_structure_points_payload(
+                    one=one,
+                    pivot_indices=armed.stage3.structure_pivot_indices,
+                    pivot_prices=armed.stage3.structure_pivot_prices,
+                    pivot_kinds=armed.stage3.structure_pivot_kinds,
+                )
+            )
+            if extra:
+                payload.update(extra)
+            return Stage5Decision(
+                trade=None,
+                exit_idx=int(exit_idx if exit_idx is not None else min(entry_idx, max(len(one.timestamps) - 1, 0))),
+                reject_reason=reason,
+                reject_extra=payload if reason is not None else None,
+            )
+
         if entry_idx >= len(one.timestamps):
-            return None, len(one.timestamps) - 1
+            return _reject("no_entry_bar", exit_idx=len(one.timestamps) - 1)
 
         open_price = float(one.opens[entry_idx])
         high_price = float(one.highs[entry_idx])
@@ -7405,12 +7524,22 @@ class PnoEngine:
         signal_kind = "cross"
         if confirmation_mode == "cross":
             if high_price < armed.stage4.level:
-                return None, entry_idx
+                return _reject(None, exit_idx=entry_idx)
             entry_price = max(open_price, float(armed.stage4.entry_plan))
             stop_loss = float(armed.stage4.low_last_red_plan)
         elif confirmation_mode == "close_above":
-            if high_price < armed.stage4.level or close_price <= armed.stage4.level:
-                return None, entry_idx
+            if high_price < armed.stage4.level:
+                return _reject(None, exit_idx=entry_idx)
+            if close_price <= armed.stage4.level:
+                return _reject(
+                    "no_close_above",
+                    exit_idx=entry_idx,
+                    signal_context=self._resolve_signal_bar_context_online(
+                        one=one,
+                        idx=entry_idx,
+                        level=float(armed.stage4.level),
+                    ),
+                )
             ideal_like_impulse = self._is_ideal_like_impulse(stage1=armed.stage1, params=params)
             close_above_decay_reason = self._resolve_close_above_pre_signal_decay_reason(
                 one=one,
@@ -7427,15 +7556,23 @@ class PnoEngine:
             if armed.stage4.structure_source == "human_bos":
                 close_above_decay_reason = None
             if close_above_decay_reason is not None:
-                return None, entry_idx
+                return _reject(
+                    "close_above_decay_filter_failed",
+                    exit_idx=entry_idx,
+                    extra={"close_above_decay_reason": str(close_above_decay_reason)},
+                )
             actual_entry_idx = entry_idx + 1
             if actual_entry_idx >= len(one.timestamps):
-                return None, entry_idx
+                return _reject("no_next_entry_bar", exit_idx=entry_idx, actual_entry_idx=actual_entry_idx)
             entry_price = float(one.opens[actual_entry_idx])
             stop_loss = float(armed.stage4.low_last_red_plan)
             signal_kind = "close_above"
         else:
-            return None, entry_idx
+            return _reject(
+                "invalid_entry_confirmation_mode",
+                exit_idx=entry_idx,
+                extra={"invalid_entry_confirmation_mode": confirmation_mode},
+            )
 
         ideal_like_impulse = self._is_ideal_like_impulse(stage1=armed.stage1, params=params)
         entry_pos_reference_high = float(armed.stage4.active_high)
@@ -7452,7 +7589,15 @@ class PnoEngine:
             else float(params.max_entry_pullback_fraction)
         )
         if actual_entry_pos > max_actual_entry_pos:
-            return None, entry_idx
+            return _reject(
+                "actual_entry_pos_too_high",
+                exit_idx=entry_idx,
+                actual_entry_idx=actual_entry_idx,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                actual_entry_pos=actual_entry_pos,
+                max_actual_entry_pos=max_actual_entry_pos,
+            )
 
         trigger_body_close_adj = 0
         trigger_overhead_adj = 0
@@ -7494,7 +7639,17 @@ class PnoEngine:
             ):
                 close_trigger_filter_reason = None
             if close_trigger_filter_reason is not None:
-                return None, entry_idx
+                return _reject(
+                    "close_trigger_filter_failed",
+                    exit_idx=entry_idx,
+                    actual_entry_idx=actual_entry_idx,
+                    entry_price=entry_price,
+                    stop_loss=stop_loss,
+                    actual_entry_pos=actual_entry_pos,
+                    max_actual_entry_pos=max_actual_entry_pos,
+                    signal_context=signal_context,
+                    extra={"close_trigger_filter_reason": str(close_trigger_filter_reason)},
+                )
             trigger_adjusted_final_score = float(armed.stage4.final_score + trigger_score_adjustment)
 
         # If the actual executable entry is already above the original payoff geometry,
@@ -7503,24 +7658,89 @@ class PnoEngine:
         active_high_price = float(armed.stage4.active_high)
         tp1_price = float(armed.stage4.tp1)
         allow_entry_above_active_high = ideal_like_impulse and tp1_price > (active_high_price + self._EPSILON)
-        if (
-            stop_loss >= (entry_price - self._EPSILON)
-            or ((not allow_entry_above_active_high) and entry_price >= (active_high_price - self._EPSILON))
-            or entry_price >= (tp1_price - self._EPSILON)
-        ):
-            return None, entry_idx
+        if stop_loss >= (entry_price - self._EPSILON):
+            return _reject(
+                "stop_not_below_entry",
+                exit_idx=entry_idx,
+                actual_entry_idx=actual_entry_idx,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                actual_entry_pos=actual_entry_pos,
+                max_actual_entry_pos=max_actual_entry_pos,
+                signal_context=signal_context,
+            )
+        if (not allow_entry_above_active_high) and entry_price >= (active_high_price - self._EPSILON):
+            return _reject(
+                "entry_price_above_active_high",
+                exit_idx=entry_idx,
+                actual_entry_idx=actual_entry_idx,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                actual_entry_pos=actual_entry_pos,
+                max_actual_entry_pos=max_actual_entry_pos,
+                signal_context=signal_context,
+            )
+        if entry_price >= (tp1_price - self._EPSILON):
+            return _reject(
+                "entry_price_above_tp1",
+                exit_idx=entry_idx,
+                actual_entry_idx=actual_entry_idx,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                actual_entry_pos=actual_entry_pos,
+                max_actual_entry_pos=max_actual_entry_pos,
+                signal_context=signal_context,
+            )
 
         # Check RR using actual entry price and stop loss (stage 5 validation)
         actual_risk = entry_price - stop_loss
         net_tp1_move = tp1_price - entry_price - (float(params.fee_rate) * entry_price) - (0.5 * float(params.fee_rate) * tp1_price)
-        if actual_risk <= self._EPSILON or self._safe_divide(net_tp1_move, actual_risk) <= (
-            float(params.min_entry_rr) + self._EPSILON
-        ):
-            return None, entry_idx
+        net_rr = self._safe_divide(net_tp1_move, actual_risk) if actual_risk > self._EPSILON else -np.inf
+        if actual_risk <= self._EPSILON:
+            return _reject(
+                "actual_risk_non_positive",
+                exit_idx=entry_idx,
+                actual_entry_idx=actual_entry_idx,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                actual_entry_pos=actual_entry_pos,
+                max_actual_entry_pos=max_actual_entry_pos,
+                actual_risk=actual_risk,
+                net_tp1_move=net_tp1_move,
+                net_rr=net_rr,
+                signal_context=signal_context,
+            )
+        if net_rr <= (float(params.min_entry_rr) + self._EPSILON):
+            return _reject(
+                "net_rr_too_low",
+                exit_idx=entry_idx,
+                actual_entry_idx=actual_entry_idx,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                actual_entry_pos=actual_entry_pos,
+                max_actual_entry_pos=max_actual_entry_pos,
+                actual_risk=actual_risk,
+                net_tp1_move=net_tp1_move,
+                net_rr=net_rr,
+                signal_context=signal_context,
+                extra={"min_entry_rr": round(float(params.min_entry_rr), 4)},
+            )
 
         position_size = self._resolve_position_size(params=params, entry_price=entry_price, stop_loss=stop_loss)
         if position_size <= 0.0:
-            return None, entry_idx
+            return _reject(
+                "position_size_non_positive",
+                exit_idx=entry_idx,
+                actual_entry_idx=actual_entry_idx,
+                entry_price=entry_price,
+                stop_loss=stop_loss,
+                actual_entry_pos=actual_entry_pos,
+                max_actual_entry_pos=max_actual_entry_pos,
+                actual_risk=actual_risk,
+                net_tp1_move=net_tp1_move,
+                net_rr=net_rr,
+                signal_context=signal_context,
+            )
 
         pump_to_peak_bars = max(armed.stage1.active_high_idx - armed.stage1.start_idx, 1)
         levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
@@ -7738,7 +7958,7 @@ class PnoEngine:
                 }
             )
 
-        return self._simulate_trade_path(
+        trade, exit_idx = self._simulate_trade_path(
             one=one,
             params=params,
             armed=armed,
@@ -7748,6 +7968,7 @@ class PnoEngine:
             position_size=position_size,
             metadata=metadata,
         )
+        return Stage5Decision(trade=trade, exit_idx=exit_idx)
 
     def _resolve_be_arm_fraction(
         self,
