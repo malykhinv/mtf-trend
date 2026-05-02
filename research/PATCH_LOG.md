@@ -41,7 +41,8 @@ SUPERSEDED = заменён новым патчем
 | P018 | Stale reclaim and trade-count chart fix | APPLIED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Канонизировать trade-count column для графиков и отбрасывать сделки после failed reclaim уровня до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
 | P019 | Clear PNO trade-data caches | APPLIED | `strategy/pno/pno_strategy.py` | memory | Сбрасывать aggTrades-derived runtime caches после обработки символа. | `python -m compileall strategy/pno/pno_strategy.py` |
 | P020 | Trade/chart consistency fix | APPLIED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Заполнить все trade-count aliases и считать уровень stale, если close_above случился до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
-| P021 | True trade-count chart propagation | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Прокидывать реальные number_of_trades/trades/trade_count из enriched PNO frames обратно в исходные frames, которые использует chart export. | `python -m compileall strategy/pno/pno_strategy.py` |
+| P021 | True trade-count chart propagation | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Прокидывать реальные number_of_trades/trades/trade_count из enriched PNO frames обратно в исходные frames, которые использует chart export. | `python -m compileall strategy/pno/pno_strategy.py` |
+| P022 | Stage5/results consistency fix | PROPOSED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix/diagnostics | Переносить stale-level Stage5 passed events в rejected и писать runtime TF в results.csv. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
 
 ---
 
@@ -817,7 +818,7 @@ Trading logic changed: no
 Files: strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
 Follow-up to: P020
 Supersedes: none
-Commit: UNKNOWN
+Commit: ac6c7c505306fd2aac52b145837bd2a560c36386
 ```
 
 Problem:
@@ -855,7 +856,58 @@ Risk:
 логика сделок не меняется; исходные DataFrame получают дополнительные diagnostic columns, чтобы chart export видел тот же trade-count, что и strategy path
 ```
 
-## 24. Шаблон нового патча
+---
+
+## 24. P022 — Stage5/results consistency fix
+
+```text
+Status: PROPOSED
+Type: bugfix / diagnostics
+Trading logic changed: no
+Files: strategy/pno/pno_strategy.py, vectorbt_runner/backtest_runner.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P021
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+Stale-level фильтр убирал MAGMA из итоговых trades/charts, но Stage5 review всё ещё показывал его как passed.
+Для multi-TF runs строка results.csv могла сохранять базовые 5m/30s вместо runtime TF пары.
+```
+
+Change:
+
+```text
+разделять stale-level trades на kept/stale
+переносить соответствующие stage_5_trade events из passed в rejected с reason=level_stale_before_signal
+уменьшать stage_hits/trades_generated после переноса
+собирать results row из params после runtime levels_timeframe/entry_timeframe injection
+```
+
+Expected diagnostics:
+
+```text
+stage_5_trade/passed/events.csv, results.csv, trade_context.csv и charts показывают один и тот же набор валидных trades
+MAGMA-like stale reclaim попадает в stage_5_trade/rejected/events.csv
+1m_5s results.csv пишет pno_levels_timeframe=1m и pno_entry_timeframe=5s
+```
+
+Verification:
+
+```text
+python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected false --pno-entry-confirmation-mode close_above --days 14 --pno-category-mode discovery --collect-diagnostics true
+```
+
+Risk:
+
+```text
+Trading logic не меняется: stale trades уже не попадали в итоговые trades. Меняется согласованность diagnostics и results row.
+```
+
+## 25. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -877,7 +929,7 @@ Next:
 
 ---
 
-## 25. Правило обновления
+## 26. Правило обновления
 
 Каждый patch должен обновлять:
 

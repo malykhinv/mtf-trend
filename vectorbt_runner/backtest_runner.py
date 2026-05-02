@@ -669,7 +669,13 @@ class BacktestRunner:
                                 symbol,
                             )
 
-            row = self._build_metrics_row(strategy.params_to_row(prepared.params), all_trades)
+            row_params = self._inject_runtime_fields(
+                prepared.params,
+                symbol="*",
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+            )
+            row = self._build_metrics_row(strategy.params_to_row(row_params), all_trades)
             if collect_stage_metrics:
                 for stage_id in tracked_stage_ids:
                     row[_stage_metric_column_name(stage_id)] = int(stage_metric_totals.get(stage_id, 0))
