@@ -1693,7 +1693,6 @@ def _export_pno_diagnostics_context_for_symbols(
         stage_rows_by_stage=stage_rows_by_stage,
         stage_rejections_by_stage=research_rejections_by_stage,
         logger=logger,
-        log_prefix=log_prefix,
     )
     _export_pno_stage_reviews(
         diagnostics_dir=diagnostics_dir,
@@ -1704,7 +1703,6 @@ def _export_pno_diagnostics_context_for_symbols(
         render_charts=False,
         passed_chart_stage_ids=passed_chart_stage_ids,
         logger=logger,
-        log_prefix=log_prefix,
     )
     return {
         "all_trade_rows": all_trade_rows,

@@ -3677,7 +3677,6 @@ def _export_pno_research_context(
     stage_rows_by_stage: dict[str, list[dict[str, object]]],
     stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
     logger: Logger | None = None,
-    log_prefix: str = "pno",
 ) -> None:
     research_dir = diagnostics_dir / "research_context"
     research_dir.mkdir(parents=True, exist_ok=True)
