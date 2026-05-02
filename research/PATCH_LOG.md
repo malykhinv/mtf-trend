@@ -44,7 +44,8 @@ SUPERSEDED = заменён новым патчем
 | P021 | True trade-count chart propagation | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Прокидывать реальные number_of_trades/trades/trade_count из enriched PNO frames обратно в исходные frames, которые использует chart export. | `python -m compileall strategy/pno/pno_strategy.py` |
 | P022 | Stage5/results consistency fix | APPLIED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix/diagnostics | Переносить stale-level Stage5 passed events в rejected и писать runtime TF в results.csv. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
 | P023 | PNO none-trades guard | APPLIED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть list-return contract для PNO generate_events_multi_tf и не валить runner, если стратегия вернула None. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
-| P024 | Concise backtest logs | PROPOSED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging | Убрать лишнюю прозу из runtime backtest logs, оставить TF, progress 0..100% и итоговую сводку по сделкам. | `python -m compileall vectorbt_runner/backtest_runner.py` |
+| P024 | Concise backtest logs | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging | Убрать лишнюю прозу из runtime backtest logs, оставить TF, progress 0..100% и итоговую сводку по сделкам. | `python -m compileall vectorbt_runner/backtest_runner.py` |
+| P025 | Fix concise progress checkpoint init | PROPOSED | `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Инициализировать progress checkpoint cursor перед per-symbol progress loop. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 
 ---
 

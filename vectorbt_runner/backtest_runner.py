@@ -539,6 +539,7 @@ class BacktestRunner:
             self._logger.warning("Таймфреймы: %s-%s", levels_timeframe.value, entry_timeframe.value)
             self._logger.info("%s", _format_progress_line(percent=0, checked=0, total=symbols_count, eta_seconds=None))
             progress_checkpoints = _build_progress_checkpoints(symbols_count)
+            progress_checkpoint_index = 0
             try:
                 portfolio_trades = strategy.generate_events_portfolio(
                     symbol_frames=symbol_frames,

@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 1877d2891b1f537a6326857e67cd74e5d761ad96
-Local diff: P008 proposed typing/client-boundary hardening; P024 proposed concise backtest logs
-Last applied patch: P023 PNO none-trades guard
+Commit: 7de18b62ea82c6eedae00fa7cd247244ddacc6aa
+Local diff: P008 proposed typing/client-boundary hardening; P025 proposed concise progress checkpoint init
+Last applied patch: P024 Concise backtest logs
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -98,7 +98,8 @@ winrate > 0.40
 | P021 | True trade-count chart propagation | APPLIED | Прокидывать реальные aggTrades trade-count columns из enriched frames в исходные frames для chart export. |
 | P022 | Stage5/results consistency fix | APPLIED | Синхронизировать Stage5 review с stale-level фильтром и писать runtime TF в results row. |
 | P023 | PNO none-trades guard | APPLIED | Гарантировать list-return contract для PNO trades и защитить runner от None. |
-| P024 | Concise backtest logs | PROPOSED | Заменить повествовательные runtime-логи на короткий progress-bar стиль и итог по TF-паре. |
+| P024 | Concise backtest logs | APPLIED | Заменить повествовательные runtime-логи на короткий progress-bar стиль и итог по TF-паре. |
+| P025 | Fix concise progress checkpoint init | PROPOSED | Исправить UnboundLocalError в progress loop после P024. |
 
 Статусы:
 
