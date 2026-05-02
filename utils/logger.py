@@ -39,6 +39,41 @@ class _ColorFormatter(logging.Formatter):
         return f"{color}{message}{self.RESET}"
 
 
+class _RuntimeNoiseFilter(logging.Filter):
+    """Отсекает старый служебный шум из runtime-консоли и log-файлов."""
+
+    _SUPPRESSED_SUBSTRINGS: Final[tuple[str, ...]] = (
+        "run-backtest: старт",
+        "run-backtest: output_root=",
+        "запуск-бэктеста:",
+        "pre-rank",
+        "анализ-кэша:",
+        "подготовка-символов",
+        "сводка по символам",
+        "В работу ушло",
+        "тяжёлый прогон",
+        "тяжелый прогон",
+        "Почему рынок не пустил во вход",
+        "Бэктест начинает",
+        "Дошёл до символа",
+        "Глава ",
+        "Сетка продвинулась",
+        "Финал бэктеста",
+        "Категории получили отдельные CSV",
+        "PNO-артефакты разложены по категориям",
+    )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = record.getMessage()
+        return not any(fragment in message for fragment in self._SUPPRESSED_SUBSTRINGS)
+
+
+def _ensure_runtime_noise_filter(handler: logging.Handler) -> None:
+    if any(isinstance(existing_filter, _RuntimeNoiseFilter) for existing_filter in handler.filters):
+        return
+    handler.addFilter(_RuntimeNoiseFilter())
+
+
 _NAMED_LOG_LEVELS: Final[dict[str, int]] = {
     "CRITICAL": logging.CRITICAL,
     "ERROR": logging.ERROR,
@@ -71,6 +106,7 @@ def get_logger(
         stream_handler = logging.StreamHandler()
         stream_handler.setLevel(resolved_level)
         stream_handler.setFormatter(_ColorFormatter(LOGGER_MESSAGE_FORMAT, datefmt=LOGGER_DATE_FORMAT))
+        _ensure_runtime_noise_filter(stream_handler)
         logger.addHandler(stream_handler)
 
         file_handler = RotatingFileHandler(
@@ -81,9 +117,11 @@ def get_logger(
         )
         file_handler.setLevel(resolved_level)
         file_handler.setFormatter(logging.Formatter(LOGGER_MESSAGE_FORMAT, datefmt=LOGGER_DATE_FORMAT))
+        _ensure_runtime_noise_filter(file_handler)
         logger.addHandler(file_handler)
     else:
         for handler in logger.handlers:
             handler.setLevel(resolved_level)
+            _ensure_runtime_noise_filter(handler)
 
     return logger

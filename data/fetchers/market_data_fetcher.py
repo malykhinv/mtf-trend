@@ -44,7 +44,7 @@ class MarketDataFetcher:
     # region Приватные
 
     def _log_stage_summary(self, stage: str, total: int, ok: int, failed: int) -> None:
-        self._logger.info("%s: прошли %s из %s, с ошибками %s.", stage, ok, total, failed)
+        self._logger.debug("%s: прошли %s из %s, с ошибками %s.", stage, ok, total, failed)
 
     @staticmethod
     def _count_structured_results(results: dict[str, SymbolFetchResult]) -> tuple[int, int, int]:
@@ -62,7 +62,7 @@ class MarketDataFetcher:
 
     def fetch_market_caps(self, symbols: list[str]) -> MarketCapsResult:
         """Загружает капитализации для списка тикеров."""
-        self._logger.info("Собираю капитализацию: %s инструментов.", len(symbols))
+        self._logger.debug("Собираю капитализацию: %s инструментов.", len(symbols))
         results: dict[str, float | str] = {}
 
         try:
@@ -84,10 +84,10 @@ class MarketDataFetcher:
                 self._logger.debug("Капитализация найдена вручную: %s.", symbol)
             except Exception as exc:
                 msg = f"Капитализация {symbol} не найдена: {exc}"
-                self._logger.info(msg)
+                self._logger.debug(msg)
                 results[symbol] = msg
 
-        self._logger.info(LOG_MSG_TASK_COMPLETED, "Рыночная капитализация")
+        self._logger.debug(LOG_MSG_TASK_COMPLETED, "Рыночная капитализация")
         return MarketCapsResult(market_caps=results)
 
     def fetch_all(
@@ -100,7 +100,7 @@ class MarketDataFetcher:
         include_open_interest: bool = True,
     ) -> FetchAllResult:
         """Загружает полный набор рыночных метрик."""
-        self._logger.info("Открываю рыночную сцену: %s символов, таймфрейм %s.", len(symbols), timeframe.value)
+        self._logger.debug("Открываю рыночную сцену: %s символов, таймфрейм %s.", len(symbols), timeframe.value)
 
         ohlcv_result = self._ohlcv_fetcher.fetch_many(
             symbols,
@@ -115,7 +115,7 @@ class MarketDataFetcher:
             current_time_ms = int(time.time() * 1000)
             oi_start_timestamp_ms = max(start_timestamp_ms, current_time_ms - thirty_days_ms)
             
-            self._logger.info(
+            self._logger.debug(
                 "OI живёт по правилам биржи: беру %s только в доступном окне %s..%s.",
                 oi_timeframe.value,
                 oi_start_timestamp_ms,
@@ -129,7 +129,7 @@ class MarketDataFetcher:
                 end_timestamp_ms,
             )
         else:
-            self._logger.info("OI для %s не нужен в этом проходе, иду дальше.", timeframe.value)
+            self._logger.debug("OI для %s не нужен в этом проходе, иду дальше.", timeframe.value)
             oi_result = {symbol: SymbolFetchResult.ok(0) for symbol in symbols}
 
         market_caps = self.fetch_market_caps(symbols)
@@ -153,7 +153,7 @@ class MarketDataFetcher:
         )
         has_errors = failed_symbols_count > 0
 
-        self._logger.info("Рыночная сцена собрана. Данные готовы к проверке.")
+        self._logger.debug("Рыночная сцена собрана. Данные готовы к проверке.")
 
         return FetchAllResult(
             ohlcv=ohlcv_result,

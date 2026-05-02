@@ -40,13 +40,6 @@ PROGRESS_LOG_EVERY = 100
 SYMBOL_PROGRESS_STEPS = 10
 SYMBOL_PROGRESS_MAX_INTERVAL = 50
 LONG_SYMBOL_LOG_SECONDS = 10.0
-DIAGNOSTIC_TOP_N = 5
-ZERO_ENTRY_REJECTION_KEYS = (
-    "retest_rejected_by_volume",
-    "retest_rejected_by_extra_filters",
-    "retest_confirmation_not_received",
-    "retest_confirmation_expired",
-)
 
 
 def _resolve_median_metric(values: list[int | float]) -> float | None:
@@ -388,80 +381,6 @@ class BacktestRunner:
             }
         )
 
-    def _log_zero_entry_with_retests(
-        self,
-        diagnostics_by_key: dict[tuple[str, str], Counter[str]],
-    ) -> None:
-        if not diagnostics_by_key:
-            return
-
-        keys_with_retests = [
-            (key, counter)
-            for key, counter in diagnostics_by_key.items()
-            if counter.get("retests_found", BACKTEST_ZERO_COUNT) > BACKTEST_ZERO_COUNT
-        ]
-        if not keys_with_retests:
-            return
-
-        problematic = [
-            (key, counter)
-            for key, counter in keys_with_retests
-            if counter.get("trades_generated", BACKTEST_ZERO_COUNT) == BACKTEST_ZERO_COUNT
-        ]
-        problematic_count = len(problematic)
-        keys_with_retests_count = len(keys_with_retests)
-        problematic_share = problematic_count / keys_with_retests_count if keys_with_retests_count else BACKTEST_ZERO_COUNT
-
-        total_retests = sum(counter.get("retests_found", BACKTEST_ZERO_COUNT) for _, counter in keys_with_retests)
-        problematic_retests = sum(counter.get("retests_found", BACKTEST_ZERO_COUNT) for _, counter in problematic)
-        problematic_retests_share = (
-            problematic_retests / total_retests
-            if total_retests
-            else BACKTEST_ZERO_COUNT
-        )
-
-        breakdown = {
-            name: sum(counter.get(name, BACKTEST_ZERO_COUNT) for _, counter in problematic)
-            for name in ZERO_ENTRY_REJECTION_KEYS
-        }
-        breakdown_message = ", ".join(f"{name}={value}" for name, value in breakdown.items())
-
-        self._logger.debug(
-            "Диагностика входов: рынок дал ретесты, но не дал вход. Ключей %s/%s, доля %.4f. Ретестов %s/%s, доля %.4f. Разбор: %s",
-            problematic_count,
-            keys_with_retests_count,
-            problematic_share,
-            problematic_retests,
-            total_retests,
-            problematic_retests_share,
-            breakdown_message,
-        )
-
-        if not problematic:
-            return
-
-        sorted_problematic = sorted(
-            problematic,
-            key=lambda item: (
-                sum(item[1].get(name, BACKTEST_ZERO_COUNT) for name in ZERO_ENTRY_REJECTION_KEYS),
-                item[1].get("retests_found", BACKTEST_ZERO_COUNT),
-            ),
-            reverse=True,
-        )
-        detail_limit = len(sorted_problematic) if self._logger.isEnabledFor(logging.DEBUG) else min(DIAGNOSTIC_TOP_N, len(sorted_problematic))
-        for (symbol, params_signature), counter in sorted_problematic[:detail_limit]:
-            self._logger.debug(
-                "Диагностика входов: %s — ретест был, сделки нет. Параметры: %s. Ретестов %s, сделок %s, объём отсёк %s, фильтры отсекли %s, подтверждение не пришло %s, подтверждение истекло %s.",
-                symbol,
-                params_signature,
-                counter.get("retests_found", BACKTEST_ZERO_COUNT),
-                counter.get("trades_generated", BACKTEST_ZERO_COUNT),
-                counter.get("retest_rejected_by_volume", BACKTEST_ZERO_COUNT),
-                counter.get("retest_rejected_by_extra_filters", BACKTEST_ZERO_COUNT),
-                counter.get("retest_confirmation_not_received", BACKTEST_ZERO_COUNT),
-                counter.get("retest_confirmation_expired", BACKTEST_ZERO_COUNT),
-            )
-
     def _raise_memory_error(
         self,
         *,
@@ -522,9 +441,7 @@ class BacktestRunner:
         collect_stage_metrics = bool(stage_metric_ids)
         tracked_stage_ids = tuple(stage_metric_ids or ())
 
-        rejection_diagnostics_by_key: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         diagnostics_method = getattr(strategy, "consume_last_generation_diagnostics", None)
-        symbol_progress_interval = _resolve_symbol_progress_interval(symbols_count)
 
         self._logger.warning("Запуск бектеста")
         self._logger.info("Отобрано %s символов", symbols_count)
@@ -568,7 +485,6 @@ class BacktestRunner:
                 raise RuntimeError("BeeBiteStrategy должен использовать только portfolio pipeline.")
             else:
                 for symbol_idx, (symbol, mtf_frames) in enumerate(symbol_frames.items(), start=1):
-                    _ = symbol_progress_interval
                     symbol_started_at = perf_counter()
                     cfg = self._inject_runtime_fields(
                         prepared.params,
@@ -606,20 +522,10 @@ class BacktestRunner:
                         trades = []
                     all_trades.extend(trades)
                     symbol_elapsed_seconds = perf_counter() - symbol_started_at
-                    if symbol_elapsed_seconds >= LONG_SYMBOL_LOG_SECONDS:
-                        self._logger.debug("%s обработан за %s. Сделок: %s.", symbol, _format_duration_human(symbol_elapsed_seconds), len(trades))
 
                     if (collect_diagnostics or collect_stage_metrics) and callable(diagnostics_method):
                         diagnostics_raw = diagnostics_method()
                         if isinstance(diagnostics_raw, dict):
-                            if collect_diagnostics:
-                                diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
-                                raw_context = diagnostics_raw.get("context")
-                                context_symbol = symbol
-                                if isinstance(raw_context, dict) and isinstance(raw_context.get("symbol"), str):
-                                    context_symbol = raw_context["symbol"]
-                                key = (context_symbol, prepared.params_signature)
-                                rejection_diagnostics_by_key[key].update(diagnostics_counter)
                             if collect_stage_metrics:
                                 stage_hits_raw = diagnostics_raw.get("stage_hits")
                                 if isinstance(stage_hits_raw, dict):

@@ -82,7 +82,8 @@ def run_with_retry(
                 )
                 raise
             is_last = attempt_number >= attempts
-            target_logger.warning(
+            retry_logger = target_logger.warning if is_last else target_logger.debug
+            retry_logger(
                 "Источник не ответил на «%s». Попытка %s/%s. Endpoint: %s. Символ: %s. Причина: %s",
                 operation,
                 attempt_number,

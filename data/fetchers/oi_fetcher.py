@@ -62,19 +62,19 @@ class OiFetcher:
             if suffix_start_ms <= end_timestamp_ms:
                 segments.append((suffix_start_ms, end_timestamp_ms, "suffix"))
 
-        self._logger.info(
+        self._logger.debug(
             "OI %s %s: сверил кэш, нужно закрыть сегментов: %s.",
             symbol,
             timeframe.value,
             len(segments),
         )
         if not segments:
-            self._logger.info(LOG_MSG_SKIP_UP_TO_DATE, "OI", symbol)
+            self._logger.debug(LOG_MSG_SKIP_UP_TO_DATE, "OI", symbol)
             return 0
 
         added_rows = 0
         for segment_start_ms, segment_end_ms, segment_kind in segments:
-            self._logger.info(
+            self._logger.debug(
                 "OI %s %s: дописываю %s сегмент %s..%s.",
                 symbol,
                 timeframe.value,
@@ -87,7 +87,7 @@ class OiFetcher:
 
             if "timestamp" not in data.columns:
                 if data.empty:
-                    self._logger.info("OI %s %s: биржа вернула пустой ряд, пропускаю без драмы.", symbol, timeframe.value)
+                    self._logger.debug("OI %s %s: биржа вернула пустой ряд, пропускаю без драмы.", symbol, timeframe.value)
                     continue
                 raise ValueError(
                     f"OI fetch_symbol: отсутствует колонка 'timestamp' в непустом OI для {symbol} {timeframe.value}"
@@ -97,7 +97,7 @@ class OiFetcher:
 
             added_rows += self._storage.save_incremental(symbol, timeframe, data)
 
-        self._logger.info("OI %s: история интереса обновлена, новых строк %s.", symbol, added_rows)
+        self._logger.debug("OI %s: история интереса обновлена, новых строк %s.", symbol, added_rows)
         return added_rows
 
     def fetch_many(

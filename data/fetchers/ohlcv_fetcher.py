@@ -99,7 +99,7 @@ class OhlcvFetcher:
             if not cached_base_frame.empty:
                 data = self._aggregate_cached_frame(cached_base_frame, target_timeframe=timeframe)
                 added_rows = self._storage.save_incremental(symbol, timeframe, data)
-                self._logger.info(
+                self._logger.debug(
                     "OHLCV %s %s собран из уже имеющегося %s. Новых строк: %s.",
                     symbol,
                     timeframe.value,
@@ -127,19 +127,19 @@ class OhlcvFetcher:
             if suffix_start_ms <= end_timestamp_ms:
                 segments.append((suffix_start_ms, end_timestamp_ms, "suffix"))
 
-        self._logger.info(
+        self._logger.debug(
             "OHLCV %s %s: сверил кэш, нужно закрыть сегментов: %s.",
             symbol,
             timeframe.value,
             len(segments),
         )
         if not segments:
-            self._logger.info(LOG_MSG_SKIP_UP_TO_DATE, "OHLCV", symbol)
+            self._logger.debug(LOG_MSG_SKIP_UP_TO_DATE, "OHLCV", symbol)
             return 0
 
         added_rows = 0
         for segment_start_ms, segment_end_ms, segment_kind in segments:
-            self._logger.info(
+            self._logger.debug(
                 "OHLCV %s %s: дописываю %s сегмент %s..%s.",
                 symbol,
                 timeframe.value,
@@ -152,11 +152,11 @@ class OhlcvFetcher:
 
             gaps = self._gap_detector.detect_gaps(data, expected_step_ms=timeframe_ms)
             if gaps:
-                self._logger.info("OHLCV %s: в свечах есть разрывы, найдено %s.", symbol, len(gaps))
+                self._logger.debug("OHLCV %s: в свечах есть разрывы, найдено %s.", symbol, len(gaps))
 
             added_rows += self._storage.save_incremental(symbol, timeframe, data)
 
-        self._logger.info("OHLCV %s: свечная история обновлена, новых строк %s.", symbol, added_rows)
+        self._logger.debug("OHLCV %s: свечная история обновлена, новых строк %s.", symbol, added_rows)
         return added_rows
 
     def fetch_many(

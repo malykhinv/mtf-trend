@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 665bd3112a36754020f6618585366dad881a1f64
-Local diff: P008 proposed typing/client-boundary hardening; P026 proposed strict backtest runtime log shape
-Last applied patch: P025 Fix concise progress checkpoint init
+Commit: f9fbabec6d97ee0ca51922a9e3742a6e6b899e4a
+Local diff: P008 proposed typing/client-boundary hardening; P027 proposed quiet runtime logger sweep
+Last applied patch: P026 Strict backtest runtime log shape
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -100,7 +100,8 @@ winrate > 0.40
 | P023 | PNO none-trades guard | APPLIED | Гарантировать list-return contract для PNO trades и защитить runner от None. |
 | P024 | Concise backtest logs | APPLIED | Заменить повествовательные runtime-логи на короткий progress-bar стиль и итог по TF-паре. |
 | P025 | Fix concise progress checkpoint init | APPLIED | Исправить UnboundLocalError в progress loop после P024. |
-| P026 | Strict backtest runtime log shape | PROPOSED | Строгий формат логов: заголовок, TF, progress, итог; без лишней runtime-диагностики. |
+| P026 | Strict backtest runtime log shape | APPLIED | Строгий формат логов: заголовок, TF, progress, итог; без лишней runtime-диагностики. |
+| P027 | Quiet runtime logger sweep | PROPOSED | Убрать служебный runtime-шум из logger.*, оставив человековажные заголовки, progress, итог, предупреждения и ошибки. |
 
 Статусы:
 
