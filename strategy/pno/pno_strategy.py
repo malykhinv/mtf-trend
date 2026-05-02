@@ -819,6 +819,121 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         if event_symbol is not None and trade_symbol is not None and event_symbol != trade_symbol:
             return False
 
+        trade_timestamps = {int(trade.entry_timestamp_ms)}
+        for key in ("entry_signal_timestamp_ms", "timestamp_ms", "entry_timestamp_ms"):
+            value = PnoStrategy._safe_metadata_int(metadata, key)
+            if value is not None:
+                trade_timestamps.add(int(value))
+
+        event_timestamps = {
+            value
+            for key in ("timestamp_ms", "entry_signal_timestamp_ms", "entry_timestamp_ms")
+            for value in [PnoStrategy._safe_metadata_int(event, key)]
+            if value is not None
+        }
+        if event_timestamps and trade_timestamps.isdisjoint(event_timestamps):
+            return False
+
+        trade_entry_price = PnoStrategy._trade_entry_price_value(trade)
+        event_entry_price = PnoStrategy._safe_metadata_float(event, "entry_price")
+        if event_entry_price is not None:
+            tolerance = max(abs(trade_entry_price) * 1e-6, 1e-12)
+            if abs(float(event_entry_price) - trade_entry_price) > tolerance:
+                return False
+
+        trade_level = PnoStrategy._safe_metadata_float(metadata, "level")
+        event_level = PnoStrategy._safe_metadata_float(event, "level")
+        if trade_level is not None and event_level is not None:
+            tolerance = max(abs(float(trade_level)) * 1e-6, 1e-12)
+            if abs(float(event_level) - float(trade_level)) > tolerance:
+                return False
+
+        return bool(event_timestamps) or event_entry_price is not None or event_level is not None or (
+            event_symbol is not None and trade_symbol is not None
+        )
+
+    @staticmethod
+    def _sync_stale_level_reclaim_diagnostics_payload(
+        diagnostics: dict[str, object],
+        *,
+        stale_trades: list[TradeResult],
+    ) -> None:
+        stage_events = diagnostics.get("stage_events")
+        if not isinstance(stage_events, list):
+            return
+
+        kept_events: list[object] = []
+        stale_rejections: list[dict[str, object]] = []
+        remaining_stale_trades = list(stale_trades)
+
+        for raw_event in stage_events:
+            if not isinstance(raw_event, dict) or raw_event.get("stage_id") != PNO_STAGE_5_TRADE:
+                kept_events.append(raw_event)
+                continue
+
+            matched_index = next(
+                (
+                    index
+                    for index, trade in enumerate(remaining_stale_trades)
+                    if PnoStrategy._stage5_event_matches_trade(raw_event, trade)
+                ),
+                None,
+            )
+            if matched_index is None:
+                kept_events.append(raw_event)
+                continue
+
+            stale_trade = remaining_stale_trades.pop(matched_index)
+            stale_metadata = stale_trade.metadata if isinstance(stale_trade.metadata, dict) else {}
+            rejection = dict(raw_event)
+            rejection.update(
+                {
+                    "reason": "level_stale_before_signal",
+                    "source_status": "rejected",
+                    "entry_timestamp_ms": int(stale_trade.entry_timestamp_ms),
+                    "entry_signal_timestamp_ms": stale_metadata.get("entry_signal_timestamp_ms"),
+                }
+            )
+            stale_rejections.append(rejection)
+
+        stale_count = len(stale_rejections)
+        if stale_count == 0:
+            return
+
+        diagnostics["stage_events"] = kept_events
+        stage_rejections = diagnostics.get("stage_rejections")
+        if isinstance(stage_rejections, list):
+            stage_rejections.extend(stale_rejections)
+        else:
+            diagnostics["stage_rejections"] = stale_rejections
+
+        stage_hits = diagnostics.get("stage_hits")
+        if isinstance(stage_hits, dict):
+            current_hits = int(stage_hits.get(PNO_STAGE_5_TRADE, 0) or 0)
+            stage_hits[PNO_STAGE_5_TRADE] = max(0, current_hits - stale_count)
+        diagnostics["trades_generated"] = max(0, int(diagnostics.get("trades_generated", 0) or 0) - stale_count)
+
+    def _sync_stale_level_reclaim_diagnostics(self, *, stale_trades: list[TradeResult]) -> None:
+        if not stale_trades:
+            return
+        for diagnostics in (getattr(self._engine, "_last_generation_diagnostics", None), self._last_generation_diagnostics):
+            if isinstance(diagnostics, dict):
+                self._sync_stale_level_reclaim_diagnostics_payload(diagnostics, stale_trades=stale_trades)
+
+    @staticmethod
+    def _trade_entry_price_value(trade: TradeResult) -> float:
+        raw_value = getattr(trade.entry_price, "value", trade.entry_price)
+        return float(raw_value)
+
+    @staticmethod
+    def _stage5_event_matches_trade(event: dict[str, object], trade: TradeResult) -> bool:
+        metadata = trade.metadata if isinstance(trade.metadata, dict) else {}
+
+        event_symbol = str(event.get("symbol")) if event.get("symbol") is not None else None
+        trade_symbol = str(metadata.get("symbol")) if metadata.get("symbol") is not None else None
+        if event_symbol is not None and trade_symbol is not None and event_symbol != trade_symbol:
+            return False
+
         trade_timestamps = {
             int(trade.entry_timestamp_ms),
         }
