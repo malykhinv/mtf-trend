@@ -7,12 +7,12 @@
 ## 1. Текущее состояние
 
 ```text
-Branch:
-Commit:
-Local diff:
-Last applied patch:
-Last analyzed run:
-Updated:
+Branch: codex/ideal-like
+Commit: 5c5447dbf98bbddb33c5b99dcf6d17fa75b23a8b
+Local diff: proposed docs follow-up for P005 status/details
+Last applied patch: P005 repo cleanup
+Last analyzed run: E001 5m/30s
+Updated: 2026-05-02
 ```
 
 Если неизвестно — писать `UNKNOWN`, не выдумывать.

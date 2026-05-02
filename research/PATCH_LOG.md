@@ -25,7 +25,7 @@ SUPERSEDED = заменён новым патчем
 | P002 | Stage5 reject reasons | UNKNOWN | `strategy/pno/engine.py` | diagnostics | Вернуть точные причины no-trade. | Stage5 rejected reasons. |
 | P003 | Trades % charts | UNKNOWN | `cli/pno_diagnostics.py` | charts | Добавить trade-count панель. | На графиках есть `Trades %`. |
 | P004 | True trade-count data | PROPOSED / UNKNOWN | `constants.py`, `strategy/pno/*` | data quality | Использовать real trade-count/quote_volume. | `trade_count_proxy_used=false`. |
-| P005 | Repo cleanup | PROPOSED | `.gitignore`, `.run/*`, `logs/parquet-storage.log`, `utils/validators.py` | cleanup | Убрать локальные IDE/log/empty artifacts без изменения PNO-логики. | `python -m compileall strategy/pno cli constants.py` |
+| P005 | Repo cleanup | APPLIED | `.gitignore`, `.run/*`, `logs/parquet-storage.log`, `utils/validators.py` | cleanup | Убрать локальные IDE/log/empty artifacts без изменения PNO-логики. | `python -m compileall strategy/pno cli constants.py` |
 
 ---
 
@@ -156,7 +156,39 @@ timestamp mismatch
 
 ---
 
-## 7. Шаблон нового патча
+## 7. P005 — Repo cleanup
+
+```text
+Status: APPLIED
+Type: cleanup
+Trading logic changed: no
+Files: .gitignore, .run/*, logs/parquet-storage.log, utils/validators.py
+Commit: 5c5447dbf98bbddb33c5b99dcf6d17fa75b23a8b
+```
+
+Проблема:
+
+```text
+в репозитории были локальные IDE run configs, пустой log-файл и пустой неиспользуемый validators.py
+```
+
+Изменение:
+
+```text
+удалены .run stage configs, logs/parquet-storage.log и utils/validators.py
+добавлены ignore rules для .run/, logs/ и *.log
+.env намеренно не трогался
+```
+
+Проверка:
+
+```text
+CI/status checks отсутствуют; локально проверить python -m compileall strategy/pno cli constants.py
+```
+
+---
+
+## 8. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -178,7 +210,7 @@ Next:
 
 ---
 
-## 8. Правило обновления
+## 9. Правило обновления
 
 Каждый patch должен обновлять:
 
