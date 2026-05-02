@@ -43,7 +43,8 @@ SUPERSEDED = заменён новым патчем
 | P020 | Trade/chart consistency fix | APPLIED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Заполнить все trade-count aliases и считать уровень stale, если close_above случился до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
 | P021 | True trade-count chart propagation | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Прокидывать реальные number_of_trades/trades/trade_count из enriched PNO frames обратно в исходные frames, которые использует chart export. | `python -m compileall strategy/pno/pno_strategy.py` |
 | P022 | Stage5/results consistency fix | APPLIED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix/diagnostics | Переносить stale-level Stage5 passed events в rejected и писать runtime TF в results.csv. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
-| P023 | PNO none-trades guard | PROPOSED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть list-return contract для PNO generate_events_multi_tf и не валить runner, если стратегия вернула None. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
+| P023 | PNO none-trades guard | APPLIED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть list-return contract для PNO generate_events_multi_tf и не валить runner, если стратегия вернула None. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
+| P024 | Concise backtest logs | PROPOSED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging | Убрать лишнюю прозу из runtime backtest logs, оставить TF, progress 0..100% и итоговую сводку по сделкам. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 
 ---
 
@@ -919,7 +920,7 @@ Trading logic changed: no
 Files: strategy/pno/pno_strategy.py, vectorbt_runner/backtest_runner.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
 Follow-up to: P022
 Supersedes: none
-Commit: UNKNOWN
+Commit: 1877d2891b1f537a6326857e67cd74e5d761ad96
 ```
 
 Problem:
@@ -956,7 +957,59 @@ Risk:
 Если стратегия вернёт None из-за будущей ошибки, runner не упадёт сразу, а продолжит с warning; это осознанная защита вокруг контрактного пустого результата.
 ```
 
-## 26. Шаблон нового патча
+---
+
+## 26. P024 — Concise backtest logs
+
+```text
+Status: PROPOSED
+Type: logging
+Trading logic changed: no
+Files: vectorbt_runner/backtest_runner.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P023
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+Runtime logs стали слишком разговорными и шумными: тяжёлый прогон, главы, весь путь, причины отсутствия входов.
+В консоли нужен короткий progress по TF-паре и итоговая сводка.
+```
+
+Change:
+
+```text
+логировать запуск бэктеста и число отобранных символов
+для каждой TF-пары логировать progress 0/10/20/.../100%
+убрать symbol-by-symbol narrative, heavy-run warning, zero-entry explanation и общий финальный шум
+выводить итог TF-пары: Сделок нет или Сделок/Винрейт/PF/PnL/DD/SL/TP1_BE/TP2
+```
+
+Expected console:
+
+```text
+Запуск бэктеста
+Отобрано 509 символов.
+Таймфреймы: 5m-30s
+  0% Проверено: 0 из 509.  ETA: --ч --м --с
+ 10% Проверено: 51 из 509.  ETA: 00ч 23м 16с
+...
+100% Проверено: 509 из 509.  ETA: 00ч 00м 00с
+Анализ 5m-30s завершён
+Сделок: 17
+Винрейт: 0.8400
+```
+
+Verification:
+
+```text
+python -m compileall vectorbt_runner/backtest_runner.py
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected false --pno-entry-confirmation-mode close_above --days 14 --pno-category-mode discovery --collect-diagnostics true
+```
+
+## 27. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -978,7 +1031,7 @@ Next:
 
 ---
 
-## 27. Правило обновления
+## 28. Правило обновления
 
 Каждый patch должен обновлять:
 

@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 56f05338910241286c1cd36e8de6f9aa34f68475
-Local diff: P008 proposed typing/client-boundary hardening; P023 proposed PNO none-trades guard
-Last applied patch: P022 Stage5/results consistency fix
+Commit: 1877d2891b1f537a6326857e67cd74e5d761ad96
+Local diff: P008 proposed typing/client-boundary hardening; P024 proposed concise backtest logs
+Last applied patch: P023 PNO none-trades guard
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -97,7 +97,8 @@ winrate > 0.40
 | P020 | Trade/chart consistency fix | APPLIED | Синхронизировать trade-count aliases и отбрасывать уровни с close_above до финального сигнала. |
 | P021 | True trade-count chart propagation | APPLIED | Прокидывать реальные aggTrades trade-count columns из enriched frames в исходные frames для chart export. |
 | P022 | Stage5/results consistency fix | APPLIED | Синхронизировать Stage5 review с stale-level фильтром и писать runtime TF в results row. |
-| P023 | PNO none-trades guard | PROPOSED | Гарантировать list-return contract для PNO trades и защитить runner от None. |
+| P023 | PNO none-trades guard | APPLIED | Гарантировать list-return contract для PNO trades и защитить runner от None. |
+| P024 | Concise backtest logs | PROPOSED | Заменить повествовательные runtime-логи на короткий progress-bar стиль и итог по TF-паре. |
 
 Статусы:
 

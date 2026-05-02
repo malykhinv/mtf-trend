@@ -56,11 +56,54 @@ def _resolve_median_metric(values: list[int | float]) -> float | None:
 
 
 def _format_duration_human(seconds: float) -> str:
-    """Преобразует длительность в человекоудобный формат `Hh Mm Ss`."""
+    """Преобразует длительность в компактный формат `00ч 00м 00с`."""
     total_seconds = max(0, int(seconds))
     hours, remainder = divmod(total_seconds, 3600)
     minutes, secs = divmod(remainder, 60)
-    return f"{hours}ч {minutes}м {secs}с"
+    return f"{hours:02d}ч {minutes:02d}м {secs:02d}с"
+
+
+def _format_eta(seconds: float | None) -> str:
+    if seconds is None:
+        return "--ч --м --с"
+    return _format_duration_human(seconds)
+
+
+def _build_progress_checkpoints(total: int) -> list[tuple[int, int]]:
+    if total <= 0:
+        return [(100, 0)]
+    checkpoints: list[tuple[int, int]] = []
+    previous_checked = -1
+    for percent in range(10, 101, 10):
+        checked = int(round((total * percent) / 100))
+        checked = min(total, max(1, checked))
+        if checked == previous_checked and percent != 100:
+            continue
+        checkpoints.append((percent, checked))
+        previous_checked = checked
+    return checkpoints
+
+
+def _format_progress_line(*, percent: int, checked: int, total: int, eta_seconds: float | None) -> str:
+    return f"{percent:3d}% Проверено: {checked} из {total}.  ETA: {_format_eta(eta_seconds)}"
+
+
+def _format_result_summary(*, levels_timeframe: Timeframe, entry_timeframe: Timeframe, row: dict[str, int | float | str | None]) -> str:
+    header = f"Анализ {levels_timeframe.value}-{entry_timeframe.value} завершён"
+    trades_count = int(row.get("trades_count") or 0)
+    if trades_count <= 0:
+        return f"{header}\nСделок нет"
+    return (
+        f"{header}\n"
+        f"Сделок: {trades_count}\n"
+        f"Винрейт: {float(row.get('win_rate') or 0.0):.4f}\n"
+        f"Profit factor: {float(row.get('profit_factor') or 0.0):.4f}\n"
+        f"PnL: {float(row.get('pnl_percent') or 0.0):.4f}%\n"
+        f"Max DD: {float(row.get('max_drawdown_pct') or 0.0):.4f}%\n"
+        f"SL: {int(row.get('sl_count') or 0)}\n"
+        f"TP1_BE: {int(row.get('tp1_be_count') or 0)}\n"
+        f"TP2: {int(row.get('tp2_count') or 0)}"
+    )
 
 
 def _resolve_symbol_progress_interval(symbols_count: int) -> int:
@@ -486,30 +529,16 @@ class BacktestRunner:
         symbol_progress_interval = _resolve_symbol_progress_interval(symbols_count)
 
         multi_combo_run = total > 1
-        self._logger.info(
-            "План бэктеста: %s комбинаций и %s символов.",
-            total,
-            symbols_count,
-        )
-        if symbols_count >= 200:
-            self._logger.warning(
-                "В работу ушло %s символов. Это тяжёлый прогон; если ожидался короткий тест, проверь --top-n.",
-                symbols_count,
-            )
+        self._logger.warning("Запуск бэктеста")
+        self._logger.info("Отобрано %s символов.", symbols_count)
 
         for idx, prepared in enumerate(prepared_grid, start=1):
             all_trades: list[TradeResult] = []
             stage_metric_totals = {stage_id: 0 for stage_id in tracked_stage_ids}
             combo_started_at = perf_counter()
-            if multi_combo_run:
-                self._logger.info(
-                    "Бэктест начинает главу %s/%s: проверяю %s символов.",
-                    idx,
-                    total,
-                    symbols_count,
-                )
-            else:
-                self._logger.info("Бэктест начинает расчёт: проверяю %s символов.", symbols_count)
+            self._logger.warning("Таймфреймы: %s-%s", levels_timeframe.value, entry_timeframe.value)
+            self._logger.info("%s", _format_progress_line(percent=0, checked=0, total=symbols_count, eta_seconds=None))
+            progress_checkpoints = _build_progress_checkpoints(symbols_count)
             try:
                 portfolio_trades = strategy.generate_events_portfolio(
                     symbol_frames=symbol_frames,
@@ -530,30 +559,8 @@ class BacktestRunner:
             elif strategy.__class__.__name__ == "BeeBiteStrategy":
                 raise RuntimeError("BeeBiteStrategy должен использовать только portfolio pipeline.")
             else:
-                total_symbol_units = max(1, total * symbols_count)
                 for symbol_idx, (symbol, mtf_frames) in enumerate(symbol_frames.items(), start=1):
-                    should_log_symbol_start = symbol_idx == 1 or symbol_idx % symbol_progress_interval == 0
-                    if should_log_symbol_start:
-                        combo_elapsed_seconds = perf_counter() - combo_started_at
-                        if multi_combo_run:
-                            self._logger.info(
-                                "Глава %s/%s: дошёл до символа %s/%s. Прошло %s. Сейчас смотрю %s.",
-                                idx,
-                                total,
-                                symbol_idx,
-                                symbols_count,
-                                _format_duration_human(combo_elapsed_seconds),
-                                symbol,
-                            )
-                        else:
-                            self._logger.info(
-                                "Дошёл до символа %s/%s. Прошло %s. Сейчас смотрю %s.",
-                                symbol_idx,
-                                symbols_count,
-                                _format_duration_human(combo_elapsed_seconds),
-                                symbol,
-                            )
-
+                    _ = symbol_progress_interval
                     symbol_started_at = perf_counter()
                     cfg = self._inject_runtime_fields(
                         prepared.params,
@@ -588,34 +595,11 @@ class BacktestRunner:
                             total_combos=total,
                         )
                     if trades is None:
-                        self._logger.warning(
-                            "%s не вернул список сделок. Считаю, что сделок нет, и продолжаю прогон.",
-                            symbol,
-                        )
                         trades = []
                     all_trades.extend(trades)
                     symbol_elapsed_seconds = perf_counter() - symbol_started_at
                     if symbol_elapsed_seconds >= LONG_SYMBOL_LOG_SECONDS:
-                        if multi_combo_run:
-                            self._logger.info(
-                                "%s потребовал внимания: %s на расчёт. Глава %s/%s, символ %s/%s. Сделок найдено: %s.",
-                                symbol,
-                                _format_duration_human(symbol_elapsed_seconds),
-                                idx,
-                                total,
-                                symbol_idx,
-                                symbols_count,
-                                len(trades),
-                            )
-                        else:
-                            self._logger.info(
-                                "%s потребовал внимания: %s на расчёт. Символ %s/%s. Сделок найдено: %s.",
-                                symbol,
-                                _format_duration_human(symbol_elapsed_seconds),
-                                symbol_idx,
-                                symbols_count,
-                                len(trades),
-                            )
+                        self._logger.debug("%s обработан за %s. Сделок: %s.", symbol, _format_duration_human(symbol_elapsed_seconds), len(trades))
 
                     if (collect_diagnostics or collect_stage_metrics) and callable(diagnostics_method):
                         diagnostics_raw = diagnostics_method()
@@ -635,45 +619,24 @@ class BacktestRunner:
                                     for stage_id in tracked_stage_ids:
                                         stage_metric_totals[stage_id] += int(stage_hits_raw.get(stage_id, 0) or 0)
 
-                    if symbol_idx % symbol_progress_interval == 0 or symbol_idx == symbols_count:
+                    while progress_checkpoint_index < len(progress_checkpoints) and symbol_idx >= progress_checkpoints[progress_checkpoint_index][1]:
+                        progress_percent, checked_symbols = progress_checkpoints[progress_checkpoint_index]
                         combo_elapsed_seconds = perf_counter() - combo_started_at
-                        combo_progress = (symbol_idx / symbols_count) * 100 if symbols_count else BACKTEST_ZERO_COUNT
                         combo_eta_seconds = (
                             (combo_elapsed_seconds / symbol_idx) * (symbols_count - symbol_idx)
                             if symbol_idx and symbols_count
-                            else BACKTEST_ZERO_COUNT
+                            else None
                         )
-                        total_elapsed_seconds = perf_counter() - started_at
-                        completed_units = ((idx - 1) * symbols_count) + symbol_idx
-                        total_eta_seconds = (
-                            (total_elapsed_seconds / completed_units) * (total_symbol_units - completed_units)
-                            if completed_units
-                            else BACKTEST_ZERO_COUNT
+                        self._logger.info(
+                            "%s",
+                            _format_progress_line(
+                                percent=progress_percent,
+                                checked=checked_symbols,
+                                total=symbols_count,
+                                eta_seconds=combo_eta_seconds,
+                            ),
                         )
-                        if multi_combo_run:
-                            self._logger.info(
-                                "Глава %s/%s идёт: %s/%s символов, %.1f%%. В главе прошло %s, осталось около %s. Весь путь: прошло %s, осталось около %s. Последний символ: %s.",
-                                idx,
-                                total,
-                                symbol_idx,
-                                symbols_count,
-                                combo_progress,
-                                _format_duration_human(combo_elapsed_seconds),
-                                _format_duration_human(combo_eta_seconds),
-                                _format_duration_human(total_elapsed_seconds),
-                                _format_duration_human(total_eta_seconds),
-                                symbol,
-                            )
-                        else:
-                            self._logger.info(
-                                "Бэктест идёт: %s/%s символов, %.1f%%. Прошло %s, осталось около %s. Последний символ: %s.",
-                                symbol_idx,
-                                symbols_count,
-                                combo_progress,
-                                _format_duration_human(combo_elapsed_seconds),
-                                _format_duration_human(combo_eta_seconds),
-                                symbol,
-                            )
+                        progress_checkpoint_index += 1
 
             row_params = self._inject_runtime_fields(
                 prepared.params,
@@ -687,80 +650,13 @@ class BacktestRunner:
                     row[_stage_metric_column_name(stage_id)] = int(stage_metric_totals.get(stage_id, 0))
             rows.append(row)
             combo_elapsed_seconds = perf_counter() - combo_started_at
-            if multi_combo_run:
-                self._logger.info(
-                    "Глава %s/%s закрыта за %s. Сделок в ней: %s.",
-                    idx,
-                    total,
-                    _format_duration_human(combo_elapsed_seconds),
-                    len(all_trades),
-                )
-            else:
-                self._logger.info(
-                    "Расчёт закрыт за %s. Сделок найдено: %s.",
-                    _format_duration_human(combo_elapsed_seconds),
-                    len(all_trades),
-                )
-
-            if idx % PROGRESS_LOG_EVERY == 0 or idx == total:
-                elapsed_seconds = perf_counter() - started_at
-                progress = (idx / total) * 100 if total else BACKTEST_ZERO_COUNT
-                eta_seconds = (elapsed_seconds / idx) * (total - idx) if idx else BACKTEST_ZERO_COUNT
-                if multi_combo_run:
-                    self._logger.info(
-                        "Сетка продвинулась: %s/%s, %.1f%%. Символов в главе: %s. Прошло %s, впереди примерно %s.",
-                        idx,
-                        total,
-                        progress,
-                        symbols_count,
-                        _format_duration_human(elapsed_seconds),
-                        _format_duration_human(eta_seconds),
-                    )
+            self._logger.warning("%s", _format_result_summary(levels_timeframe=levels_timeframe, entry_timeframe=entry_timeframe, row=row))
 
         results = (
             pd.DataFrame(rows)
             .sort_values("profit_factor", ascending=BACKTEST_SORT_ASCENDING)
             .reset_index(drop=True)
         )
-
-        combinations_with_trades = int((results["trades_count"] > BACKTEST_ZERO_COUNT).sum()) if not results.empty else BACKTEST_ZERO_COUNT
-        combinations_without_trades = int((results["trades_count"] == BACKTEST_ZERO_COUNT).sum()) if not results.empty else BACKTEST_ZERO_COUNT
-        total_combinations = int(len(results)) if not results.empty else BACKTEST_ZERO_COUNT
-        total_trades = int(results["trades_count"].sum()) if not results.empty else BACKTEST_ZERO_COUNT
-        average_trades_per_combination = (
-            total_trades / total_combinations
-            if total_combinations
-            else float(BACKTEST_ZERO_COUNT)
-        )
-        median_trades_per_combination = (
-            float(results["trades_count"].median())
-            if not results.empty
-            else float(BACKTEST_ZERO_COUNT)
-        )
-        no_trades_share = (
-            combinations_without_trades / len(results)
-            if not results.empty
-            else BACKTEST_ZERO_COUNT
-        )
-        self._logger.info(
-            "Финал бэктеста: живых комбинаций %s, пустых %s. Всего сделок %s. Среднее %.4f, медиана %.4f. Доля тишины %.4f.",
-            combinations_with_trades,
-            combinations_without_trades,
-            total_trades,
-            average_trades_per_combination,
-            median_trades_per_combination,
-            no_trades_share,
-        )
-        if collect_diagnostics and rejection_diagnostics_total:
-            diagnostic_parts = [
-                f"{name}={value}"
-                for name, value in rejection_diagnostics_total.most_common()
-                if value > BACKTEST_ZERO_COUNT
-            ]
-            self._logger.info(
-                "Почему рынок не пустил во вход: %s",
-                ", ".join(diagnostic_parts),
-            )
 
         if collect_diagnostics:
             self._log_zero_entry_with_retests(dict(rejection_diagnostics_by_key))
