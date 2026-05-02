@@ -44,7 +44,7 @@ class ParquetStorage:
     @staticmethod
     def _ensure_columns(data: pd.DataFrame) -> pd.DataFrame:
         if "timestamp" not in data.columns:
-            raise ValueError("data must contain 'timestamp' column")
+            raise ValueError("В данных нет колонки timestamp.")
 
         prepared = data.copy()
         prepared = prepared.loc[prepared["timestamp"].notna()].copy()
@@ -65,14 +65,14 @@ class ParquetStorage:
 
         if len(written) < previous_count or len(written) != previous_count + added_rows:
             raise ParquetCacheValidationError(
-                "parquet cache validation failed: "
+                "Проверка parquet-кэша не прошла: "
                 f"symbol={symbol}, timeframe={timeframe.value}, path={path}, "
                 f"expected_rows={previous_count}+{added_rows}, actual_rows={len(written)}"
             )
 
         if "timestamp" not in written.columns:
             raise ParquetCacheValidationError(
-                "parquet cache validation failed: "
+                "Проверка parquet-кэша не прошла: "
                 f"symbol={symbol}, timeframe={timeframe.value}, path={path}, missing_column=timestamp"
             )
 
@@ -81,7 +81,7 @@ class ParquetStorage:
         missing = incoming_ts - written_ts
         if missing:
             raise ParquetCacheValidationError(
-                "parquet cache validation failed: "
+                "Проверка parquet-кэша не прошла: "
                 f"symbol={symbol}, timeframe={timeframe.value}, path={path}, "
                 f"missing_written_batch_rows={sorted(list(missing))[:10]}"
             )

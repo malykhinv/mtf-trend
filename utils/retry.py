@@ -61,7 +61,7 @@ def run_with_retry(
         try:
             result = call(*args, **kwargs)
             target_logger.debug(
-                "Источник ответил: «%s», попытка %s/%s, endpoint=%s, symbol=%s.",
+                "Источник ответил на «%s» с попытки %s/%s. Endpoint: %s. Символ: %s.",
                 operation,
                 attempt_number,
                 attempts,
@@ -72,7 +72,7 @@ def run_with_retry(
         except retriable_exceptions as exc:
             if should_retry is not None and not should_retry(exc):
                 target_logger.warning(
-                    "Запрос «%s» остановлен без повтора. Попытка %s/%s, endpoint=%s, symbol=%s. Причина: %s",
+                    "Запрос «%s» остановлен без повтора. Попытка %s/%s. Endpoint: %s. Символ: %s. Причина: %s",
                     operation,
                     attempt_number,
                     attempts,
@@ -83,7 +83,7 @@ def run_with_retry(
                 raise
             is_last = attempt_number >= attempts
             target_logger.warning(
-                "Источник не ответил на «%s». Попытка %s/%s, endpoint=%s, symbol=%s. Причина: %s",
+                "Источник не ответил на «%s». Попытка %s/%s. Endpoint: %s. Символ: %s. Причина: %s",
                 operation,
                 attempt_number,
                 attempts,

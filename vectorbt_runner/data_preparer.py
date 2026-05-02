@@ -75,7 +75,7 @@ class DataPreparer:
     @staticmethod
     def _resolve_window_start_ms(*, days: int, end_timestamp_ms: int) -> int:
         if days <= 0:
-            raise ValueError("days must be > 0")
+            raise ValueError("Окно должно быть положительным: days > 0.")
         return int(end_timestamp_ms) - int(days) * 86_400_000
 
     @staticmethod

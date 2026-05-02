@@ -17,4 +17,4 @@ def build_strategy(config: AppConfig, _logger: object = None) -> BaseStrategy[ob
             category_mode_filter=config.strategy.pno_category_mode,
             cache_dir=config.backtest.cache_dir,
         )
-    raise ValueError(f"Unsupported strategy_id: {config.strategy.strategy_id}")
+    raise ValueError(f"Стратегия «{config.strategy.strategy_id}» не поддерживается.")

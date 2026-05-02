@@ -105,7 +105,7 @@ class DataValidator:
                 price_series = numeric_columns[col]
                 bad_mask = price_series.lt(0) & price_series.notna()
                 for pos in normalized.index[bad_mask]:
-                    add_issue(int(pos), "negative_price", DataQualitySeverity.CRITICAL, f"Negative {col} value")
+                    add_issue(int(pos), "negative_price", DataQualitySeverity.CRITICAL, f"Цена в колонке {col} ушла ниже нуля.")
 
         issue_type_by_column = {
             "volume": "negative_volume",
@@ -117,7 +117,7 @@ class DataValidator:
                 numeric_series = numeric_columns[col]
                 bad_mask = numeric_series.lt(0) & numeric_series.notna()
                 for pos in normalized.index[bad_mask]:
-                    add_issue(int(pos), issue_type, DataQualitySeverity.ERROR, f"Negative {col} value")
+                    add_issue(int(pos), issue_type, DataQualitySeverity.ERROR, f"Значение в колонке {col} ушло ниже нуля.")
 
         if {"high", "low", "close"}.issubset(numeric_columns):
             spread: pd.Series = (numeric_columns["high"] - numeric_columns["low"]).abs()
@@ -130,14 +130,14 @@ class DataValidator:
                     int(pos),
                     "suspicious_spread",
                     DataQualitySeverity.WARNING,
-                    f"Spread exceeds {threshold_pct}% of close",
+                    f"Размах свечи больше {threshold_pct}% от close.",
                 )
 
         if "volume" in numeric_columns:
             volume_series = numeric_columns["volume"]
             zero_volume_mask = volume_series.eq(0) & volume_series.notna()
             for pos in normalized.index[zero_volume_mask]:
-                add_issue(int(pos), "zero_volume", DataQualitySeverity.INFO, "Zero candle volume")
+                add_issue(int(pos), "zero_volume", DataQualitySeverity.INFO, "Свеча пришла с нулевым объёмом.")
 
         for col, series in numeric_columns.items():
             if series.notna().sum() == 0:

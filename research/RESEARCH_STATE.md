@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 9c2e31cb540eb044f9d9f0a671b744fcfb3426f7
-Local diff: P008 proposed typing/client-boundary hardening; P013 proposed narrative runtime logs
-Last applied patch: P012 Fix P011 logging follow-up
+Commit: ba8cd69e5cdc6ccdb36f7018c0c5d32540bf8669
+Local diff: P008 proposed typing/client-boundary hardening; P014 proposed polish console logs
+Last applied patch: P013 Narrative runtime logs
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -87,7 +87,8 @@ winrate > 0.40
 | P010 | Rewrite README for PNO research workflow | APPLIED | Привести README к фактическому PNO workflow: data, 3 TF-set, diagnostics, research memory, data quality. |
 | P011 | Humanize runtime logs in Russian | APPLIED | Привести runtime-логи к короткому русскому языку без перегруза служебными деталями. |
 | P012 | Fix P011 logging follow-up | APPLIED | Исправить mismatch аргументов logger.info и синхронизировать research bookkeeping. |
-| P013 | Narrative runtime logs | PROPOSED | Превратить консольные логи из перевода в связную историю прогона: этапы, прогресс, причины и итог. |
+| P013 | Narrative runtime logs | APPLIED | Превратить консольные логи из перевода в связную историю прогона: этапы, прогресс, причины и итог. |
+| P014 | Polish console logs | PROPOSED | Добить оставшийся английский и сухие key=value строки; добавить переносы строк в многочастные сообщения. |
 
 Статусы:
 

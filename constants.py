@@ -129,9 +129,9 @@ LOGGER_FILE_ENCODING = "utf-8"
 
 # Log message templates
 LOG_MSG_TASK_COMPLETED = "Этап «%s» завершён."
-LOG_MSG_SKIP_UP_TO_DATE = "%s: %s уже в порядке, пропускаю."
+LOG_MSG_SKIP_UP_TO_DATE = "%s: %s уже свежий. Пропускаю."
 LOG_MSG_LOAD_ERROR = "Не смог прочитать %s. Причина: %s"
-LOG_MSG_RETRY_EXHAUSTED = "Источник молчит после всех попыток: endpoint=%s symbol=%s attempts=%s"
+LOG_MSG_RETRY_EXHAUSTED = "Источник не ответил. Запрос: %s. Символ: %s. Попыток: %s."
 
 # Data preparer constants
 DATA_PREPARER_EMPTY_BOOL_DTYPE = "bool"

@@ -33,7 +33,8 @@ SUPERSEDED = заменён новым патчем
 | P010 | Rewrite README for PNO research workflow | APPLIED | `README.md`, `research/*` | docs | Заменить устаревший README на фактический PNO research workflow: data, 3 TF-set, diagnostics, research memory, data quality. | `python -m compileall domain/enums data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 | P011 | Humanize runtime logs in Russian | APPLIED | `constants.py`, `launcher.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | logging/docs | Перевести runtime-логи на лаконичный русский: процесс, прогресс, ошибки и итоговая аналитика без служебного шума. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
 | P012 | Fix P011 logging follow-up | APPLIED | `vectorbt_runner/backtest_runner.py`, `launcher.py`, `research/*` | bugfix/bookkeeping | Исправить лишние аргументы logger.info после P011 и синхронизировать статусы P010/P011. | `python -m compileall vectorbt_runner launcher.py` |
-| P013 | Narrative runtime logs | PROPOSED | `constants.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | logging/docs | Превратить runtime-логи в связный консольный рассказ: меньше шума, больше этапов, прогресса, причин и финального смысла. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
+| P013 | Narrative runtime logs | APPLIED | `constants.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | logging/docs | Превратить runtime-логи в связный консольный рассказ: меньше шума, больше этапов, прогресса, причин и финального смысла. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
+| P014 | Polish console logs | PROPOSED | `constants.py`, `utils/retry.py`, `cli/*`, `data/*`, `strategy/factory.py`, `vectorbt_runner/*`, `research/*` | logging/docs | Перевести оставшийся английский в консоли, убрать сухие key=value строки, добавить переносы строк в длинные сообщения. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
 
 ---
 
@@ -477,7 +478,7 @@ Trading logic changed: no
 Files: constants.py, utils/retry.py, data/fetchers/*, data/exchanges/ccxt_futures_client.py, vectorbt_runner/backtest_runner.py, cli/commands.py, research/*
 Follow-up to: P011/P012
 Supersedes: none
-Commit: UNKNOWN
+Commit: ba8cd69e5cdc6ccdb36f7018c0c5d32540bf8669
 ```
 
 Problem:
@@ -517,7 +518,51 @@ Risk:
 логика стратегии не меняется; риск в том, что слишком художественные логи могут скрыть техническую точность, поэтому числовые поля сохранены
 ```
 
-## 16. Шаблон нового патча
+---
+
+## 16. P014 — Polish console logs
+
+```text
+Status: PROPOSED
+Type: logging / docs
+Trading logic changed: no
+Files: constants.py, utils/retry.py, cli/*, data/*, strategy/factory.py, vectorbt_runner/*, research/*
+Follow-up to: P013
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+После P013 в консоли ещё оставались английские help/error строки и сухие сообщения вида key=value.
+Пример: output_root=..., strategy_output=..., pre-rank symbols_total=...
+Такие строки полезны машине, но плохо читаются человеком во время длинного прогона.
+```
+
+Change:
+
+```text
+переписать run-backtest стартовые сообщения как короткие предложения
+разбить длинные многочастные сообщения на несколько строк
+перевести user-facing validation/error descriptions
+сохранить технические ключи только там, где они являются частью CSV/diagnostics contracts
+```
+
+Verification:
+
+```text
+python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --days 3 --top-n 20 --light-run true
+```
+
+Risk:
+
+```text
+логика стратегии не меняется; риск только в тексте консольных сообщений
+```
+
+## 17. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -539,7 +584,7 @@ Next:
 
 ---
 
-## 17. Правило обновления
+## 18. Правило обновления
 
 Каждый patch должен обновлять:
 

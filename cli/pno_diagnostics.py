@@ -100,15 +100,15 @@ def _to_compact_json(payload: object) -> str:
 
 def _format_eta_compact(seconds: float | None) -> str:
     if seconds is None or not np.isfinite(seconds) or seconds < 0.0:
-        return "n/a"
+        return "н/д"
     total_seconds = int(round(seconds))
     minutes, secs = divmod(total_seconds, 60)
     hours, minutes = divmod(minutes, 60)
     if hours > 0:
-        return f"{hours}h {minutes:02d}m"
+        return f"{hours}ч {minutes:02d}м"
     if minutes > 0:
-        return f"{minutes}m {secs:02d}s"
-    return f"{secs}s"
+        return f"{minutes}м {secs:02d}с"
+    return f"{secs}с"
 
 
 def _resolve_metric_distance(

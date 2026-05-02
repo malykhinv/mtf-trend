@@ -410,7 +410,7 @@ def _load_saved_backtest_request(run_dir: Path) -> tuple[Path, dict[str, object]
     run_root_dir = _resolve_saved_backtest_root_dir(run_dir)
     context_path = run_root_dir / _BACKTEST_RUN_CONTEXT_FILE_NAME
     if not context_path.exists():
-        raise FileNotFoundError(f"run context not found: {context_path}")
+        raise FileNotFoundError(f"Не нашёл контекст сохранённого прогона: {context_path}")
     context = json.loads(context_path.read_text(encoding="utf-8"))
     request_path = run_root_dir / _BACKTEST_PLOT_REQUEST_FILE_NAME
     request: dict[str, object] = {}
@@ -692,7 +692,11 @@ def _export_pno_category_artifacts(
             "trades_generated": len(category_trade_rows_all),
         }
         (category_root / "category_context.json").write_text(_to_compact_json(context_payload), encoding="utf-8")
-    logger.info("%s: разложил PNO-артефакты по категориям: %s.", log_prefix, ", ".join(sorted(category_meta)))
+    logger.info(
+        "%s: PNO-артефакты разложены по категориям.\n  Категории: %s.",
+        log_prefix,
+        ", ".join(sorted(category_meta)),
+    )
 
 
 def _export_pno_category_csv_split(
@@ -720,7 +724,10 @@ def _export_pno_category_csv_split(
         category_path = categories_root / f"{category_id}_results.csv"
         category_df.to_csv(category_path, index=False)
 
-    logger.info("Категории получили свои CSV: %s.", categories_root)
+    logger.info(
+        "Категории получили отдельные CSV.\n  Папка: %s.",
+        categories_root,
+    )
 
 
 def _plot_pno_grid_artifacts(
