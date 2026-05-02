@@ -510,6 +510,21 @@ class BacktestRunner:
                 )
             else:
                 self._logger.info("Бэктест начинает расчёт: проверяю %s символов.", symbols_count)
+            try:
+                portfolio_trades = strategy.generate_events_portfolio(
+                    symbol_frames=symbol_frames,
+                    params=prepared.params,
+                )
+            except MemoryError as exc:
+                self._raise_memory_error(
+                    exc=exc,
+                    symbol=None,
+                    symbol_idx=None,
+                    symbols_count=symbols_count,
+                    combo_idx=idx,
+                    total_combos=total,
+                )
+
             if portfolio_trades is not None:
                 all_trades.extend(portfolio_trades)
             elif strategy.__class__.__name__ == "BeeBiteStrategy":
@@ -579,6 +594,21 @@ class BacktestRunner:
                             self._logger.info(
                                 "%s потребовал внимания: %s на расчёт. Глава %s/%s, символ %s/%s. Сделок найдено: %s.",
                                 symbol,
+                                _format_duration_human(symbol_elapsed_seconds),
+                                idx,
+                                total,
+                                symbol_idx,
+                                symbols_count,
+                                len(trades),
+                            )
+                        else:
+                            self._logger.info(
+                                "%s потребовал внимания: %s на расчёт. Символ %s/%s. Сделок найдено: %s.",
+                                symbol,
+                                _format_duration_human(symbol_elapsed_seconds),
+                                symbol_idx,
+                                symbols_count,
+                                len(trades),
                             )
 
                     if (collect_diagnostics or collect_stage_metrics) and callable(diagnostics_method):

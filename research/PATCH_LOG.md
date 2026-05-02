@@ -35,7 +35,9 @@ SUPERSEDED = заменён новым патчем
 | P012 | Fix P011 logging follow-up | APPLIED | `vectorbt_runner/backtest_runner.py`, `launcher.py`, `research/*` | bugfix/bookkeeping | Исправить лишние аргументы logger.info после P011 и синхронизировать статусы P010/P011. | `python -m compileall vectorbt_runner launcher.py` |
 | P013 | Narrative runtime logs | APPLIED | `constants.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | logging/docs | Превратить runtime-логи в связный консольный рассказ: меньше шума, больше этапов, прогресса, причин и финального смысла. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
 | P014 | Polish console logs | APPLIED | `constants.py`, `utils/retry.py`, `cli/*`, `data/*`, `strategy/factory.py`, `vectorbt_runner/*`, `research/*` | logging/docs | Перевести оставшийся английский в консоли, убрать сухие key=value строки, добавить переносы строк в длинные сообщения. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
-| P015 | Backtest progress and memory logs | PROPOSED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging/bugfix | Убрать дублирующий progress narrative при одной комбинации, добавить предупреждение о тяжёлом symbol set и понятный memory-error. | `python -m compileall vectorbt_runner research/PATCH_LOG.md research/RESEARCH_STATE.md` |
+| P015 | Backtest progress and memory logs | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging/bugfix | Убрать дублирующий progress narrative при одной комбинации, добавить предупреждение о тяжёлом symbol set и понятный memory-error. | `python -m compileall vectorbt_runner research/PATCH_LOG.md research/RESEARCH_STATE.md` |
+| P016 | Fix unclosed logger call | APPLIED | `vectorbt_runner/backtest_runner.py` | bugfix | Закрыть незавершённый logger.info после P015. | `python -m compileall vectorbt_runner/backtest_runner.py` |
+| P017 | Fix P015 runner regression | PROPOSED | `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть потерянный вызов generate_events_portfolio и восстановить аргументы long-symbol logger. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 
 ---
 
@@ -574,7 +576,7 @@ Trading logic changed: no
 Files: vectorbt_runner/backtest_runner.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
 Follow-up to: P014
 Supersedes: none
-Commit: UNKNOWN
+Commit: 013a68eb51e3e0c49f2c56da4bd32a422e44fc82
 ```
 
 Problem:
@@ -618,7 +620,75 @@ Risk:
 логика стратегии и расчёта сделок не меняется; меняются только progress/error logs и re-raise MemoryError с русским сообщением
 ```
 
-## 18. Шаблон нового патча
+---
+
+## 18. P016 — Fix unclosed logger call
+
+```text
+Status: APPLIED
+Type: bugfix
+Trading logic changed: no
+Files: vectorbt_runner/backtest_runner.py
+Follow-up to: P015
+Supersedes: none
+Commit: 013a68eb51e3e0c49f2c56da4bd32a422e44fc82
+```
+
+Problem:
+
+```text
+P015 оставил незакрытый logger.info и ломал import backtest_runner.py с SyntaxError.
+```
+
+Change:
+
+```text
+закрыть вызов logger.info
+```
+
+Risk:
+
+```text
+P016 устранил syntax error, но не восстановил потерянный portfolio_trades assignment и аргументы logger.info.
+```
+
+---
+
+## 19. P017 — Fix P015 runner regression
+
+```text
+Status: PROPOSED
+Type: bugfix
+Trading logic changed: no
+Files: vectorbt_runner/backtest_runner.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P015/P016
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+После P015/P016 BacktestRunner.run обращался к portfolio_trades до присваивания.
+Long-symbol logger в multi-combo ветке также передавал один аргумент на семь placeholder.
+```
+
+Change:
+
+```text
+вернуть вызов strategy.generate_events_portfolio под MemoryError guard
+восстановить все аргументы long-symbol logger
+добавить single-combo long-symbol сообщение
+```
+
+Verification:
+
+```text
+python -m compileall vectorbt_runner/backtest_runner.py
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --days 3 --top-n 20 --light-run true
+```
+
+## 20. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -640,7 +710,7 @@ Next:
 
 ---
 
-## 19. Правило обновления
+## 21. Правило обновления
 
 Каждый patch должен обновлять:
 
