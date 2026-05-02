@@ -48,7 +48,8 @@ SUPERSEDED = заменён новым патчем
 | P025 | Fix concise progress checkpoint init | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Инициализировать progress checkpoint cursor перед per-symbol progress loop. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 | P026 | Strict backtest runtime log shape | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging | Привести runtime-логи бэктеста к строгому формату: заголовок, TF, progress, итог без лишней диагностики. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 | P027 | Quiet runtime logger sweep | APPLIED | `utils/logger.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `research/*` | logging | Пройтись по logger.* и оставить в консоли только человековажные заголовки, progress, итог, предупреждения и ошибки. | `python -m compileall utils data vectorbt_runner research/PATCH_LOG.md research/RESEARCH_STATE.md` |
-| P028 | Normalize diagnostics and chart logs | PROPOSED | `utils/logger.py`, `research/*` | logging | Убрать summary/grid/runner-final шум и нормализовать PNO diagnostics/charts export logs в короткий человекочитаемый статус. | `python -m compileall utils/logger.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
+| P028 | Normalize diagnostics and chart logs | APPLIED | `utils/logger.py`, `research/*` | logging | Убрать summary/grid/runner-final шум и нормализовать PNO diagnostics/charts export logs в короткий человекочитаемый статус. | `python -m compileall utils/logger.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
+| P029 | Whitelist runtime log format | PROPOSED | `utils/logger.py`, `research/*` | logging | Перевести runtime logging на whitelist: заголовок, отбор, TF, progress, итог, diagnostics/charts, errors. Остальной INFO/WARNING шум скрывать. | `python -m compileall utils/logger.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 
 ---
 

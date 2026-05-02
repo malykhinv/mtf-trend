@@ -40,19 +40,56 @@ class _ColorFormatter(logging.Formatter):
 
 
 class _RuntimeNoiseFilter(logging.Filter):
-    """Отсекает старый служебный шум из runtime-консоли и log-файлов."""
+    """Нормализует runtime-логи до человекочитаемого backtest-формата."""
 
     _REWRITE_SUBSTRINGS: Final[tuple[tuple[str, int, str], ...]] = (
         ("pno diagnostics export start", logging.WARNING, "Диагностика PNO: экспорт артефактов"),
         ("pno diagnostics export done", logging.WARNING, "Диагностика PNO завершена"),
         ("pno diagnostics export finished", logging.WARNING, "Диагностика PNO завершена"),
         ("pno diagnostics export complete", logging.WARNING, "Диагностика PNO завершена"),
+        ("pno diagnostics export end", logging.WARNING, "Диагностика PNO завершена"),
+        ("pno diagnostics export", logging.WARNING, "Диагностика PNO"),
         ("trade charts render start", logging.WARNING, "Графики: генерация"),
         ("trade charts export start", logging.WARNING, "Графики: генерация"),
         ("pno trade charts render start", logging.WARNING, "Графики: генерация"),
+        ("pno trade charts export start", logging.WARNING, "Графики: генерация"),
+        ("render trade charts start", logging.WARNING, "Графики: генерация"),
+        ("export trade charts start", logging.WARNING, "Графики: генерация"),
+        ("генерация графиков", logging.WARNING, "Графики: генерация"),
+        ("экспорт графиков", logging.WARNING, "Графики: генерация"),
         ("trade charts render done", logging.WARNING, "Графики готовы"),
         ("trade charts export done", logging.WARNING, "Графики готовы"),
         ("pno trade charts render done", logging.WARNING, "Графики готовы"),
+        ("pno trade charts export done", logging.WARNING, "Графики готовы"),
+        ("render trade charts done", logging.WARNING, "Графики готовы"),
+        ("export trade charts done", logging.WARNING, "Графики готовы"),
+        ("графики готовы", logging.WARNING, "Графики готовы"),
+    )
+
+    _ALLOWED_PREFIXES: Final[tuple[str, ...]] = (
+        "запуск бектеста",
+        "запуск бэктеста",
+        "отобрано ",
+        "таймфреймы:",
+        "анализ ",
+        "сделок нет",
+        "сделок:",
+        "винрейт:",
+        "profit factor:",
+        "pnl:",
+        "max dd:",
+        "sl:",
+        "tp1_be:",
+        "tp2:",
+        "диагностика pno",
+        "графики",
+        "прогон остановлен",
+    )
+
+    _ALLOWED_SUBSTRINGS: Final[tuple[str, ...]] = (
+        "проверено:",
+        "eta:",
+        "не хватило памяти",
     )
 
     _SUPPRESSED_SUBSTRINGS: Final[tuple[str, ...]] = (
@@ -80,20 +117,46 @@ class _RuntimeNoiseFilter(logging.Filter):
         "runner final close:",
         "Категории получили отдельные CSV",
         "PNO-артефакты разложены по категориям",
+        "plot=false",
+        "plot=true",
+        "symbols=",
+        "stages=",
+        "комбинаций=",
+        "прибыльных=",
+        "со сделками=",
+        "средний трейд",
+        "лучшая комбинация",
+        "исходы:",
     )
 
     @staticmethod
     def _extract_int_after(message: str, prefix: str) -> int | None:
-        start = message.find(prefix)
+        lowered = message.lower()
+        prefix_lowered = prefix.lower()
+        start = lowered.find(prefix_lowered)
         if start < 0:
             return None
-        value_start = start + len(prefix)
+        value_start = start + len(prefix_lowered)
         value_end = value_start
         while value_end < len(message) and message[value_end].isdigit():
             value_end += 1
         if value_end == value_start:
             return None
         return int(message[value_start:value_end])
+
+    @classmethod
+    def _normalize_message_for_matching(cls, message: str) -> str:
+        normalized = message.strip()
+        if normalized.lower().startswith("run-backtest: "):
+            normalized = normalized.split(": ", 1)[1].strip()
+        return normalized
+
+    @classmethod
+    def _is_allowed_runtime_message(cls, message: str) -> bool:
+        normalized = cls._normalize_message_for_matching(message).lower()
+        if normalized.startswith(cls._ALLOWED_PREFIXES):
+            return True
+        return any(fragment in normalized for fragment in cls._ALLOWED_SUBSTRINGS)
 
     @classmethod
     def _format_rewritten_message(cls, message: str, base_message: str) -> str:
@@ -110,8 +173,9 @@ class _RuntimeNoiseFilter(logging.Filter):
 
     @classmethod
     def _rewrite_record(cls, record: logging.LogRecord, message: str) -> bool:
+        lowered = message.lower()
         for fragment, levelno, base_message in cls._REWRITE_SUBSTRINGS:
-            if fragment in message:
+            if fragment in lowered:
                 record.msg = cls._format_rewritten_message(message, base_message)
                 record.args = ()
                 record.levelno = levelno
@@ -121,9 +185,21 @@ class _RuntimeNoiseFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
+
+        if record.levelno >= logging.ERROR:
+            return True
+
         if self._rewrite_record(record, message):
             return True
-        return not any(fragment in message for fragment in self._SUPPRESSED_SUBSTRINGS)
+
+        lowered = message.lower()
+        if any(fragment.lower() in lowered for fragment in self._SUPPRESSED_SUBSTRINGS):
+            return False
+
+        if record.levelno in {logging.INFO, logging.WARNING}:
+            return self._is_allowed_runtime_message(message)
+
+        return True
 
 
 def _ensure_runtime_noise_filter(handler: logging.Handler) -> None:
