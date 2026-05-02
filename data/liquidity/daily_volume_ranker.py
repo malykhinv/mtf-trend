@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from logging import Logger
 from numbers import Integral
 from pathlib import Path
 
@@ -31,7 +30,6 @@ class DailyVolumeRanker:
             self,
             symbols: list[str],
             timeframe: Timeframe,
-            logger: Logger,
     ) -> dict[str, float]:
         """Возвращает средний дневной USD-объём по каждому символу."""
         result: dict[str, float] = {}

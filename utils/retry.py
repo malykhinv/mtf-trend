@@ -51,10 +51,10 @@ def run_with_retry(
     endpoint_value = endpoint or "н/д"
     symbol_value = symbol or "н/д"
 
-    def _compute_sleep_seconds(exc: Exception, attempt_number: int) -> float:
-        message = str(exc).lower()
+    def _compute_sleep_seconds(retry_error: Exception, current_attempt: int) -> float:
+        message = str(retry_error).lower()
         if "too many requests" in message or "429" in message or "-1003" in message:
-            return max(backoff_seconds * attempt_number, 20.0)
+            return max(backoff_seconds * current_attempt, 20.0)
         return backoff_seconds
 
     for attempt_number in range(1, attempts + 1):

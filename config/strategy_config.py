@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from constants import DEFAULT_BEE_BITE_DEPOSIT, DEFAULT_BEE_BITE_RISK_PCT
+from constants import DEFAULT_BEE_BITE_DEPOSIT
 from domain.enums.timeframe import Timeframe
 from strategy.pno.config import PNO_DEFAULT_ENTRY_TIMEFRAME, PNO_DEFAULT_LEVELS_TIMEFRAME
 

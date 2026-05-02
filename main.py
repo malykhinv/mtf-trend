@@ -26,8 +26,13 @@ def _force_single_thread_mode() -> None:
 def _configure_console_encoding() -> None:
     if os.name == "nt":
         try:
-            windll.kernel32.SetConsoleCP(65001)
-            windll.kernel32.SetConsoleOutputCP(65001)
+            kernel32 = getattr(windll, "kernel32", None)
+            set_console_cp = getattr(kernel32, "SetConsoleCP", None)
+            set_console_output_cp = getattr(kernel32, "SetConsoleOutputCP", None)
+            if callable(set_console_cp):
+                set_console_cp(65001)
+            if callable(set_console_output_cp):
+                set_console_output_cp(65001)
         except OSError:
             pass
     for stream_name in ("stdout", "stderr"):

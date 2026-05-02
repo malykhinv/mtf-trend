@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections import Counter, defaultdict
+from collections import Counter
 from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
 from statistics import median
@@ -436,7 +436,6 @@ class BacktestRunner:
 
         total = len(prepared_grid)
         symbols_count = len(symbol_frames)
-        started_at = perf_counter()
         collect_diagnostics = self._logger.isEnabledFor(logging.DEBUG) if collect_diagnostics is None else bool(collect_diagnostics)
         collect_stage_metrics = bool(stage_metric_ids)
         tracked_stage_ids = tuple(stage_metric_ids or ())
@@ -454,6 +453,7 @@ class BacktestRunner:
             self._logger.info("%s", _format_progress_line(percent=0, checked=0, total=symbols_count, eta_seconds=None))
             progress_checkpoints = _build_progress_checkpoints(symbols_count)
             progress_checkpoint_index = 0
+            portfolio_trades: list[TradeResult] | None = None
             try:
                 portfolio_trades = strategy.generate_events_portfolio(
                     symbol_frames=symbol_frames,
@@ -497,6 +497,7 @@ class BacktestRunner:
                         mtf_frames=mtf_frames,
                         params=cfg,
                     )
+                    trades: list[TradeResult] | None = None
                     try:
                         trades = strategy.generate_events_multi_tf(
                             mtf_frames=mtf_frames,
@@ -521,8 +522,6 @@ class BacktestRunner:
                     if trades is None:
                         trades = []
                     all_trades.extend(trades)
-                    symbol_elapsed_seconds = perf_counter() - symbol_started_at
-
                     if (collect_diagnostics or collect_stage_metrics) and callable(diagnostics_method):
                         diagnostics_raw = diagnostics_method()
                         if isinstance(diagnostics_raw, dict):
@@ -562,7 +561,6 @@ class BacktestRunner:
                 for stage_id in tracked_stage_ids:
                     row[_stage_metric_column_name(stage_id)] = int(stage_metric_totals.get(stage_id, 0))
             rows.append(row)
-            combo_elapsed_seconds = perf_counter() - combo_started_at
             self._logger.warning("%s", _format_result_summary(levels_timeframe=levels_timeframe, entry_timeframe=entry_timeframe, row=row))
 
         results = (

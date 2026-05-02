@@ -53,6 +53,7 @@ SUPERSEDED = заменён новым патчем
 | P030 | Replace runtime log filters with source logs | APPLIED | `utils/logger.py`, `cli/commands.py`, `research/*` | logging/refactor | Удалить глобальный RuntimeNoiseFilter/whitelist и исправить шумные runtime logs в конкретных источниках. | `python -m compileall utils/logger.py cli/commands.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P031 | Finish source-level runtime logs | APPLIED | `cli/commands.py`, `research/*` | logging/refactor | Добить оставшиеся runtime источники: wrapper start/path в debug, diagnostics/charts в нормальный человекочитаемый статус. | `python -m compileall cli/commands.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P032 | Normalize source-level artifact logs | PROPOSED | `cli/commands.py`, `cli/pno_diagnostics.py`, `research/*` | logging/refactor | Завершить нормализацию без костылей: public runtime status только из call-sites, detailed artifact logs в debug. | `python -m compileall cli/commands.py cli/pno_diagnostics.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
+| P033 | PyCharm inspection cleanup | PROPOSED | `cli/commands.py`, `vectorbt_runner/*`, `data/*`, `strategy/*`, `simulation/*`, `launcher.py`, `main.py`, `research/*` | cleanup/typing | Исправить актуальные PyCharm inspection warnings без изменения PNO trade logic. | `python -m compileall data/exchanges data/liquidity simulation strategy/pno strategy/base_strategy.py vectorbt_runner cli constants.py main.py launcher.py` |
 
 ---
 
@@ -1048,4 +1049,46 @@ PATCH_LOG.md
 RESEARCH_STATE.md, если меняется статус/вывод
 STRATEGY_SPEC.md, если меняется логика стратегии
 EXPERIMENT_LOG.md, если связан с run/experiment
+```
+---
+
+## P033 — PyCharm inspection cleanup
+
+```text
+Status: PROPOSED
+Type: cleanup / typing
+Trading logic changed: no
+Files: cli/commands.py, vectorbt_runner/*, data/*, strategy/*, simulation/*, launcher.py, main.py, research/*
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+PyCharm inspections reported stale cleanup issues in the uploaded local code snapshot: unresolved BacktestSummary, unused locals/imports, unbound-local warnings, broad exception, invalid cast, name shadowing and pandas category typing. Previous generated patches were based on mismatched cli/commands.py context and did not apply cleanly.
+```
+
+Change:
+
+```text
+rebuild cleanup patch against uploaded code.zip
+remove unused CLI locals/imports and unused helper parameters
+cast diagnostics_payloads explicitly before iteration
+fix BacktestRunner unbound-local warnings with explicit initialization
+replace broad Parquet metadata exception with concrete exception types
+fix pandas Categorical categories typing with pd.Index
+fix Windows console ctypes access through getattr
+remove dead category4 profile construction that was not returned
+```
+
+Verification:
+
+```text
+python -m compileall data/exchanges data/liquidity simulation strategy/pno strategy/base_strategy.py vectorbt_runner cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+No intended trading-logic change. Category4 construction was dead code because resolve_pno_category_profiles did not return it.
 ```

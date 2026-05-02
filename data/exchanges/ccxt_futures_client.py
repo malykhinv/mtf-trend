@@ -247,11 +247,11 @@ class CcxtFuturesClient(ExchangeClient):
         if not isinstance(batch, list):
             return []
 
-        return [
-            cast(CcxtAggTradePayload, row)
-            for row in batch
-            if isinstance(row, dict)
-        ]
+        payloads: list[CcxtAggTradePayload] = []
+        for row in batch:
+            if isinstance(row, dict):
+                payloads.append(cast(CcxtAggTradePayload, cast(dict[str, object], row)))
+        return payloads
 
     def get_futures_symbols(self) -> list[str]:
         """Возвращает список доступных фьючерсных символов."""
@@ -569,7 +569,7 @@ class CcxtFuturesClient(ExchangeClient):
                         should_retry=(
                             None
                             if self.exchange != Exchange.BINANCE
-                            else lambda exc: not self._is_non_retriable_binance_oi_error(exc)
+                            else lambda retry_exc: not self._is_non_retriable_binance_oi_error(retry_exc)
                         ),
                     )
                 except TypeError:
@@ -585,7 +585,7 @@ class CcxtFuturesClient(ExchangeClient):
                         should_retry=(
                             None
                             if self.exchange != Exchange.BINANCE
-                            else lambda exc: not self._is_non_retriable_binance_oi_error(exc)
+                            else lambda retry_exc: not self._is_non_retriable_binance_oi_error(retry_exc)
                         ),
                     )
             except Exception as exc:

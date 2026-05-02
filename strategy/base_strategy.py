@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import pandas as pd
 
 from domain.models.trade_result import TradeResult
-from typing import Generic, TypeVar, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from vectorbt_runner.mtf_frames import SymbolMtfFrames
@@ -39,13 +38,14 @@ class BaseStrategy(ABC, Generic[StrategyParamsT]):
         """Метод."""
 
 
+    @staticmethod
     def generate_events_portfolio(
-        self,
         *,
         symbol_frames: dict[str, SymbolMtfFrames],
         params: StrategyParamsT,
     ) -> list[TradeResult] | None:
         """Опциональный портфельный запуск, когда стратегия должна выбирать кандидатов между символами синхронно."""
+        del symbol_frames, params
         return None
 
     @abstractmethod

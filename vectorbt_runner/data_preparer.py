@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from pandas.api.types import is_numeric_dtype
 from pyarrow import parquet as pq
+from pyarrow.lib import ArrowException
 
 from constants import (
     DATA_PREPARER_EMPTY_BOOL_DTYPE,
@@ -111,7 +112,7 @@ class DataPreparer:
                     rg_max_i = int(rg_max)
                     max_ts = rg_max_i if max_ts is None else max(max_ts, rg_max_i)
             return min_ts, max_ts
-        except Exception:
+        except (ArrowException, OSError, TypeError, ValueError):
             return None, None
 
     # endregion Приватные
@@ -206,7 +207,7 @@ class DataPreparer:
 
         prepared["symbol"] = pd.Categorical.from_codes(
             np.zeros(len(prepared), dtype=np.int8),
-            categories=[symbol],
+            categories=pd.Index([symbol]),
         )
         return prepared
 
@@ -268,7 +269,7 @@ class DataPreparer:
 
         prepared["symbol"] = pd.Categorical.from_codes(
             np.zeros(len(prepared), dtype=np.int8),
-            categories=[symbol],
+            categories=pd.Index([symbol]),
         )
         return prepared
 
@@ -296,18 +297,18 @@ class DataPreparer:
                 trades=trades_frame,
             )
 
-        trades_sorted = sorted(trades, key=lambda trade: (trade.entry_timestamp_ms, trade.exit_timestamp_ms))
+        trades_sorted = sorted(trades, key=lambda trade_result: (trade_result.entry_timestamp_ms, trade_result.exit_timestamp_ms))
         trade_rows = []
-        for trade in trades_sorted:
+        for trade_result in trades_sorted:
             row = {
-                "entry_timestamp_ms": int(trade.entry_timestamp_ms),
-                "exit_timestamp_ms": int(trade.exit_timestamp_ms),
-                "pnl": float(trade.pnl),
-                "pnl_percent": float(trade.pnl_percent.value),
-                "result_type": trade.result_type.value,
+                "entry_timestamp_ms": int(trade_result.entry_timestamp_ms),
+                "exit_timestamp_ms": int(trade_result.exit_timestamp_ms),
+                "pnl": float(trade_result.pnl),
+                "pnl_percent": float(trade_result.pnl_percent.value),
+                "result_type": trade_result.result_type.value,
             }
-            if trade.metadata:
-                for key, value in trade.metadata.items():
+            if trade_result.metadata:
+                for key, value in trade_result.metadata.items():
                     if isinstance(value, (str, int, float, bool)) or value is None:
                         row[key] = value
             trade_rows.append(row)

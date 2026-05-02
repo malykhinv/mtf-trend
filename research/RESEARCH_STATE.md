@@ -9,7 +9,7 @@
 ```text
 Branch: codex/ideal-like
 Commit: 68c0f43bd1f9041a829f5e08809203f667af16af
-Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs
+Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup
 Last applied patch: P031 Finish source-level runtime logs
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02

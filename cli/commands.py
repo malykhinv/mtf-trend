@@ -30,7 +30,6 @@ from constants import (
     QUALITY_SEVERITY_ERROR,
     QUALITY_SEVERITY_INFO,
     QUALITY_SEVERITY_WARNING,
-    LOG_MSG_TASK_COMPLETED,
 )
 from data.clients.noop_market_data_client import NoOpMarketDataClient
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
@@ -61,13 +60,11 @@ from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
 from cli.pno_diagnostics import (
     _export_pno_research_context,
     _export_pno_stage_reviews,
-    _format_eta_compact,
     _read_csv_or_empty,
     _render_pno_trade_charts_for_symbol,
     _safe_float,
     _safe_int,
     _select_stage_review_rejection_rows,
-    _slice_backtest_frame_window,
     _to_compact_json,
 )
 
@@ -609,13 +606,12 @@ def _export_pno_category_artifacts(
 
     categories_root = diagnostics_dir.parent / "categories"
     categories_root.mkdir(parents=True, exist_ok=True)
-    root_charts_dir = diagnostics_dir / "charts"
     diagnostics_payloads = cast(list[dict[str, object]], export_result.get("diagnostics_payloads", []))
     stage_rows_by_stage = cast(dict[str, list[dict[str, object]]], export_result.get("stage_rows_by_stage", {}))
     stage_rejections_by_stage = cast(dict[str, dict[str, list[dict[str, object]]]], export_result.get("stage_rejections_by_stage", {}))
     selected_stage_ids = cast(tuple[str, ...], export_result.get("selected_stage_ids", ()))
 
-    for category_id, (category_label, category_priority) in sorted(category_meta.items(), key=lambda item: (item[1][1], item[0])):
+    for category_id, (category_label, category_priority) in sorted(category_meta.items(), key=lambda category_item: (category_item[1][1], category_item[0])):
         category_root = categories_root / category_id
         if category_root.exists():
             shutil.rmtree(category_root)
@@ -807,7 +803,6 @@ def _export_pno_grid_artifacts_without_stage_charts(
     results: pd.DataFrame,
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
-    log_prefix: str,
 ) -> None:
     for artifact_name, params_row in _resolve_pno_artifact_rows(results):
         output_dir = Path(config.backtest.results_dir) / "trade_plots" / artifact_name
@@ -821,13 +816,11 @@ def _export_pno_grid_artifacts_without_stage_charts(
             params_row=params_row,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
-            log_prefix=f"{log_prefix} [{artifact_name}]",
         )
         _render_pno_trade_charts_from_export_result(
             diagnostics_dir=diagnostics_dir,
             export_result=export_result,
             logger=logger,
-            log_prefix=f"{log_prefix} [{artifact_name}]",
         )
         _export_pno_category_artifacts(
             diagnostics_dir=diagnostics_dir,
@@ -861,7 +854,7 @@ def _sync_shared_stage_reviews(
         stage_id = str(row.get("stage_id") or "")
         if stage_id not in shared_stage_ids:
             continue
-        payload = row.to_dict()
+        payload = {str(key): value for key, value in row.to_dict().items()}
         payload["passed_events_path"] = str(target_stage_reviews_dir / stage_id / "passed" / "events.csv")
         shared_rows.append(payload)
     target_rows = [
@@ -904,7 +897,6 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
         diagnostics_dir=diagnostics_dir,
         export_result=export_result,
         logger=logger,
-        log_prefix=log_prefix,
     )
     _export_pno_stage_reviews(
         diagnostics_dir=diagnostics_dir,
@@ -1302,12 +1294,13 @@ def _plot_pno_diagnostics_for_symbols(
     charts_dir = diagnostics_dir / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
     total_charts_generated = 0
-    chart_symbols_total = sum(1 for item in export_result["diagnostics_payloads"] if item["trade_rows"])
+    diagnostics_payloads = cast(list[dict[str, object]], export_result.get("diagnostics_payloads", []))
+    chart_symbols_total = sum(1 for item in diagnostics_payloads if item["trade_rows"])
     chart_symbols_done = 0
     chart_render_start_time = time.monotonic()
     if chart_symbols_total > 0:
         logger.warning("Графики: генерация")
-    for item in export_result["diagnostics_payloads"]:
+    for item in diagnostics_payloads:
         symbol = str(item["symbol"])
         trade_rows = list(item["trade_rows"])
         if not trade_rows:
@@ -1382,17 +1375,17 @@ def _render_pno_trade_charts_from_export_result(
     diagnostics_dir: Path,
     export_result: dict[str, object],
     logger: Logger,
-    log_prefix: str,
 ) -> int:
     charts_dir = diagnostics_dir / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
     total_charts_generated = 0
-    chart_symbols_total = sum(1 for item in export_result["diagnostics_payloads"] if item["trade_rows"])
+    diagnostics_payloads = cast(list[dict[str, object]], export_result.get("diagnostics_payloads", []))
+    chart_symbols_total = sum(1 for item in diagnostics_payloads if item["trade_rows"])
     chart_symbols_done = 0
     chart_render_start_time = time.monotonic()
     if chart_symbols_total > 0:
         logger.warning("Графики: генерация")
-    for item in export_result["diagnostics_payloads"]:
+    for item in diagnostics_payloads:
         symbol = str(item["symbol"])
         trade_rows = list(item["trade_rows"])
         if not trade_rows:
@@ -1438,7 +1431,6 @@ def _render_pno_trade_charts_only(
     params_row: pd.Series,
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
-    log_prefix: str,
 ) -> int:
     charts_dir = output_dir / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
@@ -1519,7 +1511,6 @@ def _export_pno_grid_trade_charts_only(
     results: pd.DataFrame,
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
-    log_prefix: str,
 ) -> None:
     for artifact_name, params_row in _resolve_pno_artifact_rows(results):
         output_dir = Path(config.backtest.results_dir) / "trade_plots" / artifact_name
@@ -1531,7 +1522,6 @@ def _export_pno_grid_trade_charts_only(
             params_row=params_row,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
-            log_prefix=f"{log_prefix} [{artifact_name}]",
         )
 
 
@@ -1539,8 +1529,6 @@ def _log_human_backtest_summary(
     *,
     logger: Logger,
     results: pd.DataFrame,
-    summary: BacktestSummary,
-    log_prefix: str,
 ) -> None:
     if results.empty:
         logger.debug("Итог бэктеста пустой: сделок нет.")
@@ -1690,7 +1678,6 @@ def _export_pno_diagnostics_context_for_symbols(
         stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, [])
     )
     stage_rows_by_stage[PNO_STAGE_4_LEVEL] = deduplicated_stage4_rows
-    research_export_start = time.monotonic()
     _build_stage5_review_rejections_from_stage4(
         symbol_frames=symbol_frames,
         stage_rows_by_stage=stage_rows_by_stage,
@@ -2060,7 +2047,6 @@ def _resolve_symbols(
     avg_daily_volumes = ranker.calculate_avg_daily_volume_usd(
         symbols=symbols_raw,
         timeframe=liquidity_timeframe,
-        logger=logger,
     )
     avg_daily_volumes_normalized = {
         normalize_symbol(raw_symbol): volume
@@ -2203,7 +2189,6 @@ class FetchSummary:
 
 
 def _log_fetch_summary(
-    command_name: str,
     logger: Logger,
     total_symbols: int,
     failed_symbols_count: int,
@@ -2453,7 +2438,6 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         result.open_interest.update(enriched_open_interest)
 
         fetch_summaries[requested_timeframe] = _log_fetch_summary(
-            f"fetch-data[{requested_timeframe.value}]",
             logger,
             len(symbols_to_fetch),
             result.failed_symbols_count,
@@ -2612,7 +2596,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         enriched_open_interest = _attach_liquidity_quality_metadata(result.open_interest, liquidity_quality_by_symbol)
         result.open_interest.clear()
         result.open_interest.update(enriched_open_interest)
-        _log_fetch_summary(f"update-cache[{timeframe.value}]", logger, len(symbols), result.failed_symbols_count)
+        _log_fetch_summary(logger, len(symbols), result.failed_symbols_count)
         failed_symbols.update(
             symbol
             for symbol in symbols
@@ -2694,7 +2678,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     symbols_before_ranking = len(symbols)
     top_n = getattr(args, "top_n", None)
     pre_rank_enabled = top_n is not None and top_n > 0
-    pre_filter_active = pre_rank_enabled or pno_fast_prefilter_active
     ranked_symbols: list[tuple[str, float]] = []
     rejected_symbols_count = 0
     preloaded_levels_frames: dict[str, pd.DataFrame] = {}
@@ -2743,7 +2726,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         ranked_symbols_count = len(ranked_symbols)
         selected_ranked_symbols = ranked_symbols[:top_n]
         symbols = [symbol for symbol, _ in selected_ranked_symbols]
-        top_n_applied = top_n
 
         preview = selected_ranked_symbols[:10]
         top_preview_text = ", ".join(
@@ -2755,7 +2737,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     else:
         ranked_symbols_count = 0
         symbols = list(symbols)
-        top_n_applied = "не применялся"
         top_preview_text = "предварительный отбор отключён"
 
     pre_rank_elapsed_seconds = time.perf_counter() - pre_rank_started_at
@@ -2816,10 +2797,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 entry_timeframe=entry_timeframe,
             ):
                 symbols_fast_stage1_rejected += 1
-                if idx % _PROGRESS_LOG_EVERY == 0 or idx == symbols_total:
-                    elapsed_seconds = time.perf_counter() - symbols_prepare_started_at
-                    progress = (idx / symbols_total) * 100 if symbols_total else 0.0
-                    eta_seconds = (elapsed_seconds / idx) * (symbols_total - idx) if idx else 0.0
                 continue
         entry_frame: pd.DataFrame | None = preloaded_entry_frames.get(symbol)
         if levels_timeframe == source_entry_timeframe:
@@ -2843,10 +2820,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             entry_frame=entry_frame,
         )
 
-        if idx % _PROGRESS_LOG_EVERY == 0 or idx == symbols_total:
-            elapsed_seconds = time.perf_counter() - symbols_prepare_started_at
-            progress = (idx / symbols_total) * 100 if symbols_total else 0.0
-            eta_seconds = (elapsed_seconds / idx) * (symbols_total - idx) if idx else 0.0
     if not symbol_frames:
         logger.warning("Не удалось подготовить данные для бэктеста")
         return 0
@@ -2871,7 +2844,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         config.backtest.results_file_name,
         logger=logger,
     )
-    symbols_used_ratio = symbols_used / symbols_total if symbols_total else 0.0
     plot_from_results = _to_bool_flag(getattr(args, "plot_from_results", None), default=False)
     if plot_from_results:
         best_row = _load_plot_params_row_from_results(config, args, logger=logger, strategy_id=strategy_id)
@@ -2917,14 +2889,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             results_dir=config.backtest.results_dir,
             logger=logger,
         )
-    combinations_with_trades = int((results["trades_count"] > 0).sum()) if not results.empty else 0
     total_trades = int(results["trades_count"].sum()) if not results.empty else 0
-    average_trades_per_combination = (
-        total_trades / summary.total_combinations
-        if summary.total_combinations
-        else 0.0
-    )
-    median_trades_per_combination = float(results["trades_count"].median()) if not results.empty else 0.0
     logger.debug(
         "Сетка бэктеста: комбинаций %s, прибыльных %s, лучший профит-фактор %.4f, сделок %s.",
         summary.total_combinations,
@@ -2935,8 +2900,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     _log_human_backtest_summary(
         logger=logger,
         results=results,
-        summary=summary,
-        log_prefix="run-backtest",
     )
     if summary.best_pf == 0 and total_trades == 0:
         logger.debug(
@@ -3015,7 +2978,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 results=results,
                 levels_timeframe=levels_timeframe,
                 entry_timeframe=entry_timeframe,
-                log_prefix="лёгкий режим",
             )
         else:
             _export_pno_grid_artifacts_without_stage_charts(
@@ -3307,8 +3269,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return 0
 
 
-def _clear_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
-    del args
+def _clear_cache_inner(config: AppConfig, _args: argparse.Namespace) -> int:
     logger = get_logger("clear-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
 
     cache_dir = config.backtest.cache_dir
