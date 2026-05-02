@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from dataclasses import dataclass
+import gc
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 import io
@@ -61,6 +62,47 @@ class _PnoSecondsFrameProvider:
         self._window_cache: dict[tuple[str, int, int], pd.DataFrame] = {}
         self._day_cache: dict[tuple[str, str], pd.DataFrame] = {}
         self._aggregated_window_cache: dict[tuple[str, str, int, int], pd.DataFrame] = {}
+
+    @staticmethod
+    def _drop_symbol_cache_items(cache: dict[tuple[object, ...], pd.DataFrame], symbol: str) -> int:
+        removed = 0
+        for key in list(cache):
+            if key and key[0] == symbol:
+                cache.pop(key, None)
+                removed += 1
+        return removed
+
+    def clear_runtime_caches(self, *, symbol: str | None = None) -> None:
+        """Drop heavy aggTrades-derived frames after a symbol is processed.
+
+        PNO enriches OHLCV with real aggTrades data. On a full-universe run this
+        means hundreds of large second-level windows. Keeping them in process
+        after the current symbol is done gives no trading benefit because the
+        aggregated frames are persisted on disk, but it steadily exhausts RAM.
+        """
+        removed = 0
+        if symbol is None:
+            removed += len(self._window_cache)
+            removed += len(self._day_cache)
+            removed += len(self._aggregated_window_cache)
+            removed += len(self._shared_window_cache)
+            removed += len(self._shared_day_cache)
+            removed += len(self._shared_aggregated_window_cache)
+            self._window_cache.clear()
+            self._day_cache.clear()
+            self._aggregated_window_cache.clear()
+            self._shared_window_cache.clear()
+            self._shared_day_cache.clear()
+            self._shared_aggregated_window_cache.clear()
+        else:
+            removed += self._drop_symbol_cache_items(self._window_cache, symbol)
+            removed += self._drop_symbol_cache_items(self._day_cache, symbol)
+            removed += self._drop_symbol_cache_items(self._aggregated_window_cache, symbol)
+            removed += self._drop_symbol_cache_items(self._shared_window_cache, symbol)
+            removed += self._drop_symbol_cache_items(self._shared_day_cache, symbol)
+            removed += self._drop_symbol_cache_items(self._shared_aggregated_window_cache, symbol)
+        if removed:
+            gc.collect()
 
     @staticmethod
     def _resolve_persistent_cache_dir(cache_dir: Path) -> Path:
@@ -676,9 +718,15 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         return None if parsed is None else int(parsed)
 
     @staticmethod
-    def _is_stale_level_reclaim_trade(*, trade: TradeResult, entry_frame: pd.DataFrame) -> bool:
+    def _is_stale_level_reclaim_trade(
+        *,
+        trade: TradeResult,
+        timestamps: np.ndarray,
+        highs: np.ndarray,
+        closes: np.ndarray,
+    ) -> bool:
         metadata = getattr(trade, "metadata", None)
-        if not isinstance(metadata, dict) or entry_frame.empty or "timestamp" not in entry_frame.columns:
+        if not isinstance(metadata, dict) or timestamps.size == 0:
             return False
 
         level = PnoStrategy._safe_metadata_float(metadata, "level")
@@ -689,20 +737,13 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         if entry_signal_timestamp_ms <= level_valid_timestamp_ms:
             return False
 
-        required_columns = {"timestamp", "high", "close"}
-        if not required_columns.issubset(entry_frame.columns):
-            return False
-
-        timestamps = pd.to_numeric(entry_frame["timestamp"], errors="coerce")
-        highs = pd.to_numeric(entry_frame["high"], errors="coerce")
-        closes = pd.to_numeric(entry_frame["close"], errors="coerce")
         epsilon = max(abs(float(level)) * 1e-6, 1e-12)
         pre_signal_window = (
             (timestamps >= int(level_valid_timestamp_ms))
             & (timestamps < int(entry_signal_timestamp_ms))
         )
         failed_reclaim = pre_signal_window & (highs > float(level) + epsilon) & (closes < float(level) - epsilon)
-        return bool(failed_reclaim.fillna(False).any())
+        return bool(np.any(failed_reclaim))
 
     def _filter_stale_level_reclaim_trades(
         self,
@@ -712,12 +753,20 @@ class PnoStrategy(BaseStrategy[PnoParams]):
     ) -> list[TradeResult]:
         if not trades:
             return trades
+        required_columns = {"timestamp", "high", "close"}
+        if entry_frame.empty or not required_columns.issubset(entry_frame.columns):
+            return trades
+        timestamps = pd.to_numeric(entry_frame["timestamp"], errors="coerce").astype("float64").to_numpy()
+        highs = pd.to_numeric(entry_frame["high"], errors="coerce").astype("float64").to_numpy()
+        closes = pd.to_numeric(entry_frame["close"], errors="coerce").astype("float64").to_numpy()
         return [
             trade
             for trade in trades
             if not self._is_stale_level_reclaim_trade(
                 trade=trade,
-                entry_frame=entry_frame,
+                timestamps=timestamps,
+                highs=highs,
+                closes=closes,
             )
         ]
 
@@ -728,31 +777,36 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         params: PnoParams,
         **context: object,
     ) -> list[TradeResult]:
-        engine_context = {"seconds_frame_provider": self._seconds_provider}
-        engine_context.update(context)
-        enriched_levels_frame = self._seconds_provider.enrich_with_trade_data(
-            symbol=params.symbol,
-            frame=mtf_frames.levels_frame,
-            target_timeframe=params.levels_timeframe,
-        )
-        enriched_entry_frame = self._seconds_provider.enrich_with_trade_data(
-            symbol=params.symbol,
-            frame=mtf_frames.entry_frame,
-            target_timeframe=params.entry_timeframe,
-        )
-        trades = self._generate_events_for_profiles(
-            profiles=resolve_pno_category_profiles(params, category_mode=self._category_mode_filter),
-            runner=lambda profile_params: self._engine.generate_events_multi_tf(
-                levels_frame=enriched_levels_frame,
+        self._seconds_provider.clear_runtime_caches(symbol=params.symbol)
+        try:
+            engine_context = {"seconds_frame_provider": self._seconds_provider}
+            engine_context.update(context)
+            enriched_levels_frame = self._seconds_provider.enrich_with_trade_data(
+                symbol=params.symbol,
+                frame=mtf_frames.levels_frame,
+                target_timeframe=params.levels_timeframe,
+            )
+            enriched_entry_frame = self._seconds_provider.enrich_with_trade_data(
+                symbol=params.symbol,
+                frame=mtf_frames.entry_frame,
+                target_timeframe=params.entry_timeframe,
+            )
+            trades = self._generate_events_for_profiles(
+                profiles=resolve_pno_category_profiles(params, category_mode=self._category_mode_filter),
+                runner=lambda profile_params: self._engine.generate_events_multi_tf(
+                    levels_frame=enriched_levels_frame,
+                    entry_frame=enriched_entry_frame,
+                    params=profile_params,
+                    **engine_context,
+                ),
+            )
+            self._seconds_provider.clear_runtime_caches(symbol=params.symbol)
+            return self._filter_stale_level_reclaim_trades(
+                trades=trades,
                 entry_frame=enriched_entry_frame,
-                params=profile_params,
-                **engine_context,
-            ),
-        )
-        return self._filter_stale_level_reclaim_trades(
-            trades=trades,
-            entry_frame=enriched_entry_frame,
-        )
+            )
+        finally:
+            self._seconds_provider.clear_runtime_caches(symbol=params.symbol)
 
     def prepare_symbol_context(
         self,
