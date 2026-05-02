@@ -981,7 +981,6 @@ def test_export_pno_diagnostics_context_writes_research_artifacts_without_charts
         params_row=params_row,
         levels_timeframe=Timeframe.M5,
         entry_timeframe=Timeframe.M1,
-        log_prefix="test",
     )
 
     assert export_result["total_trades_generated"] == 1

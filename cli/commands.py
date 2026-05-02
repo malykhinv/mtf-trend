@@ -891,7 +891,6 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
         params_row=params_row,
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
-        log_prefix=log_prefix,
     )
     total_charts_generated = _render_pno_trade_charts_from_export_result(
         diagnostics_dir=diagnostics_dir,
@@ -1289,7 +1288,6 @@ def _plot_pno_diagnostics_for_symbols(
         params_row=params_row,
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
-        log_prefix=log_prefix,
     )
     charts_dir = diagnostics_dir / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
@@ -1570,7 +1568,6 @@ def _export_pno_diagnostics_context_for_symbols(
     params_row: pd.Series,
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
-    log_prefix: str,
 ) -> dict[str, object]:
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     selected_stage_ids = _resolve_pno_stage_ids(args)
