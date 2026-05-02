@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 7de18b62ea82c6eedae00fa7cd247244ddacc6aa
-Local diff: P008 proposed typing/client-boundary hardening; P025 proposed concise progress checkpoint init
-Last applied patch: P024 Concise backtest logs
+Commit: 665bd3112a36754020f6618585366dad881a1f64
+Local diff: P008 proposed typing/client-boundary hardening; P026 proposed strict backtest runtime log shape
+Last applied patch: P025 Fix concise progress checkpoint init
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -99,7 +99,8 @@ winrate > 0.40
 | P022 | Stage5/results consistency fix | APPLIED | Синхронизировать Stage5 review с stale-level фильтром и писать runtime TF в results row. |
 | P023 | PNO none-trades guard | APPLIED | Гарантировать list-return contract для PNO trades и защитить runner от None. |
 | P024 | Concise backtest logs | APPLIED | Заменить повествовательные runtime-логи на короткий progress-bar стиль и итог по TF-паре. |
-| P025 | Fix concise progress checkpoint init | PROPOSED | Исправить UnboundLocalError в progress loop после P024. |
+| P025 | Fix concise progress checkpoint init | APPLIED | Исправить UnboundLocalError в progress loop после P024. |
+| P026 | Strict backtest runtime log shape | PROPOSED | Строгий формат логов: заголовок, TF, progress, итог; без лишней runtime-диагностики. |
 
 Статусы:
 

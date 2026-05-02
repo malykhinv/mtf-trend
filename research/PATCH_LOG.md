@@ -45,7 +45,8 @@ SUPERSEDED = заменён новым патчем
 | P022 | Stage5/results consistency fix | APPLIED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix/diagnostics | Переносить stale-level Stage5 passed events в rejected и писать runtime TF в results.csv. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
 | P023 | PNO none-trades guard | APPLIED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть list-return contract для PNO generate_events_multi_tf и не валить runner, если стратегия вернула None. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
 | P024 | Concise backtest logs | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging | Убрать лишнюю прозу из runtime backtest logs, оставить TF, progress 0..100% и итоговую сводку по сделкам. | `python -m compileall vectorbt_runner/backtest_runner.py` |
-| P025 | Fix concise progress checkpoint init | PROPOSED | `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Инициализировать progress checkpoint cursor перед per-symbol progress loop. | `python -m compileall vectorbt_runner/backtest_runner.py` |
+| P025 | Fix concise progress checkpoint init | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Инициализировать progress checkpoint cursor перед per-symbol progress loop. | `python -m compileall vectorbt_runner/backtest_runner.py` |
+| P026 | Strict backtest runtime log shape | PROPOSED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging | Привести runtime-логи бэктеста к строгому формату: заголовок, TF, progress, итог без лишней диагностики. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 
 ---
 

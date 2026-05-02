@@ -73,33 +73,32 @@ def _build_progress_checkpoints(total: int) -> list[tuple[int, int]]:
     if total <= 0:
         return [(100, 0)]
     checkpoints: list[tuple[int, int]] = []
-    previous_checked = -1
-    for percent in range(10, 101, 10):
-        checked = int(round((total * percent) / 100))
-        checked = min(total, max(1, checked))
-        if checked == previous_checked and percent != 100:
-            continue
+    progress_step = max(1, total // SYMBOL_PROGRESS_STEPS)
+    checked = progress_step
+    while checked < total:
+        percent = min(99, max(1, int(round((checked / total) * 100))))
         checkpoints.append((percent, checked))
-        previous_checked = checked
+        checked += progress_step
+    checkpoints.append((100, total))
     return checkpoints
 
 
 def _format_progress_line(*, percent: int, checked: int, total: int, eta_seconds: float | None) -> str:
-    return f"{percent:3d}% Проверено: {checked} из {total}.  ETA: {_format_eta(eta_seconds)}"
+    return f"{percent}% Проверено: {checked} из {total}. ETA: {_format_eta(eta_seconds)}"
 
 
 def _format_result_summary(*, levels_timeframe: Timeframe, entry_timeframe: Timeframe, row: dict[str, int | float | str | None]) -> str:
-    header = f"Анализ {levels_timeframe.value}-{entry_timeframe.value} завершён"
+    header = f"Анализ {levels_timeframe.value}-{entry_timeframe.value} завершен"
     trades_count = int(row.get("trades_count") or 0)
     if trades_count <= 0:
         return f"{header}\nСделок нет"
     return (
         f"{header}\n"
         f"Сделок: {trades_count}\n"
-        f"Винрейт: {float(row.get('win_rate') or 0.0):.4f}\n"
-        f"Profit factor: {float(row.get('profit_factor') or 0.0):.4f}\n"
-        f"PnL: {float(row.get('pnl_percent') or 0.0):.4f}%\n"
-        f"Max DD: {float(row.get('max_drawdown_pct') or 0.0):.4f}%\n"
+        f"Винрейт: {float(row.get('win_rate') or 0.0):.2f}\n"
+        f"Profit factor: {float(row.get('profit_factor') or 0.0):.2f}\n"
+        f"PnL: {float(row.get('pnl_percent') or 0.0):.2f}%\n"
+        f"Max DD: {float(row.get('max_drawdown_pct') or 0.0):.2f}%\n"
         f"SL: {int(row.get('sl_count') or 0)}\n"
         f"TP1_BE: {int(row.get('tp1_be_count') or 0)}\n"
         f"TP2: {int(row.get('tp2_count') or 0)}"
@@ -523,14 +522,12 @@ class BacktestRunner:
         collect_stage_metrics = bool(stage_metric_ids)
         tracked_stage_ids = tuple(stage_metric_ids or ())
 
-        rejection_diagnostics_total: Counter[str] = Counter()
         rejection_diagnostics_by_key: dict[tuple[str, str], Counter[str]] = defaultdict(Counter)
         diagnostics_method = getattr(strategy, "consume_last_generation_diagnostics", None)
         symbol_progress_interval = _resolve_symbol_progress_interval(symbols_count)
 
-        multi_combo_run = total > 1
-        self._logger.warning("Запуск бэктеста")
-        self._logger.info("Отобрано %s символов.", symbols_count)
+        self._logger.warning("Запуск бектеста")
+        self._logger.info("Отобрано %s символов", symbols_count)
 
         for idx, prepared in enumerate(prepared_grid, start=1):
             all_trades: list[TradeResult] = []
@@ -557,6 +554,16 @@ class BacktestRunner:
 
             if portfolio_trades is not None:
                 all_trades.extend(portfolio_trades)
+                if progress_checkpoints:
+                    self._logger.info(
+                        "%s",
+                        _format_progress_line(
+                            percent=100,
+                            checked=symbols_count,
+                            total=symbols_count,
+                            eta_seconds=0.0,
+                        ),
+                    )
             elif strategy.__class__.__name__ == "BeeBiteStrategy":
                 raise RuntimeError("BeeBiteStrategy должен использовать только portfolio pipeline.")
             else:
@@ -607,7 +614,6 @@ class BacktestRunner:
                         if isinstance(diagnostics_raw, dict):
                             if collect_diagnostics:
                                 diagnostics_counter = self._extract_diagnostic_counter(diagnostics_raw)
-                                rejection_diagnostics_total.update(diagnostics_counter)
                                 raw_context = diagnostics_raw.get("context")
                                 context_symbol = symbol
                                 if isinstance(raw_context, dict) and isinstance(raw_context.get("symbol"), str):
@@ -658,9 +664,6 @@ class BacktestRunner:
             .sort_values("profit_factor", ascending=BACKTEST_SORT_ASCENDING)
             .reset_index(drop=True)
         )
-
-        if collect_diagnostics:
-            self._log_zero_entry_with_retests(dict(rejection_diagnostics_by_key))
 
         self._save_results(results)
         return results
