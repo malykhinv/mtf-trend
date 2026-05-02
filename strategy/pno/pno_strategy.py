@@ -43,6 +43,13 @@ class _PnoSecondsFrameProvider:
     _shared_window_cache: ClassVar[dict[tuple[str, int, int], pd.DataFrame]] = {}
     _shared_day_cache: ClassVar[dict[tuple[str, str], pd.DataFrame]] = {}
     _shared_aggregated_window_cache: ClassVar[dict[tuple[str, str, int, int], pd.DataFrame]] = {}
+    _TRADE_COUNT_COLUMNS: ClassVar[tuple[str, ...]] = ("number_of_trades", "trades", "trade_count")
+    _TRADE_DATA_COLUMNS: ClassVar[tuple[str, ...]] = (
+        "quote_volume",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "number_of_trades",
+    )
 
     def __post_init__(self) -> None:
         self._runtime_cache_dir = Path(self.cache_dir)
@@ -112,6 +119,84 @@ class _PnoSecondsFrameProvider:
                 frame=aggregated,
             )
         return aggregated
+
+    def enrich_with_trade_data(
+        self,
+        *,
+        symbol: str,
+        frame: pd.DataFrame,
+        target_timeframe: Timeframe,
+    ) -> pd.DataFrame:
+        """Merges real aggTrades-derived trade count into an OHLCV frame.
+
+        This keeps the exchange OHLCV prices/volume as the source of truth and only
+        fills market-activity columns used by PNO flow filters.
+        """
+        if frame.empty or "timestamp" not in frame.columns:
+            return frame
+        has_full_trade_data = self._has_real_trade_count(frame) and {"quote_volume", "taker_buy_quote_volume"}.issubset(frame.columns)
+        if has_full_trade_data:
+            return frame
+        window = self._resolve_frame_window(frame)
+        if window is None:
+            return frame
+        start_timestamp_ms, end_timestamp_ms = window
+        trade_frame = self.load_aggregated_window(
+            symbol=symbol,
+            start_timestamp_ms=start_timestamp_ms,
+            end_timestamp_ms=end_timestamp_ms,
+            target_timeframe=target_timeframe,
+        )
+        if trade_frame.empty or not self._has_real_trade_count(trade_frame):
+            return frame
+        return self._merge_trade_data_columns(frame=frame, trade_frame=trade_frame)
+
+    @classmethod
+    def _has_real_trade_count(cls, frame: pd.DataFrame) -> bool:
+        trade_count_column = next((column for column in cls._TRADE_COUNT_COLUMNS if column in frame.columns), None)
+        if trade_count_column is None:
+            return False
+        values = pd.to_numeric(frame[trade_count_column], errors="coerce")
+        return bool(values.notna().any() and float(values.fillna(0.0).sum()) > 0.0)
+
+    @staticmethod
+    def _resolve_frame_window(frame: pd.DataFrame) -> tuple[int, int] | None:
+        timestamps = pd.to_numeric(frame.get("timestamp"), errors="coerce").dropna()
+        if timestamps.empty:
+            return None
+        return int(timestamps.min()), int(timestamps.max())
+
+    @classmethod
+    def _merge_trade_data_columns(cls, *, frame: pd.DataFrame, trade_frame: pd.DataFrame) -> pd.DataFrame:
+        trade_columns = [column for column in cls._TRADE_DATA_COLUMNS if column in trade_frame.columns]
+        if not trade_columns:
+            return frame
+        prepared_trade_frame = trade_frame.loc[:, ["timestamp", *trade_columns]].copy()
+        prepared_trade_frame["timestamp"] = pd.to_numeric(prepared_trade_frame["timestamp"], errors="coerce")
+        prepared_trade_frame = prepared_trade_frame.dropna(subset=["timestamp"])
+        if prepared_trade_frame.empty:
+            return frame
+        prepared_trade_frame["timestamp"] = prepared_trade_frame["timestamp"].astype("int64")
+        for column in trade_columns:
+            prepared_trade_frame[column] = pd.to_numeric(prepared_trade_frame[column], errors="coerce")
+        merged = frame.copy()
+        merged["timestamp"] = pd.to_numeric(merged["timestamp"], errors="coerce").astype("int64")
+        merged = merged.merge(
+            prepared_trade_frame,
+            on="timestamp",
+            how="left",
+            suffixes=("", "__agg_trades"),
+        )
+        for column in trade_columns:
+            incoming_column = f"{column}__agg_trades"
+            if incoming_column not in merged.columns:
+                continue
+            if column in frame.columns:
+                merged[column] = merged[incoming_column].combine_first(pd.to_numeric(merged[column], errors="coerce"))
+                merged = merged.drop(columns=[incoming_column])
+            else:
+                merged = merged.rename(columns={incoming_column: column})
+        return merged
 
     def _ensure_seconds_window(
         self,
@@ -294,7 +379,7 @@ class _PnoSecondsFrameProvider:
         frame = pd.read_parquet(path)
         if frame.empty:
             return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-        if not {"taker_buy_volume", "number_of_trades"}.issubset(frame.columns):
+        if not {"quote_volume", "taker_buy_volume", "taker_buy_quote_volume", "number_of_trades"}.issubset(frame.columns):
             return None
         return frame.sort_values("timestamp").reset_index(drop=True)
 
@@ -429,6 +514,7 @@ class _PnoSecondsFrameProvider:
         maker_column = "is_buyer_maker" if "is_buyer_maker" in work.columns else "m"
         work["price"] = pd.to_numeric(work["price"] if "price" in work.columns else work["p"], errors="coerce")
         work["quantity"] = pd.to_numeric(work[quantity_column], errors="coerce")
+        work["quote_volume"] = work["price"].astype("float64") * work["quantity"].astype("float64")
         work["timestamp"] = ((pd.to_numeric(work[timestamp_column], errors="coerce") // 1000) * 1000).astype("Int64")
         work = work.loc[work["timestamp"].notna() & work["price"].notna() & work["quantity"].notna()].copy()
         if work.empty:
@@ -436,6 +522,7 @@ class _PnoSecondsFrameProvider:
         work["timestamp"] = work["timestamp"].astype("int64")
         buyer_is_maker = work[maker_column].astype(str).str.lower().isin(("true", "1"))
         work["taker_buy_volume"] = np.where(buyer_is_maker, 0.0, work["quantity"].astype("float64"))
+        work["taker_buy_quote_volume"] = np.where(buyer_is_maker, 0.0, work["quote_volume"].astype("float64"))
         aggregated = (
             work.groupby("timestamp", sort=True)
             .agg(
@@ -444,7 +531,9 @@ class _PnoSecondsFrameProvider:
                 low=("price", "min"),
                 close=("price", "last"),
                 volume=("quantity", "sum"),
+                quote_volume=("quote_volume", "sum"),
                 taker_buy_volume=("taker_buy_volume", "sum"),
+                taker_buy_quote_volume=("taker_buy_quote_volume", "sum"),
                 number_of_trades=("quantity", "size"),
             )
             .reset_index()
@@ -457,7 +546,9 @@ class _PnoSecondsFrameProvider:
                 "low": "float64",
                 "close": "float64",
                 "volume": "float64",
+                "quote_volume": "float64",
                 "taker_buy_volume": "float64",
+                "taker_buy_quote_volume": "float64",
                 "number_of_trades": "float64",
             }
         )
@@ -505,11 +596,21 @@ class PnoStrategy(BaseStrategy[PnoParams]):
     ) -> list[TradeResult]:
         engine_context = {"seconds_frame_provider": self._seconds_provider}
         engine_context.update(context)
+        enriched_levels_frame = self._seconds_provider.enrich_with_trade_data(
+            symbol=params.symbol,
+            frame=mtf_frames.levels_frame,
+            target_timeframe=params.levels_timeframe,
+        )
+        enriched_entry_frame = self._seconds_provider.enrich_with_trade_data(
+            symbol=params.symbol,
+            frame=mtf_frames.entry_frame,
+            target_timeframe=params.entry_timeframe,
+        )
         return self._generate_events_for_profiles(
             profiles=resolve_pno_category_profiles(params, category_mode=self._category_mode_filter),
             runner=lambda profile_params: self._engine.generate_events_multi_tf(
-                levels_frame=mtf_frames.levels_frame,
-                entry_frame=mtf_frames.entry_frame,
+                levels_frame=enriched_levels_frame,
+                entry_frame=enriched_entry_frame,
                 params=profile_params,
                 **engine_context,
             ),

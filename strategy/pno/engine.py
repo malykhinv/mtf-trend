@@ -32,6 +32,13 @@ PNO_STAGE_SEQUENCE: tuple[str, ...] = (
     PNO_STAGE_5_TRADE,
 )
 PNO_STAGE_PATH = " > ".join(PNO_STAGE_SEQUENCE)
+PNO_TRADE_COUNT_COLUMNS: tuple[str, ...] = ("number_of_trades", "trades", "trade_count")
+PNO_OPTIONAL_MARKET_DATA_COLUMNS: tuple[str, ...] = (
+    "quote_volume",
+    "taker_buy_volume",
+    "taker_buy_quote_volume",
+    *PNO_TRADE_COUNT_COLUMNS,
+)
 
 
 @dataclass(slots=True)
@@ -379,7 +386,7 @@ class GenerationDiagnostics(TypedDict, total=False):
 class PnoEngine:
     REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
     _EPSILON = 1e-12
-    _STAGE1_CACHE_VERSION = 30
+    _STAGE1_CACHE_VERSION = 31
 
     def __init__(self, *, cache_dir: str | Path | None = None) -> None:
         self._last_generation_diagnostics = self._empty_diagnostics()
@@ -457,8 +464,87 @@ class PnoEngine:
                 "stage_order": list(PNO_STAGE_SEQUENCE),
                 "trade_count_proxy": "volume",
                 "quote_volume_proxy": "close*volume",
+                "levels_trade_count_source": "unknown",
+                "entry_trade_count_source": "unknown",
+                "levels_quote_volume_source": "unknown",
+                "entry_quote_volume_source": "unknown",
             },
         }
+
+    @staticmethod
+    def _resolve_trade_count_column(frame: pd.DataFrame) -> str | None:
+        return next((column for column in PNO_TRADE_COUNT_COLUMNS if column in frame.columns), None)
+
+    @staticmethod
+    def _has_real_trade_count(frame: pd.DataFrame) -> bool:
+        trade_count_column = PnoEngine._resolve_trade_count_column(frame)
+        if trade_count_column is None:
+            return False
+        values = pd.to_numeric(frame[trade_count_column], errors="coerce")
+        return bool(values.notna().any() and float(values.fillna(0.0).sum()) > 0.0)
+
+    @staticmethod
+    def _has_true_quote_volume(frame: pd.DataFrame) -> bool:
+        if "quote_volume" not in frame.columns:
+            return False
+        values = pd.to_numeric(frame["quote_volume"], errors="coerce")
+        return bool(values.notna().any() and float(values.fillna(0.0).sum()) > 0.0)
+
+    @staticmethod
+    def _resolve_quote_volume_series(frame: pd.DataFrame) -> pd.Series:
+        if PnoEngine._has_true_quote_volume(frame):
+            return pd.to_numeric(frame["quote_volume"], errors="coerce")
+        return pd.to_numeric(frame["close"], errors="coerce") * pd.to_numeric(frame["volume"], errors="coerce")
+
+    @staticmethod
+    def _resolve_trade_activity_series(frame: pd.DataFrame) -> pd.Series:
+        trade_count_column = PnoEngine._resolve_trade_count_column(frame)
+        if trade_count_column is None or not PnoEngine._has_real_trade_count(frame):
+            return pd.to_numeric(frame["volume"], errors="coerce")
+        return pd.to_numeric(frame[trade_count_column], errors="coerce")
+
+    @staticmethod
+    def _trade_count_source_label(frame: pd.DataFrame) -> str:
+        trade_count_column = PnoEngine._resolve_trade_count_column(frame)
+        if trade_count_column is None:
+            return "volume_proxy"
+        return trade_count_column if PnoEngine._has_real_trade_count(frame) else f"{trade_count_column}_empty_volume_proxy"
+
+    @staticmethod
+    def _quote_volume_source_label(frame: pd.DataFrame) -> str:
+        return "quote_volume" if PnoEngine._has_true_quote_volume(frame) else "close_volume_proxy"
+
+    def _annotate_market_data_sources(
+        self,
+        diagnostics: GenerationDiagnostics,
+        *,
+        levels_frame: pd.DataFrame,
+        entry_frame: pd.DataFrame,
+    ) -> None:
+        levels_trade_source = self._trade_count_source_label(levels_frame)
+        entry_trade_source = self._trade_count_source_label(entry_frame)
+        levels_quote_source = self._quote_volume_source_label(levels_frame)
+        entry_quote_source = self._quote_volume_source_label(entry_frame)
+        real_trade_sources = set(PNO_TRADE_COUNT_COLUMNS)
+        diagnostics["trade_count_proxy_used"] = (
+            levels_trade_source not in real_trade_sources or entry_trade_source not in real_trade_sources
+        )
+        context = diagnostics.setdefault("context", {})
+        if isinstance(context, dict):
+            context.update(
+                {
+                    "levels_trade_count_source": levels_trade_source,
+                    "entry_trade_count_source": entry_trade_source,
+                    "levels_quote_volume_source": levels_quote_source,
+                    "entry_quote_volume_source": entry_quote_source,
+                    "trade_count_proxy": "volume" if diagnostics.get("trade_count_proxy_used") else None,
+                    "quote_volume_proxy": (
+                        "close*volume"
+                        if levels_quote_source == "close_volume_proxy" or entry_quote_source == "close_volume_proxy"
+                        else None
+                    ),
+                }
+            )
 
     def _build_stage1_cache_metadata(
         self,
@@ -478,6 +564,10 @@ class PnoEngine:
             "levels_timeframe_ms": int(levels_timeframe_ms),
             "entry_timeframe_ms": int(entry_timeframe_ms),
             "source_entry_timeframe_ms": int(source_entry_timeframe_ms),
+            "levels_trade_count_source": self._trade_count_source_label(levels_frame),
+            "entry_trade_count_source": self._trade_count_source_label(entry_frame),
+            "levels_quote_volume_source": self._quote_volume_source_label(levels_frame),
+            "entry_quote_volume_source": self._quote_volume_source_label(entry_frame),
             "levels_rows": int(len(levels_frame)),
             "entry_rows": int(len(entry_frame)),
             "levels_start_ts": int(levels_timestamps.iloc[0]) if not levels_timestamps.empty else -1,
@@ -600,15 +690,8 @@ class PnoEngine:
         if highs.empty or lows.empty or closes.empty or volumes.empty:
             return 0, None
 
-        quote_volume = closes * volumes
-        trade_activity = next(
-            (
-                pd.to_numeric(five[column], errors="coerce")
-                for column in ("number_of_trades", "trades", "trade_count")
-                if column in five.columns
-            ),
-            volumes,
-        )
+        quote_volume = self._resolve_quote_volume_series(five)
+        trade_activity = self._resolve_trade_activity_series(five)
         baseline_window = self._bars_for_duration(levels_timeframe_ms, 24 * 60 * 60_000)
         pretrend_1h_bars = self._bars_for_duration(levels_timeframe_ms, 60 * 60_000)
         pretrend_2h_bars = self._bars_for_duration(levels_timeframe_ms, 2 * 60 * 60_000)
@@ -802,13 +885,7 @@ class PnoEngine:
             raise ValueError(f"Missing required columns: {missing}")
         optional_columns = [
             column
-            for column in (
-                "taker_buy_volume",
-                "taker_buy_quote_volume",
-                "number_of_trades",
-                "trades",
-                "trade_count",
-            )
+            for column in PNO_OPTIONAL_MARKET_DATA_COLUMNS
             if column in data.columns
         ]
         prepared = data.loc[:, list(self.REQUIRED_COLUMNS) + optional_columns].copy()
@@ -855,6 +932,11 @@ class PnoEngine:
             "symbol": params.symbol,
             "stage_order": list(PNO_STAGE_SEQUENCE),
         }
+        self._annotate_market_data_sources(
+            diagnostics,
+            levels_frame=prepared_levels,
+            entry_frame=prepared_entry,
+        )
         levels_required_bars = self._scale_required_bars(
             base_bars=params.min_data_5m,
             base_timeframe_ms=Timeframe.M5.to_milliseconds(),
@@ -1005,6 +1087,12 @@ class PnoEngine:
                 self._last_generation_diagnostics = diagnostics
                 return []
 
+        self._annotate_market_data_sources(
+            diagnostics,
+            levels_frame=prepared_levels,
+            entry_frame=actual_entry_frame,
+        )
+
         one_cache_key = (
             id(actual_entry_frame),
             len(actual_entry_frame),
@@ -1145,10 +1233,10 @@ class PnoEngine:
         work["tr"] = tr
         volatility_window = self._bars_for_duration(timeframe_ms, 30 * 60_000)
         work["v1"] = tr.rolling(window=volatility_window, min_periods=volatility_window).median()
-        work["quote_volume"] = work["close"] * work["volume"]
+        work["quote_volume"] = self._resolve_quote_volume_series(work)
         work["cumulative_quote_volume"] = work["quote_volume"].cumsum()
         work["red"] = work["close"] < work["open"]
-        for optional_column in ("taker_buy_volume", "taker_buy_quote_volume", "number_of_trades", "trades", "trade_count"):
+        for optional_column in PNO_OPTIONAL_MARKET_DATA_COLUMNS:
             if optional_column in work.columns:
                 work[optional_column] = pd.to_numeric(work[optional_column], errors="coerce")
         highs = work["high"].astype("float64").to_numpy()
@@ -1207,16 +1295,8 @@ class PnoEngine:
         pre_high_24h_window = self._bars_for_duration(levels_timeframe_ms, 24 * 60 * 60_000)
         stage1_flow_hold_bars = self._scale_5m_stage_bars(int(params.stage1_flow_hold_bars), levels_timeframe_ms)
         stage1_flow_hold_window_bars = self._scale_5m_stage_bars(int(params.stage1_flow_hold_window_bars), levels_timeframe_ms)
-        work["quote_volume"] = work["close"] * work["volume"]
-        trade_column = next(
-            (
-                column
-                for column in ("number_of_trades", "trades", "trade_count")
-                if column in work.columns
-            ),
-            "volume",
-        )
-        work["trade_activity"] = pd.to_numeric(work[trade_column], errors="coerce")
+        work["quote_volume"] = self._resolve_quote_volume_series(work)
+        work["trade_activity"] = self._resolve_trade_activity_series(work)
         prev_close = work["close"].shift(1).fillna(work["close"])
         tr = pd.concat(
             [
@@ -8752,13 +8832,7 @@ class PnoEngine:
             "close": ("close", "last"),
             "volume": ("volume", "sum"),
         }
-        for optional_column in (
-            "taker_buy_volume",
-            "taker_buy_quote_volume",
-            "number_of_trades",
-            "trades",
-            "trade_count",
-        ):
+        for optional_column in PNO_OPTIONAL_MARKET_DATA_COLUMNS:
             if optional_column in work.columns:
                 aggregation[optional_column] = (optional_column, "sum")
         aggregated = (
