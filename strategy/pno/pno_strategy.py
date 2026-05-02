@@ -462,8 +462,46 @@ class _PnoSecondsFrameProvider:
             raw = archive.read(names[0])
         trades = pd.read_csv(io.BytesIO(raw))
         if trades.empty:
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            return self._empty_seconds_frame()
         return self._aggregate_agg_trades_to_seconds(trades)
+
+    @staticmethod
+    def _resolve_agg_trade_timestamp(row: dict[str, object]) -> int | None:
+        raw_value = row.get("transact_time") if "transact_time" in row else row.get("T")
+        try:
+            return int(raw_value) if raw_value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _resolve_agg_trade_id(row: dict[str, object]) -> int | None:
+        for key in ("agg_trade_id", "a", "id"):
+            raw_value = row.get(key)
+            if raw_value is None:
+                continue
+            try:
+                return int(raw_value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _clip_agg_trades_to_window(
+        trades: pd.DataFrame,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
+        if trades.empty:
+            return trades
+        timestamp_column = "transact_time" if "transact_time" in trades.columns else "T"
+        if timestamp_column not in trades.columns:
+            return trades.iloc[0:0].copy()
+        timestamps = pd.to_numeric(trades[timestamp_column], errors="coerce")
+        return trades.loc[
+            (timestamps >= int(start_timestamp_ms))
+            & (timestamps <= int(end_timestamp_ms))
+        ].copy()
 
     def _fetch_seconds_from_live_trades(
         self,

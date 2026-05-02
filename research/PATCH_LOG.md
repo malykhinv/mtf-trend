@@ -26,7 +26,8 @@ SUPERSEDED = заменён новым патчем
 | P003 | Trades % charts | UNKNOWN | `cli/pno_diagnostics.py` | charts | Добавить trade-count панель. | На графиках есть `Trades %`. |
 | P004 | True trade-count data | PROPOSED / UNKNOWN | `constants.py`, `strategy/pno/*` | data quality | Использовать real trade-count/quote_volume. | `trade_count_proxy_used=false`. |
 | P005 | Repo cleanup | APPLIED | `.gitignore`, `.run/*`, `logs/parquet-storage.log`, `utils/validators.py` | cleanup | Убрать локальные IDE/log/empty artifacts без изменения PNO-логики. | `python -m compileall strategy/pno cli constants.py` |
-| P006 | PNO entry/data fetch hardening | PROPOSED | `launcher.py`, `strategy/pno/pno_strategy.py` | bugfix/data quality | Зафиксировать только `close_above`, покрывать последнюю свечу aggTrades window, пагинировать live aggTrades по id. | `python -m compileall strategy/pno launcher.py` |
+| P006 | PNO entry/data fetch hardening | APPLIED | `launcher.py`, `strategy/pno/pno_strategy.py` | bugfix/data quality | Зафиксировать только `close_above`, покрывать последнюю свечу aggTrades window, пагинировать live aggTrades по id. | `python -m compileall strategy/pno launcher.py` |
+| P007 | PNO aggTrades helper hotfix | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | bugfix | Добавить отсутствующие helper-методы, которые вызывает P006. | `python -m compileall strategy/pno launcher.py` |
 
 ---
 
@@ -228,7 +229,39 @@ python launcher.py --help
 
 ---
 
-## 9. Шаблон нового патча
+## 9. P007 — PNO aggTrades helper hotfix
+
+```text
+Status: PROPOSED
+Type: bugfix
+Trading logic changed: no
+Files: strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P006
+Supersedes: none
+```
+
+Problem:
+```text
+P006 добавил вызовы _resolve_agg_trade_timestamp, _resolve_agg_trade_id и _clip_agg_trades_to_window,
+но сами helper-методы отсутствуют в pno_strategy.py.
+```
+
+Change:
+```text
+добавить helper-методы для live aggTrades fromId-pagination
+унифицировать empty archive result через _empty_seconds_frame
+обновить research state под текущий head
+```
+
+Verification:
+```text
+python -m compileall strategy/pno launcher.py
+python launcher.py --help
+```
+
+---
+
+## 10. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -250,7 +283,7 @@ Next:
 
 ---
 
-## 10. Правило обновления
+## 11. Правило обновления
 
 Каждый patch должен обновлять:
 
