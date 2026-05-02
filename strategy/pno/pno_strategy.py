@@ -137,7 +137,7 @@ class _PnoSecondsFrameProvider:
         has_full_trade_data = self._has_real_trade_count(frame) and {"quote_volume", "taker_buy_quote_volume"}.issubset(frame.columns)
         if has_full_trade_data:
             return frame
-        window = self._resolve_frame_window(frame)
+        window = self._resolve_frame_window(frame, target_timeframe=target_timeframe)
         if window is None:
             return frame
         start_timestamp_ms, end_timestamp_ms = window
@@ -160,11 +160,16 @@ class _PnoSecondsFrameProvider:
         return bool(values.notna().any() and float(values.fillna(0.0).sum()) > 0.0)
 
     @staticmethod
-    def _resolve_frame_window(frame: pd.DataFrame) -> tuple[int, int] | None:
+    def _resolve_frame_window(frame: pd.DataFrame, *, target_timeframe: Timeframe) -> tuple[int, int] | None:
         timestamps = pd.to_numeric(frame.get("timestamp"), errors="coerce").dropna()
         if timestamps.empty:
             return None
-        return int(timestamps.min()), int(timestamps.max())
+        timeframe_ms = int(target_timeframe.to_milliseconds())
+        return int(timestamps.min()), int(timestamps.max()) + max(timeframe_ms - 1, 0)
+
+    @staticmethod
+    def _empty_seconds_frame() -> pd.DataFrame:
+        return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
 
     @classmethod
     def _merge_trade_data_columns(cls, *, frame: pd.DataFrame, trade_frame: pd.DataFrame) -> pd.DataFrame:
@@ -378,7 +383,7 @@ class _PnoSecondsFrameProvider:
             return None
         frame = pd.read_parquet(path)
         if frame.empty:
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            return self._empty_seconds_frame()
         if not {"quote_volume", "taker_buy_volume", "taker_buy_quote_volume", "number_of_trades"}.issubset(frame.columns):
             return None
         return frame.sort_values("timestamp").reset_index(drop=True)
@@ -448,12 +453,12 @@ class _PnoSecondsFrameProvider:
         )
         response = requests.get(url, timeout=60)
         if response.status_code == 404:
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            return self._empty_seconds_frame()
         response.raise_for_status()
         with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
             names = archive.namelist()
             if not names:
-                return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+                return self._empty_seconds_frame()
             raw = archive.read(names[0])
         trades = pd.read_csv(io.BytesIO(raw))
         if trades.empty:
@@ -472,30 +477,60 @@ class _PnoSecondsFrameProvider:
         self._client._ensure_markets_loaded()
         market_id = self._client._client.market_id(symbol)
         all_rows: list[dict[str, object]] = []
-        since = int(start_timestamp_ms)
-        while since <= int(end_timestamp_ms):
+        next_from_id: int | None = None
+        previous_last_id: int | None = None
+        while True:
+            params: dict[str, object] = {
+                "symbol": market_id,
+                "limit": 1000,
+            }
+            if next_from_id is None:
+                params["startTime"] = int(start_timestamp_ms)
+                params["endTime"] = int(end_timestamp_ms)
+            else:
+                params["fromId"] = int(next_from_id)
+
             batch = self._client._retry_exchange_call(
                 operation="binance_fetch_agg_trades",
                 symbol=symbol,
                 endpoint="fapiPublicGetAggTrades",
                 call=self._client._client.fapiPublicGetAggTrades,
-                params={
-                    "symbol": market_id,
-                    "startTime": since,
-                    "endTime": int(end_timestamp_ms),
-                    "limit": 1000,
-                },
+                params=params,
             )
             if not isinstance(batch, list) or not batch:
                 break
-            all_rows.extend(batch)
-            last_ts = int(batch[-1].get("T") or 0)
-            if last_ts >= int(end_timestamp_ms):
+
+            rows = [row for row in batch if isinstance(row, dict)]
+            if not rows:
                 break
-            since = max(last_ts + 1, since + 1)
+
+            all_rows.extend(rows)
+            last_row = rows[-1]
+            last_ts = self._resolve_agg_trade_timestamp(last_row)
+            last_id = self._resolve_agg_trade_id(last_row)
+            if last_id is None:
+                break
+            if previous_last_id is not None and last_id <= previous_last_id:
+                break
+            previous_last_id = last_id
+            next_from_id = last_id + 1
+
+            if last_ts is not None and last_ts > int(end_timestamp_ms):
+                break
+            if len(rows) < 1000:
+                break
+
         if not all_rows:
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            return self._empty_seconds_frame()
+
         trades = pd.DataFrame(all_rows)
+        trades = self._clip_agg_trades_to_window(
+            trades,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+        )
+        if trades.empty:
+            return self._empty_seconds_frame()
         return self._aggregate_agg_trades_to_seconds(trades)
 
     def _resolve_market_id(self, symbol: str) -> str:
@@ -507,7 +542,7 @@ class _PnoSecondsFrameProvider:
     @staticmethod
     def _aggregate_agg_trades_to_seconds(trades: pd.DataFrame) -> pd.DataFrame:
         if trades.empty:
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            return _PnoSecondsFrameProvider._empty_seconds_frame()
         work = trades.copy()
         timestamp_column = "transact_time" if "transact_time" in work.columns else "T"
         quantity_column = "quantity" if "quantity" in work.columns else "q"
@@ -518,7 +553,7 @@ class _PnoSecondsFrameProvider:
         work["timestamp"] = ((pd.to_numeric(work[timestamp_column], errors="coerce") // 1000) * 1000).astype("Int64")
         work = work.loc[work["timestamp"].notna() & work["price"].notna() & work["quantity"].notna()].copy()
         if work.empty:
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            return _PnoSecondsFrameProvider._empty_seconds_frame()
         work["timestamp"] = work["timestamp"].astype("int64")
         buyer_is_maker = work[maker_column].astype(str).str.lower().isin(("true", "1"))
         work["taker_buy_volume"] = np.where(buyer_is_maker, 0.0, work["quantity"].astype("float64"))

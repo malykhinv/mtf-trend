@@ -26,6 +26,7 @@ SUPERSEDED = заменён новым патчем
 | P003 | Trades % charts | UNKNOWN | `cli/pno_diagnostics.py` | charts | Добавить trade-count панель. | На графиках есть `Trades %`. |
 | P004 | True trade-count data | PROPOSED / UNKNOWN | `constants.py`, `strategy/pno/*` | data quality | Использовать real trade-count/quote_volume. | `trade_count_proxy_used=false`. |
 | P005 | Repo cleanup | APPLIED | `.gitignore`, `.run/*`, `logs/parquet-storage.log`, `utils/validators.py` | cleanup | Убрать локальные IDE/log/empty artifacts без изменения PNO-логики. | `python -m compileall strategy/pno cli constants.py` |
+| P006 | PNO entry/data fetch hardening | PROPOSED | `launcher.py`, `strategy/pno/pno_strategy.py` | bugfix/data quality | Зафиксировать только `close_above`, покрывать последнюю свечу aggTrades window, пагинировать live aggTrades по id. | `python -m compileall strategy/pno launcher.py` |
 
 ---
 
@@ -188,7 +189,46 @@ CI/status checks отсутствуют; локально проверить pyt
 
 ---
 
-## 8. Шаблон нового патча
+## 8. P006 — PNO entry/data fetch hardening
+
+```text
+Status: PROPOSED
+Type: bugfix / data quality
+Trading logic changed: no
+Files: launcher.py, strategy/pno/pno_strategy.py
+Follow-up to: code review
+Supersedes: none
+```
+
+Problem:
+```text
+launcher.py показывал baseline_cross, хотя PNO должен входить только через close_above.
+aggTrades enrichment window заканчивался на open timestamp последней свечи, а не на её закрытии.
+live aggTrades fallback пагинировал по timestamp, что могло пропустить часть trades при 1000+ aggTrades в одном ms.
+```
+
+Change:
+```text
+оставить в launcher только close_above
+расширить enrichment window до конца последней candle
+перевести live aggTrades fallback на fromId-pagination и обрезать результат по исходному timestamp window
+```
+
+Lookahead:
+```text
+расширение окна использует только данные внутри той же свечи, которая уже есть в OHLCV-фрейме;
+для backtest/diagnostics это не добавляет данных из следующих свечей.
+```
+
+Verification:
+```text
+python -m compileall strategy/pno launcher.py
+python launcher.py --help
+```
+
+---
+
+## 9. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -210,7 +250,7 @@ Next:
 
 ---
 
-## 9. Правило обновления
+## 10. Правило обновления
 
 Каждый patch должен обновлять:
 

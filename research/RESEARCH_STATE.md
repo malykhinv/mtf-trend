@@ -9,7 +9,7 @@
 ```text
 Branch: codex/ideal-like
 Commit: 5c5447dbf98bbddb33c5b99dcf6d17fa75b23a8b
-Local diff: proposed docs follow-up for P005 status/details
+Local diff: P006 proposed entry/data fetch hardening
 Last applied patch: P005 repo cleanup
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
@@ -81,6 +81,8 @@ winrate > 0.40
 | P002 | Stage5 reject reasons | UNKNOWN | Логировать точные причины no-trade. |
 | P003 | Trades % charts | UNKNOWN | Добавить trade-count панель на графики. |
 | P004 | True trade-count data | PROPOSED / UNKNOWN | Использовать real `number_of_trades` / `quote_volume`, не volume proxy. |
+| P005 | Repo cleanup | APPLIED | Удалены локальные IDE/log/empty artifacts; `.env` не трогался. |
+| P006 | PNO entry/data fetch hardening | PROPOSED | Зафиксировать `close_above`, исправить aggTrades candle window и live pagination. |
 
 Статусы:
 
