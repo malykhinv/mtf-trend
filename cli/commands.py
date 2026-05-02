@@ -933,8 +933,7 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
         log_prefix=log_prefix,
     )
     logger.debug(
-        "%s: pno diagnostics with shared stage-reviews saved trade_charts=%s shared_stages=%s",
-        log_prefix,
+        "Диагностика PNO сохранена: графиков %s, общих стадий %s.",
         total_charts_generated,
         ",".join(shared_stage_ids),
     )
@@ -1375,7 +1374,7 @@ def _plot_pno_diagnostics_for_symbols(
         diagnostics_dir,
     )
     if export_result["total_stage_events"] == 0 and export_result["symbols_with_trades"] == 0:
-        logger.debug("%s: не найдено событий pno и не сгенерировано сделок для визуализации", log_prefix)
+        logger.debug("PNO: нет событий и сделок для визуализации")
 
 
 def _render_pno_trade_charts_from_export_result(
@@ -1504,8 +1503,8 @@ def _render_pno_trade_charts_only(
     if all_trade_rows:
         all_trades_path = output_dir / "all_trades.csv"
         pd.DataFrame(all_trade_rows).to_csv(all_trades_path, index=False)
-        logger.debug("%s: light trade table saved rows=%s path=%s", log_prefix, len(all_trade_rows), all_trades_path)
-    logger.debug("%s: light charts saved png=%s output_dir=%s", log_prefix, total_charts_generated, charts_dir)
+        logger.debug("Таблица сделок сохранена: строк %s, файл %s.", len(all_trade_rows), all_trades_path)
+    logger.debug("Графики сохранены: файлов %s, папка %s.", total_charts_generated, charts_dir)
     if total_symbols > 0:
         logger.warning("Графики готовы")
     return total_charts_generated
@@ -1544,7 +1543,7 @@ def _log_human_backtest_summary(
     log_prefix: str,
 ) -> None:
     if results.empty:
-        logger.debug("%s: итог бэктеста пустой: сделок нет, комбинации не дали результата.", log_prefix)
+        logger.debug("Итог бэктеста пустой: сделок нет.")
         return
     best_row = results.iloc[0]
     trades_count = int(best_row.get("trades_count", 0) or 0)
@@ -1557,7 +1556,7 @@ def _log_human_backtest_summary(
     runner_be_count = int(best_row.get("ppa_runner_be_below_tp1_count", 0) or 0)
     runner_loss_count = int(best_row.get("ppa_runner_loss_below_entry_count", 0) or 0)
     logger.debug(
-        "%s сделок, winrate: %.1f%%, средний трейд: %.2f%%, итог: %.2f%%, PF: %.2f, DD: %.2f%%.",
+        "%s сделок, винрейт %.1f%%, средний трейд %.2f%%, итог %.2f%%, профит-фактор %.2f, просадка %.2f%%.",
         trades_count,
         win_rate,
         avg_trade_pct,
@@ -1608,7 +1607,7 @@ def _export_pno_diagnostics_context_for_symbols(
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
     )
-    logger.debug("Экспорт диагностических данных...", total_symbols, ",".join(selected_stage_ids))
+    logger.debug("Диагностика PNO: символов %s, стадий %s.", total_symbols, ",".join(selected_stage_ids))
     for symbol_index, (symbol, mtf_frames) in enumerate(symbol_frames.items(), start=1):
         params = replace(pno_params_template, symbol=symbol)
         trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
@@ -1751,7 +1750,7 @@ def _plot_for_strategy_dispatch(
     log_prefix: str,
 ) -> bool:
     if strategy_id != "pno" or not isinstance(strategy, PnoStrategy):
-        logger.error("%s: unsupported visualization type for strategy %s", log_prefix, strategy_id)
+        logger.error("Визуализация для стратегии %s не поддерживается", strategy_id)
         return False
     _plot_pno_diagnostics_for_symbols(
         config=config,
@@ -1804,7 +1803,7 @@ def _select_pno_plot_params_row_by_stage(
         best_score = max(scored_rows, key=lambda item: item[:5])
         if best_score[0] > 0 or not needs_rejection_fallback:
             logger.debug(
-                "pno stage-plot selected row from results stage_events=%s stage_rejections=%s trades_generated=%s profit_factor=%.4f",
+                "PNO: строка для графиков выбрана из результатов; событий %s, отказов %s, сделок %s, профит-фактор %.4f.",
                 best_score[0],
                 best_score[1],
                 best_score[2],
@@ -1852,7 +1851,7 @@ def _select_pno_plot_params_row_by_stage(
 
     best_score = max(scored_rows, key=lambda item: item[:5])
     logger.debug(
-        "pno stage-plot selected row by stage_events=%s stage_rejections=%s trades_generated=%s profit_factor=%.4f",
+        "PNO: строка для графиков выбрана по диагностике; событий %s, отказов %s, сделок %s, профит-фактор %.4f.",
         best_score[0],
         best_score[1],
         best_score[2],
@@ -1885,16 +1884,16 @@ def _load_plot_params_row_from_results(
         csv_path = next((candidate for candidate in candidate_paths if candidate.exists()), candidate_paths[0])
 
     if not csv_path.exists():
-        logger.error("plot-from-results: файл результатов не найден: %s", csv_path)
+        logger.error("Файл результатов не найден: %s", csv_path)
         return None
 
     frame = pd.read_csv(csv_path)
     if frame.empty:
-        logger.error("plot-from-results: файл результатов пустой: %s", csv_path)
+        logger.error("Файл результатов пустой: %s", csv_path)
         return None
 
     if strategy_id != "pno":
-        logger.error("plot-from-results: неподдерживаемая стратегия %s", strategy_id)
+        logger.error("Стратегия %s не поддерживается", strategy_id)
         return None
     required_columns = [
         "pno_variant_id",
@@ -1907,7 +1906,7 @@ def _load_plot_params_row_from_results(
     ]
     missing_columns = [column for column in required_columns if column not in frame.columns]
     if missing_columns:
-        logger.error("plot-from-results: отсутствуют обязательные колонки: %s", ", ".join(missing_columns))
+        logger.error("В результатах нет обязательных колонок: %s", ", ".join(missing_columns))
         return None
 
     selected_row_number_raw = getattr(args, "row_number", None)
@@ -1916,14 +1915,14 @@ def _load_plot_params_row_from_results(
         row_index = row_number - 1
         if row_index < 0 or row_index >= len(frame):
             logger.error(
-                "plot-from-results: row_number=%s вне диапазона 1..%s",
+                "Номер строки %s вне диапазона 1..%s",
                 row_number,
                 len(frame),
             )
             return None
         selected_row = frame.iloc[row_index]
         logger.debug(
-            "plot-from-results: использована строка=%s из %s (pf=%s, trades_count=%s)",
+            "Использована строка %s из %s: профит-фактор %s, сделок %s.",
             row_number,
             csv_path,
             selected_row.get("profit_factor", "n/a"),
@@ -1946,7 +1945,7 @@ def _load_plot_params_row_from_results(
             if not matches.empty:
                 matched_by_column = matches
                 logger.debug(
-                    "plot-from-results: найдена комбинация по колонке %s, id=%s, совпадений=%s",
+                    "Комбинация найдена по колонке %s: id %s, совпадений %s.",
                     column,
                     selected_id,
                     len(matches),
@@ -1959,14 +1958,14 @@ def _load_plot_params_row_from_results(
             row_index = selected_id - 1
             if row_index < 0 or row_index >= len(frame):
                 logger.error(
-                    "plot-from-results: id=%s не найден (нет колонок id/combination_id/rank и номер строки вне диапазона 1..%s)",
+                    "ID %s не найден, номер строки вне диапазона 1..%s",
                     selected_id,
                     len(frame),
                 )
                 return None
             selected_row = frame.iloc[row_index]
             logger.warning(
-                "plot-from-results: id=%s не найден в id/combination_id/rank, использован 1-based номер строки=%s",
+                "ID %s не найден; использована строка %s.",
                 selected_id,
                 selected_id,
             )
@@ -1975,7 +1974,7 @@ def _load_plot_params_row_from_results(
         selected_row = sorted_frame.iloc[0]
 
     logger.debug(
-        "plot-from-results: использованы параметры из %s (pf=%s, trades_count=%s, id=%s)",
+        "Параметры взяты из %s: профит-фактор %s, сделок %s, id %s.",
         csv_path,
         selected_row.get("profit_factor", "n/a"),
         selected_row.get("trades_count", "n/a"),
@@ -1989,10 +1988,10 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
         level=config.backtest.log_level,
         logs_dir=config.backtest.logs_dir,
     )
-    logger.debug("%s: старт", command_name)
+    logger.debug("Команда запущена: %s", command_name)
     try:
         code = body()
-        logger.debug("%s (код=%s)", LOG_MSG_TASK_COMPLETED % command_name, code)
+        logger.debug("Команда завершена: %s, код %s", command_name, code)
         return code
     except Exception as exc:
         logger.exception("Ошибка: %s", exc)
@@ -2112,15 +2111,15 @@ def _resolve_symbols(
                 )
     except Exception as exc:
         logger.warning(
-            'ликвидность-кэша: не удалось получить метрики биржи (%s)',
+            "Не удалось получить метрики ликвидности с биржи: %s",
             exc,
         )
 
     combined_symbols = set(liquid_symbols) | exchange_liquid_symbols
     if not combined_symbols:
         fallback_symbols = exchange_symbols_normalized[:top_n]
-        logger.info(
-            'ликвидность-кэша: не найдено ликвидных символов, fallback на первые top_n=%s',
+        logger.warning(
+            "Ликвидные символы не найдены; беру первые %s символов.",
             len(fallback_symbols),
         )
         return [futures_symbol_map[symbol] for symbol in fallback_symbols], liquidity_quality_by_symbol
@@ -2135,22 +2134,12 @@ def _resolve_symbols(
         reverse=True,
     )[:top_n]
 
-    logger.info(
-        'ликвидность-кэша: источник=cache+exchange-liquidity, символов_на_бирже=%s -> в_кэше_с_объёмом=%s -> прошло_порог_ликвидности=%s -> объединённый_кандидатный_лист=%s -> выбрано_top_n=%s',
+    logger.debug(
+        "Отбор ликвидности: биржа %s, кэш %s, порог прошли %s, выбрано %s.",
         len(exchange_symbols_normalized),
         len(symbols_with_volume),
         len(liquid_symbols),
-        len(combined_symbols),
         len(ranked_top_symbols),
-    )
-    logger.info(
-        'ликвидность-кэша: исключено по порогу среднего объёма (min_avg_daily_volume_usd=%.2f) символов=%s',
-        min_volume_usd,
-        len(symbols_with_volume) - len(liquid_symbols),
-    )
-    logger.info(
-        'ликвидность-кэша: добавлено символов по метрикам биржи=%s',
-        len(exchange_liquid_symbols - set(liquid_symbols)),
     )
     return [futures_symbol_map[symbol] for symbol in ranked_top_symbols], liquidity_quality_by_symbol
 
@@ -2180,8 +2169,8 @@ def _resolve_explicit_symbols(
         resolved.append(resolved_symbol)
 
     if missing:
-        logger.warning("explicit-symbols: skipped_missing=%s", ",".join(missing))
-    logger.info("explicit-symbols: requested=%s resolved=%s", len(requested_symbols), len(resolved))
+        logger.warning("Пропущены неизвестные символы: %s", ",".join(missing))
+    logger.debug("Явный список символов: запрошено %s, найдено %s.", len(requested_symbols), len(resolved))
     return resolved
 
 def _resolve_fetch_anchor_timestamp_ms(config: AppConfig, end_timestamp_ms_raw: int | None) -> int:
@@ -2228,12 +2217,10 @@ def _log_fetch_summary(
     )
     if emit_log:
         logger.info(
-            "%s: сводка загрузки всего=%s успешно=%s с ошибками=%s доля_ошибок=%.2f%%",
-            command_name,
-            summary.total_symbols,
+            "Загрузка завершена: %s из %s, ошибок %s.",
             summary.success_symbols,
+            summary.total_symbols,
             summary.failed_symbols,
-            summary.failed_ratio * 100,
         )
     return summary
 
@@ -2254,8 +2241,8 @@ def _resolve_liquidity_skip_reason(summary: FetchSummary | None, threshold: floa
 
 def _log_loaded_coins(logger: Logger, count: int, action: str) -> None:
     templates = {
-        "loaded": "Загружено %s монет.",
-        "updated": "Обновлено %s монет.",
+        "loaded": "Загрузка данных завершена\nСимволов: %s",
+        "updated": "Обновление кэша завершено\nСимволов: %s",
     }
     template = templates.get(action)
     if template is None:
@@ -2402,10 +2389,10 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     fetch_timeframes = _resolve_fetch_timeframes(args, config.fetch.timeframes)
 
     if args.top_n is not None and args.top_n <= 0:
-        logger.error("fetch-data: --top-n must be > 0")
+        logger.error("--top-n должен быть > 0")
         return 1
     if args.days <= 0:
-        logger.error("fetch-data: --days must be > 0")
+        logger.error("--days должен быть > 0")
         return 1
 
     fetcher, exchange_client = _build_fetch_stack(config)
@@ -2431,15 +2418,12 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     else:
         symbols = explicit_symbols
         liquidity_quality_by_symbol = {}
-    logger.info(
-        "загрузка-данных: найдено фьючерсов=%s выбрано_символов=%s (режим_подбора=%s)",
-        all_futures_count,
-        len(symbols),
-        "cache+exchange-liquidity",
-    )
+    logger.warning("Загрузка данных")
+    logger.info("Отобрано %s символов", len(symbols))
+    logger.debug("Фьючерсов на бирже: %s.", all_futures_count)
     if not symbols:
         liquidity_quality_by_symbol = {}
-        logger.info("загрузка-данных: не найдено символов для загрузки")
+        logger.warning("Нет символов для загрузки")
         return 0
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
@@ -2453,11 +2437,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         *,
         emit_log: bool = True,
     ) -> None:
-        logger.info(
-            "загрузка-данных: сбор кэша для TF=%s (символов=%s)",
-            requested_timeframe.value,
-            len(symbols_to_fetch),
-        )
+        logger.warning("Таймфрейм: %s", requested_timeframe.value)
         result = fetcher.fetch_all(
             symbols=symbols_to_fetch,
             timeframe=requested_timeframe,
@@ -2508,17 +2488,11 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 liquidity_timeframe=config.fetch.timeframe,
                 futures_symbols_raw=futures_symbols,
             )
-            logger.info(
-                "fetch-data: recomputed liquid symbol list after primary timeframe load (symbols=%s)",
-                len(followup_symbols),
-            )
+            logger.debug("Список ликвидных символов пересчитан: %s.", len(followup_symbols))
         else:
             root_stage_status = "ohlcv_cache_failed"
-            logger.warning(
-                "liquidity-skip: reason=%s timeframe=%s",
-                skip_reason,
-                primary_timeframe.value,
-            )
+            logger.warning("Отбор ликвидности пропущен для %s", primary_timeframe.value)
+            logger.debug("Причина пропуска отбора ликвидности: %s", skip_reason)
 
     for timeframe in fetch_timeframes:
         if timeframe == primary_timeframe:
@@ -2529,7 +2503,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
     if root_stage_status == "ohlcv_cache_failed":
         exit_code = 2
 
-    logger.info("fetch-data: status=%s exit_code=%s", root_stage_status, exit_code)
+    logger.debug("Загрузка данных завершилась с кодом %s.", exit_code)
     _log_loaded_coins(logger, len(followup_symbols), "loaded")
     return exit_code
 
@@ -2584,10 +2558,10 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     fetch_timeframes = _resolve_fetch_timeframes(args, config.fetch.timeframes)
 
     if args.top_n is not None and args.top_n <= 0:
-        logger.error("update-cache: --top-n must be > 0")
+        logger.error("--top-n должен быть > 0")
         return 1
     if args.days <= 0:
-        logger.error("update-cache: --days must be > 0")
+        logger.error("--days должен быть > 0")
         return 1
 
     fetcher, exchange_client = _build_fetch_stack(config)
@@ -2613,20 +2587,18 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     else:
         symbols = explicit_symbols
         liquidity_quality_by_symbol = {}
-    logger.info(
-        "обновление-кэша: найдено фьючерсов=%s отправлено в fetch_all=%s",
-        all_futures_count,
-        len(symbols),
-    )
+    logger.warning("Обновление кэша")
+    logger.info("Отобрано %s символов", len(symbols))
+    logger.debug("Фьючерсов на бирже: %s.", all_futures_count)
     if not symbols:
-        logger.info("обновление-кэша: не найдено символов для обновления")
+        logger.warning("Нет символов для обновления")
         return 0
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
     include_open_interest = not _to_bool_flag(getattr(args, "skip_open_interest", False))
     failed_symbols: set[str] = set()
     for index, timeframe in enumerate(fetch_timeframes):
-        logger.info("обновление-кэша: сбор кэша для TF=%s", timeframe.value)
+        logger.warning("Таймфрейм: %s", timeframe.value)
         result = fetcher.fetch_all(
             symbols=symbols,
             timeframe=timeframe,
@@ -2649,7 +2621,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
             or isinstance(result.market_caps.market_caps.get(symbol), str)
         )
         if index < len(fetch_timeframes) - 1:
-            logger.info("обновление-кэша: cooldown after TF=%s sleep=75s", timeframe.value)
+            logger.warning("Пауза перед следующим таймфреймом: 75с")
             time.sleep(75)
 
     exit_code = _fetch_exit_code(len(failed_symbols))
@@ -2670,7 +2642,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     run_root_dir = Path(run_root_dir_raw) if run_root_dir_raw is not None else None
     if run_root_dir is not None:
         logger.debug(
-            "output_root=%s strategy_output=%s",
+            "Папка прогона: %s. Папка стратегии: %s.",
             run_root_dir,
             config.backtest.results_dir,
         )
@@ -2689,7 +2661,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         configured_entry_timeframe=config.strategy.entry_timeframe,
     )
     logger.debug(
-        "запуск-бэктеста: явный запуск, уровни: %s, входы: %s",
+        "Бэктест: уровни %s, входы %s.",
         levels_timeframe.value,
         entry_timeframe.value,
     )
@@ -2705,9 +2677,9 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
     if backtest_days is not None:
         logger.debug(
-            "запуск-бэктеста: ограничение окна days=%s end_timestamp_ms=%s",
+            "Окно бэктеста: %s дней, конец %s.",
             backtest_days,
-            backtest_end_timestamp_ms if backtest_end_timestamp_ms is not None else "auto_from_cache",
+            backtest_end_timestamp_ms if backtest_end_timestamp_ms is not None else "по кэшу",
         )
 
     should_plot = _resolve_plot_rejected_flag(args)
@@ -2739,7 +2711,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             preloaded_levels_frames[symbol] = levels_frame
             if levels_frame.empty:
                 logger.debug(
-                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=пустой levels_tf=%s",
+                    "Символ %s исключён из предварительного отбора: нет данных %s.",
                     symbol,
                     levels_timeframe.value,
                 )
@@ -2747,7 +2719,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 continue
             if "volume" not in levels_frame.columns:
                 logger.debug(
-                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет колонки volume на levels_tf=%s",
+                    "Символ %s исключён из предварительного отбора: нет объёма на %s.",
                     symbol,
                     levels_timeframe.value,
                 )
@@ -2758,7 +2730,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             volume_series = volume_numeric.dropna()
             if volume_series.empty:
                 logger.debug(
-                    "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет валидного volume на levels_tf=%s",
+                    "Символ %s исключён из предварительного отбора: объём на %s невалиден.",
                     symbol,
                     levels_timeframe.value,
                 )
@@ -2784,28 +2756,17 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         ranked_symbols_count = 0
         symbols = list(symbols)
         top_n_applied = "не применялся"
-        top_preview_text = "pre-rank отключён"
+        top_preview_text = "предварительный отбор отключён"
 
     pre_rank_elapsed_seconds = time.perf_counter() - pre_rank_started_at
     logger.debug(
-        "запуск-бэктеста: pre-rank время=%.3fs enabled=%s",
-        pre_rank_elapsed_seconds,
-        pre_filter_active,
-    )
-    logger.debug(
-        "запуск-бэктеста: pre-rank symbols_total=%s валидный_volume_levels_tf=%s rejected=%s top_n=%s выбрано_после_отсечения=%s",
+        "Предварительный отбор: %s символов → %s, отклонено %s, время %.3fс.",
         symbols_before_ranking,
-        ranked_symbols_count,
-        rejected_symbols_count,
-        top_n_applied,
         len(symbols),
+        rejected_symbols_count,
+        pre_rank_elapsed_seconds,
     )
-    if not pre_rank_enabled:
-        logger.debug(
-            "запуск-бэктеста: pre-rank top_n не задан или <= 0, используется исходный список символов (%s)",
-            len(symbols),
-        )
-    logger.debug("запуск-бэктеста: pre-rank top-list: %s", top_preview_text)
+    logger.debug("Предварительный список: %s", top_preview_text)
 
     if not symbols:
         if ranked_symbols_count == 0:
@@ -2814,7 +2775,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 levels_timeframe.value,
             )
         else:
-            logger.warning("После применения top_n=%s список символов пуст", top_n)
+            logger.warning("После top_n=%s список символов пуст", top_n)
         return 0
 
     symbol_frames: dict[str, SymbolMtfFrames] = {}
@@ -2965,14 +2926,11 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     median_trades_per_combination = float(results["trades_count"].median()) if not results.empty else 0.0
     logger.debug(
-        "запуск-бэктеста: всего=%s прибыльных=%s лучший_pf=%.4f комбинаций_со_сделками=%s сумма_сделок_по_сетке=%s среднее_сделок_на_комбинацию=%.4f медиана_сделок_на_комбинацию=%.4f",
+        "Сетка бэктеста: комбинаций %s, прибыльных %s, лучший профит-фактор %.4f, сделок %s.",
         summary.total_combinations,
         summary.profitable_combinations,
         summary.best_pf,
-        combinations_with_trades,
         total_trades,
-        average_trades_per_combination,
-        median_trades_per_combination,
     )
     _log_human_backtest_summary(
         logger=logger,
@@ -2982,8 +2940,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     if summary.best_pf == 0 and total_trades == 0:
         logger.debug(
-            "запуск-бэктеста: отсутствуют сделки по всем комбинациям; проверьте достаточность истории для levels_tf=%s и соответствие таймфреймов в кэше (%s/%s)",
-            levels_timeframe.value,
+            "Сделок нет: проверьте историю и кэш таймфреймов %s/%s.",
             levels_timeframe.value,
             entry_timeframe.value,
         )
@@ -3058,7 +3015,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 results=results,
                 levels_timeframe=levels_timeframe,
                 entry_timeframe=entry_timeframe,
-                log_prefix="light-run artifacts",
+                log_prefix="лёгкий режим",
             )
         else:
             _export_pno_grid_artifacts_without_stage_charts(
@@ -3070,7 +3027,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 results=results,
                 levels_timeframe=levels_timeframe,
                 entry_timeframe=entry_timeframe,
-                log_prefix="plot=false",
+                log_prefix="без графиков",
             )
     return 0
 
@@ -3114,9 +3071,9 @@ def _run_pno_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     root_output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.warning("PNO stage-review: запуск")
+    logger.warning("PNO: проверка стадий")
     logger.debug(
-        "pno-stage: preset=%s stage=%s through_stage=%s output_dir=%s",
+        "PNO: пресет %s, стадия %s, до стадии %s, папка %s.",
         preset_name,
         preset_stage,
         preset_through_stage,
@@ -3158,9 +3115,9 @@ def _run_pno_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
-    logger.warning("PNO stage-review завершен")
+    logger.warning("PNO: проверка стадий завершена")
     logger.debug(
-        "pno-stage: summary=%s context=%s",
+        "PNO: сводка %s, контекст %s.",
         summary_path,
         context_path,
     )
@@ -3278,7 +3235,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     preparer = DataPreparer(config.backtest.cache_dir)
     symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
     if not symbols:
-        logger.info("проверка-качества: нет данных для проверки")
+        logger.warning("Нет данных для проверки качества")
         return 0
 
     validator = DataValidator()
@@ -3293,7 +3250,7 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     for symbol in symbols:
         frame = preparer.load_symbol_data(symbol, config.fetch.timeframe)
         if frame.empty:
-            logger.info(f"проверка-качества: {symbol} пропущен, пустой датасет")
+            logger.debug("Проверка качества: %s пропущен, данных нет.", symbol)
             continue
 
         issues = validator.validate(symbol, config.fetch.timeframe, frame)
@@ -3321,9 +3278,12 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
             by_severity=dict(sorted(symbol_severity_counter.items())),
         )
 
-        logger.info(
-            f"проверка-качества: {symbol} проблемы={symbol_total_issues} пропуски={len(gaps)} "
-            f"проблемы_oi={len(oi_quality_issues)}"
+        logger.debug(
+            "Проверка качества: %s, проблем %s, пропусков %s, проблем OI %s.",
+            symbol,
+            symbol_total_issues,
+            len(gaps),
+            len(oi_quality_issues),
         )
 
     summary = QualitySummary(
@@ -3342,8 +3302,8 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     output_path = Path(args.output) if args.output else config.backtest.results_dir / DEFAULT_QUALITY_REPORT_OUTPUT_FILE
     _save_quality_report(report, output_path)
 
-    logger.info(f"проверка-качества: итог проблемы={report.summary.issues_total} пропуски={report.summary.gaps_total}")
-    logger.info(f"проверка-качества: отчет сохранен {output_path}")
+    logger.warning("Проверка качества завершена\nПроблем: %s\nПропусков: %s", report.summary.issues_total, report.summary.gaps_total)
+    logger.info("Отчёт качества: %s", output_path)
     return 0
 
 
@@ -3354,23 +3314,23 @@ def _clear_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     cache_dir = config.backtest.cache_dir
     cache_dir_str = str(cache_dir).strip()
     if not cache_dir_str:
-        logger.error("очистка-кэша: путь к директории кэша пустой, удаление отменено")
+        logger.error("Удаление отменено: путь кэша пустой")
         return 1
 
     resolved_cache_dir = cache_dir.expanduser().resolve()
     home_dir = Path.home().resolve()
     if resolved_cache_dir == Path(resolved_cache_dir.anchor):
-        logger.error(f"очистка-кэша: путь '{resolved_cache_dir}' указывает на корень ФС, удаление отменено")
+        logger.error("Удаление отменено: путь кэша указывает на корень ФС (%s)", resolved_cache_dir)
         return 1
 
     if resolved_cache_dir == home_dir:
-        logger.error(f"очистка-кэша: путь '{resolved_cache_dir}' указывает на домашнюю директорию, удаление отменено")
+        logger.error("Удаление отменено: путь кэша указывает на домашнюю директорию (%s)", resolved_cache_dir)
         return 1
 
-    logger.info(f"очистка-кэша: удаление содержимого {resolved_cache_dir}")
+    logger.warning("Очистка кэша: %s", resolved_cache_dir)
     shutil.rmtree(resolved_cache_dir, ignore_errors=True)
     resolved_cache_dir.mkdir(parents=True, exist_ok=True)
-    logger.info(f"очистка-кэша: директория пересоздана {resolved_cache_dir}")
+    logger.warning("Кэш очищен")
     return 0
 
 
@@ -3379,14 +3339,14 @@ def _plot_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("plot-backtest", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     raw_run_dir = getattr(args, "run_dir", None)
     if raw_run_dir is None or not str(raw_run_dir).strip():
-        logger.error("plot-backtest: --run-dir is required")
+        logger.error("Нужен параметр --run-dir")
         return 1
     run_dir = Path(str(raw_run_dir))
 
     try:
         run_root_dir, context, request = _load_saved_backtest_request(run_dir)
     except (FileNotFoundError, json.JSONDecodeError) as exc:
-        logger.error("plot-backtest: %s", exc)
+        logger.error("Не удалось открыть сохранённый прогон: %s", exc)
         return 1
 
     plot_args = _build_plot_backtest_args(
@@ -3395,7 +3355,7 @@ def _plot_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         request=request,
     )
     logger.debug(
-        "plot-backtest: run_dir=%s results=%s output_dir=%s row_number=%s",
+        "Повторная генерация графиков: прогон %s, результаты %s, папка %s, строка %s.",
         run_root_dir,
         getattr(plot_args, "results_input", None),
         getattr(plot_args, "output_dir", None),

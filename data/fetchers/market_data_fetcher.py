@@ -100,7 +100,7 @@ class MarketDataFetcher:
         include_open_interest: bool = True,
     ) -> FetchAllResult:
         """Загружает полный набор рыночных метрик."""
-        self._logger.debug("Открываю рыночную сцену: %s символов, таймфрейм %s.", len(symbols), timeframe.value)
+        self._logger.debug("Сбор рыночных данных: %s символов, таймфрейм %s.", len(symbols), timeframe.value)
 
         ohlcv_result = self._ohlcv_fetcher.fetch_many(
             symbols,
@@ -129,7 +129,7 @@ class MarketDataFetcher:
                 end_timestamp_ms,
             )
         else:
-            self._logger.debug("OI для %s не нужен в этом проходе, иду дальше.", timeframe.value)
+            self._logger.debug("OI для %s не нужен, пропускаю.", timeframe.value)
             oi_result = {symbol: SymbolFetchResult.ok(0) for symbol in symbols}
 
         market_caps = self.fetch_market_caps(symbols)
@@ -153,7 +153,7 @@ class MarketDataFetcher:
         )
         has_errors = failed_symbols_count > 0
 
-        self._logger.debug("Рыночная сцена собрана. Данные готовы к проверке.")
+        self._logger.debug("Рыночные данные собраны.")
 
         return FetchAllResult(
             ohlcv=ohlcv_result,

@@ -532,7 +532,7 @@ class CcxtFuturesClient(ExchangeClient):
             ].reset_index(drop=True)
 
         if timeframe == Timeframe.M3:
-            self._logger.debug("OI %s %s биржа не ведёт. Ставлю пустой ряд и продолжаю.", symbol, timeframe.value)
+            self._logger.debug("OI %s %s биржа не ведёт. Возвращаю пустой ряд и продолжаю.", symbol, timeframe.value)
             return pd.DataFrame(columns=OPEN_INTEREST_FRAME_COLUMNS)
 
         self._ensure_markets_loaded()

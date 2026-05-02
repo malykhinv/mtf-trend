@@ -87,7 +87,7 @@ class OiFetcher:
 
             if "timestamp" not in data.columns:
                 if data.empty:
-                    self._logger.debug("OI %s %s: биржа вернула пустой ряд, пропускаю без драмы.", symbol, timeframe.value)
+                    self._logger.debug("OI %s %s: биржа вернула пустой ряд, пропускаю.", symbol, timeframe.value)
                     continue
                 raise ValueError(
                     f"OI fetch_symbol: отсутствует колонка 'timestamp' в непустом OI для {symbol} {timeframe.value}"

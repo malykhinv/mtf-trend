@@ -2508,11 +2508,10 @@ def _export_pno_stage_reviews(
             remaining = total_review_charts - rendered_review_charts
             eta_seconds = remaining / rate if rate > 0.0 else None
             logger.debug(
-                "%s: pno stage-review charts %s/%s (%.1f%%) current_stage=%s eta=%s",
+                "Графики проверки стадий: %s из %s, стадия %s, ETA %s.",
                 log_prefix,
                 rendered_review_charts,
                 total_review_charts,
-                (rendered_review_charts / total_review_charts) * 100.0,
                 stage_id,
                 _format_eta_compact(eta_seconds),
             )
@@ -2520,7 +2519,7 @@ def _export_pno_stage_reviews(
 
     if render_charts and logger is not None and total_review_charts > 0:
         logger.debug(
-            "%s: pno stage-review charts start total=%s stages=%s",
+            "Графики проверки стадий: всего %s, стадии %s.",
             log_prefix,
             total_review_charts,
             ",".join(selected_stage_ids),
@@ -2640,8 +2639,7 @@ def _export_pno_stage_reviews(
     pd.DataFrame(manifest_rows).to_csv(stage_reviews_dir / "manifest.csv", index=False)
     if render_charts and logger is not None and total_review_charts > 0:
         logger.debug(
-            "%s: pno stage-review charts finished total=%s",
-            log_prefix,
+            "Графики проверки стадий готовы: %s.",
             rendered_review_charts,
         )
 
@@ -3700,8 +3698,7 @@ def _export_pno_research_context(
         remaining = total - done
         eta_seconds = remaining / rate if rate > 0.0 else None
         logger.debug(
-            "%s: pno research export phase=%s %s/%s (%.1f%%) eta=%s",
-            log_prefix,
+            "Экспорт исследовательского контекста: этап %s, %s из %s, ETA %s.",
             phase,
             done,
             total,
@@ -3716,13 +3713,6 @@ def _export_pno_research_context(
             len(rows)
             for reason_groups in stage_rejections_by_stage.values()
             for rows in reason_groups.values()
-        )
-        logger.debug(
-            "%s: pno research export start stage_passed=%s stage_rejected=%s trades=%s",
-            log_prefix,
-            stage_passed_total,
-            stage_rejected_total,
-            len(trade_rows),
         )
 
     def _get_prepared_levels_frame(symbol: str) -> pd.DataFrame:
@@ -3993,10 +3983,9 @@ def _export_pno_research_context(
     if logger is not None:
         elapsed = max(time.monotonic() - export_start_time, 0.0)
         logger.debug(
-            "%s: pno research export finished elapsed=%s output_dir=%s",
-            log_prefix,
-            _format_eta_compact(elapsed),
+            "Исследовательский контекст сохранён: %s, время %s.",
             research_dir,
+            _format_eta_compact(elapsed),
         )
 
 

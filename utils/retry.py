@@ -48,8 +48,8 @@ def run_with_retry(
         raise ValueError("число попыток должно быть >= 1")
 
     target_logger = logger or logging.getLogger(__name__)
-    endpoint_value = endpoint or "n/a"
-    symbol_value = symbol or "n/a"
+    endpoint_value = endpoint or "н/д"
+    symbol_value = symbol or "н/д"
 
     def _compute_sleep_seconds(exc: Exception, attempt_number: int) -> float:
         message = str(exc).lower()
@@ -61,7 +61,7 @@ def run_with_retry(
         try:
             result = call(*args, **kwargs)
             target_logger.debug(
-                "Источник ответил на «%s» с попытки %s/%s. Endpoint: %s. Символ: %s.",
+                "Источник ответил на «%s» с попытки %s/%s. Адрес: %s. Символ: %s.",
                 operation,
                 attempt_number,
                 attempts,
@@ -72,7 +72,7 @@ def run_with_retry(
         except retriable_exceptions as exc:
             if should_retry is not None and not should_retry(exc):
                 target_logger.warning(
-                    "Запрос «%s» остановлен без повтора. Попытка %s/%s. Endpoint: %s. Символ: %s. Причина: %s",
+                    "Запрос «%s» остановлен без повтора. Попытка %s/%s. Адрес: %s. Символ: %s. Причина: %s",
                     operation,
                     attempt_number,
                     attempts,
@@ -84,7 +84,7 @@ def run_with_retry(
             is_last = attempt_number >= attempts
             retry_logger = target_logger.warning if is_last else target_logger.debug
             retry_logger(
-                "Источник не ответил на «%s». Попытка %s/%s. Endpoint: %s. Символ: %s. Причина: %s",
+                "Источник не ответил на «%s». Попытка %s/%s. Адрес: %s. Символ: %s. Причина: %s",
                 operation,
                 attempt_number,
                 attempts,
