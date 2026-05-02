@@ -40,7 +40,8 @@ SUPERSEDED = заменён новым патчем
 | P017 | Fix P015 runner regression | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть потерянный вызов generate_events_portfolio и восстановить аргументы long-symbol logger. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 | P018 | Stale reclaim and trade-count chart fix | APPLIED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Канонизировать trade-count column для графиков и отбрасывать сделки после failed reclaim уровня до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
 | P019 | Clear PNO trade-data caches | APPLIED | `strategy/pno/pno_strategy.py` | memory | Сбрасывать aggTrades-derived runtime caches после обработки символа. | `python -m compileall strategy/pno/pno_strategy.py` |
-| P020 | Trade/chart consistency fix | PROPOSED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Заполнить все trade-count aliases и считать уровень stale, если close_above случился до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
+| P020 | Trade/chart consistency fix | APPLIED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Заполнить все trade-count aliases и считать уровень stale, если close_above случился до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
+| P021 | True trade-count chart propagation | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Прокидывать реальные number_of_trades/trades/trade_count из enriched PNO frames обратно в исходные frames, которые использует chart export. | `python -m compileall strategy/pno/pno_strategy.py` |
 
 ---
 
@@ -779,7 +780,7 @@ Trading logic changed: yes
 Files: cli/pno_diagnostics.py, strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
 Follow-up to: P018
 Supersedes: none
-Commit: UNKNOWN
+Commit: bc41b54a87ac411740f17536dd3429e40b2bfd46
 ```
 
 Problem:
@@ -805,7 +806,56 @@ python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py
 python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected false --pno-entry-confirmation-mode close_above --days 14 --pno-category-mode discovery --collect-diagnostics true
 ```
 
-## 23. Шаблон нового патча
+---
+
+## 23. P021 — True trade-count chart propagation
+
+```text
+Status: PROPOSED
+Type: bugfix / diagnostics
+Trading logic changed: no
+Files: strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P020
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+PNO calculation used enriched copies with real aggTrades columns, but chart export received the original raw SymbolMtfFrames.
+As a result the strategy saw number_of_trades, while the Trades panel on the saved chart was empty.
+```
+
+Change:
+
+```text
+after enriching levels/entry frames, copy real quote_volume/taker_buy_volume/taker_buy_quote_volume/number_of_trades/trades/trade_count back into the original frames by timestamp
+do not use volume/taker_buy_volume as trade-count proxy
+keep chart export using real number_of_trades aliases only
+```
+
+Expected diagnostics:
+
+```text
+Trades panel on trade charts is populated from real number_of_trades/trades/trade_count
+strategy calculations and chart export read the same enriched market-activity columns
+```
+
+Verification:
+
+```text
+python -m compileall strategy/pno/pno_strategy.py
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected false --pno-entry-confirmation-mode close_above --days 14 --pno-category-mode discovery --collect-diagnostics true
+```
+
+Risk:
+
+```text
+логика сделок не меняется; исходные DataFrame получают дополнительные diagnostic columns, чтобы chart export видел тот же trade-count, что и strategy path
+```
+
+## 24. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -827,7 +877,7 @@ Next:
 
 ---
 
-## 24. Правило обновления
+## 25. Правило обновления
 
 Каждый patch должен обновлять:
 

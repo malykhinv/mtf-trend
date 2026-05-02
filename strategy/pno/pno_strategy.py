@@ -742,6 +742,70 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         return None if parsed is None else int(parsed)
 
     @staticmethod
+    def _propagate_enriched_trade_data_to_source_frame(
+        *,
+        source_frame: pd.DataFrame,
+        enriched_frame: pd.DataFrame,
+    ) -> None:
+        """Copy real aggTrades columns back into the original frame.
+
+        Diagnostics and chart export receive the original SymbolMtfFrames object,
+        while PNO calculation works on enriched copies. Without this propagation
+        the strategy can use real number_of_trades, but the chart still sees a
+        raw OHLCV frame and draws an empty trades panel.
+        """
+        if (
+            source_frame.empty
+            or enriched_frame.empty
+            or "timestamp" not in source_frame.columns
+            or "timestamp" not in enriched_frame.columns
+        ):
+            return
+
+        trade_columns = tuple(
+            dict.fromkeys(
+                (
+                    *_PnoSecondsFrameProvider._TRADE_DATA_COLUMNS,
+                    *_PnoSecondsFrameProvider._TRADE_COUNT_COLUMNS,
+                )
+            )
+        )
+        selected_columns = [column for column in trade_columns if column in enriched_frame.columns]
+        if not selected_columns:
+            return
+
+        source_timestamps = pd.to_numeric(source_frame["timestamp"], errors="coerce")
+        if source_timestamps.isna().any():
+            return
+
+        enriched = enriched_frame.loc[:, ["timestamp", *selected_columns]].copy()
+        enriched["timestamp"] = pd.to_numeric(enriched["timestamp"], errors="coerce")
+        enriched = enriched.dropna(subset=["timestamp"])
+        if enriched.empty:
+            return
+        enriched["timestamp"] = enriched["timestamp"].astype("int64")
+        enriched = (
+            enriched.drop_duplicates(subset=["timestamp"], keep="last")
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
+        for column in selected_columns:
+            enriched[column] = pd.to_numeric(enriched[column], errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+        aligned = pd.DataFrame({"timestamp": source_timestamps.astype("int64").to_numpy()}).merge(
+            enriched,
+            on="timestamp",
+            how="left",
+        )
+        for column in selected_columns:
+            enriched_values = pd.to_numeric(aligned[column], errors="coerce")
+            if column in source_frame.columns:
+                current_values = pd.to_numeric(source_frame[column], errors="coerce").reset_index(drop=True)
+                source_frame[column] = enriched_values.combine_first(current_values).to_numpy()
+            else:
+                source_frame[column] = enriched_values.to_numpy()
+
+    @staticmethod
     def _is_stale_level_reclaim_trade(
         *,
         trade: TradeResult,
@@ -816,6 +880,14 @@ class PnoStrategy(BaseStrategy[PnoParams]):
                 symbol=params.symbol,
                 frame=mtf_frames.entry_frame,
                 target_timeframe=params.entry_timeframe,
+            )
+            self._propagate_enriched_trade_data_to_source_frame(
+                source_frame=mtf_frames.levels_frame,
+                enriched_frame=enriched_levels_frame,
+            )
+            self._propagate_enriched_trade_data_to_source_frame(
+                source_frame=mtf_frames.entry_frame,
+                enriched_frame=enriched_entry_frame,
             )
             trades = self._generate_events_for_profiles(
                 profiles=resolve_pno_category_profiles(params, category_mode=self._category_mode_filter),

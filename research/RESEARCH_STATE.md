@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 8b61debb608ecb7f6d08107eb9aabfbd5a792964
-Local diff: P008 proposed typing/client-boundary hardening; P020 proposed trade/chart consistency fix
-Last applied patch: P019 Clear PNO trade-data caches
+Commit: bc41b54a87ac411740f17536dd3429e40b2bfd46
+Local diff: P008 proposed typing/client-boundary hardening; P021 proposed true trade-count chart propagation
+Last applied patch: P020 Trade/chart consistency fix
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -94,7 +94,8 @@ winrate > 0.40
 | P017 | Fix P015 runner regression | APPLIED | Вернуть portfolio_trades assignment и восстановить аргументы long-symbol logger. |
 | P018 | Stale reclaim and trade-count chart fix | APPLIED | Починить пустой trade-count panel и отбрасывать входы в уже провалившийся reclaim уровня. |
 | P019 | Clear PNO trade-data caches | APPLIED | Сбрасывать тяжёлые aggTrades runtime-caches после символа, чтобы full-universe run не упирался в RAM. |
-| P020 | Trade/chart consistency fix | PROPOSED | Синхронизировать trade-count aliases и отбрасывать уровни с close_above до финального сигнала. |
+| P020 | Trade/chart consistency fix | APPLIED | Синхронизировать trade-count aliases и отбрасывать уровни с close_above до финального сигнала. |
+| P021 | True trade-count chart propagation | PROPOSED | Прокидывать реальные aggTrades trade-count columns из enriched frames в исходные frames для chart export. |
 
 Статусы:
 
