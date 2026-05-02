@@ -11,6 +11,7 @@ PnoTimeframePair = tuple[Timeframe, Timeframe]
 
 PNO_BACKTEST_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = (
     (Timeframe.M5, Timeframe.S30),
+    (Timeframe.M5, Timeframe.S15),
     (Timeframe.M1, Timeframe.S5),
 )
 PNO_LIVE_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = (

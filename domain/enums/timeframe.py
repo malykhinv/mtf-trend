@@ -20,6 +20,7 @@ class Timeframe(str, Enum):
     S1 = "1s"
     S5 = "5s"
     S10 = "10s"
+    S15 = "15s"
     S30 = "30s"
     M1 = "1m"
     M3 = "3m"

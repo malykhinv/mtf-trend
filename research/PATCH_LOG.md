@@ -29,6 +29,7 @@ SUPERSEDED = заменён новым патчем
 | P006 | PNO entry/data fetch hardening | APPLIED | `launcher.py`, `strategy/pno/pno_strategy.py` | bugfix/data quality | Зафиксировать только `close_above`, покрывать последнюю свечу aggTrades window, пагинировать live aggTrades по id. | `python -m compileall strategy/pno launcher.py` |
 | P007 | PNO aggTrades helper hotfix | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | bugfix | Добавить отсутствующие helper-методы, которые вызывает P006. | `python -m compileall strategy/pno launcher.py` |
 | P008 | PNO aggTrades typing/client boundary | PROPOSED | `data/exchanges/ccxt_types.py`, `data/exchanges/ccxt_futures_client.py`, `strategy/pno/pno_strategy.py` | typing/refactor | Убрать доступ PNO к private ccxt client, типизировать aggTrades payload, убрать сомнительный `id` fallback. | `python -m compileall data/exchanges strategy/pno launcher.py` |
+| P009 | Add 5m/15s PNO TF set | PROPOSED | `domain/enums/timeframe.py`, `strategy/pno/config.py`, `research/*` | experiment config | Добавить `15s` timeframe и включить `5m/15s` в multi-TF backtest set. | `python -m compileall domain/enums strategy/pno cli constants.py main.py launcher.py` |
 
 ---
 
@@ -298,7 +299,46 @@ python launcher.py --help
 
 ---
 
-## 11. Шаблон нового патча
+---
+
+## 11. P009 — Add 5m/15s PNO TF set
+
+```text
+Status: PROPOSED
+Type: experiment config
+Trading logic changed: no
+Files: domain/enums/timeframe.py, strategy/pno/config.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md, research/EXPERIMENT_LOG.md
+Follow-up to: E003
+Supersedes: none
+```
+
+Problem:
+
+```text
+E003 должен сравнить три TF-set, но 5m/15s не был доступен:
+Timeframe.S15 отсутствовал, а PNO_BACKTEST_TIMEFRAME_PAIRS содержал только 5m/30s и 1m/5s.
+```
+
+Change:
+
+```text
+добавить Timeframe.S15
+добавить (Timeframe.M5, Timeframe.S15) в PNO_BACKTEST_TIMEFRAME_PAIRS
+```
+
+Expected diagnostics:
+
+```text
+--pno-all-tf-pairs прогоняет 3 TF-set: 5m/30s, 5m/15s, 1m/5s
+```
+
+Verification:
+
+```text
+python -m compileall domain/enums strategy/pno cli constants.py main.py launcher.py
+```
+
+## 12. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -320,7 +360,7 @@ Next:
 
 ---
 
-## 12. Правило обновления
+## 13. Правило обновления
 
 Каждый patch должен обновлять:
 

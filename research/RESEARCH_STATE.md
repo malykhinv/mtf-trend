@@ -9,7 +9,7 @@
 ```text
 Branch: codex/ideal-like
 Commit: 3cb535baea6e44461fbd5405848d708ef18eed0e
-Local diff: P008 proposed typing/client-boundary hardening
+Local diff: P008 proposed typing/client-boundary hardening; P009 proposed 5m/15s TF set
 Last applied patch: P007 PNO aggTrades helper hotfix
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
@@ -83,6 +83,7 @@ winrate > 0.40
 | P004 | True trade-count data | PROPOSED / UNKNOWN | Использовать real `number_of_trades` / `quote_volume`, не volume proxy. |
 | P005 | Repo cleanup | APPLIED | Удалены локальные IDE/log/empty artifacts; `.env` не трогался. |
 | P006 | PNO entry/data fetch hardening | PROPOSED | Зафиксировать `close_above`, исправить aggTrades candle window и live pagination. |
+| P009 | Add 5m/15s PNO TF set | PROPOSED | Добавить `15s` enum и включить `5m/15s` в multi-TF backtest set. |
 
 Статусы:
 
@@ -174,5 +175,5 @@ P004 true trade-count → повторить тот же 5m/30s период →
 После этого:
 
 ```text
-сравнить 5m/30s vs 5m/15s vs 5m/5s.
+сравнить 5m/30s vs 5m/15s vs 1m/5s через --pno-all-tf-pairs.
 ```

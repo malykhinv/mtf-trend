@@ -141,8 +141,10 @@ Status: PLANNED
 ```text
 5m/30s
 5m/15s
-5m/5s
+1m/5s
 ```
+
+Code prep: P009 proposed to add `15s` enum and include `5m/15s` in `PNO_BACKTEST_TIMEFRAME_PAIRS`.
 
 Метрики:
 
