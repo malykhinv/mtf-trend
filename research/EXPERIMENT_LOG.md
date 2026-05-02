@@ -37,7 +37,7 @@ data quality
 |---|---|---|---|
 | E001 | `5m/30s` 3-day run | ANALYZED | 0 trades; полезен для funnel/reject, не для PnL. |
 | E002 | Same window + true trade-count | PLANNED | Проверить Stage1/flow на real trade-count. |
-| E003 | Entry TF comparison | PLANNED | Сравнить `5m/30s`, `5m/15s`, `5m/5s`. |
+| E003 | Entry TF comparison | PLANNED | Сравнить `5m/30s`, `5m/15s`, `1m/5s`. |
 | E004 | `touch + retest hold` | IDEA ONLY | Только отдельный режим, не замена `close_above`. |
 | E005 | Year robustness test | PLANNED | Проверить 50+ trades/year, months, top-trade dependency. |
 
@@ -144,7 +144,7 @@ Status: PLANNED
 1m/5s
 ```
 
-Code prep: P009 proposed to add `15s` enum and include `5m/15s` in `PNO_BACKTEST_TIMEFRAME_PAIRS`.
+Code prep: P009 applied in commit `a4857715b556693c74c10993b74249278275ec16`; `15s` enum added and `5m/15s` included in `PNO_BACKTEST_TIMEFRAME_PAIRS`.
 
 Метрики:
 

@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 3cb535baea6e44461fbd5405848d708ef18eed0e
-Local diff: P008 proposed typing/client-boundary hardening; P009 proposed 5m/15s TF set
-Last applied patch: P007 PNO aggTrades helper hotfix
+Commit: a4857715b556693c74c10993b74249278275ec16
+Local diff: P008 proposed typing/client-boundary hardening
+Last applied patch: P009 Add 5m/15s PNO TF set
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -83,7 +83,7 @@ winrate > 0.40
 | P004 | True trade-count data | PROPOSED / UNKNOWN | Использовать real `number_of_trades` / `quote_volume`, не volume proxy. |
 | P005 | Repo cleanup | APPLIED | Удалены локальные IDE/log/empty artifacts; `.env` не трогался. |
 | P006 | PNO entry/data fetch hardening | PROPOSED | Зафиксировать `close_above`, исправить aggTrades candle window и live pagination. |
-| P009 | Add 5m/15s PNO TF set | PROPOSED | Добавить `15s` enum и включить `5m/15s` в multi-TF backtest set. |
+| P009 | Add 5m/15s PNO TF set | APPLIED | Добавить `15s` enum и включить `5m/15s` в multi-TF backtest set. |
 
 Статусы:
 
@@ -97,7 +97,7 @@ PROPOSED / APPLIED / VERIFIED / UNKNOWN / REVERTED / SUPERSEDED
 
 | ID | Гипотеза | Основание | Следующий тест |
 |---|---|---|---|
-| H1 | `30s` entry TF может опаздывать. | ETH case дошёл до active high до executable entry. | Сравнить `5m/30s`, `5m/15s`, `5m/5s`. |
+| H1 | `30s` entry TF может опаздывать. | ETH case дошёл до active high до executable entry. | Сравнить `5m/30s`, `5m/15s`, `1m/5s`. |
 | H2 | Stage1 слишком узкий или рынок дал мало чистых пампов. | Мало Stage1 passes в последнем run. | Длиннее окно + rejection distribution. |
 | H3 | Flow-фильтры нельзя честно оценить без real trade-count. | Был volume proxy. | P004 + повтор того же run. |
 | H4 | `human_bos` может обходить часть Stage4 scoring. | Нужно проверить текущий execution path. | Code review актуального `engine.py`. |
