@@ -298,11 +298,15 @@ def _with_canonical_pno_trade_count(frame: pd.DataFrame) -> pd.DataFrame:
     if source_column is None:
         return frame
     prepared = frame.copy()
-    source_values = pd.to_numeric(prepared[source_column], errors="coerce")
-    if "trade_count" in prepared.columns:
-        prepared["trade_count"] = pd.to_numeric(prepared["trade_count"], errors="coerce").combine_first(source_values)
-    else:
-        prepared["trade_count"] = source_values
+    source_values = pd.to_numeric(prepared[source_column], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    for column in _PNO_PLOT_TRADE_COUNT_COLUMNS:
+        if column in prepared.columns:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce").replace(
+                [np.inf, -np.inf],
+                np.nan,
+            ).combine_first(source_values)
+        else:
+            prepared[column] = source_values
     return prepared
 
 

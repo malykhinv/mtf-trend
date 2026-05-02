@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 9508a095fd10c7a628c78692fdcce6616d39c414
-Local diff: P008 proposed typing/client-boundary hardening; P018 proposed stale reclaim and trade-count chart fix
-Last applied patch: P017 Fix P015 runner regression
+Commit: 8b61debb608ecb7f6d08107eb9aabfbd5a792964
+Local diff: P008 proposed typing/client-boundary hardening; P020 proposed trade/chart consistency fix
+Last applied patch: P019 Clear PNO trade-data caches
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -92,7 +92,9 @@ winrate > 0.40
 | P015 | Backtest progress and memory logs | APPLIED | Убрать дубли прогресса для одиночной сетки и сделать понятный memory-error. |
 | P016 | Fix unclosed logger call | APPLIED | Закрыть незавершённый logger.info после P015. |
 | P017 | Fix P015 runner regression | APPLIED | Вернуть portfolio_trades assignment и восстановить аргументы long-symbol logger. |
-| P018 | Stale reclaim and trade-count chart fix | PROPOSED | Починить пустой trade-count panel и отбрасывать входы в уже провалившийся reclaim уровня. |
+| P018 | Stale reclaim and trade-count chart fix | APPLIED | Починить пустой trade-count panel и отбрасывать входы в уже провалившийся reclaim уровня. |
+| P019 | Clear PNO trade-data caches | APPLIED | Сбрасывать тяжёлые aggTrades runtime-caches после символа, чтобы full-universe run не упирался в RAM. |
+| P020 | Trade/chart consistency fix | PROPOSED | Синхронизировать trade-count aliases и отбрасывать уровни с close_above до финального сигнала. |
 
 Статусы:
 

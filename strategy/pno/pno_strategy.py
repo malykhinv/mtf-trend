@@ -178,10 +178,10 @@ class _PnoSecondsFrameProvider:
             return frame
         has_full_trade_data = self._has_real_trade_count(frame) and {"quote_volume", "taker_buy_quote_volume"}.issubset(frame.columns)
         if has_full_trade_data:
-            return frame
+            return self._with_trade_count_aliases(frame)
         window = self._resolve_frame_window(frame, target_timeframe=target_timeframe)
         if window is None:
-            return frame
+            return self._with_trade_count_aliases(frame)
         start_timestamp_ms, end_timestamp_ms = window
         trade_frame = self.load_aggregated_window(
             symbol=symbol,
@@ -190,7 +190,7 @@ class _PnoSecondsFrameProvider:
             target_timeframe=target_timeframe,
         )
         if trade_frame.empty or not self._has_real_trade_count(trade_frame):
-            return frame
+            return self._with_trade_count_aliases(frame)
         return self._merge_trade_data_columns(frame=frame, trade_frame=trade_frame)
 
     @classmethod
@@ -200,6 +200,30 @@ class _PnoSecondsFrameProvider:
             return False
         values = pd.to_numeric(frame[trade_count_column], errors="coerce")
         return bool(values.notna().any() and float(values.fillna(0.0).sum()) > 0.0)
+
+    @classmethod
+    def _with_trade_count_aliases(cls, frame: pd.DataFrame) -> pd.DataFrame:
+        source_column = next(
+            (
+                column
+                for column in cls._TRADE_COUNT_COLUMNS
+                if column in frame.columns and pd.to_numeric(frame[column], errors="coerce").notna().any()
+            ),
+            None,
+        )
+        if source_column is None:
+            return frame
+        prepared = frame.copy()
+        source_values = pd.to_numeric(prepared[source_column], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        for column in cls._TRADE_COUNT_COLUMNS:
+            if column in prepared.columns:
+                prepared[column] = pd.to_numeric(prepared[column], errors="coerce").replace(
+                    [np.inf, -np.inf],
+                    np.nan,
+                ).combine_first(source_values)
+            else:
+                prepared[column] = source_values
+        return prepared
 
     @staticmethod
     def _resolve_frame_window(frame: pd.DataFrame, *, target_timeframe: Timeframe) -> tuple[int, int] | None:
@@ -243,7 +267,7 @@ class _PnoSecondsFrameProvider:
                 merged = merged.drop(columns=[incoming_column])
             else:
                 merged = merged.rename(columns={incoming_column: column})
-        return merged
+        return cls._with_trade_count_aliases(merged)
 
     def _ensure_seconds_window(
         self,
@@ -743,7 +767,9 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             & (timestamps < int(entry_signal_timestamp_ms))
         )
         failed_reclaim = pre_signal_window & (highs > float(level) + epsilon) & (closes < float(level) - epsilon)
-        return bool(np.any(failed_reclaim))
+        close_above_before_signal = pre_signal_window & (closes > float(level) + epsilon)
+        stale_reclaim = failed_reclaim | close_above_before_signal
+        return bool(np.any(stale_reclaim))
 
     def _filter_stale_level_reclaim_trades(
         self,

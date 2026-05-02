@@ -38,7 +38,9 @@ SUPERSEDED = заменён новым патчем
 | P015 | Backtest progress and memory logs | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging/bugfix | Убрать дублирующий progress narrative при одной комбинации, добавить предупреждение о тяжёлом symbol set и понятный memory-error. | `python -m compileall vectorbt_runner research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P016 | Fix unclosed logger call | APPLIED | `vectorbt_runner/backtest_runner.py` | bugfix | Закрыть незавершённый logger.info после P015. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 | P017 | Fix P015 runner regression | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть потерянный вызов generate_events_portfolio и восстановить аргументы long-symbol logger. | `python -m compileall vectorbt_runner/backtest_runner.py` |
-| P018 | Stale reclaim and trade-count chart fix | PROPOSED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Канонизировать trade-count column для графиков и отбрасывать сделки после failed reclaim уровня до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
+| P018 | Stale reclaim and trade-count chart fix | APPLIED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Канонизировать trade-count column для графиков и отбрасывать сделки после failed reclaim уровня до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
+| P019 | Clear PNO trade-data caches | APPLIED | `strategy/pno/pno_strategy.py` | memory | Сбрасывать aggTrades-derived runtime caches после обработки символа. | `python -m compileall strategy/pno/pno_strategy.py` |
+| P020 | Trade/chart consistency fix | PROPOSED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Заполнить все trade-count aliases и считать уровень stale, если close_above случился до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
 
 ---
 
@@ -700,7 +702,7 @@ Trading logic changed: yes
 Files: cli/pno_diagnostics.py, strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
 Follow-up to: MAGMA_USDT_USDT_001_sl review
 Supersedes: none
-Commit: UNKNOWN
+Commit: a604d9ca206fbe12a9a3dd78a1140470be123e4a
 ```
 
 Problem:
@@ -739,7 +741,71 @@ Risk:
 пост-фильтр убирает trades после failed reclaim; если later reclaim должен считаться новым setup, его нужно создавать как новый Stage4 setup, а не переиспользовать старый уровень
 ```
 
-## 21. Шаблон нового патча
+---
+
+## 21. P019 — Clear PNO trade-data caches
+
+```text
+Status: APPLIED
+Type: memory
+Trading logic changed: no
+Files: strategy/pno/pno_strategy.py
+Follow-up to: P018
+Supersedes: none
+Commit: 8b61debb608ecb7f6d08107eb9aabfbd5a792964
+```
+
+Problem:
+
+```text
+Full-universe run держал в памяти сотни aggTrades-derived windows и мог упереться в RAM.
+```
+
+Change:
+
+```text
+сбрасывать runtime/shared caches после обработки символа
+оставить persistent sparse cache на диске
+```
+
+---
+
+## 22. P020 — Trade/chart consistency fix
+
+```text
+Status: PROPOSED
+Type: bugfix / diagnostics
+Trading logic changed: yes
+Files: cli/pno_diagnostics.py, strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P018
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+В results могло быть 2 trades, а chart directory показывал только один валидный график.
+Trades panel оставалась пустой, потому что разные части pipeline смотрели на разные aliases: number_of_trades / trades / trade_count.
+MAGMA-like stale level не отбрасывался, если до финального сигнала уже был close_above, но не было failed close back below level.
+```
+
+Change:
+
+```text
+заполнять все aliases number_of_trades/trades/trade_count в diagnostics plot frames
+заполнять те же aliases сразу после aggTrades enrichment в PNO strategy wrapper
+считать уровень stale, если close_above по уровню случился до финального entry_signal_timestamp_ms
+```
+
+Verification:
+
+```text
+python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected false --pno-entry-confirmation-mode close_above --days 14 --pno-category-mode discovery --collect-diagnostics true
+```
+
+## 23. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -761,7 +827,7 @@ Next:
 
 ---
 
-## 22. Правило обновления
+## 24. Правило обновления
 
 Каждый patch должен обновлять:
 
