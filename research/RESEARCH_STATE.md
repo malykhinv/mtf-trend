@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 4af62154dba0f4431407d7b161db64fdd7ef5491
-Local diff: P008 proposed typing/client-boundary hardening; P029 proposed whitelist runtime log format
-Last applied patch: P028 Normalize diagnostics and chart logs
+Commit: 32c8ca0dd5cd475da6b96be3f9d8ad9e409fb55b
+Local diff: P008 proposed typing/client-boundary hardening; P030 proposed replace runtime log filters with source logs
+Last applied patch: P029 Whitelist runtime log format
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -103,7 +103,8 @@ winrate > 0.40
 | P026 | Strict backtest runtime log shape | APPLIED | Строгий формат логов: заголовок, TF, progress, итог; без лишней runtime-диагностики. |
 | P027 | Quiet runtime logger sweep | APPLIED | Убрать служебный runtime-шум из logger.*, оставив человековажные заголовки, progress, итог, предупреждения и ошибки. |
 | P028 | Normalize diagnostics and chart logs | APPLIED | Убрать summary/grid/runner-final шум и нормализовать diagnostics/charts export logs. |
-| P029 | Whitelist runtime log format | PROPOSED | Runtime INFO/WARNING проходит только для заголовка, TF, progress, итога, diagnostics/charts и ошибок. |
+| P029 | Whitelist runtime log format | APPLIED | Runtime INFO/WARNING проходит только для заголовка, TF, progress, итога, diagnostics/charts и ошибок. |
+| P030 | Replace runtime log filters with source logs | PROPOSED | Удалить глобальный фильтр логов и исправить runtime-шум в конкретных call-sites. |
 
 Статусы:
 

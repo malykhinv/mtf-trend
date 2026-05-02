@@ -692,7 +692,7 @@ def _export_pno_category_artifacts(
             "trades_generated": len(category_trade_rows_all),
         }
         (category_root / "category_context.json").write_text(_to_compact_json(context_payload), encoding="utf-8")
-    logger.info(
+    logger.debug(
         "%s: PNO-артефакты разложены по категориям.\n  Категории: %s.",
         log_prefix,
         ", ".join(sorted(category_meta)),
@@ -724,7 +724,7 @@ def _export_pno_category_csv_split(
         category_path = categories_root / f"{category_id}_results.csv"
         category_df.to_csv(category_path, index=False)
 
-    logger.info(
+    logger.debug(
         "Категории получили отдельные CSV.\n  Папка: %s.",
         categories_root,
     )
@@ -1536,7 +1536,7 @@ def _log_human_backtest_summary(
     runner_success_count = int(best_row.get("ppa_runner_success_above_tp1_count", 0) or 0)
     runner_be_count = int(best_row.get("ppa_runner_be_below_tp1_count", 0) or 0)
     runner_loss_count = int(best_row.get("ppa_runner_loss_below_entry_count", 0) or 0)
-    logger.info(
+    logger.debug(
         "%s: трейдерская сводка: лучшая комбинация дала %s сделок, winrate %.1f%%, средний трейд %.2f%%, итог %.2f%%, PF %.2f, max DD %.2f%%.",
         log_prefix,
         trades_count,
@@ -1546,7 +1546,7 @@ def _log_human_backtest_summary(
         profit_factor,
         max_drawdown_pct,
     )
-    logger.info(
+    logger.debug(
         "%s: по сетке: комбинаций=%s, прибыльных=%s, со сделками=%s. У лучшей комбинации исходы: TP2=%s, TP1+runner=%s, SL=%s.",
         log_prefix,
         summary.total_combinations,
@@ -1556,7 +1556,7 @@ def _log_human_backtest_summary(
         tp1_be_count,
         sl_count,
     )
-    logger.info(
+    logger.debug(
         "%s: runner final close: above_TP1=%s, below_TP1_BE=%s, below_entry_loss=%s.",
         log_prefix,
         runner_success_count,
