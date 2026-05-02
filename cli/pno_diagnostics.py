@@ -2507,7 +2507,7 @@ def _export_pno_stage_reviews(
             rate = rendered_review_charts / elapsed
             remaining = total_review_charts - rendered_review_charts
             eta_seconds = remaining / rate if rate > 0.0 else None
-            logger.info(
+            logger.debug(
                 "%s: pno stage-review charts %s/%s (%.1f%%) current_stage=%s eta=%s",
                 log_prefix,
                 rendered_review_charts,
@@ -2519,7 +2519,7 @@ def _export_pno_stage_reviews(
             last_progress_log_time = now
 
     if render_charts and logger is not None and total_review_charts > 0:
-        logger.info(
+        logger.debug(
             "%s: pno stage-review charts start total=%s stages=%s",
             log_prefix,
             total_review_charts,
@@ -2639,7 +2639,7 @@ def _export_pno_stage_reviews(
 
     pd.DataFrame(manifest_rows).to_csv(stage_reviews_dir / "manifest.csv", index=False)
     if render_charts and logger is not None and total_review_charts > 0:
-        logger.info(
+        logger.debug(
             "%s: pno stage-review charts finished total=%s",
             log_prefix,
             rendered_review_charts,
@@ -3699,7 +3699,7 @@ def _export_pno_research_context(
         rate = done / elapsed
         remaining = total - done
         eta_seconds = remaining / rate if rate > 0.0 else None
-        logger.info(
+        logger.debug(
             "%s: pno research export phase=%s %s/%s (%.1f%%) eta=%s",
             log_prefix,
             phase,
@@ -3717,7 +3717,7 @@ def _export_pno_research_context(
             for reason_groups in stage_rejections_by_stage.values()
             for rows in reason_groups.values()
         )
-        logger.info(
+        logger.debug(
             "%s: pno research export start stage_passed=%s stage_rejected=%s trades=%s",
             log_prefix,
             stage_passed_total,
@@ -3992,7 +3992,7 @@ def _export_pno_research_context(
 
     if logger is not None:
         elapsed = max(time.monotonic() - export_start_time, 0.0)
-        logger.info(
+        logger.debug(
             "%s: pno research export finished elapsed=%s output_dir=%s",
             log_prefix,
             _format_eta_compact(elapsed),

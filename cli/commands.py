@@ -110,6 +110,19 @@ def _build_filtered_pno_stage_rejections(
     return filtered
 
 
+def _format_runtime_eta(seconds: float | None) -> str:
+    if seconds is None:
+        return "--ч --м --с"
+    total_seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours:02d}ч {minutes:02d}м {secs:02d}с"
+
+
+def _format_runtime_progress(*, title: str, checked: int, total: int, eta_seconds: float | None) -> str:
+    return f"{title}: {checked} из {total}. ETA: {_format_runtime_eta(eta_seconds)}"
+
+
 def _to_bool_flag(value: object, *, default: bool = False) -> bool:
     if value is None:
         return default
@@ -919,7 +932,7 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
         logger=logger,
         log_prefix=log_prefix,
     )
-    logger.info(
+    logger.debug(
         "%s: pno diagnostics with shared stage-reviews saved trade_charts=%s shared_stages=%s",
         log_prefix,
         total_charts_generated,
@@ -1293,6 +1306,8 @@ def _plot_pno_diagnostics_for_symbols(
     chart_symbols_total = sum(1 for item in export_result["diagnostics_payloads"] if item["trade_rows"])
     chart_symbols_done = 0
     chart_render_start_time = time.monotonic()
+    if chart_symbols_total > 0:
+        logger.warning("Графики: генерация")
     for item in export_result["diagnostics_payloads"]:
         symbol = str(item["symbol"])
         trade_rows = list(item["trade_rows"])
@@ -1318,13 +1333,13 @@ def _plot_pno_diagnostics_for_symbols(
             remaining = chart_symbols_total - chart_symbols_done
             eta_seconds = remaining / rate if rate > 0.0 else None
             logger.info(
-                "%s: pno trade charts %s/%s (%.1f%%) png=%s eta=%s",
-                log_prefix,
-                chart_symbols_done,
-                chart_symbols_total,
-                (chart_symbols_done / chart_symbols_total) * 100.0,
-                total_charts_generated,
-                _format_eta_compact(eta_seconds),
+                "%s",
+                _format_runtime_progress(
+                    title="Графики",
+                    checked=chart_symbols_done,
+                    total=chart_symbols_total,
+                    eta_seconds=eta_seconds,
+                ),
             )
 
     _export_pno_stage_reviews(
@@ -1349,8 +1364,8 @@ def _plot_pno_diagnostics_for_symbols(
         log_prefix=log_prefix,
     )
 
-    logger.info(
-        "%s: сохранена диагностика pno stage_symbols=%s stage_events=%s trades_generated=%s charts_generated=%s stages=%s output_dir=%s",
+    logger.debug(
+        "%s: pno diagnostics saved stage_symbols=%s stage_events=%s trades_generated=%s charts_generated=%s stages=%s output_dir=%s",
         log_prefix,
         export_result["symbols_with_stage_events"],
         export_result["total_stage_events"],
@@ -1360,7 +1375,7 @@ def _plot_pno_diagnostics_for_symbols(
         diagnostics_dir,
     )
     if export_result["total_stage_events"] == 0 and export_result["symbols_with_trades"] == 0:
-        logger.warning("%s: не найдено событий pno и не сгенерировано сделок для визуализации", log_prefix)
+        logger.debug("%s: не найдено событий pno и не сгенерировано сделок для визуализации", log_prefix)
 
 
 def _render_pno_trade_charts_from_export_result(
@@ -1376,6 +1391,8 @@ def _render_pno_trade_charts_from_export_result(
     chart_symbols_total = sum(1 for item in export_result["diagnostics_payloads"] if item["trade_rows"])
     chart_symbols_done = 0
     chart_render_start_time = time.monotonic()
+    if chart_symbols_total > 0:
+        logger.warning("Графики: генерация")
     for item in export_result["diagnostics_payloads"]:
         symbol = str(item["symbol"])
         trade_rows = list(item["trade_rows"])
@@ -1400,14 +1417,16 @@ def _render_pno_trade_charts_from_export_result(
             remaining = chart_symbols_total - chart_symbols_done
             eta_seconds = remaining / rate if rate > 0.0 else None
             logger.info(
-                "%s: pno trade charts %s/%s (%.1f%%) png=%s eta=%s",
-                log_prefix,
-                chart_symbols_done,
-                chart_symbols_total,
-                (chart_symbols_done / chart_symbols_total) * 100.0,
-                total_charts_generated,
-                _format_eta_compact(eta_seconds),
+                "%s",
+                _format_runtime_progress(
+                    title="Графики",
+                    checked=chart_symbols_done,
+                    total=chart_symbols_total,
+                    eta_seconds=eta_seconds,
+                ),
             )
+    if chart_symbols_total > 0:
+        logger.warning("Графики готовы")
     return total_charts_generated
 
 
@@ -1437,6 +1456,8 @@ def _render_pno_trade_charts_only(
     processed_symbols = 0
     all_trade_rows: list[dict[str, object]] = []
     render_started_at = time.monotonic()
+    if total_symbols > 0:
+        logger.warning("Графики: генерация")
     for symbol, mtf_frames in symbol_frames.items():
         params = replace(pno_params_template, symbol=symbol)
         trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
@@ -1466,25 +1487,27 @@ def _render_pno_trade_charts_only(
             pd.DataFrame(exported_rows).to_csv(trades_dir / f"{_pno_output_symbol_stem(symbol)}_trades.csv", index=False)
             pd.DataFrame(all_trade_rows).to_csv(output_dir / "all_trades.csv", index=False)
         processed_symbols += 1
-        if total_symbols > 0 and (processed_symbols == total_symbols or processed_symbols % 25 == 0):
+        if total_symbols > 0 and (processed_symbols == total_symbols or processed_symbols % _PROGRESS_LOG_EVERY == 0):
             elapsed = max(time.monotonic() - render_started_at, 1e-9)
             rate = processed_symbols / elapsed
             remaining = total_symbols - processed_symbols
             eta_seconds = remaining / rate if rate > 0.0 else None
             logger.info(
-                "%s: light charts %s/%s (%.1f%%) png=%s eta=%s",
-                log_prefix,
-                processed_symbols,
-                total_symbols,
-                (processed_symbols / total_symbols) * 100.0,
-                total_charts_generated,
-                _format_eta_compact(eta_seconds),
+                "%s",
+                _format_runtime_progress(
+                    title="Графики",
+                    checked=processed_symbols,
+                    total=total_symbols,
+                    eta_seconds=eta_seconds,
+                ),
             )
     if all_trade_rows:
         all_trades_path = output_dir / "all_trades.csv"
         pd.DataFrame(all_trade_rows).to_csv(all_trades_path, index=False)
-        logger.info("%s: light trade table saved rows=%s path=%s", log_prefix, len(all_trade_rows), all_trades_path)
-    logger.info("%s: light charts saved png=%s output_dir=%s", log_prefix, total_charts_generated, charts_dir)
+        logger.debug("%s: light trade table saved rows=%s path=%s", log_prefix, len(all_trade_rows), all_trades_path)
+    logger.debug("%s: light charts saved png=%s output_dir=%s", log_prefix, total_charts_generated, charts_dir)
+    if total_symbols > 0:
+        logger.warning("Графики готовы")
     return total_charts_generated
 
 
@@ -1521,7 +1544,7 @@ def _log_human_backtest_summary(
     log_prefix: str,
 ) -> None:
     if results.empty:
-        logger.info("%s: итог бэктеста пустой: сделок нет, комбинации не дали результата.", log_prefix)
+        logger.debug("%s: итог бэктеста пустой: сделок нет, комбинации не дали результата.", log_prefix)
         return
     best_row = results.iloc[0]
     trades_count = int(best_row.get("trades_count", 0) or 0)
@@ -1600,7 +1623,8 @@ def _export_pno_diagnostics_context_for_symbols(
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
     )
-    logger.info("%s: pno diagnostics export start symbols=%s stages=%s", log_prefix, total_symbols, ",".join(selected_stage_ids))
+    logger.warning("Диагностика PNO: экспорт артефактов")
+    logger.debug("%s: pno diagnostics export start symbols=%s stages=%s", log_prefix, total_symbols, ",".join(selected_stage_ids))
     for symbol_index, (symbol, mtf_frames) in enumerate(symbol_frames.items(), start=1):
         params = replace(pno_params_template, symbol=symbol)
         trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
@@ -1664,20 +1688,19 @@ def _export_pno_diagnostics_context_for_symbols(
         if trade_rows:
             pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
 
-        if symbol_index == total_symbols or symbol_index % 25 == 0:
+        if symbol_index == total_symbols or symbol_index % _PROGRESS_LOG_EVERY == 0:
             elapsed = max(time.monotonic() - symbol_export_start_time, 1e-9)
             rate = symbol_index / elapsed
             remaining = total_symbols - symbol_index
             eta_seconds = remaining / rate if rate > 0.0 else None
             logger.info(
-                "%s: pno diagnostics export symbols %s/%s (%.1f%%) stage_events=%s trades=%s eta=%s",
-                log_prefix,
-                symbol_index,
-                total_symbols,
-                (symbol_index / max(total_symbols, 1)) * 100.0,
-                total_stage_events,
-                total_trades_generated,
-                _format_eta_compact(eta_seconds),
+                "%s",
+                _format_runtime_progress(
+                    title="Диагностика PNO",
+                    checked=symbol_index,
+                    total=total_symbols,
+                    eta_seconds=eta_seconds,
+                ),
             )
 
     stage4_rows_before_dedup = len(stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, []))
@@ -1686,7 +1709,7 @@ def _export_pno_diagnostics_context_for_symbols(
     )
     stage_rows_by_stage[PNO_STAGE_4_LEVEL] = deduplicated_stage4_rows
     if stage4_duplicate_count > 0:
-        logger.info(
+        logger.debug(
             "%s: pno stage4 review dedup removed=%s before=%s after=%s",
             log_prefix,
             stage4_duplicate_count,
@@ -1695,7 +1718,7 @@ def _export_pno_diagnostics_context_for_symbols(
         )
 
     research_export_start = time.monotonic()
-    logger.info("%s: pno research export dispatch start", log_prefix)
+    logger.debug("%s: pno research export dispatch start", log_prefix)
     _build_stage5_review_rejections_from_stage4(
         symbol_frames=symbol_frames,
         stage_rows_by_stage=stage_rows_by_stage,
@@ -1716,7 +1739,7 @@ def _export_pno_diagnostics_context_for_symbols(
         logger=logger,
         log_prefix=log_prefix,
     )
-    logger.info(
+    logger.debug(
         "%s: pno research export dispatch finished elapsed=%s",
         log_prefix,
         _format_eta_compact(max(time.monotonic() - research_export_start, 0.0)),
@@ -1732,7 +1755,8 @@ def _export_pno_diagnostics_context_for_symbols(
         logger=logger,
         log_prefix=log_prefix,
     )
-    logger.info("%s: pno stage-review tables saved stages=%s", log_prefix, ",".join(selected_stage_ids))
+    logger.debug("%s: pno stage-review tables saved stages=%s", log_prefix, ",".join(selected_stage_ids))
+    logger.warning("Диагностика PNO завершена")
     return {
         "all_trade_rows": all_trade_rows,
         "diagnostics_payloads": diagnostics_payloads,
@@ -1813,7 +1837,7 @@ def _select_pno_plot_params_row_by_stage(
 
         best_score = max(scored_rows, key=lambda item: item[:5])
         if best_score[0] > 0 or not needs_rejection_fallback:
-            logger.info(
+            logger.debug(
                 "run-backtest: pno stage-plot selected row from results stage_events=%s stage_rejections=%s trades_generated=%s profit_factor=%.4f",
                 best_score[0],
                 best_score[1],
@@ -1861,7 +1885,7 @@ def _select_pno_plot_params_row_by_stage(
         return None
 
     best_score = max(scored_rows, key=lambda item: item[:5])
-    logger.info(
+    logger.debug(
         "run-backtest: pno stage-plot selected row by stage_events=%s stage_rejections=%s trades_generated=%s profit_factor=%.4f",
         best_score[0],
         best_score[1],
@@ -1932,7 +1956,7 @@ def _load_plot_params_row_from_results(
             )
             return None
         selected_row = frame.iloc[row_index]
-        logger.info(
+        logger.debug(
             "plot-from-results: использована строка=%s из %s (pf=%s, trades_count=%s)",
             row_number,
             csv_path,
@@ -1955,7 +1979,7 @@ def _load_plot_params_row_from_results(
             matches: pd.DataFrame = frame.loc[match_mask].copy()
             if not matches.empty:
                 matched_by_column = matches
-                logger.info(
+                logger.debug(
                     "plot-from-results: найдена комбинация по колонке %s, id=%s, совпадений=%s",
                     column,
                     selected_id,
@@ -1984,7 +2008,7 @@ def _load_plot_params_row_from_results(
         sorted_frame = frame.sort_values(["profit_factor", "trades_count"], ascending=[False, False], na_position="last")
         selected_row = sorted_frame.iloc[0]
 
-    logger.info(
+    logger.debug(
         "plot-from-results: использованы параметры из %s (pf=%s, trades_count=%s, id=%s)",
         csv_path,
         selected_row.get("profit_factor", "n/a"),
@@ -1999,13 +2023,13 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
         level=config.backtest.log_level,
         logs_dir=config.backtest.logs_dir,
     )
-    logger.info(f"{command_name}: старт")
+    logger.debug("%s: старт", command_name)
     try:
         code = body()
-        logger.info(f"{LOG_MSG_TASK_COMPLETED % command_name} (код={code})")
+        logger.debug("%s (код=%s)", LOG_MSG_TASK_COMPLETED % command_name, code)
         return code
     except Exception as exc:
-        logger.exception(f"{command_name}: ошибка: {exc}")
+        logger.exception("Ошибка: %s", exc)
         return 1
 
 
@@ -2679,7 +2703,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     run_root_dir_raw = getattr(args, "backtest_run_root_dir", None)
     run_root_dir = Path(run_root_dir_raw) if run_root_dir_raw is not None else None
     if run_root_dir is not None:
-        logger.info(
+        logger.debug(
             "run-backtest: output_root=%s strategy_output=%s",
             run_root_dir,
             config.backtest.results_dir,
@@ -2698,7 +2722,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         configured_levels_timeframe=config.strategy.levels_timeframe,
         configured_entry_timeframe=config.strategy.entry_timeframe,
     )
-    logger.info(
+    logger.debug(
         "запуск-бэктеста: явный запуск, уровни: %s, входы: %s",
         levels_timeframe.value,
         entry_timeframe.value,
@@ -2711,10 +2735,10 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     source_entry_timeframe = Timeframe.M1 if pno_seconds_entry_pair else entry_timeframe
     symbols = args.symbols or preparer.list_symbols(source_entry_timeframe)
     if not symbols:
-        logger.info("запуск-бектеста: нет данных в кэше")
+        logger.warning("Нет данных в кэше")
         return 0
     if backtest_days is not None:
-        logger.info(
+        logger.debug(
             "запуск-бэктеста: ограничение окна days=%s end_timestamp_ms=%s",
             backtest_days,
             backtest_end_timestamp_ms if backtest_end_timestamp_ms is not None else "auto_from_cache",
@@ -2756,7 +2780,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 rejected_symbols_count += 1
                 continue
             if "volume" not in levels_frame.columns:
-                logger.info(
+                logger.debug(
                     "запуск-бэктеста: символ %s исключён из pre-rank, причина=нет колонки volume на levels_tf=%s",
                     symbol,
                     levels_timeframe.value,
@@ -2797,12 +2821,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         top_preview_text = "pre-rank отключён"
 
     pre_rank_elapsed_seconds = time.perf_counter() - pre_rank_started_at
-    logger.info(
+    logger.debug(
         "запуск-бэктеста: pre-rank время=%.3fs enabled=%s",
         pre_rank_elapsed_seconds,
         pre_filter_active,
     )
-    logger.info(
+    logger.debug(
         "запуск-бэктеста: pre-rank symbols_total=%s валидный_volume_levels_tf=%s rejected=%s top_n=%s выбрано_после_отсечения=%s",
         symbols_before_ranking,
         ranked_symbols_count,
@@ -2811,20 +2835,20 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         len(symbols),
     )
     if not pre_rank_enabled:
-        logger.info(
+        logger.debug(
             "запуск-бэктеста: pre-rank top_n не задан или <= 0, используется исходный список символов (%s)",
             len(symbols),
         )
-    logger.info("запуск-бэктеста: pre-rank top-list: %s", top_preview_text)
+    logger.debug("запуск-бэктеста: pre-rank top-list: %s", top_preview_text)
 
     if not symbols:
         if ranked_symbols_count == 0:
-            logger.info(
-                "запуск-бэктеста: ранний выход, нет символов с валидным объёмом на levels_tf=%s",
+            logger.warning(
+                "Нет символов с валидным объёмом на %s",
                 levels_timeframe.value,
             )
         else:
-            logger.info("запуск-бэктеста: ранний выход, после применения top_n=%s список символов пуст", top_n)
+            logger.warning("После применения top_n=%s список символов пуст", top_n)
         return 0
 
     symbol_frames: dict[str, SymbolMtfFrames] = {}
@@ -2869,7 +2893,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     elapsed_seconds = time.perf_counter() - symbols_prepare_started_at
                     progress = (idx / symbols_total) * 100 if symbols_total else 0.0
                     eta_seconds = (elapsed_seconds / idx) * (symbols_total - idx) if idx else 0.0
-                    logger.info(
+                    logger.debug(
                         "анализ-кэша: подготовка-символов %s/%s (%.1f%%), eta=%ss",
                         idx,
                         symbols_total,
@@ -2903,7 +2927,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             elapsed_seconds = time.perf_counter() - symbols_prepare_started_at
             progress = (idx / symbols_total) * 100 if symbols_total else 0.0
             eta_seconds = (elapsed_seconds / idx) * (symbols_total - idx) if idx else 0.0
-            logger.info(
+            logger.debug(
                 "анализ-кэша: подготовка-символов %s/%s (%.1f%%), eta=%ss",
                 idx,
                 symbols_total,
@@ -2911,7 +2935,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 int(eta_seconds),
             )
     if not symbol_frames:
-        logger.info("запуск-бектеста: не удалось подготовить данные")
+        logger.warning("Не удалось подготовить данные для бэктеста")
         return 0
 
     if run_root_dir is not None:
@@ -2935,7 +2959,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger=logger,
     )
     symbols_used_ratio = symbols_used / symbols_total if symbols_total else 0.0
-    logger.info(
+    logger.debug(
         "запуск-бэктеста: сводка по символам всего=%s использовано=%s без_данных_levels_tf=%s без_данных_entry_tf=%s",
         symbols_total,
         symbols_used,
@@ -2943,14 +2967,14 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         symbols_missing_entry_tf,
     )
     if pno_fast_prefilter_active:
-        logger.info(
+        logger.debug(
             "запуск-бэктеста: pno fast stage1 prefilter rejected=%s selected_for_full_pipeline=%s",
             symbols_fast_stage1_rejected,
             symbols_used,
         )
     if symbols_total and symbols_used_ratio < 0.2:
         logger.warning(
-            "запуск-бэктеста: используется только %.1f%% символов (%s из %s); результат бэктеста может быть нерепрезентативным",
+            "Предупреждение: используется только %.1f%% символов (%s из %s); результат может быть нерепрезентативным",
             symbols_used_ratio * 100,
             symbols_used,
             symbols_total,
@@ -3008,7 +3032,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         else 0.0
     )
     median_trades_per_combination = float(results["trades_count"].median()) if not results.empty else 0.0
-    logger.info(
+    logger.debug(
         "запуск-бэктеста: всего=%s прибыльных=%s лучший_pf=%.4f комбинаций_со_сделками=%s сумма_сделок_по_сетке=%s среднее_сделок_на_комбинацию=%.4f медиана_сделок_на_комбинацию=%.4f",
         summary.total_combinations,
         summary.profitable_combinations,
@@ -3025,7 +3049,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         log_prefix="run-backtest",
     )
     if summary.best_pf == 0 and total_trades == 0:
-        logger.warning(
+        logger.debug(
             "запуск-бэктеста: отсутствуют сделки по всем комбинациям; проверьте достаточность истории для levels_tf=%s и соответствие таймфреймов в кэше (%s/%s)",
             levels_timeframe.value,
             levels_timeframe.value,
@@ -3034,7 +3058,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     if should_plot:
         if results.empty:
-            logger.warning("запуск-бэктеста: plot=true, но результаты пустые")
+            logger.warning("Графики: нет данных")
             return 0
 
         if strategy_id == "pno" and isinstance(strategy, PnoStrategy):
@@ -3070,7 +3094,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 logger=logger,
             )
             if best_row is None:
-                logger.warning("запуск-бэктеста: pno stage plot selection returned no params row")
+                logger.warning("Диагностика PNO: нет подходящей строки результатов")
                 return 0
         else:
             best_row = results.iloc[0]
@@ -3158,7 +3182,8 @@ def _run_pno_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     root_output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.info(
+    logger.warning("PNO stage-review: запуск")
+    logger.debug(
         "pno-stage: preset=%s stage=%s through_stage=%s output_dir=%s",
         preset_name,
         preset_stage,
@@ -3201,7 +3226,8 @@ def _run_pno_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
-    logger.info(
+    logger.warning("PNO stage-review завершен")
+    logger.debug(
         "pno-stage: summary=%s context=%s",
         summary_path,
         context_path,
@@ -3436,7 +3462,7 @@ def _plot_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         context=context,
         request=request,
     )
-    logger.info(
+    logger.debug(
         "plot-backtest: run_dir=%s results=%s output_dir=%s row_number=%s",
         run_root_dir,
         getattr(plot_args, "results_input", None),
