@@ -3505,7 +3505,6 @@ def test_export_pno_grid_artifacts_without_stage_charts_splits_by_entry_mode(tmp
         results=results,
         levels_timeframe=Timeframe.M5,
         entry_timeframe=Timeframe.M1,
-        log_prefix="test",
     )
 
     assert captured_dirs == [

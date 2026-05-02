@@ -827,7 +827,7 @@ def _export_pno_grid_artifacts_without_stage_charts(
             export_result=export_result,
             symbol_frames=symbol_frames,
             logger=logger,
-            log_prefix=f"{log_prefix} [{artifact_name}]",
+            log_prefix=f"[{artifact_name}]",
         )
 
 
@@ -2989,7 +2989,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 results=results,
                 levels_timeframe=levels_timeframe,
                 entry_timeframe=entry_timeframe,
-                log_prefix="без графиков",
             )
     return 0
 
