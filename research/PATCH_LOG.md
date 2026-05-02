@@ -42,7 +42,8 @@ SUPERSEDED = заменён новым патчем
 | P019 | Clear PNO trade-data caches | APPLIED | `strategy/pno/pno_strategy.py` | memory | Сбрасывать aggTrades-derived runtime caches после обработки символа. | `python -m compileall strategy/pno/pno_strategy.py` |
 | P020 | Trade/chart consistency fix | APPLIED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Заполнить все trade-count aliases и считать уровень stale, если close_above случился до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
 | P021 | True trade-count chart propagation | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Прокидывать реальные number_of_trades/trades/trade_count из enriched PNO frames обратно в исходные frames, которые использует chart export. | `python -m compileall strategy/pno/pno_strategy.py` |
-| P022 | Stage5/results consistency fix | PROPOSED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix/diagnostics | Переносить stale-level Stage5 passed events в rejected и писать runtime TF в results.csv. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
+| P022 | Stage5/results consistency fix | APPLIED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix/diagnostics | Переносить stale-level Stage5 passed events в rejected и писать runtime TF в results.csv. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
+| P023 | PNO none-trades guard | PROPOSED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть list-return contract для PNO generate_events_multi_tf и не валить runner, если стратегия вернула None. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
 
 ---
 
@@ -867,7 +868,7 @@ Trading logic changed: no
 Files: strategy/pno/pno_strategy.py, vectorbt_runner/backtest_runner.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
 Follow-up to: P021
 Supersedes: none
-Commit: UNKNOWN
+Commit: 56f05338910241286c1cd36e8de6f9aa34f68475
 ```
 
 Problem:
@@ -907,7 +908,55 @@ Risk:
 Trading logic не меняется: stale trades уже не попадали в итоговые trades. Меняется согласованность diagnostics и results row.
 ```
 
-## 25. Шаблон нового патча
+---
+
+## 25. P023 — PNO none-trades guard
+
+```text
+Status: PROPOSED
+Type: bugfix
+Trading logic changed: no
+Files: strategy/pno/pno_strategy.py, vectorbt_runner/backtest_runner.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P022
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+После Stage5 diagnostics consistency patch один из no-trade путей PNO мог вернуть None вместо [].
+BacktestRunner ожидал iterable и падал на первом символе: TypeError: 'NoneType' object is not iterable.
+```
+
+Change:
+
+```text
+generate_events_multi_tf возвращает [] при пустом/None результате stale-level фильтра
+BacktestRunner получает defensive guard: если стратегия вернула None, логирует предупреждение и продолжает с пустым списком сделок
+```
+
+Expected result:
+
+```text
+Символы без сделок больше не валят прогон.
+Контракт strategy.generate_events_multi_tf снова list[TradeResult].
+```
+
+Verification:
+
+```text
+python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected false --pno-entry-confirmation-mode close_above --days 14 --pno-category-mode discovery --collect-diagnostics true
+```
+
+Risk:
+
+```text
+Если стратегия вернёт None из-за будущей ошибки, runner не упадёт сразу, а продолжит с warning; это осознанная защита вокруг контрактного пустого результата.
+```
+
+## 26. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -929,7 +978,7 @@ Next:
 
 ---
 
-## 26. Правило обновления
+## 27. Правило обновления
 
 Каждый patch должен обновлять:
 

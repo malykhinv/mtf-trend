@@ -587,6 +587,12 @@ class BacktestRunner:
                             combo_idx=idx,
                             total_combos=total,
                         )
+                    if trades is None:
+                        self._logger.warning(
+                            "%s не вернул список сделок. Считаю, что сделок нет, и продолжаю прогон.",
+                            symbol,
+                        )
+                        trades = []
                     all_trades.extend(trades)
                     symbol_elapsed_seconds = perf_counter() - symbol_started_at
                     if symbol_elapsed_seconds >= LONG_SYMBOL_LOG_SECONDS:

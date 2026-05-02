@@ -1147,10 +1147,11 @@ class PnoStrategy(BaseStrategy[PnoParams]):
                 ),
             )
             self._seconds_provider.clear_runtime_caches(symbol=params.symbol)
-            return self._filter_stale_level_reclaim_trades(
+            filtered_trades = self._filter_stale_level_reclaim_trades(
                 trades=trades,
                 entry_frame=enriched_entry_frame,
             )
+            return filtered_trades or []
         finally:
             self._seconds_provider.clear_runtime_caches(symbol=params.symbol)
 
