@@ -33,13 +33,13 @@ data quality
 
 ## 2. Индекс
 
-| ID | Название | Статус | Главный вывод |
-|---|---|---|---|
-| E001 | `5m/30s` 3-day run | ANALYZED | 0 trades; полезен для funnel/reject, не для PnL. |
-| E002 | Same window + true trade-count | PLANNED | Проверить Stage1/flow на real trade-count. |
-| E003 | Entry TF comparison | PLANNED | Сравнить `5m/30s`, `5m/15s`, `1m/5s`. |
-| E004 | `touch + retest hold` | IDEA ONLY | Только отдельный режим, не замена `close_above`. |
-| E005 | Year robustness test | PLANNED | Проверить 50+ trades/year, months, top-trade dependency. |
+| ID   | Название                       | Статус    | Главный вывод                                            |
+|------|--------------------------------|-----------|----------------------------------------------------------|
+| E001 | `5m/30s` 3-day run             | ANALYZED  | 0 trades; полезен для funnel/reject, не для PnL.         |
+| E002 | Same window + true trade-count | PLANNED   | Проверить Stage1/flow на real trade-count.               |
+| E003 | Entry TF comparison            | PLANNED   | Сравнить `5m/30s`, `5m/15s`, `1m/5s`.                    |
+| E004 | `touch + retest hold`          | IDEA ONLY | Только отдельный режим, не замена `close_above`.         |
+| E005 | Year robustness test           | PLANNED   | Проверить 50+ trades/year, months, top-trade dependency. |
 
 ---
 
