@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 import io
 import os
 import tempfile
@@ -16,6 +17,7 @@ import pandas as pd
 import requests
 
 from constants import DEFAULT_CACHE_DIR
+from data.exchanges.ccxt_types import CcxtAggTradePayload
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.exchange import Exchange
@@ -23,7 +25,6 @@ from domain.enums.timeframe import Timeframe
 from domain.models.trade_result import TradeResult
 from strategy.base_strategy import BaseStrategy
 from strategy.pno.config import (
-    PnoCategoryProfile,
     PnoParams,
     build_pno_grid,
     describe_pno_category_profile_set,
@@ -33,7 +34,6 @@ from strategy.pno.config import (
 )
 from strategy.pno.engine import PnoEngine
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
-from pathlib import Path
 from vectorbt_runner.data_preparer import DataPreparer
 
 
@@ -466,7 +466,7 @@ class _PnoSecondsFrameProvider:
         return self._aggregate_agg_trades_to_seconds(trades)
 
     @staticmethod
-    def _resolve_agg_trade_timestamp(row: dict[str, object]) -> int | None:
+    def _resolve_agg_trade_timestamp(row: CcxtAggTradePayload) -> int | None:
         raw_value = row.get("transact_time") if "transact_time" in row else row.get("T")
         try:
             return int(raw_value) if raw_value is not None else None
@@ -474,8 +474,8 @@ class _PnoSecondsFrameProvider:
             return None
 
     @staticmethod
-    def _resolve_agg_trade_id(row: dict[str, object]) -> int | None:
-        for key in ("agg_trade_id", "a", "id"):
+    def _resolve_agg_trade_id(row: CcxtAggTradePayload) -> int | None:
+        for key in ("agg_trade_id", "a"):
             raw_value = row.get(key)
             if raw_value is None:
                 continue
@@ -512,9 +512,8 @@ class _PnoSecondsFrameProvider:
     ) -> pd.DataFrame:
         if self._client is None:
             self._client = CcxtFuturesClient(exchange=Exchange.BINANCE)
-        self._client._ensure_markets_loaded()
-        market_id = self._client._client.market_id(symbol)
-        all_rows: list[dict[str, object]] = []
+        market_id = self._client.get_market_id(symbol)
+        all_rows: list[CcxtAggTradePayload] = []
         next_from_id: int | None = None
         previous_last_id: int | None = None
         while True:
@@ -528,17 +527,9 @@ class _PnoSecondsFrameProvider:
             else:
                 params["fromId"] = int(next_from_id)
 
-            batch = self._client._retry_exchange_call(
-                operation="binance_fetch_agg_trades",
-                symbol=symbol,
-                endpoint="fapiPublicGetAggTrades",
-                call=self._client._client.fapiPublicGetAggTrades,
-                params=params,
-            )
-            if not isinstance(batch, list) or not batch:
+            rows = self._client.fetch_binance_agg_trades(symbol=symbol, params=params)
+            if not rows:
                 break
-
-            rows = [row for row in batch if isinstance(row, dict)]
             if not rows:
                 break
 
@@ -583,13 +574,23 @@ class _PnoSecondsFrameProvider:
             return _PnoSecondsFrameProvider._empty_seconds_frame()
         work = trades.copy()
         timestamp_column = "transact_time" if "transact_time" in work.columns else "T"
+        price_column = "price" if "price" in work.columns else "p"
         quantity_column = "quantity" if "quantity" in work.columns else "q"
         maker_column = "is_buyer_maker" if "is_buyer_maker" in work.columns else "m"
-        work["price"] = pd.to_numeric(work["price"] if "price" in work.columns else work["p"], errors="coerce")
+
+        required_columns = (timestamp_column, price_column, quantity_column, maker_column)
+        if any(column not in work.columns for column in required_columns):
+            return _PnoSecondsFrameProvider._empty_seconds_frame()
+
+        work["price"] = pd.to_numeric(work[price_column], errors="coerce")
         work["quantity"] = pd.to_numeric(work[quantity_column], errors="coerce")
         work["quote_volume"] = work["price"].astype("float64") * work["quantity"].astype("float64")
         work["timestamp"] = ((pd.to_numeric(work[timestamp_column], errors="coerce") // 1000) * 1000).astype("Int64")
-        work = work.loc[work["timestamp"].notna() & work["price"].notna() & work["quantity"].notna()].copy()
+        work = work.loc[
+            work["timestamp"].notna()
+            & work["price"].notna()
+            & work["quantity"].notna()
+        ].copy()
         if work.empty:
             return _PnoSecondsFrameProvider._empty_seconds_frame()
         work["timestamp"] = work["timestamp"].astype("int64")

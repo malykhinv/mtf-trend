@@ -18,7 +18,12 @@ from constants import (
     OHLCV_FRAME_COLUMNS,
     OPEN_INTEREST_FRAME_COLUMNS,
 )
-from data.exchanges.ccxt_types import CcxtClientOptions, CcxtFuturesApi, CcxtOpenInterestApi
+from data.exchanges.ccxt_types import (
+    CcxtAggTradePayload,
+    CcxtClientOptions,
+    CcxtFuturesApi,
+    CcxtOpenInterestApi,
+)
 from domain.abstract.exchange_client import ExchangeClient
 from domain.exceptions import ExchangeConnectivityError
 from domain.enums.exchange import Exchange
@@ -215,6 +220,38 @@ class CcxtFuturesClient(ExchangeClient):
         return aggregated.loc[:, list(OPEN_INTEREST_FRAME_COLUMNS)].reset_index(drop=True)
 
     # endregion Приватные
+
+    def get_market_id(self, symbol: str) -> str:
+        """Returns exchange-specific market id for a normalized CCXT symbol."""
+        self._ensure_markets_loaded()
+        return str(self._client.market_id(symbol))
+
+    def fetch_binance_agg_trades(
+        self,
+        *,
+        symbol: str,
+        params: dict[str, object],
+    ) -> list[CcxtAggTradePayload]:
+        """Fetches raw Binance futures aggTrades through a typed client boundary."""
+        if self.exchange != Exchange.BINANCE:
+            raise NotImplementedError("aggTrades raw endpoint is currently implemented only for Binance futures")
+
+        raw_client = cast(Any, self._client)
+        batch = self._retry_exchange_call(
+            operation="binance_fetch_agg_trades",
+            symbol=symbol,
+            endpoint="fapiPublicGetAggTrades",
+            call=raw_client.fapiPublicGetAggTrades,
+            params=params,
+        )
+        if not isinstance(batch, list):
+            return []
+
+        return [
+            cast(CcxtAggTradePayload, row)
+            for row in batch
+            if isinstance(row, dict)
+        ]
 
     def get_futures_symbols(self) -> list[str]:
         """Возвращает список доступных фьючерсных символов."""

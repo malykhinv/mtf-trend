@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: cb6fd0eca5aa38b24abc58b3e8e630c3a530a5d7
-Local diff: P007 proposed aggTrades helper hotfix
-Last applied patch: P006 PNO entry/data fetch hardening
+Commit: 3cb535baea6e44461fbd5405848d708ef18eed0e
+Local diff: P008 proposed typing/client-boundary hardening
+Last applied patch: P007 PNO aggTrades helper hotfix
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
