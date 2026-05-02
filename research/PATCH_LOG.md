@@ -30,8 +30,10 @@ SUPERSEDED = заменён новым патчем
 | P007 | PNO aggTrades helper hotfix | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | bugfix | Добавить отсутствующие helper-методы, которые вызывает P006. | `python -m compileall strategy/pno launcher.py` |
 | P008 | PNO aggTrades typing/client boundary | PROPOSED | `data/exchanges/ccxt_types.py`, `data/exchanges/ccxt_futures_client.py`, `strategy/pno/pno_strategy.py` | typing/refactor | Убрать доступ PNO к private ccxt client, типизировать aggTrades payload, убрать сомнительный `id` fallback. | `python -m compileall data/exchanges strategy/pno launcher.py` |
 | P009 | Add 5m/15s PNO TF set | APPLIED | `domain/enums/timeframe.py`, `strategy/pno/config.py`, `research/*` | experiment config | Добавить `15s` timeframe и включить `5m/15s` в multi-TF backtest set. | `python -m compileall domain/enums strategy/pno cli constants.py main.py launcher.py` |
-| P010 | Rewrite README for PNO research workflow | PROPOSED | `README.md`, `research/*` | docs | Заменить устаревший README на фактический PNO research workflow: data, 3 TF-set, diagnostics, research memory, data quality. | `python -m compileall domain/enums data/exchanges strategy/pno cli constants.py main.py launcher.py` |
-| P011 | Humanize runtime logs in Russian | PROPOSED | `constants.py`, `launcher.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | logging/docs | Перевести runtime-логи на лаконичный русский: процесс, прогресс, ошибки и итоговая аналитика без служебного шума. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
+| P010 | Rewrite README for PNO research workflow | APPLIED | `README.md`, `research/*` | docs | Заменить устаревший README на фактический PNO research workflow: data, 3 TF-set, diagnostics, research memory, data quality. | `python -m compileall domain/enums data/exchanges strategy/pno cli constants.py main.py launcher.py` |
+| P011 | Humanize runtime logs in Russian | APPLIED | `constants.py`, `launcher.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | logging/docs | Перевести runtime-логи на лаконичный русский: процесс, прогресс, ошибки и итоговая аналитика без служебного шума. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
+| P012 | Fix P011 logging follow-up | PROPOSED | `vectorbt_runner/backtest_runner.py`, `launcher.py`, `research/*` | bugfix/bookkeeping | Исправить лишние аргументы logger.info после P011 и синхронизировать статусы P010/P011. | `python -m compileall vectorbt_runner launcher.py` |
+
 ---
 
 ## 3. P001 — Stage4 dedup
@@ -343,7 +345,7 @@ python -m compileall domain/enums strategy/pno cli constants.py main.py launcher
 ## 12. P010 — Rewrite README for PNO research workflow
 
 ```text
-Status: PROPOSED
+Status: APPLIED
 Type: docs
 Trading logic changed: no
 Files: README.md, research/PATCH_LOG.md, research/RESEARCH_STATE.md
@@ -380,7 +382,90 @@ Risk:
 docs-only; риск только в устаревании команд при будущих CLI изменениях
 ```
 
-## 13. Шаблон нового патча
+---
+
+## 13. P011 — Humanize runtime logs in Russian
+
+```text
+Status: APPLIED
+Type: logging / docs
+Trading logic changed: no
+Files: constants.py, launcher.py, utils/retry.py, data/*, vectorbt_runner/backtest_runner.py, cli/commands.py, research/*
+Follow-up to: P010
+Supersedes: none
+Commit: 1a3576f9c0ab0ba4bfabd30d2bd0d529a7fdd720
+```
+
+Problem:
+
+```text
+Runtime-логи были смешаны: часть на английском, часть техническими key=value строками, часть слишком шумная для чтения во время прогона.
+```
+
+Change:
+
+```text
+перевести user-facing runtime logs на короткий русский
+сохранить технические reason-коды и CSV-поля для аналитики
+оставить подробную диагностику в debug, а process/status сообщения сделать читабельными
+```
+
+Verification:
+
+```text
+python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+ошибки в количестве logger placeholder/arguments проявляются только в runtime, не всегда на compile
+```
+
+---
+
+## 14. P012 — Fix P011 logging follow-up
+
+```text
+Status: PROPOSED
+Type: bugfix / bookkeeping
+Trading logic changed: no
+Files: vectorbt_runner/backtest_runner.py, launcher.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P011
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+В одном logger.info после P011 осталось больше аргументов, чем placeholder.
+Также P010/P011 были уже применены, но research state продолжал считать их proposed/local diff.
+```
+
+Change:
+
+```text
+убрать лишние аргументы из long-symbol progress log
+отформатировать итоговый logger.info
+убрать лишний пробел в prompt launcher menu
+перевести P010/P011 в APPLIED в research bookkeeping
+```
+
+Verification:
+
+```text
+python -m compileall vectorbt_runner launcher.py
+python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+логика бэктеста не меняется; риск ограничен форматированием логов и research bookkeeping
+```
+
+## 15. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -402,7 +487,7 @@ Next:
 
 ---
 
-## 14. Правило обновления
+## 16. Правило обновления
 
 Каждый patch должен обновлять:
 

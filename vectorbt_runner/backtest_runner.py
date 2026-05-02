@@ -523,9 +523,7 @@ class BacktestRunner:
                             total,
                             symbol_idx,
                             symbols_count,
-                            _format_duration_human(symbol_elapsed_seconds),
                             len(trades),
-                            symbol,
                         )
 
                     if (collect_diagnostics or collect_stage_metrics) and callable(diagnostics_method):
@@ -629,7 +627,8 @@ class BacktestRunner:
             else BACKTEST_ZERO_COUNT
         )
         self._logger.info(
-            "Итог бэктеста: комбинаций со сделками %s, без сделок %s. Всего сделок %s. Среднее на комбинацию %.4f, медиана %.4f. Доля пустых %.4f.",            combinations_with_trades,
+            "Итог бэктеста: комбинаций со сделками %s, без сделок %s. Всего сделок %s. Среднее на комбинацию %.4f, медиана %.4f. Доля пустых %.4f.",
+            combinations_with_trades,
             combinations_without_trades,
             total_trades,
             average_trades_per_combination,

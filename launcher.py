@@ -140,7 +140,7 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
 
 
 def _prompt_menu() -> str:
-    print("Выберите режим: ")
+    print("Выберите режим:")
     modes = list(MODE_LABELS.items())
     for index, (_, label) in enumerate(modes, start=1):
         print(f"  {index}. {label}")

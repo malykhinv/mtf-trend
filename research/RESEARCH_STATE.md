@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 343b033c831ccc9bf422b847ca344c91d5dc7e15
-Local diff: P008 proposed typing/client-boundary hardening; P010 proposed README rewrite
-Last applied patch: P009 Add 5m/15s PNO TF set
+Commit: 1a3576f9c0ab0ba4bfabd30d2bd0d529a7fdd720
+Local diff: P008 proposed typing/client-boundary hardening; P012 proposed P011 logging follow-up
+Last applied patch: P011 Humanize runtime logs in Russian
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -84,8 +84,10 @@ winrate > 0.40
 | P005 | Repo cleanup | APPLIED | Удалены локальные IDE/log/empty artifacts; `.env` не трогался. |
 | P006 | PNO entry/data fetch hardening | PROPOSED | Зафиксировать `close_above`, исправить aggTrades candle window и live pagination. |
 | P009 | Add 5m/15s PNO TF set | APPLIED | Добавить `15s` enum и включить `5m/15s` в multi-TF backtest set. |
-| P010 | Rewrite README for PNO research workflow | PROPOSED | Привести README к фактическому PNO workflow: data, 3 TF-set, diagnostics, research memory, data quality. |
-| P011 | Humanize runtime logs in Russian | PROPOSED | Привести runtime-логи к короткому русскому языку без перегруза служебными деталями. |
+| P010 | Rewrite README for PNO research workflow | APPLIED | Привести README к фактическому PNO workflow: data, 3 TF-set, diagnostics, research memory, data quality. |
+| P011 | Humanize runtime logs in Russian | APPLIED | Привести runtime-логи к короткому русскому языку без перегруза служебными деталями. |
+| P012 | Fix P011 logging follow-up | PROPOSED | Исправить mismatch аргументов logger.info и синхронизировать research bookkeeping. |
+
 Статусы:
 
 ```text
