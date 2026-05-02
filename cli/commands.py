@@ -164,6 +164,86 @@ def _resolve_pno_stage_cycle_key(row: dict[str, object]) -> str | None:
     )
 
 
+
+
+def _resolve_pno_stage4_review_key(row: dict[str, object]) -> str | None:
+    """Returns a stable key for one unique Stage-4 level setup.
+
+    Stage 4 may emit the same BOS/level on several consecutive entry bars while
+    the setup is still alive. For review/export purposes those rows describe one
+    setup, not several independent opportunities.
+    """
+    structural_key = _resolve_pno_stage_cycle_key(row)
+    category_id = str(row.get("pno_category_id") or "")
+    profile_variant_id = str(row.get("pno_profile_variant_id") or "")
+    profile_key = f"{category_id}|{profile_variant_id}"
+    if structural_key is not None:
+        return f"{profile_key}|{structural_key}"
+
+    symbol = str(row.get("symbol") or "")
+    active_high_timestamp_ms = _safe_int(row.get("active_high_timestamp_ms"))
+    pullback_low_timestamp_ms = _safe_int(row.get("pullback_low_timestamp_ms"))
+    structure_high_timestamp_ms = _safe_int(row.get("structure_high_timestamp_ms"))
+    structure_low_timestamp_ms = _safe_int(row.get("structure_low_timestamp_ms"))
+    level = _safe_float(row.get("level"))
+    if (
+        not symbol
+        or active_high_timestamp_ms is None
+        or pullback_low_timestamp_ms is None
+        or structure_high_timestamp_ms is None
+        or structure_low_timestamp_ms is None
+        or level is None
+    ):
+        return None
+    return (
+        f"{profile_key}|{symbol}|{active_high_timestamp_ms}|{pullback_low_timestamp_ms}|"
+        f"{structure_high_timestamp_ms}|{structure_low_timestamp_ms}|{level:.8f}"
+    )
+
+
+def _resolve_pno_stage4_review_version(row: dict[str, object]) -> tuple[int, int, int]:
+    """Sort key used to keep the most recent representation of a duplicate setup."""
+    return (
+        _safe_int(row.get("level_valid_timestamp_ms")) or 0,
+        _safe_int(row.get("structure_break_timestamp_ms")) or 0,
+        _safe_int(row.get("timestamp_ms")) or 0,
+    )
+
+
+def _deduplicate_pno_stage4_review_rows(
+    rows: list[dict[str, object]],
+) -> tuple[list[dict[str, object]], int]:
+    """Collapses repeated Stage-4 rows for the same level/cycle/profile.
+
+    Rows without enough metadata are left untouched. For duplicates we keep the
+    latest row, because downstream Stage-5 synthetic rejection generation already
+    interprets the latest Stage-4 row as the active setup state.
+    """
+    selected_by_key: dict[str, tuple[int, dict[str, object]]] = {}
+    passthrough_rows: list[tuple[int, dict[str, object]]] = []
+    duplicate_count = 0
+
+    for index, row in enumerate(rows):
+        key = _resolve_pno_stage4_review_key(row)
+        if key is None:
+            passthrough_rows.append((index, row))
+            continue
+
+        previous = selected_by_key.get(key)
+        if previous is None:
+            selected_by_key[key] = (index, row)
+            continue
+
+        duplicate_count += 1
+        previous_row = previous[1]
+        if _resolve_pno_stage4_review_version(row) >= _resolve_pno_stage4_review_version(previous_row):
+            selected_by_key[key] = (index, row)
+
+    selected_rows = [*passthrough_rows, *selected_by_key.values()]
+    selected_rows.sort(key=lambda item: item[0])
+    return [row for _, row in selected_rows], duplicate_count
+
+
 def _build_stage5_review_rejections_from_stage4(
     *,
     symbol_frames: dict[str, SymbolMtfFrames],
@@ -1592,6 +1672,20 @@ def _export_pno_diagnostics_context_for_symbols(
                 total_trades_generated,
                 _format_eta_compact(eta_seconds),
             )
+
+    stage4_rows_before_dedup = len(stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, []))
+    deduplicated_stage4_rows, stage4_duplicate_count = _deduplicate_pno_stage4_review_rows(
+        stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, [])
+    )
+    stage_rows_by_stage[PNO_STAGE_4_LEVEL] = deduplicated_stage4_rows
+    if stage4_duplicate_count > 0:
+        logger.info(
+            "%s: pno stage4 review dedup removed=%s before=%s after=%s",
+            log_prefix,
+            stage4_duplicate_count,
+            stage4_rows_before_dedup,
+            len(deduplicated_stage4_rows),
+        )
 
     research_export_start = time.monotonic()
     logger.info("%s: pno research export dispatch start", log_prefix)
