@@ -37,7 +37,8 @@ SUPERSEDED = заменён новым патчем
 | P014 | Polish console logs | APPLIED | `constants.py`, `utils/retry.py`, `cli/*`, `data/*`, `strategy/factory.py`, `vectorbt_runner/*`, `research/*` | logging/docs | Перевести оставшийся английский в консоли, убрать сухие key=value строки, добавить переносы строк в длинные сообщения. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
 | P015 | Backtest progress and memory logs | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging/bugfix | Убрать дублирующий progress narrative при одной комбинации, добавить предупреждение о тяжёлом symbol set и понятный memory-error. | `python -m compileall vectorbt_runner research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P016 | Fix unclosed logger call | APPLIED | `vectorbt_runner/backtest_runner.py` | bugfix | Закрыть незавершённый logger.info после P015. | `python -m compileall vectorbt_runner/backtest_runner.py` |
-| P017 | Fix P015 runner regression | PROPOSED | `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть потерянный вызов generate_events_portfolio и восстановить аргументы long-symbol logger. | `python -m compileall vectorbt_runner/backtest_runner.py` |
+| P017 | Fix P015 runner regression | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть потерянный вызов generate_events_portfolio и восстановить аргументы long-symbol logger. | `python -m compileall vectorbt_runner/backtest_runner.py` |
+| P018 | Stale reclaim and trade-count chart fix | PROPOSED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Канонизировать trade-count column для графиков и отбрасывать сделки после failed reclaim уровня до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
 
 ---
 
@@ -663,7 +664,7 @@ Trading logic changed: no
 Files: vectorbt_runner/backtest_runner.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
 Follow-up to: P015/P016
 Supersedes: none
-Commit: UNKNOWN
+Commit: 9508a095fd10c7a628c78692fdcce6616d39c414
 ```
 
 Problem:
@@ -688,7 +689,57 @@ python -m compileall vectorbt_runner/backtest_runner.py
 python main.py run-backtest --strategy pno --pno-all-tf-pairs --days 3 --top-n 20 --light-run true
 ```
 
-## 20. Шаблон нового патча
+---
+
+## 20. P018 — Stale reclaim and trade-count chart fix
+
+```text
+Status: PROPOSED
+Type: bugfix / diagnostics
+Trading logic changed: yes
+Files: cli/pno_diagnostics.py, strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: MAGMA_USDT_USDT_001_sl review
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+MAGMA_USDT_USDT_001_sl показал две проблемы.
+1. Trade-count panel на графике пустой, хотя diagnostics говорят, что source = number_of_trades.
+2. Trade прошёл после того, как уровень уже был пробит вверх и закрыт обратно под уровнем; такой reclaim потерял актуальность.
+```
+
+Change:
+
+```text
+добавить канонический trade_count для графиков из number_of_trades/trades/trade_count
+протащить trade-count columns в plot frame
+после генерации PNO trades отбрасывать сделки, где между level_valid_timestamp_ms и entry_signal_timestamp_ms была свеча high > level и close < level
+```
+
+Expected diagnostics:
+
+```text
+trade-count panel заполняется при наличии number_of_trades
+MAGMA-like stale reclaim trades исчезают из results/trades/charts
+```
+
+Verification:
+
+```text
+python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected false --pno-entry-confirmation-mode close_above --days 14 --pno-category-mode discovery --collect-diagnostics true
+```
+
+Risk:
+
+```text
+пост-фильтр убирает trades после failed reclaim; если later reclaim должен считаться новым setup, его нужно создавать как новый Stage4 setup, а не переиспользовать старый уровень
+```
+
+## 21. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -710,7 +761,7 @@ Next:
 
 ---
 
-## 21. Правило обновления
+## 22. Правило обновления
 
 Каждый patch должен обновлять:
 

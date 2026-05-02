@@ -24,6 +24,7 @@ _PNO_STAGE1_REVIEW_MAX_ROWS_PER_REASON = 8
 _PNO_STAGE1_REVIEW_MAX_ROWS_PER_SYMBOL = 2
 _PNO_STAGE1_REVIEW_FALLBACK_ROWS_PER_REASON = 4
 _PNO_STAGE1_REVIEW_DISTANCE_MAX = 0.18
+_PNO_PLOT_TRADE_COUNT_COLUMNS: tuple[str, ...] = ("number_of_trades", "trades", "trade_count")
 _PNO_STAGE1_REJECTION_DISTANCE_FIELDS: dict[str, tuple[str, str, str]] = {
     "impulse_atr_pre_too_small": ("pump_impulse_atr_pre", "stage1_min_impulse_atr_pre", "min"),
     "peak_bar_tr_atr_pre_too_small": ("pump_peak_bar_tr_atr_pre", "stage1_min_peak_bar_tr_atr_pre", "min"),
@@ -260,7 +261,7 @@ def _build_pno_plot_frame(
     start_timestamp_ms: int,
     end_timestamp_ms: int,
 ) -> pd.DataFrame:
-    selected_columns = ["timestamp", "open", "high", "low", "close", "volume"]
+    selected_columns = [column for column in ("timestamp", "open", "high", "low", "close", "volume", *_PNO_PLOT_TRADE_COUNT_COLUMNS) if column in entry_frame.columns]
     plot_frame = entry_frame.loc[
         (entry_frame["timestamp"] >= start_timestamp_ms) & (entry_frame["timestamp"] <= end_timestamp_ms),
         selected_columns,
@@ -268,19 +269,41 @@ def _build_pno_plot_frame(
     if plot_frame.empty:
         return plot_frame
     if {"ema9", "ema20"}.issubset(plot_frame.columns):
-        return plot_frame
+        return _with_canonical_pno_trade_count(plot_frame)
 
     levels_ema = _prepare_pno_levels_ema_source(levels_frame)
     if levels_ema.empty:
         plot_frame["ema9"] = np.nan
         plot_frame["ema20"] = np.nan
-        return plot_frame
+        return _with_canonical_pno_trade_count(plot_frame)
 
     levels_timestamps = levels_ema["timestamp"].to_numpy(dtype=np.float64)
     plot_timestamps = plot_frame["timestamp"].to_numpy(dtype=np.float64)
     plot_frame["ema9"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema9"].to_numpy(dtype=np.float64))
     plot_frame["ema20"] = np.interp(plot_timestamps, levels_timestamps, levels_ema["ema20"].to_numpy(dtype=np.float64))
-    return plot_frame
+    return _with_canonical_pno_trade_count(plot_frame)
+
+
+def _with_canonical_pno_trade_count(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    source_column = next(
+        (
+            column
+            for column in _PNO_PLOT_TRADE_COUNT_COLUMNS
+            if column in frame.columns and pd.to_numeric(frame[column], errors="coerce").notna().any()
+        ),
+        None,
+    )
+    if source_column is None:
+        return frame
+    prepared = frame.copy()
+    source_values = pd.to_numeric(prepared[source_column], errors="coerce")
+    if "trade_count" in prepared.columns:
+        prepared["trade_count"] = pd.to_numeric(prepared["trade_count"], errors="coerce").combine_first(source_values)
+    else:
+        prepared["trade_count"] = source_values
+    return prepared
 
 
 def _prepare_pno_levels_ema_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
@@ -368,6 +391,7 @@ def _prepare_pno_levels_plot_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
     if "ema9" not in prepared.columns or "ema20" not in prepared.columns:
         prepared["ema9"] = prepared["close"].ewm(span=9, adjust=False).mean()
         prepared["ema20"] = prepared["close"].ewm(span=20, adjust=False).mean()
+    prepared = _with_canonical_pno_trade_count(prepared)
     return prepared
 
 
@@ -422,6 +446,7 @@ def _prepare_pno_entry_plot_source(entry_frame: pd.DataFrame) -> pd.DataFrame:
         unique_mask[:-1] = timestamps[:-1] != timestamps[1:]
         if not bool(unique_mask.all()):
             prepared = prepared.loc[unique_mask]
+    prepared = _with_canonical_pno_trade_count(prepared)
     return prepared
 
 

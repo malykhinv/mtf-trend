@@ -661,6 +661,66 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             runner=lambda profile_params: self._engine.generate_events_single_frame(frame=prepared, params=profile_params),
         )
 
+    @staticmethod
+    def _safe_metadata_float(metadata: dict[str, object], key: str) -> float | None:
+        value = metadata.get(key)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if np.isfinite(parsed) else None
+
+    @staticmethod
+    def _safe_metadata_int(metadata: dict[str, object], key: str) -> int | None:
+        parsed = PnoStrategy._safe_metadata_float(metadata, key)
+        return None if parsed is None else int(parsed)
+
+    @staticmethod
+    def _is_stale_level_reclaim_trade(*, trade: TradeResult, entry_frame: pd.DataFrame) -> bool:
+        metadata = getattr(trade, "metadata", None)
+        if not isinstance(metadata, dict) or entry_frame.empty or "timestamp" not in entry_frame.columns:
+            return False
+
+        level = PnoStrategy._safe_metadata_float(metadata, "level")
+        level_valid_timestamp_ms = PnoStrategy._safe_metadata_int(metadata, "level_valid_timestamp_ms")
+        entry_signal_timestamp_ms = PnoStrategy._safe_metadata_int(metadata, "entry_signal_timestamp_ms")
+        if level is None or level_valid_timestamp_ms is None or entry_signal_timestamp_ms is None:
+            return False
+        if entry_signal_timestamp_ms <= level_valid_timestamp_ms:
+            return False
+
+        required_columns = {"timestamp", "high", "close"}
+        if not required_columns.issubset(entry_frame.columns):
+            return False
+
+        timestamps = pd.to_numeric(entry_frame["timestamp"], errors="coerce")
+        highs = pd.to_numeric(entry_frame["high"], errors="coerce")
+        closes = pd.to_numeric(entry_frame["close"], errors="coerce")
+        epsilon = max(abs(float(level)) * 1e-6, 1e-12)
+        pre_signal_window = (
+            (timestamps >= int(level_valid_timestamp_ms))
+            & (timestamps < int(entry_signal_timestamp_ms))
+        )
+        failed_reclaim = pre_signal_window & (highs > float(level) + epsilon) & (closes < float(level) - epsilon)
+        return bool(failed_reclaim.fillna(False).any())
+
+    def _filter_stale_level_reclaim_trades(
+        self,
+        *,
+        trades: list[TradeResult],
+        entry_frame: pd.DataFrame,
+    ) -> list[TradeResult]:
+        if not trades:
+            return trades
+        return [
+            trade
+            for trade in trades
+            if not self._is_stale_level_reclaim_trade(
+                trade=trade,
+                entry_frame=entry_frame,
+            )
+        ]
+
     def generate_events_multi_tf(
         self,
         *,
@@ -680,7 +740,7 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             frame=mtf_frames.entry_frame,
             target_timeframe=params.entry_timeframe,
         )
-        return self._generate_events_for_profiles(
+        trades = self._generate_events_for_profiles(
             profiles=resolve_pno_category_profiles(params, category_mode=self._category_mode_filter),
             runner=lambda profile_params: self._engine.generate_events_multi_tf(
                 levels_frame=enriched_levels_frame,
@@ -688,6 +748,10 @@ class PnoStrategy(BaseStrategy[PnoParams]):
                 params=profile_params,
                 **engine_context,
             ),
+        )
+        return self._filter_stale_level_reclaim_trades(
+            trades=trades,
+            entry_frame=enriched_entry_frame,
         )
 
     def prepare_symbol_context(

@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 013a68eb51e3e0c49f2c56da4bd32a422e44fc82
-Local diff: P008 proposed typing/client-boundary hardening; P017 proposed P015 runner regression fix
-Last applied patch: P016 Fix unclosed logger call
+Commit: 9508a095fd10c7a628c78692fdcce6616d39c414
+Local diff: P008 proposed typing/client-boundary hardening; P018 proposed stale reclaim and trade-count chart fix
+Last applied patch: P017 Fix P015 runner regression
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -91,7 +91,8 @@ winrate > 0.40
 | P014 | Polish console logs | APPLIED | Добить оставшийся английский и сухие key=value строки; добавить переносы строк в многочастные сообщения. |
 | P015 | Backtest progress and memory logs | APPLIED | Убрать дубли прогресса для одиночной сетки и сделать понятный memory-error. |
 | P016 | Fix unclosed logger call | APPLIED | Закрыть незавершённый logger.info после P015. |
-| P017 | Fix P015 runner regression | PROPOSED | Вернуть portfolio_trades assignment и восстановить аргументы long-symbol logger. |
+| P017 | Fix P015 runner regression | APPLIED | Вернуть portfolio_trades assignment и восстановить аргументы long-symbol logger. |
+| P018 | Stale reclaim and trade-count chart fix | PROPOSED | Починить пустой trade-count panel и отбрасывать входы в уже провалившийся reclaim уровня. |
 
 Статусы:
 
