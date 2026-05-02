@@ -923,12 +923,6 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
         logger=logger,
         log_prefix=log_prefix,
     )
-    logger.debug(
-        "Диагностика PNO сохранена: графиков %s, общих стадий %s.",
-        total_charts_generated,
-        ",".join(shared_stage_ids),
-    )
-
 
 
 def _build_futures_symbol_map(symbols: list[str]) -> dict[str, str]:
@@ -1592,7 +1586,6 @@ def _export_pno_diagnostics_context_for_symbols(
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
     )
-    logger.debug("Диагностика PNO: символов %s, стадий %s.", total_symbols, ",".join(selected_stage_ids))
     for symbol_index, (symbol, mtf_frames) in enumerate(symbol_frames.items(), start=1):
         params = replace(pno_params_template, symbol=symbol)
         trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
@@ -2896,13 +2889,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger=logger,
         results=results,
     )
-    if summary.best_pf == 0 and total_trades == 0:
-        logger.debug(
-            "Сделок нет: проверьте историю и кэш таймфреймов %s/%s.",
-            levels_timeframe.value,
-            entry_timeframe.value,
-        )
-
     if should_plot:
         if results.empty:
             logger.warning("Графики: нет данных")
@@ -2941,7 +2927,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 logger=logger,
             )
             if best_row is None:
-                logger.warning("Диагностика PNO: нет подходящей строки результатов")
                 return 0
         else:
             best_row = results.iloc[0]
