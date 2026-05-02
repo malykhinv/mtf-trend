@@ -42,6 +42,19 @@ class _ColorFormatter(logging.Formatter):
 class _RuntimeNoiseFilter(logging.Filter):
     """Отсекает старый служебный шум из runtime-консоли и log-файлов."""
 
+    _REWRITE_SUBSTRINGS: Final[tuple[tuple[str, int, str], ...]] = (
+        ("pno diagnostics export start", logging.WARNING, "Диагностика PNO: экспорт артефактов"),
+        ("pno diagnostics export done", logging.WARNING, "Диагностика PNO завершена"),
+        ("pno diagnostics export finished", logging.WARNING, "Диагностика PNO завершена"),
+        ("pno diagnostics export complete", logging.WARNING, "Диагностика PNO завершена"),
+        ("trade charts render start", logging.WARNING, "Графики: генерация"),
+        ("trade charts export start", logging.WARNING, "Графики: генерация"),
+        ("pno trade charts render start", logging.WARNING, "Графики: генерация"),
+        ("trade charts render done", logging.WARNING, "Графики готовы"),
+        ("trade charts export done", logging.WARNING, "Графики готовы"),
+        ("pno trade charts render done", logging.WARNING, "Графики готовы"),
+    )
+
     _SUPPRESSED_SUBSTRINGS: Final[tuple[str, ...]] = (
         "run-backtest: старт",
         "run-backtest: output_root=",
@@ -59,12 +72,57 @@ class _RuntimeNoiseFilter(logging.Filter):
         "Глава ",
         "Сетка продвинулась",
         "Финал бэктеста",
+        "run-backtest: трейдерская сводка:",
+        "run-backtest: по сетке:",
+        "run-backtest: runner final close:",
+        "лучшая комбинация дала",
+        "по сетке: комбинаций=",
+        "runner final close:",
         "Категории получили отдельные CSV",
         "PNO-артефакты разложены по категориям",
     )
 
+    @staticmethod
+    def _extract_int_after(message: str, prefix: str) -> int | None:
+        start = message.find(prefix)
+        if start < 0:
+            return None
+        value_start = start + len(prefix)
+        value_end = value_start
+        while value_end < len(message) and message[value_end].isdigit():
+            value_end += 1
+        if value_end == value_start:
+            return None
+        return int(message[value_start:value_end])
+
+    @classmethod
+    def _format_rewritten_message(cls, message: str, base_message: str) -> str:
+        symbols_count = cls._extract_int_after(message, "symbols=")
+        if symbols_count is not None:
+            return f"{base_message}: {symbols_count} символов"
+        charts_count = cls._extract_int_after(message, "charts=")
+        if charts_count is not None:
+            return f"{base_message}: {charts_count} графиков"
+        trades_count = cls._extract_int_after(message, "trades=")
+        if trades_count is not None:
+            return f"{base_message}: {trades_count} сделок"
+        return base_message
+
+    @classmethod
+    def _rewrite_record(cls, record: logging.LogRecord, message: str) -> bool:
+        for fragment, levelno, base_message in cls._REWRITE_SUBSTRINGS:
+            if fragment in message:
+                record.msg = cls._format_rewritten_message(message, base_message)
+                record.args = ()
+                record.levelno = levelno
+                record.levelname = logging.getLevelName(levelno)
+                return True
+        return False
+
     def filter(self, record: logging.LogRecord) -> bool:
         message = record.getMessage()
+        if self._rewrite_record(record, message):
+            return True
         return not any(fragment in message for fragment in self._SUPPRESSED_SUBSTRINGS)
 
 
