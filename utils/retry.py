@@ -24,7 +24,7 @@ class RetryExhaustedError(Exception):
     # region Приватные
     def __str__(self) -> str:
         return (
-            f"Операция {self.operation} не удалась после {self.attempts} попыток: {self.reason}"
+            f"Источник не ответил на «{self.operation}» после {self.attempts} попыток: {self.reason}"
         )
 
 
@@ -60,8 +60,8 @@ def run_with_retry(
     for attempt_number in range(1, attempts + 1):
         try:
             result = call(*args, **kwargs)
-            target_logger.info(
-                "Запрос выполнен: %s, попытка %s/%s, endpoint=%s, symbol=%s.",
+            target_logger.debug(
+                "Источник ответил: «%s», попытка %s/%s, endpoint=%s, symbol=%s.",
                 operation,
                 attempt_number,
                 attempts,
@@ -72,7 +72,7 @@ def run_with_retry(
         except retriable_exceptions as exc:
             if should_retry is not None and not should_retry(exc):
                 target_logger.warning(
-                    "Запрос не повторяем: %s, попытка %s/%s, endpoint=%s, symbol=%s. Причина: %s",
+                    "Запрос «%s» остановлен без повтора. Попытка %s/%s, endpoint=%s, symbol=%s. Причина: %s",
                     operation,
                     attempt_number,
                     attempts,
@@ -83,7 +83,7 @@ def run_with_retry(
                 raise
             is_last = attempt_number >= attempts
             target_logger.warning(
-                "Запрос не прошёл: %s, попытка %s/%s, endpoint=%s, symbol=%s. Причина: %s",
+                "Источник не ответил на «%s». Попытка %s/%s, endpoint=%s, symbol=%s. Причина: %s",
                 operation,
                 attempt_number,
                 attempts,
@@ -103,5 +103,5 @@ def run_with_retry(
     raise RetryExhaustedError(
         operation=operation,
         attempts=attempts,
-        reason="ответ не получен",
+        reason="ответ так и не пришёл",
     )

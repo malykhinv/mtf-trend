@@ -32,7 +32,8 @@ SUPERSEDED = заменён новым патчем
 | P009 | Add 5m/15s PNO TF set | APPLIED | `domain/enums/timeframe.py`, `strategy/pno/config.py`, `research/*` | experiment config | Добавить `15s` timeframe и включить `5m/15s` в multi-TF backtest set. | `python -m compileall domain/enums strategy/pno cli constants.py main.py launcher.py` |
 | P010 | Rewrite README for PNO research workflow | APPLIED | `README.md`, `research/*` | docs | Заменить устаревший README на фактический PNO research workflow: data, 3 TF-set, diagnostics, research memory, data quality. | `python -m compileall domain/enums data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 | P011 | Humanize runtime logs in Russian | APPLIED | `constants.py`, `launcher.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | logging/docs | Перевести runtime-логи на лаконичный русский: процесс, прогресс, ошибки и итоговая аналитика без служебного шума. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
-| P012 | Fix P011 logging follow-up | PROPOSED | `vectorbt_runner/backtest_runner.py`, `launcher.py`, `research/*` | bugfix/bookkeeping | Исправить лишние аргументы logger.info после P011 и синхронизировать статусы P010/P011. | `python -m compileall vectorbt_runner launcher.py` |
+| P012 | Fix P011 logging follow-up | APPLIED | `vectorbt_runner/backtest_runner.py`, `launcher.py`, `research/*` | bugfix/bookkeeping | Исправить лишние аргументы logger.info после P011 и синхронизировать статусы P010/P011. | `python -m compileall vectorbt_runner launcher.py` |
+| P013 | Narrative runtime logs | PROPOSED | `constants.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | logging/docs | Превратить runtime-логи в связный консольный рассказ: меньше шума, больше этапов, прогресса, причин и финального смысла. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
 
 ---
 
@@ -433,7 +434,7 @@ Trading logic changed: no
 Files: vectorbt_runner/backtest_runner.py, launcher.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
 Follow-up to: P011
 Supersedes: none
-Commit: UNKNOWN
+Commit: 9c2e31cb540eb044f9d9f0a671b744fcfb3426f7
 ```
 
 Problem:
@@ -465,7 +466,58 @@ Risk:
 логика бэктеста не меняется; риск ограничен форматированием логов и research bookkeeping
 ```
 
-## 15. Шаблон нового патча
+---
+
+## 15. P013 — Narrative runtime logs
+
+```text
+Status: PROPOSED
+Type: logging / docs
+Trading logic changed: no
+Files: constants.py, utils/retry.py, data/fetchers/*, data/exchanges/ccxt_futures_client.py, vectorbt_runner/backtest_runner.py, cli/commands.py, research/*
+Follow-up to: P011/P012
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+P011 в основном перевёл логи, но не поменял ощущение консоли: она всё ещё звучала как сухой поток технических событий.
+Для длинных PNO-прогонов нужна связная история: что началось, что проверяется, где рынок молчит, где есть разрывы, чем всё закончилось.
+```
+
+Change:
+
+```text
+переписать INFO/WARNING runtime logs в единый narrative style
+успешные retry-сообщения перенести в DEBUG, чтобы INFO не тонул в сетевом шуме
+оставить числа, прогресс и причины, но оформить их как понятные этапы прогона
+сохранить технические поля и reason-коды там, где они нужны для CSV/diagnostics
+```
+
+Expected diagnostics:
+
+```text
+консоль читает прогон как последовательность глав: данные → кэш → символы → сетка → причины отсева → финал
+меньше успешных API retry сообщений в INFO
+warning/error остаются содержательными
+```
+
+Verification:
+
+```text
+python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --days 3 --top-n 20 --light-run true
+```
+
+Risk:
+
+```text
+логика стратегии не меняется; риск в том, что слишком художественные логи могут скрыть техническую точность, поэтому числовые поля сохранены
+```
+
+## 16. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -487,7 +539,7 @@ Next:
 
 ---
 
-## 16. Правило обновления
+## 17. Правило обновления
 
 Каждый patch должен обновлять:
 

@@ -385,7 +385,7 @@ class BacktestRunner:
         breakdown_message = ", ".join(f"{name}={value}" for name, value in breakdown.items())
 
         self._logger.debug(
-            "Диагностика входов: ретесты были, но входов нет у %s из %s ключей. Доля ключей %.4f. Ретестов %s из %s, доля %.4f. %s",
+            "Диагностика входов: рынок дал ретесты, но не дал вход. Ключей %s/%s, доля %.4f. Ретестов %s/%s, доля %.4f. Разбор: %s",
             problematic_count,
             keys_with_retests_count,
             problematic_share,
@@ -409,7 +409,7 @@ class BacktestRunner:
         detail_limit = len(sorted_problematic) if self._logger.isEnabledFor(logging.DEBUG) else min(DIAGNOSTIC_TOP_N, len(sorted_problematic))
         for (symbol, params_signature), counter in sorted_problematic[:detail_limit]:
             self._logger.debug(
-                "Диагностика входов: %s. Параметры: %s. Ретестов: %s, сделок: %s, отсев по объёму: %s, отсев фильтрами: %s, подтверждение не пришло: %s, подтверждение истекло: %s.",
+                "Диагностика входов: %s — ретест был, сделки нет. Параметры: %s. Ретестов %s, сделок %s, объём отсёк %s, фильтры отсекли %s, подтверждение не пришло %s, подтверждение истекло %s.",
                 symbol,
                 params_signature,
                 counter.get("retests_found", BACKTEST_ZERO_COUNT),
@@ -460,7 +460,7 @@ class BacktestRunner:
             stage_metric_totals = {stage_id: 0 for stage_id in tracked_stage_ids}
             combo_started_at = perf_counter()
             self._logger.info(
-                "Бэктест: комбинация %s/%s. Символов: %s.",
+                "Бэктест начинает главу %s/%s: проверяю %s символов.",
                 idx,
                 total,
                 symbols_count,
@@ -480,7 +480,7 @@ class BacktestRunner:
                     if should_log_symbol_start:
                         combo_elapsed_seconds = perf_counter() - combo_started_at
                         self._logger.info(
-                            "Бэктест: комбинация %s/%s, символ %s/%s. Прошло: %s. Текущий символ: %s.",
+                            "Глава %s/%s: дошёл до символа %s/%s. Прошло %s. Сейчас смотрю %s.",
                             idx,
                             total,
                             symbol_idx,
@@ -516,7 +516,7 @@ class BacktestRunner:
                     symbol_elapsed_seconds = perf_counter() - symbol_started_at
                     if symbol_elapsed_seconds >= LONG_SYMBOL_LOG_SECONDS:
                         self._logger.info(
-                            "Бэктест: символ %s готов за %s. Комбинация %s/%s, символ %s/%s. Сделок: %s.",
+                            "%s потребовал внимания: %s на расчёт. Глава %s/%s, символ %s/%s. Сделок найдено: %s.",
                             symbol,
                             _format_duration_human(symbol_elapsed_seconds),
                             idx,
@@ -560,7 +560,7 @@ class BacktestRunner:
                             else BACKTEST_ZERO_COUNT
                         )
                         self._logger.info(
-                            "Бэктест: комбинация %s/%s, символы %s/%s (%.1f%%). Прошло: %s, осталось примерно: %s. Всего прошло: %s, всего осталось: %s. Последний символ: %s.",
+                            "Глава %s/%s идёт: %s/%s символов, %.1f%%. В главе прошло %s, осталось около %s. Весь путь: прошло %s, осталось около %s. Последний символ: %s.",
                             idx,
                             total,
                             symbol_idx,
@@ -580,7 +580,7 @@ class BacktestRunner:
             rows.append(row)
             combo_elapsed_seconds = perf_counter() - combo_started_at
             self._logger.info(
-                "Бэктест: комбинация %s/%s готова за %s. Сделок: %s.",
+                "Глава %s/%s закрыта за %s. Сделок в ней: %s.",
                 idx,
                 total,
                 _format_duration_human(combo_elapsed_seconds),
@@ -592,7 +592,7 @@ class BacktestRunner:
                 progress = (idx / total) * 100 if total else BACKTEST_ZERO_COUNT
                 eta_seconds = (elapsed_seconds / idx) * (total - idx) if idx else BACKTEST_ZERO_COUNT
                 self._logger.info(
-                    "Бэктест: сетка %s/%s (%.1f%%), символов %s. Прошло: %s, осталось примерно: %s.",
+                    "Сетка продвинулась: %s/%s, %.1f%%. Символов в главе: %s. Прошло %s, впереди примерно %s.",
                     idx,
                     total,
                     progress,
@@ -627,7 +627,7 @@ class BacktestRunner:
             else BACKTEST_ZERO_COUNT
         )
         self._logger.info(
-            "Итог бэктеста: комбинаций со сделками %s, без сделок %s. Всего сделок %s. Среднее на комбинацию %.4f, медиана %.4f. Доля пустых %.4f.",
+            "Финал бэктеста: живых комбинаций %s, пустых %s. Всего сделок %s. Среднее %.4f, медиана %.4f. Доля тишины %.4f.",
             combinations_with_trades,
             combinations_without_trades,
             total_trades,
@@ -642,7 +642,7 @@ class BacktestRunner:
                 if value > BACKTEST_ZERO_COUNT
             ]
             self._logger.info(
-                "Причины отсева входов: %s",
+                "Почему рынок не пустил во вход: %s",
                 ", ".join(diagnostic_parts),
             )
 

@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 1a3576f9c0ab0ba4bfabd30d2bd0d529a7fdd720
-Local diff: P008 proposed typing/client-boundary hardening; P012 proposed P011 logging follow-up
-Last applied patch: P011 Humanize runtime logs in Russian
+Commit: 9c2e31cb540eb044f9d9f0a671b744fcfb3426f7
+Local diff: P008 proposed typing/client-boundary hardening; P013 proposed narrative runtime logs
+Last applied patch: P012 Fix P011 logging follow-up
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -86,7 +86,8 @@ winrate > 0.40
 | P009 | Add 5m/15s PNO TF set | APPLIED | Добавить `15s` enum и включить `5m/15s` в multi-TF backtest set. |
 | P010 | Rewrite README for PNO research workflow | APPLIED | Привести README к фактическому PNO workflow: data, 3 TF-set, diagnostics, research memory, data quality. |
 | P011 | Humanize runtime logs in Russian | APPLIED | Привести runtime-логи к короткому русскому языку без перегруза служебными деталями. |
-| P012 | Fix P011 logging follow-up | PROPOSED | Исправить mismatch аргументов logger.info и синхронизировать research bookkeeping. |
+| P012 | Fix P011 logging follow-up | APPLIED | Исправить mismatch аргументов logger.info и синхронизировать research bookkeeping. |
+| P013 | Narrative runtime logs | PROPOSED | Превратить консольные логи из перевода в связную историю прогона: этапы, прогресс, причины и итог. |
 
 Статусы:
 

@@ -532,7 +532,7 @@ class CcxtFuturesClient(ExchangeClient):
             ].reset_index(drop=True)
 
         if timeframe == Timeframe.M3:
-            self._logger.info("OI %s %s не поддерживается биржей, пропускаю.", symbol, timeframe.value)
+            self._logger.info("OI %s %s биржа не ведёт. Ставлю пустой ряд и продолжаю.", symbol, timeframe.value)
             return pd.DataFrame(columns=OPEN_INTEREST_FRAME_COLUMNS)
 
         self._ensure_markets_loaded()
@@ -592,7 +592,7 @@ class CcxtFuturesClient(ExchangeClient):
                 message = str(exc)
                 if self.exchange == Exchange.BINANCE and "startTime" in message and "invalid" in message:
                     self._logger.info(
-                        "OI %s %s: биржа отклонила начало окна, иду дальше. since=%s, end=%s, причина=%s",
+                        "OI %s %s: начало окна вне правил биржи. Перешагиваю участок %s..%s. Причина: %s",
                         symbol,
                         timeframe.value,
                         since,

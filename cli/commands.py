@@ -692,7 +692,7 @@ def _export_pno_category_artifacts(
             "trades_generated": len(category_trade_rows_all),
         }
         (category_root / "category_context.json").write_text(_to_compact_json(context_payload), encoding="utf-8")
-    logger.info("%s: pno category artifacts saved categories=%s", log_prefix, ",".join(sorted(category_meta)))
+    logger.info("%s: разложил PNO-артефакты по категориям: %s.", log_prefix, ", ".join(sorted(category_meta)))
 
 
 def _export_pno_category_csv_split(
@@ -720,7 +720,7 @@ def _export_pno_category_csv_split(
         category_path = categories_root / f"{category_id}_results.csv"
         category_df.to_csv(category_path, index=False)
 
-    logger.info("CSV по категориям сохранены: %s.", categories_root)
+    logger.info("Категории получили свои CSV: %s.", categories_root)
 
 
 def _plot_pno_grid_artifacts(
