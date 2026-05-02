@@ -579,6 +579,7 @@ class BacktestRunner:
                             self._logger.info(
                                 "%s потребовал внимания: %s на расчёт. Глава %s/%s, символ %s/%s. Сделок найдено: %s.",
                                 symbol,
+                            )
 
                     if (collect_diagnostics or collect_stage_metrics) and callable(diagnostics_method):
                         diagnostics_raw = diagnostics_method()
