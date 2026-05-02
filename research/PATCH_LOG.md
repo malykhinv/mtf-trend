@@ -30,6 +30,7 @@ SUPERSEDED = заменён новым патчем
 | P007 | PNO aggTrades helper hotfix | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | bugfix | Добавить отсутствующие helper-методы, которые вызывает P006. | `python -m compileall strategy/pno launcher.py` |
 | P008 | PNO aggTrades typing/client boundary | PROPOSED | `data/exchanges/ccxt_types.py`, `data/exchanges/ccxt_futures_client.py`, `strategy/pno/pno_strategy.py` | typing/refactor | Убрать доступ PNO к private ccxt client, типизировать aggTrades payload, убрать сомнительный `id` fallback. | `python -m compileall data/exchanges strategy/pno launcher.py` |
 | P009 | Add 5m/15s PNO TF set | APPLIED | `domain/enums/timeframe.py`, `strategy/pno/config.py`, `research/*` | experiment config | Добавить `15s` timeframe и включить `5m/15s` в multi-TF backtest set. | `python -m compileall domain/enums strategy/pno cli constants.py main.py launcher.py` |
+| P010 | Rewrite README for PNO research workflow | PROPOSED | `README.md`, `research/*` | docs | Заменить устаревший README на фактический PNO research workflow: data, 3 TF-set, diagnostics, research memory, data quality. | `python -m compileall domain/enums data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 
 ---
 
@@ -337,7 +338,49 @@ Verification:
 python -m compileall domain/enums strategy/pno cli constants.py main.py launcher.py
 ```
 
-## 12. Шаблон нового патча
+---
+
+## 12. P010 — Rewrite README for PNO research workflow
+
+```text
+Status: PROPOSED
+Type: docs
+Trading logic changed: no
+Files: README.md, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P009
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+README был слишком коротким и содержал устаревшие PNO examples с 5m/1m.
+Он не отражал текущий research workflow: 3 TF-set, diagnostics, research memory и data-quality checks.
+```
+
+Change:
+
+```text
+переписать README как практический PNO research guide
+зафиксировать актуальные TF-set: 5m/30s, 5m/15s, 1m/5s
+добавить команды data prep, multi-TF backtest, stage diagnostics, artifact layout, sanity checks
+явно указать ограничения: PNO не готовая торговая система, малое число trades не оценивает прибыльность
+```
+
+Verification:
+
+```text
+python -m compileall domain/enums data/exchanges strategy/pno cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+docs-only; риск только в устаревании команд при будущих CLI изменениях
+```
+
+## 13. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -359,7 +402,7 @@ Next:
 
 ---
 
-## 13. Правило обновления
+## 14. Правило обновления
 
 Каждый patch должен обновлять:
 
