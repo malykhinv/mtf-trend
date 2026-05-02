@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: ba8cd69e5cdc6ccdb36f7018c0c5d32540bf8669
-Local diff: P008 proposed typing/client-boundary hardening; P014 proposed polish console logs
-Last applied patch: P013 Narrative runtime logs
+Commit: 24f3ecbc857cc27bb728a848438e7c66940f7cc8
+Local diff: P008 proposed typing/client-boundary hardening; P015 proposed backtest progress and memory logs
+Last applied patch: P014 Polish console logs
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-02
 ```
@@ -88,7 +88,8 @@ winrate > 0.40
 | P011 | Humanize runtime logs in Russian | APPLIED | Привести runtime-логи к короткому русскому языку без перегруза служебными деталями. |
 | P012 | Fix P011 logging follow-up | APPLIED | Исправить mismatch аргументов logger.info и синхронизировать research bookkeeping. |
 | P013 | Narrative runtime logs | APPLIED | Превратить консольные логи из перевода в связную историю прогона: этапы, прогресс, причины и итог. |
-| P014 | Polish console logs | PROPOSED | Добить оставшийся английский и сухие key=value строки; добавить переносы строк в многочастные сообщения. |
+| P014 | Polish console logs | APPLIED | Добить оставшийся английский и сухие key=value строки; добавить переносы строк в многочастные сообщения. |
+| P015 | Backtest progress and memory logs | PROPOSED | Убрать дубли прогресса для одиночной сетки и сделать понятный memory-error. |
 
 Статусы:
 

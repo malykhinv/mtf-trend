@@ -34,7 +34,8 @@ SUPERSEDED = заменён новым патчем
 | P011 | Humanize runtime logs in Russian | APPLIED | `constants.py`, `launcher.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | logging/docs | Перевести runtime-логи на лаконичный русский: процесс, прогресс, ошибки и итоговая аналитика без служебного шума. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
 | P012 | Fix P011 logging follow-up | APPLIED | `vectorbt_runner/backtest_runner.py`, `launcher.py`, `research/*` | bugfix/bookkeeping | Исправить лишние аргументы logger.info после P011 и синхронизировать статусы P010/P011. | `python -m compileall vectorbt_runner launcher.py` |
 | P013 | Narrative runtime logs | APPLIED | `constants.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | logging/docs | Превратить runtime-логи в связный консольный рассказ: меньше шума, больше этапов, прогресса, причин и финального смысла. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
-| P014 | Polish console logs | PROPOSED | `constants.py`, `utils/retry.py`, `cli/*`, `data/*`, `strategy/factory.py`, `vectorbt_runner/*`, `research/*` | logging/docs | Перевести оставшийся английский в консоли, убрать сухие key=value строки, добавить переносы строк в длинные сообщения. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
+| P014 | Polish console logs | APPLIED | `constants.py`, `utils/retry.py`, `cli/*`, `data/*`, `strategy/factory.py`, `vectorbt_runner/*`, `research/*` | logging/docs | Перевести оставшийся английский в консоли, убрать сухие key=value строки, добавить переносы строк в длинные сообщения. | `python -m compileall domain/enums data/exchanges data/fetchers strategy/pno vectorbt_runner cli constants.py main.py launcher.py` |
+| P015 | Backtest progress and memory logs | PROPOSED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging/bugfix | Убрать дублирующий progress narrative при одной комбинации, добавить предупреждение о тяжёлом symbol set и понятный memory-error. | `python -m compileall vectorbt_runner research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 
 ---
 
@@ -529,7 +530,7 @@ Trading logic changed: no
 Files: constants.py, utils/retry.py, cli/*, data/*, strategy/factory.py, vectorbt_runner/*, research/*
 Follow-up to: P013
 Supersedes: none
-Commit: UNKNOWN
+Commit: 24f3ecbc857cc27bb728a848438e7c66940f7cc8
 ```
 
 Problem:
@@ -562,7 +563,62 @@ Risk:
 логика стратегии не меняется; риск только в тексте консольных сообщений
 ```
 
-## 17. Шаблон нового патча
+---
+
+## 17. P015 — Backtest progress and memory logs
+
+```text
+Status: PROPOSED
+Type: logging / bugfix
+Trading logic changed: no
+Files: vectorbt_runner/backtest_runner.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P014
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+При одной grid-комбинации console progress писал одновременно "глава" и "весь путь", хотя это один и тот же прогон.
+При нехватке памяти пользователь видел сырой NumPy error: Unable to allocate ...
+Также по логу было не сразу ясно, что в работу ушли все 509 символов.
+```
+
+Change:
+
+```text
+для total == 1 писать общий progress без "глава/весь путь"
+для total > 1 оставить chapter narrative
+добавить план бэктеста: количество комбинаций и символов
+предупреждать, если символов >= 200
+перехватывать MemoryError в portfolio и per-symbol paths, логировать понятный русский текст и подсказку уменьшить --top-n/--days/diagnostics
+```
+
+Expected console:
+
+```text
+План бэктеста: 1 комбинаций и 509 символов.
+В работу ушло 509 символов. Это тяжёлый прогон; если ожидался короткий тест, проверь --top-n.
+Дошёл до символа 250/509. Прошло 0ч 5м 56с. Сейчас смотрю KERNEL/USDT:USDT.
+Бэктест идёт: 250/509 символов, 49.1%. Прошло 0ч 5м 58с, осталось около 0ч 6м 11с. Последний символ: KERNEL/USDT:USDT.
+Прогон остановлен: не хватило памяти.
+```
+
+Verification:
+
+```text
+python -m compileall vectorbt_runner research/PATCH_LOG.md research/RESEARCH_STATE.md
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --days 3 --top-n 20 --light-run true
+```
+
+Risk:
+
+```text
+логика стратегии и расчёта сделок не меняется; меняются только progress/error logs и re-raise MemoryError с русским сообщением
+```
+
+## 18. Шаблон нового патча
 
 ```markdown
 ## PXXX — Название
@@ -584,7 +640,7 @@ Next:
 
 ---
 
-## 18. Правило обновления
+## 19. Правило обновления
 
 Каждый patch должен обновлять:
 
