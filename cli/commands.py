@@ -720,7 +720,7 @@ def _export_pno_category_csv_split(
         category_path = categories_root / f"{category_id}_results.csv"
         category_df.to_csv(category_path, index=False)
 
-    logger.info(f"Category CSV split saved to {categories_root}")
+    logger.info("CSV по категориям сохранены: %s.", categories_root)
 
 
 def _plot_pno_grid_artifacts(

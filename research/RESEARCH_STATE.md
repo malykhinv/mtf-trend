@@ -85,7 +85,7 @@ winrate > 0.40
 | P006 | PNO entry/data fetch hardening | PROPOSED | Зафиксировать `close_above`, исправить aggTrades candle window и live pagination. |
 | P009 | Add 5m/15s PNO TF set | APPLIED | Добавить `15s` enum и включить `5m/15s` в multi-TF backtest set. |
 | P010 | Rewrite README for PNO research workflow | PROPOSED | Привести README к фактическому PNO workflow: data, 3 TF-set, diagnostics, research memory, data quality. |
-
+| P011 | Humanize runtime logs in Russian | PROPOSED | Привести runtime-логи к короткому русскому языку без перегруза служебными деталями. |
 Статусы:
 
 ```text

@@ -19,12 +19,12 @@ MODE_CHECK_QUALITY = "check-quality"
 MODE_CLEAR_CACHE = "clear-cache"
 
 MODE_LABELS: dict[str, str] = {
-    MODE_FETCH_DATA: "Fetch market cache",
-    MODE_UPDATE_CACHE: "Update market cache",
-    MODE_RUN_BACKTEST: "Run PNO backtest",
-    MODE_PNO_STAGE: "Run PNO stage diagnostics",
-    MODE_CHECK_QUALITY: "Check cache quality",
-    MODE_CLEAR_CACHE: "Clear cache",
+    MODE_FETCH_DATA: "Загрузить рыночный кэш",
+    MODE_UPDATE_CACHE: "Обновить рыночный кэш",
+    MODE_RUN_BACKTEST: "Запустить PNO-бэктест",
+    MODE_PNO_STAGE: "Запустить PNO-диагностику",
+    MODE_CHECK_QUALITY: "Проверить качество кэша",
+    MODE_CLEAR_CACHE: "Очистить кэш",
 }
 
 
@@ -140,15 +140,15 @@ def _run_mode(config: AppConfig, mode: str, task_args: argparse.Namespace) -> in
 
 
 def _prompt_menu() -> str:
-    print("Select run mode:")
+    print("Выберите режим: ")
     modes = list(MODE_LABELS.items())
     for index, (_, label) in enumerate(modes, start=1):
         print(f"  {index}. {label}")
     while True:
-        raw = input("Enter mode number: ").strip()
+        raw = input("Введите номер режима: ").strip()
         if raw.isdigit() and 1 <= int(raw) <= len(modes):
             return modes[int(raw) - 1][0]
-        print("Invalid number. Try again.")
+        print("Такого номера нет. Попробуйте ещё раз.")
 
 
 def main() -> int:

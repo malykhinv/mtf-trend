@@ -99,7 +99,13 @@ class OhlcvFetcher:
             if not cached_base_frame.empty:
                 data = self._aggregate_cached_frame(cached_base_frame, target_timeframe=timeframe)
                 added_rows = self._storage.save_incremental(symbol, timeframe, data)
-                self._logger.info("OHLCV local aggregate: %s %s from %s rows=%s", symbol, timeframe.value, Timeframe.M5.value, added_rows)
+                self._logger.info(
+                    "OHLCV %s %s собран из локального %s. Добавлено строк: %s.",
+                    symbol,
+                    timeframe.value,
+                    Timeframe.M5.value,
+                    added_rows,
+                )
                 return added_rows
 
         start_timestamp_ms = int(start_timestamp_ms)
@@ -122,12 +128,9 @@ class OhlcvFetcher:
                 segments.append((suffix_start_ms, end_timestamp_ms, "suffix"))
 
         self._logger.info(
-            "OHLCV водораздел: %s %s колонка=%s первый_ms=%s последний_ms=%s сегментов=%s",
+            "OHLCV %s %s: найдено сегментов для дозагрузки: %s.",
             symbol,
             timeframe.value,
-            watermark_column,
-            first_timestamp_ms,
-            last_timestamp_ms,
             len(segments),
         )
         if not segments:
@@ -137,7 +140,7 @@ class OhlcvFetcher:
         added_rows = 0
         for segment_start_ms, segment_end_ms, segment_kind in segments:
             self._logger.info(
-                "OHLCV сегмент: %s %s %s %s -> %s",
+                "OHLCV %s %s: загружаю %s сегмент %s..%s.",
                 symbol,
                 timeframe.value,
                 segment_kind,
@@ -149,11 +152,11 @@ class OhlcvFetcher:
 
             gaps = self._gap_detector.detect_gaps(data, expected_step_ms=timeframe_ms)
             if gaps:
-                self._logger.info("OHLCV пропуски: %s найдено %s пропусков", symbol, len(gaps))
+                self._logger.info("OHLCV %s: найдено пропусков: %s.", symbol, len(gaps))
 
             added_rows += self._storage.save_incremental(symbol, timeframe, data)
 
-        self._logger.info("OHLCV завершен: %s, добавлено %s строк", symbol, added_rows)
+        self._logger.info("OHLCV %s: добавлено строк: %s.", symbol, added_rows)
         return added_rows
 
     def fetch_many(
@@ -172,7 +175,7 @@ class OhlcvFetcher:
             except Exception as exc:
                 if isinstance(exc, ParquetCacheValidationError) or "parquet cache validation failed" in str(exc).lower():
                     self._logger.exception(
-                        "cache-validation-error: source=ohlcv symbol=%s timeframe=%s cause=%s",
+                        "Кэш OHLCV не прошёл проверку: %s %s. Причина: %s",
                         symbol,
                         timeframe.value,
                         exc,
@@ -183,12 +186,12 @@ class OhlcvFetcher:
 
                 if self._is_system_error(exc):
                     diagnostic_message = (
-                        "OHLCV fail-fast: системная ошибка, прерывание обработки TF "
-                        f"{timeframe.value} после {symbol}: {exc}"
+                        f"OHLCV: системная ошибка на {symbol} {timeframe.value}. "
+                        f"Остальные символы этого TF пропущены. Причина: {exc}"
                     )
                     remaining_symbols = symbols[index + 1 :]
                     self._logger.warning(
-                        "fetch-abort-system-error: source=ohlcv timeframe=%s failure_symbol=%s remaining=%s cause=%s",
+                        "OHLCV: остановил TF %s после %s. Осталось символов: %s. Причина: %s",
                         timeframe.value,
                         symbol,
                         len(remaining_symbols),

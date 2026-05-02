@@ -128,10 +128,10 @@ LOGGER_FILE_BACKUP_COUNT = 3
 LOGGER_FILE_ENCODING = "utf-8"
 
 # Log message templates
-LOG_MSG_TASK_COMPLETED = "%s: завершено"
-LOG_MSG_SKIP_UP_TO_DATE = "%s skip up-to-date: %s"
-LOG_MSG_LOAD_ERROR = "load error: path=%s error=%s"
-LOG_MSG_RETRY_EXHAUSTED = "retry exhausted: endpoint=%s symbol=%s attempts=%s"
+LOG_MSG_TASK_COMPLETED = "%s: готово"
+LOG_MSG_SKIP_UP_TO_DATE = "%s: %s уже обновлён"
+LOG_MSG_LOAD_ERROR = "Не удалось прочитать файл: %s. Причина: %s"
+LOG_MSG_RETRY_EXHAUSTED = "Запрос не удался после всех попыток: endpoint=%s symbol=%s attempts=%s"
 
 # Data preparer constants
 DATA_PREPARER_EMPTY_BOOL_DTYPE = "bool"

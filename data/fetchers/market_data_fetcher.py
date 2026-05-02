@@ -44,7 +44,7 @@ class MarketDataFetcher:
     # region Приватные
 
     def _log_stage_summary(self, stage: str, total: int, ok: int, failed: int) -> None:
-        self._logger.info("%s сводка: всего=%s успешно=%s с ошибками=%s", stage, total, ok, failed)
+        self._logger.info("%s: всего %s, готово %s, ошибок %s.", stage, total, ok, failed)
 
     @staticmethod
     def _count_structured_results(results: dict[str, SymbolFetchResult]) -> tuple[int, int, int]:
@@ -62,7 +62,7 @@ class MarketDataFetcher:
 
     def fetch_market_caps(self, symbols: list[str]) -> MarketCapsResult:
         """Загружает капитализации для списка тикеров."""
-        self._logger.info(f"Рыночная капитализация старт: {len(symbols)} инструментов")
+        self._logger.info("Загружаю капитализацию: %s инструментов.", len(symbols))
         results: dict[str, float | str] = {}
 
         try:
@@ -70,10 +70,10 @@ class MarketDataFetcher:
             for symbol in symbols:
                 if symbol in batch_caps:
                     results[symbol] = float(batch_caps.get(symbol, 0.0))
-                    self._logger.info(f"Рыночная капитализация готово (batch): {symbol}")
+                    self._logger.debug("Капитализация получена: %s.", symbol)
         except Exception as exc:
             self._logger.warning(
-                "Рыночная капитализация: batch-запрос не удался, переключение на fallback get_market_cap(): %s",
+                "Капитализация пачкой не получилась. Пробую по одному. Причина: %s",
                 exc,
             )
 
@@ -81,9 +81,9 @@ class MarketDataFetcher:
         for symbol in unresolved_symbols:
             try:
                 results[symbol] = self._market_data_client.get_market_cap(symbol)
-                self._logger.info(f"Рыночная капитализация готово (fallback): {symbol}")
+                self._logger.debug("Капитализация получена по одному: %s.", symbol)
             except Exception as exc:
-                msg = f"Рыночная капитализация ошибка исполнения: {symbol}: {exc}"
+                msg = f"Не удалось получить капитализацию для {symbol}: {exc}"
                 self._logger.info(msg)
                 results[symbol] = msg
 
@@ -100,7 +100,7 @@ class MarketDataFetcher:
         include_open_interest: bool = True,
     ) -> FetchAllResult:
         """Загружает полный набор рыночных метрик."""
-        self._logger.info(f"Загрузка старт: {len(symbols)} символов, TF={timeframe.value}")
+        self._logger.info("Загружаю рыночные данные: %s символов, TF %s.", len(symbols), timeframe.value)
 
         ohlcv_result = self._ohlcv_fetcher.fetch_many(
             symbols,
@@ -116,11 +116,9 @@ class MarketDataFetcher:
             oi_start_timestamp_ms = max(start_timestamp_ms, current_time_ms - thirty_days_ms)
             
             self._logger.info(
-                "OI ограничения: TF=%s период=%s..%s (оригинал=%s..%s)",
+                "OI беру на %s только за доступное окно: %s..%s.",
                 oi_timeframe.value,
                 oi_start_timestamp_ms,
-                end_timestamp_ms,
-                start_timestamp_ms,
                 end_timestamp_ms,
             )
             
@@ -131,7 +129,7 @@ class MarketDataFetcher:
                 end_timestamp_ms,
             )
         else:
-            self._logger.info("OI skipped for TF=%s", timeframe.value)
+            self._logger.info("OI пропущен для TF %s.", timeframe.value)
             oi_result = {symbol: SymbolFetchResult.ok(0) for symbol in symbols}
 
         market_caps = self.fetch_market_caps(symbols)
@@ -155,7 +153,7 @@ class MarketDataFetcher:
         )
         has_errors = failed_symbols_count > 0
 
-        self._logger.info("Загрузка завершена")
+        self._logger.info("Загрузка данных завершена.")
 
         return FetchAllResult(
             ohlcv=ohlcv_result,

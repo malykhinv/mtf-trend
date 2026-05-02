@@ -63,12 +63,9 @@ class OiFetcher:
                 segments.append((suffix_start_ms, end_timestamp_ms, "suffix"))
 
         self._logger.info(
-            "OI водораздел: %s %s колонка=%s первый_ms=%s последний_ms=%s сегментов=%s",
+            "OI %s %s: найдено сегментов для дозагрузки: %s.",
             symbol,
             timeframe.value,
-            watermark_column,
-            first_timestamp_ms,
-            last_timestamp_ms,
             len(segments),
         )
         if not segments:
@@ -78,7 +75,7 @@ class OiFetcher:
         added_rows = 0
         for segment_start_ms, segment_end_ms, segment_kind in segments:
             self._logger.info(
-                "OI сегмент: %s %s %s %s -> %s",
+                "OI %s %s: загружаю %s сегмент %s..%s.",
                 symbol,
                 timeframe.value,
                 segment_kind,
@@ -90,7 +87,7 @@ class OiFetcher:
 
             if "timestamp" not in data.columns:
                 if data.empty:
-                    self._logger.info("OI пустой ряд без метки времени: %s %s", symbol, timeframe.value)
+                    self._logger.info("OI %s %s: пустой ряд, пропускаю.", symbol, timeframe.value)
                     continue
                 raise ValueError(
                     f"OI fetch_symbol: отсутствует колонка 'timestamp' в непустом OI для {symbol} {timeframe.value}"
@@ -100,7 +97,7 @@ class OiFetcher:
 
             added_rows += self._storage.save_incremental(symbol, timeframe, data)
 
-        self._logger.info("OI завершен: %s, добавлено %s строк", symbol, added_rows)
+        self._logger.info("OI %s: добавлено строк: %s.", symbol, added_rows)
         return added_rows
 
     def fetch_many(
@@ -119,7 +116,7 @@ class OiFetcher:
             except Exception as exc:
                 if isinstance(exc, ParquetCacheValidationError) or "parquet cache validation failed" in str(exc).lower():
                     self._logger.exception(
-                        "cache-validation-error: source=oi symbol=%s timeframe=%s cause=%s",
+                        "Кэш OI не прошёл проверку: %s %s. Причина: %s",
                         symbol,
                         timeframe.value,
                         exc,
@@ -130,12 +127,12 @@ class OiFetcher:
 
                 if self._is_system_error(exc):
                     diagnostic_message = (
-                        "OI fail-fast: системная ошибка, прерывание обработки TF "
-                        f"{timeframe.value} после {symbol}: {exc}"
+                        f"OI: системная ошибка на {symbol} {timeframe.value}. "
+                        f"Остальные символы этого TF пропущены. Причина: {exc}"
                     )
                     remaining_symbols = symbols[index + 1 :]
                     self._logger.warning(
-                        "fetch-abort-system-error: source=oi timeframe=%s failure_symbol=%s remaining=%s cause=%s",
+                        "OI: остановил TF %s после %s. Осталось символов: %s. Причина: %s",
                         timeframe.value,
                         symbol,
                         len(remaining_symbols),
