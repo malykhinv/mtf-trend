@@ -3,7 +3,10 @@
 /.inspection/
 /.output/
 /.pytest_cache/
+/.run/
 /.venv/
+/logs/
 __pycache__/
 */__pycache__/
 *.py[cod]
+*.log
