@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 373b58bf5cfb1b420c4663be4c9840e12e91d350
-Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P035/P036 applied locally; P037 proposed skip redundant sparse Stage1 precheck
-Last applied patch: P036 Skip full PNO source-entry enrichment
+Commit: 3e8a24765fa342a401815c4044ed0d8db78f284e
+Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P038 proposed diagnostics export cache
+Last applied patch: P037 Skip redundant sparse Stage1 precheck
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-03
 ```
@@ -110,7 +110,8 @@ winrate > 0.40
 | P034 | Diagnostics initial progress | PROPOSED | Печатать стартовый diagnostics progress 0/N и не пропускать checkpoints на пустых символах. |
 | P035 | PNO lazy entry enrichment CPU fix | APPLIED | Не грузить entry aggTrades для символов без Stage1-кандидата; восстановить return stale-фильтра. |
 | P036 | PNO skip full source-entry enrichment | APPLIED | Не обогащать весь source entry-frame для seconds-entry TF; оставить sparse materialization после Stage1. |
-| P037 | PNO skip redundant sparse Stage1 precheck | PROPOSED | Не делать wrapper-level Stage1 pre-scan в sparse-entry режиме; engine всё равно делает обязательную Stage1-проверку. |
+| P037 | PNO skip redundant sparse Stage1 precheck | APPLIED | Не делать wrapper-level Stage1 pre-scan в sparse-entry режиме; engine всё равно делает обязательную Stage1-проверку. |
+| P038 | Reuse PNO backtest diagnostics export cache | PROPOSED | Не прогонять PNO strategy повторно при экспорте diagnostics/stage reviews/charts после `--collect-diagnostics true`. |
 
 Статусы:
 

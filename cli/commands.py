@@ -57,6 +57,7 @@ from strategy.pno.engine import PNO_STAGE_4_LEVEL, PNO_STAGE_5_TRADE, PNO_STAGE_
 from utils.logger import get_logger
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
+from vectorbt_runner.backtest_runner import BacktestGenerationDiagnosticsCache
 from cli.pno_diagnostics import (
     _export_pno_research_context,
     _export_pno_stage_reviews,
@@ -750,6 +751,7 @@ def _plot_pno_grid_artifacts(
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
     log_prefix: str,
+    diagnostics_cache: BacktestGenerationDiagnosticsCache | None = None,
 ) -> bool:
     resolved_rows = _resolve_pno_artifact_rows(results)
     shared_stage_ids = tuple(stage_id for stage_id in PNO_STAGE_SEQUENCE if stage_id != PNO_STAGE_5_TRADE)
@@ -771,6 +773,7 @@ def _plot_pno_grid_artifacts(
                 levels_timeframe=levels_timeframe,
                 entry_timeframe=entry_timeframe,
                 log_prefix=f"{log_prefix} [{artifact_name}]",
+                diagnostics_cache=diagnostics_cache,
             ):
                 return False
             shared_diagnostics_dir = Path(scoped_args.output_dir) / "pno_diagnostics"
@@ -789,6 +792,7 @@ def _plot_pno_grid_artifacts(
             log_prefix=f"{log_prefix} [{artifact_name}]",
             shared_diagnostics_dir=shared_diagnostics_dir,
             shared_stage_ids=shared_stage_ids,
+            diagnostics_cache=diagnostics_cache,
         )
     return True
 
@@ -803,6 +807,7 @@ def _export_pno_grid_artifacts_without_stage_charts(
     results: pd.DataFrame,
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
+    diagnostics_cache: BacktestGenerationDiagnosticsCache | None = None,
 ) -> None:
     for artifact_name, params_row in _resolve_pno_artifact_rows(results):
         output_dir = Path(config.backtest.results_dir) / "trade_plots" / artifact_name
@@ -816,6 +821,7 @@ def _export_pno_grid_artifacts_without_stage_charts(
             params_row=params_row,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
+            diagnostics_cache=diagnostics_cache,
         )
         _render_pno_trade_charts_from_export_result(
             diagnostics_dir=diagnostics_dir,
@@ -878,6 +884,7 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
     log_prefix: str,
     shared_diagnostics_dir: Path,
     shared_stage_ids: tuple[str, ...],
+    diagnostics_cache: BacktestGenerationDiagnosticsCache | None = None,
 ) -> None:
     output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
     diagnostics_dir = output_dir / "pno_diagnostics"
@@ -891,6 +898,7 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
         params_row=params_row,
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
+        diagnostics_cache=diagnostics_cache,
     )
     total_charts_generated = _render_pno_trade_charts_from_export_result(
         diagnostics_dir=diagnostics_dir,
@@ -1269,6 +1277,7 @@ def _plot_pno_diagnostics_for_symbols(
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
     log_prefix: str,
+    diagnostics_cache: BacktestGenerationDiagnosticsCache | None = None,
 ) -> None:
     output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
     diagnostics_dir = output_dir / "pno_diagnostics"
@@ -1282,6 +1291,7 @@ def _plot_pno_diagnostics_for_symbols(
         params_row=params_row,
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
+        diagnostics_cache=diagnostics_cache,
     )
     charts_dir = diagnostics_dir / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
@@ -1387,6 +1397,7 @@ def _render_pno_trade_charts_from_export_result(
             symbol=symbol,
             mtf_frames=item["mtf_frames"],
             trade_rows=trade_rows,
+            seconds_frame_provider=item.get("seconds_frame_provider"),
         )
         total_charts_generated += len(chart_paths)
         base_name = _pno_output_symbol_stem(symbol)
@@ -1562,6 +1573,7 @@ def _export_pno_diagnostics_context_for_symbols(
     params_row: pd.Series,
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
+    diagnostics_cache: BacktestGenerationDiagnosticsCache | None = None,
 ) -> dict[str, object]:
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     selected_stage_ids = _resolve_pno_stage_ids(args)
@@ -1586,6 +1598,9 @@ def _export_pno_diagnostics_context_for_symbols(
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
     )
+    params_signature = BacktestRunner.build_params_signature(strategy, pno_params_template)
+    diagnostics_cache_hits = 0
+    diagnostics_cache_misses = 0
     if total_symbols > 0:
         logger.info(
             "%s",
@@ -1598,9 +1613,17 @@ def _export_pno_diagnostics_context_for_symbols(
         )
 
     for symbol_index, (symbol, mtf_frames) in enumerate(symbol_frames.items(), start=1):
-        params = replace(pno_params_template, symbol=symbol)
-        trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
-        diagnostics = strategy.consume_last_generation_diagnostics()
+        cached_generation = diagnostics_cache.get((params_signature, symbol)) if diagnostics_cache is not None else None
+        if cached_generation is None:
+            if diagnostics_cache is not None:
+                diagnostics_cache_misses += 1
+            params = replace(pno_params_template, symbol=symbol)
+            trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+            diagnostics = strategy.consume_last_generation_diagnostics()
+        else:
+            diagnostics_cache_hits += 1
+            trades = list(cached_generation.trades)
+            diagnostics = dict(cached_generation.diagnostics)
         trade_rows = [_flatten_trade_for_diagnostics(trade) for trade in trades]
         all_trade_rows.extend(trade_rows)
         total_trades_generated += len(trade_rows)
@@ -1708,6 +1731,12 @@ def _export_pno_diagnostics_context_for_symbols(
         passed_chart_stage_ids=passed_chart_stage_ids,
         logger=logger,
     )
+    if diagnostics_cache is not None:
+        logger.debug(
+            "PNO diagnostics export cache: hits=%s misses=%s.",
+            diagnostics_cache_hits,
+            diagnostics_cache_misses,
+        )
     return {
         "all_trade_rows": all_trade_rows,
         "diagnostics_payloads": diagnostics_payloads,
@@ -1734,6 +1763,7 @@ def _plot_for_strategy_dispatch(
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
     log_prefix: str,
+    diagnostics_cache: BacktestGenerationDiagnosticsCache | None = None,
 ) -> bool:
     if strategy_id != "pno" or not isinstance(strategy, PnoStrategy):
         logger.error("Визуализация для стратегии %s не поддерживается", strategy_id)
@@ -1748,6 +1778,7 @@ def _plot_for_strategy_dispatch(
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
         log_prefix=log_prefix,
+        diagnostics_cache=diagnostics_cache,
     )
     return True
 
@@ -2879,6 +2910,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         stage_metric_ids=stage_metric_ids_for_run,
         collect_diagnostics=collect_diagnostics,
     )
+    diagnostics_cache = runner.last_generation_diagnostics_cache if collect_diagnostics else None
     summary = runner.build_summary(results)
     if (
         strategy_id == "pno"
@@ -2913,6 +2945,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 levels_timeframe=levels_timeframe,
                 entry_timeframe=entry_timeframe,
                 log_prefix="запуск-бэктеста: plot=true",
+                diagnostics_cache=diagnostics_cache,
             ):
                 return 1
             return 0
@@ -2949,6 +2982,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
             log_prefix="запуск-бэктеста: plot=true",
+            diagnostics_cache=diagnostics_cache,
         ):
             return 1
     elif strategy_id == "pno" and not results.empty and isinstance(strategy, PnoStrategy):
@@ -2972,6 +3006,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 results=results,
                 levels_timeframe=levels_timeframe,
                 entry_timeframe=entry_timeframe,
+                diagnostics_cache=diagnostics_cache,
             )
     return 0
 

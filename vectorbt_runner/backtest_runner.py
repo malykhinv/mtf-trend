@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from collections import Counter
 from dataclasses import fields, is_dataclass, replace
 from pathlib import Path
@@ -115,6 +116,16 @@ class PreparedGridParams(NamedTuple):
     params_signature: str
 
 
+class BacktestGenerationSnapshot(NamedTuple):
+    """Снимок результата одного symbol-run для повторного экспорта diagnostics."""
+
+    trades: list[TradeResult]
+    diagnostics: dict[str, object]
+
+
+BacktestGenerationDiagnosticsCache = dict[tuple[str, str], BacktestGenerationSnapshot]
+
+
 class BacktestRunner:
     """Класс."""
 
@@ -127,6 +138,12 @@ class BacktestRunner:
         self._results_dir = Path(results_dir)
         self._results_file_name = results_file_name
         self._logger = logger or module_logger
+        self._last_generation_diagnostics_cache: BacktestGenerationDiagnosticsCache = {}
+
+    @property
+    def last_generation_diagnostics_cache(self) -> BacktestGenerationDiagnosticsCache:
+        """Возвращает diagnostics/trades последнего run без повторного запуска стратегии."""
+        return dict(self._last_generation_diagnostics_cache)
 
     @staticmethod
     def _resolve_initial_deposit(base_row: dict[str, int | float | str | None]) -> float | None:
@@ -341,12 +358,23 @@ class BacktestRunner:
         results.to_csv(self._results_dir / self._results_file_name, index=False)
 
     @staticmethod
-    def _params_signature(
+    def build_params_signature(
         strategy: BaseStrategy[object],
         params: object,
     ) -> str:
         params_row = strategy.params_to_row(params)
         return "|".join(f"{key}={params_row[key]}" for key in sorted(params_row.keys()))
+
+    @staticmethod
+    def _params_signature(
+        strategy: BaseStrategy[object],
+        params: object,
+    ) -> str:
+        return BacktestRunner.build_params_signature(strategy, params)
+
+    @staticmethod
+    def _copy_generation_diagnostics(diagnostics: dict[str, object]) -> dict[str, object]:
+        return cast(dict[str, object], deepcopy(diagnostics))
 
     @staticmethod
     def _inject_runtime_fields(
@@ -438,6 +466,7 @@ class BacktestRunner:
         symbols_count = len(symbol_frames)
         collect_diagnostics = self._logger.isEnabledFor(logging.DEBUG) if collect_diagnostics is None else bool(collect_diagnostics)
         collect_stage_metrics = bool(stage_metric_ids)
+        self._last_generation_diagnostics_cache = {}
         tracked_stage_ids = tuple(stage_metric_ids or ())
 
         diagnostics_method = getattr(strategy, "consume_last_generation_diagnostics", None)
@@ -447,6 +476,13 @@ class BacktestRunner:
 
         for idx, prepared in enumerate(prepared_grid, start=1):
             all_trades: list[TradeResult] = []
+            combo_params_for_signature = self._inject_runtime_fields(
+                prepared.params,
+                symbol="*",
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+            )
+            combo_params_signature = self.build_params_signature(strategy, combo_params_for_signature)
             stage_metric_totals = {stage_id: 0 for stage_id in tracked_stage_ids}
             combo_started_at = perf_counter()
             self._logger.warning("Таймфреймы: %s-%s", levels_timeframe.value, entry_timeframe.value)
@@ -525,6 +561,11 @@ class BacktestRunner:
                     if (collect_diagnostics or collect_stage_metrics) and callable(diagnostics_method):
                         diagnostics_raw = diagnostics_method()
                         if isinstance(diagnostics_raw, dict):
+                            if collect_diagnostics:
+                                self._last_generation_diagnostics_cache[(combo_params_signature, symbol)] = BacktestGenerationSnapshot(
+                                    trades=list(trades),
+                                    diagnostics=self._copy_generation_diagnostics(diagnostics_raw),
+                                )
                             if collect_stage_metrics:
                                 stage_hits_raw = diagnostics_raw.get("stage_hits")
                                 if isinstance(stage_hits_raw, dict):

@@ -57,7 +57,8 @@ SUPERSEDED = заменён новым патчем
 | P034 | Diagnostics initial progress | PROPOSED | `cli/commands.py`, `research/*` | logging/diagnostics | Печатать стартовый progress `Диагностика: 0 из N` и не пропускать checkpoints на пустых символах. | `python -m compileall cli/commands.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P035 | PNO lazy entry enrichment CPU fix | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | performance/bugfix | Не обогащать entry-frame через aggTrades, если enriched levels уже не даёт Stage1-кандидатов; вернуть intended stale-filter result. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 | P036 | PNO skip full source-entry enrichment | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | performance | Для seconds-entry TF не обогащать весь 1m source entry-frame через aggTrades; оставить sparse materialization engine после Stage1. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
-| P037 | PNO skip redundant sparse Stage1 precheck | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | performance | Не делать wrapper-level fast Stage1 scan в sparse-entry режиме; engine уже делает обязательную Stage1-проверку перед materialization. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
+| P037 | PNO skip redundant sparse Stage1 precheck | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | performance | Не делать wrapper-level fast Stage1 scan в sparse-entry режиме; engine уже делает обязательную Stage1-проверку перед materialization. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
+| P038 | Reuse PNO backtest diagnostics export cache | PROPOSED | `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | performance/diagnostics | Кэшировать trades+diagnostics в runner и переиспользовать при artifact export после `--collect-diagnostics true`. | `python -m compileall vectorbt_runner cli strategy/pno constants.py main.py launcher.py` |
 
 ---
 
@@ -1164,13 +1165,13 @@ Charts for trades already load target-entry windows through the seconds provider
 ## P037 — PNO skip redundant sparse Stage1 precheck
 
 ```text
-Status: PROPOSED
+Status: APPLIED
 Type: performance
 Trading logic changed: no
 Files: strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
 Follow-up to: P035/P036
 Supersedes: none
-Commit: UNKNOWN
+Commit: 3e8a24765fa342a401815c4044ed0d8db78f284e
 ```
 
 Problem:
@@ -1207,6 +1208,61 @@ Risk:
 ```text
 Low. The skipped scan was only a wrapper guard for eager entry enrichment; sparse-entry mode now relies on the engine's existing Stage1 gate.
 ```
+
+---
+
+## P038 — Reuse PNO backtest diagnostics export cache
+
+```text
+Status: PROPOSED
+Type: performance / diagnostics
+Trading logic changed: no
+Files: vectorbt_runner/backtest_runner.py, cli/commands.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P035/P036/P037
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+With --collect-diagnostics true, BacktestRunner already runs PNO per symbol and consumes trades + generation diagnostics.
+After the backtest, CLI artifact export called strategy.generate_events_multi_tf again for every artifact row and symbol.
+That repeated the CPU-heavy PNO path and could drift from the exact stage review / chart context produced during the runner pass.
+```
+
+Change:
+
+```text
+BacktestRunner stores a typed per (params_signature, symbol) snapshot with trades and diagnostics when collect_diagnostics is enabled.
+PNO diagnostics export computes the same runtime params signature from the selected results row and reuses cached snapshots when available.
+All artifact exporters pass the cache through to diagnostics/stage review/chart export.
+Missing cache entries fall back to the existing generation path and are counted in debug logs.
+```
+
+Expected effect:
+
+```text
+No second full strategy pass after --collect-diagnostics true for the normal post-backtest PNO artifact export path.
+Stage reviews, diagnostics JSON/CSV and trade charts use the same trades/diagnostics produced by the runner pass.
+No change to PNO entry logic, close_above rules, thresholds, TP/SL, ranking, or data loading.
+```
+
+Verification:
+
+```text
+python -m compileall vectorbt_runner cli strategy/pno constants.py main.py launcher.py
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected false --pno-entry-confirmation-mode close_above --days 14 --pno-category-mode discovery --collect-diagnostics true
+```
+
+Risk:
+
+```text
+Medium-low. The cache key uses the same params_to_row signature as runner/results reconstruction.
+If a future exporter is run from results only, cache is absent and the old generation path remains explicit.
+```
+
+---
 
 ## 27. Шаблон нового патча
 
