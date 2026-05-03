@@ -55,6 +55,7 @@ SUPERSEDED = заменён новым патчем
 | P032 | Normalize source-level artifact logs | PROPOSED | `cli/commands.py`, `cli/pno_diagnostics.py`, `research/*` | logging/refactor | Завершить нормализацию без костылей: public runtime status только из call-sites, detailed artifact logs в debug. | `python -m compileall cli/commands.py cli/pno_diagnostics.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P033 | PyCharm inspection cleanup | PROPOSED | `cli/commands.py`, `vectorbt_runner/*`, `data/*`, `strategy/*`, `simulation/*`, `launcher.py`, `main.py`, `research/*` | cleanup/typing | Исправить актуальные PyCharm inspection warnings без изменения PNO trade logic. | `python -m compileall data/exchanges data/liquidity simulation strategy/pno strategy/base_strategy.py vectorbt_runner cli constants.py main.py launcher.py` |
 | P034 | Diagnostics initial progress | PROPOSED | `cli/commands.py`, `research/*` | logging/diagnostics | Печатать стартовый progress `Диагностика: 0 из N` и не пропускать checkpoints на пустых символах. | `python -m compileall cli/commands.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
+| P035 | PNO lazy entry enrichment CPU fix | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | performance/bugfix | Не обогащать entry-frame через aggTrades, если enriched levels уже не даёт Stage1-кандидатов; вернуть intended stale-filter result. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 
 ---
 
@@ -1048,6 +1049,60 @@ Verification:
 ```text
 python -m compileall vectorbt_runner/backtest_runner.py
 python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected false --pno-entry-confirmation-mode close_above --days 14 --pno-category-mode discovery --collect-diagnostics true
+```
+
+---
+
+## P035 — PNO lazy entry enrichment CPU fix
+
+```text
+Status: PROPOSED
+Type: performance / bugfix
+Trading logic changed: no new rules; bugfix can change results from erroneous all-drop to intended stale-filtered trades
+Files: strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P019/P021/P022/P023
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+PnoStrategy.generate_events_multi_tf eagerly enriched both levels and entry frames with aggTrades before the cheap Stage1 gate.
+For collect-diagnostics/full-universe runs this loaded/merged entry trade data for symbols that enriched levels would reject at Stage1 anyway.
+Also _filter_stale_level_reclaim_trades computed kept/stale trades but returned None, so the caller collapsed non-empty trade lists to [].
+```
+
+Change:
+
+```text
+resolve category profiles once per symbol
+enrich levels first
+run fast Stage1 candidate check on enriched levels
+only enrich entry frame when at least one profile has a Stage1 candidate
+reuse the same profile tuple for the actual engine run
+return kept_trades after syncing stale-level diagnostics
+```
+
+Expected effect:
+
+```text
+CPU and IO drop most on --collect-diagnostics true / full-universe runs where most symbols fail Stage1.
+No new entry mode, no wick-touch, no changed thresholds.
+Symbols with Stage1 candidates still use enriched entry trade data before trade simulation.
+```
+
+Verification:
+
+```text
+python -m compileall strategy/pno cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+No-candidate diagnostics no longer force entry aggTrades enrichment; Stage1 rejection remains based on enriched levels data.
+The stale-filter return fix may reveal trades that were previously dropped by a return-contract bug.
 ```
 
 ## 27. Шаблон нового патча

@@ -1107,6 +1107,8 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             trades=trades,
             entry_frame=entry_frame,
         )
+        self._sync_stale_level_reclaim_diagnostics(stale_trades=stale_trades)
+        return kept_trades
 
     def generate_events_multi_tf(
         self,
@@ -1119,29 +1121,39 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         try:
             engine_context = {"seconds_frame_provider": self._seconds_provider}
             engine_context.update(context)
+            profiles = resolve_pno_category_profiles(params, category_mode=self._category_mode_filter)
             enriched_levels_frame = self._seconds_provider.enrich_with_trade_data(
                 symbol=params.symbol,
                 frame=mtf_frames.levels_frame,
                 target_timeframe=params.levels_timeframe,
             )
-            enriched_entry_frame = self._seconds_provider.enrich_with_trade_data(
-                symbol=params.symbol,
-                frame=mtf_frames.entry_frame,
-                target_timeframe=params.entry_timeframe,
-            )
             self._propagate_enriched_trade_data_to_source_frame(
                 source_frame=mtf_frames.levels_frame,
                 enriched_frame=enriched_levels_frame,
             )
-            self._propagate_enriched_trade_data_to_source_frame(
-                source_frame=mtf_frames.entry_frame,
-                enriched_frame=enriched_entry_frame,
+            has_stage1_candidate = self._profiles_have_fast_stage1_candidate(
+                profiles=profiles,
+                levels_frame=enriched_levels_frame,
+                levels_timeframe=params.levels_timeframe,
             )
+            if has_stage1_candidate:
+                entry_frame_for_engine = self._seconds_provider.enrich_with_trade_data(
+                    symbol=params.symbol,
+                    frame=mtf_frames.entry_frame,
+                    target_timeframe=params.entry_timeframe,
+                )
+                self._propagate_enriched_trade_data_to_source_frame(
+                    source_frame=mtf_frames.entry_frame,
+                    enriched_frame=entry_frame_for_engine,
+                )
+            else:
+                entry_frame_for_engine = mtf_frames.entry_frame
+
             trades = self._generate_events_for_profiles(
-                profiles=resolve_pno_category_profiles(params, category_mode=self._category_mode_filter),
+                profiles=profiles,
                 runner=lambda profile_params: self._engine.generate_events_multi_tf(
                     levels_frame=enriched_levels_frame,
-                    entry_frame=enriched_entry_frame,
+                    entry_frame=entry_frame_for_engine,
                     params=profile_params,
                     **engine_context,
                 ),
@@ -1149,11 +1161,30 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             self._seconds_provider.clear_runtime_caches(symbol=params.symbol)
             filtered_trades = self._filter_stale_level_reclaim_trades(
                 trades=trades,
-                entry_frame=enriched_entry_frame,
+                entry_frame=entry_frame_for_engine,
             )
             return filtered_trades or []
         finally:
             self._seconds_provider.clear_runtime_caches(symbol=params.symbol)
+
+    def _profiles_have_fast_stage1_candidate(
+        self,
+        *,
+        profiles: tuple[PnoCategoryProfile, ...],
+        levels_frame: pd.DataFrame,
+        levels_timeframe: Timeframe,
+    ) -> bool:
+        if levels_frame.empty:
+            return False
+        levels_timeframe_ms = levels_timeframe.to_milliseconds()
+        return any(
+            self._engine.fast_stage1_candidate_count(
+                levels_frame=levels_frame,
+                params=profile.params,
+                levels_timeframe_ms=levels_timeframe_ms,
+            ) > 0
+            for profile in profiles
+        )
 
     def prepare_symbol_context(
         self,
@@ -1182,13 +1213,13 @@ class PnoStrategy(BaseStrategy[PnoParams]):
                 levels_timeframe=levels_timeframe,
                 entry_timeframe=entry_timeframe,
             )
-            for profile in resolve_pno_category_profiles(runtime_params, category_mode=self._category_mode_filter):
-                if self._engine.fast_stage1_candidate_count(
-                    levels_frame=levels_frame,
-                    params=profile.params,
-                    levels_timeframe_ms=levels_timeframe.to_milliseconds(),
-                ) > 0:
-                    return True
+            profiles = resolve_pno_category_profiles(runtime_params, category_mode=self._category_mode_filter)
+            if self._profiles_have_fast_stage1_candidate(
+                profiles=profiles,
+                levels_frame=levels_frame,
+                levels_timeframe=levels_timeframe,
+            ):
+                return True
         return False
 
     def build_parameter_grid(self) -> list[PnoParams]:
