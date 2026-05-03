@@ -54,6 +54,7 @@ SUPERSEDED = заменён новым патчем
 | P031 | Finish source-level runtime logs | APPLIED | `cli/commands.py`, `research/*` | logging/refactor | Добить оставшиеся runtime источники: wrapper start/path в debug, diagnostics/charts в нормальный человекочитаемый статус. | `python -m compileall cli/commands.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P032 | Normalize source-level artifact logs | PROPOSED | `cli/commands.py`, `cli/pno_diagnostics.py`, `research/*` | logging/refactor | Завершить нормализацию без костылей: public runtime status только из call-sites, detailed artifact logs в debug. | `python -m compileall cli/commands.py cli/pno_diagnostics.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P033 | PyCharm inspection cleanup | PROPOSED | `cli/commands.py`, `vectorbt_runner/*`, `data/*`, `strategy/*`, `simulation/*`, `launcher.py`, `main.py`, `research/*` | cleanup/typing | Исправить актуальные PyCharm inspection warnings без изменения PNO trade logic. | `python -m compileall data/exchanges data/liquidity simulation strategy/pno strategy/base_strategy.py vectorbt_runner cli constants.py main.py launcher.py` |
+| P034 | Diagnostics initial progress | PROPOSED | `cli/commands.py`, `research/*` | logging/diagnostics | Печатать стартовый progress `Диагностика: 0 из N` и не пропускать checkpoints на пустых символах. | `python -m compileall cli/commands.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 
 ---
 
@@ -536,6 +537,37 @@ Risk:
 ```text
 логика стратегии не меняется; риск в том, что слишком художественные логи могут скрыть техническую точность, поэтому числовые поля сохранены
 ```
+
+---
+
+## 37. P034 — Diagnostics initial progress
+
+```text
+Status: PROPOSED
+Type: logging / diagnostics
+Trading logic changed: no
+Files: cli/commands.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P031/P032
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+_export_pno_diagnostics_context_for_symbols логировал progress только внутри symbol loop.
+Стартовая строка checked=0 вообще не эмитилась.
+Кроме того, checkpoint стоял после continue для символов без trades/stage events/rejections, поэтому progress мог пропускаться на пустых символах.
+```
+
+Change:
+
+```text
+перед циклом печатать Диагностика: 0 из N. ETA: --ч --м --с
+перенести periodic checkpoint до early-continue пустого символа
+```
+
+Verification:
 
 ---
 

@@ -70,7 +70,7 @@ from cli.pno_diagnostics import (
 
 # region Приватные
 
-_PROGRESS_LOG_EVERY = 100
+_PROGRESS_LOG_EVERY = 50
 _BACKTEST_RUNS_DIR_NAME = "backtest_runs"
 _BACKTEST_RUN_CONTEXT_FILE_NAME = "run_context.json"
 _BACKTEST_PLOT_REQUEST_FILE_NAME = "plot_request.json"
@@ -1359,7 +1359,7 @@ def _plot_pno_diagnostics_for_symbols(
         diagnostics_dir,
     )
     if export_result["total_stage_events"] == 0 and export_result["symbols_with_trades"] == 0:
-        logger.debug("PNO: нет событий и сделок для визуализации")
+        logger.debug("Нет событий и сделок для визуализации")
 
 
 def _render_pno_trade_charts_from_export_result(
@@ -1586,6 +1586,17 @@ def _export_pno_diagnostics_context_for_symbols(
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
     )
+    if total_symbols > 0:
+        logger.info(
+            "%s",
+            _format_runtime_progress(
+                title="Диагностика",
+                checked=0,
+                total=total_symbols,
+                eta_seconds=None,
+            ),
+        )
+
     for symbol_index, (symbol, mtf_frames) in enumerate(symbol_frames.items(), start=1):
         params = replace(pno_params_template, symbol=symbol)
         trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
@@ -1626,6 +1637,21 @@ def _export_pno_diagnostics_context_for_symbols(
                 reason = str(raw_rejection.get("reason") or "unknown")
                 stage_rejections_by_stage[stage_id].setdefault(reason, []).append({"symbol": symbol, **raw_rejection})
 
+        if symbol_index == total_symbols or symbol_index % _PROGRESS_LOG_EVERY == 0:
+            elapsed = max(time.monotonic() - symbol_export_start_time, 1e-9)
+            rate = symbol_index / elapsed
+            remaining = total_symbols - symbol_index
+            eta_seconds = remaining / rate if rate > 0.0 else None
+            logger.info(
+                "%s",
+                _format_runtime_progress(
+                    title="Диагностика",
+                    checked=symbol_index,
+                    total=total_symbols,
+                    eta_seconds=eta_seconds,
+                ),
+            )
+
         if not trade_rows and symbol_stage_events == 0 and symbol_stage_rejections == 0:
             continue
 
@@ -1648,21 +1674,6 @@ def _export_pno_diagnostics_context_for_symbols(
         (diagnostics_dir / f"{base_name}_diagnostics.json").write_text(_to_compact_json(payload), encoding="utf-8")
         if trade_rows:
             pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
-
-        if symbol_index == total_symbols or symbol_index % _PROGRESS_LOG_EVERY == 0:
-            elapsed = max(time.monotonic() - symbol_export_start_time, 1e-9)
-            rate = symbol_index / elapsed
-            remaining = total_symbols - symbol_index
-            eta_seconds = remaining / rate if rate > 0.0 else None
-            logger.info(
-                "%s",
-                _format_runtime_progress(
-                    title="Диагностика",
-                    checked=symbol_index,
-                    total=total_symbols,
-                    eta_seconds=eta_seconds,
-                ),
-            )
 
     deduplicated_stage4_rows, stage4_duplicate_count = _deduplicate_pno_stage4_review_rows(
         stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, [])
@@ -1778,7 +1789,7 @@ def _select_pno_plot_params_row_by_stage(
         best_score = max(scored_rows, key=lambda item: item[:5])
         if best_score[0] > 0 or not needs_rejection_fallback:
             logger.debug(
-                "PNO: строка для графиков выбрана из результатов; событий %s, отказов %s, сделок %s, профит-фактор %.4f.",
+                "Строка для графиков выбрана из результатов; событий %s, отказов %s, сделок %s, профит-фактор %.4f.",
                 best_score[0],
                 best_score[1],
                 best_score[2],
@@ -1826,7 +1837,7 @@ def _select_pno_plot_params_row_by_stage(
 
     best_score = max(scored_rows, key=lambda item: item[:5])
     logger.debug(
-        "PNO: строка для графиков выбрана по диагностике; событий %s, отказов %s, сделок %s, профит-фактор %.4f.",
+        "Строка для графиков выбрана по диагностике; событий %s, отказов %s, сделок %s, профит-фактор %.4f.",
         best_score[0],
         best_score[1],
         best_score[2],
@@ -2877,14 +2888,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             results_dir=config.backtest.results_dir,
             logger=logger,
         )
-    total_trades = int(results["trades_count"].sum()) if not results.empty else 0
-    logger.debug(
-        "Сетка бэктеста: комбинаций %s, прибыльных %s, лучший профит-фактор %.4f, сделок %s.",
-        summary.total_combinations,
-        summary.profitable_combinations,
-        summary.best_pf,
-        total_trades,
-    )
     _log_human_backtest_summary(
         logger=logger,
         results=results,
@@ -3012,9 +3015,9 @@ def _run_pno_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
     root_output_dir.mkdir(parents=True, exist_ok=True)
 
-    logger.warning("PNO: проверка стадий")
+    logger.warning("Проверка стадий")
     logger.debug(
-        "PNO: пресет %s, стадия %s, до стадии %s, папка %s.",
+        "Пресет %s, стадия %s, до стадии %s, папка %s.",
         preset_name,
         preset_stage,
         preset_through_stage,
@@ -3056,9 +3059,9 @@ def _run_pno_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
         ),
         encoding="utf-8",
     )
-    logger.warning("PNO: проверка стадий завершена")
+    logger.warning("Проверка стадий завершена")
     logger.debug(
-        "PNO: сводка %s, контекст %s.",
+        "Сводка %s, контекст %s.",
         summary_path,
         context_path,
     )

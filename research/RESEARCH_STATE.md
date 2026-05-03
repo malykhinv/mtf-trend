@@ -8,11 +8,11 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 68c0f43bd1f9041a829f5e08809203f667af16af
-Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup
+Commit: 373b58bf5cfb1b420c4663be4c9840e12e91d350
+Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress
 Last applied patch: P031 Finish source-level runtime logs
 Last analyzed run: E001 5m/30s
-Updated: 2026-05-02
+Updated: 2026-05-03
 ```
 
 Если неизвестно — писать `UNKNOWN`, не выдумывать.
@@ -107,6 +107,7 @@ winrate > 0.40
 | P030 | Replace runtime log filters with source logs | APPLIED | Удалить глобальный фильтр логов и исправить runtime-шум в конкретных call-sites. |
 | P031 | Finish source-level runtime logs | APPLIED | Добить оставшиеся source-level runtime логи без фильтров/whitelist/post-processing. |
 | P032 | Normalize source-level artifact logs | PROPOSED | Public runtime status формируется в call-sites; подробные artifact/progress детали переведены в debug. |
+| P034 | Diagnostics initial progress | PROPOSED | Печатать стартовый diagnostics progress 0/N и не пропускать checkpoints на пустых символах. |
 
 Статусы:
 
