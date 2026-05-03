@@ -9,7 +9,7 @@
 ```text
 Branch: codex/ideal-like
 Commit: 373b58bf5cfb1b420c4663be4c9840e12e91d350
-Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P035 proposed PNO lazy entry enrichment CPU fix
+Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P035 proposed PNO lazy entry enrichment CPU fix; P036 proposed PNO skip full source-entry enrichment
 Last applied patch: P031 Finish source-level runtime logs
 Last analyzed run: E001 5m/30s
 Updated: 2026-05-03
@@ -109,6 +109,7 @@ winrate > 0.40
 | P032 | Normalize source-level artifact logs | PROPOSED | Public runtime status формируется в call-sites; подробные artifact/progress детали переведены в debug. |
 | P034 | Diagnostics initial progress | PROPOSED | Печатать стартовый diagnostics progress 0/N и не пропускать checkpoints на пустых символах. |
 | P035 | PNO lazy entry enrichment CPU fix | PROPOSED | Не грузить entry aggTrades для символов без Stage1-кандидата; восстановить return stale-фильтра. |
+| P036 | PNO skip full source-entry enrichment | PROPOSED | Не обогащать весь source entry-frame для seconds-entry TF; оставить sparse materialization после Stage1. |
 
 Статусы:
 

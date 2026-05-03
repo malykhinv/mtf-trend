@@ -56,6 +56,7 @@ SUPERSEDED = заменён новым патчем
 | P033 | PyCharm inspection cleanup | PROPOSED | `cli/commands.py`, `vectorbt_runner/*`, `data/*`, `strategy/*`, `simulation/*`, `launcher.py`, `main.py`, `research/*` | cleanup/typing | Исправить актуальные PyCharm inspection warnings без изменения PNO trade logic. | `python -m compileall data/exchanges data/liquidity simulation strategy/pno strategy/base_strategy.py vectorbt_runner cli constants.py main.py launcher.py` |
 | P034 | Diagnostics initial progress | PROPOSED | `cli/commands.py`, `research/*` | logging/diagnostics | Печатать стартовый progress `Диагностика: 0 из N` и не пропускать checkpoints на пустых символах. | `python -m compileall cli/commands.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P035 | PNO lazy entry enrichment CPU fix | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | performance/bugfix | Не обогащать entry-frame через aggTrades, если enriched levels уже не даёт Stage1-кандидатов; вернуть intended stale-filter result. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
+| P036 | PNO skip full source-entry enrichment | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | performance | Для seconds-entry TF не обогащать весь 1m source entry-frame через aggTrades; оставить sparse materialization engine после Stage1. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 
 ---
 
@@ -1103,6 +1104,58 @@ Risk:
 ```text
 No-candidate diagnostics no longer force entry aggTrades enrichment; Stage1 rejection remains based on enriched levels data.
 The stale-filter return fix may reveal trades that were previously dropped by a return-contract bug.
+```
+
+---
+
+## P036 — PNO skip full source-entry enrichment
+
+```text
+Status: PROPOSED
+Type: performance
+Trading logic changed: no
+Files: strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P035
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+For seconds-entry PNO pairs (`5m/30s`, `5m/15s`, `1m/5s`) the CLI passes a coarser source entry frame, usually 1m.
+PnoStrategy still pre-enriched that whole source entry frame with aggTrades when Stage1 existed.
+That can aggregate the full backtest entry window even though PnoEngine later materializes only sparse target-entry windows after Stage1.
+```
+
+Change:
+
+```text
+infer the actual source entry-frame step from timestamps
+skip wrapper-level entry enrichment when target entry TF is finer than the source frame
+let PnoEngine keep doing sparse seconds materialization after Stage1
+keep eager entry enrichment only when the provided entry frame is already at target/finer resolution
+```
+
+Expected effect:
+
+```text
+Large CPU/IO reduction on seconds-entry runs with at least one Stage1 candidate.
+The win is strongest on `--pno-all-tf-pairs` and `--collect-diagnostics true` where full source-entry enrichment was repeated per TF-set.
+```
+
+Verification:
+
+```text
+python -m py_compile strategy/pno/pno_strategy.py
+python -m compileall strategy/pno cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+Low. Trade decisions should remain on the same sparse materialized target-entry data produced by PnoEngine.
+Charts for trades already load target-entry windows through the seconds provider when source entry TF is coarser than target.
 ```
 
 ## 27. Шаблон нового патча

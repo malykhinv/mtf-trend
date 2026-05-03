@@ -1136,7 +1136,11 @@ class PnoStrategy(BaseStrategy[PnoParams]):
                 levels_frame=enriched_levels_frame,
                 levels_timeframe=params.levels_timeframe,
             )
-            if has_stage1_candidate:
+            should_pre_enrich_entry = has_stage1_candidate and not self._requires_sparse_entry_materialization(
+                entry_frame=mtf_frames.entry_frame,
+                target_entry_timeframe=params.entry_timeframe,
+            )
+            if should_pre_enrich_entry:
                 entry_frame_for_engine = self._seconds_provider.enrich_with_trade_data(
                     symbol=params.symbol,
                     frame=mtf_frames.entry_frame,
@@ -1185,6 +1189,31 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             ) > 0
             for profile in profiles
         )
+
+    @staticmethod
+    def _infer_frame_timeframe_ms(frame: pd.DataFrame) -> int | None:
+        if frame.empty or "timestamp" not in frame.columns or len(frame) < 2:
+            return None
+        timestamps = pd.to_numeric(frame["timestamp"], errors="coerce").dropna().astype("int64")
+        if len(timestamps) < 2:
+            return None
+        diffs = np.diff(timestamps.to_numpy())
+        positive_diffs = diffs[diffs > 0]
+        if positive_diffs.size == 0:
+            return None
+        return int(pd.Series(positive_diffs).mode().iloc[0])
+
+    @classmethod
+    def _requires_sparse_entry_materialization(
+        cls,
+        *,
+        entry_frame: pd.DataFrame,
+        target_entry_timeframe: Timeframe,
+    ) -> bool:
+        source_timeframe_ms = cls._infer_frame_timeframe_ms(entry_frame)
+        if source_timeframe_ms is None:
+            return False
+        return int(target_entry_timeframe.to_milliseconds()) < int(source_timeframe_ms)
 
     def prepare_symbol_context(
         self,
