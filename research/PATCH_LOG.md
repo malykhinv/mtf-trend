@@ -59,6 +59,7 @@ SUPERSEDED = заменён новым патчем
 | P036 | PNO skip full source-entry enrichment | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | performance | Для seconds-entry TF не обогащать весь 1m source entry-frame через aggTrades; оставить sparse materialization engine после Stage1. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 | P037 | PNO skip redundant sparse Stage1 precheck | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | performance | Не делать wrapper-level fast Stage1 scan в sparse-entry режиме; engine уже делает обязательную Stage1-проверку перед materialization. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 | P038 | Reuse PNO backtest diagnostics export cache | PROPOSED | `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | performance/diagnostics | Кэшировать trades+diagnostics в runner и переиспользовать при artifact export после `--collect-diagnostics true`. | `python -m compileall vectorbt_runner cli strategy/pno constants.py main.py launcher.py` |
+| P039 | PNO trade-count chart bars | PROPOSED | `cli/pno_diagnostics.py`, `research/*` | diagnostics/chart | Рисовать `Trades %` как exchange trade-count per candle из entry plot frame с fallback на levels frame, если entry-count отсутствует. | `python -m compileall cli/pno_diagnostics.py` |
 
 ---
 
@@ -1260,6 +1261,55 @@ Risk:
 ```text
 Medium-low. The cache key uses the same params_to_row signature as runner/results reconstruction.
 If a future exporter is run from results only, cache is absent and the old generation path remains explicit.
+```
+
+---
+
+## P039 — PNO trade-count chart bars
+
+```text
+Status: PROPOSED
+Type: diagnostics / chart
+Trading logic changed: no
+Files: cli/pno_diagnostics.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P021/P038
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+PNO trade charts had a lower `Trades %` subplot, but `_render_pno_trade_chart` sliced `levels_window` without `number_of_trades` / `trades` / `trade_count` columns.
+As a result `_resolve_trade_count_series(levels_window)` returned zeros and the subplot could be visually empty even when true exchange trade-count data existed in the plot frames.
+```
+
+Change:
+
+```text
+keep trade-count columns in the levels-frame chart slice when they exist
+plot `Trades %` from the entry plot frame first, using exchange trade-count per candle normalized to the local window max
+fallback to levels-frame trade-count only if entry-frame trade-count is absent/zero
+leave PNO strategy trades, stage decisions, TP/SL and diagnostics generation unchanged
+```
+
+Expected effect:
+
+```text
+Trade chart bottom subplot shows exchange activity per candle, not PNO strategy trade rows.
+Charts no longer silently show a zero trade-count panel when entry/levels frames contain real trade-count fields.
+```
+
+Verification:
+
+```text
+python -m compileall cli/pno_diagnostics.py
+```
+
+Risk:
+
+```text
+Low. Plot-only change; it changes chart rendering, not backtest decisions or exported trade rows.
 ```
 
 ---

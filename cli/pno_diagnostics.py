@@ -1577,10 +1577,15 @@ def _render_pno_trade_chart(
 
     x_values = np.arange(len(plot_frame), dtype=np.float64)
     timestamps = plot_frame["timestamp"].to_numpy(dtype=np.int64)
+    levels_window_columns = [
+        column
+        for column in ("timestamp", "open", "high", "low", "close", "volume", *_PNO_PLOT_TRADE_COUNT_COLUMNS)
+        if column in levels_frame.columns
+    ]
     levels_window = levels_frame.loc[
         (levels_frame["timestamp"] >= window_start_ms)
         & (levels_frame["timestamp"] <= window_end_ms),
-        ["timestamp", "open", "high", "low", "close", "volume"],
+        levels_window_columns,
     ].copy()
     if not levels_window.empty:
         level_positions = np.interp(
@@ -1945,18 +1950,35 @@ def _render_pno_trade_chart(
             alpha=0.88,
             zorder=3,
         )
-        levels_trades = _resolve_trade_count_series(levels_window)
-        levels_trades_max = float(np.nanmax(levels_trades)) if levels_trades.size else 0.0
-        levels_trades_pct = (levels_trades / levels_trades_max) * 100.0 if levels_trades_max > 0.0 else np.zeros_like(levels_trades)
+
+    trade_counts = _resolve_trade_count_series(plot_frame)
+    trade_counts_max = float(np.nanmax(trade_counts)) if trade_counts.size else 0.0
+    if trade_counts_max > 0.0:
+        trade_counts_pct = (trade_counts / trade_counts_max) * 100.0
+        trade_count_colors = np.where(closes >= opens, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
         ax_trades.bar(
-            levels_x,
-            levels_trades_pct,
-            width=levels_volume_width,
-            color=levels_volume_colors,
+            x_values,
+            trade_counts_pct,
+            width=_resolve_pno_candle_width(x_values, default=0.82),
+            color=trade_count_colors,
             edgecolor="none",
             alpha=0.78,
             zorder=3,
         )
+    elif not levels_window.empty:
+        levels_trades = _resolve_trade_count_series(levels_window)
+        levels_trades_max = float(np.nanmax(levels_trades)) if levels_trades.size else 0.0
+        if levels_trades_max > 0.0:
+            levels_trades_pct = (levels_trades / levels_trades_max) * 100.0
+            ax_trades.bar(
+                levels_x,
+                levels_trades_pct,
+                width=levels_volume_width,
+                color=levels_volume_colors,
+                edgecolor="none",
+                alpha=0.78,
+                zorder=3,
+            )
 
     padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.05, 1e-9)
     ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
