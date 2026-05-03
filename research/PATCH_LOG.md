@@ -55,8 +55,9 @@ SUPERSEDED = заменён новым патчем
 | P032 | Normalize source-level artifact logs | PROPOSED | `cli/commands.py`, `cli/pno_diagnostics.py`, `research/*` | logging/refactor | Завершить нормализацию без костылей: public runtime status только из call-sites, detailed artifact logs в debug. | `python -m compileall cli/commands.py cli/pno_diagnostics.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P033 | PyCharm inspection cleanup | PROPOSED | `cli/commands.py`, `vectorbt_runner/*`, `data/*`, `strategy/*`, `simulation/*`, `launcher.py`, `main.py`, `research/*` | cleanup/typing | Исправить актуальные PyCharm inspection warnings без изменения PNO trade logic. | `python -m compileall data/exchanges data/liquidity simulation strategy/pno strategy/base_strategy.py vectorbt_runner cli constants.py main.py launcher.py` |
 | P034 | Diagnostics initial progress | PROPOSED | `cli/commands.py`, `research/*` | logging/diagnostics | Печатать стартовый progress `Диагностика: 0 из N` и не пропускать checkpoints на пустых символах. | `python -m compileall cli/commands.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
-| P035 | PNO lazy entry enrichment CPU fix | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | performance/bugfix | Не обогащать entry-frame через aggTrades, если enriched levels уже не даёт Stage1-кандидатов; вернуть intended stale-filter result. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
-| P036 | PNO skip full source-entry enrichment | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | performance | Для seconds-entry TF не обогащать весь 1m source entry-frame через aggTrades; оставить sparse materialization engine после Stage1. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
+| P035 | PNO lazy entry enrichment CPU fix | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | performance/bugfix | Не обогащать entry-frame через aggTrades, если enriched levels уже не даёт Stage1-кандидатов; вернуть intended stale-filter result. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
+| P036 | PNO skip full source-entry enrichment | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | performance | Для seconds-entry TF не обогащать весь 1m source entry-frame через aggTrades; оставить sparse materialization engine после Stage1. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
+| P037 | PNO skip redundant sparse Stage1 precheck | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | performance | Не делать wrapper-level fast Stage1 scan в sparse-entry режиме; engine уже делает обязательную Stage1-проверку перед materialization. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 
 ---
 
@@ -1057,7 +1058,7 @@ python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 1000
 ## P035 — PNO lazy entry enrichment CPU fix
 
 ```text
-Status: PROPOSED
+Status: APPLIED
 Type: performance / bugfix
 Trading logic changed: no new rules; bugfix can change results from erroneous all-drop to intended stale-filtered trades
 Files: strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
@@ -1111,7 +1112,7 @@ The stale-filter return fix may reveal trades that were previously dropped by a 
 ## P036 — PNO skip full source-entry enrichment
 
 ```text
-Status: PROPOSED
+Status: APPLIED
 Type: performance
 Trading logic changed: no
 Files: strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
@@ -1156,6 +1157,55 @@ Risk:
 ```text
 Low. Trade decisions should remain on the same sparse materialized target-entry data produced by PnoEngine.
 Charts for trades already load target-entry windows through the seconds provider when source entry TF is coarser than target.
+```
+
+---
+
+## P037 — PNO skip redundant sparse Stage1 precheck
+
+```text
+Status: PROPOSED
+Type: performance
+Trading logic changed: no
+Files: strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P035/P036
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+After P036, seconds-entry TF pairs use sparse entry materialization inside PnoEngine.
+PnoStrategy.generate_events_multi_tf still computed a wrapper-level fast Stage1 candidate scan across all profiles before deciding entry enrichment.
+For sparse-entry mode that scan no longer affects enrichment, and PnoEngine repeats the required Stage1 check anyway before materializing seconds windows.
+```
+
+Change:
+
+```text
+resolve whether sparse entry materialization is required first
+only run wrapper-level _profiles_have_fast_stage1_candidate when eager entry enrichment is still possible
+skip the redundant wrapper pre-scan for 5m/30s, 5m/15s and 1m/5s sparse-entry paths
+```
+
+Expected effect:
+
+```text
+Less per-symbol/per-profile CPU before the real engine run, especially on --pno-all-tf-pairs and discovery mode.
+No change to Stage1 decisions, entry logic, close_above, thresholds, TP/SL or diagnostics semantics.
+```
+
+Verification:
+
+```text
+python -m compileall strategy/pno cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+Low. The skipped scan was only a wrapper guard for eager entry enrichment; sparse-entry mode now relies on the engine's existing Stage1 gate.
 ```
 
 ## 27. Шаблон нового патча

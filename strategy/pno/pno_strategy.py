@@ -1131,14 +1131,17 @@ class PnoStrategy(BaseStrategy[PnoParams]):
                 source_frame=mtf_frames.levels_frame,
                 enriched_frame=enriched_levels_frame,
             )
-            has_stage1_candidate = self._profiles_have_fast_stage1_candidate(
-                profiles=profiles,
-                levels_frame=enriched_levels_frame,
-                levels_timeframe=params.levels_timeframe,
-            )
-            should_pre_enrich_entry = has_stage1_candidate and not self._requires_sparse_entry_materialization(
+            requires_sparse_entry_materialization = self._requires_sparse_entry_materialization(
                 entry_frame=mtf_frames.entry_frame,
                 target_entry_timeframe=params.entry_timeframe,
+            )
+            should_pre_enrich_entry = (
+                not requires_sparse_entry_materialization
+                and self._profiles_have_fast_stage1_candidate(
+                    profiles=profiles,
+                    levels_frame=enriched_levels_frame,
+                    levels_timeframe=params.levels_timeframe,
+                )
             )
             if should_pre_enrich_entry:
                 entry_frame_for_engine = self._seconds_provider.enrich_with_trade_data(
