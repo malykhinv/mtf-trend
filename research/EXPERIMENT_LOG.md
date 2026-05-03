@@ -40,6 +40,7 @@ data quality
 | E003 | Entry TF comparison            | PLANNED   | Сравнить `5m/30s`, `5m/15s`, `1m/5s`.                    |
 | E004 | `touch + retest hold`          | IDEA ONLY | Только отдельный режим, не замена `close_above`.         |
 | E005 | Year robustness test           | PLANNED   | Проверить 50+ trades/year, months, top-trade dependency. |
+| E006 | `5m/30s` 31-day diagnostics run | ANALYZED  | 2 SL trades; diagnostics export has logging-format bug. |
 
 ---
 
@@ -225,6 +226,44 @@ regime concentration
 результат держится на 1–5 сделках
 слишком мало trades
 edge только в одном режиме
+```
+
+---
+
+## 8. E006 — `5m/30s` 31-day diagnostics run
+
+```text
+Status: ANALYZED
+Date: 2026-05-03
+Code state: codex/ideal-like, commit 3e8a24765fa342a401815c4044ed0d8db78f284e + local proposed diagnostics patches
+Config: --strategy pno --pno-all-tf-pairs --days 31 --pno-category-mode discovery --collect-diagnostics true --plot-rejected true --pno-entry-confirmation-mode close_above
+Levels TF: 5m
+Entry TF: 30s
+Symbols: 508
+Trades: 2
+PnL: -1.68%
+Winrate: 0.0%
+PF: 0.00
+```
+
+Result:
+
+```text
+Strategy execution completed and produced 2 trades, both SL.
+Diagnostics export reused cache: hits=508 misses=0.
+During research_context/stage review export logging emitted TypeError because debug format strings did not match argument count.
+```
+
+Conclusion:
+
+```text
+Do not assess edge from 2 trades. Fix diagnostics logging first, then rerun/check stage_reason_summary and near-miss outputs.
+```
+
+One next test:
+
+```text
+Apply P040 and rerun the same 31-day command; verify no Logging error and stage_reason_summary.csv includes rejected reasons.
 ```
 
 ---

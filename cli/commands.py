@@ -108,6 +108,45 @@ def _build_filtered_pno_stage_rejections(
     return filtered
 
 
+def _warn_if_pno_backtest_window_too_short(
+    *,
+    strategy_id: str,
+    backtest_days: int | None,
+    levels_timeframe: Timeframe,
+    logger: Logger,
+) -> None:
+    if strategy_id != "pno" or backtest_days is None:
+        return
+
+    defaults = PnoParams(symbol="", levels_timeframe=levels_timeframe)
+    required_levels_bars_by_timeframe = {
+        Timeframe.M5: defaults.min_data_5m,
+        Timeframe.M1: defaults.min_data_1m,
+    }
+    required_levels_bars = required_levels_bars_by_timeframe.get(levels_timeframe)
+    if required_levels_bars is None:
+        return
+
+    timeframe_ms = int(levels_timeframe.to_milliseconds())
+    requested_levels_bars = int((int(backtest_days) * 86_400_000) // timeframe_ms) + 1
+    if requested_levels_bars >= required_levels_bars:
+        return
+
+    required_days = max(
+        1,
+        int(((required_levels_bars - 1) * timeframe_ms + 86_400_000 - 1) // 86_400_000),
+    )
+    logger.warning(
+        "Окно PNO слишком короткое: --days %s даёт максимум около %s баров %s, "
+        "а Stage1 требует минимум %s. Увеличь --days минимум до %s.",
+        backtest_days,
+        requested_levels_bars,
+        levels_timeframe.value,
+        required_levels_bars,
+        required_days,
+    )
+
+
 def _format_runtime_eta(seconds: float | None) -> str:
     if seconds is None:
         return "--ч --м --с"
@@ -1719,6 +1758,7 @@ def _export_pno_diagnostics_context_for_symbols(
         trade_rows=all_trade_rows,
         stage_rows_by_stage=stage_rows_by_stage,
         stage_rejections_by_stage=research_rejections_by_stage,
+        stage_rejection_summary_by_stage=stage_rejections_by_stage,
         logger=logger,
     )
     _export_pno_stage_reviews(
@@ -2695,6 +2735,12 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             backtest_days,
             backtest_end_timestamp_ms if backtest_end_timestamp_ms is not None else "по кэшу",
         )
+    _warn_if_pno_backtest_window_too_short(
+        strategy_id=strategy_id,
+        backtest_days=backtest_days,
+        levels_timeframe=levels_timeframe,
+        logger=logger,
+    )
 
     should_plot = _resolve_plot_rejected_flag(args)
     collect_diagnostics = _resolve_collect_diagnostics_flag(args)

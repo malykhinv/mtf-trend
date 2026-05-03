@@ -2530,7 +2530,7 @@ def _export_pno_stage_reviews(
             remaining = total_review_charts - rendered_review_charts
             eta_seconds = remaining / rate if rate > 0.0 else None
             logger.debug(
-                "Графики проверки стадий: %s из %s, стадия %s, ETA %s.",
+                "Графики проверки стадий: %s: %s из %s, стадия %s, ETA %s.",
                 log_prefix,
                 rendered_review_charts,
                 total_review_charts,
@@ -2541,7 +2541,7 @@ def _export_pno_stage_reviews(
 
     if render_charts and logger is not None and total_review_charts > 0:
         logger.debug(
-            "Графики проверки стадий: всего %s, стадии %s.",
+            "Графики проверки стадий: %s: всего %s, стадии %s.",
             log_prefix,
             total_review_charts,
             ",".join(selected_stage_ids),
@@ -3698,6 +3698,7 @@ def _export_pno_research_context(
     trade_rows: list[dict[str, object]],
     stage_rows_by_stage: dict[str, list[dict[str, object]]],
     stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
+    stage_rejection_summary_by_stage: dict[str, dict[str, list[dict[str, object]]]] | None = None,
     logger: Logger | None = None,
 ) -> None:
     research_dir = diagnostics_dir / "research_context"
@@ -3706,6 +3707,11 @@ def _export_pno_research_context(
     prepared_entry_frames: dict[str, pd.DataFrame] = {}
     export_start_time = time.monotonic()
     last_progress_log_time = export_start_time
+    stage_rejection_summary_source = (
+        stage_rejections_by_stage
+        if stage_rejection_summary_by_stage is None
+        else stage_rejection_summary_by_stage
+    )
 
     def _log_progress(phase: str, done: int, total: int, *, force: bool = False) -> None:
         nonlocal last_progress_log_time
@@ -3719,7 +3725,7 @@ def _export_pno_research_context(
         remaining = total - done
         eta_seconds = remaining / rate if rate > 0.0 else None
         logger.debug(
-            "Экспорт исследовательского контекста: этап %s, %s из %s, ETA %s.",
+            "Экспорт исследовательского контекста: этап %s, %s из %s (%.1f%%), ETA %s.",
             phase,
             done,
             total,
@@ -3732,7 +3738,7 @@ def _export_pno_research_context(
         stage_passed_total = sum(len(rows) for rows in stage_rows_by_stage.values())
         stage_rejected_total = sum(
             len(rows)
-            for reason_groups in stage_rejections_by_stage.values()
+            for reason_groups in stage_rejection_summary_source.values()
             for rows in reason_groups.values()
         )
 
@@ -3996,7 +4002,7 @@ def _export_pno_research_context(
     stage_reason_summary_rows: list[dict[str, object]] = []
     for stage_id, rows in stage_rows_by_stage.items():
         stage_reason_summary_rows.append({"stage_id": stage_id, "status": "passed", "reason": "passed", "count": int(len(rows))})
-    for stage_id, reason_groups in stage_rejections_by_stage.items():
+    for stage_id, reason_groups in stage_rejection_summary_source.items():
         for reason, rows in reason_groups.items():
             stage_reason_summary_rows.append({"stage_id": stage_id, "status": "rejected", "reason": reason, "count": int(len(rows))})
     pd.DataFrame(stage_reason_summary_rows).to_csv(research_dir / "stage_reason_summary.csv", index=False)

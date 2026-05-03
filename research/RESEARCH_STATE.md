@@ -9,9 +9,9 @@
 ```text
 Branch: codex/ideal-like
 Commit: 3e8a24765fa342a401815c4044ed0d8db78f284e
-Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P038 proposed diagnostics export cache; P039 proposed trade-count chart fix
+Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P038 proposed diagnostics export cache; P039 proposed trade-count chart fix; P040 proposed diagnostics logging/summary fix
 Last applied patch: P037 Skip redundant sparse Stage1 precheck
-Last analyzed run: E001 5m/30s
+Last analyzed run: E006 5m/30s 31-day run
 Updated: 2026-05-03
 ```
 
@@ -113,6 +113,7 @@ winrate > 0.40
 | P037 | PNO skip redundant sparse Stage1 precheck | APPLIED | Не делать wrapper-level Stage1 pre-scan в sparse-entry режиме; engine всё равно делает обязательную Stage1-проверку. |
 | P038 | Reuse PNO backtest diagnostics export cache | PROPOSED | Не прогонять PNO strategy повторно при экспорте diagnostics/stage reviews/charts после `--collect-diagnostics true`. |
 | P039 | PNO trade-count chart bars | PROPOSED | Нижний `Trades %` на trade charts рисует exchange trade-count per candle, нормированный в проценты, а не пустой subplot. |
+| P040 | PNO diagnostics logging/summary fix | PROPOSED | Исправить logger.debug placeholder mismatch, warning для короткого окна и full rejected-reason summary. |
 
 Статусы:
 
@@ -140,12 +141,13 @@ PROPOSED / APPLIED / VERIFIED / UNKNOWN / REVERTED / SUPERSEDED
 Run: 5m_30s
 Levels TF: 5m
 Entry TF: 30s
-Period: 3 days
-Symbols: ~508
+Period: 31 days
+Symbols: 508
 Mode: discovery / close_above
-Trades: 0
-PnL: 0
-PF: неинформативен при trades = 0
+Trades: 2
+PnL: -1.68%
+PF: 0.00
+Issue: diagnostics/chart export printed logging TypeError because debug format strings had fewer placeholders than arguments
 ```
 
 Funnel:

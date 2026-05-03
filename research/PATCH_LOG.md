@@ -60,6 +60,7 @@ SUPERSEDED = заменён новым патчем
 | P037 | PNO skip redundant sparse Stage1 precheck | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | performance | Не делать wrapper-level fast Stage1 scan в sparse-entry режиме; engine уже делает обязательную Stage1-проверку перед materialization. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 | P038 | Reuse PNO backtest diagnostics export cache | PROPOSED | `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | performance/diagnostics | Кэшировать trades+diagnostics в runner и переиспользовать при artifact export после `--collect-diagnostics true`. | `python -m compileall vectorbt_runner cli strategy/pno constants.py main.py launcher.py` |
 | P039 | PNO trade-count chart bars | PROPOSED | `cli/pno_diagnostics.py`, `research/*` | diagnostics/chart | Рисовать `Trades %` как exchange trade-count per candle из entry plot frame с fallback на levels frame, если entry-count отсутствует. | `python -m compileall cli/pno_diagnostics.py` |
+| P040 | PNO diagnostics logging/summary fix | PROPOSED | `cli/commands.py`, `cli/pno_diagnostics.py`, `research/*` | diagnostics/logging | Исправить logging TypeError в diagnostics export, предупреждать о коротком PNO окне и писать full rejection summary. | `python -m compileall cli/pno_diagnostics.py cli/commands.py` |
 
 ---
 
@@ -1310,6 +1311,49 @@ Risk:
 
 ```text
 Low. Plot-only change; it changes chart rendering, not backtest decisions or exported trade rows.
+```
+
+---
+
+## P040 — PNO diagnostics logging/summary fix
+
+```text
+Status: PROPOSED
+Type: diagnostics / logging
+Trading logic changed: no
+Files: cli/commands.py, cli/pno_diagnostics.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md, research/EXPERIMENT_LOG.md
+Follow-up to: E006 / P032 / P038
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+31-day 5m/30s PNO run completed strategy execution but diagnostics/chart export emitted logging TypeError.
+Several logger.debug calls had fewer `%s` placeholders than supplied arguments.
+Research context summary used filtered review rejections, so non-reviewable reasons like insufficient_data could disappear from stage_reason_summary.csv.
+A 1-day 5m run could proceed despite being shorter than Stage1 min_data_5m=300.
+```
+
+Change:
+
+```text
+fix debug format strings for research-context and stage-review progress logs
+pass full stage_rejections_by_stage separately for stage_reason_summary.csv while keeping filtered rows for heavy context exports
+warn early when requested PNO --days cannot satisfy min levels bars
+```
+
+Verification:
+
+```text
+python -m compileall cli/pno_diagnostics.py cli/commands.py
+```
+
+Risk:
+
+```text
+Low. No trade decision, threshold, entry, TP/SL or data-fetch logic changes. Only diagnostics/logging/export summary behavior changes.
 ```
 
 ---
