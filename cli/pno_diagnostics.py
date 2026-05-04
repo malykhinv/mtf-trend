@@ -210,6 +210,7 @@ def _select_stage1_review_rejection_rows(
     rows: list[dict[str, object]],
 ) -> list[dict[str, object]]:
     scored_rows: list[tuple[float, dict[str, object]]] = []
+    far_scored_rows: list[tuple[float, dict[str, object]]] = []
     fallback_rows: list[dict[str, object]] = []
     for row in rows:
         score = _resolve_stage1_rejection_review_score(row)
@@ -217,6 +218,7 @@ def _select_stage1_review_rejection_rows(
             fallback_rows.append(row)
             continue
         if score > _PNO_STAGE1_REVIEW_DISTANCE_MAX:
+            far_scored_rows.append((score, row))
             continue
         scored_rows.append((score, row))
 
@@ -232,6 +234,20 @@ def _select_stage1_review_rejection_rows(
             [row for _, row in scored_rows],
             max_rows=_PNO_STAGE1_REVIEW_MAX_ROWS_PER_REASON,
             max_rows_per_symbol=_PNO_STAGE1_REVIEW_MAX_ROWS_PER_SYMBOL,
+        )
+
+    if far_scored_rows:
+        far_scored_rows.sort(
+            key=lambda item: (
+                item[0],
+                _safe_int(item[1].get("timestamp_ms")) if _safe_int(item[1].get("timestamp_ms")) is not None else 0,
+                str(item[1].get("symbol") or ""),
+            )
+        )
+        return _cap_stage1_review_rows(
+            [row for _, row in far_scored_rows],
+            max_rows=_PNO_STAGE1_REVIEW_FALLBACK_ROWS_PER_REASON,
+            max_rows_per_symbol=1,
         )
 
     if reason in {"hold_floor_lost_before_stage2", "hold_floor_wick_before_stage2", "stage1_lost_before_stage2"}:

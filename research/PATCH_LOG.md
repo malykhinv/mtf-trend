@@ -62,6 +62,7 @@ SUPERSEDED = заменён новым патчем
 | P039 | PNO trade-count chart bars | PROPOSED | `cli/pno_diagnostics.py`, `research/*` | diagnostics/chart | Рисовать `Trades %` как exchange trade-count per candle из entry plot frame с fallback на levels frame, если entry-count отсутствует. | `python -m compileall cli/pno_diagnostics.py` |
 | P040 | PNO diagnostics logging/summary fix | APPLIED | `cli/commands.py`, `cli/pno_diagnostics.py`, `research/*` | diagnostics/logging | Исправить logging TypeError в diagnostics export, предупреждать о коротком PNO окне и писать full rejection summary. | `python -m compileall cli/pno_diagnostics.py cli/commands.py` |
 | P041 | PNO seconds-entry/stale-level/BE/log cleanup | PROPOSED | `cli/commands.py`, `cli/pno_diagnostics.py`, `strategy/pno/config.py`, `strategy/pno/engine.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/logging/risk | `15s` использует тот же sparse aggTrades path, что `30s`/`5s`; Stage5 режет уже reclaimed level до сделки; BE arm снижен до 60%; убраны лишние runtime logs. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
+| P043 | Human BOS obsolete-level guard | PROPOSED | `strategy/pno/engine.py`, `cli/pno_diagnostics.py`, `research/*` | bugfix/diagnostics | Убрать bypass Stage4 scoring/Stage5 decay для `human_bos`; Stage1 rejected reasons без near-threshold rows получают fallback charts. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 
 ---
 
@@ -1448,6 +1449,64 @@ Next:
 
 ```text
 Rerun the same --pno-all-tf-pairs command and verify that diagnostics/research_context/*.csv and stage_reason_summary.csv are written after 508/508 symbols.
+```
+
+---
+
+## P043 — Human BOS obsolete-level guard
+
+```text
+Status: PROPOSED
+Type: bugfix / diagnostics
+Trading logic changed: yes, for human_bos validity only
+Files: strategy/pno/engine.py, cli/pno_diagnostics.py, research/*
+Follow-up to: E007 / 1.zip multi-TF diagnostics
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+5m/30s admitted GUA/MAGMA through `human_bos` levels that were visually and structurally stale: selected BOS was a lower/local level under later or prior local highs. In code, `human_bos` returned from `_resolve_stage4_context` as already valid and `_rebuild_stage4_scores` returned immediately, so overhead/untested-high/stale-level hard blocks were bypassed. Stage5 also nulled non-reclaim decay reasons for `human_bos`.
+
+Stage1 rejected chart export only rendered near-threshold rows. Reasons like `counterflow_ratio_5m_too_high` wrote events.csv but no charts when all rows were far from threshold.
+```
+
+Change:
+
+```text
+run `human_bos` through normal Stage4 scoring instead of returning early
+add explicit `human_bos` obsolete-level guard for prior/later local highs above selected level
+apply close_above pre-signal decay to `human_bos` instead of blanket nulling it
+invalidate armed `human_bos` entries when level becomes obsolete before trigger
+select fallback Stage1 review rows from closest far-threshold rejects when no near-threshold rows exist
+```
+
+Expected diagnostics:
+
+```text
+GUA/MAGMA-like lower stale `human_bos` trades should move to Stage4/Stage5 rejected with human_bos_* or level_already_* reasons.
+Stage1 rejected folders such as counterflow_ratio_5m_too_high should get charts even when all rows are far from threshold.
+```
+
+Verification:
+
+```text
+python -m compileall strategy/pno cli constants.py main.py launcher.py
+rerun same 31d --pno-all-tf-pairs diagnostics and compare GUA/MAGMA, Stage4 unique, Stage5 reasons and rejected charts manifest
+```
+
+Risk:
+
+```text
+Medium. This intentionally reduces `human_bos` permissiveness. It may remove some valid early BOS continuations; verify through same-window before/after funnel, not PnL only. Diagnostics fallback has low risk and does not affect trading decisions.
+```
+
+Next:
+
+```text
+Rerun same 31-day multi-TF diagnostics and inspect whether rejected GUA/MAGMA are correct and whether missing Stage1 rejected charts are now exported.
 ```
 
 ---

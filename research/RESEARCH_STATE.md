@@ -9,9 +9,9 @@
 ```text
 Branch: codex/ideal-like
 Commit: 146919dde598b7ff100a07a9a4657de272165bc0
-Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P038 proposed diagnostics export cache; P039 proposed trade-count chart fix; P041 proposed seconds-entry/stale-level/BE/log cleanup; P042 proposed research-context export helper fix
+Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P038 proposed diagnostics export cache; P039 proposed trade-count chart fix; P041 proposed seconds-entry/stale-level/BE/log cleanup; P042 proposed research-context export helper fix; P043 proposed human_bos obsolete-level guard and Stage1 rejected chart fallback
 Last applied patch: P040 Fix PNO diagnostics logging and rejection summary
-Last analyzed run: E006 5m/30s 31-day run
+Last analyzed run: E007 multi-TF 31-day run from 1.zip
 Updated: 2026-05-04
 ```
 
@@ -70,6 +70,7 @@ winrate > 0.40
 5. Без настоящего `number_of_trades` выводы о flow/tape/organic pump ограничены.
 6. Ноль сделок — не оценка прибыльности, а материал для funnel/reject анализа.
 7. Сначала диагностика и качество данных, потом изменение фильтров.
+8. H4 подтверждена: `human_bos` bypass scoring/decay может принимать устаревший нижний BOS-level.
 
 ---
 
@@ -116,6 +117,7 @@ winrate > 0.40
 | P040 | PNO diagnostics logging/summary fix | APPLIED | Исправить logger.debug placeholder mismatch, warning для короткого окна и full rejected-reason summary. |
 | P041 | PNO seconds-entry/stale-level/BE/log cleanup | PROPOSED | Включить `15s` в общий sparse aggTrades path, резать устаревший level до сделки, снизить BE до 60%, убрать лишние runtime logs. |
 | P042 | PNO research-context export helper fix | PROPOSED | Восстановить локальные prepared-frame helper’ы и накопители в `_export_pno_research_context`, чтобы diagnostics export не падал после полного прогона. |
+| P043 | Human BOS obsolete-level guard | PROPOSED | Убрать bypass scoring/decay для `human_bos` и экспортировать fallback charts для Stage1 rejected reasons без near-threshold rows. |
 
 Статусы:
 
@@ -132,7 +134,7 @@ PROPOSED / APPLIED / VERIFIED / UNKNOWN / REVERTED / SUPERSEDED
 | H1 | `30s` entry TF может опаздывать. | ETH case дошёл до active high до executable entry. | Сравнить `5m/30s`, `5m/15s`, `1m/5s`. |
 | H2 | Stage1 слишком узкий или рынок дал мало чистых пампов. | Мало Stage1 passes в последнем run. | Длиннее окно + rejection distribution. |
 | H3 | Flow-фильтры нельзя честно оценить без real trade-count. | Был volume proxy. | P004 + повтор того же run. |
-| H4 | `human_bos` может обходить часть Stage4 scoring. | Нужно проверить текущий execution path. | Code review актуального `engine.py`. |
+| H4 | `human_bos` может обходить часть Stage4 scoring. | Подтверждено на `engine.py`: `human_bos` bypassed Stage4 scoring и Stage5 decay. | P043 + rerun same 31d multi-TF diagnostics. |
 | H5 | Wick-touch ухудшит качество входов. | BZ/RUNE были wick-only без close_above. | Только отдельный `touch + retest hold` experiment. |
 
 ---
@@ -140,35 +142,33 @@ PROPOSED / APPLIED / VERIFIED / UNKNOWN / REVERTED / SUPERSEDED
 ## 7. Последний известный run
 
 ```text
-Run: 5m_30s
-Levels TF: 5m
-Entry TF: 30s
+Run: 1.zip multi-TF
+Levels/Entry TF: 1m/5s, 5m/15s, 5m/30s
 Period: 31 days
-Symbols: 508
+Symbols: ~508
 Mode: discovery / close_above
-Trades: 2
-PnL: -1.68%
-PF: 0.00
-Issue: diagnostics/chart export printed logging TypeError because debug format strings had fewer placeholders than arguments
+Trades: 0 / 2 / 4
+5m/30s PnL: -4.4104%
+PF: not meaningful
+Issue: `human_bos` allowed stale/obsolete lower BOS-levels; Stage1 rejected charts omitted reasons with no near-threshold rows.
 ```
 
 Funnel:
 
 ```text
-Stage1 pump:            8
-Stage2 high_pullback:   6
-Stage3 valid_pullback:  3
-Stage4 rows:            7
-Stage4 unique expected: 4
-Stage5 trades:          0
+5m/30s Stage1 pump:            44
+5m/30s Stage2 high_pullback:   34
+5m/30s Stage3 valid_pullback:  11
+5m/30s Stage4 rows / unique:   29 / 14
+5m/30s Stage5 trades:          4
 ```
 
 Интерпретация:
 
 ```text
 run полезен для funnel/reject analysis, но не для оценки прибыльности.
-BZ/RUNE: wick-only / no close_above.
-ETH: вероятный entry TF latency case.
+GUA/MAGMA: входы в неактуальный `human_bos` level.
+`counterflow_ratio_5m_too_high` charts отсутствовали из-за near-threshold sampling.
 ```
 
 ---
@@ -202,7 +202,7 @@ taker_buy_quote_volume
 Текущий приоритет:
 
 ```text
-P004 true trade-count → повторить тот же 5m/30s период → сравнить Stage1/reject distribution.
+P043 → повторить тот же multi-TF 31d run → проверить, исчезли ли GUA/MAGMA и появились ли Stage1 rejected fallback charts.
 ```
 
 После этого:

@@ -41,6 +41,7 @@ data quality
 | E004 | `touch + retest hold`          | IDEA ONLY | Только отдельный режим, не замена `close_above`.         |
 | E005 | Year robustness test           | PLANNED   | Проверить 50+ trades/year, months, top-trade dependency. |
 | E006 | `5m/30s` 31-day diagnostics run | ANALYZED  | 2 SL trades; diagnostics export has logging-format bug. |
+| E007 | `1.zip` multi-TF 31-day diagnostics | ANALYZED | Edge not proven; `human_bos` stale-level bypass and Stage1 chart sampling issue found. |
 
 ---
 
@@ -264,6 +265,51 @@ One next test:
 
 ```text
 Apply P040 and rerun the same 31-day command; verify no Logging error and stage_reason_summary.csv includes rejected reasons.
+```
+
+---
+
+## 9. E007 — `1.zip` multi-TF 31-day diagnostics
+
+```text
+Status: ANALYZED
+Date: 2026-05-04
+Code state: README.zip / codex/ideal-like snapshot, exact commit UNKNOWN
+Config: --pno-all-tf-pairs, close_above, discovery
+Data quality: levels trade-count = number_of_trades; 5m/30s entry trade-count partly volume_proxy; entry quote_volume = close_volume_proxy
+```
+
+Result:
+
+```text
+1m/5s: 0 trades
+5m/15s: 2 trades, roughly flat TP1_BE only
+5m/30s: 4 trades, -4.4104%, 3 SL + 1 TP1_BE
+5m/30s funnel: Stage1 44, Stage2 34, Stage3 11, Stage4 29 rows / 14 unique, Stage5 4 trades
+```
+
+Evidence:
+
+```text
+All 5m/30s trades used structure_source=human_bos. GUA and MAGMA entered stale/lower BOS levels under prior or later local highs, not clean current reclaim levels. Stage1 rejected reasons such as counterflow_ratio_5m_too_high lacked charts because near-threshold selector returned zero rows.
+```
+
+Limitations:
+
+```text
+Small trade count; PnL not enough for edge conclusion. Entry flow/tape quality limited by proxy fields.
+```
+
+Conclusion:
+
+```text
+Do not optimize PnL. First fix human_bos validity and diagnostics sampling, then rerun same window and compare funnel/reject distribution.
+```
+
+One next test:
+
+```text
+Apply P043 and rerun the same 31-day multi-TF diagnostics; inspect GUA/MAGMA, Stage4 unique, Stage5 rejected reasons and rejected charts manifest.
 ```
 
 ---

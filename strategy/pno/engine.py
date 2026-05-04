@@ -5778,8 +5778,6 @@ class PnoEngine:
         stage4: Stage4Context,
         params: PnoParams,
     ) -> Stage4Context:
-        if stage4.structure_source == "human_bos":
-            return stage4
         v1_now = max(float(one.v1[idx]), self._EPSILON)
         v5_now = max(float(five.v5[five_idx]), self._EPSILON)
         ideal_like_impulse = self._is_ideal_like_impulse(stage1=stage1, params=params)
@@ -5998,12 +5996,22 @@ class PnoEngine:
 
         hard_block_reason = stage4.hard_block_reason
         hard_block = bool(stage4.hard_block)
+        human_bos_obsolete_reason = self._resolve_human_bos_obsolete_level_reason(
+            one=one,
+            idx=idx,
+            stage3=stage3,
+            stage4=stage4,
+            params=params,
+        )
         if stage4.level >= stage3.active_high:
             hard_block = True
             hard_block_reason = "level_not_below_active_high"
         elif stage4.touches > int(params.max_level_touches):
             hard_block = True
             hard_block_reason = "too_many_touches"
+        elif human_bos_obsolete_reason is not None:
+            hard_block = True
+            hard_block_reason = human_bos_obsolete_reason
         elif self._has_deep_stale_break_below_pullback_after_level(
             one=one,
             idx=idx,
@@ -6556,6 +6564,58 @@ class PnoEngine:
             "quote_volume_median": float(np.nanmedian(quote_volume)) if quote_volume.size > 0 else 0.0,
         }
 
+    def _resolve_human_bos_obsolete_level_reason(
+        self,
+        *,
+        one: OneMinuteFrame,
+        idx: int,
+        stage3: Stage3Context,
+        stage4: Stage4Context,
+        params: PnoParams,
+    ) -> str | None:
+        if stage4.structure_source != "human_bos":
+            return None
+        level = float(stage4.level)
+        active_high = float(stage3.active_high)
+        if level >= (active_high - self._EPSILON):
+            return "human_bos_level_not_below_active_high"
+        if idx <= int(stage4.cluster_first_idx):
+            return None
+
+        v1_now = max(float(one.v1[idx]), self._EPSILON)
+        tolerance = max(float(params.level_touch_tolerance_v1) * v1_now, 0.35 * v1_now, self._EPSILON)
+        min_decline = max(0.50 * v1_now, 0.05 * max(float(stage3.pullback_depth), self._EPSILON))
+        confirmed_highs = self._resolve_confirmed_highs(
+            one=one,
+            start_idx=stage3.pullback_start_idx + 1,
+            end_idx=idx,
+        )
+        selected_idx = int(stage4.cluster_first_idx)
+        for high_idx in confirmed_highs:
+            if high_idx == selected_idx or high_idx > idx:
+                continue
+            high_price = float(one.highs[high_idx])
+            if high_price <= (level + tolerance) or high_price >= (active_high - self._EPSILON):
+                continue
+            later_lows = one.lows[high_idx + 1 : idx + 1]
+            if later_lows.size == 0:
+                continue
+            decline = high_price - float(np.nanmin(later_lows))
+            if decline < min_decline:
+                continue
+            if high_idx < selected_idx:
+                return "human_bos_below_prior_local_high"
+            return "human_bos_obsolete_under_later_local_high"
+
+        if int(stage4.level_valid_idx) < idx:
+            level_profile = self._resolve_level_life_profile(one=one, stage4=stage4, signal_idx=idx)
+            if bool(level_profile["prior_close_above_bar"]):
+                return "level_already_reclaimed_before_entry"
+            if bool(level_profile["prior_full_above_bar"]):
+                return "level_already_accepted_before_signal"
+        return None
+
+
     def _resolve_close_above_pre_signal_decay_reason(
         self,
         *,
@@ -6624,13 +6684,22 @@ class PnoEngine:
         pullback_low = float(armed.stage3.pullback_low)
         stop_broken = current_close <= (stop_level - close_tolerance) or current_low <= (stop_level - wick_tolerance)
         pullback_broken = current_close <= (pullback_low - close_tolerance) or current_low <= (pullback_low - wick_tolerance)
-        if armed.stage4.structure_source == "human_bos":
-            return stop_broken or pullback_broken
+        resolved_params = params or PnoParams(symbol="")
+        human_bos_obsolete_broken = (
+            self._resolve_human_bos_obsolete_level_reason(
+                one=one,
+                idx=idx,
+                stage3=armed.stage3,
+                stage4=armed.stage4,
+                params=resolved_params,
+            )
+            is not None
+        )
         close_above_decay_broken = (
             self._resolve_close_above_pre_signal_decay_reason(
                 one=one,
                 signal_idx=idx,
-                params=params or PnoParams(symbol=""),
+                params=resolved_params,
                 stage4=armed.stage4,
             )
             is not None
@@ -6641,7 +6710,7 @@ class PnoEngine:
             and self._is_ideal_like_impulse(stage1=armed.stage1, params=params)
         ):
             close_above_decay_broken = False
-        return stop_broken or pullback_broken or close_above_decay_broken
+        return stop_broken or pullback_broken or human_bos_obsolete_broken or close_above_decay_broken
 
     def _resolve_compression_score(
         self,
@@ -7625,21 +7694,31 @@ class PnoEngine:
                     ),
                 )
             ideal_like_impulse = self._is_ideal_like_impulse(stage1=armed.stage1, params=params)
+            human_bos_obsolete_reason = self._resolve_human_bos_obsolete_level_reason(
+                one=one,
+                idx=entry_idx,
+                stage3=armed.stage3,
+                stage4=armed.stage4,
+                params=params,
+            )
+            if human_bos_obsolete_reason is not None:
+                return _reject(
+                    str(human_bos_obsolete_reason),
+                    exit_idx=entry_idx,
+                    extra={"human_bos_obsolete_reason": str(human_bos_obsolete_reason)},
+                )
             close_above_decay_reason = self._resolve_close_above_pre_signal_decay_reason(
                 one=one,
                 signal_idx=entry_idx,
                 params=params,
                 stage4=armed.stage4,
             )
-            if close_above_decay_reason != "level_already_reclaimed_before_entry":
-                if (
-                    ideal_like_impulse
-                    and bool(getattr(params, "ideal_like_ignore_decay_invalidation", False))
-                    and close_above_decay_reason == "level_already_accepted_before_signal"
-                ):
-                    close_above_decay_reason = None
-                if armed.stage4.structure_source == "human_bos":
-                    close_above_decay_reason = None
+            if (
+                ideal_like_impulse
+                and bool(getattr(params, "ideal_like_ignore_decay_invalidation", False))
+                and close_above_decay_reason == "level_already_accepted_before_signal"
+            ):
+                close_above_decay_reason = None
             if close_above_decay_reason == "level_already_reclaimed_before_entry":
                 return _reject(
                     "level_already_reclaimed_before_entry",
