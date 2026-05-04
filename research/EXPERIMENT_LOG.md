@@ -365,3 +365,34 @@ research_context/*.csv имеют header даже при пустых rows.
 ```text
 PnL / winrate / edge, пока positions мало или 0.
 ```
+
+---
+
+## E009 — Artifact quality rerun after P046
+
+```text
+Status: PLANNED
+Depends on: P046
+Levels/Entry TF: 1m/5s, 5m/15s, 5m/30s
+Period: same as E008 / 31 days
+Mode: discovery / close_above
+```
+
+Goal:
+
+```text
+prove that the current exporter produces analyzable diagnostics artifacts even when the funnel stops at data-quality Stage1.
+```
+
+Success:
+
+```text
+stage_reviews/*/passed/events.csv can be read by pandas with headers at zero rows; stage_reviews/*/summary.csv and manifest.csv agree on events_count; diagnostics_quality_sources.csv exposes quote-volume/trade-count source coverage; diagnostics_quality_reasons.csv exposes top quality bottlenecks; run_context.json records category mode, entry confirmation mode and variant id.
+```
+
+Do not evaluate:
+
+```text
+PnL / winrate / edge if positions remain zero or too few.
+```
+

@@ -75,6 +75,34 @@ _PROGRESS_LOG_EVERY = 50
 _BACKTEST_RUNS_DIR_NAME = "backtest_runs"
 _BACKTEST_RUN_CONTEXT_FILE_NAME = "run_context.json"
 _BACKTEST_PLOT_REQUEST_FILE_NAME = "plot_request.json"
+_PNO_DIAGNOSTICS_COVERAGE_COLUMNS: tuple[str, ...] = (
+    "symbol",
+    "diagnostics_json_written",
+    "skip_reason",
+    "positions_generated",
+    "selected_activity_count",
+    "selected_stage_events_count",
+    "selected_stage_rejections_count",
+    "total_stage_events_count",
+    "total_stage_rejections_count",
+    "skipped_market_data_quality",
+    "levels_trade_count_source",
+    "entry_trade_count_source",
+    "levels_quote_volume_source",
+    "entry_quote_volume_source",
+    "market_data_quality_status",
+    "market_data_quality_reasons",
+)
+_PNO_DIAGNOSTICS_COVERAGE_SUMMARY_COLUMNS: tuple[str, ...] = ("metric", "value")
+_PNO_DIAGNOSTICS_QUALITY_SOURCE_COLUMNS: tuple[str, ...] = ("field", "value", "count")
+_PNO_DIAGNOSTICS_QUALITY_REASON_COLUMNS: tuple[str, ...] = ("reason", "count")
+_PNO_STAGE_REVIEW_RUN_SUMMARY_COLUMNS: tuple[str, ...] = (
+    "preset",
+    "stage_id",
+    "events_count",
+    "events_path",
+    "summary_path",
+)
 _PNO_STAGE_PRESETS: dict[str, tuple[int | None, int | None]] = {
     **{f"s{idx}": (idx, None) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
     **{f"stage{idx}": (idx, None) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
@@ -420,6 +448,9 @@ def _write_backtest_run_context(
     plot_requested: bool,
     pno_stage: int | None,
     pno_through_stage: int | None,
+    pno_category_mode: str | None = None,
+    pno_entry_confirmation_mode: str | None = None,
+    pno_variant_id: str | None = None,
 ) -> None:
     payload = {
         "strategy_id": strategy_id,
@@ -435,6 +466,9 @@ def _write_backtest_run_context(
         "plot_requested": bool(plot_requested),
         "pno_stage": int(pno_stage) if pno_stage is not None else None,
         "pno_through_stage": int(pno_through_stage) if pno_through_stage is not None else None,
+        "pno_category_mode": pno_category_mode,
+        "pno_entry_confirmation_mode": pno_entry_confirmation_mode,
+        "pno_variant_id": pno_variant_id,
     }
     (run_root_dir / _BACKTEST_RUN_CONTEXT_FILE_NAME).write_text(
         _to_compact_json(payload),
@@ -907,7 +941,24 @@ def _sync_shared_stage_reviews(
         for _, row in target_manifest.iterrows()
         if str(row.get("stage_id") or "") not in shared_stage_ids
     ]
-    pd.DataFrame([*shared_rows, *target_rows]).to_csv(target_stage_reviews_dir / "manifest.csv", index=False)
+    _write_frame_from_records(
+        target_stage_reviews_dir / "manifest.csv",
+        [*shared_rows, *target_rows],
+        columns=(
+            "stage_id",
+            "events_count",
+            "passed_count",
+            "rejected_count",
+            "rejected_review_count",
+            "rejected_filtered_count",
+            "stage_dir",
+            "events_path",
+            "summary_path",
+            "passed_events_path",
+            "passed_charts_count",
+            "rejected_charts_count",
+        ),
+    )
 
 
 def _plot_pno_diagnostics_with_shared_stage_reviews(
@@ -1611,15 +1662,68 @@ def _serialize_diagnostics_context_value(value: object) -> object:
     return value
 
 
+def _write_frame_from_records(path: Path, records: list[dict[str, object]], *, columns: tuple[str, ...]) -> None:
+    frame = pd.DataFrame(records) if records else pd.DataFrame(columns=list(columns))
+    frame.to_csv(path, index=False)
+
+
+def _split_quality_reasons(value: object) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, float) and pd.isna(value):
+        return []
+    text = str(value).strip()
+    if not text:
+        return []
+    return [part for part in text.split("|") if part]
+
+
+def _write_pno_diagnostics_quality_tables(*, diagnostics_dir: Path, coverage_frame: pd.DataFrame) -> None:
+    source_rows: list[dict[str, object]] = []
+    for field in (
+        "levels_trade_count_source",
+        "entry_trade_count_source",
+        "levels_quote_volume_source",
+        "entry_quote_volume_source",
+        "market_data_quality_status",
+    ):
+        if field not in coverage_frame.columns:
+            continue
+        counts = coverage_frame[field].fillna("").astype(str).value_counts(dropna=False)
+        for value, count in counts.items():
+            source_rows.append({"field": field, "value": value, "count": int(count)})
+    _write_frame_from_records(
+        diagnostics_dir / "diagnostics_quality_sources.csv",
+        source_rows,
+        columns=_PNO_DIAGNOSTICS_QUALITY_SOURCE_COLUMNS,
+    )
+
+    reason_counts: Counter[str] = Counter()
+    if "market_data_quality_reasons" in coverage_frame.columns:
+        for raw_value in coverage_frame["market_data_quality_reasons"]:
+            reason_counts.update(_split_quality_reasons(raw_value))
+    reason_rows = [
+        {"reason": reason, "count": int(count)}
+        for reason, count in sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    _write_frame_from_records(
+        diagnostics_dir / "diagnostics_quality_reasons.csv",
+        reason_rows,
+        columns=_PNO_DIAGNOSTICS_QUALITY_REASON_COLUMNS,
+    )
+
+
 def _write_pno_diagnostics_coverage(*, diagnostics_dir: Path, rows: list[dict[str, object]]) -> None:
-    coverage_frame = pd.DataFrame(rows)
+    coverage_frame = pd.DataFrame(rows) if rows else pd.DataFrame(columns=list(_PNO_DIAGNOSTICS_COVERAGE_COLUMNS))
     coverage_path = diagnostics_dir / "diagnostics_coverage.csv"
     coverage_frame.to_csv(coverage_path, index=False)
     if coverage_frame.empty:
-        pd.DataFrame([{"metric": "symbols_total", "value": 0}]).to_csv(
+        _write_frame_from_records(
             diagnostics_dir / "diagnostics_coverage_summary.csv",
-            index=False,
+            [{"metric": "symbols_total", "value": 0}],
+            columns=_PNO_DIAGNOSTICS_COVERAGE_SUMMARY_COLUMNS,
         )
+        _write_pno_diagnostics_quality_tables(diagnostics_dir=diagnostics_dir, coverage_frame=coverage_frame)
         return
     written_mask = coverage_frame["diagnostics_json_written"].astype(bool)
     positions_mask = pd.to_numeric(coverage_frame.get("positions_generated", 0), errors="coerce").fillna(0).gt(0)
@@ -1636,7 +1740,12 @@ def _write_pno_diagnostics_coverage(*, diagnostics_dir: Path, rows: list[dict[st
         {"metric": "skipped_market_data_quality_count", "value": int(skipped_quality_mask.sum())},
         {"metric": "missing_diagnostics_symbols", "value": "|".join(missing_symbols)},
     ]
-    pd.DataFrame(summary_rows).to_csv(diagnostics_dir / "diagnostics_coverage_summary.csv", index=False)
+    _write_frame_from_records(
+        diagnostics_dir / "diagnostics_coverage_summary.csv",
+        summary_rows,
+        columns=_PNO_DIAGNOSTICS_COVERAGE_SUMMARY_COLUMNS,
+    )
+    _write_pno_diagnostics_quality_tables(diagnostics_dir=diagnostics_dir, coverage_frame=coverage_frame)
 
 def _export_pno_diagnostics_context_for_symbols(
     *,
@@ -2958,6 +3067,16 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     if run_root_dir is not None:
+        pno_category_mode = None
+        pno_entry_confirmation_mode = None
+        pno_variant_id = None
+        if isinstance(strategy, PnoStrategy):
+            pno_category_mode = getattr(config.strategy, "pno_category_mode", None)
+            pno_grid = strategy.build_parameter_grid()
+            pno_entry_modes = sorted({params.entry_confirmation_mode for params in pno_grid})
+            pno_variant_ids = sorted({params.pno_variant_id for params in pno_grid})
+            pno_entry_confirmation_mode = "+".join(pno_entry_modes) if pno_entry_modes else None
+            pno_variant_id = "+".join(pno_variant_ids) if pno_variant_ids else None
         _write_backtest_run_context(
             run_root_dir,
             strategy_id=strategy_id,
@@ -2970,6 +3089,9 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             plot_requested=should_plot,
             pno_stage=getattr(args, "pno_stage", None),
             pno_through_stage=getattr(args, "pno_through_stage", None),
+            pno_category_mode=pno_category_mode,
+            pno_entry_confirmation_mode=pno_entry_confirmation_mode,
+            pno_variant_id=pno_variant_id,
         )
 
     runner = BacktestRunner(
@@ -3179,7 +3301,11 @@ def _run_pno_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
     )
 
     summary_path = root_output_dir / "stage_review_summary.csv"
-    pd.DataFrame(summary_rows).to_csv(summary_path, index=False)
+    _write_frame_from_records(
+        summary_path,
+        summary_rows,
+        columns=_PNO_STAGE_REVIEW_RUN_SUMMARY_COLUMNS,
+    )
     context_path = root_output_dir / "stage_review_context.json"
     context_path.write_text(
         json.dumps(

@@ -1670,3 +1670,45 @@ python -m compileall data/exchanges strategy/pno cli constants.py main.py launch
 Backtest results станут менее permissive: символы без real USDT quote_volume или real trade-count будут явно отклоняться по missing_required_market_data.
 Это ожидаемо; цель — не маскировать проблему proxy-данных.
 ```
+
+---
+
+## P046 — Artifact export quality
+
+```text
+Status: PROPOSED
+Commit: UNKNOWN until applied
+Base checked: 3ae80c93fa3e8ca2ec95566a89982f4001956db5
+Trading logic changed: no
+Files: cli/pno_diagnostics.py, cli/commands.py, research/RESEARCH_STATE.md, research/PATCH_LOG.md, research/EXPERIMENT_LOG.md
+```
+
+Problem:
+
+```text
+P045 removed the sparse-entry Stage1 false gate, but the new run still produced diagnostics artifacts that were hard to consume: stage_reviews/*/passed/events.csv could be headerless when empty, stage manifest did not match stage_review_summary expectations, and run_context omitted PNO category/entry/variant mode. Data-quality coverage required extra manual grouping to see quote-volume/source bottlenecks.
+```
+
+Change:
+
+```text
+Write stage-review events with a stable base schema even when rows are empty.
+Add per-stage summary.csv and manifest fields used by stage review aggregation.
+Write diagnostics_quality_sources.csv and diagnostics_quality_reasons.csv directly from diagnostics_coverage.csv.
+Write diagnostics_coverage.csv / summaries with headers when empty.
+Persist pno_category_mode, pno_entry_confirmation_mode and pno_variant_id in run_context.json.
+Do not add separate artifact validators or post-processing layers.
+```
+
+Verification:
+
+```bash
+python -m compileall -q data/exchanges strategy/pno cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+No trading-decision path is changed. Artifact schemas gain columns; consumers expecting the old minimal manifest should continue to work because old count/path fields are preserved and new fields are additive.
+```
+

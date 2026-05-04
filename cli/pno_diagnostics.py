@@ -179,12 +179,76 @@ _PNO_FEATURE_SUMMARY_COLUMNS: tuple[str, ...] = (
     "median_pnl_percent",
 )
 _PNO_STAGE_REASON_SUMMARY_COLUMNS: tuple[str, ...] = ("stage_id", "status", "reason", "count")
+_PNO_STAGE_REVIEW_EVENT_COLUMNS: tuple[str, ...] = (
+    "symbol",
+    "stage_id",
+    "status",
+    "reason",
+    "timestamp_ms",
+    "pno_category_id",
+    "pno_category_label",
+    "pno_profile_variant_id",
+    "active_high_timestamp_ms",
+    "pullback_low_timestamp_ms",
+    "level_valid_timestamp_ms",
+    "entry_signal_timestamp_ms",
+    "active_high",
+    "pullback_low",
+    "level",
+    "entry_pos",
+    "entry_price",
+    "score",
+    "final_score",
+)
+_PNO_STAGE_REVIEW_SUMMARY_COLUMNS: tuple[str, ...] = (
+    "stage_id",
+    "status",
+    "reason",
+    "count",
+    "exported_events_count",
+    "events_path",
+    "charts_count",
+)
+_PNO_STAGE_REVIEW_MANIFEST_COLUMNS: tuple[str, ...] = (
+    "stage_id",
+    "events_count",
+    "passed_count",
+    "rejected_count",
+    "rejected_review_count",
+    "rejected_filtered_count",
+    "stage_dir",
+    "events_path",
+    "summary_path",
+    "passed_events_path",
+    "passed_charts_count",
+    "rejected_charts_count",
+)
 
 
 def _frame_from_records(records: list[dict[str, object]], *, columns: tuple[str, ...]) -> pd.DataFrame:
     if records:
         return pd.DataFrame(records)
     return pd.DataFrame(columns=list(columns))
+
+
+def _stage_review_frame(records: list[dict[str, object]], *, status: str, reason: str) -> pd.DataFrame:
+    """Build a stable stage-review CSV frame without hiding dynamic diagnostics fields."""
+    if not records:
+        return pd.DataFrame(columns=list(_PNO_STAGE_REVIEW_EVENT_COLUMNS))
+    frame = pd.DataFrame(records).copy()
+    if "status" not in frame.columns:
+        frame.insert(2 if len(frame.columns) >= 2 else len(frame.columns), "status", status)
+    if "reason" not in frame.columns:
+        frame.insert(3 if len(frame.columns) >= 3 else len(frame.columns), "reason", reason)
+    ordered_columns = [column for column in _PNO_STAGE_REVIEW_EVENT_COLUMNS if column in frame.columns]
+    trailing_columns = [column for column in frame.columns if column not in ordered_columns]
+    return frame.loc[:, [*ordered_columns, *trailing_columns]]
+
+
+def _write_stage_review_events(path: Path, records: list[dict[str, object]], *, status: str, reason: str) -> pd.DataFrame:
+    frame = _stage_review_frame(records, status=status, reason=reason)
+    frame.to_csv(path, index=False)
+    return frame
 
 def _read_csv_or_empty(path: Path) -> pd.DataFrame:
     if not path.exists():
@@ -2713,11 +2777,22 @@ def _export_pno_stage_reviews(
         stage_dir = stage_reviews_dir / stage_id
         stage_dir.mkdir(parents=True, exist_ok=True)
         passed_rows = stage_rows_by_stage.get(stage_id, [])
-        passed_frame = pd.DataFrame(passed_rows)
         passed_dir = stage_dir / "passed"
         passed_dir.mkdir(parents=True, exist_ok=True)
-        passed_frame.to_csv(passed_dir / "events.csv", index=False)
+        passed_events_path = passed_dir / "events.csv"
+        _write_stage_review_events(passed_events_path, passed_rows, status="passed", reason="passed")
         passed_chart_paths: list[str] = []
+        stage_summary_rows: list[dict[str, object]] = [
+            {
+                "stage_id": stage_id,
+                "status": "passed",
+                "reason": "passed",
+                "count": int(len(passed_rows)),
+                "exported_events_count": int(len(passed_rows)),
+                "events_path": str(passed_events_path),
+                "charts_count": 0,
+            }
+        ]
         if stage_id in chart_stage_ids and stage_id in passed_chart_stage_id_set:
             passed_charts_dir = passed_dir / "charts"
             passed_charts_dir.mkdir(parents=True, exist_ok=True)
@@ -2757,7 +2832,9 @@ def _export_pno_stage_reviews(
             reason_dir = rejected_dir / _sanitize_plot_name(reason)
             reason_dir.mkdir(parents=True, exist_ok=True)
             export_rows = review_rows if review_rows else rows
-            pd.DataFrame(export_rows).to_csv(reason_dir / "events.csv", index=False)
+            rejected_events_path = reason_dir / "events.csv"
+            _write_stage_review_events(rejected_events_path, export_rows, status="rejected", reason=reason)
+            rejected_charts_before_reason = rejected_chart_paths
             if review_rows and stage_id in chart_stage_ids:
                 charts_dir = reason_dir / "charts"
                 charts_dir.mkdir(parents=True, exist_ok=True)
@@ -2782,21 +2859,47 @@ def _export_pno_stage_reviews(
                         rejected_chart_paths += 1
                     rendered_review_charts += 1
                     _log_review_progress(stage_id)
+            stage_summary_rows.append(
+                {
+                    "stage_id": stage_id,
+                    "status": "rejected",
+                    "reason": reason,
+                    "count": int(len(rows)),
+                    "exported_events_count": int(len(export_rows)),
+                    "events_path": str(rejected_events_path),
+                    "charts_count": int(rejected_chart_paths - rejected_charts_before_reason),
+                }
+            )
+
+        if stage_summary_rows:
+            stage_summary_rows[0]["charts_count"] = int(len(passed_chart_paths))
+        summary_path = stage_dir / "summary.csv"
+        _frame_from_records(stage_summary_rows, columns=_PNO_STAGE_REVIEW_SUMMARY_COLUMNS).to_csv(
+            summary_path,
+            index=False,
+        )
 
         manifest_rows.append(
             {
                 "stage_id": stage_id,
+                "events_count": int(len(passed_rows) + rejected_total),
                 "passed_count": int(len(passed_rows)),
                 "rejected_count": int(rejected_total),
                 "rejected_review_count": int(rejected_review_total),
                 "rejected_filtered_count": int(rejected_total - rejected_review_total),
-                "passed_events_path": str(passed_dir / "events.csv"),
+                "stage_dir": str(stage_dir),
+                "events_path": str(stage_dir),
+                "summary_path": str(summary_path),
+                "passed_events_path": str(passed_events_path),
                 "passed_charts_count": int(len(passed_chart_paths)),
                 "rejected_charts_count": int(rejected_chart_paths),
             }
         )
 
-    pd.DataFrame(manifest_rows).to_csv(stage_reviews_dir / "manifest.csv", index=False)
+    _frame_from_records(manifest_rows, columns=_PNO_STAGE_REVIEW_MANIFEST_COLUMNS).to_csv(
+        stage_reviews_dir / "manifest.csv",
+        index=False,
+    )
     if render_charts and logger is not None and total_review_charts > 0:
         logger.debug(
             "Графики проверки стадий готовы: %s.",
