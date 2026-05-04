@@ -2530,21 +2530,17 @@ def _export_pno_stage_reviews(
             remaining = total_review_charts - rendered_review_charts
             eta_seconds = remaining / rate if rate > 0.0 else None
             logger.debug(
-                "Графики проверки стадий: %s: %s из %s, стадия %s, ETA %s.",
-                log_prefix,
+                "Графики проверки стадий: %s из %s. ETA: %s",
                 rendered_review_charts,
                 total_review_charts,
-                stage_id,
                 _format_eta_compact(eta_seconds),
             )
             last_progress_log_time = now
 
     if render_charts and logger is not None and total_review_charts > 0:
         logger.debug(
-            "Графики проверки стадий: %s: всего %s, стадии %s.",
-            log_prefix,
+            "Графики проверки стадий: 0 из %s. ETA: --ч --м --с",
             total_review_charts,
-            ",".join(selected_stage_ids),
         )
 
     def _get_prepared_frames(symbol: str) -> tuple[pd.DataFrame, pd.DataFrame, int, int] | None:
@@ -3703,10 +3699,9 @@ def _export_pno_research_context(
 ) -> None:
     research_dir = diagnostics_dir / "research_context"
     research_dir.mkdir(parents=True, exist_ok=True)
+    del logger
     prepared_levels_frames: dict[str, pd.DataFrame] = {}
     prepared_entry_frames: dict[str, pd.DataFrame] = {}
-    export_start_time = time.monotonic()
-    last_progress_log_time = export_start_time
     stage_rejection_summary_source = (
         stage_rejections_by_stage
         if stage_rejection_summary_by_stage is None
@@ -3714,134 +3709,9 @@ def _export_pno_research_context(
     )
 
     def _log_progress(phase: str, done: int, total: int, *, force: bool = False) -> None:
-        nonlocal last_progress_log_time
-        if logger is None or total <= 0:
-            return
-        now = time.monotonic()
-        if not force and (now - last_progress_log_time) < 30.0:
-            return
-        elapsed = max(now - export_start_time, 1e-9)
-        rate = done / elapsed
-        remaining = total - done
-        eta_seconds = remaining / rate if rate > 0.0 else None
-        logger.debug(
-            "Экспорт исследовательского контекста: этап %s, %s из %s (%.1f%%), ETA %s.",
-            phase,
-            done,
-            total,
-            (done / total) * 100.0,
-            _format_eta_compact(eta_seconds),
-        )
-        last_progress_log_time = now
+        del phase, done, total, force
+        return
 
-    if logger is not None:
-        stage_passed_total = sum(len(rows) for rows in stage_rows_by_stage.values())
-        stage_rejected_total = sum(
-            len(rows)
-            for reason_groups in stage_rejection_summary_source.values()
-            for rows in reason_groups.values()
-        )
-
-    def _get_prepared_levels_frame(symbol: str) -> pd.DataFrame:
-        cached = prepared_levels_frames.get(symbol)
-        if cached is not None:
-            return cached
-        mtf_frames = symbol_frames.get(symbol)
-        if mtf_frames is None:
-            cached = pd.DataFrame()
-        else:
-            cached = _prepare_pno_levels_plot_source(mtf_frames.levels_frame)
-        prepared_levels_frames[symbol] = cached
-        return cached
-
-    def _get_prepared_entry_frame(symbol: str) -> pd.DataFrame:
-        cached = prepared_entry_frames.get(symbol)
-        if cached is not None:
-            return cached
-        mtf_frames = symbol_frames.get(symbol)
-        if mtf_frames is None:
-            cached = pd.DataFrame()
-        else:
-            cached = _prepare_pno_entry_plot_source_with_ema(
-                levels_frame=mtf_frames.levels_frame,
-                entry_frame=mtf_frames.entry_frame,
-            )
-        prepared_entry_frames[symbol] = cached
-        return cached
-
-    stage_context_rows: list[dict[str, object]] = []
-    stage_context_total = sum(len(rows) for rows in stage_rows_by_stage.values()) + sum(
-        len(rows)
-        for reason_groups in stage_rejections_by_stage.values()
-        for rows in reason_groups.values()
-    )
-    stage_context_done = 0
-    for stage_id, rows in stage_rows_by_stage.items():
-        for row in rows:
-            symbol = str(row.get("symbol") or "")
-            signal_timestamp_ms = _safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("timestamp_ms"))
-            signal_context = _resolve_pno_signal_bar_context(
-                entry_frame=_get_prepared_entry_frame(symbol),
-                timestamp_ms=signal_timestamp_ms,
-                level=_safe_float(row.get("level")),
-            )
-            pattern_context = _resolve_pno_pattern_context(
-                levels_frame=_get_prepared_levels_frame(symbol),
-                entry_frame=_get_prepared_entry_frame(symbol),
-                row=row,
-                signal_timestamp_ms=signal_timestamp_ms,
-            )
-            stage_context_rows.append(
-                _build_pno_research_context_row(
-                    row,
-                    source_stage=stage_id,
-                    source_status="passed",
-                    source_reason="passed",
-                    signal_context=signal_context,
-                    pattern_context=pattern_context,
-                )
-            )
-            stage_context_done += 1
-            _log_progress("stage_context", stage_context_done, stage_context_total)
-    for stage_id, reason_groups in stage_rejections_by_stage.items():
-        for reason, rows in reason_groups.items():
-            for row in rows:
-                symbol = str(row.get("symbol") or "")
-                signal_timestamp_ms = _safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("timestamp_ms"))
-                signal_context = _resolve_pno_signal_bar_context(
-                    entry_frame=_get_prepared_entry_frame(symbol),
-                    timestamp_ms=signal_timestamp_ms,
-                    level=_safe_float(row.get("level")),
-                )
-                pattern_context = _resolve_pno_pattern_context(
-                    levels_frame=_get_prepared_levels_frame(symbol),
-                    entry_frame=_get_prepared_entry_frame(symbol),
-                    row=row,
-                    signal_timestamp_ms=signal_timestamp_ms,
-                )
-                stage_context_rows.append(
-                    _build_pno_research_context_row(
-                        row,
-                        source_stage=stage_id,
-                        source_status="rejected",
-                        source_reason=reason,
-                        signal_context=signal_context,
-                        pattern_context=pattern_context,
-                    )
-                )
-                stage_context_done += 1
-                _log_progress("stage_context", stage_context_done, stage_context_total)
-    stage_context_frame = pd.DataFrame(stage_context_rows)
-    stage_context_frame.to_csv(research_dir / "stage_context_all.csv", index=False)
-    _log_progress("stage_context", stage_context_done, stage_context_total, force=True)
-
-    trade_context_rows: list[dict[str, object]] = []
-    trade_exit_reference_rows: list[dict[str, object]] = []
-    trade_path_rows: list[dict[str, object]] = []
-    stage5_levels_path_rows: list[dict[str, object]] = []
-    stage5_outcome_by_key: dict[str, str] = {}
-    trades_total = len(trade_rows)
-    trades_done = 0
     for row in trade_rows:
         symbol = str(row.get("symbol") or "")
         prepared_levels_frame = _get_prepared_levels_frame(symbol)
@@ -4006,13 +3876,5 @@ def _export_pno_research_context(
         for reason, rows in reason_groups.items():
             stage_reason_summary_rows.append({"stage_id": stage_id, "status": "rejected", "reason": reason, "count": int(len(rows))})
     pd.DataFrame(stage_reason_summary_rows).to_csv(research_dir / "stage_reason_summary.csv", index=False)
-
-    if logger is not None:
-        elapsed = max(time.monotonic() - export_start_time, 0.0)
-        logger.debug(
-            "Исследовательский контекст сохранён: %s, время %s.",
-            research_dir,
-            _format_eta_compact(elapsed),
-        )
 
 

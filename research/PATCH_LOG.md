@@ -60,7 +60,8 @@ SUPERSEDED = заменён новым патчем
 | P037 | PNO skip redundant sparse Stage1 precheck | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | performance | Не делать wrapper-level fast Stage1 scan в sparse-entry режиме; engine уже делает обязательную Stage1-проверку перед materialization. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 | P038 | Reuse PNO backtest diagnostics export cache | PROPOSED | `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | performance/diagnostics | Кэшировать trades+diagnostics в runner и переиспользовать при artifact export после `--collect-diagnostics true`. | `python -m compileall vectorbt_runner cli strategy/pno constants.py main.py launcher.py` |
 | P039 | PNO trade-count chart bars | PROPOSED | `cli/pno_diagnostics.py`, `research/*` | diagnostics/chart | Рисовать `Trades %` как exchange trade-count per candle из entry plot frame с fallback на levels frame, если entry-count отсутствует. | `python -m compileall cli/pno_diagnostics.py` |
-| P040 | PNO diagnostics logging/summary fix | PROPOSED | `cli/commands.py`, `cli/pno_diagnostics.py`, `research/*` | diagnostics/logging | Исправить logging TypeError в diagnostics export, предупреждать о коротком PNO окне и писать full rejection summary. | `python -m compileall cli/pno_diagnostics.py cli/commands.py` |
+| P040 | PNO diagnostics logging/summary fix | APPLIED | `cli/commands.py`, `cli/pno_diagnostics.py`, `research/*` | diagnostics/logging | Исправить logging TypeError в diagnostics export, предупреждать о коротком PNO окне и писать full rejection summary. | `python -m compileall cli/pno_diagnostics.py cli/commands.py` |
+| P041 | PNO seconds-entry/stale-level/BE/log cleanup | PROPOSED | `cli/commands.py`, `cli/pno_diagnostics.py`, `strategy/pno/config.py`, `strategy/pno/engine.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/logging/risk | `15s` использует тот же sparse aggTrades path, что `30s`/`5s`; Stage5 режет уже reclaimed level до сделки; BE arm снижен до 60%; убраны лишние runtime logs. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 
 ---
 
@@ -1311,6 +1312,53 @@ Risk:
 
 ```text
 Low. Plot-only change; it changes chart rendering, not backtest decisions or exported trade rows.
+```
+
+---
+
+## P041 — PNO seconds-entry/stale-level/BE/log cleanup
+
+```text
+Status: PROPOSED
+Type: bugfix / logging / risk management
+Trading logic changed: yes
+Files: cli/commands.py, cli/pno_diagnostics.py, strategy/pno/config.py, strategy/pno/engine.py, strategy/pno/pno_strategy.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P009 / P018 / P040
+Supersedes: wrapper-level stale trade post-filter from P018/P022
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+5m/15s was present in the PNO backtest TF set, but run-backtest treated only 30s/5s as seconds-entry pairs and looked for a native 15s cache.
+A GUA case entered a level that had already been reclaimed several LTF candles before the executable entry.
+The stale-level protection lived as a wrapper-level post-trade filter and could inspect the source entry frame instead of the actual materialized seconds frame.
+Runtime logs still printed run path, diagnostics export cache and research-context export progress.
+BE was armed at 80% of the move to active high, which was too late for the observed failed continuation cases.
+```
+
+Change:
+
+```text
+route every PNO entry timeframe below 1m through source 1m cache + sparse aggTrades materialization to the requested seconds TF
+reject Stage5 before simulation when the level had any close_above before the current signal candle
+make the stale-level reject non-bypassable by human_bos / ideal-like decay relaxation
+stop using wrapper-level stale trade post-filter after simulation
+set be_arm_to_active_high_fraction and close_above_be_start_fraction from 0.80 to 0.60
+suppress research-context/cache/path runtime logs and normalize stage-review chart progress
+```
+
+Verification:
+
+```text
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+Medium. This changes trade acceptance and BE timing. Expected effect: fewer stale close_above entries and earlier BE protection. Needs same-window comparison across 5m/30s, 5m/15s, 1m/5s.
 ```
 
 ---

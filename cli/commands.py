@@ -942,7 +942,7 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
     total_charts_generated = _render_pno_trade_charts_from_export_result(
         diagnostics_dir=diagnostics_dir,
         export_result=export_result,
-        logger=logger,
+        logger=None,
     )
     _export_pno_stage_reviews(
         diagnostics_dir=diagnostics_dir,
@@ -1759,7 +1759,7 @@ def _export_pno_diagnostics_context_for_symbols(
         stage_rows_by_stage=stage_rows_by_stage,
         stage_rejections_by_stage=research_rejections_by_stage,
         stage_rejection_summary_by_stage=stage_rejections_by_stage,
-        logger=logger,
+        logger=None,
     )
     _export_pno_stage_reviews(
         diagnostics_dir=diagnostics_dir,
@@ -1771,12 +1771,6 @@ def _export_pno_diagnostics_context_for_symbols(
         passed_chart_stage_ids=passed_chart_stage_ids,
         logger=logger,
     )
-    if diagnostics_cache is not None:
-        logger.debug(
-            "PNO diagnostics export cache: hits=%s misses=%s.",
-            diagnostics_cache_hits,
-            diagnostics_cache_misses,
-        )
     return {
         "all_trade_rows": all_trade_rows,
         "diagnostics_payloads": diagnostics_payloads,
@@ -2694,12 +2688,6 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     config.backtest.results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, strategy_id)
     run_root_dir_raw = getattr(args, "backtest_run_root_dir", None)
     run_root_dir = Path(run_root_dir_raw) if run_root_dir_raw is not None else None
-    if run_root_dir is not None:
-        logger.debug(
-            "Папка прогона: %s. Папка стратегии: %s.",
-            run_root_dir,
-            config.backtest.results_dir,
-        )
     if getattr(args, "pno_deposit", None) is not None:
         config.strategy.pno_deposit = float(args.pno_deposit)
     if getattr(args, "pno_risk_pct", None) is not None:
@@ -2723,7 +2711,10 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     preparer = DataPreparer(config.backtest.cache_dir)
     backtest_days = getattr(args, "days", None)
     backtest_end_timestamp_ms = getattr(args, "end_timestamp_ms", None)
-    pno_seconds_entry_pair = strategy_id == "pno" and entry_timeframe in {Timeframe.S30, Timeframe.S5}
+    pno_seconds_entry_pair = (
+        strategy_id == "pno"
+        and int(entry_timeframe.to_milliseconds()) < int(Timeframe.M1.to_milliseconds())
+    )
     source_entry_timeframe = Timeframe.M1 if pno_seconds_entry_pair else entry_timeframe
     symbols = args.symbols or preparer.list_symbols(source_entry_timeframe)
     if not symbols:

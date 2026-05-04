@@ -6520,6 +6520,7 @@ class PnoEngine:
                 "close_below_pullback_count": 0,
                 "low_below_pullback_count": 0,
                 "false_break_wick_count": 0,
+                "prior_close_above_bar": False,
                 "prior_full_above_bar": False,
                 "prior_tp1_hit": False,
                 "path_efficiency": 1.0,
@@ -6548,6 +6549,7 @@ class PnoEngine:
             "close_below_pullback_count": int(np.sum(close_below_pullback_mask)),
             "low_below_pullback_count": int(np.sum(low_below_pullback_mask)),
             "false_break_wick_count": int(np.sum(false_break_mask)),
+            "prior_close_above_bar": bool(np.any(close_above_mask)),
             "prior_full_above_bar": bool(np.any(full_above_mask)),
             "prior_tp1_hit": bool(np.any(highs >= (float(stage4.tp1) - self._EPSILON))),
             "path_efficiency": float(path_efficiency),
@@ -6576,6 +6578,8 @@ class PnoEngine:
             return "level_crossed_too_late"
         if bool(level_profile["prior_tp1_hit"]):
             return "tp1_already_tagged_before_signal"
+        if bool(level_profile["prior_close_above_bar"]):
+            return "level_already_reclaimed_before_entry"
         if bool(level_profile["prior_full_above_bar"]):
             return "level_already_accepted_before_signal"
         if (
@@ -7627,14 +7631,21 @@ class PnoEngine:
                 params=params,
                 stage4=armed.stage4,
             )
-            if (
-                ideal_like_impulse
-                and bool(getattr(params, "ideal_like_ignore_decay_invalidation", False))
-                and close_above_decay_reason == "level_already_accepted_before_signal"
-            ):
-                close_above_decay_reason = None
-            if armed.stage4.structure_source == "human_bos":
-                close_above_decay_reason = None
+            if close_above_decay_reason != "level_already_reclaimed_before_entry":
+                if (
+                    ideal_like_impulse
+                    and bool(getattr(params, "ideal_like_ignore_decay_invalidation", False))
+                    and close_above_decay_reason == "level_already_accepted_before_signal"
+                ):
+                    close_above_decay_reason = None
+                if armed.stage4.structure_source == "human_bos":
+                    close_above_decay_reason = None
+            if close_above_decay_reason == "level_already_reclaimed_before_entry":
+                return _reject(
+                    "level_already_reclaimed_before_entry",
+                    exit_idx=entry_idx,
+                    extra={"close_above_decay_reason": str(close_above_decay_reason)},
+                )
             if close_above_decay_reason is not None:
                 return _reject(
                     "close_above_decay_filter_failed",

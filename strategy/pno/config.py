@@ -164,8 +164,8 @@ class PnoParams:
     close_above_min_signal_close_position_in_chop: float = 0.25
     close_above_choppy_overlap_threshold: float = 0.95
     tp1_share: float = 0.50
-    be_arm_to_active_high_fraction: float = 0.80
-    close_above_be_start_fraction: float = 0.80
+    be_arm_to_active_high_fraction: float = 0.60
+    close_above_be_start_fraction: float = 0.60
     close_above_be_step_fraction: float = 0.05
     close_above_be_step_bars: int = 1
     close_above_be_min_fraction: float = 0.25
