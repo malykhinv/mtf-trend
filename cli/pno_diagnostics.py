@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 import time
+from logging import Logger
 from pathlib import Path
 
 import matplotlib
@@ -3702,11 +3703,46 @@ def _export_pno_research_context(
     del logger
     prepared_levels_frames: dict[str, pd.DataFrame] = {}
     prepared_entry_frames: dict[str, pd.DataFrame] = {}
+    trade_context_rows: list[dict[str, object]] = []
+    trade_exit_reference_rows: list[dict[str, object]] = []
+    trade_path_rows: list[dict[str, object]] = []
+    stage5_levels_path_rows: list[dict[str, object]] = []
+    stage5_outcome_by_key: dict[str, str] = {}
+    trades_total = len(trade_rows)
+    trades_done = 0
     stage_rejection_summary_source = (
         stage_rejections_by_stage
         if stage_rejection_summary_by_stage is None
         else stage_rejection_summary_by_stage
     )
+
+    def _get_prepared_levels_frame(symbol: str) -> pd.DataFrame:
+        cached = prepared_levels_frames.get(symbol)
+        if cached is not None:
+            return cached
+        mtf_frames = symbol_frames.get(symbol)
+        prepared = (
+            _prepare_pno_levels_plot_source(mtf_frames.levels_frame)
+            if mtf_frames is not None
+            else pd.DataFrame()
+        )
+        prepared_levels_frames[symbol] = prepared
+        return prepared
+
+    def _get_prepared_entry_frame(symbol: str) -> pd.DataFrame:
+        cached = prepared_entry_frames.get(symbol)
+        if cached is not None:
+            return cached
+        mtf_frames = symbol_frames.get(symbol)
+        if mtf_frames is None:
+            prepared = pd.DataFrame()
+        else:
+            prepared = _prepare_pno_entry_plot_source_with_ema(
+                levels_frame=_get_prepared_levels_frame(symbol),
+                entry_frame=mtf_frames.entry_frame,
+            )
+        prepared_entry_frames[symbol] = prepared
+        return prepared
 
     def _log_progress(phase: str, done: int, total: int, *, force: bool = False) -> None:
         del phase, done, total, force

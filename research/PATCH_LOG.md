@@ -1406,6 +1406,52 @@ Low. No trade decision, threshold, entry, TP/SL or data-fetch logic changes. Onl
 
 ---
 
+## P042 — PNO research-context export helper fix
+
+```text
+Status: PROPOSED
+Type: diagnostics / export stability
+Trading logic changed: no
+Files: cli/pno_diagnostics.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Follow-up to: P040 / latest diagnostics crash
+Supersedes: none
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+After diagnostics reached 508/508 symbols, research_context export crashed with NameError because _export_pno_research_context referenced _get_prepared_levels_frame/_get_prepared_entry_frame without defining them. The same block also depended on uninitialized local collectors and counters that would fail after the helper issue was fixed.
+```
+
+Change:
+
+```text
+restore local prepared levels/entry frame cache helpers inside _export_pno_research_context
+initialize trade_context, exit-reference, trade-path, levels-path and stage5 outcome collectors before export loops
+add the missing Logger import used by diagnostics helper signatures
+```
+
+Verification:
+
+```text
+python -m compileall cli/pno_diagnostics.py cli/commands.py
+```
+
+Risk:
+
+```text
+Low. Diagnostics/export-only change. No PNO thresholds, entry rules, exits, fills, data-fetch logic or trading decisions are changed.
+```
+
+Next:
+
+```text
+Rerun the same --pno-all-tf-pairs command and verify that diagnostics/research_context/*.csv and stage_reason_summary.csv are written after 508/508 symbols.
+```
+
+---
+
 ## 27. Шаблон нового патча
 
 ```markdown

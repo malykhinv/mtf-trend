@@ -9,10 +9,10 @@
 ```text
 Branch: codex/ideal-like
 Commit: 146919dde598b7ff100a07a9a4657de272165bc0
-Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P038 proposed diagnostics export cache; P039 proposed trade-count chart fix; P041 proposed seconds-entry/stale-level/BE/log cleanup
+Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P038 proposed diagnostics export cache; P039 proposed trade-count chart fix; P041 proposed seconds-entry/stale-level/BE/log cleanup; P042 proposed research-context export helper fix
 Last applied patch: P040 Fix PNO diagnostics logging and rejection summary
 Last analyzed run: E006 5m/30s 31-day run
-Updated: 2026-05-03
+Updated: 2026-05-04
 ```
 
 Если неизвестно — писать `UNKNOWN`, не выдумывать.
@@ -115,6 +115,7 @@ winrate > 0.40
 | P039 | PNO trade-count chart bars | PROPOSED | Нижний `Trades %` на trade charts рисует exchange trade-count per candle, нормированный в проценты, а не пустой subplot. |
 | P040 | PNO diagnostics logging/summary fix | APPLIED | Исправить logger.debug placeholder mismatch, warning для короткого окна и full rejected-reason summary. |
 | P041 | PNO seconds-entry/stale-level/BE/log cleanup | PROPOSED | Включить `15s` в общий sparse aggTrades path, резать устаревший level до сделки, снизить BE до 60%, убрать лишние runtime logs. |
+| P042 | PNO research-context export helper fix | PROPOSED | Восстановить локальные prepared-frame helper’ы и накопители в `_export_pno_research_context`, чтобы diagnostics export не падал после полного прогона. |
 
 Статусы:
 
