@@ -1924,8 +1924,14 @@ class PnoEngine:
         baseline_window = self._bars_for_duration(entry_timeframe_ms, 60 * 60_000)
         close_above_ema20_threshold = self._threshold_count(recent_window, numerator=10, denominator=15)
         close_above_ema9_threshold = self._threshold_count(recent_window, numerator=8, denominator=15)
-        one = entry_frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
-        one["quote_volume"] = pd.to_numeric(one["close"], errors="coerce") * pd.to_numeric(one["volume"], errors="coerce")
+        required_columns = {"timestamp", "open", "high", "low", "close", "volume", "quote_volume"}
+        if not required_columns.issubset(entry_frame.columns):
+            return support
+        if not self._has_true_quote_volume(entry_frame) or not self._has_real_trade_count(entry_frame):
+            return support
+        one = entry_frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume", "quote_volume"]].copy()
+        one["trade_count"] = self._resolve_trade_activity_series(entry_frame)
+        one["quote_volume"] = pd.to_numeric(one["quote_volume"], errors="coerce")
         prev_close = pd.to_numeric(one["close"], errors="coerce").shift(1).fillna(one["close"])
         tr = pd.concat(
             [
@@ -1940,8 +1946,8 @@ class PnoEngine:
         one["ema20"] = pd.to_numeric(one["close"], errors="coerce").ewm(span=20, adjust=False).mean()
         one["r15_quote"] = one["quote_volume"].rolling(window=recent_window, min_periods=recent_window).median()
         one["b60_quote"] = one["quote_volume"].shift(recent_window).rolling(window=baseline_window, min_periods=baseline_window).median()
-        one["r15_trade"] = pd.to_numeric(one["volume"], errors="coerce").rolling(window=recent_window, min_periods=recent_window).median()
-        one["b60_trade"] = pd.to_numeric(one["volume"], errors="coerce").shift(recent_window).rolling(window=baseline_window, min_periods=baseline_window).median()
+        one["r15_trade"] = pd.to_numeric(one["trade_count"], errors="coerce").rolling(window=recent_window, min_periods=recent_window).median()
+        one["b60_trade"] = pd.to_numeric(one["trade_count"], errors="coerce").shift(recent_window).rolling(window=baseline_window, min_periods=baseline_window).median()
         one["r15_tr"] = one["tr"].rolling(window=recent_window, min_periods=recent_window).median()
         one["b60_tr"] = one["tr"].shift(recent_window).rolling(window=baseline_window, min_periods=baseline_window).median()
         one["close_above_ema20"] = (pd.to_numeric(one["close"], errors="coerce") > one["ema20"]).rolling(window=recent_window, min_periods=recent_window).sum()

@@ -48,6 +48,14 @@ class CcxtFuturesApi(Protocol):
         ...
 
 
+
+
+@runtime_checkable
+class CcxtBinanceKlineApi(Protocol):
+    def fapiPublicGetKlines(self, params: dict[str, object]) -> list[list[object]]:
+        """Describes loading raw Binance USD-M futures kline payload."""
+        ...
+
 @runtime_checkable
 class CcxtOpenInterestApi(Protocol):
     def fetch_open_interest_history(

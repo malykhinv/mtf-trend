@@ -15,11 +15,14 @@ from constants import (
     EXCHANGE_TIMEOUT_SECONDS,
     FUTURES_SETTLEMENT_QUOTE_ASSET,
     MILLISECONDS_IN_SECOND,
+    OHLCV_EXTENDED_FRAME_COLUMNS,
     OHLCV_FRAME_COLUMNS,
+    OHLCV_OPTIONAL_MARKET_DATA_COLUMNS,
     OPEN_INTEREST_FRAME_COLUMNS,
 )
 from data.exchanges.ccxt_types import (
     CcxtAggTradePayload,
+    CcxtBinanceKlineApi,
     CcxtClientOptions,
     CcxtFuturesApi,
     CcxtOpenInterestApi,
@@ -173,30 +176,42 @@ class CcxtFuturesClient(ExchangeClient):
 
     @staticmethod
     def _aggregate_ohlcv_frame(frame: pd.DataFrame, *, target_timeframe: Timeframe) -> pd.DataFrame:
+        output_columns = [
+            *OHLCV_FRAME_COLUMNS,
+            *[column for column in OHLCV_OPTIONAL_MARKET_DATA_COLUMNS if column in frame.columns],
+        ]
         if frame.empty:
-            return pd.DataFrame(columns=OHLCV_FRAME_COLUMNS)
+            return pd.DataFrame(columns=output_columns)
 
-        prepared = frame.loc[:, list(OHLCV_FRAME_COLUMNS)].copy()
-        for column in OHLCV_FRAME_COLUMNS:
+        required_columns = list(OHLCV_FRAME_COLUMNS)
+        if not set(required_columns).issubset(frame.columns):
+            return pd.DataFrame(columns=output_columns)
+
+        prepared = frame.loc[:, output_columns].copy()
+        for column in output_columns:
             prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
         prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
         if prepared.empty:
-            return pd.DataFrame(columns=OHLCV_FRAME_COLUMNS)
+            return pd.DataFrame(columns=output_columns)
 
         timeframe_ms = target_timeframe.to_milliseconds()
         prepared["bucket"] = (prepared["timestamp"] // timeframe_ms) * timeframe_ms
+        aggregation: dict[str, tuple[str, str]] = {
+            "open": ("open", "first"),
+            "high": ("high", "max"),
+            "low": ("low", "min"),
+            "close": ("close", "last"),
+            "volume": ("volume", "sum"),
+        }
+        for column in OHLCV_OPTIONAL_MARKET_DATA_COLUMNS:
+            if column in prepared.columns:
+                aggregation[column] = (column, "sum")
         aggregated = (
             prepared.groupby("bucket", as_index=False)
-            .agg(
-                open=("open", "first"),
-                high=("high", "max"),
-                low=("low", "min"),
-                close=("close", "last"),
-                volume=("volume", "sum"),
-            )
+            .agg(**aggregation)
             .rename(columns={"bucket": "timestamp"})
         )
-        return aggregated.loc[:, list(OHLCV_FRAME_COLUMNS)].reset_index(drop=True)
+        return aggregated.loc[:, output_columns].reset_index(drop=True)
 
     @staticmethod
     def _aggregate_open_interest_frame(frame: pd.DataFrame, *, target_timeframe: Timeframe) -> pd.DataFrame:
@@ -448,6 +463,130 @@ class CcxtFuturesClient(ExchangeClient):
             reverse=True,
         )
 
+    @staticmethod
+    def _normalize_binance_kline_rows(rows: list[list[object]]) -> pd.DataFrame:
+        normalized_rows: list[list[object]] = []
+        for row in rows:
+            if len(row) < 11:
+                continue
+            normalized_rows.append(
+                [
+                    row[0],
+                    row[1],
+                    row[2],
+                    row[3],
+                    row[4],
+                    row[5],
+                    row[7],
+                    row[8],
+                    row[9],
+                    row[10],
+                ]
+            )
+        return pd.DataFrame(normalized_rows, columns=OHLCV_EXTENDED_FRAME_COLUMNS)
+
+    @staticmethod
+    def _normalize_ccxt_ohlcv_rows(rows: list[list[object]]) -> pd.DataFrame:
+        normalized_rows = [
+            list(row[: len(OHLCV_FRAME_COLUMNS)])
+            if len(row) >= len(OHLCV_FRAME_COLUMNS)
+            else [*row, *([None] * (len(OHLCV_FRAME_COLUMNS) - len(row)))]
+            for row in rows
+        ]
+        return pd.DataFrame(normalized_rows, columns=OHLCV_FRAME_COLUMNS)
+
+    def _fetch_binance_ohlcv_frame(
+        self,
+        *,
+        symbol: str,
+        timeframe: Timeframe,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
+        self._ensure_markets_loaded()
+        raw_client = cast(CcxtBinanceKlineApi, self._client)
+        market_id = self.get_market_id(symbol)
+        since = int(start_timestamp_ms)
+        timeframe_ms = int(timeframe.to_milliseconds())
+        all_rows: list[list[object]] = []
+
+        while since <= end_timestamp_ms:
+            batch = self._retry_exchange_call(
+                operation="binance_fetch_klines",
+                symbol=symbol,
+                endpoint="fapiPublicGetKlines",
+                call=raw_client.fapiPublicGetKlines,
+                params={
+                    "symbol": market_id,
+                    "interval": timeframe.value,
+                    "startTime": int(since),
+                    "endTime": int(end_timestamp_ms),
+                    "limit": int(DEFAULT_FETCH_BATCH_SIZE),
+                },
+            )
+            if not isinstance(batch, list) or not batch:
+                break
+
+            typed_batch: list[list[object]] = []
+            for row in batch:
+                if isinstance(row, list):
+                    typed_batch.append(row)
+                elif isinstance(row, tuple):
+                    typed_batch.append(list(row))
+            if not typed_batch:
+                break
+
+            all_rows.extend(typed_batch)
+            last_ts = int(typed_batch[-1][0])
+            next_since = last_ts + timeframe_ms
+            if last_ts >= end_timestamp_ms or next_since <= since:
+                break
+            since = next_since
+
+        return self._normalize_binance_kline_rows(all_rows)
+
+    def _fetch_ccxt_ohlcv_frame(
+        self,
+        *,
+        symbol: str,
+        timeframe: Timeframe,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
+        self._ensure_markets_loaded()
+        since = int(start_timestamp_ms)
+        all_rows: list[list[object]] = []
+        while since <= end_timestamp_ms:
+            batch = self._retry_exchange_call(
+                operation="ccxt_fetch_ohlcv",
+                symbol=symbol,
+                endpoint="fetch_ohlcv",
+                call=self._client.fetch_ohlcv,
+                args=(symbol,),
+                timeframe=timeframe.value,
+                since=since,
+                limit=DEFAULT_FETCH_BATCH_SIZE,
+            )
+            if not isinstance(batch, list) or not batch:
+                break
+
+            typed_batch: list[list[object]] = []
+            for row in batch:
+                if isinstance(row, list):
+                    typed_batch.append(row)
+                elif isinstance(row, tuple):
+                    typed_batch.append(list(row))
+            if not typed_batch:
+                break
+
+            all_rows.extend(typed_batch)
+            last_ts = int(typed_batch[-1][0])
+            if last_ts >= end_timestamp_ms:
+                break
+            since = last_ts + 1
+
+        return self._normalize_ccxt_ohlcv_rows(all_rows)
+
     def fetch_ohlcv(
         self,
         symbol: str,
@@ -469,41 +608,26 @@ class CcxtFuturesClient(ExchangeClient):
                 & (aggregated["timestamp"] <= end_timestamp_ms)
             ].reset_index(drop=True)
 
-        self._ensure_markets_loaded()
-        since = start_timestamp_ms
-
-        all_rows: list[list[float]] = []
-        while since <= end_timestamp_ms:
-            batch = self._retry_exchange_call(
-                operation="ccxt_fetch_ohlcv",
+        frame = (
+            self._fetch_binance_ohlcv_frame(
                 symbol=symbol,
-                endpoint="fetch_ohlcv",
-                call=self._client.fetch_ohlcv,
-                args=(symbol,),
-                timeframe=timeframe.value,
-                since=since,
-                limit=DEFAULT_FETCH_BATCH_SIZE,
+                timeframe=timeframe,
+                start_timestamp_ms=int(start_timestamp_ms),
+                end_timestamp_ms=int(end_timestamp_ms),
             )
-            if not isinstance(batch, list):
-                break
-            if not batch:
-                break
-            all_rows.extend(batch)
-            last_ts = int(batch[-1][0])
-            if last_ts >= end_timestamp_ms:
-                break
-            since = last_ts + 1
-
-        normalized_rows = [
-            list(row[: len(OHLCV_FRAME_COLUMNS)])
-            if len(row) >= len(OHLCV_FRAME_COLUMNS)
-            else [*row, None]
-            for row in all_rows
-        ]
-        frame = pd.DataFrame(normalized_rows, columns=OHLCV_FRAME_COLUMNS)
+            if self.exchange == Exchange.BINANCE
+            else self._fetch_ccxt_ohlcv_frame(
+                symbol=symbol,
+                timeframe=timeframe,
+                start_timestamp_ms=int(start_timestamp_ms),
+                end_timestamp_ms=int(end_timestamp_ms),
+            )
+        )
         if frame.empty:
             return frame
 
+        for column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
         frame = frame.loc[
             (frame["timestamp"] >= start_timestamp_ms)
             & (frame["timestamp"] <= end_timestamp_ms)

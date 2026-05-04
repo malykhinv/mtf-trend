@@ -1712,3 +1712,43 @@ Risk:
 No trading-decision path is changed. Artifact schemas gain columns; consumers expecting the old minimal manifest should continue to work because old count/path fields are preserved and new fields are additive.
 ```
 
+---
+
+## P047 — Real Binance kline quote-volume propagation
+
+```text
+Status: PROPOSED
+Commit: UNKNOWN until applied
+Base: P046 applied locally on top of 2.zip / P045 state
+GitHub head checked: 0332f2c470372e986b62283d4df04b16a179a104
+Trading logic changed: no
+Files: constants.py, data/exchanges/ccxt_types.py, data/exchanges/ccxt_futures_client.py, data/fetchers/ohlcv_fetcher.py, strategy/pno/engine.py, research/RESEARCH_STATE.md, research/PATCH_LOG.md, research/EXPERIMENT_LOG.md
+```
+
+Problem:
+
+```text
+P045 fixed the sparse-entry gate, but the next blocker was levels_missing_quote_volume_usdt for most symbols. The common OHLCV fetch path kept only CCXT's 6 standard OHLCV columns, losing Binance futures kline fields that contain real quote asset volume, number of trades, taker buy volume and taker buy quote volume. Existing caches with close but no quote_volume looked up-to-date and were not backfilled.
+```
+
+Change:
+
+```text
+Fetch Binance USD-M klines through the typed exchange boundary and preserve raw quote_volume, number_of_trades, taker_buy_volume and taker_buy_quote_volume.
+Keep non-Binance CCXT OHLCV as 6-column OHLCV instead of inventing quote_volume.
+Aggregate optional OHLCV market-data columns by sum when deriving M10 or cached aggregate frames.
+Use quote_volume as the OHLCV cache watermark so old candles without real quote_volume are re-fetched/backfilled.
+Remove close*volume from one-minute Stage1 support; support now requires real quote_volume and real trade-count or returns no support.
+```
+
+Verification:
+
+```bash
+python -m compileall -q data/exchanges data/fetchers strategy/pno cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+The next OHLCV update may re-fetch a full requested range for old caches that have prices but lack quote_volume. That is intentional. If an exchange path cannot provide real quote_volume, PNO should keep reporting missing_quote_volume_usdt rather than using close*volume.
+```

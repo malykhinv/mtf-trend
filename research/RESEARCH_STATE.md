@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 3ae80c93fa3e8ca2ec95566a89982f4001956db5 (GitHub head checked); ZIP-local patch state still source-of-truth for uncommitted code
-Local diff: P046 proposed artifact export quality patch on top of 2.zip / P045 state
-Last applied patch: UNKNOWN in ZIP
+Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
+Local diff: P047 proposed real Binance kline quote-volume propagation on top of applied P046
+Last applied patch: P046 (user-stated local apply; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-04
 ```
@@ -123,7 +123,8 @@ winrate > 0.40
 | P043 | Human BOS obsolete-level guard | PROPOSED | Убрать bypass scoring/decay для `human_bos` и экспортировать fallback charts для Stage1 rejected reasons без near-threshold rows. |
 | P044 | Position terminology and strict flow data | UNKNOWN in ZIP | Развести exchange trades и bot positions; требовать real quote_volume USDT/trade-count; добавить diagnostics coverage и Stage5 unique setup summary. |
 | P045 | Sparse entry data-quality gate | PROPOSED | Не валидировать target entry trade data до sparse aggTrades materialization; писать пустые research CSV с колонками. |
-| P046 | Artifact export quality | PROPOSED | Стабильные schemas для stage-review CSV, stage summary/manifest, data-quality source/reason tables и полный PNO run context. |
+| P046 | Artifact export quality | APPLIED locally / UNKNOWN commit | Стабильные schemas для stage-review CSV, stage summary/manifest, data-quality source/reason tables и полный PNO run context. |
+| P047 | Real Binance kline quote-volume propagation | PROPOSED | Сохранять real Binance futures kline quote_volume/number_of_trades/taker_buy_* в OHLCV cache; backfill cache по quote_volume; убрать close*volume proxy из one-minute Stage1 support. |
 
 Статусы:
 
@@ -209,7 +210,7 @@ taker_buy_quote_volume
 Текущий приоритет:
 
 ```text
-P046 → повторить тот же multi-TF 31d run без изменения торговой логики → проверить, что stage_reviews/*.csv читаются с header, diagnostics_quality_sources/reasons показывают levels quote_volume bottleneck, run_context содержит PNO mode.
+P047 → обновить OHLCV cache тем же окном → повторить тот же multi-TF 31d run без изменения торговой логики → проверить, что levels_quote_volume_source массово стал quote_volume_usdt, а Stage1 перестал массово падать на levels_missing_quote_volume_usdt.
 ```
 
 После этого:

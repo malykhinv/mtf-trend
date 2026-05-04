@@ -114,6 +114,13 @@ MILLISECONDS_IN_SECOND = 1000
 CCXT_MARKET_TYPE_SWAP = "swap"
 FUTURES_SETTLEMENT_QUOTE_ASSET = "USDT"
 OHLCV_FRAME_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
+OHLCV_OPTIONAL_MARKET_DATA_COLUMNS = (
+    "quote_volume",
+    "number_of_trades",
+    "taker_buy_volume",
+    "taker_buy_quote_volume",
+)
+OHLCV_EXTENDED_FRAME_COLUMNS = (*OHLCV_FRAME_COLUMNS, *OHLCV_OPTIONAL_MARKET_DATA_COLUMNS)
 OPEN_INTEREST_FRAME_COLUMNS = ("timestamp", "open_interest")
 
 # Logger formatting

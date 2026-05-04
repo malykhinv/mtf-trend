@@ -11,6 +11,8 @@ from constants import (
     DEFAULT_LOGS_DIR,
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     LOG_MSG_SKIP_UP_TO_DATE,
+    OHLCV_FRAME_COLUMNS,
+    OHLCV_OPTIONAL_MARKET_DATA_COLUMNS,
 )
 from data.quality.data_validator import DataValidator
 from data.quality.deduplicator import Deduplicator
@@ -47,23 +49,38 @@ class OhlcvFetcher:
 
     @staticmethod
     def _aggregate_cached_frame(frame: pd.DataFrame, target_timeframe: Timeframe) -> pd.DataFrame:
-        if frame.empty:
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        output_columns = [
+            *OHLCV_FRAME_COLUMNS,
+            *[column for column in OHLCV_OPTIONAL_MARKET_DATA_COLUMNS if column in frame.columns],
+        ]
+        if frame.empty or not set(OHLCV_FRAME_COLUMNS).issubset(frame.columns):
+            return pd.DataFrame(columns=output_columns)
+
         timeframe_ms = target_timeframe.to_milliseconds()
-        prepared = frame.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].copy()
+        prepared = frame.loc[:, output_columns].copy()
+        for column in output_columns:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+        prepared = prepared.dropna(subset=list(OHLCV_FRAME_COLUMNS))
+        if prepared.empty:
+            return pd.DataFrame(columns=output_columns)
+
         prepared["bucket"] = (prepared["timestamp"] // timeframe_ms) * timeframe_ms
+        aggregation: dict[str, tuple[str, str]] = {
+            "open": ("open", "first"),
+            "high": ("high", "max"),
+            "low": ("low", "min"),
+            "close": ("close", "last"),
+            "volume": ("volume", "sum"),
+        }
+        for column in OHLCV_OPTIONAL_MARKET_DATA_COLUMNS:
+            if column in prepared.columns:
+                aggregation[column] = (column, "sum")
         aggregated = (
             prepared.groupby("bucket", as_index=False)
-            .agg(
-                open=("open", "first"),
-                high=("high", "max"),
-                low=("low", "min"),
-                close=("close", "last"),
-                volume=("volume", "sum"),
-            )
+            .agg(**aggregation)
             .rename(columns={"bucket": "timestamp"})
         )
-        return aggregated.loc[:, ["timestamp", "open", "high", "low", "close", "volume"]].reset_index(drop=True)
+        return aggregated.loc[:, output_columns].reset_index(drop=True)
 
     def _load_cached_base_frame(
         self,
@@ -76,10 +93,10 @@ class OhlcvFetcher:
         if frame.empty or "timestamp" not in frame.columns:
             return pd.DataFrame()
         prepared = frame.copy()
-        for column in ("timestamp", "open", "high", "low", "close", "volume"):
+        for column in (*OHLCV_FRAME_COLUMNS, *OHLCV_OPTIONAL_MARKET_DATA_COLUMNS):
             if column in prepared.columns:
                 prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-        prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
+        prepared = prepared.dropna(subset=list(OHLCV_FRAME_COLUMNS))
         if prepared.empty:
             return pd.DataFrame()
         return prepared.loc[
@@ -111,7 +128,7 @@ class OhlcvFetcher:
         start_timestamp_ms = int(start_timestamp_ms)
         end_timestamp_ms = int(end_timestamp_ms)
         timeframe_ms = timeframe.to_milliseconds()
-        watermark_column = "close"
+        watermark_column = "quote_volume"
         first_timestamp_ms = self._storage.get_first_timestamp_for_column(symbol, timeframe, watermark_column)
         last_timestamp_ms = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
 

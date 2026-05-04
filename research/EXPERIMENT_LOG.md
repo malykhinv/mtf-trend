@@ -396,3 +396,32 @@ Do not evaluate:
 PnL / winrate / edge if positions remain zero or too few.
 ```
 
+---
+
+## E010 — PNO data-quality rerun after P047
+
+```text
+Status: PLANNED
+Depends on: P047
+Levels/Entry TF: 1m/5s, 5m/15s, 5m/30s
+Period: same as E008 / 31 days
+Mode: discovery / close_above
+```
+
+Goal:
+
+```text
+prove that levels candles now carry real Binance quote_volume and trade-count fields from exchange kline payload, not close*volume proxy.
+```
+
+Success:
+
+```text
+diagnostics_coverage shows trade_count_proxy_used=false, levels_trade_count_source=number_of_trades and levels_quote_volume_source=quote_volume_usdt for the main symbol set; Stage1 missing_required_market_data is no longer dominated by levels_missing_quote_volume_usdt; sparse entry TF proceed to post-Stage1 sparse materialization when candidates exist.
+```
+
+Do not evaluate:
+
+```text
+PnL / winrate / edge if positions remain zero or too few. First read funnel, reject reasons, near-miss and data quality.
+```
