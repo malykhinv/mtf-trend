@@ -19,7 +19,7 @@ real pump -> active high -> healthy pullback -> BOS / level reclaim -> close_abo
 - загружает и обновляет локальный Binance futures cache;
 - запускает PNO backtest на кэшированных данных;
 - строит stage diagnostics по pipeline Stage1..Stage5;
-- экспортирует rejected/passed review rows, research context и trade charts;
+- экспортирует rejected/passed review rows, research context и position charts;
 - сравнивает entry timeframe sets для проверки latency входа;
 - хранит рабочую память исследования в `research/*.md`.
 
@@ -34,7 +34,7 @@ Stage1: Pump
 Stage2: High Pullback
 Stage3: Valid Pullback
 Stage4: Level / BOS Setup
-Stage5: Trade
+Stage5: Position
 ```
 
 Primary entry mode:
@@ -160,7 +160,7 @@ t1..t5 / through1..through5  cumulative 1..N
 
 ```text
 .output/results/strategy/pno/results.csv
-.output/results/strategy/pno/trades.csv
+.output/results/strategy/pno/positions.csv
 ```
 
 Диагностика:
@@ -214,16 +214,16 @@ entry_trade_count_source
 levels_quote_volume_source
 entry_quote_volume_source
 number_of_trades / trades / trade_count
-quote_volume
+quote_volume  # real USDT quote notional
 taker_buy_volume
 taker_buy_quote_volume
 ```
 
-Если используется proxy вместо настоящего trade-count, выводы о tape/flow/organic pump ограничены.
+PNO flow не использует `close*volume` как замену `quote_volume`: если real USDT quote notional отсутствует, символ должен получить явный `missing_required_market_data`.
 
 ## Оценка результата
 
-При `trades = 0` или малом числе сделок не оценивать прибыльность. Анализировать только:
+При `positions = 0` или малом числе позиций не оценивать прибыльность. Анализировать только:
 
 ```text
 funnel
@@ -235,16 +235,16 @@ data quality
 Минимальные ориентиры перспективной PNO-кандидатуры:
 
 ```text
-50+ trades/year
+50+ positions/year
 winrate > 0.40
-average trade > +1.0%
+average position > +1.0%
 помесячно преимущественно положительно
-нет зависимости от 1-5 top trades
+нет зависимости от 1-5 top positions
 нет lookahead/leakage
 нет явной переоптимизации
 ```
 
-Если результат выглядит слишком сильным, сначала искать leakage, stale cache, selection bias или зависимость от хвостовых сделок.
+Если результат выглядит слишком сильным, сначала искать leakage, stale cache, selection bias или зависимость от хвостовых позиций.
 
 ## Sanity checks
 

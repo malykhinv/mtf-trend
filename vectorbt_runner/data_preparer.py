@@ -15,7 +15,7 @@ from constants import (
     DATA_PREPARER_EMPTY_BOOL_DTYPE,
     DATA_PREPARER_EMPTY_FLOAT_DTYPE,
     DATA_PREPARER_NUMERIC_COLUMNS,
-    DATA_PREPARER_TRADE_COLUMNS,
+    DATA_PREPARER_POSITION_COLUMNS,
     SIMULATION_PARQUET_FILE_NAME,
     SIMULATION_PNL_PERCENT_DIVISOR,
     SIMULATION_PRICE_INIT,
@@ -25,7 +25,7 @@ from constants import (
 )
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.timeframe import Timeframe
-from domain.models.trade_result import TradeResult
+from domain.models.position_result import PositionResult
 from utils.symbols import normalize_symbol
 from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
@@ -282,40 +282,40 @@ class DataPreparer:
         }
 
     @staticmethod
-    def prepare_vectorbt_inputs(trades: list[TradeResult], initial_price: float = SIMULATION_PRICE_INIT) -> VectorbtInputs:
+    def prepare_vectorbt_inputs(positions: list[PositionResult], initial_price: float = SIMULATION_PRICE_INIT) -> VectorbtInputs:
         """Метод."""
-        if not trades:
+        if not positions:
             index = pd.Index([], dtype="int64", name="timestamp_ms")
             empty_float = pd.Series([], index=index, dtype=DATA_PREPARER_EMPTY_FLOAT_DTYPE)
             empty_bool = pd.Series([], index=index, dtype=DATA_PREPARER_EMPTY_BOOL_DTYPE)
-            trades_frame = pd.DataFrame(columns=DATA_PREPARER_TRADE_COLUMNS)
+            positions_frame = pd.DataFrame(columns=DATA_PREPARER_POSITION_COLUMNS)
             return VectorbtInputs(
                 close=empty_float,
                 entries=empty_bool,
                 exits=empty_bool,
                 equity_curve=empty_float,
-                trades=trades_frame,
+                positions=positions_frame,
             )
 
-        trades_sorted = sorted(trades, key=lambda trade_result: (trade_result.entry_timestamp_ms, trade_result.exit_timestamp_ms))
-        trade_rows = []
-        for trade_result in trades_sorted:
+        positions_sorted = sorted(positions, key=lambda position_result: (position_result.entry_timestamp_ms, position_result.exit_timestamp_ms))
+        position_rows = []
+        for position_result in positions_sorted:
             row = {
-                "entry_timestamp_ms": int(trade_result.entry_timestamp_ms),
-                "exit_timestamp_ms": int(trade_result.exit_timestamp_ms),
-                "pnl": float(trade_result.pnl),
-                "pnl_percent": float(trade_result.pnl_percent.value),
-                "result_type": trade_result.result_type.value,
+                "entry_timestamp_ms": int(position_result.entry_timestamp_ms),
+                "exit_timestamp_ms": int(position_result.exit_timestamp_ms),
+                "pnl": float(position_result.pnl),
+                "pnl_percent": float(position_result.pnl_percent.value),
+                "result_type": position_result.result_type.value,
             }
-            if trade_result.metadata:
-                for key, value in trade_result.metadata.items():
+            if position_result.metadata:
+                for key, value in position_result.metadata.items():
                     if isinstance(value, (str, int, float, bool)) or value is None:
                         row[key] = value
-            trade_rows.append(row)
-        trades_frame = pd.DataFrame(trade_rows)
+            position_rows.append(row)
+        positions_frame = pd.DataFrame(position_rows)
 
         timeline = pd.Index(
-            sorted(set(trades_frame["entry_timestamp_ms"].tolist() + trades_frame["exit_timestamp_ms"].tolist())),
+            sorted(set(positions_frame["entry_timestamp_ms"].tolist() + positions_frame["exit_timestamp_ms"].tolist())),
             dtype="int64",
             name="timestamp_ms",
         )
@@ -326,11 +326,11 @@ class DataPreparer:
 
         running_price = float(initial_price)
         cumulative_pnl = SIMULATION_ZERO_VALUE
-        for trade in trade_rows:
-            entry_time = int(trade["entry_timestamp_ms"])
-            exit_time = int(trade["exit_timestamp_ms"])
-            pnl_percent = trade["pnl_percent"]
-            pnl = trade["pnl"]
+        for position in position_rows:
+            entry_time = int(position["entry_timestamp_ms"])
+            exit_time = int(position["exit_timestamp_ms"])
+            pnl_percent = position["pnl_percent"]
+            pnl = position["pnl"]
 
             entries.at[entry_time] = True
             exits.at[exit_time] = True
@@ -350,5 +350,5 @@ class DataPreparer:
             entries=entries,
             exits=exits,
             equity_curve=equity_curve,
-            trades=trades_frame,
+            positions=positions_frame,
         )

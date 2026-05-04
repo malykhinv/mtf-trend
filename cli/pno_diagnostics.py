@@ -18,13 +18,19 @@ from matplotlib.patches import Rectangle
 from matplotlib.ticker import LinearLocator
 from matplotlib.transforms import blended_transform_factory
 
-from strategy.pno.engine import PNO_STAGE_1_PUMP, PNO_STAGE_4_LEVEL, PNO_STAGE_5_TRADE, PNO_STAGE_SEQUENCE
+from strategy.pno.engine import PNO_STAGE_1_PUMP, PNO_STAGE_4_LEVEL, PNO_STAGE_5_POSITION, PNO_STAGE_SEQUENCE
 from vectorbt_runner import SymbolMtfFrames
 
 _PNO_STAGE1_REVIEW_MAX_ROWS_PER_REASON = 8
 _PNO_STAGE1_REVIEW_MAX_ROWS_PER_SYMBOL = 2
 _PNO_STAGE1_REVIEW_FALLBACK_ROWS_PER_REASON = 4
 _PNO_STAGE1_REVIEW_DISTANCE_MAX = 0.18
+_PNO_STAGE1_REVIEW_SAMPLE_REASONS: set[str] = {
+    "flow_window_no_price_growth",
+    "pump_candidate_pretrend_too_weak",
+    "pump_nonorganic_tape",
+    "active_flow_faded_before_structure",
+}
 _PNO_PLOT_TRADE_COUNT_COLUMNS: tuple[str, ...] = ("number_of_trades", "trades", "trade_count")
 _PNO_STAGE1_REJECTION_DISTANCE_FIELDS: dict[str, tuple[str, str, str]] = {
     "impulse_atr_pre_too_small": ("pump_impulse_atr_pre", "stage1_min_impulse_atr_pre", "min"),
@@ -246,6 +252,13 @@ def _select_stage1_review_rejection_rows(
         )
         return _cap_stage1_review_rows(
             [row for _, row in far_scored_rows],
+            max_rows=_PNO_STAGE1_REVIEW_FALLBACK_ROWS_PER_REASON,
+            max_rows_per_symbol=1,
+        )
+
+    if reason in _PNO_STAGE1_REVIEW_SAMPLE_REASONS:
+        return _cap_stage1_review_rows(
+            fallback_rows or rows,
             max_rows=_PNO_STAGE1_REVIEW_FALLBACK_ROWS_PER_REASON,
             max_rows_per_symbol=1,
         )
@@ -1490,16 +1503,16 @@ def _build_pno_tick_labels(frame: pd.DataFrame, positions: np.ndarray) -> list[s
     return _build_pno_tick_labels_from_timestamps(_build_pno_tick_timestamps(frame), positions)
 
 
-def _resolve_pno_trade_chart_entry_visuals(
-    trade_row: dict[str, object],
+def _resolve_pno_position_chart_entry_visuals(
+    position_row: dict[str, object],
 ) -> tuple[float | None, float | None, int | None]:
-    entry_confirmation_mode = str(trade_row.get("entry_confirmation_mode") or "")
-    entry_signal_timestamp_ms = _safe_int(trade_row.get("entry_signal_timestamp_ms"))
-    entry_plan_price = _safe_float(trade_row.get("entry_plan"))
-    level_price = _safe_float(trade_row.get("level"))
-    execution_price = _safe_float(trade_row.get("entry_price"))
+    entry_confirmation_mode = str(position_row.get("entry_confirmation_mode") or "")
+    entry_signal_timestamp_ms = _safe_int(position_row.get("entry_signal_timestamp_ms"))
+    entry_plan_price = _safe_float(position_row.get("entry_plan"))
+    level_price = _safe_float(position_row.get("level"))
+    execution_price = _safe_float(position_row.get("entry_price"))
     if execution_price is None:
-        execution_price = _safe_float(trade_row.get("entry_price_actual"))
+        execution_price = _safe_float(position_row.get("entry_price_actual"))
 
     display_entry_price = execution_price
     execution_tag_price: float | None = None
@@ -1513,50 +1526,50 @@ def _resolve_pno_trade_chart_entry_visuals(
     return display_entry_price, execution_tag_price, entry_signal_timestamp_ms
 
 
-def _render_pno_trade_chart(
+def _render_pno_position_chart(
     *,
     charts_dir: Path,
     symbol: str,
     levels_frame: pd.DataFrame,
     entry_frame: pd.DataFrame,
-    trade_row: dict[str, object],
-    trade_index: int,
+    position_row: dict[str, object],
+    position_index: int,
 ) -> Path | None:
-    entry_timestamp_ms = _safe_int(trade_row.get("entry_timestamp_ms"))
-    exit_timestamp_ms = _safe_int(trade_row.get("exit_timestamp_ms"))
-    entry_confirmation_mode = str(trade_row.get("entry_confirmation_mode") or "")
-    entry_price = _safe_float(trade_row.get("entry_price"))
+    entry_timestamp_ms = _safe_int(position_row.get("entry_timestamp_ms"))
+    exit_timestamp_ms = _safe_int(position_row.get("exit_timestamp_ms"))
+    entry_confirmation_mode = str(position_row.get("entry_confirmation_mode") or "")
+    entry_price = _safe_float(position_row.get("entry_price"))
     if entry_price is None:
-        entry_price = _safe_float(trade_row.get("entry_price_actual"))
-    stop_loss = _safe_float(trade_row.get("sl_plan"))
+        entry_price = _safe_float(position_row.get("entry_price_actual"))
+    stop_loss = _safe_float(position_row.get("sl_plan"))
     if stop_loss is None:
-        stop_loss = _safe_float(trade_row.get("sl_actual"))
-    initial_stop_loss = _safe_float(trade_row.get("initial_stop_loss")) or stop_loss
-    tp1 = _safe_float(trade_row.get("tp1"))
-    tp2 = _safe_float(trade_row.get("tp2"))
-    runner_stop_after_tp1 = _safe_float(trade_row.get("runner_stop_after_tp1"))
-    runner_stop_after_tp1_timestamp_ms = _safe_int(trade_row.get("runner_stop_after_tp1_timestamp_ms"))
-    be_protect_price = _safe_float(trade_row.get("be_protect_price"))
-    be_arm_timestamp_ms = _safe_int(trade_row.get("be_arm_timestamp_ms"))
-    tp1_hit_timestamp_ms = _safe_int(trade_row.get("tp1_hit_timestamp_ms"))
-    tp2_hit_timestamp_ms = _safe_int(trade_row.get("tp2_hit_timestamp_ms"))
-    partial_exit_timestamp_ms = _safe_int(trade_row.get("partial_exit_timestamp_ms")) or tp1_hit_timestamp_ms
-    partial_exit_price = _safe_float(trade_row.get("partial_exit_price")) or tp1
-    runner_exit_price = _safe_float(trade_row.get("runner_exit_price"))
-    pump_start_timestamp_ms = _safe_int(trade_row.get("pump_start_timestamp_ms")) or entry_timestamp_ms
-    level_price = _safe_float(trade_row.get("level"))
-    level_first_timestamp_ms = _safe_int(trade_row.get("level_first_local_high_timestamp_ms"))
-    bos_level = _resolve_pno_bos_level_from_row(trade_row, _resolve_pno_structure_points(trade_row))
+        stop_loss = _safe_float(position_row.get("sl_actual"))
+    initial_stop_loss = _safe_float(position_row.get("initial_stop_loss")) or stop_loss
+    tp1 = _safe_float(position_row.get("tp1"))
+    tp2 = _safe_float(position_row.get("tp2"))
+    runner_stop_after_tp1 = _safe_float(position_row.get("runner_stop_after_tp1"))
+    runner_stop_after_tp1_timestamp_ms = _safe_int(position_row.get("runner_stop_after_tp1_timestamp_ms"))
+    be_protect_price = _safe_float(position_row.get("be_protect_price"))
+    be_arm_timestamp_ms = _safe_int(position_row.get("be_arm_timestamp_ms"))
+    tp1_hit_timestamp_ms = _safe_int(position_row.get("tp1_hit_timestamp_ms"))
+    tp2_hit_timestamp_ms = _safe_int(position_row.get("tp2_hit_timestamp_ms"))
+    partial_exit_timestamp_ms = _safe_int(position_row.get("partial_exit_timestamp_ms")) or tp1_hit_timestamp_ms
+    partial_exit_price = _safe_float(position_row.get("partial_exit_price")) or tp1
+    runner_exit_price = _safe_float(position_row.get("runner_exit_price"))
+    pump_start_timestamp_ms = _safe_int(position_row.get("pump_start_timestamp_ms")) or entry_timestamp_ms
+    level_price = _safe_float(position_row.get("level"))
+    level_first_timestamp_ms = _safe_int(position_row.get("level_first_local_high_timestamp_ms"))
+    bos_level = _resolve_pno_bos_level_from_row(position_row, _resolve_pno_structure_points(position_row))
     if bos_level is not None:
         level_first_timestamp_ms, level_price = bos_level
-    active_high = _safe_float(trade_row.get("active_high"))
-    pullback_low = _safe_float(trade_row.get("pullback_low"))
-    active_high_timestamp_ms = _safe_int(trade_row.get("active_high_timestamp_ms"))
-    pullback_low_timestamp_ms = _safe_int(trade_row.get("pullback_low_timestamp_ms"))
-    pullback_base_low = _safe_float(trade_row.get("pullback_base_low"))
-    pullback_base_high = _safe_float(trade_row.get("pullback_base_high"))
-    pullback_base_start_timestamp_ms = _safe_int(trade_row.get("pullback_base_start_timestamp_ms"))
-    pullback_base_end_timestamp_ms = _safe_int(trade_row.get("pullback_base_end_timestamp_ms"))
+    active_high = _safe_float(position_row.get("active_high"))
+    pullback_low = _safe_float(position_row.get("pullback_low"))
+    active_high_timestamp_ms = _safe_int(position_row.get("active_high_timestamp_ms"))
+    pullback_low_timestamp_ms = _safe_int(position_row.get("pullback_low_timestamp_ms"))
+    pullback_base_low = _safe_float(position_row.get("pullback_base_low"))
+    pullback_base_high = _safe_float(position_row.get("pullback_base_high"))
+    pullback_base_start_timestamp_ms = _safe_int(position_row.get("pullback_base_start_timestamp_ms"))
+    pullback_base_end_timestamp_ms = _safe_int(position_row.get("pullback_base_end_timestamp_ms"))
     if (
         entry_timestamp_ms is None
         or exit_timestamp_ms is None
@@ -1566,15 +1579,15 @@ def _render_pno_trade_chart(
         or pump_start_timestamp_ms is None
     ):
         return None
-    display_entry_price, execution_tag_price, entry_signal_timestamp_ms = _resolve_pno_trade_chart_entry_visuals(trade_row)
+    display_entry_price, execution_tag_price, entry_signal_timestamp_ms = _resolve_pno_position_chart_entry_visuals(position_row)
     risk_entry_price = entry_price
 
-    category = str(trade_row.get("category") or "")
-    result_type = str(trade_row.get("result_type") or "")
+    category = str(position_row.get("category") or "")
+    result_type = str(position_row.get("result_type") or "")
     exit_price_actual = (
-        _safe_float(trade_row.get("runner_exit_price"))
-        or _safe_float(trade_row.get("exit_price_actual"))
-        or _safe_float(trade_row.get("exit_price"))
+        _safe_float(position_row.get("runner_exit_price"))
+        or _safe_float(position_row.get("exit_price_actual"))
+        or _safe_float(position_row.get("exit_price"))
     )
     show_high_tag = not _pno_prices_close(active_high, tp1)
     show_pullback_low_tag = not _pno_prices_close(pullback_low, initial_stop_loss)
@@ -1655,7 +1668,7 @@ def _render_pno_trade_chart(
     _configure_pno_plot_axes(price_ax=ax_levels, volume_ax=ax_volume, trades_ax=ax_trades)
 
     _draw_pno_candles(ax_price, plot_frame, x_values)
-    _draw_pno_structure_inset(ax_price, plot_frame=plot_frame, row=trade_row)
+    _draw_pno_structure_inset(ax_price, plot_frame=plot_frame, row=position_row)
     ax_price.set_title(_format_pno_chart_symbol(symbol), loc="left", color=_PNO_PLOT_TEXT, fontsize=11, pad=10, fontweight="semibold")
     if not levels_window.empty:
         _draw_pno_candles_on_columns(ax_levels, levels_window, x_column="plot_x", candle_width=_PNO_PLOT_5M_CANDLE_WIDTH)
@@ -2012,7 +2025,7 @@ def _render_pno_trade_chart(
     ax_price.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(plot_frame, default_ms=60_000)))
     ax_levels.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(levels_window, default_ms=5 * 60_000)))
     ax_volume.set_ylabel("Vol %")
-    ax_trades.set_ylabel("Trades %")
+    ax_trades.set_ylabel("Exchange trades %")
     ax_levels.yaxis.set_label_coords(-0.072, 0.5)
     ax_volume.set_ylim(0.0, 100.0)
     ax_volume.set_yticks([0.0, 50.0, 100.0])
@@ -2033,7 +2046,7 @@ def _render_pno_trade_chart(
     ax_volume.margins(x=0.0)
     ax_trades.margins(x=0.0)
 
-    file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{trade_index:03d}_{_sanitize_plot_name(result_type.lower() or category.lower() or 'trade')}.png"
+    file_name = f"{_sanitize_plot_name(symbol.replace('/', '_'))}_{position_index:03d}_{_sanitize_plot_name(result_type.lower() or category.lower() or 'position')}.png"
     output_path = charts_dir / file_name
     fig.subplots_adjust(left=0.10, right=0.80, top=0.94, bottom=0.06, hspace=0.05)
     fig.savefig(output_path, **_PNO_PLOT_SAVEFIG_KWARGS)
@@ -2041,15 +2054,15 @@ def _render_pno_trade_chart(
     return output_path
 
 
-def _render_pno_trade_charts_for_symbol(
+def _render_pno_position_charts_for_symbol(
     *,
     charts_dir: Path,
     symbol: str,
     mtf_frames: SymbolMtfFrames,
-    trade_rows: list[dict[str, object]],
+    position_rows: list[dict[str, object]],
     seconds_frame_provider: object | None = None,
 ) -> list[str]:
-    if not trade_rows:
+    if not position_rows:
         return []
     levels_plot_frame = _prepare_pno_levels_plot_source(mtf_frames.levels_frame)
     entry_source_frame = mtf_frames.entry_frame
@@ -2057,7 +2070,7 @@ def _render_pno_trade_charts_for_symbol(
     source_entry_ms = _infer_pno_frame_step_ms(entry_source_frame, target_entry_ms)
     if source_entry_ms > target_entry_ms and seconds_frame_provider is not None:
         timestamps: list[int] = []
-        for row in trade_rows:
+        for row in position_rows:
             for key in (
                 "pump_start_timestamp_ms",
                 "active_high_timestamp_ms",
@@ -2085,14 +2098,14 @@ def _render_pno_trade_charts_for_symbol(
         entry_frame=entry_source_frame,
     )
     chart_paths: list[str] = []
-    for trade_index, trade_row in enumerate(trade_rows, start=1):
-        chart_path = _render_pno_trade_chart(
+    for position_index, position_row in enumerate(position_rows, start=1):
+        chart_path = _render_pno_position_chart(
             charts_dir=charts_dir,
             symbol=symbol,
             levels_frame=levels_plot_frame,
             entry_frame=entry_plot_frame,
-            trade_row=trade_row,
-            trade_index=trade_index,
+            position_row=position_row,
+            position_index=position_index,
         )
         if chart_path is not None:
             chart_paths.append(str(chart_path))
@@ -2471,7 +2484,7 @@ def _render_pno_stage_review_chart(
         fontsize=8,
     )
     ax_volume.set_ylabel("Vol %", color=_PNO_PLOT_MUTED, fontsize=8)
-    ax_trades.set_ylabel("Trades %", color=_PNO_PLOT_MUTED, fontsize=8)
+    ax_trades.set_ylabel("Exchange trades %", color=_PNO_PLOT_MUTED, fontsize=8)
 
     tick_timestamps = _build_pno_tick_timestamps(plot_frame)
     tick_positions = _build_pno_tick_positions_from_timestamps(tick_timestamps, len(plot_frame))
@@ -2706,7 +2719,7 @@ def _resolve_pno_stage_key_from_row(row: dict[str, object]) -> str | None:
     return f"{symbol}|{active_high_timestamp_ms}|{pullback_low_timestamp_ms}|{level_valid_timestamp_ms}|{level:.8f}"
 
 
-def _resolve_pno_trade_key(row: dict[str, object]) -> str | None:
+def _resolve_pno_position_key(row: dict[str, object]) -> str | None:
     symbol = str(row.get("symbol") or "")
     entry_timestamp_ms = _safe_int(row.get("entry_timestamp_ms"))
     if not symbol or entry_timestamp_ms is None:
@@ -2720,7 +2733,7 @@ def _resolve_pno_trade_key(row: dict[str, object]) -> str | None:
     return f"{symbol}|{entry_timestamp_ms}"
 
 
-def _build_pno_trade_exit_reference_row(row: dict[str, object]) -> dict[str, object]:
+def _build_pno_position_exit_reference_row(row: dict[str, object]) -> dict[str, object]:
     entry_price = _safe_float(row.get("entry_price_actual")) or _safe_float(row.get("entry_price")) or _safe_float(row.get("entry_plan"))
     initial_stop_loss = _safe_float(row.get("initial_stop_loss")) or _safe_float(row.get("sl_actual")) or _safe_float(row.get("sl_plan"))
     initial_risk = _safe_float(row.get("initial_risk"))
@@ -2732,7 +2745,7 @@ def _build_pno_trade_exit_reference_row(row: dict[str, object]) -> dict[str, obj
     be_arm_price = _safe_float(row.get("be_arm_price"))
     be_protect_price = _safe_float(row.get("be_protect_price"))
     reference: dict[str, object] = {
-        "trade_key": _resolve_pno_trade_key(row),
+        "position_key": _resolve_pno_position_key(row),
         "stage_key": _resolve_pno_stage_key_from_row(row),
         "symbol": row.get("symbol"),
         "entry_timestamp_ms": _safe_int(row.get("entry_timestamp_ms")),
@@ -2784,7 +2797,7 @@ def _build_pno_trade_exit_reference_row(row: dict[str, object]) -> dict[str, obj
     return reference
 
 
-def _build_pno_trade_path_rows(
+def _build_pno_position_path_rows(
     *,
     entry_frame: pd.DataFrame,
     row: dict[str, object],
@@ -2793,7 +2806,7 @@ def _build_pno_trade_path_rows(
     entry_timestamp_ms = _safe_int(row.get("entry_timestamp_ms"))
     if entry_frame.empty or entry_timestamp_ms is None:
         return []
-    trade_key = _resolve_pno_trade_key(row)
+    position_key = _resolve_pno_position_key(row)
     entry_price = _safe_float(row.get("entry_price_actual")) or _safe_float(row.get("entry_price")) or _safe_float(row.get("entry_plan"))
     initial_stop_loss = _safe_float(row.get("initial_stop_loss")) or _safe_float(row.get("sl_actual")) or _safe_float(row.get("sl_plan"))
     initial_risk = _safe_float(row.get("initial_risk"))
@@ -2811,7 +2824,7 @@ def _build_pno_trade_path_rows(
     be_protect_price = _safe_float(row.get("be_protect_price"))
     tp1 = _safe_float(row.get("tp1"))
     tp2 = _safe_float(row.get("tp2"))
-    trade_rows: list[dict[str, object]] = []
+    position_rows: list[dict[str, object]] = []
     running_high = -np.inf
     running_low = np.inf
     for offset, (_, path_row) in enumerate(path_frame.iterrows()):
@@ -2822,9 +2835,9 @@ def _build_pno_trade_path_rows(
         volume = float(path_row["volume"])
         running_high = max(running_high, high_price)
         running_low = min(running_low, low_price)
-        trade_rows.append(
+        position_rows.append(
             {
-                "trade_key": trade_key,
+                "position_key": position_key,
                 "symbol": row.get("symbol"),
                 "result_type": row.get("result_type"),
                 "bar_offset": int(offset),
@@ -2850,7 +2863,7 @@ def _build_pno_trade_path_rows(
                 "signal_close_above_level": bool(level is not None and close_price > level),
             }
         )
-    return trade_rows
+    return position_rows
 
 
 def _build_pno_levels_path_rows(
@@ -2879,7 +2892,7 @@ def _build_pno_levels_path_rows(
     pullback_low_timestamp_ms = _safe_int(row.get("pullback_low_timestamp_ms"))
     level_first_timestamp_ms = _safe_int(row.get("level_first_local_high_timestamp_ms"))
     level_last_timestamp_ms = _safe_int(row.get("level_last_local_high_timestamp_ms"))
-    trade_key = _resolve_pno_trade_key(row)
+    position_key = _resolve_pno_position_key(row)
     stage_key = _resolve_pno_stage_key_from_row(row)
     path_timestamps = path_frame["timestamp"].to_numpy(dtype=np.int64, copy=False)
 
@@ -2916,10 +2929,10 @@ def _build_pno_levels_path_rows(
         timestamp_ms = int(path_row["timestamp"])
         path_rows.append(
             {
-                "trade_key": trade_key,
+                "position_key": position_key,
                 "stage_key": stage_key,
                 "symbol": row.get("symbol"),
-                "source_stage": PNO_STAGE_5_TRADE,
+                "source_stage": PNO_STAGE_5_POSITION,
                 "source_status": source_status,
                 "source_reason": source_reason,
                 "bar_offset": int(offset),
@@ -2966,7 +2979,11 @@ def _resolve_pno_signal_bar_context(
     low_price = float(entry_frame["low"].iloc[idx])
     close_price = float(entry_frame["close"].iloc[idx])
     volume = float(entry_frame["volume"].iloc[idx])
-    quote_volume = close_price * volume
+    quote_volume = (
+        float(entry_frame["quote_volume"].iloc[idx])
+        if "quote_volume" in entry_frame.columns and pd.notna(entry_frame["quote_volume"].iloc[idx])
+        else np.nan
+    )
     bar_range = max(high_price - low_price, 1e-12)
     body = abs(close_price - open_price)
     upper_wick = high_price - max(open_price, close_price)
@@ -3126,7 +3143,11 @@ def _resolve_pno_window_profile(
     trade_count_column = next((column for column in ("number_of_trades", "trades", "trade_count") if column in frame.columns), None)
     trade_counts = frame[trade_count_column].to_numpy(dtype=np.float64, copy=False) if trade_count_column is not None else None
     oi_values = frame["open_interest"].to_numpy(dtype=np.float64, copy=False) if "open_interest" in frame.columns else None
-    quote_volume = closes * volumes
+    quote_volume = (
+        frame["quote_volume"].to_numpy(dtype=np.float64, copy=False)
+        if "quote_volume" in frame.columns
+        else np.full_like(closes, np.nan, dtype=np.float64)
+    )
     result: dict[str, object] = {
         f"{prefix}_bar_count": int(len(frame)),
         f"{prefix}_green_share": round(float(np.mean(green_mask)), 4),
@@ -3545,7 +3566,7 @@ def _build_pno_research_context_row(
         level_pos = (level - pullback_low) / span
 
     payload["stage_key"] = _resolve_pno_stage_key_from_row(payload)
-    payload["trade_key"] = _resolve_pno_trade_key(payload)
+    payload["position_key"] = _resolve_pno_position_key(payload)
     payload["pump_leg_pct"] = round((leg_size / leg_start) * 100.0, 4) if leg_size is not None and leg_start is not None and leg_start > 0.0 else np.nan
     payload["pullback_fraction_of_leg"] = round(pullback_depth / leg_size, 4) if pullback_depth is not None and leg_size is not None and leg_size > 0.0 else np.nan
     payload["level_fraction_of_pullback"] = round(level_pos, 4) if level_pos is not None and np.isfinite(level_pos) else np.nan
@@ -3685,7 +3706,7 @@ def _summarize_pno_feature_buckets(frame: pd.DataFrame, *, scope: str) -> pd.Dat
         if scoped.empty:
             continue
         for bucket_value, group in scoped.groupby(feature, dropna=False):
-            trade_group = group.loc[group.get("is_trade", False).astype(bool)] if "is_trade" in group.columns else pd.DataFrame()
+            position_group = group.loc[group.get("is_position", False).astype(bool)] if "is_position" in group.columns else pd.DataFrame()
             summary_rows.append(
                 {
                     "scope": scope,
@@ -3694,21 +3715,97 @@ def _summarize_pno_feature_buckets(frame: pd.DataFrame, *, scope: str) -> pd.Dat
                     "count": int(len(group)),
                     "share": round(len(group) / total_count, 4) if total_count > 0 else np.nan,
                     "triggered_rate": round(float(group["is_triggered"].mean()), 4) if "is_triggered" in group.columns else np.nan,
-                    "trade_count": int(len(trade_group)) if not trade_group.empty else 0,
-                    "win_rate": round(float(trade_group["is_win"].mean()), 4) if not trade_group.empty and "is_win" in trade_group.columns else np.nan,
-                    "tp2_rate": round(float((trade_group["stage5_outcome"] == "tp2").mean()), 4) if not trade_group.empty and "stage5_outcome" in trade_group.columns else np.nan,
-                    "mean_pnl_percent": round(float(pd.to_numeric(trade_group["pnl_percent"], errors="coerce").mean()), 4) if not trade_group.empty and "pnl_percent" in trade_group.columns else np.nan,
-                    "median_pnl_percent": round(float(pd.to_numeric(trade_group["pnl_percent"], errors="coerce").median()), 4) if not trade_group.empty and "pnl_percent" in trade_group.columns else np.nan,
+                    "position_count": int(len(position_group)) if not position_group.empty else 0,
+                    "win_rate": round(float(position_group["is_win"].mean()), 4) if not position_group.empty and "is_win" in position_group.columns else np.nan,
+                    "tp2_rate": round(float((position_group["stage5_outcome"] == "tp2").mean()), 4) if not position_group.empty and "stage5_outcome" in position_group.columns else np.nan,
+                    "mean_pnl_percent": round(float(pd.to_numeric(position_group["pnl_percent"], errors="coerce").mean()), 4) if not position_group.empty and "pnl_percent" in position_group.columns else np.nan,
+                    "median_pnl_percent": round(float(pd.to_numeric(position_group["pnl_percent"], errors="coerce").median()), 4) if not position_group.empty and "pnl_percent" in position_group.columns else np.nan,
                 }
             )
     return pd.DataFrame(summary_rows)
 
 
+
+def _first_non_empty_string(values: pd.Series) -> str:
+    for value in values:
+        text = str(value or "")
+        if text and text.lower() != "nan":
+            return text
+    return ""
+
+
+def _join_unique_strings(values: pd.Series) -> str:
+    unique_values = sorted({str(value) for value in values.dropna() if str(value) and str(value).lower() != "nan"})
+    return "|".join(unique_values)
+
+
+def _build_stage5_unique_setup_summary(frame: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "stage_key",
+        "symbol",
+        "status",
+        "position_count",
+        "row_count",
+        "unique_signal_timestamps",
+        "first_signal_timestamp_ms",
+        "last_signal_timestamp_ms",
+        "first_reason",
+        "final_reason",
+        "reasons",
+        "source_statuses",
+        "level",
+        "active_high",
+        "pullback_low",
+        "entry_pos",
+        "score",
+    ]
+    if frame.empty or "stage_key" not in frame.columns:
+        return pd.DataFrame(columns=columns)
+    prepared = frame.loc[frame["stage_key"].notna()].copy()
+    if prepared.empty:
+        return pd.DataFrame(columns=columns)
+    timestamp_column = "entry_signal_timestamp_ms" if "entry_signal_timestamp_ms" in prepared.columns else "timestamp_ms"
+    timestamp_values = prepared[timestamp_column] if timestamp_column in prepared.columns else pd.Series(np.nan, index=prepared.index)
+    prepared["_summary_timestamp_ms"] = pd.to_numeric(timestamp_values, errors="coerce")
+    rows: list[dict[str, object]] = []
+    for stage_key, group in prepared.groupby("stage_key", sort=True, dropna=True):
+        ordered = group.sort_values(
+            ["_summary_timestamp_ms", "source_status", "source_reason"],
+            na_position="last",
+        )
+        first = ordered.iloc[0]
+        last = ordered.iloc[-1]
+        is_position = ordered["is_position"].astype(bool) if "is_position" in ordered.columns else pd.Series(False, index=ordered.index)
+        position_count = int(is_position.sum())
+        timestamps = pd.to_numeric(ordered["_summary_timestamp_ms"], errors="coerce").dropna()
+        rows.append(
+            {
+                "stage_key": str(stage_key),
+                "symbol": _first_non_empty_string(ordered.get("symbol", pd.Series(dtype=object))),
+                "status": "position_opened" if position_count > 0 else "rejected",
+                "position_count": position_count,
+                "row_count": int(len(ordered)),
+                "unique_signal_timestamps": int(timestamps.nunique()) if not timestamps.empty else 0,
+                "first_signal_timestamp_ms": int(timestamps.min()) if not timestamps.empty else np.nan,
+                "last_signal_timestamp_ms": int(timestamps.max()) if not timestamps.empty else np.nan,
+                "first_reason": str(first.get("source_reason") or ""),
+                "final_reason": str(last.get("source_reason") or ""),
+                "reasons": _join_unique_strings(ordered.get("source_reason", pd.Series(dtype=object))),
+                "source_statuses": _join_unique_strings(ordered.get("source_status", pd.Series(dtype=object))),
+                "level": _safe_float(first.get("level")),
+                "active_high": _safe_float(first.get("active_high")),
+                "pullback_low": _safe_float(first.get("pullback_low")),
+                "entry_pos": _safe_float(first.get("entry_pos")),
+                "score": _safe_float(first.get("final_score")) or _safe_float(first.get("score")),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
 def _export_pno_research_context(
     *,
     diagnostics_dir: Path,
     symbol_frames: dict[str, SymbolMtfFrames],
-    trade_rows: list[dict[str, object]],
+    position_rows: list[dict[str, object]],
     stage_rows_by_stage: dict[str, list[dict[str, object]]],
     stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
     stage_rejection_summary_by_stage: dict[str, dict[str, list[dict[str, object]]]] | None = None,
@@ -3719,13 +3816,13 @@ def _export_pno_research_context(
     del logger
     prepared_levels_frames: dict[str, pd.DataFrame] = {}
     prepared_entry_frames: dict[str, pd.DataFrame] = {}
-    trade_context_rows: list[dict[str, object]] = []
-    trade_exit_reference_rows: list[dict[str, object]] = []
-    trade_path_rows: list[dict[str, object]] = []
+    position_context_rows: list[dict[str, object]] = []
+    position_exit_reference_rows: list[dict[str, object]] = []
+    position_path_rows: list[dict[str, object]] = []
     stage5_levels_path_rows: list[dict[str, object]] = []
     stage5_outcome_by_key: dict[str, str] = {}
-    trades_total = len(trade_rows)
-    trades_done = 0
+    positions_total = len(position_rows)
+    positions_done = 0
     stage_rejection_summary_source = (
         stage_rejections_by_stage
         if stage_rejection_summary_by_stage is None
@@ -3764,7 +3861,7 @@ def _export_pno_research_context(
         del phase, done, total, force
         return
 
-    for row in trade_rows:
+    for row in position_rows:
         symbol = str(row.get("symbol") or "")
         prepared_levels_frame = _get_prepared_levels_frame(symbol)
         prepared_entry_frame = _get_prepared_entry_frame(symbol)
@@ -3782,42 +3879,42 @@ def _export_pno_research_context(
         )
         enriched = _build_pno_research_context_row(
             row,
-            source_stage=PNO_STAGE_5_TRADE,
+            source_stage=PNO_STAGE_5_POSITION,
             source_status="passed",
-            source_reason=str(row.get("result_type") or row.get("category") or "trade"),
+            source_reason=str(row.get("result_type") or row.get("category") or "position"),
             signal_context=signal_context,
             pattern_context=pattern_context,
         )
         result_type = str(row.get("result_type") or "").lower()
         enriched["stage5_outcome"] = result_type
-        enriched["is_trade"] = True
+        enriched["is_position"] = True
         enriched["is_triggered"] = True
         enriched["is_win"] = result_type in {"be", "tp1_be", "tp2"}
-        trade_context_rows.append(enriched)
-        trade_exit_reference_rows.append(_build_pno_trade_exit_reference_row(row))
-        trade_path_rows.extend(_build_pno_trade_path_rows(entry_frame=prepared_entry_frame, row=row))
+        position_context_rows.append(enriched)
+        position_exit_reference_rows.append(_build_pno_position_exit_reference_row(row))
+        position_path_rows.extend(_build_pno_position_path_rows(entry_frame=prepared_entry_frame, row=row))
         stage5_levels_path_rows.extend(
             _build_pno_levels_path_rows(
                 levels_frame=prepared_levels_frame,
                 row=row,
                 source_status="passed",
-                source_reason=str(row.get("result_type") or row.get("category") or "trade"),
+                source_reason=str(row.get("result_type") or row.get("category") or "position"),
             )
         )
         stage_key = str(enriched.get("stage_key") or "")
         if stage_key:
             stage5_outcome_by_key[stage_key] = result_type
-        trades_done += 1
-        _log_progress("trade_context", trades_done, trades_total)
+        positions_done += 1
+        _log_progress("position_context", positions_done, positions_total)
 
-    trade_context_frame = pd.DataFrame(trade_context_rows)
-    trade_context_frame.to_csv(research_dir / "trade_context.csv", index=False)
-    pd.DataFrame(trade_exit_reference_rows).to_csv(research_dir / "trade_exit_reference.csv", index=False)
-    pd.DataFrame(trade_path_rows).to_csv(research_dir / "trade_path_context.csv", index=False)
-    _log_progress("trade_context", trades_done, trades_total, force=True)
+    position_context_frame = pd.DataFrame(position_context_rows)
+    position_context_frame.to_csv(research_dir / "position_context.csv", index=False)
+    pd.DataFrame(position_exit_reference_rows).to_csv(research_dir / "position_exit_reference.csv", index=False)
+    pd.DataFrame(position_path_rows).to_csv(research_dir / "position_path_context.csv", index=False)
+    _log_progress("position_context", positions_done, positions_total, force=True)
 
-    stage5_candidate_rows: list[dict[str, object]] = list(trade_context_rows)
-    for reason, rows in stage_rejections_by_stage.get(PNO_STAGE_5_TRADE, {}).items():
+    stage5_candidate_rows: list[dict[str, object]] = list(position_context_rows)
+    for reason, rows in stage_rejections_by_stage.get(PNO_STAGE_5_POSITION, {}).items():
         for row in rows:
             symbol = str(row.get("symbol") or "")
             prepared_levels_frame = _get_prepared_levels_frame(symbol)
@@ -3835,14 +3932,14 @@ def _export_pno_research_context(
             )
             enriched = _build_pno_research_context_row(
                 row,
-                source_stage=PNO_STAGE_5_TRADE,
+                source_stage=PNO_STAGE_5_POSITION,
                 source_status="rejected",
                 source_reason=reason,
                 signal_context=signal_context,
                 pattern_context=pattern_context,
             )
             enriched["stage5_outcome"] = f"rejected_{reason}"
-            enriched["is_trade"] = False
+            enriched["is_position"] = False
             enriched["is_triggered"] = False
             enriched["is_win"] = False
             stage5_candidate_rows.append(enriched)
@@ -3860,6 +3957,10 @@ def _export_pno_research_context(
 
     stage5_candidate_frame = pd.DataFrame(stage5_candidate_rows)
     stage5_candidate_frame.to_csv(research_dir / "stage5_trigger_context.csv", index=False)
+    _build_stage5_unique_setup_summary(stage5_candidate_frame).to_csv(
+        research_dir / "stage5_unique_setup_summary.csv",
+        index=False,
+    )
     pd.DataFrame(stage5_levels_path_rows).to_csv(research_dir / "stage5_levels_path_context.csv", index=False)
 
     stage4_context_rows: list[dict[str, object]] = []
@@ -3914,9 +4015,9 @@ def _export_pno_research_context(
     _log_progress("stage4_context", stage4_done, stage4_total, force=True)
 
     summary_frames = [
-        _summarize_pno_feature_buckets(trade_context_frame, scope="trades"),
+        _summarize_pno_feature_buckets(position_context_frame, scope="positions"),
         _summarize_pno_feature_buckets(stage5_candidate_frame, scope="stage5"),
-        _summarize_pno_feature_buckets(stage4_context_frame.assign(is_trade=stage4_context_frame.get("downstream_triggered", False), is_triggered=stage4_context_frame.get("downstream_triggered", False), is_win=stage4_context_frame.get("downstream_win", False), stage5_outcome=stage4_context_frame.get("downstream_stage5_outcome", pd.Series(dtype=object))), scope="stage4"),
+        _summarize_pno_feature_buckets(stage4_context_frame.assign(is_position=stage4_context_frame.get("downstream_triggered", False), is_triggered=stage4_context_frame.get("downstream_triggered", False), is_win=stage4_context_frame.get("downstream_win", False), stage5_outcome=stage4_context_frame.get("downstream_stage5_outcome", pd.Series(dtype=object))), scope="stage4"),
     ]
     summary_frame = pd.concat([frame for frame in summary_frames if not frame.empty], ignore_index=True) if any(not frame.empty for frame in summary_frames) else pd.DataFrame()
     summary_frame.to_csv(research_dir / "feature_summary.csv", index=False)

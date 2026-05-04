@@ -9,7 +9,7 @@ from domain.enums.order_type import OrderType
 from domain.enums.position_side import PositionSide
 from domain.enums.sl_mode import SLMode
 from domain.enums.timeframe import Timeframe
-from domain.enums.trade_result_type import TradeResultType
+from domain.enums.position_result_type import PositionResultType
 
 __all__ = [
     "DataQualitySeverity",
@@ -21,5 +21,5 @@ __all__ = [
     "PositionSide",
     "SLMode",
     "Timeframe",
-    "TradeResultType",
+    "PositionResultType",
 ]

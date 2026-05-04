@@ -91,7 +91,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--entry-tf", default=None, help="Entry timeframe for PNO")
     parser.add_argument("--strategy", choices=["pno"], default="pno", help="Strategy id")
     parser.add_argument("--pno-deposit", type=float, default=None, help="Deposit used for PNO sizing")
-    parser.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per trade for PNO")
+    parser.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per position for PNO")
     parser.add_argument("--pno-entry-confirmation-mode", choices=["close_above"], default=None, help="PNO entry confirmation mode")
     parser.add_argument("--pno-category-mode", choices=["all", "core", "discovery"], default=None, help="PNO category runtime mode")
     parser.add_argument("--pno-stage", type=int, default=None, help="Single PNO stage to export")

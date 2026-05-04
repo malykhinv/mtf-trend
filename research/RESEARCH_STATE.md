@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 146919dde598b7ff100a07a9a4657de272165bc0
+Commit: UNKNOWN (source: README.zip)
 Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P038 proposed diagnostics export cache; P039 proposed trade-count chart fix; P041 proposed seconds-entry/stale-level/BE/log cleanup; P042 proposed research-context export helper fix; P043 proposed human_bos obsolete-level guard and Stage1 rejected chart fallback
-Last applied patch: P040 Fix PNO diagnostics logging and rejection summary
+Last applied patch: UNKNOWN in ZIP; local patch P044 is PROPOSED
 Last analyzed run: E007 multi-TF 31-day run from 1.zip
 Updated: 2026-05-04
 ```
@@ -43,11 +43,11 @@ PNO покупает только подтверждение, что откат 
 Минимальные ориентиры:
 
 ```text
-50+ сделок в год
+50+ позиций в год
 winrate > 0.40
-средний трейд > +1.0%
+средняя позиция > +1.0%
 помесячно преимущественно положительно
-нет зависимости от 1–5 топ-сделок
+нет зависимости от 1–5 топ-позиций
 нет lookahead/leakage/явной переоптимизации
 ```
 
@@ -68,9 +68,11 @@ winrate > 0.40
 3. `5m/30s` может быть слишком медленным для быстрых continuation cases.
 4. Stage4 rows могут дублироваться; считать нужно unique setups.
 5. Без настоящего `number_of_trades` выводы о flow/tape/organic pump ограничены.
-6. Ноль сделок — не оценка прибыльности, а материал для funnel/reject анализа.
+6. Ноль позиций — не оценка прибыльности, а материал для funnel/reject анализа.
 7. Сначала диагностика и качество данных, потом изменение фильтров.
 8. H4 подтверждена: `human_bos` bypass scoring/decay может принимать устаревший нижний BOS-level.
+9. Для PNO flow требуется real `quote_volume` в USDT; `close*volume` не допускается как замена.
+10. Симулированные результаты бота называются positions; trade/trades остаётся только для биржевых сделок внутри свечей.
 
 ---
 
@@ -92,7 +94,7 @@ winrate > 0.40
 | P014 | Polish console logs | APPLIED | Добить оставшийся английский и сухие key=value строки; добавить переносы строк в многочастные сообщения. |
 | P015 | Backtest progress and memory logs | APPLIED | Убрать дубли прогресса для одиночной сетки и сделать понятный memory-error. |
 | P016 | Fix unclosed logger call | APPLIED | Закрыть незавершённый logger.info после P015. |
-| P017 | Fix P015 runner regression | APPLIED | Вернуть portfolio_trades assignment и восстановить аргументы long-symbol logger. |
+| P017 | Fix P015 runner regression | APPLIED | Вернуть portfolio_positions assignment и восстановить аргументы long-symbol logger. |
 | P018 | Stale reclaim and trade-count chart fix | APPLIED | Починить пустой trade-count panel и отбрасывать входы в уже провалившийся reclaim уровня. |
 | P019 | Clear PNO trade-data caches | APPLIED | Сбрасывать тяжёлые aggTrades runtime-caches после символа, чтобы full-universe run не упирался в RAM. |
 | P020 | Trade/chart consistency fix | APPLIED | Синхронизировать trade-count aliases и отбрасывать уровни с close_above до финального сигнала. |
@@ -115,9 +117,10 @@ winrate > 0.40
 | P038 | Reuse PNO backtest diagnostics export cache | PROPOSED | Не прогонять PNO strategy повторно при экспорте diagnostics/stage reviews/charts после `--collect-diagnostics true`. |
 | P039 | PNO trade-count chart bars | PROPOSED | Нижний `Trades %` на trade charts рисует exchange trade-count per candle, нормированный в проценты, а не пустой subplot. |
 | P040 | PNO diagnostics logging/summary fix | APPLIED | Исправить logger.debug placeholder mismatch, warning для короткого окна и full rejected-reason summary. |
-| P041 | PNO seconds-entry/stale-level/BE/log cleanup | PROPOSED | Включить `15s` в общий sparse aggTrades path, резать устаревший level до сделки, снизить BE до 60%, убрать лишние runtime logs. |
+| P041 | PNO seconds-entry/stale-level/BE/log cleanup | PROPOSED | Включить `15s` в общий sparse aggTrades path, резать устаревший level до позиции, снизить BE до 60%, убрать лишние runtime logs. |
 | P042 | PNO research-context export helper fix | PROPOSED | Восстановить локальные prepared-frame helper’ы и накопители в `_export_pno_research_context`, чтобы diagnostics export не падал после полного прогона. |
 | P043 | Human BOS obsolete-level guard | PROPOSED | Убрать bypass scoring/decay для `human_bos` и экспортировать fallback charts для Stage1 rejected reasons без near-threshold rows. |
+| P044 | Position terminology and strict flow data | PROPOSED | Развести exchange trades и bot positions; требовать real quote_volume USDT/trade-count; добавить diagnostics coverage и Stage5 unique setup summary. |
 
 Статусы:
 
@@ -147,10 +150,10 @@ Levels/Entry TF: 1m/5s, 5m/15s, 5m/30s
 Period: 31 days
 Symbols: ~508
 Mode: discovery / close_above
-Trades: 0 / 2 / 4
-5m/30s PnL: -4.4104%
-PF: not meaningful
-Issue: `human_bos` allowed stale/obsolete lower BOS-levels; Stage1 rejected charts omitted reasons with no near-threshold rows.
+Positions: 0 / 0 / 0
+5m/30s PnL: not applicable
+PF: not applicable
+Issue: old research note claimed 0/2/4 trades, but current 1.zip artifacts show zero simulated positions in every TF set; diagnostics coverage and Stage5 unique setup summary are required to avoid repeating this confusion.
 ```
 
 Funnel:
@@ -159,8 +162,9 @@ Funnel:
 5m/30s Stage1 pump:            44
 5m/30s Stage2 high_pullback:   34
 5m/30s Stage3 valid_pullback:  11
-5m/30s Stage4 rows / unique:   29 / 14
-5m/30s Stage5 trades:          4
+5m/30s Stage4 rows / unique:   35 / 15
+5m/30s Stage5 unique setups:    1
+5m/30s Stage5 positions:        0
 ```
 
 Интерпретация:

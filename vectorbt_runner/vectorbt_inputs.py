@@ -13,4 +13,4 @@ class VectorbtInputs:
     entries: pd.Series
     exits: pd.Series
     equity_curve: pd.Series
-    trades: pd.DataFrame
+    positions: pd.DataFrame

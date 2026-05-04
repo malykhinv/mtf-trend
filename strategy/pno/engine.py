@@ -13,8 +13,8 @@ import numpy as np
 import pandas as pd
 
 from domain.enums.timeframe import Timeframe
-from domain.enums.trade_result_type import TradeResultType
-from domain.models.trade_result import TradeResult
+from domain.enums.position_result_type import PositionResultType
+from domain.models.position_result import PositionResult
 from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
 from strategy.pno.config import PNO_DEFAULT_RISK_PCT, PnoParams
@@ -23,13 +23,13 @@ PNO_STAGE_1_PUMP = "stage_1_pump"
 PNO_STAGE_2_HIGH_PULLBACK = "stage_2_high_pullback"
 PNO_STAGE_3_VALID_PULLBACK = "stage_3_valid_pullback"
 PNO_STAGE_4_LEVEL = "stage_4_level"
-PNO_STAGE_5_TRADE = "stage_5_trade"
+PNO_STAGE_5_POSITION = "stage_5_position"
 PNO_STAGE_SEQUENCE: tuple[str, ...] = (
     PNO_STAGE_1_PUMP,
     PNO_STAGE_2_HIGH_PULLBACK,
     PNO_STAGE_3_VALID_PULLBACK,
     PNO_STAGE_4_LEVEL,
-    PNO_STAGE_5_TRADE,
+    PNO_STAGE_5_POSITION,
 )
 PNO_STAGE_PATH = " > ".join(PNO_STAGE_SEQUENCE)
 PNO_TRADE_COUNT_COLUMNS: tuple[str, ...] = ("number_of_trades", "trades", "trade_count")
@@ -352,7 +352,7 @@ class ArmedContext:
 
 @dataclass(slots=True)
 class Stage5Decision:
-    trade: TradeResult | None
+    position: PositionResult | None
     exit_idx: int
     reject_reason: str | None = None
     reject_extra: dict[str, object] | None = None
@@ -373,7 +373,7 @@ class Stage1StateArrays:
 
 
 class GenerationDiagnostics(TypedDict, total=False):
-    trades_generated: int
+    positions_generated: int
     blocked_cycles: int
     skipped_insufficient_data: int
     trade_count_proxy_used: bool
@@ -453,17 +453,18 @@ class PnoEngine:
 
     def _empty_diagnostics(self) -> GenerationDiagnostics:
         return {
-            "trades_generated": 0,
+            "positions_generated": 0,
             "blocked_cycles": 0,
             "skipped_insufficient_data": 0,
-            "trade_count_proxy_used": True,
+            "skipped_market_data_quality": 0,
+            "trade_count_proxy_used": False,
             "stage_hits": {stage_id: 0 for stage_id in PNO_STAGE_SEQUENCE},
             "stage_events": [],
             "stage_rejections": [],
             "context": {
                 "stage_order": list(PNO_STAGE_SEQUENCE),
-                "trade_count_proxy": "volume",
-                "quote_volume_proxy": "close*volume",
+                "market_data_quality_status": "unknown",
+                "market_data_quality_reasons": [],
                 "levels_trade_count_source": "unknown",
                 "entry_trade_count_source": "unknown",
                 "levels_quote_volume_source": "unknown",
@@ -492,27 +493,40 @@ class PnoEngine:
 
     @staticmethod
     def _resolve_quote_volume_series(frame: pd.DataFrame) -> pd.Series:
-        if PnoEngine._has_true_quote_volume(frame):
-            return pd.to_numeric(frame["quote_volume"], errors="coerce")
-        return pd.to_numeric(frame["close"], errors="coerce") * pd.to_numeric(frame["volume"], errors="coerce")
+        if not PnoEngine._has_true_quote_volume(frame):
+            raise ValueError("PNO requires real quote_volume in USDT; close*volume proxy is not allowed")
+        return pd.to_numeric(frame["quote_volume"], errors="coerce")
 
     @staticmethod
     def _resolve_trade_activity_series(frame: pd.DataFrame) -> pd.Series:
         trade_count_column = PnoEngine._resolve_trade_count_column(frame)
         if trade_count_column is None or not PnoEngine._has_real_trade_count(frame):
-            return pd.to_numeric(frame["volume"], errors="coerce")
+            raise ValueError("PNO requires real exchange trade-count; volume proxy is not allowed")
         return pd.to_numeric(frame[trade_count_column], errors="coerce")
 
     @staticmethod
     def _trade_count_source_label(frame: pd.DataFrame) -> str:
         trade_count_column = PnoEngine._resolve_trade_count_column(frame)
         if trade_count_column is None:
-            return "volume_proxy"
-        return trade_count_column if PnoEngine._has_real_trade_count(frame) else f"{trade_count_column}_empty_volume_proxy"
+            return "missing_real_trade_count"
+        return trade_count_column if PnoEngine._has_real_trade_count(frame) else f"{trade_count_column}_empty"
 
     @staticmethod
     def _quote_volume_source_label(frame: pd.DataFrame) -> str:
-        return "quote_volume" if PnoEngine._has_true_quote_volume(frame) else "close_volume_proxy"
+        return "quote_volume_usdt" if PnoEngine._has_true_quote_volume(frame) else "missing_quote_volume_usdt"
+
+    @staticmethod
+    def _market_data_quality_reasons(*, levels_frame: pd.DataFrame, entry_frame: pd.DataFrame) -> list[str]:
+        reasons: list[str] = []
+        if not PnoEngine._has_real_trade_count(levels_frame):
+            reasons.append("levels_missing_real_trade_count")
+        if not PnoEngine._has_real_trade_count(entry_frame):
+            reasons.append("entry_missing_real_trade_count")
+        if not PnoEngine._has_true_quote_volume(levels_frame):
+            reasons.append("levels_missing_quote_volume_usdt")
+        if not PnoEngine._has_true_quote_volume(entry_frame):
+            reasons.append("entry_missing_quote_volume_usdt")
+        return reasons
 
     def _annotate_market_data_sources(
         self,
@@ -526,9 +540,11 @@ class PnoEngine:
         levels_quote_source = self._quote_volume_source_label(levels_frame)
         entry_quote_source = self._quote_volume_source_label(entry_frame)
         real_trade_sources = set(PNO_TRADE_COUNT_COLUMNS)
-        diagnostics["trade_count_proxy_used"] = (
-            levels_trade_source not in real_trade_sources or entry_trade_source not in real_trade_sources
+        market_data_quality_reasons = self._market_data_quality_reasons(
+            levels_frame=levels_frame,
+            entry_frame=entry_frame,
         )
+        diagnostics["trade_count_proxy_used"] = False
         context = diagnostics.setdefault("context", {})
         if isinstance(context, dict):
             context.update(
@@ -537,12 +553,8 @@ class PnoEngine:
                     "entry_trade_count_source": entry_trade_source,
                     "levels_quote_volume_source": levels_quote_source,
                     "entry_quote_volume_source": entry_quote_source,
-                    "trade_count_proxy": "volume" if diagnostics.get("trade_count_proxy_used") else None,
-                    "quote_volume_proxy": (
-                        "close*volume"
-                        if levels_quote_source == "close_volume_proxy" or entry_quote_source == "close_volume_proxy"
-                        else None
-                    ),
+                    "market_data_quality_status": "ok" if not market_data_quality_reasons else "failed",
+                    "market_data_quality_reasons": list(market_data_quality_reasons),
                 }
             )
 
@@ -898,7 +910,7 @@ class PnoEngine:
         prepared = prepared.sort_values("timestamp").drop_duplicates(subset=["timestamp"], keep="last")
         return prepared.reset_index(drop=True)
 
-    def generate_events_single_frame(self, *, frame: pd.DataFrame, params: PnoParams) -> list[TradeResult]:
+    def generate_events_single_frame(self, *, frame: pd.DataFrame, params: PnoParams) -> list[PositionResult]:
         prepared = self.prepare_data(frame)
         timeframe_ms = self._infer_timeframe_ms(prepared)
         entry_timeframe_ms = params.entry_timeframe.to_milliseconds()
@@ -921,7 +933,7 @@ class PnoEngine:
         seconds_frame_provider: object | None = None,
         collect_diagnostics: bool | None = None,
         collect_stage_metrics: bool | None = None,
-    ) -> list[TradeResult]:
+    ) -> list[PositionResult]:
         del collect_diagnostics, collect_stage_metrics
         self._runtime_reference_high_cache.clear()
         prepared_levels = self._prepare_data_cached(levels_frame)
@@ -937,6 +949,27 @@ class PnoEngine:
             levels_frame=prepared_levels,
             entry_frame=prepared_entry,
         )
+        market_data_quality_reasons = self._market_data_quality_reasons(
+            levels_frame=prepared_levels,
+            entry_frame=prepared_entry,
+        )
+        if market_data_quality_reasons:
+            diagnostics["skipped_market_data_quality"] = 1
+            context = diagnostics.setdefault("context", {})
+            if isinstance(context, dict):
+                context["market_data_quality_status"] = "failed"
+                context["market_data_quality_reasons"] = list(market_data_quality_reasons)
+            self._mark_stage_rejection(
+                diagnostics,
+                {},
+                PNO_STAGE_1_PUMP,
+                key=(str(params.symbol), "missing_required_market_data", tuple(market_data_quality_reasons)),
+                timestamp_ms=int(prepared_levels["timestamp"].iloc[-1]) if "timestamp" in prepared_levels.columns and not prepared_levels.empty else 0,
+                reason="missing_required_market_data",
+                extra={"market_data_quality_reasons": "|".join(market_data_quality_reasons)},
+            )
+            self._last_generation_diagnostics = diagnostics
+            return []
         levels_required_bars = self._scale_required_bars(
             base_bars=params.min_data_5m,
             base_timeframe_ms=Timeframe.M5.to_milliseconds(),
@@ -1178,11 +1211,11 @@ class PnoEngine:
                         "stage1_min_trade_ratio_start": round(float(params.stage1_min_trade_ratio_start), 4),
                     },
                 )
-        trades = self._run(one=one, five=five, params=params, diagnostics=diagnostics)
+        positions = self._run(one=one, five=five, params=params, diagnostics=diagnostics)
         stage_events = diagnostics.get("stage_events")
         stage_rejections = diagnostics.get("stage_rejections")
         if (
-            not trades
+            not positions
             and isinstance(stage_events, list)
             and isinstance(stage_rejections, list)
             and not stage_events
@@ -1215,9 +1248,9 @@ class PnoEngine:
                 reason=reason,
                 extra={},
             )
-        diagnostics["trades_generated"] = len(trades)
+        diagnostics["positions_generated"] = len(positions)
         self._last_generation_diagnostics = diagnostics
-        return trades
+        return positions
 
     def _prepare_1m_frame(self, frame: pd.DataFrame, *, timeframe_ms: int = 60_000) -> OneMinuteFrame:
         work = frame.copy()
@@ -2152,8 +2185,8 @@ class PnoEngine:
         five: FiveMinuteFrame,
         params: PnoParams,
         diagnostics: GenerationDiagnostics,
-    ) -> list[TradeResult]:
-        trades: list[TradeResult] = []
+    ) -> list[PositionResult]:
+        positions: list[PositionResult] = []
         stage_keys: dict[str, tuple[object, ...]] = {}
         one_to_five_idx = np.searchsorted(five.timestamps, one.timestamps, side="right") - 1
         stage1: Stage1Context | None = None
@@ -2193,7 +2226,7 @@ class PnoEngine:
                 return
             ts_idx = min(max(int(armed_ctx.entry_idx), 0), max(len(one.timestamps) - 1, 0))
             _reject_stage(
-                PNO_STAGE_5_TRADE,
+                PNO_STAGE_5_POSITION,
                 key=(
                     armed_ctx.stage4.active_high_idx,
                     armed_ctx.stage4.cluster_first_idx,
@@ -2230,7 +2263,7 @@ class PnoEngine:
                     )
                     if bars_since_active_high > max_htf_bars_since_active_high:
                         _reject_stage(
-                            PNO_STAGE_5_TRADE,
+                            PNO_STAGE_5_POSITION,
                             key=(
                                 armed.stage4.active_high_idx,
                                 armed.stage4.cluster_first_idx,
@@ -2252,10 +2285,10 @@ class PnoEngine:
                         continue
                 live_armed = armed if armed.entry_idx == i else replace(armed, entry_idx=i)
                 stage5_decision = self._try_enter_and_simulate(one=one, params=params, armed=live_armed)
-                trade = stage5_decision.trade
+                position = stage5_decision.position
                 exit_idx = stage5_decision.exit_idx
-                if trade is not None:
-                    trades.append(trade)
+                if position is not None:
+                    positions.append(position)
                     retired_clusters.append(
                         RetiredCluster(
                             active_high_idx=live_armed.stage4.active_high_idx,
@@ -2269,14 +2302,14 @@ class PnoEngine:
                     self._mark_stage(
                         diagnostics,
                         stage_keys,
-                        PNO_STAGE_5_TRADE,
-                        key=(trade.entry_timestamp_ms, trade.exit_timestamp_ms),
-                        timestamp_ms=int(trade.entry_timestamp_ms),
+                        PNO_STAGE_5_POSITION,
+                        key=(position.entry_timestamp_ms, position.exit_timestamp_ms),
+                        timestamp_ms=int(position.entry_timestamp_ms),
                         extra={
-                            "entry_price": round(float(trade.entry_price.value), 8),
-                            "exit_price": round(float(trade.exit_price.value), 8),
-                            "result_type": trade.result_type.value,
-                            "score": float(trade.metadata.get("final_score", live_armed.stage4.final_score)),
+                            "entry_price": round(float(position.entry_price.value), 8),
+                            "exit_price": round(float(position.exit_price.value), 8),
+                            "result_type": position.result_type.value,
+                            "score": float(position.metadata.get("final_score", live_armed.stage4.final_score)),
                         },
                     )
                     stage1 = None
@@ -2296,7 +2329,7 @@ class PnoEngine:
                     params=params,
                 ):
                     _reject_stage(
-                        PNO_STAGE_5_TRADE,
+                        PNO_STAGE_5_POSITION,
                         key=(armed.stage4.active_high_idx, armed.stage4.cluster_first_idx, armed.stage4.cluster_last_idx, armed.entry_idx),
                         timestamp_ms=int(one.timestamps[min(i, len(one.timestamps) - 1)]),
                         reason="entry_invalidated_before_trigger",
@@ -2854,7 +2887,7 @@ class PnoEngine:
             if next_stage4 is None:
                 if armed is not None:
                     _reject_stage(
-                        PNO_STAGE_5_TRADE,
+                        PNO_STAGE_5_POSITION,
                         key=(armed.stage4.active_high_idx, armed.stage4.cluster_first_idx, armed.stage4.cluster_last_idx, armed.entry_idx),
                         timestamp_ms=int(one.timestamps[min(i, len(one.timestamps) - 1)]),
                         reason="entry_not_triggered",
@@ -3061,10 +3094,10 @@ class PnoEngine:
                 armed = ArmedContext(entry_idx=arm_entry_idx, stage1=stage1, stage3=stage3, stage4=stage4)
                 if confirmation_mode == "close_above":
                     stage5_decision = self._try_enter_and_simulate(one=one, params=params, armed=armed)
-                    trade = stage5_decision.trade
+                    position = stage5_decision.position
                     exit_idx = stage5_decision.exit_idx
-                    if trade is not None:
-                        trades.append(trade)
+                    if position is not None:
+                        positions.append(position)
                         retired_clusters.append(
                             RetiredCluster(
                                 active_high_idx=armed.stage4.active_high_idx,
@@ -3078,14 +3111,14 @@ class PnoEngine:
                         self._mark_stage(
                             diagnostics,
                             stage_keys,
-                            PNO_STAGE_5_TRADE,
-                            key=(trade.entry_timestamp_ms, trade.exit_timestamp_ms),
-                            timestamp_ms=int(trade.entry_timestamp_ms),
+                            PNO_STAGE_5_POSITION,
+                            key=(position.entry_timestamp_ms, position.exit_timestamp_ms),
+                            timestamp_ms=int(position.entry_timestamp_ms),
                             extra={
-                                "entry_price": round(float(trade.entry_price.value), 8),
-                                "exit_price": round(float(trade.exit_price.value), 8),
-                                "result_type": trade.result_type.value,
-                                "score": float(trade.metadata.get("final_score", armed.stage4.final_score)),
+                                "entry_price": round(float(position.entry_price.value), 8),
+                                "exit_price": round(float(position.exit_price.value), 8),
+                                "result_type": position.result_type.value,
+                                "score": float(position.metadata.get("final_score", armed.stage4.final_score)),
                             },
                         )
                         stage1 = None
@@ -3100,7 +3133,7 @@ class PnoEngine:
                     _reject_stage5_decision(armed, stage5_decision)
 
             i += 1
-        return trades
+        return positions
 
     @staticmethod
     def _range_sum(cumulative: np.ndarray, start_idx: int, end_idx: int) -> float:
@@ -7659,7 +7692,7 @@ class PnoEngine:
             if extra:
                 payload.update(extra)
             return Stage5Decision(
-                trade=None,
+                position=None,
                 exit_idx=int(exit_idx if exit_idx is not None else min(entry_idx, max(len(one.timestamps) - 1, 0))),
                 reject_reason=reason,
                 reject_extra=payload if reason is not None else None,
@@ -8128,7 +8161,7 @@ class PnoEngine:
                 }
             )
 
-        trade, exit_idx = self._simulate_trade_path(
+        position, exit_idx = self._simulate_position_path(
             one=one,
             params=params,
             armed=armed,
@@ -8138,7 +8171,7 @@ class PnoEngine:
             position_size=position_size,
             metadata=metadata,
         )
-        return Stage5Decision(trade=trade, exit_idx=exit_idx)
+        return Stage5Decision(position=position, exit_idx=exit_idx)
 
     def _resolve_be_arm_fraction(
         self,
@@ -8152,7 +8185,7 @@ class PnoEngine:
             return float(params.be_arm_to_active_high_fraction)
         return float(params.close_above_be_start_fraction)
 
-    def _simulate_trade_path(
+    def _simulate_position_path(
         self,
         *,
         one: OneMinuteFrame,
@@ -8163,7 +8196,7 @@ class PnoEngine:
         stop_loss: float,
         position_size: float,
         metadata: dict[str, int | float | str | bool | None],
-        ) -> tuple[TradeResult | None, int]:
+        ) -> tuple[PositionResult | None, int]:
         tp1 = float(armed.stage4.tp1)
         tp2 = float("nan")
         fee_rate = float(params.fee_rate)
@@ -8204,7 +8237,7 @@ class PnoEngine:
         runner_exit_reason: str | None = None
         exit_idx = len(one.timestamps) - 1
         exit_price = float(one.closes[exit_idx])
-        result_type = TradeResultType.BE
+        result_type = PositionResultType.BE
         realized_pnl = 0.0
         category = "incomplete"
         max_favorable = 0.0
@@ -8244,7 +8277,7 @@ class PnoEngine:
                 if low <= active_stop:
                     exit_price = active_stop
                     exit_idx = idx
-                    result_type = TradeResultType.TP1_BE if be_armed else TradeResultType.SL
+                    result_type = PositionResultType.TP1_BE if be_armed else PositionResultType.SL
                     runner_exit_price = active_stop
                     runner_exit_idx = idx
                     runner_exit_reason = "be_arm_stop" if be_armed else "sl_non_entry"
@@ -8292,15 +8325,15 @@ class PnoEngine:
                         runner_exit_price = close
                         runner_exit_idx = idx
                         if close > (tp1 + self._EPSILON):
-                            result_type = TradeResultType.TIME_EXIT_PROFIT
+                            result_type = PositionResultType.TIME_EXIT_PROFIT
                             runner_exit_reason = "final_success_above_tp1"
                             runner_final_classification = "success_above_tp1"
                         elif close < (entry_price - self._EPSILON):
-                            result_type = TradeResultType.SL
+                            result_type = PositionResultType.SL
                             runner_exit_reason = "final_loss_below_entry"
                             runner_final_classification = "loss_below_entry"
                         else:
-                            result_type = TradeResultType.TP1_BE
+                            result_type = PositionResultType.TP1_BE
                             runner_exit_reason = "final_be_below_tp1"
                             runner_final_classification = "be_below_tp1"
                         runner_realized_pnl = self._net_leg_pnl(
@@ -8316,7 +8349,7 @@ class PnoEngine:
                 if be_armed and low <= active_stop:
                     exit_price = active_stop
                     exit_idx = idx
-                    result_type = TradeResultType.TP1_BE
+                    result_type = PositionResultType.TP1_BE
                     runner_exit_price = active_stop
                     runner_exit_idx = idx
                     runner_exit_reason = "be_arm_stop_same_bar"
@@ -8337,15 +8370,15 @@ class PnoEngine:
                     runner_exit_price = close
                     runner_exit_idx = idx
                     if close > (tp1 + self._EPSILON):
-                        result_type = TradeResultType.TIME_EXIT_PROFIT
+                        result_type = PositionResultType.TIME_EXIT_PROFIT
                         runner_exit_reason = "ema9_max_success_above_tp1"
                         runner_final_classification = "success_above_tp1"
                     elif close < (entry_price - self._EPSILON):
-                        result_type = TradeResultType.SL
+                        result_type = PositionResultType.SL
                         runner_exit_reason = "ema9_max_loss_below_entry"
                         runner_final_classification = "loss_below_entry"
                     else:
-                        result_type = TradeResultType.TP1_BE
+                        result_type = PositionResultType.TP1_BE
                         runner_exit_reason = "ema9_max_be_below_tp1"
                         runner_final_classification = "be_below_tp1"
                     runner_realized_pnl = self._net_leg_pnl(
@@ -8363,15 +8396,15 @@ class PnoEngine:
                     runner_exit_price = runner_stop_after_tp1
                     runner_exit_idx = idx
                     if runner_stop_after_tp1 > (tp1 + self._EPSILON):
-                        result_type = TradeResultType.TIME_EXIT_PROFIT
+                        result_type = PositionResultType.TIME_EXIT_PROFIT
                         runner_exit_reason = "trail_success_above_tp1"
                         runner_final_classification = "success_above_tp1"
                     elif runner_stop_after_tp1 < (entry_price - self._EPSILON):
-                        result_type = TradeResultType.SL
+                        result_type = PositionResultType.SL
                         runner_exit_reason = "trail_loss_below_entry"
                         runner_final_classification = "loss_below_entry"
                     else:
-                        result_type = TradeResultType.TP1_BE
+                        result_type = PositionResultType.TP1_BE
                         runner_exit_reason = "trail_be_below_tp1"
                         runner_final_classification = "be_below_tp1"
                     runner_realized_pnl = self._net_leg_pnl(
@@ -8402,15 +8435,15 @@ class PnoEngine:
                     runner_exit_price = close
                     runner_exit_idx = idx
                     if close > (tp1 + self._EPSILON):
-                        result_type = TradeResultType.TIME_EXIT_PROFIT
+                        result_type = PositionResultType.TIME_EXIT_PROFIT
                         runner_exit_reason = "final_success_above_tp1"
                         runner_final_classification = "success_above_tp1"
                     elif close < (entry_price - self._EPSILON):
-                        result_type = TradeResultType.SL
+                        result_type = PositionResultType.SL
                         runner_exit_reason = "final_loss_below_entry"
                         runner_final_classification = "loss_below_entry"
                     else:
-                        result_type = TradeResultType.TP1_BE
+                        result_type = PositionResultType.TP1_BE
                         runner_exit_reason = "final_be_below_tp1"
                         runner_final_classification = "be_below_tp1"
                     runner_realized_pnl = self._net_leg_pnl(
@@ -8424,11 +8457,11 @@ class PnoEngine:
 
         if category == "incomplete":
             return None, entry_idx
-        if result_type not in {TradeResultType.SL, TradeResultType.BE, TradeResultType.TP1_BE, TradeResultType.TIME_EXIT_PROFIT}:
+        if result_type not in {PositionResultType.SL, PositionResultType.BE, PositionResultType.TP1_BE, PositionResultType.TIME_EXIT_PROFIT}:
             return None, entry_idx
 
-        trade_metadata = dict(metadata)
-        trade_metadata.update(
+        position_metadata = dict(metadata)
+        position_metadata.update(
             {
                 "category": category,
                 "be_fee": round(float(be_fee), 8),
@@ -8480,10 +8513,10 @@ class PnoEngine:
                 "tp1_hit_share": round(float(tp1_share), 4) if tp1_hit else 0.0,
                 "tp2_hit": False,
                 "tp2_disabled": True,
-                "trade_complete": True,
+                "position_complete": True,
             }
         )
-        trade = TradeResult(
+        position = PositionResult(
             entry_price=Price(entry_price),
             exit_price=Price(exit_price),
             entry_timestamp_ms=int(one.timestamps[entry_idx]),
@@ -8495,9 +8528,9 @@ class PnoEngine:
             retest_timestamp_ms=None,
             pump_to_peak_bars=int(metadata["pump_to_peak_bars"]),
             pump_to_peak_minutes=float(metadata["pump_to_peak_minutes"]),
-            metadata=trade_metadata,
+            metadata=position_metadata,
         )
-        return trade, exit_idx
+        return position, exit_idx
 
     def _resolve_position_size(
         self,
@@ -8506,12 +8539,12 @@ class PnoEngine:
         entry_price: float,
         stop_loss: float,
     ) -> float:
-        configured_trade_risk = params.pno_r_trade if params.pno_r_trade is not None else (params.pno_deposit * params.pno_risk_pct)
-        trade_risk = min(float(configured_trade_risk), float(params.pno_deposit) * float(PNO_DEFAULT_RISK_PCT))
+        configured_position_risk = params.pno_r_position if params.pno_r_position is not None else (params.pno_deposit * params.pno_risk_pct)
+        position_risk = min(float(configured_position_risk), float(params.pno_deposit) * float(PNO_DEFAULT_RISK_PCT))
         stop_distance = entry_price - stop_loss
-        if trade_risk <= 0.0 or stop_distance <= self._EPSILON:
+        if position_risk <= 0.0 or stop_distance <= self._EPSILON:
             return 0.0
-        return float(trade_risk) / float(stop_distance)
+        return float(position_risk) / float(stop_distance)
 
     def _build_confirmed_high_map(
         self,
@@ -8861,13 +8894,13 @@ class PnoEngine:
         return gross - fees
 
     @staticmethod
-    def _classify_time_exit_result(pnl: float) -> TradeResultType:
+    def _classify_time_exit_result(pnl: float) -> PositionResultType:
         epsilon = 1e-9
         if pnl < -epsilon:
-            return TradeResultType.SL
+            return PositionResultType.SL
         if pnl > epsilon:
-            return TradeResultType.TIME_EXIT_PROFIT
-        return TradeResultType.BE
+            return PositionResultType.TIME_EXIT_PROFIT
+        return PositionResultType.BE
 
     @staticmethod
     def _to_percent(value: float, base: float) -> float:

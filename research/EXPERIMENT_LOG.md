@@ -11,16 +11,16 @@
 PNO-кандидат перспективен, если:
 
 ```text
-50+ сделок/год
+50+ позиций/год
 winrate > 0.40
-average trade > +1.0%
+average position > +1.0%
 помесячно преимущественно положительно
-нет зависимости от top-1/3/5 сделок
+нет зависимости от top-1/3/5 позиций
 нет leakage/lookahead
 нет явной переоптимизации
 ```
 
-При малом числе сделок или `trades=0` анализировать только:
+При малом числе позиций или `positions=0` анализировать только:
 
 ```text
 funnel
@@ -39,7 +39,7 @@ data quality
 | E002 | Same window + true trade-count | PLANNED   | Проверить Stage1/flow на real trade-count.               |
 | E003 | Entry TF comparison            | PLANNED   | Сравнить `5m/30s`, `5m/15s`, `1m/5s`.                    |
 | E004 | `touch + retest hold`          | IDEA ONLY | Только отдельный режим, не замена `close_above`.         |
-| E005 | Year robustness test           | PLANNED   | Проверить 50+ trades/year, months, top-trade dependency. |
+| E005 | Year robustness test           | PLANNED   | Проверить 50+ positions/year, months, top-position dependency. |
 | E006 | `5m/30s` 31-day diagnostics run | ANALYZED  | 2 SL trades; diagnostics export has logging-format bug. |
 | E007 | `1.zip` multi-TF 31-day diagnostics | ANALYZED | Edge not proven; `human_bos` stale-level bypass and Stage1 chart sampling issue found. |
 
@@ -160,14 +160,14 @@ entry_price_above_tp1
 actual_entry_pos_too_high
 net_rr_too_low
 TP1 hit rate
-average trade
+average position
 expectancy
 ```
 
 Правило:
 
 ```text
-больше сделок ≠ лучше, если вырос fake reclaim / плохой RR
+больше позиций ≠ лучше, если вырос fake reclaim / плохой RR
 ```
 
 ---
@@ -207,8 +207,8 @@ Status: PLANNED
 Проверить:
 
 ```text
-trades/year
-average trade
+positions/year
+average position
 winrate
 expectancy
 annualized return
@@ -224,7 +224,7 @@ regime concentration
 
 ```text
 год держится на одном месяце
-результат держится на 1–5 сделках
+результат держится на 1–5 позициях
 слишком мало trades
 edge только в одном режиме
 ```
@@ -276,34 +276,34 @@ Status: ANALYZED
 Date: 2026-05-04
 Code state: README.zip / codex/ideal-like snapshot, exact commit UNKNOWN
 Config: --pno-all-tf-pairs, close_above, discovery
-Data quality: levels trade-count = number_of_trades; 5m/30s entry trade-count partly volume_proxy; entry quote_volume = close_volume_proxy
+Data quality: Stage4/Stage5 near-miss symbols have real number_of_trades; quote_volume must be real USDT not close*volume proxy.
 ```
 
 Result:
 
 ```text
-1m/5s: 0 trades
-5m/15s: 2 trades, roughly flat TP1_BE only
-5m/30s: 4 trades, -4.4104%, 3 SL + 1 TP1_BE
-5m/30s funnel: Stage1 44, Stage2 34, Stage3 11, Stage4 29 rows / 14 unique, Stage5 4 trades
+1m/5s: 0 positions
+5m/15s: 0 positions
+5m/30s: 0 positions
+5m/30s funnel: Stage1 44, Stage2 34, Stage3 11, Stage4 35 rows / 15 unique, Stage5 1 unique setup / 0 positions
 ```
 
 Evidence:
 
 ```text
-All 5m/30s trades used structure_source=human_bos. GUA and MAGMA entered stale/lower BOS levels under prior or later local highs, not clean current reclaim levels. Stage1 rejected reasons such as counterflow_ratio_5m_too_high lacked charts because near-threshold selector returned zero rows.
+Current 1.zip has zero simulated positions. Stage5 rows are repeated reviews of one setup, not independent opportunities. Stage1 rejected reasons such as flow_window_no_price_growth, pump_candidate_pretrend_too_weak, pump_nonorganic_tape and active_flow_faded_before_structure lacked chart samples.
 ```
 
 Limitations:
 
 ```text
-Small trade count; PnL not enough for edge conclusion. Entry flow/tape quality limited by proxy fields.
+Zero positions; PnL/edge/winrate are not evaluable. Previous 0/2/4 trades note was stale relative to current artifacts.
 ```
 
 Conclusion:
 
 ```text
-Do not optimize PnL. First fix human_bos validity and diagnostics sampling, then rerun same window and compare funnel/reject distribution.
+Do not optimize PnL. First fix terminology, strict quote_volume USDT/trade-count requirements, diagnostics coverage and Stage5 unique setup summary; then rerun same window and compare funnel/reject distribution.
 ```
 
 One next test:

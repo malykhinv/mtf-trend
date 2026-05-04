@@ -1,4 +1,4 @@
-"""Модель данных для визуализации завершенной сделки."""
+"""Модель данных для визуализации завершенной позиции."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from domain.enums.position_side import PositionSide
 
 
 @dataclass(frozen=True, slots=True)
-class TradePlotSpan:
+class PositionPlotSpan:
     symbol: str
     side: PositionSide
     level_start_timestamp_ms: int

@@ -30,7 +30,7 @@ Stage1: Pump
 Stage2: High Pullback
 Stage3: Valid Pullback
 Stage4: Level / BOS Setup
-Stage5: Trade
+Stage5: Position
 ```
 
 ---
@@ -42,15 +42,15 @@ Stage5: Trade
 ```text
 быстрое направленное движение
 рост объёма
-рост trade-count, если данные есть
-достаточный quote_volume
+рост real trade-count
+достаточный real quote_volume в USDT
 нормальные тела свечей
 не один верхний фитиль
 не frozen/zero-body tape
 не тонкая ликвидность
 ```
 
-Если trade-count заменён volume proxy, оценка organic flow неполная.
+Если real trade-count или quote_volume USDT отсутствуют, PNO не должен заменять их volume/close*volume proxy; символ должен явно отклоняться по data quality.
 
 ---
 
@@ -66,7 +66,7 @@ TP1
 проверка, не опоздал ли entry
 ```
 
-Если TP1/active high достигнут до executable entry, сделка часто invalid.
+Если TP1/active high достигнут до executable entry, позиция часто invalid.
 
 ---
 

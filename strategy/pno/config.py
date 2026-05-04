@@ -45,7 +45,7 @@ class PnoParams:
     entry_timeframe: Timeframe = PNO_DEFAULT_ENTRY_TIMEFRAME
     pno_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
     pno_risk_pct: float = PNO_DEFAULT_RISK_PCT
-    pno_r_trade: float | None = None
+    pno_r_position: float | None = None
     fee_rate: float = DEFAULT_COMMISSION_RATE
     min_data_5m: int = 300
     min_data_1m: int = 60
@@ -239,8 +239,8 @@ def validate_pno_params(params: PnoParams) -> None:
         raise ValueError("pno_deposit must be > 0")
     if params.pno_risk_pct <= 0.0 or params.pno_risk_pct > 1.0:
         raise ValueError("pno_risk_pct must be in range (0, 1]")
-    if params.pno_r_trade is not None and params.pno_r_trade <= 0.0:
-        raise ValueError("pno_r_trade must be > 0 when provided")
+    if params.pno_r_position is not None and params.pno_r_position <= 0.0:
+        raise ValueError("pno_r_position must be > 0 when provided")
     if params.min_stage1_leg_v1 <= 0.0:
         raise ValueError("min_stage1_leg_v1 must be > 0")
     if params.min_stage1_leg_v5_fraction <= 0.0:
@@ -583,5 +583,5 @@ def with_pno_risk(params: PnoParams, *, deposit: float, risk_pct: float) -> PnoP
         params,
         pno_deposit=deposit,
         pno_risk_pct=effective_risk_pct,
-        pno_r_trade=deposit * effective_risk_pct,
+        pno_r_position=deposit * effective_risk_pct,
     )

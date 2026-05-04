@@ -1,28 +1,28 @@
-"""Классификация результатов сделки и расчеты прибыли/убытка."""
+"""Классификация результатов позиции и расчеты прибыли/убытка."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from domain.enums.trade_result_type import TradeResultType
+from domain.enums.position_result_type import PositionResultType
 from domain.models.position import Position
-from domain.models.trade_result import TradeResult
+from domain.models.position_result import PositionResult
 from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
 
 
 @dataclass(frozen=True, slots=True)
-class TradeClassifier:
-    """Формирует итоговые результаты сделки из состояния симулятора."""
+class PositionResultClassifier:
+    """Формирует итоговые результаты позиции из состояния симулятора."""
 
     @staticmethod
-    def classify_result_type(*, tp1_done: bool, exit_at_breakeven: bool, exit_at_tp2: bool) -> TradeResultType:
-        """Определяет тип исхода сделки по её параметрам."""
+    def classify_result_type(*, tp1_done: bool, exit_at_breakeven: bool, exit_at_tp2: bool) -> PositionResultType:
+        """Определяет тип исхода позиции по её параметрам."""
         if exit_at_tp2:
-            return TradeResultType.TP2
+            return PositionResultType.TP2
         if exit_at_breakeven:
-            return TradeResultType.TP1_BE if tp1_done else TradeResultType.BE
-        return TradeResultType.SL
+            return PositionResultType.TP1_BE if tp1_done else PositionResultType.BE
+        return PositionResultType.SL
 
     @staticmethod
     def build_result(
@@ -30,13 +30,13 @@ class TradeClassifier:
         position: Position,
         exit_price: float,
         exit_timestamp_ms: int,
-        result_type: TradeResultType,
+        result_type: PositionResultType,
         pnl: float,
-    ) -> TradeResult:
-        """Формирует объект результата классификации сделки."""
+    ) -> PositionResult:
+        """Формирует объект результата классификации позиции."""
         entry_notional = position.entry_price.value * position.size.value
         pnl_percent_value = 0.0 if entry_notional == 0 else (pnl / entry_notional) * 100
-        return TradeResult(
+        return PositionResult(
             entry_price=position.entry_price,
             exit_price=Price(exit_price),
             entry_timestamp_ms=position.entry_timestamp_ms,

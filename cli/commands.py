@@ -53,7 +53,7 @@ from strategy.pno.config import (
     resolve_pno_default_timeframe_pair,
     validate_pno_timeframe_pair,
 )
-from strategy.pno.engine import PNO_STAGE_4_LEVEL, PNO_STAGE_5_TRADE, PNO_STAGE_SEQUENCE
+from strategy.pno.engine import PNO_STAGE_4_LEVEL, PNO_STAGE_5_POSITION, PNO_STAGE_SEQUENCE
 from utils.logger import get_logger
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
@@ -62,7 +62,7 @@ from cli.pno_diagnostics import (
     _export_pno_research_context,
     _export_pno_stage_reviews,
     _read_csv_or_empty,
-    _render_pno_trade_charts_for_symbol,
+    _render_pno_position_charts_for_symbol,
     _safe_float,
     _safe_int,
     _select_stage_review_rejection_rows,
@@ -299,15 +299,15 @@ def _build_stage5_review_rejections_from_stage4(
     symbol_frames: dict[str, SymbolMtfFrames],
     stage_rows_by_stage: dict[str, list[dict[str, object]]],
     stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
-    trade_rows: list[dict[str, object]],
+    position_rows: list[dict[str, object]],
     min_score: float,
 ) -> None:
     existing_stage5_keys: set[str] = set()
-    for row in trade_rows:
+    for row in position_rows:
         key = _resolve_pno_stage_cycle_key(row)
         if key is not None:
             existing_stage5_keys.add(key)
-    for rows in stage_rejections_by_stage.get(PNO_STAGE_5_TRADE, {}).values():
+    for rows in stage_rejections_by_stage.get(PNO_STAGE_5_POSITION, {}).values():
         for row in rows:
             key = _resolve_pno_stage_cycle_key(row)
             if key is not None:
@@ -356,7 +356,7 @@ def _build_stage5_review_rejections_from_stage4(
         synthetic_rows.setdefault(reason, []).append(
             {
                 **row,
-                "stage_id": PNO_STAGE_5_TRADE,
+                "stage_id": PNO_STAGE_5_POSITION,
                 "reason": reason,
                 "timestamp_ms": int(signal_row["timestamp"]),
                 "entry_signal_timestamp_ms": int(signal_row["timestamp"]),
@@ -366,7 +366,7 @@ def _build_stage5_review_rejections_from_stage4(
         )
 
     for reason, rows in synthetic_rows.items():
-        stage_rejections_by_stage[PNO_STAGE_5_TRADE].setdefault(reason, []).extend(rows)
+        stage_rejections_by_stage[PNO_STAGE_5_POSITION].setdefault(reason, []).extend(rows)
 
 
 def _resolve_strategy_id(args: argparse.Namespace) -> str:
@@ -424,7 +424,7 @@ def _write_backtest_run_context(
     payload = {
         "strategy_id": strategy_id,
         "strategy_results_rel_dir": str(Path("strategy") / strategy_id),
-        "trade_plots_rel_dir": str(Path("strategy") / strategy_id / "trade_plots"),
+        "position_plots_rel_dir": str(Path("strategy") / strategy_id / "position_plots"),
         "results_file_name": results_file_name,
         "levels_tf": levels_timeframe.value,
         "entry_tf": entry_timeframe.value,
@@ -477,7 +477,7 @@ def _build_plot_backtest_args(
 ) -> argparse.Namespace:
     strategy_id = str(context.get("strategy_id") or "pno")
     strategy_results_rel_dir = Path(str(context.get("strategy_results_rel_dir") or (Path("strategy") / strategy_id)))
-    trade_plots_rel_dir = Path(str(context.get("trade_plots_rel_dir") or (strategy_results_rel_dir / "trade_plots")))
+    position_plots_rel_dir = Path(str(context.get("position_plots_rel_dir") or (strategy_results_rel_dir / "position_plots")))
     results_file_name = str(context.get("results_file_name") or DEFAULT_BACKTEST_OUTPUT_FILE)
     raw_symbols = context.get("symbols")
     symbols = list(raw_symbols) if isinstance(raw_symbols, list) else None
@@ -502,7 +502,7 @@ def _build_plot_backtest_args(
         light_run=None,
         plot_from_results=True,
         results_input=str(run_root_dir / strategy_results_rel_dir / results_file_name),
-        output_dir=str(run_root_dir / trade_plots_rel_dir),
+        output_dir=str(run_root_dir / position_plots_rel_dir),
         id=None,
         row_number=request.get("selected_row_number"),
     )
@@ -603,15 +603,15 @@ def _export_pno_category_artifacts(
     log_prefix: str,
 ) -> None:
     category_meta: dict[str, tuple[str, int]] = {}
-    for trade_row in cast(list[dict[str, object]], export_result.get("all_trade_rows", [])):
-        category_id = str(trade_row.get("pno_category_id") or "")
+    for position_row in cast(list[dict[str, object]], export_result.get("all_position_rows", [])):
+        category_id = str(position_row.get("pno_category_id") or "")
         if not category_id:
             continue
         category_meta.setdefault(
             category_id,
             (
-                str(trade_row.get("pno_category_label") or category_id),
-                int(trade_row.get("pno_category_priority") or 0),
+                str(position_row.get("pno_category_label") or category_id),
+                int(position_row.get("pno_category_priority") or 0),
             ),
         )
     for rows in cast(dict[str, list[dict[str, object]]], export_result.get("stage_rows_by_stage", {})).values():
@@ -660,7 +660,7 @@ def _export_pno_category_artifacts(
         category_charts_dir = category_diagnostics_dir / "charts"
         category_charts_dir.mkdir(parents=True, exist_ok=True)
 
-        category_trade_rows_all: list[dict[str, object]] = []
+        category_position_rows_all: list[dict[str, object]] = []
         category_symbols = 0
         for item in diagnostics_payloads:
             symbol = str(item["symbol"])
@@ -669,22 +669,22 @@ def _export_pno_category_artifacts(
             if not root_payload_path.exists():
                 continue
             root_payload = json.loads(root_payload_path.read_text(encoding="utf-8"))
-            trade_rows_all = list(item.get("trade_rows") or [])
-            filtered_trade_rows = _filter_pno_rows_by_category(trade_rows_all, category_id=category_id)
+            position_rows_all = list(item.get("position_rows") or [])
+            filtered_position_rows = _filter_pno_rows_by_category(position_rows_all, category_id=category_id)
             diagnostics_payload = dict(item.get("diagnostics") or {})
             stage_events = _filter_pno_rows_by_category(list(diagnostics_payload.get("stage_events") or []), category_id=category_id)
             stage_rejections = _filter_pno_rows_by_category(list(diagnostics_payload.get("stage_rejections") or []), category_id=category_id)
-            if not filtered_trade_rows and not stage_events and not stage_rejections:
+            if not filtered_position_rows and not stage_events and not stage_rejections:
                 continue
             category_symbols += 1
-            category_trade_rows_all.extend(filtered_trade_rows)
+            category_position_rows_all.extend(filtered_position_rows)
             chart_paths_root = list(root_payload.get("chart_paths") or [])
             selected_chart_paths: list[str] = []
-            if chart_paths_root and len(chart_paths_root) == len(trade_rows_all):
-                for trade_index, trade_row in enumerate(trade_rows_all):
-                    if str(trade_row.get("pno_category_id") or "") != category_id:
+            if chart_paths_root and len(chart_paths_root) == len(position_rows_all):
+                for position_index, position_row in enumerate(position_rows_all):
+                    if str(position_row.get("pno_category_id") or "") != category_id:
                         continue
-                    source_chart = Path(str(chart_paths_root[trade_index]))
+                    source_chart = Path(str(chart_paths_root[position_index]))
                     if not source_chart.exists():
                         continue
                     target_chart = category_charts_dir / source_chart.name
@@ -692,22 +692,22 @@ def _export_pno_category_artifacts(
                     selected_chart_paths.append(str(target_chart))
             payload = {
                 "symbol": symbol,
-                "trades_generated": len(filtered_trade_rows),
+                "positions_generated": len(filtered_position_rows),
                 "diagnostics": {
                     **diagnostics_payload,
-                    "trades_generated": len(filtered_trade_rows),
+                    "positions_generated": len(filtered_position_rows),
                     "stage_events": stage_events,
                     "stage_rejections": stage_rejections,
                 },
-                "trades": filtered_trade_rows,
+                "positions": filtered_position_rows,
                 "chart_paths": selected_chart_paths,
             }
             (category_diagnostics_dir / f"{base_name}_diagnostics.json").write_text(
                 _to_compact_json(payload),
                 encoding="utf-8",
             )
-            if filtered_trade_rows:
-                pd.DataFrame(filtered_trade_rows).to_csv(category_diagnostics_dir / f"{base_name}_trades.csv", index=False)
+            if filtered_position_rows:
+                pd.DataFrame(filtered_position_rows).to_csv(category_diagnostics_dir / f"{base_name}_positions.csv", index=False)
 
         _write_pno_category_research_context(
             source_diagnostics_dir=diagnostics_dir,
@@ -738,7 +738,7 @@ def _export_pno_category_artifacts(
             "category_label": category_label,
             "category_priority": category_priority,
             "symbols": category_symbols,
-            "trades_generated": len(category_trade_rows_all),
+            "positions_generated": len(category_position_rows_all),
         }
         (category_root / "category_context.json").write_text(_to_compact_json(context_payload), encoding="utf-8")
     logger.debug(
@@ -793,12 +793,12 @@ def _plot_pno_grid_artifacts(
     diagnostics_cache: BacktestGenerationDiagnosticsCache | None = None,
 ) -> bool:
     resolved_rows = _resolve_pno_artifact_rows(results)
-    shared_stage_ids = tuple(stage_id for stage_id in PNO_STAGE_SEQUENCE if stage_id != PNO_STAGE_5_TRADE)
+    shared_stage_ids = tuple(stage_id for stage_id in PNO_STAGE_SEQUENCE if stage_id != PNO_STAGE_5_POSITION)
     shared_diagnostics_dir: Path | None = None
     for index, (artifact_name, params_row) in enumerate(resolved_rows):
         scoped_args = _clone_args_with_output_dir(
             args,
-            output_dir=Path(config.backtest.results_dir) / "trade_plots" / artifact_name,
+            output_dir=Path(config.backtest.results_dir) / "position_plots" / artifact_name,
         )
         if index == 0:
             if not _plot_for_strategy_dispatch(
@@ -849,7 +849,7 @@ def _export_pno_grid_artifacts_without_stage_charts(
     diagnostics_cache: BacktestGenerationDiagnosticsCache | None = None,
 ) -> None:
     for artifact_name, params_row in _resolve_pno_artifact_rows(results):
-        output_dir = Path(config.backtest.results_dir) / "trade_plots" / artifact_name
+        output_dir = Path(config.backtest.results_dir) / "position_plots" / artifact_name
         diagnostics_dir = output_dir / "pno_diagnostics"
         export_result = _export_pno_diagnostics_context_for_symbols(
             diagnostics_dir=diagnostics_dir,
@@ -862,7 +862,7 @@ def _export_pno_grid_artifacts_without_stage_charts(
             entry_timeframe=entry_timeframe,
             diagnostics_cache=diagnostics_cache,
         )
-        _render_pno_trade_charts_from_export_result(
+        _render_pno_position_charts_from_export_result(
             diagnostics_dir=diagnostics_dir,
             export_result=export_result,
             logger=logger,
@@ -925,7 +925,7 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
     shared_stage_ids: tuple[str, ...],
     diagnostics_cache: BacktestGenerationDiagnosticsCache | None = None,
 ) -> None:
-    output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
+    output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "position_plots"))
     diagnostics_dir = output_dir / "pno_diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     export_result = _export_pno_diagnostics_context_for_symbols(
@@ -939,7 +939,7 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
         entry_timeframe=entry_timeframe,
         diagnostics_cache=diagnostics_cache,
     )
-    total_charts_generated = _render_pno_trade_charts_from_export_result(
+    total_charts_generated = _render_pno_position_charts_from_export_result(
         diagnostics_dir=diagnostics_dir,
         export_result=export_result,
         logger=None,
@@ -952,7 +952,7 @@ def _plot_pno_diagnostics_with_shared_stage_reviews(
             dict[str, dict[str, list[dict[str, object]]]],
             export_result["stage_rejections_by_stage"],
         ),
-        selected_stage_ids=(PNO_STAGE_5_TRADE,),
+        selected_stage_ids=(PNO_STAGE_5_POSITION,),
         render_charts=True,
         passed_chart_stage_ids=(),
         logger=logger,
@@ -1021,10 +1021,10 @@ def _build_pno_params_template_from_row(
     )
     deposit = _optional_float("pno_deposit") or defaults.pno_deposit
     risk_pct = _optional_float("pno_risk_pct")
-    r_trade = _optional_float("pno_r_trade")
+    r_position = _optional_float("pno_r_position")
     if risk_pct is None:
-        risk_pct = (r_trade / deposit) if r_trade is not None else defaults.pno_risk_pct
-    resolved_trade_risk = r_trade if r_trade is not None else deposit * risk_pct
+        risk_pct = (r_position / deposit) if r_position is not None else defaults.pno_risk_pct
+    resolved_position_risk = r_position if r_position is not None else deposit * risk_pct
 
     return PnoParams(
         symbol="",
@@ -1037,7 +1037,7 @@ def _build_pno_params_template_from_row(
         entry_timeframe=entry_timeframe,
         pno_deposit=deposit,
         pno_risk_pct=risk_pct,
-        pno_r_trade=resolved_trade_risk,
+        pno_r_position=resolved_position_risk,
         fee_rate=_float_or_default("pno_fee_rate", defaults.fee_rate),
         min_data_5m=_int_or_default("pno_min_data_5m", defaults.min_data_5m),
         min_data_1m=_int_or_default("pno_min_data_1m", defaults.min_data_1m),
@@ -1257,15 +1257,15 @@ def _build_pno_params_from_row(
     return replace(template, symbol=symbol)
 
 
-def _flatten_trade_for_diagnostics(trade: object) -> dict[str, object]:
+def _flatten_position_for_diagnostics(position: object) -> dict[str, object]:
     payload = {
-        "entry_timestamp_ms": int(getattr(trade, "entry_timestamp_ms")),
-        "exit_timestamp_ms": int(getattr(trade, "exit_timestamp_ms")),
-        "pnl": float(getattr(trade, "pnl")),
-        "pnl_percent": float(getattr(getattr(trade, "pnl_percent"), "value", getattr(trade, "pnl_percent"))),
-        "result_type": str(getattr(getattr(trade, "result_type"), "value", getattr(trade, "result_type"))),
+        "entry_timestamp_ms": int(getattr(position, "entry_timestamp_ms")),
+        "exit_timestamp_ms": int(getattr(position, "exit_timestamp_ms")),
+        "pnl": float(getattr(position, "pnl")),
+        "pnl_percent": float(getattr(getattr(position, "pnl_percent"), "value", getattr(position, "pnl_percent"))),
+        "result_type": str(getattr(getattr(position, "result_type"), "value", getattr(position, "result_type"))),
     }
-    metadata = getattr(trade, "metadata", None)
+    metadata = getattr(position, "metadata", None)
     if isinstance(metadata, dict):
         payload.update(metadata)
     return payload
@@ -1318,7 +1318,7 @@ def _plot_pno_diagnostics_for_symbols(
     log_prefix: str,
     diagnostics_cache: BacktestGenerationDiagnosticsCache | None = None,
 ) -> None:
-    output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "trade_plots"))
+    output_dir = Path(getattr(args, "output_dir", None) or (config.backtest.results_dir / "position_plots"))
     diagnostics_dir = output_dir / "pno_diagnostics"
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
     export_result = _export_pno_diagnostics_context_for_symbols(
@@ -1336,21 +1336,21 @@ def _plot_pno_diagnostics_for_symbols(
     charts_dir.mkdir(parents=True, exist_ok=True)
     total_charts_generated = 0
     diagnostics_payloads = cast(list[dict[str, object]], export_result.get("diagnostics_payloads", []))
-    chart_symbols_total = sum(1 for item in diagnostics_payloads if item["trade_rows"])
+    chart_symbols_total = sum(1 for item in diagnostics_payloads if item["position_rows"])
     chart_symbols_done = 0
     chart_render_start_time = time.monotonic()
     if chart_symbols_total > 0:
         logger.warning("Графики: генерация")
     for item in diagnostics_payloads:
         symbol = str(item["symbol"])
-        trade_rows = list(item["trade_rows"])
-        if not trade_rows:
+        position_rows = list(item["position_rows"])
+        if not position_rows:
             continue
-        chart_paths = _render_pno_trade_charts_for_symbol(
+        chart_paths = _render_pno_position_charts_for_symbol(
             charts_dir=charts_dir,
             symbol=symbol,
             mtf_frames=item["mtf_frames"],
-            trade_rows=trade_rows,
+            position_rows=position_rows,
             seconds_frame_provider=item.get("seconds_frame_provider"),
         )
         total_charts_generated += len(chart_paths)
@@ -1398,20 +1398,20 @@ def _plot_pno_diagnostics_for_symbols(
     )
 
     logger.debug(
-        "%s: pno diagnostics saved stage_symbols=%s stage_events=%s trades_generated=%s charts_generated=%s stages=%s output_dir=%s",
+        "%s: pno diagnostics saved stage_symbols=%s stage_events=%s positions_generated=%s charts_generated=%s stages=%s output_dir=%s",
         log_prefix,
         export_result["symbols_with_stage_events"],
         export_result["total_stage_events"],
-        export_result["total_trades_generated"],
+        export_result["total_positions_generated"],
         total_charts_generated,
         ",".join(cast(tuple[str, ...], export_result["selected_stage_ids"])),
         diagnostics_dir,
     )
-    if export_result["total_stage_events"] == 0 and export_result["symbols_with_trades"] == 0:
-        logger.debug("Нет событий и сделок для визуализации")
+    if export_result["total_stage_events"] == 0 and export_result["symbols_with_positions"] == 0:
+        logger.debug("Нет событий и позиций для визуализации")
 
 
-def _render_pno_trade_charts_from_export_result(
+def _render_pno_position_charts_from_export_result(
     *,
     diagnostics_dir: Path,
     export_result: dict[str, object],
@@ -1421,21 +1421,21 @@ def _render_pno_trade_charts_from_export_result(
     charts_dir.mkdir(parents=True, exist_ok=True)
     total_charts_generated = 0
     diagnostics_payloads = cast(list[dict[str, object]], export_result.get("diagnostics_payloads", []))
-    chart_symbols_total = sum(1 for item in diagnostics_payloads if item["trade_rows"])
+    chart_symbols_total = sum(1 for item in diagnostics_payloads if item["position_rows"])
     chart_symbols_done = 0
     chart_render_start_time = time.monotonic()
     if chart_symbols_total > 0:
         logger.warning("Графики: генерация")
     for item in diagnostics_payloads:
         symbol = str(item["symbol"])
-        trade_rows = list(item["trade_rows"])
-        if not trade_rows:
+        position_rows = list(item["position_rows"])
+        if not position_rows:
             continue
-        chart_paths = _render_pno_trade_charts_for_symbol(
+        chart_paths = _render_pno_position_charts_for_symbol(
             charts_dir=charts_dir,
             symbol=symbol,
             mtf_frames=item["mtf_frames"],
-            trade_rows=trade_rows,
+            position_rows=position_rows,
             seconds_frame_provider=item.get("seconds_frame_provider"),
         )
         total_charts_generated += len(chart_paths)
@@ -1464,7 +1464,7 @@ def _render_pno_trade_charts_from_export_result(
     return total_charts_generated
 
 
-def _render_pno_trade_charts_only(
+def _render_pno_position_charts_only(
     *,
     output_dir: Path,
     logger: Logger,
@@ -1476,8 +1476,8 @@ def _render_pno_trade_charts_only(
 ) -> int:
     charts_dir = output_dir / "charts"
     charts_dir.mkdir(parents=True, exist_ok=True)
-    trades_dir = output_dir / "trades"
-    trades_dir.mkdir(parents=True, exist_ok=True)
+    positions_dir = output_dir / "positions"
+    positions_dir.mkdir(parents=True, exist_ok=True)
     pno_params_template = _build_pno_params_template_from_row(
         params_row,
         levels_timeframe=levels_timeframe,
@@ -1487,38 +1487,38 @@ def _render_pno_trade_charts_only(
     total_symbols = len(symbol_frames)
     total_charts_generated = 0
     processed_symbols = 0
-    all_trade_rows: list[dict[str, object]] = []
+    all_position_rows: list[dict[str, object]] = []
     render_started_at = time.monotonic()
     if total_symbols > 0:
         logger.warning("Графики: генерация")
     for symbol, mtf_frames in symbol_frames.items():
         params = replace(pno_params_template, symbol=symbol)
-        trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
-        trade_rows = [_flatten_trade_for_diagnostics(trade) for trade in trades]
-        if trade_rows:
-            chart_paths = _render_pno_trade_charts_for_symbol(
+        positions = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+        position_rows = [_flatten_position_for_diagnostics(position) for position in positions]
+        if position_rows:
+            chart_paths = _render_pno_position_charts_for_symbol(
                 charts_dir=charts_dir,
                 symbol=symbol,
                 mtf_frames=mtf_frames,
-                trade_rows=trade_rows,
+                position_rows=position_rows,
                 seconds_frame_provider=getattr(strategy, "_seconds_provider", None),
             )
             total_charts_generated += len(chart_paths)
             exported_rows: list[dict[str, object]] = []
-            for trade_index, trade_row in enumerate(trade_rows):
-                chart_path = str(chart_paths[trade_index]) if trade_index < len(chart_paths) else ""
+            for position_index, position_row in enumerate(position_rows):
+                chart_path = str(chart_paths[position_index]) if position_index < len(chart_paths) else ""
                 exported_row = {
                     **params_payload,
-                    **trade_row,
-                    "symbol": str(trade_row.get("symbol") or symbol),
+                    **position_row,
+                    "symbol": str(position_row.get("symbol") or symbol),
                     "levels_timeframe": levels_timeframe.value,
                     "entry_timeframe": entry_timeframe.value,
                     "chart_path": chart_path,
                 }
                 exported_rows.append(exported_row)
-                all_trade_rows.append(exported_row)
-            pd.DataFrame(exported_rows).to_csv(trades_dir / f"{_pno_output_symbol_stem(symbol)}_trades.csv", index=False)
-            pd.DataFrame(all_trade_rows).to_csv(output_dir / "all_trades.csv", index=False)
+                all_position_rows.append(exported_row)
+            pd.DataFrame(exported_rows).to_csv(positions_dir / f"{_pno_output_symbol_stem(symbol)}_positions.csv", index=False)
+            pd.DataFrame(all_position_rows).to_csv(output_dir / "all_positions.csv", index=False)
         processed_symbols += 1
         if total_symbols > 0 and (processed_symbols == total_symbols or processed_symbols % _PROGRESS_LOG_EVERY == 0):
             elapsed = max(time.monotonic() - render_started_at, 1e-9)
@@ -1534,17 +1534,17 @@ def _render_pno_trade_charts_only(
                     eta_seconds=eta_seconds,
                 ),
             )
-    if all_trade_rows:
-        all_trades_path = output_dir / "all_trades.csv"
-        pd.DataFrame(all_trade_rows).to_csv(all_trades_path, index=False)
-        logger.debug("Таблица сделок сохранена: строк %s, файл %s.", len(all_trade_rows), all_trades_path)
+    if all_position_rows:
+        all_positions_path = output_dir / "all_positions.csv"
+        pd.DataFrame(all_position_rows).to_csv(all_positions_path, index=False)
+        logger.debug("Таблица позиций сохранена: строк %s, файл %s.", len(all_position_rows), all_positions_path)
     logger.debug("Графики сохранены: файлов %s, папка %s.", total_charts_generated, charts_dir)
     if total_symbols > 0:
         logger.warning("Графики готовы")
     return total_charts_generated
 
 
-def _export_pno_grid_trade_charts_only(
+def _export_pno_grid_position_charts_only(
     *,
     config: AppConfig,
     logger: Logger,
@@ -1555,8 +1555,8 @@ def _export_pno_grid_trade_charts_only(
     entry_timeframe: Timeframe,
 ) -> None:
     for artifact_name, params_row in _resolve_pno_artifact_rows(results):
-        output_dir = Path(config.backtest.results_dir) / "trade_plots" / artifact_name
-        _render_pno_trade_charts_only(
+        output_dir = Path(config.backtest.results_dir) / "position_plots" / artifact_name
+        _render_pno_position_charts_only(
             output_dir=output_dir,
             logger=logger,
             strategy=strategy,
@@ -1573,23 +1573,23 @@ def _log_human_backtest_summary(
     results: pd.DataFrame,
 ) -> None:
     if results.empty:
-        logger.debug("Итог бэктеста пустой: сделок нет.")
+        logger.debug("Итог бэктеста пустой: позиций нет.")
         return
     best_row = results.iloc[0]
-    trades_count = int(best_row.get("trades_count", 0) or 0)
+    positions_count = int(best_row.get("positions_count", 0) or 0)
     win_rate = float(best_row.get("win_rate", 0.0) or 0.0) * 100.0
     pnl_percent = float(best_row.get("pnl_percent", 0.0) or 0.0)
     profit_factor = float(best_row.get("profit_factor", 0.0) or 0.0)
     max_drawdown_pct = float(best_row.get("max_drawdown_pct", 0.0) or 0.0)
-    avg_trade_pct = (pnl_percent / trades_count) if trades_count else 0.0
+    avg_position_pct = (pnl_percent / positions_count) if positions_count else 0.0
     runner_success_count = int(best_row.get("ppa_runner_success_above_tp1_count", 0) or 0)
     runner_be_count = int(best_row.get("ppa_runner_be_below_tp1_count", 0) or 0)
     runner_loss_count = int(best_row.get("ppa_runner_loss_below_entry_count", 0) or 0)
     logger.debug(
-        "%s сделок, винрейт %.1f%%, средний трейд %.2f%%, итог %.2f%%, профит-фактор %.2f, просадка %.2f%%.",
-        trades_count,
+        "%s позиций, винрейт %.1f%%, средняя позиция %.2f%%, итог %.2f%%, профит-фактор %.2f, просадка %.2f%%.",
+        positions_count,
         win_rate,
-        avg_trade_pct,
+        avg_position_pct,
         pnl_percent,
         profit_factor,
         max_drawdown_pct,
@@ -1601,6 +1601,42 @@ def _log_human_backtest_summary(
         runner_loss_count,
     )
 
+
+
+def _serialize_diagnostics_context_value(value: object) -> object:
+    if isinstance(value, (list, tuple, set)):
+        return "|".join(str(item) for item in value)
+    if isinstance(value, dict):
+        return _to_compact_json(value)
+    return value
+
+
+def _write_pno_diagnostics_coverage(*, diagnostics_dir: Path, rows: list[dict[str, object]]) -> None:
+    coverage_frame = pd.DataFrame(rows)
+    coverage_path = diagnostics_dir / "diagnostics_coverage.csv"
+    coverage_frame.to_csv(coverage_path, index=False)
+    if coverage_frame.empty:
+        pd.DataFrame([{"metric": "symbols_total", "value": 0}]).to_csv(
+            diagnostics_dir / "diagnostics_coverage_summary.csv",
+            index=False,
+        )
+        return
+    written_mask = coverage_frame["diagnostics_json_written"].astype(bool)
+    positions_mask = pd.to_numeric(coverage_frame.get("positions_generated", 0), errors="coerce").fillna(0).gt(0)
+    skipped_quality_mask = pd.to_numeric(
+        coverage_frame.get("skipped_market_data_quality", 0),
+        errors="coerce",
+    ).fillna(0).gt(0)
+    missing_symbols = coverage_frame.loc[~written_mask, "symbol"].astype(str).tolist()
+    summary_rows = [
+        {"metric": "symbols_total", "value": int(len(coverage_frame))},
+        {"metric": "diagnostics_json_written_count", "value": int(written_mask.sum())},
+        {"metric": "diagnostics_json_missing_count", "value": int((~written_mask).sum())},
+        {"metric": "symbols_with_positions_count", "value": int(positions_mask.sum())},
+        {"metric": "skipped_market_data_quality_count", "value": int(skipped_quality_mask.sum())},
+        {"metric": "missing_diagnostics_symbols", "value": "|".join(missing_symbols)},
+    ]
+    pd.DataFrame(summary_rows).to_csv(diagnostics_dir / "diagnostics_coverage_summary.csv", index=False)
 
 def _export_pno_diagnostics_context_for_symbols(
     *,
@@ -1619,12 +1655,13 @@ def _export_pno_diagnostics_context_for_symbols(
     selected_stage_id_set = set(selected_stage_ids)
     passed_chart_stage_ids = ()
 
-    symbols_with_trades = 0
+    symbols_with_positions = 0
     symbols_with_stage_events = 0
-    total_trades_generated = 0
+    total_positions_generated = 0
     total_stage_events = 0
-    all_trade_rows: list[dict[str, object]] = []
+    all_position_rows: list[dict[str, object]] = []
     diagnostics_payloads: list[dict[str, object]] = []
+    coverage_rows: list[dict[str, object]] = []
     total_symbols = len(symbol_frames)
     symbol_export_start_time = time.monotonic()
     stage_rows_by_stage: dict[str, list[dict[str, object]]] = {stage_id: [] for stage_id in PNO_STAGE_SEQUENCE}
@@ -1657,17 +1694,17 @@ def _export_pno_diagnostics_context_for_symbols(
             if diagnostics_cache is not None:
                 diagnostics_cache_misses += 1
             params = replace(pno_params_template, symbol=symbol)
-            trades = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
+            positions = strategy.generate_events_multi_tf(mtf_frames=mtf_frames, params=params)
             diagnostics = strategy.consume_last_generation_diagnostics()
         else:
             diagnostics_cache_hits += 1
-            trades = list(cached_generation.trades)
+            positions = list(cached_generation.positions)
             diagnostics = dict(cached_generation.diagnostics)
-        trade_rows = [_flatten_trade_for_diagnostics(trade) for trade in trades]
-        all_trade_rows.extend(trade_rows)
-        total_trades_generated += len(trade_rows)
-        if trade_rows:
-            symbols_with_trades += 1
+        position_rows = [_flatten_position_for_diagnostics(position) for position in positions]
+        all_position_rows.extend(position_rows)
+        total_positions_generated += len(position_rows)
+        if position_rows:
+            symbols_with_positions += 1
 
         stage_events_raw = diagnostics.get("stage_events", [])
         symbol_stage_events = 0
@@ -1714,7 +1751,35 @@ def _export_pno_diagnostics_context_for_symbols(
                 ),
             )
 
-        if not trade_rows and symbol_stage_events == 0 and symbol_stage_rejections == 0:
+        context = diagnostics.get("context") if isinstance(diagnostics, dict) else {}
+        if not isinstance(context, dict):
+            context = {}
+        diagnostics_json_written = bool(position_rows or symbol_stage_events or symbol_stage_rejections)
+        selected_activity_count = int(symbol_stage_events + symbol_stage_rejections + len(position_rows))
+        all_stage_events_count = len(stage_events_raw) if isinstance(stage_events_raw, list) else 0
+        all_stage_rejections_count = len(stage_rejections_raw) if isinstance(stage_rejections_raw, list) else 0
+        coverage_rows.append(
+            {
+                "symbol": symbol,
+                "diagnostics_json_written": diagnostics_json_written,
+                "skip_reason": "" if diagnostics_json_written else "no_selected_stage_activity",
+                "positions_generated": len(position_rows),
+                "selected_activity_count": selected_activity_count,
+                "selected_stage_events_count": symbol_stage_events,
+                "selected_stage_rejections_count": symbol_stage_rejections,
+                "total_stage_events_count": all_stage_events_count,
+                "total_stage_rejections_count": all_stage_rejections_count,
+                "skipped_market_data_quality": int(diagnostics.get("skipped_market_data_quality", 0) or 0),
+                "levels_trade_count_source": _serialize_diagnostics_context_value(context.get("levels_trade_count_source")),
+                "entry_trade_count_source": _serialize_diagnostics_context_value(context.get("entry_trade_count_source")),
+                "levels_quote_volume_source": _serialize_diagnostics_context_value(context.get("levels_quote_volume_source")),
+                "entry_quote_volume_source": _serialize_diagnostics_context_value(context.get("entry_quote_volume_source")),
+                "market_data_quality_status": _serialize_diagnostics_context_value(context.get("market_data_quality_status")),
+                "market_data_quality_reasons": _serialize_diagnostics_context_value(context.get("market_data_quality_reasons")),
+            }
+        )
+
+        if not diagnostics_json_written:
             continue
 
         diagnostics_payloads.append(
@@ -1722,20 +1787,20 @@ def _export_pno_diagnostics_context_for_symbols(
                 "symbol": symbol,
                 "mtf_frames": mtf_frames,
                 "seconds_frame_provider": getattr(strategy, "_seconds_provider", None),
-                "trade_rows": trade_rows,
+                "position_rows": position_rows,
                 "diagnostics": diagnostics,
             }
         )
         base_name = _pno_output_symbol_stem(symbol)
         payload = {
             "symbol": symbol,
-            "trades_generated": len(trade_rows),
+            "positions_generated": len(position_rows),
             "diagnostics": diagnostics,
-            "trades": trade_rows,
+            "positions": position_rows,
         }
         (diagnostics_dir / f"{base_name}_diagnostics.json").write_text(_to_compact_json(payload), encoding="utf-8")
-        if trade_rows:
-            pd.DataFrame(trade_rows).to_csv(diagnostics_dir / f"{base_name}_trades.csv", index=False)
+        if position_rows:
+            pd.DataFrame(position_rows).to_csv(diagnostics_dir / f"{base_name}_positions.csv", index=False)
 
     deduplicated_stage4_rows, stage4_duplicate_count = _deduplicate_pno_stage4_review_rows(
         stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, [])
@@ -1745,17 +1810,18 @@ def _export_pno_diagnostics_context_for_symbols(
         symbol_frames=symbol_frames,
         stage_rows_by_stage=stage_rows_by_stage,
         stage_rejections_by_stage=stage_rejections_by_stage,
-        trade_rows=all_trade_rows,
+        position_rows=all_position_rows,
         min_score=float(params_row.get("pno_min_score", 0.0) or 0.0),
     )
     research_rejections_by_stage = _build_filtered_pno_stage_rejections(
         stage_rejections_by_stage=stage_rejections_by_stage,
         selected_stage_ids=selected_stage_ids,
     )
+    _write_pno_diagnostics_coverage(diagnostics_dir=diagnostics_dir, rows=coverage_rows)
     _export_pno_research_context(
         diagnostics_dir=diagnostics_dir,
         symbol_frames=symbol_frames,
-        trade_rows=all_trade_rows,
+        position_rows=all_position_rows,
         stage_rows_by_stage=stage_rows_by_stage,
         stage_rejections_by_stage=research_rejections_by_stage,
         stage_rejection_summary_by_stage=stage_rejections_by_stage,
@@ -1772,15 +1838,15 @@ def _export_pno_diagnostics_context_for_symbols(
         logger=logger,
     )
     return {
-        "all_trade_rows": all_trade_rows,
+        "all_position_rows": all_position_rows,
         "diagnostics_payloads": diagnostics_payloads,
         "stage_rows_by_stage": stage_rows_by_stage,
         "stage_rejections_by_stage": stage_rejections_by_stage,
         "selected_stage_ids": selected_stage_ids,
         "passed_chart_stage_ids": passed_chart_stage_ids,
-        "symbols_with_trades": symbols_with_trades,
+        "symbols_with_positions": symbols_with_positions,
         "symbols_with_stage_events": symbols_with_stage_events,
-        "total_trades_generated": total_trades_generated,
+        "total_positions_generated": total_positions_generated,
         "total_stage_events": total_stage_events,
     }
 
@@ -1841,10 +1907,10 @@ def _select_pno_plot_params_row_by_stage(
                 raw_value = pd.to_numeric(row.get(column, 0), errors="coerce")
                 if not pd.isna(raw_value):
                     stage_events_count += int(raw_value)
-            raw_trades_count = pd.to_numeric(row.get("trades_count", 0), errors="coerce")
-            trades_generated = int(raw_trades_count) if not pd.isna(raw_trades_count) else 0
+            raw_positions_count = pd.to_numeric(row.get("positions_count", 0), errors="coerce")
+            positions_generated = int(raw_positions_count) if not pd.isna(raw_positions_count) else 0
             profit_factor = float(row.get("profit_factor", 0.0) or 0.0)
-            scored_rows.append((stage_events_count, 0, trades_generated, profit_factor, -row_index, row))
+            scored_rows.append((stage_events_count, 0, positions_generated, profit_factor, -row_index, row))
             if stage_events_count == 0:
                 needs_rejection_fallback = True
 
@@ -1854,7 +1920,7 @@ def _select_pno_plot_params_row_by_stage(
         best_score = max(scored_rows, key=lambda item: item[:5])
         if best_score[0] > 0 or not needs_rejection_fallback:
             logger.debug(
-                "Строка для графиков выбрана из результатов; событий %s, отказов %s, сделок %s, профит-фактор %.4f.",
+                "Строка для графиков выбрана из результатов; событий %s, отказов %s, позиций %s, профит-фактор %.4f.",
                 best_score[0],
                 best_score[1],
                 best_score[2],
@@ -1866,7 +1932,7 @@ def _select_pno_plot_params_row_by_stage(
     for row_index, (_, row) in enumerate(results.iterrows()):
         stage_events_count = 0
         stage_rejections_count = 0
-        trades_generated = 0
+        positions_generated = 0
 
         pno_params_template = _build_pno_params_template_from_row(
             row,
@@ -1892,17 +1958,17 @@ def _select_pno_plot_params_row_by_stage(
                     for rejection in stage_rejections
                     if isinstance(rejection, dict) and rejection.get("stage_id") in selected_stage_ids
                 )
-            trades_generated += int(diagnostics.get("trades_generated", 0) or 0)
+            positions_generated += int(diagnostics.get("positions_generated", 0) or 0)
 
         profit_factor = float(row.get("profit_factor", 0.0) or 0.0)
-        scored_rows.append((stage_events_count, stage_rejections_count, trades_generated, profit_factor, -row_index, row))
+        scored_rows.append((stage_events_count, stage_rejections_count, positions_generated, profit_factor, -row_index, row))
 
     if not scored_rows:
         return None
 
     best_score = max(scored_rows, key=lambda item: item[:5])
     logger.debug(
-        "Строка для графиков выбрана по диагностике; событий %s, отказов %s, сделок %s, профит-фактор %.4f.",
+        "Строка для графиков выбрана по диагностике; событий %s, отказов %s, позиций %s, профит-фактор %.4f.",
         best_score[0],
         best_score[1],
         best_score[2],
@@ -1950,7 +2016,7 @@ def _load_plot_params_row_from_results(
         "pno_variant_id",
         "pno_deposit",
         "pno_risk_pct",
-        "pno_r_trade",
+        "pno_r_position",
         "pno_fee_rate",
         "pno_min_score",
         "pno_strong_score",
@@ -1973,11 +2039,11 @@ def _load_plot_params_row_from_results(
             return None
         selected_row = frame.iloc[row_index]
         logger.debug(
-            "Использована строка %s из %s: профит-фактор %s, сделок %s.",
+            "Использована строка %s из %s: профит-фактор %s, позиций %s.",
             row_number,
             csv_path,
             selected_row.get("profit_factor", "n/a"),
-            selected_row.get("trades_count", "n/a"),
+            selected_row.get("positions_count", "n/a"),
         )
         return selected_row
 
@@ -2021,14 +2087,14 @@ def _load_plot_params_row_from_results(
                 selected_id,
             )
     else:
-        sorted_frame = frame.sort_values(["profit_factor", "trades_count"], ascending=[False, False], na_position="last")
+        sorted_frame = frame.sort_values(["profit_factor", "positions_count"], ascending=[False, False], na_position="last")
         selected_row = sorted_frame.iloc[0]
 
     logger.debug(
-        "Параметры взяты из %s: профит-фактор %s, сделок %s, id %s.",
+        "Параметры взяты из %s: профит-фактор %s, позиций %s, id %s.",
         csv_path,
         selected_row.get("profit_factor", "n/a"),
-        selected_row.get("trades_count", "n/a"),
+        selected_row.get("positions_count", "n/a"),
         selected_id_raw if selected_id_raw is not None else "best",
     )
     return selected_row
@@ -3024,7 +3090,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             return 1
     elif strategy_id == "pno" and not results.empty and isinstance(strategy, PnoStrategy):
         if not collect_diagnostics:
-            _export_pno_grid_trade_charts_only(
+            _export_pno_grid_position_charts_only(
                 config=config,
                 logger=logger,
                 strategy=strategy,
@@ -3057,7 +3123,7 @@ def _collect_pno_stage_summary_rows(
         Path(scoped_results_dir),
         "pno",
     )
-    stage_reviews_dir = strategy_results_dir / "trade_plots" / "pno_diagnostics" / "stage_reviews"
+    stage_reviews_dir = strategy_results_dir / "position_plots" / "pno_diagnostics" / "stage_reviews"
     manifest = _read_csv_or_empty(stage_reviews_dir / "manifest.csv")
     if manifest.empty:
         return []

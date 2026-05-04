@@ -10,13 +10,13 @@ from domain.abstract.position_simulator import PositionSimulator
 from domain.enums.position_side import PositionSide
 from domain.models.candle import Candle
 from domain.models.position import Position
-from domain.models.trade_result import TradeResult
-from domain.models.trade_signal import TradeSignal
+from domain.models.position_result import PositionResult
+from domain.models.position_signal import PositionSignal
 from domain.value_objects.price import Price
 from domain.value_objects.volume import Volume
 from simulation.exit_manager import ExitManager, ExitManagerConfig
 from simulation.order_processor import OrderProcessor
-from simulation.trade_classifier import TradeClassifier
+from simulation.position_result_classifier import PositionResultClassifier
 
 
 @dataclass(slots=True)
@@ -25,12 +25,12 @@ class StatefulPositionSimulator(PositionSimulator):
 
     side: PositionSide
     order_processor: OrderProcessor
-    trade_classifier: TradeClassifier
+    position_result_classifier: PositionResultClassifier
     exit_manager: ExitManager = field(default_factory=lambda: ExitManager(config=ExitManagerConfig(tp1_close_ratio=TP1_CLOSE_RATIO)))
     max_bars_in_trade: int | None = None
 
     position: Position | None = None
-    _pending_signal: TradeSignal | None = None
+    _pending_signal: PositionSignal | None = None
     _pending_size: float = 0.0
     _realized_pnl: float = 0.0
     _closed_size: float = 0.0
@@ -65,7 +65,7 @@ class StatefulPositionSimulator(PositionSimulator):
         self._pending_signal = None
         self._pending_size = 0.0
 
-    def _process_long(self, candle: Candle) -> TradeResult | None:
+    def _process_long(self, candle: Candle) -> PositionResult | None:
         assert self.position is not None
         target, exit_at_be = self.exit_manager.process(
             candle=candle,
@@ -79,7 +79,7 @@ class StatefulPositionSimulator(PositionSimulator):
             return self._finalize(candle, target, exit_at_be=exit_at_be, exit_at_tp2=math.isclose(target, self.position.take_profit_2.value, abs_tol=SIMULATION_PRICE_COMPARISON_EPSILON))
         return None
 
-    def _process_short(self, candle: Candle) -> TradeResult | None:
+    def _process_short(self, candle: Candle) -> PositionResult | None:
         assert self.position is not None
         target, exit_at_be = self.exit_manager.process(
             candle=candle,
@@ -106,19 +106,19 @@ class StatefulPositionSimulator(PositionSimulator):
         self._closed_size += size
         self._last_exit_price = fill.price
 
-    def _finalize(self, candle: Candle, target_price: float, *, exit_at_be: bool = False, exit_at_tp2: bool = False) -> TradeResult:
+    def _finalize(self, candle: Candle, target_price: float, *, exit_at_be: bool = False, exit_at_tp2: bool = False) -> PositionResult:
         assert self.position is not None
 
         remaining_size = self.position.size.value - self._closed_size
         if remaining_size > 0:
             self._close_leg(size=remaining_size, target_price=target_price)
 
-        result_type = self.trade_classifier.classify_result_type(
+        result_type = self.position_result_classifier.classify_result_type(
             tp1_done=self.position.tp1_done,
             exit_at_breakeven=exit_at_be,
             exit_at_tp2=exit_at_tp2,
         )
-        trade_result = self.trade_classifier.build_result(
+        position_result = self.position_result_classifier.build_result(
             position=self.position,
             exit_price=self._last_exit_price,
             exit_timestamp_ms=candle.timestamp_ms,
@@ -127,16 +127,16 @@ class StatefulPositionSimulator(PositionSimulator):
         )
         self.position = None
         self._bars_in_trade = 0
-        return trade_result
+        return position_result
 
     # endregion Приватные
 
-    def register_signal(self, signal: TradeSignal, size: float) -> None:
+    def register_signal(self, signal: PositionSignal, size: float) -> None:
         """Сохраняет сигнал; позиция откроется рыночным ордером на открытии следующей свечи."""
         self._pending_signal = signal
         self._pending_size = size
 
-    def process_candle(self, candle: Candle) -> TradeResult | None:
+    def process_candle(self, candle: Candle) -> PositionResult | None:
         """Открывает отложенный сигнал и обрабатывает активную позицию на текущей свече."""
         if self.position is None and self._pending_signal is not None:
             self._open_from_pending_signal(candle)
@@ -153,15 +153,15 @@ class StatefulPositionSimulator(PositionSimulator):
         return self._process_short(candle)
 
     def open_position(self, position: Position) -> None:
-        """Устанавливает активную позицию. Предназначено для уже исполненных сделок."""
+        """Устанавливает активную позицию. Предназначено для уже исполненных позиций."""
         self.position = position
         self._realized_pnl = 0.0
         self._closed_size = 0.0
         self._last_exit_price = position.entry_price.value
         self._bars_in_trade = 0
 
-    def close_position(self, price: float, exit_timestamp_ms: int) -> TradeResult:
-        """Закрывает остаток позиции по заданной цене и времени, затем возвращает классифицированный результат сделки."""
+    def close_position(self, price: float, exit_timestamp_ms: int) -> PositionResult:
+        """Закрывает остаток позиции по заданной цене и времени, затем возвращает классифицированный результат позиции."""
         if self.position is None:
             msg = "Нет активной позиции для закрытия."
             raise RuntimeError(msg)
@@ -170,13 +170,13 @@ class StatefulPositionSimulator(PositionSimulator):
         if remaining_size > 0:
             self._close_leg(size=remaining_size, target_price=price)
 
-        result_type = self.trade_classifier.classify_result_type(
+        result_type = self.position_result_classifier.classify_result_type(
             tp1_done=self.position.tp1_done,
             exit_at_breakeven=self.position.sl_moved_to_be
             and math.isclose(price, self.position.stop_loss.value, abs_tol=SIMULATION_PRICE_COMPARISON_EPSILON),
             exit_at_tp2=math.isclose(price, self.position.take_profit_2.value, abs_tol=SIMULATION_PRICE_COMPARISON_EPSILON),
         )
-        trade_result = self.trade_classifier.build_result(
+        position_result = self.position_result_classifier.build_result(
             position=self.position,
             exit_price=self._last_exit_price,
             exit_timestamp_ms=exit_timestamp_ms,
@@ -185,7 +185,7 @@ class StatefulPositionSimulator(PositionSimulator):
         )
         self.position = None
         self._bars_in_trade = 0
-        return trade_result
+        return position_result
 
     def update_stop(self, new_stop: float) -> None:
         """Обновляет уровень стоп-лосса для активной позиции."""

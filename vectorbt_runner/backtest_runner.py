@@ -17,7 +17,7 @@ from constants import (
     BACKTEST_EMPTY_MAX_DD,
     BACKTEST_EMPTY_PF,
     BACKTEST_EMPTY_PNL_PERCENT,
-    BACKTEST_EMPTY_TRADES_COUNT,
+    BACKTEST_EMPTY_POSITIONS_COUNT,
     BACKTEST_EMPTY_WIN_RATE,
     BACKTEST_PF_FALLBACK_WHEN_NO_LOSSES,
     BACKTEST_PROFITABLE_PF_THRESHOLD,
@@ -27,8 +27,8 @@ from constants import (
     BACKTEST_ZERO_COUNT,
 )
 from domain.enums.timeframe import Timeframe
-from domain.enums.trade_result_type import TradeResultType
-from domain.models.trade_result import TradeResult
+from domain.enums.position_result_type import PositionResultType
+from domain.models.position_result import PositionResult
 from vectorbt_runner.backtest_summary import BacktestSummary
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 
@@ -83,12 +83,12 @@ def _format_progress_line(*, percent: int, checked: int, total: int, eta_seconds
 
 def _format_result_summary(*, levels_timeframe: Timeframe, entry_timeframe: Timeframe, row: dict[str, int | float | str | None]) -> str:
     header = f"Анализ {levels_timeframe.value}-{entry_timeframe.value} завершен"
-    trades_count = int(row.get("trades_count") or 0)
-    if trades_count <= 0:
-        return f"{header}\nСделок нет"
+    positions_count = int(row.get("positions_count") or 0)
+    if positions_count <= 0:
+        return f"{header}\nПозиций нет"
     return (
         f"{header}\n"
-        f"Сделок: {trades_count}\n"
+        f"Позиций: {positions_count}\n"
         f"Винрейт: {float(row.get('win_rate') or 0.0):.2f}\n"
         f"Профит-фактор: {float(row.get('profit_factor') or 0.0):.2f}\n"
         f"Итог: {float(row.get('pnl_percent') or 0.0):.2f}%\n"
@@ -119,7 +119,7 @@ class PreparedGridParams(NamedTuple):
 class BacktestGenerationSnapshot(NamedTuple):
     """Снимок результата одного symbol-run для повторного экспорта diagnostics."""
 
-    trades: list[TradeResult]
+    positions: list[PositionResult]
     diagnostics: dict[str, object]
 
 
@@ -142,7 +142,7 @@ class BacktestRunner:
 
     @property
     def last_generation_diagnostics_cache(self) -> BacktestGenerationDiagnosticsCache:
-        """Возвращает diagnostics/trades последнего run без повторного запуска стратегии."""
+        """Возвращает diagnostics/positions последнего run без повторного запуска стратегии."""
         return dict(self._last_generation_diagnostics_cache)
 
     @staticmethod
@@ -160,11 +160,11 @@ class BacktestRunner:
         return None
 
     @staticmethod
-    def _build_trade_metadata_metrics(trades: list[TradeResult]) -> dict[str, int | float | str | None]:
+    def _build_position_metadata_metrics(positions: list[PositionResult]) -> dict[str, int | float | str | None]:
         metadata_rows = [
-            trade.metadata
-            for trade in trades
-            if isinstance(getattr(trade, "metadata", None), dict)
+            position.metadata
+            for position in positions
+            if isinstance(getattr(position, "metadata", None), dict)
         ]
         if not metadata_rows:
             return {}
@@ -237,15 +237,15 @@ class BacktestRunner:
     @staticmethod
     def _build_metrics_row(
         base_row: dict[str, int | float | str | None],
-        trades: list[TradeResult],
+        positions: list[PositionResult],
     ) -> dict[str, int | float | str | None]:
-        if not trades:
+        if not positions:
             return {
                 **base_row,
                 "profit_factor": BACKTEST_EMPTY_PF,
                 "pnl_percent": BACKTEST_EMPTY_PNL_PERCENT,
                 "win_rate": BACKTEST_EMPTY_WIN_RATE,
-                "trades_count": BACKTEST_EMPTY_TRADES_COUNT,
+                "positions_count": BACKTEST_EMPTY_POSITIONS_COUNT,
                 "max_dd": BACKTEST_EMPTY_MAX_DD,
                 "max_drawdown_pct": BACKTEST_EMPTY_MAX_DD,
                 "median_pump_to_peak_bars": None,
@@ -270,26 +270,26 @@ class BacktestRunner:
         tp1_be_count = BACKTEST_ZERO_COUNT
         tp2_count = BACKTEST_ZERO_COUNT
 
-        normalized_trades: list[TradeResult] = trades
-        for trade in normalized_trades:
-            pnl_value = trade.pnl
-            trade_pnl_percent = getattr(trade.pnl_percent, "value", trade.pnl_percent)
-            pnl_percent += float(trade_pnl_percent)
+        normalized_positions: list[PositionResult] = positions
+        for position in normalized_positions:
+            pnl_value = position.pnl
+            position_pnl_percent = getattr(position.pnl_percent, "value", position.pnl_percent)
+            pnl_percent += float(position_pnl_percent)
             if pnl_value > 0:
                 profits += pnl_value
                 wins += 1
             elif pnl_value < 0:
                 losses += abs(pnl_value)
 
-            if trade.result_type == TradeResultType.SL:
+            if position.result_type == PositionResultType.SL:
                 sl_count += 1
-            elif trade.result_type == TradeResultType.BE:
+            elif position.result_type == PositionResultType.BE:
                 be_count += 1
-            elif trade.result_type == TradeResultType.TIME_EXIT_PROFIT:
+            elif position.result_type == PositionResultType.TIME_EXIT_PROFIT:
                 time_exit_profit_count += 1
-            elif trade.result_type == TradeResultType.TP1_BE:
+            elif position.result_type == PositionResultType.TP1_BE:
                 tp1_be_count += 1
-            elif trade.result_type == TradeResultType.TP2:
+            elif position.result_type == PositionResultType.TP2:
                 tp2_count += 1
 
         if losses > 0:
@@ -299,12 +299,12 @@ class BacktestRunner:
         else:
             pf = BACKTEST_EMPTY_PF
 
-        win_rate = wins / len(normalized_trades)
-        trades_count = len(normalized_trades)
+        win_rate = wins / len(normalized_positions)
+        positions_count = len(normalized_positions)
 
-        sorted_trades = sorted(
-            normalized_trades,
-            key=lambda trade_row: (trade_row.exit_timestamp_ms, trade_row.entry_timestamp_ms),
+        sorted_positions = sorted(
+            normalized_positions,
+            key=lambda position_row: (position_row.exit_timestamp_ms, position_row.entry_timestamp_ms),
         )
         cumulative_pnl = BACKTEST_EMPTY_PNL_PERCENT
         peak_pnl = BACKTEST_EMPTY_PNL_PERCENT
@@ -313,13 +313,13 @@ class BacktestRunner:
         peak_equity = initial_deposit
         max_drawdown_pct = BACKTEST_EMPTY_MAX_DD
         pump_to_peak_bars_values = [
-            trade.pump_to_peak_bars for trade in normalized_trades if trade.pump_to_peak_bars is not None
+            position.pump_to_peak_bars for position in normalized_positions if position.pump_to_peak_bars is not None
         ]
         pump_to_peak_minutes_values = [
-            trade.pump_to_peak_minutes for trade in normalized_trades if trade.pump_to_peak_minutes is not None
+            position.pump_to_peak_minutes for position in normalized_positions if position.pump_to_peak_minutes is not None
         ]
-        for sorted_trade in sorted_trades:
-            cumulative_pnl += sorted_trade.pnl
+        for sorted_position in sorted_positions:
+            cumulative_pnl += sorted_position.pnl
             if cumulative_pnl > peak_pnl:
                 peak_pnl = cumulative_pnl
             drawdown = peak_pnl - cumulative_pnl
@@ -333,14 +333,14 @@ class BacktestRunner:
                     if drawdown_pct > max_drawdown_pct:
                         max_drawdown_pct = drawdown_pct
 
-        metadata_metrics = BacktestRunner._build_trade_metadata_metrics(normalized_trades)
+        metadata_metrics = BacktestRunner._build_position_metadata_metrics(normalized_positions)
 
         return {
             **base_row,
             "profit_factor": round(float(pf), BACKTEST_ROUND_METRICS),
             "pnl_percent": round(float(pnl_percent), BACKTEST_ROUND_METRICS),
             "win_rate": round(float(win_rate), BACKTEST_ROUND_METRICS),
-            "trades_count": trades_count,
+            "positions_count": positions_count,
             "max_dd": round(float(max_dd), BACKTEST_ROUND_MAX_DD),
             "max_drawdown_pct": round(float(max_drawdown_pct), BACKTEST_ROUND_MAX_DD),
             "median_pump_to_peak_bars": _resolve_median_metric(pump_to_peak_bars_values),
@@ -475,7 +475,7 @@ class BacktestRunner:
         self._logger.info("Отобрано %s символов", symbols_count)
 
         for idx, prepared in enumerate(prepared_grid, start=1):
-            all_trades: list[TradeResult] = []
+            all_positions: list[PositionResult] = []
             combo_params_for_signature = self._inject_runtime_fields(
                 prepared.params,
                 symbol="*",
@@ -489,9 +489,9 @@ class BacktestRunner:
             self._logger.info("%s", _format_progress_line(percent=0, checked=0, total=symbols_count, eta_seconds=None))
             progress_checkpoints = _build_progress_checkpoints(symbols_count)
             progress_checkpoint_index = 0
-            portfolio_trades: list[TradeResult] | None = None
+            portfolio_positions: list[PositionResult] | None = None
             try:
-                portfolio_trades = strategy.generate_events_portfolio(
+                portfolio_positions = strategy.generate_events_portfolio(
                     symbol_frames=symbol_frames,
                     params=prepared.params,
                 )
@@ -505,8 +505,8 @@ class BacktestRunner:
                     total_combos=total,
                 )
 
-            if portfolio_trades is not None:
-                all_trades.extend(portfolio_trades)
+            if portfolio_positions is not None:
+                all_positions.extend(portfolio_positions)
                 if progress_checkpoints:
                     self._logger.info(
                         "%s",
@@ -533,9 +533,9 @@ class BacktestRunner:
                         mtf_frames=mtf_frames,
                         params=cfg,
                     )
-                    trades: list[TradeResult] | None = None
+                    positions: list[PositionResult] | None = None
                     try:
-                        trades = strategy.generate_events_multi_tf(
+                        positions = strategy.generate_events_multi_tf(
                             mtf_frames=mtf_frames,
                             params=cfg,
                             **(
@@ -555,15 +555,15 @@ class BacktestRunner:
                             combo_idx=idx,
                             total_combos=total,
                         )
-                    if trades is None:
-                        trades = []
-                    all_trades.extend(trades)
+                    if positions is None:
+                        positions = []
+                    all_positions.extend(positions)
                     if (collect_diagnostics or collect_stage_metrics) and callable(diagnostics_method):
                         diagnostics_raw = diagnostics_method()
                         if isinstance(diagnostics_raw, dict):
                             if collect_diagnostics:
                                 self._last_generation_diagnostics_cache[(combo_params_signature, symbol)] = BacktestGenerationSnapshot(
-                                    trades=list(trades),
+                                    positions=list(positions),
                                     diagnostics=self._copy_generation_diagnostics(diagnostics_raw),
                                 )
                             if collect_stage_metrics:
@@ -597,7 +597,7 @@ class BacktestRunner:
                 levels_timeframe=levels_timeframe,
                 entry_timeframe=entry_timeframe,
             )
-            row = self._build_metrics_row(strategy.params_to_row(row_params), all_trades)
+            row = self._build_metrics_row(strategy.params_to_row(row_params), all_positions)
             if collect_stage_metrics:
                 for stage_id in tracked_stage_ids:
                     row[_stage_metric_column_name(stage_id)] = int(stage_metric_totals.get(stage_id, 0))

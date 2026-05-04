@@ -38,13 +38,13 @@ SUPERSEDED = заменён новым патчем
 | P015 | Backtest progress and memory logs | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging/bugfix | Убрать дублирующий progress narrative при одной комбинации, добавить предупреждение о тяжёлом symbol set и понятный memory-error. | `python -m compileall vectorbt_runner research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P016 | Fix unclosed logger call | APPLIED | `vectorbt_runner/backtest_runner.py` | bugfix | Закрыть незавершённый logger.info после P015. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 | P017 | Fix P015 runner regression | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть потерянный вызов generate_events_portfolio и восстановить аргументы long-symbol logger. | `python -m compileall vectorbt_runner/backtest_runner.py` |
-| P018 | Stale reclaim and trade-count chart fix | APPLIED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Канонизировать trade-count column для графиков и отбрасывать сделки после failed reclaim уровня до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
+| P018 | Stale reclaim and trade-count chart fix | APPLIED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Канонизировать trade-count column для графиков и отбрасывать позиции после failed reclaim уровня до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
 | P019 | Clear PNO trade-data caches | APPLIED | `strategy/pno/pno_strategy.py` | memory | Сбрасывать aggTrades-derived runtime caches после обработки символа. | `python -m compileall strategy/pno/pno_strategy.py` |
 | P020 | Trade/chart consistency fix | APPLIED | `cli/pno_diagnostics.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Заполнить все trade-count aliases и считать уровень stale, если close_above случился до финального сигнала. | `python -m compileall cli/pno_diagnostics.py strategy/pno/pno_strategy.py` |
 | P021 | True trade-count chart propagation | APPLIED | `strategy/pno/pno_strategy.py`, `research/*` | bugfix/diagnostics | Прокидывать реальные number_of_trades/trades/trade_count из enriched PNO frames обратно в исходные frames, которые использует chart export. | `python -m compileall strategy/pno/pno_strategy.py` |
 | P022 | Stage5/results consistency fix | APPLIED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix/diagnostics | Переносить stale-level Stage5 passed events в rejected и писать runtime TF в results.csv. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
 | P023 | PNO none-trades guard | APPLIED | `strategy/pno/pno_strategy.py`, `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Вернуть list-return contract для PNO generate_events_multi_tf и не валить runner, если стратегия вернула None. | `python -m compileall strategy/pno/pno_strategy.py vectorbt_runner/backtest_runner.py` |
-| P024 | Concise backtest logs | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging | Убрать лишнюю прозу из runtime backtest logs, оставить TF, progress 0..100% и итоговую сводку по сделкам. | `python -m compileall vectorbt_runner/backtest_runner.py` |
+| P024 | Concise backtest logs | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging | Убрать лишнюю прозу из runtime backtest logs, оставить TF, progress 0..100% и итоговую сводку по позициям. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 | P025 | Fix concise progress checkpoint init | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | bugfix | Инициализировать progress checkpoint cursor перед per-symbol progress loop. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 | P026 | Strict backtest runtime log shape | APPLIED | `vectorbt_runner/backtest_runner.py`, `research/*` | logging | Привести runtime-логи бэктеста к строгому формату: заголовок, TF, progress, итог без лишней диагностики. | `python -m compileall vectorbt_runner/backtest_runner.py` |
 | P027 | Quiet runtime logger sweep | APPLIED | `utils/logger.py`, `utils/retry.py`, `data/*`, `vectorbt_runner/backtest_runner.py`, `research/*` | logging | Пройтись по logger.* и оставить в консоли только человековажные заголовки, progress, итог, предупреждения и ошибки. | `python -m compileall utils data vectorbt_runner research/PATCH_LOG.md research/RESEARCH_STATE.md` |
@@ -61,8 +61,9 @@ SUPERSEDED = заменён новым патчем
 | P038 | Reuse PNO backtest diagnostics export cache | PROPOSED | `vectorbt_runner/backtest_runner.py`, `cli/commands.py`, `research/*` | performance/diagnostics | Кэшировать trades+diagnostics в runner и переиспользовать при artifact export после `--collect-diagnostics true`. | `python -m compileall vectorbt_runner cli strategy/pno constants.py main.py launcher.py` |
 | P039 | PNO trade-count chart bars | PROPOSED | `cli/pno_diagnostics.py`, `research/*` | diagnostics/chart | Рисовать `Trades %` как exchange trade-count per candle из entry plot frame с fallback на levels frame, если entry-count отсутствует. | `python -m compileall cli/pno_diagnostics.py` |
 | P040 | PNO diagnostics logging/summary fix | APPLIED | `cli/commands.py`, `cli/pno_diagnostics.py`, `research/*` | diagnostics/logging | Исправить logging TypeError в diagnostics export, предупреждать о коротком PNO окне и писать full rejection summary. | `python -m compileall cli/pno_diagnostics.py cli/commands.py` |
-| P041 | PNO seconds-entry/stale-level/BE/log cleanup | PROPOSED | `cli/commands.py`, `cli/pno_diagnostics.py`, `strategy/pno/config.py`, `strategy/pno/engine.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/logging/risk | `15s` использует тот же sparse aggTrades path, что `30s`/`5s`; Stage5 режет уже reclaimed level до сделки; BE arm снижен до 60%; убраны лишние runtime logs. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
+| P041 | PNO seconds-entry/stale-level/BE/log cleanup | PROPOSED | `cli/commands.py`, `cli/pno_diagnostics.py`, `strategy/pno/config.py`, `strategy/pno/engine.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/logging/risk | `15s` использует тот же sparse aggTrades path, что `30s`/`5s`; Stage5 режет уже reclaimed level до позиции; BE arm снижен до 60%; убраны лишние runtime logs. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 | P043 | Human BOS obsolete-level guard | PROPOSED | `strategy/pno/engine.py`, `cli/pno_diagnostics.py`, `research/*` | bugfix/diagnostics | Убрать bypass Stage4 scoring/Stage5 decay для `human_bos`; Stage1 rejected reasons без near-threshold rows получают fallback charts. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
+| P044 | Position terminology and strict flow data | PROPOSED | `domain/*`, `simulation/*`, `vectorbt_runner/*`, `strategy/pno/*`, `cli/*`, `research/*` | refactor/data-quality/diagnostics | Развести exchange trades и bot positions; требовать real quote_volume USDT/trade-count; добавить diagnostics coverage и Stage5 unique setup summary. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 
 ---
 
@@ -148,7 +149,7 @@ Trading logic changed: no
 Риск:
 
 ```text
-нули могут означать отсутствие поля, а не отсутствие сделок
+нули могут означать отсутствие поля, а не отсутствие позиций
 ```
 
 ---
@@ -673,7 +674,7 @@ python main.py run-backtest --strategy pno --pno-all-tf-pairs --days 3 --top-n 2
 Risk:
 
 ```text
-логика стратегии и расчёта сделок не меняется; меняются только progress/error logs и re-raise MemoryError с русским сообщением
+логика стратегии и расчёта позиций не меняется; меняются только progress/error logs и re-raise MemoryError с русским сообщением
 ```
 
 ---
@@ -705,7 +706,7 @@ Change:
 Risk:
 
 ```text
-P016 устранил syntax error, но не восстановил потерянный portfolio_trades assignment и аргументы logger.info.
+P016 устранил syntax error, но не восстановил потерянный portfolio_positions assignment и аргументы logger.info.
 ```
 
 ---
@@ -725,7 +726,7 @@ Commit: 9508a095fd10c7a628c78692fdcce6616d39c414
 Problem:
 
 ```text
-После P015/P016 BacktestRunner.run обращался к portfolio_trades до присваивания.
+После P015/P016 BacktestRunner.run обращался к portfolio_positions до присваивания.
 Long-symbol logger в multi-combo ветке также передавал один аргумент на семь placeholder.
 ```
 
@@ -771,7 +772,7 @@ Change:
 ```text
 добавить канонический trade_count для графиков из number_of_trades/trades/trade_count
 протащить trade-count columns в plot frame
-после генерации PNO trades отбрасывать сделки, где между level_valid_timestamp_ms и entry_signal_timestamp_ms была свеча high > level и close < level
+после генерации PNO trades отбрасывать позиции, где между level_valid_timestamp_ms и entry_signal_timestamp_ms была свеча high > level и close < level
 ```
 
 Expected diagnostics:
@@ -904,7 +905,7 @@ python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 1000
 Risk:
 
 ```text
-логика сделок не меняется; исходные DataFrame получают дополнительные diagnostic columns, чтобы chart export видел тот же trade-count, что и strategy path
+логика позиций не меняется; исходные DataFrame получают дополнительные diagnostic columns, чтобы chart export видел тот же trade-count, что и strategy path
 ```
 
 ---
@@ -932,16 +933,16 @@ Change:
 
 ```text
 разделять stale-level trades на kept/stale
-переносить соответствующие stage_5_trade events из passed в rejected с reason=level_stale_before_signal
-уменьшать stage_hits/trades_generated после переноса
+переносить соответствующие stage_5_position events из passed в rejected с reason=level_stale_before_signal
+уменьшать stage_hits/positions_generated после переноса
 собирать results row из params после runtime levels_timeframe/entry_timeframe injection
 ```
 
 Expected diagnostics:
 
 ```text
-stage_5_trade/passed/events.csv, results.csv, trade_context.csv и charts показывают один и тот же набор валидных trades
-MAGMA-like stale reclaim попадает в stage_5_trade/rejected/events.csv
+stage_5_position/passed/events.csv, results.csv, position_context.csv и charts показывают один и тот же набор валидных trades
+MAGMA-like stale reclaim попадает в stage_5_position/rejected/events.csv
 1m_5s results.csv пишет pno_levels_timeframe=1m и pno_entry_timeframe=5s
 ```
 
@@ -983,14 +984,14 @@ Change:
 
 ```text
 generate_events_multi_tf возвращает [] при пустом/None результате stale-level фильтра
-BacktestRunner получает defensive guard: если стратегия вернула None, логирует предупреждение и продолжает с пустым списком сделок
+BacktestRunner получает defensive guard: если стратегия вернула None, логирует предупреждение и продолжает с пустым списком позиций
 ```
 
 Expected result:
 
 ```text
-Символы без сделок больше не валят прогон.
-Контракт strategy.generate_events_multi_tf снова list[TradeResult].
+Символы без позиций больше не валят прогон.
+Контракт strategy.generate_events_multi_tf снова list[PositionResult].
 ```
 
 Verification:
@@ -1033,7 +1034,7 @@ Change:
 логировать запуск бэктеста и число отобранных символов
 для каждой TF-пары логировать progress 0/10/20/.../100%
 убрать symbol-by-symbol narrative, heavy-run warning, zero-entry explanation и общий финальный шум
-выводить итог TF-пары: Сделок нет или Сделок/Винрейт/PF/PnL/DD/SL/TP1_BE/TP2
+выводить итог TF-пары: Позиций нет или Позиций/Винрейт/PF/PnL/DD/SL/TP1_BE/TP2
 ```
 
 Expected console:
@@ -1047,7 +1048,7 @@ Expected console:
 ...
 100% Проверено: 509 из 509.  ETA: 00ч 00м 00с
 Анализ 5m-30s завершён
-Сделок: 17
+Позиций: 17
 Винрейт: 0.8400
 ```
 
@@ -1088,7 +1089,7 @@ enrich levels first
 run fast Stage1 candidate check on enriched levels
 only enrich entry frame when at least one profile has a Stage1 candidate
 reuse the same profile tuple for the actual engine run
-return kept_trades after syncing stale-level diagnostics
+return kept_positions after syncing stale-level diagnostics
 ```
 
 Expected effect:
@@ -1283,7 +1284,7 @@ Commit: UNKNOWN
 Problem:
 
 ```text
-PNO trade charts had a lower `Trades %` subplot, but `_render_pno_trade_chart` sliced `levels_window` without `number_of_trades` / `trades` / `trade_count` columns.
+PNO trade charts had a lower `Trades %` subplot, but `_render_pno_position_chart` sliced `levels_window` without `number_of_trades` / `trades` / `trade_count` columns.
 As a result `_resolve_trade_count_series(levels_window)` returned zeros and the subplot could be visually empty even when true exchange trade-count data existed in the plot frames.
 ```
 
@@ -1429,7 +1430,7 @@ Change:
 
 ```text
 restore local prepared levels/entry frame cache helpers inside _export_pno_research_context
-initialize trade_context, exit-reference, trade-path, levels-path and stage5 outcome collectors before export loops
+initialize position_context, exit-reference, trade-path, levels-path and stage5 outcome collectors before export loops
 add the missing Logger import used by diagnostics helper signatures
 ```
 
@@ -1584,4 +1585,46 @@ Risk:
 
 ```text
 No intended trading-logic change. Category4 construction was dead code because resolve_pno_category_profiles did not return it.
+```
+
+---
+
+## P044 — Position terminology and strict flow data
+
+```text
+Status: PROPOSED
+Commit: UNKNOWN
+Trading logic changed: yes, data-quality gate only
+```
+
+Проблема:
+
+```text
+Симулированные bot outcomes назывались trades, что смешивало их с биржевыми trades внутри свечей.
+PNO flow мог опираться на close*volume / volume_proxy как замену real quote_volume USDT / trade-count.
+Diagnostics не показывали coverage по символам и считали Stage5 rows вместо unique setups.
+```
+
+Изменение:
+
+```text
+TradeResult/TradeSignal/TradeClassifier -> PositionResult/PositionSignal/PositionResultClassifier.
+CSV/metrics/stage ids для bot outcomes переименованы в positions/stage_5_position/position_context.
+Exchange trade fields number_of_trades/trades/trade_count сохранены как trade-data.
+PNO требует real quote_volume в USDT и real trade-count; close*volume и volume_proxy не используются как fallback.
+Добавлены diagnostics_coverage.csv, diagnostics_coverage_summary.csv и stage5_unique_setup_summary.csv.
+Добавлены chart samples для ключевых Stage1 rejected reasons.
+```
+
+Проверка:
+
+```bash
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain
+```
+
+Риск:
+
+```text
+Backtest results станут менее permissive: символы без real USDT quote_volume или real trade-count будут явно отклоняться по missing_required_market_data.
+Это ожидаемо; цель — не маскировать проблему proxy-данных.
 ```

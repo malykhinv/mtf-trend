@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Generic, TypeVar
 
 import pandas as pd
 
-from domain.models.trade_result import TradeResult
+from domain.models.position_result import PositionResult
 
 if TYPE_CHECKING:
     from vectorbt_runner.mtf_frames import SymbolMtfFrames
@@ -25,7 +25,7 @@ class BaseStrategy(ABC, Generic[StrategyParamsT]):
     def prepare_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """Метод."""
     @abstractmethod
-    def generate_events(self, data: pd.DataFrame, params: StrategyParamsT) -> list[TradeResult]:
+    def generate_events(self, data: pd.DataFrame, params: StrategyParamsT) -> list[PositionResult]:
         """Метод."""
     @abstractmethod
     def generate_events_multi_tf(
@@ -34,7 +34,7 @@ class BaseStrategy(ABC, Generic[StrategyParamsT]):
         mtf_frames: SymbolMtfFrames,
         params: StrategyParamsT,
         **context: Any,
-    ) -> list[TradeResult]:
+    ) -> list[PositionResult]:
         """Метод."""
 
 
@@ -43,7 +43,7 @@ class BaseStrategy(ABC, Generic[StrategyParamsT]):
         *,
         symbol_frames: dict[str, SymbolMtfFrames],
         params: StrategyParamsT,
-    ) -> list[TradeResult] | None:
+    ) -> list[PositionResult] | None:
         """Опциональный портфельный запуск, когда стратегия должна выбирать кандидатов между символами синхронно."""
         del symbol_frames, params
         return None
@@ -63,5 +63,5 @@ class BaseStrategy(ABC, Generic[StrategyParamsT]):
         mtf_frames: SymbolMtfFrames,
         params: StrategyParamsT,
     ) -> dict[str, Any] | None:
-        """Опциональная подготовка symbol-specific контекста перед генерацией сделок."""
+        """Опциональная подготовка symbol-specific контекста перед генерацией позиций."""
         return None

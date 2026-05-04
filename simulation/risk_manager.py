@@ -7,15 +7,15 @@ from dataclasses import dataclass
 from constants import STRATEGY_PRICE_EPSILON
 from domain.enums.position_side import PositionSide
 from domain.models.position import Position
-from domain.models.trade_signal import TradeSignal
+from domain.models.position_signal import PositionSignal
 
 
 @dataclass(frozen=True, slots=True)
 class RiskConfig:
     deposit: float
-    risk_per_trade_pct: float
+    risk_per_position_pct: float
     portfolio_risk_limit: float
-    legacy_r_trade: float | None = None
+    legacy_r_position: float | None = None
     min_stop_atr_ratio: float = 0.3
 
 
@@ -24,9 +24,9 @@ class RiskManager:
     config: RiskConfig
 
     def risk_amount(self) -> float:
-        if self.config.legacy_r_trade is not None:
-            return self.config.legacy_r_trade
-        return self.config.deposit * self.config.risk_per_trade_pct
+        if self.config.legacy_r_position is not None:
+            return self.config.legacy_r_position
+        return self.config.deposit * self.config.risk_per_position_pct
 
     @staticmethod
     def per_unit_risk(*, entry_price: float, stop_loss: float, side: PositionSide) -> float:
@@ -34,7 +34,7 @@ class RiskManager:
             return max(entry_price - stop_loss, STRATEGY_PRICE_EPSILON)
         return max(stop_loss - entry_price, STRATEGY_PRICE_EPSILON)
 
-    def calc_position_size(self, *, signal: TradeSignal) -> float:
+    def calc_position_size(self, *, signal: PositionSignal) -> float:
         risk = self.per_unit_risk(
             entry_price=signal.entry_price.value,
             stop_loss=signal.stop_loss.value,
@@ -42,7 +42,7 @@ class RiskManager:
         )
         return self.risk_amount() / risk
 
-    def check_stop_distance_by_atr(self, *, signal: TradeSignal, atr_bg: float) -> bool:
+    def check_stop_distance_by_atr(self, *, signal: PositionSignal, atr_bg: float) -> bool:
         if atr_bg <= 0:
             return True
         stop_distance = self.per_unit_risk(
@@ -63,12 +63,12 @@ class RiskManager:
             for position, side in positions
         )
 
-    def can_open_with_portfolio_limit(self, *, active_positions: list[tuple[Position, PositionSide]], signal: TradeSignal) -> bool:
+    def can_open_with_portfolio_limit(self, *, active_positions: list[tuple[Position, PositionSide]], signal: PositionSignal) -> bool:
         current_risk = self.total_open_risk(active_positions)
-        new_trade_risk = self.per_unit_risk(
+        new_position_risk = self.per_unit_risk(
             entry_price=signal.entry_price.value,
             stop_loss=signal.stop_loss.value,
             side=signal.position_side,
         ) * self.calc_position_size(signal=signal)
         portfolio_risk_limit = self.config.portfolio_risk_limit * self.risk_amount()
-        return (current_risk + new_trade_risk) <= portfolio_risk_limit
+        return (current_risk + new_position_risk) <= portfolio_risk_limit

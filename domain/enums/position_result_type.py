@@ -3,7 +3,7 @@
 from enum import Enum
 
 
-class TradeResultType(str, Enum):
+class PositionResultType(str, Enum):
     SL = "SL"
     BE = "BE"
     TIME_EXIT_PROFIT = "TIME_EXIT_PROFIT"
