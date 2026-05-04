@@ -63,7 +63,49 @@ SUPERSEDED = заменён новым патчем
 | P040 | PNO diagnostics logging/summary fix | APPLIED | `cli/commands.py`, `cli/pno_diagnostics.py`, `research/*` | diagnostics/logging | Исправить logging TypeError в diagnostics export, предупреждать о коротком PNO окне и писать full rejection summary. | `python -m compileall cli/pno_diagnostics.py cli/commands.py` |
 | P041 | PNO seconds-entry/stale-level/BE/log cleanup | PROPOSED | `cli/commands.py`, `cli/pno_diagnostics.py`, `strategy/pno/config.py`, `strategy/pno/engine.py`, `strategy/pno/pno_strategy.py`, `research/*` | bugfix/logging/risk | `15s` использует тот же sparse aggTrades path, что `30s`/`5s`; Stage5 режет уже reclaimed level до позиции; BE arm снижен до 60%; убраны лишние runtime logs. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 | P043 | Human BOS obsolete-level guard | PROPOSED | `strategy/pno/engine.py`, `cli/pno_diagnostics.py`, `research/*` | bugfix/diagnostics | Убрать bypass Stage4 scoring/Stage5 decay для `human_bos`; Stage1 rejected reasons без near-threshold rows получают fallback charts. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
-| P044 | Position terminology and strict flow data | PROPOSED | `domain/*`, `simulation/*`, `vectorbt_runner/*`, `strategy/pno/*`, `cli/*`, `research/*` | refactor/data-quality/diagnostics | Развести exchange trades и bot positions; требовать real quote_volume USDT/trade-count; добавить diagnostics coverage и Stage5 unique setup summary. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+| P044 | Position terminology and strict flow data | UNKNOWN in ZIP | `domain/*`, `simulation/*`, `vectorbt_runner/*`, `strategy/pno/*`, `cli/*`, `research/*` | refactor/data-quality/diagnostics | Развести exchange trades и bot positions; требовать real quote_volume USDT/trade-count; добавить diagnostics coverage и Stage5 unique setup summary. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+| P045 | Sparse entry data-quality gate | PROPOSED | `strategy/pno/engine.py`, `cli/pno_diagnostics.py`, `research/*` | bugfix/diagnostics | Для sparse entry TF откладывать entry data-quality gate до aggTrades materialization; levels data quality остаётся ранним; пустые research CSV пишутся с колонками. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+
+
+---
+
+## P045 — Sparse entry data-quality gate
+
+```text
+Status: PROPOSED
+Type: bugfix / diagnostics
+Trading logic changed: no; execution path/data-quality ordering changed
+Files: strategy/pno/engine.py, cli/pno_diagnostics.py, research/*
+Commit: UNKNOWN
+```
+
+Проблема:
+
+```text
+5m/15s и 5m/30s sparse entry TF валидировали target entry trade-count/quote_volume до materialization из aggTrades.
+Из-за этого run мог получить 508/508 missing_required_market_data на Stage1 и не проверить PNO-воронку.
+```
+
+Изменение:
+
+```text
+levels data quality проверяется до Stage1; entry data quality для sparse TF — после materialized aggTrades entry frame.
+Если sparse materialization даёт мало баров или неполные trade-data fields, diagnostics пишет явный Stage2 rejection.
+Пустые research_context CSV получают стабильные колонки, а не пустой файл без header.
+```
+
+Проверка:
+
+```text
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain
+```
+
+Ожидаемый rerun check:
+
+```text
+5m/15s и 5m/30s больше не должны массово резаться как entry_missing_real_trade_count до sparse materialization.
+Если entry aggTrades реально недоступны, причина должна перейти в insufficient_sparse_entry_data или missing_required_entry_market_data.
+```
 
 ---
 

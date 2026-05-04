@@ -41,7 +41,8 @@ data quality
 | E004 | `touch + retest hold`          | IDEA ONLY | Только отдельный режим, не замена `close_above`.         |
 | E005 | Year robustness test           | PLANNED   | Проверить 50+ positions/year, months, top-position dependency. |
 | E006 | `5m/30s` 31-day diagnostics run | ANALYZED  | 2 SL trades; diagnostics export has logging-format bug. |
-| E007 | `1.zip` multi-TF 31-day diagnostics | ANALYZED | Edge not proven; `human_bos` stale-level bypass and Stage1 chart sampling issue found. |
+| E007 | `1.zip` multi-TF 31-day diagnostics | ANALYZED | Edge not proven; current artifact mostly proves sparse-entry data-quality gate/order issue. |
+| E008 | Same multi-TF after P045 | PLANNED | Check that sparse entry TF reach real funnel/reject reasons instead of pre-materialization entry data-quality rejects. |
 
 ---
 
@@ -333,4 +334,34 @@ Evidence:
 Limitations:
 Conclusion:
 One next test:
+```
+---
+
+## E008 — Same multi-TF after P045
+
+```text
+Status: PLANNED
+Depends on: P045
+Levels/Entry TF: 1m/5s, 5m/15s, 5m/30s
+Period: same as E007 / 31 days
+Mode: discovery / close_above
+```
+
+Цель:
+
+```text
+проверить, что sparse entry TF больше не режутся на Stage1 из-за target entry trade-count до materialization
+```
+
+Успех:
+
+```text
+5m/15s и 5m/30s показывают levels-quality failures, market rejections или post-materialization entry-data failures, но не 508/508 entry_missing_real_trade_count до Stage1.
+research_context/*.csv имеют header даже при пустых rows.
+```
+
+Не оценивать:
+
+```text
+PnL / winrate / edge, пока positions мало или 0.
 ```

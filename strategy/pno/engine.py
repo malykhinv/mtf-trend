@@ -516,16 +516,22 @@ class PnoEngine:
         return "quote_volume_usdt" if PnoEngine._has_true_quote_volume(frame) else "missing_quote_volume_usdt"
 
     @staticmethod
-    def _market_data_quality_reasons(*, levels_frame: pd.DataFrame, entry_frame: pd.DataFrame) -> list[str]:
+    def _market_data_quality_reasons(
+        *,
+        levels_frame: pd.DataFrame,
+        entry_frame: pd.DataFrame,
+        require_entry_frame: bool = True,
+    ) -> list[str]:
         reasons: list[str] = []
         if not PnoEngine._has_real_trade_count(levels_frame):
             reasons.append("levels_missing_real_trade_count")
-        if not PnoEngine._has_real_trade_count(entry_frame):
-            reasons.append("entry_missing_real_trade_count")
         if not PnoEngine._has_true_quote_volume(levels_frame):
             reasons.append("levels_missing_quote_volume_usdt")
-        if not PnoEngine._has_true_quote_volume(entry_frame):
-            reasons.append("entry_missing_quote_volume_usdt")
+        if require_entry_frame:
+            if not PnoEngine._has_real_trade_count(entry_frame):
+                reasons.append("entry_missing_real_trade_count")
+            if not PnoEngine._has_true_quote_volume(entry_frame):
+                reasons.append("entry_missing_quote_volume_usdt")
         return reasons
 
     def _annotate_market_data_sources(
@@ -534,6 +540,8 @@ class PnoEngine:
         *,
         levels_frame: pd.DataFrame,
         entry_frame: pd.DataFrame,
+        require_entry_frame: bool = True,
+        status_override: str | None = None,
     ) -> None:
         levels_trade_source = self._trade_count_source_label(levels_frame)
         entry_trade_source = self._trade_count_source_label(entry_frame)
@@ -543,6 +551,7 @@ class PnoEngine:
         market_data_quality_reasons = self._market_data_quality_reasons(
             levels_frame=levels_frame,
             entry_frame=entry_frame,
+            require_entry_frame=require_entry_frame,
         )
         diagnostics["trade_count_proxy_used"] = False
         context = diagnostics.setdefault("context", {})
@@ -553,8 +562,10 @@ class PnoEngine:
                     "entry_trade_count_source": entry_trade_source,
                     "levels_quote_volume_source": levels_quote_source,
                     "entry_quote_volume_source": entry_quote_source,
-                    "market_data_quality_status": "ok" if not market_data_quality_reasons else "failed",
+                    "market_data_quality_status": status_override
+                    or ("ok" if not market_data_quality_reasons else "failed"),
                     "market_data_quality_reasons": list(market_data_quality_reasons),
+                    "entry_market_data_required": bool(require_entry_frame),
                 }
             )
 
@@ -944,32 +955,6 @@ class PnoEngine:
             "symbol": params.symbol,
             "stage_order": list(PNO_STAGE_SEQUENCE),
         }
-        self._annotate_market_data_sources(
-            diagnostics,
-            levels_frame=prepared_levels,
-            entry_frame=prepared_entry,
-        )
-        market_data_quality_reasons = self._market_data_quality_reasons(
-            levels_frame=prepared_levels,
-            entry_frame=prepared_entry,
-        )
-        if market_data_quality_reasons:
-            diagnostics["skipped_market_data_quality"] = 1
-            context = diagnostics.setdefault("context", {})
-            if isinstance(context, dict):
-                context["market_data_quality_status"] = "failed"
-                context["market_data_quality_reasons"] = list(market_data_quality_reasons)
-            self._mark_stage_rejection(
-                diagnostics,
-                {},
-                PNO_STAGE_1_PUMP,
-                key=(str(params.symbol), "missing_required_market_data", tuple(market_data_quality_reasons)),
-                timestamp_ms=int(prepared_levels["timestamp"].iloc[-1]) if "timestamp" in prepared_levels.columns and not prepared_levels.empty else 0,
-                reason="missing_required_market_data",
-                extra={"market_data_quality_reasons": "|".join(market_data_quality_reasons)},
-            )
-            self._last_generation_diagnostics = diagnostics
-            return []
         levels_required_bars = self._scale_required_bars(
             base_bars=params.min_data_5m,
             base_timeframe_ms=Timeframe.M5.to_milliseconds(),
@@ -980,6 +965,40 @@ class PnoEngine:
         uses_local_seconds_materialization = (
             entry_timeframe_ms < source_entry_timeframe_ms and seconds_frame_provider is not None
         )
+        require_entry_quality_now = not uses_local_seconds_materialization
+        early_market_data_quality_reasons = self._market_data_quality_reasons(
+            levels_frame=prepared_levels,
+            entry_frame=prepared_entry,
+            require_entry_frame=require_entry_quality_now,
+        )
+        self._annotate_market_data_sources(
+            diagnostics,
+            levels_frame=prepared_levels,
+            entry_frame=prepared_entry,
+            require_entry_frame=require_entry_quality_now,
+            status_override=(
+                "levels_ok_entry_deferred"
+                if uses_local_seconds_materialization and not early_market_data_quality_reasons
+                else None
+            ),
+        )
+        if early_market_data_quality_reasons:
+            diagnostics["skipped_market_data_quality"] = 1
+            context = diagnostics.setdefault("context", {})
+            if isinstance(context, dict):
+                context["market_data_quality_status"] = "failed"
+                context["market_data_quality_reasons"] = list(early_market_data_quality_reasons)
+            self._mark_stage_rejection(
+                diagnostics,
+                {},
+                PNO_STAGE_1_PUMP,
+                key=(str(params.symbol), "missing_required_market_data", tuple(early_market_data_quality_reasons)),
+                timestamp_ms=int(prepared_levels["timestamp"].iloc[-1]) if "timestamp" in prepared_levels.columns and not prepared_levels.empty else 0,
+                reason="missing_required_market_data",
+                extra={"market_data_quality_reasons": "|".join(early_market_data_quality_reasons)},
+            )
+            self._last_generation_diagnostics = diagnostics
+            return []
         entry_required_bars = (
             max(
                 12,
@@ -1114,9 +1133,23 @@ class PnoEngine:
             )
             diagnostics["context"]["seconds_materialized"] = not actual_entry_frame.empty
             diagnostics["context"]["seconds_source_timeframe_ms"] = int(source_entry_timeframe_ms)
+            diagnostics["context"]["seconds_materialized_bars"] = int(len(actual_entry_frame))
             if len(actual_entry_frame) < entry_required_bars:
                 diagnostics["skipped_insufficient_data"] = 1
-                diagnostics["context"]["seconds_materialized_bars"] = int(len(actual_entry_frame))
+                self._mark_stage_rejection(
+                    diagnostics,
+                    {},
+                    PNO_STAGE_2_HIGH_PULLBACK,
+                    key=(str(params.symbol), "insufficient_sparse_entry_data", int(len(actual_entry_frame))),
+                    timestamp_ms=int(prepared_levels["timestamp"].iloc[-1]) if "timestamp" in prepared_levels.columns and not prepared_levels.empty else 0,
+                    reason="insufficient_sparse_entry_data",
+                    extra={
+                        "entry_rows": int(len(actual_entry_frame)),
+                        "entry_required_bars": int(entry_required_bars),
+                        "source_entry_timeframe_ms": int(source_entry_timeframe_ms),
+                        "target_entry_timeframe_ms": int(entry_timeframe_ms),
+                    },
+                )
                 self._last_generation_diagnostics = diagnostics
                 return []
 
@@ -1125,6 +1158,27 @@ class PnoEngine:
             levels_frame=prepared_levels,
             entry_frame=actual_entry_frame,
         )
+        entry_market_data_quality_reasons = self._market_data_quality_reasons(
+            levels_frame=prepared_levels,
+            entry_frame=actual_entry_frame,
+        )
+        if entry_market_data_quality_reasons:
+            diagnostics["skipped_market_data_quality"] = 1
+            context = diagnostics.setdefault("context", {})
+            if isinstance(context, dict):
+                context["market_data_quality_status"] = "failed"
+                context["market_data_quality_reasons"] = list(entry_market_data_quality_reasons)
+            self._mark_stage_rejection(
+                diagnostics,
+                {},
+                PNO_STAGE_2_HIGH_PULLBACK if uses_local_seconds_materialization else PNO_STAGE_1_PUMP,
+                key=(str(params.symbol), "missing_required_entry_market_data", tuple(entry_market_data_quality_reasons)),
+                timestamp_ms=int(prepared_levels["timestamp"].iloc[-1]) if "timestamp" in prepared_levels.columns and not prepared_levels.empty else 0,
+                reason="missing_required_entry_market_data" if uses_local_seconds_materialization else "missing_required_market_data",
+                extra={"market_data_quality_reasons": "|".join(entry_market_data_quality_reasons)},
+            )
+            self._last_generation_diagnostics = diagnostics
+            return []
 
         one_cache_key = (
             id(actual_entry_frame),

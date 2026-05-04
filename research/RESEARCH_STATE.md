@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: UNKNOWN (source: README.zip)
-Local diff: P008 proposed typing/client-boundary hardening; P032 proposed normalize source-level artifact logs; P033 proposed PyCharm inspection cleanup; P034 proposed diagnostics initial progress; P038 proposed diagnostics export cache; P039 proposed trade-count chart fix; P041 proposed seconds-entry/stale-level/BE/log cleanup; P042 proposed research-context export helper fix; P043 proposed human_bos obsolete-level guard and Stage1 rejected chart fallback
-Last applied patch: UNKNOWN in ZIP; local patch P044 is PROPOSED
+Commit: UNKNOWN (source: 2.zip)
+Local diff: P045 proposed sparse-entry data-quality gate and empty research CSV schemas. P044 appears present in ZIP code, but commit/status remains UNKNOWN until GitHub head is checked.
+Last applied patch: UNKNOWN in ZIP
 Last analyzed run: E007 multi-TF 31-day run from 1.zip
 Updated: 2026-05-04
 ```
@@ -73,6 +73,7 @@ winrate > 0.40
 8. H4 подтверждена: `human_bos` bypass scoring/decay может принимать устаревший нижний BOS-level.
 9. Для PNO flow требуется real `quote_volume` в USDT; `close*volume` не допускается как замена.
 10. Симулированные результаты бота называются positions; trade/trades остаётся только для биржевых сделок внутри свечей.
+11. `1.zip` показал не edge-result, а data-quality bottleneck: sparse entry TF (`5m/15s`, `5m/30s`) резались до materialization из-за раннего entry-quality gate.
 
 ---
 
@@ -120,7 +121,8 @@ winrate > 0.40
 | P041 | PNO seconds-entry/stale-level/BE/log cleanup | PROPOSED | Включить `15s` в общий sparse aggTrades path, резать устаревший level до позиции, снизить BE до 60%, убрать лишние runtime logs. |
 | P042 | PNO research-context export helper fix | PROPOSED | Восстановить локальные prepared-frame helper’ы и накопители в `_export_pno_research_context`, чтобы diagnostics export не падал после полного прогона. |
 | P043 | Human BOS obsolete-level guard | PROPOSED | Убрать bypass scoring/decay для `human_bos` и экспортировать fallback charts для Stage1 rejected reasons без near-threshold rows. |
-| P044 | Position terminology and strict flow data | PROPOSED | Развести exchange trades и bot positions; требовать real quote_volume USDT/trade-count; добавить diagnostics coverage и Stage5 unique setup summary. |
+| P044 | Position terminology and strict flow data | UNKNOWN in ZIP | Развести exchange trades и bot positions; требовать real quote_volume USDT/trade-count; добавить diagnostics coverage и Stage5 unique setup summary. |
+| P045 | Sparse entry data-quality gate | PROPOSED | Не валидировать target entry trade data до sparse aggTrades materialization; писать пустые research CSV с колонками. |
 
 Статусы:
 
@@ -136,7 +138,7 @@ PROPOSED / APPLIED / VERIFIED / UNKNOWN / REVERTED / SUPERSEDED
 |---|---|---|---|
 | H1 | `30s` entry TF может опаздывать. | ETH case дошёл до active high до executable entry. | Сравнить `5m/30s`, `5m/15s`, `1m/5s`. |
 | H2 | Stage1 слишком узкий или рынок дал мало чистых пампов. | Мало Stage1 passes в последнем run. | Длиннее окно + rejection distribution. |
-| H3 | Flow-фильтры нельзя честно оценить без real trade-count. | Был volume proxy. | P004 + повтор того же run. |
+| H3 | Flow-фильтры нельзя честно оценить без real trade-count. | Был volume proxy. | P045 + повтор того же run с diagnostics coverage. |
 | H4 | `human_bos` может обходить часть Stage4 scoring. | Подтверждено на `engine.py`: `human_bos` bypassed Stage4 scoring и Stage5 decay. | P043 + rerun same 31d multi-TF diagnostics. |
 | H5 | Wick-touch ухудшит качество входов. | BZ/RUNE были wick-only без close_above. | Только отдельный `touch + retest hold` experiment. |
 

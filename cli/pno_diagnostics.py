@@ -74,6 +74,118 @@ _PNO_STAGE1_REJECTION_DISTANCE_FIELDS: dict[str, tuple[str, str, str]] = {
     "pump_candidate_jerky": ("pump_path_efficiency", "stage1_min_path_efficiency", "min"),
 }
 
+
+_PNO_RESEARCH_CONTEXT_BASE_COLUMNS: tuple[str, ...] = (
+    "symbol",
+    "source_stage",
+    "source_status",
+    "source_reason",
+    "stage_key",
+    "position_key",
+    "timestamp_ms",
+    "pump_start_timestamp_ms",
+    "active_high_timestamp_ms",
+    "pullback_low_timestamp_ms",
+    "level_valid_timestamp_ms",
+    "entry_signal_timestamp_ms",
+    "entry_timestamp_ms",
+    "active_high",
+    "pullback_low",
+    "level",
+    "entry_pos",
+    "final_score",
+    "stage5_outcome",
+    "is_position",
+    "is_triggered",
+    "is_win",
+)
+_PNO_POSITION_EXIT_REFERENCE_COLUMNS: tuple[str, ...] = (
+    "position_key",
+    "stage_key",
+    "symbol",
+    "entry_timestamp_ms",
+    "exit_timestamp_ms",
+    "result_type",
+    "category",
+    "entry_price",
+    "initial_stop_loss",
+    "initial_risk",
+    "initial_risk_pct",
+    "fee_rate",
+    "active_high",
+    "active_high_r",
+    "tp1",
+    "tp1_r",
+    "tp2",
+    "tp2_r",
+    "be_arm_price",
+    "be_protect_price",
+    "pnl_percent",
+)
+_PNO_POSITION_PATH_CONTEXT_COLUMNS: tuple[str, ...] = (
+    "position_key",
+    "symbol",
+    "result_type",
+    "bar_offset",
+    "timestamp_ms",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "open_r",
+    "high_r",
+    "low_r",
+    "close_r",
+    "cum_mfe_r",
+    "cum_mae_r",
+    "crossed_initial_stop",
+    "crossed_be_arm",
+    "crossed_be_protect",
+    "crossed_active_high",
+    "crossed_tp1",
+    "crossed_tp2",
+    "crossed_level_down",
+    "signal_close_above_level",
+)
+_PNO_LEVELS_PATH_CONTEXT_COLUMNS: tuple[str, ...] = (
+    "stage_key",
+    "symbol",
+    "source_status",
+    "source_reason",
+    "bar_offset",
+    "timestamp_ms",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "is_active_high_bar",
+    "is_pullback_low_bar",
+    "is_level_bar",
+    "is_signal_bar",
+)
+_PNO_FEATURE_SUMMARY_COLUMNS: tuple[str, ...] = (
+    "scope",
+    "feature",
+    "bucket",
+    "count",
+    "share",
+    "triggered_rate",
+    "position_count",
+    "win_rate",
+    "tp2_rate",
+    "mean_pnl_percent",
+    "median_pnl_percent",
+)
+_PNO_STAGE_REASON_SUMMARY_COLUMNS: tuple[str, ...] = ("stage_id", "status", "reason", "count")
+
+
+def _frame_from_records(records: list[dict[str, object]], *, columns: tuple[str, ...]) -> pd.DataFrame:
+    if records:
+        return pd.DataFrame(records)
+    return pd.DataFrame(columns=list(columns))
+
 def _read_csv_or_empty(path: Path) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
@@ -3647,7 +3759,7 @@ def _build_pno_research_context_row(
 
 def _summarize_pno_feature_buckets(frame: pd.DataFrame, *, scope: str) -> pd.DataFrame:
     if frame.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=list(_PNO_FEATURE_SUMMARY_COLUMNS))
     feature_columns = [
         "pump_impulse_bucket",
         "pump_volume_start_bucket",
@@ -3722,7 +3834,7 @@ def _summarize_pno_feature_buckets(frame: pd.DataFrame, *, scope: str) -> pd.Dat
                     "median_pnl_percent": round(float(pd.to_numeric(position_group["pnl_percent"], errors="coerce").median()), 4) if not position_group.empty and "pnl_percent" in position_group.columns else np.nan,
                 }
             )
-    return pd.DataFrame(summary_rows)
+    return _frame_from_records(summary_rows, columns=_PNO_FEATURE_SUMMARY_COLUMNS)
 
 
 
@@ -3907,10 +4019,16 @@ def _export_pno_research_context(
         positions_done += 1
         _log_progress("position_context", positions_done, positions_total)
 
-    position_context_frame = pd.DataFrame(position_context_rows)
+    position_context_frame = _frame_from_records(position_context_rows, columns=_PNO_RESEARCH_CONTEXT_BASE_COLUMNS)
     position_context_frame.to_csv(research_dir / "position_context.csv", index=False)
-    pd.DataFrame(position_exit_reference_rows).to_csv(research_dir / "position_exit_reference.csv", index=False)
-    pd.DataFrame(position_path_rows).to_csv(research_dir / "position_path_context.csv", index=False)
+    _frame_from_records(position_exit_reference_rows, columns=_PNO_POSITION_EXIT_REFERENCE_COLUMNS).to_csv(
+        research_dir / "position_exit_reference.csv",
+        index=False,
+    )
+    _frame_from_records(position_path_rows, columns=_PNO_POSITION_PATH_CONTEXT_COLUMNS).to_csv(
+        research_dir / "position_path_context.csv",
+        index=False,
+    )
     _log_progress("position_context", positions_done, positions_total, force=True)
 
     stage5_candidate_rows: list[dict[str, object]] = list(position_context_rows)
@@ -3955,13 +4073,16 @@ def _export_pno_research_context(
             if stage_key:
                 stage5_outcome_by_key.setdefault(stage_key, f"rejected_{reason}")
 
-    stage5_candidate_frame = pd.DataFrame(stage5_candidate_rows)
+    stage5_candidate_frame = _frame_from_records(stage5_candidate_rows, columns=_PNO_RESEARCH_CONTEXT_BASE_COLUMNS)
     stage5_candidate_frame.to_csv(research_dir / "stage5_trigger_context.csv", index=False)
     _build_stage5_unique_setup_summary(stage5_candidate_frame).to_csv(
         research_dir / "stage5_unique_setup_summary.csv",
         index=False,
     )
-    pd.DataFrame(stage5_levels_path_rows).to_csv(research_dir / "stage5_levels_path_context.csv", index=False)
+    _frame_from_records(stage5_levels_path_rows, columns=_PNO_LEVELS_PATH_CONTEXT_COLUMNS).to_csv(
+        research_dir / "stage5_levels_path_context.csv",
+        index=False,
+    )
 
     stage4_context_rows: list[dict[str, object]] = []
     stage4_total = len(stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, [])) + sum(
@@ -4010,7 +4131,7 @@ def _export_pno_research_context(
             stage4_context_rows.append(enriched)
             stage4_done += 1
             _log_progress("stage4_context", stage4_done, stage4_total)
-    stage4_context_frame = pd.DataFrame(stage4_context_rows)
+    stage4_context_frame = _frame_from_records(stage4_context_rows, columns=_PNO_RESEARCH_CONTEXT_BASE_COLUMNS)
     stage4_context_frame.to_csv(research_dir / "stage4_level_context.csv", index=False)
     _log_progress("stage4_context", stage4_done, stage4_total, force=True)
 
@@ -4019,7 +4140,11 @@ def _export_pno_research_context(
         _summarize_pno_feature_buckets(stage5_candidate_frame, scope="stage5"),
         _summarize_pno_feature_buckets(stage4_context_frame.assign(is_position=stage4_context_frame.get("downstream_triggered", False), is_triggered=stage4_context_frame.get("downstream_triggered", False), is_win=stage4_context_frame.get("downstream_win", False), stage5_outcome=stage4_context_frame.get("downstream_stage5_outcome", pd.Series(dtype=object))), scope="stage4"),
     ]
-    summary_frame = pd.concat([frame for frame in summary_frames if not frame.empty], ignore_index=True) if any(not frame.empty for frame in summary_frames) else pd.DataFrame()
+    summary_frame = (
+        pd.concat([frame for frame in summary_frames if not frame.empty], ignore_index=True)
+        if any(not frame.empty for frame in summary_frames)
+        else pd.DataFrame(columns=list(_PNO_FEATURE_SUMMARY_COLUMNS))
+    )
     summary_frame.to_csv(research_dir / "feature_summary.csv", index=False)
 
     stage_reason_summary_rows: list[dict[str, object]] = []
@@ -4028,6 +4153,9 @@ def _export_pno_research_context(
     for stage_id, reason_groups in stage_rejection_summary_source.items():
         for reason, rows in reason_groups.items():
             stage_reason_summary_rows.append({"stage_id": stage_id, "status": "rejected", "reason": reason, "count": int(len(rows))})
-    pd.DataFrame(stage_reason_summary_rows).to_csv(research_dir / "stage_reason_summary.csv", index=False)
+    _frame_from_records(stage_reason_summary_rows, columns=_PNO_STAGE_REASON_SUMMARY_COLUMNS).to_csv(
+        research_dir / "stage_reason_summary.csv",
+        index=False,
+    )
 
 
