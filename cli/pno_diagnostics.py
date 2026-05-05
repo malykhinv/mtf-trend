@@ -31,7 +31,10 @@ _PNO_STAGE1_REVIEW_SAMPLE_REASONS: set[str] = {
     "pump_nonorganic_tape",
     "active_flow_faded_before_structure",
 }
-_PNO_PLOT_TRADE_COUNT_COLUMNS: tuple[str, ...] = ("number_of_trades", "trades", "trade_count")
+_PNO_REAL_TRADE_COUNT_COLUMN = "number_of_trades"
+_PNO_LEGACY_TRADE_COUNT_COLUMNS: tuple[str, ...] = ("trades", "trade_count")
+_PNO_TRADE_COUNT_SOURCE_COLUMNS: tuple[str, ...] = (_PNO_REAL_TRADE_COUNT_COLUMN, *_PNO_LEGACY_TRADE_COUNT_COLUMNS)
+_PNO_PLOT_TRADE_COUNT_COLUMNS: tuple[str, ...] = (_PNO_REAL_TRADE_COUNT_COLUMN,)
 _PNO_STAGE1_REJECTION_DISTANCE_FIELDS: dict[str, tuple[str, str, str]] = {
     "impulse_atr_pre_too_small": ("pump_impulse_atr_pre", "stage1_min_impulse_atr_pre", "min"),
     "peak_bar_tr_atr_pre_too_small": ("pump_peak_bar_tr_atr_pre", "stage1_min_peak_bar_tr_atr_pre", "min"),
@@ -222,6 +225,7 @@ _PNO_STAGE_REVIEW_MANIFEST_COLUMNS: tuple[str, ...] = (
     "passed_events_path",
     "passed_charts_count",
     "rejected_charts_count",
+    "trade_count_source_counts",
 )
 
 
@@ -467,7 +471,7 @@ def _build_pno_plot_frame(
     start_timestamp_ms: int,
     end_timestamp_ms: int,
 ) -> pd.DataFrame:
-    selected_columns = [column for column in ("timestamp", "open", "high", "low", "close", "volume", *_PNO_PLOT_TRADE_COUNT_COLUMNS) if column in entry_frame.columns]
+    selected_columns = [column for column in ("timestamp", "open", "high", "low", "close", "volume", *_PNO_TRADE_COUNT_SOURCE_COLUMNS) if column in entry_frame.columns]
     plot_frame = entry_frame.loc[
         (entry_frame["timestamp"] >= start_timestamp_ms) & (entry_frame["timestamp"] <= end_timestamp_ms),
         selected_columns,
@@ -491,29 +495,48 @@ def _build_pno_plot_frame(
 
 
 def _with_canonical_pno_trade_count(frame: pd.DataFrame) -> pd.DataFrame:
-    if frame.empty:
-        return frame
-    source_column = next(
-        (
-            column
-            for column in _PNO_PLOT_TRADE_COUNT_COLUMNS
-            if column in frame.columns and pd.to_numeric(frame[column], errors="coerce").notna().any()
-        ),
-        None,
-    )
-    if source_column is None:
+    """Normalize canonical trade-count values without backfilling legacy aliases."""
+    if frame.empty or _PNO_REAL_TRADE_COUNT_COLUMN not in frame.columns:
         return frame
     prepared = frame.copy()
-    source_values = pd.to_numeric(prepared[source_column], errors="coerce").replace([np.inf, -np.inf], np.nan)
-    for column in _PNO_PLOT_TRADE_COUNT_COLUMNS:
-        if column in prepared.columns:
-            prepared[column] = pd.to_numeric(prepared[column], errors="coerce").replace(
-                [np.inf, -np.inf],
-                np.nan,
-            ).combine_first(source_values)
-        else:
-            prepared[column] = source_values
+    prepared[_PNO_REAL_TRADE_COUNT_COLUMN] = pd.to_numeric(
+        prepared[_PNO_REAL_TRADE_COUNT_COLUMN],
+        errors="coerce",
+    ).replace([np.inf, -np.inf], np.nan)
     return prepared
+
+
+def _pno_trade_count_source_label(frame: pd.DataFrame) -> str:
+    if _PNO_REAL_TRADE_COUNT_COLUMN in frame.columns:
+        values = pd.to_numeric(frame[_PNO_REAL_TRADE_COUNT_COLUMN], errors="coerce").replace(
+            [np.inf, -np.inf],
+            np.nan,
+        )
+        if values.notna().any() and float(values.fillna(0.0).sum()) > 0.0:
+            return _PNO_REAL_TRADE_COUNT_COLUMN
+        return f"{_PNO_REAL_TRADE_COUNT_COLUMN}_empty"
+    for column in _PNO_LEGACY_TRADE_COUNT_COLUMNS:
+        if column not in frame.columns:
+            continue
+        values = pd.to_numeric(frame[column], errors="coerce").replace([np.inf, -np.inf], np.nan)
+        if values.notna().any() and float(values.fillna(0.0).sum()) > 0.0:
+            return f"legacy_{column}_ignored"
+        return f"legacy_{column}_empty_ignored"
+    return "missing_canonical_number_of_trades"
+
+
+def _annotate_missing_trade_count_panel(ax: plt.Axes, source_label: str) -> None:
+    ax.text(
+        0.5,
+        0.5,
+        f"number_of_trades missing\n{source_label}",
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        color=_PNO_PLOT_MUTED,
+        fontsize=7,
+        alpha=0.72,
+    )
 
 
 def _prepare_pno_levels_ema_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
@@ -553,9 +576,7 @@ def _prepare_pno_levels_plot_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
             "ema9",
             "ema20",
             "open_interest",
-            "number_of_trades",
-            "trades",
-            "trade_count",
+            *_PNO_TRADE_COUNT_SOURCE_COLUMNS,
             "taker_buy_volume",
             "taker_buy_quote_volume",
         )
@@ -576,9 +597,7 @@ def _prepare_pno_levels_plot_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
             "ema9",
             "ema20",
             "open_interest",
-            "number_of_trades",
-            "trades",
-            "trade_count",
+            *_PNO_TRADE_COUNT_SOURCE_COLUMNS,
             "taker_buy_volume",
             "taker_buy_quote_volume",
         )
@@ -616,9 +635,7 @@ def _prepare_pno_entry_plot_source(entry_frame: pd.DataFrame) -> pd.DataFrame:
             "close",
             "volume",
             "open_interest",
-            "number_of_trades",
-            "trades",
-            "trade_count",
+            *_PNO_TRADE_COUNT_SOURCE_COLUMNS,
             "taker_buy_volume",
             "taker_buy_quote_volume",
         )
@@ -635,9 +652,7 @@ def _prepare_pno_entry_plot_source(entry_frame: pd.DataFrame) -> pd.DataFrame:
         "close",
         "volume",
         "open_interest",
-        "number_of_trades",
-        "trades",
-        "trade_count",
+        *_PNO_TRADE_COUNT_SOURCE_COLUMNS,
         "taker_buy_volume",
         "taker_buy_quote_volume",
     ):
@@ -1213,15 +1228,16 @@ def _configure_pno_plot_axes(*, price_ax: plt.Axes, volume_ax: plt.Axes, trades_
         trades_ax.tick_params(axis="y", labelleft=False, labelright=True)
 
 
-def _resolve_trade_count_series(frame: pd.DataFrame) -> np.ndarray:
-    trade_count_column = next(
-        (column for column in ("number_of_trades", "trades", "trade_count") if column in frame.columns),
-        None,
+def _resolve_trade_count_series(frame: pd.DataFrame) -> np.ndarray | None:
+    if _PNO_REAL_TRADE_COUNT_COLUMN not in frame.columns:
+        return None
+    values = pd.to_numeric(frame[_PNO_REAL_TRADE_COUNT_COLUMN], errors="coerce").replace(
+        [np.inf, -np.inf],
+        np.nan,
     )
-    if trade_count_column is None:
-        return np.zeros(len(frame), dtype=np.float64)
-    values = pd.to_numeric(frame[trade_count_column], errors="coerce").fillna(0.0)
-    return values.to_numpy(dtype=np.float64, copy=False)
+    if not values.notna().any():
+        return None
+    return values.fillna(0.0).to_numpy(dtype=np.float64, copy=False)
 
 
 def _resolve_pno_pump_plot_idx(
@@ -1785,7 +1801,7 @@ def _render_pno_position_chart(
     timestamps = plot_frame["timestamp"].to_numpy(dtype=np.int64)
     levels_window_columns = [
         column
-        for column in ("timestamp", "open", "high", "low", "close", "volume", *_PNO_PLOT_TRADE_COUNT_COLUMNS)
+        for column in ("timestamp", "open", "high", "low", "close", "volume", *_PNO_TRADE_COUNT_SOURCE_COLUMNS)
         if column in levels_frame.columns
     ]
     levels_window = levels_frame.loc[
@@ -2158,8 +2174,8 @@ def _render_pno_position_chart(
         )
 
     trade_counts = _resolve_trade_count_series(plot_frame)
-    trade_counts_max = float(np.nanmax(trade_counts)) if trade_counts.size else 0.0
-    if trade_counts_max > 0.0:
+    trade_counts_max = float(np.nanmax(trade_counts)) if trade_counts is not None and trade_counts.size else 0.0
+    if trade_counts is not None and trade_counts_max > 0.0:
         trade_counts_pct = (trade_counts / trade_counts_max) * 100.0
         trade_count_colors = np.where(closes >= opens, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
         ax_trades.bar(
@@ -2173,8 +2189,8 @@ def _render_pno_position_chart(
         )
     elif not levels_window.empty:
         levels_trades = _resolve_trade_count_series(levels_window)
-        levels_trades_max = float(np.nanmax(levels_trades)) if levels_trades.size else 0.0
-        if levels_trades_max > 0.0:
+        levels_trades_max = float(np.nanmax(levels_trades)) if levels_trades is not None and levels_trades.size else 0.0
+        if levels_trades is not None and levels_trades_max > 0.0:
             levels_trades_pct = (levels_trades / levels_trades_max) * 100.0
             ax_trades.bar(
                 levels_x,
@@ -2185,6 +2201,13 @@ def _render_pno_position_chart(
                 alpha=0.78,
                 zorder=3,
             )
+        else:
+            _annotate_missing_trade_count_panel(
+                ax_trades,
+                f"entry={_pno_trade_count_source_label(plot_frame)}; levels={_pno_trade_count_source_label(levels_window)}",
+            )
+    else:
+        _annotate_missing_trade_count_panel(ax_trades, _pno_trade_count_source_label(plot_frame))
 
     padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.05, 1e-9)
     ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
@@ -2630,17 +2653,20 @@ def _render_pno_stage_review_chart(
                 linestyle="--",
                 zorder=3,
             )
-        trades_max = float(np.nanmax(trade_counts)) if trade_counts.size and np.isfinite(trade_counts).any() else 0.0
-        trades_pct = (trade_counts / trades_max) * 100.0 if trades_max > 0.0 else np.zeros_like(trade_counts)
-        ax_trades.bar(
-            x,
-            trades_pct,
-            width=_resolve_pno_candle_width(x, default=0.82),
-            color=volume_colors,
-            edgecolor="none",
-            alpha=0.72,
-            zorder=2,
-        )
+        trades_max = float(np.nanmax(trade_counts)) if trade_counts is not None and trade_counts.size and np.isfinite(trade_counts).any() else 0.0
+        if trade_counts is not None and trades_max > 0.0:
+            trades_pct = (trade_counts / trades_max) * 100.0
+            ax_trades.bar(
+                x,
+                trades_pct,
+                width=_resolve_pno_candle_width(x, default=0.82),
+                color=volume_colors,
+                edgecolor="none",
+                alpha=0.72,
+                zorder=2,
+            )
+        else:
+            _annotate_missing_trade_count_panel(ax_trades, _pno_trade_count_source_label(plot_frame))
 
     if np.isfinite(high_values).any() and np.isfinite(low_values).any():
         padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.06, 1e-9)
@@ -2782,6 +2808,7 @@ def _export_pno_stage_reviews(
         passed_events_path = passed_dir / "events.csv"
         _write_stage_review_events(passed_events_path, passed_rows, status="passed", reason="passed")
         passed_chart_paths: list[str] = []
+        stage_trade_count_source_counts: dict[str, int] = {}
         stage_summary_rows: list[dict[str, object]] = [
             {
                 "stage_id": stage_id,
@@ -2801,6 +2828,9 @@ def _export_pno_stage_reviews(
                 prepared_frames = _get_prepared_frames(symbol)
                 if prepared_frames is None:
                     continue
+                trade_source_frame = prepared_frames[1] if needs_entry_frames else prepared_frames[0]
+                trade_source_label = _pno_trade_count_source_label(trade_source_frame)
+                stage_trade_count_source_counts[trade_source_label] = stage_trade_count_source_counts.get(trade_source_label, 0) + 1
                 chart_path = _render_pno_stage_review_chart(
                     charts_dir=passed_charts_dir,
                     symbol=symbol,
@@ -2843,6 +2873,9 @@ def _export_pno_stage_reviews(
                     prepared_frames = _get_prepared_frames(symbol)
                     if prepared_frames is None:
                         continue
+                    trade_source_frame = prepared_frames[1] if needs_entry_frames else prepared_frames[0]
+                    trade_source_label = _pno_trade_count_source_label(trade_source_frame)
+                    stage_trade_count_source_counts[trade_source_label] = stage_trade_count_source_counts.get(trade_source_label, 0) + 1
                     chart_path = _render_pno_stage_review_chart(
                         charts_dir=charts_dir,
                         symbol=symbol,
@@ -2893,6 +2926,7 @@ def _export_pno_stage_reviews(
                 "passed_events_path": str(passed_events_path),
                 "passed_charts_count": int(len(passed_chart_paths)),
                 "rejected_charts_count": int(rejected_chart_paths),
+                "trade_count_source_counts": json.dumps(stage_trade_count_source_counts, sort_keys=True),
             }
         )
 
@@ -3210,12 +3244,16 @@ def _resolve_pno_signal_bar_context(
     ema20 = float(entry_frame["ema20"].iloc[idx]) if "ema20" in entry_frame.columns else np.nan
     ema9_prev = float(entry_frame["ema9"].iloc[max(0, idx - 3)]) if "ema9" in entry_frame.columns else np.nan
     ema20_prev = float(entry_frame["ema20"].iloc[max(0, idx - 3)]) if "ema20" in entry_frame.columns else np.nan
-    trade_count_column = next(
-        (column for column in ("number_of_trades", "trades", "trade_count") if column in entry_frame.columns),
-        None,
+    trade_count = (
+        float(entry_frame[_PNO_REAL_TRADE_COUNT_COLUMN].iloc[idx])
+        if _PNO_REAL_TRADE_COUNT_COLUMN in entry_frame.columns
+        else np.nan
     )
-    trade_count = float(entry_frame[trade_count_column].iloc[idx]) if trade_count_column is not None else np.nan
-    recent_trade_slice = entry_frame[trade_count_column].iloc[recent_start:idx] if trade_count_column is not None else pd.Series(dtype=float)
+    recent_trade_slice = (
+        entry_frame[_PNO_REAL_TRADE_COUNT_COLUMN].iloc[recent_start:idx]
+        if _PNO_REAL_TRADE_COUNT_COLUMN in entry_frame.columns
+        else pd.Series(dtype=float)
+    )
     recent_trade_median = float(recent_trade_slice.median()) if not recent_trade_slice.empty else np.nan
     level_value = float(level) if level is not None and np.isfinite(float(level)) else np.nan
     signal_high_clearance_pct = ((high_price - level_value) / level_value * 100.0) if np.isfinite(level_value) and level_value > 0.0 else np.nan
@@ -3355,8 +3393,11 @@ def _resolve_pno_window_profile(
     volume_chunks = np.array_split(volumes, 3) if volumes.size >= 3 else [volumes]
     first_chunk = volume_chunks[0] if volume_chunks else np.array([], dtype=np.float64)
     last_chunk = volume_chunks[-1] if volume_chunks else np.array([], dtype=np.float64)
-    trade_count_column = next((column for column in ("number_of_trades", "trades", "trade_count") if column in frame.columns), None)
-    trade_counts = frame[trade_count_column].to_numpy(dtype=np.float64, copy=False) if trade_count_column is not None else None
+    trade_counts = (
+        pd.to_numeric(frame[_PNO_REAL_TRADE_COUNT_COLUMN], errors="coerce").to_numpy(dtype=np.float64, copy=False)
+        if _PNO_REAL_TRADE_COUNT_COLUMN in frame.columns
+        else None
+    )
     oi_values = frame["open_interest"].to_numpy(dtype=np.float64, copy=False) if "open_interest" in frame.columns else None
     quote_volume = (
         frame["quote_volume"].to_numpy(dtype=np.float64, copy=False)

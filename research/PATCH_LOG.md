@@ -69,7 +69,8 @@ SUPERSEDED = заменён новым патчем
 | P049 | Canonical PNO trade-count only | APPLIED locally / UNKNOWN commit | `strategy/pno/engine.py`, `strategy/pno/pno_strategy.py`, `research/*` | data-quality | PNO trading path доверяет только `number_of_trades`; legacy `trades`/`trade_count` не легализуют flow-data. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 | P050 | No ticker quote-volume proxy | APPLIED locally / UNKNOWN commit | `data/exchanges/ccxt_futures_client.py`, `cli/commands.py`, `research/*` | data-quality | Не заменять missing ticker `quoteVolume` на `baseVolume * last`; proxy хранить только как ignored diagnostics metadata. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 | P051 | Explicit sparse-entry materialization failure | APPLIED locally / UNKNOWN commit | `strategy/pno/engine.py`, `research/*` | data-quality/diagnostics | Sparse entry materialization возвращает typed status/reason вместо пустого OHLCV-frame fallback; причины loader/window/load/empty/insufficient bars видны в diagnostics. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
-| P052 | Explicit DataPreparer load status | PROPOSED | `vectorbt_runner/data_preparer.py`, `vectorbt_runner/__init__.py`, `cli/commands.py`, `research/*` | data-quality/diagnostics | DataPreparer возвращает typed status/reason для missing symbol/file/schema/window/invalid rows; PNO backtest и check-quality больше не сводят эти причины к одинаковому empty frame. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+| P052 | Explicit DataPreparer load status | APPLIED locally / UNKNOWN commit | `vectorbt_runner/data_preparer.py`, `vectorbt_runner/__init__.py`, `cli/commands.py`, `research/*` | data-quality/diagnostics | DataPreparer возвращает typed status/reason для missing symbol/file/schema/window/invalid rows; PNO backtest и check-quality больше не сводят эти причины к одинаковому empty frame. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+| P053 | Canonical diagnostics trade-count only | PROPOSED | `cli/pno_diagnostics.py`, `research/*` | diagnostics/chart | Diagnostics/charts читают только `number_of_trades`; legacy `trades`/`trade_count` маркируются как ignored, missing trade-count не рисуется как нули. | `python -m compileall cli/pno_diagnostics.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 
 
 ---
@@ -77,7 +78,7 @@ SUPERSEDED = заменён новым патчем
 ## P052 — Explicit DataPreparer load status
 
 ```text
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Type: data-quality / diagnostics
 Trading logic changed: no; data loading failures become explicit instead of empty-frame fallbacks
 Files: vectorbt_runner/data_preparer.py, vectorbt_runner/__init__.py, cli/commands.py, research/*
@@ -1959,4 +1960,41 @@ Risk:
 
 ```text
 The next OHLCV update may re-fetch a full requested range for old caches that have prices but lack quote_volume. That is intentional. If an exchange path cannot provide real quote_volume, PNO should keep reporting missing_quote_volume_usdt rather than using close*volume.
+```
+
+---
+
+## P053 — Canonical diagnostics trade-count only
+
+```text
+Status: PROPOSED
+Type: diagnostics / chart
+Trading logic changed: no; diagnostics now follows the same canonical trade-count contract as PNO trading path
+Files: cli/pno_diagnostics.py, research/*
+Commit: UNKNOWN
+Base: P048/P049/P050/P051/P052 user-applied locally; exact commit UNKNOWN
+```
+
+Проблема:
+
+```text
+Diagnostics/charts still treated legacy `trades`/`trade_count` as usable trade-count inputs and backfilled missing `number_of_trades`. Missing trade-count could render as zero activity, which is a false diagnostic signal.
+```
+
+Изменение:
+
+```text
+Plot/review diagnostics read only canonical `number_of_trades`. Legacy aliases remain visible only through ignored source labels. Missing canonical trade-count annotates the Trades panel and stage-review manifest instead of drawing zero bars.
+```
+
+Проверка:
+
+```text
+python -m compileall cli/pno_diagnostics.py research/PATCH_LOG.md research/RESEARCH_STATE.md
+```
+
+Ожидаемый rerun check:
+
+```text
+Stage-review charts and manifest should show `missing_canonical_number_of_trades` or `legacy_*_ignored` when canonical trade-count is absent; no chart should present missing trade-count as zero exchange activity.
 ```
