@@ -9,8 +9,8 @@
 ```text
 Branch: codex/ideal-like
 Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P059 applied locally after P056/P057/P058 fallback audit; commit UNKNOWN
-Last applied patch: P059 (local workspace; commit UNKNOWN)
+Local diff: P060 applied locally after second-pass fallback audit; commit UNKNOWN
+Last applied patch: P060 (local workspace; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -328,4 +328,26 @@ One next test:
 
 ```text
 Run a small saved PNO backtest with diagnostics, then plot it through plot-backtest and verify all artifact CSVs are present under the same run root before interpreting funnel or PnL.
+```
+---
+
+## 14. Current local patch note - P060
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Updated: 2026-05-05
+```
+
+Current conclusion:
+
+```text
+Second-pass audit found one remaining artifact-path fallback in saved plot-backtest run_context handling.
+run_context is now strict: missing required fields or missing results file are explicit failures, not default path reconstruction.
+Diagnostic frame-step inference has no default_ms parameter left.
+```
+
+One next test:
+
+```text
+Run plot-backtest against a valid saved PNO run and a deliberately incomplete copy of run_context.json; the first should use the exact results path and the second should fail before generating misleading artifacts.
 ```

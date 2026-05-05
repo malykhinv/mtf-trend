@@ -17,8 +17,6 @@ import pandas as pd
 
 from config import AppConfig
 from constants import (
-    DEFAULT_BACKTEST_OUTPUT_FILE,
-    DEFAULT_RESULTS_DIR,
     DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
     OI_STALE_MIN_OBSERVATIONS,
     OI_STALE_RATIO_THRESHOLD,
@@ -648,10 +646,28 @@ def _build_plot_backtest_args(
     context: dict[str, object],
     request: dict[str, object],
 ) -> argparse.Namespace:
-    strategy_id = str(context.get("strategy_id") or "pno")
-    strategy_results_rel_dir = Path(str(context.get("strategy_results_rel_dir") or (Path("strategy") / strategy_id)))
-    position_plots_rel_dir = Path(str(context.get("position_plots_rel_dir") or (strategy_results_rel_dir / "position_plots")))
-    results_file_name = str(context.get("results_file_name") or DEFAULT_BACKTEST_OUTPUT_FILE)
+    missing_context_fields = [
+        field_name
+        for field_name in (
+            "strategy_id",
+            "strategy_results_rel_dir",
+            "position_plots_rel_dir",
+            "results_file_name",
+            "levels_tf",
+            "entry_tf",
+        )
+        if not context.get(field_name)
+    ]
+    if missing_context_fields:
+        raise ValueError(f"run_context_missing_required_fields: {', '.join(missing_context_fields)}")
+
+    strategy_id = str(context["strategy_id"])
+    strategy_results_rel_dir = Path(str(context["strategy_results_rel_dir"]))
+    position_plots_rel_dir = Path(str(context["position_plots_rel_dir"]))
+    results_file_name = str(context["results_file_name"])
+    results_input = run_root_dir / strategy_results_rel_dir / results_file_name
+    if not results_input.exists():
+        raise FileNotFoundError(f"run_context_results_file_missing: {results_input}")
     raw_symbols = context.get("symbols")
     symbols = list(raw_symbols) if isinstance(raw_symbols, list) else None
     return argparse.Namespace(
@@ -674,7 +690,7 @@ def _build_plot_backtest_args(
         plot=None,
         light_run=None,
         plot_from_results=True,
-        results_input=str(run_root_dir / strategy_results_rel_dir / results_file_name),
+        results_input=str(results_input),
         output_dir=str(run_root_dir / position_plots_rel_dir),
         id=None,
         row_number=request.get("selected_row_number"),

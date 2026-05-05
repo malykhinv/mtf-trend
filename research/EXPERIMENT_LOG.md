@@ -540,3 +540,19 @@ Check:
 Run a small saved PNO backtest with diagnostics, then use plot-backtest on the saved run directory.
 Before reading PnL/funnel, verify results.csv has profit_factor_status, run_context.json points to the selected results file, and artifact_load_status.csv / data_load_status.csv / seconds_load_status.csv / sparse_materialization_windows.csv / stage1_cache_status.csv are present.
 ```
+---
+
+## E010 - Planned strict run_context artifact check
+
+```text
+Status: PLANNED
+Patch: P060 / commit UNKNOWN
+Goal: confirm saved plot-backtest no longer reconstructs default results paths from incomplete run_context metadata.
+```
+
+Check:
+
+```text
+Run plot-backtest on a valid saved PNO run and verify results_input equals run_root/strategy_results_rel_dir/results_file_name.
+Then remove one required context field in a temporary copy and verify the command fails with run_context_missing_required_fields before writing new misleading plot artifacts.
+```

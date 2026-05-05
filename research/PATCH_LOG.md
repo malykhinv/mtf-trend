@@ -2285,3 +2285,49 @@ Next:
 ```text
 Run a small saved backtest/plot-backtest cycle and confirm results.csv, run_context.json, artifact_load_status.csv, seconds_load_status.csv, sparse_materialization_windows.csv and stage1_cache_status.csv are complete and refer to the same run root.
 ```
+---
+
+## P060 - Strict saved run context artifact path
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: diagnostics / artifact truthfulness
+Trading logic changed: no
+Files: cli/commands.py, cli/pno_diagnostics.py, research/*
+Commit: UNKNOWN
+Follow-up to: P059 second-pass audit
+```
+
+Problem:
+
+```text
+Saved plot-backtest reconstructed results paths from run_context.json with default values if core fields were missing.
+That could make a damaged/incomplete run_context point charts at a synthetic/default results path instead of failing on the real artifact issue.
+Diagnostic timeframe inference also kept a dead default_ms parameter after P057, which made the code look like it could still substitute a fake frame step.
+```
+
+Change:
+
+```text
+Require strategy_id, strategy_results_rel_dir, position_plots_rel_dir, results_file_name, levels_tf and entry_tf in saved run_context before building plot args.
+Fail with run_context_missing_required_fields or run_context_results_file_missing instead of reconstructing defaults.
+Remove the unused default_ms argument from _infer_pno_frame_step_ms and its chart label call sites.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges data/fetchers data/storage strategy/pno cli vectorbt_runner constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+Low. Existing valid run_context.json files continue to work; incomplete old artifacts now fail explicitly instead of guessing paths.
+```
+
+Next:
+
+```text
+Use a recent saved run directory for plot-backtest and verify it either uses the exact run_context results file or reports the missing field/file explicitly.
+```

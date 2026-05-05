@@ -1116,8 +1116,7 @@ def _annotate_pno_axis_price_tag(
     )
 
 
-def _infer_pno_frame_step_ms(frame: pd.DataFrame, default_ms: int | None = None) -> int | None:
-    del default_ms
+def _infer_pno_frame_step_ms(frame: pd.DataFrame) -> int | None:
     if frame.empty or "timestamp" not in frame.columns:
         return None
     timestamps = pd.to_numeric(frame["timestamp"], errors="coerce").dropna().to_numpy(dtype=np.int64)
@@ -2276,8 +2275,8 @@ def _render_pno_position_chart(
         levels_padding = max((float(np.nanmax(levels_high)) - float(np.nanmin(levels_low))) * 0.08, 1e-9)
         ax_levels.set_ylim(float(np.nanmin(levels_low)) - levels_padding, float(np.nanmax(levels_high)) + levels_padding)
     ax_levels.set_xlim(-x_left_pad, len(plot_frame) - 1 + x_right_pad)
-    ax_price.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(plot_frame, default_ms=60_000)))
-    ax_levels.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(levels_window, default_ms=5 * 60_000)))
+    ax_price.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(plot_frame)))
+    ax_levels.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(levels_window)))
     ax_volume.set_ylabel("Vol %")
     ax_trades.set_ylabel("Exchange trades %")
     ax_levels.yaxis.set_label_coords(-0.072, 0.5)
