@@ -9,8 +9,8 @@
 ```text
 Branch: codex/ideal-like
 Commit: e961252 (GitHub head checked); ZIP-local patch stack remains source-of-truth for uncommitted code
-Local diff: P061 + P063 applied locally after P060; commit UNKNOWN
-Last applied patch: P063 (local workspace; commit UNKNOWN)
+Local diff: P061 + P063 + P062 applied locally after P060; commit UNKNOWN
+Last applied patch: P062 (local workspace; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -82,6 +82,7 @@ winrate > 0.40
 17. Diagnostics/charts должны читать только canonical `number_of_trades`; legacy `trades`/`trade_count` можно показывать только как ignored source label, а missing trade-count нельзя рисовать как нулевую активность.
 18. Aggregate `data_load_rejections` недостаточен: run output должен сохранять per-symbol/role/timeframe status для всех load attempts, включая символы, исключённые до `symbol_frames`.
 19. Archive aggTrades market-id resolution no longer reaches through `CcxtFuturesClient._client`; PNO strategy uses the typed `get_market_id()` boundary for both archive and live aggTrades paths.
+20. PNO sparse seconds provider exposes only status-carrying `*_result` load paths for aggregated windows, seconds windows, per-day seconds, archive aggTrades, live aggTrades and aggTrades aggregation; status-dropping DataFrame compatibility wrappers were removed.
 
 ---
 
@@ -389,6 +390,29 @@ Current conclusion:
 ```text
 Archive aggTrades market-id resolution now uses CcxtFuturesClient.get_market_id(symbol) instead of reaching through the private ccxt client.
 This keeps archive and live aggTrades paths behind the same typed boundary without adding a new verification layer or changing trade decisions.
+```
+
+One next test:
+
+```text
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner
+```
+
+---
+
+## 17. Current local patch note - P062
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Updated: 2026-05-05
+```
+
+Current conclusion:
+
+```text
+The sparse seconds provider no longer keeps dead compatibility wrappers that returned only DataFrame frames and discarded ok/status/reason/load_statuses.
+The remaining load path is the status-carrying result API, so failures cannot be silently flattened by these wrappers.
+Trading logic is unchanged because all removed wrappers had no callers in the current codebase.
 ```
 
 One next test:

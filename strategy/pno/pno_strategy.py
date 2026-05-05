@@ -298,21 +298,6 @@ class _PnoSecondsFrameProvider:
             "missing_columns": ",".join(result.missing_columns),
         }
 
-    def load_aggregated_window(
-        self,
-        *,
-        symbol: str,
-        start_timestamp_ms: int,
-        end_timestamp_ms: int,
-        target_timeframe: Timeframe,
-    ) -> pd.DataFrame:
-        """Compatibility wrapper. PNO diagnostics should use load_aggregated_window_result()."""
-        return self.load_aggregated_window_result(
-            symbol=symbol,
-            start_timestamp_ms=int(start_timestamp_ms),
-            end_timestamp_ms=int(end_timestamp_ms),
-            target_timeframe=target_timeframe,
-        ).frame
 
     def load_aggregated_window_result(
         self,
@@ -622,19 +607,6 @@ class _PnoSecondsFrameProvider:
                 merged = merged.rename(columns={incoming_column: column})
         return cls._with_canonical_trade_count(merged)
 
-    def _ensure_seconds_window(
-        self,
-        *,
-        symbol: str,
-        start_timestamp_ms: int,
-        end_timestamp_ms: int,
-    ) -> pd.DataFrame:
-        """Compatibility wrapper. Prefer _ensure_seconds_window_result() for diagnostics."""
-        return self._ensure_seconds_window_result(
-            symbol=symbol,
-            start_timestamp_ms=int(start_timestamp_ms),
-            end_timestamp_ms=int(end_timestamp_ms),
-        ).frame
 
     def _ensure_seconds_window_result(
         self,
@@ -1046,13 +1018,6 @@ class _PnoSecondsFrameProvider:
             cursor += timedelta(days=1)
         return tuple(days)
 
-    def _fetch_seconds_for_day(
-        self,
-        *,
-        symbol: str,
-        utc_day: date,
-    ) -> pd.DataFrame:
-        return self._fetch_seconds_for_day_result(symbol=symbol, utc_day=utc_day).frame
 
     def _fetch_seconds_for_day_result(
         self,
@@ -1081,13 +1046,6 @@ class _PnoSecondsFrameProvider:
             missing_columns=tuple(sorted(set(archive_result.missing_columns) | set(live_result.missing_columns))),
         )
 
-    def _fetch_seconds_from_archive(
-        self,
-        *,
-        symbol: str,
-        utc_day: date,
-    ) -> pd.DataFrame:
-        return self._fetch_seconds_from_archive_result(symbol=symbol, utc_day=utc_day).frame
 
     def _fetch_seconds_from_archive_result(
         self,
@@ -1193,18 +1151,6 @@ class _PnoSecondsFrameProvider:
             & (timestamps <= int(end_timestamp_ms))
         ].copy()
 
-    def _fetch_seconds_from_live_trades(
-        self,
-        *,
-        symbol: str,
-        start_timestamp_ms: int,
-        end_timestamp_ms: int,
-    ) -> pd.DataFrame:
-        return self._fetch_seconds_from_live_trades_result(
-            symbol=symbol,
-            start_timestamp_ms=start_timestamp_ms,
-            end_timestamp_ms=end_timestamp_ms,
-        ).frame
 
     def _fetch_seconds_from_live_trades_result(
         self,
@@ -1298,9 +1244,6 @@ class _PnoSecondsFrameProvider:
             self._client = CcxtFuturesClient(exchange=Exchange.BINANCE)
         return self._client.get_market_id(symbol)
 
-    @staticmethod
-    def _aggregate_agg_trades_to_seconds(trades: pd.DataFrame) -> pd.DataFrame:
-        return _PnoSecondsFrameProvider._aggregate_agg_trades_to_seconds_result(trades).frame
 
     @staticmethod
     def _aggregate_agg_trades_to_seconds_result(trades: pd.DataFrame) -> _PnoAggTradesAggregateResult:

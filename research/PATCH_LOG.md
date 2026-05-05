@@ -2424,3 +2424,58 @@ Next:
 ```text
 Run a tiny PNO sparse-entry diagnostic using an archive-backed day and confirm seconds load statuses still show archive_loaded/archive_404/live_* accurately.
 ```
+
+---
+
+## P062 - Remove status-dropping PNO load wrappers
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: cleanup / fallback removal
+Trading logic changed: no
+Files: strategy/pno/pno_strategy.py, research/*
+Commit: UNKNOWN
+Follow-up to: P060 fallback cleanup, P063 typed market-id boundary
+```
+
+Problem:
+
+```text
+_PnoSecondsFrameProvider still had dead compatibility wrappers that called the strict result APIs and returned only `.frame`.
+Those wrappers discarded ok/status/reason/load_statuses if they were ever called again, recreating the same class of silent failure masking that the strict result APIs were added to prevent.
+```
+
+Change:
+
+```text
+Remove the unused DataFrame-only wrappers:
+- load_aggregated_window
+- _ensure_seconds_window
+- _fetch_seconds_for_day
+- _fetch_seconds_from_archive
+- _fetch_seconds_from_live_trades
+- _aggregate_agg_trades_to_seconds
+
+Keep the existing `*_result` execution path unchanged.
+No new verification layer, no trading-logic change, no public CLI/config change.
+```
+
+Verification:
+
+```bash
+rg -n "load_aggregated_window\(|_ensure_seconds_window\(|_fetch_seconds_for_day\(|_fetch_seconds_from_archive\(|_fetch_seconds_from_live_trades\(|_aggregate_agg_trades_to_seconds\(" . --glob '!*.pyc'
+git diff --check
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner
+```
+
+Risk:
+
+```text
+Low. Current repository search shows no callers for the removed wrappers. Risk is limited to any external/private script importing these non-public helpers directly.
+```
+
+Next:
+
+```text
+Run a small PNO sparse diagnostic and confirm seconds/aggregated load failures still surface through load_statuses and rejection summaries.
+```
