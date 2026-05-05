@@ -66,7 +66,49 @@ SUPERSEDED = заменён новым патчем
 | P044 | Position terminology and strict flow data | UNKNOWN in ZIP | `domain/*`, `simulation/*`, `vectorbt_runner/*`, `strategy/pno/*`, `cli/*`, `research/*` | refactor/data-quality/diagnostics | Развести exchange trades и bot positions; требовать real quote_volume USDT/trade-count; добавить diagnostics coverage и Stage5 unique setup summary. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P045 | Sparse entry data-quality gate | PROPOSED | `strategy/pno/engine.py`, `cli/pno_diagnostics.py`, `research/*` | bugfix/diagnostics | Для sparse entry TF откладывать entry data-quality gate до aggTrades materialization; levels data quality остаётся ранним; пустые research CSV пишутся с колонками. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P048 | Explicit trade-data enrichment failure | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | data-quality/diagnostics | `enrich_with_trade_data` возвращает typed result; провал enrichment становится явным `trade_data_enrichment_failed`, а не raw-frame fallback. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
+| P049 | Canonical PNO trade-count only | PROPOSED | `strategy/pno/engine.py`, `strategy/pno/pno_strategy.py`, `research/*` | data-quality | PNO trading path доверяет только `number_of_trades`; legacy `trades`/`trade_count` не легализуют flow-data. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 
+
+---
+
+## P049 — Canonical PNO trade-count only
+
+```text
+Status: PROPOSED
+Type: data-quality
+Trading logic changed: yes; stricter market-data acceptance only
+Files: strategy/pno/engine.py, strategy/pno/pno_strategy.py, research/*
+Commit: UNKNOWN
+Base: P048 user-applied locally; exact commit UNKNOWN
+```
+
+Проблема:
+
+```text
+PNO принимал первый доступный trade-count alias из number_of_trades / trades / trade_count.
+Legacy или proxy column мог выглядеть как настоящий exchange trade-count и проходить flow/tape gates.
+```
+
+Изменение:
+
+```text
+PNO engine считает real trade-count только из canonical number_of_trades.
+trades/trade_count больше не выбираются как source для _resolve_trade_activity_series и не попадают в optional PNO market-data columns.
+Если canonical number_of_trades отсутствует, diagnostics source label показывает missing_canonical_number_of_trades или legacy_*_ignored, а quality reason становится *_missing_canonical_number_of_trades.
+Trade enrichment больше не размножает canonical count в aliases; back-propagation в исходные frames копирует только canonical trade-data columns.
+```
+
+Проверка:
+
+```text
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py
+```
+
+Ожидаемый rerun check:
+
+```text
+Frame с trades/trade_count без number_of_trades должен получить market_data_quality_status=failed, source label legacy_*_ignored или missing_canonical_number_of_trades, и не проходить Stage1 flow gates.
+```
 
 ---
 

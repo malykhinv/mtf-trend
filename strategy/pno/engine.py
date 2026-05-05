@@ -32,12 +32,14 @@ PNO_STAGE_SEQUENCE: tuple[str, ...] = (
     PNO_STAGE_5_POSITION,
 )
 PNO_STAGE_PATH = " > ".join(PNO_STAGE_SEQUENCE)
-PNO_TRADE_COUNT_COLUMNS: tuple[str, ...] = ("number_of_trades", "trades", "trade_count")
+PNO_REAL_TRADE_COUNT_COLUMN = "number_of_trades"
+PNO_LEGACY_TRADE_COUNT_COLUMNS: tuple[str, ...] = ("trades", "trade_count")
+PNO_TRADE_COUNT_COLUMNS: tuple[str, ...] = (PNO_REAL_TRADE_COUNT_COLUMN,)
 PNO_OPTIONAL_MARKET_DATA_COLUMNS: tuple[str, ...] = (
     "quote_volume",
     "taker_buy_volume",
     "taker_buy_quote_volume",
-    *PNO_TRADE_COUNT_COLUMNS,
+    PNO_REAL_TRADE_COUNT_COLUMN,
 )
 
 
@@ -474,15 +476,25 @@ class PnoEngine:
 
     @staticmethod
     def _resolve_trade_count_column(frame: pd.DataFrame) -> str | None:
-        return next((column for column in PNO_TRADE_COUNT_COLUMNS if column in frame.columns), None)
+        return PNO_REAL_TRADE_COUNT_COLUMN if PNO_REAL_TRADE_COUNT_COLUMN in frame.columns else None
 
     @staticmethod
     def _has_real_trade_count(frame: pd.DataFrame) -> bool:
-        trade_count_column = PnoEngine._resolve_trade_count_column(frame)
-        if trade_count_column is None:
+        if PNO_REAL_TRADE_COUNT_COLUMN not in frame.columns:
             return False
-        values = pd.to_numeric(frame[trade_count_column], errors="coerce")
+        values = pd.to_numeric(frame[PNO_REAL_TRADE_COUNT_COLUMN], errors="coerce")
         return bool(values.notna().any() and float(values.fillna(0.0).sum()) > 0.0)
+
+    @staticmethod
+    def _legacy_trade_count_source_label(frame: pd.DataFrame) -> str | None:
+        for column in PNO_LEGACY_TRADE_COUNT_COLUMNS:
+            if column not in frame.columns:
+                continue
+            values = pd.to_numeric(frame[column], errors="coerce")
+            if values.notna().any() and float(values.fillna(0.0).sum()) > 0.0:
+                return f"legacy_{column}_ignored"
+            return f"legacy_{column}_empty_ignored"
+        return None
 
     @staticmethod
     def _has_true_quote_volume(frame: pd.DataFrame) -> bool:
@@ -499,17 +511,20 @@ class PnoEngine:
 
     @staticmethod
     def _resolve_trade_activity_series(frame: pd.DataFrame) -> pd.Series:
-        trade_count_column = PnoEngine._resolve_trade_count_column(frame)
-        if trade_count_column is None or not PnoEngine._has_real_trade_count(frame):
-            raise ValueError("PNO requires real exchange trade-count; volume proxy is not allowed")
-        return pd.to_numeric(frame[trade_count_column], errors="coerce")
+        if not PnoEngine._has_real_trade_count(frame):
+            raise ValueError("PNO requires canonical real exchange number_of_trades; trades/trade_count aliases are not allowed")
+        return pd.to_numeric(frame[PNO_REAL_TRADE_COUNT_COLUMN], errors="coerce")
 
     @staticmethod
     def _trade_count_source_label(frame: pd.DataFrame) -> str:
-        trade_count_column = PnoEngine._resolve_trade_count_column(frame)
-        if trade_count_column is None:
-            return "missing_real_trade_count"
-        return trade_count_column if PnoEngine._has_real_trade_count(frame) else f"{trade_count_column}_empty"
+        if PnoEngine._has_real_trade_count(frame):
+            return PNO_REAL_TRADE_COUNT_COLUMN
+        if PNO_REAL_TRADE_COUNT_COLUMN in frame.columns:
+            return f"{PNO_REAL_TRADE_COUNT_COLUMN}_empty"
+        legacy_label = PnoEngine._legacy_trade_count_source_label(frame)
+        if legacy_label is not None:
+            return legacy_label
+        return "missing_canonical_number_of_trades"
 
     @staticmethod
     def _quote_volume_source_label(frame: pd.DataFrame) -> str:
@@ -524,12 +539,12 @@ class PnoEngine:
     ) -> list[str]:
         reasons: list[str] = []
         if not PnoEngine._has_real_trade_count(levels_frame):
-            reasons.append("levels_missing_real_trade_count")
+            reasons.append("levels_missing_canonical_number_of_trades")
         if not PnoEngine._has_true_quote_volume(levels_frame):
             reasons.append("levels_missing_quote_volume_usdt")
         if require_entry_frame:
             if not PnoEngine._has_real_trade_count(entry_frame):
-                reasons.append("entry_missing_real_trade_count")
+                reasons.append("entry_missing_canonical_number_of_trades")
             if not PnoEngine._has_true_quote_volume(entry_frame):
                 reasons.append("entry_missing_quote_volume_usdt")
         return reasons
@@ -547,7 +562,6 @@ class PnoEngine:
         entry_trade_source = self._trade_count_source_label(entry_frame)
         levels_quote_source = self._quote_volume_source_label(levels_frame)
         entry_quote_source = self._quote_volume_source_label(entry_frame)
-        real_trade_sources = set(PNO_TRADE_COUNT_COLUMNS)
         market_data_quality_reasons = self._market_data_quality_reasons(
             levels_frame=levels_frame,
             entry_frame=entry_frame,

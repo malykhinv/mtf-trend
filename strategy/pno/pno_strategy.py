@@ -53,7 +53,9 @@ class _PnoSecondsFrameProvider:
     _shared_window_cache: ClassVar[dict[tuple[str, int, int], pd.DataFrame]] = {}
     _shared_day_cache: ClassVar[dict[tuple[str, str], pd.DataFrame]] = {}
     _shared_aggregated_window_cache: ClassVar[dict[tuple[str, str, int, int], pd.DataFrame]] = {}
-    _TRADE_COUNT_COLUMNS: ClassVar[tuple[str, ...]] = ("number_of_trades", "trades", "trade_count")
+    _REAL_TRADE_COUNT_COLUMN: ClassVar[str] = "number_of_trades"
+    _LEGACY_TRADE_COUNT_COLUMNS: ClassVar[tuple[str, ...]] = ("trades", "trade_count")
+    _TRADE_COUNT_COLUMNS: ClassVar[tuple[str, ...]] = (_REAL_TRADE_COUNT_COLUMN,)
     _TRADE_DATA_COLUMNS: ClassVar[tuple[str, ...]] = (
         "quote_volume",
         "taker_buy_volume",
@@ -207,7 +209,7 @@ class _PnoSecondsFrameProvider:
         }.issubset(frame.columns)
         if has_full_trade_data:
             return TradeDataEnrichmentResult(
-                frame=self._with_trade_count_aliases(frame),
+                frame=self._with_canonical_trade_count(frame),
                 ok=True,
                 status="already_enriched",
                 source_rows=source_rows,
@@ -277,34 +279,20 @@ class _PnoSecondsFrameProvider:
 
     @classmethod
     def _has_real_trade_count(cls, frame: pd.DataFrame) -> bool:
-        trade_count_column = next((column for column in cls._TRADE_COUNT_COLUMNS if column in frame.columns), None)
-        if trade_count_column is None:
+        if cls._REAL_TRADE_COUNT_COLUMN not in frame.columns:
             return False
-        values = pd.to_numeric(frame[trade_count_column], errors="coerce")
+        values = pd.to_numeric(frame[cls._REAL_TRADE_COUNT_COLUMN], errors="coerce")
         return bool(values.notna().any() and float(values.fillna(0.0).sum()) > 0.0)
 
     @classmethod
-    def _with_trade_count_aliases(cls, frame: pd.DataFrame) -> pd.DataFrame:
-        source_column = next(
-            (
-                column
-                for column in cls._TRADE_COUNT_COLUMNS
-                if column in frame.columns and pd.to_numeric(frame[column], errors="coerce").notna().any()
-            ),
-            None,
-        )
-        if source_column is None:
+    def _with_canonical_trade_count(cls, frame: pd.DataFrame) -> pd.DataFrame:
+        if cls._REAL_TRADE_COUNT_COLUMN not in frame.columns:
             return frame
         prepared = frame.copy()
-        source_values = pd.to_numeric(prepared[source_column], errors="coerce").replace([np.inf, -np.inf], np.nan)
-        for column in cls._TRADE_COUNT_COLUMNS:
-            if column in prepared.columns:
-                prepared[column] = pd.to_numeric(prepared[column], errors="coerce").replace(
-                    [np.inf, -np.inf],
-                    np.nan,
-                ).combine_first(source_values)
-            else:
-                prepared[column] = source_values
+        prepared[cls._REAL_TRADE_COUNT_COLUMN] = pd.to_numeric(
+            prepared[cls._REAL_TRADE_COUNT_COLUMN],
+            errors="coerce",
+        ).replace([np.inf, -np.inf], np.nan)
         return prepared
 
     @staticmethod
@@ -349,7 +337,7 @@ class _PnoSecondsFrameProvider:
                 merged = merged.drop(columns=[incoming_column])
             else:
                 merged = merged.rename(columns={incoming_column: column})
-        return cls._with_trade_count_aliases(merged)
+        return cls._with_canonical_trade_count(merged)
 
     def _ensure_seconds_window(
         self,

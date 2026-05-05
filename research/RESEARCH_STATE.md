@@ -9,8 +9,8 @@
 ```text
 Branch: codex/ideal-like
 Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P048 proposed explicit trade-data enrichment failure handling on top of ZIP-local state
-Last applied patch: P046 (user-stated local apply; commit UNKNOWN)
+Local diff: P049 proposed canonical-only trade-count handling on top of user-applied P048
+Last applied patch: P048 (user-stated local apply; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -75,6 +75,7 @@ winrate > 0.40
 10. Симулированные результаты бота называются positions; trade/trades остаётся только для биржевых сделок внутри свечей.
 11. `1.zip` показал не edge-result, а data-quality bottleneck: sparse entry TF (`5m/15s`, `5m/30s`) резались до materialization из-за раннего entry-quality gate.
 12. Trade-data enrichment не должен возвращать исходный OHLCV как success; ошибка aggTrades/window/schema должна становиться явным data-quality rejection.
+13. PNO trading path должен доверять только canonical `number_of_trades`; legacy `trades`/`trade_count` нельзя использовать как замену real trade-count.
 
 ---
 
@@ -127,6 +128,7 @@ winrate > 0.40
 | P046 | Artifact export quality | APPLIED locally / UNKNOWN commit | Стабильные schemas для stage-review CSV, stage summary/manifest, data-quality source/reason tables и полный PNO run context. |
 | P047 | Real Binance kline quote-volume propagation | PROPOSED | Сохранять real Binance futures kline quote_volume/number_of_trades/taker_buy_* в OHLCV cache; backfill cache по quote_volume; убрать close*volume proxy из one-minute Stage1 support. |
 | P048 | Explicit trade-data enrichment failure | PROPOSED | Не маскировать провал aggTrades enrichment возвратом raw frame; писать `trade_data_enrichment_failed` diagnostics. |
+| P049 | Canonical PNO trade-count only | PROPOSED | Доверять в PNO trading path только `number_of_trades`; `trades`/`trade_count` маркировать как legacy ignored, а не использовать. |
 
 Статусы:
 
@@ -193,7 +195,7 @@ levels_trade_count_source
 entry_trade_count_source
 levels_quote_volume_source
 entry_quote_volume_source
-number_of_trades / trades / trade_count
+number_of_trades (canonical); trades/trade_count only as legacy ignored diagnostics
 quote_volume
 taker_buy_volume
 taker_buy_quote_volume
@@ -212,7 +214,7 @@ taker_buy_quote_volume
 Текущий приоритет:
 
 ```text
-P047 → обновить OHLCV cache тем же окном → повторить тот же multi-TF 31d run без изменения торговой логики → проверить, что levels_quote_volume_source массово стал quote_volume_usdt, а Stage1 перестал массово падать на levels_missing_quote_volume_usdt.
+P049 → compileall → micro-check: synthetic frame с `trades`/`trade_count`, но без `number_of_trades`, должен получить `*_missing_canonical_number_of_trades`; затем повторить тот же multi-TF 31d run после cache update.
 ```
 
 После этого:
