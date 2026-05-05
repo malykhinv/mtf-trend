@@ -9,8 +9,8 @@
 ```text
 Branch: codex/ideal-like
 Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P057 applied locally after P056; commit UNKNOWN
-Last applied patch: P057 (local workspace; commit UNKNOWN)
+Local diff: P058 applied locally after P056/P057 fallback audit; commit UNKNOWN
+Last applied patch: P058 (local workspace; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -282,4 +282,28 @@ One next test:
 
 ```text
 Run a small PNO diagnostics/backtest path and inspect artifact_load_status.csv, data_load_status.csv, seconds_load_status.csv and stage1_cache_status.csv before reading funnel/PnL.
+```
+
+---
+
+## 12. Current local patch note - P058
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Updated: 2026-05-05
+```
+
+Current conclusion:
+
+```text
+The original fallback checklist is now closed in current code, except compatibility wrappers that return frames for old call sites.
+Full seconds materialization statuses are exported; no sample is used for current diagnostics export.
+Unresolved entry timeframe is an explicit rejection/failure, not a target-TF assumption.
+Baseline PNO no longer uses ideal-like/fallback level construction in category_3.
+```
+
+One next test:
+
+```text
+Run the same 31-day multi-TF diagnostics and verify no confirmed/shelf level cases do not enter via fallback/ideal-like level_source.
 ```

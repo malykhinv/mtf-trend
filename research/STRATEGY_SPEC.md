@@ -20,6 +20,7 @@ real pump → active high → controlled pullback → BOS/reclaim → close_abov
 Baseline PNO must not construct a trading level from fallback highs when confirmed/shelf highs are absent.
 No confirmed or shelf level means no Stage4 setup.
 ideal_like category profiles must not ignore close_above/decay invalidation inside the baseline comparison.
+category_3 baseline must not enable ideal_like fallback level construction.
 Relaxed or ideal-like level behavior is allowed only as an explicitly named experiment/profile with separate diagnostics.
 ```
 

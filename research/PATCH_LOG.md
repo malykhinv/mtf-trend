@@ -2183,3 +2183,54 @@ Next:
 ```text
 Run a small diagnostics/backtest path and verify artifact_load_status.csv plus existing data_load_status.csv/seconds_load_status.csv/stage1_cache_status.csv are present and distinguish missing vs empty vs read_failed.
 ```
+
+---
+
+## P058 - Remove remaining PNO fallback tails
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: data-quality / diagnostics / baseline logic hardening
+Trading logic changed: yes, ideal-like fallback level source disabled in baseline/category_3
+Files: strategy/pno/engine.py, strategy/pno/pno_strategy.py, strategy/pno/config.py, cli/commands.py, research/*
+Commit: UNKNOWN
+Follow-up to: P056/P057 and fallback audit checklist
+```
+
+Problem:
+
+```text
+P056/P057 closed the main fallbacks, but a few tails remained:
+Stage2 rejection extra still stored only load_status_sample[:10].
+CLI diagnostics export still accepted old seconds_materialization_load_status_sample fallback.
+Engine Stage1 metadata/support used `or entry_timeframe_ms` when source entry timeframe inference failed.
+PnoStrategy wrapper treated unresolved source entry timeframe as "no sparse materialization", which could route the wrong enrichment path.
+category_3 still enabled ideal_like_impulse and `_resolve_level_cluster` could call `_resolve_ideal_like_level_cluster` as a fallback level source.
+```
+
+Change:
+
+```text
+Store full materialization load_statuses in rejection extra and export only full seconds_materialization_load_statuses.
+Reject unresolved entry timeframe explicitly in PnoStrategy wrapper and raise entry_timeframe_unresolved in engine internals that should be unreachable after the main gate.
+Disable category_3 ideal_like_impulse_enabled in baseline.
+Remove `_resolve_ideal_like_level_cluster` call from baseline level resolution.
+```
+
+Verification:
+
+```bash
+python -m compileall strategy/pno cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+Medium. Diagnostics become more complete, but category_3/ideal-like setups that depended on relaxed fallback level construction will disappear from baseline. That is intended; ideal-like behavior should be a separate explicit experiment.
+```
+
+Next:
+
+```text
+Run the same PNO diagnostics window and compare Stage4/Stage5 reasons: no confirmed/shelf level should now show as no setup/reject, not ideal_like fallback level.
+```

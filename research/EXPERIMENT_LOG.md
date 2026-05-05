@@ -492,3 +492,35 @@ Do not evaluate:
 ```text
 PnL / winrate / edge. This checks diagnostic truthfulness only.
 ```
+
+---
+
+## E013 - Baseline without remaining fallback tails
+
+```text
+Status: PLANNED
+Depends on: P058
+Date: 2026-05-05
+Code state: local workspace, commit UNKNOWN
+```
+
+Goal:
+
+```text
+Verify that the PNO baseline no longer admits setups through sampled diagnostics, unresolved entry TF assumptions or ideal-like fallback level creation.
+```
+
+Success:
+
+```text
+seconds_load_status.csv covers all sparse materialization rows needed to explain data failures.
+Stage rejection extra contains full load_statuses when sparse materialization rejects.
+entry_timeframe_unresolved appears as explicit rejection/failure when source entry TF cannot be inferred.
+No Stage4/Stage5 accepted setup has level_source from ideal_like fallback construction in baseline/category_3.
+```
+
+Do not evaluate:
+
+```text
+PnL / edge until data-quality and fallback-removal effects are confirmed on funnel/reject distribution.
+```

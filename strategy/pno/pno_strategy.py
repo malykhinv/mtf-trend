@@ -1840,6 +1840,8 @@ class PnoStrategy(BaseStrategy[PnoParams]):
                 entry_frame=mtf_frames.entry_frame,
                 target_entry_timeframe=params.entry_timeframe,
             )
+            if requires_sparse_entry_materialization is None:
+                return self._reject_entry_timeframe_unresolved(params=params, entry_frame=mtf_frames.entry_frame)
             should_pre_enrich_entry = (
                 not requires_sparse_entry_materialization
                 and self._profiles_have_fast_stage1_candidate(
@@ -1930,6 +1932,38 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         self._last_generation_diagnostics = diagnostics
         return []
 
+    def _reject_entry_timeframe_unresolved(
+        self,
+        *,
+        params: PnoParams,
+        entry_frame: pd.DataFrame,
+    ) -> list[PositionResult]:
+        diagnostics = self._engine._empty_diagnostics()
+        diagnostics["skipped_insufficient_data"] = 1
+        reason = "entry_timeframe_unresolved"
+        context = diagnostics.setdefault("context", {})
+        if isinstance(context, dict):
+            context.update(
+                {
+                    "symbol": params.symbol,
+                    "market_data_quality_status": "failed",
+                    "market_data_quality_reasons": [reason],
+                    "entry_rows": int(len(entry_frame)),
+                }
+            )
+        PnoEngine._mark_stage_rejection(
+            diagnostics,
+            {},
+            PNO_STAGE_1_PUMP,
+            key=(str(params.symbol), reason, int(len(entry_frame))),
+            timestamp_ms=self._last_frame_timestamp_ms(entry_frame),
+            reason=reason,
+            extra={"entry_rows": int(len(entry_frame))},
+        )
+        self._engine._last_generation_diagnostics = diagnostics
+        self._last_generation_diagnostics = diagnostics
+        return []
+
     @staticmethod
     def _last_frame_timestamp_ms(frame: pd.DataFrame) -> int:
         if frame.empty or "timestamp" not in frame.columns:
@@ -1977,10 +2011,10 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         *,
         entry_frame: pd.DataFrame,
         target_entry_timeframe: Timeframe,
-    ) -> bool:
+    ) -> bool | None:
         source_timeframe_ms = cls._infer_frame_timeframe_ms(entry_frame)
         if source_timeframe_ms is None:
-            return False
+            return None
         return int(target_entry_timeframe.to_milliseconds()) < int(source_timeframe_ms)
 
     def prepare_symbol_context(

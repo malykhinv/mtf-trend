@@ -609,7 +609,9 @@ class PnoEngine:
     ) -> dict[str, int | float | str]:
         levels_timestamps = pd.to_numeric(levels_frame["timestamp"], errors="coerce").dropna().astype("int64")
         entry_timestamps = pd.to_numeric(entry_frame["timestamp"], errors="coerce").dropna().astype("int64")
-        source_entry_timeframe_ms = self._infer_timeframe_ms(entry_frame) or int(entry_timeframe_ms)
+        source_entry_timeframe_ms = self._infer_timeframe_ms(entry_frame)
+        if source_entry_timeframe_ms is None:
+            raise ValueError("entry_timeframe_unresolved")
         return {
             "version": self._STAGE1_CACHE_VERSION,
             "symbol": str(params.symbol),
@@ -1275,7 +1277,7 @@ class PnoEngine:
                         "windows_requested": int(materialization.windows_requested),
                         "windows_loaded": int(materialization.windows_loaded),
                         "load_reason_counts": dict(materialization.load_reason_counts or {}),
-                        "load_status_sample": list(materialization.load_statuses[:10]),
+                        "load_statuses": list(materialization.load_statuses),
                     },
                 )
                 self._last_generation_diagnostics = diagnostics
@@ -1705,7 +1707,9 @@ class PnoEngine:
             stage1_pump_max_bars + stage1_pullback_max_bars + stage1_fetch_post_bars,
             stage1_flow_hold_window_bars + stage1_pullback_min_bars,
         )
-        source_entry_timeframe_ms = self._infer_timeframe_ms(entry_frame) or int(entry_timeframe_ms)
+        source_entry_timeframe_ms = self._infer_timeframe_ms(entry_frame)
+        if source_entry_timeframe_ms is None:
+            raise ValueError("entry_timeframe_unresolved")
         one_support = self._build_one_minute_stage1_support(
             entry_frame=entry_frame,
             five_timestamps=timestamps,
@@ -6472,16 +6476,6 @@ class PnoEngine:
                 ):
                     continue
                 return indices, prices
-        if ideal_like_impulse:
-            fallback = self._resolve_ideal_like_level_cluster(
-                one=one,
-                idx=idx,
-                stage3=stage3,
-                retired_clusters=retired_clusters,
-                params=params,
-            )
-            if fallback is not None:
-                return fallback
         return None
 
     def _resolve_ideal_like_level_cluster(

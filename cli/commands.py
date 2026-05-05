@@ -2048,8 +2048,6 @@ def _export_pno_diagnostics_context_for_symbols(
         if not isinstance(context, dict):
             context = {}
         seconds_load_statuses = context.get("seconds_materialization_load_statuses")
-        if seconds_load_statuses is None:
-            seconds_load_statuses = context.get("seconds_materialization_load_status_sample")
         if isinstance(seconds_load_statuses, list):
             for status_row in seconds_load_statuses:
                 if isinstance(status_row, dict):

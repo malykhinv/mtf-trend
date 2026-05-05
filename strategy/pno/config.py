@@ -531,7 +531,7 @@ def resolve_pno_category_profiles(
             0.30,
         ),
         stage3_fast_reclaim_max_pullback_age_bars=max(int(params.stage3_fast_reclaim_max_pullback_age_bars), 2),
-        ideal_like_impulse_enabled=True,
+        ideal_like_impulse_enabled=False,
         ideal_like_min_impulse_atr_pre=max(float(params.ideal_like_min_impulse_atr_pre), 14.0),
         ideal_like_min_peak_bar_tr_atr_pre=max(float(params.ideal_like_min_peak_bar_tr_atr_pre), 6.0),
         ideal_like_min_volume_ratio_start=max(float(params.ideal_like_min_volume_ratio_start), 7.0),
