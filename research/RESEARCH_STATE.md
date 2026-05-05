@@ -9,8 +9,8 @@
 ```text
 Branch: codex/ideal-like
 Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P058 applied locally after P056/P057 fallback audit; commit UNKNOWN
-Last applied patch: P058 (local workspace; commit UNKNOWN)
+Local diff: P059 applied locally after P056/P057/P058 fallback audit; commit UNKNOWN
+Last applied patch: P059 (local workspace; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -306,4 +306,26 @@ One next test:
 
 ```text
 Run the same 31-day multi-TF diagnostics and verify no confirmed/shelf level cases do not enter via fallback/ideal-like level_source.
+```
+---
+
+## 13. Current local patch note - P059
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Updated: 2026-05-05
+```
+
+Current conclusion:
+
+```text
+The remaining artifact-truthfulness tails are now explicit rather than silent.
+plot-from-results must use an explicit results_input/run_context path, --id must match an actual id/combination_id/rank column, and no-loss profit factor is represented as infinite with profit_factor_status instead of a capped numeric placeholder.
+Unused fallback/ideal-like level helpers were removed from the baseline engine code to keep the execution path clean, and chart/stage-review coverage helpers no longer use fallback terminology.
+```
+
+One next test:
+
+```text
+Run a small saved PNO backtest with diagnostics, then plot it through plot-backtest and verify all artifact CSVs are present under the same run root before interpreting funnel or PnL.
 ```

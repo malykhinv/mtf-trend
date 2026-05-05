@@ -24,7 +24,7 @@ from vectorbt_runner import SymbolMtfFrames
 
 _PNO_STAGE1_REVIEW_MAX_ROWS_PER_REASON = 8
 _PNO_STAGE1_REVIEW_MAX_ROWS_PER_SYMBOL = 2
-_PNO_STAGE1_REVIEW_FALLBACK_ROWS_PER_REASON = 4
+_PNO_STAGE1_REVIEW_COVERAGE_ROWS_PER_REASON = 4
 _PNO_STAGE1_REVIEW_DISTANCE_MAX = 0.18
 _PNO_STAGE1_REVIEW_SAMPLE_REASONS: set[str] = {
     "flow_window_no_price_growth",
@@ -449,11 +449,11 @@ def _select_stage1_review_rejection_rows(
 ) -> list[dict[str, object]]:
     scored_rows: list[tuple[float, dict[str, object]]] = []
     far_scored_rows: list[tuple[float, dict[str, object]]] = []
-    fallback_rows: list[dict[str, object]] = []
+    coverage_rows: list[dict[str, object]] = []
     for row in rows:
         score = _resolve_stage1_rejection_review_score(row)
         if score is None or not np.isfinite(score):
-            fallback_rows.append(row)
+            coverage_rows.append(row)
             continue
         if score > _PNO_STAGE1_REVIEW_DISTANCE_MAX:
             far_scored_rows.append((score, row))
@@ -484,21 +484,21 @@ def _select_stage1_review_rejection_rows(
         )
         return _cap_stage1_review_rows(
             [row for _, row in far_scored_rows],
-            max_rows=_PNO_STAGE1_REVIEW_FALLBACK_ROWS_PER_REASON,
+            max_rows=_PNO_STAGE1_REVIEW_COVERAGE_ROWS_PER_REASON,
             max_rows_per_symbol=1,
         )
 
     if reason in _PNO_STAGE1_REVIEW_SAMPLE_REASONS:
         return _cap_stage1_review_rows(
-            fallback_rows or rows,
-            max_rows=_PNO_STAGE1_REVIEW_FALLBACK_ROWS_PER_REASON,
+            coverage_rows or rows,
+            max_rows=_PNO_STAGE1_REVIEW_COVERAGE_ROWS_PER_REASON,
             max_rows_per_symbol=1,
         )
 
     if reason in {"hold_floor_lost_before_stage2", "hold_floor_wick_before_stage2", "stage1_lost_before_stage2"}:
         return _cap_stage1_review_rows(
-            fallback_rows or rows,
-            max_rows=_PNO_STAGE1_REVIEW_FALLBACK_ROWS_PER_REASON,
+            coverage_rows or rows,
+            max_rows=_PNO_STAGE1_REVIEW_COVERAGE_ROWS_PER_REASON,
             max_rows_per_symbol=1,
         )
 

@@ -19,7 +19,6 @@ from constants import (
     BACKTEST_EMPTY_PNL_PERCENT,
     BACKTEST_EMPTY_POSITIONS_COUNT,
     BACKTEST_EMPTY_WIN_RATE,
-    BACKTEST_PF_FALLBACK_WHEN_NO_LOSSES,
     BACKTEST_PROFITABLE_PF_THRESHOLD,
     BACKTEST_ROUND_MAX_DD,
     BACKTEST_ROUND_METRICS,
@@ -243,6 +242,7 @@ class BacktestRunner:
             return {
                 **base_row,
                 "profit_factor": BACKTEST_EMPTY_PF,
+                "profit_factor_status": "no_positions",
                 "pnl_percent": BACKTEST_EMPTY_PNL_PERCENT,
                 "win_rate": BACKTEST_EMPTY_WIN_RATE,
                 "positions_count": BACKTEST_EMPTY_POSITIONS_COUNT,
@@ -294,10 +294,13 @@ class BacktestRunner:
 
         if losses > 0:
             pf = profits / losses
+            pf_status = "finite"
         elif profits > 0:
-            pf = BACKTEST_PF_FALLBACK_WHEN_NO_LOSSES
+            pf = float("inf")
+            pf_status = "infinite_no_losses"
         else:
             pf = BACKTEST_EMPTY_PF
+            pf_status = "zero_profit_no_losses"
 
         win_rate = wins / len(normalized_positions)
         positions_count = len(normalized_positions)
@@ -338,6 +341,7 @@ class BacktestRunner:
         return {
             **base_row,
             "profit_factor": round(float(pf), BACKTEST_ROUND_METRICS),
+            "profit_factor_status": pf_status,
             "pnl_percent": round(float(pnl_percent), BACKTEST_ROUND_METRICS),
             "win_rate": round(float(win_rate), BACKTEST_ROUND_METRICS),
             "positions_count": positions_count,

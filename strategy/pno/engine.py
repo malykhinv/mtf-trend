@@ -1649,7 +1649,7 @@ class PnoEngine:
         levels_timeframe_ms: int,
         entry_timeframe_ms: int,
     ) -> Stage1StateArrays:
-        return self._build_fallback_stage1_state(
+        return self._build_stage1_state_from_frames(
             levels_frame=levels_frame,
             entry_frame=entry_frame,
             timestamps=timestamps,
@@ -1659,7 +1659,7 @@ class PnoEngine:
             entry_timeframe_ms=entry_timeframe_ms,
         )
 
-    def _build_fallback_stage1_state(
+    def _build_stage1_state_from_frames(
         self,
         *,
         levels_frame: pd.DataFrame,
@@ -2100,22 +2100,6 @@ class PnoEngine:
         if valid_five_indices.size > 0:
             support[valid_five_indices.astype(np.int64, copy=False)] = True
         return support
-
-    @staticmethod
-    def _resolve_fallback_pump_start_idx(
-        *,
-        wake: np.ndarray,
-        support: np.ndarray,
-        local_breakout: np.ndarray,
-        idx: int,
-        lookback_bars: int,
-    ) -> int:
-        start_idx = idx
-        for probe_idx in range(max(0, idx - lookback_bars), idx + 1):
-            if bool(wake[probe_idx]) and bool(support[probe_idx]) and bool(local_breakout[probe_idx]):
-                start_idx = probe_idx
-                break
-        return int(start_idx)
 
     @staticmethod
     def _extend_pump_start_to_precursor_breakout(
@@ -6478,60 +6462,6 @@ class PnoEngine:
                 return indices, prices
         return None
 
-    def _resolve_ideal_like_level_cluster(
-        self,
-        *,
-        one: OneMinuteFrame,
-        idx: int,
-        stage3: Stage3Context,
-        retired_clusters: list[RetiredCluster],
-        params: PnoParams,
-    ) -> tuple[tuple[int, ...], tuple[float, ...]] | None:
-        if idx <= stage3.pullback_low_idx:
-            return None
-        v1_now = max(float(one.v1[idx]), self._EPSILON)
-        tolerance = max(float(params.level_touch_tolerance_v1) * v1_now, self._EPSILON)
-        ideal_latest_high_max_age_bars = (
-            self._scale_entry_bars(
-                int(params.ideal_like_level_latest_high_max_age_bars),
-                int(params.entry_timeframe.to_milliseconds()),
-            )
-            if int(params.ideal_like_level_latest_high_max_age_bars) > 0
-            else 0
-        )
-        search_start = max(
-            stage3.pullback_low_idx,
-            idx - max(ideal_latest_high_max_age_bars, self._scale_entry_bars(6, int(params.entry_timeframe.to_milliseconds()))),
-        )
-        candidate_idx: int | None = None
-        candidate_price = -np.inf
-        for probe_idx in range(search_start, idx + 1):
-            high_price = float(one.highs[probe_idx])
-            if high_price >= (stage3.active_high - self._EPSILON):
-                continue
-            close_price = float(one.closes[probe_idx])
-            low_price = float(one.lows[probe_idx])
-            body_low = min(float(one.opens[probe_idx]), close_price)
-            if close_price <= (high_price - max(0.65 * (high_price - low_price), tolerance)):
-                continue
-            if body_low < (stage3.pullback_low - tolerance):
-                continue
-            if high_price > candidate_price:
-                candidate_idx = int(probe_idx)
-                candidate_price = high_price
-        if candidate_idx is None:
-            return None
-        if not self._is_cluster_rearm_allowed(
-            active_high_idx=stage3.active_high_idx,
-            candidate_level=float(candidate_price),
-            stage3=stage3,
-            retired_clusters=retired_clusters,
-            v1_now=v1_now,
-            rearm_min_distance_v1=float(params.level_rearm_min_distance_v1),
-        ):
-            return None
-        return (candidate_idx,), (float(candidate_price),)
-
     def _resolve_recent_shelf_highs(
         self,
         *,
@@ -6566,33 +6496,6 @@ class PnoEngine:
         if len(shelf_indices) < 2:
             return []
         return shelf_indices[-3:]
-
-    def _resolve_fallback_level_highs(
-        self,
-        *,
-        one: OneMinuteFrame,
-        start_idx: int,
-        end_idx: int,
-        active_high: float,
-        v1_now: float,
-    ) -> list[int]:
-        if end_idx - start_idx < 2:
-            return []
-        candidate_indices: list[int] = []
-        tolerance = max(0.35 * v1_now, self._EPSILON)
-        for probe_idx in range(max(start_idx, 1), min(end_idx, len(one.highs) - 1)):
-            high_price = float(one.highs[probe_idx])
-            if high_price >= (active_high - self._EPSILON):
-                continue
-            if high_price < float(one.highs[probe_idx - 1]) or high_price < float(one.highs[probe_idx + 1]):
-                continue
-            touch_count = 0
-            for check_idx in range(probe_idx, min(end_idx + 1, len(one.highs))):
-                if float(one.highs[check_idx]) >= (high_price - tolerance):
-                    touch_count += 1
-            if touch_count >= 2:
-                candidate_indices.append(int(probe_idx))
-        return candidate_indices
 
     def _is_single_touch_level_candidate(
         self,

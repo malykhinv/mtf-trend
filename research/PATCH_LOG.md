@@ -2234,3 +2234,54 @@ Next:
 ```text
 Run the same PNO diagnostics window and compare Stage4/Stage5 reasons: no confirmed/shelf level should now show as no setup/reject, not ideal_like fallback level.
 ```
+---
+
+## P059 - Truthful artifact tail cleanup
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: diagnostics / artifact truthfulness / cleanup
+Trading logic changed: no
+Files: cli/commands.py, vectorbt_runner/backtest_runner.py, strategy/pno/engine.py, constants.py, research/*
+Commit: UNKNOWN
+Follow-up to: P056/P057/P058
+```
+
+Problem:
+
+```text
+The main fallback audit was closed, but several artifact tails could still confuse post-run reading:
+--plot-from-results could silently choose an existing configured/default results.csv when no explicit input was supplied.
+--id could fall back to row number when no id/combination_id/rank match existed.
+Profit factor used a numeric 99.0 cap when there were profits and no losses.
+PNO engine still contained unused relaxed/fallback level helpers and a misleading Stage1 fallback builder name.
+Stage-review/chart selection still used fallback terminology for diagnostic coverage rows and rescore logic.
+```
+
+Change:
+
+```text
+Require explicit --results-input for run-backtest --plot-from-results, except saved plot-backtest requests that already pass run_context-derived results_input.
+Treat missing --id match as an error instead of selecting row N.
+Write profit_factor=inf plus profit_factor_status=infinite_no_losses for no-loss profitable rows; no positions now get profit_factor_status=no_positions.
+Remove dead relaxed/fallback level helper functions and rename the Stage1 builder away from fallback terminology.
+Rename diagnostic coverage/rescore helper names away from fallback terminology without changing selected rows.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges data/fetchers data/storage strategy/pno cli vectorbt_runner constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+Low to medium. Existing ad-hoc plot-from-results commands now need --results-input. Results.csv schema gains profit_factor_status and no-loss PF is infinite rather than a capped placeholder.
+```
+
+Next:
+
+```text
+Run a small saved backtest/plot-backtest cycle and confirm results.csv, run_context.json, artifact_load_status.csv, seconds_load_status.csv, sparse_materialization_windows.csv and stage1_cache_status.csv are complete and refer to the same run root.
+```

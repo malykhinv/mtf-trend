@@ -524,3 +524,19 @@ Do not evaluate:
 ```text
 PnL / edge until data-quality and fallback-removal effects are confirmed on funnel/reject distribution.
 ```
+---
+
+## E009 - Planned P059 artifact truthfulness check
+
+```text
+Status: PLANNED
+Patch: P059 / commit UNKNOWN
+Goal: verify that normal PNO run artifacts stay complete and point to the same run root after removing residual artifact fallbacks.
+```
+
+Check:
+
+```text
+Run a small saved PNO backtest with diagnostics, then use plot-backtest on the saved run directory.
+Before reading PnL/funnel, verify results.csv has profit_factor_status, run_context.json points to the selected results file, and artifact_load_status.csv / data_load_status.csv / seconds_load_status.csv / sparse_materialization_windows.csv / stage1_cache_status.csv are present.
+```

@@ -687,7 +687,7 @@ def _sanitize_artifact_dir_name(name: str) -> str:
     return sanitized or "combo"
 
 
-def _resolve_pno_artifact_dir_name(params_row: pd.Series, *, fallback_index: int) -> str:
+def _resolve_pno_artifact_dir_name(params_row: pd.Series, *, row_number: int) -> str:
     entry_mode = str(params_row.get("entry_confirmation_mode") or "").strip().lower()
     if entry_mode:
         return _sanitize_artifact_dir_name(entry_mode)
@@ -700,14 +700,14 @@ def _resolve_pno_artifact_dir_name(params_row: pd.Series, *, fallback_index: int
             return _sanitize_artifact_dir_name(variant_tail)
     if variant_id:
         return _sanitize_artifact_dir_name(variant_id)
-    return f"combo_{fallback_index}"
+    return f"combo_{row_number}"
 
 
 def _resolve_pno_artifact_rows(results: pd.DataFrame) -> list[tuple[str, pd.Series]]:
     resolved: list[tuple[str, pd.Series]] = []
     used_names: Counter[str] = Counter()
-    for fallback_index, (_, row) in enumerate(results.iterrows(), start=1):
-        base_name = _resolve_pno_artifact_dir_name(row, fallback_index=fallback_index)
+    for row_number, (_, row) in enumerate(results.iterrows(), start=1):
+        base_name = _resolve_pno_artifact_dir_name(row, row_number=row_number)
         used_names[base_name] += 1
         final_name = base_name if used_names[base_name] == 1 else f"{base_name}_{used_names[base_name]}"
         resolved.append((final_name, row))
@@ -2207,7 +2207,7 @@ def _select_pno_plot_params_row_by_stage(
     selected_stage_columns = [_pno_stage_metric_column_name(stage_id) for stage_id in selected_stage_ids]
     if selected_stage_columns and all(column in results.columns for column in selected_stage_columns):
         scored_rows: list[tuple[int, int, int, float, int, pd.Series]] = []
-        needs_rejection_fallback = False
+        needs_diagnostic_rescore = False
         for row_index, (_, row) in enumerate(results.iterrows()):
             stage_events_count = 0
             for column in selected_stage_columns:
@@ -2219,13 +2219,13 @@ def _select_pno_plot_params_row_by_stage(
             profit_factor = float(row.get("profit_factor", 0.0) or 0.0)
             scored_rows.append((stage_events_count, 0, positions_generated, profit_factor, -row_index, row))
             if stage_events_count == 0:
-                needs_rejection_fallback = True
+                needs_diagnostic_rescore = True
 
         if not scored_rows:
             return None
 
         best_score = max(scored_rows, key=lambda item: item[:5])
-        if best_score[0] > 0 or not needs_rejection_fallback:
+        if best_score[0] > 0 or not needs_diagnostic_rescore:
             logger.debug(
                 "Строка для графиков выбрана из результатов; событий %s, отказов %s, позиций %s, профит-фактор %.4f.",
                 best_score[0],
@@ -2292,20 +2292,10 @@ def _load_plot_params_row_from_results(
     strategy_id: str,
 ) -> pd.Series | None:
     explicit_csv_path = getattr(args, "results_input", None) or getattr(args, "input", None)
-    if explicit_csv_path is not None:
-        csv_path = Path(explicit_csv_path)
-    else:
-        configured_results_dir = Path(config.backtest.results_dir)
-        strategy_results_dir = _resolve_results_dir_for_strategy(configured_results_dir, strategy_id)
-        fallback_results_dir = _resolve_results_dir_for_strategy(Path(DEFAULT_RESULTS_DIR), strategy_id)
-        candidate_paths = [
-            strategy_results_dir / config.backtest.results_file_name,
-            strategy_results_dir / "results.csv",
-            configured_results_dir / config.backtest.results_file_name,
-            fallback_results_dir / "results.csv",
-            fallback_results_dir / DEFAULT_BACKTEST_OUTPUT_FILE,
-        ]
-        csv_path = next((candidate for candidate in candidate_paths if candidate.exists()), candidate_paths[0])
+    if explicit_csv_path is None:
+        logger.error("--plot-from-results требует явный --results-input или сохранённый plot-backtest run_context")
+        return None
+    csv_path = Path(explicit_csv_path)
 
     if not csv_path.exists():
         logger.error("Файл результатов не найден: %s", csv_path)
@@ -2379,20 +2369,8 @@ def _load_plot_params_row_from_results(
         if matched_by_column is not None:
             selected_row = matched_by_column.iloc[0]
         else:
-            row_index = selected_id - 1
-            if row_index < 0 or row_index >= len(frame):
-                logger.error(
-                    "ID %s не найден, номер строки вне диапазона 1..%s",
-                    selected_id,
-                    len(frame),
-                )
-                return None
-            selected_row = frame.iloc[row_index]
-            logger.warning(
-                "ID %s не найден; использована строка %s.",
-                selected_id,
-                selected_id,
-            )
+            logger.error("ID %s не найден в колонках id/combination_id/rank файла %s", selected_id, csv_path)
+            return None
     else:
         sorted_frame = frame.sort_values(["profit_factor", "positions_count"], ascending=[False, False], na_position="last")
         selected_row = sorted_frame.iloc[0]
