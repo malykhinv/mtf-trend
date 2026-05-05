@@ -77,6 +77,8 @@ _BACKTEST_RUN_CONTEXT_FILE_NAME = "run_context.json"
 _BACKTEST_PLOT_REQUEST_FILE_NAME = "plot_request.json"
 _BACKTEST_DATA_LOAD_STATUS_FILE_NAME = "data_load_status.csv"
 _BACKTEST_DATA_LOAD_REJECTIONS_FILE_NAME = "data_load_rejections.csv"
+_PNO_SECONDS_LOAD_STATUS_FILE_NAME = "seconds_load_status.csv"
+_PNO_STAGE1_CACHE_STATUS_FILE_NAME = "stage1_cache_status.csv"
 _PNO_DIAGNOSTICS_COVERAGE_COLUMNS: tuple[str, ...] = (
     "symbol",
     "diagnostics_json_written",
@@ -98,6 +100,39 @@ _PNO_DIAGNOSTICS_COVERAGE_COLUMNS: tuple[str, ...] = (
 _PNO_DIAGNOSTICS_COVERAGE_SUMMARY_COLUMNS: tuple[str, ...] = ("metric", "value")
 _PNO_DIAGNOSTICS_QUALITY_SOURCE_COLUMNS: tuple[str, ...] = ("field", "value", "count")
 _PNO_DIAGNOSTICS_QUALITY_REASON_COLUMNS: tuple[str, ...] = ("reason", "count")
+_PNO_SECONDS_LOAD_STATUS_COLUMNS: tuple[str, ...] = (
+    "symbol",
+    "source",
+    "role",
+    "target_timeframe",
+    "timeframe",
+    "utc_day",
+    "window_start_timestamp_ms",
+    "window_end_timestamp_ms",
+    "ok",
+    "status",
+    "reason",
+    "source_detail",
+    "seconds_status",
+    "seconds_reason",
+    "path",
+    "http_status",
+    "fetched_rows",
+    "raw_rows",
+    "prepared_rows",
+    "rows",
+    "missing_columns",
+)
+_PNO_STAGE1_CACHE_STATUS_COLUMNS: tuple[str, ...] = (
+    "symbol",
+    "source",
+    "cache_key",
+    "ok",
+    "status",
+    "reason",
+    "path",
+    "missing_arrays",
+)
 _BACKTEST_DATA_LOAD_STATUS_COLUMNS: tuple[str, ...] = (
     "role",
     "symbol",
@@ -1810,6 +1845,24 @@ def _write_pno_diagnostics_quality_tables(*, diagnostics_dir: Path, coverage_fra
     )
 
 
+def _write_pno_seconds_and_cache_status_tables(
+    *,
+    diagnostics_dir: Path,
+    seconds_rows: list[dict[str, object]],
+    stage1_cache_rows: list[dict[str, object]],
+) -> None:
+    _write_frame_from_records(
+        diagnostics_dir / _PNO_SECONDS_LOAD_STATUS_FILE_NAME,
+        seconds_rows,
+        columns=_PNO_SECONDS_LOAD_STATUS_COLUMNS,
+    )
+    _write_frame_from_records(
+        diagnostics_dir / _PNO_STAGE1_CACHE_STATUS_FILE_NAME,
+        stage1_cache_rows,
+        columns=_PNO_STAGE1_CACHE_STATUS_COLUMNS,
+    )
+
+
 def _write_pno_diagnostics_coverage(*, diagnostics_dir: Path, rows: list[dict[str, object]]) -> None:
     coverage_frame = pd.DataFrame(rows) if rows else pd.DataFrame(columns=list(_PNO_DIAGNOSTICS_COVERAGE_COLUMNS))
     coverage_path = diagnostics_dir / "diagnostics_coverage.csv"
@@ -1868,6 +1921,8 @@ def _export_pno_diagnostics_context_for_symbols(
     all_position_rows: list[dict[str, object]] = []
     diagnostics_payloads: list[dict[str, object]] = []
     coverage_rows: list[dict[str, object]] = []
+    seconds_load_status_rows: list[dict[str, object]] = []
+    stage1_cache_status_rows: list[dict[str, object]] = []
     total_symbols = len(symbol_frames)
     symbol_export_start_time = time.monotonic()
     stage_rows_by_stage: dict[str, list[dict[str, object]]] = {stage_id: [] for stage_id in PNO_STAGE_SEQUENCE}
@@ -1960,6 +2015,17 @@ def _export_pno_diagnostics_context_for_symbols(
         context = diagnostics.get("context") if isinstance(diagnostics, dict) else {}
         if not isinstance(context, dict):
             context = {}
+        seconds_load_statuses = context.get("seconds_materialization_load_statuses")
+        if seconds_load_statuses is None:
+            seconds_load_statuses = context.get("seconds_materialization_load_status_sample")
+        if isinstance(seconds_load_statuses, list):
+            for status_row in seconds_load_statuses:
+                if isinstance(status_row, dict):
+                    seconds_load_status_rows.append({"symbol": symbol, **status_row})
+        for cache_context_key in ("stage1_cache_status", "stage1_cache_store_status"):
+            cache_status = context.get(cache_context_key)
+            if isinstance(cache_status, dict):
+                stage1_cache_status_rows.append({"symbol": symbol, **cache_status})
         diagnostics_json_written = bool(position_rows or symbol_stage_events or symbol_stage_rejections)
         selected_activity_count = int(symbol_stage_events + symbol_stage_rejections + len(position_rows))
         all_stage_events_count = len(stage_events_raw) if isinstance(stage_events_raw, list) else 0
@@ -2024,6 +2090,11 @@ def _export_pno_diagnostics_context_for_symbols(
         selected_stage_ids=selected_stage_ids,
     )
     _write_pno_diagnostics_coverage(diagnostics_dir=diagnostics_dir, rows=coverage_rows)
+    _write_pno_seconds_and_cache_status_tables(
+        diagnostics_dir=diagnostics_dir,
+        seconds_rows=seconds_load_status_rows,
+        stage1_cache_rows=stage1_cache_status_rows,
+    )
     _export_pno_research_context(
         diagnostics_dir=diagnostics_dir,
         symbol_frames=symbol_frames,
@@ -2441,12 +2512,25 @@ def _resolve_symbols(
 
     combined_symbols = set(liquid_symbols) | exchange_liquid_symbols
     if not combined_symbols:
-        fallback_symbols = exchange_symbols_normalized[:top_n]
         logger.warning(
-            "Ликвидные символы не найдены; беру первые %s символов.",
-            len(fallback_symbols),
+            "Ликвидные символы не найдены; universe_selection_failed, произвольный fallback по первым символам отключён.",
         )
-        return [futures_symbol_map[symbol] for symbol in fallback_symbols], liquidity_quality_by_symbol
+        liquidity_quality_by_symbol["__universe_selection__"] = {
+            "liquidity_score": 0.0,
+            "quote_volume": 0.0,
+            "quote_volume_source": "none",
+            "quote_volume_proxy": 0.0,
+            "trade_count_24h": 0,
+            "quality_flags": ["universe_selection_failed"],
+            "quality_metadata": {
+                "exchange_symbols_count": len(exchange_symbols_normalized),
+                "cache_symbols_with_volume": len(symbols_with_volume),
+                "cache_liquid_symbols": len(liquid_symbols),
+                "exchange_liquid_symbols": len(exchange_liquid_symbols),
+                "min_volume_usd": float(min_volume_usd),
+            },
+        }
+        return [], liquidity_quality_by_symbol
 
     ranked_top_symbols = sorted(
         combined_symbols,

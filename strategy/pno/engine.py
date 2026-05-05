@@ -666,7 +666,7 @@ class PnoEngine:
         params: PnoParams,
         levels_timeframe_ms: int,
         entry_timeframe_ms: int,
-    ) -> tuple[str, Stage1StateArrays | None]:
+    ) -> tuple[str, Stage1StateArrays | None, dict[str, object]]:
         metadata = self._build_stage1_cache_metadata(
             levels_frame=levels_frame,
             entry_frame=entry_frame,
@@ -675,16 +675,46 @@ class PnoEngine:
             entry_timeframe_ms=entry_timeframe_ms,
         )
         cache_key = self._stage1_cache_key(metadata)
+        status_payload: dict[str, object] = {
+            "source": "stage1_state_cache",
+            "symbol": str(params.symbol),
+            "cache_key": cache_key,
+            "ok": False,
+            "status": "miss",
+            "reason": "stage1_cache_miss",
+        }
         cached = self._stage1_state_memory_cache.get(cache_key)
         if cached is not None:
-            return cache_key, cached
+            return cache_key, cached, {
+                **status_payload,
+                "ok": True,
+                "status": "hit",
+                "reason": "stage1_cache_memory_hit",
+            }
 
         cache_path = self._stage1_cache_path(cache_key)
+        status_payload["path"] = str(cache_path)
         if not cache_path.exists():
-            return cache_key, None
+            return cache_key, None, status_payload
 
         try:
             with np.load(cache_path, allow_pickle=False) as payload:
+                required_arrays = (
+                    "inplay",
+                    "pump_start_idx",
+                    "sleep_start_idx",
+                    "sleep_end_idx",
+                    "stage1_confirm_idx",
+                    "stage1_hold_price",
+                )
+                missing_arrays = [name for name in required_arrays if name not in payload.files]
+                if missing_arrays:
+                    return cache_key, None, {
+                        **status_payload,
+                        "status": "failed",
+                        "reason": "stage1_cache_schema_invalid",
+                        "missing_arrays": "|".join(missing_arrays),
+                    }
                 state = Stage1StateArrays(
                     inplay=payload["inplay"].astype(bool, copy=False),
                     pump_start_idx=payload["pump_start_idx"].astype(np.int64, copy=False),
@@ -694,20 +724,37 @@ class PnoEngine:
                     stage1_hold_price=payload["stage1_hold_price"].astype(np.float64, copy=False),
                 )
         except Exception:
-            return cache_key, None
+            return cache_key, None, {
+                **status_payload,
+                "status": "failed",
+                "reason": "stage1_cache_read_failed",
+            }
 
         self._stage1_state_memory_cache[cache_key] = state
-        return cache_key, state
+        return cache_key, state, {
+            **status_payload,
+            "ok": True,
+            "status": "hit",
+            "reason": "stage1_cache_disk_hit",
+        }
 
     def _store_stage1_state_cache(
         self,
         *,
         cache_key: str,
         state: Stage1StateArrays,
-    ) -> None:
+    ) -> dict[str, object]:
         self._stage1_state_memory_cache[cache_key] = state
         cache_path = self._stage1_cache_path(cache_key)
         tmp_path = cache_path.with_suffix(".tmp")
+        status_payload: dict[str, object] = {
+            "source": "stage1_state_cache",
+            "cache_key": cache_key,
+            "path": str(cache_path),
+            "ok": False,
+            "status": "failed",
+            "reason": "stage1_cache_write_failed",
+        }
         try:
             with tmp_path.open("wb") as handle:
                 np.savez_compressed(
@@ -720,9 +767,16 @@ class PnoEngine:
                     stage1_hold_price=state.stage1_hold_price.astype(np.float64, copy=False),
                 )
             tmp_path.replace(cache_path)
+            return {
+                **status_payload,
+                "ok": True,
+                "status": "stored",
+                "reason": "stage1_cache_stored",
+            }
         except Exception:
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
+            return status_payload
 
     def _fast_stage1_candidate_count(
         self,
@@ -990,7 +1044,24 @@ class PnoEngine:
             timeframe_ms=params.levels_timeframe.to_milliseconds(),
         )
         entry_timeframe_ms = params.entry_timeframe.to_milliseconds()
-        source_entry_timeframe_ms = self._infer_timeframe_ms(prepared_entry) or entry_timeframe_ms
+        source_entry_timeframe_ms = self._infer_timeframe_ms(prepared_entry)
+        if source_entry_timeframe_ms is None:
+            diagnostics["skipped_insufficient_data"] = 1
+            context = diagnostics.setdefault("context", {})
+            if isinstance(context, dict):
+                context["market_data_quality_status"] = "failed"
+                context["market_data_quality_reasons"] = ["entry_timeframe_unresolved"]
+            self._mark_stage_rejection(
+                diagnostics,
+                {},
+                PNO_STAGE_1_PUMP,
+                key=(str(params.symbol), "entry_timeframe_unresolved", int(len(prepared_entry))),
+                timestamp_ms=int(prepared_entry["timestamp"].iloc[-1]) if "timestamp" in prepared_entry.columns and not prepared_entry.empty else 0,
+                reason="entry_timeframe_unresolved",
+                extra={"entry_rows": int(len(prepared_entry))},
+            )
+            self._last_generation_diagnostics = diagnostics
+            return []
         uses_local_seconds_materialization = (
             entry_timeframe_ms < source_entry_timeframe_ms and seconds_frame_provider is not None
         )
@@ -1079,8 +1150,9 @@ class PnoEngine:
             levels_timeframe_ms=levels_timeframe_ms,
             entry_timeframe_ms=entry_timeframe_ms,
         )
-        cache_key, cached_stage1_state = stage1_cache_entry
+        cache_key, cached_stage1_state, stage1_cache_status = stage1_cache_entry
         diagnostics["context"]["stage1_cache"] = "hit" if cached_stage1_state is not None else "miss"
+        diagnostics["context"]["stage1_cache_status"] = dict(stage1_cache_status)
         precomputed_five: FiveMinuteFrame | None = None
         if cached_stage1_state is None:
             fast_candidate_count, fast_rejection = self._fast_stage1_candidate_count(
@@ -1098,7 +1170,8 @@ class PnoEngine:
                     stage1_confirm_idx=np.full(len(prepared_levels), -1, dtype=np.int64),
                     stage1_hold_price=np.full(len(prepared_levels), np.nan, dtype=np.float64),
                 )
-                self._store_stage1_state_cache(cache_key=cache_key, state=empty_state)
+                store_status = self._store_stage1_state_cache(cache_key=cache_key, state=empty_state)
+                diagnostics["context"]["stage1_cache_store_status"] = dict(store_status)
                 diagnostics["context"]["stage1_fast_reject"] = "no_5m_candidates"
                 if fast_rejection is not None:
                     self._mark_stage_rejection(
@@ -1129,6 +1202,8 @@ class PnoEngine:
                 stage1_confirm_idx=precomputed_five.stage1_confirm_idx.astype(np.int64, copy=False),
                 stage1_hold_price=precomputed_five.stage1_hold_price.astype(np.float64, copy=False),
             )
+            store_status = self._store_stage1_state_cache(cache_key=cache_key, state=cached_stage1_state)
+            diagnostics["context"]["stage1_cache_store_status"] = dict(store_status)
         else:
             diagnostics["context"]["stage1_fast_candidates"] = int(np.sum(cached_stage1_state.inplay))
             if not cached_stage1_state.has_inplay:
@@ -1162,7 +1237,6 @@ class PnoEngine:
             actual_entry_frame = materialization.frame
             context = diagnostics.setdefault("context", {})
             if isinstance(context, dict):
-                load_status_sample = list(materialization.load_statuses[:50])
                 context.update(
                     {
                         "seconds_materialization_status": materialization.status,
@@ -1170,7 +1244,7 @@ class PnoEngine:
                         "seconds_materialization_windows_requested": int(materialization.windows_requested),
                         "seconds_materialization_windows_loaded": int(materialization.windows_loaded),
                         "seconds_materialization_load_status_count": int(len(materialization.load_statuses)),
-                        "seconds_materialization_load_status_sample": load_status_sample,
+                        "seconds_materialization_load_statuses": list(materialization.load_statuses),
                         "seconds_materialization_load_reason_counts": dict(materialization.load_reason_counts or {}),
                         "seconds_materialized": materialization.ok,
                         "seconds_source_timeframe_ms": int(source_entry_timeframe_ms),
@@ -6328,14 +6402,6 @@ class PnoEngine:
     ) -> tuple[tuple[int, ...], tuple[float, ...]] | None:
         if len(confirmed_highs) < 1:
             confirmed_highs = self._resolve_recent_shelf_highs(
-                one=one,
-                start_idx=stage3.pullback_start_idx + 1,
-                end_idx=idx,
-                active_high=stage3.active_high,
-                v1_now=max(float(one.v1[idx]), self._EPSILON),
-            )
-        if len(confirmed_highs) < 1:
-            confirmed_highs = self._resolve_fallback_level_highs(
                 one=one,
                 start_idx=stage3.pullback_start_idx + 1,
                 end_idx=idx,

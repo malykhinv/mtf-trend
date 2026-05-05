@@ -425,3 +425,37 @@ Do not evaluate:
 ```text
 PnL / winrate / edge if positions remain zero or too few. First read funnel, reject reasons, near-miss and data quality.
 ```
+
+---
+
+## E011 - Fallback diagnostics micro-check after P056
+
+```text
+Status: PLANNED
+Depends on: P056
+Date: 2026-05-05
+Code state: local workspace, commit UNKNOWN
+```
+
+Goal:
+
+```text
+Verify that seconds/aggTrades, persisted sparse cache, Stage1 cache and universe-selection failures produce explicit artifacts instead of empty/no-setup ambiguity.
+```
+
+Success:
+
+```text
+diagnostics/seconds_load_status.csv exists and contains per-window plus nested archive/live/cache reasons.
+diagnostics/stage1_cache_status.csv exists and contains hit/miss/read_failed/write_failed/schema_invalid statuses where applicable.
+Invalid persisted sparse cache reports persisted_aggregated_window_schema_invalid/read_failed/empty instead of silently rebuilding.
+No liquid universe returns universe_selection_failed instead of first-symbol fallback.
+Baseline no-confirmed-level cases do not create fallback trading levels.
+category_3 does not bypass close_above/decay invalidation in baseline comparison.
+```
+
+Do not evaluate:
+
+```text
+PnL / winrate / edge. This is a data-quality diagnostics check only.
+```

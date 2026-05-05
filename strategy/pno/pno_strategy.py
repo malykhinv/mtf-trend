@@ -60,6 +60,41 @@ class _PnoSecondsWindowLoadResult:
 
 
 @dataclass(frozen=True, slots=True)
+class _PnoSecondsDayLoadResult:
+    frame: pd.DataFrame
+    ok: bool
+    status: str
+    reason: str
+    source: str
+    rows: int = 0
+    fetched_rows: int = 0
+    http_status: int | None = None
+    missing_columns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _PnoAggTradesAggregateResult:
+    frame: pd.DataFrame
+    ok: bool
+    status: str
+    reason: str
+    rows: int = 0
+    fetched_rows: int = 0
+    missing_columns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class _PnoPersistedAggregatedWindowLoadResult:
+    frame: pd.DataFrame | None
+    ok: bool
+    status: str
+    reason: str
+    path: Path
+    rows: int = 0
+    missing_columns: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class _PnoAggregatedWindowLoadResult:
     frame: pd.DataFrame
     ok: bool
@@ -76,6 +111,7 @@ class _PnoSecondsFrameProvider:
     cache_dir: Path
     _shared_window_cache: ClassVar[dict[tuple[str, int, int], pd.DataFrame]] = {}
     _shared_day_cache: ClassVar[dict[tuple[str, str], pd.DataFrame]] = {}
+    _shared_day_status_cache: ClassVar[dict[tuple[str, str], dict[str, object]]] = {}
     _shared_aggregated_window_cache: ClassVar[dict[tuple[str, str, int, int], pd.DataFrame]] = {}
     _REAL_TRADE_COUNT_COLUMN: ClassVar[str] = "number_of_trades"
     _LEGACY_TRADE_COUNT_COLUMNS: ClassVar[tuple[str, ...]] = ("trades", "trade_count")
@@ -96,6 +132,7 @@ class _PnoSecondsFrameProvider:
         self._client: CcxtFuturesClient | None = None
         self._window_cache: dict[tuple[str, int, int], pd.DataFrame] = {}
         self._day_cache: dict[tuple[str, str], pd.DataFrame] = {}
+        self._day_status_cache: dict[tuple[str, str], dict[str, object]] = {}
         self._aggregated_window_cache: dict[tuple[str, str, int, int], pd.DataFrame] = {}
 
     @staticmethod
@@ -122,19 +159,24 @@ class _PnoSecondsFrameProvider:
             removed += len(self._aggregated_window_cache)
             removed += len(self._shared_window_cache)
             removed += len(self._shared_day_cache)
+            removed += len(self._shared_day_status_cache)
             removed += len(self._shared_aggregated_window_cache)
             self._window_cache.clear()
             self._day_cache.clear()
+            self._day_status_cache.clear()
             self._aggregated_window_cache.clear()
             self._shared_window_cache.clear()
             self._shared_day_cache.clear()
+            self._shared_day_status_cache.clear()
             self._shared_aggregated_window_cache.clear()
         else:
             removed += self._drop_symbol_cache_items(self._window_cache, symbol)
             removed += self._drop_symbol_cache_items(self._day_cache, symbol)
+            removed += self._drop_symbol_cache_items(self._day_status_cache, symbol)
             removed += self._drop_symbol_cache_items(self._aggregated_window_cache, symbol)
             removed += self._drop_symbol_cache_items(self._shared_window_cache, symbol)
             removed += self._drop_symbol_cache_items(self._shared_day_cache, symbol)
+            removed += self._drop_symbol_cache_items(self._shared_day_status_cache, symbol)
             removed += self._drop_symbol_cache_items(self._shared_aggregated_window_cache, symbol)
         if removed:
             gc.collect()
@@ -188,6 +230,74 @@ class _PnoSecondsFrameProvider:
             load_statuses=seconds_result.load_statuses if seconds_result is not None else (),
         )
 
+    @staticmethod
+    def _empty_seconds_day_result(
+        *,
+        status: str,
+        reason: str,
+        source: str,
+        http_status: int | None = None,
+        fetched_rows: int = 0,
+        missing_columns: tuple[str, ...] = (),
+    ) -> _PnoSecondsDayLoadResult:
+        return _PnoSecondsDayLoadResult(
+            frame=_PnoSecondsFrameProvider._empty_seconds_frame(),
+            ok=False,
+            status=status,
+            reason=reason,
+            source=source,
+            rows=0,
+            fetched_rows=int(fetched_rows),
+            http_status=http_status,
+            missing_columns=tuple(missing_columns),
+        )
+
+    @staticmethod
+    def _day_result_status_payload(
+        result: _PnoSecondsDayLoadResult,
+        *,
+        symbol: str,
+        utc_day: date,
+    ) -> dict[str, object]:
+        return {
+            "source": result.source,
+            "role": "seconds_day",
+            "symbol": symbol,
+            "timeframe": Timeframe.S1.value,
+            "utc_day": utc_day.isoformat(),
+            "ok": bool(result.ok),
+            "status": result.status,
+            "reason": result.reason,
+            "http_status": "" if result.http_status is None else int(result.http_status),
+            "fetched_rows": int(result.fetched_rows),
+            "prepared_rows": int(result.rows),
+            "missing_columns": ",".join(result.missing_columns),
+        }
+
+    @staticmethod
+    def _persisted_window_status_payload(
+        result: _PnoPersistedAggregatedWindowLoadResult,
+        *,
+        symbol: str,
+        target_timeframe: Timeframe,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> dict[str, object]:
+        return {
+            "source": "persisted_aggregated_cache",
+            "role": "sparse_aggregated_window",
+            "symbol": symbol,
+            "target_timeframe": target_timeframe.value,
+            "window_start_timestamp_ms": int(start_timestamp_ms),
+            "window_end_timestamp_ms": int(end_timestamp_ms),
+            "ok": bool(result.ok),
+            "status": result.status,
+            "reason": result.reason,
+            "path": str(result.path),
+            "prepared_rows": int(result.rows),
+            "missing_columns": ",".join(result.missing_columns),
+        }
+
     def load_aggregated_window(
         self,
         *,
@@ -235,19 +345,30 @@ class _PnoSecondsFrameProvider:
                 rows=int(len(local_copy)),
                 source="shared_aggregated_cache",
             )
-        persisted = self._load_persisted_aggregated_window(
+        persisted_result = self._load_persisted_aggregated_window_result(
             symbol=symbol,
             start_timestamp_ms=int(start_timestamp_ms),
             end_timestamp_ms=int(end_timestamp_ms),
             target_timeframe=target_timeframe,
         )
-        if persisted is not None:
-            if persisted.empty:
-                return self._empty_aggregated_window_result(
+        if persisted_result.status != "miss":
+            persisted_status = self._persisted_window_status_payload(
+                persisted_result,
+                symbol=symbol,
+                target_timeframe=target_timeframe,
+                start_timestamp_ms=int(start_timestamp_ms),
+                end_timestamp_ms=int(end_timestamp_ms),
+            )
+            if not persisted_result.ok or persisted_result.frame is None:
+                return _PnoAggregatedWindowLoadResult(
+                    frame=self._empty_seconds_frame(),
+                    ok=False,
                     status="failed",
-                    reason="persisted_aggregated_window_empty",
+                    reason=persisted_result.reason,
                     source="persisted_aggregated_cache",
+                    load_statuses=(persisted_status,),
                 )
+            persisted = persisted_result.frame
             self._aggregated_window_cache[cache_key] = persisted.copy()
             self._shared_aggregated_window_cache[cache_key] = persisted.copy()
             return _PnoAggregatedWindowLoadResult(
@@ -257,6 +378,7 @@ class _PnoSecondsFrameProvider:
                 reason="persisted_aggregated_window_loaded",
                 rows=int(len(persisted)),
                 source="persisted_aggregated_cache",
+                load_statuses=(persisted_status,),
             )
 
         seconds_result = self._ensure_seconds_window_result(
@@ -626,34 +748,42 @@ class _PnoSecondsFrameProvider:
         ):
             day_key = (symbol, utc_day.isoformat())
             day_frame = self._day_cache.get(day_key)
+            day_status = self._day_status_cache.get(day_key)
             day_source = "runtime_day_cache"
             if day_frame is None:
                 day_frame = self._shared_day_cache.get(day_key)
+                day_status = self._shared_day_status_cache.get(day_key)
                 day_source = "shared_day_cache"
             if day_frame is None:
-                day_frame = self._fetch_seconds_for_day(symbol=symbol, utc_day=utc_day)
+                day_result = self._fetch_seconds_for_day_result(symbol=symbol, utc_day=utc_day)
+                day_frame = day_result.frame
+                day_status = self._day_result_status_payload(day_result, symbol=symbol, utc_day=utc_day)
                 day_source = "archive_or_live_fetch"
                 fetched_days += 1
                 self._day_cache[day_key] = day_frame
+                self._day_status_cache[day_key] = dict(day_status)
                 self._shared_day_cache[day_key] = day_frame.copy()
+                self._shared_day_status_cache[day_key] = dict(day_status)
                 if not day_frame.empty:
                     newly_fetched_day_parts.append(day_frame.copy())
             else:
                 self._day_cache[day_key] = day_frame.copy()
+                if day_status is None:
+                    day_status = {
+                        "source": day_source,
+                        "role": "seconds_day",
+                        "symbol": symbol,
+                        "timeframe": Timeframe.S1.value,
+                        "utc_day": utc_day.isoformat(),
+                        "ok": bool(not day_frame.empty),
+                        "status": "ok" if not day_frame.empty else "failed",
+                        "reason": "seconds_day_cache_loaded" if not day_frame.empty else "seconds_day_cache_empty",
+                        "prepared_rows": int(len(day_frame)),
+                    }
+                else:
+                    day_status = {**day_status, "source": day_source}
 
-            load_statuses.append(
-                {
-                    "source": day_source,
-                    "role": "seconds_day",
-                    "symbol": symbol,
-                    "timeframe": Timeframe.S1.value,
-                    "utc_day": utc_day.isoformat(),
-                    "ok": bool(not day_frame.empty),
-                    "status": "ok" if not day_frame.empty else "failed",
-                    "reason": "seconds_day_loaded" if not day_frame.empty else "seconds_day_empty",
-                    "prepared_rows": int(len(day_frame)),
-                }
-            )
+            load_statuses.append(dict(day_status))
             if day_frame.empty:
                 continue
             day_slice = day_frame.loc[
@@ -804,6 +934,67 @@ class _PnoSecondsFrameProvider:
             / f"{int(start_timestamp_ms)}_{int(end_timestamp_ms)}.parquet"
         )
 
+    def _load_persisted_aggregated_window_result(
+        self,
+        *,
+        symbol: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+        target_timeframe: Timeframe,
+    ) -> _PnoPersistedAggregatedWindowLoadResult:
+        path = self._aggregated_window_path(
+            symbol=symbol,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+            target_timeframe=target_timeframe,
+        )
+        if not path.exists():
+            return _PnoPersistedAggregatedWindowLoadResult(
+                frame=None,
+                ok=False,
+                status="miss",
+                reason="persisted_aggregated_window_missing",
+                path=path,
+            )
+        try:
+            frame = pd.read_parquet(path)
+        except Exception:
+            return _PnoPersistedAggregatedWindowLoadResult(
+                frame=None,
+                ok=False,
+                status="failed",
+                reason="persisted_aggregated_window_read_failed",
+                path=path,
+            )
+        if frame.empty:
+            return _PnoPersistedAggregatedWindowLoadResult(
+                frame=frame,
+                ok=False,
+                status="failed",
+                reason="persisted_aggregated_window_empty",
+                path=path,
+            )
+        required_columns = {"quote_volume", "taker_buy_volume", "taker_buy_quote_volume", "number_of_trades"}
+        missing_columns = tuple(sorted(required_columns.difference(frame.columns)))
+        if missing_columns:
+            return _PnoPersistedAggregatedWindowLoadResult(
+                frame=frame,
+                ok=False,
+                status="failed",
+                reason="persisted_aggregated_window_schema_invalid",
+                path=path,
+                rows=int(len(frame)),
+                missing_columns=missing_columns,
+            )
+        return _PnoPersistedAggregatedWindowLoadResult(
+            frame=frame.sort_values("timestamp").reset_index(drop=True),
+            ok=True,
+            status="ok",
+            reason="persisted_aggregated_window_loaded",
+            path=path,
+            rows=int(len(frame)),
+        )
+
     def _load_persisted_aggregated_window(
         self,
         *,
@@ -812,20 +1003,13 @@ class _PnoSecondsFrameProvider:
         end_timestamp_ms: int,
         target_timeframe: Timeframe,
     ) -> pd.DataFrame | None:
-        path = self._aggregated_window_path(
+        result = self._load_persisted_aggregated_window_result(
             symbol=symbol,
-            start_timestamp_ms=int(start_timestamp_ms),
-            end_timestamp_ms=int(end_timestamp_ms),
+            start_timestamp_ms=start_timestamp_ms,
+            end_timestamp_ms=end_timestamp_ms,
             target_timeframe=target_timeframe,
         )
-        if not path.exists():
-            return None
-        frame = pd.read_parquet(path)
-        if frame.empty:
-            return self._empty_seconds_frame()
-        if not {"quote_volume", "taker_buy_volume", "taker_buy_quote_volume", "number_of_trades"}.issubset(frame.columns):
-            return None
-        return frame.sort_values("timestamp").reset_index(drop=True)
+        return result.frame if result.ok else None
 
     def _persist_aggregated_window(
         self,
@@ -868,15 +1052,33 @@ class _PnoSecondsFrameProvider:
         symbol: str,
         utc_day: date,
     ) -> pd.DataFrame:
-        archive_frame = self._fetch_seconds_from_archive(symbol=symbol, utc_day=utc_day)
-        if not archive_frame.empty:
-            return archive_frame
+        return self._fetch_seconds_for_day_result(symbol=symbol, utc_day=utc_day).frame
+
+    def _fetch_seconds_for_day_result(
+        self,
+        *,
+        symbol: str,
+        utc_day: date,
+    ) -> _PnoSecondsDayLoadResult:
+        archive_result = self._fetch_seconds_from_archive_result(symbol=symbol, utc_day=utc_day)
+        if archive_result.ok:
+            return archive_result
         day_start_ms = int(datetime.combine(utc_day, datetime.min.time(), tzinfo=timezone.utc).timestamp() * 1000)
         day_end_ms = day_start_ms + (24 * 60 * 60 * 1000) - 1
-        return self._fetch_seconds_from_live_trades(
+        live_result = self._fetch_seconds_from_live_trades_result(
             symbol=symbol,
             start_timestamp_ms=day_start_ms,
             end_timestamp_ms=day_end_ms,
+        )
+        if live_result.ok:
+            return live_result
+        return self._empty_seconds_day_result(
+            status="failed",
+            reason=f"{archive_result.reason}|{live_result.reason}",
+            source="archive_then_live",
+            fetched_rows=archive_result.fetched_rows + live_result.fetched_rows,
+            http_status=archive_result.http_status,
+            missing_columns=tuple(sorted(set(archive_result.missing_columns) | set(live_result.missing_columns))),
         )
 
     def _fetch_seconds_from_archive(
@@ -885,24 +1087,73 @@ class _PnoSecondsFrameProvider:
         symbol: str,
         utc_day: date,
     ) -> pd.DataFrame:
+        return self._fetch_seconds_from_archive_result(symbol=symbol, utc_day=utc_day).frame
+
+    def _fetch_seconds_from_archive_result(
+        self,
+        *,
+        symbol: str,
+        utc_day: date,
+    ) -> _PnoSecondsDayLoadResult:
         market_id = self._resolve_market_id(symbol)
         url = (
             "https://data.binance.vision/data/futures/um/daily/aggTrades/"
             f"{market_id}/{market_id}-aggTrades-{utc_day.isoformat()}.zip"
         )
-        response = requests.get(url, timeout=60)
+        try:
+            response = requests.get(url, timeout=60)
+        except requests.RequestException:
+            return self._empty_seconds_day_result(
+                status="failed",
+                reason="archive_fetch_error",
+                source="archive",
+            )
         if response.status_code == 404:
-            return self._empty_seconds_frame()
-        response.raise_for_status()
-        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-            names = archive.namelist()
-            if not names:
-                return self._empty_seconds_frame()
-            raw = archive.read(names[0])
-        trades = pd.read_csv(io.BytesIO(raw))
+            return self._empty_seconds_day_result(
+                status="failed",
+                reason="archive_404",
+                source="archive",
+                http_status=404,
+            )
+        try:
+            response.raise_for_status()
+            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+                names = archive.namelist()
+                if not names:
+                    return self._empty_seconds_day_result(
+                        status="failed",
+                        reason="archive_empty_zip",
+                        source="archive",
+                        http_status=response.status_code,
+                    )
+                raw = archive.read(names[0])
+            trades = pd.read_csv(io.BytesIO(raw))
+        except (requests.RequestException, zipfile.BadZipFile, pd.errors.ParserError, OSError):
+            return self._empty_seconds_day_result(
+                status="failed",
+                reason="archive_read_failed",
+                source="archive",
+                http_status=response.status_code,
+            )
         if trades.empty:
-            return self._empty_seconds_frame()
-        return self._aggregate_agg_trades_to_seconds(trades)
+            return self._empty_seconds_day_result(
+                status="failed",
+                reason="archive_empty",
+                source="archive",
+                http_status=response.status_code,
+            )
+        aggregate_result = self._aggregate_agg_trades_to_seconds_result(trades)
+        return _PnoSecondsDayLoadResult(
+            frame=aggregate_result.frame,
+            ok=aggregate_result.ok,
+            status=aggregate_result.status,
+            reason=aggregate_result.reason if not aggregate_result.ok else "archive_loaded",
+            source="archive",
+            rows=aggregate_result.rows,
+            fetched_rows=int(len(trades)),
+            http_status=response.status_code,
+            missing_columns=aggregate_result.missing_columns,
+        )
 
     @staticmethod
     def _resolve_agg_trade_timestamp(row: CcxtAggTradePayload) -> int | None:
@@ -949,12 +1200,27 @@ class _PnoSecondsFrameProvider:
         start_timestamp_ms: int,
         end_timestamp_ms: int,
     ) -> pd.DataFrame:
+        return self._fetch_seconds_from_live_trades_result(
+            symbol=symbol,
+            start_timestamp_ms=start_timestamp_ms,
+            end_timestamp_ms=end_timestamp_ms,
+        ).frame
+
+    def _fetch_seconds_from_live_trades_result(
+        self,
+        *,
+        symbol: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> _PnoSecondsDayLoadResult:
         if self._client is None:
             self._client = CcxtFuturesClient(exchange=Exchange.BINANCE)
         market_id = self._client.get_market_id(symbol)
         all_rows: list[CcxtAggTradePayload] = []
         next_from_id: int | None = None
         previous_last_id: int | None = None
+        pagination_stalled = False
+        fetch_failed = False
         while True:
             params: dict[str, object] = {
                 "symbol": market_id,
@@ -966,8 +1232,10 @@ class _PnoSecondsFrameProvider:
             else:
                 params["fromId"] = int(next_from_id)
 
-            rows = self._client.fetch_binance_agg_trades(symbol=symbol, params=params)
-            if not rows:
+            try:
+                rows = self._client.fetch_binance_agg_trades(symbol=symbol, params=params)
+            except Exception:
+                fetch_failed = True
                 break
             if not rows:
                 break
@@ -977,8 +1245,10 @@ class _PnoSecondsFrameProvider:
             last_ts = self._resolve_agg_trade_timestamp(last_row)
             last_id = self._resolve_agg_trade_id(last_row)
             if last_id is None:
+                pagination_stalled = True
                 break
             if previous_last_id is not None and last_id <= previous_last_id:
+                pagination_stalled = True
                 break
             previous_last_id = last_id
             next_from_id = last_id + 1
@@ -989,7 +1259,11 @@ class _PnoSecondsFrameProvider:
                 break
 
         if not all_rows:
-            return self._empty_seconds_frame()
+            return self._empty_seconds_day_result(
+                status="failed",
+                reason="live_fetch_error" if fetch_failed else "live_no_rows",
+                source="live",
+            )
 
         trades = pd.DataFrame(all_rows)
         trades = self._clip_agg_trades_to_window(
@@ -998,8 +1272,26 @@ class _PnoSecondsFrameProvider:
             end_timestamp_ms=int(end_timestamp_ms),
         )
         if trades.empty:
-            return self._empty_seconds_frame()
-        return self._aggregate_agg_trades_to_seconds(trades)
+            return self._empty_seconds_day_result(
+                status="failed",
+                reason="live_no_rows_in_window",
+                source="live",
+                fetched_rows=len(all_rows),
+            )
+        aggregate_result = self._aggregate_agg_trades_to_seconds_result(trades)
+        reason = aggregate_result.reason
+        if aggregate_result.ok:
+            reason = "live_pagination_stalled" if pagination_stalled else "live_loaded"
+        return _PnoSecondsDayLoadResult(
+            frame=aggregate_result.frame,
+            ok=aggregate_result.ok and not pagination_stalled,
+            status="failed" if pagination_stalled else aggregate_result.status,
+            reason=reason,
+            source="live",
+            rows=aggregate_result.rows,
+            fetched_rows=int(len(all_rows)),
+            missing_columns=aggregate_result.missing_columns,
+        )
 
     def _resolve_market_id(self, symbol: str) -> str:
         if self._client is None:
@@ -1009,8 +1301,17 @@ class _PnoSecondsFrameProvider:
 
     @staticmethod
     def _aggregate_agg_trades_to_seconds(trades: pd.DataFrame) -> pd.DataFrame:
+        return _PnoSecondsFrameProvider._aggregate_agg_trades_to_seconds_result(trades).frame
+
+    @staticmethod
+    def _aggregate_agg_trades_to_seconds_result(trades: pd.DataFrame) -> _PnoAggTradesAggregateResult:
         if trades.empty:
-            return _PnoSecondsFrameProvider._empty_seconds_frame()
+            return _PnoAggTradesAggregateResult(
+                frame=_PnoSecondsFrameProvider._empty_seconds_frame(),
+                ok=False,
+                status="failed",
+                reason="aggtrades_empty",
+            )
         work = trades.copy()
         timestamp_column = "transact_time" if "transact_time" in work.columns else "T"
         price_column = "price" if "price" in work.columns else "p"
@@ -1018,8 +1319,17 @@ class _PnoSecondsFrameProvider:
         maker_column = "is_buyer_maker" if "is_buyer_maker" in work.columns else "m"
 
         required_columns = (timestamp_column, price_column, quantity_column, maker_column)
-        if any(column not in work.columns for column in required_columns):
-            return _PnoSecondsFrameProvider._empty_seconds_frame()
+        missing_columns = tuple(column for column in required_columns if column not in work.columns)
+        if missing_columns:
+            timestamp_missing = timestamp_column in missing_columns
+            return _PnoAggTradesAggregateResult(
+                frame=_PnoSecondsFrameProvider._empty_seconds_frame(),
+                ok=False,
+                status="failed",
+                reason="aggtrades_timestamp_missing" if timestamp_missing else "aggtrades_schema_missing",
+                fetched_rows=int(len(trades)),
+                missing_columns=missing_columns,
+            )
 
         work["price"] = pd.to_numeric(work[price_column], errors="coerce")
         work["quantity"] = pd.to_numeric(work[quantity_column], errors="coerce")
@@ -1031,7 +1341,13 @@ class _PnoSecondsFrameProvider:
             & work["quantity"].notna()
         ].copy()
         if work.empty:
-            return _PnoSecondsFrameProvider._empty_seconds_frame()
+            return _PnoAggTradesAggregateResult(
+                frame=_PnoSecondsFrameProvider._empty_seconds_frame(),
+                ok=False,
+                status="failed",
+                reason="aggregate_empty_after_cleaning",
+                fetched_rows=int(len(trades)),
+            )
         work["timestamp"] = work["timestamp"].astype("int64")
         buyer_is_maker = work[maker_column].astype(str).str.lower().isin(("true", "1"))
         work["taker_buy_volume"] = np.where(buyer_is_maker, 0.0, work["quantity"].astype("float64"))
@@ -1051,7 +1367,7 @@ class _PnoSecondsFrameProvider:
             )
             .reset_index()
         )
-        return aggregated.astype(
+        frame = aggregated.astype(
             {
                 "timestamp": "int64",
                 "open": "float64",
@@ -1064,6 +1380,14 @@ class _PnoSecondsFrameProvider:
                 "taker_buy_quote_volume": "float64",
                 "number_of_trades": "float64",
             }
+        )
+        return _PnoAggTradesAggregateResult(
+            frame=frame,
+            ok=True,
+            status="ok",
+            reason="aggtrades_aggregated",
+            rows=int(len(frame)),
+            fetched_rows=int(len(trades)),
         )
 
 

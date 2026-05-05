@@ -12,6 +12,17 @@ PNO — лонговая momentum-continuation стратегия после п�
 real pump → active high → controlled pullback → BOS/reclaim → close_above → next-bar entry → TP1 active high → runner
 ```
 
+---
+
+## 15. Baseline fallback rule
+
+```text
+Baseline PNO must not construct a trading level from fallback highs when confirmed/shelf highs are absent.
+No confirmed or shelf level means no Stage4 setup.
+ideal_like category profiles must not ignore close_above/decay invalidation inside the baseline comparison.
+Relaxed or ideal-like level behavior is allowed only as an explicitly named experiment/profile with separate diagnostics.
+```
+
 Стратегия не торгует:
 
 ```text

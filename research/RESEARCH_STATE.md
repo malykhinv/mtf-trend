@@ -9,8 +9,8 @@
 ```text
 Branch: codex/ideal-like
 Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P055 proposed sparse seconds load-status propagation after user-applied P048/P049/P050/P051/P052/P053/P054
-Last applied patch: P054 (user-stated local apply; commit UNKNOWN)
+Local diff: P056 applied locally after P055/fallback audit; commit UNKNOWN
+Last applied patch: P056 (local workspace; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -235,4 +235,28 @@ P055 → apply → compileall → micro-check sparse seconds path: missing/inval
 
 ```text
 сравнить 5m/30s vs 5m/15s vs 1m/5s через --pno-all-tf-pairs.
+```
+
+---
+
+## 10. Current local patch note - P056
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Updated: 2026-05-05
+```
+
+Current conclusion:
+
+```text
+The next blocker is no longer only DataPreparer. seconds/aggTrades, persisted sparse cache, Stage1 cache, diagnostics export and universe selection can also mask data failures as empty/no setup.
+P056 makes those failures explicit without changing PNO entry/TP/SL thresholds, and removes baseline fallback level / ideal_like decay bypass behavior.
+Invalid sparse persisted cache is now a data failure, not a silent rebuild.
+If liquidity selection yields no liquid symbols, the run must stop with universe_selection_failed instead of using arbitrary first symbols.
+```
+
+One next test:
+
+```text
+Run a small PNO diagnostics sample and inspect seconds_load_status.csv plus stage1_cache_status.csv before reading funnel profitability.
 ```

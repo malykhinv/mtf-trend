@@ -2076,3 +2076,57 @@ python -m compileall data/exchanges strategy/pno cli constants.py main.py launch
 ```text
 A sparse-entry run with missing/invalid seconds data should expose `seconds_materialization_load_reason_counts` and `seconds_materialization_load_status_sample`; `sparse_entry_no_loaded_frames` should remain only the top-level rejection, not the only observable cause.
 ```
+
+---
+
+## P056 - Explicit fallback failure diagnostics
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: data-quality / diagnostics / universe selection
+Trading logic changed: yes, baseline level fallback and ideal_like decay bypass removed
+Files: strategy/pno/pno_strategy.py, strategy/pno/engine.py, strategy/pno/config.py, cli/commands.py, research/*
+Commit: UNKNOWN
+Follow-up to: P055 and fallback audit from current workspace
+```
+
+Problem:
+
+```text
+seconds/aggTrades low-level paths still collapsed archive/live/schema/pagination/cleaning failures into empty frames.
+Persisted sparse aggregated cache treated missing and invalid cache similarly, then silently rebuilt from seconds.
+Stage1 cache read/write failures were recomputed without explicit diagnostics.
+Diagnostics kept only bounded seconds materialization samples.
+Universe selection could fall back to arbitrary first symbols when liquidity selection produced no liquid universe.
+```
+
+Change:
+
+```text
+Add typed archive/live aggTrades day results and typed aggregate results with explicit reasons: archive_404, archive_empty, archive_read_failed, live_no_rows, live_fetch_error, live_pagination_stalled, aggtrades_schema_missing, aggtrades_timestamp_missing and aggregate_empty_after_cleaning.
+Make persisted sparse aggregated cache return explicit miss/read_failed/schema_invalid/empty statuses; invalid persisted cache now fails the window instead of silently rebuilding.
+Record Stage1 cache hit/miss/read_failed/write_failed/schema_invalid status in diagnostics context.
+Export full seconds_load_status.csv and stage1_cache_status.csv from PNO diagnostics instead of relying only on context samples.
+Remove arbitrary first-symbol universe fallback; no liquid symbols now returns an empty universe with universe_selection_failed metadata.
+Remove baseline trading fallback level construction when confirmed/shelf highs are absent.
+Disable ideal_like decay invalidation bypass in category_3 baseline profile.
+Reject unresolved entry timeframe in the main PNO multi-TF path instead of assuming configured TF.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+Low to medium. Trading acceptance thresholds are unchanged, but runs that previously masked invalid sparse cache, unresolved entry timeframe or failed liquidity universe can now stop earlier with explicit data-quality reasons.
+```
+
+Next:
+
+```text
+Run a small PNO diagnostics sample and verify data_load_status.csv, data_load_rejections.csv, diagnostics/seconds_load_status.csv and diagnostics/stage1_cache_status.csv.
+```

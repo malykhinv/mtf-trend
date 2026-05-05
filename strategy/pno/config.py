@@ -550,7 +550,7 @@ def resolve_pno_category_profiles(
             0.05,
         ),
         ideal_like_level_latest_high_max_age_bars=max(int(params.ideal_like_level_latest_high_max_age_bars), 60),
-        ideal_like_ignore_decay_invalidation=True,
+        ideal_like_ignore_decay_invalidation=False,
         min_entry_rr=max(float(params.min_entry_rr), 3.0),
     )
     category3_params = replace(category2_params, **category3_common)
