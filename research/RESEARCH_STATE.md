@@ -9,8 +9,8 @@
 ```text
 Branch: codex/ideal-like
 Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P054 proposed per-symbol data-load artifacts after user-applied P048/P049/P050/P051/P052/P053
-Last applied patch: P053 (user-stated local apply; commit UNKNOWN)
+Local diff: P055 proposed sparse seconds load-status propagation after user-applied P048/P049/P050/P051/P052/P053/P054
+Last applied patch: P054 (user-stated local apply; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -138,7 +138,8 @@ winrate > 0.40
 | P051 | Explicit sparse-entry materialization failure | APPLIED locally / UNKNOWN commit | Не маскировать missing seconds loader/windows/frames пустым OHLCV-frame; писать точные `sparse_entry_*` reasons. |
 | P052 | Explicit DataPreparer load status | APPLIED locally / UNKNOWN commit | Не сводить missing symbol/file/schema/window/invalid OHLCV к одинаковому empty frame; сохранять точные data_load_rejections. |
 | P053 | Canonical diagnostics trade-count only | APPLIED locally / UNKNOWN commit | Diagnostics/charts читают только `number_of_trades`; legacy aliases маркируются как ignored, missing trade-count не рисуется как нули. |
-| P054 | Per-symbol data-load artifacts | PROPOSED | Сохранять `data_load_status.csv` и `data_load_rejections.csv` по каждому symbol/role/timeframe, а не только aggregate counts. |
+| P054 | Per-symbol data-load artifacts | APPLIED locally / UNKNOWN commit | Сохранять `data_load_status.csv` и `data_load_rejections.csv` по каждому symbol/role/timeframe, а не только aggregate counts. |
+| P055 | Sparse seconds load-status propagation | PROPOSED | Пробрасывать причины cache/window/fetch/materialization из seconds provider в engine diagnostics, а не сводить их к `sparse_entry_no_loaded_frames`. |
 
 Статусы:
 
@@ -227,7 +228,7 @@ taker_buy_quote_volume
 Текущий приоритет:
 
 ```text
-P051 → compileall → micro-check sparse seconds path: missing loader / empty loaded windows должны дать конкретный `sparse_entry_*` Stage2 rejection, а не generic `insufficient_sparse_entry_data`.
+P055 → apply → compileall → micro-check sparse seconds path: missing/invalid seconds cache должен дать `seconds_materialization_load_reason_counts` и `seconds_materialization_load_status_sample`, а не только top-level `sparse_entry_no_loaded_frames`.
 ```
 
 После этого:

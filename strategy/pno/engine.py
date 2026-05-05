@@ -381,6 +381,8 @@ class SparseEntryMaterializationResult:
     reason: str | None = None
     windows_requested: int = 0
     windows_loaded: int = 0
+    load_statuses: tuple[dict[str, object], ...] = ()
+    load_reason_counts: dict[str, int] | None = None
 
     @property
     def ok(self) -> bool:
@@ -1160,12 +1162,16 @@ class PnoEngine:
             actual_entry_frame = materialization.frame
             context = diagnostics.setdefault("context", {})
             if isinstance(context, dict):
+                load_status_sample = list(materialization.load_statuses[:50])
                 context.update(
                     {
                         "seconds_materialization_status": materialization.status,
                         "seconds_materialization_reason": materialization.reason or "",
                         "seconds_materialization_windows_requested": int(materialization.windows_requested),
                         "seconds_materialization_windows_loaded": int(materialization.windows_loaded),
+                        "seconds_materialization_load_status_count": int(len(materialization.load_statuses)),
+                        "seconds_materialization_load_status_sample": load_status_sample,
+                        "seconds_materialization_load_reason_counts": dict(materialization.load_reason_counts or {}),
                         "seconds_materialized": materialization.ok,
                         "seconds_source_timeframe_ms": int(source_entry_timeframe_ms),
                         "seconds_materialized_bars": int(len(actual_entry_frame)),
@@ -1194,6 +1200,8 @@ class PnoEngine:
                         "materialization_status": materialization.status,
                         "windows_requested": int(materialization.windows_requested),
                         "windows_loaded": int(materialization.windows_loaded),
+                        "load_reason_counts": dict(materialization.load_reason_counts or {}),
+                        "load_status_sample": list(materialization.load_statuses[:10]),
                     },
                 )
                 self._last_generation_diagnostics = diagnostics
@@ -9075,6 +9083,14 @@ class PnoEngine:
     def _aggregate_to_5m(frame: pd.DataFrame) -> pd.DataFrame:
         return PnoEngine._aggregate_frame(frame, target_timeframe_ms=Timeframe.M5.to_milliseconds())
 
+    @staticmethod
+    def _count_sparse_load_reasons(load_statuses: tuple[dict[str, object], ...]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for item in load_statuses:
+            reason = str(item.get("reason") or item.get("status") or "unknown")
+            counts[reason] = counts.get(reason, 0) + 1
+        return counts
+
     def _materialize_sparse_entry_frame(
         self,
         *,
@@ -9093,12 +9109,13 @@ class PnoEngine:
             *PNO_OPTIONAL_MARKET_DATA_COLUMNS,
         ]
         empty_frame = pd.DataFrame(columns=empty_columns)
-        loader = getattr(seconds_frame_provider, "load_aggregated_window", None)
-        if not callable(loader):
+        result_loader = getattr(seconds_frame_provider, "load_aggregated_window_result", None)
+        if not callable(result_loader):
             return SparseEntryMaterializationResult(
                 frame=empty_frame,
                 status="failed",
-                reason="sparse_entry_loader_missing",
+                reason="sparse_entry_window_result_loader_missing",
+                load_reason_counts={"sparse_entry_window_result_loader_missing": 1},
             )
 
         windows = self._resolve_stage1_fetch_windows(
@@ -9111,20 +9128,72 @@ class PnoEngine:
                 frame=empty_frame,
                 status="failed",
                 reason="sparse_entry_no_stage1_windows",
+                load_reason_counts={"sparse_entry_no_stage1_windows": 1},
             )
 
         frames: list[pd.DataFrame] = []
+        load_statuses: list[dict[str, object]] = []
         for start_timestamp_ms, end_timestamp_ms in windows:
-            frame = loader(
+            result = result_loader(
                 symbol=params.symbol,
                 start_timestamp_ms=int(start_timestamp_ms),
                 end_timestamp_ms=int(end_timestamp_ms),
                 target_timeframe=params.entry_timeframe,
             )
-            if isinstance(frame, pd.DataFrame) and not frame.empty:
-                prepared = self.prepare_data(frame)
-                if not prepared.empty:
-                    frames.append(prepared)
+            frame = getattr(result, "frame", None)
+            ok = bool(getattr(result, "ok", False))
+            status = str(getattr(result, "status", "unknown"))
+            reason = str(getattr(result, "reason", "unknown"))
+            rows = int(len(frame)) if isinstance(frame, pd.DataFrame) else 0
+            window_status = {
+                "source": "sparse_entry_window",
+                "symbol": str(params.symbol),
+                "target_timeframe": params.entry_timeframe.value,
+                "window_start_timestamp_ms": int(start_timestamp_ms),
+                "window_end_timestamp_ms": int(end_timestamp_ms),
+                "ok": ok,
+                "status": status,
+                "reason": reason,
+                "rows": rows,
+                "source_detail": str(getattr(result, "source", "")),
+                "seconds_status": str(getattr(result, "seconds_status", "")),
+                "seconds_reason": str(getattr(result, "seconds_reason", "")),
+            }
+            load_statuses.append(window_status)
+
+            nested_statuses = getattr(result, "load_statuses", ())
+            if isinstance(nested_statuses, (list, tuple)):
+                for nested in nested_statuses:
+                    if not isinstance(nested, dict):
+                        continue
+                    nested_payload = dict(nested)
+                    nested_payload.setdefault("source", "sparse_entry_window_detail")
+                    nested_payload["window_start_timestamp_ms"] = int(start_timestamp_ms)
+                    nested_payload["window_end_timestamp_ms"] = int(end_timestamp_ms)
+                    load_statuses.append(nested_payload)
+
+            if not ok or not isinstance(frame, pd.DataFrame) or frame.empty:
+                continue
+            prepared = self.prepare_data(frame)
+            if prepared.empty:
+                load_statuses.append(
+                    {
+                        "source": "sparse_entry_window_prepare",
+                        "symbol": str(params.symbol),
+                        "target_timeframe": params.entry_timeframe.value,
+                        "window_start_timestamp_ms": int(start_timestamp_ms),
+                        "window_end_timestamp_ms": int(end_timestamp_ms),
+                        "ok": False,
+                        "status": "failed",
+                        "reason": "sparse_entry_window_prepare_empty",
+                        "rows": int(rows),
+                    }
+                )
+                continue
+            frames.append(prepared)
+
+        load_status_tuple = tuple(load_statuses)
+        reason_counts = self._count_sparse_load_reasons(load_status_tuple)
         if not frames:
             return SparseEntryMaterializationResult(
                 frame=empty_frame,
@@ -9132,6 +9201,8 @@ class PnoEngine:
                 reason="sparse_entry_no_loaded_frames",
                 windows_requested=len(windows),
                 windows_loaded=0,
+                load_statuses=load_status_tuple,
+                load_reason_counts=reason_counts,
             )
         materialized = self.prepare_data(pd.concat(frames, ignore_index=True))
         if materialized.empty:
@@ -9141,12 +9212,16 @@ class PnoEngine:
                 reason="sparse_entry_materialized_frame_empty",
                 windows_requested=len(windows),
                 windows_loaded=len(frames),
+                load_statuses=load_status_tuple,
+                load_reason_counts=reason_counts,
             )
         return SparseEntryMaterializationResult(
             frame=materialized,
             status="ok",
             windows_requested=len(windows),
             windows_loaded=len(frames),
+            load_statuses=load_status_tuple,
+            load_reason_counts=reason_counts,
         )
 
     def _resolve_stage1_fetch_windows(

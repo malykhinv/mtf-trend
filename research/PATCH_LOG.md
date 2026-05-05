@@ -71,7 +71,8 @@ SUPERSEDED = заменён новым патчем
 | P051 | Explicit sparse-entry materialization failure | APPLIED locally / UNKNOWN commit | `strategy/pno/engine.py`, `research/*` | data-quality/diagnostics | Sparse entry materialization возвращает typed status/reason вместо пустого OHLCV-frame fallback; причины loader/window/load/empty/insufficient bars видны в diagnostics. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 | P052 | Explicit DataPreparer load status | APPLIED locally / UNKNOWN commit | `vectorbt_runner/data_preparer.py`, `vectorbt_runner/__init__.py`, `cli/commands.py`, `research/*` | data-quality/diagnostics | DataPreparer возвращает typed status/reason для missing symbol/file/schema/window/invalid rows; PNO backtest и check-quality больше не сводят эти причины к одинаковому empty frame. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P053 | Canonical diagnostics trade-count only | APPLIED locally / UNKNOWN commit | `cli/pno_diagnostics.py`, `research/*` | diagnostics/chart | Diagnostics/charts читают только `number_of_trades`; legacy `trades`/`trade_count` маркируются как ignored, missing trade-count не рисуется как нули. | `python -m compileall cli/pno_diagnostics.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
-| P054 | Per-symbol data-load artifacts | PROPOSED | `cli/commands.py`, `research/*` | diagnostics/data-quality | Сохранять per-symbol/role/timeframe `data_load_status.csv` и `data_load_rejections.csv`; linked from run_context. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+| P054 | Per-symbol data-load artifacts | APPLIED locally / UNKNOWN commit | `cli/commands.py`, `research/*` | diagnostics/data-quality | Сохранять per-symbol/role/timeframe `data_load_status.csv` и `data_load_rejections.csv`; linked from run_context. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+| P055 | Sparse seconds load-status propagation | PROPOSED | `strategy/pno/pno_strategy.py`, `strategy/pno/engine.py`, `research/*` | data-quality/diagnostics | Пробрасывать typed seconds/aggregated-window statuses в sparse materialization diagnostics; `sparse_entry_no_loaded_frames` больше не теряет первопричины cache/schema/window/fetch. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 
 
 ---
@@ -2006,7 +2007,7 @@ Stage-review charts and manifest should show `missing_canonical_number_of_trades
 ## P054 — Per-symbol data-load artifacts
 
 ```text
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Type: diagnostics / data-quality artifact
 Trading logic changed: no
 Files: cli/commands.py, research/*
@@ -2036,4 +2037,42 @@ python -m compileall data/exchanges strategy/pno cli constants.py main.py launch
 
 ```text
 A run with missing timeframe/cache should produce `data_load_status.csv` rows for rejected symbols and `run_context.json` should point to both data-load artifacts; no rejected symbol should be visible only as an aggregate count.
+```
+
+
+---
+
+## P055 — Sparse seconds load-status propagation
+
+```text
+Status: PROPOSED
+Type: data-quality / diagnostics
+Trading logic changed: no; sparse data failures now preserve exact load/materialization reasons
+Files: strategy/pno/pno_strategy.py, strategy/pno/engine.py, research/*
+Commit: UNKNOWN
+Base: P048/P049/P050/P051/P052/P053/P054 user-applied locally; exact commit UNKNOWN
+```
+
+Проблема:
+
+```text
+P051 made sparse entry materialization explicit, but the provider still returned only a DataFrame. Runtime/persistent seconds-cache statuses, missing parquet, empty requested windows, invalid OHLCV rows and day-fetch empties collapsed into `sparse_entry_no_loaded_frames`.
+```
+
+Изменение:
+
+```text
+Add typed seconds-window and aggregated-window load results in the PNO seconds provider. Engine now uses `load_aggregated_window_result`, records per-window status rows, nested DataPreparer/day-fetch statuses, reason counts and a bounded status sample in diagnostics context and Stage2 rejection extra.
+```
+
+Проверка:
+
+```bash
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain
+```
+
+Ожидаемый rerun check:
+
+```text
+A sparse-entry run with missing/invalid seconds data should expose `seconds_materialization_load_reason_counts` and `seconds_materialization_load_status_sample`; `sparse_entry_no_loaded_frames` should remain only the top-level rejection, not the only observable cause.
 ```
