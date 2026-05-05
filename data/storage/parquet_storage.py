@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import gc
 from logging import INFO
 from pathlib import Path
@@ -16,6 +17,17 @@ from utils.logger import get_logger
 
 class ParquetCacheValidationError(ValueError):
     """Ошибка валидации записанного parquet-кэша."""
+
+
+@dataclass(frozen=True, slots=True)
+class ParquetLoadResult:
+    frame: pd.DataFrame
+    ok: bool
+    status: str
+    reason: str
+    path: Path
+    rows: int = 0
+    missing_columns: tuple[str, ...] = ()
 
 
 class ParquetStorage:
@@ -86,14 +98,58 @@ class ParquetStorage:
                 f"missing_written_batch_rows={sorted(list(missing))[:10]}"
             )
 
-    def load(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
+    def load_result(self, symbol: str, timeframe: Timeframe) -> ParquetLoadResult:
         path = self._data_path(symbol, timeframe)
         if not path.exists():
-            return pd.DataFrame()
-        frame = pd.read_parquet(path)
+            return ParquetLoadResult(
+                frame=pd.DataFrame(),
+                ok=False,
+                status="missing",
+                reason="parquet_file_missing",
+                path=path,
+            )
+        try:
+            frame = pd.read_parquet(path)
+        except Exception as exc:
+            return ParquetLoadResult(
+                frame=pd.DataFrame(),
+                ok=False,
+                status="read_failed",
+                reason=f"parquet_read_failed:{type(exc).__name__}",
+                path=path,
+            )
         if frame.empty:
-            return frame
-        return self._ensure_columns(frame)
+            return ParquetLoadResult(
+                frame=frame,
+                ok=False,
+                status="empty",
+                reason="parquet_file_empty",
+                path=path,
+                rows=0,
+            )
+        try:
+            prepared = self._ensure_columns(frame)
+        except ValueError:
+            return ParquetLoadResult(
+                frame=pd.DataFrame(),
+                ok=False,
+                status="schema_invalid",
+                reason="parquet_missing_timestamp",
+                path=path,
+                rows=int(len(frame)),
+                missing_columns=("timestamp",),
+            )
+        return ParquetLoadResult(
+            frame=prepared,
+            ok=True,
+            status="ok",
+            reason="parquet_loaded",
+            path=path,
+            rows=int(len(prepared)),
+        )
+
+    def load(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
+        return self.load_result(symbol, timeframe).frame
 
     def get_last_timestamp(self, symbol: str, timeframe: Timeframe) -> int | None:
         data = self.load(symbol, timeframe)

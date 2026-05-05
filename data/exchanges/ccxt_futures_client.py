@@ -260,7 +260,9 @@ class CcxtFuturesClient(ExchangeClient):
             params=params,
         )
         if not isinstance(batch, list):
-            return []
+            raise ValueError(
+                f"binance_fetch_agg_trades returned invalid payload type: {type(batch).__name__}"
+            )
 
         payloads: list[CcxtAggTradePayload] = []
         for row in batch:

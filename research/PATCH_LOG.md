@@ -2130,3 +2130,56 @@ Next:
 ```text
 Run a small PNO diagnostics sample and verify data_load_status.csv, data_load_rejections.csv, diagnostics/seconds_load_status.csv and diagnostics/stage1_cache_status.csv.
 ```
+
+---
+
+## P057 - Strict current-code artifact/cache reads
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: data-quality / diagnostics / cache-read hardening
+Trading logic changed: no; invalid configured PNO TF pair now fails explicitly instead of silently using default
+Files: cli/pno_diagnostics.py, cli/commands.py, data/storage/parquet_storage.py, data/fetchers/ohlcv_fetcher.py, data/exchanges/ccxt_futures_client.py, research/*
+Commit: UNKNOWN
+Follow-up to: P056
+```
+
+Problem:
+
+```text
+Some current-code reads still treated missing/empty/broken artifacts as the same empty DataFrame.
+Diagnostic chart timeframe inference still accepted a default when frame step could not be inferred.
+Parquet cache load returned empty frame for missing cache and raised/failed elsewhere without a reusable status.
+M10 cached-base OHLCV aggregation treated missing/schema/window/invalid base cache as a generic empty frame before falling through.
+Binance aggTrades typed boundary returned [] for invalid non-list exchange payload.
+PNO backtest timeframe config could silently fall back to the default pair if configured pair was invalid.
+```
+
+Change:
+
+```text
+Add CSV artifact read status for existing artifact readers and write artifact_load_status.csv where current commands read/sync category research context and stage manifests.
+Make PNO diagnostic frame-step inference return None when unresolved; chart/context callers now skip or annotate diagnostic_frame_step_unresolved instead of using synthetic TF.
+Add ParquetStorage.load_result with explicit missing/empty/read_failed/schema_invalid/ok status while keeping load() as compatibility wrapper.
+Make OhlcvFetcher M10 cached-base path use explicit cache load status and distinguish invalid rows and empty requested window.
+Raise an explicit error on invalid non-list Binance aggTrades payload instead of returning [].
+Reject invalid configured PNO backtest TF pair with configured_timeframe_pair_invalid instead of defaulting to another pair.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges data/fetchers data/storage strategy/pno cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+Low to medium. No PNO thresholds or entry/exit decisions changed. Some commands that previously continued with guessed/default data now stop or produce explicit artifact/cache failure statuses.
+```
+
+Next:
+
+```text
+Run a small diagnostics/backtest path and verify artifact_load_status.csv plus existing data_load_status.csv/seconds_load_status.csv/stage1_cache_status.csv are present and distinguish missing vs empty vs read_failed.
+```

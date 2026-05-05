@@ -9,8 +9,8 @@
 ```text
 Branch: codex/ideal-like
 Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P056 applied locally after P055/fallback audit; commit UNKNOWN
-Last applied patch: P056 (local workspace; commit UNKNOWN)
+Local diff: P057 applied locally after P056; commit UNKNOWN
+Last applied patch: P057 (local workspace; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -259,4 +259,27 @@ One next test:
 
 ```text
 Run a small PNO diagnostics sample and inspect seconds_load_status.csv plus stage1_cache_status.csv before reading funnel profitability.
+```
+
+---
+
+## 11. Current local patch note - P057
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Updated: 2026-05-05
+```
+
+Current conclusion:
+
+```text
+Do not add a separate validation/diagnostics layer. Fix the current read paths so normal PNO artifacts are truthful.
+P057 makes CSV artifact reads, Parquet cache reads, M10 cached-base OHLCV reads, Binance aggTrades payload shape and PNO configured TF pair failures explicit.
+Missing/empty/read_failed/schema_invalid must be visible in artifacts or command status, not converted to an undifferentiated empty DataFrame/default timeframe.
+```
+
+One next test:
+
+```text
+Run a small PNO diagnostics/backtest path and inspect artifact_load_status.csv, data_load_status.csv, seconds_load_status.csv and stage1_cache_status.csv before reading funnel/PnL.
 ```

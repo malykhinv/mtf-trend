@@ -459,3 +459,36 @@ Do not evaluate:
 ```text
 PnL / winrate / edge. This is a data-quality diagnostics check only.
 ```
+
+---
+
+## E012 - Artifact/cache read truthfulness after P057
+
+```text
+Status: PLANNED
+Depends on: P057
+Date: 2026-05-05
+Code state: local workspace, commit UNKNOWN
+```
+
+Goal:
+
+```text
+Verify that current PNO artifact/cache readers expose missing/empty/read_failed/schema_invalid/unresolved-TF states without adding a separate validation layer.
+```
+
+Success:
+
+```text
+artifact_load_status.csv is written when category/stage artifacts are read or synced.
+Parquet cache reads used by current fetch paths expose explicit load_result status.
+M10 cached-base OHLCV path does not hide missing/schema/window/invalid base cache as a generic empty frame.
+Invalid aggTrades payload shape raises a typed-boundary error that PNO seconds diagnostics can record.
+Diagnostic frame step unresolved is visible as diagnostic_frame_step_unresolved or the chart is skipped, not drawn with a fake TF.
+```
+
+Do not evaluate:
+
+```text
+PnL / winrate / edge. This checks diagnostic truthfulness only.
+```

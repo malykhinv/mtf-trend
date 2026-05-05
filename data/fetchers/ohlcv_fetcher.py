@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -22,6 +23,18 @@ from domain.abstract.exchange_client import ExchangeClient
 from domain.enums.timeframe import Timeframe
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
 from utils.logger import get_logger
+
+
+@dataclass(frozen=True, slots=True)
+class CachedBaseFrameLoadResult:
+    frame: pd.DataFrame
+    ok: bool
+    status: str
+    reason: str
+    source_timeframe: Timeframe
+    path: str = ""
+    rows: int = 0
+    missing_columns: tuple[str, ...] = ()
 
 
 class OhlcvFetcher:
@@ -82,6 +95,65 @@ class OhlcvFetcher:
         )
         return aggregated.loc[:, output_columns].reset_index(drop=True)
 
+    def _load_cached_base_frame_result(
+        self,
+        symbol: str,
+        source_timeframe: Timeframe,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> CachedBaseFrameLoadResult:
+        load_result = self._storage.load_result(symbol, source_timeframe)
+        if not load_result.ok:
+            return CachedBaseFrameLoadResult(
+                frame=pd.DataFrame(),
+                ok=False,
+                status=load_result.status,
+                reason=load_result.reason,
+                source_timeframe=source_timeframe,
+                path=str(load_result.path),
+                rows=int(load_result.rows),
+                missing_columns=load_result.missing_columns,
+            )
+        frame = load_result.frame
+        prepared = frame.copy()
+        for column in (*OHLCV_FRAME_COLUMNS, *OHLCV_OPTIONAL_MARKET_DATA_COLUMNS):
+            if column in prepared.columns:
+                prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+        prepared = prepared.dropna(subset=list(OHLCV_FRAME_COLUMNS))
+        if prepared.empty:
+            return CachedBaseFrameLoadResult(
+                frame=pd.DataFrame(),
+                ok=False,
+                status="invalid_required_ohlcv_rows",
+                reason="cached_base_rows_invalid_after_numeric_cleaning",
+                source_timeframe=source_timeframe,
+                path=str(load_result.path),
+                rows=int(load_result.rows),
+            )
+        sliced = prepared.loc[
+            (prepared["timestamp"] >= start_timestamp_ms)
+            & (prepared["timestamp"] <= end_timestamp_ms)
+        ].sort_values("timestamp").reset_index(drop=True)
+        if sliced.empty:
+            return CachedBaseFrameLoadResult(
+                frame=sliced,
+                ok=False,
+                status="requested_window_empty",
+                reason="cached_base_window_empty",
+                source_timeframe=source_timeframe,
+                path=str(load_result.path),
+                rows=0,
+            )
+        return CachedBaseFrameLoadResult(
+            frame=sliced,
+            ok=True,
+            status="ok",
+            reason="cached_base_loaded",
+            source_timeframe=source_timeframe,
+            path=str(load_result.path),
+            rows=int(len(sliced)),
+        )
+
     def _load_cached_base_frame(
         self,
         symbol: str,
@@ -89,30 +161,23 @@ class OhlcvFetcher:
         start_timestamp_ms: int,
         end_timestamp_ms: int,
     ) -> pd.DataFrame:
-        frame = self._storage.load(symbol, source_timeframe)
-        if frame.empty or "timestamp" not in frame.columns:
-            return pd.DataFrame()
-        prepared = frame.copy()
-        for column in (*OHLCV_FRAME_COLUMNS, *OHLCV_OPTIONAL_MARKET_DATA_COLUMNS):
-            if column in prepared.columns:
-                prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-        prepared = prepared.dropna(subset=list(OHLCV_FRAME_COLUMNS))
-        if prepared.empty:
-            return pd.DataFrame()
-        return prepared.loc[
-            (prepared["timestamp"] >= start_timestamp_ms)
-            & (prepared["timestamp"] <= end_timestamp_ms)
-        ].sort_values("timestamp").reset_index(drop=True)
+        return self._load_cached_base_frame_result(
+            symbol=symbol,
+            source_timeframe=source_timeframe,
+            start_timestamp_ms=start_timestamp_ms,
+            end_timestamp_ms=end_timestamp_ms,
+        ).frame
 
     def fetch_symbol(self, symbol: str, timeframe: Timeframe, start_timestamp_ms: int, end_timestamp_ms: int) -> int:
         """Загружает OHLCV-данные для одного символа."""
         if timeframe == Timeframe.M10:
-            cached_base_frame = self._load_cached_base_frame(
+            cached_base_result = self._load_cached_base_frame_result(
                 symbol=symbol,
                 source_timeframe=Timeframe.M5,
                 start_timestamp_ms=start_timestamp_ms,
                 end_timestamp_ms=end_timestamp_ms,
             )
+            cached_base_frame = cached_base_result.frame
             if not cached_base_frame.empty:
                 data = self._aggregate_cached_frame(cached_base_frame, target_timeframe=timeframe)
                 added_rows = self._storage.save_incremental(symbol, timeframe, data)

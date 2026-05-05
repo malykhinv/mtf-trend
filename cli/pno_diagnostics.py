@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 import time
+from dataclasses import dataclass
 from logging import Logger
 from pathlib import Path
 
@@ -254,13 +255,64 @@ def _write_stage_review_events(path: Path, records: list[dict[str, object]], *, 
     frame.to_csv(path, index=False)
     return frame
 
-def _read_csv_or_empty(path: Path) -> pd.DataFrame:
+@dataclass(frozen=True, slots=True)
+class CsvArtifactReadResult:
+    frame: pd.DataFrame
+    ok: bool
+    status: str
+    reason: str
+    path: Path
+    rows: int = 0
+
+
+def _read_csv_with_status(path: Path) -> CsvArtifactReadResult:
     if not path.exists():
-        return pd.DataFrame()
+        return CsvArtifactReadResult(
+            frame=pd.DataFrame(),
+            ok=False,
+            status="missing",
+            reason="artifact_missing",
+            path=path,
+        )
     try:
-        return pd.read_csv(path)
+        frame = pd.read_csv(path)
     except pd.errors.EmptyDataError:
-        return pd.DataFrame()
+        return CsvArtifactReadResult(
+            frame=pd.DataFrame(),
+            ok=False,
+            status="empty_file",
+            reason="artifact_empty_file",
+            path=path,
+        )
+    except (OSError, ValueError, pd.errors.ParserError) as exc:
+        return CsvArtifactReadResult(
+            frame=pd.DataFrame(),
+            ok=False,
+            status="read_failed",
+            reason=f"artifact_read_failed:{type(exc).__name__}",
+            path=path,
+        )
+    if frame.empty:
+        return CsvArtifactReadResult(
+            frame=frame,
+            ok=True,
+            status="empty_rows",
+            reason="artifact_loaded_with_zero_rows",
+            path=path,
+            rows=0,
+        )
+    return CsvArtifactReadResult(
+        frame=frame,
+        ok=True,
+        status="ok",
+        reason="artifact_loaded",
+        path=path,
+        rows=int(len(frame)),
+    )
+
+
+def _read_csv_or_empty(path: Path) -> pd.DataFrame:
+    return _read_csv_with_status(path).frame
 
 
 def _safe_float(value: object) -> float | None:
@@ -1064,16 +1116,17 @@ def _annotate_pno_axis_price_tag(
     )
 
 
-def _infer_pno_frame_step_ms(frame: pd.DataFrame, default_ms: int) -> int:
+def _infer_pno_frame_step_ms(frame: pd.DataFrame, default_ms: int | None = None) -> int | None:
+    del default_ms
     if frame.empty or "timestamp" not in frame.columns:
-        return default_ms
+        return None
     timestamps = pd.to_numeric(frame["timestamp"], errors="coerce").dropna().to_numpy(dtype=np.int64)
     if timestamps.size < 2:
-        return default_ms
+        return None
     diffs = np.diff(np.sort(timestamps))
     diffs = diffs[diffs > 0]
     if diffs.size == 0:
-        return default_ms
+        return None
     return int(np.median(diffs))
 
 
@@ -1088,8 +1141,8 @@ def _format_pno_chart_symbol(symbol: str) -> str:
     return base
 
 
-def _format_pno_timeframe_label(step_ms: int) -> str:
-    if step_ms <= 0:
+def _format_pno_timeframe_label(step_ms: int | None) -> str:
+    if step_ms is None or step_ms <= 0:
         return "TF"
     if step_ms % 60_000 == 0:
         minutes = step_ms // 60_000
@@ -1784,7 +1837,9 @@ def _render_pno_position_chart(
     show_high_tag = not _pno_prices_close(active_high, tp1)
     show_pullback_low_tag = not _pno_prices_close(pullback_low, initial_stop_loss)
 
-    levels_step_ms = _infer_pno_frame_step_ms(levels_frame, default_ms=5 * 60 * 1000)
+    levels_step_ms = _infer_pno_frame_step_ms(levels_frame)
+    if levels_step_ms is None:
+        return None
     sleep_lookback_ms = _PNO_TRADE_SLEEP_LOOKBACK_BARS * levels_step_ms
     window_start_ms = max(pump_start_timestamp_ms - sleep_lookback_ms, 0)
     window_end_ms = max(exit_timestamp_ms + (30 * 60 * 1000), entry_timestamp_ms + (30 * 60 * 1000))
@@ -2266,8 +2321,8 @@ def _render_pno_position_charts_for_symbol(
     levels_plot_frame = _prepare_pno_levels_plot_source(mtf_frames.levels_frame)
     entry_source_frame = mtf_frames.entry_frame
     target_entry_ms = int(mtf_frames.entry_timeframe.to_milliseconds())
-    source_entry_ms = _infer_pno_frame_step_ms(entry_source_frame, target_entry_ms)
-    if source_entry_ms > target_entry_ms and seconds_frame_provider is not None:
+    source_entry_ms = _infer_pno_frame_step_ms(entry_source_frame)
+    if source_entry_ms is not None and source_entry_ms > target_entry_ms and seconds_frame_provider is not None:
         timestamps: list[int] = []
         for row in position_rows:
             for key in (
@@ -2351,7 +2406,9 @@ def _resolve_pno_sleep_volume_baseline(
     source = levels_frame if use_levels_frame else entry_frame
     if source.empty or "timestamp" not in source.columns or "volume" not in source.columns:
         return None
-    step_ms = _infer_pno_frame_step_ms(source, default_ms=5 * 60_000 if use_levels_frame else 60_000)
+    step_ms = _infer_pno_frame_step_ms(source)
+    if step_ms is None:
+        return None
     del sleep_start_timestamp_ms
     start_timestamp_ms = max(0, int(pump_start_timestamp_ms) - _PNO_STAGE_REVIEW_SLEEP_BASELINE_MS)
     end_timestamp_ms = max(0, int(pump_start_timestamp_ms) - step_ms)
@@ -2393,8 +2450,12 @@ def _render_pno_stage_review_chart(
     pullback_base_start_timestamp_ms = _safe_int(review_row.get("pullback_base_start_timestamp_ms"))
     is_stage1 = stage_id == PNO_STAGE_SEQUENCE[0]
     use_levels_frame = is_stage1
-    levels_step_ms = int(levels_timeframe_ms or _infer_pno_frame_step_ms(levels_frame, default_ms=5 * 60_000))
-    entry_step_ms = int(entry_timeframe_ms or _infer_pno_frame_step_ms(entry_frame, default_ms=60_000))
+    inferred_levels_step_ms = _infer_pno_frame_step_ms(levels_frame)
+    inferred_entry_step_ms = _infer_pno_frame_step_ms(entry_frame)
+    levels_step_ms = int(levels_timeframe_ms or inferred_levels_step_ms or 0)
+    entry_step_ms = int(entry_timeframe_ms or inferred_entry_step_ms or 0)
+    if levels_step_ms <= 0 or entry_step_ms <= 0:
+        return None
     if is_stage1 and pump_start_timestamp_ms is not None:
         start_timestamp_ms = _resolve_pno_stage_review_start_timestamp(
             timestamp_ms=int(timestamp_ms),
@@ -2406,7 +2467,9 @@ def _render_pno_stage_review_chart(
         )
         end_timestamp_ms = timestamp_ms
     else:
-        frame_step_ms = _infer_pno_frame_step_ms(levels_frame if use_levels_frame else entry_frame, 5 * 60_000)
+        frame_step_ms = _infer_pno_frame_step_ms(levels_frame if use_levels_frame else entry_frame)
+        if frame_step_ms is None:
+            return None
         sleep_context_start = _resolve_pno_stage_review_start_timestamp(
             timestamp_ms=int(timestamp_ms),
             pump_start_timestamp_ms=pump_start_timestamp_ms,
@@ -3458,8 +3521,11 @@ def _resolve_pno_pattern_context(
     leg_size = _safe_float(row.get("leg_size"))
     result: dict[str, object] = {}
 
-    levels_step_ms = _infer_pno_frame_step_ms(levels_frame, default_ms=5 * 60_000)
-    entry_step_ms = _infer_pno_frame_step_ms(entry_frame, default_ms=60_000)
+    levels_step_ms = _infer_pno_frame_step_ms(levels_frame)
+    entry_step_ms = _infer_pno_frame_step_ms(entry_frame)
+    if levels_step_ms is None or entry_step_ms is None:
+        result["diagnostic_frame_step_unresolved"] = True
+        return result
     signal_ts = signal_timestamp_ms or level_valid_timestamp_ms or _safe_int(row.get("timestamp_ms"))
     active_high_levels_timestamp_ms: int | None = None
 

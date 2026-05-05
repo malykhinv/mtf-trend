@@ -61,7 +61,7 @@ from vectorbt_runner.backtest_runner import BacktestGenerationDiagnosticsCache
 from cli.pno_diagnostics import (
     _export_pno_research_context,
     _export_pno_stage_reviews,
-    _read_csv_or_empty,
+    _read_csv_with_status,
     _render_pno_position_charts_for_symbol,
     _safe_float,
     _safe_int,
@@ -132,6 +132,13 @@ _PNO_STAGE1_CACHE_STATUS_COLUMNS: tuple[str, ...] = (
     "reason",
     "path",
     "missing_arrays",
+)
+_PNO_ARTIFACT_LOAD_STATUS_COLUMNS: tuple[str, ...] = (
+    "path",
+    "ok",
+    "status",
+    "reason",
+    "rows",
 )
 _BACKTEST_DATA_LOAD_STATUS_COLUMNS: tuple[str, ...] = (
     "role",
@@ -749,8 +756,11 @@ def _write_pno_category_research_context(
         return
     target_research_dir = target_diagnostics_dir / "research_context"
     target_research_dir.mkdir(parents=True, exist_ok=True)
+    artifact_status_rows: list[dict[str, object]] = []
     for csv_path in source_research_dir.glob("*.csv"):
-        frame = _read_csv_or_empty(csv_path)
+        read_result = _read_csv_with_status(csv_path)
+        artifact_status_rows.append(_artifact_status_row(read_result))
+        frame = read_result.frame
         if frame.empty:
             frame.to_csv(target_research_dir / csv_path.name, index=False)
             continue
@@ -758,6 +768,11 @@ def _write_pno_category_research_context(
             continue
         filtered = frame.loc[frame["pno_category_id"].astype(str) == category_id].copy()
         filtered.to_csv(target_research_dir / csv_path.name, index=False)
+    _write_frame_from_records(
+        target_research_dir / "artifact_load_status.csv",
+        artifact_status_rows,
+        columns=_PNO_ARTIFACT_LOAD_STATUS_COLUMNS,
+    )
 
 
 def _export_pno_category_artifacts(
@@ -1058,8 +1073,15 @@ def _sync_shared_stage_reviews(
             continue
         shutil.copytree(source_stage_dir, target_stage_dir, dirs_exist_ok=True)
 
-    shared_manifest = _read_csv_or_empty(shared_stage_reviews_dir / "manifest.csv")
-    target_manifest = _read_csv_or_empty(target_stage_reviews_dir / "manifest.csv")
+    shared_manifest_result = _read_csv_with_status(shared_stage_reviews_dir / "manifest.csv")
+    target_manifest_result = _read_csv_with_status(target_stage_reviews_dir / "manifest.csv")
+    _write_frame_from_records(
+        target_stage_reviews_dir / "artifact_load_status.csv",
+        [_artifact_status_row(shared_manifest_result), _artifact_status_row(target_manifest_result)],
+        columns=_PNO_ARTIFACT_LOAD_STATUS_COLUMNS,
+    )
+    shared_manifest = shared_manifest_result.frame
+    target_manifest = target_manifest_result.frame
     shared_rows: list[dict[str, object]] = []
     for _, row in shared_manifest.iterrows():
         stage_id = str(row.get("stage_id") or "")
@@ -1797,6 +1819,16 @@ def _serialize_diagnostics_context_value(value: object) -> object:
 def _write_frame_from_records(path: Path, records: list[dict[str, object]], *, columns: tuple[str, ...]) -> None:
     frame = pd.DataFrame(records) if records else pd.DataFrame(columns=list(columns))
     frame.to_csv(path, index=False)
+
+
+def _artifact_status_row(result: object) -> dict[str, object]:
+    return {
+        "path": str(getattr(result, "path", "")),
+        "ok": bool(getattr(result, "ok", False)),
+        "status": str(getattr(result, "status", "unknown")),
+        "reason": str(getattr(result, "reason", "unknown")),
+        "rows": int(getattr(result, "rows", 0) or 0),
+    }
 
 
 def _split_quality_reasons(value: object) -> list[str]:
@@ -2750,7 +2782,10 @@ def _resolve_backtest_timeframes(
         configured_entry_timeframe,
     )
     if fallback_pair not in PNO_BACKTEST_TIMEFRAME_PAIRS:
-        fallback_pair = resolve_pno_default_timeframe_pair(mode="backtest")
+        raise ValueError(
+            "configured_timeframe_pair_invalid: "
+            f"levels_tf={configured_levels_timeframe.value}, entry_tf={configured_entry_timeframe.value}"
+        )
     entry_timeframe = _resolve_timeframe(
         getattr(args, "entry_tf", None),
         fallback=fallback_pair[1],
@@ -3529,7 +3564,13 @@ def _collect_pno_stage_summary_rows(
         "pno",
     )
     stage_reviews_dir = strategy_results_dir / "position_plots" / "pno_diagnostics" / "stage_reviews"
-    manifest = _read_csv_or_empty(stage_reviews_dir / "manifest.csv")
+    manifest_result = _read_csv_with_status(stage_reviews_dir / "manifest.csv")
+    _write_frame_from_records(
+        stage_reviews_dir / "artifact_load_status.csv",
+        [_artifact_status_row(manifest_result)],
+        columns=_PNO_ARTIFACT_LOAD_STATUS_COLUMNS,
+    )
+    manifest = manifest_result.frame
     if manifest.empty:
         return []
 
