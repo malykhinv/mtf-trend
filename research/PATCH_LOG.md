@@ -68,15 +68,57 @@ SUPERSEDED = заменён новым патчем
 | P048 | Explicit trade-data enrichment failure | APPLIED locally / UNKNOWN commit | `strategy/pno/pno_strategy.py`, `research/*` | data-quality/diagnostics | `enrich_with_trade_data` возвращает typed result; провал enrichment становится явным `trade_data_enrichment_failed`, а не raw-frame fallback. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 | P049 | Canonical PNO trade-count only | APPLIED locally / UNKNOWN commit | `strategy/pno/engine.py`, `strategy/pno/pno_strategy.py`, `research/*` | data-quality | PNO trading path доверяет только `number_of_trades`; legacy `trades`/`trade_count` не легализуют flow-data. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 | P050 | No ticker quote-volume proxy | APPLIED locally / UNKNOWN commit | `data/exchanges/ccxt_futures_client.py`, `cli/commands.py`, `research/*` | data-quality | Не заменять missing ticker `quoteVolume` на `baseVolume * last`; proxy хранить только как ignored diagnostics metadata. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
-| P051 | Explicit sparse-entry materialization failure | PROPOSED | `strategy/pno/engine.py`, `research/*` | data-quality/diagnostics | Sparse entry materialization возвращает typed status/reason вместо пустого OHLCV-frame fallback; причины loader/window/load/empty/insufficient bars видны в diagnostics. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
+| P051 | Explicit sparse-entry materialization failure | APPLIED locally / UNKNOWN commit | `strategy/pno/engine.py`, `research/*` | data-quality/diagnostics | Sparse entry materialization возвращает typed status/reason вместо пустого OHLCV-frame fallback; причины loader/window/load/empty/insufficient bars видны в diagnostics. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
+| P052 | Explicit DataPreparer load status | PROPOSED | `vectorbt_runner/data_preparer.py`, `vectorbt_runner/__init__.py`, `cli/commands.py`, `research/*` | data-quality/diagnostics | DataPreparer возвращает typed status/reason для missing symbol/file/schema/window/invalid rows; PNO backtest и check-quality больше не сводят эти причины к одинаковому empty frame. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 
+
+---
+
+## P052 — Explicit DataPreparer load status
+
+```text
+Status: PROPOSED
+Type: data-quality / diagnostics
+Trading logic changed: no; data loading failures become explicit instead of empty-frame fallbacks
+Files: vectorbt_runner/data_preparer.py, vectorbt_runner/__init__.py, cli/commands.py, research/*
+Commit: UNKNOWN
+Base: P048/P049/P050/P051 user-applied locally; exact commit UNKNOWN
+```
+
+Проблема:
+
+```text
+DataPreparer возвращал pd.DataFrame() для разных причин: missing symbol dir, missing timeframe parquet, missing required OHLCV columns, empty requested window и invalid OHLCV rows.
+PNO backtest preparation и check-quality видели это как одинаковое "нет данных", поэтому cache/schema/path failures могли выглядеть как честное отсутствие сетапов.
+```
+
+Изменение:
+
+```text
+Добавлен SymbolDataLoadResult(frame/ok/status/reason/path/missing_columns/raw_rows/prepared_rows).
+load_symbol_data_result/load_symbol_data_range_result дают явный статус, а старые load_symbol_data/load_symbol_data_range оставлены только как compatibility wrappers.
+PNO backtest preparation считает data_load_rejections по точным причинам и сохраняет их в run_context.json.
+check-quality логирует конкретный load status вместо generic "данных нет".
+```
+
+Проверка:
+
+```text
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain
+```
+
+Ожидаемый rerun check:
+
+```text
+Если символ пропущен из-за missing parquet/schema/window/invalid OHLCV, run_context.data_load_rejections должен показать точную причину, а не только общий missing_levels_tf/missing_entry_tf.
+```
 
 ---
 
 ## P051 — Explicit sparse-entry materialization failure
 
 ```text
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Type: data-quality / diagnostics
 Trading logic changed: no; failed sparse materialization now stops with explicit diagnostics instead of an empty-frame fallback
 Files: strategy/pno/engine.py, research/*

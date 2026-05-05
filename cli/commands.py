@@ -56,7 +56,7 @@ from strategy.pno.config import (
 from strategy.pno.engine import PNO_STAGE_4_LEVEL, PNO_STAGE_5_POSITION, PNO_STAGE_SEQUENCE
 from utils.logger import get_logger
 from utils.symbols import normalize_symbol
-from vectorbt_runner import BacktestRunner, DataPreparer, SymbolMtfFrames
+from vectorbt_runner import BacktestRunner, DataPreparer, SymbolDataLoadResult, SymbolMtfFrames
 from vectorbt_runner.backtest_runner import BacktestGenerationDiagnosticsCache
 from cli.pno_diagnostics import (
     _export_pno_research_context,
@@ -451,6 +451,7 @@ def _write_backtest_run_context(
     pno_category_mode: str | None = None,
     pno_entry_confirmation_mode: str | None = None,
     pno_variant_id: str | None = None,
+    data_load_rejections: dict[str, int] | None = None,
 ) -> None:
     payload = {
         "strategy_id": strategy_id,
@@ -469,6 +470,7 @@ def _write_backtest_run_context(
         "pno_category_mode": pno_category_mode,
         "pno_entry_confirmation_mode": pno_entry_confirmation_mode,
         "pno_variant_id": pno_variant_id,
+        "data_load_rejections": dict(data_load_rejections or {}),
     }
     (run_root_dir / _BACKTEST_RUN_CONTEXT_FILE_NAME).write_text(
         _to_compact_json(payload),
@@ -2924,23 +2926,27 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     pre_rank_enabled = top_n is not None and top_n > 0
     ranked_symbols: list[tuple[str, float]] = []
     rejected_symbols_count = 0
-    preloaded_levels_frames: dict[str, pd.DataFrame] = {}
-    preloaded_entry_frames: dict[str, pd.DataFrame] = {}
+    preloaded_levels_results: dict[str, SymbolDataLoadResult] = {}
+    data_load_rejections: Counter[str] = Counter()
     pre_rank_started_at = time.perf_counter()
     if pre_rank_enabled:
         for symbol in symbols:
-            levels_frame = preparer.load_symbol_data(
+            levels_result = preparer.load_symbol_data_result(
                 symbol,
                 levels_timeframe,
                 days=backtest_days,
                 end_timestamp_ms=backtest_end_timestamp_ms,
             )
-            preloaded_levels_frames[symbol] = levels_frame
-            if levels_frame.empty:
+            preloaded_levels_results[symbol] = levels_result
+            levels_frame = levels_result.frame
+            if not levels_result.ok:
+                data_load_rejections[f"pre_rank_levels:{levels_result.status}"] += 1
                 logger.debug(
-                    "Символ %s исключён из предварительного отбора: нет данных %s.",
+                    "Символ %s исключён из предварительного отбора: %s %s (%s).",
                     symbol,
                     levels_timeframe.value,
+                    levels_result.status,
+                    levels_result.reason,
                 )
                 rejected_symbols_count += 1
                 continue
@@ -3022,16 +3028,18 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 candidate_ends.append(int(entry_end))
             resolved_end_timestamp_ms = min(candidate_ends) if candidate_ends else None
 
-        levels_frame = preloaded_levels_frames.get(symbol)
-        if levels_frame is None:
-            levels_frame = preparer.load_symbol_data(
+        levels_result = preloaded_levels_results.get(symbol)
+        if levels_result is None:
+            levels_result = preparer.load_symbol_data_result(
                 symbol,
                 levels_timeframe,
                 days=backtest_days,
                 end_timestamp_ms=resolved_end_timestamp_ms,
             )
-        if levels_frame.empty:
+        levels_frame = levels_result.frame
+        if not levels_result.ok:
             symbols_missing_levels_tf += 1
+            data_load_rejections[f"levels:{levels_result.status}"] += 1
             continue
         if pno_fast_prefilter_active and isinstance(strategy, PnoStrategy):
             if not strategy.has_fast_stage1_candidate(
@@ -3042,20 +3050,20 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             ):
                 symbols_fast_stage1_rejected += 1
                 continue
-        entry_frame: pd.DataFrame | None = preloaded_entry_frames.get(symbol)
         if levels_timeframe == source_entry_timeframe:
-            entry_frame = levels_frame if entry_frame is None else entry_frame
-        elif entry_frame is None:
-            entry_frame = preparer.load_symbol_data(
+            entry_frame = levels_frame
+        else:
+            entry_result = preparer.load_symbol_data_result(
                 symbol,
                 source_entry_timeframe,
                 days=backtest_days,
                 end_timestamp_ms=resolved_end_timestamp_ms,
             )
-        if entry_frame.empty:
-            symbols_missing_entry_tf += 1
-        if entry_frame.empty:
-            continue
+            entry_frame = entry_result.frame
+            if not entry_result.ok:
+                symbols_missing_entry_tf += 1
+                data_load_rejections[f"entry:{entry_result.status}"] += 1
+                continue
         symbols_used += 1
         symbol_frames[symbol] = SymbolMtfFrames(
             levels_timeframe=levels_timeframe,
@@ -3063,6 +3071,9 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             levels_frame=levels_frame,
             entry_frame=entry_frame,
         )
+
+    if data_load_rejections:
+        logger.debug("Причины пропуска данных: %s", dict(sorted(data_load_rejections.items())))
 
     if not symbol_frames:
         logger.warning("Не удалось подготовить данные для бэктеста")
@@ -3094,6 +3105,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             pno_category_mode=pno_category_mode,
             pno_entry_confirmation_mode=pno_entry_confirmation_mode,
             pno_variant_id=pno_variant_id,
+            data_load_rejections=dict(sorted(data_load_rejections.items())),
         )
 
     runner = BacktestRunner(
@@ -3458,9 +3470,15 @@ def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     total_issues = 0
     total_gaps = 0
     for symbol in symbols:
-        frame = preparer.load_symbol_data(symbol, config.fetch.timeframe)
-        if frame.empty:
-            logger.debug("Проверка качества: %s пропущен, данных нет.", symbol)
+        load_result = preparer.load_symbol_data_result(symbol, config.fetch.timeframe)
+        frame = load_result.frame
+        if not load_result.ok:
+            logger.debug(
+                "Проверка качества: %s пропущен, %s (%s).",
+                symbol,
+                load_result.status,
+                load_result.reason,
+            )
             continue
 
         issues = validator.validate(symbol, config.fetch.timeframe, frame)

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from vectorbt_runner.backtest_runner import BacktestRunner
     from vectorbt_runner.backtest_summary import BacktestSummary
-    from vectorbt_runner.data_preparer import DataPreparer
+    from vectorbt_runner.data_preparer import DataPreparer, SymbolDataLoadResult
     from vectorbt_runner.mtf_frames import SymbolMtfFrames
     from vectorbt_runner.vectorbt_inputs import VectorbtInputs
 
@@ -16,6 +16,7 @@ __all__ = [
     "BacktestRunner",
     "BacktestSummary",
     "DataPreparer",
+    "SymbolDataLoadResult",
     "SymbolMtfFrames",
     "VectorbtInputs",
 ]
@@ -24,6 +25,7 @@ _MODULE_BY_NAME = {
     "BacktestRunner": "vectorbt_runner.backtest_runner",
     "BacktestSummary": "vectorbt_runner.backtest_summary",
     "DataPreparer": "vectorbt_runner.data_preparer",
+    "SymbolDataLoadResult": "vectorbt_runner.data_preparer",
     "SymbolMtfFrames": "vectorbt_runner.mtf_frames",
     "VectorbtInputs": "vectorbt_runner.vectorbt_inputs",
 }
