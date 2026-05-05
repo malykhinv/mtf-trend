@@ -9,10 +9,10 @@
 ```text
 Branch: codex/ideal-like
 Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P047 proposed real Binance kline quote-volume propagation on top of applied P046
+Local diff: P048 proposed explicit trade-data enrichment failure handling on top of ZIP-local state
 Last applied patch: P046 (user-stated local apply; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
-Updated: 2026-05-04
+Updated: 2026-05-05
 ```
 
 Если неизвестно — писать `UNKNOWN`, не выдумывать.
@@ -74,6 +74,7 @@ winrate > 0.40
 9. Для PNO flow требуется real `quote_volume` в USDT; `close*volume` не допускается как замена.
 10. Симулированные результаты бота называются positions; trade/trades остаётся только для биржевых сделок внутри свечей.
 11. `1.zip` показал не edge-result, а data-quality bottleneck: sparse entry TF (`5m/15s`, `5m/30s`) резались до materialization из-за раннего entry-quality gate.
+12. Trade-data enrichment не должен возвращать исходный OHLCV как success; ошибка aggTrades/window/schema должна становиться явным data-quality rejection.
 
 ---
 
@@ -125,6 +126,7 @@ winrate > 0.40
 | P045 | Sparse entry data-quality gate | PROPOSED | Не валидировать target entry trade data до sparse aggTrades materialization; писать пустые research CSV с колонками. |
 | P046 | Artifact export quality | APPLIED locally / UNKNOWN commit | Стабильные schemas для stage-review CSV, stage summary/manifest, data-quality source/reason tables и полный PNO run context. |
 | P047 | Real Binance kline quote-volume propagation | PROPOSED | Сохранять real Binance futures kline quote_volume/number_of_trades/taker_buy_* в OHLCV cache; backfill cache по quote_volume; убрать close*volume proxy из one-minute Stage1 support. |
+| P048 | Explicit trade-data enrichment failure | PROPOSED | Не маскировать провал aggTrades enrichment возвратом raw frame; писать `trade_data_enrichment_failed` diagnostics. |
 
 Статусы:
 

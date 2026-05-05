@@ -33,10 +33,19 @@ from strategy.pno.config import (
     validate_pno_params,
     with_pno_risk,
 )
-from strategy.pno.engine import PNO_STAGE_5_POSITION, PnoEngine
+from strategy.pno.engine import PNO_STAGE_1_PUMP, PNO_STAGE_5_POSITION, PnoEngine
 from vectorbt_runner.mtf_frames import SymbolMtfFrames
 from vectorbt_runner.data_preparer import DataPreparer
 
+
+@dataclass(frozen=True, slots=True)
+class TradeDataEnrichmentResult:
+    frame: pd.DataFrame
+    ok: bool
+    status: str
+    reason: str | None = None
+    source_rows: int = 0
+    trade_rows: int = 0
 
 @dataclass
 class _PnoSecondsFrameProvider:
@@ -168,20 +177,51 @@ class _PnoSecondsFrameProvider:
         symbol: str,
         frame: pd.DataFrame,
         target_timeframe: Timeframe,
-    ) -> pd.DataFrame:
-        """Merges real aggTrades-derived trade count into an OHLCV frame.
+    ) -> TradeDataEnrichmentResult:
+        """Merges real aggTrades-derived activity data into an OHLCV frame.
 
-        This keeps the exchange OHLCV prices/volume as the source of truth and only
-        fills market-activity columns used by PNO flow filters.
+        Missing enrichment is a hard data-quality failure for PNO. Returning the
+        original frame would hide archive/live fetch/cache/schema problems behind
+        a later generic `missing_required_market_data` rejection.
         """
-        if frame.empty or "timestamp" not in frame.columns:
-            return frame
-        has_full_trade_data = self._has_real_trade_count(frame) and {"quote_volume", "taker_buy_quote_volume"}.issubset(frame.columns)
+        source_rows = int(len(frame))
+        if frame.empty:
+            return TradeDataEnrichmentResult(
+                frame=frame,
+                ok=False,
+                status="failed",
+                reason="input_frame_empty",
+                source_rows=source_rows,
+            )
+        if "timestamp" not in frame.columns:
+            return TradeDataEnrichmentResult(
+                frame=frame,
+                ok=False,
+                status="failed",
+                reason="input_frame_missing_timestamp",
+                source_rows=source_rows,
+            )
+        has_full_trade_data = self._has_real_trade_count(frame) and {
+            "quote_volume",
+            "taker_buy_quote_volume",
+        }.issubset(frame.columns)
         if has_full_trade_data:
-            return self._with_trade_count_aliases(frame)
+            return TradeDataEnrichmentResult(
+                frame=self._with_trade_count_aliases(frame),
+                ok=True,
+                status="already_enriched",
+                source_rows=source_rows,
+                trade_rows=source_rows,
+            )
         window = self._resolve_frame_window(frame, target_timeframe=target_timeframe)
         if window is None:
-            return self._with_trade_count_aliases(frame)
+            return TradeDataEnrichmentResult(
+                frame=frame,
+                ok=False,
+                status="failed",
+                reason="enrichment_window_invalid",
+                source_rows=source_rows,
+            )
         start_timestamp_ms, end_timestamp_ms = window
         trade_frame = self.load_aggregated_window(
             symbol=symbol,
@@ -189,9 +229,51 @@ class _PnoSecondsFrameProvider:
             end_timestamp_ms=end_timestamp_ms,
             target_timeframe=target_timeframe,
         )
-        if trade_frame.empty or not self._has_real_trade_count(trade_frame):
-            return self._with_trade_count_aliases(frame)
-        return self._merge_trade_data_columns(frame=frame, trade_frame=trade_frame)
+        trade_rows = int(len(trade_frame))
+        if trade_frame.empty:
+            return TradeDataEnrichmentResult(
+                frame=frame,
+                ok=False,
+                status="failed",
+                reason="aggtrades_unavailable",
+                source_rows=source_rows,
+                trade_rows=trade_rows,
+            )
+        if not self._has_real_trade_count(trade_frame):
+            return TradeDataEnrichmentResult(
+                frame=frame,
+                ok=False,
+                status="failed",
+                reason="aggtrades_missing_real_trade_count",
+                source_rows=source_rows,
+                trade_rows=trade_rows,
+            )
+        enriched = self._merge_trade_data_columns(frame=frame, trade_frame=trade_frame)
+        if not self._has_real_trade_count(enriched):
+            return TradeDataEnrichmentResult(
+                frame=enriched,
+                ok=False,
+                status="failed",
+                reason="enrichment_missing_real_trade_count",
+                source_rows=source_rows,
+                trade_rows=trade_rows,
+            )
+        if not {"quote_volume", "taker_buy_quote_volume"}.issubset(enriched.columns):
+            return TradeDataEnrichmentResult(
+                frame=enriched,
+                ok=False,
+                status="failed",
+                reason="enrichment_missing_quote_volume",
+                source_rows=source_rows,
+                trade_rows=trade_rows,
+            )
+        return TradeDataEnrichmentResult(
+            frame=enriched,
+            ok=True,
+            status="enriched",
+            source_rows=source_rows,
+            trade_rows=trade_rows,
+        )
 
     @classmethod
     def _has_real_trade_count(cls, frame: pd.DataFrame) -> bool:
@@ -1122,11 +1204,19 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             engine_context = {"seconds_frame_provider": self._seconds_provider}
             engine_context.update(context)
             profiles = resolve_pno_category_profiles(params, category_mode=self._category_mode_filter)
-            enriched_levels_frame = self._seconds_provider.enrich_with_trade_data(
+            levels_enrichment = self._seconds_provider.enrich_with_trade_data(
                 symbol=params.symbol,
                 frame=mtf_frames.levels_frame,
                 target_timeframe=params.levels_timeframe,
             )
+            if not levels_enrichment.ok:
+                return self._reject_trade_data_enrichment_failure(
+                    params=params,
+                    result=levels_enrichment,
+                    frame_kind="levels",
+                    timeframe=params.levels_timeframe,
+                )
+            enriched_levels_frame = levels_enrichment.frame
             self._propagate_enriched_trade_data_to_source_frame(
                 source_frame=mtf_frames.levels_frame,
                 enriched_frame=enriched_levels_frame,
@@ -1144,11 +1234,19 @@ class PnoStrategy(BaseStrategy[PnoParams]):
                 )
             )
             if should_pre_enrich_entry:
-                entry_frame_for_engine = self._seconds_provider.enrich_with_trade_data(
+                entry_enrichment = self._seconds_provider.enrich_with_trade_data(
                     symbol=params.symbol,
                     frame=mtf_frames.entry_frame,
                     target_timeframe=params.entry_timeframe,
                 )
+                if not entry_enrichment.ok:
+                    return self._reject_trade_data_enrichment_failure(
+                        params=params,
+                        result=entry_enrichment,
+                        frame_kind="entry",
+                        timeframe=params.entry_timeframe,
+                    )
+                entry_frame_for_engine = entry_enrichment.frame
                 self._propagate_enriched_trade_data_to_source_frame(
                     source_frame=mtf_frames.entry_frame,
                     enriched_frame=entry_frame_for_engine,
@@ -1169,6 +1267,62 @@ class PnoStrategy(BaseStrategy[PnoParams]):
             return positions or []
         finally:
             self._seconds_provider.clear_runtime_caches(symbol=params.symbol)
+
+    def _reject_trade_data_enrichment_failure(
+        self,
+        *,
+        params: PnoParams,
+        result: TradeDataEnrichmentResult,
+        frame_kind: str,
+        timeframe: Timeframe,
+    ) -> list[PositionResult]:
+        diagnostics = self._engine._empty_diagnostics()
+        diagnostics["skipped_market_data_quality"] = 1
+        reason = result.reason or "trade_data_enrichment_failed"
+        context = diagnostics.setdefault("context", {})
+        if isinstance(context, dict):
+            context.update(
+                {
+                    "symbol": params.symbol,
+                    "market_data_quality_status": "failed",
+                    "market_data_quality_reasons": [reason],
+                    "trade_data_enrichment_status": result.status,
+                    "trade_data_enrichment_reason": reason,
+                    "trade_data_enrichment_frame_kind": frame_kind,
+                    "trade_data_enrichment_timeframe": timeframe.value,
+                    "trade_data_enrichment_source_rows": int(result.source_rows),
+                    "trade_data_enrichment_trade_rows": int(result.trade_rows),
+                }
+            )
+        timestamp_ms = self._last_frame_timestamp_ms(result.frame)
+        PnoEngine._mark_stage_rejection(
+            diagnostics,
+            {},
+            PNO_STAGE_1_PUMP,
+            key=(str(params.symbol), frame_kind, reason),
+            timestamp_ms=timestamp_ms,
+            reason="trade_data_enrichment_failed",
+            extra={
+                "market_data_quality_reasons": reason,
+                "trade_data_enrichment_reason": reason,
+                "trade_data_enrichment_frame_kind": frame_kind,
+                "trade_data_enrichment_timeframe": timeframe.value,
+                "source_rows": int(result.source_rows),
+                "trade_rows": int(result.trade_rows),
+            },
+        )
+        self._engine._last_generation_diagnostics = diagnostics
+        self._last_generation_diagnostics = diagnostics
+        return []
+
+    @staticmethod
+    def _last_frame_timestamp_ms(frame: pd.DataFrame) -> int:
+        if frame.empty or "timestamp" not in frame.columns:
+            return 0
+        timestamps = pd.to_numeric(frame["timestamp"], errors="coerce").dropna()
+        if timestamps.empty:
+            return 0
+        return int(timestamps.iloc[-1])
 
     def _profiles_have_fast_stage1_candidate(
         self,

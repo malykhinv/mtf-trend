@@ -65,7 +65,47 @@ SUPERSEDED = заменён новым патчем
 | P043 | Human BOS obsolete-level guard | PROPOSED | `strategy/pno/engine.py`, `cli/pno_diagnostics.py`, `research/*` | bugfix/diagnostics | Убрать bypass Stage4 scoring/Stage5 decay для `human_bos`; Stage1 rejected reasons без near-threshold rows получают fallback charts. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 | P044 | Position terminology and strict flow data | UNKNOWN in ZIP | `domain/*`, `simulation/*`, `vectorbt_runner/*`, `strategy/pno/*`, `cli/*`, `research/*` | refactor/data-quality/diagnostics | Развести exchange trades и bot positions; требовать real quote_volume USDT/trade-count; добавить diagnostics coverage и Stage5 unique setup summary. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P045 | Sparse entry data-quality gate | PROPOSED | `strategy/pno/engine.py`, `cli/pno_diagnostics.py`, `research/*` | bugfix/diagnostics | Для sparse entry TF откладывать entry data-quality gate до aggTrades materialization; levels data quality остаётся ранним; пустые research CSV пишутся с колонками. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+| P048 | Explicit trade-data enrichment failure | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | data-quality/diagnostics | `enrich_with_trade_data` возвращает typed result; провал enrichment становится явным `trade_data_enrichment_failed`, а не raw-frame fallback. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 
+
+---
+
+## P048 — Explicit trade-data enrichment failure
+
+```text
+Status: PROPOSED
+Type: data-quality / diagnostics
+Trading logic changed: no; failed enrichment now stops with explicit diagnostics instead of raw-frame fallback
+Files: strategy/pno/pno_strategy.py, research/*
+Commit: UNKNOWN
+```
+
+Проблема:
+
+```text
+enrich_with_trade_data мог вернуть исходный OHLCV frame при пустом input, invalid window, пустом aggTrades window или отсутствии real trade-count.
+Дальше engine видел общий missing_required_market_data, а причина fetch/cache/schema терялась.
+```
+
+Изменение:
+
+```text
+trade-data enrichment возвращает typed TradeDataEnrichmentResult.
+Любой failed enrichment до engine превращается в Stage1 rejection trade_data_enrichment_failed с reason: input_frame_empty, input_frame_missing_timestamp, enrichment_window_invalid, aggtrades_unavailable, aggtrades_missing_real_trade_count, enrichment_missing_real_trade_count или enrichment_missing_quote_volume.
+Raw-frame fallback больше не считается успешным enrichment.
+```
+
+Проверка:
+
+```text
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py
+```
+
+Ожидаемый rerun check:
+
+```text
+Если aggTrades/window/schema реально недоступны, diagnostics должны показывать trade_data_enrichment_failed и конкретный trade_data_enrichment_reason, а не только missing_required_market_data.
+```
 
 ---
 
