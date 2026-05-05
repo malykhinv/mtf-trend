@@ -2377,3 +2377,50 @@ Next:
 ```text
 Run a small PNO diagnostic backtest and confirm that zero-position runs still complete when the strategy returns [], while any accidental None return stops before results.csv/artifacts are trusted.
 ```
+
+---
+
+## P063 - Typed market-id boundary for archive aggTrades
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: refactor / boundary hardening
+Trading logic changed: no
+Files: strategy/pno/pno_strategy.py, research/*
+Commit: UNKNOWN
+Follow-up to: P060 fallback cleanup
+```
+
+Problem:
+
+```text
+_PnoSecondsFrameProvider._resolve_market_id reached through CcxtFuturesClient._client and called the underlying ccxt market_id directly.
+That bypassed the typed exchange-client boundary and made the archive aggTrades path different from the live aggTrades path.
+```
+
+Change:
+
+```text
+Keep the existing strategy helper but make it initialize CcxtFuturesClient when needed and call CcxtFuturesClient.get_market_id(symbol).
+No new validation layer, no trading-logic change, no new public API.
+The private client access is removed from strategy/pno/pno_strategy.py.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner
+rg -n "_client\._client" strategy/pno data/exchanges
+```
+
+Risk:
+
+```text
+Low. get_market_id already wraps the same ccxt market_id call after ensuring markets are loaded; behavior should match, but through the supported boundary.
+```
+
+Next:
+
+```text
+Run a tiny PNO sparse-entry diagnostic using an archive-backed day and confirm seconds load statuses still show archive_loaded/archive_404/live_* accurately.
+```

@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P061 applied locally after P060; commit UNKNOWN
-Last applied patch: P061 (local workspace; commit UNKNOWN)
+Commit: e961252 (GitHub head checked); ZIP-local patch stack remains source-of-truth for uncommitted code
+Local diff: P061 + P063 applied locally after P060; commit UNKNOWN
+Last applied patch: P063 (local workspace; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -81,6 +81,7 @@ winrate > 0.40
 16. DataPreparer не должен возвращать одинаковый empty frame для missing symbol/file/schema/window/invalid rows; PNO preparation должна видеть точный load status.
 17. Diagnostics/charts должны читать только canonical `number_of_trades`; legacy `trades`/`trade_count` можно показывать только как ignored source label, а missing trade-count нельзя рисовать как нулевую активность.
 18. Aggregate `data_load_rejections` недостаточен: run output должен сохранять per-symbol/role/timeframe status для всех load attempts, включая символы, исключённые до `symbol_frames`.
+19. Archive aggTrades market-id resolution no longer reaches through `CcxtFuturesClient._client`; PNO strategy uses the typed `get_market_id()` boundary for both archive and live aggTrades paths.
 
 ---
 
@@ -372,4 +373,26 @@ One next test:
 
 ```text
 python -m compileall strategy/pno cli constants.py vectorbt_runner
+```
+
+---
+
+## 16. Current local patch note - P063
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Updated: 2026-05-05
+```
+
+Current conclusion:
+
+```text
+Archive aggTrades market-id resolution now uses CcxtFuturesClient.get_market_id(symbol) instead of reaching through the private ccxt client.
+This keeps archive and live aggTrades paths behind the same typed boundary without adding a new verification layer or changing trade decisions.
+```
+
+One next test:
+
+```text
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner
 ```

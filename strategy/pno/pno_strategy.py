@@ -1296,8 +1296,7 @@ class _PnoSecondsFrameProvider:
     def _resolve_market_id(self, symbol: str) -> str:
         if self._client is None:
             self._client = CcxtFuturesClient(exchange=Exchange.BINANCE)
-        self._client._ensure_markets_loaded()
-        return str(self._client._client.market_id(symbol))
+        return self._client.get_market_id(symbol)
 
     @staticmethod
     def _aggregate_agg_trades_to_seconds(trades: pd.DataFrame) -> pd.DataFrame:
