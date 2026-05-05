@@ -374,6 +374,19 @@ class Stage1StateArrays:
         return bool(self.inplay.size and np.any(self.inplay))
 
 
+@dataclass(slots=True)
+class SparseEntryMaterializationResult:
+    frame: pd.DataFrame
+    status: str
+    reason: str | None = None
+    windows_requested: int = 0
+    windows_loaded: int = 0
+
+    @property
+    def ok(self) -> bool:
+        return self.status == "ok"
+
+
 class GenerationDiagnostics(TypedDict, total=False):
     positions_generated: int
     blocked_cycles: int
@@ -1138,30 +1151,49 @@ class PnoEngine:
 
         actual_entry_frame = prepared_entry
         if uses_local_seconds_materialization:
-            actual_entry_frame = self._materialize_sparse_entry_frame(
+            materialization = self._materialize_sparse_entry_frame(
                 levels_frame=prepared_levels,
-                source_entry_frame=prepared_entry,
                 params=params,
                 stage1_state=cached_stage1_state,
                 seconds_frame_provider=seconds_frame_provider,
             )
-            diagnostics["context"]["seconds_materialized"] = not actual_entry_frame.empty
-            diagnostics["context"]["seconds_source_timeframe_ms"] = int(source_entry_timeframe_ms)
-            diagnostics["context"]["seconds_materialized_bars"] = int(len(actual_entry_frame))
-            if len(actual_entry_frame) < entry_required_bars:
+            actual_entry_frame = materialization.frame
+            context = diagnostics.setdefault("context", {})
+            if isinstance(context, dict):
+                context.update(
+                    {
+                        "seconds_materialization_status": materialization.status,
+                        "seconds_materialization_reason": materialization.reason or "",
+                        "seconds_materialization_windows_requested": int(materialization.windows_requested),
+                        "seconds_materialization_windows_loaded": int(materialization.windows_loaded),
+                        "seconds_materialized": materialization.ok,
+                        "seconds_source_timeframe_ms": int(source_entry_timeframe_ms),
+                        "seconds_materialized_bars": int(len(actual_entry_frame)),
+                    }
+                )
+            sparse_reject_reason = materialization.reason if not materialization.ok else None
+            if materialization.ok and len(actual_entry_frame) < entry_required_bars:
+                sparse_reject_reason = "sparse_entry_materialized_insufficient_bars"
+            if sparse_reject_reason is not None:
                 diagnostics["skipped_insufficient_data"] = 1
+                if isinstance(context, dict):
+                    context["market_data_quality_status"] = "failed"
+                    context["market_data_quality_reasons"] = [sparse_reject_reason]
                 self._mark_stage_rejection(
                     diagnostics,
                     {},
                     PNO_STAGE_2_HIGH_PULLBACK,
-                    key=(str(params.symbol), "insufficient_sparse_entry_data", int(len(actual_entry_frame))),
+                    key=(str(params.symbol), sparse_reject_reason, int(len(actual_entry_frame))),
                     timestamp_ms=int(prepared_levels["timestamp"].iloc[-1]) if "timestamp" in prepared_levels.columns and not prepared_levels.empty else 0,
-                    reason="insufficient_sparse_entry_data",
+                    reason=sparse_reject_reason,
                     extra={
                         "entry_rows": int(len(actual_entry_frame)),
                         "entry_required_bars": int(entry_required_bars),
                         "source_entry_timeframe_ms": int(source_entry_timeframe_ms),
                         "target_entry_timeframe_ms": int(entry_timeframe_ms),
+                        "materialization_status": materialization.status,
+                        "windows_requested": int(materialization.windows_requested),
+                        "windows_loaded": int(materialization.windows_loaded),
                     },
                 )
                 self._last_generation_diagnostics = diagnostics
@@ -9047,15 +9079,27 @@ class PnoEngine:
         self,
         *,
         levels_frame: pd.DataFrame,
-        source_entry_frame: pd.DataFrame,
         params: PnoParams,
         stage1_state: Stage1StateArrays | None,
         seconds_frame_provider: object,
-    ) -> pd.DataFrame:
-        del source_entry_frame
+    ) -> SparseEntryMaterializationResult:
+        empty_columns = [
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            *PNO_OPTIONAL_MARKET_DATA_COLUMNS,
+        ]
+        empty_frame = pd.DataFrame(columns=empty_columns)
         loader = getattr(seconds_frame_provider, "load_aggregated_window", None)
         if not callable(loader):
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            return SparseEntryMaterializationResult(
+                frame=empty_frame,
+                status="failed",
+                reason="sparse_entry_loader_missing",
+            )
 
         windows = self._resolve_stage1_fetch_windows(
             levels_frame=levels_frame,
@@ -9063,7 +9107,11 @@ class PnoEngine:
             stage1_state=stage1_state,
         )
         if not windows:
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+            return SparseEntryMaterializationResult(
+                frame=empty_frame,
+                status="failed",
+                reason="sparse_entry_no_stage1_windows",
+            )
 
         frames: list[pd.DataFrame] = []
         for start_timestamp_ms, end_timestamp_ms in windows:
@@ -9074,11 +9122,32 @@ class PnoEngine:
                 target_timeframe=params.entry_timeframe,
             )
             if isinstance(frame, pd.DataFrame) and not frame.empty:
-                frames.append(self.prepare_data(frame))
+                prepared = self.prepare_data(frame)
+                if not prepared.empty:
+                    frames.append(prepared)
         if not frames:
-            return pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
-        materialized = pd.concat(frames, ignore_index=True)
-        return self.prepare_data(materialized)
+            return SparseEntryMaterializationResult(
+                frame=empty_frame,
+                status="failed",
+                reason="sparse_entry_no_loaded_frames",
+                windows_requested=len(windows),
+                windows_loaded=0,
+            )
+        materialized = self.prepare_data(pd.concat(frames, ignore_index=True))
+        if materialized.empty:
+            return SparseEntryMaterializationResult(
+                frame=empty_frame,
+                status="failed",
+                reason="sparse_entry_materialized_frame_empty",
+                windows_requested=len(windows),
+                windows_loaded=len(frames),
+            )
+        return SparseEntryMaterializationResult(
+            frame=materialized,
+            status="ok",
+            windows_requested=len(windows),
+            windows_loaded=len(frames),
+        )
 
     def _resolve_stage1_fetch_windows(
         self,
