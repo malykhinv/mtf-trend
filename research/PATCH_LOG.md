@@ -2331,3 +2331,49 @@ Next:
 ```text
 Use a recent saved run directory for plot-backtest and verify it either uses the exact run_context results file or reports the missing field/file explicitly.
 ```
+
+---
+
+## P061 - No silent None positions fallback
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: bugfix / artifact truthfulness
+Trading logic changed: no
+Files: vectorbt_runner/backtest_runner.py, research/*
+Commit: UNKNOWN
+Follow-up to: P060 fallback cleanup
+```
+
+Problem:
+
+```text
+BacktestRunner converted `generate_events_multi_tf(...) is None` into an empty positions list.
+That masked strategy contract violations as a valid zero-position run and could produce misleading PNO artifacts.
+```
+
+Change:
+
+```text
+Remove the silent `None -> []` fallback for per-symbol strategy generation.
+A None return now raises `strategy_returned_none` with strategy, symbol, levels timeframe, entry timeframe and params signature.
+The optional portfolio pipeline sentinel remains unchanged: BaseStrategy.generate_events_portfolio may still return None to indicate no portfolio-level implementation.
+```
+
+Verification:
+
+```bash
+python -m compileall strategy/pno cli constants.py vectorbt_runner
+```
+
+Risk:
+
+```text
+Low. Valid strategies already return list[PositionResult]; only broken strategy implementations now fail instead of generating false empty artifacts.
+```
+
+Next:
+
+```text
+Run a small PNO diagnostic backtest and confirm that zero-position runs still complete when the strategy returns [], while any accidental None return stops before results.csv/artifacts are trusted.
+```

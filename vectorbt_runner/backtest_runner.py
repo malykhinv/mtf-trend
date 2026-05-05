@@ -108,6 +108,22 @@ def _stage_metric_column_name(stage_id: str) -> str:
     return f"ppa_stage_hits_{stage_id}"
 
 
+def _raise_strategy_returned_none(
+    *,
+    strategy_name: str,
+    symbol: str,
+    levels_timeframe: Timeframe,
+    entry_timeframe: Timeframe,
+    params_signature: str,
+) -> None:
+    raise RuntimeError(
+        "strategy_returned_none: "
+        f"strategy={strategy_name} symbol={symbol} "
+        f"levels_timeframe={levels_timeframe.value} entry_timeframe={entry_timeframe.value} "
+        f"params_signature={params_signature}"
+    )
+
+
 class PreparedGridParams(NamedTuple):
     """Предвычисленная конфигурация сетки без symbol-specific полей."""
 
@@ -560,7 +576,13 @@ class BacktestRunner:
                             total_combos=total,
                         )
                     if positions is None:
-                        positions = []
+                        _raise_strategy_returned_none(
+                            strategy_name=strategy.__class__.__name__,
+                            symbol=symbol,
+                            levels_timeframe=levels_timeframe,
+                            entry_timeframe=entry_timeframe,
+                            params_signature=combo_params_signature,
+                        )
                     all_positions.extend(positions)
                     if (collect_diagnostics or collect_stage_metrics) and callable(diagnostics_method):
                         diagnostics_raw = diagnostics_method()

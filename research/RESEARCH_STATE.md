@@ -9,8 +9,8 @@
 ```text
 Branch: codex/ideal-like
 Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P060 applied locally after second-pass fallback audit; commit UNKNOWN
-Last applied patch: P060 (local workspace; commit UNKNOWN)
+Local diff: P061 applied locally after P060; commit UNKNOWN
+Last applied patch: P061 (local workspace; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -350,4 +350,26 @@ One next test:
 
 ```text
 Run plot-backtest against a valid saved PNO run and a deliberately incomplete copy of run_context.json; the first should use the exact results path and the second should fail before generating misleading artifacts.
+```
+
+---
+
+## 15. Current local patch note - P061
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Updated: 2026-05-05
+```
+
+Current conclusion:
+
+```text
+BacktestRunner no longer converts a strategy bug (`generate_events_multi_tf` returning None) into an honest empty-position result.
+A None return now fails immediately with `strategy_returned_none` and includes strategy, symbol, levels TF, entry TF and params signature.
+```
+
+One next test:
+
+```text
+python -m compileall strategy/pno cli constants.py vectorbt_runner
 ```
