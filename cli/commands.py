@@ -75,6 +75,8 @@ _PROGRESS_LOG_EVERY = 50
 _BACKTEST_RUNS_DIR_NAME = "backtest_runs"
 _BACKTEST_RUN_CONTEXT_FILE_NAME = "run_context.json"
 _BACKTEST_PLOT_REQUEST_FILE_NAME = "plot_request.json"
+_BACKTEST_DATA_LOAD_STATUS_FILE_NAME = "data_load_status.csv"
+_BACKTEST_DATA_LOAD_REJECTIONS_FILE_NAME = "data_load_rejections.csv"
 _PNO_DIAGNOSTICS_COVERAGE_COLUMNS: tuple[str, ...] = (
     "symbol",
     "diagnostics_json_written",
@@ -96,6 +98,21 @@ _PNO_DIAGNOSTICS_COVERAGE_COLUMNS: tuple[str, ...] = (
 _PNO_DIAGNOSTICS_COVERAGE_SUMMARY_COLUMNS: tuple[str, ...] = ("metric", "value")
 _PNO_DIAGNOSTICS_QUALITY_SOURCE_COLUMNS: tuple[str, ...] = ("field", "value", "count")
 _PNO_DIAGNOSTICS_QUALITY_REASON_COLUMNS: tuple[str, ...] = ("reason", "count")
+_BACKTEST_DATA_LOAD_STATUS_COLUMNS: tuple[str, ...] = (
+    "role",
+    "symbol",
+    "timeframe",
+    "ok",
+    "status",
+    "reason",
+    "path",
+    "missing_columns",
+    "raw_rows",
+    "prepared_rows",
+    "window_days",
+    "end_timestamp_ms",
+)
+_BACKTEST_DATA_LOAD_REJECTION_COLUMNS: tuple[str, ...] = ("role", "status", "count")
 _PNO_STAGE_REVIEW_RUN_SUMMARY_COLUMNS: tuple[str, ...] = (
     "preset",
     "stage_id",
@@ -435,6 +452,80 @@ def _resolve_results_row_number(results: pd.DataFrame, selected_row: pd.Series) 
     return 1
 
 
+def _build_data_load_status_row(
+    result: SymbolDataLoadResult,
+    *,
+    role: str,
+    window_days: int | None,
+    end_timestamp_ms: int | None,
+    status_override: str | None = None,
+    reason_override: str | None = None,
+) -> dict[str, object]:
+    return {
+        "role": role,
+        "symbol": result.symbol,
+        "timeframe": result.timeframe.value,
+        "ok": bool(result.ok),
+        "status": status_override or result.status,
+        "reason": reason_override or result.reason,
+        "path": "" if result.path is None else str(result.path),
+        "missing_columns": "|".join(result.missing_columns),
+        "raw_rows": int(result.raw_rows),
+        "prepared_rows": int(result.prepared_rows),
+        "window_days": int(window_days) if window_days is not None else "",
+        "end_timestamp_ms": int(end_timestamp_ms) if end_timestamp_ms is not None else "",
+    }
+
+
+def _write_backtest_data_load_artifacts(
+    run_root_dir: Path,
+    *,
+    status_rows: list[dict[str, object]],
+) -> dict[str, int]:
+    status_frame = (
+        pd.DataFrame(status_rows)
+        if status_rows
+        else pd.DataFrame(columns=list(_BACKTEST_DATA_LOAD_STATUS_COLUMNS))
+    )
+    status_frame = status_frame.reindex(columns=list(_BACKTEST_DATA_LOAD_STATUS_COLUMNS))
+    status_frame.to_csv(run_root_dir / _BACKTEST_DATA_LOAD_STATUS_FILE_NAME, index=False)
+
+    rejection_counts: Counter[tuple[str, str]] = Counter()
+    if not status_frame.empty:
+        for row in status_frame.to_dict("records"):
+            if bool(row.get("ok")):
+                continue
+            rejection_counts[(str(row.get("role") or "unknown"), str(row.get("status") or "unknown"))] += 1
+    rejection_rows = [
+        {"role": role, "status": status, "count": int(count)}
+        for (role, status), count in sorted(rejection_counts.items())
+    ]
+    rejection_frame = (
+        pd.DataFrame(rejection_rows)
+        if rejection_rows
+        else pd.DataFrame(columns=list(_BACKTEST_DATA_LOAD_REJECTION_COLUMNS))
+    )
+    rejection_frame = rejection_frame.reindex(columns=list(_BACKTEST_DATA_LOAD_REJECTION_COLUMNS))
+    rejection_frame.to_csv(run_root_dir / _BACKTEST_DATA_LOAD_REJECTIONS_FILE_NAME, index=False)
+    return {f"{role}:{status}": int(count) for (role, status), count in sorted(rejection_counts.items())}
+
+
+def _resolve_pno_run_context_metadata(
+    *,
+    strategy: object,
+    config: AppConfig,
+) -> tuple[str | None, str | None, str | None]:
+    if not isinstance(strategy, PnoStrategy):
+        return None, None, None
+    pno_category_mode = getattr(config.strategy, "pno_category_mode", None)
+    pno_grid = strategy.build_parameter_grid()
+    pno_entry_modes = sorted({params.entry_confirmation_mode for params in pno_grid})
+    pno_variant_ids = sorted({params.pno_variant_id for params in pno_grid})
+    pno_entry_confirmation_mode = "+".join(pno_entry_modes) if pno_entry_modes else None
+    pno_variant_id = "+".join(pno_variant_ids) if pno_variant_ids else None
+    return pno_category_mode, pno_entry_confirmation_mode, pno_variant_id
+
+
 def _write_backtest_run_context(
     run_root_dir: Path,
     *,
@@ -452,6 +543,8 @@ def _write_backtest_run_context(
     pno_entry_confirmation_mode: str | None = None,
     pno_variant_id: str | None = None,
     data_load_rejections: dict[str, int] | None = None,
+    data_load_status_file_name: str | None = None,
+    data_load_rejections_file_name: str | None = None,
 ) -> None:
     payload = {
         "strategy_id": strategy_id,
@@ -471,6 +564,8 @@ def _write_backtest_run_context(
         "pno_entry_confirmation_mode": pno_entry_confirmation_mode,
         "pno_variant_id": pno_variant_id,
         "data_load_rejections": dict(data_load_rejections or {}),
+        "data_load_status_file_name": data_load_status_file_name,
+        "data_load_rejections_file_name": data_load_rejections_file_name,
     }
     (run_root_dir / _BACKTEST_RUN_CONTEXT_FILE_NAME).write_text(
         _to_compact_json(payload),
@@ -2928,6 +3023,7 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     rejected_symbols_count = 0
     preloaded_levels_results: dict[str, SymbolDataLoadResult] = {}
     data_load_rejections: Counter[str] = Counter()
+    data_load_status_rows: list[dict[str, object]] = []
     pre_rank_started_at = time.perf_counter()
     if pre_rank_enabled:
         for symbol in symbols:
@@ -2938,6 +3034,14 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 end_timestamp_ms=backtest_end_timestamp_ms,
             )
             preloaded_levels_results[symbol] = levels_result
+            data_load_status_rows.append(
+                _build_data_load_status_row(
+                    levels_result,
+                    role="pre_rank_levels",
+                    window_days=backtest_days,
+                    end_timestamp_ms=backtest_end_timestamp_ms,
+                )
+            )
             levels_frame = levels_result.frame
             if not levels_result.ok:
                 data_load_rejections[f"pre_rank_levels:{levels_result.status}"] += 1
@@ -3007,6 +3111,34 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             )
         else:
             logger.warning("После top_n=%s список символов пуст", top_n)
+        if run_root_dir is not None:
+            data_load_artifact_rejections = _write_backtest_data_load_artifacts(
+                run_root_dir,
+                status_rows=data_load_status_rows,
+            )
+            pno_category_mode, pno_entry_confirmation_mode, pno_variant_id = _resolve_pno_run_context_metadata(
+                strategy=strategy,
+                config=config,
+            )
+            _write_backtest_run_context(
+                run_root_dir,
+                strategy_id=strategy_id,
+                results_file_name=config.backtest.results_file_name,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                backtest_days=backtest_days,
+                end_timestamp_ms=backtest_end_timestamp_ms,
+                symbols=[],
+                plot_requested=should_plot,
+                pno_stage=getattr(args, "pno_stage", None),
+                pno_through_stage=getattr(args, "pno_through_stage", None),
+                pno_category_mode=pno_category_mode,
+                pno_entry_confirmation_mode=pno_entry_confirmation_mode,
+                pno_variant_id=pno_variant_id,
+                data_load_rejections=data_load_artifact_rejections,
+                data_load_status_file_name=_BACKTEST_DATA_LOAD_STATUS_FILE_NAME,
+                data_load_rejections_file_name=_BACKTEST_DATA_LOAD_REJECTIONS_FILE_NAME,
+            )
         return 0
 
     symbol_frames: dict[str, SymbolMtfFrames] = {}
@@ -3036,6 +3168,14 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 days=backtest_days,
                 end_timestamp_ms=resolved_end_timestamp_ms,
             )
+        data_load_status_rows.append(
+            _build_data_load_status_row(
+                levels_result,
+                role="levels",
+                window_days=backtest_days,
+                end_timestamp_ms=resolved_end_timestamp_ms,
+            )
+        )
         levels_frame = levels_result.frame
         if not levels_result.ok:
             symbols_missing_levels_tf += 1
@@ -3051,6 +3191,16 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 symbols_fast_stage1_rejected += 1
                 continue
         if levels_timeframe == source_entry_timeframe:
+            data_load_status_rows.append(
+                _build_data_load_status_row(
+                    levels_result,
+                    role="entry",
+                    window_days=backtest_days,
+                    end_timestamp_ms=resolved_end_timestamp_ms,
+                    status_override="reused_levels_frame",
+                    reason_override="entry timeframe equals levels timeframe",
+                )
+            )
             entry_frame = levels_frame
         else:
             entry_result = preparer.load_symbol_data_result(
@@ -3058,6 +3208,14 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 source_entry_timeframe,
                 days=backtest_days,
                 end_timestamp_ms=resolved_end_timestamp_ms,
+            )
+            data_load_status_rows.append(
+                _build_data_load_status_row(
+                    entry_result,
+                    role="entry",
+                    window_days=backtest_days,
+                    end_timestamp_ms=resolved_end_timestamp_ms,
+                )
             )
             entry_frame = entry_result.frame
             if not entry_result.ok:
@@ -3075,21 +3233,46 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
     if data_load_rejections:
         logger.debug("Причины пропуска данных: %s", dict(sorted(data_load_rejections.items())))
 
+    data_load_artifact_rejections: dict[str, int] = dict(sorted(data_load_rejections.items()))
+    if run_root_dir is not None:
+        data_load_artifact_rejections = _write_backtest_data_load_artifacts(
+            run_root_dir,
+            status_rows=data_load_status_rows,
+        )
+
     if not symbol_frames:
         logger.warning("Не удалось подготовить данные для бэктеста")
+        if run_root_dir is not None:
+            pno_category_mode, pno_entry_confirmation_mode, pno_variant_id = _resolve_pno_run_context_metadata(
+                strategy=strategy,
+                config=config,
+            )
+            _write_backtest_run_context(
+                run_root_dir,
+                strategy_id=strategy_id,
+                results_file_name=config.backtest.results_file_name,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                backtest_days=backtest_days,
+                end_timestamp_ms=backtest_end_timestamp_ms,
+                symbols=[],
+                plot_requested=should_plot,
+                pno_stage=getattr(args, "pno_stage", None),
+                pno_through_stage=getattr(args, "pno_through_stage", None),
+                pno_category_mode=pno_category_mode,
+                pno_entry_confirmation_mode=pno_entry_confirmation_mode,
+                pno_variant_id=pno_variant_id,
+                data_load_rejections=data_load_artifact_rejections,
+                data_load_status_file_name=_BACKTEST_DATA_LOAD_STATUS_FILE_NAME,
+                data_load_rejections_file_name=_BACKTEST_DATA_LOAD_REJECTIONS_FILE_NAME,
+            )
         return 0
 
     if run_root_dir is not None:
-        pno_category_mode = None
-        pno_entry_confirmation_mode = None
-        pno_variant_id = None
-        if isinstance(strategy, PnoStrategy):
-            pno_category_mode = getattr(config.strategy, "pno_category_mode", None)
-            pno_grid = strategy.build_parameter_grid()
-            pno_entry_modes = sorted({params.entry_confirmation_mode for params in pno_grid})
-            pno_variant_ids = sorted({params.pno_variant_id for params in pno_grid})
-            pno_entry_confirmation_mode = "+".join(pno_entry_modes) if pno_entry_modes else None
-            pno_variant_id = "+".join(pno_variant_ids) if pno_variant_ids else None
+        pno_category_mode, pno_entry_confirmation_mode, pno_variant_id = _resolve_pno_run_context_metadata(
+            strategy=strategy,
+            config=config,
+        )
         _write_backtest_run_context(
             run_root_dir,
             strategy_id=strategy_id,
@@ -3105,7 +3288,9 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             pno_category_mode=pno_category_mode,
             pno_entry_confirmation_mode=pno_entry_confirmation_mode,
             pno_variant_id=pno_variant_id,
-            data_load_rejections=dict(sorted(data_load_rejections.items())),
+            data_load_rejections=data_load_artifact_rejections,
+            data_load_status_file_name=_BACKTEST_DATA_LOAD_STATUS_FILE_NAME,
+            data_load_rejections_file_name=_BACKTEST_DATA_LOAD_REJECTIONS_FILE_NAME,
         )
 
     runner = BacktestRunner(

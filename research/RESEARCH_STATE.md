@@ -9,8 +9,8 @@
 ```text
 Branch: codex/ideal-like
 Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P053 proposed canonical diagnostics trade-count only after user-applied P048/P049/P050/P051/P052
-Last applied patch: P052 (user-stated local apply; commit UNKNOWN)
+Local diff: P054 proposed per-symbol data-load artifacts after user-applied P048/P049/P050/P051/P052/P053
+Last applied patch: P053 (user-stated local apply; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -80,6 +80,7 @@ winrate > 0.40
 15. Sparse entry materialization не должна возвращать пустой OHLCV-frame как универсальный fallback; loader/window/load/empty failures должны быть отдельными diagnostics reasons.
 16. DataPreparer не должен возвращать одинаковый empty frame для missing symbol/file/schema/window/invalid rows; PNO preparation должна видеть точный load status.
 17. Diagnostics/charts должны читать только canonical `number_of_trades`; legacy `trades`/`trade_count` можно показывать только как ignored source label, а missing trade-count нельзя рисовать как нулевую активность.
+18. Aggregate `data_load_rejections` недостаточен: run output должен сохранять per-symbol/role/timeframe status для всех load attempts, включая символы, исключённые до `symbol_frames`.
 
 ---
 
@@ -136,7 +137,8 @@ winrate > 0.40
 | P050 | No ticker quote-volume proxy | APPLIED locally / UNKNOWN commit | Не заменять missing ticker `quoteVolume` на `baseVolume * last`; proxy сохранять только как ignored diagnostics metadata. |
 | P051 | Explicit sparse-entry materialization failure | APPLIED locally / UNKNOWN commit | Не маскировать missing seconds loader/windows/frames пустым OHLCV-frame; писать точные `sparse_entry_*` reasons. |
 | P052 | Explicit DataPreparer load status | APPLIED locally / UNKNOWN commit | Не сводить missing symbol/file/schema/window/invalid OHLCV к одинаковому empty frame; сохранять точные data_load_rejections. |
-| P053 | Canonical diagnostics trade-count only | PROPOSED | Diagnostics/charts читают только `number_of_trades`; legacy aliases маркируются как ignored, missing trade-count не рисуется как нули. |
+| P053 | Canonical diagnostics trade-count only | APPLIED locally / UNKNOWN commit | Diagnostics/charts читают только `number_of_trades`; legacy aliases маркируются как ignored, missing trade-count не рисуется как нули. |
+| P054 | Per-symbol data-load artifacts | PROPOSED | Сохранять `data_load_status.csv` и `data_load_rejections.csv` по каждому symbol/role/timeframe, а не только aggregate counts. |
 
 Статусы:
 

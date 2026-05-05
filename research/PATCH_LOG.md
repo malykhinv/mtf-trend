@@ -70,7 +70,8 @@ SUPERSEDED = заменён новым патчем
 | P050 | No ticker quote-volume proxy | APPLIED locally / UNKNOWN commit | `data/exchanges/ccxt_futures_client.py`, `cli/commands.py`, `research/*` | data-quality | Не заменять missing ticker `quoteVolume` на `baseVolume * last`; proxy хранить только как ignored diagnostics metadata. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 | P051 | Explicit sparse-entry materialization failure | APPLIED locally / UNKNOWN commit | `strategy/pno/engine.py`, `research/*` | data-quality/diagnostics | Sparse entry materialization возвращает typed status/reason вместо пустого OHLCV-frame fallback; причины loader/window/load/empty/insufficient bars видны в diagnostics. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 | P052 | Explicit DataPreparer load status | APPLIED locally / UNKNOWN commit | `vectorbt_runner/data_preparer.py`, `vectorbt_runner/__init__.py`, `cli/commands.py`, `research/*` | data-quality/diagnostics | DataPreparer возвращает typed status/reason для missing symbol/file/schema/window/invalid rows; PNO backtest и check-quality больше не сводят эти причины к одинаковому empty frame. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
-| P053 | Canonical diagnostics trade-count only | PROPOSED | `cli/pno_diagnostics.py`, `research/*` | diagnostics/chart | Diagnostics/charts читают только `number_of_trades`; legacy `trades`/`trade_count` маркируются как ignored, missing trade-count не рисуется как нули. | `python -m compileall cli/pno_diagnostics.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
+| P053 | Canonical diagnostics trade-count only | APPLIED locally / UNKNOWN commit | `cli/pno_diagnostics.py`, `research/*` | diagnostics/chart | Diagnostics/charts читают только `number_of_trades`; legacy `trades`/`trade_count` маркируются как ignored, missing trade-count не рисуется как нули. | `python -m compileall cli/pno_diagnostics.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
+| P054 | Per-symbol data-load artifacts | PROPOSED | `cli/commands.py`, `research/*` | diagnostics/data-quality | Сохранять per-symbol/role/timeframe `data_load_status.csv` и `data_load_rejections.csv`; linked from run_context. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 
 
 ---
@@ -1523,7 +1524,7 @@ If a future exporter is run from results only, cache is absent and the old gener
 ## P039 — PNO trade-count chart bars
 
 ```text
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Type: diagnostics / chart
 Trading logic changed: no
 Files: cli/pno_diagnostics.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
@@ -1967,7 +1968,7 @@ The next OHLCV update may re-fetch a full requested range for old caches that ha
 ## P053 — Canonical diagnostics trade-count only
 
 ```text
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Type: diagnostics / chart
 Trading logic changed: no; diagnostics now follows the same canonical trade-count contract as PNO trading path
 Files: cli/pno_diagnostics.py, research/*
@@ -1997,4 +1998,42 @@ python -m compileall cli/pno_diagnostics.py research/PATCH_LOG.md research/RESEA
 
 ```text
 Stage-review charts and manifest should show `missing_canonical_number_of_trades` or `legacy_*_ignored` when canonical trade-count is absent; no chart should present missing trade-count as zero exchange activity.
+```
+
+
+---
+
+## P054 — Per-symbol data-load artifacts
+
+```text
+Status: PROPOSED
+Type: diagnostics / data-quality artifact
+Trading logic changed: no
+Files: cli/commands.py, research/*
+Commit: UNKNOWN
+Base: P048/P049/P050/P051/P052/P053 user-applied locally; exact commit UNKNOWN
+```
+
+Проблема:
+
+```text
+P052 introduced explicit SymbolDataLoadResult, but run output still exposed mostly aggregate `data_load_rejections`. Symbols dropped before `symbol_frames` could disappear from diagnostics coverage, making missing cache/schema/window issues hard to distinguish from honest no-signal runs.
+```
+
+Изменение:
+
+```text
+Write `data_load_status.csv` with one row per load attempt: role, symbol, timeframe, ok, status, reason, path, missing_columns, raw_rows, prepared_rows, window_days and end_timestamp_ms. Write `data_load_rejections.csv` as role/status counts. Link both files from run_context.json and still write them when preparation leaves zero usable symbol frames.
+```
+
+Проверка:
+
+```bash
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain
+```
+
+Ожидаемый rerun check:
+
+```text
+A run with missing timeframe/cache should produce `data_load_status.csv` rows for rejected symbols and `run_context.json` should point to both data-load artifacts; no rejected symbol should be visible only as an aggregate count.
 ```
