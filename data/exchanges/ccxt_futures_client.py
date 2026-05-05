@@ -408,10 +408,10 @@ class CcxtFuturesClient(ExchangeClient):
                 continue
 
             quote_volume = _safe_float(ticker.get("quoteVolume"))
-            if quote_volume == 0.0:
-                base_volume = _safe_float(ticker.get("baseVolume"))
-                last_price = _safe_float(ticker.get("last"))
-                quote_volume = base_volume * last_price
+            base_volume = _safe_float(ticker.get("baseVolume"))
+            last_price = _safe_float(ticker.get("last"))
+            quote_volume_proxy = base_volume * last_price if base_volume > 0.0 and last_price > 0.0 else 0.0
+            quote_volume_source = "quoteVolume" if quote_volume > 0.0 else "missing_real_quote_volume"
 
             trade_count_24h = _extract_trade_count_24h(ticker)
             open_interest_24h = _extract_open_interest(ticker)
@@ -434,6 +434,10 @@ class CcxtFuturesClient(ExchangeClient):
                 liquidity_score *= 1.05
 
             quality_metadata = {
+                "no_real_quote_volume": quote_volume <= 0.0,
+                "quote_volume_source": quote_volume_source,
+                "quote_volume_proxy": quote_volume_proxy,
+                "quote_volume_proxy_source": "baseVolume_last" if quote_volume_proxy > 0.0 else "missing",
                 "no_oi": open_interest_24h <= 0.0,
                 "no_taker": taker_buy_volume_24h <= 0.0,
                 "questionable_sync": quote_volume <= 0.0 or trade_count_24h <= 0,
@@ -442,7 +446,13 @@ class CcxtFuturesClient(ExchangeClient):
                 "oi_quality_state": oi_quality_state.value,
                 "taker_quality_state": taker_quality_state.value,
             }
-            quality_flags = [flag for flag in ("no_oi", "no_taker", "questionable_sync") if bool(quality_metadata[flag])]
+            quality_flags = [
+                flag
+                for flag in ("no_real_quote_volume", "no_oi", "no_taker", "questionable_sync")
+                if bool(quality_metadata[flag])
+            ]
+            if quote_volume <= 0.0 and quote_volume_proxy > 0.0:
+                quality_flags.append("quote_volume_proxy_available_ignored")
             if oi_quality_state == LiquidityQualityState.LOW_QUALITY:
                 quality_flags.append("oi_low_quality")
             if taker_quality_state == LiquidityQualityState.LOW_QUALITY:
@@ -451,6 +461,8 @@ class CcxtFuturesClient(ExchangeClient):
             records.append({
                 "symbol": symbol,
                 "quote_volume": quote_volume,
+                "quote_volume_source": quote_volume_source,
+                "quote_volume_proxy": quote_volume_proxy,
                 "trade_count_24h": trade_count_24h,
                 "liquidity_score": liquidity_score,
                 "quality_flags": quality_flags,

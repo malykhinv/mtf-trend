@@ -65,16 +65,58 @@ SUPERSEDED = заменён новым патчем
 | P043 | Human BOS obsolete-level guard | PROPOSED | `strategy/pno/engine.py`, `cli/pno_diagnostics.py`, `research/*` | bugfix/diagnostics | Убрать bypass Stage4 scoring/Stage5 decay для `human_bos`; Stage1 rejected reasons без near-threshold rows получают fallback charts. | `python -m compileall strategy/pno cli constants.py main.py launcher.py` |
 | P044 | Position terminology and strict flow data | UNKNOWN in ZIP | `domain/*`, `simulation/*`, `vectorbt_runner/*`, `strategy/pno/*`, `cli/*`, `research/*` | refactor/data-quality/diagnostics | Развести exchange trades и bot positions; требовать real quote_volume USDT/trade-count; добавить diagnostics coverage и Stage5 unique setup summary. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P045 | Sparse entry data-quality gate | PROPOSED | `strategy/pno/engine.py`, `cli/pno_diagnostics.py`, `research/*` | bugfix/diagnostics | Для sparse entry TF откладывать entry data-quality gate до aggTrades materialization; levels data quality остаётся ранним; пустые research CSV пишутся с колонками. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
-| P048 | Explicit trade-data enrichment failure | PROPOSED | `strategy/pno/pno_strategy.py`, `research/*` | data-quality/diagnostics | `enrich_with_trade_data` возвращает typed result; провал enrichment становится явным `trade_data_enrichment_failed`, а не raw-frame fallback. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
-| P049 | Canonical PNO trade-count only | PROPOSED | `strategy/pno/engine.py`, `strategy/pno/pno_strategy.py`, `research/*` | data-quality | PNO trading path доверяет только `number_of_trades`; legacy `trades`/`trade_count` не легализуют flow-data. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
+| P048 | Explicit trade-data enrichment failure | APPLIED locally / UNKNOWN commit | `strategy/pno/pno_strategy.py`, `research/*` | data-quality/diagnostics | `enrich_with_trade_data` возвращает typed result; провал enrichment становится явным `trade_data_enrichment_failed`, а не raw-frame fallback. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
+| P049 | Canonical PNO trade-count only | APPLIED locally / UNKNOWN commit | `strategy/pno/engine.py`, `strategy/pno/pno_strategy.py`, `research/*` | data-quality | PNO trading path доверяет только `number_of_trades`; legacy `trades`/`trade_count` не легализуют flow-data. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
+| P050 | No ticker quote-volume proxy | PROPOSED | `data/exchanges/ccxt_futures_client.py`, `cli/commands.py`, `research/*` | data-quality | Не заменять missing ticker `quoteVolume` на `baseVolume * last`; proxy хранить только как ignored diagnostics metadata. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py` |
 
+
+---
+
+## P050 — No ticker quote-volume proxy
+
+```text
+Status: PROPOSED
+Type: data-quality
+Trading logic changed: yes; stricter universe/liquidity data acceptance only
+Files: data/exchanges/ccxt_futures_client.py, cli/commands.py, research/*
+Commit: UNKNOWN
+Base: P048/P049 user-applied locally; exact commit UNKNOWN
+```
+
+Проблема:
+
+```text
+get_futures_symbols_with_liquidity_metrics заменял missing ticker quoteVolume на baseVolume * last.
+Такой proxy мог пройти как quote_volume, повлиять на liquidity_score/universe selection и скрыть неверный ticker payload.
+```
+
+Изменение:
+
+```text
+quote_volume теперь берётся только из real ticker quoteVolume.
+baseVolume * last считается только в quote_volume_proxy и не влияет на quote_volume/liquidity_score/selection.
+При отсутствии real quoteVolume добавляются no_real_quote_volume, missing_real_quote_volume и quote_volume_proxy_available_ignored.
+CLI сохраняет quote_volume_source/quote_volume_proxy в liquidity metadata для диагностики.
+```
+
+Проверка:
+
+```text
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py
+```
+
+Ожидаемый rerun check:
+
+```text
+Ticker payload без quoteVolume, но с baseVolume/last, должен дать quote_volume=0.0, liquidity_score=0.0, quote_volume_proxy>0.0 и quality flag quote_volume_proxy_available_ignored.
+```
 
 ---
 
 ## P049 — Canonical PNO trade-count only
 
 ```text
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Type: data-quality
 Trading logic changed: yes; stricter market-data acceptance only
 Files: strategy/pno/engine.py, strategy/pno/pno_strategy.py, research/*
@@ -115,7 +157,7 @@ Frame с trades/trade_count без number_of_trades должен получит�
 ## P048 — Explicit trade-data enrichment failure
 
 ```text
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Type: data-quality / diagnostics
 Trading logic changed: no; failed enrichment now stops with explicit diagnostics instead of raw-frame fallback
 Files: strategy/pno/pno_strategy.py, research/*

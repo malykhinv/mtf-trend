@@ -9,8 +9,8 @@
 ```text
 Branch: codex/ideal-like
 Commit: 0332f2c470372e986b62283d4df04b16a179a104 (GitHub head checked); ZIP-local/P046 patch state still source-of-truth for uncommitted code
-Local diff: P049 proposed canonical-only trade-count handling on top of user-applied P048
-Last applied patch: P048 (user-stated local apply; commit UNKNOWN)
+Local diff: P050 proposed no ticker quote-volume proxy after user-applied P048/P049
+Last applied patch: P049 (user-stated local apply; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
 Updated: 2026-05-05
 ```
@@ -76,6 +76,7 @@ winrate > 0.40
 11. `1.zip` показал не edge-result, а data-quality bottleneck: sparse entry TF (`5m/15s`, `5m/30s`) резались до materialization из-за раннего entry-quality gate.
 12. Trade-data enrichment не должен возвращать исходный OHLCV как success; ошибка aggTrades/window/schema должна становиться явным data-quality rejection.
 13. PNO trading path должен доверять только canonical `number_of_trades`; legacy `trades`/`trade_count` нельзя использовать как замену real trade-count.
+14. Ticker `baseVolume * last` нельзя подставлять в `quote_volume`; proxy можно хранить только как diagnostics metadata и не использовать для liquidity selection/PNO flow.
 
 ---
 
@@ -127,8 +128,9 @@ winrate > 0.40
 | P045 | Sparse entry data-quality gate | PROPOSED | Не валидировать target entry trade data до sparse aggTrades materialization; писать пустые research CSV с колонками. |
 | P046 | Artifact export quality | APPLIED locally / UNKNOWN commit | Стабильные schemas для stage-review CSV, stage summary/manifest, data-quality source/reason tables и полный PNO run context. |
 | P047 | Real Binance kline quote-volume propagation | PROPOSED | Сохранять real Binance futures kline quote_volume/number_of_trades/taker_buy_* в OHLCV cache; backfill cache по quote_volume; убрать close*volume proxy из one-minute Stage1 support. |
-| P048 | Explicit trade-data enrichment failure | PROPOSED | Не маскировать провал aggTrades enrichment возвратом raw frame; писать `trade_data_enrichment_failed` diagnostics. |
-| P049 | Canonical PNO trade-count only | PROPOSED | Доверять в PNO trading path только `number_of_trades`; `trades`/`trade_count` маркировать как legacy ignored, а не использовать. |
+| P048 | Explicit trade-data enrichment failure | APPLIED locally / UNKNOWN commit | Не маскировать провал aggTrades enrichment возвратом raw frame; писать `trade_data_enrichment_failed` diagnostics. |
+| P049 | Canonical PNO trade-count only | APPLIED locally / UNKNOWN commit | Доверять в PNO trading path только `number_of_trades`; `trades`/`trade_count` маркировать как legacy ignored, а не использовать. |
+| P050 | No ticker quote-volume proxy | PROPOSED | Не заменять missing ticker `quoteVolume` на `baseVolume * last`; proxy сохранять только как ignored diagnostics metadata. |
 
 Статусы:
 
@@ -197,6 +199,8 @@ levels_quote_volume_source
 entry_quote_volume_source
 number_of_trades (canonical); trades/trade_count only as legacy ignored diagnostics
 quote_volume
+quote_volume_source
+quote_volume_proxy (diagnostics only; ignored for selection/trading)
 taker_buy_volume
 taker_buy_quote_volume
 ```
@@ -214,7 +218,7 @@ taker_buy_quote_volume
 Текущий приоритет:
 
 ```text
-P049 → compileall → micro-check: synthetic frame с `trades`/`trade_count`, но без `number_of_trades`, должен получить `*_missing_canonical_number_of_trades`; затем повторить тот же multi-TF 31d run после cache update.
+P050 → compileall → micro-check ticker без real `quoteVolume`, но с `baseVolume` и `last`, должен получить `quote_volume=0`, `quote_volume_source=missing_real_quote_volume`, `quote_volume_proxy_available_ignored`; затем обновить cache и повторить тот же multi-TF 31d run.
 ```
 
 После этого:

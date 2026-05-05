@@ -2323,6 +2323,8 @@ def _resolve_symbols(
             liquidity_quality_by_symbol[symbol_raw] = {
                 'liquidity_score': liquidity_score,
                 'quote_volume': quote_volume,
+                'quote_volume_source': str(item.get('quote_volume_source', 'unknown')),
+                'quote_volume_proxy': float(item.get('quote_volume_proxy', 0.0) or 0.0),
                 'trade_count_24h': int(item.get('trade_count_24h', 0) or 0),
                 'quality_flags': list(cast(list[object], item.get('quality_flags', []))),
                 'quality_metadata': dict(cast(dict[str, object], item.get('quality_metadata', {}))),
