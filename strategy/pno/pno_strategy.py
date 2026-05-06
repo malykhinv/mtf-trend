@@ -1849,8 +1849,16 @@ class PnoStrategy(BaseStrategy[PnoParams]):
                     **engine_context,
                 ),
             )
+            if positions is None:
+                raise RuntimeError(
+                    "pno_category_generation_returned_none: "
+                    f"symbol={params.symbol} "
+                    f"levels_timeframe={params.levels_timeframe.value} "
+                    f"entry_timeframe={params.entry_timeframe.value} "
+                    f"variant={params.pno_variant_id}"
+                )
             self._seconds_provider.clear_runtime_caches(symbol=params.symbol)
-            return positions or []
+            return positions
         finally:
             self._seconds_provider.clear_runtime_caches(symbol=params.symbol)
 
@@ -2182,6 +2190,15 @@ class PnoStrategy(BaseStrategy[PnoParams]):
         try:
             for profile in profiles:
                 profile_positions = runner(profile.params)
+                if profile_positions is None:
+                    raise RuntimeError(
+                        "pno_profile_runner_returned_none: "
+                        f"category_id={profile.category_id} "
+                        f"symbol={profile.params.symbol} "
+                        f"levels_timeframe={profile.params.levels_timeframe.value} "
+                        f"entry_timeframe={profile.params.entry_timeframe.value} "
+                        f"variant={profile.params.pno_variant_id}"
+                    )
                 profile_diagnostics = self._engine.consume_last_generation_diagnostics()
                 tagged_diagnostics = self._tag_profile_diagnostics(profile_diagnostics, profile=profile)
                 self._merge_generation_diagnostics(combined_diagnostics, tagged_diagnostics)

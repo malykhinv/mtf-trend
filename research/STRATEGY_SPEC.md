@@ -132,7 +132,7 @@ reclaim level
 
 Stage4 rows не равны independent setups. Один и тот же level может повторяться несколько entry bars.
 
-`human_bos` не является bypass-режимом. Он должен проходить те же проверки свежести уровня, overhead/untested-high context и close_above decay, что и обычный reclaim level.
+`human_bos` не является bypass-режимом. Он должен проходить те же проверки свежести уровня, overhead/untested-high context, close_above decay и close-trigger quality, что и обычный reclaim level. Его Stage4 score/validity до пересчёта считается provisional, а не принятым setup.
 
 ---
 

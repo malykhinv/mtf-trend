@@ -5650,21 +5650,21 @@ class PnoEngine:
                 pno_index=pno_index,
                 maturity_penalty=0,
                 pno_order_adj=0,
-                score_a=20,
-                score_b=20,
-                score_c=20,
-                score_d=20,
-                score_e=20,
-                score_tp2=self._resolve_tp2_score(tp2=tp2, active_high=tp1, v1=v1_now),
-                final_score=max(float(params.min_score), 90.0),
+                score_a=0,
+                score_b=0,
+                score_c=0,
+                score_d=0,
+                score_e=0,
+                score_tp2=0,
+                final_score=0.0,
                 entry_plan=entry_plan,
                 sl_plan=float(stage3.structure_low),
                 low_last_red_plan=float(stage3.structure_low),
                 tp1=tp1,
                 tp2=tp2,
-                stage4_ready=True,
+                stage4_ready=False,
                 hard_block=False,
-                is_valid_setup=True,
+                is_valid_setup=False,
                 hard_block_reason=None,
                 entry_pos=self._resolve_entry_pullback_fraction(
                     pullback_low=float(stage3.structure_low),
@@ -7903,25 +7903,22 @@ class PnoEngine:
                 idx=entry_idx,
                 level=float(armed.stage4.level),
             )
-            if armed.stage4.structure_source != "human_bos":
-                (
-                    trigger_body_close_adj,
-                    trigger_overhead_adj,
-                    trigger_volume_adj,
-                    trigger_score_adjustment,
-                ) = self._resolve_close_trigger_score_adjustment(
-                    stage4=armed.stage4,
-                    signal_context=signal_context,
-                )
-                close_trigger_filter_reason = self._resolve_close_trigger_filter_reason(
-                    params=params,
-                    stage1=armed.stage1,
-                    stage3=armed.stage3,
-                    stage4=armed.stage4,
-                    signal_context=signal_context,
-                )
-            else:
-                close_trigger_filter_reason = None
+            (
+                trigger_body_close_adj,
+                trigger_overhead_adj,
+                trigger_volume_adj,
+                trigger_score_adjustment,
+            ) = self._resolve_close_trigger_score_adjustment(
+                stage4=armed.stage4,
+                signal_context=signal_context,
+            )
+            close_trigger_filter_reason = self._resolve_close_trigger_filter_reason(
+                params=params,
+                stage1=armed.stage1,
+                stage3=armed.stage3,
+                stage4=armed.stage4,
+                signal_context=signal_context,
+            )
             if (
                 ideal_like_impulse
                 and close_trigger_filter_reason in {

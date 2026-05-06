@@ -9,10 +9,10 @@
 ```text
 Branch: codex/ideal-like
 Commit: e961252 (GitHub head checked); ZIP-local patch stack remains source-of-truth for uncommitted code
-Local diff: P061 + P063 + P062 applied locally after P060; commit UNKNOWN
-Last applied patch: P062 (local workspace; commit UNKNOWN)
+Local diff: P076 applied locally on top of ZIP-local stack through P075; commit UNKNOWN
+Last applied patch: P076 (local workspace; commit UNKNOWN)
 Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
-Updated: 2026-05-05
+Updated: 2026-05-06
 ```
 
 Если неизвестно — писать `UNKNOWN`, не выдумывать.
@@ -70,7 +70,7 @@ winrate > 0.40
 5. Без настоящего `number_of_trades` выводы о flow/tape/organic pump ограничены.
 6. Ноль позиций — не оценка прибыльности, а материал для funnel/reject анализа.
 7. Сначала диагностика и качество данных, потом изменение фильтров.
-8. H4 подтверждена: `human_bos` bypass scoring/decay может принимать устаревший нижний BOS-level.
+8. H4 исправляется локальным P076: `human_bos` не должен получать auto-valid Stage4 score или Stage5 close-trigger bypass; нужна same-window проверка rejection distribution.
 9. Для PNO flow требуется real `quote_volume` в USDT; `close*volume` не допускается как замена.
 10. Симулированные результаты бота называются positions; trade/trades остаётся только для биржевых сделок внутри свечей.
 11. `1.zip` показал не edge-result, а data-quality bottleneck: sparse entry TF (`5m/15s`, `5m/30s`) резались до materialization из-за раннего entry-quality gate.
@@ -142,6 +142,7 @@ winrate > 0.40
 | P053 | Canonical diagnostics trade-count only | APPLIED locally / UNKNOWN commit | Diagnostics/charts читают только `number_of_trades`; legacy aliases маркируются как ignored, missing trade-count не рисуется как нули. |
 | P054 | Per-symbol data-load artifacts | APPLIED locally / UNKNOWN commit | Сохранять `data_load_status.csv` и `data_load_rejections.csv` по каждому symbol/role/timeframe, а не только aggregate counts. |
 | P055 | Sparse seconds load-status propagation | PROPOSED | Пробрасывать причины cache/window/fetch/materialization из seconds provider в engine diagnostics, а не сводить их к `sparse_entry_no_loaded_frames`. |
+| P076 | Strict PNO generation and human_bos parity | APPLIED locally / UNKNOWN commit | Не маскировать `None` как 0 positions; убрать оставшийся `human_bos` auto-valid/close-trigger bypass. |
 
 Статусы:
 
@@ -158,7 +159,7 @@ PROPOSED / APPLIED / VERIFIED / UNKNOWN / REVERTED / SUPERSEDED
 | H1 | `30s` entry TF может опаздывать. | ETH case дошёл до active high до executable entry. | Сравнить `5m/30s`, `5m/15s`, `1m/5s`. |
 | H2 | Stage1 слишком узкий или рынок дал мало чистых пампов. | Мало Stage1 passes в последнем run. | Длиннее окно + rejection distribution. |
 | H3 | Flow-фильтры нельзя честно оценить без real trade-count. | Был volume proxy. | P045 + повтор того же run с diagnostics coverage. |
-| H4 | `human_bos` может обходить часть Stage4 scoring. | Подтверждено на `engine.py`: `human_bos` bypassed Stage4 scoring и Stage5 decay. | P043 + rerun same 31d multi-TF diagnostics. |
+| H4 | `human_bos` может обходить часть Stage4/Stage5 качества. | P076 убирает оставшийся provisional auto-valid score и close-trigger bypass. | Rerun same 31d multi-TF diagnostics; сравнить human_bos reject distribution. |
 | H5 | Wick-touch ухудшит качество входов. | BZ/RUNE были wick-only без close_above. | Только отдельный `touch + retest hold` experiment. |
 
 ---
@@ -706,4 +707,28 @@ One next test:
 
 ```text
 Triage the pno_historical failures into stale test expectations versus real PNO strategy regressions.
+```
+
+
+---
+
+## 30. Current local patch note - P076
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Updated: 2026-05-06
+```
+
+Current conclusion:
+
+```text
+PNO no longer converts category/profile generation None into an honest zero-position result.
+human_bos Stage4 candidates are provisional until normal score rebuild, and Stage5 close_above trigger quality filters now run for human_bos the same way as for ordinary reclaim levels.
+This is a small trading-logic tightening for human_bos only; data collection and artifact schemas are unchanged.
+```
+
+One next test:
+
+```text
+Run the same 31-day multi-TF diagnostics and compare human_bos Stage4/Stage5 rejection reasons before/after P076.
 ```

@@ -73,6 +73,7 @@ SUPERSEDED = заменён новым патчем
 | P053 | Canonical diagnostics trade-count only | APPLIED locally / UNKNOWN commit | `cli/pno_diagnostics.py`, `research/*` | diagnostics/chart | Diagnostics/charts читают только `number_of_trades`; legacy `trades`/`trade_count` маркируются как ignored, missing trade-count не рисуется как нули. | `python -m compileall cli/pno_diagnostics.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 | P054 | Per-symbol data-load artifacts | APPLIED locally / UNKNOWN commit | `cli/commands.py`, `research/*` | diagnostics/data-quality | Сохранять per-symbol/role/timeframe `data_load_status.csv` и `data_load_rejections.csv`; linked from run_context. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P055 | Sparse seconds load-status propagation | PROPOSED | `strategy/pno/pno_strategy.py`, `strategy/pno/engine.py`, `research/*` | data-quality/diagnostics | Пробрасывать typed seconds/aggregated-window statuses в sparse materialization diagnostics; `sparse_entry_no_loaded_frames` больше не теряет первопричины cache/schema/window/fetch. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+| P076 | Strict PNO generation and human_bos parity | APPLIED locally / UNKNOWN commit | `strategy/pno/pno_strategy.py`, `strategy/pno/engine.py`, `research/*` | bugfix/strategy | Не маскировать `None` как 0 positions; `human_bos` больше не получает provisional auto-valid score и Stage5 close-trigger bypass. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 
 
 ---
@@ -3043,4 +3044,50 @@ Next:
 
 ```text
 Triage pno_historical failures by class: stale parameter/schema expectations, stale sparse seconds provider internals, and real strategy golden-case regressions.
+```
+
+---
+
+## P076 - Strict PNO generation and human_bos parity
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: bugfix / strategy honesty
+Trading logic changed: yes, only for human_bos close_above trigger parity
+Files: strategy/pno/pno_strategy.py, strategy/pno/engine.py, research/*
+Commit: UNKNOWN
+Follow-up to: code review risk that None can be hidden as zero positions and human_bos still has a special Stage5 trigger bypass
+```
+
+Problem:
+
+```text
+PnoStrategy.generate_events_multi_tf returned positions or [], which could hide an internal None as an honest zero-position result.
+human_bos Stage4 candidates were constructed as already valid with a high provisional score, and Stage5 skipped close-trigger score adjustment/filtering for human_bos.
+```
+
+Change:
+
+```text
+Raise RuntimeError if category/profile generation returns None instead of converting it to [].
+Make human_bos Stage4 context provisional until _rebuild_stage4_scores computes the real score/validity.
+Run human_bos close_above signals through the same close-trigger score adjustment and filter path as normal reclaim levels.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain
+```
+
+Risk:
+
+```text
+Medium. None handling is safer and should only expose bugs. human_bos parity can reduce positions because weak/noisy close_above signals are no longer bypassed. Verify with same-window funnel/reject distribution, not PnL only.
+```
+
+Next:
+
+```text
+Run the same 31-day multi-TF diagnostics and compare human_bos Stage4/Stage5 rejection reasons before/after P076.
 ```
