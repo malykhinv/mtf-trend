@@ -981,3 +981,49 @@ run_context.json records requested_entry_tf, source_entry_tf and entry_load_mode
 `sparse_entry_materialized_insufficient_bars` either disappears or points to a concrete cache/window/data availability problem, not hardcoded pre-roll truncation.
 No edge/PnL conclusion until positions exist.
 ```
+
+
+---
+
+## E026 - 20260506_104450_pno 7-day multi-TF artifact audit
+
+```text
+Status: ANALYZED
+Patch state: P079 artifacts present; P080 proposed locally after analysis; commit UNKNOWN
+Run: 2.zip / 20260506_104450_pno
+Period: 7 days
+Mode: discovery / close_above
+TF pairs: 5m/30s, 5m/15s, 1m/5s
+Positions: 0 / 0 / 0
+```
+
+Funnel:
+
+```text
+5m/30s: Stage1 25, Stage2 17, Stage3 7, Stage4 unique 4, Stage5 positions 0
+5m/15s: Stage1 19, Stage2 14, Stage3 7, Stage4 unique 2, Stage5 positions 0
+1m/5s:  Stage1 1,  Stage2 1,  Stage3 0, Stage4 unique 0, Stage5 positions 0
+```
+
+Data quality:
+
+```text
+diagnostics_coverage reports number_of_trades and quote_volume_usdt for levels/entry on all analyzed symbols.
+For 5m/30s and 5m/15s, data_load_status correctly marks requested target entry TF as sparse_deferred and target_checked=false at preparation time.
+However sparse_entry_materialization_status.csv and seconds_load_status.csv are empty despite Stage2 `sparse_entry_materialized_insufficient_bars` rejections containing materialization/load details.
+Root cause: category diagnostics merge dropped sparse materialization context keys before CLI artifact export.
+```
+
+Interpretation:
+
+```text
+Run is not evidence of edge or no-edge; zero positions makes PnL meaningless.
+The useful finding is artifact honesty: target-entry sparse materialization failures were not surfaced as first-class run-level tables.
+Stage5 rejections are dominated by entry_invalidated_before_trigger, human_bos_obsolete_under_later_local_high and no_close_above; do not relax close_above based on this run.
+```
+
+Next:
+
+```text
+Apply/commit P080, rerun the same 7-day command, then inspect sparse_entry_materialization_status.csv before touching filters or entry logic.
+```

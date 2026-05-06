@@ -2351,6 +2351,43 @@ class PnoStrategy(BaseStrategy[PnoParams]):
                 "entry_quote_volume_source",
                 "market_data_quality_status",
                 "market_data_quality_reasons",
+                "requested_entry_timeframe",
+                "target_entry_timeframe",
+                "target_entry_timeframe_ms",
+                "source_entry_timeframe_ms",
+                "entry_load_mode",
+                "target_entry_checked",
+                "target_entry_rows",
+                "target_entry_required_bars",
+                "target_entry_usable",
+                "target_entry_usable_status",
+                "target_entry_usable_reason",
+                "seconds_source_timeframe_ms",
+                "seconds_materialization_status",
+                "seconds_materialization_reason",
+                "seconds_materialization_windows_requested",
+                "seconds_materialization_windows_loaded",
+                "seconds_materialization_required_bars",
+                "seconds_materialization_load_status_count",
+                "seconds_materialized",
+                "seconds_materialized_bars",
             ):
                 if passthrough_key in incoming_context:
                     combined_context.setdefault(passthrough_key, incoming_context[passthrough_key])
+
+            incoming_load_statuses = incoming_context.get("seconds_materialization_load_statuses")
+            if isinstance(incoming_load_statuses, list):
+                combined_load_statuses = combined_context.setdefault("seconds_materialization_load_statuses", [])
+                if isinstance(combined_load_statuses, list):
+                    combined_load_statuses.extend(
+                        dict(item) if isinstance(item, dict) else item
+                        for item in incoming_load_statuses
+                    )
+
+            incoming_reason_counts = incoming_context.get("seconds_materialization_load_reason_counts")
+            if isinstance(incoming_reason_counts, dict):
+                combined_reason_counts = combined_context.setdefault("seconds_materialization_load_reason_counts", {})
+                if isinstance(combined_reason_counts, dict):
+                    for reason, count in incoming_reason_counts.items():
+                        key = str(reason)
+                        combined_reason_counts[key] = int(combined_reason_counts.get(key, 0) or 0) + int(count or 0)

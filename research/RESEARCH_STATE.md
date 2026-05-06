@@ -10,8 +10,8 @@
 Branch: codex/ideal-like
 Commit: e961252 (GitHub head checked); ZIP-local patch stack remains source-of-truth for uncommitted code
 Local diff: P076 applied locally on top of ZIP-local stack through P075; commit UNKNOWN
-Last applied patch: P076 (local workspace; commit UNKNOWN)
-Last analyzed run: E008 multi-TF 31-day run from 1.zip after P045
+Last applied patch: P080 proposed locally; compile verified; commit UNKNOWN
+Last analyzed run: 20260506_104450_pno 7-day multi-TF run from 2.zip
 Updated: 2026-05-06
 ```
 
@@ -84,6 +84,7 @@ winrate > 0.40
 19. Archive aggTrades market-id resolution no longer reaches through `CcxtFuturesClient._client`; PNO strategy uses the typed `get_market_id()` boundary for both archive and live aggTrades paths.
 20. PNO sparse seconds provider exposes only status-carrying `*_result` load paths for aggregated windows, seconds windows, per-day seconds, archive aggTrades, live aggTrades and aggTrades aggregation; status-dropping DataFrame compatibility wrappers were removed.
 21. 7-day multi-TF artifacts showed that source-entry data-load status is not enough for seconds-entry runs; target-entry sparse materialization needs a global status table and enough pre-roll to avoid false `sparse_entry_materialized_insufficient_bars`.
+22. P079 artifact tables existed in the 7-day run, but were empty because category diagnostics merge dropped sparse materialization context; P080 propagates those context keys so target-entry materialization failures are exported instead of hidden inside Stage2 rejection payloads.
 
 ---
 

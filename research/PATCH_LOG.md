@@ -75,6 +75,7 @@ SUPERSEDED = заменён новым патчем
 | P055 | Sparse seconds load-status propagation | PROPOSED | `strategy/pno/pno_strategy.py`, `strategy/pno/engine.py`, `research/*` | data-quality/diagnostics | Пробрасывать typed seconds/aggregated-window statuses в sparse materialization diagnostics; `sparse_entry_no_loaded_frames` больше не теряет первопричины cache/schema/window/fetch. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P076 | Strict PNO generation and human_bos parity | APPLIED locally / UNKNOWN commit | `strategy/pno/pno_strategy.py`, `strategy/pno/engine.py`, `research/*` | bugfix/strategy | Не маскировать `None` как 0 positions; `human_bos` больше не получает provisional auto-valid score и Stage5 close-trigger bypass. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P079 | Sparse entry audit trail and sizing | PROPOSED | `strategy/pno/engine.py`, `cli/commands.py`, `research/*` | data-quality/diagnostics | Писать run-level sparse target-entry materialization status, явно разделить source/target entry TF в data_load_status/run_context и расширить sparse pre-roll до required bars. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+| P080 | Propagate sparse materialization diagnostics | PROPOSED / compile verified locally | `strategy/pno/pno_strategy.py`, `research/*` | data-quality/diagnostics | Не терять sparse-entry materialization context при merge category diagnostics; заполнять sparse_entry_materialization_status.csv и seconds_load_status.csv. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 
 
 ---
@@ -3244,4 +3245,53 @@ Next:
 
 ```text
 Inspect sparse_entry_materialization_status.csv first. If target_entry_usable=false, the row must show whether the cause is insufficient bars, missing loaded frames, cache/schema/window/fetch failure or missing provider.
+```
+
+
+---
+
+## P080 - Propagate sparse materialization diagnostics
+
+```text
+Status: PROPOSED / compile verified locally
+Type: data-quality / diagnostics
+Trading logic changed: no
+Files: strategy/pno/pno_strategy.py, research/*
+Commit: UNKNOWN
+Follow-up to: 2.zip 7-day multi-TF run after P079 artifacts existed but sparse materialization tables were empty
+```
+
+Problem:
+
+```text
+P079 added sparse_entry_materialization_status.csv and seconds_load_status.csv, but the 7-day run still exported both tables empty.
+The sparse materialization details were present inside Stage2 rejection payloads, for example `sparse_entry_materialized_insufficient_bars`, but `_merge_generation_diagnostics` only passed through a small whitelist of context keys.
+As a result, diagnostics coverage could say `levels_ok_target_entry_deferred`, while the target-entry materialization audit trail was missing from run-level artifacts.
+```
+
+Change:
+
+```text
+Propagate sparse-entry context keys through category diagnostics merge: requested/target/source entry TF, target_entry_checked/rows/required/usable, materialization status/reason/windows/bars and seconds load statuses.
+Merge seconds_materialization_load_statuses and load_reason_counts instead of dropping them at the category boundary.
+No trading decision, filter, score, TP/SL or entry logic is changed.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain
+```
+
+Risk:
+
+```text
+Low. Artifacts become more truthful; trading output should not change.
+For multi-profile category runs, status rows may now include multiple profile load-status entries instead of only the first visible scalar context.
+```
+
+Next:
+
+```text
+Rerun the same 7-day multi-TF command and check that sparse_entry_materialization_status.csv has rows for AVGO/KAVA-like insufficient-bars cases and seconds_load_status.csv contains the underlying cache/window rows.
 ```
