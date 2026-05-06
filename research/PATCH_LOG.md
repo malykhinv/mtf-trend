@@ -74,6 +74,7 @@ SUPERSEDED = заменён новым патчем
 | P054 | Per-symbol data-load artifacts | APPLIED locally / UNKNOWN commit | `cli/commands.py`, `research/*` | diagnostics/data-quality | Сохранять per-symbol/role/timeframe `data_load_status.csv` и `data_load_rejections.csv`; linked from run_context. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P055 | Sparse seconds load-status propagation | PROPOSED | `strategy/pno/pno_strategy.py`, `strategy/pno/engine.py`, `research/*` | data-quality/diagnostics | Пробрасывать typed seconds/aggregated-window statuses в sparse materialization diagnostics; `sparse_entry_no_loaded_frames` больше не теряет первопричины cache/schema/window/fetch. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P076 | Strict PNO generation and human_bos parity | APPLIED locally / UNKNOWN commit | `strategy/pno/pno_strategy.py`, `strategy/pno/engine.py`, `research/*` | bugfix/strategy | Не маскировать `None` как 0 positions; `human_bos` больше не получает provisional auto-valid score и Stage5 close-trigger bypass. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+| P079 | Sparse entry audit trail and sizing | PROPOSED | `strategy/pno/engine.py`, `cli/commands.py`, `research/*` | data-quality/diagnostics | Писать run-level sparse target-entry materialization status, явно разделить source/target entry TF в data_load_status/run_context и расширить sparse pre-roll до required bars. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 
 
 ---
@@ -3190,4 +3191,57 @@ Next:
 
 ```text
 Run the same 31-day multi-TF diagnostics and compare human_bos Stage4/Stage5 rejection reasons before/after P076.
+```
+
+
+---
+
+## P079 - Sparse entry audit trail and sizing
+
+```text
+Status: PROPOSED
+Type: data-quality / diagnostics
+Trading logic changed: no
+Files: strategy/pno/engine.py, cli/commands.py, research/*
+Commit: UNKNOWN
+Follow-up to: 7-day multi-TF artifacts with target seconds-entry materialization deferred behind source 1m data-load status
+```
+
+Problem:
+
+```text
+For seconds-entry PNO runs, data_load_status.csv records the source entry frame (usually 1m or reused levels), while the requested 5s/15s/30s target-entry frame is materialized later after Stage1.
+That made artifacts easy to misread as if target entry data had been fully checked during data preparation.
+Sparse materialization also reported load ok before the downstream required-bars gate, so `sparse_entry_materialized_insufficient_bars` was visible only as a stage rejection rather than as a run-level materialization status.
+Some target-entry windows were only a few candles short because sparse pre-roll was fixed at 30 minutes instead of matching the target-entry required bar span.
+```
+
+Change:
+
+```text
+Add pno_diagnostics/sparse_entry_materialization_status.csv with one status row per sparse-entry symbol attempt.
+Record source/target/requested entry timeframe and load_mode in data_load_status.csv and run_context.json.
+Rename the deferred source-frame status to `levels_ok_target_entry_deferred`.
+Mark target-entry usability separately from low-level materialization ok, including rows, required_bars, windows and load_reason_counts.
+Expand sparse Stage1 fetch pre-roll to at least `required_bars * target_entry_timeframe_ms` so target-entry materialization is not cut short by a hardcoded 30-minute pre-roll.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected true --pno-entry-confirmation-mode close_above --days 7 --pno-category-mode discovery --collect-diagnostics true
+```
+
+Risk:
+
+```text
+Low for trading decisions: entry/score/TP/SL logic is unchanged.
+Medium for runtime/cache pressure: sparse windows can be wider for candidate symbols, but only after Stage1 and only to satisfy the already-required target-entry bar count.
+```
+
+Next:
+
+```text
+Inspect sparse_entry_materialization_status.csv first. If target_entry_usable=false, the row must show whether the cause is insufficient bars, missing loaded frames, cache/schema/window/fetch failure or missing provider.
 ```

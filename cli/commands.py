@@ -76,6 +76,7 @@ _BACKTEST_PLOT_REQUEST_FILE_NAME = "plot_request.json"
 _BACKTEST_DATA_LOAD_STATUS_FILE_NAME = "data_load_status.csv"
 _BACKTEST_DATA_LOAD_REJECTIONS_FILE_NAME = "data_load_rejections.csv"
 _PNO_SECONDS_LOAD_STATUS_FILE_NAME = "seconds_load_status.csv"
+_PNO_SPARSE_ENTRY_MATERIALIZATION_STATUS_FILE_NAME = "sparse_entry_materialization_status.csv"
 _PNO_STAGE1_CACHE_STATUS_FILE_NAME = "stage1_cache_status.csv"
 _PNO_STAGE5_REVIEW_SYNTHESIS_STATUS_FILE_NAME = "stage5_review_synthesis_status.csv"
 _PNO_DIAGNOSTICS_COVERAGE_COLUMNS: tuple[str, ...] = (
@@ -120,7 +121,37 @@ _PNO_SECONDS_LOAD_STATUS_COLUMNS: tuple[str, ...] = (
     "raw_rows",
     "prepared_rows",
     "rows",
+    "required_bars",
     "missing_columns",
+    "exception_type",
+    "exception_message",
+)
+_PNO_SPARSE_ENTRY_MATERIALIZATION_STATUS_COLUMNS: tuple[str, ...] = (
+    "symbol",
+    "ok",
+    "status",
+    "reason",
+    "requested_entry_timeframe",
+    "target_entry_timeframe",
+    "target_entry_timeframe_ms",
+    "source_entry_timeframe_ms",
+    "entry_load_mode",
+    "target_entry_checked",
+    "target_entry_rows",
+    "target_entry_required_bars",
+    "target_entry_usable",
+    "target_entry_usable_status",
+    "target_entry_usable_reason",
+    "materialization_status",
+    "materialization_reason",
+    "materialized",
+    "materialized_bars",
+    "windows_requested",
+    "windows_loaded",
+    "load_status_count",
+    "load_reason_counts",
+    "market_data_quality_status",
+    "market_data_quality_reasons",
 )
 _PNO_STAGE1_CACHE_STATUS_COLUMNS: tuple[str, ...] = (
     "symbol",
@@ -177,6 +208,11 @@ _BACKTEST_DATA_LOAD_STATUS_COLUMNS: tuple[str, ...] = (
     "role",
     "symbol",
     "timeframe",
+    "requested_timeframe",
+    "source_timeframe",
+    "target_timeframe",
+    "load_mode",
+    "target_checked",
     "ok",
     "status",
     "reason",
@@ -618,11 +654,21 @@ def _build_data_load_status_row(
     end_timestamp_ms: int | None,
     status_override: str | None = None,
     reason_override: str | None = None,
+    requested_timeframe: Timeframe | None = None,
+    source_timeframe: Timeframe | None = None,
+    target_timeframe: Timeframe | None = None,
+    load_mode: str | None = None,
+    target_checked: bool | None = None,
 ) -> dict[str, object]:
     return {
         "role": role,
         "symbol": result.symbol,
         "timeframe": result.timeframe.value,
+        "requested_timeframe": requested_timeframe.value if requested_timeframe is not None else result.timeframe.value,
+        "source_timeframe": source_timeframe.value if source_timeframe is not None else result.timeframe.value,
+        "target_timeframe": target_timeframe.value if target_timeframe is not None else result.timeframe.value,
+        "load_mode": load_mode or "source_frame",
+        "target_checked": "" if target_checked is None else bool(target_checked),
         "ok": bool(result.ok),
         "status": status_override or result.status,
         "reason": reason_override or result.reason,
@@ -633,7 +679,6 @@ def _build_data_load_status_row(
         "window_days": int(window_days) if window_days is not None else "",
         "end_timestamp_ms": int(end_timestamp_ms) if end_timestamp_ms is not None else "",
     }
-
 
 def _write_backtest_data_load_artifacts(
     run_root_dir: Path,
@@ -703,6 +748,8 @@ def _write_backtest_run_context(
     data_load_rejections: dict[str, int] | None = None,
     data_load_status_file_name: str | None = None,
     data_load_rejections_file_name: str | None = None,
+    source_entry_timeframe: Timeframe | None = None,
+    entry_load_mode: str | None = None,
 ) -> None:
     payload = {
         "strategy_id": strategy_id,
@@ -711,6 +758,10 @@ def _write_backtest_run_context(
         "results_file_name": results_file_name,
         "levels_tf": levels_timeframe.value,
         "entry_tf": entry_timeframe.value,
+        "requested_entry_tf": entry_timeframe.value,
+        "source_entry_tf": (source_entry_timeframe or entry_timeframe).value,
+        "entry_load_mode": entry_load_mode or "source_frame",
+        "target_entry_checked_in_data_load": bool((source_entry_timeframe or entry_timeframe) == entry_timeframe),
         "days": int(backtest_days) if backtest_days is not None else None,
         "end_timestamp_ms": int(end_timestamp_ms) if end_timestamp_ms is not None else None,
         "symbols": list(symbols),
@@ -2071,10 +2122,52 @@ def _write_pno_diagnostics_quality_tables(*, diagnostics_dir: Path, coverage_fra
     )
 
 
+def _build_pno_sparse_materialization_status_row(
+    *,
+    symbol: str,
+    context: dict[str, object],
+) -> dict[str, object] | None:
+    if context.get("entry_load_mode") != "sparse_deferred" and "seconds_materialization_status" not in context:
+        return None
+    materialization_status = str(context.get("seconds_materialization_status") or "not_attempted")
+    usable_status = str(context.get("target_entry_usable_status") or "not_checked")
+    usable_reason = str(context.get("target_entry_usable_reason") or "")
+    status = usable_status if usable_status != "not_checked" else materialization_status
+    reason = usable_reason or str(context.get("seconds_materialization_reason") or "")
+    return {
+        "symbol": symbol,
+        "ok": bool(context.get("target_entry_usable")) if usable_status != "not_checked" else bool(context.get("seconds_materialized")),
+        "status": status,
+        "reason": reason,
+        "requested_entry_timeframe": _serialize_diagnostics_context_value(context.get("requested_entry_timeframe")),
+        "target_entry_timeframe": _serialize_diagnostics_context_value(context.get("target_entry_timeframe")),
+        "target_entry_timeframe_ms": _serialize_diagnostics_context_value(context.get("target_entry_timeframe_ms")),
+        "source_entry_timeframe_ms": _serialize_diagnostics_context_value(context.get("source_entry_timeframe_ms")),
+        "entry_load_mode": _serialize_diagnostics_context_value(context.get("entry_load_mode")),
+        "target_entry_checked": _serialize_diagnostics_context_value(context.get("target_entry_checked")),
+        "target_entry_rows": _serialize_diagnostics_context_value(context.get("target_entry_rows")),
+        "target_entry_required_bars": _serialize_diagnostics_context_value(context.get("target_entry_required_bars") or context.get("seconds_materialization_required_bars")),
+        "target_entry_usable": _serialize_diagnostics_context_value(context.get("target_entry_usable")),
+        "target_entry_usable_status": usable_status,
+        "target_entry_usable_reason": usable_reason,
+        "materialization_status": materialization_status,
+        "materialization_reason": _serialize_diagnostics_context_value(context.get("seconds_materialization_reason")),
+        "materialized": _serialize_diagnostics_context_value(context.get("seconds_materialized")),
+        "materialized_bars": _serialize_diagnostics_context_value(context.get("seconds_materialized_bars")),
+        "windows_requested": _serialize_diagnostics_context_value(context.get("seconds_materialization_windows_requested")),
+        "windows_loaded": _serialize_diagnostics_context_value(context.get("seconds_materialization_windows_loaded")),
+        "load_status_count": _serialize_diagnostics_context_value(context.get("seconds_materialization_load_status_count")),
+        "load_reason_counts": _serialize_diagnostics_context_value(context.get("seconds_materialization_load_reason_counts")),
+        "market_data_quality_status": _serialize_diagnostics_context_value(context.get("market_data_quality_status")),
+        "market_data_quality_reasons": _serialize_diagnostics_context_value(context.get("market_data_quality_reasons")),
+    }
+
+
 def _write_pno_seconds_and_cache_status_tables(
     *,
     diagnostics_dir: Path,
     seconds_rows: list[dict[str, object]],
+    sparse_materialization_rows: list[dict[str, object]],
     stage1_cache_rows: list[dict[str, object]],
 ) -> None:
     _write_frame_from_records(
@@ -2083,11 +2176,15 @@ def _write_pno_seconds_and_cache_status_tables(
         columns=_PNO_SECONDS_LOAD_STATUS_COLUMNS,
     )
     _write_frame_from_records(
+        diagnostics_dir / _PNO_SPARSE_ENTRY_MATERIALIZATION_STATUS_FILE_NAME,
+        sparse_materialization_rows,
+        columns=_PNO_SPARSE_ENTRY_MATERIALIZATION_STATUS_COLUMNS,
+    )
+    _write_frame_from_records(
         diagnostics_dir / _PNO_STAGE1_CACHE_STATUS_FILE_NAME,
         stage1_cache_rows,
         columns=_PNO_STAGE1_CACHE_STATUS_COLUMNS,
     )
-
 
 def _write_pno_diagnostics_coverage(*, diagnostics_dir: Path, rows: list[dict[str, object]]) -> None:
     coverage_frame = pd.DataFrame(rows) if rows else pd.DataFrame(columns=list(_PNO_DIAGNOSTICS_COVERAGE_COLUMNS))
@@ -2148,6 +2245,7 @@ def _export_pno_diagnostics_context_for_symbols(
     diagnostics_payloads: list[dict[str, object]] = []
     coverage_rows: list[dict[str, object]] = []
     seconds_load_status_rows: list[dict[str, object]] = []
+    sparse_materialization_status_rows: list[dict[str, object]] = []
     stage1_cache_status_rows: list[dict[str, object]] = []
     total_symbols = len(symbol_frames)
     symbol_export_start_time = time.monotonic()
@@ -2246,6 +2344,9 @@ def _export_pno_diagnostics_context_for_symbols(
             for status_row in seconds_load_statuses:
                 if isinstance(status_row, dict):
                     seconds_load_status_rows.append({"symbol": symbol, **status_row})
+        sparse_status_row = _build_pno_sparse_materialization_status_row(symbol=symbol, context=context)
+        if sparse_status_row is not None:
+            sparse_materialization_status_rows.append(sparse_status_row)
         for cache_context_key in ("stage1_cache_status", "stage1_cache_store_status"):
             cache_status = context.get(cache_context_key)
             if isinstance(cache_status, dict):
@@ -2326,6 +2427,7 @@ def _export_pno_diagnostics_context_for_symbols(
     _write_pno_seconds_and_cache_status_tables(
         diagnostics_dir=diagnostics_dir,
         seconds_rows=seconds_load_status_rows,
+        sparse_materialization_rows=sparse_materialization_status_rows,
         stage1_cache_rows=stage1_cache_status_rows,
     )
     _export_pno_research_context(
@@ -3280,6 +3382,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         and int(entry_timeframe.to_milliseconds()) < int(Timeframe.M1.to_milliseconds())
     )
     source_entry_timeframe = Timeframe.M1 if pno_seconds_entry_pair else entry_timeframe
+    entry_load_mode = "sparse_deferred" if pno_seconds_entry_pair else "source_frame"
+    entry_target_checked_in_data_load = not pno_seconds_entry_pair
     symbols = args.symbols or preparer.list_symbols(source_entry_timeframe)
     if not symbols:
         logger.warning("Нет данных в кэше")
@@ -3428,6 +3532,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 data_load_rejections=data_load_artifact_rejections,
                 data_load_status_file_name=_BACKTEST_DATA_LOAD_STATUS_FILE_NAME,
                 data_load_rejections_file_name=_BACKTEST_DATA_LOAD_REJECTIONS_FILE_NAME,
+                source_entry_timeframe=source_entry_timeframe,
+                entry_load_mode=entry_load_mode,
             )
         return 0
 
@@ -3487,8 +3593,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     role="entry",
                     window_days=backtest_days,
                     end_timestamp_ms=resolved_end_timestamp_ms,
-                    status_override="reused_levels_frame",
-                    reason_override="entry timeframe equals levels timeframe",
+                    status_override=(
+                        "reused_levels_source_target_entry_deferred"
+                        if pno_seconds_entry_pair
+                        else "reused_levels_frame"
+                    ),
+                    reason_override=(
+                        "source timeframe equals levels timeframe; target entry materialized after Stage1"
+                        if pno_seconds_entry_pair
+                        else "entry timeframe equals levels timeframe"
+                    ),
+                    requested_timeframe=entry_timeframe,
+                    source_timeframe=source_entry_timeframe,
+                    target_timeframe=entry_timeframe,
+                    load_mode=entry_load_mode,
+                    target_checked=entry_target_checked_in_data_load,
                 )
             )
             entry_frame = levels_frame
@@ -3505,6 +3624,21 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                     role="entry",
                     window_days=backtest_days,
                     end_timestamp_ms=resolved_end_timestamp_ms,
+                    status_override=(
+                        "source_loaded_target_entry_deferred"
+                        if pno_seconds_entry_pair and entry_result.ok
+                        else None
+                    ),
+                    reason_override=(
+                        "target entry materialized after Stage1"
+                        if pno_seconds_entry_pair and entry_result.ok
+                        else None
+                    ),
+                    requested_timeframe=entry_timeframe,
+                    source_timeframe=source_entry_timeframe,
+                    target_timeframe=entry_timeframe,
+                    load_mode=entry_load_mode,
+                    target_checked=entry_target_checked_in_data_load,
                 )
             )
             entry_frame = entry_result.frame
@@ -3555,6 +3689,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
                 data_load_rejections=data_load_artifact_rejections,
                 data_load_status_file_name=_BACKTEST_DATA_LOAD_STATUS_FILE_NAME,
                 data_load_rejections_file_name=_BACKTEST_DATA_LOAD_REJECTIONS_FILE_NAME,
+                source_entry_timeframe=source_entry_timeframe,
+                entry_load_mode=entry_load_mode,
             )
         return 0
 
@@ -3581,6 +3717,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
             data_load_rejections=data_load_artifact_rejections,
             data_load_status_file_name=_BACKTEST_DATA_LOAD_STATUS_FILE_NAME,
             data_load_rejections_file_name=_BACKTEST_DATA_LOAD_REJECTIONS_FILE_NAME,
+            source_entry_timeframe=source_entry_timeframe,
+            entry_load_mode=entry_load_mode,
         )
 
     runner = BacktestRunner(

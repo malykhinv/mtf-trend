@@ -381,6 +381,7 @@ class SparseEntryMaterializationResult:
     reason: str | None = None
     windows_requested: int = 0
     windows_loaded: int = 0
+    required_bars: int = 0
     load_statuses: tuple[dict[str, object], ...] = ()
     load_reason_counts: dict[str, int] | None = None
 
@@ -1079,6 +1080,18 @@ class PnoEngine:
         uses_local_seconds_materialization = (
             entry_timeframe_ms < source_entry_timeframe_ms and seconds_frame_provider is not None
         )
+        context = diagnostics.setdefault("context", {})
+        if isinstance(context, dict):
+            context.update(
+                {
+                    "requested_entry_timeframe": params.entry_timeframe.value,
+                    "target_entry_timeframe": params.entry_timeframe.value,
+                    "target_entry_timeframe_ms": int(entry_timeframe_ms),
+                    "source_entry_timeframe_ms": int(source_entry_timeframe_ms),
+                    "entry_load_mode": "sparse_deferred" if uses_local_seconds_materialization else "source_frame",
+                    "target_entry_checked": not uses_local_seconds_materialization,
+                }
+            )
         require_entry_quality_now = not uses_local_seconds_materialization
         early_market_data_quality_reasons = self._market_data_quality_reasons(
             levels_frame=prepared_levels,
@@ -1091,7 +1104,7 @@ class PnoEngine:
             entry_frame=prepared_entry,
             require_entry_frame=require_entry_quality_now,
             status_override=(
-                "levels_ok_entry_deferred"
+                "levels_ok_target_entry_deferred"
                 if uses_local_seconds_materialization and not early_market_data_quality_reasons
                 else None
             ),
@@ -1247,8 +1260,13 @@ class PnoEngine:
                 params=params,
                 stage1_state=cached_stage1_state,
                 seconds_frame_provider=seconds_frame_provider,
+                required_bars=entry_required_bars,
             )
             actual_entry_frame = materialization.frame
+            sparse_reject_reason = materialization.reason if not materialization.ok else None
+            if materialization.ok and len(actual_entry_frame) < entry_required_bars:
+                sparse_reject_reason = "sparse_entry_materialized_insufficient_bars"
+            sparse_usable = sparse_reject_reason is None
             context = diagnostics.setdefault("context", {})
             if isinstance(context, dict):
                 context.update(
@@ -1257,17 +1275,21 @@ class PnoEngine:
                         "seconds_materialization_reason": materialization.reason or "",
                         "seconds_materialization_windows_requested": int(materialization.windows_requested),
                         "seconds_materialization_windows_loaded": int(materialization.windows_loaded),
+                        "seconds_materialization_required_bars": int(entry_required_bars),
                         "seconds_materialization_load_status_count": int(len(materialization.load_statuses)),
                         "seconds_materialization_load_statuses": list(materialization.load_statuses),
                         "seconds_materialization_load_reason_counts": dict(materialization.load_reason_counts or {}),
                         "seconds_materialized": materialization.ok,
                         "seconds_source_timeframe_ms": int(source_entry_timeframe_ms),
                         "seconds_materialized_bars": int(len(actual_entry_frame)),
+                        "target_entry_checked": True,
+                        "target_entry_rows": int(len(actual_entry_frame)),
+                        "target_entry_required_bars": int(entry_required_bars),
+                        "target_entry_usable": bool(sparse_usable),
+                        "target_entry_usable_status": "ok" if sparse_usable else "failed",
+                        "target_entry_usable_reason": sparse_reject_reason or "",
                     }
                 )
-            sparse_reject_reason = materialization.reason if not materialization.ok else None
-            if materialization.ok and len(actual_entry_frame) < entry_required_bars:
-                sparse_reject_reason = "sparse_entry_materialized_insufficient_bars"
             if sparse_reject_reason is not None:
                 diagnostics["skipped_insufficient_data"] = 1
                 if isinstance(context, dict):
@@ -9070,6 +9092,7 @@ class PnoEngine:
         params: PnoParams,
         stage1_state: Stage1StateArrays | None,
         seconds_frame_provider: object,
+        required_bars: int,
     ) -> SparseEntryMaterializationResult:
         empty_columns = [
             "timestamp",
@@ -9087,6 +9110,7 @@ class PnoEngine:
                 frame=empty_frame,
                 status="failed",
                 reason="sparse_entry_window_result_loader_missing",
+                required_bars=int(required_bars),
                 load_reason_counts={"sparse_entry_window_result_loader_missing": 1},
             )
 
@@ -9094,12 +9118,14 @@ class PnoEngine:
             levels_frame=levels_frame,
             params=params,
             stage1_state=stage1_state,
+            required_bars=required_bars,
         )
         if not windows:
             return SparseEntryMaterializationResult(
                 frame=empty_frame,
                 status="failed",
                 reason="sparse_entry_no_stage1_windows",
+                required_bars=int(required_bars),
                 load_reason_counts={"sparse_entry_no_stage1_windows": 1},
             )
 
@@ -9127,6 +9153,7 @@ class PnoEngine:
                 "status": status,
                 "reason": reason,
                 "rows": rows,
+                "required_bars": int(required_bars),
                 "source_detail": str(getattr(result, "source", "")),
                 "seconds_status": str(getattr(result, "seconds_status", "")),
                 "seconds_reason": str(getattr(result, "seconds_reason", "")),
@@ -9173,6 +9200,7 @@ class PnoEngine:
                 reason="sparse_entry_no_loaded_frames",
                 windows_requested=len(windows),
                 windows_loaded=0,
+                required_bars=int(required_bars),
                 load_statuses=load_status_tuple,
                 load_reason_counts=reason_counts,
             )
@@ -9184,6 +9212,7 @@ class PnoEngine:
                 reason="sparse_entry_materialized_frame_empty",
                 windows_requested=len(windows),
                 windows_loaded=len(frames),
+                required_bars=int(required_bars),
                 load_statuses=load_status_tuple,
                 load_reason_counts=reason_counts,
             )
@@ -9192,6 +9221,7 @@ class PnoEngine:
             status="ok",
             windows_requested=len(windows),
             windows_loaded=len(frames),
+            required_bars=int(required_bars),
             load_statuses=load_status_tuple,
             load_reason_counts=reason_counts,
         )
@@ -9202,6 +9232,7 @@ class PnoEngine:
         levels_frame: pd.DataFrame,
         params: PnoParams,
         stage1_state: Stage1StateArrays | None,
+        required_bars: int = 0,
     ) -> list[tuple[int, int]]:
         timestamps = pd.to_numeric(levels_frame["timestamp"], errors="coerce").to_numpy(dtype=np.int64)
         highs = pd.to_numeric(levels_frame["high"], errors="coerce").to_numpy(dtype=np.float64)
@@ -9229,7 +9260,9 @@ class PnoEngine:
                 axis=0,
             )
             levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
-            entry_preroll_ms = max(30 * 60_000, 6 * int(params.entry_timeframe.to_milliseconds()))
+            target_entry_timeframe_ms = int(params.entry_timeframe.to_milliseconds())
+            required_entry_window_ms = max(0, int(required_bars)) * target_entry_timeframe_ms
+            entry_preroll_ms = max(30 * 60_000, 6 * target_entry_timeframe_ms, required_entry_window_ms)
             raw_windows: list[tuple[int, int]] = []
             post_bars = (
                 self._scale_5m_stage_bars(int(params.stage1_pullback_max_bars), levels_timeframe_ms)
@@ -9250,7 +9283,9 @@ class PnoEngine:
             candidate_indices = np.arange(len(timestamps), dtype=np.int64)
         raw_windows: list[tuple[int, int]] = []
         levels_timeframe_ms = int(params.levels_timeframe.to_milliseconds())
-        entry_preroll_ms = max(30 * 60_000, 6 * int(params.entry_timeframe.to_milliseconds()))
+        target_entry_timeframe_ms = int(params.entry_timeframe.to_milliseconds())
+        required_entry_window_ms = max(0, int(required_bars)) * target_entry_timeframe_ms
+        entry_preroll_ms = max(30 * 60_000, 6 * target_entry_timeframe_ms, required_entry_window_ms)
         for five_idx in candidate_indices.tolist():
             candidate = self._resolve_htf_stage1_candidate_from_arrays(
                 timestamps=timestamps,

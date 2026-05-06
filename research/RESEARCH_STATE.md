@@ -83,6 +83,7 @@ winrate > 0.40
 18. Aggregate `data_load_rejections` недостаточен: run output должен сохранять per-symbol/role/timeframe status для всех load attempts, включая символы, исключённые до `symbol_frames`.
 19. Archive aggTrades market-id resolution no longer reaches through `CcxtFuturesClient._client`; PNO strategy uses the typed `get_market_id()` boundary for both archive and live aggTrades paths.
 20. PNO sparse seconds provider exposes only status-carrying `*_result` load paths for aggregated windows, seconds windows, per-day seconds, archive aggTrades, live aggTrades and aggTrades aggregation; status-dropping DataFrame compatibility wrappers were removed.
+21. 7-day multi-TF artifacts showed that source-entry data-load status is not enough for seconds-entry runs; target-entry sparse materialization needs a global status table and enough pre-roll to avoid false `sparse_entry_materialized_insufficient_bars`.
 
 ---
 
@@ -143,6 +144,7 @@ winrate > 0.40
 | P054 | Per-symbol data-load artifacts | APPLIED locally / UNKNOWN commit | Сохранять `data_load_status.csv` и `data_load_rejections.csv` по каждому symbol/role/timeframe, а не только aggregate counts. |
 | P055 | Sparse seconds load-status propagation | PROPOSED | Пробрасывать причины cache/window/fetch/materialization из seconds provider в engine diagnostics, а не сводить их к `sparse_entry_no_loaded_frames`. |
 | P076 | Strict PNO generation and human_bos parity | APPLIED locally / UNKNOWN commit | Не маскировать `None` как 0 positions; убрать оставшийся `human_bos` auto-valid/close-trigger bypass. |
+| P079 | Sparse entry audit trail and sizing | PROPOSED | Писать `sparse_entry_materialization_status.csv`, явно маркировать source/target entry TF и расширить sparse pre-roll до required bars. |
 
 Статусы:
 
@@ -780,4 +782,29 @@ One next test:
 
 ```text
 Run the same 31-day multi-TF diagnostics and compare human_bos Stage4/Stage5 rejection reasons before/after P076.
+```
+
+
+---
+
+## 33. Current local patch note - P079
+
+```text
+Status: PROPOSED
+Updated: 2026-05-06
+```
+
+Current conclusion:
+
+```text
+The 7-day multi-TF artifacts are mostly honest on real trade-count and quote-volume, but seconds-entry auditability is incomplete.
+For 5s/15s/30s target entry TF, data_load_status only proves the source 1m/levels frame; target-entry sparse materialization happens later and must have its own run-level status table.
+P079 adds sparse_entry_materialization_status.csv, labels source/target entry TF in data_load_status and run_context, and expands sparse fetch pre-roll to the target-entry required bar span to reduce false insufficient-bars rejections.
+Trading thresholds, close_above, TP/SL and scoring are unchanged.
+```
+
+One next test:
+
+```text
+Run the same 7-day --pno-all-tf-pairs diagnostics and inspect sparse_entry_materialization_status.csv before reading funnel/PnL; target_entry_usable_reason should explain every failed sparse materialization, and avoidable insufficient-bars cases should disappear or expose a concrete cache/window cause.
 ```

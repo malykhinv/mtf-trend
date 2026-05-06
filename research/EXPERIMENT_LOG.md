@@ -946,3 +946,38 @@ Next:
 ```text
 Apply P078, rerun the same 5m/30s diagnostics, then compare quote_volume coverage in diagnostics_coverage.csv versus stage3_5_candle_context.csv before changing filters.
 ```
+
+
+---
+
+## E025 - Planned sparse-entry artifact audit after P079
+
+```text
+Status: PLANNED
+Patch: P079 proposed / commit UNKNOWN
+Date: 2026-05-06
+Code state: local ZIP workspace after P078/P079 proposal; commit UNKNOWN
+Run artifact basis: 2.zip 7-day multi-TF run
+```
+
+Goal:
+
+```text
+Verify that seconds-entry PNO runs expose target-entry sparse materialization health as a first-class artifact before any funnel/PnL interpretation.
+```
+
+Command:
+
+```bash
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected true --pno-entry-confirmation-mode close_above --days 7 --pno-category-mode discovery --collect-diagnostics true
+```
+
+Checks:
+
+```text
+sparse_entry_materialization_status.csv exists for each PNO diagnostics directory.
+data_load_status.csv marks source_timeframe, target_timeframe, load_mode and target_checked.
+run_context.json records requested_entry_tf, source_entry_tf and entry_load_mode.
+`sparse_entry_materialized_insufficient_bars` either disappears or points to a concrete cache/window/data availability problem, not hardcoded pre-roll truncation.
+No edge/PnL conclusion until positions exist.
+```
