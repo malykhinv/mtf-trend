@@ -3247,6 +3247,56 @@ Next:
 Inspect sparse_entry_materialization_status.csv first. If target_entry_usable=false, the row must show whether the cause is insufficient bars, missing loaded frames, cache/schema/window/fetch failure or missing provider.
 ```
 
+---
+
+## P081 - Remove prior-local-high human BOS reject
+
+```text
+Status: PROPOSED / compile verified locally
+Type: trading logic / experiment
+Trading logic changed: yes
+Files: strategy/pno/engine.py, research/*
+Commit: UNKNOWN
+Follow-up to: 20260506_111822_pno 7-day multi-TF run; user-requested removal of `human_bos_below_prior_local_high`
+```
+
+Problem:
+
+```text
+The previous human_bos freshness guard rejected a selected BOS level when a confirmed local high before the selected BOS was above it.
+This can be too strict for PNO continuation: an earlier lower-high inside the pullback does not necessarily obsolete a later reclaim/BOS attempt.
+The run still had zero positions, so this change is an experiment to expose whether those prior-high rejects were blocking executable close_above setups, not evidence of edge.
+```
+
+Change:
+
+```text
+Remove only the `human_bos_below_prior_local_high` rejection.
+Confirmed local highs before the selected BOS are skipped instead of rejected.
+Keep the later-local-high obsolete guard: a newer confirmed high after the selected BOS can still reject as `human_bos_obsolete_under_later_local_high`.
+No data collection, sparse materialization, close_above trigger, TP/SL or RR logic is changed.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain
+```
+
+Risk:
+
+```text
+Medium. This intentionally weakens human_bos structural freshness and may admit weaker rebound setups under older pullback highs.
+The next run must compare reject distribution and near-miss charts, not only positions/PnL.
+```
+
+Next:
+
+```text
+Rerun the same 7-day multi-TF diagnostics and inspect whether prior `human_bos_below_prior_local_high` cases become valid Stage5 attempts, later-local-high rejects, no_close_above rejects, entry-invalidated rejects or real positions.
+```
+
+
 
 ---
 

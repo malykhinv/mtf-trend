@@ -6748,7 +6748,7 @@ class PnoEngine:
             if decline < min_decline:
                 continue
             if high_idx < selected_idx:
-                return "human_bos_below_prior_local_high"
+                continue
             return "human_bos_obsolete_under_later_local_high"
 
         if int(stage4.level_valid_idx) < idx:

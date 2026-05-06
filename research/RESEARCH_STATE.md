@@ -146,6 +146,7 @@ winrate > 0.40
 | P055 | Sparse seconds load-status propagation | PROPOSED | Пробрасывать причины cache/window/fetch/materialization из seconds provider в engine diagnostics, а не сводить их к `sparse_entry_no_loaded_frames`. |
 | P076 | Strict PNO generation and human_bos parity | APPLIED locally / UNKNOWN commit | Не маскировать `None` как 0 positions; убрать оставшийся `human_bos` auto-valid/close-trigger bypass. |
 | P079 | Sparse entry audit trail and sizing | PROPOSED | Писать `sparse_entry_materialization_status.csv`, явно маркировать source/target entry TF и расширить sparse pre-roll до required bars. |
+| P081 | Remove prior-local-high human BOS reject | PROPOSED / compile verified locally | Вырезать только `human_bos_below_prior_local_high`; later-local-high obsolete guard оставить. |
 
 Статусы:
 
@@ -809,3 +810,28 @@ One next test:
 ```text
 Run the same 7-day --pno-all-tf-pairs diagnostics and inspect sparse_entry_materialization_status.csv before reading funnel/PnL; target_entry_usable_reason should explain every failed sparse materialization, and avoidable insufficient-bars cases should disappear or expose a concrete cache/window cause.
 ```
+
+---
+
+## 34. Current local patch note - P081
+
+```text
+Status: PROPOSED / compile verified locally
+Updated: 2026-05-06
+```
+
+Current conclusion:
+
+```text
+P081 is a deliberate trading-logic experiment, not a data-quality patch.
+It removes the `human_bos_below_prior_local_high` rejection by skipping confirmed highs that occurred before the selected BOS level.
+The existing `human_bos_obsolete_under_later_local_high` guard remains, so newer local highs after the selected BOS can still obsolete the level.
+This should increase Stage5 attempts only for prior-high-blocked human_bos setups; edge/PnL still requires positions and robustness checks.
+```
+
+One next test:
+
+```text
+Run the same 7-day --pno-all-tf-pairs diagnostics and compare Stage5 reject distribution: `human_bos_below_prior_local_high` should disappear; track whether those cases become later-obsolete, no_close_above, invalidated-before-trigger, or real positions.
+```
+

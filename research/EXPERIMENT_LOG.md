@@ -982,6 +982,39 @@ run_context.json records requested_entry_tf, source_entry_tf and entry_load_mode
 No edge/PnL conclusion until positions exist.
 ```
 
+---
+
+## E027 - Planned P081 prior-local-high human_bos removal audit
+
+```text
+Status: PLANNED
+Patch: P081 proposed / compile verified locally / commit UNKNOWN
+Date: 2026-05-06
+Run baseline: 20260506_111822_pno 7-day multi-TF run from 2-2.zip
+Positions baseline: 0 / 0 / 0
+```
+
+Goal:
+
+```text
+Measure what happens when `human_bos_below_prior_local_high` is removed without touching close_above, later-local-high obsolete rejection, RR, TP/SL or data-quality gates.
+```
+
+Command:
+
+```bash
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected true --pno-entry-confirmation-mode close_above --days 7 --pno-category-mode discovery --collect-diagnostics true
+```
+
+Checks:
+
+```text
+`human_bos_below_prior_local_high` should disappear from Stage5 reject reasons.
+Count how many formerly blocked setups move to Stage5 valid attempts, later-local-high obsolete rejects, no_close_above, entry_invalidated_before_trigger or real positions.
+If positions appear, do not judge edge yet; first inspect charts, data quality, RR, TP1 timing and whether results depend on a tiny number of cases.
+```
+
+
 
 ---
 
