@@ -3345,3 +3345,205 @@ Next:
 ```text
 Rerun the same 7-day multi-TF command and check that sparse_entry_materialization_status.csv has rows for AVGO/KAVA-like insufficient-bars cases and seconds_load_status.csv contains the underlying cache/window rows.
 ```
+
+---
+
+## P082 - Add anomaly continuation lab research tool
+
+```text
+Status: APPLIED locally / tests passed
+Type: research artifact tooling
+Trading logic changed: no
+Files: research_tools/anomaly_continuation_lab.py, tests/test_anomaly_continuation_lab.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Problem:
+
+```text
+The early anomaly-continuation hypothesis should be studied separately from executable PNO pullback logic.
+Manual IO/ZEC checks showed strong start tape and future continuation in raw candles, but current PNO correctly rejects them as non-pullback setups.
+We need a truthful artifact that captures only metrics known after a fixed confirmation window and labels future outcomes separately.
+```
+
+Change:
+
+```text
+Add a standalone research tool: python -m research_tools.anomaly_continuation_lab.
+It scans 1m cached OHLCV for wake-up anomaly starts where quote_volume and number_of_trades are >= 10x previous rolling baseline.
+It writes anomaly_continuation_lab.csv and anomaly_continuation_summary.csv.
+It includes next-N-candle persistence, trade/quote decay, price retention, midpoint loss, future MFE/MAE labels, and start verticality metrics.
+Verticality is represented by a bounded score plus raw components: path efficiency, range efficiency, slope pct per candle, max retrace fraction, and green-candle share.
+No PNO filters, entries, exits, scoring, TP/SL or stage logic are changed.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m compileall research_tools tests\test_anomaly_continuation_lab.py
+.venv\Scripts\python.exe -m research_tools.anomaly_continuation_lab --cache-dir .output/cache --output-dir .output/manual_checks/anomaly_continuation_lab_io_zec --days 31 --confirmation-candles 4 --symbols IO/USDT:USDT ZEC/USDT:USDT
+```
+
+Risk:
+
+```text
+Low for production because this is research-only tooling.
+Medium research risk: the artifact can still be overfit if rules are chosen after reading future outcome labels. Entry rules must use only columns available at decision_timestamp_ms.
+```
+
+Next:
+
+```text
+Run the lab artifact across all symbols and compare big_25p, fast_fade and other groups by persistence, verticality, price retention, symbol/month concentration and top-runner dependence before defining any long/short strategy rules.
+```
+
+---
+
+## P083 - Add focused runner-date review for anomaly lab
+
+```text
+Status: APPLIED locally / tests passed
+Type: research artifact tooling
+Trading logic changed: no
+Files: research_tools/anomaly_runner_review.py, research_tools/anomaly_continuation_lab.py, tests/test_anomaly_continuation_lab.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Problem:
+
+```text
+Known recent runner dates need a compact review showing where the lab would have had an entry/decision moment.
+The generic lab artifact can contain hundreds of anomaly rows, and ranking candidates by future return must be explicitly marked as post-facto review, not a trading rule.
+```
+
+Change:
+
+```text
+Add research_tools.anomaly_runner_review to filter anomaly_continuation_lab.csv by SYMBOL=YYYY-MM-DD targets using local date offset.
+It writes recent_runner_target_review.csv with anomaly timestamp, decision timestamp, decision price, tape persistence, verticality, price retention and future outcomes.
+Rows are ranked by future return only for retrospective review and are labelled ranked_by_future_for_review.
+Also expose CLI parameters in anomaly_continuation_lab for forward window and anomaly thresholds, enabling strict and relaxed sensitivity runs.
+No PNO execution logic is changed.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m compileall research_tools tests\test_anomaly_continuation_lab.py
+```
+
+Risk:
+
+```text
+Low production risk.
+Medium research risk if the ranked-by-future review is mistaken for an entry rule. It is only a way to locate which anomaly row corresponded to a known runner date.
+```
+
+Next:
+
+```text
+Compare strict 10x/60-candle and relaxed 5x/240-candle runner-date reviews, then design entry rules using only decision-time columns.
+```
+
+---
+
+## P084 - Add anomaly lab profitability command
+
+```text
+Status: APPLIED locally / tests passed
+Type: research backtest tooling
+Trading logic changed: no PNO logic changed
+Files: research_tools/anomaly_strategy_backtest.py, cli/parser.py, cli/commands.py, tests/test_anomaly_continuation_lab.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Problem:
+
+```text
+The anomaly-continuation lab had candidate/outcome artifacts but no runnable profitability artifact with explicit entry, stop, partial take and trailing logic.
+Without a command-level run, it is too easy to inspect future labels without checking whether a realizable long entry has acceptable risk/reward after fees.
+```
+
+Change:
+
+```text
+Add CLI command: python main.py run-anomaly-lab.
+Default entry: long at decision close after fixed confirmation candles when price_retention >= 0.70 and start_verticality_score >= 0.25.
+Initial stop: below the anomaly+confirmation box low with a small range buffer.
+TP1: take 50% at +1R, then move stop to breakeven.
+Trail: after TP1, ratchet stop under the rolling swing-low of the last 5 closed candles minus 0.10R.
+Artifacts: anomaly_candidates.csv, anomaly_signals.csv, anomaly_trades.csv, anomaly_profitability_summary.csv, anomaly_profitability_by_symbol.csv, run_config.csv.
+The command is research-only and does not affect PNO engine/stages.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m compileall research_tools cli tests\test_anomaly_continuation_lab.py
+.venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_strategy_recent_runners --days 31 --confirmation-candles 4 --forward-high-candles 240 --forward-low-candles 60 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols LAB/USDT:USDT TON/USDT:USDT ZEC/USDT:USDT PLAY/USDT:USDT IO/USDT:USDT JTO/USDT:USDT NEAR/USDT:USDT DASH/USDT:USDT
+```
+
+Risk:
+
+```text
+Medium research risk. The first default rule is intentionally simple and not proven to have edge.
+OHLCV intrabar ambiguity is handled conservatively by checking stop before TP1 within a candle.
+The command should be used to compare rule variants and robustness, not as evidence of deployable edge by itself.
+```
+
+Next:
+
+```text
+Run across all cached symbols and analyze profitability by hold_count, verticality, price_retention, initial_risk_pct, symbol, date and top-trade contribution.
+```
+
+---
+
+## P085 - Add 5m open-interest context to anomaly lab artifacts
+
+```text
+Status: APPLIED locally / tests passed
+Type: research artifact/data quality
+Trading logic changed: no PNO logic changed
+Files: research_tools/anomaly_continuation_lab.py, research_tools/anomaly_strategy_backtest.py, tests/test_anomaly_continuation_lab.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Problem:
+
+```text
+Open interest can be material for anomaly continuation research, but in this project it is available only on 5m data.
+The 1m anomaly lab needed OI context without pretending that 1m OI exists or silently filling missing OI with zero.
+```
+
+Change:
+
+```text
+Attach OI as a 5m as-of feature: last 5m open_interest row with timestamp <= decision_timestamp_ms.
+Add oi_timeframe, oi_status, oi_timestamp, oi_age_ms, oi_open_interest and 1/3/6 x 5m OI deltas to candidates, signals and trades.
+Write oi_context_status.csv for lab and profitability command outputs.
+Missing OI remains NaN and is labelled missing_frame, missing_column, empty_oi, no_oi_before_decision, stale_asof or read_error.
+No OI feature is used by the default signal filter yet.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m compileall research_tools cli tests\test_anomaly_continuation_lab.py
+.venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_strategy_recent_runners_oi_check --days 31 --confirmation-candles 4 --forward-high-candles 240 --forward-low-candles 60 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols LAB/USDT:USDT TON/USDT:USDT ZEC/USDT:USDT PLAY/USDT:USDT IO/USDT:USDT JTO/USDT:USDT NEAR/USDT:USDT DASH/USDT:USDT
+```
+
+Risk:
+
+```text
+Low production risk; this is research-only and does not affect PNO execution.
+Current selected cache lacks open_interest columns in 5m data, so OI analysis is unavailable until the 5m cache is fetched/enriched with OI.
+```

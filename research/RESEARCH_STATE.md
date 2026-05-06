@@ -835,3 +835,102 @@ One next test:
 Run the same 7-day --pno-all-tf-pairs diagnostics and compare Stage5 reject distribution: `human_bos_below_prior_local_high` should disappear; track whether those cases become later-obsolete, no_close_above, invalidated-before-trigger, or real positions.
 ```
 
+---
+
+## 35. Current branch direction - anomaly continuation lab
+
+```text
+Status: STARTED
+Updated: 2026-05-06
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Current conclusion:
+
+```text
+This branch separates early wake-up continuation research from current PNO pullback execution.
+The new lab artifact is not a trading strategy and does not relax PNO engine filters.
+It studies anomaly starts using only metrics available after a fixed confirmation-candle window, then attaches future outcome labels for analysis.
+Start-pump verticality is now first-class: bounded verticality score plus path efficiency, range efficiency, slope pct per candle, max retrace fraction and green-candle share.
+```
+
+One next test:
+
+```text
+Generate anomaly_continuation_lab.csv across all cached symbols, then test whether persistence + verticality + price retention separate 25%+ continuations from fast fades without relying on a tiny number of symbols or rare runners.
+```
+
+---
+
+## 36. Current runner-date review note
+
+```text
+Status: ANALYZED
+Updated: 2026-05-06
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Current conclusion:
+
+```text
+For the known recent runner list, strict 10x/60-candle anomaly settings only identify IO 2026-05-06 as a big_25p target-date candidate.
+Relaxed 5x/240-candle settings identify LAB, ZEC, PLAY 2026-05-04, PLAY 2026-05-06 and IO as post-decision +25% continuations.
+This suggests that threshold sensitivity is material. The lab should not jump directly to strategy rules before comparing all-symbol fader contamination under the same relaxed settings.
+```
+
+One next test:
+
+```text
+Run relaxed 5x/240-candle settings across all cached symbols and compare fader rate by hold_count, verticality and price_retention bins.
+```
+
+---
+
+## 37. Current anomaly profitability status
+
+```text
+Status: TOOLING READY / EDGE NOT PROVEN
+Updated: 2026-05-06
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Current conclusion:
+
+```text
+The repository now has a command-level anomaly profitability run: python main.py run-anomaly-lab.
+Default logic: decision-close long entry after confirmation candles, structural box stop, 50% TP1 at 1R, breakeven after TP1, rolling swing-low trail.
+The first smoke run on recent runner symbols is slightly negative after fees, so the current default rule is not a proven edge.
+The artifact is now suitable for honest research because every signal has entry, stop, TP1/trail behavior, MFE/MAE and net return.
+```
+
+One next test:
+
+```text
+Run anomaly profitability across all cached symbols, then segment expectancy by hold_count_next_n_candles, start_verticality_score, price_retention_next_n and initial_risk_pct before changing thresholds.
+```
+
+---
+
+## 38. Current anomaly OI coverage status
+
+```text
+Status: TOOLING READY / CACHE OI MISSING
+Updated: 2026-05-06
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Current conclusion:
+
+```text
+Anomaly lab artifacts now include open-interest context only as 5m as-of data at decision time.
+The implementation does not create synthetic 1m OI and does not fill missing OI with zero.
+The latest runner-symbol OI check wrote oi_context_status.csv with 2224 candidate rows across 8 symbols all marked missing_column, meaning the current selected 5m cache has no open_interest column.
+Therefore no conclusion about OI dynamics is currently supported by the available cache.
+```
+
+One next test:
+
+```text
+Refresh/fetch 5m cache with open_interest for the runner-symbol set, rerun run-anomaly-lab, then segment net_return and big_25p/fast_fade by oi_change_pct_1x5m, oi_change_pct_3x5m and oi_age_ms.
+```
+

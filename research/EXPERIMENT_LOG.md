@@ -1060,3 +1060,212 @@ Next:
 ```text
 Apply/commit P080, rerun the same 7-day command, then inspect sparse_entry_materialization_status.csv before touching filters or entry logic.
 ```
+
+---
+
+## E027 - Manual IO/ZEC candle check around user-marked PNO times
+
+```text
+Status: ANALYZED
+Patch state: no code patch; commit UNKNOWN
+Times: Belgrade UTC+2
+IO: 2026-05-06 08:19 / 08:26 / 08:29 Belgrade
+ZEC: 2026-05-05 22:06 / 22:17 / 22:30 Belgrade
+```
+
+Findings:
+
+```text
+ZEC targets are covered by 1m/5m cache. Current discovery/close_above PNO produces zero positions and rejects the later 21:00-21:03 UTC pump candidate at Stage1 as pump_candidate_pretrend_too_weak with flow_hold_bar_count=0. The marked 20:06/20:17/20:30 UTC candles occur during pump expansion before the later 21:03 UTC high, not after a completed active-high pullback.
+IO 1m/5m and sparse 5s PNO inputs end at 2026-05-06 06:14 UTC, before the marked 06:19/06:26/06:29 UTC candles. Auxiliary 1s cache extends through the window and shows continued impulse from 06:19 toward later highs, but this was not available to the official run input. An in-memory sanity check using aggregated 1s continuation still generated zero PNO positions.
+```
+
+Interpretation:
+
+```text
+Do not count these marked candles as confirmed PNO wins. They are mostly impulse-continuation candles before the future active high; treating the later high as TP1 for those entries would risk lookahead/leakage unless the setup definition explicitly allows pre-active-high continuation entries.
+```
+
+---
+
+## E028 - Targeted IO/ZEC all-TF PNO rerun
+
+```text
+Status: ANALYZED
+Patch state: no code patch; commit UNKNOWN
+Output: .output/manual_checks/pno_manual_20260506_io_zec_cache_only
+TF sets: 5m/30s, 5m/15s, 1m/5s
+Mode: discovery / close_above
+```
+
+Result:
+
+```text
+All six targeted runs produced 0 positions and 0 Stage events.
+IO 5m/30s and 5m/15s: Stage1 reject at 2026-05-06 08:00 UTC, pump_candidate_pretrend_too_weak, pump_pct=0.653344, flow_hold_bar_count=0.
+IO 1m/5s: Stage1 rejects at 07:01, 07:33, 07:34, 07:45 UTC: below_ema20 / jerky.
+ZEC 5m/30s and 5m/15s: Stage1 reject at 2026-05-05 21:00 UTC, pump_candidate_pretrend_too_weak, pump_pct=0.306750, flow_hold_bar_count=0.
+ZEC 1m/5s: Stage1 reject at 2026-05-05 21:03 UTC, pump_candidate_pretrend_too_weak, pump_pct=0.307478, flow_hold_bar_count=0.
+Data quality used real number_of_trades and quote_volume_usdt for levels and entry source frames.
+```
+
+Interpretation:
+
+```text
+The marked candles can lead to higher future highs on raw candles, but current PNO does not recognize them as valid PNO setups on any supported TF set. They remain impulse/continuation observations, not executable PNO entries under the current spec.
+```
+
+---
+
+## E029 - IO/ZEC filter table and anomaly trade-count outcome scan
+
+```text
+Status: ANALYZED
+Patch state: no code patch; commit UNKNOWN
+Output: .output/manual_checks/pno_manual_20260506_io_zec_cache_only
+Files: manual_filter_table.csv, anomaly_trade_count_outcome_scan.csv
+```
+
+Manual filter table:
+
+```text
+IO and ZEC pass start quote-volume ratio, start trade-count ratio, and pump_pct on the rejected 5m Stage1 candidates.
+The blocking filter for 5m/30s and 5m/15s is flow-hold: observed next-candle hold count is 0 vs required 2.
+IO 1m/5s is blocked by below_ema20 and/or jerky path efficiency: path_efficiency 0.1732 vs required 0.18 on the later candidates.
+ZEC 1m/5s is also blocked by flow-hold: observed 0 vs required 10.
+```
+
+Exploratory scan:
+
+```text
+Definition: 1m anomaly start = quote_volume and number_of_trades >= 10x previous-60-candle rolling median. Hold count is next 4 candles, not minutes.
+31-day scan: 92,493 anomaly starts across 537 symbols.
+big_25p group: 94 events, median number_of_trades 2,877, median trade_ratio 14.83, median next4-candle hold count 3.
+fast_fade group: 2,191 events, median number_of_trades 1,839, median trade_ratio 14.16, median next4-candle hold count 1.
+Interpretation: absolute trade-count is somewhat higher in 25%+ moves, but the cleaner separator is persistence of activity across following candles. Start trade-count spike alone is not enough.
+```
+
+---
+
+## E030 - Anomaly continuation lab IO/ZEC smoke artifact
+
+```text
+Status: COMPLETED
+Patch state: P082 applied locally; commit UNKNOWN
+Output: .output/manual_checks/anomaly_continuation_lab_io_zec
+Command: .venv\Scripts\python.exe -m research_tools.anomaly_continuation_lab --cache-dir .output/cache --output-dir .output/manual_checks/anomaly_continuation_lab_io_zec --days 31 --confirmation-candles 4 --symbols IO/USDT:USDT ZEC/USDT:USDT
+```
+
+Result:
+
+```text
+The smoke artifact wrote 324 anomaly rows for IO/ZEC.
+Schema includes decision_timestamp_utc, next-N-candle hold/decay, price retention, future outcome labels, and start verticality metrics.
+Verticality columns: start_verticality_score, start_verticality_path_efficiency, start_verticality_range_efficiency, start_verticality_slope_pct_per_candle, start_verticality_max_retrace_fraction, start_verticality_green_share.
+```
+
+Next:
+
+```text
+Run the same tool across all symbols and analyze whether high verticality plus next-candle tape persistence improves separation between big_25p and fast_fade groups.
+```
+
+---
+
+## E031 - Recent runner-date anomaly lab review
+
+```text
+Status: COMPLETED
+Patch state: P083 applied locally; commit UNKNOWN
+Targets: LAB 2026-05-01, TON 2026-05-04, ZEC 2026-05-05, PLAY 2026-05-04/2026-05-06, IO 2026-05-06, JTO 2026-05-06, NEAR 2026-05-06, DASH 2026-05-04
+Outputs:
+- .output/manual_checks/anomaly_continuation_recent_runners
+- .output/manual_checks/anomaly_continuation_recent_runners_relaxed_4h
+```
+
+Strict result:
+
+```text
+Strict grid: start quote/trade ratio >= 10x, confirmation 4 candles, future high window 60 candles.
+Only IO 2026-05-06 was labelled big_25p among the requested target dates.
+IO anomaly local 08:00, decision local 08:04, decision_close 0.13110, hold_count_next_4=2, verticality=0.8214, future high after decision +43.55%.
+NEAR had no strict candidates on 2026-05-06.
+```
+
+Relaxed sensitivity result:
+
+```text
+Relaxed grid: start quote/trade ratio >= 5x, confirmation 4 candles, future high window 240 candles.
+Best retrospective candidates by target date:
+LAB 2026-05-01: anomaly 21:53, decision 21:57, +49.35%, hold=3, verticality=0.4917.
+ZEC 2026-05-05: anomaly 21:17, decision 21:21, +28.18%, hold=0, verticality=0.6076.
+PLAY 2026-05-04: anomaly 22:01, decision 22:05, +30.38%, hold=0, verticality=0.2697.
+PLAY 2026-05-06: anomaly 15:23, decision 15:27, +46.38%, hold=4, verticality=0.4399.
+IO 2026-05-06: anomaly 08:00, decision 08:04, +64.07%, hold=2, verticality=0.8214.
+TON, JTO, NEAR and DASH had candidates but did not reach +25% in this post-decision 240-candle window under the current artifact labels.
+```
+
+Interpretation:
+
+```text
+The moment of entry in this lab is decision_timestamp_local after the fixed confirmation window, not the anomaly candle itself.
+Strict 10x thresholds may be too narrow for several known runner dates; relaxed 5x catches more runners but will also add more faders, so rules must be tested on all-symbol distributions before using this as an edge.
+```
+
+---
+
+## E032 - Anomaly strategy profitability smoke run on recent runner symbols
+
+```text
+Status: COMPLETED
+Patch state: P084 applied locally; commit UNKNOWN
+Output: .output/manual_checks/anomaly_strategy_recent_runners
+Command: .venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_strategy_recent_runners --days 31 --confirmation-candles 4 --forward-high-candles 240 --forward-low-candles 60 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols LAB/USDT:USDT TON/USDT:USDT ZEC/USDT:USDT PLAY/USDT:USDT IO/USDT:USDT JTO/USDT:USDT NEAR/USDT:USDT DASH/USDT:USDT
+```
+
+Result:
+
+```text
+Closed trades: 409 across 8 symbols.
+Win rate: 50.61%.
+Average net return per trade after fees: -0.0405%.
+Median net return: +0.0174%.
+TP1 hit rate: 49.88%.
+Exit reasons: 195 stop_loss, 204 trailing_stop, 10 time_exit.
+By symbol sum_net_return: IO +0.1737, PLAY +0.1389, DASH +0.0643, JTO -0.0195, ZEC -0.0698, TON -0.0741, NEAR -0.1512, LAB -0.2279.
+```
+
+Interpretation:
+
+```text
+The first default entry/stop/trail rule is not evidence of stable edge. It is roughly breakeven/slightly negative on the selected runner symbols after fees, despite several large MFE cases.
+This is useful: the lab now exposes realizable trade artifacts and shows that catching anomaly continuations requires additional filters or better exit logic, not just verticality + upper-range retention.
+```
+
+---
+
+## E033 - Anomaly strategy OI artifact coverage check
+
+```text
+Status: COMPLETED
+Patch state: P085 applied locally; commit UNKNOWN
+Output: .output/manual_checks/anomaly_strategy_recent_runners_oi_check
+Command: .venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_strategy_recent_runners_oi_check --days 31 --confirmation-candles 4 --forward-high-candles 240 --forward-low-candles 60 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols LAB/USDT:USDT TON/USDT:USDT ZEC/USDT:USDT PLAY/USDT:USDT IO/USDT:USDT JTO/USDT:USDT NEAR/USDT:USDT DASH/USDT:USDT
+```
+
+Result:
+
+```text
+anomaly_candidates.csv: 2224 rows with OI columns.
+anomaly_signals.csv: 416 rows with OI columns.
+anomaly_trades.csv: 416 rows with OI columns.
+oi_context_status.csv: oi_timeframe=5m, oi_status=missing_column, rows=2224, symbols=8.
+All OI values and OI deltas are NaN because the current selected 5m cache lacks open_interest.
+```
+
+Interpretation:
+
+```text
+The artifacts are honest for OI coverage: no synthetic 1m OI, no zero fill, no hidden fallback.
+This run cannot answer whether OI dynamics separate runners from faders until 5m open_interest exists in cache.
+```

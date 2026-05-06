@@ -163,6 +163,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     pno_stage.add_argument("--output-dir", default=None, help="Root directory for stage review results")
 
+    anomaly_lab = subparsers.add_parser(
+        "run-anomaly-lab",
+        help="Run early anomaly-continuation research backtest on cached data",
+    )
+    anomaly_lab.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT:USDT")
+    anomaly_lab.add_argument("--days", type=_positive_int_for("--days"), default=31)
+    anomaly_lab.add_argument("--timeframe", default="1m")
+    anomaly_lab.add_argument("--end-timestamp-ms", type=int, default=None)
+    anomaly_lab.add_argument("--output-dir", default=None)
+    anomaly_lab.add_argument("--baseline-candles", type=_positive_int_for("--baseline-candles"), default=60)
+    anomaly_lab.add_argument("--confirmation-candles", type=_positive_int_for("--confirmation-candles"), default=4)
+    anomaly_lab.add_argument("--forward-high-candles", type=_positive_int_for("--forward-high-candles"), default=240)
+    anomaly_lab.add_argument("--forward-low-candles", type=_positive_int_for("--forward-low-candles"), default=60)
+    anomaly_lab.add_argument("--min-quote-ratio-start", type=float, default=5.0)
+    anomaly_lab.add_argument("--min-trade-ratio-start", type=float, default=5.0)
+    anomaly_lab.add_argument("--min-price-retention", type=float, default=0.70)
+    anomaly_lab.add_argument("--min-verticality-score", type=float, default=0.25)
+    anomaly_lab.add_argument("--min-hold-count", type=int, default=0)
+    anomaly_lab.add_argument("--max-initial-risk-pct", type=float, default=0.16)
+    anomaly_lab.add_argument("--tp1-r", type=float, default=1.0)
+    anomaly_lab.add_argument("--tp1-fraction", type=float, default=0.50)
+    anomaly_lab.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
+    anomaly_lab.add_argument("--trail-buffer-r", type=float, default=0.10)
+    anomaly_lab.add_argument("--max-hold-candles", type=_positive_int_for("--max-hold-candles"), default=240)
+    anomaly_lab.add_argument("--fee-rate", type=float, default=0.0004)
+
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     quality.add_argument("--output", default=None, help=f"Path to quality report (.json or .csv). Default: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
@@ -178,6 +204,7 @@ def resolve_handler(command_name: str) -> Handler:
         "run-backtest": commands.run_backtest,
         "plot-backtest": commands.plot_backtest,
         "pno-stage": commands.run_pno_stage,
+        "run-anomaly-lab": commands.run_anomaly_lab,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
     }

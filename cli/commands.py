@@ -4299,6 +4299,53 @@ def run_pno_stage(config: AppConfig, args: argparse.Namespace) -> int:
     return _run_with_logging("pno-stage", config, lambda: _run_pno_stage_inner(config, args))
 
 
+def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs early anomaly-continuation research backtest artifacts."""
+
+    def _run() -> int:
+        from research_tools.anomaly_strategy_backtest import (
+            AnomalyBacktestConfig,
+            AnomalyLabConfig,
+            run_anomaly_strategy_backtest,
+        )
+
+        output_dir = (
+            Path(str(args.output_dir))
+            if getattr(args, "output_dir", None)
+            else config.backtest.results_dir / "anomaly_lab"
+        )
+        lab_config = AnomalyLabConfig(
+            cache_dir=config.backtest.cache_dir,
+            output_dir=output_dir,
+            timeframe=str(args.timeframe),
+            days=int(args.days),
+            end_timestamp_ms=getattr(args, "end_timestamp_ms", None),
+            baseline_candles=int(args.baseline_candles),
+            confirmation_candles=int(args.confirmation_candles),
+            forward_high_candles=int(args.forward_high_candles),
+            forward_low_candles=int(args.forward_low_candles),
+            min_quote_ratio_start=float(args.min_quote_ratio_start),
+            min_trade_ratio_start=float(args.min_trade_ratio_start),
+        )
+        backtest_config = AnomalyBacktestConfig(
+            lab_config=lab_config,
+            min_price_retention=float(args.min_price_retention),
+            min_verticality_score=float(args.min_verticality_score),
+            min_hold_count=int(args.min_hold_count),
+            max_initial_risk_pct=float(args.max_initial_risk_pct),
+            tp1_r=float(args.tp1_r),
+            tp1_fraction=float(args.tp1_fraction),
+            trail_lookback_candles=int(args.trail_lookback_candles),
+            trail_buffer_r=float(args.trail_buffer_r),
+            max_hold_candles=int(args.max_hold_candles),
+            fee_rate=float(args.fee_rate),
+        )
+        run_anomaly_strategy_backtest(backtest_config, symbols=getattr(args, "symbols", None))
+        return 0
+
+    return _run_with_logging("run-anomaly-lab", config, _run)
+
+
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
     """Проверяет качество и целостность данных."""
     return _run_with_logging("check-quality", config, lambda: _check_quality_inner(config, args))
