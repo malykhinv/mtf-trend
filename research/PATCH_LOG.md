@@ -2527,3 +2527,50 @@ Next:
 ```text
 Run plot-from-results on one fresh PNO results.csv and on a deliberately stripped copy missing pno_min_score; the fresh row should rebuild, the stripped row should fail with results_row_missing_required_pno_fields.
 ```
+
+---
+
+## P065 - Exception payloads for data failures
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: diagnostic truthfulness / failure payload clarity
+Trading logic changed: no
+Files: strategy/pno/engine.py, strategy/pno/pno_strategy.py, research/*
+Commit: UNKNOWN
+Follow-up to: P061/P063/P062/P064 fallback cleanup chain
+```
+
+Problem:
+
+```text
+Several existing failed-status paths preserved only a broad reason such as stage1_cache_read_failed, archive_fetch_error, archive_read_failed, live_fetch_error or persisted_aggregated_window_read_failed.
+That made artifacts less truthful because different root causes collapsed into the same generic label.
+```
+
+Change:
+
+```text
+Keep the same failure branches and reasons, but attach exception_type and a bounded exception_message where an exception is already caught.
+Covered paths: Stage1 cache read/write, persisted sparse aggregated cache read, Binance archive fetch/read and live aggTrades fetch.
+No new verification layer, no fallback, no trading-logic change.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner
+rg -n "exception_type|exception_message" strategy/pno/engine.py strategy/pno/pno_strategy.py
+```
+
+Risk:
+
+```text
+Low. CSV/status artifacts get two new optional diagnostic columns in affected status rows. Existing ok/fail decisions and rejection reasons are unchanged.
+```
+
+Next:
+
+```text
+Run a small PNO sparse diagnostic with one intentionally unreadable/corrupt Stage1 or sparse aggregated cache file and confirm status artifacts include exception_type/exception_message instead of only *_read_failed.
+```

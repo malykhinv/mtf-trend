@@ -70,6 +70,8 @@ class _PnoSecondsDayLoadResult:
     fetched_rows: int = 0
     http_status: int | None = None
     missing_columns: tuple[str, ...] = ()
+    exception_type: str = ""
+    exception_message: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,6 +94,8 @@ class _PnoPersistedAggregatedWindowLoadResult:
     path: Path
     rows: int = 0
     missing_columns: tuple[str, ...] = ()
+    exception_type: str = ""
+    exception_message: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +126,17 @@ class _PnoSecondsFrameProvider:
         "taker_buy_quote_volume",
         "number_of_trades",
     )
+    _EXCEPTION_MESSAGE_MAX_LENGTH: ClassVar[int] = 500
+
+    @classmethod
+    def _exception_payload(cls, exc: BaseException) -> dict[str, str]:
+        message = str(exc)
+        if len(message) > cls._EXCEPTION_MESSAGE_MAX_LENGTH:
+            message = message[: cls._EXCEPTION_MESSAGE_MAX_LENGTH] + "..."
+        return {
+            "exception_type": type(exc).__name__,
+            "exception_message": message,
+        }
 
     def __post_init__(self) -> None:
         self._runtime_cache_dir = Path(self.cache_dir)
@@ -239,6 +254,8 @@ class _PnoSecondsFrameProvider:
         http_status: int | None = None,
         fetched_rows: int = 0,
         missing_columns: tuple[str, ...] = (),
+        exception_type: str = "",
+        exception_message: str = "",
     ) -> _PnoSecondsDayLoadResult:
         return _PnoSecondsDayLoadResult(
             frame=_PnoSecondsFrameProvider._empty_seconds_frame(),
@@ -250,6 +267,8 @@ class _PnoSecondsFrameProvider:
             fetched_rows=int(fetched_rows),
             http_status=http_status,
             missing_columns=tuple(missing_columns),
+            exception_type=exception_type,
+            exception_message=exception_message,
         )
 
     @staticmethod
@@ -272,6 +291,8 @@ class _PnoSecondsFrameProvider:
             "fetched_rows": int(result.fetched_rows),
             "prepared_rows": int(result.rows),
             "missing_columns": ",".join(result.missing_columns),
+            "exception_type": result.exception_type,
+            "exception_message": result.exception_message,
         }
 
     @staticmethod
@@ -296,6 +317,8 @@ class _PnoSecondsFrameProvider:
             "path": str(result.path),
             "prepared_rows": int(result.rows),
             "missing_columns": ",".join(result.missing_columns),
+            "exception_type": result.exception_type,
+            "exception_message": result.exception_message,
         }
 
 
@@ -930,13 +953,14 @@ class _PnoSecondsFrameProvider:
             )
         try:
             frame = pd.read_parquet(path)
-        except Exception:
+        except Exception as exc:
             return _PnoPersistedAggregatedWindowLoadResult(
                 frame=None,
                 ok=False,
                 status="failed",
                 reason="persisted_aggregated_window_read_failed",
                 path=path,
+                **self._exception_payload(exc),
             )
         if frame.empty:
             return _PnoPersistedAggregatedWindowLoadResult(
@@ -1060,11 +1084,12 @@ class _PnoSecondsFrameProvider:
         )
         try:
             response = requests.get(url, timeout=60)
-        except requests.RequestException:
+        except requests.RequestException as exc:
             return self._empty_seconds_day_result(
                 status="failed",
                 reason="archive_fetch_error",
                 source="archive",
+                **self._exception_payload(exc),
             )
         if response.status_code == 404:
             return self._empty_seconds_day_result(
@@ -1086,12 +1111,13 @@ class _PnoSecondsFrameProvider:
                     )
                 raw = archive.read(names[0])
             trades = pd.read_csv(io.BytesIO(raw))
-        except (requests.RequestException, zipfile.BadZipFile, pd.errors.ParserError, OSError):
+        except (requests.RequestException, zipfile.BadZipFile, pd.errors.ParserError, OSError) as exc:
             return self._empty_seconds_day_result(
                 status="failed",
                 reason="archive_read_failed",
                 source="archive",
                 http_status=response.status_code,
+                **self._exception_payload(exc),
             )
         if trades.empty:
             return self._empty_seconds_day_result(
@@ -1166,7 +1192,7 @@ class _PnoSecondsFrameProvider:
         next_from_id: int | None = None
         previous_last_id: int | None = None
         pagination_stalled = False
-        fetch_failed = False
+        fetch_exception: BaseException | None = None
         while True:
             params: dict[str, object] = {
                 "symbol": market_id,
@@ -1180,8 +1206,8 @@ class _PnoSecondsFrameProvider:
 
             try:
                 rows = self._client.fetch_binance_agg_trades(symbol=symbol, params=params)
-            except Exception:
-                fetch_failed = True
+            except Exception as exc:
+                fetch_exception = exc
                 break
             if not rows:
                 break
@@ -1207,8 +1233,9 @@ class _PnoSecondsFrameProvider:
         if not all_rows:
             return self._empty_seconds_day_result(
                 status="failed",
-                reason="live_fetch_error" if fetch_failed else "live_no_rows",
+                reason="live_fetch_error" if fetch_exception is not None else "live_no_rows",
                 source="live",
+                **(self._exception_payload(fetch_exception) if fetch_exception is not None else {}),
             )
 
         trades = pd.DataFrame(all_rows)

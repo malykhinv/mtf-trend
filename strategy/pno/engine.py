@@ -404,6 +404,17 @@ class PnoEngine:
     REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close", "volume")
     _EPSILON = 1e-12
     _STAGE1_CACHE_VERSION = 31
+    _EXCEPTION_MESSAGE_MAX_LENGTH = 500
+
+    @classmethod
+    def _exception_payload(cls, exc: BaseException) -> dict[str, str]:
+        message = str(exc)
+        if len(message) > cls._EXCEPTION_MESSAGE_MAX_LENGTH:
+            message = message[: cls._EXCEPTION_MESSAGE_MAX_LENGTH] + "..."
+        return {
+            "exception_type": type(exc).__name__,
+            "exception_message": message,
+        }
 
     def __init__(self, *, cache_dir: str | Path | None = None) -> None:
         self._last_generation_diagnostics = self._empty_diagnostics()
@@ -725,11 +736,12 @@ class PnoEngine:
                     stage1_confirm_idx=payload["stage1_confirm_idx"].astype(np.int64, copy=False),
                     stage1_hold_price=payload["stage1_hold_price"].astype(np.float64, copy=False),
                 )
-        except Exception:
+        except Exception as exc:
             return cache_key, None, {
                 **status_payload,
                 "status": "failed",
                 "reason": "stage1_cache_read_failed",
+                **self._exception_payload(exc),
             }
 
         self._stage1_state_memory_cache[cache_key] = state
@@ -775,10 +787,10 @@ class PnoEngine:
                 "status": "stored",
                 "reason": "stage1_cache_stored",
             }
-        except Exception:
+        except Exception as exc:
             if tmp_path.exists():
                 tmp_path.unlink(missing_ok=True)
-            return status_payload
+            return {**status_payload, **self._exception_payload(exc)}
 
     def _fast_stage1_candidate_count(
         self,

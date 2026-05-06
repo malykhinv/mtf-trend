@@ -443,3 +443,26 @@ One next test:
 ```text
 python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner
 ```
+
+---
+
+## 19. Current local patch note - P065
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Updated: 2026-05-06
+```
+
+Current conclusion:
+
+```text
+Existing PNO data-failure branches no longer collapse caught exceptions into only generic status labels.
+Stage1 cache read/write, persisted sparse aggregated cache read, Binance archive fetch/read and live aggTrades fetch now add exception_type and bounded exception_message to their existing failure payloads.
+Trading decisions, rejection reasons and fallback behavior are unchanged.
+```
+
+One next test:
+
+```text
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner
+```
