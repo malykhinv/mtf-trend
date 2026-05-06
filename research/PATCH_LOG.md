@@ -3048,6 +3048,55 @@ Triage pno_historical failures by class: stale parameter/schema expectations, st
 
 ---
 
+## P077 - Avoid empty seconds concat FutureWarning
+
+```text
+Status: PROPOSED
+Type: runtime hygiene / data-load path
+Trading logic changed: no
+Files: strategy/pno/pno_strategy.py, research/*
+Commit: UNKNOWN
+Follow-up to: runtime FutureWarning at pno_strategy.py:799 during sparse seconds fetch
+```
+
+Problem:
+
+```text
+Sparse seconds loading can start from an empty schema-only seconds_frame, then append real fetched seconds candles.
+pd.concat([empty_schema_frame, fetched]) triggers pandas FutureWarning about concat with empty/all-NA entries.
+The warning is noisy and future pandas versions may infer dtypes differently.
+```
+
+Change:
+
+```text
+When the existing seconds_frame is empty, assign fetched.copy() directly.
+Only call pd.concat when both existing seconds_frame and fetched contain rows.
+No fallback, suppress-warning filter or post-processing is added.
+```
+
+Verification:
+
+```bash
+python -m compileall strategy/pno cli constants.py main.py launcher.py vectorbt_runner
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected true --pno-entry-confirmation-mode close_above --days 7 --pno-category-mode discovery --collect-diagnostics true
+```
+
+Risk:
+
+```text
+Low. The previous concat with an empty frame and fetched rows is equivalent to using fetched rows directly for the requested window.
+This should change only warning noise, not candidate selection or position generation.
+```
+
+Next:
+
+```text
+Inspect data-load/status artifacts first; do not treat warning removal as evidence of edge or artifact completeness.
+```
+
+---
+
 ## P076 - Strict PNO generation and human_bos parity
 
 ```text

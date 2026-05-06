@@ -795,12 +795,15 @@ class _PnoSecondsFrameProvider:
                 .sort_values("timestamp")
                 .reset_index(drop=True)
             )
-            seconds_frame = (
-                pd.concat([seconds_frame, fetched], ignore_index=True)
-                .drop_duplicates(subset=["timestamp"], keep="last")
-                .sort_values("timestamp")
-                .reset_index(drop=True)
-            )
+            if seconds_frame.empty:
+                seconds_frame = fetched.copy()
+            else:
+                seconds_frame = (
+                    pd.concat([seconds_frame, fetched], ignore_index=True)
+                    .drop_duplicates(subset=["timestamp"], keep="last")
+                    .sort_values("timestamp")
+                    .reset_index(drop=True)
+                )
         if newly_fetched_day_parts:
             newly_fetched = (
                 pd.concat(newly_fetched_day_parts, ignore_index=True)

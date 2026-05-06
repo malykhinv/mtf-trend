@@ -709,6 +709,30 @@ One next test:
 Triage the pno_historical failures into stale test expectations versus real PNO strategy regressions.
 ```
 
+---
+
+## 31. Current local patch note - P077
+
+```text
+Status: PROPOSED
+Updated: 2026-05-06
+```
+
+Current conclusion:
+
+```text
+The pandas FutureWarning during sparse seconds loading was caused by concatenating an empty schema-only seconds frame with newly fetched seconds candles.
+This is not a trading/data rejection and not a PNO signal issue, but it pollutes runtime logs and may become unstable when pandas changes concat dtype inference.
+P077 replaces the empty frame with fetched candles directly and only uses concat when both sides contain rows.
+Trading logic, data filters, rejection reasons and artifact schemas are unchanged.
+```
+
+One next test:
+
+```text
+Run the same 7-day pno-all-tf-pairs diagnostics command and verify the FutureWarning from pno_strategy.py:799 is gone before reading funnel/PnL.
+```
+
 
 ---
 
