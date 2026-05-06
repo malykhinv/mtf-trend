@@ -1200,268 +1200,222 @@ def _build_futures_symbol_map(symbols: list[str]) -> dict[str, str]:
     }
 
 
+_PNO_RESULT_ROW_STR_FIELDS: tuple[tuple[str, str], ...] = (
+    ("pno_variant_id", "pno_variant_id"),
+    ("entry_confirmation_mode", "pno_entry_confirmation_mode"),
+)
+
+_PNO_RESULT_ROW_BOOL_FIELDS: tuple[tuple[str, str], ...] = (
+    ("ideal_like_impulse_enabled", "pno_ideal_like_impulse_enabled"),
+    ("ideal_like_ignore_decay_invalidation", "pno_ideal_like_ignore_decay_invalidation"),
+)
+
+_PNO_RESULT_ROW_INT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("min_data_5m", "pno_min_data_5m"),
+    ("min_data_1m", "pno_min_data_1m"),
+    ("pullback_max_age_bars", "pno_pullback_max_age_bars"),
+    ("structure_min_leg_bars", "pno_structure_min_leg_bars"),
+    ("stage1_pre_pump_ema_crosses_min", "pno_stage1_pre_pump_ema_crosses_min"),
+    ("stage1_flow_hold_bars", "pno_stage1_flow_hold_bars"),
+    ("stage1_flow_hold_window_bars", "pno_stage1_flow_hold_window_bars"),
+    ("stage3_fast_reclaim_max_pullback_age_bars", "pno_stage3_fast_reclaim_max_pullback_age_bars"),
+    ("ideal_like_level_latest_high_max_age_bars", "pno_ideal_like_level_latest_high_max_age_bars"),
+    ("level_latest_high_max_age_bars", "pno_level_latest_high_max_age_bars"),
+    ("level_max_age_bars_upper_tf", "pno_level_max_age_bars_upper_tf"),
+    ("max_level_touches", "pno_max_level_touches"),
+    ("close_above_be_step_bars", "pno_close_above_be_step_bars"),
+)
+
+_PNO_RESULT_ROW_FLOAT_FIELDS: tuple[tuple[str, str], ...] = (
+    ("pno_deposit", "pno_deposit"),
+    ("pno_risk_pct", "pno_risk_pct"),
+    ("pno_r_position", "pno_r_position"),
+    ("fee_rate", "pno_fee_rate"),
+    ("min_stage1_leg_v1", "pno_min_stage1_leg_v1"),
+    ("min_stage1_leg_v5_fraction", "pno_min_stage1_leg_v5_fraction"),
+    ("stage1_hold_fraction", "pno_stage1_hold_fraction"),
+    ("pullback_min_v1", "pno_pullback_min_v1"),
+    ("pullback_min_pump_fraction_5m", "pno_pullback_min_pump_fraction_5m"),
+    ("pullback_valid_min_leg_fraction", "pno_pullback_valid_min_leg_fraction"),
+    ("pullback_valid_max_leg_fraction", "pno_pullback_valid_max_leg_fraction"),
+    ("pullback_invalid_max_leg_fraction", "pno_pullback_invalid_max_leg_fraction"),
+    ("pullback_valid_max_v5", "pno_pullback_valid_max_v5"),
+    ("pullback_invalid_max_v5", "pno_pullback_invalid_max_v5"),
+    ("structure_terminal_retrace_fraction", "pno_structure_terminal_retrace_fraction"),
+    ("stage1_min_cumulative_quote_volume", "pno_stage1_min_cumulative_quote_volume"),
+    ("stage1_barcode_max_fraction_1h", "pno_stage1_barcode_max_fraction_1h"),
+    ("stage1_barcode_tr_atr_fraction", "pno_stage1_barcode_tr_atr_fraction"),
+    ("stage1_barcode_tr_price_fraction", "pno_stage1_barcode_tr_price_fraction"),
+    ("stage1_min_impulse_atr_pre", "pno_stage1_min_impulse_atr_pre"),
+    ("stage1_min_peak_bar_tr_atr_pre", "pno_stage1_min_peak_bar_tr_atr_pre"),
+    ("stage1_min_volume_ratio_start", "pno_stage1_min_volume_ratio_start"),
+    ("stage1_min_trade_ratio_start", "pno_stage1_min_trade_ratio_start"),
+    ("stage1_min_volume_ratio_continue", "pno_stage1_min_volume_ratio_continue"),
+    ("stage1_min_trade_ratio_continue", "pno_stage1_min_trade_ratio_continue"),
+    ("stage1_flow_hold_min_start_fraction", "pno_stage1_flow_hold_min_start_fraction"),
+    ("stage1_active_context_min_start_fraction", "pno_stage1_active_context_min_start_fraction"),
+    ("stage1_active_context_min_baseline_ratio", "pno_stage1_active_context_min_baseline_ratio"),
+    ("stage1_min_path_efficiency", "pno_stage1_min_path_efficiency"),
+    ("stage1_max_wick_share", "pno_stage1_max_wick_share"),
+    ("stage1_min_body_share_mean", "pno_stage1_min_body_share_mean"),
+    ("stage1_max_flat_body_share", "pno_stage1_max_flat_body_share"),
+    ("stage1_min_body_wick_edge", "pno_stage1_min_body_wick_edge"),
+    ("stage1_max_micro_flat_bar_share", "pno_stage1_max_micro_flat_bar_share"),
+    ("stage1_max_active_high_upper_wick_share", "pno_stage1_max_active_high_upper_wick_share"),
+    ("stage1_max_red_body_share_5m", "pno_stage1_max_red_body_share_5m"),
+    ("stage1_max_counterflow_ratio_5m", "pno_stage1_max_counterflow_ratio_5m"),
+    ("stage1_max_red_body_share_1m", "pno_stage1_max_red_body_share_1m"),
+    ("stage1_max_counterflow_ratio_1m", "pno_stage1_max_counterflow_ratio_1m"),
+    ("stage1_min_pump_pct", "pno_stage1_min_pump_pct"),
+    ("stage1_min_pretrend_range_ratio_2h", "pno_stage1_min_pretrend_range_ratio_2h"),
+    ("stage1_pre_pump_high_max_fraction_of_leg", "pno_stage1_pre_pump_high_max_fraction_of_leg"),
+    ("stage3_max_post_high_wick_share", "pno_stage3_max_post_high_wick_share"),
+    ("stage3_max_post_high_body_overlap_rate", "pno_stage3_max_post_high_body_overlap_rate"),
+    ("stage3_min_post_high_5m_volume_support_fraction", "pno_stage3_min_post_high_5m_volume_support_fraction"),
+    ("stage3_fast_reclaim_min_post_high_5m_volume_support_fraction", "pno_stage3_fast_reclaim_min_post_high_5m_volume_support_fraction"),
+    ("ideal_like_min_impulse_atr_pre", "pno_ideal_like_min_impulse_atr_pre"),
+    ("ideal_like_min_peak_bar_tr_atr_pre", "pno_ideal_like_min_peak_bar_tr_atr_pre"),
+    ("ideal_like_min_volume_ratio_start", "pno_ideal_like_min_volume_ratio_start"),
+    ("ideal_like_min_path_efficiency", "pno_ideal_like_min_path_efficiency"),
+    ("ideal_like_max_wick_share", "pno_ideal_like_max_wick_share"),
+    ("ideal_like_min_body_share_mean", "pno_ideal_like_min_body_share_mean"),
+    ("ideal_like_min_body_wick_edge", "pno_ideal_like_min_body_wick_edge"),
+    ("ideal_like_max_micro_flat_bar_share", "pno_ideal_like_max_micro_flat_bar_share"),
+    ("ideal_like_max_active_high_upper_wick_share", "pno_ideal_like_max_active_high_upper_wick_share"),
+    ("ideal_like_max_counterflow_ratio_5m", "pno_ideal_like_max_counterflow_ratio_5m"),
+    ("ideal_like_relaxed_level_maturity_fraction", "pno_ideal_like_relaxed_level_maturity_fraction"),
+    ("level_cluster_spread_v1", "pno_level_cluster_spread_v1"),
+    ("level_cluster_relaxed_spread_v1", "pno_level_cluster_relaxed_spread_v1"),
+    ("level_touch_tolerance_v1", "pno_level_touch_tolerance_v1"),
+    ("level_low_minor_break_v1", "pno_level_low_minor_break_v1"),
+    ("level_low_major_break_v1", "pno_level_low_major_break_v1"),
+    ("level_min_maturity_fraction", "pno_level_min_maturity_fraction"),
+    ("level_rearm_min_distance_v1", "pno_level_rearm_min_distance_v1"),
+    ("min_score", "pno_min_score"),
+    ("strong_score", "pno_strong_score"),
+    ("slip_plan_v1_fraction", "pno_slip_plan_v1_fraction"),
+    ("min_tick_fraction", "pno_min_tick_fraction"),
+    ("max_entry_pullback_fraction", "pno_max_entry_pullback_fraction"),
+    ("min_entry_rr", "pno_min_entry_rr"),
+    ("close_above_max_entry_pos", "pno_close_above_max_entry_pos"),
+    ("close_above_min_entry_pos", "pno_close_above_min_entry_pos"),
+    ("close_above_max_pullback_fraction_of_leg", "pno_close_above_max_pullback_fraction_of_leg"),
+    ("close_above_max_post_high_wick_share", "pno_close_above_max_post_high_wick_share"),
+    ("close_above_max_active_high_upper_wick_share", "pno_close_above_max_active_high_upper_wick_share"),
+    ("close_above_min_active_high_close_position", "pno_close_above_min_active_high_close_position"),
+    ("close_above_min_post_high_alternation_rate", "pno_close_above_min_post_high_alternation_rate"),
+    ("close_above_min_signal_volume_vs_recent", "pno_close_above_min_signal_volume_vs_recent"),
+    ("close_above_min_signal_ema9_slope_3", "pno_close_above_min_signal_ema9_slope_3"),
+    ("close_above_min_signal_ema20_slope_3", "pno_close_above_min_signal_ema20_slope_3"),
+    ("close_above_min_signal_ema_spread_pct", "pno_close_above_min_signal_ema_spread_pct"),
+    ("close_above_min_signal_close_position_in_chop", "pno_close_above_min_signal_close_position_in_chop"),
+    ("close_above_choppy_overlap_threshold", "pno_close_above_choppy_overlap_threshold"),
+    ("tp1_share", "pno_tp1_share"),
+    ("be_arm_to_active_high_fraction", "pno_be_arm_to_active_high_fraction"),
+    ("close_above_be_start_fraction", "pno_close_above_be_start_fraction"),
+    ("close_above_be_step_fraction", "pno_close_above_be_step_fraction"),
+    ("close_above_be_min_fraction", "pno_close_above_be_min_fraction"),
+    ("be_buffer_r_fraction", "pno_be_buffer_r_fraction"),
+)
+
+_PNO_REQUIRED_RESULTS_ROW_COLUMNS: tuple[str, ...] = tuple(
+    dict.fromkeys(
+        (
+            "pno_levels_timeframe",
+            "pno_entry_timeframe",
+            *(column for _field_name, column in _PNO_RESULT_ROW_STR_FIELDS),
+            *(column for _field_name, column in _PNO_RESULT_ROW_BOOL_FIELDS),
+            *(column for _field_name, column in _PNO_RESULT_ROW_INT_FIELDS),
+            *(column for _field_name, column in _PNO_RESULT_ROW_FLOAT_FIELDS),
+        )
+    )
+)
+
+
+def _is_missing_pno_results_scalar(value: object) -> bool:
+    if value is None or value is pd.NA:
+        return True
+    if isinstance(value, (pd.Series, pd.DataFrame)):
+        return False
+    return bool(pd.isna(value))
+
+
+def _find_missing_pno_results_row_columns(row: pd.Series) -> list[str]:
+    return [
+        column
+        for column in _PNO_REQUIRED_RESULTS_ROW_COLUMNS
+        if column not in row.index or _is_missing_pno_results_scalar(row.get(column))
+    ]
+
+
 def _build_pno_params_template_from_row(
     row: pd.Series,
     *,
     levels_timeframe: Timeframe,
     entry_timeframe: Timeframe,
 ) -> PnoParams:
-    def _is_missing_scalar(value: object) -> bool:
-        if value is None or value is pd.NA:
+    missing_columns = _find_missing_pno_results_row_columns(row)
+    if missing_columns:
+        raise ValueError(
+            "results_row_missing_required_pno_fields: "
+            + ",".join(missing_columns)
+        )
+
+    def _required_str(column_name: str) -> str:
+        return str(row[column_name])
+
+    def _required_float(column_name: str) -> float:
+        try:
+            return float(row[column_name])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"results_row_invalid_pno_field: {column_name}") from exc
+
+    def _required_int(column_name: str) -> int:
+        raw_value = row[column_name]
+        try:
+            numeric_value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"results_row_invalid_pno_field: {column_name}") from exc
+        if not numeric_value.is_integer():
+            raise ValueError(f"results_row_invalid_pno_field: {column_name}")
+        return int(numeric_value)
+
+    def _required_bool(column_name: str) -> bool:
+        raw_value = row[column_name]
+        if isinstance(raw_value, bool):
+            return raw_value
+        normalized = str(raw_value).strip().lower()
+        if normalized in {"true", "1"}:
             return True
-        if isinstance(value, (pd.Series, pd.DataFrame)):
+        if normalized in {"false", "0"}:
             return False
-        if isinstance(value, float):
-            return bool(pd.isna(value))
-        return False
+        raise ValueError(f"results_row_invalid_pno_field: {column_name}")
 
-    def _optional_float(column_name: str) -> float | None:
-        raw_value = row.get(column_name)
-        return None if _is_missing_scalar(raw_value) else float(raw_value)
+    row_levels_timeframe = _required_str("pno_levels_timeframe")
+    row_entry_timeframe = _required_str("pno_entry_timeframe")
+    if row_levels_timeframe != levels_timeframe.value or row_entry_timeframe != entry_timeframe.value:
+        raise ValueError(
+            "results_row_timeframe_mismatch: "
+            f"row={row_levels_timeframe}/{row_entry_timeframe}, "
+            f"requested={levels_timeframe.value}/{entry_timeframe.value}"
+        )
 
-    def _optional_int(column_name: str) -> int | None:
-        raw_value = row.get(column_name)
-        return None if _is_missing_scalar(raw_value) else int(raw_value)
-
-    def _float_or_default(column_name: str, default: float) -> float:
-        resolved = _optional_float(column_name)
-        return default if resolved is None else resolved
-
-    def _int_or_default(column_name: str, default: int) -> int:
-        resolved = _optional_int(column_name)
-        return default if resolved is None else resolved
-
-    def _str_or_default(column_name: str, default: str) -> str:
-        raw_value = row.get(column_name)
-        return default if _is_missing_scalar(raw_value) else str(raw_value)
-
-    defaults = PnoParams(
-        symbol="",
-        levels_timeframe=levels_timeframe,
-        entry_timeframe=entry_timeframe,
-    )
-    deposit = _optional_float("pno_deposit") or defaults.pno_deposit
-    risk_pct = _optional_float("pno_risk_pct")
-    r_position = _optional_float("pno_r_position")
-    if risk_pct is None:
-        risk_pct = (r_position / deposit) if r_position is not None else defaults.pno_risk_pct
-    resolved_position_risk = r_position if r_position is not None else deposit * risk_pct
+    params_payload: dict[str, object] = {}
+    for field_name, column_name in _PNO_RESULT_ROW_STR_FIELDS:
+        params_payload[field_name] = _required_str(column_name)
+    for field_name, column_name in _PNO_RESULT_ROW_BOOL_FIELDS:
+        params_payload[field_name] = _required_bool(column_name)
+    for field_name, column_name in _PNO_RESULT_ROW_INT_FIELDS:
+        params_payload[field_name] = _required_int(column_name)
+    for field_name, column_name in _PNO_RESULT_ROW_FLOAT_FIELDS:
+        params_payload[field_name] = _required_float(column_name)
 
     return PnoParams(
         symbol="",
-        pno_variant_id=str(row.get("pno_variant_id", defaults.pno_variant_id)),
-        entry_confirmation_mode=_str_or_default(
-            "pno_entry_confirmation_mode",
-            defaults.entry_confirmation_mode,
-        ),
         levels_timeframe=levels_timeframe,
         entry_timeframe=entry_timeframe,
-        pno_deposit=deposit,
-        pno_risk_pct=risk_pct,
-        pno_r_position=resolved_position_risk,
-        fee_rate=_float_or_default("pno_fee_rate", defaults.fee_rate),
-        min_data_5m=_int_or_default("pno_min_data_5m", defaults.min_data_5m),
-        min_data_1m=_int_or_default("pno_min_data_1m", defaults.min_data_1m),
-        min_stage1_leg_v1=_float_or_default("pno_min_stage1_leg_v1", defaults.min_stage1_leg_v1),
-        min_stage1_leg_v5_fraction=_float_or_default("pno_min_stage1_leg_v5_fraction", defaults.min_stage1_leg_v5_fraction),
-        stage1_hold_fraction=_float_or_default("pno_stage1_hold_fraction", defaults.stage1_hold_fraction),
-        pullback_min_v1=_float_or_default("pno_pullback_min_v1", defaults.pullback_min_v1),
-        pullback_min_pump_fraction_5m=_float_or_default(
-            "pno_pullback_min_pump_fraction_5m",
-            defaults.pullback_min_pump_fraction_5m,
-        ),
-        pullback_valid_min_leg_fraction=_float_or_default("pno_pullback_valid_min_leg_fraction", defaults.pullback_valid_min_leg_fraction),
-        pullback_valid_max_leg_fraction=_float_or_default("pno_pullback_valid_max_leg_fraction", defaults.pullback_valid_max_leg_fraction),
-        pullback_invalid_max_leg_fraction=_float_or_default("pno_pullback_invalid_max_leg_fraction", defaults.pullback_invalid_max_leg_fraction),
-        pullback_valid_max_v5=_float_or_default("pno_pullback_valid_max_v5", defaults.pullback_valid_max_v5),
-        pullback_invalid_max_v5=_float_or_default("pno_pullback_invalid_max_v5", defaults.pullback_invalid_max_v5),
-        pullback_max_age_bars=_int_or_default("pno_pullback_max_age_bars", defaults.pullback_max_age_bars),
-        structure_min_leg_bars=_int_or_default("pno_structure_min_leg_bars", defaults.structure_min_leg_bars),
-        structure_terminal_retrace_fraction=_float_or_default(
-            "pno_structure_terminal_retrace_fraction",
-            defaults.structure_terminal_retrace_fraction,
-        ),
-        stage1_min_cumulative_quote_volume=_float_or_default(
-            "pno_stage1_min_cumulative_quote_volume",
-            defaults.stage1_min_cumulative_quote_volume,
-        ),
-        stage1_pre_pump_ema_crosses_min=_int_or_default(
-            "pno_stage1_pre_pump_ema_crosses_min",
-            defaults.stage1_pre_pump_ema_crosses_min,
-        ),
-        stage1_barcode_max_fraction_1h=_float_or_default(
-            "pno_stage1_barcode_max_fraction_1h",
-            defaults.stage1_barcode_max_fraction_1h,
-        ),
-        stage1_barcode_tr_atr_fraction=_float_or_default(
-            "pno_stage1_barcode_tr_atr_fraction",
-            defaults.stage1_barcode_tr_atr_fraction,
-        ),
-        stage1_barcode_tr_price_fraction=_float_or_default(
-            "pno_stage1_barcode_tr_price_fraction",
-            defaults.stage1_barcode_tr_price_fraction,
-        ),
-        stage1_min_impulse_atr_pre=_float_or_default("pno_stage1_min_impulse_atr_pre", defaults.stage1_min_impulse_atr_pre),
-        stage1_min_peak_bar_tr_atr_pre=_float_or_default(
-            "pno_stage1_min_peak_bar_tr_atr_pre",
-            defaults.stage1_min_peak_bar_tr_atr_pre,
-        ),
-        stage1_min_volume_ratio_start=_float_or_default("pno_stage1_min_volume_ratio_start", defaults.stage1_min_volume_ratio_start),
-        stage1_min_trade_ratio_start=_float_or_default("pno_stage1_min_trade_ratio_start", defaults.stage1_min_trade_ratio_start),
-        stage1_min_volume_ratio_continue=_float_or_default(
-            "pno_stage1_min_volume_ratio_continue",
-            defaults.stage1_min_volume_ratio_continue,
-        ),
-        stage1_min_trade_ratio_continue=_float_or_default(
-            "pno_stage1_min_trade_ratio_continue",
-            defaults.stage1_min_trade_ratio_continue,
-        ),
-        stage1_flow_hold_bars=_int_or_default("pno_stage1_flow_hold_bars", defaults.stage1_flow_hold_bars),
-        stage1_flow_hold_window_bars=_int_or_default(
-            "pno_stage1_flow_hold_window_bars",
-            defaults.stage1_flow_hold_window_bars,
-        ),
-        stage1_flow_hold_min_start_fraction=_float_or_default(
-            "pno_stage1_flow_hold_min_start_fraction",
-            defaults.stage1_flow_hold_min_start_fraction,
-        ),
-        stage1_active_context_min_start_fraction=_float_or_default(
-            "pno_stage1_active_context_min_start_fraction",
-            defaults.stage1_active_context_min_start_fraction,
-        ),
-        stage1_active_context_min_baseline_ratio=_float_or_default(
-            "pno_stage1_active_context_min_baseline_ratio",
-            defaults.stage1_active_context_min_baseline_ratio,
-        ),
-        stage1_min_path_efficiency=_float_or_default("pno_stage1_min_path_efficiency", defaults.stage1_min_path_efficiency),
-        stage1_max_wick_share=_float_or_default("pno_stage1_max_wick_share", defaults.stage1_max_wick_share),
-        stage1_min_body_share_mean=_float_or_default("pno_stage1_min_body_share_mean", defaults.stage1_min_body_share_mean),
-        stage1_max_flat_body_share=_float_or_default("pno_stage1_max_flat_body_share", defaults.stage1_max_flat_body_share),
-        stage1_min_body_wick_edge=_float_or_default("pno_stage1_min_body_wick_edge", defaults.stage1_min_body_wick_edge),
-        stage1_max_micro_flat_bar_share=_float_or_default(
-            "pno_stage1_max_micro_flat_bar_share",
-            defaults.stage1_max_micro_flat_bar_share,
-        ),
-        stage1_max_active_high_upper_wick_share=_float_or_default(
-            "pno_stage1_max_active_high_upper_wick_share",
-            defaults.stage1_max_active_high_upper_wick_share,
-        ),
-        stage1_max_red_body_share_5m=_float_or_default(
-            "pno_stage1_max_red_body_share_5m",
-            defaults.stage1_max_red_body_share_5m,
-        ),
-        stage1_max_counterflow_ratio_5m=_float_or_default(
-            "pno_stage1_max_counterflow_ratio_5m",
-            defaults.stage1_max_counterflow_ratio_5m,
-        ),
-        stage1_max_red_body_share_1m=_float_or_default(
-            "pno_stage1_max_red_body_share_1m",
-            defaults.stage1_max_red_body_share_1m,
-        ),
-        stage1_max_counterflow_ratio_1m=_float_or_default(
-            "pno_stage1_max_counterflow_ratio_1m",
-            defaults.stage1_max_counterflow_ratio_1m,
-        ),
-        stage1_min_pump_pct=_float_or_default("pno_stage1_min_pump_pct", defaults.stage1_min_pump_pct),
-        stage1_min_pretrend_range_ratio_2h=_float_or_default(
-            "pno_stage1_min_pretrend_range_ratio_2h",
-            defaults.stage1_min_pretrend_range_ratio_2h,
-        ),
-        stage1_pre_pump_high_max_fraction_of_leg=_float_or_default(
-            "pno_stage1_pre_pump_high_max_fraction_of_leg",
-            defaults.stage1_pre_pump_high_max_fraction_of_leg,
-        ),
-        stage3_max_post_high_wick_share=_float_or_default(
-            "pno_stage3_max_post_high_wick_share",
-            defaults.stage3_max_post_high_wick_share,
-        ),
-        stage3_max_post_high_body_overlap_rate=_float_or_default(
-            "pno_stage3_max_post_high_body_overlap_rate",
-            defaults.stage3_max_post_high_body_overlap_rate,
-        ),
-        level_cluster_spread_v1=_float_or_default("pno_level_cluster_spread_v1", defaults.level_cluster_spread_v1),
-        level_cluster_relaxed_spread_v1=_float_or_default(
-            "pno_level_cluster_relaxed_spread_v1",
-            defaults.level_cluster_relaxed_spread_v1,
-        ),
-        level_latest_high_max_age_bars=_int_or_default(
-            "pno_level_latest_high_max_age_bars",
-            defaults.level_latest_high_max_age_bars,
-        ),
-        level_touch_tolerance_v1=_float_or_default("pno_level_touch_tolerance_v1", defaults.level_touch_tolerance_v1),
-        level_low_minor_break_v1=_float_or_default("pno_level_low_minor_break_v1", defaults.level_low_minor_break_v1),
-        level_low_major_break_v1=_float_or_default("pno_level_low_major_break_v1", defaults.level_low_major_break_v1),
-        level_min_maturity_fraction=_float_or_default(
-            "pno_level_min_maturity_fraction",
-            defaults.level_min_maturity_fraction,
-        ),
-        level_rearm_min_distance_v1=_float_or_default(
-            "pno_level_rearm_min_distance_v1",
-            defaults.level_rearm_min_distance_v1,
-        ),
-        max_level_touches=_int_or_default("pno_max_level_touches", defaults.max_level_touches),
-        min_score=_float_or_default("pno_min_score", defaults.min_score),
-        strong_score=_float_or_default("pno_strong_score", defaults.strong_score),
-        slip_plan_v1_fraction=_float_or_default("pno_slip_plan_v1_fraction", defaults.slip_plan_v1_fraction),
-        min_tick_fraction=_float_or_default("pno_min_tick_fraction", defaults.min_tick_fraction),
-        max_entry_pullback_fraction=_float_or_default("pno_max_entry_pullback_fraction", defaults.max_entry_pullback_fraction),
-        min_entry_rr=_float_or_default("pno_min_entry_rr", defaults.min_entry_rr),
-        close_above_max_entry_pos=_float_or_default(
-            "pno_close_above_max_entry_pos",
-            defaults.close_above_max_entry_pos,
-        ),
-        close_above_max_pullback_fraction_of_leg=_float_or_default(
-            "pno_close_above_max_pullback_fraction_of_leg",
-            defaults.close_above_max_pullback_fraction_of_leg,
-        ),
-        close_above_max_post_high_wick_share=_float_or_default(
-            "pno_close_above_max_post_high_wick_share",
-            defaults.close_above_max_post_high_wick_share,
-        ),
-        close_above_min_signal_volume_vs_recent=_float_or_default(
-            "pno_close_above_min_signal_volume_vs_recent",
-            defaults.close_above_min_signal_volume_vs_recent,
-        ),
-        close_above_min_signal_ema20_slope_3=_float_or_default(
-            "pno_close_above_min_signal_ema20_slope_3",
-            defaults.close_above_min_signal_ema20_slope_3,
-        ),
-        close_above_min_signal_ema_spread_pct=_float_or_default(
-            "pno_close_above_min_signal_ema_spread_pct",
-            defaults.close_above_min_signal_ema_spread_pct,
-        ),
-        close_above_min_signal_close_position_in_chop=_float_or_default(
-            "pno_close_above_min_signal_close_position_in_chop",
-            defaults.close_above_min_signal_close_position_in_chop,
-        ),
-        close_above_choppy_overlap_threshold=_float_or_default(
-            "pno_close_above_choppy_overlap_threshold",
-            defaults.close_above_choppy_overlap_threshold,
-        ),
-        tp1_share=_float_or_default("pno_tp1_share", defaults.tp1_share),
-        be_arm_to_active_high_fraction=_float_or_default(
-            "pno_be_arm_to_active_high_fraction",
-            defaults.be_arm_to_active_high_fraction,
-        ),
-        close_above_be_start_fraction=_float_or_default(
-            "pno_close_above_be_start_fraction",
-            defaults.close_above_be_start_fraction,
-        ),
-        close_above_be_step_fraction=_float_or_default(
-            "pno_close_above_be_step_fraction",
-            defaults.close_above_be_step_fraction,
-        ),
-        close_above_be_step_bars=_int_or_default(
-            "pno_close_above_be_step_bars",
-            defaults.close_above_be_step_bars,
-        ),
-        close_above_be_min_fraction=_float_or_default(
-            "pno_close_above_be_min_fraction",
-            defaults.close_above_be_min_fraction,
-        ),
-        be_buffer_r_fraction=_float_or_default("pno_be_buffer_r_fraction", defaults.be_buffer_r_fraction),
+        **params_payload,
     )
-
 
 def _build_pno_params_from_row(
     row: pd.Series,
@@ -2325,18 +2279,9 @@ def _load_plot_params_row_from_results(
     if strategy_id != "pno":
         logger.error("Стратегия %s не поддерживается", strategy_id)
         return None
-    required_columns = [
-        "pno_variant_id",
-        "pno_deposit",
-        "pno_risk_pct",
-        "pno_r_position",
-        "pno_fee_rate",
-        "pno_min_score",
-        "pno_strong_score",
-    ]
-    missing_columns = [column for column in required_columns if column not in frame.columns]
+    missing_columns = [column for column in _PNO_REQUIRED_RESULTS_ROW_COLUMNS if column not in frame.columns]
     if missing_columns:
-        logger.error("В результатах нет обязательных колонок: %s", ", ".join(missing_columns))
+        logger.error("results_row_missing_required_pno_fields: %s", ",".join(missing_columns))
         return None
 
     selected_row_number_raw = getattr(args, "row_number", None)

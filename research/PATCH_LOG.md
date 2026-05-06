@@ -2479,3 +2479,51 @@ Next:
 ```text
 Run a small PNO sparse diagnostic and confirm seconds/aggregated load failures still surface through load_statuses and rejection summaries.
 ```
+
+---
+
+## P064 - Strict result-row reconstruction
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: artifact truthfulness / fallback removal
+Trading logic changed: no
+Files: cli/commands.py, research/*
+Commit: UNKNOWN
+Follow-up to: P061/P063/P062 fallback cleanup chain
+```
+
+Problem:
+
+```text
+PNO artifact rebuild paths reconstructed PnoParams from results.csv with a fresh PnoParams() defaults object.
+Missing or blank result-row fields were silently replaced by current code defaults, so plot-from-results/stage artifact rebuild could produce plausible but non-reproducible PNO artifacts.
+```
+
+Change:
+
+```text
+Replace default-backed reconstruction with strict results-row parsing.
+Required PNO result columns are centralized; missing/blank fields fail with results_row_missing_required_pno_fields.
+Malformed scalar fields fail with results_row_invalid_pno_field.
+A row/runtime TF mismatch fails with results_row_timeframe_mismatch instead of rebuilding artifacts against the wrong TF pair.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner
+```
+
+Risk:
+
+```text
+Medium for old results.csv artifacts: older/incomplete rows that depended on default reconstruction now fail explicitly and must be regenerated or supplied with full PNO params.
+Live/backtest trade decisions are unchanged.
+```
+
+Next:
+
+```text
+Run plot-from-results on one fresh PNO results.csv and on a deliberately stripped copy missing pno_min_score; the fresh row should rebuild, the stripped row should fail with results_row_missing_required_pno_fields.
+```

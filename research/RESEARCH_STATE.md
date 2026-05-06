@@ -420,3 +420,26 @@ One next test:
 ```text
 python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner
 ```
+
+---
+
+## 18. Current local patch note - P064
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Updated: 2026-05-05
+```
+
+Current conclusion:
+
+```text
+PNO artifact rebuild no longer reconstructs params by mixing results.csv with current PnoParams defaults.
+Missing/blank required result-row params now fail explicitly as results_row_missing_required_pno_fields; invalid scalar values fail as results_row_invalid_pno_field; TF mismatch fails as results_row_timeframe_mismatch.
+This makes plot-from-results/stage artifact rebuild less backward-compatible but more truthful.
+```
+
+One next test:
+
+```text
+python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner
+```
