@@ -3547,3 +3547,30 @@ Risk:
 Low production risk; this is research-only and does not affect PNO execution.
 Current selected cache lacks open_interest columns in 5m data, so OI analysis is unavailable until the 5m cache is fetched/enriched with OI.
 ```
+
+---
+
+## P086 - Add run-anomaly-lab progress and ETA
+
+```text
+Status: APPLIED locally / tests passed
+Type: research tooling UX
+Trading logic changed: no
+Files: research_tools/anomaly_continuation_lab.py, research_tools/anomaly_strategy_backtest.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+run-anomaly-lab now prints sparse progress with percent and ETA while collecting anomaly candidates and simulating trades.
+This does not change candidates, signals, exits, OI logic or artifact schema.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m compileall research_tools cli tests\test_anomaly_continuation_lab.py
+```

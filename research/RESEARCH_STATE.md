@@ -934,3 +934,9 @@ One next test:
 Refresh/fetch 5m cache with open_interest for the runner-symbol set, rerun run-anomaly-lab, then segment net_return and big_25p/fast_fade by oi_change_pct_1x5m, oi_change_pct_3x5m and oi_age_ms.
 ```
 
+Progress note:
+
+```text
+run-anomaly-lab prints percent and ETA for candidate collection and trade simulation after P086. This is a logging/UX change only.
+```
+
