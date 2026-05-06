@@ -1,6 +1,6 @@
 from domain.enums.position_side import PositionSide
 from domain.models.position import Position
-from domain.models.trade_signal import TradeSignal
+from domain.models.position_signal import PositionSignal as TradeSignal
 from domain.value_objects.price import Price
 from domain.value_objects.volume import Volume
 from simulation.risk_manager import RiskConfig, RiskManager
@@ -23,7 +23,7 @@ def test_position_size_uses_two_percent_of_deposit() -> None:
     manager = RiskManager(
         RiskConfig(
             deposit=1_000.0,
-            risk_per_trade_pct=0.02,
+            risk_per_position_pct=0.02,
             portfolio_risk_limit=3.0,
         )
     )
@@ -37,7 +37,7 @@ def test_portfolio_risk_limit_scales_by_risk_unit() -> None:
     manager = RiskManager(
         RiskConfig(
             deposit=1_000.0,
-            risk_per_trade_pct=0.02,
+            risk_per_position_pct=0.02,
             portfolio_risk_limit=3.0,
         )
     )

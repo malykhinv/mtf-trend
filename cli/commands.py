@@ -77,6 +77,7 @@ _BACKTEST_DATA_LOAD_STATUS_FILE_NAME = "data_load_status.csv"
 _BACKTEST_DATA_LOAD_REJECTIONS_FILE_NAME = "data_load_rejections.csv"
 _PNO_SECONDS_LOAD_STATUS_FILE_NAME = "seconds_load_status.csv"
 _PNO_STAGE1_CACHE_STATUS_FILE_NAME = "stage1_cache_status.csv"
+_PNO_STAGE5_REVIEW_SYNTHESIS_STATUS_FILE_NAME = "stage5_review_synthesis_status.csv"
 _PNO_DIAGNOSTICS_COVERAGE_COLUMNS: tuple[str, ...] = (
     "symbol",
     "diagnostics_json_written",
@@ -131,12 +132,46 @@ _PNO_STAGE1_CACHE_STATUS_COLUMNS: tuple[str, ...] = (
     "path",
     "missing_arrays",
 )
+_PNO_STAGE5_REVIEW_SYNTHESIS_STATUS_COLUMNS: tuple[str, ...] = (
+    "cycle_key",
+    "symbol",
+    "ok",
+    "status",
+    "reason",
+    "stage4_timestamp_ms",
+    "level_valid_timestamp_ms",
+    "synthesized_timestamp_ms",
+    "synthesized_reason",
+    "score",
+    "min_score",
+    "level",
+    "active_high",
+)
 _PNO_ARTIFACT_LOAD_STATUS_COLUMNS: tuple[str, ...] = (
     "path",
     "ok",
     "status",
     "reason",
     "rows",
+)
+_PNO_CATEGORY_RESEARCH_CONTEXT_FILTER_STATUS_COLUMNS: tuple[str, ...] = (
+    "path",
+    "target_path",
+    "ok",
+    "status",
+    "reason",
+    "source_rows",
+    "target_rows",
+    "has_pno_category_id",
+)
+_PNO_CATEGORY_CHART_COPY_STATUS_COLUMNS: tuple[str, ...] = (
+    "symbol",
+    "position_index",
+    "ok",
+    "status",
+    "reason",
+    "source_path",
+    "target_path",
 )
 _BACKTEST_DATA_LOAD_STATUS_COLUMNS: tuple[str, ...] = (
     "role",
@@ -386,7 +421,7 @@ def _build_stage5_review_rejections_from_stage4(
     stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
     position_rows: list[dict[str, object]],
     min_score: float,
-) -> None:
+) -> list[dict[str, object]]:
     existing_stage5_keys: set[str] = set()
     for row in position_rows:
         key = _resolve_pno_stage_cycle_key(row)
@@ -410,41 +445,123 @@ def _build_stage5_review_rejections_from_stage4(
             latest_stage4_by_key[key] = row
 
     synthetic_rows: dict[str, list[dict[str, object]]] = {}
+    status_rows: list[dict[str, object]] = []
+
+    def _status_row(
+        row: dict[str, object],
+        *,
+        key: str,
+        ok: bool,
+        status: str,
+        reason: str,
+        synthesized_timestamp_ms: int | None = None,
+        synthesized_reason: str = "",
+    ) -> dict[str, object]:
+        return {
+            "cycle_key": key,
+            "symbol": str(row.get("symbol") or ""),
+            "ok": bool(ok),
+            "status": status,
+            "reason": reason,
+            "stage4_timestamp_ms": _safe_int(row.get("timestamp_ms")) or "",
+            "level_valid_timestamp_ms": _safe_int(row.get("level_valid_timestamp_ms")) or "",
+            "synthesized_timestamp_ms": synthesized_timestamp_ms if synthesized_timestamp_ms is not None else "",
+            "synthesized_reason": synthesized_reason,
+            "score": _safe_float(row.get("score")) if _safe_float(row.get("score")) is not None else "",
+            "min_score": float(min_score),
+            "level": _safe_float(row.get("level")) if _safe_float(row.get("level")) is not None else "",
+            "active_high": _safe_float(row.get("active_high")) if _safe_float(row.get("active_high")) is not None else "",
+        }
+
     for key, row in latest_stage4_by_key.items():
         if key in existing_stage5_keys:
+            status_rows.append(
+                _status_row(row, key=key, ok=True, status="skipped", reason="stage5_already_present")
+            )
             continue
         symbol = str(row.get("symbol") or "")
         mtf_frames = symbol_frames.get(symbol)
         if mtf_frames is None or mtf_frames.entry_frame.empty:
+            status_rows.append(
+                _status_row(row, key=key, ok=False, status="not_synthesized", reason="entry_frame_missing_or_empty")
+            )
             continue
         level = _safe_float(row.get("level"))
         if level is None:
+            status_rows.append(
+                _status_row(row, key=key, ok=False, status="not_synthesized", reason="level_missing")
+            )
             continue
         active_high = _safe_float(row.get("active_high"))
         if active_high is not None and level >= active_high:
+            status_rows.append(
+                _status_row(row, key=key, ok=False, status="not_synthesized", reason="level_not_below_active_high")
+            )
             continue
         level_valid_timestamp_ms = _safe_int(row.get("level_valid_timestamp_ms")) or _safe_int(row.get("timestamp_ms"))
         if level_valid_timestamp_ms is None:
+            status_rows.append(
+                _status_row(
+                    row,
+                    key=key,
+                    ok=False,
+                    status="not_synthesized",
+                    reason="level_valid_timestamp_missing",
+                )
+            )
             continue
         entry_frame = mtf_frames.entry_frame
         if "timestamp" not in entry_frame.columns or "high" not in entry_frame.columns:
+            status_rows.append(
+                _status_row(
+                    row,
+                    key=key,
+                    ok=False,
+                    status="not_synthesized",
+                    reason="entry_frame_missing_timestamp_or_high",
+                )
+            )
             continue
         post_level_frame = entry_frame.loc[entry_frame["timestamp"] >= level_valid_timestamp_ms]
         if post_level_frame.empty:
+            status_rows.append(
+                _status_row(row, key=key, ok=False, status="not_synthesized", reason="post_level_frame_empty")
+            )
             continue
         crossed_frame = post_level_frame.loc[post_level_frame["high"] >= level]
         if crossed_frame.empty:
+            status_rows.append(
+                _status_row(
+                    row,
+                    key=key,
+                    ok=False,
+                    status="not_synthesized",
+                    reason="no_wick_cross_after_level_valid",
+                )
+            )
             continue
         signal_row = crossed_frame.iloc[0]
         score = _safe_float(row.get("score")) or 0.0
         reason = "level_crossed_below_min_score" if score < float(min_score) else "level_crossed_no_trade"
+        signal_timestamp_ms = int(signal_row["timestamp"])
+        status_rows.append(
+            _status_row(
+                row,
+                key=key,
+                ok=True,
+                status="synthesized",
+                reason="stage5_review_rejection_synthesized",
+                synthesized_timestamp_ms=signal_timestamp_ms,
+                synthesized_reason=reason,
+            )
+        )
         synthetic_rows.setdefault(reason, []).append(
             {
                 **row,
                 "stage_id": PNO_STAGE_5_POSITION,
                 "reason": reason,
-                "timestamp_ms": int(signal_row["timestamp"]),
-                "entry_signal_timestamp_ms": int(signal_row["timestamp"]),
+                "timestamp_ms": signal_timestamp_ms,
+                "entry_signal_timestamp_ms": signal_timestamp_ms,
                 "entry_price": float(level),
                 "entry_plan": float(level),
             }
@@ -452,6 +569,7 @@ def _build_stage5_review_rejections_from_stage4(
 
     for reason, rows in synthetic_rows.items():
         stage_rejections_by_stage[PNO_STAGE_5_POSITION].setdefault(reason, []).extend(rows)
+    return status_rows
 
 
 def _resolve_strategy_id(args: argparse.Namespace) -> str:
@@ -768,26 +886,87 @@ def _write_pno_category_research_context(
     category_id: str,
 ) -> None:
     source_research_dir = source_diagnostics_dir / "research_context"
-    if not source_research_dir.exists():
-        return
     target_research_dir = target_diagnostics_dir / "research_context"
     target_research_dir.mkdir(parents=True, exist_ok=True)
     artifact_status_rows: list[dict[str, object]] = []
+    filter_status_rows: list[dict[str, object]] = []
+    if not source_research_dir.exists():
+        filter_status_rows.append(
+            {
+                "path": str(source_research_dir),
+                "target_path": str(target_research_dir),
+                "ok": False,
+                "status": "not_copied",
+                "reason": "source_research_context_missing",
+                "source_rows": 0,
+                "target_rows": 0,
+                "has_pno_category_id": False,
+            }
+        )
+        _write_frame_from_records(
+            target_research_dir / "research_context_filter_status.csv",
+            filter_status_rows,
+            columns=_PNO_CATEGORY_RESEARCH_CONTEXT_FILTER_STATUS_COLUMNS,
+        )
+        return
     for csv_path in source_research_dir.glob("*.csv"):
         read_result = _read_csv_with_status(csv_path)
         artifact_status_rows.append(_artifact_status_row(read_result))
         frame = read_result.frame
+        target_path = target_research_dir / csv_path.name
         if frame.empty:
-            frame.to_csv(target_research_dir / csv_path.name, index=False)
+            frame.to_csv(target_path, index=False)
+            filter_status_rows.append(
+                {
+                    "path": str(csv_path),
+                    "target_path": str(target_path),
+                    "ok": bool(read_result.ok),
+                    "status": "copied_empty",
+                    "reason": str(read_result.reason),
+                    "source_rows": int(len(frame)),
+                    "target_rows": int(len(frame)),
+                    "has_pno_category_id": "pno_category_id" in frame.columns,
+                }
+            )
             continue
         if "pno_category_id" not in frame.columns:
+            frame.to_csv(target_path, index=False)
+            filter_status_rows.append(
+                {
+                    "path": str(csv_path),
+                    "target_path": str(target_path),
+                    "ok": bool(read_result.ok),
+                    "status": "copied_unfiltered",
+                    "reason": "pno_category_id_missing",
+                    "source_rows": int(len(frame)),
+                    "target_rows": int(len(frame)),
+                    "has_pno_category_id": False,
+                }
+            )
             continue
         filtered = frame.loc[frame["pno_category_id"].astype(str) == category_id].copy()
-        filtered.to_csv(target_research_dir / csv_path.name, index=False)
+        filtered.to_csv(target_path, index=False)
+        filter_status_rows.append(
+            {
+                "path": str(csv_path),
+                "target_path": str(target_path),
+                "ok": bool(read_result.ok),
+                "status": "filtered_by_category",
+                "reason": "pno_category_id_matched",
+                "source_rows": int(len(frame)),
+                "target_rows": int(len(filtered)),
+                "has_pno_category_id": True,
+            }
+        )
     _write_frame_from_records(
         target_research_dir / "artifact_load_status.csv",
         artifact_status_rows,
         columns=_PNO_ARTIFACT_LOAD_STATUS_COLUMNS,
+    )
+    _write_frame_from_records(
+        target_research_dir / "research_context_filter_status.csv",
+        filter_status_rows,
+        columns=_PNO_CATEGORY_RESEARCH_CONTEXT_FILTER_STATUS_COLUMNS,
     )
 
 
@@ -858,6 +1037,7 @@ def _export_pno_category_artifacts(
         category_charts_dir.mkdir(parents=True, exist_ok=True)
 
         category_position_rows_all: list[dict[str, object]] = []
+        category_chart_copy_status_rows: list[dict[str, object]] = []
         category_symbols = 0
         for item in diagnostics_payloads:
             symbol = str(item["symbol"])
@@ -883,10 +1063,48 @@ def _export_pno_category_artifacts(
                         continue
                     source_chart = Path(str(chart_paths_root[position_index]))
                     if not source_chart.exists():
+                        category_chart_copy_status_rows.append(
+                            {
+                                "symbol": symbol,
+                                "position_index": int(position_index),
+                                "ok": False,
+                                "status": "not_copied",
+                                "reason": "source_chart_missing",
+                                "source_path": str(source_chart),
+                                "target_path": "",
+                            }
+                        )
                         continue
                     target_chart = category_charts_dir / source_chart.name
                     shutil.copy2(source_chart, target_chart)
                     selected_chart_paths.append(str(target_chart))
+                    category_chart_copy_status_rows.append(
+                        {
+                            "symbol": symbol,
+                            "position_index": int(position_index),
+                            "ok": True,
+                            "status": "copied",
+                            "reason": "ok",
+                            "source_path": str(source_chart),
+                            "target_path": str(target_chart),
+                        }
+                    )
+            else:
+                reason = "chart_paths_missing" if not chart_paths_root else "chart_paths_count_mismatch"
+                for position_index, position_row in enumerate(position_rows_all):
+                    if str(position_row.get("pno_category_id") or "") != category_id:
+                        continue
+                    category_chart_copy_status_rows.append(
+                        {
+                            "symbol": symbol,
+                            "position_index": int(position_index),
+                            "ok": False,
+                            "status": "not_copied",
+                            "reason": reason,
+                            "source_path": "",
+                            "target_path": "",
+                        }
+                    )
             payload = {
                 "symbol": symbol,
                 "positions_generated": len(filtered_position_rows),
@@ -910,6 +1128,11 @@ def _export_pno_category_artifacts(
             source_diagnostics_dir=diagnostics_dir,
             target_diagnostics_dir=category_diagnostics_dir,
             category_id=category_id,
+        )
+        _write_frame_from_records(
+            category_diagnostics_dir / "chart_copy_status.csv",
+            category_chart_copy_status_rows,
+            columns=_PNO_CATEGORY_CHART_COPY_STATUS_COLUMNS,
         )
         category_stage_rows = {
             stage_id: _filter_pno_rows_by_category(rows, category_id=category_id)
@@ -1127,6 +1350,7 @@ def _sync_shared_stage_reviews(
             "passed_events_path",
             "passed_charts_count",
             "rejected_charts_count",
+            "trade_count_source_counts",
         ),
     )
 
@@ -2078,12 +2302,21 @@ def _export_pno_diagnostics_context_for_symbols(
         stage_rows_by_stage.get(PNO_STAGE_4_LEVEL, [])
     )
     stage_rows_by_stage[PNO_STAGE_4_LEVEL] = deduplicated_stage4_rows
-    _build_stage5_review_rejections_from_stage4(
+    stage5_review_synthesis_status_rows = _build_stage5_review_rejections_from_stage4(
         symbol_frames=symbol_frames,
         stage_rows_by_stage=stage_rows_by_stage,
         stage_rejections_by_stage=stage_rejections_by_stage,
         position_rows=all_position_rows,
         min_score=float(params_row.get("pno_min_score", 0.0) or 0.0),
+    )
+    research_context_dir = diagnostics_dir / "research_context"
+    research_context_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        stage5_review_synthesis_status_rows,
+        columns=_PNO_STAGE5_REVIEW_SYNTHESIS_STATUS_COLUMNS,
+    ).to_csv(
+        research_context_dir / _PNO_STAGE5_REVIEW_SYNTHESIS_STATUS_FILE_NAME,
+        index=False,
     )
     research_rejections_by_stage = _build_filtered_pno_stage_rejections(
         stage_rejections_by_stage=stage_rejections_by_stage,
@@ -2102,6 +2335,7 @@ def _export_pno_diagnostics_context_for_symbols(
         stage_rows_by_stage=stage_rows_by_stage,
         stage_rejections_by_stage=research_rejections_by_stage,
         stage_rejection_summary_by_stage=stage_rejections_by_stage,
+        seconds_frame_provider=getattr(strategy, "_seconds_provider", None),
         logger=None,
     )
     _export_pno_stage_reviews(

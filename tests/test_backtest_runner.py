@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from domain.enums.trade_result_type import TradeResultType
-from domain.models.trade_result import TradeResult
+from domain.enums.position_result_type import PositionResultType as TradeResultType
+from domain.models.position_result import PositionResult as TradeResult
 from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
 from vectorbt_runner.backtest_runner import BacktestRunner
@@ -65,4 +65,3 @@ def test_build_metrics_row_returns_zero_drawdown_pct_without_trades() -> None:
     assert row["max_drawdown_pct"] == 0.0
     assert row["median_pump_to_peak_bars"] is None
     assert row["median_pump_to_peak_minutes"] is None
-

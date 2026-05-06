@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass
 from logging import Logger
 from pathlib import Path
+from typing import Callable
 
 import matplotlib
 matplotlib.use("Agg")
@@ -19,7 +20,13 @@ from matplotlib.patches import Rectangle
 from matplotlib.ticker import LinearLocator
 from matplotlib.transforms import blended_transform_factory
 
-from strategy.pno.engine import PNO_STAGE_1_PUMP, PNO_STAGE_4_LEVEL, PNO_STAGE_5_POSITION, PNO_STAGE_SEQUENCE
+from strategy.pno.engine import (
+    PNO_STAGE_1_PUMP,
+    PNO_STAGE_3_VALID_PULLBACK,
+    PNO_STAGE_4_LEVEL,
+    PNO_STAGE_5_POSITION,
+    PNO_STAGE_SEQUENCE,
+)
 from vectorbt_runner import SymbolMtfFrames
 
 _PNO_STAGE1_REVIEW_MAX_ROWS_PER_REASON = 8
@@ -169,6 +176,121 @@ _PNO_LEVELS_PATH_CONTEXT_COLUMNS: tuple[str, ...] = (
     "is_level_bar",
     "is_signal_bar",
 )
+_PNO_STAGE_CANDLE_CONTEXT_COLUMNS: tuple[str, ...] = (
+    "context_key",
+    "stage_key",
+    "position_key",
+    "symbol",
+    "source_stage",
+    "source_status",
+    "source_reason",
+    "pno_category_id",
+    "pno_category_label",
+    "pno_profile_variant_id",
+    "bar_offset",
+    "future_bar_offset",
+    "minutes_from_anchor",
+    "timestamp_ms",
+    "anchor_timestamp_ms",
+    "open",
+    "high",
+    "low",
+    "close",
+    "volume",
+    "quote_volume",
+    "number_of_trades",
+    "taker_buy_volume",
+    "taker_buy_quote_volume",
+    "ema9",
+    "ema20",
+    "body_share",
+    "upper_wick_share",
+    "lower_wick_share",
+    "close_position",
+    "is_green",
+    "is_pre_anchor",
+    "is_anchor_bar",
+    "is_future_bar",
+    "is_active_high_bar",
+    "is_pullback_low_bar",
+    "is_level_bar",
+    "is_signal_bar",
+    "close_above_level",
+    "wick_touched_level",
+    "hit_active_high",
+    "hit_tp1",
+    "hit_tp1_within_1h",
+)
+_PNO_STAGE_CANDLE_OUTCOME_COLUMNS: tuple[str, ...] = (
+    "context_key",
+    "stage_key",
+    "position_key",
+    "symbol",
+    "source_stage",
+    "source_status",
+    "source_reason",
+    "pno_category_id",
+    "pno_category_label",
+    "pno_profile_variant_id",
+    "anchor_timestamp_ms",
+    "active_high_timestamp_ms",
+    "pullback_low_timestamp_ms",
+    "level_valid_timestamp_ms",
+    "entry_signal_timestamp_ms",
+    "entry_timestamp_ms",
+    "active_high",
+    "pullback_low",
+    "level",
+    "tp1",
+    "entry_price",
+    "entry_pos",
+    "final_score",
+    "context_bars",
+    "future_bars_1h",
+    "tp1_hit_within_1h",
+    "pullback_low_broken_within_1h",
+    "first_pullback_low_break_timestamp_ms",
+    "minutes_to_pullback_low_break",
+    "first_future_event_1h",
+    "first_future_event_timestamp_ms",
+    "minutes_to_first_future_event",
+    "first_tp1_hit_timestamp_ms",
+    "minutes_to_tp1_hit",
+    "max_future_high_1h",
+    "max_future_high_1h_pct_from_anchor_close",
+    "min_future_low_1h",
+    "min_future_low_1h_pct_from_anchor_close",
+)
+_PNO_RESEARCH_CONTEXT_ENTRY_LOAD_STATUS_COLUMNS: tuple[str, ...] = (
+    "symbol",
+    "source",
+    "target_timeframe",
+    "window_start_timestamp_ms",
+    "window_end_timestamp_ms",
+    "ok",
+    "status",
+    "reason",
+    "rows",
+    "source_detail",
+    "seconds_status",
+    "seconds_reason",
+)
+_PNO_STAGE_CANDLE_CONTEXT_STATUS_COLUMNS: tuple[str, ...] = (
+    "context_key",
+    "symbol",
+    "ok",
+    "status",
+    "reason",
+    "source_stage",
+    "source_status",
+    "source_reason",
+    "pno_category_id",
+    "pno_category_label",
+    "pno_profile_variant_id",
+    "anchor_timestamp_ms",
+    "candle_rows",
+    "outcome_written",
+)
 _PNO_FEATURE_SUMMARY_COLUMNS: tuple[str, ...] = (
     "scope",
     "feature",
@@ -210,6 +332,8 @@ _PNO_STAGE_REVIEW_SUMMARY_COLUMNS: tuple[str, ...] = (
     "reason",
     "count",
     "exported_events_count",
+    "events_are_complete",
+    "event_export_mode",
     "events_path",
     "charts_count",
 )
@@ -227,6 +351,17 @@ _PNO_STAGE_REVIEW_MANIFEST_COLUMNS: tuple[str, ...] = (
     "passed_charts_count",
     "rejected_charts_count",
     "trade_count_source_counts",
+)
+_PNO_STAGE_REVIEW_CHART_STATUS_COLUMNS: tuple[str, ...] = (
+    "stage_id",
+    "status",
+    "reason",
+    "symbol",
+    "review_index",
+    "ok",
+    "chart_status",
+    "chart_reason",
+    "chart_path",
 )
 
 
@@ -785,6 +920,16 @@ _PNO_STAGE_REVIEW_SLEEP_CONTEXT_BARS = 24
 _PNO_STAGE_REVIEW_MAX_ENTRY_LOOKBACK_MS = 6 * 60 * 60_000
 _PNO_STAGE_REVIEW_BASELINE_COLOR = "#facc15"
 _PNO_RESEARCH_TRADE_PATH_MAX_BARS = 240
+_PNO_STAGE_CANDLE_CONTEXT_STAGES: tuple[str, ...] = (
+    PNO_STAGE_3_VALID_PULLBACK,
+    PNO_STAGE_4_LEVEL,
+    PNO_STAGE_5_POSITION,
+)
+_PNO_STAGE_CANDLE_CONTEXT_PRE_BARS = 60
+_PNO_STAGE_CANDLE_CONTEXT_FUTURE_MS = 60 * 60_000
+_PNO_STAGE_CANDLE_CONTEXT_MAX_BARS = 1_000
+_PNO_STAGE3_CANDLE_CONTEXT_MAX_PASSED_ROWS = 50
+_PNO_STAGE3_CANDLE_CONTEXT_MAX_PASSED_ROWS_PER_SYMBOL = 2
 _PNO_PLOT_AXIS_TAG_LABEL_WIDTH = 7
 _PNO_PLOT_AXIS_TAG_TEXT_WIDTH = 20
 _PNO_PLOT_SAVEFIG_KWARGS = {"dpi": 100, "facecolor": _PNO_PLOT_FIGURE_FACE, "pil_kwargs": {"compress_level": 1}}
@@ -2336,15 +2481,16 @@ def _render_pno_position_charts_for_symbol(
                 if value is not None:
                     timestamps.append(int(value))
         if timestamps:
-            loader = getattr(seconds_frame_provider, "load_aggregated_window", None)
+            loader = getattr(seconds_frame_provider, "load_aggregated_window_result", None)
             if callable(loader):
-                loaded = loader(
+                result = loader(
                     symbol=symbol,
                     start_timestamp_ms=max(min(timestamps) - 30 * 60_000, 0),
                     end_timestamp_ms=max(timestamps) + 30 * 60_000,
                     target_timeframe=mtf_frames.entry_timeframe,
                 )
-                if isinstance(loaded, pd.DataFrame) and not loaded.empty:
+                loaded = getattr(result, "frame", None)
+                if bool(getattr(result, "ok", False)) and isinstance(loaded, pd.DataFrame) and not loaded.empty:
                     entry_source_frame = loaded
     entry_plot_frame = _prepare_pno_entry_plot_source_with_ema(
         levels_frame=levels_plot_frame,
@@ -2797,6 +2943,7 @@ def _export_pno_stage_reviews(
                 filtered_groups[reason] = selected_rows
         review_rejections_by_stage[stage_id] = filtered_groups
     total_review_charts = 0
+    chart_status_rows: list[dict[str, object]] = []
     if render_charts:
         for stage_id in selected_stage_ids:
             if stage_id in passed_chart_stage_id_set:
@@ -2878,6 +3025,8 @@ def _export_pno_stage_reviews(
                 "reason": "passed",
                 "count": int(len(passed_rows)),
                 "exported_events_count": int(len(passed_rows)),
+                "events_are_complete": True,
+                "event_export_mode": "complete",
                 "events_path": str(passed_events_path),
                 "charts_count": 0,
             }
@@ -2889,6 +3038,19 @@ def _export_pno_stage_reviews(
                 symbol = str(row.get("symbol", ""))
                 prepared_frames = _get_prepared_frames(symbol)
                 if prepared_frames is None:
+                    chart_status_rows.append(
+                        {
+                            "stage_id": stage_id,
+                            "status": "passed",
+                            "reason": "passed",
+                            "symbol": symbol,
+                            "review_index": int(row_index),
+                            "ok": False,
+                            "chart_status": "not_rendered",
+                            "chart_reason": "prepared_frames_missing",
+                            "chart_path": "",
+                        }
+                    )
                     continue
                 trade_source_frame = prepared_frames[1] if needs_entry_frames else prepared_frames[0]
                 trade_source_label = _pno_trade_count_source_label(trade_source_frame)
@@ -2907,6 +3069,33 @@ def _export_pno_stage_reviews(
                 )
                 if chart_path is not None:
                     passed_chart_paths.append(chart_path)
+                    chart_status_rows.append(
+                        {
+                            "stage_id": stage_id,
+                            "status": "passed",
+                            "reason": "passed",
+                            "symbol": symbol,
+                            "review_index": int(row_index),
+                            "ok": True,
+                            "chart_status": "rendered",
+                            "chart_reason": "ok",
+                            "chart_path": chart_path,
+                        }
+                    )
+                else:
+                    chart_status_rows.append(
+                        {
+                            "stage_id": stage_id,
+                            "status": "passed",
+                            "reason": "passed",
+                            "symbol": symbol,
+                            "review_index": int(row_index),
+                            "ok": False,
+                            "chart_status": "not_rendered",
+                            "chart_reason": "renderer_returned_none",
+                            "chart_path": "",
+                        }
+                    )
                 rendered_review_charts += 1
                 _log_review_progress(stage_id)
 
@@ -2924,6 +3113,8 @@ def _export_pno_stage_reviews(
             reason_dir = rejected_dir / _sanitize_plot_name(reason)
             reason_dir.mkdir(parents=True, exist_ok=True)
             export_rows = review_rows if review_rows else rows
+            events_are_complete = len(export_rows) == len(rows)
+            event_export_mode = "complete" if events_are_complete else "review_sample"
             rejected_events_path = reason_dir / "events.csv"
             _write_stage_review_events(rejected_events_path, export_rows, status="rejected", reason=reason)
             rejected_charts_before_reason = rejected_chart_paths
@@ -2934,6 +3125,19 @@ def _export_pno_stage_reviews(
                     symbol = str(row.get("symbol", ""))
                     prepared_frames = _get_prepared_frames(symbol)
                     if prepared_frames is None:
+                        chart_status_rows.append(
+                            {
+                                "stage_id": stage_id,
+                                "status": "rejected",
+                                "reason": reason,
+                                "symbol": symbol,
+                                "review_index": int(row_index),
+                                "ok": False,
+                                "chart_status": "not_rendered",
+                                "chart_reason": "prepared_frames_missing",
+                                "chart_path": "",
+                            }
+                        )
                         continue
                     trade_source_frame = prepared_frames[1] if needs_entry_frames else prepared_frames[0]
                     trade_source_label = _pno_trade_count_source_label(trade_source_frame)
@@ -2952,6 +3156,33 @@ def _export_pno_stage_reviews(
                     )
                     if chart_path is not None:
                         rejected_chart_paths += 1
+                        chart_status_rows.append(
+                            {
+                                "stage_id": stage_id,
+                                "status": "rejected",
+                                "reason": reason,
+                                "symbol": symbol,
+                                "review_index": int(row_index),
+                                "ok": True,
+                                "chart_status": "rendered",
+                                "chart_reason": "ok",
+                                "chart_path": chart_path,
+                            }
+                        )
+                    else:
+                        chart_status_rows.append(
+                            {
+                                "stage_id": stage_id,
+                                "status": "rejected",
+                                "reason": reason,
+                                "symbol": symbol,
+                                "review_index": int(row_index),
+                                "ok": False,
+                                "chart_status": "not_rendered",
+                                "chart_reason": "renderer_returned_none",
+                                "chart_path": "",
+                            }
+                        )
                     rendered_review_charts += 1
                     _log_review_progress(stage_id)
             stage_summary_rows.append(
@@ -2961,6 +3192,8 @@ def _export_pno_stage_reviews(
                     "reason": reason,
                     "count": int(len(rows)),
                     "exported_events_count": int(len(export_rows)),
+                    "events_are_complete": bool(events_are_complete),
+                    "event_export_mode": event_export_mode,
                     "events_path": str(rejected_events_path),
                     "charts_count": int(rejected_chart_paths - rejected_charts_before_reason),
                 }
@@ -2994,6 +3227,10 @@ def _export_pno_stage_reviews(
 
     _frame_from_records(manifest_rows, columns=_PNO_STAGE_REVIEW_MANIFEST_COLUMNS).to_csv(
         stage_reviews_dir / "manifest.csv",
+        index=False,
+    )
+    _frame_from_records(chart_status_rows, columns=_PNO_STAGE_REVIEW_CHART_STATUS_COLUMNS).to_csv(
+        stage_reviews_dir / "chart_status.csv",
         index=False,
     )
     if render_charts and logger is not None and total_review_charts > 0:
@@ -3413,6 +3650,52 @@ def _slice_backtest_frame_window(
         start_timestamp_ms=start_timestamp_ms,
         end_timestamp_ms=resolved_end,
     )
+
+
+def _resolve_pno_context_time_bounds(rows: list[dict[str, object]]) -> tuple[int, int] | None:
+    timestamps: list[int] = []
+    for row in rows:
+        for key in (
+            "pump_start_timestamp_ms",
+            "active_high_timestamp_ms",
+            "pullback_low_timestamp_ms",
+            "level_valid_timestamp_ms",
+            "level_first_local_high_timestamp_ms",
+            "entry_signal_timestamp_ms",
+            "entry_timestamp_ms",
+            "exit_timestamp_ms",
+            "timestamp_ms",
+        ):
+            value = _safe_int(row.get(key))
+            if value is not None:
+                timestamps.append(int(value))
+    if not timestamps:
+        return None
+    return max(min(timestamps) - 30 * 60_000, 0), max(timestamps) + _PNO_STAGE_CANDLE_CONTEXT_FUTURE_MS
+
+
+def _pno_entry_load_status_row(
+    *,
+    symbol: str,
+    target_timeframe: object,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+    result: object,
+) -> dict[str, object]:
+    return {
+        "symbol": symbol,
+        "source": "research_context_entry_window",
+        "target_timeframe": getattr(target_timeframe, "value", str(target_timeframe)),
+        "window_start_timestamp_ms": int(start_timestamp_ms),
+        "window_end_timestamp_ms": int(end_timestamp_ms),
+        "ok": bool(getattr(result, "ok", False)),
+        "status": str(getattr(result, "status", "unknown")),
+        "reason": str(getattr(result, "reason", "unknown")),
+        "rows": int(getattr(result, "rows", 0) or 0),
+        "source_detail": str(getattr(result, "source", "")),
+        "seconds_status": str(getattr(result, "seconds_status", "")),
+        "seconds_reason": str(getattr(result, "seconds_reason", "")),
+    }
 
 
 def _resolve_pno_session_bucket(timestamp_ms: int | None) -> str:
@@ -4122,6 +4405,365 @@ def _build_stage5_unique_setup_summary(frame: pd.DataFrame) -> pd.DataFrame:
         )
     return pd.DataFrame(rows, columns=columns)
 
+
+def _resolve_pno_stage_candle_context_key(
+    row: dict[str, object],
+    *,
+    source_stage: str,
+    source_status: str,
+    source_reason: str,
+) -> str:
+    stage_key = _resolve_pno_stage_key_from_row(row)
+    timestamp_ms = (
+        _safe_int(row.get("entry_signal_timestamp_ms"))
+        or _safe_int(row.get("timestamp_ms"))
+        or _safe_int(row.get("level_valid_timestamp_ms"))
+        or _safe_int(row.get("pullback_low_timestamp_ms"))
+        or _safe_int(row.get("active_high_timestamp_ms"))
+        or 0
+    )
+    if stage_key:
+        return f"{stage_key}|{source_stage}|{source_status}|{source_reason}|{timestamp_ms}"
+    symbol = str(row.get("symbol") or "")
+    level = _safe_float(row.get("level"))
+    level_text = f"{level:.8f}" if level is not None else "na"
+    return f"{symbol}|{source_stage}|{source_status}|{source_reason}|{timestamp_ms}|{level_text}"
+
+
+def _resolve_pno_stage_candle_anchor_timestamp(row: dict[str, object], *, source_stage: str) -> int | None:
+    if source_stage == PNO_STAGE_5_POSITION:
+        return (
+            _safe_int(row.get("entry_signal_timestamp_ms"))
+            or _safe_int(row.get("timestamp_ms"))
+            or _safe_int(row.get("entry_timestamp_ms"))
+        )
+    if source_stage == PNO_STAGE_4_LEVEL:
+        return (
+            _safe_int(row.get("entry_signal_timestamp_ms"))
+            or _safe_int(row.get("timestamp_ms"))
+            or _safe_int(row.get("level_valid_timestamp_ms"))
+        )
+    return (
+        _safe_int(row.get("timestamp_ms"))
+        or _safe_int(row.get("pullback_low_timestamp_ms"))
+        or _safe_int(row.get("active_high_timestamp_ms"))
+    )
+
+
+def _build_pno_stage_candle_context(
+    *,
+    entry_frame: pd.DataFrame,
+    row: dict[str, object],
+    source_stage: str,
+    source_status: str,
+    source_reason: str,
+) -> tuple[list[dict[str, object]], dict[str, object] | None, str]:
+    anchor_timestamp_ms = _resolve_pno_stage_candle_anchor_timestamp(row, source_stage=source_stage)
+    if entry_frame.empty or anchor_timestamp_ms is None or "timestamp" not in entry_frame.columns:
+        return [], None, "entry_frame_empty_or_anchor_missing_or_timestamp_missing"
+    timestamps = entry_frame["timestamp"].to_numpy(dtype=np.int64, copy=False)
+    if timestamps.size == 0:
+        return [], None, "entry_timestamp_array_empty"
+    anchor_idx = int(np.searchsorted(timestamps, int(anchor_timestamp_ms), side="left"))
+    if anchor_idx >= len(entry_frame):
+        return [], None, "anchor_after_entry_frame_end"
+
+    future_end_timestamp_ms = int(anchor_timestamp_ms) + _PNO_STAGE_CANDLE_CONTEXT_FUTURE_MS
+    future_end_idx = int(np.searchsorted(timestamps, future_end_timestamp_ms, side="right"))
+    start_idx = max(0, anchor_idx - _PNO_STAGE_CANDLE_CONTEXT_PRE_BARS)
+    end_idx = min(len(entry_frame), max(anchor_idx + 1, future_end_idx))
+    if end_idx - start_idx > _PNO_STAGE_CANDLE_CONTEXT_MAX_BARS:
+        start_idx = max(0, end_idx - _PNO_STAGE_CANDLE_CONTEXT_MAX_BARS)
+    context_frame = entry_frame.iloc[start_idx:end_idx].copy()
+    if context_frame.empty:
+        return [], None, "context_frame_empty"
+
+    context_key = _resolve_pno_stage_candle_context_key(
+        row,
+        source_stage=source_stage,
+        source_status=source_status,
+        source_reason=source_reason,
+    )
+    stage_key = _resolve_pno_stage_key_from_row(row)
+    position_key = _resolve_pno_position_key(row)
+    active_high_timestamp_ms = _safe_int(row.get("active_high_timestamp_ms"))
+    pullback_low_timestamp_ms = _safe_int(row.get("pullback_low_timestamp_ms"))
+    level_timestamp_ms = _safe_int(row.get("level_valid_timestamp_ms")) or _safe_int(row.get("level_first_local_high_timestamp_ms"))
+    signal_timestamp_ms = _safe_int(row.get("entry_signal_timestamp_ms")) or _safe_int(row.get("timestamp_ms"))
+    entry_timestamp_ms = _safe_int(row.get("entry_timestamp_ms"))
+    active_high = _safe_float(row.get("active_high"))
+    pullback_low = _safe_float(row.get("pullback_low"))
+    level = _safe_float(row.get("level"))
+    tp1 = _safe_float(row.get("tp1")) or active_high
+    entry_price = _safe_float(row.get("entry_price_actual")) or _safe_float(row.get("entry_price")) or _safe_float(row.get("entry_plan"))
+
+    future_mask = (context_frame["timestamp"] > int(anchor_timestamp_ms)) & (
+        context_frame["timestamp"] <= future_end_timestamp_ms
+    )
+    future_frame = context_frame.loc[future_mask].copy()
+    anchor_close = float(context_frame["close"].iloc[min(max(anchor_idx - start_idx, 0), len(context_frame) - 1)])
+    first_tp1_hit_timestamp_ms: int | None = None
+    if tp1 is not None and not future_frame.empty:
+        hit_rows = future_frame.loc[pd.to_numeric(future_frame["high"], errors="coerce") >= float(tp1)]
+        if not hit_rows.empty:
+            first_tp1_hit_timestamp_ms = int(hit_rows["timestamp"].iloc[0])
+    first_pullback_low_break_timestamp_ms: int | None = None
+    if pullback_low is not None and not future_frame.empty:
+        break_rows = future_frame.loc[pd.to_numeric(future_frame["low"], errors="coerce") < float(pullback_low)]
+        if not break_rows.empty:
+            first_pullback_low_break_timestamp_ms = int(break_rows["timestamp"].iloc[0])
+    max_future_high = float(pd.to_numeric(future_frame["high"], errors="coerce").max()) if not future_frame.empty else np.nan
+    min_future_low = float(pd.to_numeric(future_frame["low"], errors="coerce").min()) if not future_frame.empty else np.nan
+    tp1_hit_within_1h = first_tp1_hit_timestamp_ms is not None
+    pullback_low_broken_within_1h = first_pullback_low_break_timestamp_ms is not None
+    first_future_event = "none"
+    first_future_event_timestamp_ms: int | None = None
+    if first_tp1_hit_timestamp_ms is not None and first_pullback_low_break_timestamp_ms is not None:
+        if first_tp1_hit_timestamp_ms == first_pullback_low_break_timestamp_ms:
+            first_future_event = "same_bar_tp1_and_pullback_low_broken"
+            first_future_event_timestamp_ms = first_tp1_hit_timestamp_ms
+        elif first_tp1_hit_timestamp_ms < first_pullback_low_break_timestamp_ms:
+            first_future_event = "tp1_hit"
+            first_future_event_timestamp_ms = first_tp1_hit_timestamp_ms
+        else:
+            first_future_event = "pullback_low_broken"
+            first_future_event_timestamp_ms = first_pullback_low_break_timestamp_ms
+    elif first_tp1_hit_timestamp_ms is not None:
+        first_future_event = "tp1_hit"
+        first_future_event_timestamp_ms = first_tp1_hit_timestamp_ms
+    elif first_pullback_low_break_timestamp_ms is not None:
+        first_future_event = "pullback_low_broken"
+        first_future_event_timestamp_ms = first_pullback_low_break_timestamp_ms
+    outcome_row = {
+        "context_key": context_key,
+        "stage_key": stage_key,
+        "position_key": position_key,
+        "symbol": row.get("symbol"),
+        "source_stage": source_stage,
+        "source_status": source_status,
+        "source_reason": source_reason,
+        "pno_category_id": row.get("pno_category_id"),
+        "pno_category_label": row.get("pno_category_label"),
+        "pno_profile_variant_id": row.get("pno_profile_variant_id"),
+        "anchor_timestamp_ms": int(anchor_timestamp_ms),
+        "active_high_timestamp_ms": active_high_timestamp_ms,
+        "pullback_low_timestamp_ms": pullback_low_timestamp_ms,
+        "level_valid_timestamp_ms": _safe_int(row.get("level_valid_timestamp_ms")),
+        "entry_signal_timestamp_ms": _safe_int(row.get("entry_signal_timestamp_ms")),
+        "entry_timestamp_ms": entry_timestamp_ms,
+        "active_high": active_high,
+        "pullback_low": pullback_low,
+        "level": level,
+        "tp1": tp1,
+        "entry_price": entry_price,
+        "entry_pos": _safe_float(row.get("entry_pos")),
+        "final_score": _safe_float(row.get("final_score")) or _safe_float(row.get("score")),
+        "context_bars": int(len(context_frame)),
+        "future_bars_1h": int(len(future_frame)),
+        "tp1_hit_within_1h": bool(tp1_hit_within_1h),
+        "pullback_low_broken_within_1h": bool(pullback_low_broken_within_1h),
+        "first_pullback_low_break_timestamp_ms": first_pullback_low_break_timestamp_ms
+        if first_pullback_low_break_timestamp_ms is not None
+        else np.nan,
+        "minutes_to_pullback_low_break": round((first_pullback_low_break_timestamp_ms - int(anchor_timestamp_ms)) / 60_000.0, 4)
+        if first_pullback_low_break_timestamp_ms is not None
+        else np.nan,
+        "first_future_event_1h": first_future_event,
+        "first_future_event_timestamp_ms": first_future_event_timestamp_ms
+        if first_future_event_timestamp_ms is not None
+        else np.nan,
+        "minutes_to_first_future_event": round((first_future_event_timestamp_ms - int(anchor_timestamp_ms)) / 60_000.0, 4)
+        if first_future_event_timestamp_ms is not None
+        else np.nan,
+        "first_tp1_hit_timestamp_ms": first_tp1_hit_timestamp_ms if first_tp1_hit_timestamp_ms is not None else np.nan,
+        "minutes_to_tp1_hit": round((first_tp1_hit_timestamp_ms - int(anchor_timestamp_ms)) / 60_000.0, 4)
+        if first_tp1_hit_timestamp_ms is not None
+        else np.nan,
+        "max_future_high_1h": round(max_future_high, 8) if np.isfinite(max_future_high) else np.nan,
+        "max_future_high_1h_pct_from_anchor_close": round(((max_future_high - anchor_close) / anchor_close) * 100.0, 4)
+        if np.isfinite(max_future_high) and anchor_close > 0.0
+        else np.nan,
+        "min_future_low_1h": round(min_future_low, 8) if np.isfinite(min_future_low) else np.nan,
+        "min_future_low_1h_pct_from_anchor_close": round(((min_future_low - anchor_close) / anchor_close) * 100.0, 4)
+        if np.isfinite(min_future_low) and anchor_close > 0.0
+        else np.nan,
+    }
+
+    def _is_same_candle(timestamp_value: int, target_timestamp_ms: int | None) -> bool:
+        if target_timestamp_ms is None:
+            return False
+        return int(timestamp_value) == int(target_timestamp_ms)
+
+    candle_rows: list[dict[str, object]] = []
+    for absolute_idx, (_, candle) in enumerate(context_frame.iterrows(), start=start_idx):
+        timestamp_ms = int(candle["timestamp"])
+        open_price = float(candle["open"])
+        high_price = float(candle["high"])
+        low_price = float(candle["low"])
+        close_price = float(candle["close"])
+        bar_range = max(high_price - low_price, 1e-12)
+        future_bar_offset = absolute_idx - anchor_idx if absolute_idx > anchor_idx else np.nan
+        candle_rows.append(
+            {
+                "context_key": context_key,
+                "stage_key": stage_key,
+                "position_key": position_key,
+                "symbol": row.get("symbol"),
+                "source_stage": source_stage,
+                "source_status": source_status,
+                "source_reason": source_reason,
+                "pno_category_id": row.get("pno_category_id"),
+                "pno_category_label": row.get("pno_category_label"),
+                "pno_profile_variant_id": row.get("pno_profile_variant_id"),
+                "bar_offset": int(absolute_idx - anchor_idx),
+                "future_bar_offset": int(future_bar_offset) if np.isfinite(future_bar_offset) else np.nan,
+                "minutes_from_anchor": round((timestamp_ms - int(anchor_timestamp_ms)) / 60_000.0, 4),
+                "timestamp_ms": timestamp_ms,
+                "anchor_timestamp_ms": int(anchor_timestamp_ms),
+                "open": open_price,
+                "high": high_price,
+                "low": low_price,
+                "close": close_price,
+                "volume": float(candle["volume"]),
+                "quote_volume": float(candle["quote_volume"]) if "quote_volume" in candle.index and pd.notna(candle["quote_volume"]) else np.nan,
+                "number_of_trades": float(candle[_PNO_REAL_TRADE_COUNT_COLUMN]) if _PNO_REAL_TRADE_COUNT_COLUMN in candle.index and pd.notna(candle[_PNO_REAL_TRADE_COUNT_COLUMN]) else np.nan,
+                "taker_buy_volume": float(candle["taker_buy_volume"]) if "taker_buy_volume" in candle.index and pd.notna(candle["taker_buy_volume"]) else np.nan,
+                "taker_buy_quote_volume": float(candle["taker_buy_quote_volume"]) if "taker_buy_quote_volume" in candle.index and pd.notna(candle["taker_buy_quote_volume"]) else np.nan,
+                "ema9": float(candle["ema9"]) if "ema9" in candle.index and pd.notna(candle["ema9"]) else np.nan,
+                "ema20": float(candle["ema20"]) if "ema20" in candle.index and pd.notna(candle["ema20"]) else np.nan,
+                "body_share": round(abs(close_price - open_price) / bar_range, 4),
+                "upper_wick_share": round(max(high_price - max(open_price, close_price), 0.0) / bar_range, 4),
+                "lower_wick_share": round(max(min(open_price, close_price) - low_price, 0.0) / bar_range, 4),
+                "close_position": round((close_price - low_price) / bar_range, 4),
+                "is_green": bool(close_price >= open_price),
+                "is_pre_anchor": bool(absolute_idx < anchor_idx),
+                "is_anchor_bar": bool(absolute_idx == anchor_idx),
+                "is_future_bar": bool(absolute_idx > anchor_idx),
+                "is_active_high_bar": _is_same_candle(timestamp_ms, active_high_timestamp_ms),
+                "is_pullback_low_bar": _is_same_candle(timestamp_ms, pullback_low_timestamp_ms),
+                "is_level_bar": _is_same_candle(timestamp_ms, level_timestamp_ms),
+                "is_signal_bar": _is_same_candle(timestamp_ms, signal_timestamp_ms),
+                "close_above_level": bool(level is not None and close_price > level),
+                "wick_touched_level": bool(level is not None and high_price >= level),
+                "hit_active_high": bool(active_high is not None and high_price >= active_high),
+                "hit_tp1": bool(tp1 is not None and high_price >= tp1),
+                "hit_tp1_within_1h": bool(tp1_hit_within_1h),
+            }
+        )
+    return candle_rows, outcome_row, "context_built"
+
+
+def _collect_pno_stage_candle_context_rows(
+    *,
+    get_prepared_entry_frame: Callable[[str], pd.DataFrame],
+    stage_rows_by_stage: dict[str, list[dict[str, object]]],
+    stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
+) -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]]]:
+    candle_rows: list[dict[str, object]] = []
+    outcome_rows: list[dict[str, object]] = []
+    status_rows: list[dict[str, object]] = []
+    seen_context_keys: set[str] = set()
+
+    def _add_row(row: dict[str, object], *, source_stage: str, source_status: str, source_reason: str) -> None:
+        symbol = str(row.get("symbol") or "")
+        context_key = _resolve_pno_stage_candle_context_key(
+            row,
+            source_stage=source_stage,
+            source_status=source_status,
+            source_reason=source_reason,
+        )
+        anchor_timestamp_ms = _resolve_pno_stage_candle_anchor_timestamp(row, source_stage=source_stage)
+        if not symbol:
+            status_rows.append(
+                {
+                    "context_key": context_key,
+                    "symbol": "",
+                    "ok": False,
+                    "status": "not_exported",
+                    "reason": "symbol_missing",
+                    "source_stage": source_stage,
+                    "source_status": source_status,
+                    "source_reason": source_reason,
+                    "pno_category_id": row.get("pno_category_id"),
+                    "pno_category_label": row.get("pno_category_label"),
+                    "pno_profile_variant_id": row.get("pno_profile_variant_id"),
+                    "anchor_timestamp_ms": anchor_timestamp_ms if anchor_timestamp_ms is not None else "",
+                    "candle_rows": 0,
+                    "outcome_written": False,
+                }
+            )
+            return
+        if context_key in seen_context_keys:
+            status_rows.append(
+                {
+                    "context_key": context_key,
+                    "symbol": symbol,
+                    "ok": True,
+                    "status": "skipped",
+                    "reason": "duplicate_context_key",
+                    "source_stage": source_stage,
+                    "source_status": source_status,
+                    "source_reason": source_reason,
+                    "pno_category_id": row.get("pno_category_id"),
+                    "pno_category_label": row.get("pno_category_label"),
+                    "pno_profile_variant_id": row.get("pno_profile_variant_id"),
+                    "anchor_timestamp_ms": anchor_timestamp_ms if anchor_timestamp_ms is not None else "",
+                    "candle_rows": 0,
+                    "outcome_written": False,
+                }
+            )
+            return
+        seen_context_keys.add(context_key)
+        rows, outcome, context_status_reason = _build_pno_stage_candle_context(
+            entry_frame=get_prepared_entry_frame(symbol),
+            row=row,
+            source_stage=source_stage,
+            source_status=source_status,
+            source_reason=source_reason,
+        )
+        candle_rows.extend(rows)
+        if outcome is not None:
+            outcome_rows.append(outcome)
+        status_rows.append(
+            {
+                "context_key": context_key,
+                "symbol": symbol,
+                "ok": bool(outcome is not None and rows),
+                "status": "exported" if outcome is not None and rows else "not_exported",
+                "reason": context_status_reason,
+                "source_stage": source_stage,
+                "source_status": source_status,
+                "source_reason": source_reason,
+                "pno_category_id": row.get("pno_category_id"),
+                "pno_category_label": row.get("pno_category_label"),
+                "pno_profile_variant_id": row.get("pno_profile_variant_id"),
+                "anchor_timestamp_ms": anchor_timestamp_ms if anchor_timestamp_ms is not None else "",
+                "candle_rows": int(len(rows)),
+                "outcome_written": bool(outcome is not None),
+            }
+        )
+
+    for stage_id in _PNO_STAGE_CANDLE_CONTEXT_STAGES:
+        passed_rows = stage_rows_by_stage.get(stage_id, [])
+        if stage_id == PNO_STAGE_3_VALID_PULLBACK:
+            passed_rows = _cap_stage1_review_rows(
+                passed_rows,
+                max_rows=_PNO_STAGE3_CANDLE_CONTEXT_MAX_PASSED_ROWS,
+                max_rows_per_symbol=_PNO_STAGE3_CANDLE_CONTEXT_MAX_PASSED_ROWS_PER_SYMBOL,
+            )
+        for row in passed_rows:
+            _add_row(row, source_stage=stage_id, source_status="passed", source_reason="passed")
+        for reason, rows in stage_rejections_by_stage.get(stage_id, {}).items():
+            export_rows = (
+                _select_stage_review_rejection_rows(stage_id=stage_id, reason=reason, rows=rows)
+                if stage_id == PNO_STAGE_3_VALID_PULLBACK
+                else rows
+            )
+            for row in export_rows:
+                _add_row(row, source_stage=stage_id, source_status="rejected", source_reason=reason)
+    return candle_rows, outcome_rows, status_rows
+
+
 def _export_pno_research_context(
     *,
     diagnostics_dir: Path,
@@ -4130,6 +4772,7 @@ def _export_pno_research_context(
     stage_rows_by_stage: dict[str, list[dict[str, object]]],
     stage_rejections_by_stage: dict[str, dict[str, list[dict[str, object]]]],
     stage_rejection_summary_by_stage: dict[str, dict[str, list[dict[str, object]]]] | None = None,
+    seconds_frame_provider: object | None = None,
     logger: Logger | None = None,
 ) -> None:
     research_dir = diagnostics_dir / "research_context"
@@ -4137,6 +4780,7 @@ def _export_pno_research_context(
     del logger
     prepared_levels_frames: dict[str, pd.DataFrame] = {}
     prepared_entry_frames: dict[str, pd.DataFrame] = {}
+    entry_load_status_rows: list[dict[str, object]] = []
     position_context_rows: list[dict[str, object]] = []
     position_exit_reference_rows: list[dict[str, object]] = []
     position_path_rows: list[dict[str, object]] = []
@@ -4171,9 +4815,58 @@ def _export_pno_research_context(
         if mtf_frames is None:
             prepared = pd.DataFrame()
         else:
+            entry_source_frame = mtf_frames.entry_frame
+            target_entry_ms = int(mtf_frames.entry_timeframe.to_milliseconds())
+            source_entry_ms = _infer_pno_frame_step_ms(entry_source_frame)
+            if source_entry_ms is not None and source_entry_ms > target_entry_ms and seconds_frame_provider is not None:
+                symbol_rows: list[dict[str, object]] = []
+                symbol_rows.extend(row for row in position_rows if str(row.get("symbol") or "") == symbol)
+                for stage_id in _PNO_STAGE_CANDLE_CONTEXT_STAGES:
+                    symbol_rows.extend(row for row in stage_rows_by_stage.get(stage_id, []) if str(row.get("symbol") or "") == symbol)
+                    for rows in stage_rejections_by_stage.get(stage_id, {}).values():
+                        symbol_rows.extend(row for row in rows if str(row.get("symbol") or "") == symbol)
+                time_bounds = _resolve_pno_context_time_bounds(symbol_rows)
+                loader = getattr(seconds_frame_provider, "load_aggregated_window_result", None)
+                if time_bounds is not None and callable(loader):
+                    start_timestamp_ms, end_timestamp_ms = time_bounds
+                    result = loader(
+                        symbol=symbol,
+                        start_timestamp_ms=start_timestamp_ms,
+                        end_timestamp_ms=end_timestamp_ms,
+                        target_timeframe=mtf_frames.entry_timeframe,
+                    )
+                    entry_load_status_rows.append(
+                        _pno_entry_load_status_row(
+                            symbol=symbol,
+                            target_timeframe=mtf_frames.entry_timeframe,
+                            start_timestamp_ms=start_timestamp_ms,
+                            end_timestamp_ms=end_timestamp_ms,
+                            result=result,
+                        )
+                    )
+                    loaded_frame = getattr(result, "frame", None)
+                    if bool(getattr(result, "ok", False)) and isinstance(loaded_frame, pd.DataFrame) and not loaded_frame.empty:
+                        entry_source_frame = loaded_frame
+                elif time_bounds is not None:
+                    entry_load_status_rows.append(
+                        {
+                            "symbol": symbol,
+                            "source": "research_context_entry_window",
+                            "target_timeframe": mtf_frames.entry_timeframe.value,
+                            "window_start_timestamp_ms": int(time_bounds[0]),
+                            "window_end_timestamp_ms": int(time_bounds[1]),
+                            "ok": False,
+                            "status": "failed",
+                            "reason": "load_aggregated_window_result_missing",
+                            "rows": 0,
+                            "source_detail": "",
+                            "seconds_status": "",
+                            "seconds_reason": "",
+                        }
+                    )
             prepared = _prepare_pno_entry_plot_source_with_ema(
                 levels_frame=_get_prepared_levels_frame(symbol),
-                entry_frame=mtf_frames.entry_frame,
+                entry_frame=entry_source_frame,
             )
         prepared_entry_frames[symbol] = prepared
         return prepared
@@ -4290,6 +4983,28 @@ def _export_pno_research_context(
     )
     _frame_from_records(stage5_levels_path_rows, columns=_PNO_LEVELS_PATH_CONTEXT_COLUMNS).to_csv(
         research_dir / "stage5_levels_path_context.csv",
+        index=False,
+    )
+
+    stage_candle_rows, stage_candle_outcome_rows, stage_candle_status_rows = _collect_pno_stage_candle_context_rows(
+        get_prepared_entry_frame=_get_prepared_entry_frame,
+        stage_rows_by_stage=stage_rows_by_stage,
+        stage_rejections_by_stage=stage_rejections_by_stage,
+    )
+    _frame_from_records(stage_candle_outcome_rows, columns=_PNO_STAGE_CANDLE_OUTCOME_COLUMNS).to_csv(
+        research_dir / "stage3_5_candle_outcomes.csv",
+        index=False,
+    )
+    _frame_from_records(stage_candle_rows, columns=_PNO_STAGE_CANDLE_CONTEXT_COLUMNS).to_csv(
+        research_dir / "stage3_5_candle_context.csv",
+        index=False,
+    )
+    _frame_from_records(stage_candle_status_rows, columns=_PNO_STAGE_CANDLE_CONTEXT_STATUS_COLUMNS).to_csv(
+        research_dir / "stage3_5_candle_context_status.csv",
+        index=False,
+    )
+    _frame_from_records(entry_load_status_rows, columns=_PNO_RESEARCH_CONTEXT_ENTRY_LOAD_STATUS_COLUMNS).to_csv(
+        research_dir / "research_context_entry_load_status.csv",
         index=False,
     )
 

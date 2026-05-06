@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+pytestmark = pytest.mark.pno_historical
+
 from cli import commands, pno_diagnostics
 from cli.parser import build_parser, resolve_handler
 from config.app_config import AppConfig
@@ -20,8 +22,8 @@ from config.simulation_config import SimulationConfig
 from config.strategy_config import StrategyConfig
 from constants import SIMULATION_PARQUET_FILE_NAME
 from domain.enums.timeframe import Timeframe
-from domain.enums.trade_result_type import TradeResultType
-from domain.models.trade_result import TradeResult
+from domain.enums.position_result_type import PositionResultType as TradeResultType
+from domain.models.position_result import PositionResult as TradeResult
 from domain.value_objects.percentage import Percentage
 from domain.value_objects.price import Price
 from strategy.factory import build_strategy

@@ -2574,3 +2574,473 @@ Next:
 ```text
 Run a small PNO sparse diagnostic with one intentionally unreadable/corrupt Stage1 or sparse aggregated cache file and confirm status artifacts include exception_type/exception_message instead of only *_read_failed.
 ```
+
+---
+
+## P066 - Stage3-5 candle context artifacts
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: diagnostics / research artifacts
+Trading logic changed: no
+Files: cli/pno_diagnostics.py, research/*
+Commit: UNKNOWN
+Follow-up to: request for compact candle-level artifacts for external ChatGPT analysis
+```
+
+Problem:
+
+```text
+Existing Stage3-5 artifacts had event rows, summaries and some path context, but rejected/near-miss setups did not get a compact entry-TF candle window with future outcome labels.
+That made questions like "which setups reached TP1 within one hour" or "what candle patterns separate wins from losses" harder to answer from the artifact ZIP alone.
+```
+
+Change:
+
+```text
+Export research_context/stage3_5_candle_outcomes.csv with one row per selected Stage3-5 setup and future 1h TP1 / pullback-low-break labels, including same-bar ambiguity when both happen in one candle.
+Export research_context/stage3_5_candle_context.csv with bounded entry-TF OHLCV/trade-count/quote-volume candles around each selected Stage3-5 anchor plus up to one hour after the anchor.
+Each setup window is capped to 1000 candles and deduplicated by context key to avoid large duplicate artifacts.
+Pre-anchor context is capped to 60 entry-TF candles; Stage3 candle export is sampled/near-miss only, while Stage4/Stage5 remain full.
+No PNO decision logic, thresholds, entry, TP or SL handling changed.
+```
+
+Verification:
+
+```bash
+python -m compileall strategy/pno cli constants.py
+```
+
+Risk:
+
+```text
+Low. Artifact size increases with selected Stage4/Stage5 rows, especially 5s entry TF, but Stage3 is sampled and each setup is bounded and CSV-only. The TP1/pullback-low first-event labels are diagnostic look-forward metadata and must not be used inside trading decisions.
+```
+
+Next:
+
+```text
+Run a small PNO diagnostics sample and verify research_context/stage3_5_candle_outcomes.csv and stage3_5_candle_context.csv exist, have headers, and contain tp1_hit_within_1h, pullback_low_broken_within_1h, first_future_event_1h and candle rows for selected Stage3-5 setups.
+```
+
+---
+
+## P067 - Research context sparse entry load truthfulness
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: diagnostics / artifact truthfulness
+Trading logic changed: no
+Files: cli/commands.py, cli/pno_diagnostics.py, research/*
+Commit: UNKNOWN
+Follow-up to: audit for remaining fallback masking in PNO run artifacts
+```
+
+Problem:
+
+```text
+Position charts still looked for removed `load_aggregated_window` instead of the status-carrying `load_aggregated_window_result`.
+Research context and Stage3-5 candle context could therefore use the source entry frame when sparse target entry TF needed materialization, making candle artifacts look complete while not necessarily being target-TF candles.
+```
+
+Change:
+
+```text
+Use `load_aggregated_window_result` for sparse position-chart windows.
+Pass the PNO seconds provider into research-context export.
+When research context needs sparse target entry candles, load the bounded aggregated window through the status-carrying result API.
+Export research_context/research_context_entry_load_status.csv so target-entry candle load failures are explicit instead of silent source-frame fallback.
+```
+
+Verification:
+
+```bash
+python -m compileall strategy/pno cli constants.py
+```
+
+Risk:
+
+```text
+Low. Trading decisions are unchanged. Some research_context candle artifacts can now expose failed sparse target-entry materialization instead of silently relying on a coarser source frame.
+```
+
+Next:
+
+```text
+Run a small sparse-entry PNO diagnostics sample and verify research_context/research_context_entry_load_status.csv is present; if any row has ok=false, do not treat stage3_5 candle rows for that symbol as target-entry candles.
+```
+
+---
+
+## P068 - Stage5 review synthesis status artifact
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: diagnostics / artifact truthfulness
+Trading logic changed: no
+Files: cli/commands.py, research/*
+Commit: UNKNOWN
+Follow-up to: audit for remaining fallback masking in PNO run artifacts
+```
+
+Problem:
+
+```text
+Stage5 review synthesis from latest Stage4 rows had several silent continue branches.
+If a Stage4 setup had no existing Stage5 row and synthesis could not be built because of missing/empty entry candles, missing level metadata, invalid level/high relation, missing timestamps or no wick cross, the setup disappeared from the Stage5 review surface without an explicit artifact row.
+```
+
+Change:
+
+```text
+Export research_context/stage5_review_synthesis_status.csv with one status row per latest Stage4 cycle considered by Stage5 review synthesis.
+Rows now show synthesized, skipped because Stage5 already exists, or not_synthesized with a concrete reason.
+Synthetic Stage5 rejection generation itself is unchanged; only its skip/synthesis status is persisted.
+```
+
+Verification:
+
+```bash
+python -m compileall strategy/pno cli constants.py
+```
+
+Risk:
+
+```text
+Low. Trading decisions and review rejection content are unchanged except for adding a status CSV that exposes previously silent synthesis gaps.
+```
+
+Next:
+
+```text
+Run a small diagnostics sample and check research_context/stage5_review_synthesis_status.csv; any not_synthesized rows must be treated as Stage5 review coverage gaps, not as real clean Stage5 rejects.
+```
+
+---
+
+## P069 - Stage3-5 candle context coverage status
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: diagnostics / artifact truthfulness
+Trading logic changed: no
+Files: cli/pno_diagnostics.py, research/*
+Commit: UNKNOWN
+Follow-up to: audit for remaining fallback masking in PNO run artifacts
+```
+
+Problem:
+
+```text
+Stage3-5 candle context export could skip a selected setup without a row in stage3_5_candle_outcomes.csv when symbol, anchor timestamp or entry candle coverage was missing.
+That made candle artifacts less comprehensive because absence of a row could mean either no selected setup or a failed candle-context export.
+```
+
+Change:
+
+```text
+Export research_context/stage3_5_candle_context_status.csv with one status row for each selected Stage3-5 candle context candidate.
+Rows now report exported, skipped duplicate_context_key or not_exported with concrete reasons such as symbol_missing, entry_frame_empty_or_anchor_missing_or_timestamp_missing, entry_timestamp_array_empty, anchor_after_entry_frame_end or context_frame_empty.
+```
+
+Verification:
+
+```bash
+python -m compileall strategy/pno cli constants.py
+```
+
+Risk:
+
+```text
+Low. Trading decisions and candle outcome calculations are unchanged; the new CSV only exposes coverage of the candle artifact itself.
+```
+
+Next:
+
+```text
+Run a small diagnostics sample and inspect stage3_5_candle_context_status.csv; any not_exported row means candle-pattern analysis is incomplete for that selected setup.
+```
+
+---
+
+## P070 - Category research-context filter status
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: diagnostics / artifact truthfulness
+Trading logic changed: no
+Files: cli/commands.py, research/*
+Commit: UNKNOWN
+Follow-up to: audit for remaining fallback masking in PNO run artifacts
+```
+
+Problem:
+
+```text
+Category diagnostics copied research_context CSVs only when they had pno_category_id.
+Files without pno_category_id, including status/coverage artifacts, were silently omitted from category research_context while artifact_load_status only reported that the source CSV was read.
+Shared stage-review manifest sync also dropped trade_count_source_counts, weakening data-quality traceability.
+```
+
+Change:
+
+```text
+Category research_context export now writes research_context_filter_status.csv with per-file copied/filtered/not-copied status, source row count, target row count and whether pno_category_id existed.
+CSV files without pno_category_id are copied unfiltered and explicitly marked copied_unfiltered/pno_category_id_missing instead of disappearing.
+Shared stage-review manifest sync preserves trade_count_source_counts.
+```
+
+Verification:
+
+```bash
+python -m compileall strategy/pno cli constants.py
+```
+
+Risk:
+
+```text
+Low. Trading decisions are unchanged. Category archives can include additional global status CSVs that are not category-filtered, but the new filter status labels that explicitly.
+```
+
+Next:
+
+```text
+Run a small pno_category_mode=all diagnostics sample and inspect categories/*/pno_diagnostics/research_context/research_context_filter_status.csv before treating category archives as complete.
+```
+
+---
+
+## P071 - Candle context category metadata
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: diagnostics / artifact truthfulness
+Trading logic changed: no
+Files: cli/pno_diagnostics.py, research/*
+Commit: UNKNOWN
+Follow-up to: category artifact completeness audit
+```
+
+Problem:
+
+```text
+Stage3-5 candle context/outcome/status rows were built manually and did not carry pno_category_id.
+Category research_context export therefore could not filter candle artifacts by category and would have to treat them as unfiltered global CSVs.
+```
+
+Change:
+
+```text
+Add pno_category_id, pno_category_label and pno_profile_variant_id to stage3_5_candle_context.csv, stage3_5_candle_outcomes.csv and stage3_5_candle_context_status.csv rows.
+This allows category archives to filter candle evidence by category instead of silently mixing all categories.
+```
+
+Verification:
+
+```bash
+python -m compileall strategy/pno cli constants.py
+```
+
+Risk:
+
+```text
+Low. Trading decisions and candle calculations are unchanged; CSV schemas gain category metadata columns.
+```
+
+Next:
+
+```text
+Run a small pno_category_mode=all diagnostics sample and verify category stage3_5 candle CSVs are filtered_by_category in research_context_filter_status.csv.
+```
+
+---
+
+## P072 - Chart artifact status coverage
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: diagnostics / artifact truthfulness
+Trading logic changed: no
+Files: cli/commands.py, cli/pno_diagnostics.py, research/*
+Commit: UNKNOWN
+Follow-up to: audit for remaining fallback masking in PNO run artifacts
+```
+
+Problem:
+
+```text
+Stage-review chart rendering and category chart copying could skip charts when prepared frames were missing, the renderer returned None, chart_paths were absent/mismatched, or source chart files were missing.
+Those cases were only indirectly visible through chart counts or empty chart_path fields.
+```
+
+Change:
+
+```text
+Stage-review export now writes stage_reviews/chart_status.csv with per-chart rendered/not_rendered status and concrete reason.
+Category diagnostics now write chart_copy_status.csv with copied/not_copied status for each category position chart candidate.
+```
+
+Verification:
+
+```bash
+python -m compileall strategy/pno cli constants.py
+```
+
+Risk:
+
+```text
+Low. Trading decisions, stage events and rejection rows are unchanged. Only chart artifact coverage is made explicit.
+```
+
+Next:
+
+```text
+Run diagnostics with chart rendering enabled and inspect stage_reviews/chart_status.csv and category chart_copy_status.csv before relying on image coverage in the archive.
+```
+
+---
+
+## P073 - Stage-review event completeness flags
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: diagnostics / artifact truthfulness
+Trading logic changed: no
+Files: cli/pno_diagnostics.py, research/*
+Commit: UNKNOWN
+Follow-up to: stage-review sampling audit
+```
+
+Problem:
+
+```text
+Stage-review rejected events can be exported as either complete rows or a review sample.
+The summary exposed count and exported_events_count, but did not include an explicit machine-readable completeness flag.
+```
+
+Change:
+
+```text
+Stage-review summary.csv now includes events_are_complete and event_export_mode.
+Rejected reasons with sampled event rows are marked event_export_mode=review_sample; full exports are marked complete.
+```
+
+Verification:
+
+```bash
+python -m compileall strategy/pno cli constants.py
+```
+
+Risk:
+
+```text
+Low. Trading decisions and exported event selection are unchanged. The summary schema gains explicit completeness fields.
+```
+
+Next:
+
+```text
+Inspect stage_reviews/*/summary.csv and require events_are_complete=true before treating a reason events.csv as the full rejected-row set.
+```
+
+---
+
+## P074 - Artifact contract regression tests
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: tests / artifact contract
+Trading logic changed: no
+Files: tests/test_pno.py, research/*
+Commit: UNKNOWN
+Follow-up to: concern that status artifacts alone do not fix root causes
+```
+
+Problem:
+
+```text
+The artifact fixes needed executable regression coverage, not just additional status CSVs.
+tests/test_pno.py also had stale TradeResultType/TradeResult imports that prevented collection in the current tree.
+```
+
+Change:
+
+```text
+Update tests/test_pno.py imports to the current PositionResultType/PositionResult modules.
+Add focused tests that verify category research_context filters category-aware CSVs, stage-review summaries mark sampled rejected events explicitly, and Stage3-5 candle context/outcome/status rows carry category metadata.
+```
+
+Verification:
+
+```bash
+python -m pytest tests/test_pno.py -k "category_research_context_filters_category_aware_csvs or stage_review_summary_marks_sampled_rejected_events or stage_candle_context_carries_category_metadata"
+python -m compileall strategy/pno cli constants.py tests/test_pno.py
+```
+
+Risk:
+
+```text
+Low for runtime. Test import compatibility changed only the test suite. Full tests/test_pno.py still has many existing failures against the current code/config and should not be treated as green.
+```
+
+Next:
+
+```text
+Stabilize the broader PNO test suite separately; do not infer production stability from compileall plus three focused artifact tests.
+```
+
+---
+
+## P075 - Split historical PNO tests from runnable suite
+
+```text
+Status: APPLIED locally / UNKNOWN commit
+Type: tests / suite stabilization
+Trading logic changed: no
+Files: pyproject.toml, tests/test_pno.py, tests/test_pno_artifacts.py, tests/test_backtest_runner.py, tests/test_risk_manager.py, research/*
+Commit: UNKNOWN
+Follow-up to: request to stabilize PNO test suite or split stale historical tests from current runnable tests
+```
+
+Problem:
+
+```text
+tests/test_pno.py mixes current checks with stale historical regression expectations and is not green in the current code/config.
+Several non-PNO test files also used stale trade_* imports and prevented default pytest collection.
+```
+
+Change:
+
+```text
+Mark tests/test_pno.py as pno_historical and exclude that marker from the default pytest run.
+Move current artifact-contract tests into tests/test_pno_artifacts.py so they run by default.
+Register the pno_historical marker in pyproject.toml.
+Update stale test imports to current PositionResultType/PositionResult/PositionSignal names and current RiskConfig.risk_per_position_pct field.
+```
+
+Verification:
+
+```bash
+python -m pytest -q
+python -m pytest -m pno_historical tests/test_pno.py -q
+python -m compileall strategy/pno cli constants.py tests
+```
+
+Result:
+
+```text
+Default runnable suite: 8 passed, 159 deselected.
+Historical PNO suite remains red when explicitly requested: 80 failed, 79 passed.
+```
+
+Risk:
+
+```text
+Medium. Default pytest is now green and honest, but it excludes historical PNO regressions. Those failures still need a separate stabilization pass before using historical examples as current acceptance criteria.
+```
+
+Next:
+
+```text
+Triage pno_historical failures by class: stale parameter/schema expectations, stale sparse seconds provider internals, and real strategy golden-case regressions.
+```
