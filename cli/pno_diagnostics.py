@@ -160,8 +160,10 @@ _PNO_POSITION_PATH_CONTEXT_COLUMNS: tuple[str, ...] = (
     "signal_close_above_level",
 )
 _PNO_LEVELS_PATH_CONTEXT_COLUMNS: tuple[str, ...] = (
+    "position_key",
     "stage_key",
     "symbol",
+    "source_stage",
     "source_status",
     "source_reason",
     "bar_offset",
@@ -171,9 +173,22 @@ _PNO_LEVELS_PATH_CONTEXT_COLUMNS: tuple[str, ...] = (
     "low",
     "close",
     "volume",
+    "quote_volume",
+    "number_of_trades",
+    "taker_buy_volume",
+    "taker_buy_quote_volume",
+    "ema9",
+    "ema20",
+    "body_share",
+    "upper_wick_share",
+    "lower_wick_share",
+    "body_overlap_prev",
+    "is_green",
+    "is_pump_start_bar",
     "is_active_high_bar",
     "is_pullback_low_bar",
-    "is_level_bar",
+    "is_level_first_bar",
+    "is_level_last_bar",
     "is_signal_bar",
 )
 _PNO_STAGE_CANDLE_CONTEXT_COLUMNS: tuple[str, ...] = (
@@ -760,6 +775,7 @@ def _prepare_pno_levels_plot_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
             "low",
             "close",
             "volume",
+            "quote_volume",
             "ema9",
             "ema20",
             "open_interest",
@@ -781,6 +797,7 @@ def _prepare_pno_levels_plot_source(levels_frame: pd.DataFrame) -> pd.DataFrame:
             "low",
             "close",
             "volume",
+            "quote_volume",
             "ema9",
             "ema20",
             "open_interest",
@@ -821,6 +838,7 @@ def _prepare_pno_entry_plot_source(entry_frame: pd.DataFrame) -> pd.DataFrame:
             "low",
             "close",
             "volume",
+            "quote_volume",
             "open_interest",
             *_PNO_TRADE_COUNT_SOURCE_COLUMNS,
             "taker_buy_volume",
@@ -838,6 +856,7 @@ def _prepare_pno_entry_plot_source(entry_frame: pd.DataFrame) -> pd.DataFrame:
         "low",
         "close",
         "volume",
+        "quote_volume",
         "open_interest",
         *_PNO_TRADE_COUNT_SOURCE_COLUMNS,
         "taker_buy_volume",
@@ -3490,6 +3509,10 @@ def _build_pno_levels_path_rows(
                 "low": low_price,
                 "close": close_price,
                 "volume": float(path_row["volume"]),
+                "quote_volume": float(path_row["quote_volume"]) if "quote_volume" in path_row.index and pd.notna(path_row["quote_volume"]) else np.nan,
+                "number_of_trades": float(path_row[_PNO_REAL_TRADE_COUNT_COLUMN]) if _PNO_REAL_TRADE_COUNT_COLUMN in path_row.index and pd.notna(path_row[_PNO_REAL_TRADE_COUNT_COLUMN]) else np.nan,
+                "taker_buy_volume": float(path_row["taker_buy_volume"]) if "taker_buy_volume" in path_row.index and pd.notna(path_row["taker_buy_volume"]) else np.nan,
+                "taker_buy_quote_volume": float(path_row["taker_buy_quote_volume"]) if "taker_buy_quote_volume" in path_row.index and pd.notna(path_row["taker_buy_quote_volume"]) else np.nan,
                 "ema9": float(path_row["ema9"]) if "ema9" in path_row.index else np.nan,
                 "ema20": float(path_row["ema20"]) if "ema20" in path_row.index else np.nan,
                 "body_share": round(abs(close_price - open_price) / bar_range, 4),
@@ -3713,6 +3736,13 @@ def _resolve_pno_session_bucket(timestamp_ms: int | None) -> str:
     return "late"
 
 
+def _safe_nanmedian(values: np.ndarray) -> float:
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return np.nan
+    return float(np.median(finite_values))
+
+
 def _resolve_pno_window_profile(
     frame: pd.DataFrame,
     *,
@@ -3738,6 +3768,8 @@ def _resolve_pno_window_profile(
     volume_chunks = np.array_split(volumes, 3) if volumes.size >= 3 else [volumes]
     first_chunk = volume_chunks[0] if volume_chunks else np.array([], dtype=np.float64)
     last_chunk = volume_chunks[-1] if volume_chunks else np.array([], dtype=np.float64)
+    first_volume_median = _safe_nanmedian(first_chunk)
+    last_volume_median = _safe_nanmedian(last_chunk)
     trade_counts = (
         pd.to_numeric(frame[_PNO_REAL_TRADE_COUNT_COLUMN], errors="coerce").to_numpy(dtype=np.float64, copy=False)
         if _PNO_REAL_TRADE_COUNT_COLUMN in frame.columns
@@ -3760,10 +3792,10 @@ def _resolve_pno_window_profile(
         f"{prefix}_lower_wick_share_avg": round(float(np.mean(lower_wicks / bar_ranges)), 4),
         f"{prefix}_path_efficiency": round(float(direct / max(path, 1e-12)), 4) if closes.size > 1 else np.nan,
         f"{prefix}_range_abs": round(float(np.max(highs) - np.min(lows)), 8),
-        f"{prefix}_volume_median": round(float(np.nanmedian(volumes)), 4),
-        f"{prefix}_quote_volume_median": round(float(np.nanmedian(quote_volume)), 4),
-        f"{prefix}_volume_last_vs_first": round(float(np.nanmedian(last_chunk) / np.nanmedian(first_chunk)), 4)
-        if first_chunk.size > 0 and last_chunk.size > 0 and np.nanmedian(first_chunk) > 0.0
+        f"{prefix}_volume_median": round(_safe_nanmedian(volumes), 4),
+        f"{prefix}_quote_volume_median": round(_safe_nanmedian(quote_volume), 4),
+        f"{prefix}_volume_last_vs_first": round(last_volume_median / first_volume_median, 4)
+        if np.isfinite(first_volume_median) and first_volume_median > 0.0 and np.isfinite(last_volume_median)
         else np.nan,
     }
     if anchor_price is not None and np.isfinite(anchor_price) and anchor_price > 0.0:
@@ -3772,8 +3804,10 @@ def _resolve_pno_window_profile(
         trade_chunks = np.array_split(trade_counts, 3) if trade_counts.size >= 3 else [trade_counts]
         trade_first = trade_chunks[0] if trade_chunks else np.array([], dtype=np.float64)
         trade_last = trade_chunks[-1] if trade_chunks else np.array([], dtype=np.float64)
-        result[f"{prefix}_trade_count_median"] = round(float(np.nanmedian(trade_counts)), 4)
-        result[f"{prefix}_trade_count_last_vs_first"] = round(float(np.nanmedian(trade_last) / np.nanmedian(trade_first)), 4) if trade_first.size > 0 and trade_last.size > 0 and np.nanmedian(trade_first) > 0.0 else np.nan
+        trade_first_median = _safe_nanmedian(trade_first)
+        trade_last_median = _safe_nanmedian(trade_last)
+        result[f"{prefix}_trade_count_median"] = round(_safe_nanmedian(trade_counts), 4)
+        result[f"{prefix}_trade_count_last_vs_first"] = round(trade_last_median / trade_first_median, 4) if np.isfinite(trade_first_median) and trade_first_median > 0.0 and np.isfinite(trade_last_median) else np.nan
     if oi_values is not None and oi_values.size:
         valid_oi = oi_values[np.isfinite(oi_values)]
         if valid_oi.size >= 2 and valid_oi[0] > 0.0:

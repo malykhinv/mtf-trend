@@ -736,6 +736,31 @@ Run the same 7-day pno-all-tf-pairs diagnostics command and verify the FutureWar
 
 ---
 
+## 32. Current local patch note - P078
+
+```text
+Status: PROPOSED
+Updated: 2026-05-06
+```
+
+Current conclusion:
+
+```text
+The 5m/30s 7-day diagnostics run is usable for funnel analysis, not edge.
+Data coverage says real number_of_trades and quote_volume_usdt are available, but research_context artifacts were dropping quote_volume in prepared plot/research frames.
+P078 fixes artifact truthfulness by carrying quote_volume through prepared levels/entry frames and exporting flow fields in stage5_levels_path_context.
+No proxy quote volume is introduced and trading logic is unchanged.
+```
+
+One next test:
+
+```text
+Rerun the same 5m/30s diagnostics and check diagnostics_coverage.csv against research_context/stage3_5_candle_context.csv: if source is quote_volume_usdt, quote_volume should not be all NaN.
+```
+
+
+---
+
 ## 30. Current local patch note - P076
 
 ```text

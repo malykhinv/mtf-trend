@@ -3095,6 +3095,57 @@ Next:
 Inspect data-load/status artifacts first; do not treat warning removal as evidence of edge or artifact completeness.
 ```
 
+
+---
+
+## P078 - Preserve quote_volume in PNO research artifacts
+
+```text
+Status: PROPOSED
+Type: diagnostics / artifact truthfulness
+Trading logic changed: no
+Files: cli/pno_diagnostics.py, research/*
+Commit: UNKNOWN
+Follow-up to: 5m/30s 7-day diagnostics run from 5m_30s.zip showed quote_volume_usdt coverage in diagnostics, but all-NaN quote_volume in research_context candle artifacts.
+```
+
+Problem:
+
+```text
+PNO diagnostics coverage reported levels/entry quote_volume_source=quote_volume_usdt for all 527 analyzed symbols.
+However, plot/research frame preparation dropped quote_volume before building research_context, so stage3_5_candle_context.csv exported quote_volume as all NaN and _describe_pno_frame_shape emitted All-NaN RuntimeWarning for quote_volume_median.
+This made artifacts less truthful than the loaded data.
+```
+
+Change:
+
+```text
+Carry quote_volume through prepared levels/entry plot frames.
+Export quote_volume, canonical number_of_trades and taker-buy fields in stage5_levels_path_context.
+Compute diagnostic medians with an explicit finite-value check so missing data remains NaN without RuntimeWarning noise.
+No proxy or fallback value is introduced.
+```
+
+Verification:
+
+```bash
+python -m compileall cli/pno_diagnostics.py strategy/pno constants.py main.py launcher.py vectorbt_runner
+python main.py run-backtest --strategy pno --pno-all-tf-pairs --pno-deposit 10000 --pno-risk-pct 0.05 --plot-rejected true --pno-entry-confirmation-mode close_above --days 7 --pno-category-mode discovery --collect-diagnostics true
+```
+
+Risk:
+
+```text
+Low. Artifact columns become more complete; trading decisions and rejection logic are unchanged.
+If source data genuinely lacks quote_volume, artifacts will still show NaN instead of fabricating a proxy.
+```
+
+Next:
+
+```text
+Rerun the same 5m/30s diagnostics and verify stage3_5_candle_context.csv quote_volume is populated when diagnostics_coverage reports quote_volume_usdt.
+```
+
 ---
 
 ## P076 - Strict PNO generation and human_bos parity

@@ -888,3 +888,61 @@ Do not evaluate:
 ```text
 Edge/PnL. This is test-suite hygiene and separation of current acceptance checks from stale historical regressions.
 ```
+
+
+---
+
+## E024 - 5m/30s 7-day discovery diagnostics artifact audit
+
+```text
+Status: ANALYZED
+Patch: P078 proposed / commit UNKNOWN
+Date: 2026-05-06
+Code state: local workspace after P077; P076 application status should be checked in the user repo before interpreting human_bos parity.
+Run artifact: 5m_30s.zip
+```
+
+Config:
+
+```text
+Strategy: PNO discovery / close_above
+Levels TF: 5m
+Entry TF: 30s
+Period: 7 days
+Symbols analyzed: 527
+Positions: 0
+```
+
+Funnel:
+
+```text
+Stage1: 958 events / 13 passed
+Stage2: 10 events / 9 passed
+Stage3: 10 events / 3 passed
+Stage4: 6 events / 1 passed
+Stage5: 18 events / 0 positions
+Unique Stage5 setup: 1, GOOGL/USDT:USDT, rejected
+```
+
+Data quality:
+
+```text
+Diagnostics coverage reports levels_trade_count_source=number_of_trades and entry_trade_count_source=number_of_trades for all 527 symbols.
+Diagnostics coverage reports levels_quote_volume_source=quote_volume_usdt and entry_quote_volume_source=quote_volume_usdt for all 527 symbols.
+Research_context candle artifacts nevertheless had all-NaN quote_volume because prepared plot/research frames dropped the column.
+This is an artifact bug, not evidence that loaded market data lacks quote_volume.
+```
+
+Interpretation:
+
+```text
+No profitability conclusion is possible with 0 positions.
+The single Stage5 setup failed honestly: the GOOGL reclaim did not reach active high and broke pullback low first.
+Several rejected Stage3/Stage4 near-misses hit TP1 within one hour, but those were pre-entry/invalid cases and must not be counted as trades.
+```
+
+Next:
+
+```text
+Apply P078, rerun the same 5m/30s diagnostics, then compare quote_volume coverage in diagnostics_coverage.csv versus stage3_5_candle_context.csv before changing filters.
+```
