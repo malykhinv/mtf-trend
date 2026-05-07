@@ -1269,3 +1269,122 @@ Interpretation:
 The artifacts are honest for OI coverage: no synthetic 1m OI, no zero fill, no hidden fallback.
 This run cannot answer whether OI dynamics separate runners from faders until 5m open_interest exists in cache.
 ```
+
+---
+
+## E034 - 7-day all-symbol anomaly lab profitability/OI run
+
+```text
+Status: ANALYZED
+Patch state: local anomaly lab branch with P085-P087; commit UNKNOWN
+Output: .output/results/anomaly_lab
+Command: .venv\Scripts\python.exe main.py run-anomaly-lab --days 7 --confirmation-candles 4 --forward-high-candles 240 --forward-low-candles 60 --min-quote-ratio-start 5 --min-trade-ratio-start 5
+```
+
+Result:
+
+```text
+Candidates: 43,232.
+Signals: 9,294.
+Closed trades: 8,962 across 537 symbols.
+Win rate: 46.14%.
+Average net return: -0.0854% per trade.
+Median net return: -0.1360%.
+Total simple sum net return: -7.653.
+TP1 hit rate: 47.70%.
+Exit reasons: 4,448 stop_loss, 4,265 trailing_stop, 249 time_exit.
+Candidate outcomes: 94 big_25p, 956 fast_fade, 42,182 other.
+```
+
+OI coverage:
+
+```text
+Candidates with OI ok: 41,990 / 43,232.
+Signals with OI ok: 9,010 / 9,294.
+Closed trades with OI ok: 8,691 / 8,962.
+Other OI statuses: missing_column, no_oi_before_decision, stale_asof.
+```
+
+Interpretation:
+
+```text
+The default anomaly continuation rule is not profitable on the 7-day all-symbol run.
+OI is now sufficiently covered for exploratory segmentation.
+Positive OI expansion is the most interesting observed layer, but the sample is still small after filtering: oi_change_pct_3x5m > 3% has 64 closed trades, win rate 60.9%, avg net +0.77%; combining it with hold_count >= 2 has 36 trades, win rate 66.7%, avg net +1.29%.
+This is a hypothesis for the next test, not a stable edge conclusion.
+```
+
+---
+
+## E035 - OI-filtered anomaly win/loss and entry-structure analysis
+
+```text
+Status: ANALYZED
+Patch state: local anomaly lab branch; commit UNKNOWN
+Output: .output/results/anomaly_lab
+Basis: E034 7-day all-symbol run
+```
+
+Findings:
+
+```text
+All closed trades: 8,962, win rate 46.1%, avg net -0.085%.
+The strongest non-future filter found in this run is oi_change_pct_3x5m > 3% plus hold_count_next_n_candles >= 2: 36 trades, 34 symbols, 6 days, win rate 66.7%, avg net +1.29%.
+Daily results for this filter: 2026-04-30 +0.013, 2026-05-01 +0.165, 2026-05-03 +0.202, 2026-05-04 -0.032, 2026-05-05 -0.024, 2026-05-06 +0.143.
+Losses inside this filter are not explained by weak OI. They often have larger start_quote_ratio/start_trade_ratio and stronger next-candle decay/hold, suggesting overly crowded or exhaustion-like pumps.
+```
+
+Entry analysis:
+
+```text
+On the rule-only oi3>3% + hold>=2 subset, market-at-decision produced 36/36 entries, 66.7% win rate, avg net +1.29%.
+Structural pullback to box_low + 0.75 * box_range produced 35/36 entries, 68.6% win rate, avg net +1.70%.
+Pullback to box_low + 0.85 * box_range produced 35/36 entries, 62.9% win rate, avg net +1.62%.
+Breakout above decision box high produced 32/36 entries, 65.6% win rate, avg net +1.24%.
+For post-facto big_25p runner trades, breakout above box high improved runner capture, but that is runner analysis, not a standalone entry rule.
+```
+
+Interpretation:
+
+```text
+The best current research direction is not "enter on candle N".
+It is: anomaly wake-up, real 5m OI expansion over the prior 15 minutes, tape persistence over confirmation candles, then structural pullback entry inside the known impulse/confirmation box.
+The edge is not proven until tested on longer periods and on a pre-declared filter grid.
+```
+
+---
+
+## E036 - Anomaly flow/effort metric smoke check
+
+```text
+Status: COMPLETED
+Patch state: P089 applied locally; commit UNKNOWN
+Output: .output/manual_checks/anomaly_metrics_smoke
+Command: .venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_metrics_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols IO/USDT:USDT ZEC/USDT:USDT --run-entry-grid true --grid-oi3-values 0.01 --grid-hold-values 1 --grid-pullback-fractions 0.75
+```
+
+Result:
+
+```text
+anomaly_candidates.csv and anomaly_trades.csv include the new taker buy, avg trade size, effort-vs-result, range expansion and OI x price interaction columns.
+This is a schema/availability smoke check only; no edge conclusion is made from this small run.
+```
+
+---
+
+## E037 - Anomaly honesty/performance smoke check after P090
+
+```text
+Status: COMPLETED
+Patch state: P090 applied locally; commit UNKNOWN
+Output: .output/manual_checks/anomaly_honesty_speed_smoke
+Command: .venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_honesty_speed_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols IO/USDT:USDT ZEC/USDT:USDT --run-entry-grid true --grid-oi3-values 0.01,0.03 --grid-hold-values 1,2 --grid-pullback-fractions 0.75
+```
+
+Result:
+
+```text
+Smoke run completed.
+anomaly_signals.csv includes decision_box_low/high/range and initial_risk_pct_at_decision.
+The prior initial_risk_pct_proxy field is removed from the signal artifact.
+```

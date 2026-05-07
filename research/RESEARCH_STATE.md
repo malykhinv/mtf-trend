@@ -940,3 +940,32 @@ Progress note:
 run-anomaly-lab prints percent and ETA for candidate collection and trade simulation after P086. This is a logging/UX change only.
 ```
 
+Research update:
+
+```text
+E035 found the most promising current non-future layer: oi_change_pct_3x5m > 3% plus hold_count_next_n_candles >= 2.
+On the 7-day all-symbol run it produced 36 closed trades across 34 symbols and 6 days, win rate 66.7%, avg net +1.29%.
+Entry analysis favors structural pullback into the known impulse/confirmation box, especially around box_low + 0.75 * box_range, over a naive candle-number entry.
+This remains a hypothesis, not a proven stable edge, until tested on longer history and pre-declared grids.
+```
+
+Tooling update:
+
+```text
+P088 adds run-anomaly-lab --run-entry-grid. The next OI test should use a predeclared 31-day grid and compare anomaly_entry_grid_summary.csv before selecting a specific rule.
+```
+
+Feature update:
+
+```text
+P089 adds flow/effort/sleep features for runner-vs-fader analysis: taker buy quote share, avg trade quote size, effort per return, range expansion vs baseline, wick/body/range structure, post-start pullback fraction and OI x price interaction.
+These features are analysis-only and should be evaluated on the next 31-day predeclared grid before adding any new filter.
+```
+
+Honesty/performance update:
+
+```text
+P090 removes the remaining anomaly signal risk proxy. Signals now use the exact decision_box_low/high/range already known at decision time.
+Entry-grid variants reuse cached symbol frames across the grid, reducing repeated parquet reads without changing trade logic.
+```
+

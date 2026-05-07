@@ -34,6 +34,15 @@ def _positive_int_for(argument_name: str) -> Callable[[str], int]:
     return _validator
 
 
+def _str_to_bool(value: str) -> bool:
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "y"}:
+        return True
+    if normalized in {"0", "false", "no", "n"}:
+        return False
+    raise argparse.ArgumentTypeError("expected true/false")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="mtf-trend")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -181,13 +190,26 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--min-price-retention", type=float, default=0.70)
     anomaly_lab.add_argument("--min-verticality-score", type=float, default=0.25)
     anomaly_lab.add_argument("--min-hold-count", type=int, default=0)
+    anomaly_lab.add_argument("--min-oi-change-pct-3x5m", type=float, default=None)
+    anomaly_lab.add_argument("--require-oi-status-ok", type=_str_to_bool, default=False)
     anomaly_lab.add_argument("--max-initial-risk-pct", type=float, default=0.16)
+    anomaly_lab.add_argument(
+        "--entry-method",
+        choices=["market", "break_box_high", "pullback_box_fraction"],
+        default="market",
+    )
+    anomaly_lab.add_argument("--pullback-box-fraction", type=float, default=0.75)
+    anomaly_lab.add_argument("--entry-timeout-candles", type=_positive_int_for("--entry-timeout-candles"), default=60)
     anomaly_lab.add_argument("--tp1-r", type=float, default=1.0)
     anomaly_lab.add_argument("--tp1-fraction", type=float, default=0.50)
     anomaly_lab.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_lab.add_argument("--trail-buffer-r", type=float, default=0.10)
     anomaly_lab.add_argument("--max-hold-candles", type=_positive_int_for("--max-hold-candles"), default=240)
     anomaly_lab.add_argument("--fee-rate", type=float, default=0.0004)
+    anomaly_lab.add_argument("--run-entry-grid", type=_str_to_bool, default=False)
+    anomaly_lab.add_argument("--grid-oi3-values", default="0.01,0.02,0.03")
+    anomaly_lab.add_argument("--grid-hold-values", default="1,2")
+    anomaly_lab.add_argument("--grid-pullback-fractions", default="0.65,0.75,0.85")
 
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")

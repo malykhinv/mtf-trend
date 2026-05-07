@@ -3574,3 +3574,111 @@ Verification:
 .venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
 .venv\Scripts\python.exe -m compileall research_tools cli tests\test_anomaly_continuation_lab.py
 ```
+
+---
+
+## P087 - Fix encoded unicode symbol cache paths in anomaly lab
+
+```text
+Status: APPLIED locally / tests passed
+Type: bugfix
+Trading logic changed: no
+Files: research_tools/anomaly_continuation_lab.py, research_tools/anomaly_strategy_backtest.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Use URL quote(symbol, safe="") when reconstructing cache paths, so unicode symbols like 龙虾/USDT:USDT resolve to their percent-encoded cache directories.
+```
+
+---
+
+## P088 - Add anomaly OI entry grid
+
+```text
+Status: APPLIED locally / tests passed
+Type: research tooling
+Trading logic changed: no PNO logic changed
+Files: research_tools/anomaly_strategy_backtest.py, cli/parser.py, cli/commands.py, tests/test_anomaly_continuation_lab.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Add decision-time OI filters and structural entry methods to run-anomaly-lab.
+Supported entry methods: market, break_box_high, pullback_box_fraction.
+Add --run-entry-grid to write anomaly_entry_grid_summary.csv for a predeclared grid of OI threshold, hold count and pullback fraction.
+The default command behavior remains market entry without OI filter unless args are supplied.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe -m compileall research_tools cli tests\test_anomaly_continuation_lab.py
+.venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_entry_grid_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols IO/USDT:USDT ZEC/USDT:USDT --run-entry-grid true --grid-oi3-values 0.01,0.03 --grid-hold-values 1,2 --grid-pullback-fractions 0.75
+```
+
+---
+
+## P089 - Add anomaly flow/effort/sleep metrics
+
+```text
+Status: APPLIED locally / tests passed
+Type: research feature engineering
+Trading logic changed: no PNO logic changed
+Files: research_tools/anomaly_continuation_lab.py, research_tools/anomaly_strategy_backtest.py, tests/test_anomaly_continuation_lab.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Add decision-time research features from exchange candle data:
+taker buy quote share and persistence, avg trade quote size and decay, start close/range/wick metrics, effort-vs-result ratios, start range expansion vs baseline, post-start pullback fraction, OI x price interaction, and OI change per decision return.
+The fields are written to anomaly_candidates.csv and propagated to anomaly_trades.csv.
+Missing taker-buy fields are labelled flow_taker_buy_status=missing_columns and stay NaN.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe -m compileall research_tools cli tests\test_anomaly_continuation_lab.py
+.venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_metrics_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols IO/USDT:USDT ZEC/USDT:USDT --run-entry-grid true --grid-oi3-values 0.01 --grid-hold-values 1 --grid-pullback-fractions 0.75
+```
+
+---
+
+## P090 - Remove anomaly risk proxy and reuse grid frame cache
+
+```text
+Status: APPLIED locally / tests passed
+Type: honesty/performance
+Trading logic changed: no PNO logic changed
+Files: research_tools/anomaly_continuation_lab.py, research_tools/anomaly_strategy_backtest.py, tests/test_anomaly_continuation_lab.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Add decision_box_low/high/range to candidates and use them for signal risk filtering instead of the prior start-candle risk proxy.
+Rename signal risk fields to initial_stop_at_decision and initial_risk_pct_at_decision.
+Reuse a shared symbol frame cache across entry-grid variants, avoiding repeated parquet reads for each grid row.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe -m compileall research_tools cli tests\test_anomaly_continuation_lab.py
+.venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_honesty_speed_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols IO/USDT:USDT ZEC/USDT:USDT --run-entry-grid true --grid-oi3-values 0.01,0.03 --grid-hold-values 1,2 --grid-pullback-fractions 0.75
+```

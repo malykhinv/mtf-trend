@@ -4306,6 +4306,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
         from research_tools.anomaly_strategy_backtest import (
             AnomalyBacktestConfig,
             AnomalyLabConfig,
+            _parse_grid_values,
             run_anomaly_strategy_backtest,
         )
 
@@ -4332,7 +4333,16 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             min_price_retention=float(args.min_price_retention),
             min_verticality_score=float(args.min_verticality_score),
             min_hold_count=int(args.min_hold_count),
+            min_oi_change_pct_3x5m=(
+                None
+                if getattr(args, "min_oi_change_pct_3x5m", None) is None
+                else float(args.min_oi_change_pct_3x5m)
+            ),
+            require_oi_status_ok=bool(getattr(args, "require_oi_status_ok", False)),
             max_initial_risk_pct=float(args.max_initial_risk_pct),
+            entry_method=str(getattr(args, "entry_method", "market")),
+            pullback_box_fraction=float(getattr(args, "pullback_box_fraction", 0.75)),
+            entry_timeout_candles=int(getattr(args, "entry_timeout_candles", 60)),
             tp1_r=float(args.tp1_r),
             tp1_fraction=float(args.tp1_fraction),
             trail_lookback_candles=int(args.trail_lookback_candles),
@@ -4340,7 +4350,17 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             max_hold_candles=int(args.max_hold_candles),
             fee_rate=float(args.fee_rate),
         )
-        run_anomaly_strategy_backtest(backtest_config, symbols=getattr(args, "symbols", None))
+        run_anomaly_strategy_backtest(
+            backtest_config,
+            symbols=getattr(args, "symbols", None),
+            run_entry_grid=bool(getattr(args, "run_entry_grid", False)),
+            grid_oi3_values=_parse_grid_values(str(getattr(args, "grid_oi3_values", "0.01,0.02,0.03")), cast=float),
+            grid_hold_values=_parse_grid_values(str(getattr(args, "grid_hold_values", "1,2")), cast=int),
+            grid_pullback_fractions=_parse_grid_values(
+                str(getattr(args, "grid_pullback_fractions", "0.65,0.75,0.85")),
+                cast=float,
+            ),
+        )
         return 0
 
     return _run_with_logging("run-anomaly-lab", config, _run)
