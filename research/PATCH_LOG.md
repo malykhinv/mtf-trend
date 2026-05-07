@@ -3709,3 +3709,33 @@ Verification:
 ```bash
 .venv\Scripts\python.exe -m compileall data/fetchers/oi_fetcher.py
 ```
+
+---
+
+## P092 - Add anomaly anti-exhaustion grid profiles
+
+```text
+Status: APPLIED locally / tests passed
+Type: research feature grid
+Trading logic changed: no PNO logic changed
+Files: research_tools/anomaly_strategy_backtest.py, cli/parser.py, cli/commands.py, tests/test_anomaly_continuation_lab.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Add optional anti-exhaustion filters to anomaly signal selection and entry-grid summary:
+max_price_retention, max_start_quote_ratio, max_start_trade_ratio, max_start_avg_trade_quote_size_ratio, max_start_quote_ratio_per_abs_return, max_start_range_pct_ratio_to_baseline and min_next_taker_buy_quote_share.
+Add grid exhaustion profiles none/mild/balanced/strict. Defaults remain unchanged.
+The intended first 30-day run should use none,mild,balanced to avoid crushing trade count below the 15-30/month target.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe -m compileall research_tools cli tests\test_anomaly_continuation_lab.py
+.venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_exhaustion_grid_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols IO/USDT:USDT ZEC/USDT:USDT --run-entry-grid true --grid-oi3-values 0.03 --grid-hold-values 2 --grid-pullback-fractions 0.75 --grid-exhaustion-profiles none,mild,balanced
+```

@@ -4307,6 +4307,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             AnomalyBacktestConfig,
             AnomalyLabConfig,
             _parse_grid_values,
+            _parse_grid_profile_values,
             run_anomaly_strategy_backtest,
         )
 
@@ -4331,6 +4332,9 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
         backtest_config = AnomalyBacktestConfig(
             lab_config=lab_config,
             min_price_retention=float(args.min_price_retention),
+            max_price_retention=(
+                None if getattr(args, "max_price_retention", None) is None else float(args.max_price_retention)
+            ),
             min_verticality_score=float(args.min_verticality_score),
             min_hold_count=int(args.min_hold_count),
             min_oi_change_pct_3x5m=(
@@ -4339,6 +4343,33 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 else float(args.min_oi_change_pct_3x5m)
             ),
             require_oi_status_ok=bool(getattr(args, "require_oi_status_ok", False)),
+            exhaustion_profile=str(getattr(args, "exhaustion_profile", "none")),
+            max_start_quote_ratio=(
+                None if getattr(args, "max_start_quote_ratio", None) is None else float(args.max_start_quote_ratio)
+            ),
+            max_start_trade_ratio=(
+                None if getattr(args, "max_start_trade_ratio", None) is None else float(args.max_start_trade_ratio)
+            ),
+            max_start_avg_trade_quote_size_ratio=(
+                None
+                if getattr(args, "max_start_avg_trade_quote_size_ratio", None) is None
+                else float(args.max_start_avg_trade_quote_size_ratio)
+            ),
+            max_start_quote_ratio_per_abs_return=(
+                None
+                if getattr(args, "max_start_quote_ratio_per_abs_return", None) is None
+                else float(args.max_start_quote_ratio_per_abs_return)
+            ),
+            max_start_range_pct_ratio_to_baseline=(
+                None
+                if getattr(args, "max_start_range_pct_ratio_to_baseline", None) is None
+                else float(args.max_start_range_pct_ratio_to_baseline)
+            ),
+            min_next_taker_buy_quote_share=(
+                None
+                if getattr(args, "min_next_taker_buy_quote_share", None) is None
+                else float(args.min_next_taker_buy_quote_share)
+            ),
             max_initial_risk_pct=float(args.max_initial_risk_pct),
             entry_method=str(getattr(args, "entry_method", "market")),
             pullback_box_fraction=float(getattr(args, "pullback_box_fraction", 0.75)),
@@ -4359,6 +4390,9 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             grid_pullback_fractions=_parse_grid_values(
                 str(getattr(args, "grid_pullback_fractions", "0.65,0.75,0.85")),
                 cast=float,
+            ),
+            grid_exhaustion_profiles=_parse_grid_profile_values(
+                str(getattr(args, "grid_exhaustion_profiles", "none"))
             ),
         )
         return 0

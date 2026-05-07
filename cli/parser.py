@@ -188,10 +188,18 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--min-quote-ratio-start", type=float, default=5.0)
     anomaly_lab.add_argument("--min-trade-ratio-start", type=float, default=5.0)
     anomaly_lab.add_argument("--min-price-retention", type=float, default=0.70)
+    anomaly_lab.add_argument("--max-price-retention", type=float, default=None)
     anomaly_lab.add_argument("--min-verticality-score", type=float, default=0.25)
     anomaly_lab.add_argument("--min-hold-count", type=int, default=0)
     anomaly_lab.add_argument("--min-oi-change-pct-3x5m", type=float, default=None)
     anomaly_lab.add_argument("--require-oi-status-ok", type=_str_to_bool, default=False)
+    anomaly_lab.add_argument("--exhaustion-profile", choices=["none", "mild", "balanced", "strict"], default="none")
+    anomaly_lab.add_argument("--max-start-quote-ratio", type=float, default=None)
+    anomaly_lab.add_argument("--max-start-trade-ratio", type=float, default=None)
+    anomaly_lab.add_argument("--max-start-avg-trade-quote-size-ratio", type=float, default=None)
+    anomaly_lab.add_argument("--max-start-quote-ratio-per-abs-return", type=float, default=None)
+    anomaly_lab.add_argument("--max-start-range-pct-ratio-to-baseline", type=float, default=None)
+    anomaly_lab.add_argument("--min-next-taker-buy-quote-share", type=float, default=None)
     anomaly_lab.add_argument("--max-initial-risk-pct", type=float, default=0.16)
     anomaly_lab.add_argument(
         "--entry-method",
@@ -210,6 +218,7 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--grid-oi3-values", default="0.01,0.02,0.03")
     anomaly_lab.add_argument("--grid-hold-values", default="1,2")
     anomaly_lab.add_argument("--grid-pullback-fractions", default="0.65,0.75,0.85")
+    anomaly_lab.add_argument("--grid-exhaustion-profiles", default="none")
 
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")

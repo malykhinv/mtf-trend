@@ -1450,3 +1450,31 @@ Conclusion:
 Do not promote this to a deployable strategy.
 Keep OI expansion as a useful feature, but the next research step should add anti-exhaustion filters and regime/day robustness checks before optimizing exits.
 ```
+
+---
+
+## E039 - Planned 30-day anomaly anti-exhaustion grid
+
+```text
+Status: PLANNED
+Patch state: P092 applied locally; commit UNKNOWN
+Output target: .output/results/anomaly_lab_30d_exhaustion_grid
+```
+
+Goal:
+
+```text
+Test whether mild/balanced anti-exhaustion filters improve OI-expansion anomaly continuation without reducing frequency below roughly 15-30 trades/month.
+```
+
+Command:
+
+```bash
+python main.py run-anomaly-lab --output-dir .output/results/anomaly_lab_30d_exhaustion_grid --days 30 --confirmation-candles 4 --forward-high-candles 240 --forward-low-candles 60 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --run-entry-grid true --grid-oi3-values 0.03,0.05 --grid-hold-values 1,2,3 --grid-pullback-fractions 0.65,0.75,0.85 --grid-exhaustion-profiles none,mild,balanced
+```
+
+Do not evaluate:
+
+```text
+Single best row only. Compare trade count, days, symbols, median, daily distribution and top-trade dependence.
+```

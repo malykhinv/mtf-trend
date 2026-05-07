@@ -136,6 +136,72 @@ def test_anomaly_signal_filter_uses_decision_time_features() -> None:
     assert signals["decision_timestamp_ms"].tolist() == [240_000]
 
 
+def test_anomaly_signal_filter_can_apply_anti_exhaustion_caps() -> None:
+    candidates = pd.DataFrame(
+        [
+            {
+                "symbol": "TEST/USDT:USDT",
+                "timestamp_ms": 0,
+                "decision_timestamp_ms": 240_000,
+                "decision_close": 11.0,
+                "decision_box_low": 9.8,
+                "decision_box_high": 11.0,
+                "decision_box_range": 1.2,
+                "price_retention_next_n": 0.85,
+                "start_verticality_score": 0.5,
+                "hold_count_next_n_candles": 2,
+                "oi_status": "ok",
+                "oi_change_pct_3x5m": 0.04,
+                "start_quote_ratio": 40.0,
+                "start_trade_ratio": 18.0,
+                "start_avg_trade_quote_size_ratio": 2.0,
+                "start_quote_ratio_per_abs_return": 2_000.0,
+                "start_range_pct_ratio_to_baseline": 6.0,
+                "next_n_taker_buy_quote_share_mean": 0.52,
+            },
+            {
+                "symbol": "TEST/USDT:USDT",
+                "timestamp_ms": 300_000,
+                "decision_timestamp_ms": 540_000,
+                "decision_close": 11.0,
+                "decision_box_low": 9.8,
+                "decision_box_high": 11.0,
+                "decision_box_range": 1.2,
+                "price_retention_next_n": 0.99,
+                "start_verticality_score": 0.5,
+                "hold_count_next_n_candles": 2,
+                "oi_status": "ok",
+                "oi_change_pct_3x5m": 0.04,
+                "start_quote_ratio": 180.0,
+                "start_trade_ratio": 90.0,
+                "start_avg_trade_quote_size_ratio": 12.0,
+                "start_quote_ratio_per_abs_return": 40_000.0,
+                "start_range_pct_ratio_to_baseline": 40.0,
+                "next_n_taker_buy_quote_share_mean": 0.42,
+            },
+        ]
+    )
+
+    signals = build_anomaly_signals(
+        candidates,
+        config=AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(),
+            min_hold_count=2,
+            min_oi_change_pct_3x5m=0.03,
+            require_oi_status_ok=True,
+            max_start_quote_ratio=80.0,
+            max_start_trade_ratio=40.0,
+            max_start_avg_trade_quote_size_ratio=7.0,
+            max_start_quote_ratio_per_abs_return=15_000.0,
+            max_start_range_pct_ratio_to_baseline=25.0,
+            min_next_taker_buy_quote_share=0.48,
+            max_price_retention=0.96,
+        ),
+    )
+
+    assert signals["decision_timestamp_ms"].tolist() == [240_000]
+
+
 def test_simulate_long_signal_takes_tp1_and_trails_remaining() -> None:
     frame = pd.DataFrame(
         {

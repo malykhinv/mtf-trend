@@ -986,3 +986,10 @@ Strict pullback 0.75 / hold>=2 / oi3>3 resimulation: 155 trades, 124 symbols, 29
 Conclusion: OI expansion is useful but not enough; next step is anti-exhaustion filtering, especially against too-large quote/trade/avg-trade-size effort per price progress.
 ```
 
+Anti-exhaustion grid update:
+
+```text
+P092 adds optional anti-exhaustion filters and grid profiles none/mild/balanced/strict.
+The next 30-day test should use none,mild,balanced first to preserve trade frequency and only inspect strict later if the softer profiles still leave enough trades.
+```
+

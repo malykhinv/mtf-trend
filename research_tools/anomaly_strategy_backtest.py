@@ -86,10 +86,18 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
 class AnomalyBacktestConfig:
     lab_config: AnomalyLabConfig
     min_price_retention: float = 0.70
+    max_price_retention: float | None = None
     min_verticality_score: float = 0.25
     min_hold_count: int = 0
     min_oi_change_pct_3x5m: float | None = None
     require_oi_status_ok: bool = False
+    exhaustion_profile: str = "none"
+    max_start_quote_ratio: float | None = None
+    max_start_trade_ratio: float | None = None
+    max_start_avg_trade_quote_size_ratio: float | None = None
+    max_start_quote_ratio_per_abs_return: float | None = None
+    max_start_range_pct_ratio_to_baseline: float | None = None
+    min_next_taker_buy_quote_share: float | None = None
     max_initial_risk_pct: float = 0.16
     entry_method: str = "market"
     pullback_box_fraction: float = 0.75
@@ -145,6 +153,18 @@ def build_anomaly_signals(
         required.add("oi_change_pct_3x5m")
     if config.require_oi_status_ok:
         required.add("oi_status")
+    optional_filter_columns = {
+        "max_start_quote_ratio": "start_quote_ratio",
+        "max_start_trade_ratio": "start_trade_ratio",
+        "max_start_avg_trade_quote_size_ratio": "start_avg_trade_quote_size_ratio",
+        "max_start_quote_ratio_per_abs_return": "start_quote_ratio_per_abs_return",
+        "max_start_range_pct_ratio_to_baseline": "start_range_pct_ratio_to_baseline",
+        "min_next_taker_buy_quote_share": "next_n_taker_buy_quote_share_mean",
+        "max_price_retention": "price_retention_next_n",
+    }
+    for config_field, column in optional_filter_columns.items():
+        if getattr(config, config_field) is not None:
+            required.add(column)
     missing = required.difference(candidates.columns)
     if missing:
         raise ValueError(f"candidates missing required columns: {sorted(missing)}")
@@ -168,6 +188,26 @@ def build_anomaly_signals(
         mask &= signals["oi_change_pct_3x5m"].astype(float).gt(config.min_oi_change_pct_3x5m)
     if config.require_oi_status_ok:
         mask &= signals["oi_status"].eq("ok")
+    if config.max_price_retention is not None:
+        mask &= signals["price_retention_next_n"].astype(float).le(config.max_price_retention)
+    if config.max_start_quote_ratio is not None:
+        mask &= signals["start_quote_ratio"].astype(float).le(config.max_start_quote_ratio)
+    if config.max_start_trade_ratio is not None:
+        mask &= signals["start_trade_ratio"].astype(float).le(config.max_start_trade_ratio)
+    if config.max_start_avg_trade_quote_size_ratio is not None:
+        mask &= signals["start_avg_trade_quote_size_ratio"].astype(float).le(config.max_start_avg_trade_quote_size_ratio)
+    if config.max_start_quote_ratio_per_abs_return is not None:
+        mask &= signals["start_quote_ratio_per_abs_return"].astype(float).le(
+            config.max_start_quote_ratio_per_abs_return
+        )
+    if config.max_start_range_pct_ratio_to_baseline is not None:
+        mask &= signals["start_range_pct_ratio_to_baseline"].astype(float).le(
+            config.max_start_range_pct_ratio_to_baseline
+        )
+    if config.min_next_taker_buy_quote_share is not None:
+        mask &= signals["next_n_taker_buy_quote_share_mean"].astype(float).ge(
+            config.min_next_taker_buy_quote_share
+        )
     signals = signals.loc[mask].copy()
     if signals.empty:
         return signals
@@ -514,6 +554,54 @@ def _parse_grid_values(raw: str, *, cast: type[float] | type[int]) -> list[float
     return [cast(item) for item in values]
 
 
+EXHAUSTION_PROFILES: dict[str, dict[str, float | None]] = {
+    "none": {
+        "max_start_quote_ratio": None,
+        "max_start_trade_ratio": None,
+        "max_start_avg_trade_quote_size_ratio": None,
+        "max_start_quote_ratio_per_abs_return": None,
+        "max_start_range_pct_ratio_to_baseline": None,
+        "min_next_taker_buy_quote_share": None,
+        "max_price_retention": None,
+    },
+    "mild": {
+        "max_start_quote_ratio": 120.0,
+        "max_start_trade_ratio": 60.0,
+        "max_start_avg_trade_quote_size_ratio": 10.0,
+        "max_start_quote_ratio_per_abs_return": 30_000.0,
+        "max_start_range_pct_ratio_to_baseline": 35.0,
+        "min_next_taker_buy_quote_share": 0.46,
+        "max_price_retention": 0.98,
+    },
+    "balanced": {
+        "max_start_quote_ratio": 80.0,
+        "max_start_trade_ratio": 40.0,
+        "max_start_avg_trade_quote_size_ratio": 7.0,
+        "max_start_quote_ratio_per_abs_return": 15_000.0,
+        "max_start_range_pct_ratio_to_baseline": 25.0,
+        "min_next_taker_buy_quote_share": 0.48,
+        "max_price_retention": 0.96,
+    },
+    "strict": {
+        "max_start_quote_ratio": 50.0,
+        "max_start_trade_ratio": 25.0,
+        "max_start_avg_trade_quote_size_ratio": 5.0,
+        "max_start_quote_ratio_per_abs_return": 8_000.0,
+        "max_start_range_pct_ratio_to_baseline": 18.0,
+        "min_next_taker_buy_quote_share": 0.50,
+        "max_price_retention": 0.94,
+    },
+}
+
+
+def _parse_grid_profile_values(raw: str) -> list[str]:
+    profiles = [item.strip() for item in raw.split(",") if item.strip()]
+    unknown = sorted(set(profiles).difference(EXHAUSTION_PROFILES))
+    if unknown:
+        raise ValueError(f"unknown exhaustion profiles: {unknown}")
+    return profiles
+
+
 def summarize_entry_grid_variant(
     trades: pd.DataFrame,
     *,
@@ -529,6 +617,14 @@ def summarize_entry_grid_variant(
         "min_hold_count": config.min_hold_count,
         "min_oi_change_pct_3x5m": config.min_oi_change_pct_3x5m,
         "require_oi_status_ok": config.require_oi_status_ok,
+        "exhaustion_profile": config.exhaustion_profile,
+        "max_start_quote_ratio": config.max_start_quote_ratio,
+        "max_start_trade_ratio": config.max_start_trade_ratio,
+        "max_start_avg_trade_quote_size_ratio": config.max_start_avg_trade_quote_size_ratio,
+        "max_start_quote_ratio_per_abs_return": config.max_start_quote_ratio_per_abs_return,
+        "max_start_range_pct_ratio_to_baseline": config.max_start_range_pct_ratio_to_baseline,
+        "min_next_taker_buy_quote_share": config.min_next_taker_buy_quote_share,
+        "max_price_retention": config.max_price_retention,
         "signals": int(signal_count),
         "closed_trades": int(len(closed)),
         "skipped_trades": int(len(trades) - len(closed)),
@@ -559,41 +655,44 @@ def run_anomaly_entry_grid(
     oi3_values: Iterable[float],
     hold_values: Iterable[int],
     pullback_fractions: Iterable[float],
+    exhaustion_profiles: Iterable[str],
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     variants: list[AnomalyBacktestConfig] = []
-    for oi3 in oi3_values:
-        for hold in hold_values:
-            variants.append(
-                replace(
-                    base_config,
-                    entry_method="market",
-                    min_hold_count=int(hold),
-                    min_oi_change_pct_3x5m=float(oi3),
-                    require_oi_status_ok=True,
-                )
-            )
-            variants.append(
-                replace(
-                    base_config,
-                    entry_method="break_box_high",
-                    min_hold_count=int(hold),
-                    min_oi_change_pct_3x5m=float(oi3),
-                    require_oi_status_ok=True,
-                )
-            )
-            for fraction in pullback_fractions:
+    for profile_name in exhaustion_profiles:
+        profile = EXHAUSTION_PROFILES[profile_name]
+        for oi3 in oi3_values:
+            for hold in hold_values:
+                common = {
+                    "min_hold_count": int(hold),
+                    "min_oi_change_pct_3x5m": float(oi3),
+                    "require_oi_status_ok": True,
+                    "exhaustion_profile": profile_name,
+                    **profile,
+                }
                 variants.append(
                     replace(
                         base_config,
-                        entry_method="pullback_box_fraction",
-                        pullback_box_fraction=float(fraction),
-                        min_hold_count=int(hold),
-                        min_oi_change_pct_3x5m=float(oi3),
-                        require_oi_status_ok=True,
+                        entry_method="market",
+                        **common,
                     )
                 )
-
+                variants.append(
+                    replace(
+                        base_config,
+                        entry_method="break_box_high",
+                        **common,
+                    )
+                )
+                for fraction in pullback_fractions:
+                    variants.append(
+                        replace(
+                            base_config,
+                            entry_method="pullback_box_fraction",
+                            pullback_box_fraction=float(fraction),
+                            **common,
+                        )
+                    )
     started_at = time.monotonic()
     frame_cache: dict[str, pd.DataFrame] = {}
     for idx, variant in enumerate(variants, start=1):
@@ -615,6 +714,7 @@ def run_anomaly_strategy_backtest(
     grid_oi3_values: Iterable[float] = (0.01, 0.02, 0.03),
     grid_hold_values: Iterable[int] = (1, 2),
     grid_pullback_fractions: Iterable[float] = (0.65, 0.75, 0.85),
+    grid_exhaustion_profiles: Iterable[str] = ("none",),
 ) -> Path:
     output_dir = config.lab_config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -636,6 +736,7 @@ def run_anomaly_strategy_backtest(
             oi3_values=grid_oi3_values,
             hold_values=grid_hold_values,
             pullback_fractions=grid_pullback_fractions,
+            exhaustion_profiles=grid_exhaustion_profiles,
         )
         grid.to_csv(output_dir / "anomaly_entry_grid_summary.csv", index=False)
     run_config = {
@@ -661,10 +762,18 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-quote-ratio-start", type=float, default=5.0)
     parser.add_argument("--min-trade-ratio-start", type=float, default=5.0)
     parser.add_argument("--min-price-retention", type=float, default=0.70)
+    parser.add_argument("--max-price-retention", type=float, default=None)
     parser.add_argument("--min-verticality-score", type=float, default=0.25)
     parser.add_argument("--min-hold-count", type=int, default=0)
     parser.add_argument("--min-oi-change-pct-3x5m", type=float, default=None)
     parser.add_argument("--require-oi-status-ok", action="store_true")
+    parser.add_argument("--exhaustion-profile", choices=sorted(EXHAUSTION_PROFILES), default="none")
+    parser.add_argument("--max-start-quote-ratio", type=float, default=None)
+    parser.add_argument("--max-start-trade-ratio", type=float, default=None)
+    parser.add_argument("--max-start-avg-trade-quote-size-ratio", type=float, default=None)
+    parser.add_argument("--max-start-quote-ratio-per-abs-return", type=float, default=None)
+    parser.add_argument("--max-start-range-pct-ratio-to-baseline", type=float, default=None)
+    parser.add_argument("--min-next-taker-buy-quote-share", type=float, default=None)
     parser.add_argument("--max-initial-risk-pct", type=float, default=0.16)
     parser.add_argument("--entry-method", choices=["market", "break_box_high", "pullback_box_fraction"], default="market")
     parser.add_argument("--pullback-box-fraction", type=float, default=0.75)
@@ -679,6 +788,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--grid-oi3-values", default="0.01,0.02,0.03")
     parser.add_argument("--grid-hold-values", default="1,2")
     parser.add_argument("--grid-pullback-fractions", default="0.65,0.75,0.85")
+    parser.add_argument("--grid-exhaustion-profiles", default="none")
     return parser
 
 
@@ -699,10 +809,18 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
     return AnomalyBacktestConfig(
         lab_config=lab_config,
         min_price_retention=args.min_price_retention,
+        max_price_retention=args.max_price_retention,
         min_verticality_score=args.min_verticality_score,
         min_hold_count=args.min_hold_count,
         min_oi_change_pct_3x5m=args.min_oi_change_pct_3x5m,
         require_oi_status_ok=bool(args.require_oi_status_ok),
+        exhaustion_profile=args.exhaustion_profile,
+        max_start_quote_ratio=args.max_start_quote_ratio,
+        max_start_trade_ratio=args.max_start_trade_ratio,
+        max_start_avg_trade_quote_size_ratio=args.max_start_avg_trade_quote_size_ratio,
+        max_start_quote_ratio_per_abs_return=args.max_start_quote_ratio_per_abs_return,
+        max_start_range_pct_ratio_to_baseline=args.max_start_range_pct_ratio_to_baseline,
+        min_next_taker_buy_quote_share=args.min_next_taker_buy_quote_share,
         max_initial_risk_pct=args.max_initial_risk_pct,
         entry_method=args.entry_method,
         pullback_box_fraction=args.pullback_box_fraction,
@@ -725,6 +843,7 @@ def main(argv: list[str] | None = None) -> int:
         grid_oi3_values=_parse_grid_values(args.grid_oi3_values, cast=float),
         grid_hold_values=_parse_grid_values(args.grid_hold_values, cast=int),
         grid_pullback_fractions=_parse_grid_values(args.grid_pullback_fractions, cast=float),
+        grid_exhaustion_profiles=_parse_grid_profile_values(args.grid_exhaustion_profiles),
     )
     print(f"wrote anomaly strategy artifacts to {output_dir}")
     return 0
