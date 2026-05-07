@@ -1003,3 +1003,13 @@ Interpretation: runners are not simply the largest volume spikes; the better pat
 Risk: result is still top-trade dependent and one-regime only; do not deploy or further overfit before out-of-window/month split validation.
 ```
 
+Leakage/exit/metrics review:
+
+```text
+E041 found no obvious lookahead in current anomaly signal construction: future labels/MFE/MAE are artifacts, while filters use decision-time features and as-of 5m OI.
+Main risk is overfitting from selecting thresholds on one recent 30-day window.
+Exit check suggests TP1 1R on 25% instead of 50% can improve average on the current best set, but it lowers median and still needs out-of-window validation.
+Do not loosen runner trail aggressively yet; higher TP/looser trail variants increased dependence on top winners.
+Next useful exchange metrics: funding/premium basis, mark-index basis, global/top long-short ratios, taker long-short ratio, and spot-vs-perp divergence.
+```
+

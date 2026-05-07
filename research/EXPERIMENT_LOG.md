@@ -1523,3 +1523,38 @@ Conclusion:
 Keep the balanced anti-exhaustion profile as the current primary candidate and mild as the frequency-preserving alternative.
 Do not add more tightening yet; next evidence must come from out-of-window/month split and top-trade dependency, not another hand-picked metric threshold.
 ```
+
+---
+
+## E041 - Anomaly leakage, exit and missing exchange metrics review
+
+```text
+Status: ANALYZED
+Date: 2026-05-07
+Patch state: no trading-code patch; commit UNKNOWN before this note
+Basis: current code plus .output/results/anomaly_lab_30d_exhaustion_grid
+```
+
+Leakage / overfit:
+
+```text
+Current signal construction uses decision-time fields only: confirmation-window retention/hold/verticality/flow, decision box, as-of 5m OI and anti-exhaustion caps.
+Future fields such as future_high/future_low/outcome_label/MFE/MAE are exported for analysis and summary, but are not used by build_anomaly_signals.
+The bigger risk is overfitting/multiple testing: balanced thresholds were selected after inspecting one 30-day window, and the best row is still top-trade dependent.
+```
+
+Exit review:
+
+```text
+Small exit-grid on the current best signal set tested TP1/trail variants without changing entries.
+Current exit: TP1 1R on 50%, BE after TP1, 5-candle swing-low trail with 0.10R buffer: 31 trades, avg +2.61%, median +2.58%, sum +0.809.
+Best tested average: TP1 1R on 25%, same trail: avg +2.98%, median +1.89%, sum +0.922, top5_share 0.879.
+Higher TP targets or looser runner trails increase top-trade dependence and often reduce median/winrate, so they are not cleaner improvements.
+```
+
+Missing easy exchange metrics:
+
+```text
+Most useful next historical additions: funding rate / premium-index basis, mark-vs-index basis, global/top long-short ratios, taker long-short ratio, and spot-vs-perp volume/return divergence.
+Orderbook imbalance/spread and liquidation/force-order flow may help, but reliable historical coverage is harder unless collected live or via exchange-limited endpoints.
+```
