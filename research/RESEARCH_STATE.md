@@ -969,3 +969,10 @@ P090 removes the remaining anomaly signal risk proxy. Signals now use the exact 
 Entry-grid variants reuse cached symbol frames across the grid, reducing repeated parquet reads without changing trade logic.
 ```
 
+OI fetch note:
+
+```text
+P091 clamps OI fetch start time to Binance's rolling 30-day history boundary and aligns OI requests to timeframe boundaries.
+Older OI remains unavailable rather than backfilled or synthesized.
+```
+

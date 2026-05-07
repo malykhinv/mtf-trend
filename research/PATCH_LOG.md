@@ -3682,3 +3682,30 @@ Verification:
 .venv\Scripts\python.exe -m compileall research_tools cli tests\test_anomaly_continuation_lab.py
 .venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_honesty_speed_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols IO/USDT:USDT ZEC/USDT:USDT --run-entry-grid true --grid-oi3-values 0.01,0.03 --grid-hold-values 1,2 --grid-pullback-fractions 0.75
 ```
+
+---
+
+## P091 - Clamp OI fetch window to exchange history limit
+
+```text
+Status: APPLIED locally / compile verified
+Type: data fetch reliability
+Trading logic changed: no
+Files: data/fetchers/oi_fetcher.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Clamp OI start_timestamp_ms to the exchange-supported 30-day history window with one timeframe buffer and align OI request start/end to the timeframe boundary.
+This avoids Binance startTime invalid errors near the rolling 30-day boundary.
+Missing older OI remains missing in artifacts; no synthetic OI is created.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall data/fetchers/oi_fetcher.py
+```

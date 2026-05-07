@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from constants import (
@@ -21,6 +22,8 @@ from utils.logger import get_logger
 
 class OiFetcher:
     """Класс."""
+
+    _MAX_EXCHANGE_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000
 
     def __init__(
         self,
@@ -46,6 +49,21 @@ class OiFetcher:
         start_timestamp_ms = int(start_timestamp_ms)
         end_timestamp_ms = int(end_timestamp_ms)
         timeframe_ms = timeframe.to_milliseconds()
+        min_supported_start_ms = int(time.time() * 1000) - self._MAX_EXCHANGE_LOOKBACK_MS + timeframe_ms
+        if start_timestamp_ms < min_supported_start_ms:
+            self._logger.debug(
+                "OI %s %s: начало окна старше биржевого лимита, обрезаю %s -> %s.",
+                symbol,
+                timeframe.value,
+                start_timestamp_ms,
+                min_supported_start_ms,
+            )
+            start_timestamp_ms = min_supported_start_ms
+        start_timestamp_ms = ((start_timestamp_ms + timeframe_ms - 1) // timeframe_ms) * timeframe_ms
+        end_timestamp_ms = (end_timestamp_ms // timeframe_ms) * timeframe_ms
+        if start_timestamp_ms > end_timestamp_ms:
+            self._logger.debug("OI %s %s: после обрезки биржевого окна нечего запрашивать.", symbol, timeframe.value)
+            return 0
         watermark_column = "open_interest"
         first_timestamp_ms = self._storage.get_first_timestamp_for_column(symbol, timeframe, watermark_column)
         last_timestamp_ms = self._storage.get_last_timestamp_for_column(symbol, timeframe, watermark_column)
