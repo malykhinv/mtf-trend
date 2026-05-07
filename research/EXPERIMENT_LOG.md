@@ -1478,3 +1478,48 @@ Do not evaluate:
 ```text
 Single best row only. Compare trade count, days, symbols, median, daily distribution and top-trade dependence.
 ```
+
+---
+
+## E040 - 30-day anomaly anti-exhaustion grid analysis
+
+```text
+Status: ANALYZED
+Date: 2026-05-07
+Patch state: P092 committed on branch codex/pno-anomaly-continuation-lab
+Output: .output/results/anomaly_lab_30d_exhaustion_grid
+```
+
+Result:
+
+```text
+Default market anomaly rule remains negative: 38,703 closed trades, win rate 47.37%, avg net -0.0673%, median -0.1104%.
+The useful signal appears only after combining strong 5m OI expansion, confirmation hold and anti-exhaustion caps.
+Best current row: market entry, balanced exhaustion profile, hold>=2, oi_change_pct_3x5m>5%; 31 closed trades, 27 symbols, 18 active days, win rate 61.29%, avg net +2.6085%, median +2.5775%, sum +0.8086.
+Mild profile with the same OI/hold gives 43 trades, 38 symbols, 21 days, win rate 60.47%, avg net +1.6155%.
+No exhaustion profile with the same OI/hold gives 66 trades, 55 symbols, 25 days, win rate 51.52%, avg net +0.5887%.
+```
+
+Metric interpretation:
+
+```text
+The pattern is not "more volume/trades is better".
+Healthy candidates have strong but controlled start quote/trade ratios, moderate avg trade size expansion, lower effort-per-return, controlled range expansion, nonzero OI expansion and enough post-start hold.
+Very high start_quote_ratio, start_trade_ratio, avg_trade_size_ratio, quote_ratio_per_abs_return or range expansion behaves like exhaustion/crowded late entry and increases fast-fade risk.
+Price retention too close to 1.0 is also suspicious; it can mean no healthy pullback after vertical expansion.
+Taker buy share helps only as a floor; high taker share alone does not separate runners.
+```
+
+Limitations:
+
+```text
+The best row meets the desired 15-30 trades/month area, but top-trade dependence remains material: top5 sum +0.6996 vs total +0.8086; top10 sum +0.9868 while bottom10 drag -0.4210.
+The run covers only one recent 30-day regime, so this is a promising research candidate, not a deployable strategy.
+```
+
+Conclusion:
+
+```text
+Keep the balanced anti-exhaustion profile as the current primary candidate and mild as the frequency-preserving alternative.
+Do not add more tightening yet; next evidence must come from out-of-window/month split and top-trade dependency, not another hand-picked metric threshold.
+```

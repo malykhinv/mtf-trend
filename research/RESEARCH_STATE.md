@@ -993,3 +993,13 @@ P092 adds optional anti-exhaustion filters and grid profiles none/mild/balanced/
 The next 30-day test should use none,mild,balanced first to preserve trade frequency and only inspect strict later if the softer profiles still leave enough trades.
 ```
 
+30-day anti-exhaustion result:
+
+```text
+E040 analyzed .output/results/anomaly_lab_30d_exhaustion_grid.
+Default anomaly market rule remains negative, but strong OI expansion plus anti-exhaustion filtering produces a materially better candidate.
+Best current candidate: market entry, balanced exhaustion profile, hold>=2, oi_change_pct_3x5m>5%; 31 trades, 27 symbols, 18 active days, win rate 61.29%, avg net +2.61%, median +2.58%.
+Interpretation: runners are not simply the largest volume spikes; the better pattern is controlled wake-up volume/trades, OI expansion, persistence/hold, moderate avg trade size, lower effort-per-return and no blowoff range expansion.
+Risk: result is still top-trade dependent and one-regime only; do not deploy or further overfit before out-of-window/month split validation.
+```
+
