@@ -1030,3 +1030,11 @@ Smoke on ZEC wrote funding, premium_index/5m, mark_price/5m, global/top long-sho
 Spot-vs-perp divergence is not implemented yet because current cache/fetch stack is futures-only; adding spot needs a separate spot client/cache namespace to avoid mixing markets.
 ```
 
+Derivatives context fetch note:
+
+```text
+P095 clamps derivatives context fetch start times to Binance's rolling 30-day boundary with a per-source interval buffer.
+This fixes startTime invalid errors on long-short endpoints near the 30-day edge.
+Older context rows remain missing; no backfill/proxy is created.
+```
+

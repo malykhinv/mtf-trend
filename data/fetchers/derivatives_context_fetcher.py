@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 from urllib.parse import quote
 
 import pandas as pd
@@ -75,6 +76,8 @@ DERIVATIVES_CONTEXT_FETCH_SPECS: tuple[DerivativesContextSpec, ...] = (
 
 
 class DerivativesContextFetcher:
+    _MAX_EXCHANGE_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000
+
     def __init__(
         self,
         *,
@@ -139,11 +142,21 @@ class DerivativesContextFetcher:
     def fetch_symbol(self, symbol: str, start_timestamp_ms: int, end_timestamp_ms: int) -> int:
         added_rows = 0
         for spec in DERIVATIVES_CONTEXT_FETCH_SPECS:
-            segment_start_ms = int(start_timestamp_ms)
+            min_supported_start_ms = int(time.time() * 1000) - self._MAX_EXCHANGE_LOOKBACK_MS + spec.interval_ms
+            segment_start_ms = max(int(start_timestamp_ms), min_supported_start_ms)
+            segment_start_ms = ((segment_start_ms + spec.interval_ms - 1) // spec.interval_ms) * spec.interval_ms
+            end_ms = (int(end_timestamp_ms) // spec.interval_ms) * spec.interval_ms
+            if segment_start_ms > end_ms:
+                self._logger.debug(
+                    "Derivatives context %s %s: after exchange lookback clamp nothing to fetch.",
+                    symbol,
+                    spec.name,
+                )
+                continue
             rows: list[pd.DataFrame] = []
-            while segment_start_ms <= int(end_timestamp_ms):
+            while segment_start_ms <= end_ms:
                 segment_end_ms = min(
-                    int(end_timestamp_ms),
+                    end_ms,
                     segment_start_ms + spec.interval_ms * spec.limit - 1,
                 )
                 data = self._exchange_client.fetch_binance_derivatives_context(

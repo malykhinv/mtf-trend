@@ -3800,3 +3800,31 @@ Verification:
 .venv\Scripts\python.exe main.py update-cache --symbols ZEC/USDT:USDT --days 1 --timeframes 1m --skip-open-interest
 .venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output\manual_checks\anomaly_derivatives_context_zec_after_fetch --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols ZEC/USDT:USDT
 ```
+
+---
+
+## P095 - Clamp derivatives context fetch window
+
+```text
+Status: APPLIED locally / smoke verified
+Type: data fetch reliability
+Trading logic changed: no
+Files: data/fetchers/derivatives_context_fetcher.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Derivatives context fetch now clamps each source start_timestamp_ms to Binance's rolling 30-day lookback with one source interval buffer and aligns start/end to source interval boundaries.
+This prevents Binance data endpoints from rejecting startTime near the rolling boundary.
+Older derivatives context remains unavailable rather than synthesized.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall data\fetchers\derivatives_context_fetcher.py
+.venv\Scripts\python.exe main.py update-cache --symbols BTC/USDT:USDT --days 30 --timeframes 5m --skip-open-interest
+```
