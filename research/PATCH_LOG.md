@@ -3739,3 +3739,34 @@ Verification:
 .venv\Scripts\python.exe -m compileall research_tools cli tests\test_anomaly_continuation_lab.py
 .venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output/manual_checks/anomaly_exhaustion_grid_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols IO/USDT:USDT ZEC/USDT:USDT --run-entry-grid true --grid-oi3-values 0.03 --grid-hold-values 2 --grid-pullback-fractions 0.75 --grid-exhaustion-profiles none,mild,balanced
 ```
+
+---
+
+## P093 - Add honest derivatives context columns to anomaly lab
+
+```text
+Status: APPLIED locally / smoke verified
+Type: research data feature
+Trading logic changed: no
+Files: research_tools/anomaly_continuation_lab.py, research_tools/anomaly_strategy_backtest.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Anomaly artifacts now include optional derivatives context from explicit cache files only:
+funding rate, premium index mark/index prices, mark-price candles, global long-short account ratio, top account long-short ratio, top position long-short ratio and taker long-short ratio.
+Each source has per-row status, timestamp and age fields plus point-in-time change metrics.
+Missing context is reported as missing_frame/missing_column/no_context_before_decision/stale_asof; no zeros, ticker substitutes, last-price proxies or synthetic fills are used.
+run-anomaly-lab writes market_context_status.csv beside oi_context_status.csv.
+No signal filter uses these fields yet.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_continuation_lab.py research_tools\anomaly_strategy_backtest.py
+.venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output\manual_checks\anomaly_derivatives_context_smoke2 --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols IO/USDT:USDT ZEC/USDT:USDT
+```

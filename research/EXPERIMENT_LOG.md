@@ -1558,3 +1558,11 @@ Missing easy exchange metrics:
 Most useful next historical additions: funding rate / premium-index basis, mark-vs-index basis, global/top long-short ratios, taker long-short ratio, and spot-vs-perp volume/return divergence.
 Orderbook imbalance/spread and liquidation/force-order flow may help, but reliable historical coverage is harder unless collected live or via exchange-limited endpoints.
 ```
+
+Follow-up patch:
+
+```text
+P093 implements the first honest artifact layer for these metrics.
+The current smoke run on IO/ZEC has market_context_status.csv with missing_frame for all new sources, which is expected because those context caches have not been fetched yet.
+This proves absence is visible rather than hidden behind zeros or last-price substitutes.
+```

@@ -32,6 +32,10 @@ DEFAULT_BIG_MOVE_THRESHOLD = 0.25
 OI_TIMEFRAME = "5m"
 OI_LOOKBACK_BARS = (1, 3, 6)
 OI_EXPECTED_INTERVAL_MS = 5 * 60 * 1000
+DERIVATIVES_CONTEXT_TIMEFRAME = "5m"
+DERIVATIVES_CONTEXT_LOOKBACK_BARS = (1, 3, 6)
+DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS = 5 * 60 * 1000
+FUNDING_EXPECTED_INTERVAL_MS = 9 * 60 * 60 * 1000
 
 OHLCV_COLUMNS = (
     "timestamp",
@@ -46,6 +50,65 @@ OHLCV_COLUMNS = (
 OPTIONAL_FLOW_COLUMNS = (
     "taker_buy_volume",
     "taker_buy_quote_volume",
+)
+
+DERIVATIVES_CONTEXT_SPECS: tuple[dict[str, object], ...] = (
+    {
+        "prefix": "funding",
+        "path_parts": ("funding_rate",),
+        "required_columns": ("timestamp", "funding_rate"),
+        "value_columns": ("funding_rate",),
+        "lookback_bars": (1, 3),
+        "expected_interval_ms": FUNDING_EXPECTED_INTERVAL_MS,
+    },
+    {
+        "prefix": "premium",
+        "path_parts": ("premium_index", DERIVATIVES_CONTEXT_TIMEFRAME),
+        "required_columns": ("timestamp", "mark_price", "index_price"),
+        "value_columns": ("mark_price", "index_price"),
+        "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
+        "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+    },
+    {
+        "prefix": "mark",
+        "path_parts": ("mark_price", DERIVATIVES_CONTEXT_TIMEFRAME),
+        "required_columns": ("timestamp", "close"),
+        "value_columns": ("close",),
+        "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
+        "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+    },
+    {
+        "prefix": "global_ls",
+        "path_parts": ("global_long_short_account_ratio", DERIVATIVES_CONTEXT_TIMEFRAME),
+        "required_columns": ("timestamp", "long_short_ratio"),
+        "value_columns": ("long_short_ratio", "long_account", "short_account"),
+        "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
+        "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+    },
+    {
+        "prefix": "top_account_ls",
+        "path_parts": ("top_long_short_account_ratio", DERIVATIVES_CONTEXT_TIMEFRAME),
+        "required_columns": ("timestamp", "long_short_ratio"),
+        "value_columns": ("long_short_ratio", "long_account", "short_account"),
+        "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
+        "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+    },
+    {
+        "prefix": "top_position_ls",
+        "path_parts": ("top_long_short_position_ratio", DERIVATIVES_CONTEXT_TIMEFRAME),
+        "required_columns": ("timestamp", "long_short_ratio"),
+        "value_columns": ("long_short_ratio", "long_account", "short_account"),
+        "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
+        "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+    },
+    {
+        "prefix": "taker_ls",
+        "path_parts": ("taker_long_short_ratio", DERIVATIVES_CONTEXT_TIMEFRAME),
+        "required_columns": ("timestamp", "buy_sell_ratio"),
+        "value_columns": ("buy_sell_ratio", "buy_vol", "sell_vol"),
+        "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
+        "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+    },
 )
 
 
@@ -528,7 +591,8 @@ def collect_anomaly_lab_rows(
     if not result.empty and "timestamp_ms" in result.columns:
         result.sort_values(["timestamp_ms", "symbol"], inplace=True)
         result.reset_index(drop=True, inplace=True)
-    return enrich_candidates_with_open_interest(result, cache_dir=config.cache_dir)
+    result = enrich_candidates_with_open_interest(result, cache_dir=config.cache_dir)
+    return enrich_candidates_with_derivatives_context(result, cache_dir=config.cache_dir)
 
 
 def _empty_oi_columns() -> dict[str, object]:
@@ -682,6 +746,178 @@ def build_oi_context_status(candidates: pd.DataFrame) -> pd.DataFrame:
     return status
 
 
+def _empty_context_columns(spec: dict[str, object]) -> dict[str, object]:
+    prefix = str(spec["prefix"])
+    values: dict[str, object] = {
+        f"{prefix}_status": "not_checked",
+        f"{prefix}_timestamp_ms": np.nan,
+        f"{prefix}_timestamp_utc": "",
+        f"{prefix}_age_ms": np.nan,
+    }
+    for column in spec["value_columns"]:
+        values[f"{prefix}_{column}"] = np.nan
+        for bars in spec["lookback_bars"]:
+            values[f"{prefix}_{column}_change_{bars}"] = np.nan
+            values[f"{prefix}_{column}_change_pct_{bars}"] = np.nan
+    return values
+
+
+def _context_path(cache_dir: Path, symbol: str, spec: dict[str, object]) -> Path:
+    path = cache_dir / _cache_symbol_dir_name(symbol)
+    for part in spec["path_parts"]:
+        path /= str(part)
+    return path / "data.parquet"
+
+
+def _read_context_frame(cache_dir: Path, symbol: str, spec: dict[str, object]) -> tuple[pd.DataFrame | None, str]:
+    path = _context_path(cache_dir, symbol, spec)
+    if not path.exists():
+        return None, "missing_frame"
+    try:
+        frame = pd.read_parquet(path)
+    except Exception as exc:
+        return None, f"read_error:{type(exc).__name__}"
+    required = tuple(str(column) for column in spec["required_columns"])
+    missing = [column for column in required if column not in frame.columns]
+    if missing:
+        return None, "missing_column:" + ",".join(missing)
+    selected = ["timestamp", *[str(column) for column in spec["value_columns"] if str(column) in frame.columns]]
+    selected_frame = frame.loc[:, selected].copy()
+    for column in selected:
+        selected_frame[column] = pd.to_numeric(selected_frame[column], errors="coerce")
+    selected_frame.dropna(subset=["timestamp"], inplace=True)
+    if selected_frame.empty:
+        return None, "empty_frame"
+    selected_frame.sort_values("timestamp", inplace=True)
+    selected_frame.drop_duplicates("timestamp", keep="last", inplace=True)
+    selected_frame.reset_index(drop=True, inplace=True)
+    return selected_frame, "ok"
+
+
+def _enrich_symbol_context(
+    candidates: pd.DataFrame,
+    frame: pd.DataFrame | None,
+    status: str,
+    spec: dict[str, object],
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    prefix = str(spec["prefix"])
+    expected_interval_ms = int(spec["expected_interval_ms"])
+    value_columns = tuple(str(column) for column in spec["value_columns"])
+    lookback_bars = tuple(int(bars) for bars in spec["lookback_bars"])
+    if frame is None:
+        for _ in range(len(candidates)):
+            values = _empty_context_columns(spec)
+            values[f"{prefix}_status"] = status
+            rows.append(values)
+        return rows
+
+    timestamps = frame["timestamp"].astype(np.int64).to_numpy()
+    value_arrays = {column: frame[column].astype(float).to_numpy() for column in value_columns if column in frame.columns}
+    for _, candidate in candidates.iterrows():
+        values = _empty_context_columns(spec)
+        decision_ts = candidate.get("decision_timestamp_ms")
+        if pd.isna(decision_ts):
+            values[f"{prefix}_status"] = "missing_decision_timestamp"
+            rows.append(values)
+            continue
+        decision_ts_int = int(decision_ts)
+        context_idx = int(np.searchsorted(timestamps, decision_ts_int, side="right") - 1)
+        if context_idx < 0:
+            values[f"{prefix}_status"] = "no_context_before_decision"
+            rows.append(values)
+            continue
+
+        context_ts = int(timestamps[context_idx])
+        age_ms = decision_ts_int - context_ts
+        values[f"{prefix}_status"] = "stale_asof" if age_ms > expected_interval_ms else "ok"
+        values[f"{prefix}_timestamp_ms"] = context_ts
+        values[f"{prefix}_timestamp_utc"] = _timestamp_to_utc(context_ts)
+        values[f"{prefix}_age_ms"] = int(age_ms)
+        for column, array in value_arrays.items():
+            current = float(array[context_idx])
+            values[f"{prefix}_{column}"] = current
+            for bars in lookback_bars:
+                prev_idx = context_idx - bars
+                if prev_idx < 0:
+                    continue
+                previous = float(array[prev_idx])
+                values[f"{prefix}_{column}_change_{bars}"] = current - previous
+                values[f"{prefix}_{column}_change_pct_{bars}"] = _safe_divide(current - previous, previous)
+        rows.append(values)
+    return rows
+
+
+def enrich_candidates_with_derivatives_context(candidates: pd.DataFrame, *, cache_dir: Path) -> pd.DataFrame:
+    """Attach optional derivatives context from explicit cache files only.
+
+    Missing context is reported through per-source status columns. This function
+    never substitutes ticker snapshots, last-price candles or zeros for absent
+    funding/premium/long-short/mark data.
+    """
+    if candidates.empty or "symbol" not in candidates.columns:
+        return candidates
+
+    result = candidates.copy()
+    context_frames: list[pd.DataFrame] = []
+    for spec in DERIVATIVES_CONTEXT_SPECS:
+        rows_by_index: dict[int, dict[str, object]] = {}
+        for symbol, group in result.groupby("symbol", sort=False):
+            context_frame, status = _read_context_frame(cache_dir, str(symbol), spec)
+            enriched_rows = _enrich_symbol_context(group, context_frame, status, spec)
+            for row_index, context_values in zip(group.index, enriched_rows, strict=True):
+                rows_by_index[int(row_index)] = context_values
+        context_values_frame = pd.DataFrame.from_dict(rows_by_index, orient="index").sort_index()
+        context_frames.append(context_values_frame)
+
+    if context_frames:
+        result = pd.concat([result, *context_frames], axis=1)
+
+    if {"premium_mark_price", "premium_index_price"}.issubset(result.columns):
+        result["premium_mark_index_basis"] = [
+            _safe_divide(float(mark) - float(index), float(index))
+            for mark, index in zip(result["premium_mark_price"], result["premium_index_price"], strict=True)
+        ]
+    if {"mark_close", "decision_close"}.issubset(result.columns):
+        result["mark_close_vs_decision_close_basis"] = [
+            _safe_divide(float(mark) - float(close), float(close))
+            for mark, close in zip(result["mark_close"], result["decision_close"], strict=True)
+        ]
+    if {"taker_ls_buy_vol", "taker_ls_sell_vol"}.issubset(result.columns):
+        result["taker_ls_buy_share"] = [
+            _safe_divide(float(buy), float(buy) + float(sell))
+            for buy, sell in zip(result["taker_ls_buy_vol"], result["taker_ls_sell_vol"], strict=True)
+        ]
+    return result
+
+
+def build_derivatives_context_status(candidates: pd.DataFrame) -> pd.DataFrame:
+    if candidates.empty or "symbol" not in candidates.columns:
+        return pd.DataFrame([{"source": "derivatives_context", "status": "no_candidates", "rows": 0, "symbols": 0}])
+    rows: list[dict[str, object]] = []
+    for spec in DERIVATIVES_CONTEXT_SPECS:
+        prefix = str(spec["prefix"])
+        status_column = f"{prefix}_status"
+        if status_column not in candidates.columns:
+            rows.append({"source": prefix, "status": "not_present", "rows": 0, "symbols": 0})
+            continue
+        grouped = (
+            candidates.groupby(status_column, dropna=False)
+            .agg(rows=("symbol", "size"), symbols=("symbol", "nunique"))
+            .reset_index()
+        )
+        for _, row in grouped.iterrows():
+            rows.append(
+                {
+                    "source": prefix,
+                    "status": row[status_column],
+                    "rows": int(row["rows"]),
+                    "symbols": int(row["symbols"]),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def write_anomaly_lab_artifacts(
     config: AnomalyLabConfig,
     *,
@@ -691,6 +927,7 @@ def write_anomaly_lab_artifacts(
     rows = collect_anomaly_lab_rows(config, symbols=symbols)
     rows.to_csv(config.output_dir / "anomaly_continuation_lab.csv", index=False)
     build_oi_context_status(rows).to_csv(config.output_dir / "oi_context_status.csv", index=False)
+    build_derivatives_context_status(rows).to_csv(config.output_dir / "market_context_status.csv", index=False)
     if not rows.empty and "outcome_label" in rows.columns:
         summary = (
             rows.groupby("outcome_label", dropna=False)

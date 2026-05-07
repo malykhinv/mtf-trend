@@ -17,6 +17,8 @@ import pandas as pd
 
 from research_tools.anomaly_continuation_lab import (
     AnomalyLabConfig,
+    DERIVATIVES_CONTEXT_SPECS,
+    build_derivatives_context_status,
     build_oi_context_status,
     collect_anomaly_lab_rows,
     _emit_progress,
@@ -79,7 +81,27 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "oi_change_pct_6x5m",
     "oi_price_interaction_3x5m",
     "oi_change_pct_3x5m_per_decision_return",
+    "premium_mark_index_basis",
+    "mark_close_vs_decision_close_basis",
+    "taker_ls_buy_share",
 )
+
+for _context_spec in DERIVATIVES_CONTEXT_SPECS:
+    _context_prefix = str(_context_spec["prefix"])
+    TRADE_SIGNAL_CONTEXT_COLUMNS += (
+        f"{_context_prefix}_status",
+        f"{_context_prefix}_timestamp_ms",
+        f"{_context_prefix}_timestamp_utc",
+        f"{_context_prefix}_age_ms",
+    )
+    for _context_column in _context_spec["value_columns"]:
+        _context_column_name = str(_context_column)
+        TRADE_SIGNAL_CONTEXT_COLUMNS += (f"{_context_prefix}_{_context_column_name}",)
+        for _context_bars in _context_spec["lookback_bars"]:
+            TRADE_SIGNAL_CONTEXT_COLUMNS += (
+                f"{_context_prefix}_{_context_column_name}_change_{int(_context_bars)}",
+                f"{_context_prefix}_{_context_column_name}_change_pct_{int(_context_bars)}",
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -721,6 +743,7 @@ def run_anomaly_strategy_backtest(
     candidates = collect_anomaly_lab_rows(config.lab_config, symbols=symbols, progress_label="anomaly candidates")
     candidates.to_csv(output_dir / "anomaly_candidates.csv", index=False)
     build_oi_context_status(candidates).to_csv(output_dir / "oi_context_status.csv", index=False)
+    build_derivatives_context_status(candidates).to_csv(output_dir / "market_context_status.csv", index=False)
     print("anomaly signals: filtering", flush=True)
     signals = build_anomaly_signals(candidates, config=config)
     signals.to_csv(output_dir / "anomaly_signals.csv", index=False)

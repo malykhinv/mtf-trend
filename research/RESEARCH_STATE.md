@@ -1013,3 +1013,12 @@ Do not loosen runner trail aggressively yet; higher TP/looser trail variants inc
 Next useful exchange metrics: funding/premium basis, mark-index basis, global/top long-short ratios, taker long-short ratio, and spot-vs-perp divergence.
 ```
 
+Derivatives context tooling:
+
+```text
+P093 adds honest optional derivatives context columns to anomaly artifacts.
+The lab now reads only explicit cached funding/premium/mark/long-short/taker-ratio parquet files and writes market_context_status.csv.
+If those files are absent, status is missing_frame and values remain NaN; no proxy/fill/fallback is used.
+These fields are analysis-only for now and must not be used as filters until coverage is checked on the target run.
+```
+
