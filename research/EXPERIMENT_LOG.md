@@ -1388,3 +1388,65 @@ Smoke run completed.
 anomaly_signals.csv includes decision_box_low/high/range and initial_risk_pct_at_decision.
 The prior initial_risk_pct_proxy field is removed from the signal artifact.
 ```
+
+---
+
+## E038 - 31-day anomaly entry-grid edge audit
+
+```text
+Status: ANALYZED
+Patch state: P090/P091 local branch; commit UNKNOWN
+Output: .output/results/anomaly_lab_31d_entry_grid
+Command basis: run-anomaly-lab --days 31 --confirmation-candles 4 --forward-high-candles 240 --forward-low-candles 60 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --run-entry-grid true --grid-oi3-values 0,0.01,0.02,0.03,0.05 --grid-hold-values 1,2,3 --grid-pullback-fractions 0.65,0.75,0.85
+```
+
+Coverage:
+
+```text
+Candidates: 201,451.
+Signals: 41,693.
+Closed default market trades: 40,123.
+OI candidate coverage: ok 184,956; no_oi_before_decision 5,580; missing_column 3,900; stale_asof 56.
+OI ok spans 2026-04-07 07:32 UTC through 2026-05-06 13:29 UTC.
+```
+
+Default result:
+
+```text
+Default market rule remains negative: 40,123 closed trades, win rate 47.41%, avg net -0.0681%, median -0.1103%, sum net -27.325.
+```
+
+Entry-grid result:
+
+```text
+Best average row in the grid: pullback_box_fraction=0.85, hold>=2, oi_change_pct_3x5m>5%, 60 closed trades, 50 symbols, 23 days, win rate 51.67%, avg net +0.871%, median +1.505%.
+Best broader n>=100 row: pullback_box_fraction=0.85, hold>=2, oi_change_pct_3x5m>3%, 158 closed trades, 130 symbols, 29 days, win rate 50.63%, avg net +0.398%, median +0.094%.
+The 0.03/hold>=2 family is positive but modest after widening OI coverage across the full month.
+The 0.01 and 0.02 variants mostly collapse toward breakeven/slightly negative.
+```
+
+Variant resimulation:
+
+```text
+strict_oi3_hold2_pb075: 155 closed trades, 124 symbols, 29 days, win rate 51.61%, avg net +0.261%, median +0.154%, sum +0.404.
+broader_oi1_hold2_pb075: 593 closed trades, 300 symbols, 30 days, win rate 49.75%, avg net +0.033%, median -0.049%, sum +0.197.
+balanced_oi2_hold2_pb075: 262 closed trades, 183 symbols, 30 days, win rate 51.15%, avg net +0.056%, median +0.073%, sum +0.146.
+strict_oi3_hold1_pb075: 201 closed trades, 151 symbols, 30 days, win rate 51.74%, avg net +0.214%, median +0.111%, sum +0.430.
+```
+
+Risk assessment:
+
+```text
+The edge candidate is not stable enough yet.
+There is positive signal in strong OI expansion, but it depends on a small tail of high-OI events and has weak monthly robustness.
+Daily distribution for strict_oi3_hold2_pb075 includes long red stretches such as 2026-04-17, 2026-04-20, 2026-04-22 and 2026-04-23.
+Top-trade dependence is material: top 10 trades sum +1.198 while total is only +0.404 for strict_oi3_hold2_pb075.
+Losses are associated with higher start_quote_ratio/start_trade_ratio, larger start_avg_trade_quote_size_ratio and worse MAE, supporting the crowded/exhaustion interpretation.
+```
+
+Conclusion:
+
+```text
+Do not promote this to a deployable strategy.
+Keep OI expansion as a useful feature, but the next research step should add anti-exhaustion filters and regime/day robustness checks before optimizing exits.
+```

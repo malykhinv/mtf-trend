@@ -976,3 +976,13 @@ P091 clamps OI fetch start time to Binance's rolling 30-day history boundary and
 Older OI remains unavailable rather than backfilled or synthesized.
 ```
 
+31-day edge audit:
+
+```text
+E038 analyzed .output/results/anomaly_lab_31d_entry_grid.
+The initial 7-day OI+hold edge weakened materially after broader OI coverage across roughly 30 days.
+Best broader row: pullback_box_fraction=0.85, hold>=2, oi_change_pct_3x5m>3%, 158 closed trades, win rate 50.63%, avg net +0.398%.
+Strict pullback 0.75 / hold>=2 / oi3>3 resimulation: 155 trades, 124 symbols, 29 days, win rate 51.61%, avg net +0.261%, sum +0.404.
+Conclusion: OI expansion is useful but not enough; next step is anti-exhaustion filtering, especially against too-large quote/trade/avg-trade-size effort per price progress.
+```
+
