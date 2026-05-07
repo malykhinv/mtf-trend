@@ -1022,3 +1022,11 @@ If those files are absent, status is missing_frame and values remain NaN; no pro
 These fields are analysis-only for now and must not be used as filters until coverage is checked on the target run.
 ```
 
+Derivatives context fetch:
+
+```text
+P094 wires derivatives context collection into fetch-data/update-cache by default, with --skip-derivatives-context as an explicit opt-out.
+Smoke on ZEC wrote funding, premium_index/5m, mark_price/5m, global/top long-short and taker long-short cache files; anomaly-lab then reported ok coverage for these sources except one funding row before the first funding timestamp.
+Spot-vs-perp divergence is not implemented yet because current cache/fetch stack is futures-only; adding spot needs a separate spot client/cache namespace to avoid mixing markets.
+```
+

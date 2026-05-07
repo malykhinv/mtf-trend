@@ -64,8 +64,8 @@ DERIVATIVES_CONTEXT_SPECS: tuple[dict[str, object], ...] = (
     {
         "prefix": "premium",
         "path_parts": ("premium_index", DERIVATIVES_CONTEXT_TIMEFRAME),
-        "required_columns": ("timestamp", "mark_price", "index_price"),
-        "value_columns": ("mark_price", "index_price"),
+        "required_columns": ("timestamp", "close"),
+        "value_columns": ("close",),
         "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
         "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
     },
@@ -873,11 +873,6 @@ def enrich_candidates_with_derivatives_context(candidates: pd.DataFrame, *, cach
     if context_frames:
         result = pd.concat([result, *context_frames], axis=1)
 
-    if {"premium_mark_price", "premium_index_price"}.issubset(result.columns):
-        result["premium_mark_index_basis"] = [
-            _safe_divide(float(mark) - float(index), float(index))
-            for mark, index in zip(result["premium_mark_price"], result["premium_index_price"], strict=True)
-        ]
     if {"mark_close", "decision_close"}.issubset(result.columns):
         result["mark_close_vs_decision_close_basis"] = [
             _safe_divide(float(mark) - float(close), float(close))

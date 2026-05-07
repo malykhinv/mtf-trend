@@ -3770,3 +3770,33 @@ Verification:
 .venv\Scripts\python.exe -m compileall research_tools\anomaly_continuation_lab.py research_tools\anomaly_strategy_backtest.py
 .venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output\manual_checks\anomaly_derivatives_context_smoke2 --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols IO/USDT:USDT ZEC/USDT:USDT
 ```
+
+---
+
+## P094 - Fetch derivatives context during cache update
+
+```text
+Status: APPLIED locally / smoke verified
+Type: data fetch
+Trading logic changed: no
+Files: data/fetchers/derivatives_context_fetcher.py, data/exchanges/ccxt_futures_client.py, cli/commands.py, cli/parser.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+fetch-data and update-cache now collect derivatives context by default after OHLCV/OI:
+funding_rate, premium_index/5m, mark_price/5m, global_long_short_account_ratio/5m, top_long_short_account_ratio/5m, top_long_short_position_ratio/5m and taker_long_short_ratio/5m.
+The optional --skip-derivatives-context flag disables this stage.
+Fetched data is written to explicit cache paths consumed by anomaly-lab; no proxy values are created.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall data\fetchers\derivatives_context_fetcher.py data\exchanges\ccxt_futures_client.py cli\commands.py cli\parser.py research_tools\anomaly_continuation_lab.py research_tools\anomaly_strategy_backtest.py
+.venv\Scripts\python.exe main.py update-cache --symbols ZEC/USDT:USDT --days 1 --timeframes 1m --skip-open-interest
+.venv\Scripts\python.exe main.py run-anomaly-lab --output-dir .output\manual_checks\anomaly_derivatives_context_zec_after_fetch --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --symbols ZEC/USDT:USDT
+```

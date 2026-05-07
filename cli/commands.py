@@ -31,6 +31,7 @@ from constants import (
 )
 from data.clients.noop_market_data_client import NoOpMarketDataClient
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
+from data.fetchers.derivatives_context_fetcher import DerivativesContextFetcher
 from data.fetchers.market_data_fetcher import MarketDataFetcher
 from data.fetchers.ohlcv_fetcher import OhlcvFetcher
 from data.fetchers.oi_fetcher import OiFetcher
@@ -2697,7 +2698,7 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
         return 1
 
 
-def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuturesClient]:
+def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuturesClient, DerivativesContextFetcher]:
     exchange_client = CcxtFuturesClient(
         exchange=Exchange.BINANCE,
         api_key=config.fetch.binance_api_key,
@@ -2726,18 +2727,22 @@ def _build_fetch_stack(config: AppConfig) -> tuple[MarketDataFetcher, CcxtFuture
         log_level=config.backtest.log_level,
         logs_dir=config.backtest.logs_dir,
     )
-    return (
-        MarketDataFetcher(
-            ohlcv_fetcher=ohlcv_fetcher,
-            oi_fetcher=oi_fetcher,
-            market_data_client=NoOpMarketDataClient(),
-            retry_attempts=config.backtest.retry_attempts,
-            retry_backoff_seconds=config.backtest.retry_backoff_seconds,
-            log_level=config.backtest.log_level,
-            logs_dir=config.backtest.logs_dir,
-        ),
-        exchange_client,
+    market_fetcher = MarketDataFetcher(
+        ohlcv_fetcher=ohlcv_fetcher,
+        oi_fetcher=oi_fetcher,
+        market_data_client=NoOpMarketDataClient(),
+        retry_attempts=config.backtest.retry_attempts,
+        retry_backoff_seconds=config.backtest.retry_backoff_seconds,
+        log_level=config.backtest.log_level,
+        logs_dir=config.backtest.logs_dir,
     )
+    derivatives_context_fetcher = DerivativesContextFetcher(
+        exchange_client=exchange_client,
+        cache_dir=config.backtest.cache_dir,
+        log_level=config.backtest.log_level,
+        logs_dir=config.backtest.logs_dir,
+    )
+    return (market_fetcher, exchange_client, derivatives_context_fetcher)
 
 
 def _resolve_symbols(
@@ -3110,7 +3115,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.error("--days должен быть > 0")
         return 1
 
-    fetcher, exchange_client = _build_fetch_stack(config)
+    fetcher, exchange_client, derivatives_context_fetcher = _build_fetch_stack(config)
     futures_symbols = exchange_client.get_futures_symbols()
     all_futures_count = len(futures_symbols)
     explicit_symbols = _resolve_explicit_symbols(
@@ -3143,6 +3148,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
     include_open_interest = not _to_bool_flag(getattr(args, "skip_open_interest", False))
+    include_derivatives_context = not _to_bool_flag(getattr(args, "skip_derivatives_context", False))
     failed_symbols: set[str] = set()
     fetch_summaries: dict[Timeframe, FetchSummary] = {}
 
@@ -3213,6 +3219,19 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
             continue
         _fetch_for_timeframe(timeframe, followup_symbols, emit_log=True)
 
+    if include_derivatives_context:
+        logger.warning("Derivatives context: 5m/funding")
+        derivatives_result = derivatives_context_fetcher.fetch_many(
+            followup_symbols,
+            start_timestamp_ms,
+            end_timestamp_ms,
+        )
+        derivatives_failed = sum(1 for result in derivatives_result.values() if not result.success)
+        _log_fetch_summary(logger, len(followup_symbols), derivatives_failed)
+        failed_symbols.update(symbol for symbol, result in derivatives_result.items() if not result.success)
+    else:
+        logger.debug("Derivatives context пропущен по --skip-derivatives-context.")
+
     exit_code = _fetch_exit_code(len(failed_symbols))
     if root_stage_status == "ohlcv_cache_failed":
         exit_code = 2
@@ -3228,7 +3247,7 @@ def _resolve_fetch_symbol_list(
     args: argparse.Namespace,
     logger: Logger,
 ) -> list[str]:
-    _, exchange_client = _build_fetch_stack(config)
+    _, exchange_client, _ = _build_fetch_stack(config)
     futures_symbols = exchange_client.get_futures_symbols()
     explicit_symbols = _resolve_explicit_symbols(
         requested_symbols=getattr(args, "symbols", None),
@@ -3278,7 +3297,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         logger.error("--days должен быть > 0")
         return 1
 
-    fetcher, exchange_client = _build_fetch_stack(config)
+    fetcher, exchange_client, derivatives_context_fetcher = _build_fetch_stack(config)
     futures_symbols = exchange_client.get_futures_symbols()
     all_futures_count = len(futures_symbols)
     explicit_symbols = _resolve_explicit_symbols(
@@ -3310,6 +3329,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
     include_open_interest = not _to_bool_flag(getattr(args, "skip_open_interest", False))
+    include_derivatives_context = not _to_bool_flag(getattr(args, "skip_derivatives_context", False))
     failed_symbols: set[str] = set()
     for index, timeframe in enumerate(fetch_timeframes):
         logger.warning("Таймфрейм: %s", timeframe.value)
@@ -3337,6 +3357,19 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         if index < len(fetch_timeframes) - 1:
             logger.warning("Пауза перед следующим таймфреймом: 75с")
             time.sleep(75)
+
+    if include_derivatives_context:
+        logger.warning("Derivatives context: 5m/funding")
+        derivatives_result = derivatives_context_fetcher.fetch_many(
+            symbols,
+            start_timestamp_ms,
+            end_timestamp_ms,
+        )
+        derivatives_failed = sum(1 for result in derivatives_result.values() if not result.success)
+        _log_fetch_summary(logger, len(symbols), derivatives_failed)
+        failed_symbols.update(symbol for symbol, result in derivatives_result.items() if not result.success)
+    else:
+        logger.debug("Derivatives context пропущен по --skip-derivatives-context.")
 
     exit_code = _fetch_exit_code(len(failed_symbols))
     _log_loaded_coins(logger, len(symbols), "updated")

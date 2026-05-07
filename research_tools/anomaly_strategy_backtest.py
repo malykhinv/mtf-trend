@@ -81,7 +81,6 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "oi_change_pct_6x5m",
     "oi_price_interaction_3x5m",
     "oi_change_pct_3x5m_per_decision_return",
-    "premium_mark_index_basis",
     "mark_close_vs_decision_close_basis",
     "taker_ls_buy_share",
 )

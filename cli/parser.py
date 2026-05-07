@@ -54,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     fetch.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
     fetch.add_argument("--timeframes", nargs="*", default=None, help="Timeframes to fetch, e.g. 1m 3m 5m")
     fetch.add_argument("--skip-open-interest", action="store_true", default=False, help="Skip open interest fetching")
+    fetch.add_argument("--skip-derivatives-context", action="store_true", default=False, help="Skip funding/premium/long-short context fetching")
     fetch.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
 
     update = subparsers.add_parser("update-cache", help="Incrementally update the local cache")
@@ -63,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
     update.add_argument("--timeframes", nargs="*", default=None, help="Timeframes to update, e.g. 1m 3m 5m")
     update.add_argument("--skip-open-interest", action="store_true", default=False, help="Skip open interest fetching")
+    update.add_argument("--skip-derivatives-context", action="store_true", default=False, help="Skip funding/premium/long-short context fetching")
     update.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
     run_bt = subparsers.add_parser("run-backtest", help="Run a backtest on cached data")
     run_bt.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")

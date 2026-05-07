@@ -1565,4 +1565,5 @@ Follow-up patch:
 P093 implements the first honest artifact layer for these metrics.
 The current smoke run on IO/ZEC has market_context_status.csv with missing_frame for all new sources, which is expected because those context caches have not been fetched yet.
 This proves absence is visible rather than hidden behind zeros or last-price substitutes.
+P094 adds default cache collection for these derivatives context files. A ZEC 1-day smoke fetch produced ok anomaly-lab coverage for premium/mark/long-short/taker context and mixed no_context_before_decision/ok for funding, matching 8h funding cadence.
 ```

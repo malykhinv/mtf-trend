@@ -270,6 +270,121 @@ class CcxtFuturesClient(ExchangeClient):
                 payloads.append(cast(CcxtAggTradePayload, cast(dict[str, object], row)))
         return payloads
 
+    @staticmethod
+    def _normalize_binance_context_kline_rows(rows: list[object]) -> pd.DataFrame:
+        normalized_rows: list[list[object]] = []
+        for row in rows:
+            if not isinstance(row, (list, tuple)) or len(row) < 5:
+                continue
+            normalized_rows.append([row[0], row[1], row[2], row[3], row[4]])
+        return pd.DataFrame(normalized_rows, columns=["timestamp", "open", "high", "low", "close"])
+
+    @staticmethod
+    def _normalize_binance_context_ratio_rows(rows: list[object]) -> pd.DataFrame:
+        normalized_rows: list[dict[str, object]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            normalized_rows.append(
+                {
+                    "timestamp": row.get("timestamp"),
+                    "long_short_ratio": row.get("longShortRatio"),
+                    "long_account": row.get("longAccount"),
+                    "short_account": row.get("shortAccount"),
+                }
+            )
+        return pd.DataFrame(normalized_rows, columns=["timestamp", "long_short_ratio", "long_account", "short_account"])
+
+    @staticmethod
+    def _normalize_binance_context_taker_rows(rows: list[object]) -> pd.DataFrame:
+        normalized_rows: list[dict[str, object]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            normalized_rows.append(
+                {
+                    "timestamp": row.get("timestamp"),
+                    "buy_sell_ratio": row.get("buySellRatio"),
+                    "buy_vol": row.get("buyVol"),
+                    "sell_vol": row.get("sellVol"),
+                }
+            )
+        return pd.DataFrame(normalized_rows, columns=["timestamp", "buy_sell_ratio", "buy_vol", "sell_vol"])
+
+    @staticmethod
+    def _normalize_binance_context_funding_rows(rows: list[object]) -> pd.DataFrame:
+        normalized_rows: list[dict[str, object]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            normalized_rows.append(
+                {
+                    "timestamp": row.get("fundingTime"),
+                    "funding_rate": row.get("fundingRate"),
+                }
+            )
+        return pd.DataFrame(normalized_rows, columns=["timestamp", "funding_rate"])
+
+    def fetch_binance_derivatives_context(
+        self,
+        *,
+        symbol: str,
+        source: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+        period: str = "5m",
+        limit: int = 500,
+    ) -> pd.DataFrame:
+        """Fetches Binance futures derivatives context without proxy substitutes."""
+        if self.exchange != Exchange.BINANCE:
+            raise NotImplementedError("derivatives context is currently implemented only for Binance futures")
+
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        market_id = self.get_market_id(symbol)
+        params: dict[str, object] = {
+            "symbol": market_id,
+            "startTime": int(start_timestamp_ms),
+            "endTime": int(end_timestamp_ms),
+            "limit": int(limit),
+        }
+        endpoint_by_source: dict[str, tuple[str, Callable[..., object], Callable[[list[object]], pd.DataFrame]]] = {
+            "funding": ("fapiPublicGetFundingRate", raw_client.fapiPublicGetFundingRate, self._normalize_binance_context_funding_rows),
+            "premium": ("fapiPublicGetPremiumIndexKlines", raw_client.fapiPublicGetPremiumIndexKlines, self._normalize_binance_context_kline_rows),
+            "mark": ("fapiPublicGetMarkPriceKlines", raw_client.fapiPublicGetMarkPriceKlines, self._normalize_binance_context_kline_rows),
+            "global_ls": ("fapiDataGetGlobalLongShortAccountRatio", raw_client.fapiDataGetGlobalLongShortAccountRatio, self._normalize_binance_context_ratio_rows),
+            "top_account_ls": ("fapiDataGetTopLongShortAccountRatio", raw_client.fapiDataGetTopLongShortAccountRatio, self._normalize_binance_context_ratio_rows),
+            "top_position_ls": ("fapiDataGetTopLongShortPositionRatio", raw_client.fapiDataGetTopLongShortPositionRatio, self._normalize_binance_context_ratio_rows),
+            "taker_ls": ("fapiDataGetTakerlongshortRatio", raw_client.fapiDataGetTakerlongshortRatio, self._normalize_binance_context_taker_rows),
+        }
+        if source not in endpoint_by_source:
+            raise ValueError(f"unsupported_derivatives_context_source:{source}")
+
+        endpoint, call, normalizer = endpoint_by_source[source]
+        if source in {"premium", "mark"}:
+            params["interval"] = period
+        elif source != "funding":
+            params["period"] = period
+        batch = self._retry_exchange_call(
+            operation=f"binance_fetch_derivatives_context_{source}",
+            symbol=symbol,
+            endpoint=endpoint,
+            call=call,
+            params=params,
+        )
+        if not isinstance(batch, list):
+            raise ValueError(f"{endpoint} returned invalid payload type: {type(batch).__name__}")
+        frame = normalizer(batch)
+        if frame.empty:
+            return frame
+        for column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        frame = frame.loc[
+            (frame["timestamp"] >= int(start_timestamp_ms))
+            & (frame["timestamp"] <= int(end_timestamp_ms))
+        ]
+        return frame.drop_duplicates("timestamp", keep="last").sort_values("timestamp").reset_index(drop=True)
+
     def get_futures_symbols(self) -> list[str]:
         """Возвращает список доступных фьючерсных символов."""
         self._ensure_markets_loaded()
