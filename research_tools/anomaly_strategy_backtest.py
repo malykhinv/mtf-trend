@@ -21,6 +21,7 @@ from research_tools.anomaly_continuation_lab import (
     build_derivatives_context_status,
     build_oi_context_status,
     collect_anomaly_lab_rows,
+    enrich_candidates_with_derivatives_context,
     _emit_progress,
 )
 
@@ -84,6 +85,8 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "mark_close_vs_decision_close_basis",
     "taker_ls_buy_share",
 )
+
+MAX_LAZY_DERIVATIVES_CONTEXT_SIGNALS = 1000
 
 for _context_spec in DERIVATIVES_CONTEXT_SPECS:
     _context_prefix = str(_context_spec["prefix"])
@@ -736,15 +739,40 @@ def run_anomaly_strategy_backtest(
     grid_hold_values: Iterable[int] = (1, 2),
     grid_pullback_fractions: Iterable[float] = (0.65, 0.75, 0.85),
     grid_exhaustion_profiles: Iterable[str] = ("none",),
+    derivatives_context_fetcher: object | None = None,
 ) -> Path:
     output_dir = config.lab_config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    candidates = collect_anomaly_lab_rows(config.lab_config, symbols=symbols, progress_label="anomaly candidates")
+    candidates = collect_anomaly_lab_rows(
+        config.lab_config,
+        symbols=symbols,
+        progress_label="anomaly candidates",
+        include_derivatives_context=derivatives_context_fetcher is None,
+    )
+    print("anomaly signals: filtering", flush=True)
+    signals = build_anomaly_signals(candidates, config=config)
+    if derivatives_context_fetcher is not None and not signals.empty and len(signals) <= MAX_LAZY_DERIVATIVES_CONTEXT_SIGNALS:
+        context_signals = signals.dropna(subset=["decision_timestamp_ms"])
+        if not context_signals.empty:
+            start_ts = int(context_signals["decision_timestamp_ms"].astype(float).min()) - 6 * 5 * 60 * 1000
+            end_ts = int(context_signals["decision_timestamp_ms"].astype(float).max()) + 5 * 60 * 1000
+            context_symbols = sorted(set(context_signals["symbol"].astype(str)))
+            fetch_many = getattr(derivatives_context_fetcher, "fetch_many")
+            fetch_many(context_symbols, start_ts, end_ts)
+        candidates = enrich_candidates_with_derivatives_context(candidates, cache_dir=config.lab_config.cache_dir)
+        signals = build_anomaly_signals(candidates, config=config)
+    elif derivatives_context_fetcher is None:
+        pass
+    else:
+        print(
+            "anomaly derivatives context: skipped lazy fetch for "
+            f"{len(signals)} signals; threshold {MAX_LAZY_DERIVATIVES_CONTEXT_SIGNALS}, using cache only",
+            flush=True,
+        )
+        candidates = enrich_candidates_with_derivatives_context(candidates, cache_dir=config.lab_config.cache_dir)
     candidates.to_csv(output_dir / "anomaly_candidates.csv", index=False)
     build_oi_context_status(candidates).to_csv(output_dir / "oi_context_status.csv", index=False)
     build_derivatives_context_status(candidates).to_csv(output_dir / "market_context_status.csv", index=False)
-    print("anomaly signals: filtering", flush=True)
-    signals = build_anomaly_signals(candidates, config=config)
     signals.to_csv(output_dir / "anomaly_signals.csv", index=False)
     trades = simulate_anomaly_trades(signals, config=config, progress_label="anomaly trades")
     trades.to_csv(output_dir / "anomaly_trades.csv", index=False)

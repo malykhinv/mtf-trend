@@ -3148,7 +3148,9 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
     include_open_interest = not _to_bool_flag(getattr(args, "skip_open_interest", False))
-    include_derivatives_context = not _to_bool_flag(getattr(args, "skip_derivatives_context", False))
+    include_derivatives_context = bool(getattr(args, "with_derivatives_context", False)) and not _to_bool_flag(
+        getattr(args, "skip_derivatives_context", False)
+    )
     failed_symbols: set[str] = set()
     fetch_summaries: dict[Timeframe, FetchSummary] = {}
 
@@ -3230,7 +3232,7 @@ def _fetch_data_inner(config: AppConfig, args: argparse.Namespace) -> int:
         _log_fetch_summary(logger, len(followup_symbols), derivatives_failed)
         failed_symbols.update(symbol for symbol, result in derivatives_result.items() if not result.success)
     else:
-        logger.debug("Derivatives context пропущен по --skip-derivatives-context.")
+        logger.debug("Derivatives context не запрошен для bulk cache; anomaly-lab доберёт его лениво для малого набора сигналов.")
 
     exit_code = _fetch_exit_code(len(failed_symbols))
     if root_stage_status == "ohlcv_cache_failed":
@@ -3329,7 +3331,9 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
 
     start_timestamp_ms, end_timestamp_ms = _fetch_period(config, args.days, getattr(args, "end_timestamp_ms", None))
     include_open_interest = not _to_bool_flag(getattr(args, "skip_open_interest", False))
-    include_derivatives_context = not _to_bool_flag(getattr(args, "skip_derivatives_context", False))
+    include_derivatives_context = bool(getattr(args, "with_derivatives_context", False)) and not _to_bool_flag(
+        getattr(args, "skip_derivatives_context", False)
+    )
     failed_symbols: set[str] = set()
     for index, timeframe in enumerate(fetch_timeframes):
         logger.warning("Таймфрейм: %s", timeframe.value)
@@ -3369,7 +3373,7 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
         _log_fetch_summary(logger, len(symbols), derivatives_failed)
         failed_symbols.update(symbol for symbol, result in derivatives_result.items() if not result.success)
     else:
-        logger.debug("Derivatives context пропущен по --skip-derivatives-context.")
+        logger.debug("Derivatives context не запрошен для bulk cache; anomaly-lab доберёт его лениво для малого набора сигналов.")
 
     exit_code = _fetch_exit_code(len(failed_symbols))
     _log_loaded_coins(logger, len(symbols), "updated")
@@ -4414,6 +4418,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             max_hold_candles=int(args.max_hold_candles),
             fee_rate=float(args.fee_rate),
         )
+        _, _, derivatives_context_fetcher = _build_fetch_stack(config)
         run_anomaly_strategy_backtest(
             backtest_config,
             symbols=getattr(args, "symbols", None),
@@ -4427,6 +4432,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             grid_exhaustion_profiles=_parse_grid_profile_values(
                 str(getattr(args, "grid_exhaustion_profiles", "none"))
             ),
+            derivatives_context_fetcher=derivatives_context_fetcher,
         )
         return 0
 

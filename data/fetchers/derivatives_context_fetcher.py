@@ -185,8 +185,10 @@ class DerivativesContextFetcher:
         end_timestamp_ms: int,
     ) -> dict[str, SymbolFetchResult]:
         results: dict[str, SymbolFetchResult] = {}
-        for symbol in symbols:
+        total = len(symbols)
+        for index, symbol in enumerate(symbols, start=1):
             try:
+                self._logger.warning("Derivatives context: %s/%s %s", index, total, symbol)
                 added_rows = self.fetch_symbol(symbol, start_timestamp_ms, end_timestamp_ms)
                 results[symbol] = SymbolFetchResult.ok(added_rows)
             except Exception as exc:

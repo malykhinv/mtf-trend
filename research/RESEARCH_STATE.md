@@ -1038,3 +1038,13 @@ This fixes startTime invalid errors on long-short endpoints near the 30-day edge
 Older context rows remain missing; no backfill/proxy is created.
 ```
 
+Derivatives context performance note:
+
+```text
+P096 changes derivatives context collection from default-on full-universe cache to event-window lazy collection in run-anomaly-lab.
+Reason: full-universe 30-day 5m long-short/premium/mark context is tens of thousands of Binance endpoint calls and is not appropriate for ordinary cache updates.
+Ordinary update-cache/fetch-data remains OHLCV/OI focused unless --with-derivatives-context is explicitly requested.
+run-anomaly-lab fetches derivatives context around a small post-filter signal set; large grids use cache-only context and print that limitation explicitly.
+Artifacts remain honest through market_context_status coverage instead of proxies/fallback fills.
+```
+

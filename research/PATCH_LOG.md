@@ -3828,3 +3828,33 @@ Verification:
 .venv\Scripts\python.exe -m compileall data\fetchers\derivatives_context_fetcher.py
 .venv\Scripts\python.exe main.py update-cache --symbols BTC/USDT:USDT --days 30 --timeframes 5m --skip-open-interest
 ```
+
+---
+
+## P096 - Make derivatives context event-window lazy
+
+```text
+Status: APPLIED locally / compile verified
+Type: data fetch performance / honest artifact coverage
+Trading logic changed: no
+Files: cli/parser.py, cli/commands.py, data/fetchers/derivatives_context_fetcher.py, research_tools/anomaly_continuation_lab.py, research_tools/anomaly_strategy_backtest.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+fetch-data/update-cache no longer collect full-universe derivatives context by default.
+Full 30-day derivatives context across 500+ symbols is too expensive because 5m long-short endpoints require many paginated requests per symbol.
+The stage now runs only with explicit --with-derivatives-context and prints per-symbol progress.
+Normal cache collection remains OHLCV/OI focused.
+run-anomaly-lab now builds anomaly signals first, then fetches derivatives context only for the event window around a small signal set.
+If the signal set is too large, the run prints an explicit skip message and uses cache-only context; market_context_status.csv still reports missing coverage honestly.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall cli\parser.py cli\commands.py data\fetchers\derivatives_context_fetcher.py research_tools\anomaly_strategy_backtest.py research_tools\anomaly_continuation_lab.py
+```
