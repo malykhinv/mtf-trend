@@ -1065,3 +1065,11 @@ This keeps raw discovery broad but fetches expensive derivatives data only where
 market_context_fetch_status.csv records fetch success/errors per symbol; missing context remains visible in market_context_status.csv.
 ```
 
+Derivatives context local enrichment:
+
+```text
+P099 fixes the post-fetch silent bottleneck: derivatives context enrichment is now scoped to the post-filter signal universe.
+Raw candidates outside that universe receive explicit not_in_context_universe context statuses.
+This preserves broad anomaly discovery while keeping expensive context work tied to the narrowed research stage.
+```
+

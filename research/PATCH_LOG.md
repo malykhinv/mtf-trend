@@ -3919,3 +3919,34 @@ Verification:
 .venv\Scripts\python.exe main.py run-anomaly-lab --symbols BTC/USDT:USDT --output-dir .output\manual_checks\anomaly_context_postfilter_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --run-entry-grid true --grid-oi3-values 0.03 --grid-hold-values 2 --grid-pullback-fractions 0.75 --grid-exhaustion-profiles balanced
 .venv\Scripts\python.exe main.py run-anomaly-lab --symbols BTC/USDT:USDT --output-dir .output\manual_checks\anomaly_context_base_fetch_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5
 ```
+
+---
+
+## P099 - Limit derivatives context enrichment to post-filter rows
+
+```text
+Status: APPLIED locally / smoke verified
+Type: data fetch performance / artifact honesty
+Trading logic changed: no
+Files: research_tools/anomaly_strategy_backtest.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+After event-window derivatives fetch, anomaly-lab no longer enriches every raw anomaly candidate with derivatives context.
+Only rows in the post-filter context universe are enriched; other raw candidates get explicit not_in_context_universe status columns.
+This keeps anomaly_candidates.csv honest without forcing the expensive context join over tens of thousands of raw rows.
+Added concise progress prints before context enrichment, artifact writes, trade simulation, and entry grid.
+Default context columns are attached in one concat block to avoid pandas fragmentation and warning spam.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_strategy_backtest.py research_tools\anomaly_continuation_lab.py cli\commands.py
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe main.py run-anomaly-lab --symbols BTC/USDT:USDT --output-dir .output\manual_checks\anomaly_context_scoped_enrichment_smoke2 --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --run-entry-grid true --grid-oi3-values 0.03 --grid-hold-values 2 --grid-pullback-fractions 0.75 --grid-exhaustion-profiles balanced
+```

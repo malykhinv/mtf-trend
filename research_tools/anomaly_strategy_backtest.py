@@ -22,6 +22,7 @@ from research_tools.anomaly_continuation_lab import (
     build_oi_context_status,
     collect_anomaly_lab_rows,
     enrich_candidates_with_derivatives_context,
+    _empty_context_columns,
     _emit_progress,
 )
 
@@ -742,6 +743,64 @@ def _fetch_derivatives_context_for_signal_universe(
     return pd.DataFrame(status_rows)
 
 
+def _context_default_columns(status: str) -> dict[str, object]:
+    defaults: dict[str, object] = {}
+    for spec in DERIVATIVES_CONTEXT_SPECS:
+        values = _empty_context_columns(spec)
+        values[f"{spec['prefix']}_status"] = status
+        defaults.update(values)
+    defaults["mark_close_vs_decision_close_basis"] = np.nan
+    defaults["taker_ls_buy_share"] = np.nan
+    return defaults
+
+
+def _attach_default_context_columns(frame: pd.DataFrame, defaults: dict[str, object]) -> pd.DataFrame:
+    default_frame = pd.DataFrame(
+        {column: [value] * len(frame) for column, value in defaults.items()},
+        index=frame.index,
+    )
+    return pd.concat([frame.drop(columns=list(defaults), errors="ignore"), default_frame], axis=1)
+
+
+def _enrich_derivatives_context_for_signal_universe(
+    candidates: pd.DataFrame,
+    signal_universe: pd.DataFrame,
+    *,
+    cache_dir: Path,
+) -> pd.DataFrame:
+    if candidates.empty or "symbol" not in candidates.columns:
+        return candidates
+
+    result = candidates.copy()
+    defaults = _context_default_columns("not_in_context_universe")
+    if signal_universe.empty:
+        defaults = _context_default_columns("no_context_universe")
+        return _attach_default_context_columns(result, defaults)
+
+    key_columns = ["symbol", "decision_timestamp_ms"]
+    if not set(key_columns).issubset(result.columns):
+        return _attach_default_context_columns(result, defaults)
+
+    universe_keys = signal_universe.loc[:, key_columns].dropna().drop_duplicates()
+    selected_index = (
+        result.reset_index()
+        .merge(universe_keys, on=key_columns, how="inner")["index"]
+        .astype(int)
+        .to_numpy()
+    )
+    result = _attach_default_context_columns(result, defaults)
+    if len(selected_index) == 0:
+        return result
+
+    selected = result.loc[selected_index].drop(columns=list(defaults), errors="ignore").copy()
+    print(f"anomaly derivatives context: enriching {len(selected)} post-filter candidate rows", flush=True)
+    enriched = enrich_candidates_with_derivatives_context(selected, cache_dir=cache_dir)
+    context_columns = [column for column in enriched.columns if column in defaults]
+    for column in context_columns:
+        result.loc[enriched.index, column] = enriched[column]
+    return result
+
+
 def summarize_entry_grid_variant(
     trades: pd.DataFrame,
     *,
@@ -856,18 +915,26 @@ def run_anomaly_strategy_backtest(
             derivatives_context_fetcher=derivatives_context_fetcher,
         )
         context_fetch_status.to_csv(output_dir / "market_context_fetch_status.csv", index=False)
-        candidates = enrich_candidates_with_derivatives_context(candidates, cache_dir=config.lab_config.cache_dir)
+        candidates = _enrich_derivatives_context_for_signal_universe(
+            candidates,
+            context_signals,
+            cache_dir=config.lab_config.cache_dir,
+        )
         signals = build_anomaly_signals(candidates, config=config)
+    print("anomaly artifacts: writing base csv files", flush=True)
     candidates.to_csv(output_dir / "anomaly_candidates.csv", index=False)
     build_oi_context_status(candidates).to_csv(output_dir / "oi_context_status.csv", index=False)
     build_derivatives_context_status(candidates).to_csv(output_dir / "market_context_status.csv", index=False)
     signals.to_csv(output_dir / "anomaly_signals.csv", index=False)
+    print(f"anomaly trades: simulating {len(signals)} signals", flush=True)
     trades = simulate_anomaly_trades(signals, config=config, progress_label="anomaly trades")
+    print("anomaly artifacts: writing trade summaries", flush=True)
     trades.to_csv(output_dir / "anomaly_trades.csv", index=False)
     summary = summarize_trades(trades)
     summary.to_csv(output_dir / "anomaly_profitability_summary.csv", index=False)
     summarize_trades_by_symbol(trades).to_csv(output_dir / "anomaly_profitability_by_symbol.csv", index=False)
     if run_entry_grid:
+        print("anomaly entry grid: running variants", flush=True)
         grid = run_anomaly_entry_grid(
             candidates,
             config,
