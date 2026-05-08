@@ -1639,3 +1639,16 @@ Europe: 13 trades, win rate 69.23%, avg +1.65%, median +2.88%, sum +0.214, 7 pos
 US: 9 trades, win rate 66.67%, avg +2.86%, median +2.58%, sum +0.257, 4 positive / 3 negative days.
 Interpretation: Europe/US are cleaner by winrate/median; Asia has upside but weaker median and lower winrate. Sample is too small to add a session filter yet.
 ```
+
+CVX / EMA20 exit follow-up:
+
+```text
+CVX in the best row is a suspicious pass, not a clean wake-up: start_trade_count=47, start_taker_buy_quote_share=0.0047, start_close_position_in_range=0.0, start_verticality_max_retrace_fraction=1.33.
+This supports adding quote/trade candle histograms and explicit zero-range sleep metrics before adding another hard filter.
+P103 adds quote_volume / number_of_trades chart panels, baseline_zero_range_share for future runs, and exit-rule grid support.
+Same-window quick check for balanced market hold>=2 oi3>5:
+structural_trail: 31 trades, WR 61.29%, avg +2.36%, median +2.48%, sum +0.730.
+ema20_close: 31 trades, WR 48.39%, avg +2.31%, median -0.08%, sum +0.718.
+ema20_negative_pnl_be_escape: 31 trades, WR 45.16%, avg +2.04%, median -0.08%, sum +0.632.
+Interpretation: EMA20 exits may help individual tails, but on this fixed sample they hurt consistency. Keep them in grid for analysis, not as default.
+```

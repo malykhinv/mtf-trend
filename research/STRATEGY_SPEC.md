@@ -233,6 +233,16 @@ Runner:
 
 Runner не должен оправдывать плохой RR до TP1.
 
+Anomaly-lab exit research:
+
+```text
+structural_trail: current default, TP1 partial then structural trailing stop.
+ema20_close: exit on the first closed candle below EMA20; decision is available only after candle close.
+ema20_negative_pnl_be_escape: after close < EMA20 and close < entry, arm a BE escape; exit at entry only if a later candle trades back to entry before stop.
+```
+
+EMA exits are research-grid variants, not a proven replacement for structural trailing.
+
 ---
 
 ## 11. Stage5 reject reasons

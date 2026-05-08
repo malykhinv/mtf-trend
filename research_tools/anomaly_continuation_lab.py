@@ -342,8 +342,10 @@ def _effort_and_sleep_metrics(
     start_ret = _safe_divide(start_close - start_open, start_open)
     abs_start_ret = abs(start_ret) if np.isfinite(start_ret) else float("nan")
     range_series = (high - low).astype(float)
+    baseline_ranges = range_series.iloc[baseline_slice]
     baseline_range = float(range_series.iloc[baseline_slice].median())
     baseline_range_pct = float((range_series / close.replace(0.0, np.nan)).iloc[baseline_slice].median())
+    baseline_zero_range_share = float(baseline_ranges.le(0.0).mean())
     start_range_pct = _safe_divide(start_range, start_open)
     decision_ret = _safe_divide(float(close.iloc[decision_idx]) - start_open, start_open)
     impulse_range = impulse_high - impulse_low
@@ -357,6 +359,7 @@ def _effort_and_sleep_metrics(
         "start_lower_wick_to_range": _safe_divide(min(start_open, start_close) - start_low, start_range),
         "baseline_range_median": baseline_range,
         "baseline_range_pct_median": baseline_range_pct,
+        "baseline_zero_range_share": baseline_zero_range_share,
         "start_range_ratio_to_baseline": _safe_divide(start_range, baseline_range),
         "start_range_pct": start_range_pct,
         "start_range_pct_ratio_to_baseline": _safe_divide(start_range_pct, baseline_range_pct),

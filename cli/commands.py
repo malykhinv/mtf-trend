@@ -4344,6 +4344,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             AnomalyBacktestConfig,
             AnomalyLabConfig,
             _parse_grid_values,
+            _parse_grid_exit_rules,
             _parse_grid_profile_values,
             run_anomaly_strategy_backtest,
         )
@@ -4415,6 +4416,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             tp1_fraction=float(args.tp1_fraction),
             trail_lookback_candles=int(args.trail_lookback_candles),
             trail_buffer_r=float(args.trail_buffer_r),
+            exit_rule=str(getattr(args, "exit_rule", "structural_trail")),
             max_hold_candles=int(args.max_hold_candles),
             fee_rate=float(args.fee_rate),
         )
@@ -4432,6 +4434,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             grid_exhaustion_profiles=_parse_grid_profile_values(
                 str(getattr(args, "grid_exhaustion_profiles", "none"))
             ),
+            grid_exit_rules=_parse_grid_exit_rules(str(getattr(args, "grid_exit_rules", "structural_trail"))),
             derivatives_context_fetcher=derivatives_context_fetcher,
         )
         return 0

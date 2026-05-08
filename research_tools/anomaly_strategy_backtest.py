@@ -36,7 +36,6 @@ from cli.pno_diagnostics import (
     _PNO_PLOT_UP,
     _PNO_PLOT_5M_CANDLE_WIDTH,
     _PNO_TRADE_CHART_FIGSIZE,
-    _annotate_missing_trade_count_panel,
     _annotate_pno_axis_price_tag,
     _build_pno_tick_labels_from_timestamps,
     _build_pno_tick_positions_from_timestamps,
@@ -48,11 +47,9 @@ from cli.pno_diagnostics import (
     _format_pno_chart_symbol,
     _format_pno_timeframe_label,
     _infer_pno_frame_step_ms,
-    _pno_trade_count_source_label,
     _resolve_pno_axis_tag_positions,
     _resolve_pno_candle_width,
     _resolve_pno_timestamp_plot_idx,
-    _resolve_trade_count_series,
 )
 from research_tools.anomaly_continuation_lab import (
     AnomalyLabConfig,
@@ -67,8 +64,12 @@ from research_tools.anomaly_continuation_lab import (
 
 TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "start_trade_count",
+    "baseline_trade_count_median",
+    "baseline_quote_volume_median",
     "start_trade_ratio",
     "start_quote_ratio",
+    "next_n_trade_count_mean",
+    "next_n_quote_volume_mean",
     "hold_count_next_n_candles",
     "hold_ratio_next_n_candles",
     "next_n_trade_decay",
@@ -103,6 +104,7 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "start_range_ratio_to_baseline",
     "start_range_pct",
     "start_range_pct_ratio_to_baseline",
+    "baseline_zero_range_share",
     "start_quote_per_abs_return",
     "start_trades_per_abs_return",
     "start_quote_ratio_per_abs_return",
@@ -170,6 +172,7 @@ class AnomalyBacktestConfig:
     move_stop_to_breakeven_after_tp1: bool = True
     trail_lookback_candles: int = 5
     trail_buffer_r: float = 0.10
+    exit_rule: str = "structural_trail"
     max_hold_candles: int = 240
     fee_rate: float = 0.0004
 
@@ -250,6 +253,8 @@ def _read_symbol_frame(cache_dir: Path, symbol: str, timeframe: str) -> pd.DataF
     frame.sort_values("timestamp", inplace=True)
     frame.drop_duplicates("timestamp", keep="last", inplace=True)
     frame.reset_index(drop=True, inplace=True)
+    if "ema20" not in frame.columns and "close" in frame.columns:
+        frame["ema20"] = frame["close"].astype(float).ewm(span=20, adjust=False).mean()
     return frame
 
 
@@ -484,12 +489,18 @@ def simulate_long_signal(
     exit_ts = int(future["timestamp"].iloc[-1])
     exit_price = float(future["close"].iloc[-1])
     trail_stop = float("nan")
+    ema20_exit_armed = False
+    ema20_exit_armed_ts = float("nan")
+    ema20_exit_armed_price = float("nan")
+    ema20_exit_triggered = False
+    ema20_exit_was_better_than_final = False
 
     for idx, row in future.iterrows():
         candle_ts = int(row["timestamp"])
         high = float(row["high"])
         low = float(row["low"])
         close = float(row["close"])
+        ema20 = _safe_float(row.get("ema20"))
         max_high = max(max_high, high)
         min_low = min(min_low, low)
 
@@ -501,12 +512,49 @@ def simulate_long_signal(
             remaining_fraction = 0.0
             break
 
+        if (
+            config.exit_rule == "ema20_negative_pnl_be_escape"
+            and ema20_exit_armed
+            and high >= entry_price
+        ):
+            exit_reason = "ema20_negative_pnl_be_escape"
+            exit_ts = candle_ts
+            exit_price = entry_price
+            realized_r += remaining_fraction * ((exit_price - entry_price) / initial_risk)
+            remaining_fraction = 0.0
+            ema20_exit_triggered = True
+            break
+
         if not tp1_hit and high >= tp1_price:
             tp1_hit = True
             realized_r += config.tp1_fraction * config.tp1_r
             remaining_fraction = 1.0 - config.tp1_fraction
             if config.move_stop_to_breakeven_after_tp1:
                 active_stop = max(active_stop, entry_price)
+
+        if (
+            config.exit_rule == "ema20_close"
+            and ema20 is not None
+            and close < ema20
+        ):
+            exit_reason = "ema20_close"
+            exit_ts = candle_ts
+            exit_price = close
+            realized_r += remaining_fraction * ((exit_price - entry_price) / initial_risk)
+            remaining_fraction = 0.0
+            ema20_exit_triggered = True
+            break
+
+        if (
+            config.exit_rule == "ema20_negative_pnl_be_escape"
+            and not ema20_exit_armed
+            and ema20 is not None
+            and close < ema20
+            and close < entry_price
+        ):
+            ema20_exit_armed = True
+            ema20_exit_armed_ts = candle_ts
+            ema20_exit_armed_price = close
 
         if tp1_hit:
             prior = frame.loc[
@@ -521,6 +569,8 @@ def simulate_long_signal(
 
     if remaining_fraction > 0.0:
         realized_r += remaining_fraction * ((exit_price - entry_price) / initial_risk)
+    if np.isfinite(ema20_exit_armed_price):
+        ema20_exit_was_better_than_final = ema20_exit_armed_price > exit_price
 
     gross_return = realized_r * initial_risk / entry_price
     round_trip_fee = config.fee_rate * 2.0
@@ -547,6 +597,13 @@ def simulate_long_signal(
         "tp1_hit": tp1_hit,
         "tp1_fraction": config.tp1_fraction,
         "trail_stop_final": trail_stop,
+        "exit_rule": config.exit_rule,
+        "ema20_exit_armed": ema20_exit_armed,
+        "ema20_exit_armed_timestamp_ms": ema20_exit_armed_ts,
+        "ema20_exit_armed_timestamp_utc": _timestamp_to_utc(ema20_exit_armed_ts) if np.isfinite(ema20_exit_armed_ts) else "",
+        "ema20_exit_armed_price": ema20_exit_armed_price,
+        "ema20_exit_triggered": ema20_exit_triggered,
+        "ema20_exit_was_better_than_final": ema20_exit_was_better_than_final,
         "exit_timestamp_ms": exit_ts,
         "exit_timestamp_utc": _timestamp_to_utc(exit_ts),
         "exit_price": exit_price,
@@ -724,6 +781,17 @@ def _parse_grid_profile_values(raw: str) -> list[str]:
     return profiles
 
 
+EXIT_RULES = {"structural_trail", "ema20_close", "ema20_negative_pnl_be_escape"}
+
+
+def _parse_grid_exit_rules(raw: str) -> list[str]:
+    rules = [item.strip() for item in raw.split(",") if item.strip()]
+    unknown = sorted(set(rules).difference(EXIT_RULES))
+    if unknown:
+        raise ValueError(f"unknown exit rules: {unknown}")
+    return rules
+
+
 def _iter_entry_grid_configs(
     base_config: AnomalyBacktestConfig,
     *,
@@ -731,42 +799,45 @@ def _iter_entry_grid_configs(
     hold_values: Iterable[int],
     pullback_fractions: Iterable[float],
     exhaustion_profiles: Iterable[str],
+    exit_rules: Iterable[str],
 ) -> list[AnomalyBacktestConfig]:
     variants: list[AnomalyBacktestConfig] = []
     for profile_name in exhaustion_profiles:
         profile = EXHAUSTION_PROFILES[profile_name]
         for oi3 in oi3_values:
             for hold in hold_values:
-                common = {
-                    "min_hold_count": int(hold),
-                    "min_oi_change_pct_3x5m": float(oi3),
-                    "require_oi_status_ok": True,
-                    "exhaustion_profile": profile_name,
-                    **profile,
-                }
-                variants.append(
-                    replace(
-                        base_config,
-                        entry_method="market",
-                        **common,
-                    )
-                )
-                variants.append(
-                    replace(
-                        base_config,
-                        entry_method="break_box_high",
-                        **common,
-                    )
-                )
-                for fraction in pullback_fractions:
+                for exit_rule in exit_rules:
+                    common = {
+                        "min_hold_count": int(hold),
+                        "min_oi_change_pct_3x5m": float(oi3),
+                        "require_oi_status_ok": True,
+                        "exhaustion_profile": profile_name,
+                        "exit_rule": str(exit_rule),
+                        **profile,
+                    }
                     variants.append(
                         replace(
                             base_config,
-                            entry_method="pullback_box_fraction",
-                            pullback_box_fraction=float(fraction),
+                            entry_method="market",
                             **common,
                         )
                     )
+                    variants.append(
+                        replace(
+                            base_config,
+                            entry_method="break_box_high",
+                            **common,
+                        )
+                    )
+                    for fraction in pullback_fractions:
+                        variants.append(
+                            replace(
+                                base_config,
+                                entry_method="pullback_box_fraction",
+                                pullback_box_fraction=float(fraction),
+                                **common,
+                            )
+                        )
     return variants
 
 
@@ -970,6 +1041,7 @@ def summarize_entry_grid_variant(
     row: dict[str, object] = {
         "variant_id": int(variant_id) if variant_id is not None else -1,
         "entry_method": config.entry_method,
+        "exit_rule": config.exit_rule,
         "pullback_box_fraction": (
             config.pullback_box_fraction if config.entry_method == "pullback_box_fraction" else np.nan
         ),
@@ -1216,6 +1288,31 @@ def _draw_anomaly_trade_block(
     )
 
 
+def _annotate_anomaly_panel_message(ax, text: str) -> None:
+    ax.text(
+        0.5,
+        0.5,
+        text,
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        color=_PNO_PLOT_MUTED,
+        fontsize=7,
+        alpha=0.72,
+    )
+
+
+def _resolve_avg_trade_quote_series(frame: pd.DataFrame) -> np.ndarray | None:
+    if "quote_volume" not in frame.columns or "number_of_trades" not in frame.columns:
+        return None
+    quote_volume = pd.to_numeric(frame["quote_volume"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    trade_count = pd.to_numeric(frame["number_of_trades"], errors="coerce").replace([np.inf, -np.inf], np.nan)
+    values = quote_volume / trade_count.replace(0.0, np.nan)
+    if not values.notna().any():
+        return None
+    return values.fillna(0.0).to_numpy(dtype=np.float64, copy=False)
+
+
 def _render_anomaly_trade_chart(
     *,
     frame: pd.DataFrame,
@@ -1365,13 +1462,13 @@ def _render_anomaly_trade_chart(
         zorder=3,
     )
 
-    trade_counts = _resolve_trade_count_series(plot_frame)
-    trade_counts_max = float(np.nanmax(trade_counts)) if trade_counts is not None and trade_counts.size else 0.0
-    if trade_counts is not None and trade_counts_max > 0.0:
-        trade_counts_pct = (trade_counts / trade_counts_max) * 100.0
+    avg_trade_quote = _resolve_avg_trade_quote_series(plot_frame)
+    avg_trade_quote_max = float(np.nanmax(avg_trade_quote)) if avg_trade_quote is not None and avg_trade_quote.size else 0.0
+    if avg_trade_quote is not None and avg_trade_quote_max > 0.0:
+        avg_trade_quote_pct = (avg_trade_quote / avg_trade_quote_max) * 100.0
         ax_trades.bar(
             x_values,
-            trade_counts_pct,
+            avg_trade_quote_pct,
             width=_resolve_pno_candle_width(x_values, default=0.82),
             color=colors,
             edgecolor="none",
@@ -1379,7 +1476,7 @@ def _render_anomaly_trade_chart(
             zorder=3,
         )
     else:
-        _annotate_missing_trade_count_panel(ax_trades, _pno_trade_count_source_label(plot_frame))
+        _annotate_anomaly_panel_message(ax_trades, "quote_volume / number_of_trades missing")
 
     high_values = plot_frame["high"].to_numpy(dtype=np.float64)
     low_values = plot_frame["low"].to_numpy(dtype=np.float64)
@@ -1402,7 +1499,7 @@ def _render_anomaly_trade_chart(
     ax_price.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(plot_frame)))
     ax_context.set_ylabel("5m")
     ax_volume.set_ylabel("Quote vol %")
-    ax_trades.set_ylabel("Exchange trades %")
+    ax_trades.set_ylabel("Quote / trade %")
     ax_price.set_title(
         (
             f"{_format_pno_chart_symbol(str(trade.get('symbol')))}  "
@@ -1501,6 +1598,7 @@ def run_anomaly_entry_grid(
     hold_values: Iterable[int],
     pullback_fractions: Iterable[float],
     exhaustion_profiles: Iterable[str],
+    exit_rules: Iterable[str],
     signal_sets: list[tuple[AnomalyBacktestConfig, pd.DataFrame]] | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
@@ -1511,6 +1609,7 @@ def run_anomaly_entry_grid(
             hold_values=hold_values,
             pullback_fractions=pullback_fractions,
             exhaustion_profiles=exhaustion_profiles,
+            exit_rules=exit_rules,
         )
         signal_sets = _build_entry_grid_signal_sets(candidates, variants)
     started_at = time.monotonic()
@@ -1541,6 +1640,7 @@ def run_anomaly_strategy_backtest(
     grid_hold_values: Iterable[int] = (1, 2),
     grid_pullback_fractions: Iterable[float] = (0.65, 0.75, 0.85),
     grid_exhaustion_profiles: Iterable[str] = ("none",),
+    grid_exit_rules: Iterable[str] = ("structural_trail",),
     derivatives_context_fetcher: object | None = None,
 ) -> Path:
     output_dir = config.lab_config.output_dir
@@ -1562,6 +1662,7 @@ def run_anomaly_strategy_backtest(
                 hold_values=grid_hold_values,
                 pullback_fractions=grid_pullback_fractions,
                 exhaustion_profiles=grid_exhaustion_profiles,
+                exit_rules=grid_exit_rules,
             )
             grid_signal_sets = _build_entry_grid_signal_sets(candidates, grid_variants)
             context_signals = _signal_universe_from_signal_sets(grid_signal_sets)
@@ -1610,6 +1711,7 @@ def run_anomaly_strategy_backtest(
             hold_values=grid_hold_values,
             pullback_fractions=grid_pullback_fractions,
             exhaustion_profiles=grid_exhaustion_profiles,
+            exit_rules=grid_exit_rules,
             signal_sets=grid_signal_sets,
         )
         _write_artifact_frames(
@@ -1624,7 +1726,7 @@ def run_anomaly_strategy_backtest(
                 best_label = (
                     f"grid_best_{best_config.exhaustion_profile}_"
                     f"oi{best_config.min_oi_change_pct_3x5m}_hold{best_config.min_hold_count}_"
-                    f"{best_config.entry_method}"
+                    f"{best_config.entry_method}_{best_config.exit_rule}"
                 )
                 best_config_frame = pd.DataFrame([{**asdict(best_config), "lab_config": asdict(best_config.lab_config)}])
                 best_health = build_edge_health_table(best_trades, label=best_label)
@@ -1705,6 +1807,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tp1-fraction", type=float, default=0.50)
     parser.add_argument("--trail-lookback-candles", type=int, default=5)
     parser.add_argument("--trail-buffer-r", type=float, default=0.10)
+    parser.add_argument("--exit-rule", choices=sorted(EXIT_RULES), default="structural_trail")
     parser.add_argument("--max-hold-candles", type=int, default=240)
     parser.add_argument("--fee-rate", type=float, default=0.0004)
     parser.add_argument("--run-entry-grid", action="store_true")
@@ -1712,6 +1815,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--grid-hold-values", default="1,2")
     parser.add_argument("--grid-pullback-fractions", default="0.65,0.75,0.85")
     parser.add_argument("--grid-exhaustion-profiles", default="none")
+    parser.add_argument("--grid-exit-rules", default="structural_trail")
     return parser
 
 
@@ -1752,6 +1856,7 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
         tp1_fraction=args.tp1_fraction,
         trail_lookback_candles=args.trail_lookback_candles,
         trail_buffer_r=args.trail_buffer_r,
+        exit_rule=args.exit_rule,
         max_hold_candles=args.max_hold_candles,
         fee_rate=args.fee_rate,
     )
@@ -1767,6 +1872,7 @@ def main(argv: list[str] | None = None) -> int:
         grid_hold_values=_parse_grid_values(args.grid_hold_values, cast=int),
         grid_pullback_fractions=_parse_grid_values(args.grid_pullback_fractions, cast=float),
         grid_exhaustion_profiles=_parse_grid_profile_values(args.grid_exhaustion_profiles),
+        grid_exit_rules=_parse_grid_exit_rules(args.grid_exit_rules),
     )
     print(f"wrote anomaly strategy artifacts to {output_dir}")
     return 0

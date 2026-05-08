@@ -216,6 +216,11 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--tp1-fraction", type=float, default=0.50)
     anomaly_lab.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_lab.add_argument("--trail-buffer-r", type=float, default=0.10)
+    anomaly_lab.add_argument(
+        "--exit-rule",
+        choices=["structural_trail", "ema20_close", "ema20_negative_pnl_be_escape"],
+        default="structural_trail",
+    )
     anomaly_lab.add_argument("--max-hold-candles", type=_positive_int_for("--max-hold-candles"), default=240)
     anomaly_lab.add_argument("--fee-rate", type=float, default=0.0004)
     anomaly_lab.add_argument("--run-entry-grid", type=_str_to_bool, default=False)
@@ -223,6 +228,7 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--grid-hold-values", default="1,2")
     anomaly_lab.add_argument("--grid-pullback-fractions", default="0.65,0.75,0.85")
     anomaly_lab.add_argument("--grid-exhaustion-profiles", default="none")
+    anomaly_lab.add_argument("--grid-exit-rules", default="structural_trail")
 
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")

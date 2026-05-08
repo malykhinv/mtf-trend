@@ -1089,5 +1089,7 @@ For grid runs, charts target the selected best grid trades, not the broad raw an
 Current 30-day derivatives-context grid now has 31 rendered best-grid trade charts and anomaly_edge_health.csv.
 Health table use is diagnostic only: it highlights weak aspects such as top-tail dependence, not a deploy/deploy-not score.
 P102 upgrades anomaly trade charts to the established PNO diagnostics style: 1m price, 5m context, risk/profit zones, price tags, quote-volume and canonical exchange trade-count panels.
+P103 changes the last panel to quote_volume / number_of_trades per candle, adds EMA20 exit-rule grid support, and exposes baseline_zero_range_share for future sleep-quality analysis.
+On the current 31-trade best config, EMA20 exits were worse by winrate/median than structural_trail; treat them as grid hypotheses, not default exits.
 ```
 

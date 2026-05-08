@@ -4040,3 +4040,39 @@ Verification:
 .venv\Scripts\python.exe -m compileall research_tools\anomaly_strategy_backtest.py
 Manual regeneration on .output/results/anomaly_lab_30d_derivatives_context_grid rendered 31/31 best-grid charts.
 ```
+
+---
+
+## P103 - Add EMA20 exit rules and quote-per-trade chart panel
+
+```text
+Status: APPLIED locally / smoke verified
+Type: research grid / chart diagnostics
+Trading logic changed: anomaly-lab research strategy only
+Files: research_tools/anomaly_strategy_backtest.py, research_tools/anomaly_continuation_lab.py, cli/*, research/*
+Base commit before patch: a7f3e3eb
+Patch commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+run-anomaly-lab supports --exit-rule and --grid-exit-rules with structural_trail, ema20_close and ema20_negative_pnl_be_escape.
+ema20_close exits at the first close below EMA20 using only the closed candle.
+ema20_negative_pnl_be_escape arms a BE escape only after close < EMA20 and close < entry, then exits at entry only if a later candle trades back to entry before stop.
+Charts now replace the raw trade-count panel with quote_volume / number_of_trades per candle, normalized to %, to expose rare large-print candles.
+Anomaly candidates now include baseline_zero_range_share so zero-range sleep/liquidity artifacts are visible in future runs.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_strategy_backtest.py research_tools\anomaly_continuation_lab.py cli\commands.py cli\parser.py
+.venv\Scripts\python.exe main.py run-anomaly-lab --help
+Manual current-window check for balanced market hold>=2 oi3>5:
+structural_trail 31 trades WR 61.29% avg +2.36% median +2.48%;
+ema20_close 31 trades WR 48.39% avg +2.31% median -0.08%;
+ema20_negative_pnl_be_escape 31 trades WR 45.16% avg +2.04% median -0.08%.
+Manual regeneration rendered 31/31 charts with quote/trade panel.
+```
