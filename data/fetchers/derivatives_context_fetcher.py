@@ -139,40 +139,78 @@ class DerivativesContextFetcher:
         tmp_path.replace(path)
         return max(len(merged) - previous_count, 0)
 
+    def _cached_timestamp_bounds(self, symbol: str, spec: DerivativesContextSpec) -> tuple[int | None, int | None]:
+        path = self._path(symbol, spec)
+        if not path.exists():
+            return None, None
+        frame = self._prepare_frame(pd.read_parquet(path), spec.columns)
+        if frame.empty:
+            return None, None
+        timestamps = frame["timestamp"].dropna()
+        if timestamps.empty:
+            return None, None
+        return int(timestamps.min()), int(timestamps.max())
+
     def fetch_symbol(self, symbol: str, start_timestamp_ms: int, end_timestamp_ms: int) -> int:
         added_rows = 0
         for spec in DERIVATIVES_CONTEXT_FETCH_SPECS:
             min_supported_start_ms = int(time.time() * 1000) - self._MAX_EXCHANGE_LOOKBACK_MS + spec.interval_ms
-            segment_start_ms = max(int(start_timestamp_ms), min_supported_start_ms)
-            segment_start_ms = ((segment_start_ms + spec.interval_ms - 1) // spec.interval_ms) * spec.interval_ms
+            requested_start_ms = max(int(start_timestamp_ms), min_supported_start_ms)
+            requested_start_ms = ((requested_start_ms + spec.interval_ms - 1) // spec.interval_ms) * spec.interval_ms
             end_ms = (int(end_timestamp_ms) // spec.interval_ms) * spec.interval_ms
-            if segment_start_ms > end_ms:
+            if requested_start_ms > end_ms:
                 self._logger.debug(
                     "Derivatives context %s %s: after exchange lookback clamp nothing to fetch.",
                     symbol,
                     spec.name,
                 )
                 continue
+
+            cached_first_ms, cached_last_ms = self._cached_timestamp_bounds(symbol, spec)
+            segments: list[tuple[int, int, str]] = []
+            if cached_first_ms is None or cached_last_ms is None:
+                segments.append((requested_start_ms, end_ms, "full"))
+            else:
+                prefix_end_ms = min(end_ms, cached_first_ms - spec.interval_ms)
+                if requested_start_ms <= prefix_end_ms:
+                    segments.append((requested_start_ms, prefix_end_ms, "prefix"))
+                suffix_start_ms = max(requested_start_ms, cached_last_ms + spec.interval_ms)
+                if suffix_start_ms <= end_ms:
+                    segments.append((suffix_start_ms, end_ms, "suffix"))
+            if not segments:
+                self._logger.debug("Derivatives context %s %s: cache is up to date.", symbol, spec.name)
+                continue
+
             rows: list[pd.DataFrame] = []
-            while segment_start_ms <= end_ms:
-                segment_end_ms = min(
-                    end_ms,
-                    segment_start_ms + spec.interval_ms * spec.limit - 1,
+            for segment_start_ms, segment_stop_ms, segment_kind in segments:
+                self._logger.debug(
+                    "Derivatives context %s %s: fetching %s segment %s..%s.",
+                    symbol,
+                    spec.name,
+                    segment_kind,
+                    segment_start_ms,
+                    segment_stop_ms,
                 )
-                data = self._exchange_client.fetch_binance_derivatives_context(
-                    symbol=symbol,
-                    source=spec.name,
-                    start_timestamp_ms=segment_start_ms,
-                    end_timestamp_ms=segment_end_ms,
-                    period="5m",
-                    limit=spec.limit,
-                )
-                if not data.empty:
-                    rows.append(data)
-                    last_timestamp = int(data["timestamp"].max())
-                    segment_start_ms = max(last_timestamp + spec.interval_ms, segment_end_ms + 1)
-                else:
-                    segment_start_ms = segment_end_ms + 1
+                cursor_ms = segment_start_ms
+                while cursor_ms <= segment_stop_ms:
+                    chunk_end_ms = min(
+                        segment_stop_ms,
+                        cursor_ms + spec.interval_ms * spec.limit - 1,
+                    )
+                    data = self._exchange_client.fetch_binance_derivatives_context(
+                        symbol=symbol,
+                        source=spec.name,
+                        start_timestamp_ms=cursor_ms,
+                        end_timestamp_ms=chunk_end_ms,
+                        period="5m",
+                        limit=spec.limit,
+                    )
+                    if not data.empty:
+                        rows.append(data)
+                        last_timestamp = int(data["timestamp"].max())
+                        cursor_ms = max(last_timestamp + spec.interval_ms, chunk_end_ms + 1)
+                    else:
+                        cursor_ms = chunk_end_ms + 1
             data = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=list(spec.columns))
             data = self._deduplicator.deduplicate(data)
             added_rows += self._save_incremental(symbol, spec, data)

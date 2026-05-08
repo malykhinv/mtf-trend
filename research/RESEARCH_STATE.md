@@ -1048,3 +1048,11 @@ run-anomaly-lab fetches derivatives context around a small post-filter signal se
 Artifacts remain honest through market_context_status coverage instead of proxies/fallback fills.
 ```
 
+Derivatives context cache efficiency:
+
+```text
+P097 adds per-source timestamp-bound checks to DerivativesContextFetcher.
+Repeated anomaly-lab runs should not refetch already cached event windows; only prefix/suffix misses are requested.
+Internal historical holes are not synthesized or filled by proxy, so coverage must still be read from market_context_status.csv.
+```
+

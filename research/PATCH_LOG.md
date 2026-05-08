@@ -3858,3 +3858,33 @@ Verification:
 ```bash
 .venv\Scripts\python.exe -m compileall cli\parser.py cli\commands.py data\fetchers\derivatives_context_fetcher.py research_tools\anomaly_strategy_backtest.py research_tools\anomaly_continuation_lab.py
 ```
+
+---
+
+## P097 - Avoid redundant derivatives context refetch
+
+```text
+Status: APPLIED locally / compile verified
+Type: data fetch performance / cache honesty
+Trading logic changed: no
+Files: data/fetchers/derivatives_context_fetcher.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+DerivativesContextFetcher now checks existing per-source cache timestamp bounds before requesting Binance.
+It fetches only missing prefix/suffix ranges instead of re-requesting the whole lazy event window on every anomaly-lab run.
+No proxy rows are created; missing internal holes remain visible through market_context_status rather than being filled silently.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall data\fetchers\derivatives_context_fetcher.py cli\commands.py research_tools\anomaly_strategy_backtest.py research_tools\anomaly_continuation_lab.py
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe main.py update-cache --symbols BTC/USDT:USDT --days 1 --timeframes 5m
+.venv\Scripts\python.exe main.py update-cache --symbols BTC/USDT:USDT --days 1 --timeframes 5m --skip-open-interest --with-derivatives-context
+```
