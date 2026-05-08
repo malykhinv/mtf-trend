@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import time
 from dataclasses import asdict
 from dataclasses import replace
@@ -169,6 +170,11 @@ def _write_artifact_frames(
             started_at=started_at,
             next_progress_pct=next_progress_pct,
         )
+
+
+def _sanitize_file_part(value: object) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value))
+    return cleaned.strip("._") or "item"
 
 
 def _timestamp_to_utc(timestamp_ms: int | float) -> str:
@@ -901,9 +907,11 @@ def summarize_entry_grid_variant(
     *,
     config: AnomalyBacktestConfig,
     signal_count: int,
+    variant_id: int | None = None,
 ) -> dict[str, object]:
     closed = trades.loc[trades.get("status", pd.Series(dtype=str)).eq("closed")].copy()
     row: dict[str, object] = {
+        "variant_id": int(variant_id) if variant_id is not None else -1,
         "entry_method": config.entry_method,
         "pullback_box_fraction": (
             config.pullback_box_fraction if config.entry_method == "pullback_box_fraction" else np.nan
@@ -942,6 +950,266 @@ def summarize_entry_grid_variant(
     return row
 
 
+def build_edge_health_table(trades: pd.DataFrame, *, label: str) -> pd.DataFrame:
+    if trades.empty or "status" not in trades.columns:
+        return pd.DataFrame(
+            [
+                {
+                    "label": label,
+                    "aspect": "closed_trades",
+                    "value": 0.0,
+                    "score_0_100": 0.0,
+                    "status": "fail",
+                    "note": "No closed trades.",
+                }
+            ]
+        )
+    closed = trades.loc[trades["status"].eq("closed")].copy()
+    if closed.empty:
+        return build_edge_health_table(pd.DataFrame(), label=label)
+
+    net = closed["net_return"].astype(float)
+    total = float(net.sum())
+    top = net.sort_values(ascending=False)
+    daily = closed.assign(day=closed["entry_timestamp_utc"].astype(str).str[:10]).groupby("day")["net_return"].sum()
+    positive_days = int((daily > 0).sum())
+    active_days = int(len(daily))
+    top5_share = float(top.head(5).sum() / total) if total > 0 else float("inf")
+
+    def score_linear(value: float, bad: float, good: float, *, higher_is_better: bool = True) -> float:
+        if not np.isfinite(value):
+            return 0.0
+        if not higher_is_better:
+            value = -value
+            bad = -bad
+            good = -good
+        if good == bad:
+            return 100.0 if value >= good else 0.0
+        return float(np.clip((value - bad) / (good - bad), 0.0, 1.0) * 100.0)
+
+    rows = [
+        {
+            "label": label,
+            "aspect": "closed_trades",
+            "value": int(len(closed)),
+            "score_0_100": score_linear(float(len(closed)), 0.0, 50.0),
+            "status": "ok" if len(closed) >= 30 else "watch" if len(closed) >= 15 else "fail",
+            "note": "Monthly frequency target: 15 watch, 30 ok, 50 strong.",
+        },
+        {
+            "label": label,
+            "aspect": "win_rate",
+            "value": float((net > 0).mean()),
+            "score_0_100": score_linear(float((net > 0).mean()), 0.40, 0.70),
+            "status": "ok" if (net > 0).mean() >= 0.55 else "watch" if (net > 0).mean() >= 0.40 else "fail",
+            "note": "40% is minimum viable, 55% ok, 70% excellent for this style.",
+        },
+        {
+            "label": label,
+            "aspect": "avg_net_return",
+            "value": float(net.mean()),
+            "score_0_100": score_linear(float(net.mean()), 0.0, 0.02),
+            "status": "ok" if net.mean() >= 0.01 else "watch" if net.mean() > 0 else "fail",
+            "note": "Target average trade is above +1%; +2% is strong.",
+        },
+        {
+            "label": label,
+            "aspect": "median_net_return",
+            "value": float(net.median()),
+            "score_0_100": score_linear(float(net.median()), 0.0, 0.015),
+            "status": "ok" if net.median() >= 0.005 else "watch" if net.median() > 0 else "fail",
+            "note": "Positive median reduces top-tail dependency risk.",
+        },
+        {
+            "label": label,
+            "aspect": "active_days",
+            "value": active_days,
+            "score_0_100": score_linear(float(active_days), 0.0, 20.0),
+            "status": "ok" if active_days >= 15 else "watch" if active_days >= 8 else "fail",
+            "note": "More active days means less single-day dependence.",
+        },
+        {
+            "label": label,
+            "aspect": "positive_day_share",
+            "value": float(positive_days / active_days) if active_days else 0.0,
+            "score_0_100": score_linear(float(positive_days / active_days) if active_days else 0.0, 0.45, 0.70),
+            "status": "ok" if active_days and positive_days / active_days >= 0.60 else "watch" if active_days and positive_days / active_days >= 0.45 else "fail",
+            "note": "Day-level consistency check.",
+        },
+        {
+            "label": label,
+            "aspect": "symbol_count",
+            "value": int(closed["symbol"].nunique()),
+            "score_0_100": score_linear(float(closed["symbol"].nunique()), 1.0, 30.0),
+            "status": "ok" if closed["symbol"].nunique() >= 20 else "watch" if closed["symbol"].nunique() >= 10 else "fail",
+            "note": "Avoid dependence on one instrument.",
+        },
+        {
+            "label": label,
+            "aspect": "top5_dependency",
+            "value": top5_share,
+            "score_0_100": score_linear(top5_share, 1.0, 0.35, higher_is_better=False),
+            "status": "ok" if top5_share <= 0.50 else "watch" if top5_share <= 0.85 else "fail",
+            "note": "Lower is better. Above 0.85 means result is dominated by top winners.",
+        },
+        {
+            "label": label,
+            "aspect": "worst_day_return",
+            "value": float(daily.min()) if active_days else np.nan,
+            "score_0_100": score_linear(float(daily.min()) if active_days else float("nan"), -0.20, -0.03),
+            "status": "ok" if active_days and daily.min() >= -0.03 else "watch" if active_days and daily.min() >= -0.10 else "fail",
+            "note": "Day-level downside containment.",
+        },
+    ]
+    return pd.DataFrame(rows)
+
+
+def _render_anomaly_trade_chart(
+    *,
+    frame: pd.DataFrame,
+    trade: pd.Series,
+    output_path: Path,
+    pre_candles: int = 30,
+    post_candles: int = 90,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    anomaly_ts = int(trade.get("anomaly_timestamp_ms", trade.get("decision_timestamp_ms")))
+    exit_ts = int(trade.get("exit_timestamp_ms", trade.get("decision_timestamp_ms")))
+    timeframe_ms = 60_000
+    start_ts = anomaly_ts - pre_candles * timeframe_ms
+    end_ts = exit_ts + post_candles * timeframe_ms
+    plot_frame = frame.loc[(frame["timestamp"] >= start_ts) & (frame["timestamp"] <= end_ts)].copy()
+    if plot_frame.empty:
+        raise ValueError("empty_plot_window")
+    plot_frame.reset_index(drop=True, inplace=True)
+
+    fig, (ax_price, ax_volume) = plt.subplots(
+        2,
+        1,
+        figsize=(13, 7),
+        gridspec_kw={"height_ratios": [3, 1]},
+        sharex=True,
+    )
+    x = np.arange(len(plot_frame))
+    opens = plot_frame["open"].astype(float).to_numpy()
+    highs = plot_frame["high"].astype(float).to_numpy()
+    lows = plot_frame["low"].astype(float).to_numpy()
+    closes = plot_frame["close"].astype(float).to_numpy()
+    volumes = plot_frame.get("quote_volume", plot_frame["volume"]).astype(float).to_numpy()
+    colors = np.where(closes >= opens, "#1f9d55", "#cc3d3d")
+    for idx, (open_, high, low, close, color) in enumerate(zip(opens, highs, lows, closes, colors, strict=True)):
+        ax_price.vlines(idx, low, high, color=color, linewidth=0.8, alpha=0.9)
+        body_low = min(open_, close)
+        body_height = max(abs(close - open_), 1e-12)
+        ax_price.add_patch(Rectangle((idx - 0.32, body_low), 0.64, body_height, facecolor=color, edgecolor=color, alpha=0.75))
+    ax_volume.bar(x, volumes, color=colors, alpha=0.35, width=0.8)
+
+    timestamps = plot_frame["timestamp"].astype(int).to_numpy()
+
+    def draw_ts(timestamp: object, color: str, label: str) -> None:
+        if pd.isna(timestamp):
+            return
+        pos = int(np.searchsorted(timestamps, int(timestamp), side="left"))
+        pos = min(max(pos, 0), len(plot_frame) - 1)
+        ax_price.axvline(pos, color=color, linewidth=1.1, alpha=0.8, label=label)
+
+    draw_ts(trade.get("anomaly_timestamp_ms"), "#5468ff", "anomaly")
+    draw_ts(trade.get("decision_timestamp_ms"), "#f0a202", "decision")
+    draw_ts(trade.get("entry_timestamp_ms"), "#0f9d58", "entry")
+    draw_ts(trade.get("exit_timestamp_ms"), "#d93025", "exit")
+    for value, color, label in [
+        (trade.get("entry_price"), "#0f9d58", "entry price"),
+        (trade.get("initial_stop"), "#d93025", "initial stop"),
+        (trade.get("tp1_price"), "#7b1fa2", "tp1"),
+    ]:
+        if pd.notna(value):
+            ax_price.axhline(float(value), color=color, linewidth=0.9, alpha=0.55, linestyle="--", label=label)
+
+    title = (
+        f"{trade.get('symbol')} {trade.get('entry_timestamp_utc')} "
+        f"net={float(trade.get('net_return', 0.0)):.2%} {trade.get('exit_reason', '')}"
+    )
+    ax_price.set_title(title, fontsize=10)
+    ax_price.grid(True, alpha=0.15)
+    ax_volume.grid(True, alpha=0.12)
+    ax_price.legend(loc="upper left", fontsize=8, ncols=4)
+    step = max(len(plot_frame) // 8, 1)
+    tick_positions = x[::step]
+    tick_labels = [
+        datetime.fromtimestamp(int(timestamps[pos]) / 1000, UTC).strftime("%m-%d %H:%M")
+        for pos in tick_positions
+    ]
+    ax_volume.set_xticks(tick_positions)
+    ax_volume.set_xticklabels(tick_labels, rotation=30, ha="right", fontsize=8)
+    fig.tight_layout()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=120)
+    plt.close(fig)
+
+
+def render_anomaly_trade_charts(
+    trades: pd.DataFrame,
+    *,
+    config: AnomalyBacktestConfig,
+    output_dir: Path,
+    max_charts: int = 80,
+) -> pd.DataFrame:
+    columns = ["symbol", "entry_timestamp_ms", "status", "chart_status", "chart_reason", "chart_path"]
+    if trades.empty or "status" not in trades.columns:
+        return pd.DataFrame(columns=columns)
+    closed = trades.loc[trades["status"].eq("closed")].copy()
+    if closed.empty:
+        return pd.DataFrame(columns=columns)
+    closed["_abs_net"] = closed["net_return"].astype(float).abs()
+    selected = closed.sort_values(["_abs_net", "entry_timestamp_ms"], ascending=[False, True]).head(max_charts).copy()
+    selected.sort_values("entry_timestamp_ms", inplace=True)
+    frame_cache: dict[str, pd.DataFrame] = {}
+    rows: list[dict[str, object]] = []
+    started_at = time.monotonic()
+    next_progress_pct = 0
+    for processed_count, (_, trade) in enumerate(selected.iterrows(), start=1):
+        symbol = str(trade["symbol"])
+        entry_ts = int(trade["entry_timestamp_ms"])
+        file_name = f"{processed_count:04d}_{_sanitize_file_part(symbol)}_{entry_ts}.png"
+        chart_path = output_dir / file_name
+        try:
+            frame = frame_cache.get(symbol)
+            if frame is None:
+                frame = _read_symbol_frame(config.lab_config.cache_dir, symbol, config.lab_config.timeframe)
+                frame_cache[symbol] = frame
+            _render_anomaly_trade_chart(frame=frame, trade=trade, output_path=chart_path)
+            chart_status = "rendered"
+            chart_reason = "ok"
+        except Exception as exc:
+            chart_status = "not_rendered"
+            chart_reason = f"{type(exc).__name__}: {exc}"
+            chart_path = Path("")
+        rows.append(
+            {
+                "symbol": symbol,
+                "entry_timestamp_ms": entry_ts,
+                "status": str(trade.get("status", "")),
+                "chart_status": chart_status,
+                "chart_reason": chart_reason,
+                "chart_path": str(chart_path),
+            }
+        )
+        next_progress_pct = _emit_progress_5pct(
+            label="anomaly charts",
+            done=processed_count,
+            total=len(selected),
+            started_at=started_at,
+            next_progress_pct=next_progress_pct,
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+
 def run_anomaly_entry_grid(
     candidates: pd.DataFrame,
     base_config: AnomalyBacktestConfig,
@@ -967,7 +1235,7 @@ def run_anomaly_entry_grid(
     frame_cache: dict[str, pd.DataFrame] = {}
     for idx, (variant, signals) in enumerate(signal_sets, start=1):
         trades = simulate_anomaly_trades(signals, config=variant, frame_cache=frame_cache)
-        rows.append(summarize_entry_grid_variant(trades, config=variant, signal_count=len(signals)))
+        rows.append(summarize_entry_grid_variant(trades, config=variant, signal_count=len(signals), variant_id=idx - 1))
         next_progress_pct = _emit_progress_5pct(
             label="anomaly entry grid",
             done=idx,
@@ -1064,6 +1332,49 @@ def run_anomaly_strategy_backtest(
         _write_artifact_frames(
             [(output_dir / "anomaly_entry_grid_summary.csv", grid)],
             progress_label="anomaly artifacts: grid files",
+        )
+        if grid_signal_sets is not None and not grid.empty and "variant_id" in grid.columns:
+            best_variant_id = int(grid.iloc[0]["variant_id"])
+            if 0 <= best_variant_id < len(grid_signal_sets):
+                best_config, best_signals = grid_signal_sets[best_variant_id]
+                best_trades = simulate_anomaly_trades(best_signals, config=best_config)
+                best_label = (
+                    f"grid_best_{best_config.exhaustion_profile}_"
+                    f"oi{best_config.min_oi_change_pct_3x5m}_hold{best_config.min_hold_count}_"
+                    f"{best_config.entry_method}"
+                )
+                best_config_frame = pd.DataFrame([{**asdict(best_config), "lab_config": asdict(best_config.lab_config)}])
+                best_health = build_edge_health_table(best_trades, label=best_label)
+                _write_artifact_frames(
+                    [
+                        (output_dir / "anomaly_entry_grid_best_trades.csv", best_trades),
+                        (output_dir / "anomaly_entry_grid_best_config.csv", best_config_frame),
+                        (output_dir / "anomaly_edge_health.csv", best_health),
+                    ],
+                    progress_label="anomaly artifacts: best grid files",
+                )
+                chart_status = render_anomaly_trade_charts(
+                    best_trades,
+                    config=best_config,
+                    output_dir=output_dir / "charts" / "best_grid_variant",
+                )
+                _write_artifact_frames(
+                    [(output_dir / "anomaly_trade_chart_status.csv", chart_status)],
+                    progress_label="anomaly artifacts: chart status",
+                )
+    elif not trades.empty:
+        health = build_edge_health_table(trades, label="primary")
+        chart_status = render_anomaly_trade_charts(
+            trades,
+            config=config,
+            output_dir=output_dir / "charts" / "primary",
+        )
+        _write_artifact_frames(
+            [
+                (output_dir / "anomaly_edge_health.csv", health),
+                (output_dir / "anomaly_trade_chart_status.csv", chart_status),
+            ],
+            progress_label="anomaly artifacts: health chart status",
         )
     run_config = {
         **asdict(config),

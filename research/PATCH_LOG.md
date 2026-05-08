@@ -3355,7 +3355,8 @@ Status: APPLIED locally / tests passed
 Type: research artifact tooling
 Trading logic changed: no
 Files: research_tools/anomaly_continuation_lab.py, tests/test_anomaly_continuation_lab.py, research/*
-Commit: UNKNOWN
+Base commit before patch: 37250044
+Patch commit: UNKNOWN
 Branch: codex/pno-anomaly-continuation-lab
 ```
 
@@ -3980,4 +3981,33 @@ Verification:
 .venv\Scripts\python.exe -m compileall research_tools\anomaly_strategy_backtest.py research_tools\anomaly_continuation_lab.py
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\python.exe main.py run-anomaly-lab --symbols BTC/USDT:USDT --output-dir .output\manual_checks\anomaly_progress_clean_smoke2 --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --run-entry-grid true --grid-oi3-values 0.03 --grid-hold-values 2 --grid-pullback-fractions 0.75 --grid-exhaustion-profiles balanced
+```
+
+---
+
+## P101 - Save anomaly best-grid trade charts and edge health
+
+```text
+Status: APPLIED locally / smoke verified
+Type: artifact completeness / analysis
+Trading logic changed: no
+Files: research_tools/anomaly_strategy_backtest.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+run-anomaly-lab now saves best grid variant artifacts when --run-entry-grid is enabled:
+anomaly_entry_grid_best_trades.csv, anomaly_entry_grid_best_config.csv, anomaly_edge_health.csv, anomaly_trade_chart_status.csv, and PNG charts under charts/best_grid_variant.
+The broad primary anomaly run is not charted during grid runs because it can contain tens of thousands of noisy trades; charts target the selected research edge.
+Added an edge health table with explicit scores for frequency, win rate, average/median trade, active days, positive-day share, symbol breadth, top5 dependency and worst-day downside.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_strategy_backtest.py
+Manual generation on .output/results/anomaly_lab_30d_derivatives_context_grid rendered 31/31 best-grid charts and wrote anomaly_edge_health.csv.
 ```

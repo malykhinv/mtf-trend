@@ -1081,3 +1081,12 @@ Expensive detail remains in CSV status artifacts rather than console spam.
 Entry-grid signal sets are computed once and reused for context universe plus grid simulation to avoid duplicated filtering work.
 ```
 
+Anomaly best-grid artifacts:
+
+```text
+P101 adds chart and health artifacts for the best grid variant in run-anomaly-lab.
+For grid runs, charts target the selected best grid trades, not the broad raw anomaly trades.
+Current 30-day derivatives-context grid now has 31 rendered best-grid trade charts and anomaly_edge_health.csv.
+Health table use is diagnostic only: it highlights weak aspects such as top-tail dependence, not a deploy/deploy-not score.
+```
+

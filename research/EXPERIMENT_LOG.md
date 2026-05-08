@@ -1624,3 +1624,17 @@ Do not optimize another threshold on this same window first.
 Run fixed out-of-window validation with the current candidate set: balanced market hold>=2 oi3>5 and mild market hold>=2 oi3>5 as the frequency-preserving alternative.
 Best next code addition is a rolling-window validation command/report that runs fixed configs across multiple non-overlapping 30-day windows and reports monthly/day/top-tail stability.
 ```
+
+Follow-up artifacts and session split:
+
+```text
+P101 generated best-grid artifacts for the same run:
+anomaly_entry_grid_best_trades.csv, anomaly_entry_grid_best_config.csv, anomaly_edge_health.csv, anomaly_trade_chart_status.csv and 31 PNG charts under charts/best_grid_variant.
+Base code commit before artifact patch: 37250044; patch commit is recorded in git history after commit/push.
+Edge health is mostly ok on frequency/winrate/avg/median/days/symbol breadth, but fails top5_dependency and worst_day_return.
+Session split uses Europe/Belgrade local time: Asia 00-08, Europe 08-16, US 16-24.
+Asia: 9 trades, win rate 44.44%, avg +2.88%, median -0.37%, sum +0.259, 4 positive / 4 negative days.
+Europe: 13 trades, win rate 69.23%, avg +1.65%, median +2.88%, sum +0.214, 7 positive / 3 negative days.
+US: 9 trades, win rate 66.67%, avg +2.86%, median +2.58%, sum +0.257, 4 positive / 3 negative days.
+Interpretation: Europe/US are cleaner by winrate/median; Asia has upside but weaker median and lower winrate. Sample is too small to add a session filter yet.
+```
