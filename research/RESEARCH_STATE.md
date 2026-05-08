@@ -1056,3 +1056,12 @@ Repeated anomaly-lab runs should not refetch already cached event windows; only 
 Internal historical holes are not synthesized or filled by proxy, so coverage must still be read from market_context_status.csv.
 ```
 
+Derivatives context event universe:
+
+```text
+P098 removes the arbitrary lazy-fetch signal cap.
+For anomaly entry grids, context fetch now uses the union of post-filter grid signals after OI/hold/exhaustion stages.
+This keeps raw discovery broad but fetches expensive derivatives data only where the research stage has already narrowed candidates.
+market_context_fetch_status.csv records fetch success/errors per symbol; missing context remains visible in market_context_status.csv.
+```
+

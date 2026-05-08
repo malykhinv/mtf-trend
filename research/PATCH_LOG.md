@@ -3888,3 +3888,34 @@ Verification:
 .venv\Scripts\python.exe main.py update-cache --symbols BTC/USDT:USDT --days 1 --timeframes 5m
 .venv\Scripts\python.exe main.py update-cache --symbols BTC/USDT:USDT --days 1 --timeframes 5m --skip-open-interest --with-derivatives-context
 ```
+
+---
+
+## P098 - Fetch derivatives context from post-filter anomaly universe
+
+```text
+Status: APPLIED locally / smoke verified
+Type: data fetch performance / honest artifact coverage
+Trading logic changed: no
+Files: research_tools/anomaly_strategy_backtest.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Removed the arbitrary 1000-signal lazy fetch guard.
+For entry-grid runs, derivatives context is now fetched from the union of grid variant signals after OI/hold/exhaustion filters, not from the raw broad base anomaly signal set.
+Fetch windows are per-symbol min/max decision windows with a small lookback/forward buffer, avoiding one full 30-day context window for every symbol.
+The run writes market_context_fetch_status.csv with per-symbol success/message/added_rows so fetch failures are explicit.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_strategy_backtest.py research_tools\anomaly_continuation_lab.py cli\commands.py cli\parser.py data\fetchers\derivatives_context_fetcher.py
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe main.py run-anomaly-lab --symbols BTC/USDT:USDT --output-dir .output\manual_checks\anomaly_context_postfilter_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --run-entry-grid true --grid-oi3-values 0.03 --grid-hold-values 2 --grid-pullback-fractions 0.75 --grid-exhaustion-profiles balanced
+.venv\Scripts\python.exe main.py run-anomaly-lab --symbols BTC/USDT:USDT --output-dir .output\manual_checks\anomaly_context_base_fetch_smoke --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5
+```

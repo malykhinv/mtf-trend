@@ -86,8 +86,6 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "taker_ls_buy_share",
 )
 
-MAX_LAZY_DERIVATIVES_CONTEXT_SIGNALS = 1000
-
 for _context_spec in DERIVATIVES_CONTEXT_SPECS:
     _context_prefix = str(_context_spec["prefix"])
     TRADE_SIGNAL_CONTEXT_COLUMNS += (
@@ -626,6 +624,124 @@ def _parse_grid_profile_values(raw: str) -> list[str]:
     return profiles
 
 
+def _iter_entry_grid_configs(
+    base_config: AnomalyBacktestConfig,
+    *,
+    oi3_values: Iterable[float],
+    hold_values: Iterable[int],
+    pullback_fractions: Iterable[float],
+    exhaustion_profiles: Iterable[str],
+) -> list[AnomalyBacktestConfig]:
+    variants: list[AnomalyBacktestConfig] = []
+    for profile_name in exhaustion_profiles:
+        profile = EXHAUSTION_PROFILES[profile_name]
+        for oi3 in oi3_values:
+            for hold in hold_values:
+                common = {
+                    "min_hold_count": int(hold),
+                    "min_oi_change_pct_3x5m": float(oi3),
+                    "require_oi_status_ok": True,
+                    "exhaustion_profile": profile_name,
+                    **profile,
+                }
+                variants.append(
+                    replace(
+                        base_config,
+                        entry_method="market",
+                        **common,
+                    )
+                )
+                variants.append(
+                    replace(
+                        base_config,
+                        entry_method="break_box_high",
+                        **common,
+                    )
+                )
+                for fraction in pullback_fractions:
+                    variants.append(
+                        replace(
+                            base_config,
+                            entry_method="pullback_box_fraction",
+                            pullback_box_fraction=float(fraction),
+                            **common,
+                        )
+                    )
+    return variants
+
+
+def _entry_grid_signal_universe(
+    candidates: pd.DataFrame,
+    variants: Iterable[AnomalyBacktestConfig],
+) -> pd.DataFrame:
+    signal_frames: list[pd.DataFrame] = []
+    for variant in variants:
+        signals = build_anomaly_signals(candidates, config=variant)
+        if not signals.empty:
+            signal_frames.append(signals.loc[:, ["symbol", "decision_timestamp_ms"]].copy())
+    if not signal_frames:
+        return pd.DataFrame(columns=["symbol", "decision_timestamp_ms"])
+    universe = pd.concat(signal_frames, ignore_index=True)
+    universe.dropna(subset=["symbol", "decision_timestamp_ms"], inplace=True)
+    universe.drop_duplicates(["symbol", "decision_timestamp_ms"], inplace=True)
+    universe.sort_values(["symbol", "decision_timestamp_ms"], inplace=True)
+    universe.reset_index(drop=True, inplace=True)
+    return universe
+
+
+def _fetch_derivatives_context_for_signal_universe(
+    signal_universe: pd.DataFrame,
+    *,
+    derivatives_context_fetcher: object,
+) -> pd.DataFrame:
+    if signal_universe.empty:
+        print("anomaly derivatives context: no post-filter signal universe to fetch", flush=True)
+        return pd.DataFrame(
+            columns=[
+                "symbol",
+                "signal_rows",
+                "start_timestamp_ms",
+                "end_timestamp_ms",
+                "success",
+                "added_rows",
+                "message",
+            ]
+        )
+    fetch_many = getattr(derivatives_context_fetcher, "fetch_many")
+    grouped = signal_universe.groupby("symbol", sort=True)
+    started_at = time.monotonic()
+    total = int(len(grouped))
+    status_rows: list[dict[str, object]] = []
+    print(
+        "anomaly derivatives context: fetching event windows for "
+        f"{len(signal_universe)} post-filter signals across {total} symbols",
+        flush=True,
+    )
+    for processed_count, (symbol, group) in enumerate(grouped, start=1):
+        timestamps = group["decision_timestamp_ms"].astype(float)
+        start_ts = int(timestamps.min()) - 6 * 5 * 60 * 1000
+        end_ts = int(timestamps.max()) + 5 * 60 * 1000
+        result = fetch_many([str(symbol)], start_ts, end_ts).get(str(symbol))
+        status_rows.append(
+            {
+                "symbol": str(symbol),
+                "signal_rows": int(len(group)),
+                "start_timestamp_ms": start_ts,
+                "end_timestamp_ms": end_ts,
+                "success": bool(result.success) if result is not None else False,
+                "added_rows": int(result.added_rows) if result is not None else 0,
+                "message": str(result.message) if result is not None else "missing_fetch_result",
+            }
+        )
+        _emit_progress(
+            label="anomaly derivatives context",
+            done=processed_count,
+            total=total,
+            started_at=started_at,
+        )
+    return pd.DataFrame(status_rows)
+
+
 def summarize_entry_grid_variant(
     trades: pd.DataFrame,
     *,
@@ -682,41 +798,13 @@ def run_anomaly_entry_grid(
     exhaustion_profiles: Iterable[str],
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    variants: list[AnomalyBacktestConfig] = []
-    for profile_name in exhaustion_profiles:
-        profile = EXHAUSTION_PROFILES[profile_name]
-        for oi3 in oi3_values:
-            for hold in hold_values:
-                common = {
-                    "min_hold_count": int(hold),
-                    "min_oi_change_pct_3x5m": float(oi3),
-                    "require_oi_status_ok": True,
-                    "exhaustion_profile": profile_name,
-                    **profile,
-                }
-                variants.append(
-                    replace(
-                        base_config,
-                        entry_method="market",
-                        **common,
-                    )
-                )
-                variants.append(
-                    replace(
-                        base_config,
-                        entry_method="break_box_high",
-                        **common,
-                    )
-                )
-                for fraction in pullback_fractions:
-                    variants.append(
-                        replace(
-                            base_config,
-                            entry_method="pullback_box_fraction",
-                            pullback_box_fraction=float(fraction),
-                            **common,
-                        )
-                    )
+    variants = _iter_entry_grid_configs(
+        base_config,
+        oi3_values=oi3_values,
+        hold_values=hold_values,
+        pullback_fractions=pullback_fractions,
+        exhaustion_profiles=exhaustion_profiles,
+    )
     started_at = time.monotonic()
     frame_cache: dict[str, pd.DataFrame] = {}
     for idx, variant in enumerate(variants, start=1):
@@ -751,25 +839,25 @@ def run_anomaly_strategy_backtest(
     )
     print("anomaly signals: filtering", flush=True)
     signals = build_anomaly_signals(candidates, config=config)
-    if derivatives_context_fetcher is not None and not signals.empty and len(signals) <= MAX_LAZY_DERIVATIVES_CONTEXT_SIGNALS:
-        context_signals = signals.dropna(subset=["decision_timestamp_ms"])
-        if not context_signals.empty:
-            start_ts = int(context_signals["decision_timestamp_ms"].astype(float).min()) - 6 * 5 * 60 * 1000
-            end_ts = int(context_signals["decision_timestamp_ms"].astype(float).max()) + 5 * 60 * 1000
-            context_symbols = sorted(set(context_signals["symbol"].astype(str)))
-            fetch_many = getattr(derivatives_context_fetcher, "fetch_many")
-            fetch_many(context_symbols, start_ts, end_ts)
+    if derivatives_context_fetcher is not None:
+        if run_entry_grid:
+            grid_variants = _iter_entry_grid_configs(
+                config,
+                oi3_values=grid_oi3_values,
+                hold_values=grid_hold_values,
+                pullback_fractions=grid_pullback_fractions,
+                exhaustion_profiles=grid_exhaustion_profiles,
+            )
+            context_signals = _entry_grid_signal_universe(candidates, grid_variants)
+        else:
+            context_signals = signals.loc[:, ["symbol", "decision_timestamp_ms"]].copy()
+        context_fetch_status = _fetch_derivatives_context_for_signal_universe(
+            context_signals,
+            derivatives_context_fetcher=derivatives_context_fetcher,
+        )
+        context_fetch_status.to_csv(output_dir / "market_context_fetch_status.csv", index=False)
         candidates = enrich_candidates_with_derivatives_context(candidates, cache_dir=config.lab_config.cache_dir)
         signals = build_anomaly_signals(candidates, config=config)
-    elif derivatives_context_fetcher is None:
-        pass
-    else:
-        print(
-            "anomaly derivatives context: skipped lazy fetch for "
-            f"{len(signals)} signals; threshold {MAX_LAZY_DERIVATIVES_CONTEXT_SIGNALS}, using cache only",
-            flush=True,
-        )
-        candidates = enrich_candidates_with_derivatives_context(candidates, cache_dir=config.lab_config.cache_dir)
     candidates.to_csv(output_dir / "anomaly_candidates.csv", index=False)
     build_oi_context_status(candidates).to_csv(output_dir / "oi_context_status.csv", index=False)
     build_derivatives_context_status(candidates).to_csv(output_dir / "market_context_status.csv", index=False)
