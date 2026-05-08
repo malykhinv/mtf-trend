@@ -1567,3 +1567,60 @@ The current smoke run on IO/ZEC has market_context_status.csv with missing_frame
 This proves absence is visible rather than hidden behind zeros or last-price substitutes.
 P094 adds default cache collection for these derivatives context files. A ZEC 1-day smoke fetch produced ok anomaly-lab coverage for premium/mark/long-short/taker context and mixed no_context_before_decision/ok for funding, matching 8h funding cadence.
 ```
+
+---
+
+## E042 - 30-day anomaly derivatives-context grid analysis
+
+```text
+Status: ANALYZED
+Date: 2026-05-08
+Patch state: P100 committed on branch codex/pno-anomaly-continuation-lab
+Output: .output/results/anomaly_lab_30d_derivatives_context_grid
+```
+
+Result:
+
+```text
+Raw anomaly rule remains negative: 41,304 closed trades, win rate 46.88%, avg net -0.0747%, sum -30.84.
+The useful candidate is still balanced anti-exhaustion + OI expansion, not raw anomaly continuation.
+Best row: market entry, balanced profile, hold>=2, oi_change_pct_3x5m>5%; 31 trades, 27 symbols, 19 days, win rate 61.29%, avg net +2.36%, median +2.48%, sum +0.730.
+Hold>=3 is similar: 29 trades, win rate 62.07%, avg +2.34%, same median, slightly less frequency.
+Mild profile with the same OI/hold keeps more trades: 45 trades, 40 symbols, 22 days, win rate 57.78%, avg +1.32%, median +2.05%.
+```
+
+Data/context quality:
+
+```text
+Candidate window: 206,977 rows across 563 symbols, decision timestamps 2026-04-08T17:25Z..2026-05-08T12:21Z, error rows 0.
+OI coverage is mostly ok: 206,125 ok rows; stale/missing/no-before are small and visible.
+Derivatives context was fetched only for post-filter grid universe: 232 post-filter signals across 171 instruments; fetch status success for all 171.
+Premium/mark/global/top/taker LS coverage is ok for those 232 rows; funding has lower coverage because of 8h cadence and missing source files for some instruments.
+Raw candidates outside the context universe have explicit not_in_context_universe status, which is expected.
+```
+
+Robustness:
+
+```text
+The best row is promising but not yet robust enough to deploy.
+Top-tail dependence remains high: for the 31-trade best row, top1 contributes +0.190, top3 +0.472, top5 +0.700 vs total +0.730; top10 exceeds total because losers offset it.
+Daily split: 12 positive days, 7 negative days, 19 active days. The largest single day is +0.190 and the worst is -0.126.
+The edge is broad by symbols but still sensitive to a few winners.
+```
+
+Interpretation:
+
+```text
+The repeated pattern is controlled wake-up, not maximum violence.
+Better winners show higher verticality, lower effort-per-return, lower range expansion, moderate real trade/quote expansion, OI expansion above 5%, and enough hold.
+Derivatives context is useful but not proven as a primary filter yet: selected sample is only 31 trades.
+Within that sample, positive hints are mark/decision basis not deeply negative, taker_ls_buy_share above median, controlled top-position LS change, and stronger verticality; treat these as hypotheses only.
+```
+
+Next:
+
+```text
+Do not optimize another threshold on this same window first.
+Run fixed out-of-window validation with the current candidate set: balanced market hold>=2 oi3>5 and mild market hold>=2 oi3>5 as the frequency-preserving alternative.
+Best next code addition is a rolling-window validation command/report that runs fixed configs across multiple non-overlapping 30-day windows and reports monthly/day/top-tail stability.
+```
