@@ -1088,5 +1088,6 @@ P101 adds chart and health artifacts for the best grid variant in run-anomaly-la
 For grid runs, charts target the selected best grid trades, not the broad raw anomaly trades.
 Current 30-day derivatives-context grid now has 31 rendered best-grid trade charts and anomaly_edge_health.csv.
 Health table use is diagnostic only: it highlights weak aspects such as top-tail dependence, not a deploy/deploy-not score.
+P102 upgrades anomaly trade charts to the established PNO diagnostics style: 1m price, 5m context, risk/profit zones, price tags, quote-volume and canonical exchange trade-count panels.
 ```
 

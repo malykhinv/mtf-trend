@@ -16,6 +16,44 @@ from urllib.parse import quote
 import numpy as np
 import pandas as pd
 
+from cli.pno_diagnostics import (
+    _PNO_PLOT_AXIS_FACE,
+    _PNO_PLOT_DOWN,
+    _PNO_PLOT_EMA9,
+    _PNO_PLOT_EMA20,
+    _PNO_PLOT_ENTRY,
+    _PNO_PLOT_EXIT,
+    _PNO_PLOT_FIGURE_FACE,
+    _PNO_PLOT_GRID,
+    _PNO_PLOT_MUTED,
+    _PNO_PLOT_PROFIT_EDGE,
+    _PNO_PLOT_PROFIT_FACE,
+    _PNO_PLOT_PUMP,
+    _PNO_PLOT_RISK_EDGE,
+    _PNO_PLOT_RISK_FACE,
+    _PNO_PLOT_SAVEFIG_KWARGS,
+    _PNO_PLOT_TEXT,
+    _PNO_PLOT_UP,
+    _PNO_PLOT_5M_CANDLE_WIDTH,
+    _PNO_TRADE_CHART_FIGSIZE,
+    _annotate_missing_trade_count_panel,
+    _annotate_pno_axis_price_tag,
+    _build_pno_tick_labels_from_timestamps,
+    _build_pno_tick_positions_from_timestamps,
+    _build_pno_tick_timestamps,
+    _configure_pno_plot_axes,
+    _draw_pno_candles,
+    _draw_pno_candles_on_columns,
+    _draw_pno_price_zone,
+    _format_pno_chart_symbol,
+    _format_pno_timeframe_label,
+    _infer_pno_frame_step_ms,
+    _pno_trade_count_source_label,
+    _resolve_pno_axis_tag_positions,
+    _resolve_pno_candle_width,
+    _resolve_pno_timestamp_plot_idx,
+    _resolve_trade_count_series,
+)
 from research_tools.anomaly_continuation_lab import (
     AnomalyLabConfig,
     DERIVATIVES_CONTEXT_SPECS,
@@ -179,6 +217,25 @@ def _sanitize_file_part(value: object) -> str:
 
 def _timestamp_to_utc(timestamp_ms: int | float) -> str:
     return datetime.fromtimestamp(int(timestamp_ms) / 1000, UTC).isoformat()
+
+
+def _safe_float(value: object) -> float | None:
+    try:
+        resolved = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(resolved):
+        return None
+    return resolved
+
+
+def _safe_int(value: object) -> int | None:
+    try:
+        if pd.isna(value):
+            return None
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def _cache_symbol_dir_name(symbol: str) -> str:
@@ -1064,6 +1121,101 @@ def build_edge_health_table(trades: pd.DataFrame, *, label: str) -> pd.DataFrame
     return pd.DataFrame(rows)
 
 
+def _prepare_anomaly_plot_frame(frame: pd.DataFrame, *, start_ts: int, end_ts: int) -> pd.DataFrame:
+    columns = [
+        column
+        for column in (
+            "timestamp",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "quote_volume",
+            "number_of_trades",
+            "taker_buy_volume",
+            "taker_buy_quote_volume",
+        )
+        if column in frame.columns
+    ]
+    plot_frame = frame.loc[(frame["timestamp"] >= start_ts) & (frame["timestamp"] <= end_ts), columns].copy()
+    if plot_frame.empty:
+        return plot_frame
+    for column in columns:
+        plot_frame[column] = pd.to_numeric(plot_frame[column], errors="coerce")
+    plot_frame = plot_frame.dropna(subset=["timestamp", "open", "high", "low", "close", "volume"])
+    if plot_frame.empty:
+        return plot_frame
+    plot_frame.sort_values("timestamp", inplace=True, kind="stable")
+    plot_frame.drop_duplicates(subset=["timestamp"], keep="last", inplace=True)
+    plot_frame["ema9"] = plot_frame["close"].ewm(span=9, adjust=False).mean()
+    plot_frame["ema20"] = plot_frame["close"].ewm(span=20, adjust=False).mean()
+    return plot_frame.reset_index(drop=True)
+
+
+def _build_anomaly_5m_context(plot_frame: pd.DataFrame, timestamps: np.ndarray, x_values: np.ndarray) -> pd.DataFrame:
+    if plot_frame.empty:
+        return pd.DataFrame()
+    prepared = plot_frame.copy()
+    prepared["bucket"] = (prepared["timestamp"].astype(np.int64) // 300_000) * 300_000
+    aggregations: dict[str, str] = {
+        "timestamp": "first",
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+        "volume": "sum",
+    }
+    for column in ("quote_volume", "number_of_trades", "taker_buy_volume", "taker_buy_quote_volume"):
+        if column in prepared.columns:
+            aggregations[column] = "sum"
+    context = prepared.groupby("bucket", as_index=False).agg(aggregations)
+    if context.empty:
+        return context
+    context["timestamp"] = context["bucket"].astype(np.int64)
+    context["plot_x"] = np.interp(
+        context["timestamp"].to_numpy(dtype=np.float64),
+        timestamps.astype(np.float64),
+        x_values,
+    )
+    return context
+
+
+def _draw_anomaly_trade_block(
+    ax,
+    *,
+    start_idx: int | None,
+    end_idx: int | None,
+    lower_price: float | None,
+    upper_price: float | None,
+    facecolor: str,
+    edgecolor: str,
+    alpha: float,
+    zorder: float,
+    frame_length: int,
+) -> None:
+    if start_idx is None or end_idx is None or lower_price is None or upper_price is None or frame_length <= 0:
+        return
+    block_start = min(max(int(start_idx), 0), frame_length - 1)
+    block_end = min(max(int(end_idx), block_start), frame_length - 1)
+    price_low = min(float(lower_price), float(upper_price))
+    price_high = max(float(lower_price), float(upper_price))
+    from matplotlib.patches import Rectangle
+
+    ax.add_patch(
+        Rectangle(
+            (block_start - 0.5, price_low),
+            max(float(block_end - block_start + 1), 1.0),
+            max(price_high - price_low, 1e-9),
+            facecolor=facecolor,
+            edgecolor=edgecolor,
+            linewidth=0.9,
+            alpha=alpha,
+            zorder=zorder,
+        )
+    )
+
+
 def _render_anomaly_trade_chart(
     *,
     frame: pd.DataFrame,
@@ -1076,79 +1228,210 @@ def _render_anomaly_trade_chart(
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Rectangle
 
-    anomaly_ts = int(trade.get("anomaly_timestamp_ms", trade.get("decision_timestamp_ms")))
-    exit_ts = int(trade.get("exit_timestamp_ms", trade.get("decision_timestamp_ms")))
+    anomaly_ts = _safe_int(trade.get("anomaly_timestamp_ms")) or _safe_int(trade.get("decision_timestamp_ms"))
+    decision_ts = _safe_int(trade.get("decision_timestamp_ms")) or anomaly_ts
+    entry_ts = _safe_int(trade.get("entry_timestamp_ms")) or decision_ts
+    exit_ts = _safe_int(trade.get("exit_timestamp_ms")) or entry_ts
+    if anomaly_ts is None or decision_ts is None or entry_ts is None or exit_ts is None:
+        raise ValueError("missing_trade_timestamps")
+    entry_price = _safe_float(trade.get("entry_price"))
+    initial_stop = _safe_float(trade.get("initial_stop"))
+    tp1_price = _safe_float(trade.get("tp1_price"))
+    box_high = _safe_float(trade.get("box_high"))
+    exit_price = _safe_float(trade.get("exit_price"))
     timeframe_ms = 60_000
     start_ts = anomaly_ts - pre_candles * timeframe_ms
     end_ts = exit_ts + post_candles * timeframe_ms
-    plot_frame = frame.loc[(frame["timestamp"] >= start_ts) & (frame["timestamp"] <= end_ts)].copy()
+    plot_frame = _prepare_anomaly_plot_frame(frame, start_ts=start_ts, end_ts=end_ts)
     if plot_frame.empty:
         raise ValueError("empty_plot_window")
-    plot_frame.reset_index(drop=True, inplace=True)
+    x_values = np.arange(len(plot_frame), dtype=np.float64)
+    timestamps = plot_frame["timestamp"].to_numpy(dtype=np.int64)
+    context_5m = _build_anomaly_5m_context(plot_frame, timestamps, x_values)
+    anomaly_idx = _resolve_pno_timestamp_plot_idx(timestamps, anomaly_ts)
+    decision_idx = _resolve_pno_timestamp_plot_idx(timestamps, decision_ts)
+    entry_idx = _resolve_pno_timestamp_plot_idx(timestamps, entry_ts)
+    exit_idx = _resolve_pno_timestamp_plot_idx(timestamps, exit_ts)
+    price_axis_right_x = float(len(plot_frame) - 0.5)
 
-    fig, (ax_price, ax_volume) = plt.subplots(
-        2,
+    fig, (ax_price, ax_context, ax_volume, ax_trades) = plt.subplots(
+        4,
         1,
-        figsize=(13, 7),
-        gridspec_kw={"height_ratios": [3, 1]},
+        figsize=_PNO_TRADE_CHART_FIGSIZE,
         sharex=True,
+        gridspec_kw={"height_ratios": [4, 2, 1, 1], "hspace": 0.05},
+        facecolor=_PNO_PLOT_FIGURE_FACE,
     )
-    x = np.arange(len(plot_frame))
-    opens = plot_frame["open"].astype(float).to_numpy()
-    highs = plot_frame["high"].astype(float).to_numpy()
-    lows = plot_frame["low"].astype(float).to_numpy()
-    closes = plot_frame["close"].astype(float).to_numpy()
-    volumes = plot_frame.get("quote_volume", plot_frame["volume"]).astype(float).to_numpy()
-    colors = np.where(closes >= opens, "#1f9d55", "#cc3d3d")
-    for idx, (open_, high, low, close, color) in enumerate(zip(opens, highs, lows, closes, colors, strict=True)):
-        ax_price.vlines(idx, low, high, color=color, linewidth=0.8, alpha=0.9)
-        body_low = min(open_, close)
-        body_height = max(abs(close - open_), 1e-12)
-        ax_price.add_patch(Rectangle((idx - 0.32, body_low), 0.64, body_height, facecolor=color, edgecolor=color, alpha=0.75))
-    ax_volume.bar(x, volumes, color=colors, alpha=0.35, width=0.8)
+    _configure_pno_plot_axes(price_ax=ax_price, volume_ax=ax_volume, trades_ax=ax_trades)
+    _configure_pno_plot_axes(price_ax=ax_context, volume_ax=ax_volume, trades_ax=ax_trades)
 
-    timestamps = plot_frame["timestamp"].astype(int).to_numpy()
+    _draw_pno_candles(ax_price, plot_frame, x_values)
+    if not context_5m.empty:
+        _draw_pno_candles_on_columns(
+            ax_context,
+            context_5m,
+            x_column="plot_x",
+            candle_width=_PNO_PLOT_5M_CANDLE_WIDTH,
+        )
+    ax_price.plot(x_values, plot_frame["ema9"].to_numpy(dtype=np.float64), color=_PNO_PLOT_EMA9, linewidth=1.2, alpha=0.28, zorder=2.2)
+    ax_price.plot(x_values, plot_frame["ema20"].to_numpy(dtype=np.float64), color=_PNO_PLOT_EMA20, linewidth=1.2, alpha=0.24, zorder=2.1)
 
-    def draw_ts(timestamp: object, color: str, label: str) -> None:
-        if pd.isna(timestamp):
-            return
-        pos = int(np.searchsorted(timestamps, int(timestamp), side="left"))
-        pos = min(max(pos, 0), len(plot_frame) - 1)
-        ax_price.axvline(pos, color=color, linewidth=1.1, alpha=0.8, label=label)
+    ax_price.axvline(anomaly_idx, color=_PNO_PLOT_PUMP, linewidth=0.95, alpha=0.30, zorder=5)
+    ax_price.axvline(decision_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.18, linestyle="--", zorder=4.8)
+    ax_price.axvline(entry_idx, color=_PNO_PLOT_ENTRY, linewidth=1.0, alpha=0.45, zorder=5.2)
+    ax_price.axvline(exit_idx, color=_PNO_PLOT_EXIT, linewidth=1.0, alpha=0.52, linestyle="-.", zorder=5.3)
+    ax_context.axvline(anomaly_idx, color=_PNO_PLOT_PUMP, linewidth=0.9, alpha=0.22, zorder=5)
+    ax_context.axvline(entry_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.32, zorder=5)
+    ax_context.axvline(exit_idx, color=_PNO_PLOT_EXIT, linewidth=0.9, alpha=0.35, linestyle="-.", zorder=5)
 
-    draw_ts(trade.get("anomaly_timestamp_ms"), "#5468ff", "anomaly")
-    draw_ts(trade.get("decision_timestamp_ms"), "#f0a202", "decision")
-    draw_ts(trade.get("entry_timestamp_ms"), "#0f9d58", "entry")
-    draw_ts(trade.get("exit_timestamp_ms"), "#d93025", "exit")
-    for value, color, label in [
-        (trade.get("entry_price"), "#0f9d58", "entry price"),
-        (trade.get("initial_stop"), "#d93025", "initial stop"),
-        (trade.get("tp1_price"), "#7b1fa2", "tp1"),
-    ]:
-        if pd.notna(value):
-            ax_price.axhline(float(value), color=color, linewidth=0.9, alpha=0.55, linestyle="--", label=label)
-
-    title = (
-        f"{trade.get('symbol')} {trade.get('entry_timestamp_utc')} "
-        f"net={float(trade.get('net_return', 0.0)):.2%} {trade.get('exit_reason', '')}"
+    _draw_pno_price_zone(
+        ax_price,
+        timestamps=timestamps,
+        start_timestamp_ms=anomaly_ts,
+        end_timestamp_ms=decision_ts,
+        low=initial_stop,
+        high=box_high,
+        facecolor="#1d4ed8",
+        edgecolor="#60a5fa",
+        alpha=0.10,
+        linewidth=0.9,
+        zorder=2.0,
     )
-    ax_price.set_title(title, fontsize=10)
-    ax_price.grid(True, alpha=0.15)
-    ax_volume.grid(True, alpha=0.12)
-    ax_price.legend(loc="upper left", fontsize=8, ncols=4)
-    step = max(len(plot_frame) // 8, 1)
-    tick_positions = x[::step]
-    tick_labels = [
-        datetime.fromtimestamp(int(timestamps[pos]) / 1000, UTC).strftime("%m-%d %H:%M")
-        for pos in tick_positions
-    ]
-    ax_volume.set_xticks(tick_positions)
-    ax_volume.set_xticklabels(tick_labels, rotation=30, ha="right", fontsize=8)
-    fig.tight_layout()
+    _draw_anomaly_trade_block(
+        ax_price,
+        start_idx=entry_idx,
+        end_idx=exit_idx,
+        lower_price=initial_stop,
+        upper_price=entry_price,
+        facecolor=_PNO_PLOT_RISK_FACE,
+        edgecolor=_PNO_PLOT_RISK_EDGE,
+        alpha=0.30,
+        zorder=1.05,
+        frame_length=len(plot_frame),
+    )
+    _draw_anomaly_trade_block(
+        ax_price,
+        start_idx=entry_idx,
+        end_idx=exit_idx,
+        lower_price=entry_price,
+        upper_price=tp1_price,
+        facecolor=_PNO_PLOT_PROFIT_FACE,
+        edgecolor=_PNO_PLOT_PROFIT_EDGE,
+        alpha=0.22,
+        zorder=1.08,
+        frame_length=len(plot_frame),
+    )
+
+    tag_positions = _resolve_pno_axis_tag_positions(
+        [
+            ("TP1", tp1_price),
+            ("Entry", entry_price),
+            ("SL", initial_stop),
+            ("Exit", exit_price),
+        ]
+    )
+    for label, value, color, leader_x in (
+        ("TP1", tp1_price, _PNO_PLOT_PROFIT_EDGE, entry_idx - 0.5),
+        ("Entry", entry_price, _PNO_PLOT_ENTRY, entry_idx),
+        ("SL", initial_stop, _PNO_PLOT_RISK_EDGE, entry_idx - 0.5),
+        ("Exit", exit_price, _PNO_PLOT_EXIT, exit_idx),
+    ):
+        _annotate_pno_axis_price_tag(
+            ax_price,
+            y=value,
+            label=label,
+            color=color,
+            leader_start_x=float(leader_x),
+            leader_end_x=price_axis_right_x,
+            text_y=tag_positions.get(label),
+            alpha=0.92,
+        )
+
+    volume_column = "quote_volume" if "quote_volume" in plot_frame.columns else "volume"
+    volume = plot_frame[volume_column].fillna(0.0).to_numpy(dtype=np.float64)
+    volume_max = float(np.nanmax(volume)) if volume.size else 0.0
+    volume_pct = (volume / volume_max) * 100.0 if volume_max > 0.0 else np.zeros_like(volume)
+    opens = plot_frame["open"].to_numpy(dtype=np.float64)
+    closes = plot_frame["close"].to_numpy(dtype=np.float64)
+    colors = np.where(closes >= opens, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
+    ax_volume.bar(
+        x_values,
+        volume_pct,
+        width=_resolve_pno_candle_width(x_values, default=0.82),
+        color=colors,
+        edgecolor="none",
+        alpha=0.82,
+        zorder=3,
+    )
+
+    trade_counts = _resolve_trade_count_series(plot_frame)
+    trade_counts_max = float(np.nanmax(trade_counts)) if trade_counts is not None and trade_counts.size else 0.0
+    if trade_counts is not None and trade_counts_max > 0.0:
+        trade_counts_pct = (trade_counts / trade_counts_max) * 100.0
+        ax_trades.bar(
+            x_values,
+            trade_counts_pct,
+            width=_resolve_pno_candle_width(x_values, default=0.82),
+            color=colors,
+            edgecolor="none",
+            alpha=0.78,
+            zorder=3,
+        )
+    else:
+        _annotate_missing_trade_count_panel(ax_trades, _pno_trade_count_source_label(plot_frame))
+
+    high_values = plot_frame["high"].to_numpy(dtype=np.float64)
+    low_values = plot_frame["low"].to_numpy(dtype=np.float64)
+    padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.05, 1e-9)
+    ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
+    if not context_5m.empty:
+        context_high = context_5m["high"].to_numpy(dtype=np.float64)
+        context_low = context_5m["low"].to_numpy(dtype=np.float64)
+        context_padding = max((float(np.nanmax(context_high)) - float(np.nanmin(context_low))) * 0.08, 1e-9)
+        ax_context.set_ylim(float(np.nanmin(context_low)) - context_padding, float(np.nanmax(context_high)) + context_padding)
+    entry_candle_width = _resolve_pno_candle_width(x_values)
+    ax_price.set_xlim(-max(0.5, entry_candle_width * 0.65), len(plot_frame) - 1 + max(0.5, entry_candle_width * 0.65))
+    ax_context.set_xlim(ax_price.get_xlim())
+    ax_volume.set_ylim(0.0, 100.0)
+    ax_volume.set_yticks([0.0, 50.0, 100.0])
+    ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
+    ax_trades.set_ylim(0.0, 100.0)
+    ax_trades.set_yticks([0.0, 50.0, 100.0])
+    ax_trades.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
+    ax_price.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(plot_frame)))
+    ax_context.set_ylabel("5m")
+    ax_volume.set_ylabel("Quote vol %")
+    ax_trades.set_ylabel("Exchange trades %")
+    ax_price.set_title(
+        (
+            f"{_format_pno_chart_symbol(str(trade.get('symbol')))}  "
+            f"{trade.get('entry_timestamp_utc')}  "
+            f"net={float(trade.get('net_return', 0.0)):.2%}  "
+            f"{trade.get('exit_reason', '')}"
+        ),
+        loc="left",
+        color=_PNO_PLOT_TEXT,
+        fontsize=10,
+        pad=10,
+        fontweight="semibold",
+    )
+
+    tick_timestamps = _build_pno_tick_timestamps(plot_frame)
+    tick_positions = _build_pno_tick_positions_from_timestamps(tick_timestamps, len(plot_frame))
+    tick_labels = _build_pno_tick_labels_from_timestamps(tick_timestamps, tick_positions)
+    ax_trades.set_xticks(tick_positions)
+    ax_trades.set_xticklabels(tick_labels)
+    ax_price.tick_params(axis="x", labelbottom=False)
+    ax_context.tick_params(axis="x", labelbottom=False)
+    ax_volume.tick_params(axis="x", labelbottom=False)
+    ax_price.margins(x=0.01)
+    ax_context.margins(x=0.0)
+    ax_volume.margins(x=0.0)
+    ax_trades.margins(x=0.0)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=120)
+    fig.subplots_adjust(left=0.10, right=0.80, top=0.94, bottom=0.06, hspace=0.05)
+    fig.savefig(output_path, **_PNO_PLOT_SAVEFIG_KWARGS)
     plt.close(fig)
 
 

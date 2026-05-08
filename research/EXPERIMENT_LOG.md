@@ -1631,6 +1631,7 @@ Follow-up artifacts and session split:
 P101 generated best-grid artifacts for the same run:
 anomaly_entry_grid_best_trades.csv, anomaly_entry_grid_best_config.csv, anomaly_edge_health.csv, anomaly_trade_chart_status.csv and 31 PNG charts under charts/best_grid_variant.
 Base code commit before artifact patch: 37250044; patch commit is recorded in git history after commit/push.
+P102 regenerated those 31 charts with the established PNO diagnostics chart style; the chart artifact quality is now suitable for visual candle review.
 Edge health is mostly ok on frequency/winrate/avg/median/days/symbol breadth, but fails top5_dependency and worst_day_return.
 Session split uses Europe/Belgrade local time: Asia 00-08, Europe 08-16, US 16-24.
 Asia: 9 trades, win rate 44.44%, avg +2.88%, median -0.37%, sum +0.259, 4 positive / 4 negative days.

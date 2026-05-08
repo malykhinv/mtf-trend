@@ -4011,3 +4011,32 @@ Verification:
 .venv\Scripts\python.exe -m compileall research_tools\anomaly_strategy_backtest.py
 Manual generation on .output/results/anomaly_lab_30d_derivatives_context_grid rendered 31/31 best-grid charts and wrote anomaly_edge_health.csv.
 ```
+
+---
+
+## P102 - Upgrade anomaly trade charts to PNO diagnostics style
+
+```text
+Status: APPLIED locally / smoke verified
+Type: artifact quality / plotting
+Trading logic changed: no
+Files: research_tools/anomaly_strategy_backtest.py, research/*
+Base commit before patch: e10a675f
+Patch commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Anomaly best-grid trade charts now reuse the established PNO diagnostics plotting style instead of the minimal temporary renderer.
+Charts include dark PNO theme, collection-based candles, 1m price panel, 5m context panel, EMA9/EMA20, entry/decision/exit markers, risk/profit zones, right-side price tags, quote-volume percentage panel and canonical exchange trade-count percentage panel.
+The chart output remains post-simulation diagnostics only; no entry/exit/trade logic is changed.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_strategy_backtest.py
+Manual regeneration on .output/results/anomaly_lab_30d_derivatives_context_grid rendered 31/31 best-grid charts.
+```
