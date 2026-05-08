@@ -592,9 +592,17 @@ def collect_anomaly_lab_rows(
     if not result.empty and "timestamp_ms" in result.columns:
         result.sort_values(["timestamp_ms", "symbol"], inplace=True)
         result.reset_index(drop=True, inplace=True)
-    result = enrich_candidates_with_open_interest(result, cache_dir=config.cache_dir)
+    result = enrich_candidates_with_open_interest(
+        result,
+        cache_dir=config.cache_dir,
+        progress_label=f"{progress_label}: oi context" if progress_label is not None else None,
+    )
     if include_derivatives_context:
-        result = enrich_candidates_with_derivatives_context(result, cache_dir=config.cache_dir)
+        result = enrich_candidates_with_derivatives_context(
+            result,
+            cache_dir=config.cache_dir,
+            progress_label=f"{progress_label}: derivatives context" if progress_label is not None else None,
+        )
     return result
 
 
@@ -679,7 +687,12 @@ def _enrich_symbol_oi(candidates: pd.DataFrame, oi_frame: pd.DataFrame | None, s
     return rows
 
 
-def enrich_candidates_with_open_interest(candidates: pd.DataFrame, *, cache_dir: Path) -> pd.DataFrame:
+def enrich_candidates_with_open_interest(
+    candidates: pd.DataFrame,
+    *,
+    cache_dir: Path,
+    progress_label: str | None = None,
+) -> pd.DataFrame:
     """Attach 5m open-interest context available at each decision timestamp.
 
     Open interest is not available on 1m in this project. For any lab timeframe,
@@ -691,11 +704,24 @@ def enrich_candidates_with_open_interest(candidates: pd.DataFrame, *, cache_dir:
 
     result = candidates.copy()
     oi_rows_by_index: dict[int, dict[str, object]] = {}
-    for symbol, group in result.groupby("symbol", sort=False):
+    grouped = list(result.groupby("symbol", sort=False))
+    progress_started_at = time.monotonic()
+    next_progress_pct = 0
+    for processed_count, (symbol, group) in enumerate(grouped, start=1):
         oi_frame, status = _read_oi_frame(cache_dir, str(symbol))
         enriched_rows = _enrich_symbol_oi(group, oi_frame, status)
         for row_index, oi_values in zip(group.index, enriched_rows, strict=True):
             oi_rows_by_index[int(row_index)] = oi_values
+        if progress_label is not None:
+            current_pct = int(100 * processed_count / len(grouped))
+            if current_pct >= next_progress_pct or processed_count == len(grouped):
+                _emit_progress(
+                    label=progress_label,
+                    done=processed_count,
+                    total=len(grouped),
+                    started_at=progress_started_at,
+                )
+                next_progress_pct = current_pct + 5
 
     oi_frame = pd.DataFrame.from_dict(oi_rows_by_index, orient="index").sort_index()
     for column in oi_frame.columns:
@@ -851,7 +877,12 @@ def _enrich_symbol_context(
     return rows
 
 
-def enrich_candidates_with_derivatives_context(candidates: pd.DataFrame, *, cache_dir: Path) -> pd.DataFrame:
+def enrich_candidates_with_derivatives_context(
+    candidates: pd.DataFrame,
+    *,
+    cache_dir: Path,
+    progress_label: str | None = None,
+) -> pd.DataFrame:
     """Attach optional derivatives context from explicit cache files only.
 
     Missing context is reported through per-source status columns. This function
@@ -863,7 +894,10 @@ def enrich_candidates_with_derivatives_context(candidates: pd.DataFrame, *, cach
 
     result = candidates.copy()
     context_frames: list[pd.DataFrame] = []
-    for spec in DERIVATIVES_CONTEXT_SPECS:
+    total_steps = len(DERIVATIVES_CONTEXT_SPECS)
+    progress_started_at = time.monotonic()
+    next_progress_pct = 0
+    for processed_count, spec in enumerate(DERIVATIVES_CONTEXT_SPECS, start=1):
         rows_by_index: dict[int, dict[str, object]] = {}
         for symbol, group in result.groupby("symbol", sort=False):
             context_frame, status = _read_context_frame(cache_dir, str(symbol), spec)
@@ -872,6 +906,16 @@ def enrich_candidates_with_derivatives_context(candidates: pd.DataFrame, *, cach
                 rows_by_index[int(row_index)] = context_values
         context_values_frame = pd.DataFrame.from_dict(rows_by_index, orient="index").sort_index()
         context_frames.append(context_values_frame)
+        if progress_label is not None:
+            current_pct = int(100 * processed_count / total_steps)
+            if current_pct >= next_progress_pct or processed_count == total_steps:
+                _emit_progress(
+                    label=progress_label,
+                    done=processed_count,
+                    total=total_steps,
+                    started_at=progress_started_at,
+                )
+                next_progress_pct = current_pct + 5
 
     if context_frames:
         result = pd.concat([result, *context_frames], axis=1)

@@ -3950,3 +3950,34 @@ Verification:
 .venv\Scripts\python.exe -m pytest -q
 .venv\Scripts\python.exe main.py run-anomaly-lab --symbols BTC/USDT:USDT --output-dir .output\manual_checks\anomaly_context_scoped_enrichment_smoke2 --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --run-entry-grid true --grid-oi3-values 0.03 --grid-hold-values 2 --grid-pullback-fractions 0.75 --grid-exhaustion-profiles balanced
 ```
+
+---
+
+## P100 - Standardize anomaly lab phase progress
+
+```text
+Status: APPLIED locally / smoke verified
+Type: progress reporting / performance
+Trading logic changed: no
+Files: research_tools/anomaly_continuation_lab.py, research_tools/anomaly_strategy_backtest.py, research/*
+Commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Anomaly lab long phases now use consistent 5% progress + ETA.
+Normal console progress no longer prints instrument names during derivatives context fetch; per-symbol detail remains in market_context_fetch_status.csv.
+OI and derivatives enrichment phases now expose progress instead of running silently.
+Entry-grid signal filtering is computed once and reused by the grid simulation, avoiding duplicated filtering work.
+Artifact writes are grouped into progress-reported phases so large CSV writes are not silent.
+```
+
+Verification:
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_strategy_backtest.py research_tools\anomaly_continuation_lab.py
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe main.py run-anomaly-lab --symbols BTC/USDT:USDT --output-dir .output\manual_checks\anomaly_progress_clean_smoke2 --days 1 --confirmation-candles 4 --forward-high-candles 60 --forward-low-candles 30 --min-quote-ratio-start 5 --min-trade-ratio-start 5 --run-entry-grid true --grid-oi3-values 0.03 --grid-hold-values 2 --grid-pullback-fractions 0.75 --grid-exhaustion-profiles balanced
+```

@@ -135,6 +135,42 @@ class AnomalyBacktestConfig:
     fee_rate: float = 0.0004
 
 
+def _emit_progress_5pct(
+    *,
+    label: str,
+    done: int,
+    total: int,
+    started_at: float,
+    next_progress_pct: int,
+) -> int:
+    if total <= 0:
+        return next_progress_pct
+    current_pct = int(100 * done / total)
+    if current_pct >= next_progress_pct or done == total:
+        _emit_progress(label=label, done=done, total=total, started_at=started_at)
+        return current_pct + 5
+    return next_progress_pct
+
+
+def _write_artifact_frames(
+    frames: Iterable[tuple[Path, pd.DataFrame]],
+    *,
+    progress_label: str,
+) -> None:
+    frame_list = list(frames)
+    started_at = time.monotonic()
+    next_progress_pct = 0
+    for processed_count, (path, frame) in enumerate(frame_list, start=1):
+        frame.to_csv(path, index=False)
+        next_progress_pct = _emit_progress_5pct(
+            label=progress_label,
+            done=processed_count,
+            total=len(frame_list),
+            started_at=started_at,
+            next_progress_pct=next_progress_pct,
+        )
+
+
 def _timestamp_to_utc(timestamp_ms: int | float) -> str:
     return datetime.fromtimestamp(int(timestamp_ms) / 1000, UTC).isoformat()
 
@@ -690,6 +726,44 @@ def _entry_grid_signal_universe(
     return universe
 
 
+def _build_entry_grid_signal_sets(
+    candidates: pd.DataFrame,
+    variants: Iterable[AnomalyBacktestConfig],
+) -> list[tuple[AnomalyBacktestConfig, pd.DataFrame]]:
+    variant_list = list(variants)
+    started_at = time.monotonic()
+    next_progress_pct = 0
+    signal_sets: list[tuple[AnomalyBacktestConfig, pd.DataFrame]] = []
+    for processed_count, variant in enumerate(variant_list, start=1):
+        signals = build_anomaly_signals(candidates, config=variant)
+        signal_sets.append((variant, signals))
+        next_progress_pct = _emit_progress_5pct(
+            label="anomaly grid signals",
+            done=processed_count,
+            total=len(variant_list),
+            started_at=started_at,
+            next_progress_pct=next_progress_pct,
+        )
+    return signal_sets
+
+
+def _signal_universe_from_signal_sets(
+    signal_sets: Iterable[tuple[AnomalyBacktestConfig, pd.DataFrame]],
+) -> pd.DataFrame:
+    signal_frames: list[pd.DataFrame] = []
+    for _, signals in signal_sets:
+        if not signals.empty:
+            signal_frames.append(signals.loc[:, ["symbol", "decision_timestamp_ms"]].copy())
+    if not signal_frames:
+        return pd.DataFrame(columns=["symbol", "decision_timestamp_ms"])
+    universe = pd.concat(signal_frames, ignore_index=True)
+    universe.dropna(subset=["symbol", "decision_timestamp_ms"], inplace=True)
+    universe.drop_duplicates(["symbol", "decision_timestamp_ms"], inplace=True)
+    universe.sort_values(["symbol", "decision_timestamp_ms"], inplace=True)
+    universe.reset_index(drop=True, inplace=True)
+    return universe
+
+
 def _fetch_derivatives_context_for_signal_universe(
     signal_universe: pd.DataFrame,
     *,
@@ -708,38 +782,55 @@ def _fetch_derivatives_context_for_signal_universe(
                 "message",
             ]
         )
-    fetch_many = getattr(derivatives_context_fetcher, "fetch_many")
+    fetch_symbol = getattr(derivatives_context_fetcher, "fetch_symbol")
     grouped = signal_universe.groupby("symbol", sort=True)
     started_at = time.monotonic()
     total = int(len(grouped))
+    next_progress_pct = 0
     status_rows: list[dict[str, object]] = []
     print(
         "anomaly derivatives context: fetching event windows for "
-        f"{len(signal_universe)} post-filter signals across {total} symbols",
+        f"{len(signal_universe)} post-filter signals across {total} instruments",
         flush=True,
     )
-    for processed_count, (symbol, group) in enumerate(grouped, start=1):
-        timestamps = group["decision_timestamp_ms"].astype(float)
-        start_ts = int(timestamps.min()) - 6 * 5 * 60 * 1000
-        end_ts = int(timestamps.max()) + 5 * 60 * 1000
-        result = fetch_many([str(symbol)], start_ts, end_ts).get(str(symbol))
-        status_rows.append(
-            {
-                "symbol": str(symbol),
-                "signal_rows": int(len(group)),
-                "start_timestamp_ms": start_ts,
-                "end_timestamp_ms": end_ts,
-                "success": bool(result.success) if result is not None else False,
-                "added_rows": int(result.added_rows) if result is not None else 0,
-                "message": str(result.message) if result is not None else "missing_fetch_result",
-            }
-        )
-        _emit_progress(
-            label="anomaly derivatives context",
-            done=processed_count,
-            total=total,
-            started_at=started_at,
-        )
+    logger = getattr(derivatives_context_fetcher, "_logger", None)
+    previous_disabled = getattr(logger, "disabled", None)
+    if logger is not None:
+        logger.disabled = True
+    try:
+        for processed_count, (symbol, group) in enumerate(grouped, start=1):
+            timestamps = group["decision_timestamp_ms"].astype(float)
+            start_ts = int(timestamps.min()) - 6 * 5 * 60 * 1000
+            end_ts = int(timestamps.max()) + 5 * 60 * 1000
+            try:
+                added_rows = int(fetch_symbol(str(symbol), start_ts, end_ts))
+                success = True
+                message = "ok"
+            except Exception as exc:
+                added_rows = 0
+                success = False
+                message = f"{type(exc).__name__}: {exc}"
+            status_rows.append(
+                {
+                    "symbol": str(symbol),
+                    "signal_rows": int(len(group)),
+                    "start_timestamp_ms": start_ts,
+                    "end_timestamp_ms": end_ts,
+                    "success": success,
+                    "added_rows": added_rows,
+                    "message": message,
+                }
+            )
+            next_progress_pct = _emit_progress_5pct(
+                label="anomaly derivatives context",
+                done=processed_count,
+                total=total,
+                started_at=started_at,
+                next_progress_pct=next_progress_pct,
+            )
+    finally:
+        if logger is not None and previous_disabled is not None:
+            logger.disabled = previous_disabled
     return pd.DataFrame(status_rows)
 
 
@@ -794,7 +885,11 @@ def _enrich_derivatives_context_for_signal_universe(
 
     selected = result.loc[selected_index].drop(columns=list(defaults), errors="ignore").copy()
     print(f"anomaly derivatives context: enriching {len(selected)} post-filter candidate rows", flush=True)
-    enriched = enrich_candidates_with_derivatives_context(selected, cache_dir=cache_dir)
+    enriched = enrich_candidates_with_derivatives_context(
+        selected,
+        cache_dir=cache_dir,
+        progress_label="anomaly derivatives enrich",
+    )
     context_columns = [column for column in enriched.columns if column in defaults]
     for column in context_columns:
         result.loc[enriched.index, column] = enriched[column]
@@ -855,22 +950,31 @@ def run_anomaly_entry_grid(
     hold_values: Iterable[int],
     pullback_fractions: Iterable[float],
     exhaustion_profiles: Iterable[str],
+    signal_sets: list[tuple[AnomalyBacktestConfig, pd.DataFrame]] | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    variants = _iter_entry_grid_configs(
-        base_config,
-        oi3_values=oi3_values,
-        hold_values=hold_values,
-        pullback_fractions=pullback_fractions,
-        exhaustion_profiles=exhaustion_profiles,
-    )
+    if signal_sets is None:
+        variants = _iter_entry_grid_configs(
+            base_config,
+            oi3_values=oi3_values,
+            hold_values=hold_values,
+            pullback_fractions=pullback_fractions,
+            exhaustion_profiles=exhaustion_profiles,
+        )
+        signal_sets = _build_entry_grid_signal_sets(candidates, variants)
     started_at = time.monotonic()
+    next_progress_pct = 0
     frame_cache: dict[str, pd.DataFrame] = {}
-    for idx, variant in enumerate(variants, start=1):
-        _emit_progress(label="anomaly entry grid", done=idx, total=len(variants), started_at=started_at)
-        signals = build_anomaly_signals(candidates, config=variant)
+    for idx, (variant, signals) in enumerate(signal_sets, start=1):
         trades = simulate_anomaly_trades(signals, config=variant, frame_cache=frame_cache)
         rows.append(summarize_entry_grid_variant(trades, config=variant, signal_count=len(signals)))
+        next_progress_pct = _emit_progress_5pct(
+            label="anomaly entry grid",
+            done=idx,
+            total=len(signal_sets),
+            started_at=started_at,
+            next_progress_pct=next_progress_pct,
+        )
     result = pd.DataFrame(rows)
     if not result.empty and "avg_net_return" in result.columns:
         result.sort_values(["avg_net_return", "closed_trades"], ascending=[False, False], inplace=True)
@@ -898,6 +1002,7 @@ def run_anomaly_strategy_backtest(
     )
     print("anomaly signals: filtering", flush=True)
     signals = build_anomaly_signals(candidates, config=config)
+    grid_signal_sets: list[tuple[AnomalyBacktestConfig, pd.DataFrame]] | None = None
     if derivatives_context_fetcher is not None:
         if run_entry_grid:
             grid_variants = _iter_entry_grid_configs(
@@ -907,32 +1012,44 @@ def run_anomaly_strategy_backtest(
                 pullback_fractions=grid_pullback_fractions,
                 exhaustion_profiles=grid_exhaustion_profiles,
             )
-            context_signals = _entry_grid_signal_universe(candidates, grid_variants)
+            grid_signal_sets = _build_entry_grid_signal_sets(candidates, grid_variants)
+            context_signals = _signal_universe_from_signal_sets(grid_signal_sets)
         else:
             context_signals = signals.loc[:, ["symbol", "decision_timestamp_ms"]].copy()
         context_fetch_status = _fetch_derivatives_context_for_signal_universe(
             context_signals,
             derivatives_context_fetcher=derivatives_context_fetcher,
         )
-        context_fetch_status.to_csv(output_dir / "market_context_fetch_status.csv", index=False)
+        _write_artifact_frames(
+            [(output_dir / "market_context_fetch_status.csv", context_fetch_status)],
+            progress_label="anomaly artifacts: context fetch status",
+        )
         candidates = _enrich_derivatives_context_for_signal_universe(
             candidates,
             context_signals,
             cache_dir=config.lab_config.cache_dir,
         )
         signals = build_anomaly_signals(candidates, config=config)
-    print("anomaly artifacts: writing base csv files", flush=True)
-    candidates.to_csv(output_dir / "anomaly_candidates.csv", index=False)
-    build_oi_context_status(candidates).to_csv(output_dir / "oi_context_status.csv", index=False)
-    build_derivatives_context_status(candidates).to_csv(output_dir / "market_context_status.csv", index=False)
-    signals.to_csv(output_dir / "anomaly_signals.csv", index=False)
+    _write_artifact_frames(
+        [
+            (output_dir / "anomaly_candidates.csv", candidates),
+            (output_dir / "oi_context_status.csv", build_oi_context_status(candidates)),
+            (output_dir / "market_context_status.csv", build_derivatives_context_status(candidates)),
+            (output_dir / "anomaly_signals.csv", signals),
+        ],
+        progress_label="anomaly artifacts: base files",
+    )
     print(f"anomaly trades: simulating {len(signals)} signals", flush=True)
     trades = simulate_anomaly_trades(signals, config=config, progress_label="anomaly trades")
-    print("anomaly artifacts: writing trade summaries", flush=True)
-    trades.to_csv(output_dir / "anomaly_trades.csv", index=False)
     summary = summarize_trades(trades)
-    summary.to_csv(output_dir / "anomaly_profitability_summary.csv", index=False)
-    summarize_trades_by_symbol(trades).to_csv(output_dir / "anomaly_profitability_by_symbol.csv", index=False)
+    _write_artifact_frames(
+        [
+            (output_dir / "anomaly_trades.csv", trades),
+            (output_dir / "anomaly_profitability_summary.csv", summary),
+            (output_dir / "anomaly_profitability_by_symbol.csv", summarize_trades_by_symbol(trades)),
+        ],
+        progress_label="anomaly artifacts: trade files",
+    )
     if run_entry_grid:
         print("anomaly entry grid: running variants", flush=True)
         grid = run_anomaly_entry_grid(
@@ -942,13 +1059,20 @@ def run_anomaly_strategy_backtest(
             hold_values=grid_hold_values,
             pullback_fractions=grid_pullback_fractions,
             exhaustion_profiles=grid_exhaustion_profiles,
+            signal_sets=grid_signal_sets,
         )
-        grid.to_csv(output_dir / "anomaly_entry_grid_summary.csv", index=False)
+        _write_artifact_frames(
+            [(output_dir / "anomaly_entry_grid_summary.csv", grid)],
+            progress_label="anomaly artifacts: grid files",
+        )
     run_config = {
         **asdict(config),
         "lab_config": asdict(config.lab_config),
     }
-    pd.DataFrame([run_config]).to_csv(output_dir / "run_config.csv", index=False)
+    _write_artifact_frames(
+        [(output_dir / "run_config.csv", pd.DataFrame([run_config]))],
+        progress_label="anomaly artifacts: run config",
+    )
     return output_dir
 
 

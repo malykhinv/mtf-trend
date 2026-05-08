@@ -1073,3 +1073,11 @@ Raw candidates outside that universe receive explicit not_in_context_universe co
 This preserves broad anomaly discovery while keeping expensive context work tied to the narrowed research stage.
 ```
 
+Anomaly lab progress contract:
+
+```text
+P100 standardizes run-anomaly-lab progress reporting to phase-level 5% ETA logs without instrument names.
+Expensive detail remains in CSV status artifacts rather than console spam.
+Entry-grid signal sets are computed once and reused for context universe plus grid simulation to avoid duplicated filtering work.
+```
+
