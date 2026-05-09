@@ -347,18 +347,37 @@ def _effort_and_sleep_metrics(
     baseline_range_pct = float((range_series / close.replace(0.0, np.nan)).iloc[baseline_slice].median())
     baseline_zero_range_share = float(baseline_ranges.le(0.0).mean())
     start_range_pct = _safe_divide(start_range, start_open)
-    baseline_high = float(high.iloc[baseline_slice].max())
-    baseline_low = float(low.iloc[baseline_slice].min())
-    baseline_close_high = float(close.iloc[baseline_slice].max())
-    baseline_close_low = float(close.iloc[baseline_slice].min())
+    baseline_high_series = high.iloc[baseline_slice].astype(float)
+    baseline_low_series = low.iloc[baseline_slice].astype(float)
+    baseline_close_series = close.iloc[baseline_slice].astype(float)
+    baseline_high = float(baseline_high_series.max())
+    baseline_low = float(baseline_low_series.min())
+    baseline_close_high = float(baseline_close_series.max())
+    baseline_close_low = float(baseline_close_series.min())
     baseline_return_range_pct = _safe_divide(baseline_high - baseline_low, start_open)
     baseline_close_return_range_pct = _safe_divide(baseline_close_high - baseline_close_low, start_open)
+    impulse_range = impulse_high - impulse_low
+    baseline_high_pos = int(baseline_high_series.to_numpy().argmax()) if not baseline_high_series.empty else -1
+    baseline_low_before_high = (
+        float(baseline_low_series.iloc[: baseline_high_pos + 1].min()) if baseline_high_pos >= 0 else float("nan")
+    )
+    baseline_low_after_high = (
+        float(baseline_low_series.iloc[baseline_high_pos:].min()) if baseline_high_pos >= 0 else float("nan")
+    )
+    prior_up_leg = baseline_high - baseline_low_before_high
+    prior_down_leg = baseline_high - baseline_low_after_high
+    prior_up_leg_to_impulse_range = _safe_divide(prior_up_leg, impulse_range)
+    prior_down_leg_to_impulse_range = _safe_divide(prior_down_leg, impulse_range)
+    prior_up_down_whipsaw_to_impulse_range = (
+        min(prior_up_leg_to_impulse_range, prior_down_leg_to_impulse_range)
+        if np.isfinite(prior_up_leg_to_impulse_range) and np.isfinite(prior_down_leg_to_impulse_range)
+        else float("nan")
+    )
     baseline_return_from_first_close_pct = _safe_divide(
         float(close.iloc[baseline_slice].iloc[-1]) - float(close.iloc[baseline_slice].iloc[0]),
         float(close.iloc[baseline_slice].iloc[0]),
     )
     decision_ret = _safe_divide(float(close.iloc[decision_idx]) - start_open, start_open)
-    impulse_range = impulse_high - impulse_low
     post_start_low = float(low.iloc[idx + 1 : decision_idx + 1].min()) if decision_idx > idx else float("nan")
     post_start_pullback_fraction = _safe_divide(impulse_high - post_start_low, impulse_range)
     return {
@@ -373,6 +392,9 @@ def _effort_and_sleep_metrics(
         "baseline_return_range_pct": baseline_return_range_pct,
         "baseline_close_return_range_pct": baseline_close_return_range_pct,
         "baseline_return_from_first_close_pct": baseline_return_from_first_close_pct,
+        "prior_up_leg_to_impulse_range": prior_up_leg_to_impulse_range,
+        "prior_down_leg_to_impulse_range": prior_down_leg_to_impulse_range,
+        "prior_up_down_whipsaw_to_impulse_range": prior_up_down_whipsaw_to_impulse_range,
         "start_range_ratio_to_baseline": _safe_divide(start_range, baseline_range),
         "start_range_pct": start_range_pct,
         "start_range_pct_ratio_to_baseline": _safe_divide(start_range_pct, baseline_range_pct),

@@ -4403,15 +4403,10 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 if getattr(args, "max_start_range_pct_ratio_to_baseline", None) is None
                 else float(args.max_start_range_pct_ratio_to_baseline)
             ),
-            max_baseline_return_range_pct=(
+            max_prior_up_down_whipsaw_to_impulse_range=(
                 None
-                if getattr(args, "max_baseline_return_range_pct", None) is None
-                else float(args.max_baseline_return_range_pct)
-            ),
-            max_baseline_close_return_range_pct=(
-                None
-                if getattr(args, "max_baseline_close_return_range_pct", None) is None
-                else float(args.max_baseline_close_return_range_pct)
+                if getattr(args, "max_prior_up_down_whipsaw_to_impulse_range", None) is None
+                else float(args.max_prior_up_down_whipsaw_to_impulse_range)
             ),
             min_next_taker_buy_quote_share=(
                 None
@@ -4479,15 +4474,10 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                 if getattr(args, "min_oi_change_pct_3x5m", None) is None
                 else float(args.min_oi_change_pct_3x5m)
             ),
-            max_baseline_return_range_pct=(
+            max_prior_up_down_whipsaw_to_impulse_range=(
                 None
-                if getattr(args, "max_baseline_return_range_pct", None) is None
-                else float(args.max_baseline_return_range_pct)
-            ),
-            max_baseline_close_return_range_pct=(
-                None
-                if getattr(args, "max_baseline_close_return_range_pct", None) is None
-                else float(args.max_baseline_close_return_range_pct)
+                if getattr(args, "max_prior_up_down_whipsaw_to_impulse_range", None) is None
+                else float(args.max_prior_up_down_whipsaw_to_impulse_range)
             ),
             risk_pct=float(getattr(args, "risk_pct", 0.05)),
             min_notional_usdt=float(getattr(args, "min_notional_usdt", 12.0)),

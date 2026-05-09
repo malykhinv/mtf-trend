@@ -1110,7 +1110,7 @@ Residual risk: first live slice needs exchange-level small-symbol smoke with max
 
 ```text
 Live/backtest stop semantics changed to max(previous structural stop, EMA20), not max(pump_bottom, EMA20).
-CVX-like no-sleep patterns are targeted by baseline range guards, not by symbol ban.
+CVX-like no-sleep patterns are targeted by a relative prior up-down whipsaw guard, not by symbol ban and not by absolute baseline range.
 Live shared state is protected by RLock; position threads and scanner no longer read/write open position dictionaries without synchronization.
 Scanner now checks a recent decision-candle backfill window and deduplicates seen decisions; this is required because full-universe REST rotation can inspect a symbol several minutes after the actual confirmation candle.
 Still required before real unattended use: fill env, run one-symbol max-cycles smoke, then verify Binance STOP_MARKET payload on an intentionally tiny position.

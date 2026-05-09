@@ -74,8 +74,7 @@ class LiveAnomalyConfig:
     min_verticality_score: float = 0.25
     min_hold_count: int = 2
     min_oi_change_pct_3x5m: float | None = 0.03
-    max_baseline_return_range_pct: float | None = 0.12
-    max_baseline_close_return_range_pct: float | None = 0.08
+    max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.60
     risk_pct: float = 0.05
     min_notional_usdt: float = 12.0
     max_open_positions: int = 3
@@ -451,40 +450,6 @@ class AnomalyMicroLiveRunner:
         start = frame.iloc[start_pos]
         baseline_quote = float(pd.to_numeric(baseline["quote_volume"], errors="coerce").median())
         baseline_trades = float(pd.to_numeric(baseline["number_of_trades"], errors="coerce").median())
-        baseline_return_range_pct = _safe_divide(
-            float(baseline["high"].astype(float).max()) - float(baseline["low"].astype(float).min()),
-            float(start["open"]),
-        )
-        baseline_close_return_range_pct = _safe_divide(
-            float(baseline["close"].astype(float).max()) - float(baseline["close"].astype(float).min()),
-            float(start["open"]),
-        )
-        if (
-            self.config.max_baseline_return_range_pct is not None
-            and baseline_return_range_pct > self.config.max_baseline_return_range_pct
-        ):
-            self.artifacts.append_event(
-                "reject_not_sleeping",
-                symbol,
-                {
-                    "baseline_return_range_pct": baseline_return_range_pct,
-                    "max": self.config.max_baseline_return_range_pct,
-                },
-            )
-            return None
-        if (
-            self.config.max_baseline_close_return_range_pct is not None
-            and baseline_close_return_range_pct > self.config.max_baseline_close_return_range_pct
-        ):
-            self.artifacts.append_event(
-                "reject_not_sleeping",
-                symbol,
-                {
-                    "baseline_close_return_range_pct": baseline_close_return_range_pct,
-                    "max": self.config.max_baseline_close_return_range_pct,
-                },
-            )
-            return None
         start_quote = float(start["quote_volume"])
         start_trades = float(start["number_of_trades"])
         quote_ratio = _safe_divide(start_quote, baseline_quote)
@@ -496,6 +461,22 @@ class AnomalyMicroLiveRunner:
 
         start_open = float(start["open"])
         segment_high = float(segment["high"].max())
+        segment_low = float(segment["low"].min())
+        impulse_range = segment_high - segment_low
+        prior_whipsaw = _prior_up_down_whipsaw_to_impulse_range(baseline, impulse_range=impulse_range)
+        if (
+            self.config.max_prior_up_down_whipsaw_to_impulse_range is not None
+            and prior_whipsaw > self.config.max_prior_up_down_whipsaw_to_impulse_range
+        ):
+            self.artifacts.append_event(
+                "reject_prior_up_down_whipsaw",
+                symbol,
+                {
+                    "prior_up_down_whipsaw_to_impulse_range": prior_whipsaw,
+                    "max": self.config.max_prior_up_down_whipsaw_to_impulse_range,
+                },
+            )
+            return None
         decision = segment.iloc[-1]
         decision_close = float(decision["close"])
         price_retention = _safe_divide(decision_close - start_open, segment_high - start_open)
@@ -812,6 +793,25 @@ def _safe_divide(numerator: float, denominator: float) -> float:
         return float("nan")
     return float(numerator / denominator)
 
+
+def _prior_up_down_whipsaw_to_impulse_range(baseline: pd.DataFrame, *, impulse_range: float) -> float:
+    if baseline.empty or not math.isfinite(impulse_range) or impulse_range <= 0.0:
+        return float("nan")
+    highs = baseline["high"].astype(float).to_numpy()
+    lows = baseline["low"].astype(float).to_numpy()
+    if highs.size == 0 or lows.size == 0:
+        return float("nan")
+    high_pos = max(range(len(highs)), key=lambda pos: highs[pos] if math.isfinite(highs[pos]) else -math.inf)
+    lows_before = [float(value) for value in lows[: high_pos + 1] if math.isfinite(float(value))]
+    lows_after = [float(value) for value in lows[high_pos:] if math.isfinite(float(value))]
+    if not lows_before or not lows_after or not math.isfinite(float(highs[high_pos])):
+        return float("nan")
+    low_before_high = min(lows_before)
+    low_after_high = min(lows_after)
+    high_value = float(highs[high_pos])
+    up_leg = high_value - low_before_high
+    down_leg = high_value - low_after_high
+    return min(_safe_divide(up_leg, impulse_range), _safe_divide(down_leg, impulse_range))
 
 def _session_name(timestamp_ms: int) -> str:
     hour = datetime.fromtimestamp(timestamp_ms / 1000, UTC).hour

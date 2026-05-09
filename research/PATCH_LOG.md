@@ -4145,8 +4145,8 @@ Change:
 
 ```text
 Initial stop now uses max(previous stop, EMA20), where previous stop is the exact pre-patch structural stop.
-Anomaly candidates export baseline_return_range_pct and baseline_close_return_range_pct to reject CVX-like cases where the baseline was not sleeping but already had a large impulse up/down.
-Default anomaly/live filters reject baseline range above 12% or close-range above 8%; grid profiles inherit the same guard except profile=none.
+Anomaly candidates export prior_up_leg_to_impulse_range, prior_down_leg_to_impulse_range and prior_up_down_whipsaw_to_impulse_range to reject CVX-like cases by movement nature: a pre-entry up leg followed by a down leg comparable to the actual wake-up impulse.
+Default anomaly/live filters reject prior up-down whipsaw when the smaller leg is above 0.60 of the wake-up impulse range; grid profiles inherit the same nature guard except profile=none.
 Live shared state now uses one RLock for open positions, stop-cooldown state and open-position counts.
 Live uses an opening-symbol reservation set so two threads cannot open the same symbol or exceed max-open while an order is in flight.
 The scanner evaluates a small backfill window of recent decision candidates instead of only the latest possible decision candle, so slow full-universe rotation does not automatically miss setups.
