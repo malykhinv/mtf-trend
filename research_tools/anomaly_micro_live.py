@@ -126,6 +126,8 @@ class LivePosition:
     telegram_open_message_id: int | None = None
     remaining_amount: float = 0.0
     tp1_done: bool = False
+    current_stop_price: float = 0.0
+    realized_pnl_usdt: float = 0.0
 
 
 class TelegramDispatcher:
@@ -616,6 +618,7 @@ class AnomalyMicroLiveRunner:
                 stop_order_id=stop_order_id,
                 opened_at_utc=datetime.now(UTC).isoformat(),
                 remaining_amount=float(amount_by_risk),
+                current_stop_price=float(signal.stop_price),
             )
             with self._state_lock:
                 self._open_positions[signal.symbol] = position
@@ -649,7 +652,7 @@ class AnomalyMicroLiveRunner:
             try:
                 actual_amount = abs(self.exchange.fetch_symbol_position_amount(signal.symbol))
                 if actual_amount <= 0.0:
-                    self._finalize_position(position, reason="позиция закрыта на бирже", pnl_price=None)
+                    self._finalize_position(position, reason="позиция закрыта на бирже", pnl_price=position.current_stop_price)
                     return
                 now_ms = int(time.time() * 1000)
                 frame = self.exchange.fetch_ohlcv(
@@ -669,6 +672,7 @@ class AnomalyMicroLiveRunner:
                     close_amount = max(actual_amount * 0.5, 0.0)
                     if close_amount > 0.0:
                         self.exchange.create_market_order(signal.symbol, "sell", close_amount, reduce_only=True)
+                        position.realized_pnl_usdt += close_amount * (signal.tp1_price - signal.entry_price)
                     time.sleep(2.0)
                     actual_after_tp1 = abs(self.exchange.fetch_symbol_position_amount(signal.symbol))
                     position.tp1_done = True
@@ -684,6 +688,7 @@ class AnomalyMicroLiveRunner:
                     )
                     old_stop_order_id = position.stop_order_id
                     position.stop_order_id = str(new_stop_order.get("id", position.stop_order_id))
+                    position.current_stop_price = signal.entry_price
                     try:
                         self.exchange.cancel_order(signal.symbol, old_stop_order_id)
                     except Exception as exc:
@@ -711,6 +716,7 @@ class AnomalyMicroLiveRunner:
                         )
                         old_stop_order_id = position.stop_order_id
                         position.stop_order_id = str(new_stop_order.get("id", position.stop_order_id))
+                        position.current_stop_price = new_stop
                         try:
                             self.exchange.cancel_order(signal.symbol, old_stop_order_id)
                         except Exception as exc:
@@ -737,8 +743,9 @@ class AnomalyMicroLiveRunner:
         with self._state_lock:
             self._open_positions.pop(position.signal.symbol, None)
         exit_price = pnl_price if pnl_price is not None else position.signal.entry_price
-        pnl_pct = _safe_divide(exit_price - position.signal.entry_price, position.signal.entry_price)
-        pnl_usdt = pnl_pct * position.notional_usdt if math.isfinite(pnl_pct) else float("nan")
+        remaining_amount = position.remaining_amount if position.remaining_amount > 0.0 else position.amount
+        pnl_usdt = position.realized_pnl_usdt + remaining_amount * (exit_price - position.signal.entry_price)
+        pnl_pct = _safe_divide(pnl_usdt, position.notional_usdt)
         if reason.startswith("стоп"):
             with self._state_lock:
                 self._recent_stops.setdefault(position.signal.symbol, []).append(time.time())

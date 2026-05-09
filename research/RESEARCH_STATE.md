@@ -1131,3 +1131,10 @@ Observed live error: tight-stop sizing could request notional larger than availa
 Fix: LiveSignal serializes via asdict; live caps notional to 95% of free USDT and rejects if that cannot satisfy 12 USDT minimum.
 Operational note: any live instance started before this patch should be stopped and restarted after checking the exchange position/stop state.
 ```
+
+2026-05-09 live PnL fix:
+
+```text
+Observed Telegram closes after TP1/trailing reported 0.00 USDT because flat-position reconciliation used entry price when no explicit pnl_price was passed.
+Fix: live position tracks current_stop_price and realized TP1 PnL; final close PnL is realized_pnl + remaining_amount * (exit - entry).
+```

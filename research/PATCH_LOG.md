@@ -4186,6 +4186,28 @@ If capped notional is below the configured 12 USDT minimum, setup is rejected wi
 Ledger risk_usdt now records actual capped risk, not the target risk.
 ```
 
+---
+
+## P109 - Fix live close PnL accounting
+
+```text
+Status: APPLIED locally / compile verified
+Type: live accounting bugfix
+Trading logic changed: no
+Files: research_tools/anomaly_micro_live.py, research/*
+Base commit before patch: a9d40b95
+Patch commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Live close messages no longer report 0 PnL when the exchange position is already flat.
+Position state now stores current_stop_price and realized_pnl_usdt.
+TP1 partial close adds realized PnL; final close adds remaining amount PnL using the current stop/exit price.
+```
+
 Change:
 
 ```text
