@@ -4250,6 +4250,26 @@ Removed risk_pct/min_notional/max-balance sizing from the live command path.
 If free USDT is below the fixed position notional, setup is rejected before order placement.
 ```
 
+---
+
+## P112 - Align live selection with balanced backtest filters
+
+```text
+Status: APPLIED locally / compile pending
+Type: live/backtest parity
+Trading logic changed: live selection only
+Files: research_tools/anomaly_micro_live.py, research/*
+Base commit before patch: 1342833f
+Patch commit: UNKNOWN
+```
+
+Change:
+
+```text
+Live now applies the remaining balanced backtest caps: avg trade quote size ratio <= 7, quote ratio per abs return <= 15000, start range pct ratio <= 25, next taker-buy quote share >= 0.48 and price retention <= 0.96.
+Missing taker-buy quote share is a hard live rejection when that balanced filter is enabled.
+```
+
 Change:
 
 ```text

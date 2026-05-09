@@ -1154,3 +1154,10 @@ Observed oversized notional on tight stops; live now caps notional per remaining
 Live sizing changed from risk-based/capped to fixed 12 USDT notional per position.
 Current command argument: --position-notional-usdt, default 12.0.
 ```
+
+2026-05-09 live/backtest parity:
+
+```text
+Live selection now matches the balanced research profile much more closely by adding the missing exhaustion/flow caps.
+Remaining expected difference: live uses only closed candles available in real time and fixed 12 USDT sizing; backtest can still compare alternate entry methods.
+```

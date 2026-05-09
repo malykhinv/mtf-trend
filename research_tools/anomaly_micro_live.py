@@ -73,6 +73,11 @@ class LiveAnomalyConfig:
     min_trade_ratio_start: float = 5.0
     max_start_quote_ratio: float | None = 80.0
     max_start_trade_ratio: float | None = 40.0
+    max_start_avg_trade_quote_size_ratio: float | None = 7.0
+    max_start_quote_ratio_per_abs_return: float | None = 15_000.0
+    max_start_range_pct_ratio_to_baseline: float | None = 25.0
+    min_next_taker_buy_quote_share: float | None = 0.48
+    max_price_retention: float | None = 0.96
     min_price_retention: float = 0.70
     min_verticality_score: float = 0.25
     min_hold_count: int = 2
@@ -483,6 +488,20 @@ class AnomalyMicroLiveRunner:
         baseline_trades = float(pd.to_numeric(baseline["number_of_trades"], errors="coerce").median())
         start_quote = float(start["quote_volume"])
         start_trades = float(start["number_of_trades"])
+        start_open = float(start["open"])
+        start_close = float(start["close"])
+        start_high = float(start["high"])
+        start_low = float(start["low"])
+        start_ret = _safe_divide(start_close - start_open, start_open)
+        abs_start_ret = abs(start_ret) if math.isfinite(start_ret) else float("nan")
+        baseline_avg_trade_quote = _safe_divide(baseline_quote, baseline_trades)
+        start_avg_trade_quote = _safe_divide(start_quote, start_trades)
+        start_avg_trade_ratio = _safe_divide(start_avg_trade_quote, baseline_avg_trade_quote)
+        start_quote_ratio_per_abs_return = _safe_divide(_safe_divide(start_quote, baseline_quote), abs_start_ret)
+        baseline_range_pct = float(
+            ((baseline["high"].astype(float) - baseline["low"].astype(float)) / baseline["close"].astype(float).replace(0.0, pd.NA)).median()
+        )
+        start_range_pct_ratio = _safe_divide(_safe_divide(start_high - start_low, start_open), baseline_range_pct)
         quote_ratio = _safe_divide(start_quote, baseline_quote)
         trade_ratio = _safe_divide(start_trades, baseline_trades)
         if not math.isfinite(quote_ratio) or not math.isfinite(trade_ratio):
@@ -495,8 +514,16 @@ class AnomalyMicroLiveRunner:
         if self.config.max_start_trade_ratio is not None and trade_ratio > self.config.max_start_trade_ratio:
             self.artifacts.append_event("reject_exhausted_trade_ratio", symbol, {"trade_ratio": trade_ratio, "max": self.config.max_start_trade_ratio})
             return None
+        if self.config.max_start_avg_trade_quote_size_ratio is not None and start_avg_trade_ratio > self.config.max_start_avg_trade_quote_size_ratio:
+            self.artifacts.append_event("reject_large_print_signature", symbol, {"ratio": start_avg_trade_ratio, "max": self.config.max_start_avg_trade_quote_size_ratio})
+            return None
+        if self.config.max_start_quote_ratio_per_abs_return is not None and start_quote_ratio_per_abs_return > self.config.max_start_quote_ratio_per_abs_return:
+            self.artifacts.append_event("reject_poor_effort_per_return", symbol, {"ratio": start_quote_ratio_per_abs_return, "max": self.config.max_start_quote_ratio_per_abs_return})
+            return None
+        if self.config.max_start_range_pct_ratio_to_baseline is not None and start_range_pct_ratio > self.config.max_start_range_pct_ratio_to_baseline:
+            self.artifacts.append_event("reject_extreme_range_expansion", symbol, {"ratio": start_range_pct_ratio, "max": self.config.max_start_range_pct_ratio_to_baseline})
+            return None
 
-        start_open = float(start["open"])
         segment_high = float(segment["high"].max())
         segment_low = float(segment["low"].min())
         impulse_range = segment_high - segment_low
@@ -523,6 +550,22 @@ class AnomalyMicroLiveRunner:
         hold_count = int((segment["close"].astype(float) >= hold_threshold).sum())
         if price_retention < self.config.min_price_retention:
             return None
+        if self.config.max_price_retention is not None and price_retention > self.config.max_price_retention:
+            self.artifacts.append_event("reject_overextended_retention", symbol, {"price_retention": price_retention, "max": self.config.max_price_retention})
+            return None
+        if self.config.min_next_taker_buy_quote_share is not None:
+            if "taker_buy_quote_volume" not in frame.columns:
+                self.artifacts.append_event("reject_missing_taker_buy_share", symbol, {"required": self.config.min_next_taker_buy_quote_share})
+                return None
+            next_taker_share = float(
+                (
+                    segment.iloc[1:]["taker_buy_quote_volume"].astype(float)
+                    / segment.iloc[1:]["quote_volume"].astype(float).replace(0.0, pd.NA)
+                ).mean()
+            )
+            if next_taker_share < self.config.min_next_taker_buy_quote_share:
+                self.artifacts.append_event("reject_weak_next_taker_buy_share", symbol, {"share": next_taker_share, "min": self.config.min_next_taker_buy_quote_share})
+                return None
         if verticality_score < self.config.min_verticality_score:
             return None
         if hold_count < self.config.min_hold_count:
