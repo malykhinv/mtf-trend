@@ -1105,3 +1105,13 @@ Operational truth: REST-only, max open positions default 3, two Telegram bots, a
 Data honesty: quote_volume, number_of_trades and required OI must be present and fresh; otherwise setup is rejected, not approximated.
 Residual risk: first live slice needs exchange-level small-symbol smoke with max-cycles before unattended run; order semantics depend on Binance/CCXT STOP_MARKET support.
 ```
+
+2026-05-09 follow-up:
+
+```text
+Live/backtest stop semantics changed to max(previous structural stop, EMA20), not max(pump_bottom, EMA20).
+CVX-like no-sleep patterns are targeted by baseline range guards, not by symbol ban.
+Live shared state is protected by RLock; position threads and scanner no longer read/write open position dictionaries without synchronization.
+Scanner now checks a recent decision-candle backfill window and deduplicates seen decisions; this is required because full-universe REST rotation can inspect a symbol several minutes after the actual confirmation candle.
+Still required before real unattended use: fill env, run one-symbol max-cycles smoke, then verify Binance STOP_MARKET payload on an intentionally tiny position.
+```

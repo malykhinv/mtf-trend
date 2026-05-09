@@ -74,11 +74,14 @@ class LiveAnomalyConfig:
     min_verticality_score: float = 0.25
     min_hold_count: int = 2
     min_oi_change_pct_3x5m: float | None = 0.03
+    max_baseline_return_range_pct: float | None = 0.12
+    max_baseline_close_return_range_pct: float | None = 0.08
     risk_pct: float = 0.05
     min_notional_usdt: float = 12.0
     max_open_positions: int = 3
     inactive_batch_size: int = 20
     inactive_batch_with_active: int = 7
+    signal_scan_backfill_candles: int = 10
     scan_sleep_seconds: float = 2.0
     network_sleep_seconds: float = 30.0
     max_cycles: int | None = None
@@ -310,7 +313,10 @@ class AnomalyMicroLiveRunner:
         )
         self.telegram = TelegramDispatcher(telegram, logger=logger, cooldown_seconds=config.telegram_cooldown_seconds)
         self._open_positions: dict[str, LivePosition] = {}
+        self._opening_symbols: set[str] = set()
         self._recent_stops: dict[str, list[float]] = {}
+        self._seen_decisions: set[tuple[str, int]] = set()
+        self._state_lock = threading.RLock()
         self._inactive_cursor = 0
         self._network_degraded = False
 
@@ -336,7 +342,7 @@ class AnomalyMicroLiveRunner:
                     self._maybe_open_position(signal)
                 if cycle == 1 or cycle % 10 == 0:
                     self.logger(
-                        f"live: цикл {cycle}, проверено {len(batch)}, сигналов {len(signals)}, открыто {len(self._open_positions)}"
+                        f"live: цикл {cycle}, проверено {len(batch)}, сигналов {len(signals)}, открыто {self._open_position_count()}"
                     )
                 self._network_degraded = False
                 time.sleep(self.config.scan_sleep_seconds)
@@ -369,7 +375,8 @@ class AnomalyMicroLiveRunner:
         _ = self.exchange.fetch_usdt_free_balance()
 
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
-        active = sorted(self._open_positions)
+        with self._state_lock:
+            active = sorted(set(self._open_positions).union(self._opening_symbols))
         if active:
             inactive_size = self.config.inactive_batch_with_active
         else:
@@ -380,7 +387,9 @@ class AnomalyMicroLiveRunner:
             symbol = symbols[self._inactive_cursor % len(symbols)]
             self._inactive_cursor += 1
             attempts += 1
-            if symbol in self._open_positions or self._symbol_in_stop_cooldown(symbol):
+            with self._state_lock:
+                symbol_is_active = symbol in self._open_positions or symbol in self._opening_symbols
+            if symbol_is_active or self._symbol_in_stop_cooldown(symbol):
                 continue
             inactive.append(symbol)
         return [*active, *inactive]
@@ -388,27 +397,52 @@ class AnomalyMicroLiveRunner:
     def _scan_batch(self, symbols: list[str]) -> list[LiveSignal]:
         signals: list[LiveSignal] = []
         now_ms = int(time.time() * 1000)
-        lookback_ms = (self.config.baseline_candles + self.config.confirmation_candles + 10) * 60_000
+        lookback_ms = (
+            self.config.baseline_candles
+            + self.config.confirmation_candles
+            + self.config.signal_scan_backfill_candles
+            + 5
+        ) * 60_000
         for symbol in symbols:
             frame = self.exchange.fetch_ohlcv(symbol, Timeframe.M1, now_ms - lookback_ms, now_ms)
-            signal = self._build_signal(symbol, frame, now_ms=now_ms)
-            if signal is not None:
-                signals.append(signal)
+            signals.extend(self._build_recent_signals(symbol, frame, now_ms=now_ms))
         return signals
 
-    def _build_signal(self, symbol: str, frame: pd.DataFrame, *, now_ms: int) -> LiveSignal | None:
+    def _build_recent_signals(self, symbol: str, frame: pd.DataFrame, *, now_ms: int) -> list[LiveSignal]:
         if frame.empty or len(frame) < self.config.baseline_candles + self.config.confirmation_candles + 1:
-            return None
+            return []
         missing = [column for column in REQUIRED_FLOW_COLUMNS if column not in frame.columns]
         if missing:
             self.artifacts.append_event("reject_missing_flow_columns", symbol, {"columns": missing})
-            return None
+            return []
         frame = frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
         closed_before = now_ms - Timeframe.M1.to_milliseconds()
         frame = frame.loc[frame["timestamp"].astype(int) <= closed_before].reset_index(drop=True)
         if len(frame) < self.config.baseline_candles + self.config.confirmation_candles + 1:
-            return None
-        start_pos = len(frame) - 1 - self.config.confirmation_candles
+            return []
+        last_start_pos = len(frame) - 1 - self.config.confirmation_candles
+        first_start_pos = max(self.config.baseline_candles, last_start_pos - self.config.signal_scan_backfill_candles + 1)
+        signals: list[LiveSignal] = []
+        for start_pos in range(first_start_pos, last_start_pos + 1):
+            decision_ts = int(frame.iloc[start_pos + self.config.confirmation_candles]["timestamp"])
+            key = (symbol, decision_ts)
+            with self._state_lock:
+                if key in self._seen_decisions:
+                    continue
+                self._seen_decisions.add(key)
+            signal = self._build_signal_at_start(symbol, frame, now_ms=now_ms, start_pos=start_pos)
+            if signal is not None:
+                signals.append(signal)
+        return signals
+
+    def _build_signal_at_start(
+        self,
+        symbol: str,
+        frame: pd.DataFrame,
+        *,
+        now_ms: int,
+        start_pos: int,
+    ) -> LiveSignal | None:
         baseline = frame.iloc[start_pos - self.config.baseline_candles : start_pos]
         segment = frame.iloc[start_pos : start_pos + self.config.confirmation_candles + 1]
         if baseline.empty or segment.empty:
@@ -417,6 +451,40 @@ class AnomalyMicroLiveRunner:
         start = frame.iloc[start_pos]
         baseline_quote = float(pd.to_numeric(baseline["quote_volume"], errors="coerce").median())
         baseline_trades = float(pd.to_numeric(baseline["number_of_trades"], errors="coerce").median())
+        baseline_return_range_pct = _safe_divide(
+            float(baseline["high"].astype(float).max()) - float(baseline["low"].astype(float).min()),
+            float(start["open"]),
+        )
+        baseline_close_return_range_pct = _safe_divide(
+            float(baseline["close"].astype(float).max()) - float(baseline["close"].astype(float).min()),
+            float(start["open"]),
+        )
+        if (
+            self.config.max_baseline_return_range_pct is not None
+            and baseline_return_range_pct > self.config.max_baseline_return_range_pct
+        ):
+            self.artifacts.append_event(
+                "reject_not_sleeping",
+                symbol,
+                {
+                    "baseline_return_range_pct": baseline_return_range_pct,
+                    "max": self.config.max_baseline_return_range_pct,
+                },
+            )
+            return None
+        if (
+            self.config.max_baseline_close_return_range_pct is not None
+            and baseline_close_return_range_pct > self.config.max_baseline_close_return_range_pct
+        ):
+            self.artifacts.append_event(
+                "reject_not_sleeping",
+                symbol,
+                {
+                    "baseline_close_return_range_pct": baseline_close_return_range_pct,
+                    "max": self.config.max_baseline_close_return_range_pct,
+                },
+            )
+            return None
         start_quote = float(start["quote_volume"])
         start_trades = float(start["number_of_trades"])
         quote_ratio = _safe_divide(start_quote, baseline_quote)
@@ -442,7 +510,10 @@ class AnomalyMicroLiveRunner:
         if hold_count < self.config.min_hold_count:
             return None
 
-        stop_price = float(segment["low"].min())
+        previous_stop = float(segment["low"].min())
+        ema20 = frame["close"].astype(float).ewm(span=20, adjust=False).mean()
+        decision_ema20 = float(ema20.iloc[len(frame) - 1])
+        stop_price = max(previous_stop, decision_ema20)
         entry_price = decision_close
         risk = entry_price - stop_price
         if risk <= 0.0:
@@ -504,47 +575,64 @@ class AnomalyMicroLiveRunner:
         return _safe_divide(current - previous, previous)
 
     def _maybe_open_position(self, signal: LiveSignal) -> None:
-        if signal.symbol in self._open_positions:
-            return
-        if len(self._open_positions) >= self.config.max_open_positions:
+        reject_max_positions = False
+        with self._state_lock:
+            if signal.symbol in self._open_positions or signal.symbol in self._opening_symbols:
+                return
+            if len(self._open_positions) + len(self._opening_symbols) >= self.config.max_open_positions:
+                reject_max_positions = True
+            if self._symbol_in_stop_cooldown(signal.symbol):
+                return
+            if not reject_max_positions:
+                self._opening_symbols.add(signal.symbol)
+        if reject_max_positions:
             self.artifacts.append_event("reject_max_positions", signal.symbol, {"max": self.config.max_open_positions})
             return
-        if self._symbol_in_stop_cooldown(signal.symbol):
-            return
-        balance = self.exchange.fetch_usdt_free_balance()
-        risk_usdt = balance * self.config.risk_pct
-        risk_per_unit = signal.entry_price - signal.stop_price
-        amount_by_risk = risk_usdt / risk_per_unit
-        notional = amount_by_risk * signal.entry_price
-        if notional < self.config.min_notional_usdt:
-            amount_by_risk = self.config.min_notional_usdt / signal.entry_price
-            notional = self.config.min_notional_usdt
-        entry_order = self.exchange.create_market_order(signal.symbol, "buy", amount_by_risk)
-        entry_order_id = str(entry_order.get("id", ""))
         try:
-            stop_order = self.exchange.create_stop_market_order(signal.symbol, "sell", amount_by_risk, signal.stop_price)
+            balance = self.exchange.fetch_usdt_free_balance()
+            risk_usdt = balance * self.config.risk_pct
+            risk_per_unit = signal.entry_price - signal.stop_price
+            amount_by_risk = risk_usdt / risk_per_unit
+            notional = amount_by_risk * signal.entry_price
+            if notional < self.config.min_notional_usdt:
+                amount_by_risk = self.config.min_notional_usdt / signal.entry_price
+                notional = self.config.min_notional_usdt
+            entry_order = self.exchange.create_market_order(signal.symbol, "buy", amount_by_risk)
+            entry_order_id = str(entry_order.get("id", ""))
+            try:
+                stop_order = self.exchange.create_stop_market_order(signal.symbol, "sell", amount_by_risk, signal.stop_price)
+            except Exception:
+                self.exchange.create_market_order(signal.symbol, "sell", amount_by_risk, reduce_only=True)
+                raise
+            stop_order_id = str(stop_order.get("id", ""))
+            position = LivePosition(
+                position_id=f"{signal.symbol.replace('/', '_').replace(':', '_')}_{signal.decision_timestamp_ms}",
+                signal=signal,
+                amount=float(amount_by_risk),
+                notional_usdt=float(notional),
+                risk_usdt=float(risk_usdt),
+                entry_order_id=entry_order_id,
+                stop_order_id=stop_order_id,
+                opened_at_utc=datetime.now(UTC).isoformat(),
+                remaining_amount=float(amount_by_risk),
+            )
+            with self._state_lock:
+                self._open_positions[signal.symbol] = position
+                self._opening_symbols.discard(signal.symbol)
         except Exception:
-            self.exchange.create_market_order(signal.symbol, "sell", amount_by_risk, reduce_only=True)
+            with self._state_lock:
+                self._opening_symbols.discard(signal.symbol)
             raise
-        stop_order_id = str(stop_order.get("id", ""))
-        position = LivePosition(
-            position_id=f"{signal.symbol.replace('/', '_').replace(':', '_')}_{signal.decision_timestamp_ms}",
-            signal=signal,
-            amount=float(amount_by_risk),
-            notional_usdt=float(notional),
-            risk_usdt=float(risk_usdt),
-            entry_order_id=entry_order_id,
-            stop_order_id=stop_order_id,
-            opened_at_utc=datetime.now(UTC).isoformat(),
-            remaining_amount=float(amount_by_risk),
-        )
-        position.telegram_open_message_id = self.telegram.send_sync(
-            channel="positions",
-            text=_format_open_message(position),
-        )
-        self._open_positions[signal.symbol] = position
         self.artifacts.append_position(position)
         self.artifacts.append_event("position_opened", signal.symbol, {"position_id": position.position_id})
+        try:
+            position.telegram_open_message_id = self.telegram.send_sync(
+                channel="positions",
+                text=_format_open_message(position),
+            )
+        except Exception as exc:
+            self.artifacts.append_event("telegram_open_failed", signal.symbol, {"position_id": position.position_id, "reason": str(exc)})
+            self.logger(f"live: позиция {signal.symbol} открыта, но Telegram-вход не отправлен: {exc}")
         self.logger(f"live: открыта позиция {signal.symbol}, риск {risk_usdt:.2f} USDT, notional {notional:.2f} USDT")
         threading.Thread(
             target=self._monitor_position,
@@ -580,19 +668,25 @@ class AnomalyMicroLiveRunner:
                     close_amount = max(actual_amount * 0.5, 0.0)
                     if close_amount > 0.0:
                         self.exchange.create_market_order(signal.symbol, "sell", close_amount, reduce_only=True)
+                    time.sleep(2.0)
+                    actual_after_tp1 = abs(self.exchange.fetch_symbol_position_amount(signal.symbol))
                     position.tp1_done = True
-                    position.remaining_amount = max(actual_amount - close_amount, 0.0)
-                    try:
-                        self.exchange.cancel_order(signal.symbol, position.stop_order_id)
-                    except Exception as exc:
-                        self.artifacts.append_event("stop_cancel_failed", signal.symbol, {"reason": str(exc)})
-                    stop_order = self.exchange.create_stop_market_order(
+                    position.remaining_amount = actual_after_tp1
+                    if position.remaining_amount <= 0.0:
+                        self._finalize_position(position, reason="TP1 закрыл позицию полностью", pnl_price=signal.tp1_price)
+                        return
+                    new_stop_order = self.exchange.create_stop_market_order(
                         signal.symbol,
                         "sell",
-                        max(position.remaining_amount, 0.0),
+                        position.remaining_amount,
                         signal.entry_price,
                     )
-                    position.stop_order_id = str(stop_order.get("id", position.stop_order_id))
+                    old_stop_order_id = position.stop_order_id
+                    position.stop_order_id = str(new_stop_order.get("id", position.stop_order_id))
+                    try:
+                        self.exchange.cancel_order(signal.symbol, old_stop_order_id)
+                    except Exception as exc:
+                        self.artifacts.append_event("old_stop_cancel_failed_after_be", signal.symbol, {"reason": str(exc)})
                     last_stop_price = signal.entry_price
                     self.artifacts.append_event("tp1_and_stop_to_be", signal.symbol, {"position_id": position.position_id})
                     self.telegram.send(
@@ -608,17 +702,18 @@ class AnomalyMicroLiveRunner:
                     trail_low = float(frame.tail(5)["low"].min())
                     new_stop = max(last_stop_price, trail_low)
                     if new_stop > last_stop_price and new_stop < latest_close:
-                        try:
-                            self.exchange.cancel_order(signal.symbol, position.stop_order_id)
-                        except Exception as exc:
-                            self.artifacts.append_event("trail_cancel_failed", signal.symbol, {"reason": str(exc)})
-                        stop_order = self.exchange.create_stop_market_order(
+                        new_stop_order = self.exchange.create_stop_market_order(
                             signal.symbol,
                             "sell",
                             actual_amount,
                             new_stop,
                         )
-                        position.stop_order_id = str(stop_order.get("id", position.stop_order_id))
+                        old_stop_order_id = position.stop_order_id
+                        position.stop_order_id = str(new_stop_order.get("id", position.stop_order_id))
+                        try:
+                            self.exchange.cancel_order(signal.symbol, old_stop_order_id)
+                        except Exception as exc:
+                            self.artifacts.append_event("old_stop_cancel_failed_after_trail", signal.symbol, {"reason": str(exc)})
                         last_stop_price = new_stop
                         self.telegram.send(
                             channel="positions",
@@ -638,12 +733,14 @@ class AnomalyMicroLiveRunner:
                 time.sleep(30.0)
 
     def _finalize_position(self, position: LivePosition, *, reason: str, pnl_price: float | None) -> None:
-        self._open_positions.pop(position.signal.symbol, None)
+        with self._state_lock:
+            self._open_positions.pop(position.signal.symbol, None)
         exit_price = pnl_price if pnl_price is not None else position.signal.entry_price
         pnl_pct = _safe_divide(exit_price - position.signal.entry_price, position.signal.entry_price)
         pnl_usdt = pnl_pct * position.notional_usdt if math.isfinite(pnl_pct) else float("nan")
         if reason.startswith("стоп"):
-            self._recent_stops.setdefault(position.signal.symbol, []).append(time.time())
+            with self._state_lock:
+                self._recent_stops.setdefault(position.signal.symbol, []).append(time.time())
         self.artifacts.append_event(
             "position_closed",
             position.signal.symbol,
@@ -668,9 +765,14 @@ class AnomalyMicroLiveRunner:
 
     def _symbol_in_stop_cooldown(self, symbol: str) -> bool:
         cutoff = time.time() - self.config.stop_cooldown_hours * 3600.0
-        stops = [ts for ts in self._recent_stops.get(symbol, []) if ts >= cutoff]
-        self._recent_stops[symbol] = stops
+        with self._state_lock:
+            stops = [ts for ts in self._recent_stops.get(symbol, []) if ts >= cutoff]
+            self._recent_stops[symbol] = stops
         return len(stops) >= self.config.stop_limit_per_symbol
+
+    def _open_position_count(self) -> int:
+        with self._state_lock:
+            return len(self._open_positions)
 
 
 def build_telegram_config_from_env() -> TelegramConfig:

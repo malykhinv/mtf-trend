@@ -347,6 +347,16 @@ def _effort_and_sleep_metrics(
     baseline_range_pct = float((range_series / close.replace(0.0, np.nan)).iloc[baseline_slice].median())
     baseline_zero_range_share = float(baseline_ranges.le(0.0).mean())
     start_range_pct = _safe_divide(start_range, start_open)
+    baseline_high = float(high.iloc[baseline_slice].max())
+    baseline_low = float(low.iloc[baseline_slice].min())
+    baseline_close_high = float(close.iloc[baseline_slice].max())
+    baseline_close_low = float(close.iloc[baseline_slice].min())
+    baseline_return_range_pct = _safe_divide(baseline_high - baseline_low, start_open)
+    baseline_close_return_range_pct = _safe_divide(baseline_close_high - baseline_close_low, start_open)
+    baseline_return_from_first_close_pct = _safe_divide(
+        float(close.iloc[baseline_slice].iloc[-1]) - float(close.iloc[baseline_slice].iloc[0]),
+        float(close.iloc[baseline_slice].iloc[0]),
+    )
     decision_ret = _safe_divide(float(close.iloc[decision_idx]) - start_open, start_open)
     impulse_range = impulse_high - impulse_low
     post_start_low = float(low.iloc[idx + 1 : decision_idx + 1].min()) if decision_idx > idx else float("nan")
@@ -360,6 +370,9 @@ def _effort_and_sleep_metrics(
         "baseline_range_median": baseline_range,
         "baseline_range_pct_median": baseline_range_pct,
         "baseline_zero_range_share": baseline_zero_range_share,
+        "baseline_return_range_pct": baseline_return_range_pct,
+        "baseline_close_return_range_pct": baseline_close_return_range_pct,
+        "baseline_return_from_first_close_pct": baseline_return_from_first_close_pct,
         "start_range_ratio_to_baseline": _safe_divide(start_range, baseline_range),
         "start_range_pct": start_range_pct,
         "start_range_pct_ratio_to_baseline": _safe_divide(start_range_pct, baseline_range_pct),
@@ -415,6 +428,7 @@ def collect_symbol_anomaly_rows(
     high = frame["high"].astype(float)
     low = frame["low"].astype(float)
     close = frame["close"].astype(float)
+    ema20 = close.ewm(span=20, adjust=False).mean()
     baseline_quote = quote_volume.shift(1).rolling(config.baseline_candles, min_periods=config.baseline_candles // 2).median()
     baseline_trades = trade_count.shift(1).rolling(config.baseline_candles, min_periods=config.baseline_candles // 2).median()
     quote_ratio = quote_volume / baseline_quote.replace(0.0, np.nan)
@@ -514,6 +528,7 @@ def collect_symbol_anomaly_rows(
                 "start_low": float(low.iloc[idx]),
                 "start_close": float(close.iloc[idx]),
                 "decision_close": decision_close,
+                "decision_ema20": float(ema20.iloc[decision_idx]),
                 "start_quote_volume": start_quote,
                 "start_trade_count": start_trades,
                 "baseline_quote_volume_median": baseline_quote_value,

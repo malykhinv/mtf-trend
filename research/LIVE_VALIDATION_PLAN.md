@@ -14,6 +14,8 @@ It writes live_events.csv and live_positions.csv under results/live_anomaly_runs
 It requires --confirm-real-orders plus filled Binance and Telegram env values.
 It does not substitute missing flow/OI data; missing data is a reject reason.
 Protective stop placement is mandatory: if stop placement fails after entry, the runner immediately sends a reduce-only market close and raises.
+Shared state is protected by one simple RLock; order placement and network calls are not run while holding that lock except for final in-memory state mutation.
+Initial live stop is max(previous structural stop, EMA20), matching the research backtest after P106.
 ```
 
 ---

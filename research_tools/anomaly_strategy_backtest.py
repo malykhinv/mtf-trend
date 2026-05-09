@@ -105,6 +105,9 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "start_range_pct",
     "start_range_pct_ratio_to_baseline",
     "baseline_zero_range_share",
+    "baseline_return_range_pct",
+    "baseline_close_return_range_pct",
+    "baseline_return_from_first_close_pct",
     "start_quote_per_abs_return",
     "start_trades_per_abs_return",
     "start_quote_ratio_per_abs_return",
@@ -161,6 +164,8 @@ class AnomalyBacktestConfig:
     max_start_avg_trade_quote_size_ratio: float | None = None
     max_start_quote_ratio_per_abs_return: float | None = None
     max_start_range_pct_ratio_to_baseline: float | None = None
+    max_baseline_return_range_pct: float | None = 0.12
+    max_baseline_close_return_range_pct: float | None = 0.08
     min_next_taker_buy_quote_share: float | None = None
     max_initial_risk_pct: float = 0.16
     entry_method: str = "market"
@@ -273,6 +278,7 @@ def build_anomaly_signals(
         "decision_box_low",
         "decision_box_high",
         "decision_box_range",
+        "decision_ema20",
         "timestamp_ms",
         "decision_timestamp_ms",
     }
@@ -286,6 +292,8 @@ def build_anomaly_signals(
         "max_start_avg_trade_quote_size_ratio": "start_avg_trade_quote_size_ratio",
         "max_start_quote_ratio_per_abs_return": "start_quote_ratio_per_abs_return",
         "max_start_range_pct_ratio_to_baseline": "start_range_pct_ratio_to_baseline",
+        "max_baseline_return_range_pct": "baseline_return_range_pct",
+        "max_baseline_close_return_range_pct": "baseline_close_return_range_pct",
         "min_next_taker_buy_quote_share": "next_n_taker_buy_quote_share_mean",
         "max_price_retention": "price_retention_next_n",
     }
@@ -300,7 +308,9 @@ def build_anomaly_signals(
     signals["entry_price"] = signals["decision_close"].astype(float)
     box_low = signals["decision_box_low"].astype(float)
     box_range = signals["decision_box_range"].astype(float).clip(lower=0.0)
-    signals["initial_stop_at_decision"] = box_low - config.stop_buffer_range_fraction * box_range
+    decision_ema20 = signals["decision_ema20"].astype(float)
+    previous_stop = box_low - config.stop_buffer_range_fraction * box_range
+    signals["initial_stop_at_decision"] = pd.concat([previous_stop, decision_ema20], axis=1).max(axis=1)
     signals["initial_risk_pct_at_decision"] = (
         (signals["entry_price"] - signals["initial_stop_at_decision"]) / signals["entry_price"]
     )
@@ -331,6 +341,12 @@ def build_anomaly_signals(
         mask &= signals["start_range_pct_ratio_to_baseline"].astype(float).le(
             config.max_start_range_pct_ratio_to_baseline
         )
+    if config.max_baseline_return_range_pct is not None:
+        mask &= signals["baseline_return_range_pct"].astype(float).le(config.max_baseline_return_range_pct)
+    if config.max_baseline_close_return_range_pct is not None:
+        mask &= signals["baseline_close_return_range_pct"].astype(float).le(
+            config.max_baseline_close_return_range_pct
+        )
     if config.min_next_taker_buy_quote_share is not None:
         mask &= signals["next_n_taker_buy_quote_share_mean"].astype(float).ge(
             config.min_next_taker_buy_quote_share
@@ -360,7 +376,10 @@ def _resolve_signal_stop(
     box_low = float(box["low"].min())
     box_high = float(box["high"].max())
     box_range = max(box_high - box_low, 0.0)
-    initial_stop = box_low - config.stop_buffer_range_fraction * box_range
+    previous_stop = box_low - config.stop_buffer_range_fraction * box_range
+    entry_row = frame.loc[frame["timestamp"].eq(decision_timestamp_ms)]
+    entry_ema20 = _safe_float(entry_row["ema20"].iloc[0]) if not entry_row.empty and "ema20" in entry_row.columns else None
+    initial_stop = max(previous_stop, entry_ema20) if entry_ema20 is not None else previous_stop
     initial_risk = entry_price - initial_stop
     return initial_stop, initial_risk, box_range
 
@@ -382,7 +401,6 @@ def _resolve_signal_entry(
     box_low = float(box["low"].min())
     box_high = float(box["high"].max())
     box_range = max(box_high - box_low, 0.0)
-    initial_stop = box_low - config.stop_buffer_range_fraction * box_range
 
     if config.entry_method == "market":
         entry_ts = decision_timestamp_ms
@@ -416,6 +434,9 @@ def _resolve_signal_entry(
         else:
             raise ValueError(f"unsupported entry_method: {config.entry_method}")
 
+    entry_row = frame.loc[frame["timestamp"].eq(entry_ts)]
+    entry_ema20 = _safe_float(entry_row["ema20"].iloc[0]) if not entry_row.empty and "ema20" in entry_row.columns else None
+    initial_stop = max(previous_stop, entry_ema20) if entry_ema20 is not None else previous_stop
     initial_risk = entry_price - initial_stop
     return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high
 
@@ -740,6 +761,8 @@ EXHAUSTION_PROFILES: dict[str, dict[str, float | None]] = {
         "max_start_avg_trade_quote_size_ratio": None,
         "max_start_quote_ratio_per_abs_return": None,
         "max_start_range_pct_ratio_to_baseline": None,
+        "max_baseline_return_range_pct": None,
+        "max_baseline_close_return_range_pct": None,
         "min_next_taker_buy_quote_share": None,
         "max_price_retention": None,
     },
@@ -749,6 +772,8 @@ EXHAUSTION_PROFILES: dict[str, dict[str, float | None]] = {
         "max_start_avg_trade_quote_size_ratio": 10.0,
         "max_start_quote_ratio_per_abs_return": 30_000.0,
         "max_start_range_pct_ratio_to_baseline": 35.0,
+        "max_baseline_return_range_pct": 0.12,
+        "max_baseline_close_return_range_pct": 0.08,
         "min_next_taker_buy_quote_share": 0.46,
         "max_price_retention": 0.98,
     },
@@ -758,6 +783,8 @@ EXHAUSTION_PROFILES: dict[str, dict[str, float | None]] = {
         "max_start_avg_trade_quote_size_ratio": 7.0,
         "max_start_quote_ratio_per_abs_return": 15_000.0,
         "max_start_range_pct_ratio_to_baseline": 25.0,
+        "max_baseline_return_range_pct": 0.12,
+        "max_baseline_close_return_range_pct": 0.08,
         "min_next_taker_buy_quote_share": 0.48,
         "max_price_retention": 0.96,
     },
@@ -767,6 +794,8 @@ EXHAUSTION_PROFILES: dict[str, dict[str, float | None]] = {
         "max_start_avg_trade_quote_size_ratio": 5.0,
         "max_start_quote_ratio_per_abs_return": 8_000.0,
         "max_start_range_pct_ratio_to_baseline": 18.0,
+        "max_baseline_return_range_pct": 0.10,
+        "max_baseline_close_return_range_pct": 0.06,
         "min_next_taker_buy_quote_share": 0.50,
         "max_price_retention": 0.94,
     },
@@ -1798,6 +1827,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-start-avg-trade-quote-size-ratio", type=float, default=None)
     parser.add_argument("--max-start-quote-ratio-per-abs-return", type=float, default=None)
     parser.add_argument("--max-start-range-pct-ratio-to-baseline", type=float, default=None)
+    parser.add_argument("--max-baseline-return-range-pct", type=float, default=0.12)
+    parser.add_argument("--max-baseline-close-return-range-pct", type=float, default=0.08)
     parser.add_argument("--min-next-taker-buy-quote-share", type=float, default=None)
     parser.add_argument("--max-initial-risk-pct", type=float, default=0.16)
     parser.add_argument("--entry-method", choices=["market", "break_box_high", "pullback_box_fraction"], default="market")
@@ -1847,6 +1878,8 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
         max_start_avg_trade_quote_size_ratio=args.max_start_avg_trade_quote_size_ratio,
         max_start_quote_ratio_per_abs_return=args.max_start_quote_ratio_per_abs_return,
         max_start_range_pct_ratio_to_baseline=args.max_start_range_pct_ratio_to_baseline,
+        max_baseline_return_range_pct=args.max_baseline_return_range_pct,
+        max_baseline_close_return_range_pct=args.max_baseline_close_return_range_pct,
         min_next_taker_buy_quote_share=args.min_next_taker_buy_quote_share,
         max_initial_risk_pct=args.max_initial_risk_pct,
         entry_method=args.entry_method,

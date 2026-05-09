@@ -4126,3 +4126,30 @@ No proxy/fallback is used for quote_volume, number_of_trades or OI: missing/stal
 Open-position Telegram is sent synchronously to capture message_id; TP1, stop moves and close messages reply to the open message.
 If protective stop placement fails after entry, the runner immediately sends a reduce-only market close and raises the error.
 ```
+
+---
+
+## P106 - Tighten live stop, sleep filter and shared-state locking
+
+```text
+Status: APPLIED locally / compile pending
+Type: live safety / anomaly filtering / backtest parity
+Trading logic changed: anomaly wake-up research/live only
+Files: research_tools/anomaly_micro_live.py, research_tools/anomaly_strategy_backtest.py, research_tools/anomaly_continuation_lab.py, cli/*, research/*
+Base commit before patch: ca9b99cd
+Patch commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Initial stop now uses max(previous stop, EMA20), where previous stop is the exact pre-patch structural stop.
+Anomaly candidates export baseline_return_range_pct and baseline_close_return_range_pct to reject CVX-like cases where the baseline was not sleeping but already had a large impulse up/down.
+Default anomaly/live filters reject baseline range above 12% or close-range above 8%; grid profiles inherit the same guard except profile=none.
+Live shared state now uses one RLock for open positions, stop-cooldown state and open-position counts.
+Live uses an opening-symbol reservation set so two threads cannot open the same symbol or exceed max-open while an order is in flight.
+The scanner evaluates a small backfill window of recent decision candidates instead of only the latest possible decision candle, so slow full-universe rotation does not automatically miss setups.
+After TP1 partial close, live re-reads the actual exchange position amount before replacing the stop.
+When replacing stops after TP1/trailing, the new reduce-only stop is placed before attempting to cancel the old one; failed old-stop cancel is explicit artifact noise, not hidden.
+```
