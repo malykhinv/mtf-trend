@@ -230,6 +230,26 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--grid-exhaustion-profiles", default="none")
     anomaly_lab.add_argument("--grid-exit-rules", default="structural_trail")
 
+    anomaly_live = subparsers.add_parser(
+        "run-anomaly-live",
+        help="Run strict REST-only micro-live anomaly wake-up loop",
+    )
+    anomaly_live.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT:USDT")
+    anomaly_live.add_argument("--confirm-real-orders", action="store_true", help="Required guard for real orders")
+    anomaly_live.add_argument("--max-cycles", type=_positive_int_for("--max-cycles"), default=None)
+    anomaly_live.add_argument("--baseline-candles", type=_positive_int_for("--baseline-candles"), default=60)
+    anomaly_live.add_argument("--confirmation-candles", type=_positive_int_for("--confirmation-candles"), default=4)
+    anomaly_live.add_argument("--min-quote-ratio-start", type=float, default=5.0)
+    anomaly_live.add_argument("--min-trade-ratio-start", type=float, default=5.0)
+    anomaly_live.add_argument("--min-price-retention", type=float, default=0.70)
+    anomaly_live.add_argument("--min-verticality-score", type=float, default=0.25)
+    anomaly_live.add_argument("--min-hold-count", type=int, default=2)
+    anomaly_live.add_argument("--min-oi-change-pct-3x5m", type=float, default=0.03)
+    anomaly_live.add_argument("--risk-pct", type=float, default=0.05)
+    anomaly_live.add_argument("--min-notional-usdt", type=float, default=12.0)
+    anomaly_live.add_argument("--max-open-positions", type=_positive_int_for("--max-open-positions"), default=3)
+    anomaly_live.add_argument("--scan-sleep-seconds", type=float, default=2.0)
+
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     quality.add_argument("--output", default=None, help=f"Path to quality report (.json or .csv). Default: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
@@ -246,6 +266,7 @@ def resolve_handler(command_name: str) -> Handler:
         "plot-backtest": commands.plot_backtest,
         "pno-stage": commands.run_pno_stage,
         "run-anomaly-lab": commands.run_anomaly_lab,
+        "run-anomaly-live": commands.run_anomaly_live,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
     }

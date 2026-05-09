@@ -4442,6 +4442,54 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
     return _run_with_logging("run-anomaly-lab", config, _run)
 
 
+def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
+    """Запускает строгий REST-only micro-live цикл anomaly wake-up."""
+
+    def _run() -> int:
+        from research_tools.anomaly_micro_live import (
+            AnomalyMicroLiveRunner,
+            LiveAnomalyConfig,
+            LiveStartupError,
+            build_telegram_config_from_env,
+        )
+
+        live_config = LiveAnomalyConfig(
+            results_dir=config.backtest.results_dir,
+            symbols=tuple(getattr(args, "symbols", None) or ()),
+            confirm_real_orders=bool(getattr(args, "confirm_real_orders", False)),
+            baseline_candles=int(getattr(args, "baseline_candles", 60)),
+            confirmation_candles=int(getattr(args, "confirmation_candles", 4)),
+            min_quote_ratio_start=float(getattr(args, "min_quote_ratio_start", 5.0)),
+            min_trade_ratio_start=float(getattr(args, "min_trade_ratio_start", 5.0)),
+            min_price_retention=float(getattr(args, "min_price_retention", 0.70)),
+            min_verticality_score=float(getattr(args, "min_verticality_score", 0.25)),
+            min_hold_count=int(getattr(args, "min_hold_count", 2)),
+            min_oi_change_pct_3x5m=(
+                None
+                if getattr(args, "min_oi_change_pct_3x5m", None) is None
+                else float(args.min_oi_change_pct_3x5m)
+            ),
+            risk_pct=float(getattr(args, "risk_pct", 0.05)),
+            min_notional_usdt=float(getattr(args, "min_notional_usdt", 12.0)),
+            max_open_positions=int(getattr(args, "max_open_positions", 3)),
+            scan_sleep_seconds=float(getattr(args, "scan_sleep_seconds", 2.0)),
+            max_cycles=getattr(args, "max_cycles", None),
+        )
+        _, exchange_client, _ = _build_fetch_stack(config)
+        try:
+            runner = AnomalyMicroLiveRunner(
+                config=live_config,
+                telegram=build_telegram_config_from_env(),
+                exchange_client=exchange_client,
+            )
+            return runner.run()
+        except LiveStartupError as exc:
+            print(f"live: запуск остановлен: {exc}", flush=True)
+            return 2
+
+    return _run_with_logging("run-anomaly-live", config, _run)
+
+
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:
     """Проверяет качество и целостность данных."""
     return _run_with_logging("check-quality", config, lambda: _check_quality_inner(config, args))

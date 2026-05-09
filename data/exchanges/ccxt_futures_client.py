@@ -241,6 +241,124 @@ class CcxtFuturesClient(ExchangeClient):
         self._ensure_markets_loaded()
         return str(self._client.market_id(symbol))
 
+    def list_usdt_swap_symbols(self) -> list[str]:
+        """Returns active USDT-settled swap symbols from the loaded exchange markets."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        markets = getattr(raw_client, "markets", {}) or {}
+        symbols: list[str] = []
+        for market in markets.values():
+            if not isinstance(market, dict):
+                continue
+            if not bool(market.get("active", True)):
+                continue
+            if not bool(market.get("swap", False)):
+                continue
+            if str(market.get("quote", "")).upper() != "USDT":
+                continue
+            symbol = market.get("symbol")
+            if isinstance(symbol, str) and symbol:
+                symbols.append(symbol)
+        return sorted(set(symbols))
+
+    def fetch_usdt_free_balance(self) -> float:
+        """Returns free USDT futures balance. Missing balance is a hard data error."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        payload = self._retry_exchange_call(
+            operation="ccxt_fetch_balance",
+            symbol="USDT",
+            endpoint="fetch_balance",
+            call=raw_client.fetch_balance,
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("fetch_balance returned invalid payload")
+        free = payload.get("free")
+        if not isinstance(free, dict) or "USDT" not in free:
+            raise RuntimeError("fetch_balance has no free USDT value")
+        return float(free["USDT"])
+
+    def create_market_order(self, symbol: str, side: str, amount: float, *, reduce_only: bool = False) -> dict[str, object]:
+        """Places a real REST market order through CCXT."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        precise_amount = raw_client.amount_to_precision(symbol, amount)
+        payload = self._retry_exchange_call(
+            operation="ccxt_create_market_order",
+            symbol=symbol,
+            endpoint="create_order",
+            call=raw_client.create_order,
+            args=(symbol, "market", side, precise_amount),
+            params={"reduceOnly": reduce_only},
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("create_order returned invalid payload")
+        return dict(payload)
+
+    def create_stop_market_order(self, symbol: str, side: str, amount: float, stop_price: float) -> dict[str, object]:
+        """Places a reduce-only STOP_MARKET order. If this fails, caller must close exposure immediately."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        precise_amount = raw_client.amount_to_precision(symbol, amount)
+        precise_stop = raw_client.price_to_precision(symbol, stop_price)
+        payload = self._retry_exchange_call(
+            operation="ccxt_create_stop_market_order",
+            symbol=symbol,
+            endpoint="create_order",
+            call=raw_client.create_order,
+            args=(symbol, "STOP_MARKET", side, precise_amount),
+            params={"stopPrice": precise_stop, "reduceOnly": True, "workingType": "MARK_PRICE"},
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("create_order returned invalid stop payload")
+        return dict(payload)
+
+    def cancel_order(self, symbol: str, order_id: str) -> dict[str, object]:
+        """Cancels an exchange order by id."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        payload = self._retry_exchange_call(
+            operation="ccxt_cancel_order",
+            symbol=symbol,
+            endpoint="cancel_order",
+            call=raw_client.cancel_order,
+            args=(order_id, symbol),
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("cancel_order returned invalid payload")
+        return dict(payload)
+
+    def fetch_symbol_position_amount(self, symbol: str) -> float:
+        """Returns signed contract amount for a symbol. Missing position means zero."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        payload = self._retry_exchange_call(
+            operation="ccxt_fetch_positions",
+            symbol=symbol,
+            endpoint="fetch_positions",
+            call=raw_client.fetch_positions,
+            args=([symbol],),
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError("fetch_positions returned invalid payload")
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("symbol", "")) != symbol:
+                continue
+            contracts = row.get("contracts", row.get("contractSize", 0.0))
+            side = str(row.get("side", "")).lower()
+            amount = float(contracts or 0.0)
+            if side == "short":
+                return -abs(amount)
+            if side == "long":
+                return abs(amount)
+            info = row.get("info")
+            if isinstance(info, dict) and "positionAmt" in info:
+                return float(info["positionAmt"])
+            return amount
+        return 0.0
+
     def fetch_binance_agg_trades(
         self,
         *,

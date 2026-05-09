@@ -1093,3 +1093,15 @@ P103 changes the last panel to quote_volume / number_of_trades per candle, adds 
 On the current 31-trade best config, EMA20 exits were worse by winrate/median than structural_trail; treat them as grid hypotheses, not default exits.
 ```
 
+---
+
+## 2026-05-09 Live Micro Validation Update
+
+```text
+Live validation moved from plan to first strict implementation slice.
+Command: run-anomaly-live.
+Mode: real micro-live only with explicit --confirm-real-orders guard; no paper fallback.
+Operational truth: REST-only, max open positions default 3, two Telegram bots, artifacts under results/live_anomaly_runs.
+Data honesty: quote_volume, number_of_trades and required OI must be present and fresh; otherwise setup is rejected, not approximated.
+Residual risk: first live slice needs exchange-level small-symbol smoke with max-cycles before unattended run; order semantics depend on Binance/CCXT STOP_MARKET support.
+```

@@ -1,10 +1,20 @@
 # Live Validation Plan: Anomaly Wake-Up Micro-Live
 
-Status: PROPOSED  
+Status: IMPLEMENTATION STARTED
 Date: 2026-05-09  
 Branch: codex/pno-anomaly-continuation-lab  
 Mode: micro-live first, not paper-first  
 Purpose: live validation with real micro fills, full audit trail and strict safety.
+
+Implementation note 2026-05-09:
+
+```text
+First strict REST-only implementation is run-anomaly-live.
+It writes live_events.csv and live_positions.csv under results/live_anomaly_runs/<timestamp>.
+It requires --confirm-real-orders plus filled Binance and Telegram env values.
+It does not substitute missing flow/OI data; missing data is a reject reason.
+Protective stop placement is mandatory: if stop placement fails after entry, the runner immediately sends a reduce-only market close and raises.
+```
 
 ---
 

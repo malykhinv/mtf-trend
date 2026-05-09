@@ -4099,3 +4099,30 @@ The plan covers scan/watch/position modes, active/inactive symbol queue, rate-li
 Updated after review to micro-live first, with OI freshness as latest value within now-5m, canonical live_positions.csv, separate live artifact folders, session reporting, per-position workers, Telegram cooldowns, per-symbol stop cooldowns, non-blocking order/position/TG/chart queues and quiet network-degraded recovery.
 Second review update fixes max open positions at 3, transport at REST-only, and two Telegram bots: events bot for watch/errors and positions bot for entry/exit/stop moves. Related messages must be sent as replies to the parent Telegram message and message ids must be persisted.
 ```
+
+---
+
+## P105 - Add strict anomaly micro-live runner
+
+```text
+Status: APPLIED locally / compile pending
+Type: live execution / artifacts / Telegram
+Trading logic changed: anomaly wake-up micro-live only
+Files: .env, data/exchanges/ccxt_futures_client.py, research_tools/anomaly_micro_live.py, cli/*, research/*
+Base commit before patch: 5c46fc16
+Patch commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Added run-anomaly-live as a strict REST-only micro-live loop.
+Startup fails unless --confirm-real-orders is passed and Binance + two Telegram bot env variables are filled.
+Added env placeholders for TELEGRAM_EVENTS_BOT_TOKEN, TELEGRAM_EVENTS_CHAT_ID, TELEGRAM_POSITIONS_BOT_TOKEN and TELEGRAM_POSITIONS_CHAT_ID.
+Live artifacts are written under results/live_anomaly_runs/<timestamp>/ with live_events.csv and canonical live_positions.csv rows for opens and closes.
+Exchange access uses explicit CcxtFuturesClient methods for symbols, USDT balance, market orders, reduce-only STOP_MARKET, cancel order and position amount reconciliation.
+No proxy/fallback is used for quote_volume, number_of_trades or OI: missing/stale data rejects the setup with an explicit event.
+Open-position Telegram is sent synchronously to capture message_id; TP1, stop moves and close messages reply to the open message.
+If protective stop placement fails after entry, the runner immediately sends a reduce-only market close and raises the error.
+```
