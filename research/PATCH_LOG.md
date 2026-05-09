@@ -4229,6 +4229,27 @@ Position notional cap is divided by remaining open-position slots, so one tight-
 Close flow renders a compact PNG chart and sends it to Telegram as a reply to the opening message.
 ```
 
+---
+
+## P111 - Fixed 12 USDT live position sizing
+
+```text
+Status: APPLIED locally / compile pending
+Type: live sizing
+Trading logic changed: live sizing only
+Files: research_tools/anomaly_micro_live.py, cli/*, research/*
+Base commit before patch: 864f2e38
+Patch commit: UNKNOWN
+```
+
+Change:
+
+```text
+Live entries now use fixed notional sizing: default position_notional_usdt=12.
+Removed risk_pct/min_notional/max-balance sizing from the live command path.
+If free USDT is below the fixed position notional, setup is rejected before order placement.
+```
+
 Change:
 
 ```text

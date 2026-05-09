@@ -4479,8 +4479,7 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                 if getattr(args, "max_prior_up_down_whipsaw_to_impulse_range", None) is None
                 else float(args.max_prior_up_down_whipsaw_to_impulse_range)
             ),
-            risk_pct=float(getattr(args, "risk_pct", 0.05)),
-            min_notional_usdt=float(getattr(args, "min_notional_usdt", 12.0)),
+            position_notional_usdt=float(getattr(args, "position_notional_usdt", 12.0)),
             max_open_positions=int(getattr(args, "max_open_positions", 3)),
             scan_sleep_seconds=float(getattr(args, "scan_sleep_seconds", 2.0)),
             max_cycles=getattr(args, "max_cycles", None),

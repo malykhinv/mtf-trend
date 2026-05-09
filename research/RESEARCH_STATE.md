@@ -1147,3 +1147,10 @@ Fix: live defaults to max_start_quote_ratio=80 and max_start_trade_ratio=40.
 Observed no Telegram charts; close handler now renders and sends a compact chart PNG.
 Observed oversized notional on tight stops; live now caps notional per remaining position slot.
 ```
+
+2026-05-09 fixed sizing update:
+
+```text
+Live sizing changed from risk-based/capped to fixed 12 USDT notional per position.
+Current command argument: --position-notional-usdt, default 12.0.
+```

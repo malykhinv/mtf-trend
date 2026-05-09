@@ -78,9 +78,7 @@ class LiveAnomalyConfig:
     min_hold_count: int = 2
     min_oi_change_pct_3x5m: float | None = 0.03
     max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.60
-    risk_pct: float = 0.05
-    min_notional_usdt: float = 12.0
-    max_position_notional_to_balance: float = 0.95
+    position_notional_usdt: float = 12.0
     max_open_positions: int = 3
     inactive_batch_size: int = 20
     inactive_batch_with_active: int = 7
@@ -615,29 +613,18 @@ class AnomalyMicroLiveRunner:
                 with self._state_lock:
                     self._opening_symbols.discard(signal.symbol)
                 return
-            target_risk_usdt = balance * self.config.risk_pct
-            risk_per_unit = signal.entry_price - signal.stop_price
-            amount_by_risk = target_risk_usdt / risk_per_unit
-            notional = amount_by_risk * signal.entry_price
-            with self._state_lock:
-                used_slots = len(self._open_positions) + len(self._opening_symbols)
-            remaining_slots = max(self.config.max_open_positions - used_slots + 1, 1)
-            max_notional = balance * self.config.max_position_notional_to_balance / remaining_slots
-            if max_notional < self.config.min_notional_usdt:
+            notional = self.config.position_notional_usdt
+            if balance < notional:
                 self.artifacts.append_event(
-                    "reject_insufficient_margin_for_min_notional",
+                    "reject_insufficient_margin_for_fixed_notional",
                     signal.symbol,
-                    {"free_usdt": balance, "max_notional": max_notional, "min_notional": self.config.min_notional_usdt},
+                    {"free_usdt": balance, "position_notional": notional},
                 )
                 with self._state_lock:
                     self._opening_symbols.discard(signal.symbol)
                 return
-            if notional > max_notional:
-                amount_by_risk = max_notional / signal.entry_price
-                notional = max_notional
-            elif notional < self.config.min_notional_usdt:
-                amount_by_risk = self.config.min_notional_usdt / signal.entry_price
-                notional = self.config.min_notional_usdt
+            risk_per_unit = signal.entry_price - signal.stop_price
+            amount_by_risk = notional / signal.entry_price
             actual_risk_usdt = amount_by_risk * risk_per_unit
             entry_order = self.exchange.create_market_order(signal.symbol, "buy", amount_by_risk)
             entry_order_id = str(entry_order.get("id", ""))

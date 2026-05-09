@@ -247,8 +247,7 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--min-hold-count", type=int, default=2)
     anomaly_live.add_argument("--min-oi-change-pct-3x5m", type=float, default=0.03)
     anomaly_live.add_argument("--max-prior-up-down-whipsaw-to-impulse-range", type=float, default=0.60)
-    anomaly_live.add_argument("--risk-pct", type=float, default=0.05)
-    anomaly_live.add_argument("--min-notional-usdt", type=float, default=12.0)
+    anomaly_live.add_argument("--position-notional-usdt", type=float, default=12.0)
     anomaly_live.add_argument("--max-open-positions", type=_positive_int_for("--max-open-positions"), default=3)
     anomaly_live.add_argument("--scan-sleep-seconds", type=float, default=2.0)
 
