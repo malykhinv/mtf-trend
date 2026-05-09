@@ -1713,3 +1713,26 @@ Run run-anomaly-live on a tiny symbol list and inspect live_events.csv.
 Expected invalid data behavior: missing/stale/invalid OI becomes reject_oi with oi_status; invalid taker-buy confirmation rows become reject_invalid_taker_buy_share; invalid ratio/retention/verticality metrics become explicit category_rejected reasons.
 No setup with non-finite required metrics should reach category_selected or position_opened.
 ```
+
+---
+
+## E047 - Planned live guardrail smoke
+
+```text
+Status: PLANNED
+Patch: P115 proposed / compile + synthetic smoke verified locally / commit UNKNOWN
+Date: 2026-05-09
+```
+
+Goal:
+
+```text
+Verify that live cannot place orders or emit malformed artifacts when non-signal guardrails return invalid data.
+```
+
+Checks:
+
+```text
+Run run-anomaly-live with a tiny symbol set in a controlled environment and inspect live_events.csv.
+Expected: invalid config fails startup; invalid free balance writes reject_invalid_free_balance and places no orders; missing OHLCV price/flow columns write explicit reject events; details_json parses as strict JSON with no NaN literals.
+```

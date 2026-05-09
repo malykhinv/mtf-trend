@@ -778,3 +778,12 @@ Stop-move Telegram updates should edit the first stop message; edit/send failure
 P113 category parity still needed a hard NaN audit.
 P114 rule: if a live filter is enabled, its metric must be finite and sourced from the expected live payload. Non-finite metric values reject with explicit live_events reasons; no proxy, no skip-to-pass, no replacement Telegram spam.
 ```
+
+---
+
+## 2026-05-09 balance/config/artifact hardening
+
+```text
+Live validation must include non-signal guardrails too: config thresholds, free balance and artifact JSON.
+NaN/inf config values are startup errors. NaN/invalid free balance rejects before order placement. Event artifacts must remain strict JSON; non-finite event payloads are integrity errors, not silently written as NaN.
+```
