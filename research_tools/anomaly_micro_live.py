@@ -24,6 +24,7 @@ from domain.enums.timeframe import Timeframe
 from research_tools.anomaly_continuation_lab import compute_start_verticality_metrics
 
 
+REQUIRED_PRICE_COLUMNS = ("timestamp", "open", "high", "low", "close")
 REQUIRED_FLOW_COLUMNS = ("quote_volume", "number_of_trades")
 OPTIONAL_FLOW_COLUMNS = ("taker_buy_quote_volume",)
 LIVE_LEDGER_COLUMNS = (
@@ -55,6 +56,10 @@ LIVE_LEDGER_COLUMNS = (
 
 class LiveStartupError(RuntimeError):
     """Expected startup validation error for clean CLI output."""
+
+
+class LiveDataIntegrityError(RuntimeError):
+    """Live artifact/data integrity failure that must not be hidden as a network issue."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +176,7 @@ class LiveSignal:
     weaknesses: list[str] = field(default_factory=list)
 
     def to_json(self) -> str:
-        return json.dumps(asdict(self), ensure_ascii=False, sort_keys=True)
+        return json.dumps(asdict(self), ensure_ascii=False, sort_keys=True, allow_nan=False)
 
 
 @dataclass(slots=True)
@@ -337,6 +342,12 @@ class LiveArtifactWriter:
             csv.DictWriter(handle, fieldnames=list(columns)).writeheader()
 
     def append_event(self, event: str, symbol: str, details: dict[str, object]) -> None:
+        try:
+            details_json = json.dumps(details, ensure_ascii=False, sort_keys=True, allow_nan=False)
+        except ValueError as exc:
+            raise LiveDataIntegrityError(
+                f"Non-finite live event details: event={event} symbol={symbol} error={exc}"
+            ) from exc
         with self._lock, self.events_path.open("a", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=["timestamp_utc", "event", "symbol", "details_json"])
             writer.writerow(
@@ -344,7 +355,7 @@ class LiveArtifactWriter:
                     "timestamp_utc": datetime.now(UTC).isoformat(),
                     "event": event,
                     "symbol": symbol,
-                    "details_json": json.dumps(details, ensure_ascii=False, sort_keys=True),
+                    "details_json": details_json,
                 }
             )
 
@@ -481,6 +492,14 @@ class AnomalyMicroLiveRunner:
             except KeyboardInterrupt:
                 self.logger("live: остановлено пользователем")
                 return 0
+            except LiveDataIntegrityError as exc:
+                self.logger(f"live: остановлено из-за ошибки целостности live-данных: {exc}")
+                self.telegram.send(
+                    channel="events",
+                    key="live_data_integrity_error",
+                    text=f"🔴 *Live остановлен: ошибка целостности данных*\n`{_telegram_escape(str(exc)[:600])}`",
+                )
+                return 3
             except Exception as exc:
                 if not self._network_degraded:
                     self.logger(f"live: сеть/API недоступны, жду восстановления. Причина: {exc}")
@@ -497,6 +516,7 @@ class AnomalyMicroLiveRunner:
     def _validate_startup(self) -> None:
         if not self.config.confirm_real_orders:
             raise LiveStartupError("Для micro-live нужен явный флаг --confirm-real-orders")
+        _validate_live_config_values(self.config)
         missing = []
         if not os.getenv("BINANCE_API_KEY"):
             missing.append("BINANCE_API_KEY")
@@ -506,7 +526,12 @@ class AnomalyMicroLiveRunner:
             raise LiveStartupError(f"Не заполнены env переменные: {', '.join(missing)}")
         if not self._pump_categories:
             raise LiveStartupError("Не заданы live pump categories")
-        _ = self.exchange.fetch_usdt_free_balance()
+        try:
+            balance = float(self.exchange.fetch_usdt_free_balance())
+        except (TypeError, ValueError) as exc:
+            raise LiveStartupError("Биржа вернула нечисловой free USDT balance") from exc
+        if not math.isfinite(balance):
+            raise LiveStartupError("Биржа вернула нечисловой free USDT balance")
 
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
         with self._state_lock:
@@ -545,9 +570,13 @@ class AnomalyMicroLiveRunner:
     def _build_recent_signals(self, symbol: str, frame: pd.DataFrame, *, now_ms: int) -> list[LiveSignal]:
         if frame.empty or len(frame) < self.config.baseline_candles + self.config.confirmation_candles + 1:
             return []
-        missing = [column for column in REQUIRED_FLOW_COLUMNS if column not in frame.columns]
-        if missing:
-            self.artifacts.append_event("reject_missing_flow_columns", symbol, {"columns": missing})
+        missing_price = [column for column in REQUIRED_PRICE_COLUMNS if column not in frame.columns]
+        if missing_price:
+            self.artifacts.append_event("reject_missing_price_columns", symbol, {"columns": missing_price})
+            return []
+        missing_flow = [column for column in REQUIRED_FLOW_COLUMNS if column not in frame.columns]
+        if missing_flow:
+            self.artifacts.append_event("reject_missing_flow_columns", symbol, {"columns": missing_flow})
             return []
         frame = frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
         closed_before = now_ms - Timeframe.M1.to_milliseconds()
@@ -667,7 +696,7 @@ class AnomalyMicroLiveRunner:
                 "reject_initial_risk_too_wide",
                 symbol,
                 {
-                    "initial_risk_pct": initial_risk_pct,
+                    "initial_risk_pct": _finite_or_none(initial_risk_pct),
                     "max": self.config.max_initial_risk_pct,
                     "decision_timestamp_ms": int(decision["timestamp"]),
                 },
@@ -1028,13 +1057,29 @@ class AnomalyMicroLiveRunner:
             self.artifacts.append_event("reject_max_positions", signal.symbol, {"max": self.config.max_open_positions})
             return
         try:
-            balance = self.exchange.fetch_usdt_free_balance()
+            try:
+                balance = float(self.exchange.fetch_usdt_free_balance())
+            except (TypeError, ValueError) as exc:
+                self.artifacts.append_event("reject_invalid_free_balance", signal.symbol, {"free_usdt": None, "reason": str(exc)})
+                with self._state_lock:
+                    self._opening_symbols.discard(signal.symbol)
+                return
+            if not math.isfinite(balance):
+                self.artifacts.append_event("reject_invalid_free_balance", signal.symbol, {"free_usdt": None})
+                with self._state_lock:
+                    self._opening_symbols.discard(signal.symbol)
+                return
             if balance <= 0.0:
                 self.artifacts.append_event("reject_no_free_balance", signal.symbol, {"free_usdt": balance})
                 with self._state_lock:
                     self._opening_symbols.discard(signal.symbol)
                 return
             notional = self.config.position_notional_usdt
+            if not math.isfinite(notional) or notional <= 0.0:
+                self.artifacts.append_event("reject_invalid_position_notional", signal.symbol, {"position_notional": _finite_or_none(notional)})
+                with self._state_lock:
+                    self._opening_symbols.discard(signal.symbol)
+                return
             if balance < notional:
                 self.artifacts.append_event(
                     "reject_insufficient_margin_for_fixed_notional",
@@ -1365,6 +1410,82 @@ class AnomalyMicroLiveRunner:
     def _open_position_count(self) -> int:
         with self._state_lock:
             return len(self._open_positions)
+
+
+
+def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
+    integer_minimums = {
+        "baseline_candles": (config.baseline_candles, 1),
+        "confirmation_candles": (config.confirmation_candles, 1),
+        "min_hold_count": (config.min_hold_count, 1),
+        "max_open_positions": (config.max_open_positions, 1),
+        "inactive_batch_size": (config.inactive_batch_size, 1),
+        "inactive_batch_with_active": (config.inactive_batch_with_active, 1),
+        "signal_scan_backfill_candles": (config.signal_scan_backfill_candles, 1),
+        "stop_limit_per_symbol": (config.stop_limit_per_symbol, 1),
+        "oi_fresh_ms": (config.oi_fresh_ms, 1),
+        "trail_lookback_candles": (config.trail_lookback_candles, 1),
+    }
+    for name, (value, minimum) in integer_minimums.items():
+        if not isinstance(value, int) or value < minimum:
+            raise LiveStartupError(f"Некорректный live config: {name} должен быть целым >= {minimum}, получено {value!r}")
+
+    required_positive = {
+        "min_quote_ratio_start": config.min_quote_ratio_start,
+        "min_trade_ratio_start": config.min_trade_ratio_start,
+        "max_initial_risk_pct": config.max_initial_risk_pct,
+        "position_notional_usdt": config.position_notional_usdt,
+        "network_sleep_seconds": config.network_sleep_seconds,
+    }
+    for name, value in required_positive.items():
+        _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
+
+    required_non_negative = {
+        "min_price_retention": config.min_price_retention,
+        "min_verticality_score": config.min_verticality_score,
+        "stop_buffer_range_fraction": config.stop_buffer_range_fraction,
+        "scan_sleep_seconds": config.scan_sleep_seconds,
+        "stop_cooldown_hours": config.stop_cooldown_hours,
+        "telegram_cooldown_seconds": config.telegram_cooldown_seconds,
+        "trail_buffer_r": config.trail_buffer_r,
+    }
+    for name, value in required_non_negative.items():
+        _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=True)
+
+    optional_positive = {
+        "max_start_quote_ratio": config.max_start_quote_ratio,
+        "max_start_trade_ratio": config.max_start_trade_ratio,
+        "max_start_avg_trade_quote_size_ratio": config.max_start_avg_trade_quote_size_ratio,
+        "max_start_quote_ratio_per_abs_return": config.max_start_quote_ratio_per_abs_return,
+        "max_start_range_pct_ratio_to_baseline": config.max_start_range_pct_ratio_to_baseline,
+        "min_next_taker_buy_quote_share": config.min_next_taker_buy_quote_share,
+        "max_price_retention": config.max_price_retention,
+        "min_oi_change_pct_3x5m": config.min_oi_change_pct_3x5m,
+        "max_prior_up_down_whipsaw_to_impulse_range": config.max_prior_up_down_whipsaw_to_impulse_range,
+    }
+    for name, value in optional_positive.items():
+        if value is not None:
+            _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
+
+    if config.max_cycles is not None and (not isinstance(config.max_cycles, int) or config.max_cycles < 0):
+        raise LiveStartupError(f"Некорректный live config: max_cycles должен быть целым >= 0, получено {config.max_cycles!r}")
+
+
+def _require_finite_config_number(name: str, value: float, *, min_value: float, allow_equal_min: bool) -> None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise LiveStartupError(f"Некорректный live config: {name} должен быть числом, получено {value!r}") from exc
+    if not math.isfinite(number):
+        raise LiveStartupError(f"Некорректный live config: {name} должен быть finite, получено {value!r}")
+    if allow_equal_min:
+        valid = number >= min_value
+        relation = ">="
+    else:
+        valid = number > min_value
+        relation = ">"
+    if not valid:
+        raise LiveStartupError(f"Некорректный live config: {name} должен быть {relation} {min_value}, получено {number!r}")
 
 
 def build_telegram_config_from_env() -> TelegramConfig:

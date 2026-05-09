@@ -4374,3 +4374,48 @@ Risk:
 ```text
 Low-to-medium. This can reduce live signal count versus P113 when Binance payloads contain missing/invalid flow/OI values. That is intentional: invalid required data must not be traded as if it passed.
 ```
+
+---
+
+## P115 - Harden live config, balance and artifact JSON integrity
+
+```text
+Status: PROPOSED / compile + smoke verified locally
+Type: live data honesty / anti-silent-fallback
+Trading logic changed: anomaly micro-live guardrails only
+Files: research_tools/anomaly_micro_live.py, research/*
+Base: GitHub head e95705f / uploaded 1.zip + P113 + P114
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+A third pass after P114 found two remaining hidden-problem paths.
+First, non-finite free USDT balance could bypass balance checks because NaN comparisons are false and still allow real orders.
+Second, explicit reject events could still serialize non-finite values as Python NaN, which is not valid strict JSON for artifact readers.
+Missing OHLCV price columns also fell through to generic exceptions instead of explicit data-quality rejects.
+```
+
+Change:
+
+```text
+Validate live config numeric thresholds at startup; NaN/inf/invalid configured thresholds are startup errors.
+Validate startup balance as finite and reject per-position non-finite balance before order placement.
+Write live event JSON with allow_nan=false; non-finite event details become a live data-integrity stop instead of malformed artifacts.
+Make missing OHLCV price columns an explicit reject_missing_price_columns event.
+```
+
+Verification:
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py research_tools/anomaly_strategy_backtest.py research_tools/anomaly_continuation_lab.py
+```
+
+Smoke:
+
+```text
+Synthetic _maybe_open_position smoke passed: NaN/None free balance writes reject_invalid_free_balance and places no orders.
+Synthetic startup smoke passed: NaN min_oi_change_pct_3x5m and non-numeric balance fail startup explicitly.
+Synthetic missing-column smoke passed: missing price/flow columns write explicit reject events.
+```

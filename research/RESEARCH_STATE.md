@@ -1177,3 +1177,11 @@ Second-pass review after P113 found a real hidden-problem risk: NaN metrics coul
 P114 proposes explicit invalid-metric rejections for OI, taker-buy share, range/effort/retention/verticality and related category gates.
 This is expected to make live stricter when data is malformed; it does not add fallback data sources or proxy values.
 ```
+
+2026-05-09 live balance/config/artifact hardening:
+
+```text
+Third-pass review after P114 found another NaN-bypass class outside signal filters: free balance and config thresholds.
+P115 proposes finite startup config validation, finite balance validation before live orders, strict JSON artifact writing and explicit missing price-column rejects.
+No proxy/fallback source is added; invalid values stop startup, reject the setup or stop live with a data-integrity error.
+```
