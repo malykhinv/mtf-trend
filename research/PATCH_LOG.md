@@ -4141,6 +4141,28 @@ Patch commit: UNKNOWN
 Branch: codex/pno-anomaly-continuation-lab
 ```
 
+---
+
+## P107 - Remove obsolete env placeholders
+
+```text
+Status: APPLIED locally / smoke pending
+Type: config hygiene
+Trading logic changed: no
+Files: .env, research/*
+Base commit before patch: 168f933d
+Patch commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Removed unused .env placeholders COINGECKO_API_KEY, IGNORE_COINGECKO and FETCH_ANCHOR_DATETIME.
+The active fetch anchor env is FETCH_ANCHOR_TIMESTAMP_MS; datetime anchor was not read by current config.
+Kept Binance, Telegram, runtime path and simulation cost variables.
+```
+
 Change:
 
 ```text

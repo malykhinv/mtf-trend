@@ -1115,3 +1115,10 @@ Live shared state is protected by RLock; position threads and scanner no longer 
 Scanner now checks a recent decision-candle backfill window and deduplicates seen decisions; this is required because full-universe REST rotation can inspect a symbol several minutes after the actual confirmation candle.
 Still required before real unattended use: fill env, run one-symbol max-cycles smoke, then verify Binance STOP_MARKET payload on an intentionally tiny position.
 ```
+
+2026-05-09 env cleanup:
+
+```text
+.env no longer contains obsolete COINGECKO_API_KEY, IGNORE_COINGECKO or FETCH_ANCHOR_DATETIME.
+If a fixed fetch anchor is needed, current config expects FETCH_ANCHOR_TIMESTAMP_MS.
+```
