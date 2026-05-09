@@ -1122,3 +1122,12 @@ Still required before real unattended use: fill env, run one-symbol max-cycles s
 .env no longer contains obsolete COINGECKO_API_KEY, IGNORE_COINGECKO or FETCH_ANCHOR_DATETIME.
 If a fixed fetch anchor is needed, current config expects FETCH_ANCHOR_TIMESTAMP_MS.
 ```
+
+2026-05-09 live incident fix:
+
+```text
+Observed live error: slots LiveSignal had no __dict__, so ledger serialization failed after order placement.
+Observed live error: tight-stop sizing could request notional larger than available margin and trigger Binance -2019.
+Fix: LiveSignal serializes via asdict; live caps notional to 95% of free USDT and rejects if that cannot satisfy 12 USDT minimum.
+Operational note: any live instance started before this patch should be stopped and restarted after checking the exchange position/stop state.
+```

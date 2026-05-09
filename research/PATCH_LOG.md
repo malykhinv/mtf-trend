@@ -4163,6 +4163,29 @@ The active fetch anchor env is FETCH_ANCHOR_TIMESTAMP_MS; datetime anchor was no
 Kept Binance, Telegram, runtime path and simulation cost variables.
 ```
 
+---
+
+## P108 - Fix live signal serialization and margin cap
+
+```text
+Status: APPLIED locally / compile pending
+Type: live safety / runtime bugfix
+Trading logic changed: live sizing guard only
+Files: research_tools/anomaly_micro_live.py, research/*
+Base commit before patch: 53af8cc1
+Patch commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Fixed LiveSignal.to_json for slots dataclass by serializing with dataclasses.asdict.
+Live sizing now caps position notional to 0.95 * free USDT balance before placing a market order.
+If capped notional is below the configured 12 USDT minimum, setup is rejected with reject_insufficient_margin_for_min_notional instead of retrying an impossible order.
+Ledger risk_usdt now records actual capped risk, not the target risk.
+```
+
 Change:
 
 ```text

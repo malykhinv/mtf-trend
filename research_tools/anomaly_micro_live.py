@@ -11,7 +11,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable
@@ -77,6 +77,7 @@ class LiveAnomalyConfig:
     max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.60
     risk_pct: float = 0.05
     min_notional_usdt: float = 12.0
+    max_position_notional_to_balance: float = 0.95
     max_open_positions: int = 3
     inactive_batch_size: int = 20
     inactive_batch_with_active: int = 7
@@ -109,7 +110,7 @@ class LiveSignal:
     weaknesses: list[str] = field(default_factory=list)
 
     def to_json(self) -> str:
-        return json.dumps(self.__dict__, ensure_ascii=False, sort_keys=True)
+        return json.dumps(asdict(self), ensure_ascii=False, sort_keys=True)
 
 
 @dataclass(slots=True)
@@ -571,13 +572,32 @@ class AnomalyMicroLiveRunner:
             return
         try:
             balance = self.exchange.fetch_usdt_free_balance()
-            risk_usdt = balance * self.config.risk_pct
+            if balance <= 0.0:
+                self.artifacts.append_event("reject_no_free_balance", signal.symbol, {"free_usdt": balance})
+                with self._state_lock:
+                    self._opening_symbols.discard(signal.symbol)
+                return
+            target_risk_usdt = balance * self.config.risk_pct
             risk_per_unit = signal.entry_price - signal.stop_price
-            amount_by_risk = risk_usdt / risk_per_unit
+            amount_by_risk = target_risk_usdt / risk_per_unit
             notional = amount_by_risk * signal.entry_price
-            if notional < self.config.min_notional_usdt:
+            max_notional = balance * self.config.max_position_notional_to_balance
+            if max_notional < self.config.min_notional_usdt:
+                self.artifacts.append_event(
+                    "reject_insufficient_margin_for_min_notional",
+                    signal.symbol,
+                    {"free_usdt": balance, "max_notional": max_notional, "min_notional": self.config.min_notional_usdt},
+                )
+                with self._state_lock:
+                    self._opening_symbols.discard(signal.symbol)
+                return
+            if notional > max_notional:
+                amount_by_risk = max_notional / signal.entry_price
+                notional = max_notional
+            elif notional < self.config.min_notional_usdt:
                 amount_by_risk = self.config.min_notional_usdt / signal.entry_price
                 notional = self.config.min_notional_usdt
+            actual_risk_usdt = amount_by_risk * risk_per_unit
             entry_order = self.exchange.create_market_order(signal.symbol, "buy", amount_by_risk)
             entry_order_id = str(entry_order.get("id", ""))
             try:
@@ -591,7 +611,7 @@ class AnomalyMicroLiveRunner:
                 signal=signal,
                 amount=float(amount_by_risk),
                 notional_usdt=float(notional),
-                risk_usdt=float(risk_usdt),
+                risk_usdt=float(actual_risk_usdt),
                 entry_order_id=entry_order_id,
                 stop_order_id=stop_order_id,
                 opened_at_utc=datetime.now(UTC).isoformat(),
@@ -614,7 +634,7 @@ class AnomalyMicroLiveRunner:
         except Exception as exc:
             self.artifacts.append_event("telegram_open_failed", signal.symbol, {"position_id": position.position_id, "reason": str(exc)})
             self.logger(f"live: позиция {signal.symbol} открыта, но Telegram-вход не отправлен: {exc}")
-        self.logger(f"live: открыта позиция {signal.symbol}, риск {risk_usdt:.2f} USDT, notional {notional:.2f} USDT")
+        self.logger(f"live: открыта позиция {signal.symbol}, риск {actual_risk_usdt:.2f} USDT, notional {notional:.2f} USDT")
         threading.Thread(
             target=self._monitor_position,
             args=(position,),
