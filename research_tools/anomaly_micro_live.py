@@ -11,6 +11,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from uuid import uuid4
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -70,6 +71,8 @@ class LiveAnomalyConfig:
     confirmation_candles: int = 4
     min_quote_ratio_start: float = 5.0
     min_trade_ratio_start: float = 5.0
+    max_start_quote_ratio: float | None = 80.0
+    max_start_trade_ratio: float | None = 40.0
     min_price_retention: float = 0.70
     min_verticality_score: float = 0.25
     min_hold_count: int = 2
@@ -153,6 +156,12 @@ class TelegramDispatcher:
     def send_sync(self, *, channel: str, text: str, reply_to_message_id: int | None = None) -> int | None:
         return self._send_message(channel=channel, text=text, reply_to_message_id=reply_to_message_id)
 
+    def send_photo(self, *, channel: str, photo_path: Path, caption: str, reply_to_message_id: int | None = None) -> None:
+        try:
+            self._send_photo(channel=channel, photo_path=photo_path, caption=caption, reply_to_message_id=reply_to_message_id)
+        except Exception as exc:
+            self._logger(f"telegram: график не отправлен, причина: {exc}")
+
     def _run(self) -> None:
         while True:
             item = self._queue.get()
@@ -201,6 +210,27 @@ class TelegramDispatcher:
             return None
         message_id = result.get("message_id")
         return int(message_id) if message_id is not None else None
+
+    def _send_photo(self, *, channel: str, photo_path: Path, caption: str, reply_to_message_id: int | None) -> None:
+        token = self._config.positions_bot_token if channel == "positions" else self._config.events_bot_token
+        chat_id = self._config.positions_chat_id if channel == "positions" else self._config.events_chat_id
+        boundary = f"----codex{uuid4().hex}"
+        fields: dict[str, object] = {"chat_id": chat_id, "caption": caption, "parse_mode": "Markdown"}
+        if reply_to_message_id is not None:
+            fields["reply_to_message_id"] = reply_to_message_id
+        body = bytearray()
+        for name, value in fields.items():
+            body.extend(f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n".encode())
+        body.extend(f"--{boundary}\r\nContent-Disposition: form-data; name=\"photo\"; filename=\"{photo_path.name}\"\r\nContent-Type: image/png\r\n\r\n".encode())
+        body.extend(photo_path.read_bytes())
+        body.extend(f"\r\n--{boundary}--\r\n".encode())
+        request = urllib.request.Request(
+            f"https://api.telegram.org/bot{token}/sendPhoto",
+            data=bytes(body),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            response.read()
 
 
 class LiveArtifactWriter:
@@ -461,6 +491,12 @@ class AnomalyMicroLiveRunner:
             return None
         if quote_ratio < self.config.min_quote_ratio_start or trade_ratio < self.config.min_trade_ratio_start:
             return None
+        if self.config.max_start_quote_ratio is not None and quote_ratio > self.config.max_start_quote_ratio:
+            self.artifacts.append_event("reject_exhausted_quote_ratio", symbol, {"quote_ratio": quote_ratio, "max": self.config.max_start_quote_ratio})
+            return None
+        if self.config.max_start_trade_ratio is not None and trade_ratio > self.config.max_start_trade_ratio:
+            self.artifacts.append_event("reject_exhausted_trade_ratio", symbol, {"trade_ratio": trade_ratio, "max": self.config.max_start_trade_ratio})
+            return None
 
         start_open = float(start["open"])
         segment_high = float(segment["high"].max())
@@ -583,7 +619,10 @@ class AnomalyMicroLiveRunner:
             risk_per_unit = signal.entry_price - signal.stop_price
             amount_by_risk = target_risk_usdt / risk_per_unit
             notional = amount_by_risk * signal.entry_price
-            max_notional = balance * self.config.max_position_notional_to_balance
+            with self._state_lock:
+                used_slots = len(self._open_positions) + len(self._opening_symbols)
+            remaining_slots = max(self.config.max_open_positions - used_slots + 1, 1)
+            max_notional = balance * self.config.max_position_notional_to_balance / remaining_slots
             if max_notional < self.config.min_notional_usdt:
                 self.artifacts.append_event(
                     "reject_insufficient_margin_for_min_notional",
@@ -760,6 +799,7 @@ class AnomalyMicroLiveRunner:
             },
         )
         self.artifacts.append_position_close(position, reason=reason, pnl_usdt=pnl_usdt, pnl_pct=pnl_pct)
+        chart_path = self._render_close_chart(position, exit_price=exit_price)
         self.telegram.send(
             channel="positions",
             key=f"close:{position.position_id}",
@@ -770,6 +810,39 @@ class AnomalyMicroLiveRunner:
                 f"PnL `{pnl_usdt:.2f} USDT` / `{pnl_pct:.2%}`."
             ),
         )
+        if chart_path is not None:
+            self.telegram.send_photo(
+                channel="positions",
+                photo_path=chart_path,
+                caption=f"📈 *График закрытой позиции*\n*{position.signal.symbol}*",
+                reply_to_message_id=position.telegram_open_message_id,
+            )
+
+    def _render_close_chart(self, position: LivePosition, *, exit_price: float) -> Path | None:
+        try:
+            import matplotlib.pyplot as plt
+            end_ms = int(time.time() * 1000)
+            start_ms = int(position.signal.start_timestamp_ms) - 30 * 60_000
+            frame = self.exchange.fetch_ohlcv(position.signal.symbol, Timeframe.M1, start_ms, end_ms)
+            if frame.empty:
+                return None
+            chart_dir = self.artifacts.root / "charts"
+            chart_dir.mkdir(parents=True, exist_ok=True)
+            path = chart_dir / f"{position.position_id}.png"
+            fig, ax = plt.subplots(figsize=(10, 4))
+            ax.plot(pd.to_datetime(frame["timestamp"], unit="ms"), frame["close"].astype(float), color="#111827", linewidth=1.2)
+            ax.axhline(position.signal.entry_price, color="#2563eb", linewidth=1, label="entry")
+            ax.axhline(position.signal.stop_price, color="#dc2626", linewidth=1, label="initial stop")
+            ax.axhline(position.signal.tp1_price, color="#16a34a", linewidth=1, label="tp1")
+            ax.axhline(exit_price, color="#f97316", linewidth=1, label="exit")
+            ax.legend(loc="best")
+            fig.tight_layout()
+            fig.savefig(path, dpi=130)
+            plt.close(fig)
+            return path
+        except Exception as exc:
+            self.artifacts.append_event("chart_render_failed", position.signal.symbol, {"reason": str(exc)})
+            return None
 
     def _symbol_in_stop_cooldown(self, symbol: str) -> bool:
         cutoff = time.time() - self.config.stop_cooldown_hours * 3600.0

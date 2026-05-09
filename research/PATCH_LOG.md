@@ -4208,6 +4208,27 @@ Position state now stores current_stop_price and realized_pnl_usdt.
 TP1 partial close adds realized PnL; final close adds remaining amount PnL using the current stop/exit price.
 ```
 
+---
+
+## P110 - Live caps, sizing slots and close charts
+
+```text
+Status: APPLIED locally / compile pending
+Type: live safety / Telegram artifacts
+Trading logic changed: live filters/sizing only
+Files: research_tools/anomaly_micro_live.py, research/*
+Base commit before patch: e4a82e01
+Patch commit: UNKNOWN
+```
+
+Change:
+
+```text
+Live now applies balanced exhaustion caps by default: start quote ratio <= 80 and trade ratio <= 40.
+Position notional cap is divided by remaining open-position slots, so one tight-stop signal cannot consume nearly all free margin.
+Close flow renders a compact PNG chart and sends it to Telegram as a reply to the opening message.
+```
+
 Change:
 
 ```text

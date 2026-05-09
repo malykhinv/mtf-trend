@@ -1138,3 +1138,12 @@ Operational note: any live instance started before this patch should be stopped 
 Observed Telegram closes after TP1/trailing reported 0.00 USDT because flat-position reconciliation used entry price when no explicit pnl_price was passed.
 Fix: live position tracks current_stop_price and realized TP1 PnL; final close PnL is realized_pnl + remaining_amount * (exit - entry).
 ```
+
+2026-05-09 live artifacts review:
+
+```text
+Observed too many live entries because live missed the balanced exhaustion caps used in research grid; BANANA/CARV/BANK-like quote/trade ratio extremes should be rejected.
+Fix: live defaults to max_start_quote_ratio=80 and max_start_trade_ratio=40.
+Observed no Telegram charts; close handler now renders and sends a compact chart PNG.
+Observed oversized notional on tight stops; live now caps notional per remaining position slot.
+```
