@@ -1652,3 +1652,14 @@ ema20_close: 31 trades, WR 48.39%, avg +2.31%, median -0.08%, sum +0.718.
 ema20_negative_pnl_be_escape: 31 trades, WR 45.16%, avg +2.04%, median -0.08%, sum +0.632.
 Interpretation: EMA20 exits may help individual tails, but on this fixed sample they hurt consistency. Keep them in grid for analysis, not as default.
 ```
+
+Live validation planning:
+
+```text
+Date: 2026-05-09
+Status: PROPOSED
+Doc: research/LIVE_VALIDATION_PLAN.md
+Decision context: no full-year derivatives context is available for free; waiting a year or buying data is out of scope.
+Plan direction: build a paper-first live supervisor with scan/watch/position states, priority symbol queue, Telegram events, honest context statuses, category separation and artifacts.
+Real trading with 12 USDT minimum should be Phase 4 after paper loop, reconciliation and kill-switches exist.
+```

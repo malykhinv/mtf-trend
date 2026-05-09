@@ -4076,3 +4076,24 @@ ema20_close 31 trades WR 48.39% avg +2.31% median -0.08%;
 ema20_negative_pnl_be_escape 31 trades WR 45.16% avg +2.04% median -0.08%.
 Manual regeneration rendered 31/31 charts with quote/trade panel.
 ```
+
+---
+
+## P104 - Draft live validation implementation plan
+
+```text
+Status: PROPOSED / docs only
+Type: planning
+Trading logic changed: no
+Files: research/LIVE_VALIDATION_PLAN.md, research/*
+Base commit before patch: 337faca2
+Patch commit: UNKNOWN
+Branch: codex/pno-anomaly-continuation-lab
+```
+
+Change:
+
+```text
+Added a concrete implementation plan for a paper-first anomaly wake-up live validation loop.
+The plan covers scan/watch/position modes, active/inactive symbol queue, rate-limit strategy, context fetch policy, pump categories, Telegram events, risk sizing, artifacts and kill-switches.
+```
