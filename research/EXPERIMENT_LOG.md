@@ -1663,4 +1663,5 @@ Decision context: no full-year derivatives context is available for free; waitin
 Plan direction: build a micro-live supervisor with scan/watch/position states, priority symbol queue, Telegram events, honest context statuses, category separation and artifacts.
 User decision: no paper-first requirement; micro-live is allowed from the start, but infrastructure must keep order/position management higher priority than Telegram/chart work.
 Added requirements: OI fresh if latest value is within current time minus 5 minutes; one canonical live_positions.csv for open/closed positions; separate live run artifact folder; all sessions traded with session in Telegram; per-position worker; Telegram cooldowns; symbol cooldown after 2 stops in N hours; network-degraded state with quiet retries.
+Follow-up decisions: max open positions = 3; REST-only in v1; use two Telegram bots, one for events and one for positions. Related Telegram updates must reply to the parent message, e.g. close/SL move replies to open-position message.
 ```

@@ -4097,4 +4097,5 @@ Change:
 Added a concrete implementation plan for a paper-first anomaly wake-up live validation loop.
 The plan covers scan/watch/position modes, active/inactive symbol queue, rate-limit strategy, context fetch policy, pump categories, Telegram events, risk sizing, artifacts and kill-switches.
 Updated after review to micro-live first, with OI freshness as latest value within now-5m, canonical live_positions.csv, separate live artifact folders, session reporting, per-position workers, Telegram cooldowns, per-symbol stop cooldowns, non-blocking order/position/TG/chart queues and quiet network-degraded recovery.
+Second review update fixes max open positions at 3, transport at REST-only, and two Telegram bots: events bot for watch/errors and positions bot for entry/exit/stop moves. Related messages must be sent as replies to the parent Telegram message and message ids must be persisted.
 ```

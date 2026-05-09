@@ -16,7 +16,7 @@ Build a simple, robust live loop for the anomaly wake-up strategy:
 - actively watch only fresh wake-up candidates;
 - trade only the controlled organic wake-up category;
 - keep full artifacts for later research;
-- send useful Telegram messages;
+- send useful Telegram messages through two separate Telegram bots;
 - survive network/API issues without killing the process;
 - avoid hidden fallbacks.
 
@@ -32,6 +32,7 @@ This is not a claim that the edge is proven. It is a micro-live validation loop 
 - Context data can be unavailable or delayed.
 - OI/long-short context is live/30d only; no free full-year validation exists.
 - Telegram, file IO and chart rendering are operational tasks, not part of signal truth.
+- REST is the only market/exchange transport in v1; websocket is out of scope for this implementation.
 
 Therefore every decision must be persisted locally before or immediately after action.
 
@@ -203,9 +204,23 @@ if active_count > 10:
 
 Position checks are not performed only by the main loop. They also have dedicated workers.
 
+Trade concurrency:
+
+```text
+max_open_positions = 3
+```
+
 ---
 
-## 7. Rate Limits
+## 7. REST and Rate Limits
+
+Transport policy:
+
+```text
+REST only in v1
+```
+
+No websocket dependency in the first implementation. The code should still hide exchange access behind interfaces so websocket can be added later without changing strategy logic.
 
 Use simple token buckets by source:
 
@@ -258,8 +273,13 @@ OrderWorker
   serializes exchange order operations
   prevents concurrent conflicting order calls
 
-TelegramWorker
-  async notification queue
+TelegramEventsWorker
+  async queue for watch on/off, skips, errors, network state
+  rate-limited and deduplicated
+
+TelegramPositionsWorker
+  async queue for open, close, stop move, position emergency
+  higher priority than events bot
   rate-limited and deduplicated
 
 ArtifactWriter
@@ -312,7 +332,43 @@ Chart generation on close:
 
 ---
 
-## 10. Telegram Cooldowns
+## 10. Telegram Bots, Threads and Cooldowns
+
+Use two separate Telegram bots:
+
+```text
+events bot:
+  TELEGRAM_EVENTS_BOT_TOKEN
+  TELEGRAM_EVENTS_CHAT_ID
+  watch on/off, skips, red flags, data/network errors
+
+positions bot:
+  TELEGRAM_POSITIONS_BOT_TOKEN
+  TELEGRAM_POSITIONS_CHAT_ID
+  position opened/closed, stop moved, TP1, emergency close
+```
+
+Current `.env` check on 2026-05-09 did not find Telegram-like variable names. Do not print token values in logs.
+
+Message style:
+
+- Russian;
+- concise;
+- human-friendly;
+- Markdown parse mode;
+- starts with exactly one emoji plus one space;
+- no more than one emoji per message;
+- important sections use bold headings;
+- no raw debug dumps.
+
+Telegram threading:
+
+- every watch session stores `watch_message_id`;
+- every position stores `open_message_id`;
+- watch-off messages reply to the corresponding watch-on message;
+- position close, TP1, stop move and emergency messages reply to the corresponding open-position message;
+- if the stored parent message is missing or Telegram rejects reply, send a normal message and persist `reply_fallback_used=true`;
+- persist all Telegram message ids in artifacts.
 
 Deduplicate per event key:
 
@@ -352,7 +408,7 @@ cooldown_after_limit = 12 hours
 
 Other limits:
 
-- max open positions: default 1 until proven stable;
+- max open positions: 3;
 - max active watch symbols: configurable;
 - max daily realized loss;
 - max consecutive losses globally;
@@ -465,6 +521,9 @@ Required fields:
 - red_flags_at_exit;
 - context_snapshot_path;
 - chart_path;
+- watch_message_id;
+- open_message_id;
+- close_message_id;
 - notes.
 
 Append event history separately:
@@ -492,6 +551,7 @@ Each live run writes to a separate directory:
   live_orders.csv
   live_context_status.csv
   live_errors.csv
+  live_telegram_messages.csv
   context_snapshots/
   charts/
   logs/
@@ -630,7 +690,7 @@ No orders yet, but architecture must be ready for real orders.
 - risk sizing;
 - OrderWorker;
 - exchange reconciliation;
-- one max open position;
+- max 3 open positions;
 - real entry/close;
 - `live_positions.csv`.
 
@@ -680,8 +740,8 @@ Before code:
 
 1. `max_effective_risk_pct`: proposed 8%.
 2. `N hours` for two-stop symbol cooldown: proposed 12h.
-3. Max open positions: proposed 1.
+3. Max open positions: decided 3.
 4. Max active watch symbols: proposed 10.
 5. Whether missing OI means no-trade or watch-only. Proposed: if config requires OI, no real entry.
 6. Telegram config source.
-7. REST-first vs websocket-first. Proposed: REST-first skeleton, websocket later behind same interfaces.
+7. Transport: decided REST-only for v1.
