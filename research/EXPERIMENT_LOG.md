@@ -1657,9 +1657,10 @@ Live validation planning:
 
 ```text
 Date: 2026-05-09
-Status: PROPOSED
+Status: UPDATED
 Doc: research/LIVE_VALIDATION_PLAN.md
 Decision context: no full-year derivatives context is available for free; waiting a year or buying data is out of scope.
-Plan direction: build a paper-first live supervisor with scan/watch/position states, priority symbol queue, Telegram events, honest context statuses, category separation and artifacts.
-Real trading with 12 USDT minimum should be Phase 4 after paper loop, reconciliation and kill-switches exist.
+Plan direction: build a micro-live supervisor with scan/watch/position states, priority symbol queue, Telegram events, honest context statuses, category separation and artifacts.
+User decision: no paper-first requirement; micro-live is allowed from the start, but infrastructure must keep order/position management higher priority than Telegram/chart work.
+Added requirements: OI fresh if latest value is within current time minus 5 minutes; one canonical live_positions.csv for open/closed positions; separate live run artifact folder; all sessions traded with session in Telegram; per-position worker; Telegram cooldowns; symbol cooldown after 2 stops in N hours; network-degraded state with quiet retries.
 ```

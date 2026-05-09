@@ -1,550 +1,687 @@
-# Live Validation Plan: Anomaly Wake-Up
+# Live Validation Plan: Anomaly Wake-Up Micro-Live
 
 Status: PROPOSED  
 Date: 2026-05-09  
 Branch: codex/pno-anomaly-continuation-lab  
-Purpose: минимальный live/paper+micro-real режим для проверки edge без заглядывания в будущее.
+Mode: micro-live first, not paper-first  
+Purpose: live validation with real micro fills, full audit trail and strict safety.
 
 ---
 
-## 1. Цель
+## 1. Goal
 
-Запустить не "боевого робота", а live validation loop:
+Build a simple, robust live loop for the anomaly wake-up strategy:
 
-- находить controlled wake-up пампы;
-- разделять пампы по природе;
-- включать активное слежение только для актуальных кандидатов;
-- торговать минимальным размером, если включён real mode;
-- сохранять полный audit trail по каждому решению;
-- не маскировать отсутствие данных fallback-ами.
+- scan all futures symbols cheaply;
+- actively watch only fresh wake-up candidates;
+- trade only the controlled organic wake-up category;
+- keep full artifacts for later research;
+- send useful Telegram messages;
+- survive network/API issues without killing the process;
+- avoid hidden fallbacks.
 
-Ключевой принцип:
-
-```text
-сначала честная live-валидация гипотезы, потом масштабирование
-```
+This is not a claim that the edge is proven. It is a micro-live validation loop with real execution.
 
 ---
 
-## 2. Режимы работы
+## 2. Live vs Backtest Differences We Must Accept
 
-### 2.1 Scan mode
+- Live uses only closed candles for signal confirmation.
+- Execution is real: spread, delay, partial fill and slippage exist.
+- The scan queue can see inactive symbols late.
+- Context data can be unavailable or delayed.
+- OI/long-short context is live/30d only; no free full-year validation exists.
+- Telegram, file IO and chart rendering are operational tasks, not part of signal truth.
 
-Дешёвый проход по всем инструментам.
+Therefore every decision must be persisted locally before or immediately after action.
 
-Что грузим:
+---
 
-- последние 1m свечи;
-- rolling baseline для quote_volume / number_of_trades;
-- минимум данных для stage0/stage1 wake-up;
-- без дорогого derivatives context, пока нет подтверждённого кандидата.
+## 3. Modes
 
-Задача:
+### 3.1 Scan Mode
 
-- быстро понять, есть ли ранний wake-up;
-- не тратить лимиты на спящие монеты;
-- не создавать позиции.
+Cheap pass over all enabled symbols.
 
-### 2.2 Watch mode
+Loads:
 
-Активное слежение по монете, где wake-up уже подтверждён.
+- latest closed 1m candles;
+- enough rolling history for baseline metrics;
+- quote_volume;
+- number_of_trades;
+- taker_buy_quote_volume if present in klines.
 
-Триггер входа в watch:
+Does not load expensive derivatives context until a symbol becomes a candidate.
 
-- есть актуальный stage wake-up;
-- есть удержание после начального импульса;
-- нет явных red flags;
-- данные имеют нужное качество.
+Output states:
 
-Что догружаем:
+- inactive;
+- candidate;
+- watch;
+- cooldown;
+- disabled.
 
-- 1m/5m свечи;
+### 3.2 Watch Mode
+
+Active tracking for symbols with confirmed wake-up context.
+
+Loads additionally:
+
+- 5m candles;
 - OI 5m;
-- funding, mark/index/premium;
-- long-short / taker long-short, если доступны в 30d/live окне;
-- при необходимости trades/aggTrades вокруг события.
+- mark/index/premium;
+- funding if relevant;
+- long-short/taker long-short where available;
+- optional trades/aggTrades around event if needed.
 
-Watch mode должен иметь TTL. Если setup стареет или контекст ломается, монета выходит из watch.
+Watch mode has TTL and exits if the setup loses context.
 
-### 2.3 Position mode
+### 3.3 Position Mode
 
-Открытая позиция.
+Real micro-live position.
 
-Задача:
+Handled by a dedicated position worker so main scan loop continues.
 
-- сопровождать позицию;
-- проверять stop/TP/trailing/BE;
-- проверять red flags;
-- слать Telegram-события;
-- сохранять график закрытия и realized PnL.
+Position worker responsibilities:
+
+- exchange reconciliation;
+- stop/TP/trailing decisions;
+- red-flag checks;
+- position state persistence;
+- close chart generation;
+- Telegram close event enqueue.
 
 ---
 
-## 3. Категории пампов
+## 4. Pump Categories
 
-Параметры должны быть зафиксированы до live-теста. Нельзя вручную переоптимизировать по ходу.
+### 4.1 Controlled Organic Wake-Up
 
-### 3.1 Controlled Organic Wake-Up
+Only category eligible for real entry in v1.
 
-Основной long-кандидат.
+Expected traits:
 
-Признаки:
+- verticality is strong;
+- close holds near high;
+- trade and quote expansion are present but not absurd;
+- quote/trade is not a rare-large-print signature;
+- taker buy share is not weak;
+- next candles hold;
+- OI confirms if OI is used;
+- no large immediate impulse-down.
 
-- заметная verticality, но без хаотичного range expansion;
-- start_close_position_in_range высокий;
-- start_trade_ratio умеренный, не экстремальный;
-- quote/trade не выглядит как редкий крупный принт;
-- taker buy share не слабый;
-- удержание следующих свечей есть;
-- OI растёт, если OI доступен;
-- post-start pullback не уничтожает импульс.
+### 4.2 Thin Large-Print Pump
 
-Решение:
+Default no-trade.
 
-```text
-eligible for entry
-```
+Traits:
 
-### 3.2 Thin Large-Print Pump
+- low trade count;
+- high quote_volume / number_of_trades;
+- zero-range sleep artifacts;
+- jumpy candles;
+- weak start taker buy share;
+- CVX-like impulse-up plus stronger impulse-down.
 
-Опасный тип, похожий на CVX.
+### 4.3 Exhaustion / Violent Pump
 
-Признаки:
+Default no-trade.
 
-- мало сделок;
-- высокий quote_volume / number_of_trades;
-- много zero-range свечей до события;
-- рваные 1m свечи;
-- taker buy на стартовой свече слабый или перекошенный;
-- большой impulse up, затем резкий impulse down.
+Traits:
 
-Решение:
+- extreme trade/quote expansion;
+- bad effort per return;
+- close fails to hold;
+- immediate deep pullback;
+- flow fades quickly.
 
-```text
-default no-trade; watch only for research
-```
+### 4.4 Derivatives-Led Squeeze
 
-### 3.3 Exhaustion / Violent Pump
+Can support controlled organic wake-up, but is not enough by itself.
 
-Импульс сильный, но edge long-continuation сомнительный.
-
-Признаки:
-
-- очень высокий trade_ratio / quote_ratio;
-- плохой effort per return;
-- close не удерживается у high;
-- сильный откат сразу после старта;
-- next candles теряют поток.
-
-Решение:
-
-```text
-no-trade или отдельный short-research, не смешивать с long edge
-```
-
-### 3.4 Derivatives-Led Squeeze
-
-Можно торговать только при честной доступности контекста.
-
-Признаки:
+Traits:
 
 - OI up + price up;
-- mark/index/premium не противоречат движению;
-- taker long-short подтверждает поток;
-- нет перегретого red flag.
-
-Решение:
-
-```text
-eligible only when derivatives context is fresh
-```
+- fresh OI;
+- mark/premium context does not contradict;
+- taker context supports flow.
 
 ---
 
-## 4. Очередь обхода символов
+## 5. OI Freshness Rule
 
-Нужна единая priority queue.
-
-Состояния:
-
-- `inactive`;
-- `candidate`;
-- `watch`;
-- `position`;
-- `cooldown`;
-- `disabled`.
-
-Базовый цикл:
+For live, OI is considered usable if:
 
 ```text
-active_set = watch + position + fresh_candidate
-inactive_queue = all other enabled symbols
-
-each cycle:
-  check all active_set first
-  then check N inactive symbols
+oi_timestamp_ms >= now_ms - 5 minutes - small_clock_buffer
 ```
 
-Пример политики:
+The latest received OI value is current until a new one arrives.
+
+Do not kill a setup because OI is a little older than an ideal polling cadence. Kill only if:
+
+- OI is older than the configured 5m freshness window;
+- OI source has an explicit error;
+- OI schema is invalid;
+- OI is required by config and missing entirely.
+
+No proxy is allowed for OI.
+
+---
+
+## 6. Symbol Queue
+
+Single authoritative scheduler owns symbol state.
+
+States:
+
+- inactive;
+- candidate;
+- watch;
+- position;
+- cooldown;
+- disabled.
+
+Cycle policy:
 
 ```text
+active = candidate + watch + position
+inactive = enabled symbols not active/cooldown/disabled
+
 if active_count == 0:
-  scan 20 inactive symbols
+  check next 20 inactive
 
 if active_count <= 3:
-  scan all active + 7 inactive
+  check all active + next 7 inactive
 
 if active_count <= 10:
-  scan all active + 3 inactive
+  check all active + next 3 inactive
 
 if active_count > 10:
-  scan active only, inactive scan degraded
+  check active only
 ```
 
-Частоты:
-
-- `position`: каждые 5-15 секунд или websocket/user-data event;
-- `watch`: каждые 15-30 секунд;
-- `candidate`: каждые 30-60 секунд;
-- `inactive`: best-effort round-robin, примерно 3-10 минут на полный universe в зависимости от лимитов.
-
-Важно: inactive scan не должен блокировать active supervision.
+Position checks are not performed only by the main loop. They also have dedicated workers.
 
 ---
 
-## 5. Rate-limit стратегия
+## 7. Rate Limits
 
-Предпочтительный порядок:
+Use simple token buckets by source:
 
-1. REST только для bootstrap и gap-fill.
-2. Websocket для live candles/ticker/user-data, если возможно.
-3. Batch/multi-symbol endpoints, где Binance их даёт.
-4. Дорогой derivatives context только после входа в watch.
-5. Per-source token bucket, а не sleep по всему процессу.
+- candles;
+- OI;
+- derivatives context;
+- orders/account;
+- Telegram.
 
-Компоненты:
+Priority:
 
-- `RateLimitBudget`;
-- `RequestScheduler`;
-- `SymbolQueue`;
-- `ContextFetcher`;
-- `CacheWriter`.
+1. order placement / close / reconciliation;
+2. open position supervision;
+3. active watch;
+4. candidate refresh;
+5. inactive scan;
+6. chart rendering and non-urgent Telegram.
 
-Правило:
+No global sleep that blocks everything.
 
-```text
-нет запроса без budget check
-```
+If rate budget is low:
 
-Если лимит истощён:
-
-- position checks имеют приоритет;
-- watch checks имеют второй приоритет;
-- inactive scan откладывается.
+- keep positions supervised;
+- degrade inactive scan;
+- postpone non-critical context.
 
 ---
 
-## 6. Вход в watch mode
+## 8. Threading Architecture
 
-Минимальный контракт:
+Keep it simple: threads plus queues, no complex shared mutable logic.
 
-```text
-symbol
-stage
-timestamp_ms
-category
-category_score
-wake_up_metrics
-data_quality_status
-watch_started_at
-watch_ttl_ms
-red_flags=[]
-```
-
-Причины входа:
-
-- `controlled_wakeup_candidate`;
-- `derivatives_squeeze_candidate`;
-- `research_watch_only`.
-
-Telegram:
+Recommended components:
 
 ```text
-Включаю слежение: SYMBOL
-Категория: controlled organic wake-up
-Почему интересно: ...
-Что настораживает: ...
-Что должно случиться для входа: ...
+MainSupervisor
+  owns SymbolStateStore
+  owns active/inactive queues
+  schedules scan/watch tasks
+
+MarketDataWorkerPool
+  fetches candles/context through RequestScheduler
+  returns immutable snapshots
+
+PositionWorker per open position
+  manages one symbol position
+  has priority over scan/watch
+
+OrderWorker
+  serializes exchange order operations
+  prevents concurrent conflicting order calls
+
+TelegramWorker
+  async notification queue
+  rate-limited and deduplicated
+
+ArtifactWriter
+  serializes CSV/JSON/chart writes
 ```
+
+Shared state rule:
+
+```text
+only MainSupervisor mutates symbol states
+only PositionWorker mutates its position state through events
+only OrderWorker talks to trading endpoints
+ArtifactWriter is append-only
+```
+
+Use `queue.Queue`, `threading.Thread`, `threading.Event`, `Lock` only around small state transitions.
+
+Avoid:
+
+- nested locks;
+- shared pandas frames between threads;
+- blocking Telegram/chart work in trading path;
+- multiple threads placing orders for the same symbol.
 
 ---
 
-## 7. Выход из watch mode
+## 9. Non-Blocking Events
 
-Причины:
+Tracking, entries, exits, stop moves and Telegram must not block each other.
 
-- `setup_expired`;
-- `hold_lost`;
-- `midpoint_lost`;
-- `context_missing`;
-- `red_flag_thin_large_print`;
-- `red_flag_exhaustion`;
-- `data_quality_failure`;
-- `position_opened`;
-- `manual_disabled`.
-
-Telegram:
+Priority path:
 
 ```text
-Снимаю SYMBOL со слежения.
-Причина: ...
-Коротко: импульс не удержался / контекст устарел / появились крупные редкие принты.
+signal decision -> risk check -> order request -> exchange response -> persist position -> enqueue Telegram
 ```
+
+Telegram can lag seconds, not minutes. If Telegram is down:
+
+- log once;
+- keep a pending queue;
+- retry with backoff;
+- never block order/position management.
+
+Chart generation on close:
+
+- create close event immediately;
+- enqueue chart rendering;
+- send chart when ready;
+- if chart fails, send close message with `chart_status=failed` and persist error.
 
 ---
 
-## 8. Entry logic для live validation
+## 10. Telegram Cooldowns
 
-Пока не менять на много вариантов.
-
-Default:
+Deduplicate per event key:
 
 ```text
-category = controlled organic wake-up
-entry_method = market at confirmed decision close
-exit_rule = structural_trail
-hold >= 2
-OI3 > 5%, если OI доступен
-no red flags
+event_key = symbol + event_type + reason
 ```
 
-Если OI недоступен:
+Suggested cooldowns:
 
-- не подставлять proxy;
-- либо no-trade;
-- либо отдельный режим `no_oi_research_only`, без реального ордера.
+- watch_on same symbol/category: 30 minutes;
+- watch_off same symbol/reason: 30 minutes;
+- repeated data warning: 30 minutes;
+- network-down notice: until recovery or 30 minutes;
+- stop moved: only material moves, not every tiny tick.
+
+Position opened/closed messages are never suppressed.
 
 ---
 
-## 9. Risk and position sizing
+## 11. Position and Trade Limits
 
-Параметры:
+Per-symbol stop cooldown:
+
+```text
+if symbol has >= 2 stop_loss exits in last N hours:
+  symbol_state = cooldown
+  no new entries
+```
+
+Default proposal:
+
+```text
+N = 12 hours
+symbol_stop_limit = 2
+cooldown_after_limit = 12 hours
+```
+
+Other limits:
+
+- max open positions: default 1 until proven stable;
+- max active watch symbols: configurable;
+- max daily realized loss;
+- max consecutive losses globally;
+- no entry if existing position/order mismatch exists.
+
+---
+
+## 12. Sessions
+
+Trade all sessions.
+
+Each entry message must include session by Europe/Belgrade time:
+
+```text
+Asia: 00:00-08:00
+Europe: 08:00-16:00
+US: 16:00-24:00
+```
+
+Session is an audit/risk field, not a hard filter in v1.
+
+Persist:
+
+- `session_name`;
+- `entry_local_time`;
+- `entry_utc_time`.
+
+---
+
+## 13. Risk and Sizing
+
+Required:
 
 ```text
 risk_per_trade = 5% deposit
 min_notional = 12 USDT
 ```
 
-Формула:
+Formula:
 
 ```text
-risk_amount = deposit_equity * 0.05
+risk_amount = equity * 0.05
 unit_risk = entry_price - stop_price
-position_qty = risk_amount / unit_risk
-notional = position_qty * entry_price
+qty_by_risk = risk_amount / unit_risk
+notional_by_risk = qty_by_risk * entry_price
+final_notional = max(notional_by_risk, 12 USDT)
+effective_risk = final_qty * unit_risk
+effective_risk_pct = effective_risk / equity
 ```
 
-Если `notional < 12 USDT`:
+Safety:
 
 ```text
-position_notional = 12 USDT
-effective_risk_pct must be recalculated
+if effective_risk_pct > max_effective_risk_pct:
+  skip entry
 ```
 
-Если из-за min notional фактический риск становится слишком большим:
+Default proposed cap:
 
 ```text
-skip real order; allow paper only
+max_effective_risk_pct = 8%
 ```
 
-Предлагаемый hard cap:
-
-```text
-effective_risk_pct <= 8-10% deposit
-```
-
-Нужен отдельный параметр, обсуждаемый до реализации.
+This needs confirmation before code.
 
 ---
 
-## 10. Position management
+## 14. Unified Position Ledger
 
-Default:
+Maintain one canonical file for open and closed positions:
 
-- initial stop below decision box;
-- TP1 partial;
-- stop to BE after TP1;
-- structural trailing;
-- red flag exit can close earlier.
+```text
+live_positions.csv
+```
 
-Red flag exits:
+One row per position, updated by `position_id`.
 
-- data quality failure during active position;
-- exchange position mismatch;
-- sudden context invalidation;
-- strong loss of hold;
-- hard risk/stop breach;
-- manual kill-switch.
+Required fields:
 
-EMA20 exits:
+- position_id;
+- symbol;
+- status: opening/open/closing/closed/error;
+- category;
+- session_name;
+- entry_signal_timestamp_ms;
+- entry_order_id;
+- entry_price_expected;
+- entry_price_filled;
+- qty;
+- notional;
+- initial_stop;
+- active_stop;
+- tp1;
+- tp1_fraction;
+- risk_usdt_expected;
+- risk_pct_expected;
+- risk_usdt_effective;
+- risk_pct_effective;
+- opened_at_utc;
+- closed_at_utc;
+- exit_reason;
+- exit_order_id;
+- exit_price_filled;
+- realized_pnl_usdt;
+- realized_pnl_pct;
+- realized_r;
+- max_favorable_excursion;
+- max_adverse_excursion;
+- red_flags_at_entry;
+- red_flags_at_exit;
+- context_snapshot_path;
+- chart_path;
+- notes.
 
-- оставить как optional research exit;
-- не default, потому что текущий 30d sample ухудшился по winrate/median.
+Append event history separately:
+
+```text
+live_position_events.csv
+```
+
+Do not rely on Telegram history as the ledger.
 
 ---
 
-## 11. Telegram events
+## 15. Artifact Layout
 
-Обязательные события:
+Each live run writes to a separate directory:
 
-1. Watch on.
-2. Watch off.
-3. Position opened.
-4. Position closed.
-5. Error / data-quality failure.
-6. Daily summary.
+```text
+.output/results/live_anomaly_runs/YYYYMMDD_HHMMSS/
+  live_config.json
+  live_events.csv
+  live_symbol_states.csv
+  live_watch_sessions.csv
+  live_positions.csv
+  live_position_events.csv
+  live_orders.csv
+  live_context_status.csv
+  live_errors.csv
+  context_snapshots/
+  charts/
+  logs/
+```
 
-Open message:
+Open and closed positions remain in the same `live_positions.csv`.
+
+---
+
+## 16. Network Resilience
+
+Network/API failures should degrade the bot, not crash it.
+
+Policy:
+
+- on first network outage, log one warning and send one Telegram warning if possible;
+- enter `network_degraded` state;
+- pause new entries;
+- continue supervising known exchange positions through retries;
+- retry with exponential backoff capped at a sane interval;
+- on recovery, log one recovery event and reconcile exchange state.
+
+No spam loop.
+
+Do not mark missing data as valid. Use statuses:
+
+```text
+network_unavailable
+exchange_timeout
+rate_limited
+stale
+missing
+schema_error
+```
+
+---
+
+## 17. Entry Message Template
+
+Human-friendly Russian message, not dry debug output:
 
 ```text
 Открыл SYMBOL long.
+Сессия: Europe.
 Категория: controlled organic wake-up.
-Вход: ...
-Стоп: ...
-Риск: ... USDT / ...%
-TP1: ...
-Почему вход не случайный: ...
-Слабые места: ...
-Контекст: OI, taker, quote/trade, session.
+
+Вход: 1.2345
+Стоп: 1.2100
+TP1: 1.2590
+Размер: 12.4 USDT
+Риск: 0.62 USDT / 5.0%
+
+Почему вход есть:
+- памп удержался после стартовой свечи;
+- OI свежий и растёт;
+- taker buy не слабый;
+- quote/trade без признака редких крупных принтов.
+
+Что настораживает:
+- объём выше обычного, но не экстремальный;
+- рынок сейчас Asia, исторически хуже по медиане.
 ```
 
-Close message:
+Open message should include:
+
+- category;
+- score;
+- session;
+- entry/stop/TP1;
+- expected risk;
+- OI freshness;
+- key strengths;
+- key weaknesses.
+
+---
+
+## 18. Close Message Template
 
 ```text
 Закрыл SYMBOL.
-Причина: trailing_stop / stop_loss / red_flag / manual.
-PnL: +X.XX USDT / +Y.YY%
-R: ...
-Что произошло после входа: ...
+Причина: trailing_stop.
+
+PnL: +0.42 USDT / +3.1%
+R: +0.8R
+Держали: 18 минут
+
+Коротко: TP1 взяли, стоп подтянулся, движение выдохлось у локального хая.
 ```
 
-Close message должен прикладывать chart PNG.
+Attach chart when ready.
 
 ---
 
-## 12. Audit artifacts
+## 19. Red Flags
 
-Каждый live run пишет:
+Red flags can disable watch or force exit depending on severity.
 
-```text
-live_events.csv
-live_symbol_states.csv
-live_watch_sessions.csv
-live_positions.csv
-live_orders.csv
-live_context_status.csv
-live_errors.csv
-charts/
-```
+Watch-off red flags:
 
-Нельзя хранить только Telegram как источник истины.
+- hold lost;
+- midpoint lost;
+- thin large-print category;
+- exhaustion category;
+- OI stale beyond allowed 5m;
+- candle data stale;
+- zero-range / illiquid artifact.
 
----
+Position-exit red flags:
 
-## 13. Safety
+- exchange position mismatch;
+- hard stop reached;
+- data stream stale while position is open;
+- active context invalidated severely;
+- manual kill switch.
 
-Обязательные kill-switch:
-
-- max daily loss;
-- max consecutive losses;
-- max open positions;
-- max active watches;
-- exchange unavailable;
-- stale candles;
-- position/order mismatch;
-- missing required context;
-- unexpected schema/data source.
-
-Любой fallback должен быть явным состоянием:
-
-```text
-status = unavailable_by_exchange_limit | missing_frame | stale | no_before | schema_error
-```
-
-Никаких proxy для OI/long-short/taker long-short.
+Position exits must go through OrderWorker.
 
 ---
 
-## 14. Implementation phases
+## 20. Implementation Phases
 
-### Phase 1: Paper live supervisor
+### Phase 1: Infrastructure Skeleton
 
+- run directory;
+- config;
 - symbol queue;
-- scan/watch state machine;
-- no real orders;
-- Telegram watch on/off;
-- artifacts.
+- state store;
+- artifact writer;
+- Telegram worker with cooldown;
+- network degraded state.
 
-### Phase 2: Signal categories and scoring
+No orders yet, but architecture must be ready for real orders.
 
-- controlled organic;
-- thin large-print;
-- exhaustion;
-- derivatives-led;
-- red flag reasons.
+### Phase 2: Micro-Live Orders
 
-### Phase 3: Position simulator in live loop
-
-- paper entries/exits;
-- charts on close;
-- daily summary;
-- compare with anomaly-lab backtest logic.
-
-### Phase 4: Micro-real trading
-
-- real order adapter;
-- min 12 USDT notional;
-- risk cap;
+- risk sizing;
+- OrderWorker;
 - exchange reconciliation;
-- emergency close.
+- one max open position;
+- real entry/close;
+- `live_positions.csv`.
 
-### Phase 5: Evaluation
+### Phase 3: Watch and Category Logic
 
-- compare paper vs real fills;
-- category-level expectancy;
-- session-level stability;
-- false positive review;
-- decide whether to continue, reduce, or stop.
+- controlled organic wake-up;
+- thin large-print rejection;
+- exhaustion rejection;
+- OI freshness rule;
+- session tagging.
+
+### Phase 4: Position Worker
+
+- per-position worker;
+- structural trail;
+- TP1 partial;
+- stop move events;
+- close chart.
+
+### Phase 5: Review Tools
+
+- daily summary;
+- category performance;
+- skipped-signal reasons;
+- Telegram chart review;
+- export ZIP for analysis.
 
 ---
 
-## 15. Open decisions before code
+## 21. Critical Implementation Rules
 
-1. Real orders сразу или сначала paper-only на 3-7 дней?
-2. Effective risk cap when 12 USDT minimum notional exceeds 5% risk.
-3. Max simultaneous positions.
-4. Max watch symbols.
-5. Whether OI missing means no-trade or paper-only.
-6. Telegram credentials/config path.
-7. Whether to use websocket in Phase 1 or REST-first with a clean abstraction.
+- Place orders only from OrderWorker.
+- Main loop never blocks on Telegram or chart rendering.
+- All exchange responses are persisted.
+- Every skip has a reason.
+- Every watch on/off has a reason.
+- Every network degradation logs once and retries quietly.
+- No OI proxy.
+- No current open candle as closed data.
+- No hidden fallback from live context to stale cache.
 
 ---
 
-## 16. Recommended first implementation
+## 22. Open Decisions
 
-Do first:
+Before code:
 
-```text
-paper-only live supervisor with queue + watch state machine + Telegram + artifacts
-```
-
-Do not start with:
-
-```text
-real orders
-multi-profile optimization
-short strategy
-hard session filter
-```
-
-Reason: current edge is promising but top-tail dependent and validated only on one 30-day window.
+1. `max_effective_risk_pct`: proposed 8%.
+2. `N hours` for two-stop symbol cooldown: proposed 12h.
+3. Max open positions: proposed 1.
+4. Max active watch symbols: proposed 10.
+5. Whether missing OI means no-trade or watch-only. Proposed: if config requires OI, no real entry.
+6. Telegram config source.
+7. REST-first vs websocket-first. Proposed: REST-first skeleton, websocket later behind same interfaces.
