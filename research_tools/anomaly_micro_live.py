@@ -30,6 +30,8 @@ LIVE_LEDGER_COLUMNS = (
     "position_id",
     "status",
     "symbol",
+    "signal_category_id",
+    "signal_category_label",
     "session",
     "opened_at_utc",
     "closed_at_utc",
@@ -45,6 +47,7 @@ LIVE_LEDGER_COLUMNS = (
     "entry_order_id",
     "stop_order_id",
     "telegram_open_message_id",
+    "telegram_stop_message_id",
     "telegram_close_message_id",
     "close_reason",
 )
@@ -63,10 +66,46 @@ class TelegramConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class LivePumpCategory:
+    category_id: str
+    label: str
+    priority: int
+    max_start_quote_ratio: float | None = None
+    max_start_trade_ratio: float | None = None
+    max_start_avg_trade_quote_size_ratio: float | None = None
+    max_start_quote_ratio_per_abs_return: float | None = None
+    max_start_range_pct_ratio_to_baseline: float | None = None
+    min_next_taker_buy_quote_share: float | None = None
+    max_price_retention: float | None = None
+
+
+SUPPORTED_LIVE_PUMP_CATEGORIES: dict[str, LivePumpCategory] = {
+    "balanced_market": LivePumpCategory(
+        category_id="balanced_market",
+        label="balanced market",
+        priority=1,
+    ),
+    "mild_market": LivePumpCategory(
+        category_id="mild_market",
+        label="mild market",
+        priority=2,
+        max_start_quote_ratio=120.0,
+        max_start_trade_ratio=60.0,
+        max_start_avg_trade_quote_size_ratio=10.0,
+        max_start_quote_ratio_per_abs_return=30_000.0,
+        max_start_range_pct_ratio_to_baseline=35.0,
+        min_next_taker_buy_quote_share=0.46,
+        max_price_retention=0.98,
+    ),
+}
+
+
+@dataclass(frozen=True, slots=True)
 class LiveAnomalyConfig:
     results_dir: Path
     symbols: tuple[str, ...]
     confirm_real_orders: bool
+    pump_categories: tuple[str, ...] = ("balanced_market", "mild_market")
     baseline_candles: int = 60
     confirmation_candles: int = 4
     min_quote_ratio_start: float = 5.0
@@ -81,7 +120,9 @@ class LiveAnomalyConfig:
     min_price_retention: float = 0.70
     min_verticality_score: float = 0.25
     min_hold_count: int = 2
-    min_oi_change_pct_3x5m: float | None = 0.03
+    min_oi_change_pct_3x5m: float | None = 0.05
+    max_initial_risk_pct: float = 0.16
+    stop_buffer_range_fraction: float = 0.05
     max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.60
     position_notional_usdt: float = 12.0
     max_open_positions: int = 3
@@ -95,10 +136,15 @@ class LiveAnomalyConfig:
     stop_limit_per_symbol: int = 2
     telegram_cooldown_seconds: float = 900.0
     oi_fresh_ms: int = 5 * 60 * 1000
+    trail_lookback_candles: int = 5
+    trail_buffer_r: float = 0.10
 
 
 @dataclass(slots=True)
 class LiveSignal:
+    category_id: str
+    category_label: str
+    category_priority: int
     symbol: str
     decision_timestamp_ms: int
     start_timestamp_ms: int
@@ -106,12 +152,15 @@ class LiveSignal:
     entry_price: float
     stop_price: float
     tp1_price: float
+    initial_risk: float
+    initial_risk_pct: float
     quote_ratio_start: float
     trade_ratio_start: float
     price_retention: float
     hold_count: int
     verticality_score: float
     oi_change_pct_3x5m: float | None
+    category_rejections: list[dict[str, object]] = field(default_factory=list)
     strengths: list[str] = field(default_factory=list)
     weaknesses: list[str] = field(default_factory=list)
 
@@ -130,6 +179,7 @@ class LivePosition:
     stop_order_id: str
     opened_at_utc: str
     telegram_open_message_id: int | None = None
+    telegram_stop_message_id: int | None = None
     remaining_amount: float = 0.0
     tp1_done: bool = False
     current_stop_price: float = 0.0
@@ -158,6 +208,9 @@ class TelegramDispatcher:
 
     def send_sync(self, *, channel: str, text: str, reply_to_message_id: int | None = None) -> int | None:
         return self._send_message(channel=channel, text=text, reply_to_message_id=reply_to_message_id)
+
+    def edit_sync(self, *, channel: str, message_id: int, text: str) -> int | None:
+        return self._edit_message(channel=channel, message_id=message_id, text=text)
 
     def send_photo(self, *, channel: str, photo_path: Path, caption: str, reply_to_message_id: int | None = None) -> None:
         try:
@@ -213,6 +266,30 @@ class TelegramDispatcher:
             return None
         message_id = result.get("message_id")
         return int(message_id) if message_id is not None else None
+
+    def _edit_message(self, *, channel: str, message_id: int, text: str) -> int | None:
+        if channel == "positions":
+            token = self._config.positions_bot_token
+            chat_id = self._config.positions_chat_id
+        else:
+            token = self._config.events_bot_token
+            chat_id = self._config.events_chat_id
+        payload: dict[str, object] = {
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "text": text,
+            "parse_mode": "Markdown",
+            "disable_web_page_preview": True,
+        }
+        data = urllib.parse.urlencode(payload).encode("utf-8")
+        request = urllib.request.Request(f"https://api.telegram.org/bot{token}/editMessageText", data=data)
+        with urllib.request.urlopen(request, timeout=10) as response:
+            raw = json.loads(response.read().decode("utf-8"))
+        result = raw.get("result") if isinstance(raw, dict) else None
+        if not isinstance(result, dict):
+            return None
+        edited_id = result.get("message_id")
+        return int(edited_id) if edited_id is not None else None
 
     def _send_photo(self, *, channel: str, photo_path: Path, caption: str, reply_to_message_id: int | None) -> None:
         token = self._config.positions_bot_token if channel == "positions" else self._config.events_bot_token
@@ -274,6 +351,8 @@ class LiveArtifactWriter:
                     "position_id": position.position_id,
                     "status": status,
                     "symbol": signal.symbol,
+                    "signal_category_id": signal.category_id,
+                    "signal_category_label": signal.category_label,
                     "session": signal.session,
                     "opened_at_utc": position.opened_at_utc,
                     "closed_at_utc": "",
@@ -289,6 +368,7 @@ class LiveArtifactWriter:
                     "entry_order_id": position.entry_order_id,
                     "stop_order_id": position.stop_order_id,
                     "telegram_open_message_id": position.telegram_open_message_id or "",
+                    "telegram_stop_message_id": position.telegram_stop_message_id or "",
                     "telegram_close_message_id": "",
                     "close_reason": "",
                 }
@@ -310,6 +390,8 @@ class LiveArtifactWriter:
                     "position_id": position.position_id,
                     "status": "closed",
                     "symbol": signal.symbol,
+                    "signal_category_id": signal.category_id,
+                    "signal_category_label": signal.category_label,
                     "session": signal.session,
                     "opened_at_utc": position.opened_at_utc,
                     "closed_at_utc": datetime.now(UTC).isoformat(),
@@ -325,6 +407,7 @@ class LiveArtifactWriter:
                     "entry_order_id": position.entry_order_id,
                     "stop_order_id": position.stop_order_id,
                     "telegram_open_message_id": position.telegram_open_message_id or "",
+                    "telegram_stop_message_id": position.telegram_stop_message_id or "",
                     "telegram_close_message_id": "",
                     "close_reason": reason,
                 }
@@ -343,6 +426,7 @@ class AnomalyMicroLiveRunner:
         self.config = config
         self.exchange = exchange_client
         self.logger = logger
+        self._pump_categories = _resolve_live_pump_categories(config.pump_categories)
         self.artifacts = LiveArtifactWriter(
             config.results_dir / "live_anomaly_runs" / datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         )
@@ -360,12 +444,19 @@ class AnomalyMicroLiveRunner:
         symbols = list(self.config.symbols) or self.exchange.list_usdt_swap_symbols()
         if not symbols:
             raise LiveStartupError("Нет символов для live-обхода")
-        self.logger(f"live: старт, символов {len(symbols)}, max позиций {self.config.max_open_positions}")
+        category_ids = ",".join(category.category_id for category in self._pump_categories)
+        self.logger(
+            f"live: старт, символов {len(symbols)}, max позиций {self.config.max_open_positions}, категории {category_ids}"
+        )
         self.logger(f"live: артефакты {self.artifacts.root}")
         self.telegram.send(
             channel="events",
             key="live_started",
-            text="🟢 *Live запущен*\nREST-only обход активен. Реальные ордера разрешены явным флагом.",
+            text=(
+                "🟢 *Live запущен*\n"
+                "REST-only обход активен. Реальные ордера разрешены явным флагом.\n"
+                f"Категории: `{category_ids}`."
+            ),
         )
         cycle = 0
         while self.config.max_cycles is None or cycle < self.config.max_cycles:
@@ -407,6 +498,8 @@ class AnomalyMicroLiveRunner:
             missing.append("BINANCE_SECRET_KEY")
         if missing:
             raise LiveStartupError(f"Не заполнены env переменные: {', '.join(missing)}")
+        if not self._pump_categories:
+            raise LiveStartupError("Не заданы live pump categories")
         _ = self.exchange.fetch_usdt_free_balance()
 
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
@@ -484,6 +577,7 @@ class AnomalyMicroLiveRunner:
             return None
 
         start = frame.iloc[start_pos]
+        decision = segment.iloc[-1]
         baseline_quote = float(pd.to_numeric(baseline["quote_volume"], errors="coerce").median())
         baseline_trades = float(pd.to_numeric(baseline["number_of_trades"], errors="coerce").median())
         start_quote = float(start["quote_volume"])
@@ -508,116 +602,275 @@ class AnomalyMicroLiveRunner:
             return None
         if quote_ratio < self.config.min_quote_ratio_start or trade_ratio < self.config.min_trade_ratio_start:
             return None
-        if self.config.max_start_quote_ratio is not None and quote_ratio > self.config.max_start_quote_ratio:
-            self.artifacts.append_event("reject_exhausted_quote_ratio", symbol, {"quote_ratio": quote_ratio, "max": self.config.max_start_quote_ratio})
-            return None
-        if self.config.max_start_trade_ratio is not None and trade_ratio > self.config.max_start_trade_ratio:
-            self.artifacts.append_event("reject_exhausted_trade_ratio", symbol, {"trade_ratio": trade_ratio, "max": self.config.max_start_trade_ratio})
-            return None
-        if self.config.max_start_avg_trade_quote_size_ratio is not None and start_avg_trade_ratio > self.config.max_start_avg_trade_quote_size_ratio:
-            self.artifacts.append_event("reject_large_print_signature", symbol, {"ratio": start_avg_trade_ratio, "max": self.config.max_start_avg_trade_quote_size_ratio})
-            return None
-        if self.config.max_start_quote_ratio_per_abs_return is not None and start_quote_ratio_per_abs_return > self.config.max_start_quote_ratio_per_abs_return:
-            self.artifacts.append_event("reject_poor_effort_per_return", symbol, {"ratio": start_quote_ratio_per_abs_return, "max": self.config.max_start_quote_ratio_per_abs_return})
-            return None
-        if self.config.max_start_range_pct_ratio_to_baseline is not None and start_range_pct_ratio > self.config.max_start_range_pct_ratio_to_baseline:
-            self.artifacts.append_event("reject_extreme_range_expansion", symbol, {"ratio": start_range_pct_ratio, "max": self.config.max_start_range_pct_ratio_to_baseline})
-            return None
 
         segment_high = float(segment["high"].max())
         segment_low = float(segment["low"].min())
         impulse_range = segment_high - segment_low
         prior_whipsaw = _prior_up_down_whipsaw_to_impulse_range(baseline, impulse_range=impulse_range)
-        if (
-            self.config.max_prior_up_down_whipsaw_to_impulse_range is not None
-            and prior_whipsaw > self.config.max_prior_up_down_whipsaw_to_impulse_range
-        ):
-            self.artifacts.append_event(
-                "reject_prior_up_down_whipsaw",
-                symbol,
-                {
-                    "prior_up_down_whipsaw_to_impulse_range": prior_whipsaw,
-                    "max": self.config.max_prior_up_down_whipsaw_to_impulse_range,
-                },
-            )
-            return None
-        decision = segment.iloc[-1]
         decision_close = float(decision["close"])
         price_retention = _safe_divide(decision_close - start_open, segment_high - start_open)
         verticality = compute_start_verticality_metrics(segment)
         verticality_score = float(verticality["start_verticality_score"])
         hold_threshold = float(start["close"]) - (float(start["close"]) - float(start["open"])) * 0.50
         hold_count = int((segment["close"].astype(float) >= hold_threshold).sum())
-        if price_retention < self.config.min_price_retention:
-            return None
-        if self.config.max_price_retention is not None and price_retention > self.config.max_price_retention:
-            self.artifacts.append_event("reject_overextended_retention", symbol, {"price_retention": price_retention, "max": self.config.max_price_retention})
-            return None
-        if self.config.min_next_taker_buy_quote_share is not None:
-            if "taker_buy_quote_volume" not in frame.columns:
-                self.artifacts.append_event("reject_missing_taker_buy_share", symbol, {"required": self.config.min_next_taker_buy_quote_share})
-                return None
-            next_taker_share = float(
-                (
-                    segment.iloc[1:]["taker_buy_quote_volume"].astype(float)
-                    / segment.iloc[1:]["quote_volume"].astype(float).replace(0.0, pd.NA)
-                ).mean()
-            )
-            if next_taker_share < self.config.min_next_taker_buy_quote_share:
-                self.artifacts.append_event("reject_weak_next_taker_buy_share", symbol, {"share": next_taker_share, "min": self.config.min_next_taker_buy_quote_share})
-                return None
-        if verticality_score < self.config.min_verticality_score:
-            return None
-        if hold_count < self.config.min_hold_count:
-            return None
-
-        previous_stop = float(segment["low"].min())
+        previous_stop = segment_low - self.config.stop_buffer_range_fraction * impulse_range
         ema20 = frame["close"].astype(float).ewm(span=20, adjust=False).mean()
-        decision_ema20 = float(ema20.iloc[len(frame) - 1])
+        decision_ema20 = float(ema20.iloc[start_pos + self.config.confirmation_candles])
         stop_price = max(previous_stop, decision_ema20)
         entry_price = decision_close
         risk = entry_price - stop_price
+        initial_risk_pct = _safe_divide(risk, entry_price)
         if risk <= 0.0:
             return None
+        if not math.isfinite(initial_risk_pct) or initial_risk_pct > self.config.max_initial_risk_pct:
+            self.artifacts.append_event(
+                "reject_initial_risk_too_wide",
+                symbol,
+                {
+                    "initial_risk_pct": initial_risk_pct,
+                    "max": self.config.max_initial_risk_pct,
+                    "decision_timestamp_ms": int(decision["timestamp"]),
+                },
+            )
+            return None
         tp1_price = entry_price + risk
-        oi_change = self._fetch_live_oi_change(symbol, now_ms=now_ms)
-        if self.config.min_oi_change_pct_3x5m is not None:
-            if oi_change is None or oi_change < self.config.min_oi_change_pct_3x5m:
-                self.artifacts.append_event(
-                    "reject_oi",
-                    symbol,
-                    {"oi_change_pct_3x5m": oi_change, "required": self.config.min_oi_change_pct_3x5m},
-                )
-                return None
 
-        strengths = [
-            f"объём x{quote_ratio:.1f}",
-            f"сделки x{trade_ratio:.1f}",
-            f"удержание {price_retention:.0%}",
-            f"вертикальность {verticality_score:.2f}",
-        ]
-        if oi_change is not None:
-            strengths.append(f"OI {oi_change:.1%}")
-        weaknesses: list[str] = []
-        if "taker_buy_quote_volume" not in frame.columns:
-            weaknesses.append("нет taker-buy в kline")
-        return LiveSignal(
-            symbol=symbol,
-            decision_timestamp_ms=int(decision["timestamp"]),
-            start_timestamp_ms=int(start["timestamp"]),
-            session=_session_name(int(decision["timestamp"])),
-            entry_price=entry_price,
-            stop_price=stop_price,
-            tp1_price=tp1_price,
-            quote_ratio_start=quote_ratio,
-            trade_ratio_start=trade_ratio,
-            price_retention=price_retention,
-            hold_count=hold_count,
-            verticality_score=verticality_score,
-            oi_change_pct_3x5m=oi_change,
-            strengths=strengths,
-            weaknesses=weaknesses,
-        )
+        category_rejections: list[dict[str, object]] = []
+        oi_change_loaded = False
+        oi_change: float | None = None
+        next_taker_share_loaded = False
+        next_taker_share = float("nan")
+        for category in self._pump_categories:
+            max_start_quote_ratio = _category_value(category, self.config, "max_start_quote_ratio")
+            if max_start_quote_ratio is not None and quote_ratio > max_start_quote_ratio:
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_exhausted_quote_ratio",
+                        {"quote_ratio": quote_ratio, "max": max_start_quote_ratio, "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
+            max_start_trade_ratio = _category_value(category, self.config, "max_start_trade_ratio")
+            if max_start_trade_ratio is not None and trade_ratio > max_start_trade_ratio:
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_exhausted_trade_ratio",
+                        {"trade_ratio": trade_ratio, "max": max_start_trade_ratio, "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
+            max_avg_trade_ratio = _category_value(category, self.config, "max_start_avg_trade_quote_size_ratio")
+            if max_avg_trade_ratio is not None and start_avg_trade_ratio > max_avg_trade_ratio:
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_large_print_signature",
+                        {"ratio": start_avg_trade_ratio, "max": max_avg_trade_ratio, "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
+            max_quote_per_return = _category_value(category, self.config, "max_start_quote_ratio_per_abs_return")
+            if max_quote_per_return is not None and start_quote_ratio_per_abs_return > max_quote_per_return:
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_poor_effort_per_return",
+                        {"ratio": start_quote_ratio_per_abs_return, "max": max_quote_per_return, "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
+            max_range_ratio = _category_value(category, self.config, "max_start_range_pct_ratio_to_baseline")
+            if max_range_ratio is not None and start_range_pct_ratio > max_range_ratio:
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_extreme_range_expansion",
+                        {"ratio": start_range_pct_ratio, "max": max_range_ratio, "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
+            max_prior_whipsaw = self.config.max_prior_up_down_whipsaw_to_impulse_range
+            if max_prior_whipsaw is not None and prior_whipsaw > max_prior_whipsaw:
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_prior_up_down_whipsaw",
+                        {
+                            "prior_up_down_whipsaw_to_impulse_range": prior_whipsaw,
+                            "max": max_prior_whipsaw,
+                            "decision_timestamp_ms": int(decision["timestamp"]),
+                        },
+                    )
+                )
+                continue
+            if price_retention < self.config.min_price_retention:
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_low_price_retention",
+                        {"price_retention": price_retention, "min": self.config.min_price_retention, "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
+            max_price_retention = _category_value(category, self.config, "max_price_retention")
+            if max_price_retention is not None and price_retention > max_price_retention:
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_overextended_retention",
+                        {"price_retention": price_retention, "max": max_price_retention, "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
+            min_next_taker_share = _category_value(category, self.config, "min_next_taker_buy_quote_share")
+            if min_next_taker_share is not None:
+                if "taker_buy_quote_volume" not in frame.columns:
+                    category_rejections.append(
+                        self._record_category_reject(
+                            category,
+                            symbol,
+                            "reject_missing_taker_buy_share",
+                            {"required": min_next_taker_share, "decision_timestamp_ms": int(decision["timestamp"])},
+                        )
+                    )
+                    continue
+                if not next_taker_share_loaded:
+                    next_taker_share = float(
+                        (
+                            segment.iloc[1:]["taker_buy_quote_volume"].astype(float)
+                            / segment.iloc[1:]["quote_volume"].astype(float).replace(0.0, pd.NA)
+                        ).mean()
+                    )
+                    next_taker_share_loaded = True
+                if next_taker_share < min_next_taker_share:
+                    category_rejections.append(
+                        self._record_category_reject(
+                            category,
+                            symbol,
+                            "reject_weak_next_taker_buy_share",
+                            {"share": next_taker_share, "min": min_next_taker_share, "decision_timestamp_ms": int(decision["timestamp"])},
+                        )
+                    )
+                    continue
+            if verticality_score < self.config.min_verticality_score:
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_low_verticality",
+                        {"verticality_score": verticality_score, "min": self.config.min_verticality_score, "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
+            if hold_count < self.config.min_hold_count:
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_low_hold_count",
+                        {"hold_count": hold_count, "min": self.config.min_hold_count, "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
+            if self.config.min_oi_change_pct_3x5m is not None:
+                if not oi_change_loaded:
+                    oi_change = self._fetch_live_oi_change(symbol, now_ms=now_ms)
+                    oi_change_loaded = True
+                if oi_change is None or oi_change <= self.config.min_oi_change_pct_3x5m:
+                    category_rejections.append(
+                        self._record_category_reject(
+                            category,
+                            symbol,
+                            "reject_oi",
+                            {
+                                "oi_change_pct_3x5m": oi_change,
+                                "required_gt": self.config.min_oi_change_pct_3x5m,
+                                "decision_timestamp_ms": int(decision["timestamp"]),
+                            },
+                        )
+                    )
+                    continue
+
+            strengths = [
+                f"категория {category.category_id}",
+                f"объём x{quote_ratio:.1f}",
+                f"сделки x{trade_ratio:.1f}",
+                f"удержание {price_retention:.0%}",
+                f"вертикальность {verticality_score:.2f}",
+            ]
+            if oi_change is not None:
+                strengths.append(f"OI {oi_change:.1%}")
+            weaknesses: list[str] = []
+            if "taker_buy_quote_volume" not in frame.columns:
+                weaknesses.append("нет taker-buy в kline")
+            signal = LiveSignal(
+                category_id=category.category_id,
+                category_label=category.label,
+                category_priority=category.priority,
+                symbol=symbol,
+                decision_timestamp_ms=int(decision["timestamp"]),
+                start_timestamp_ms=int(start["timestamp"]),
+                session=_session_name(int(decision["timestamp"])),
+                entry_price=entry_price,
+                stop_price=stop_price,
+                tp1_price=tp1_price,
+                initial_risk=risk,
+                initial_risk_pct=initial_risk_pct,
+                quote_ratio_start=quote_ratio,
+                trade_ratio_start=trade_ratio,
+                price_retention=price_retention,
+                hold_count=hold_count,
+                verticality_score=verticality_score,
+                oi_change_pct_3x5m=oi_change,
+                category_rejections=list(category_rejections),
+                strengths=strengths,
+                weaknesses=weaknesses,
+            )
+            self.artifacts.append_event(
+                "category_selected",
+                symbol,
+                {
+                    "category_id": category.category_id,
+                    "category_label": category.label,
+                    "category_priority": category.priority,
+                    "decision_timestamp_ms": int(decision["timestamp"]),
+                    "prior_category_rejections": category_rejections,
+                },
+            )
+            if category_rejections:
+                rejected_ids = ",".join(str(row.get("category_id")) for row in category_rejections)
+                self.logger(
+                    f"live: сигнал {symbol}, категория {category.category_id}; до неё не прошли: {rejected_ids}"
+                )
+            return signal
+        return None
+
+    def _record_category_reject(
+        self,
+        category: LivePumpCategory,
+        symbol: str,
+        reason: str,
+        details: dict[str, object],
+    ) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "category_id": category.category_id,
+            "category_label": category.label,
+            "category_priority": category.priority,
+            "reason": reason,
+            **details,
+        }
+        self.artifacts.append_event("category_rejected", symbol, payload)
+        return payload
 
     def _fetch_live_oi_change(self, symbol: str, *, now_ms: int) -> float | None:
         end_ms = now_ms
@@ -697,7 +950,16 @@ class AnomalyMicroLiveRunner:
                 self._opening_symbols.discard(signal.symbol)
             raise
         self.artifacts.append_position(position)
-        self.artifacts.append_event("position_opened", signal.symbol, {"position_id": position.position_id})
+        self.artifacts.append_event(
+            "position_opened",
+            signal.symbol,
+            {
+                "position_id": position.position_id,
+                "category_id": signal.category_id,
+                "category_label": signal.category_label,
+                "category_priority": signal.category_priority,
+            },
+        )
         try:
             position.telegram_open_message_id = self.telegram.send_sync(
                 channel="positions",
@@ -706,13 +968,84 @@ class AnomalyMicroLiveRunner:
         except Exception as exc:
             self.artifacts.append_event("telegram_open_failed", signal.symbol, {"position_id": position.position_id, "reason": str(exc)})
             self.logger(f"live: позиция {signal.symbol} открыта, но Telegram-вход не отправлен: {exc}")
-        self.logger(f"live: открыта позиция {signal.symbol}, риск {actual_risk_usdt:.2f} USDT, notional {notional:.2f} USDT")
+        self.logger(
+            f"live: открыта позиция {signal.symbol}, категория {signal.category_id}, "
+            f"риск {actual_risk_usdt:.2f} USDT, notional {notional:.2f} USDT"
+        )
         threading.Thread(
             target=self._monitor_position,
             args=(position,),
             name=f"position-{signal.symbol}",
             daemon=True,
         ).start()
+
+    def _send_or_edit_stop_message(self, position: LivePosition, *, text: str, stop_price: float, reason: str) -> None:
+        if position.telegram_open_message_id is None:
+            self.artifacts.append_event(
+                "telegram_stop_message_skipped_no_parent",
+                position.signal.symbol,
+                {"position_id": position.position_id, "reason": reason, "stop_price": stop_price},
+            )
+            return
+        if position.telegram_stop_message_id is None:
+            try:
+                message_id = self.telegram.send_sync(
+                    channel="positions",
+                    reply_to_message_id=position.telegram_open_message_id,
+                    text=text,
+                )
+            except Exception as exc:
+                self.artifacts.append_event(
+                    "telegram_stop_message_send_failed",
+                    position.signal.symbol,
+                    {"position_id": position.position_id, "reason": reason, "stop_price": stop_price, "error": str(exc)},
+                )
+                self.logger(f"live: стоп-сообщение {position.signal.symbol} не отправлено: {exc}")
+                return
+            if message_id is None:
+                self.artifacts.append_event(
+                    "telegram_stop_message_missing_id",
+                    position.signal.symbol,
+                    {"position_id": position.position_id, "reason": reason, "stop_price": stop_price},
+                )
+                return
+            position.telegram_stop_message_id = message_id
+            self.artifacts.append_event(
+                "telegram_stop_message_sent",
+                position.signal.symbol,
+                {"position_id": position.position_id, "message_id": message_id, "reason": reason, "stop_price": stop_price},
+            )
+            return
+        try:
+            self.telegram.edit_sync(
+                channel="positions",
+                message_id=position.telegram_stop_message_id,
+                text=text,
+            )
+        except Exception as exc:
+            self.artifacts.append_event(
+                "telegram_stop_message_edit_failed",
+                position.signal.symbol,
+                {
+                    "position_id": position.position_id,
+                    "message_id": position.telegram_stop_message_id,
+                    "reason": reason,
+                    "stop_price": stop_price,
+                    "error": str(exc),
+                },
+            )
+            self.logger(f"live: стоп-сообщение {position.signal.symbol} не отредактировано: {exc}")
+            return
+        self.artifacts.append_event(
+            "telegram_stop_message_edited",
+            position.signal.symbol,
+            {
+                "position_id": position.position_id,
+                "message_id": position.telegram_stop_message_id,
+                "reason": reason,
+                "stop_price": stop_price,
+            },
+        )
 
     def _monitor_position(self, position: LivePosition) -> None:
         signal = position.signal
@@ -764,18 +1097,25 @@ class AnomalyMicroLiveRunner:
                         self.artifacts.append_event("old_stop_cancel_failed_after_be", signal.symbol, {"reason": str(exc)})
                     last_stop_price = signal.entry_price
                     self.artifacts.append_event("tp1_and_stop_to_be", signal.symbol, {"position_id": position.position_id})
-                    self.telegram.send(
-                        channel="positions",
-                        key=f"tp1:{position.position_id}",
-                        reply_to_message_id=position.telegram_open_message_id,
+                    self._send_or_edit_stop_message(
+                        position,
+                        stop_price=signal.entry_price,
+                        reason="tp1_be",
                         text=(
-                            "🟢 *TP1 взят*\n"
-                            f"*{signal.symbol}*: закрыта половина, стоп перенесён в BE `{signal.entry_price:.6g}`."
+                            "🟢 *Стоп обновлён*\n"
+                            f"*{signal.symbol}*: TP1 взят, закрыта половина.\n"
+                            f"Текущий стоп: BE `{signal.entry_price:.6g}`."
                         ),
                     )
                 if position.tp1_done:
-                    trail_low = float(frame.tail(5)["low"].min())
-                    new_stop = max(last_stop_price, trail_low)
+                    latest_ts = int(latest["timestamp"])
+                    prior = frame.loc[frame["timestamp"].astype(int) < latest_ts].tail(self.config.trail_lookback_candles)
+                    if not prior.empty:
+                        trail_low = float(prior["low"].min())
+                        structural_stop = trail_low - self.config.trail_buffer_r * signal.initial_risk
+                    else:
+                        structural_stop = last_stop_price
+                    new_stop = max(last_stop_price, structural_stop)
                     if new_stop > last_stop_price and new_stop < latest_close:
                         new_stop_order = self.exchange.create_stop_market_order(
                             signal.symbol,
@@ -791,11 +1131,15 @@ class AnomalyMicroLiveRunner:
                         except Exception as exc:
                             self.artifacts.append_event("old_stop_cancel_failed_after_trail", signal.symbol, {"reason": str(exc)})
                         last_stop_price = new_stop
-                        self.telegram.send(
-                            channel="positions",
-                            key=f"trail:{position.position_id}:{round(new_stop, 8)}",
-                            reply_to_message_id=position.telegram_open_message_id,
-                            text=f"🟡 *Стоп подтянут*\n*{signal.symbol}*: новый стоп `{new_stop:.6g}`.",
+                        self._send_or_edit_stop_message(
+                            position,
+                            stop_price=new_stop,
+                            reason="structural_trail",
+                            text=(
+                                "🟡 *Стоп обновлён*\n"
+                                f"*{signal.symbol}*: структурный трейл.\n"
+                                f"Текущий стоп: `{new_stop:.6g}`."
+                            ),
                         )
                 if latest_low <= last_stop_price:
                     time.sleep(3.0)
@@ -904,6 +1248,35 @@ def build_telegram_config_from_env() -> TelegramConfig:
     )
 
 
+def _resolve_live_pump_categories(category_ids: tuple[str, ...]) -> tuple[LivePumpCategory, ...]:
+    resolved: list[LivePumpCategory] = []
+    unknown: list[str] = []
+    seen: set[str] = set()
+    for raw_category_id in category_ids:
+        category_id = raw_category_id.strip()
+        if not category_id or category_id in seen:
+            continue
+        category = SUPPORTED_LIVE_PUMP_CATEGORIES.get(category_id)
+        if category is None:
+            unknown.append(category_id)
+            continue
+        resolved.append(category)
+        seen.add(category_id)
+    if unknown:
+        raise LiveStartupError(
+            "Неизвестные live pump categories: "
+            f"{', '.join(sorted(unknown))}. Доступны: {', '.join(sorted(SUPPORTED_LIVE_PUMP_CATEGORIES))}"
+        )
+    return tuple(sorted(resolved, key=lambda item: item.priority))
+
+
+def _category_value(category: LivePumpCategory, config: LiveAnomalyConfig, field_name: str) -> float | None:
+    value = getattr(category, field_name)
+    if value is not None:
+        return value
+    return getattr(config, field_name)
+
+
 def _format_open_message(position: LivePosition) -> str:
     signal = position.signal
     strengths = "; ".join(signal.strengths)
@@ -911,7 +1284,9 @@ def _format_open_message(position: LivePosition) -> str:
     return (
         "🟢 *Открыта micro-live позиция*\n"
         f"*{signal.symbol}* · сессия: *{signal.session}*\n"
+        f"Категория: *{signal.category_label}* (`{signal.category_id}`)\n"
         f"Вход `{signal.entry_price:.6g}`, стоп `{signal.stop_price:.6g}`, TP1 `{signal.tp1_price:.6g}`\n"
+        f"Риск `{signal.initial_risk_pct:.2%}` от входа\n"
         f"Размер `{position.notional_usdt:.2f} USDT`, риск `{position.risk_usdt:.2f} USDT`\n"
         f"Сильные стороны: {strengths}\n"
         f"Слабые стороны: {weaknesses}"

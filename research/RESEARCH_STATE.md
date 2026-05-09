@@ -1161,3 +1161,11 @@ Current command argument: --position-notional-usdt, default 12.0.
 Live selection now matches the balanced research profile much more closely by adding the missing exhaustion/flow caps.
 Remaining expected difference: live uses only closed candles available in real time and fixed 12 USDT sizing; backtest can still compare alternate entry methods.
 ```
+
+2026-05-09 live/backtest parity follow-up:
+
+```text
+Live before P113 was still wider than the best balanced backtest because OI default was 0.03 instead of strict >0.05, and stop/trail semantics were not fully aligned with the backtest candidate.
+P113 proposes explicit live pump categories: balanced_market first, mild_market second. Category pass/reject is recorded in live_events.csv, live_positions.csv, runtime logs and Telegram open messages.
+No silent fallback is allowed: unknown categories fail startup; missing required taker-buy/OI data rejects the setup; Telegram stop edit failures are logged as explicit artifact events instead of sending replacement spam.
+```

@@ -238,6 +238,11 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT:USDT")
     anomaly_live.add_argument("--confirm-real-orders", action="store_true", help="Required guard for real orders")
     anomaly_live.add_argument("--max-cycles", type=_positive_int_for("--max-cycles"), default=None)
+    anomaly_live.add_argument(
+        "--pump-categories",
+        default="balanced_market,mild_market",
+        help="Comma-separated live pump categories, tried by priority. Supported: balanced_market,mild_market",
+    )
     anomaly_live.add_argument("--baseline-candles", type=_positive_int_for("--baseline-candles"), default=60)
     anomaly_live.add_argument("--confirmation-candles", type=_positive_int_for("--confirmation-candles"), default=4)
     anomaly_live.add_argument("--min-quote-ratio-start", type=float, default=5.0)
@@ -245,11 +250,15 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--min-price-retention", type=float, default=0.70)
     anomaly_live.add_argument("--min-verticality-score", type=float, default=0.25)
     anomaly_live.add_argument("--min-hold-count", type=int, default=2)
-    anomaly_live.add_argument("--min-oi-change-pct-3x5m", type=float, default=0.03)
+    anomaly_live.add_argument("--min-oi-change-pct-3x5m", type=float, default=0.05)
+    anomaly_live.add_argument("--max-initial-risk-pct", type=float, default=0.16)
+    anomaly_live.add_argument("--stop-buffer-range-fraction", type=float, default=0.05)
     anomaly_live.add_argument("--max-prior-up-down-whipsaw-to-impulse-range", type=float, default=0.60)
     anomaly_live.add_argument("--position-notional-usdt", type=float, default=12.0)
     anomaly_live.add_argument("--max-open-positions", type=_positive_int_for("--max-open-positions"), default=3)
     anomaly_live.add_argument("--scan-sleep-seconds", type=float, default=2.0)
+    anomaly_live.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
+    anomaly_live.add_argument("--trail-buffer-r", type=float, default=0.10)
 
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")

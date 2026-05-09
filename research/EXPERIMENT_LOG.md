@@ -1665,3 +1665,27 @@ User decision: no paper-first requirement; micro-live is allowed from the start,
 Added requirements: OI fresh if latest value is within current time minus 5 minutes; one canonical live_positions.csv for open/closed positions; separate live run artifact folder; all sessions traded with session in Telegram; per-position worker; Telegram cooldowns; symbol cooldown after 2 stops in N hours; network-degraded state with quiet retries.
 Follow-up decisions: max open positions = 3; REST-only in v1; use two Telegram bots, one for events and one for positions. Related Telegram updates must reply to the parent message, e.g. close/SL move replies to open-position message.
 ```
+
+---
+
+## E045 - Planned live category parity smoke
+
+```text
+Status: PLANNED
+Patch: P113 proposed / compile verified locally / commit UNKNOWN
+Date: 2026-05-09
+```
+
+Goal:
+
+```text
+Verify live selection now follows the fixed candidate set: balanced_market hold>=2 OI>5 first, mild_market hold>=2 OI>5 second only if balanced_market rejects.
+```
+
+Checks:
+
+```text
+Run run-anomaly-live with --max-cycles 1 on a tiny symbol list and inspect live_events.csv.
+Expected: category_rejected rows include category_id/reason/decision_timestamp_ms; category_selected row identifies the traded category; Telegram open text includes category; stop updates edit the first stop message rather than sending a sequence of trail messages.
+Do not infer edge from this smoke. It only validates execution-path parity and artifact truthfulness.
+```

@@ -4462,6 +4462,11 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             results_dir=config.backtest.results_dir,
             symbols=tuple(getattr(args, "symbols", None) or ()),
             confirm_real_orders=bool(getattr(args, "confirm_real_orders", False)),
+            pump_categories=tuple(
+                item.strip()
+                for item in str(getattr(args, "pump_categories", "balanced_market,mild_market")).split(",")
+                if item.strip()
+            ),
             baseline_candles=int(getattr(args, "baseline_candles", 60)),
             confirmation_candles=int(getattr(args, "confirmation_candles", 4)),
             min_quote_ratio_start=float(getattr(args, "min_quote_ratio_start", 5.0)),
@@ -4474,6 +4479,8 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                 if getattr(args, "min_oi_change_pct_3x5m", None) is None
                 else float(args.min_oi_change_pct_3x5m)
             ),
+            max_initial_risk_pct=float(getattr(args, "max_initial_risk_pct", 0.16)),
+            stop_buffer_range_fraction=float(getattr(args, "stop_buffer_range_fraction", 0.05)),
             max_prior_up_down_whipsaw_to_impulse_range=(
                 None
                 if getattr(args, "max_prior_up_down_whipsaw_to_impulse_range", None) is None
@@ -4483,6 +4490,8 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             max_open_positions=int(getattr(args, "max_open_positions", 3)),
             scan_sleep_seconds=float(getattr(args, "scan_sleep_seconds", 2.0)),
             max_cycles=getattr(args, "max_cycles", None),
+            trail_lookback_candles=int(getattr(args, "trail_lookback_candles", 5)),
+            trail_buffer_r=float(getattr(args, "trail_buffer_r", 0.10)),
         )
         _, exchange_client, _ = _build_fetch_stack(config)
         try:

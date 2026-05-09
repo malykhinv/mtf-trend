@@ -757,3 +757,15 @@ Before code:
 5. Whether missing OI means no-trade or watch-only. Proposed: if config requires OI, no real entry.
 6. Telegram config source.
 7. Transport: decided REST-only for v1.
+
+---
+
+## 2026-05-09 category/Telegram update
+
+```text
+Live should not silently widen the best balanced candidate.
+Default category order is balanced_market, then mild_market as the frequency-preserving alternative from the same research window.
+Every selected position must record category_id/category_label in artifacts, logs and Telegram.
+If an earlier category rejects and a later category passes, the rejection chain must remain visible.
+Stop-move Telegram updates should edit the first stop message; edit/send failures are explicit live_events rows, not fallback spam.
+```

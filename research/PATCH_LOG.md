@@ -4282,3 +4282,47 @@ The scanner evaluates a small backfill window of recent decision candidates inst
 After TP1 partial close, live re-reads the actual exchange position amount before replacing the stop.
 When replacing stops after TP1/trailing, the new reduce-only stop is placed before attempting to cancel the old one; failed old-stop cancel is explicit artifact noise, not hidden.
 ```
+
+---
+
+## P113 - Live balanced parity categories and stop-message edits
+
+```text
+Status: PROPOSED / compile verified locally
+Type: live/backtest parity / Telegram noise control
+Trading logic changed: anomaly micro-live selection and stop management only
+Files: research_tools/anomaly_micro_live.py, cli/*, research/*
+Base: uploaded 1.zip plus GitHub branch codex/pno-anomaly-continuation-lab head check
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+Current live still did not exactly match the best balanced backtest candidate.
+Best balanced candidate uses market entry, balanced exhaustion profile, hold>=2 and oi_change_pct_3x5m > 5%.
+Live default used OI > 3%, used current/latest EMA20 instead of decision-candle EMA20, missed the initial risk cap, and sent a new Telegram message for every stop move.
+```
+
+Change:
+
+```text
+Default live OI threshold is now 0.05 and the check is strict > threshold, matching the backtest grid condition.
+Live adds explicit pump categories tried in priority order: balanced_market first, mild_market second. If balanced_market rejects and mild_market passes, the selected category and prior rejection reasons are written to live_events.csv, live_positions.csv, runtime log and Telegram open message.
+Unknown categories fail startup explicitly; missing required taker-buy/OI data remains a rejection, not a fallback.
+Initial stop now uses the decision window structural stop with stop_buffer_range_fraction=0.05 and decision-candle EMA20; initial_risk_pct is capped at 0.16.
+Trailing stop now uses prior candles only and trail_buffer_r=0.10 * initial_risk, matching the structural-trail semantics more closely.
+Stop-move Telegram notifications create one stop message and then edit it through editMessageText; edit failures are explicit artifact events and do not send extra fallback messages.
+```
+
+Verification:
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py
+```
+
+Known local limitation:
+
+```text
+Parser smoke import could not run in this sandbox because pyarrow is not installed; compileall passed because it does not import the parquet stack.
+```
