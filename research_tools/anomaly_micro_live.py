@@ -79,6 +79,12 @@ class LivePumpCategory:
     max_price_retention: float | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class LiveOiChangeResult:
+    value: float | None
+    reason: str | None = None
+
+
 SUPPORTED_LIVE_PUMP_CATEGORIES: dict[str, LivePumpCategory] = {
     "balanced_market": LivePumpCategory(
         category_id="balanced_market",
@@ -599,8 +605,32 @@ class AnomalyMicroLiveRunner:
         quote_ratio = _safe_divide(start_quote, baseline_quote)
         trade_ratio = _safe_divide(start_trades, baseline_trades)
         if not math.isfinite(quote_ratio) or not math.isfinite(trade_ratio):
+            self.artifacts.append_event(
+                "reject_invalid_flow_ratios",
+                symbol,
+                {
+                    "baseline_quote": _finite_or_none(baseline_quote),
+                    "baseline_trades": _finite_or_none(baseline_trades),
+                    "start_quote": _finite_or_none(start_quote),
+                    "start_trades": _finite_or_none(start_trades),
+                    "quote_ratio": _finite_or_none(quote_ratio),
+                    "trade_ratio": _finite_or_none(trade_ratio),
+                    "decision_timestamp_ms": int(decision["timestamp"]),
+                },
+            )
             return None
         if quote_ratio < self.config.min_quote_ratio_start or trade_ratio < self.config.min_trade_ratio_start:
+            self.artifacts.append_event(
+                "reject_weak_start_flow",
+                symbol,
+                {
+                    "quote_ratio": quote_ratio,
+                    "trade_ratio": trade_ratio,
+                    "min_quote_ratio": self.config.min_quote_ratio_start,
+                    "min_trade_ratio": self.config.min_trade_ratio_start,
+                    "decision_timestamp_ms": int(decision["timestamp"]),
+                },
+            )
             return None
 
         segment_high = float(segment["high"].max())
@@ -620,7 +650,17 @@ class AnomalyMicroLiveRunner:
         entry_price = decision_close
         risk = entry_price - stop_price
         initial_risk_pct = _safe_divide(risk, entry_price)
-        if risk <= 0.0:
+        if not math.isfinite(risk) or risk <= 0.0:
+            self.artifacts.append_event(
+                "reject_invalid_initial_risk",
+                symbol,
+                {
+                    "entry_price": _finite_or_none(entry_price),
+                    "stop_price": _finite_or_none(stop_price),
+                    "risk": _finite_or_none(risk),
+                    "decision_timestamp_ms": int(decision["timestamp"]),
+                },
+            )
             return None
         if not math.isfinite(initial_risk_pct) or initial_risk_pct > self.config.max_initial_risk_pct:
             self.artifacts.append_event(
@@ -638,6 +678,7 @@ class AnomalyMicroLiveRunner:
         category_rejections: list[dict[str, object]] = []
         oi_change_loaded = False
         oi_change: float | None = None
+        oi_change_reason: str | None = None
         next_taker_share_loaded = False
         next_taker_share = float("nan")
         for category in self._pump_categories:
@@ -664,6 +705,16 @@ class AnomalyMicroLiveRunner:
                 )
                 continue
             max_avg_trade_ratio = _category_value(category, self.config, "max_start_avg_trade_quote_size_ratio")
+            if max_avg_trade_ratio is not None and not math.isfinite(start_avg_trade_ratio):
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_invalid_avg_trade_quote_size_ratio",
+                        {"ratio": _finite_or_none(start_avg_trade_ratio), "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
             if max_avg_trade_ratio is not None and start_avg_trade_ratio > max_avg_trade_ratio:
                 category_rejections.append(
                     self._record_category_reject(
@@ -675,6 +726,16 @@ class AnomalyMicroLiveRunner:
                 )
                 continue
             max_quote_per_return = _category_value(category, self.config, "max_start_quote_ratio_per_abs_return")
+            if max_quote_per_return is not None and not math.isfinite(start_quote_ratio_per_abs_return):
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_invalid_quote_ratio_per_abs_return",
+                        {"ratio": _finite_or_none(start_quote_ratio_per_abs_return), "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
             if max_quote_per_return is not None and start_quote_ratio_per_abs_return > max_quote_per_return:
                 category_rejections.append(
                     self._record_category_reject(
@@ -686,6 +747,16 @@ class AnomalyMicroLiveRunner:
                 )
                 continue
             max_range_ratio = _category_value(category, self.config, "max_start_range_pct_ratio_to_baseline")
+            if max_range_ratio is not None and not math.isfinite(start_range_pct_ratio):
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_invalid_range_expansion_ratio",
+                        {"ratio": _finite_or_none(start_range_pct_ratio), "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
             if max_range_ratio is not None and start_range_pct_ratio > max_range_ratio:
                 category_rejections.append(
                     self._record_category_reject(
@@ -697,6 +768,19 @@ class AnomalyMicroLiveRunner:
                 )
                 continue
             max_prior_whipsaw = self.config.max_prior_up_down_whipsaw_to_impulse_range
+            if max_prior_whipsaw is not None and not math.isfinite(prior_whipsaw):
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_invalid_prior_whipsaw",
+                        {
+                            "prior_up_down_whipsaw_to_impulse_range": _finite_or_none(prior_whipsaw),
+                            "decision_timestamp_ms": int(decision["timestamp"]),
+                        },
+                    )
+                )
+                continue
             if max_prior_whipsaw is not None and prior_whipsaw > max_prior_whipsaw:
                 category_rejections.append(
                     self._record_category_reject(
@@ -708,6 +792,16 @@ class AnomalyMicroLiveRunner:
                             "max": max_prior_whipsaw,
                             "decision_timestamp_ms": int(decision["timestamp"]),
                         },
+                    )
+                )
+                continue
+            if not math.isfinite(price_retention):
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_invalid_price_retention",
+                        {"price_retention": _finite_or_none(price_retention), "decision_timestamp_ms": int(decision["timestamp"])},
                     )
                 )
                 continue
@@ -745,13 +839,24 @@ class AnomalyMicroLiveRunner:
                     )
                     continue
                 if not next_taker_share_loaded:
-                    next_taker_share = float(
-                        (
-                            segment.iloc[1:]["taker_buy_quote_volume"].astype(float)
-                            / segment.iloc[1:]["quote_volume"].astype(float).replace(0.0, pd.NA)
-                        ).mean()
-                    )
+                    taker_quote = pd.to_numeric(segment.iloc[1:]["taker_buy_quote_volume"], errors="coerce")
+                    quote_volume = pd.to_numeric(segment.iloc[1:]["quote_volume"], errors="coerce")
+                    valid_taker_share_rows = taker_quote.notna() & quote_volume.notna() & quote_volume.gt(0.0)
+                    if not bool(valid_taker_share_rows.all()):
+                        next_taker_share = float("nan")
+                    else:
+                        next_taker_share = float((taker_quote / quote_volume).mean())
                     next_taker_share_loaded = True
+                if not math.isfinite(next_taker_share):
+                    category_rejections.append(
+                        self._record_category_reject(
+                            category,
+                            symbol,
+                            "reject_invalid_taker_buy_share",
+                            {"share": _finite_or_none(next_taker_share), "decision_timestamp_ms": int(decision["timestamp"])},
+                        )
+                    )
+                    continue
                 if next_taker_share < min_next_taker_share:
                     category_rejections.append(
                         self._record_category_reject(
@@ -762,6 +867,16 @@ class AnomalyMicroLiveRunner:
                         )
                     )
                     continue
+            if not math.isfinite(verticality_score):
+                category_rejections.append(
+                    self._record_category_reject(
+                        category,
+                        symbol,
+                        "reject_invalid_verticality",
+                        {"verticality_score": _finite_or_none(verticality_score), "decision_timestamp_ms": int(decision["timestamp"])},
+                    )
+                )
+                continue
             if verticality_score < self.config.min_verticality_score:
                 category_rejections.append(
                     self._record_category_reject(
@@ -784,16 +899,19 @@ class AnomalyMicroLiveRunner:
                 continue
             if self.config.min_oi_change_pct_3x5m is not None:
                 if not oi_change_loaded:
-                    oi_change = self._fetch_live_oi_change(symbol, now_ms=now_ms)
+                    oi_result = self._fetch_live_oi_change(symbol, now_ms=now_ms)
+                    oi_change = oi_result.value
+                    oi_change_reason = oi_result.reason
                     oi_change_loaded = True
-                if oi_change is None or oi_change <= self.config.min_oi_change_pct_3x5m:
+                if oi_change is None or not math.isfinite(oi_change) or oi_change <= self.config.min_oi_change_pct_3x5m:
                     category_rejections.append(
                         self._record_category_reject(
                             category,
                             symbol,
                             "reject_oi",
                             {
-                                "oi_change_pct_3x5m": oi_change,
+                                "oi_change_pct_3x5m": _finite_or_none(oi_change),
+                                "oi_status": oi_change_reason or "below_threshold",
                                 "required_gt": self.config.min_oi_change_pct_3x5m,
                                 "decision_timestamp_ms": int(decision["timestamp"]),
                             },
@@ -872,21 +990,28 @@ class AnomalyMicroLiveRunner:
         self.artifacts.append_event("category_rejected", symbol, payload)
         return payload
 
-    def _fetch_live_oi_change(self, symbol: str, *, now_ms: int) -> float | None:
+    def _fetch_live_oi_change(self, symbol: str, *, now_ms: int) -> LiveOiChangeResult:
         end_ms = now_ms
         start_ms = end_ms - 25 * 60_000
         frame = self.exchange.fetch_open_interest(symbol, Timeframe.M5, start_ms, end_ms)
-        if frame.empty or "open_interest" not in frame.columns:
-            return None
+        if frame.empty:
+            return LiveOiChangeResult(None, "oi_frame_empty")
+        if "open_interest" not in frame.columns:
+            return LiveOiChangeResult(None, "oi_column_missing")
         frame = frame.sort_values("timestamp").dropna(subset=["timestamp", "open_interest"]).reset_index(drop=True)
         if len(frame) < 4:
-            return None
+            return LiveOiChangeResult(None, "oi_history_too_short")
         latest_ts = int(frame.iloc[-1]["timestamp"])
         if latest_ts < now_ms - self.config.oi_fresh_ms:
-            return None
+            return LiveOiChangeResult(None, "oi_stale")
         current = float(frame.iloc[-1]["open_interest"])
         previous = float(frame.iloc[-4]["open_interest"])
-        return _safe_divide(current - previous, previous)
+        if not math.isfinite(current) or not math.isfinite(previous) or previous <= 0.0:
+            return LiveOiChangeResult(None, "oi_invalid_values")
+        value = _safe_divide(current - previous, previous)
+        if not math.isfinite(value):
+            return LiveOiChangeResult(None, "oi_invalid_change")
+        return LiveOiChangeResult(value)
 
     def _maybe_open_position(self, signal: LiveSignal) -> None:
         reject_max_positions = False
@@ -1017,7 +1142,7 @@ class AnomalyMicroLiveRunner:
             )
             return
         try:
-            self.telegram.edit_sync(
+            edited_message_id = self.telegram.edit_sync(
                 channel="positions",
                 message_id=position.telegram_stop_message_id,
                 text=text,
@@ -1035,6 +1160,18 @@ class AnomalyMicroLiveRunner:
                 },
             )
             self.logger(f"live: стоп-сообщение {position.signal.symbol} не отредактировано: {exc}")
+            return
+        if edited_message_id is None:
+            self.artifacts.append_event(
+                "telegram_stop_message_edit_missing_id",
+                position.signal.symbol,
+                {
+                    "position_id": position.position_id,
+                    "message_id": position.telegram_stop_message_id,
+                    "reason": reason,
+                    "stop_price": stop_price,
+                },
+            )
             return
         self.artifacts.append_event(
             "telegram_stop_message_edited",
@@ -1291,6 +1428,16 @@ def _format_open_message(position: LivePosition) -> str:
         f"Сильные стороны: {strengths}\n"
         f"Слабые стороны: {weaknesses}"
     )
+
+
+def _finite_or_none(value: float | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _safe_divide(numerator: float, denominator: float) -> float:

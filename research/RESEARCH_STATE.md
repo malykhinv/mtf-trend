@@ -1169,3 +1169,11 @@ Live before P113 was still wider than the best balanced backtest because OI defa
 P113 proposes explicit live pump categories: balanced_market first, mild_market second. Category pass/reject is recorded in live_events.csv, live_positions.csv, runtime logs and Telegram open messages.
 No silent fallback is allowed: unknown categories fail startup; missing required taker-buy/OI data rejects the setup; Telegram stop edit failures are logged as explicit artifact events instead of sending replacement spam.
 ```
+
+2026-05-09 live data-honesty follow-up:
+
+```text
+Second-pass review after P113 found a real hidden-problem risk: NaN metrics could bypass enabled live filters because NaN threshold comparisons are false.
+P114 proposes explicit invalid-metric rejections for OI, taker-buy share, range/effort/retention/verticality and related category gates.
+This is expected to make live stricter when data is malformed; it does not add fallback data sources or proxy values.
+```

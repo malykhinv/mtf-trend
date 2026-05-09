@@ -769,3 +769,12 @@ Every selected position must record category_id/category_label in artifacts, log
 If an earlier category rejects and a later category passes, the rejection chain must remain visible.
 Stop-move Telegram updates should edit the first stop message; edit/send failures are explicit live_events rows, not fallback spam.
 ```
+
+---
+
+## 2026-05-09 invalid metric follow-up
+
+```text
+P113 category parity still needed a hard NaN audit.
+P114 rule: if a live filter is enabled, its metric must be finite and sourced from the expected live payload. Non-finite metric values reject with explicit live_events reasons; no proxy, no skip-to-pass, no replacement Telegram spam.
+```

@@ -1689,3 +1689,27 @@ Run run-anomaly-live with --max-cycles 1 on a tiny symbol list and inspect live_
 Expected: category_rejected rows include category_id/reason/decision_timestamp_ms; category_selected row identifies the traded category; Telegram open text includes category; stop updates edit the first stop message rather than sending a sequence of trail messages.
 Do not infer edge from this smoke. It only validates execution-path parity and artifact truthfulness.
 ```
+
+---
+
+## E046 - Planned live invalid-metric smoke
+
+```text
+Status: PLANNED
+Patch: P114 proposed / compile + synthetic smoke verified locally / commit UNKNOWN
+Date: 2026-05-09
+```
+
+Goal:
+
+```text
+Verify that P113 live category parity cannot be bypassed by NaN or invalid required metrics.
+```
+
+Checks:
+
+```text
+Run run-anomaly-live on a tiny symbol list and inspect live_events.csv.
+Expected invalid data behavior: missing/stale/invalid OI becomes reject_oi with oi_status; invalid taker-buy confirmation rows become reject_invalid_taker_buy_share; invalid ratio/retention/verticality metrics become explicit category_rejected reasons.
+No setup with non-finite required metrics should reach category_selected or position_opened.
+```

@@ -4326,3 +4326,51 @@ Known local limitation:
 ```text
 Parser smoke import could not run in this sandbox because pyarrow is not installed; compileall passed because it does not import the parquet stack.
 ```
+
+---
+
+## P114 - Explicit invalid live metric rejections
+
+```text
+Status: PROPOSED / compile + smoke verified locally
+Type: live data honesty / anti-silent-fallback
+Trading logic changed: anomaly micro-live selection only
+Files: research_tools/anomaly_micro_live.py, research/*
+Base: uploaded 1.zip + P113 applied locally
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+P113 fixed category priority and Telegram stop-edit behavior, but a second pass found one class of hidden problem: non-finite live metrics could pass threshold checks because Python comparisons with NaN return False.
+Affected metrics included avg trade quote size ratio, quote ratio per absolute return, range expansion ratio, prior whipsaw ratio, price retention, verticality, taker-buy quote share and OI change.
+The most dangerous case was OI: invalid previous OI could produce NaN and bypass the strict >5% gate.
+```
+
+Change:
+
+```text
+Every enabled live metric gate now rejects non-finite values explicitly and writes a concrete reason to live_events.csv.
+OI fetch now returns a typed value/status result, including oi_frame_empty, oi_column_missing, oi_history_too_short, oi_stale, oi_invalid_values and oi_invalid_change.
+Taker-buy share requires valid taker_buy_quote_volume and positive quote_volume for every confirmation candle used by the share calculation.
+Telegram stop edit returning no message id is now logged as telegram_stop_message_edit_missing_id instead of being treated as success.
+```
+
+Verification:
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py research_tools/anomaly_strategy_backtest.py research_tools/anomaly_continuation_lab.py
+```
+
+Smoke:
+
+```text
+Synthetic _build_signal_at_start smoke passed: valid balanced_market signal passes; NaN taker-buy share rejects with reject_invalid_taker_buy_share; invalid zero OI history rejects with reject_oi / oi_invalid_values.
+```
+
+Risk:
+
+```text
+Low-to-medium. This can reduce live signal count versus P113 when Binance payloads contain missing/invalid flow/OI values. That is intentional: invalid required data must not be traded as if it passed.
+```
