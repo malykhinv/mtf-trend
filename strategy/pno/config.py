@@ -14,10 +14,7 @@ PNO_BACKTEST_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = (
     (Timeframe.M5, Timeframe.S15),
     (Timeframe.M1, Timeframe.S5),
 )
-PNO_LIVE_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = (
-    (Timeframe.M5, Timeframe.S30),
-    (Timeframe.M1, Timeframe.S5),
-)
+PNO_LIVE_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = PNO_BACKTEST_TIMEFRAME_PAIRS
 PNO_SUPPORTED_TIMEFRAME_PAIRS: tuple[PnoTimeframePair, ...] = tuple(
     dict.fromkeys((*PNO_BACKTEST_TIMEFRAME_PAIRS, *PNO_LIVE_TIMEFRAME_PAIRS))
 )

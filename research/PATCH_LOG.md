@@ -4495,3 +4495,145 @@ Smoke:
 Synthetic render_anomaly_trade_chart smoke produced a PNG through the canonical renderer.
 research_tools.anomaly_micro_live imports without importing the backtest/chart stack at startup; chart renderer import is lazy and only happens on close-chart generation.
 ```
+
+---
+
+## P118 - Concise live Telegram position messages
+
+```text
+Status: PROPOSED / compile + formatter smoke verified locally
+Type: live Telegram UX only
+Trading logic changed: no
+Files: research_tools/anomaly_micro_live.py, research/*
+Base: GitHub head e961252 checked; uploaded 1.zip local stack through P117
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+Close notifications were sent as two Telegram messages: a text close event and then a separate chart caption.
+The close text also repeated obvious operational reasons such as exchange stop execution, and chart captions stated that the attached image was a chart.
+Open/stop/close position messages were too verbose for live Telegram review.
+```
+
+Change:
+
+```text
+Open-position Telegram now uses compact natural-emoji format: symbol + Coinglass link + LONG, then entry, TP, SL and short signal details.
+Stop updates now use one-line BE/SL format with signed distance from entry.
+Closed-position Telegram now uses the close chart photo caption as the close message when the chart renders; no separate “closed then chart” pair is sent.
+Close captions omit obvious exchange-stop/chart wording and show only symbol, USDT PnL, PNL %, exit price and compact context.
+If chart sending/rendering fails, the runner still sends one text close notification rather than hiding the close.
+```
+
+Verification:
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py research_tools/anomaly_strategy_backtest.py cli/parser.py cli/commands.py
+```
+
+Smoke:
+
+```text
+Synthetic formatter smoke produced compact open, close, BE and SL messages in the requested shape.
+```
+
+Risk:
+
+```text
+Low. Message formatting and Telegram send sequencing only; no signal, order, stop, trailing, sizing or chart-render decision logic changed.
+```
+
+---
+
+## P119 - Base symbols in live Telegram and charts
+
+```text
+Status: PROPOSED / compile + formatter smoke verified locally
+Type: live Telegram/chart UX only
+Trading logic changed: no
+Files: research_tools/anomaly_micro_live.py, cli/pno_diagnostics.py, research/*
+Base: GitHub head e961252 checked; uploaded 1.zip local stack through P118
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+Live Telegram messages and anomaly trade chart titles could display exchange pair identifiers such as WIFUSDT or WIF/USDT:USDT.
+For human review, position messages should use the coin/base name only, e.g. WIF.
+```
+
+Change:
+
+```text
+Telegram open/close/BE/SL messages normalize symbols to base names before rendering.
+Anomaly/PNO chart titles use the same base-symbol convention for pair formats with slash/settle suffixes and compact Binance symbols.
+Coinglass links still target the Binance USDT chart through the normalized base symbol.
+Trading logic, exchange symbols, position ids and artifacts stay unchanged.
+```
+
+Verification:
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py research_tools/anomaly_strategy_backtest.py cli/pno_diagnostics.py cli/parser.py cli/commands.py
+```
+
+Smoke:
+
+```text
+Formatter smoke verified WIFUSDT, WIFUSDT:USDT and WIF/USDT:USDT render as WIF; 1000PEPEUSDT renders as 1000PEPE.
+Coinglass URL still renders Binance_WIFUSDT from WIF/USDT:USDT.
+```
+
+---
+
+## P120 - Live TF parity, base-symbol position lock and useful runtime logs
+
+```text
+Status: PROPOSED / compile + formatter smoke verified locally
+Type: live execution/chart/logging
+Trading logic changed: yes, live scans all configured PNO live timeframe pairs and enforces one active position per base coin
+Files: research_tools/anomaly_micro_live.py, research_tools/anomaly_strategy_backtest.py, strategy/pno/config.py, strategy/pno/__init__.py, cli/pno_diagnostics.py, research/*
+Base: GitHub head e961252 checked; uploaded 1.zip local stack through P119
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+Live was still effectively single-frame in several places: the close chart was rendered from 1m candles with a hard-coded 5m context panel, while backtest PNO research uses 5m/30s, 5m/15s and 1m/5s.
+The live position guard keyed active positions by raw exchange symbol, so aliases such as WIFUSDT and WIF/USDT:USDT could bypass the intended one-coin limit.
+Runtime logs printed cycle number, checked symbols and signal count, which did not answer what the live process was actually doing.
+```
+
+Change:
+
+```text
+PNO live timeframe pairs now mirror PNO backtest pairs: 5m/30s, 5m/15s, 1m/5s.
+Live signals carry levels_tf and entry_tf; live scans each configured pair and close charts render entry-TF candles with the levels-TF context panel.
+Seconds entry charts are built from Binance aggTrades through the typed exchange boundary and aggregated to the requested seconds TF.
+Active/opening/recent-stop state is keyed by compact base symbol, so only one live position per coin can exist across symbol aliases.
+Runtime logs now report pass duration, total positions opened during this run, active positions under monitoring and closed positions during this run.
+```
+
+Verification:
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py research_tools/anomaly_strategy_backtest.py cli/pno_diagnostics.py cli/parser.py cli/commands.py strategy/pno/config.py strategy/pno/__init__.py
+```
+
+Smoke:
+
+```text
+Formatter smoke verified WIFUSDT and WIF/USDT:USDT both display and lock as WIF.
+Live TF label smoke rendered configured pairs as 5m/30s, 5m/15s, 1m/5s.
+Synthetic BE move rendered as `WIF BE +0.06%`.
+```
+
+Risk:
+
+```text
+Medium. Live scanning coverage increases because 5m/15s is no longer omitted and every pair is scanned. The one-coin lock intentionally rejects duplicate aliases/setups while a base coin is opening or active.
+```

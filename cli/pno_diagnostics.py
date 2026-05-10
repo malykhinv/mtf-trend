@@ -1293,10 +1293,20 @@ def _infer_pno_frame_step_ms(frame: pd.DataFrame) -> int | None:
     return int(np.median(diffs))
 
 
+PNO_CHART_QUOTE_SUFFIXES = ("USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USD")
+
+
 def _format_pno_chart_symbol(symbol: str) -> str:
-    base = str(symbol).split(":", 1)[0]
-    if base.endswith("/USDT"):
-        base = base[:-5]
+    raw = str(symbol).upper().strip()
+    base = raw.split(":", 1)[0]
+    if "/" in base:
+        base = base.split("/", 1)[0]
+    else:
+        for suffix in PNO_CHART_QUOTE_SUFFIXES:
+            if base.endswith(suffix) and len(base) > len(suffix):
+                base = base[: -len(suffix)]
+                break
+    base = base or raw
     try:
         base.encode("latin-1")
     except UnicodeEncodeError:

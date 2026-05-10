@@ -315,3 +315,13 @@ setup stale
 ```
 
 Не менять торговую логику, пока неизвестно, почему текущая логика отказывает.
+
+---
+
+## 15. Live timeframe and position-key parity
+
+```text
+Live PNO/anomaly execution must use the same configured PNO timeframe set as backtest comparison: 5m/30s, 5m/15s, 1m/5s.
+Live charts must display entry timeframe candles and levels timeframe context, not hard-coded 1m + 5m panels.
+Live position state must be keyed by base coin symbol, not raw exchange pair string, so one coin cannot have two concurrent positions through aliases.
+```

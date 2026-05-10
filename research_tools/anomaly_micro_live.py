@@ -22,11 +22,13 @@ import pandas as pd
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from domain.enums.timeframe import Timeframe
 from research_tools.anomaly_continuation_lab import compute_start_verticality_metrics
+from strategy.pno.config import PNO_LIVE_TIMEFRAME_PAIRS, validate_pno_timeframe_pair
 
 
 REQUIRED_PRICE_COLUMNS = ("timestamp", "open", "high", "low", "close")
 REQUIRED_FLOW_COLUMNS = ("quote_volume", "number_of_trades")
 OPTIONAL_FLOW_COLUMNS = ("taker_buy_quote_volume",)
+NATURE_EMOJIS = ("🏔️", "🌋", "🌊", "🌙", "🌓", "🌘", "🌄", "🌅", "🌌", "🌧️", "🌩️", "🪨")
 LIVE_LEDGER_COLUMNS = (
     "position_id",
     "status",
@@ -116,6 +118,7 @@ class LiveAnomalyConfig:
     results_dir: Path
     symbols: tuple[str, ...]
     confirm_real_orders: bool
+    timeframe_pairs: tuple[tuple[Timeframe, Timeframe], ...] = PNO_LIVE_TIMEFRAME_PAIRS
     pump_categories: tuple[str, ...] = ("balanced_market", "mild_market")
     baseline_candles: int = 60
     confirmation_candles: int = 4
@@ -157,6 +160,8 @@ class LiveSignal:
     category_label: str
     category_priority: int
     symbol: str
+    levels_timeframe: Timeframe
+    entry_timeframe: Timeframe
     decision_timestamp_ms: int
     start_timestamp_ms: int
     session: str
@@ -225,11 +230,13 @@ class TelegramDispatcher:
     def edit_sync(self, *, channel: str, message_id: int, text: str) -> int | None:
         return self._edit_message(channel=channel, message_id=message_id, text=text)
 
-    def send_photo(self, *, channel: str, photo_path: Path, caption: str, reply_to_message_id: int | None = None) -> None:
+    def send_photo(self, *, channel: str, photo_path: Path, caption: str, reply_to_message_id: int | None = None) -> bool:
         try:
             self._send_photo(channel=channel, photo_path=photo_path, caption=caption, reply_to_message_id=reply_to_message_id)
+            return True
         except Exception as exc:
             self._logger(f"telegram: график не отправлен, причина: {exc}")
+            return False
 
     def _run(self) -> None:
         while True:
@@ -453,7 +460,9 @@ class AnomalyMicroLiveRunner:
         self._open_positions: dict[str, LivePosition] = {}
         self._opening_symbols: set[str] = set()
         self._recent_stops: dict[str, list[float]] = {}
-        self._seen_decisions: set[tuple[str, int]] = set()
+        self._seen_decisions: set[tuple[str, str, str, int]] = set()
+        self._opened_positions_total = 0
+        self._closed_positions_total = 0
         self._state_lock = threading.RLock()
         self._inactive_cursor = 0
         self._network_degraded = False
@@ -464,8 +473,9 @@ class AnomalyMicroLiveRunner:
         if not symbols:
             raise LiveStartupError("Нет символов для live-обхода")
         category_ids = ",".join(category.category_id for category in self._pump_categories)
+        timeframe_pairs_label = _format_timeframe_pairs(self.config.timeframe_pairs)
         self.logger(
-            f"live: старт, символов {len(symbols)}, max позиций {self.config.max_open_positions}, категории {category_ids}"
+            f"live: старт · символов {len(symbols)} · TF {timeframe_pairs_label} · max {self.config.max_open_positions}"
         )
         self.logger(f"live: артефакты {self.artifacts.root}")
         self.telegram.send(
@@ -474,20 +484,27 @@ class AnomalyMicroLiveRunner:
             text=(
                 "🛰️ *Live запущен*\n"
                 "REST-only обход активен. Реальные ордера разрешены явным флагом.\n"
+                f"TF: `{_telegram_escape(timeframe_pairs_label)}`.\n"
                 f"Категории: `{category_ids}`."
             ),
         )
         cycle = 0
         while self.config.max_cycles is None or cycle < self.config.max_cycles:
             cycle += 1
+            cycle_started = time.monotonic()
             try:
+                opened_before, _, closed_before = self._live_counts()
                 batch = self._next_symbol_batch(symbols)
                 signals = self._scan_batch(batch)
                 for signal in signals:
                     self._maybe_open_position(signal)
-                if cycle == 1 or cycle % 10 == 0:
+                cycle_seconds = time.monotonic() - cycle_started
+                opened_total, active_positions, closed_total = self._live_counts()
+                if cycle == 1 or cycle % 10 == 0 or opened_total != opened_before or closed_total != closed_before:
+                    opened_delta = opened_total - opened_before
                     self.logger(
-                        f"live: цикл {cycle}, проверено {len(batch)}, сигналов {len(signals)}, открыто {self._open_position_count()}"
+                        f"live: {cycle_seconds:.1f}s · открыто {opened_total} (+{opened_delta}) · "
+                        f"слежу {active_positions} · закрыто {closed_total}"
                     )
                 self._network_degraded = False
                 time.sleep(self.config.scan_sleep_seconds)
@@ -537,7 +554,7 @@ class AnomalyMicroLiveRunner:
 
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
         with self._state_lock:
-            active = sorted(set(self._open_positions).union(self._opening_symbols))
+            active = sorted({position.signal.symbol for position in self._open_positions.values()})
         if active:
             inactive_size = self.config.inactive_batch_with_active
         else:
@@ -548,8 +565,9 @@ class AnomalyMicroLiveRunner:
             symbol = symbols[self._inactive_cursor % len(symbols)]
             self._inactive_cursor += 1
             attempts += 1
+            symbol_key = _position_symbol_key(symbol)
             with self._state_lock:
-                symbol_is_active = symbol in self._open_positions or symbol in self._opening_symbols
+                symbol_is_active = symbol_key in self._open_positions or symbol_key in self._opening_symbols
             if symbol_is_active or self._symbol_in_stop_cooldown(symbol):
                 continue
             inactive.append(symbol)
@@ -558,18 +576,36 @@ class AnomalyMicroLiveRunner:
     def _scan_batch(self, symbols: list[str]) -> list[LiveSignal]:
         signals: list[LiveSignal] = []
         now_ms = int(time.time() * 1000)
-        lookback_ms = (
-            self.config.baseline_candles
-            + self.config.confirmation_candles
-            + self.config.signal_scan_backfill_candles
-            + 5
-        ) * 60_000
-        for symbol in symbols:
-            frame = self.exchange.fetch_ohlcv(symbol, Timeframe.M1, now_ms - lookback_ms, now_ms)
-            signals.extend(self._build_recent_signals(symbol, frame, now_ms=now_ms))
+        for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
+            timeframe_ms = int(levels_timeframe.to_milliseconds())
+            lookback_ms = (
+                self.config.baseline_candles
+                + self.config.confirmation_candles
+                + self.config.signal_scan_backfill_candles
+                + 5
+            ) * timeframe_ms
+            for symbol in symbols:
+                frame = self.exchange.fetch_ohlcv(symbol, levels_timeframe, now_ms - lookback_ms, now_ms)
+                signals.extend(
+                    self._build_recent_signals(
+                        symbol,
+                        frame,
+                        now_ms=now_ms,
+                        levels_timeframe=levels_timeframe,
+                        entry_timeframe=entry_timeframe,
+                    )
+                )
         return signals
 
-    def _build_recent_signals(self, symbol: str, frame: pd.DataFrame, *, now_ms: int) -> list[LiveSignal]:
+    def _build_recent_signals(
+        self,
+        symbol: str,
+        frame: pd.DataFrame,
+        *,
+        now_ms: int,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+    ) -> list[LiveSignal]:
         if frame.empty or len(frame) < self.config.baseline_candles + self.config.confirmation_candles + 1:
             return []
         missing_price = [column for column in REQUIRED_PRICE_COLUMNS if column not in frame.columns]
@@ -581,7 +617,8 @@ class AnomalyMicroLiveRunner:
             self.artifacts.append_event("reject_missing_flow_columns", symbol, {"columns": missing_flow})
             return []
         frame = frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
-        closed_before = now_ms - Timeframe.M1.to_milliseconds()
+        levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
+        closed_before = now_ms - levels_timeframe_ms
         frame = frame.loc[frame["timestamp"].astype(int) <= closed_before].reset_index(drop=True)
         if len(frame) < self.config.baseline_candles + self.config.confirmation_candles + 1:
             return []
@@ -590,12 +627,19 @@ class AnomalyMicroLiveRunner:
         signals: list[LiveSignal] = []
         for start_pos in range(first_start_pos, last_start_pos + 1):
             decision_ts = int(frame.iloc[start_pos + self.config.confirmation_candles]["timestamp"])
-            key = (symbol, decision_ts)
+            key = (symbol, levels_timeframe.value, entry_timeframe.value, decision_ts)
             with self._state_lock:
                 if key in self._seen_decisions:
                     continue
                 self._seen_decisions.add(key)
-            signal = self._build_signal_at_start(symbol, frame, now_ms=now_ms, start_pos=start_pos)
+            signal = self._build_signal_at_start(
+                symbol,
+                frame,
+                now_ms=now_ms,
+                start_pos=start_pos,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+            )
             if signal is not None:
                 signals.append(signal)
         return signals
@@ -607,6 +651,8 @@ class AnomalyMicroLiveRunner:
         *,
         now_ms: int,
         start_pos: int,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
     ) -> LiveSignal | None:
         baseline = frame.iloc[start_pos - self.config.baseline_candles : start_pos]
         segment = frame.iloc[start_pos : start_pos + self.config.confirmation_candles + 1]
@@ -967,6 +1013,8 @@ class AnomalyMicroLiveRunner:
                 category_label=category.label,
                 category_priority=category.priority,
                 symbol=symbol,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
                 decision_timestamp_ms=int(decision["timestamp"]),
                 start_timestamp_ms=int(start["timestamp"]),
                 session=_session_name(int(decision["timestamp"])),
@@ -1000,7 +1048,8 @@ class AnomalyMicroLiveRunner:
             if category_rejections:
                 rejected_ids = ",".join(str(row.get("category_id")) for row in category_rejections)
                 self.logger(
-                    f"live: сигнал {symbol}, категория {category.category_id}; до неё не прошли: {rejected_ids}"
+                    f"live: {_compact_symbol(symbol)} {levels_timeframe.value}/{entry_timeframe.value} · "
+                    f"сигнал {category.category_id} · раньше отвалилось {rejected_ids}"
                 )
             return signal
         return None
@@ -1046,16 +1095,22 @@ class AnomalyMicroLiveRunner:
         return LiveOiChangeResult(value)
 
     def _maybe_open_position(self, signal: LiveSignal) -> None:
+        symbol_key = _position_symbol_key(signal.symbol)
         reject_max_positions = False
         with self._state_lock:
-            if signal.symbol in self._open_positions or signal.symbol in self._opening_symbols:
+            if symbol_key in self._open_positions or symbol_key in self._opening_symbols:
+                self.artifacts.append_event(
+                    "reject_symbol_position_already_active",
+                    signal.symbol,
+                    {"symbol_key": symbol_key, "levels_tf": signal.levels_timeframe.value, "entry_tf": signal.entry_timeframe.value},
+                )
                 return
             if len(self._open_positions) + len(self._opening_symbols) >= self.config.max_open_positions:
                 reject_max_positions = True
             if self._symbol_in_stop_cooldown(signal.symbol):
                 return
             if not reject_max_positions:
-                self._opening_symbols.add(signal.symbol)
+                self._opening_symbols.add(symbol_key)
         if reject_max_positions:
             self.artifacts.append_event("reject_max_positions", signal.symbol, {"max": self.config.max_open_positions})
             return
@@ -1065,23 +1120,23 @@ class AnomalyMicroLiveRunner:
             except (TypeError, ValueError) as exc:
                 self.artifacts.append_event("reject_invalid_free_balance", signal.symbol, {"free_usdt": None, "reason": str(exc)})
                 with self._state_lock:
-                    self._opening_symbols.discard(signal.symbol)
+                    self._opening_symbols.discard(symbol_key)
                 return
             if not math.isfinite(balance):
                 self.artifacts.append_event("reject_invalid_free_balance", signal.symbol, {"free_usdt": None})
                 with self._state_lock:
-                    self._opening_symbols.discard(signal.symbol)
+                    self._opening_symbols.discard(symbol_key)
                 return
             if balance <= 0.0:
                 self.artifacts.append_event("reject_no_free_balance", signal.symbol, {"free_usdt": balance})
                 with self._state_lock:
-                    self._opening_symbols.discard(signal.symbol)
+                    self._opening_symbols.discard(symbol_key)
                 return
             notional = self.config.position_notional_usdt
             if not math.isfinite(notional) or notional <= 0.0:
                 self.artifacts.append_event("reject_invalid_position_notional", signal.symbol, {"position_notional": _finite_or_none(notional)})
                 with self._state_lock:
-                    self._opening_symbols.discard(signal.symbol)
+                    self._opening_symbols.discard(symbol_key)
                 return
             if balance < notional:
                 self.artifacts.append_event(
@@ -1090,7 +1145,7 @@ class AnomalyMicroLiveRunner:
                     {"free_usdt": balance, "position_notional": notional},
                 )
                 with self._state_lock:
-                    self._opening_symbols.discard(signal.symbol)
+                    self._opening_symbols.discard(symbol_key)
                 return
             risk_per_unit = signal.entry_price - signal.stop_price
             amount_by_risk = notional / signal.entry_price
@@ -1118,11 +1173,12 @@ class AnomalyMicroLiveRunner:
                 current_stop_price=float(signal.stop_price),
             )
             with self._state_lock:
-                self._open_positions[signal.symbol] = position
-                self._opening_symbols.discard(signal.symbol)
+                self._open_positions[symbol_key] = position
+                self._opened_positions_total += 1
+                self._opening_symbols.discard(symbol_key)
         except Exception:
             with self._state_lock:
-                self._opening_symbols.discard(signal.symbol)
+                self._opening_symbols.discard(symbol_key)
             raise
         self.artifacts.append_position(position)
         self.artifacts.append_event(
@@ -1144,13 +1200,13 @@ class AnomalyMicroLiveRunner:
             self.artifacts.append_event("telegram_open_failed", signal.symbol, {"position_id": position.position_id, "reason": str(exc)})
             self.logger(f"live: позиция {signal.symbol} открыта, но Telegram-вход не отправлен: {exc}")
         self.logger(
-            f"live: открыта позиция {signal.symbol}, категория {signal.category_id}, "
-            f"риск {actual_risk_usdt:.2f} USDT, notional {notional:.2f} USDT"
+            f"live: {_compact_symbol(signal.symbol)} открыт · {signal.levels_timeframe.value}/{signal.entry_timeframe.value} · "
+            f"риск {actual_risk_usdt:.2f} · notional {notional:.2f}"
         )
         threading.Thread(
             target=self._monitor_position,
             args=(position,),
-            name=f"position-{signal.symbol}",
+            name=f"position-{_compact_symbol(signal.symbol)}",
             daemon=True,
         ).start()
 
@@ -1288,12 +1344,7 @@ class AnomalyMicroLiveRunner:
                         position,
                         stop_price=signal.entry_price,
                         reason="tp1_be",
-                        text=(
-                            "🪢 *Стоп обновлён*\n"
-                            f"{signal.symbol}\n"
-                            "TP1 взят, закрыта половина.\n"
-                            f"Новый стоп: BE `{signal.entry_price:.6g}`."
-                        ),
+                        text=_format_stop_move_message(position, stop_price=signal.entry_price, label="BE"),
                     )
                 if position.tp1_done:
                     latest_ts = int(latest["timestamp"])
@@ -1323,12 +1374,7 @@ class AnomalyMicroLiveRunner:
                             position,
                             stop_price=new_stop,
                             reason="structural_trail",
-                            text=(
-                                "🪢 *Стоп обновлён*\n"
-                                f"{signal.symbol}\n"
-                                "Структурный трейл.\n"
-                                f"Новый стоп: `{new_stop:.6g}`."
-                            ),
+                            text=_format_stop_move_message(position, stop_price=new_stop, label="SL"),
                         )
                 if latest_low <= last_stop_price:
                     time.sleep(3.0)
@@ -1342,15 +1388,17 @@ class AnomalyMicroLiveRunner:
                 time.sleep(30.0)
 
     def _finalize_position(self, position: LivePosition, *, reason: str, pnl_price: float | None) -> None:
+        symbol_key = _position_symbol_key(position.signal.symbol)
         with self._state_lock:
-            self._open_positions.pop(position.signal.symbol, None)
+            self._open_positions.pop(symbol_key, None)
+            self._closed_positions_total += 1
         exit_price = pnl_price if pnl_price is not None else position.signal.entry_price
         remaining_amount = position.remaining_amount if position.remaining_amount > 0.0 else position.amount
         pnl_usdt = position.realized_pnl_usdt + remaining_amount * (exit_price - position.signal.entry_price)
         pnl_pct = _safe_divide(pnl_usdt, position.notional_usdt)
         if reason.startswith("стоп"):
             with self._state_lock:
-                self._recent_stops.setdefault(position.signal.symbol, []).append(time.time())
+                self._recent_stops.setdefault(symbol_key, []).append(time.time())
         self.artifacts.append_event(
             "position_closed",
             position.signal.symbol,
@@ -1370,24 +1418,20 @@ class AnomalyMicroLiveRunner:
             reason=reason,
             pnl_pct=pnl_pct,
         )
+        close_text = _format_close_message(position, pnl_usdt=pnl_usdt, pnl_pct=pnl_pct, exit_price=exit_price)
+        if chart_path is not None and self.telegram.send_photo(
+            channel="positions",
+            photo_path=chart_path,
+            caption=close_text,
+            reply_to_message_id=position.telegram_open_message_id,
+        ):
+            return
         self.telegram.send(
             channel="positions",
             key=f"close:{position.position_id}",
             reply_to_message_id=position.telegram_open_message_id,
-            text=(
-                "🧾 *Позиция закрыта*\n"
-                f"{position.signal.symbol}\n"
-                f"Причина: {reason}.\n"
-                f"PnL: `{pnl_usdt:.2f} USDT` / `{pnl_pct:.2%}`."
-            ),
+            text=close_text,
         )
-        if chart_path is not None:
-            self.telegram.send_photo(
-                channel="positions",
-                photo_path=chart_path,
-                caption=f"🗺️ *График закрытой позиции*\n{position.signal.symbol}",
-                reply_to_message_id=position.telegram_open_message_id,
-            )
 
     def _render_close_chart(
         self,
@@ -1402,9 +1446,15 @@ class AnomalyMicroLiveRunner:
         try:
             from research_tools.anomaly_strategy_backtest import render_anomaly_trade_chart
 
-            start_ms = int(signal.start_timestamp_ms) - 35 * 60_000
-            end_ms = max(int(time.time() * 1000), int(exit_timestamp_ms) + 60_000)
-            frame = self.exchange.fetch_ohlcv(signal.symbol, Timeframe.M1, start_ms, end_ms)
+            entry_timeframe_ms = int(signal.entry_timeframe.to_milliseconds())
+            start_ms = int(signal.start_timestamp_ms) - max(35 * 60_000, 70 * entry_timeframe_ms)
+            end_ms = max(int(time.time() * 1000), int(exit_timestamp_ms) + max(60_000, 4 * entry_timeframe_ms))
+            frame = self._fetch_chart_frame(
+                signal.symbol,
+                signal.entry_timeframe,
+                start_timestamp_ms=start_ms,
+                end_timestamp_ms=end_ms,
+            )
             if frame.empty:
                 self.artifacts.append_event(
                     "chart_render_failed",
@@ -1432,8 +1482,15 @@ class AnomalyMicroLiveRunner:
                 "exit_reason": reason,
                 "category_id": signal.category_id,
                 "category_label": signal.category_label,
+                "levels_timeframe": signal.levels_timeframe.value,
+                "entry_timeframe": signal.entry_timeframe.value,
             }
-            render_anomaly_trade_chart(frame=frame, trade=trade_row, output_path=path)
+            render_anomaly_trade_chart(
+                frame=frame,
+                trade=trade_row,
+                output_path=path,
+                context_timeframe_ms=int(signal.levels_timeframe.to_milliseconds()),
+            )
             self.artifacts.append_event(
                 "chart_rendered",
                 signal.symbol,
@@ -1441,6 +1498,8 @@ class AnomalyMicroLiveRunner:
                     "position_id": position.position_id,
                     "chart_path": str(path),
                     "renderer": "anomaly_backtest_trade_chart",
+                    "levels_tf": signal.levels_timeframe.value,
+                    "entry_tf": signal.entry_timeframe.value,
                 },
             )
             return path
@@ -1456,16 +1515,81 @@ class AnomalyMicroLiveRunner:
             )
             return None
 
+
+    def _fetch_chart_frame(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
+        if int(timeframe.to_milliseconds()) >= int(Timeframe.M1.to_milliseconds()):
+            return self.exchange.fetch_ohlcv(symbol, timeframe, start_timestamp_ms, end_timestamp_ms)
+        return self._fetch_aggtrade_chart_frame(
+            symbol,
+            timeframe,
+            start_timestamp_ms=start_timestamp_ms,
+            end_timestamp_ms=end_timestamp_ms,
+        )
+
+    def _fetch_aggtrade_chart_frame(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
+        timeframe_ms = int(timeframe.to_milliseconds())
+        if timeframe_ms <= 0 or timeframe_ms >= int(Timeframe.M1.to_milliseconds()):
+            raise ValueError(f"invalid_seconds_chart_timeframe:{timeframe.value}")
+        market_id = self.exchange.get_market_id(symbol)
+        all_rows: list[dict[str, object]] = []
+        next_from_id: int | None = None
+        previous_last_id: int | None = None
+        while True:
+            params: dict[str, object] = {"symbol": market_id, "limit": 1000}
+            if next_from_id is None:
+                params["startTime"] = int(start_timestamp_ms)
+                params["endTime"] = int(end_timestamp_ms)
+            else:
+                params["fromId"] = int(next_from_id)
+            rows = self.exchange.fetch_binance_agg_trades(symbol=symbol, params=params)
+            if not rows:
+                break
+            all_rows.extend(dict(row) for row in rows)
+            last_row = rows[-1]
+            last_id = _resolve_aggtrade_id(last_row)
+            last_ts = _resolve_aggtrade_timestamp(last_row)
+            if last_id is None or (previous_last_id is not None and last_id <= previous_last_id):
+                break
+            previous_last_id = last_id
+            next_from_id = last_id + 1
+            if last_ts is not None and last_ts > int(end_timestamp_ms):
+                break
+            if len(rows) < 1000:
+                break
+        if not all_rows:
+            return pd.DataFrame(columns=list(REQUIRED_PRICE_COLUMNS) + ["volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume"])
+        return _aggregate_aggtrades_to_ohlcv_frame(
+            pd.DataFrame(all_rows),
+            timeframe_ms=timeframe_ms,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+        )
+
     def _symbol_in_stop_cooldown(self, symbol: str) -> bool:
+        symbol_key = _position_symbol_key(symbol)
         cutoff = time.time() - self.config.stop_cooldown_hours * 3600.0
         with self._state_lock:
-            stops = [ts for ts in self._recent_stops.get(symbol, []) if ts >= cutoff]
-            self._recent_stops[symbol] = stops
+            stops = [ts for ts in self._recent_stops.get(symbol_key, []) if ts >= cutoff]
+            self._recent_stops[symbol_key] = stops
         return len(stops) >= self.config.stop_limit_per_symbol
 
-    def _open_position_count(self) -> int:
+    def _live_counts(self) -> tuple[int, int, int]:
         with self._state_lock:
-            return len(self._open_positions)
+            return self._opened_positions_total, len(self._open_positions), self._closed_positions_total
 
 
 
@@ -1593,37 +1717,206 @@ def _category_value(category: LivePumpCategory, config: LiveAnomalyConfig, field
 
 def _format_open_message(position: LivePosition) -> str:
     signal = position.signal
-    strengths = "; ".join(signal.strengths)
-    weaknesses = "; ".join(signal.weaknesses) if signal.weaknesses else "критичных слабостей нет"
+    entry_price = float(signal.entry_price)
+    tp_pct = _safe_divide(float(signal.tp1_price) - entry_price, entry_price)
+    sl_pct = _safe_divide(entry_price - float(signal.stop_price), entry_price)
+    detail_lines = [
+        f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · {signal.category_label} · {signal.session}",
+        (
+            f"retention {_format_percent(signal.price_retention, precision=0)} · "
+            f"q×{signal.quote_ratio_start:.1f} · trades×{signal.trade_ratio_start:.1f}"
+        ),
+    ]
+    if signal.strengths:
+        detail_lines.append("+ " + "; ".join(signal.strengths[:2]))
+    if signal.weaknesses:
+        detail_lines.append("− " + "; ".join(signal.weaknesses[:2]))
     category_review = _format_category_rejection_summary(signal.category_rejections)
+    symbol = _compact_symbol(signal.symbol)
     return (
-        "🪝 *Позиция открыта*\n"
-        f"{signal.symbol}\n"
-        f"Сессия: *{signal.session}*\n"
-        f"Категория: *{signal.category_label}* (`{signal.category_id}`)\n"
-        f"Вход: `{signal.entry_price:.6g}`\n"
-        f"Стоп: `{signal.stop_price:.6g}`\n"
-        f"TP1: `{signal.tp1_price:.6g}`\n"
-        f"Риск: `{signal.initial_risk_pct:.2%}` от входа\n"
-        f"Размер: `{position.notional_usdt:.2f} USDT`\n"
-        f"Риск в деньгах: `{position.risk_usdt:.2f} USDT`\n"
-        f"Сильные стороны: {strengths}\n"
-        f"Слабые стороны: {weaknesses}"
-        f"{category_review}"
+        f"{_nature_emoji('open:' + signal.symbol)} {symbol} ({_coinglass_url(signal.symbol)}) LONG\n\n"
+        f"Вход {_format_price(entry_price)}\n\n"
+        f"TP {_format_price(signal.tp1_price)} {_format_percent(tp_pct)}\n"
+        f"SL {_format_price(signal.stop_price)} {_format_percent(sl_pct)}\n\n"
+        + "\n".join(detail_lines)
+        + category_review
+    )
+
+
+def _format_close_message(position: LivePosition, *, pnl_usdt: float, pnl_pct: float, exit_price: float) -> str:
+    signal = position.signal
+    symbol = _compact_symbol(signal.symbol)
+    detail_lines = [
+        f"выход {_format_price(exit_price)}",
+        f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · {signal.category_label} · {signal.session}",
+    ]
+    if position.tp1_done:
+        detail_lines.append("TP1 был взят")
+    return (
+        f"{_nature_emoji('close:' + position.position_id)} {symbol} {_format_usdt(pnl_usdt)} USDT\n\n"
+        f"PNL {_format_percent(pnl_pct, signed=False)}\n\n"
+        + "\n".join(detail_lines)
+    )
+
+
+def _format_stop_move_message(position: LivePosition, *, stop_price: float, label: str) -> str:
+    signal = position.signal
+    stop_distance_from_entry = _safe_divide(float(stop_price) - float(signal.entry_price), float(signal.entry_price))
+    return (
+        f"{_nature_emoji('stop:' + label + ':' + position.position_id)} "
+        f"{_compact_symbol(signal.symbol)} {label} {_format_percent(stop_distance_from_entry, signed=True, precision=2)}"
     )
 
 
 def _format_category_rejection_summary(category_rejections: list[dict[str, object]]) -> str:
     if not category_rejections:
         return ""
-    lines = ["", "До выбранной категории не прошли:"]
+    lines = ["", "раньше отвалилось:"]
     for rejection in category_rejections[:3]:
         category_id = str(rejection.get("category_id", "unknown_category"))
         reason = str(rejection.get("reason", "unknown_reason"))
-        lines.append(f"- `{_telegram_escape(category_id)}`: `{_telegram_escape(reason)}`")
+        lines.append(f"{_telegram_escape(category_id)}: {_telegram_escape(reason)}")
     if len(category_rejections) > 3:
-        lines.append(f"- ещё `{len(category_rejections) - 3}` отказ(а) в live_events.csv")
+        lines.append(f"ещё {len(category_rejections) - 3} в live_events.csv")
     return "\n" + "\n".join(lines)
+
+
+
+
+def _format_timeframe_pairs(timeframe_pairs: tuple[tuple[Timeframe, Timeframe], ...]) -> str:
+    return ", ".join(f"{levels.value}/{entry.value}" for levels, entry in timeframe_pairs)
+
+
+def _position_symbol_key(symbol: str) -> str:
+    return _compact_symbol(symbol)
+
+
+def _resolve_aggtrade_timestamp(row: dict[str, object]) -> int | None:
+    for column in ("transact_time", "T"):
+        if column not in row:
+            continue
+        try:
+            return int(row[column])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _resolve_aggtrade_id(row: dict[str, object]) -> int | None:
+    for column in ("aggregate_trade_id", "a"):
+        if column not in row:
+            continue
+        try:
+            return int(row[column])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _aggregate_aggtrades_to_ohlcv_frame(
+    trades: pd.DataFrame,
+    *,
+    timeframe_ms: int,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+) -> pd.DataFrame:
+    columns = [
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "number_of_trades",
+        "taker_buy_quote_volume",
+    ]
+    if trades.empty:
+        return pd.DataFrame(columns=columns)
+    timestamp_column = "transact_time" if "transact_time" in trades.columns else "T"
+    price_column = "price" if "price" in trades.columns else "p"
+    quantity_column = "quantity" if "quantity" in trades.columns else "q"
+    maker_column = "is_buyer_maker" if "is_buyer_maker" in trades.columns else "m"
+    required = (timestamp_column, price_column, quantity_column, maker_column)
+    missing = [column for column in required if column not in trades.columns]
+    if missing:
+        return pd.DataFrame(columns=columns)
+    work = trades.copy()
+    work["timestamp"] = pd.to_numeric(work[timestamp_column], errors="coerce")
+    work["price"] = pd.to_numeric(work[price_column], errors="coerce")
+    work["quantity"] = pd.to_numeric(work[quantity_column], errors="coerce")
+    work = work.loc[
+        work["timestamp"].notna()
+        & work["price"].notna()
+        & work["quantity"].notna()
+        & (work["timestamp"] >= int(start_timestamp_ms))
+        & (work["timestamp"] <= int(end_timestamp_ms))
+    ].copy()
+    if work.empty:
+        return pd.DataFrame(columns=columns)
+    work["timestamp"] = work["timestamp"].astype("int64")
+    work["bucket"] = (work["timestamp"] // int(timeframe_ms)) * int(timeframe_ms)
+    work["quote_volume"] = work["price"].astype("float64") * work["quantity"].astype("float64")
+    buyer_is_maker = work[maker_column].astype(str).str.lower().isin(("true", "1"))
+    work["taker_buy_quote_volume"] = work["quote_volume"].where(~buyer_is_maker, 0.0)
+    aggregated = (
+        work.groupby("bucket", sort=True)
+        .agg(
+            open=("price", "first"),
+            high=("price", "max"),
+            low=("price", "min"),
+            close=("price", "last"),
+            volume=("quantity", "sum"),
+            quote_volume=("quote_volume", "sum"),
+            number_of_trades=("quantity", "size"),
+            taker_buy_quote_volume=("taker_buy_quote_volume", "sum"),
+        )
+        .reset_index()
+        .rename(columns={"bucket": "timestamp"})
+    )
+    return aggregated.loc[:, columns].reset_index(drop=True)
+
+def _nature_emoji(key: str) -> str:
+    index = sum(ord(char) for char in key) % len(NATURE_EMOJIS)
+    return NATURE_EMOJIS[index]
+
+
+QUOTE_SYMBOL_SUFFIXES = ("USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USD")
+
+
+def _compact_symbol(symbol: str) -> str:
+    raw = str(symbol).upper().strip()
+    compact = raw.split(":", 1)[0]
+    if "/" in compact:
+        compact = compact.split("/", 1)[0]
+    else:
+        for suffix in QUOTE_SYMBOL_SUFFIXES:
+            if compact.endswith(suffix) and len(compact) > len(suffix):
+                compact = compact[: -len(suffix)]
+                break
+    return compact or raw
+
+
+def _coinglass_url(symbol: str) -> str:
+    return f"https://www.coinglass.com/tv/Binance_{_compact_symbol(symbol)}USDT"
+
+
+def _format_price(value: float) -> str:
+    return f"{float(value):.6g}"
+
+
+def _format_percent(value: float, *, signed: bool = False, precision: int = 1) -> str:
+    if not math.isfinite(value):
+        return "n/a"
+    pct = float(value) * 100.0
+    sign = "+" if signed and pct >= 0.0 else ""
+    return f"{sign}{pct:.{precision}f}%"
+
+
+def _format_usdt(value: float) -> str:
+    sign = "+" if value >= 0.0 else "-"
+    rendered = f"{abs(float(value)):.3f}".rstrip("0").rstrip(".")
+    return f"{sign}{rendered.replace('.', ',')}"
 
 
 def _finite_or_none(value: float | None) -> float | None:

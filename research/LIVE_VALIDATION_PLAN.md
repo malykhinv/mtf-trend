@@ -806,3 +806,38 @@ After P117, a closed live position should create charts/<position_id>.png using 
 Expected visual elements: 1m candles, 5m context panel, EMA9/EMA20, anomaly/decision/entry/exit markers, risk/profit zones, quote volume panel and quote-per-trade panel.
 If any required chart input is missing, live_events.csv must contain chart_render_failed with renderer=anomaly_backtest_trade_chart; no degraded fallback chart should be sent.
 ```
+
+---
+
+## 2026-05-10 concise live Telegram position messages
+
+```text
+P118 changes live position Telegram copy to compact trader-facing messages.
+Open: natural emoji, base symbol, Coinglass TV link, LONG, then entry/TP/SL and short signal details.
+Close: the close chart photo caption is the close message; do not send a separate text close followed by a separate chart caption.
+Stop moves: one edited line only, `BASE BE +/-x.xx%` or `BASE SL +/-x.xx%`, where the percentage is the stop distance from entry.
+Do not write obvious Telegram text such as “график закрытой позиции” or “причина: стоп исполнен на бирже”.
+If chart rendering/sending fails, send exactly one text close notification so the close is not hidden.
+```
+
+---
+
+## 2026-05-10 live message symbol display
+
+```text
+P119 requires live Telegram open/close/BE/SL copy and attached anomaly chart titles to show base coin symbols only.
+Examples: WIFUSDT -> WIF; WIF/USDT:USDT -> WIF.
+Do not change exchange-facing symbols or ledger identifiers for display cleanup.
+```
+
+---
+
+## 2026-05-10 P120 live TF/position/log validation
+
+```text
+Run run-anomaly-live with a tiny symbol set and --max-cycles 1.
+Expected startup log includes TF 5m/30s, 5m/15s, 1m/5s.
+Expected cycle log shape: `live: 1.2s · открыто 0 (+0) · слежу 0 · закрыто 0`.
+For a closed 5m/15s live position, chart top panel is 15s and context panel is 5m; for 1m/5s, top is 5s and context is 1m.
+Use duplicate aliases for one coin in a controlled dry/smoke harness and verify only one active base-symbol position key is accepted.
+```

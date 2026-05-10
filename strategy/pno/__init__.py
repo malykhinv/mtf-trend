@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 from strategy.pno.config import (
     PNO_BACKTEST_TIMEFRAME_PAIRS,
     PNO_DEFAULT_ENTRY_TIMEFRAME,
@@ -15,7 +19,18 @@ from strategy.pno.config import (
     validate_pno_timeframe_pair,
     with_pno_risk,
 )
-from strategy.pno.pno_strategy import PnoStrategy
+
+if TYPE_CHECKING:
+    from strategy.pno.pno_strategy import PnoStrategy
+
+
+def __getattr__(name: str) -> object:
+    if name == "PnoStrategy":
+        from strategy.pno.pno_strategy import PnoStrategy
+
+        return PnoStrategy
+    raise AttributeError(name)
+
 
 __all__ = [
     "PNO_BACKTEST_TIMEFRAME_PAIRS",

@@ -1200,3 +1200,35 @@ Live close charts should no longer use the old simplified line plot.
 P117 proposes routing live Telegram trade charts through the same anomaly backtest trade-chart renderer used for research artifacts: candles, 5m context, EMA overlays, risk/profit zones, volume and quote-per-trade panels.
 No trading decision logic changes; if canonical chart rendering fails, the failure is an explicit chart_render_failed event and no fallback chart is sent.
 ```
+
+---
+
+2026-05-10 concise live Telegram position messages:
+
+```text
+P118 proposes compact live Telegram position copy.
+Close notifications should be one chart-photo caption when the chart is available, not “closed” plus a second “chart” message.
+Open/close/BE/SL messages use short natural-emoji trader format; obvious exchange-stop/chart wording is removed.
+Trading logic is unchanged.
+```
+
+---
+
+## 2026-05-10 base symbols in live Telegram/chart UI
+
+```text
+P119 proposes base-symbol rendering for live Telegram messages and anomaly chart titles.
+Display examples: WIFUSDT -> WIF; WIF/USDT:USDT -> WIF.
+Exchange-facing symbols, ledger ids and trading logic are unchanged.
+```
+
+---
+
+## 2026-05-10 live TF parity / one coin lock / runtime logs
+
+```text
+P120 proposes making live timeframe coverage match backtest PNO timeframe pairs: 5m/30s, 5m/15s, 1m/5s.
+Live close charts should no longer be hard-coded as 1m + 5m; they render entry-TF candles plus levels-TF context.
+Live active/opening/stop-cooldown state is keyed by compact base coin, so WIFUSDT and WIF/USDT:USDT cannot open concurrent positions.
+Runtime status logs should be short and useful: cycle duration, total opened this run, active monitored positions, closed this run.
+```

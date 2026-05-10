@@ -1249,11 +1249,18 @@ def _prepare_anomaly_plot_frame(frame: pd.DataFrame, *, start_ts: int, end_ts: i
     return plot_frame.reset_index(drop=True)
 
 
-def _build_anomaly_5m_context(plot_frame: pd.DataFrame, timestamps: np.ndarray, x_values: np.ndarray) -> pd.DataFrame:
+def _build_anomaly_context(
+    plot_frame: pd.DataFrame,
+    timestamps: np.ndarray,
+    x_values: np.ndarray,
+    *,
+    context_timeframe_ms: int,
+) -> pd.DataFrame:
     if plot_frame.empty:
         return pd.DataFrame()
     prepared = plot_frame.copy()
-    prepared["bucket"] = (prepared["timestamp"].astype(np.int64) // 300_000) * 300_000
+    timeframe_ms = max(int(context_timeframe_ms), 1)
+    prepared["bucket"] = (prepared["timestamp"].astype(np.int64) // timeframe_ms) * timeframe_ms
     aggregations: dict[str, str] = {
         "timestamp": "first",
         "open": "first",
@@ -1344,6 +1351,7 @@ def _render_anomaly_trade_chart(
     output_path: Path,
     pre_candles: int = 30,
     post_candles: int = 90,
+    context_timeframe_ms: int | None = 300_000,
 ) -> None:
     import matplotlib
 
@@ -1361,7 +1369,7 @@ def _render_anomaly_trade_chart(
     tp1_price = _safe_float(trade.get("tp1_price"))
     box_high = _safe_float(trade.get("box_high"))
     exit_price = _safe_float(trade.get("exit_price"))
-    timeframe_ms = 60_000
+    timeframe_ms = int(_infer_pno_frame_step_ms(frame) or 60_000)
     start_ts = anomaly_ts - pre_candles * timeframe_ms
     end_ts = exit_ts + post_candles * timeframe_ms
     plot_frame = _prepare_anomaly_plot_frame(frame, start_ts=start_ts, end_ts=end_ts)
@@ -1369,7 +1377,13 @@ def _render_anomaly_trade_chart(
         raise ValueError("empty_plot_window")
     x_values = np.arange(len(plot_frame), dtype=np.float64)
     timestamps = plot_frame["timestamp"].to_numpy(dtype=np.int64)
-    context_5m = _build_anomaly_5m_context(plot_frame, timestamps, x_values)
+    context_timeframe_ms = int(context_timeframe_ms or 300_000)
+    context_frame = _build_anomaly_context(
+        plot_frame,
+        timestamps,
+        x_values,
+        context_timeframe_ms=context_timeframe_ms,
+    )
     anomaly_idx = _resolve_pno_timestamp_plot_idx(timestamps, anomaly_ts)
     decision_idx = _resolve_pno_timestamp_plot_idx(timestamps, decision_ts)
     entry_idx = _resolve_pno_timestamp_plot_idx(timestamps, entry_ts)
@@ -1388,12 +1402,15 @@ def _render_anomaly_trade_chart(
     _configure_pno_plot_axes(price_ax=ax_context, volume_ax=ax_volume, trades_ax=ax_trades)
 
     _draw_pno_candles(ax_price, plot_frame, x_values)
-    if not context_5m.empty:
+    if not context_frame.empty:
         _draw_pno_candles_on_columns(
             ax_context,
-            context_5m,
+            context_frame,
             x_column="plot_x",
-            candle_width=_PNO_PLOT_5M_CANDLE_WIDTH,
+            candle_width=max(
+                _PNO_PLOT_5M_CANDLE_WIDTH,
+                min(float(context_timeframe_ms) / max(float(timeframe_ms), 1.0) * 0.72, 12.0),
+            ),
         )
     ax_price.plot(x_values, plot_frame["ema9"].to_numpy(dtype=np.float64), color=_PNO_PLOT_EMA9, linewidth=1.2, alpha=0.28, zorder=2.2)
     ax_price.plot(x_values, plot_frame["ema20"].to_numpy(dtype=np.float64), color=_PNO_PLOT_EMA20, linewidth=1.2, alpha=0.24, zorder=2.1)
@@ -1506,9 +1523,9 @@ def _render_anomaly_trade_chart(
     low_values = plot_frame["low"].to_numpy(dtype=np.float64)
     padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.05, 1e-9)
     ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
-    if not context_5m.empty:
-        context_high = context_5m["high"].to_numpy(dtype=np.float64)
-        context_low = context_5m["low"].to_numpy(dtype=np.float64)
+    if not context_frame.empty:
+        context_high = context_frame["high"].to_numpy(dtype=np.float64)
+        context_low = context_frame["low"].to_numpy(dtype=np.float64)
         context_padding = max((float(np.nanmax(context_high)) - float(np.nanmin(context_low))) * 0.08, 1e-9)
         ax_context.set_ylim(float(np.nanmin(context_low)) - context_padding, float(np.nanmax(context_high)) + context_padding)
     entry_candle_width = _resolve_pno_candle_width(x_values)
@@ -1521,7 +1538,7 @@ def _render_anomaly_trade_chart(
     ax_trades.set_yticks([0.0, 50.0, 100.0])
     ax_trades.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
     ax_price.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(plot_frame)))
-    ax_context.set_ylabel("5m")
+    ax_context.set_ylabel(_format_pno_timeframe_label(context_timeframe_ms))
     ax_volume.set_ylabel("Quote vol %")
     ax_trades.set_ylabel("Quote / trade %")
     ax_price.set_title(
@@ -1563,6 +1580,7 @@ def render_anomaly_trade_chart(
     output_path: Path,
     pre_candles: int = 30,
     post_candles: int = 90,
+    context_timeframe_ms: int | None = 300_000,
 ) -> None:
     """Render one anomaly trade chart through the canonical backtest chart renderer."""
 
@@ -1573,6 +1591,7 @@ def render_anomaly_trade_chart(
         output_path=output_path,
         pre_candles=pre_candles,
         post_candles=post_candles,
+        context_timeframe_ms=context_timeframe_ms,
     )
 
 
