@@ -163,6 +163,7 @@ class LiveSignal:
     entry_price: float
     stop_price: float
     tp1_price: float
+    box_high: float
     initial_risk: float
     initial_risk_pct: float
     quote_ratio_start: float
@@ -189,6 +190,7 @@ class LivePosition:
     entry_order_id: str
     stop_order_id: str
     opened_at_utc: str
+    opened_at_ms: int
     telegram_open_message_id: int | None = None
     telegram_stop_message_id: int | None = None
     remaining_amount: float = 0.0
@@ -470,7 +472,7 @@ class AnomalyMicroLiveRunner:
             channel="events",
             key="live_started",
             text=(
-                "🟢 *Live запущен*\n"
+                "🛰️ *Live запущен*\n"
                 "REST-only обход активен. Реальные ордера разрешены явным флагом.\n"
                 f"Категории: `{category_ids}`."
             ),
@@ -497,7 +499,7 @@ class AnomalyMicroLiveRunner:
                 self.telegram.send(
                     channel="events",
                     key="live_data_integrity_error",
-                    text=f"🔴 *Live остановлен: ошибка целостности данных*\n`{_telegram_escape(str(exc)[:600])}`",
+                    text=f"🧯 *Live остановлен*\nОшибка целостности данных.\n`{_telegram_escape(str(exc)[:600])}`",
                 )
                 return 3
             except Exception as exc:
@@ -506,7 +508,7 @@ class AnomalyMicroLiveRunner:
                     self.telegram.send(
                         channel="events",
                         key="network_degraded",
-                        text=f"🟡 *Пауза по сети/API*\nБот не падает, ждёт восстановления.\nПричина: `{_telegram_escape(str(exc)[:300])}`",
+                        text=f"🪁 *Пауза по сети/API*\nБот не падает, ждёт восстановления.\nПричина: `{_telegram_escape(str(exc)[:300])}`",
                     )
                 self._network_degraded = True
                 time.sleep(self.config.network_sleep_seconds)
@@ -971,6 +973,7 @@ class AnomalyMicroLiveRunner:
                 entry_price=entry_price,
                 stop_price=stop_price,
                 tp1_price=tp1_price,
+                box_high=segment_high,
                 initial_risk=risk,
                 initial_risk_pct=initial_risk_pct,
                 quote_ratio_start=quote_ratio,
@@ -1100,6 +1103,7 @@ class AnomalyMicroLiveRunner:
                 self.exchange.create_market_order(signal.symbol, "sell", amount_by_risk, reduce_only=True)
                 raise
             stop_order_id = str(stop_order.get("id", ""))
+            opened_at_ms = int(time.time() * 1000)
             position = LivePosition(
                 position_id=f"{signal.symbol.replace('/', '_').replace(':', '_')}_{signal.decision_timestamp_ms}",
                 signal=signal,
@@ -1108,7 +1112,8 @@ class AnomalyMicroLiveRunner:
                 risk_usdt=float(actual_risk_usdt),
                 entry_order_id=entry_order_id,
                 stop_order_id=stop_order_id,
-                opened_at_utc=datetime.now(UTC).isoformat(),
+                opened_at_utc=datetime.fromtimestamp(opened_at_ms / 1000, UTC).isoformat(),
+                opened_at_ms=opened_at_ms,
                 remaining_amount=float(amount_by_risk),
                 current_stop_price=float(signal.stop_price),
             )
@@ -1284,9 +1289,10 @@ class AnomalyMicroLiveRunner:
                         stop_price=signal.entry_price,
                         reason="tp1_be",
                         text=(
-                            "🟢 *Стоп обновлён*\n"
-                            f"*{signal.symbol}*: TP1 взят, закрыта половина.\n"
-                            f"Текущий стоп: BE `{signal.entry_price:.6g}`."
+                            "🪢 *Стоп обновлён*\n"
+                            f"{signal.symbol}\n"
+                            "TP1 взят, закрыта половина.\n"
+                            f"Новый стоп: BE `{signal.entry_price:.6g}`."
                         ),
                     )
                 if position.tp1_done:
@@ -1318,9 +1324,10 @@ class AnomalyMicroLiveRunner:
                             stop_price=new_stop,
                             reason="structural_trail",
                             text=(
-                                "🟡 *Стоп обновлён*\n"
-                                f"*{signal.symbol}*: структурный трейл.\n"
-                                f"Текущий стоп: `{new_stop:.6g}`."
+                                "🪢 *Стоп обновлён*\n"
+                                f"{signal.symbol}\n"
+                                "Структурный трейл.\n"
+                                f"Новый стоп: `{new_stop:.6g}`."
                             ),
                         )
                 if latest_low <= last_stop_price:
@@ -1355,49 +1362,98 @@ class AnomalyMicroLiveRunner:
             },
         )
         self.artifacts.append_position_close(position, reason=reason, pnl_usdt=pnl_usdt, pnl_pct=pnl_pct)
-        chart_path = self._render_close_chart(position, exit_price=exit_price)
+        exit_timestamp_ms = int(time.time() * 1000)
+        chart_path = self._render_close_chart(
+            position,
+            exit_price=exit_price,
+            exit_timestamp_ms=exit_timestamp_ms,
+            reason=reason,
+            pnl_pct=pnl_pct,
+        )
         self.telegram.send(
             channel="positions",
             key=f"close:{position.position_id}",
             reply_to_message_id=position.telegram_open_message_id,
             text=(
-                "🔴 *Позиция закрыта*\n"
-                f"*{position.signal.symbol}*: {reason}.\n"
-                f"PnL `{pnl_usdt:.2f} USDT` / `{pnl_pct:.2%}`."
+                "🧾 *Позиция закрыта*\n"
+                f"{position.signal.symbol}\n"
+                f"Причина: {reason}.\n"
+                f"PnL: `{pnl_usdt:.2f} USDT` / `{pnl_pct:.2%}`."
             ),
         )
         if chart_path is not None:
             self.telegram.send_photo(
                 channel="positions",
                 photo_path=chart_path,
-                caption=f"📈 *График закрытой позиции*\n*{position.signal.symbol}*",
+                caption=f"🗺️ *График закрытой позиции*\n{position.signal.symbol}",
                 reply_to_message_id=position.telegram_open_message_id,
             )
 
-    def _render_close_chart(self, position: LivePosition, *, exit_price: float) -> Path | None:
+    def _render_close_chart(
+        self,
+        position: LivePosition,
+        *,
+        exit_price: float,
+        exit_timestamp_ms: int,
+        reason: str,
+        pnl_pct: float,
+    ) -> Path | None:
+        signal = position.signal
         try:
-            import matplotlib.pyplot as plt
-            end_ms = int(time.time() * 1000)
-            start_ms = int(position.signal.start_timestamp_ms) - 30 * 60_000
-            frame = self.exchange.fetch_ohlcv(position.signal.symbol, Timeframe.M1, start_ms, end_ms)
+            from research_tools.anomaly_strategy_backtest import render_anomaly_trade_chart
+
+            start_ms = int(signal.start_timestamp_ms) - 35 * 60_000
+            end_ms = max(int(time.time() * 1000), int(exit_timestamp_ms) + 60_000)
+            frame = self.exchange.fetch_ohlcv(signal.symbol, Timeframe.M1, start_ms, end_ms)
             if frame.empty:
+                self.artifacts.append_event(
+                    "chart_render_failed",
+                    signal.symbol,
+                    {"position_id": position.position_id, "reason": "empty_plot_source_frame"},
+                )
                 return None
             chart_dir = self.artifacts.root / "charts"
             chart_dir.mkdir(parents=True, exist_ok=True)
             path = chart_dir / f"{position.position_id}.png"
-            fig, ax = plt.subplots(figsize=(10, 4))
-            ax.plot(pd.to_datetime(frame["timestamp"], unit="ms"), frame["close"].astype(float), color="#111827", linewidth=1.2)
-            ax.axhline(position.signal.entry_price, color="#2563eb", linewidth=1, label="entry")
-            ax.axhline(position.signal.stop_price, color="#dc2626", linewidth=1, label="initial stop")
-            ax.axhline(position.signal.tp1_price, color="#16a34a", linewidth=1, label="tp1")
-            ax.axhline(exit_price, color="#f97316", linewidth=1, label="exit")
-            ax.legend(loc="best")
-            fig.tight_layout()
-            fig.savefig(path, dpi=130)
-            plt.close(fig)
+            trade_row = {
+                "symbol": signal.symbol,
+                "status": "closed",
+                "anomaly_timestamp_ms": int(signal.start_timestamp_ms),
+                "decision_timestamp_ms": int(signal.decision_timestamp_ms),
+                "entry_timestamp_ms": int(position.opened_at_ms),
+                "entry_timestamp_utc": position.opened_at_utc,
+                "exit_timestamp_ms": int(exit_timestamp_ms),
+                "entry_price": float(signal.entry_price),
+                "initial_stop": float(signal.stop_price),
+                "tp1_price": float(signal.tp1_price),
+                "box_high": float(signal.box_high),
+                "exit_price": float(exit_price),
+                "net_return": float(pnl_pct),
+                "exit_reason": reason,
+                "category_id": signal.category_id,
+                "category_label": signal.category_label,
+            }
+            render_anomaly_trade_chart(frame=frame, trade=trade_row, output_path=path)
+            self.artifacts.append_event(
+                "chart_rendered",
+                signal.symbol,
+                {
+                    "position_id": position.position_id,
+                    "chart_path": str(path),
+                    "renderer": "anomaly_backtest_trade_chart",
+                },
+            )
             return path
         except Exception as exc:
-            self.artifacts.append_event("chart_render_failed", position.signal.symbol, {"reason": str(exc)})
+            self.artifacts.append_event(
+                "chart_render_failed",
+                signal.symbol,
+                {
+                    "position_id": position.position_id,
+                    "renderer": "anomaly_backtest_trade_chart",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                },
+            )
             return None
 
     def _symbol_in_stop_cooldown(self, symbol: str) -> bool:
@@ -1539,16 +1595,35 @@ def _format_open_message(position: LivePosition) -> str:
     signal = position.signal
     strengths = "; ".join(signal.strengths)
     weaknesses = "; ".join(signal.weaknesses) if signal.weaknesses else "критичных слабостей нет"
+    category_review = _format_category_rejection_summary(signal.category_rejections)
     return (
-        "🟢 *Открыта micro-live позиция*\n"
-        f"*{signal.symbol}* · сессия: *{signal.session}*\n"
+        "🪝 *Позиция открыта*\n"
+        f"{signal.symbol}\n"
+        f"Сессия: *{signal.session}*\n"
         f"Категория: *{signal.category_label}* (`{signal.category_id}`)\n"
-        f"Вход `{signal.entry_price:.6g}`, стоп `{signal.stop_price:.6g}`, TP1 `{signal.tp1_price:.6g}`\n"
-        f"Риск `{signal.initial_risk_pct:.2%}` от входа\n"
-        f"Размер `{position.notional_usdt:.2f} USDT`, риск `{position.risk_usdt:.2f} USDT`\n"
+        f"Вход: `{signal.entry_price:.6g}`\n"
+        f"Стоп: `{signal.stop_price:.6g}`\n"
+        f"TP1: `{signal.tp1_price:.6g}`\n"
+        f"Риск: `{signal.initial_risk_pct:.2%}` от входа\n"
+        f"Размер: `{position.notional_usdt:.2f} USDT`\n"
+        f"Риск в деньгах: `{position.risk_usdt:.2f} USDT`\n"
         f"Сильные стороны: {strengths}\n"
         f"Слабые стороны: {weaknesses}"
+        f"{category_review}"
     )
+
+
+def _format_category_rejection_summary(category_rejections: list[dict[str, object]]) -> str:
+    if not category_rejections:
+        return ""
+    lines = ["", "До выбранной категории не прошли:"]
+    for rejection in category_rejections[:3]:
+        category_id = str(rejection.get("category_id", "unknown_category"))
+        reason = str(rejection.get("reason", "unknown_reason"))
+        lines.append(f"- `{_telegram_escape(category_id)}`: `{_telegram_escape(reason)}`")
+    if len(category_rejections) > 3:
+        lines.append(f"- ещё `{len(category_rejections) - 3}` отказ(а) в live_events.csv")
+    return "\n" + "\n".join(lines)
 
 
 def _finite_or_none(value: float | None) -> float | None:

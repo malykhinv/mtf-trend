@@ -1556,6 +1556,26 @@ def _render_anomaly_trade_chart(
     plt.close(fig)
 
 
+def render_anomaly_trade_chart(
+    *,
+    frame: pd.DataFrame,
+    trade: pd.Series | dict[str, object],
+    output_path: Path,
+    pre_candles: int = 30,
+    post_candles: int = 90,
+) -> None:
+    """Render one anomaly trade chart through the canonical backtest chart renderer."""
+
+    trade_series = trade if isinstance(trade, pd.Series) else pd.Series(trade)
+    _render_anomaly_trade_chart(
+        frame=frame,
+        trade=trade_series,
+        output_path=output_path,
+        pre_candles=pre_candles,
+        post_candles=post_candles,
+    )
+
+
 def render_anomaly_trade_charts(
     trades: pd.DataFrame,
     *,
@@ -1586,7 +1606,7 @@ def render_anomaly_trade_charts(
             if frame is None:
                 frame = _read_symbol_frame(config.lab_config.cache_dir, symbol, config.lab_config.timeframe)
                 frame_cache[symbol] = frame
-            _render_anomaly_trade_chart(frame=frame, trade=trade, output_path=chart_path)
+            render_anomaly_trade_chart(frame=frame, trade=trade, output_path=chart_path)
             chart_status = "rendered"
             chart_reason = "ok"
         except Exception as exc:

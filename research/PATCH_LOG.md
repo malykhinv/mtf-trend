@@ -4419,3 +4419,79 @@ Synthetic _maybe_open_position smoke passed: NaN/None free balance writes reject
 Synthetic startup smoke passed: NaN min_oi_change_pct_3x5m and non-numeric balance fail startup explicitly.
 Synthetic missing-column smoke passed: missing price/flow columns write explicit reject events.
 ```
+
+---
+
+## P116 - Telegram live message tone C
+
+```text
+Status: PROPOSED / compile verified locally
+Type: live Telegram UX only
+Trading logic changed: no
+Files: research_tools/anomaly_micro_live.py, research/*
+Base: GitHub head e17538e / P113+P114+P115 stack
+Commit: UNKNOWN
+```
+
+Change:
+
+```text
+Live Telegram messages now use the selected C tone: one associative emoji, then a bold heading, then details below.
+Updated live started, network/API pause, data-integrity stop, position open, stop update, position close and close-chart caption messages.
+Open-position messages also show prior category rejection chain when a later category is selected after earlier categories failed.
+```
+
+Verification:
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py research_tools/anomaly_strategy_backtest.py research_tools/anomaly_continuation_lab.py
+```
+
+Risk:
+
+```text
+Low. Message formatting only; no order, stop, category, data-quality or artifact decision logic changed.
+```
+
+---
+
+## P117 - Use canonical backtest renderer for live Telegram trade charts
+
+```text
+Status: PROPOSED / compile + synthetic chart smoke verified locally
+Type: live Telegram chart parity
+Trading logic changed: no
+Files: research_tools/anomaly_micro_live.py, research_tools/anomaly_strategy_backtest.py, research/*
+Base: uploaded 1.zip with P113-P116 local stack; GitHub head e17538e does not include P116
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+Live Telegram close charts were a simplified line plot with four horizontal levels.
+Backtest anomaly trade charts use the professional renderer: candles, 5m context, EMA9/EMA20, anomaly/decision/entry/exit markers, risk/profit zones, volume panel, quote-per-trade panel and price tags.
+The live chart path therefore did not match the research artifact used to judge setups.
+```
+
+Change:
+
+```text
+Expose a single-trade public wrapper around the canonical anomaly backtest chart renderer.
+Live close charts now build a backtest-compatible trade row from the live position and call that renderer.
+Live records the signal box high and real opened_at_ms so the chart has the same anomaly/decision/entry/exit geometry as the backtest chart.
+The old handmade matplotlib line chart is removed; chart failures remain explicit chart_render_failed events, with no fallback chart.
+```
+
+Verification:
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py research_tools/anomaly_strategy_backtest.py cli/parser.py cli/commands.py
+```
+
+Smoke:
+
+```text
+Synthetic render_anomaly_trade_chart smoke produced a PNG through the canonical renderer.
+research_tools.anomaly_micro_live imports without importing the backtest/chart stack at startup; chart renderer import is lazy and only happens on close-chart generation.
+```

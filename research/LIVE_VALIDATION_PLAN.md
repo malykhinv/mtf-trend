@@ -787,3 +787,22 @@ P114 rule: if a live filter is enabled, its metric must be finite and sourced fr
 Live validation must include non-signal guardrails too: config thresholds, free balance and artifact JSON.
 NaN/inf config values are startup errors. NaN/invalid free balance rejects before order placement. Event artifacts must remain strict JSON; non-finite event payloads are integrity errors, not silently written as NaN.
 ```
+
+---
+
+## 2026-05-09 Telegram message tone C
+
+```text
+Live Telegram validation should check message shape, not just delivery: every live message starts with exactly one associative emoji, then a bold heading, then details on following lines.
+Open-position messages must show selected category and prior category rejects when applicable. Stop updates should continue editing the first stop message.
+```
+
+---
+
+## 2026-05-10 live chart parity check
+
+```text
+After P117, a closed live position should create charts/<position_id>.png using the canonical anomaly backtest trade-chart renderer, not the old close-line plot.
+Expected visual elements: 1m candles, 5m context panel, EMA9/EMA20, anomaly/decision/entry/exit markers, risk/profit zones, quote volume panel and quote-per-trade panel.
+If any required chart input is missing, live_events.csv must contain chart_render_failed with renderer=anomaly_backtest_trade_chart; no degraded fallback chart should be sent.
+```

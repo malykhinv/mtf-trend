@@ -1185,3 +1185,18 @@ Third-pass review after P114 found another NaN-bypass class outside signal filte
 P115 proposes finite startup config validation, finite balance validation before live orders, strict JSON artifact writing and explicit missing price-column rejects.
 No proxy/fallback source is added; invalid values stop startup, reject the setup or stop live with a data-integrity error.
 ```
+
+2026-05-09 live Telegram tone update:
+
+```text
+P116 proposes message-only Telegram formatting: C tone with one associative emoji + bold heading + details below.
+Trading logic is unchanged. Category fallback remains visible in the open-position message when an earlier category rejects and a later one passes.
+```
+
+2026-05-10 live Telegram chart parity:
+
+```text
+Live close charts should no longer use the old simplified line plot.
+P117 proposes routing live Telegram trade charts through the same anomaly backtest trade-chart renderer used for research artifacts: candles, 5m context, EMA overlays, risk/profit zones, volume and quote-per-trade panels.
+No trading decision logic changes; if canonical chart rendering fails, the failure is an explicit chart_render_failed event and no fallback chart is sent.
+```
