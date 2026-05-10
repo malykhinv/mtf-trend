@@ -43,6 +43,10 @@ class CcxtFuturesApi(Protocol):
         """Описывает загрузку тикеров через API биржи."""
         ...
 
+    def fetch_open_orders(self, symbol: str) -> list[dict[str, object]]:
+        """Описывает загрузку открытых ордеров по символу."""
+        ...
+
     def market_id(self, symbol: str) -> str:
         """Описывает получение exchange-specific market id."""
         ...

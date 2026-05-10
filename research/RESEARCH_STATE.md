@@ -8,9 +8,9 @@
 
 ```text
 Branch: codex/ideal-like
-Commit: e961252 (GitHub head checked); ZIP-local patch stack remains source-of-truth for uncommitted code
+Commit: b280663 (GitHub head checked); local P120 patch stack remains source-of-truth for uncommitted code
 Local diff: P076 applied locally on top of ZIP-local stack through P075; commit UNKNOWN
-Last applied patch: P080 proposed locally; compile verified; commit UNKNOWN
+Last applied patch: P121 proposed locally; compile + smoke verified; commit UNKNOWN
 Last analyzed run: 20260506_104450_pno 7-day multi-TF run from 2.zip
 Updated: 2026-05-06
 ```
@@ -147,6 +147,7 @@ winrate > 0.40
 | P076 | Strict PNO generation and human_bos parity | APPLIED locally / UNKNOWN commit | Не маскировать `None` как 0 positions; убрать оставшийся `human_bos` auto-valid/close-trigger bypass. |
 | P079 | Sparse entry audit trail and sizing | PROPOSED | Писать `sparse_entry_materialization_status.csv`, явно маркировать source/target entry TF и расширить sparse pre-roll до required bars. |
 | P081 | Remove prior-local-high human BOS reject | PROPOSED / compile verified locally | Вырезать только `human_bos_below_prior_local_high`; later-local-high obsolete guard оставить. |
+| P121 | Live orphan order reconciliation | PROPOSED / compile + smoke verified locally | Cancel known stop orders when positions finalize and periodically cancel open exchange orders for base coins with no live/opening bot position and zero exchange position. |
 
 Статусы:
 
@@ -1231,4 +1232,15 @@ P120 proposes making live timeframe coverage match backtest PNO timeframe pairs:
 Live close charts should no longer be hard-coded as 1m + 5m; they render entry-TF candles plus levels-TF context.
 Live active/opening/stop-cooldown state is keyed by compact base coin, so WIFUSDT and WIF/USDT:USDT cannot open concurrent positions.
 Runtime status logs should be short and useful: cycle duration, total opened this run, active monitored positions, closed this run.
+```
+
+---
+
+## 2026-05-10 live orphan order reconciliation
+
+```text
+P121 proposes closing the live order hygiene gap found after P120.
+When a live position is finalized for a non-stop reason, the current stop order is cancelled explicitly.
+The live loop also periodically reconciles configured symbols: if a base coin has no local open/opening position and the exchange position amount is zero, any remaining open exchange orders for that symbol are cancelled and recorded in live_events.csv. On max-cycle stop or Ctrl+C it does a final full configured-symbol reconciliation before returning.
+This does not alter signal logic, entry logic, TP/SL thresholds or position sizing.
 ```

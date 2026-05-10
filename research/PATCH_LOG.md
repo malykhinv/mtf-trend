@@ -4637,3 +4637,53 @@ Risk:
 ```text
 Medium. Live scanning coverage increases because 5m/15s is no longer omitted and every pair is scanned. The one-coin lock intentionally rejects duplicate aliases/setups while a base coin is opening or active.
 ```
+
+
+---
+
+## P121 - Live orphan order reconciliation
+
+```text
+Status: PROPOSED / compile + smoke verified locally
+Type: live order management
+Trading logic changed: no
+Files: data/exchanges/ccxt_futures_client.py, data/exchanges/ccxt_types.py, research_tools/anomaly_micro_live.py, research/*
+Base: GitHub head b280663 checked; local stack with P120 applied
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+After a live position was gone on the exchange, the runner could finalize the local position without cancelling the still-open stop/reduce-only order.
+This was especially possible when TP1 fully closed the remaining amount, a manual/external exchange close happened, or old stop cancellation during BE/trailing failed.
+```
+
+Change:
+
+```text
+CcxtFuturesClient exposes fetch_open_orders through a typed exchange boundary.
+On non-stop finalization, live explicitly cancels the current known stop order.
+Every configured interval, live scans a bounded batch of configured symbols and cancels open exchange orders only when the base coin has no local open/opening position and the exchange reports zero position amount for that symbol. On max-cycle stop or Ctrl+C it does a final full configured-symbol reconciliation before returning.
+Cancelled orphan order counts are added to the concise live runtime log as `ордера -N` only when something was cancelled.
+All reconciliation outcomes are written to live_events.csv.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py strategy/pno/config.py strategy/pno/__init__.py
+```
+
+Smoke:
+
+```text
+Synthetic reconcile smoke: WIF/USDT:USDT with two open orders and zero exchange position cancels both order ids and records orphan_orders_reconciled.
+```
+
+Risk:
+
+```text
+Medium operational risk: the reconciliation cancels all open orders on configured live symbols with zero exchange position, not only orders with a historical bot tag, because older bot orders were not tagged.
+The guard avoids symbols with an active/opening bot position and avoids cancellation when exchange position amount is non-zero.
+```

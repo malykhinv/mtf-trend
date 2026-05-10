@@ -328,6 +328,24 @@ class CcxtFuturesClient(ExchangeClient):
             raise RuntimeError("cancel_order returned invalid payload")
         return dict(payload)
 
+    def fetch_open_orders(self, symbol: str) -> list[dict[str, object]]:
+        """Returns currently open exchange orders for a symbol."""
+        self._ensure_markets_loaded()
+        payload = self._retry_exchange_call(
+            operation="ccxt_fetch_open_orders",
+            symbol=symbol,
+            endpoint="fetch_open_orders",
+            call=self._client.fetch_open_orders,
+            args=(symbol,),
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError("fetch_open_orders returned invalid payload")
+        orders: list[dict[str, object]] = []
+        for row in payload:
+            if isinstance(row, dict):
+                orders.append(dict(row))
+        return orders
+
     def fetch_symbol_position_amount(self, symbol: str) -> float:
         """Returns signed contract amount for a symbol. Missing position means zero."""
         self._ensure_markets_loaded()
