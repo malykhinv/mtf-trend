@@ -164,3 +164,34 @@ integrity errors written as artifacts and surfaced to Telegram
 If stop/fill/monitor state is unknown, the run must emit an explicit artifact reason. It must not count synthetic TP1/BE/PnL as reliable edge evidence.
 
 Backtest market entries remain a proxy, not real exchange fills. Artifacts must label the execution model and export skipped-entry reasons, especially stale/non-executable/price-drift/RR-collapse reasons.
+
+
+---
+
+## 1h overhead-level context diagnostic
+
+Overhead levels are context, not an entry trigger. They may support a long-continuation hypothesis only when they are above current price and still leave enough target room.
+
+A valid 1h overhead level must satisfy:
+
+```text
+at least 3 valid touches in the same price band
+each valid touch has a meaningful bounce after touch
+level is above current price
+level is not a held broken level
+symbol/level context is not a clear downtrend pseudo-resistance
+```
+
+The diagnostic metric records:
+
+```text
+distance_pct
+valid_touch_count
+max_reaction_pct
+median_valid_reaction_pct
+recent_move_pct
+reaction_to_recent_move_ratio
+context = bullish_target / danger_ceiling / overhead_level
+```
+
+A touch is valid even if it includes a wick through the level only when the subsequent bounce proves the level mattered. Wick-only markings without reaction are not valid levels.

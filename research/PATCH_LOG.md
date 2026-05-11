@@ -13,6 +13,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P129 | Purge retired strategy history from active memory | PROPOSED | `README.md`, `research/*.md` | cleanup | Remove stale historical strategy references from current project docs/logs. | `git grep -i retired_strategy_token -- .` returns empty for tracked files. |
 | P130 | Strict live fills and executable market entry | PROPOSED | `data/exchanges/*`, `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `cli/*`, `research/*` | bugfix | Stop executing stale live signals; require exchange fill fields; separate signal price from actual fill; compute live PnL/BE/TP from actual fill; make market backtest enter on execution candle. | `python -m compileall data/exchanges research_tools cli constants.py main.py` |
 | P131 | Live blocked-order Telegram alerts | PROPOSED | `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `research/*` | bugfix | Send Telegram event alerts when a selected live signal is blocked as stale/non-executable; make entry-price drift guard absolute in live and market backtest. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic stale/drift smoke. |
+| P137 | Repair 1h overhead level scanner wiring | PROPOSED | `research_tools/hourly_levels.py`, `cli/*`, `research/*` | diagnostics | Restore the non-empty scanner module and register `run-hourly-levels`; detect bounce-validated 1h overhead levels and export metrics/charts. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-hourly-levels --source-timeframe 5m --days 45`. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -242,3 +243,33 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ### Risk
 
 Low/medium: real exchange retry exhaustion still pauses. Internal code errors no longer keep the bot alive pretending the API is down; live stops instead, which is the intended safe behavior.
+
+## P137 — Repair 1h overhead level scanner wiring
+
+Status: PROPOSED
+Date: 2026-05-11
+Commit: UNKNOWN
+
+### Reason
+
+The local tree has `research_tools/hourly_levels.py` as an empty file and the CLI registration is missing from `cli/parser.py` and `cli/commands.py`. As a result, `main.py -h` cannot show `run-hourly-levels` even though the scanner patch was expected to be present.
+
+### Change
+
+- Restore the full 1h overhead-level scanner implementation.
+- Register `run-hourly-levels` in the parser and command handler map.
+- Scan cached symbols from `5m` by default, aggregate to `1h`, and write `hourly_levels_summary.csv`, `hourly_levels_status.csv`, and review charts.
+- Count a level touch only when a meaningful bounce follows; wick-only marks without reaction do not qualify.
+- Reject clear downtrend symbols and downtrend pseudo-levels by default.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py -h
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05
+```
+
+### Risk
+
+Low: diagnostics only. It does not change live signal selection, order execution, stops, exits, or backtest trading rules.

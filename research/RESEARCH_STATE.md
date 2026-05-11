@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P135 proposed locally on top of ZIP-derived source
-Last active patch: P135 hourly live top-growth artifacts
+Local patch stack: P130-P137 proposed locally on top of ZIP-derived source
+Last active patch: P137 1h overhead-level scanner repair
 Updated: 2026-05-11
 ```
 
@@ -46,6 +46,7 @@ fetch-data
 update-cache
 run-anomaly-lab
 run-anomaly-live
+run-hourly-levels
 check-quality
 clear-cache
 ```
@@ -57,6 +58,7 @@ research_tools/anomaly_config.py
 research_tools/anomaly_strategy_backtest.py
 research_tools/anomaly_micro_live.py
 research_tools/charting.py
+research_tools/hourly_levels.py
 ```
 
 ---
@@ -126,4 +128,19 @@ Next verification:
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 # smoke: mark two active symbols with symbol_batch_size=20; next batch must contain both plus 18 inactive symbols.
+```
+
+
+---
+
+## 11. Current audit note — P137
+
+P137 is diagnostics only. It repairs the partially applied hourly-level scanner: the module is restored and the CLI command is wired. It adds `run-hourly-levels` for offline/manual review of 1h overhead levels. Touches are valid only when followed by a meaningful bounce; wick-only marks and clear downtrend pseudo-levels are rejected by default.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py -h
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05
 ```

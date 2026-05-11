@@ -711,6 +711,28 @@ def _update_cache_inner(config: AppConfig, args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _run_hourly_levels_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    from research_tools.hourly_levels import build_config_from_namespace, run_hourly_level_scan
+
+    logger = get_logger("run-hourly-levels", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    scan_config = build_config_from_namespace(
+        args,
+        cache_dir=config.backtest.cache_dir,
+        results_dir=config.backtest.results_dir,
+    )
+    summary = run_hourly_level_scan(scan_config)
+    logger.info("1h level scan completed: %s", json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0
+
+
+def run_hourly_levels(config: AppConfig, args: argparse.Namespace) -> int:
+    return _run_with_logging(
+        "run-hourly-levels",
+        config,
+        lambda: _run_hourly_levels_inner(config, args),
+    )
+
+
 def _collect_oi_quality_issues(frame: pd.DataFrame) -> list[dict[str, str]]:
     if "open_interest" not in frame.columns:
         return [

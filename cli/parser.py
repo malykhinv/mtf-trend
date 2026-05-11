@@ -164,6 +164,32 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_live.add_argument("--trail-buffer-r", type=float, default=0.10)
 
+    hourly_levels = subparsers.add_parser(
+        "run-hourly-levels",
+        help="Scan cached symbols for important 1h overhead levels and save review charts",
+    )
+    hourly_levels.add_argument("--symbols", nargs="*", default=None, help="Optional symbols; default scans all cached symbols")
+    hourly_levels.add_argument("--source-timeframe", default="5m", help="Cached timeframe to read; 5m is aggregated to 1h")
+    hourly_levels.add_argument("--days", type=_positive_int_for("--days"), default=45)
+    hourly_levels.add_argument("--lookback-bars", type=_positive_int_for("--lookback-bars"), default=720)
+    hourly_levels.add_argument("--chart-bars", type=_positive_int_for("--chart-bars"), default=240)
+    hourly_levels.add_argument("--min-touches", type=_positive_int_for("--min-touches"), default=3)
+    hourly_levels.add_argument("--touch-tolerance-pct", type=float, default=0.006)
+    hourly_levels.add_argument("--min-bounce-pct", type=float, default=0.05)
+    hourly_levels.add_argument("--bounce-lookahead-bars", type=_positive_int_for("--bounce-lookahead-bars"), default=12)
+    hourly_levels.add_argument("--min-target-room-pct", type=float, default=0.05)
+    hourly_levels.add_argument("--max-overhead-distance-pct", type=float, default=0.60)
+    hourly_levels.add_argument("--min-recent-move-pct", type=float, default=0.05)
+    hourly_levels.add_argument("--recent-move-lookback-bars", type=_positive_int_for("--recent-move-lookback-bars"), default=24)
+    hourly_levels.add_argument("--reaction-to-move-threshold", type=float, default=0.80)
+    hourly_levels.add_argument("--pivot-side-bars", type=_positive_int_for("--pivot-side-bars"), default=3)
+    hourly_levels.add_argument("--break-close-tolerance-pct", type=float, default=0.004)
+    hourly_levels.add_argument("--break-hold-bars", type=_positive_int_for("--break-hold-bars"), default=2)
+    hourly_levels.add_argument("--reject-downtrend-symbols", type=_str_to_bool, default=True)
+    hourly_levels.add_argument("--reject-downtrend-levels", type=_str_to_bool, default=True)
+    hourly_levels.add_argument("--save-empty-charts", type=_str_to_bool, default=False)
+    hourly_levels.add_argument("--output-dir", default=None)
+
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")
     quality.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
     quality.add_argument("--output", default=None, help=f"Path to quality report (.json or .csv). Default: <results_dir>/{DEFAULT_QUALITY_REPORT_OUTPUT_FILE}")
@@ -180,6 +206,7 @@ def resolve_handler(command_name: str) -> Handler:
         "update-cache": commands.update_cache,
         "run-anomaly-lab": commands.run_anomaly_lab,
         "run-anomaly-live": commands.run_anomaly_live,
+        "run-hourly-levels": commands.run_hourly_levels,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,
     }
