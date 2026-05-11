@@ -152,6 +152,8 @@ class LiveAnomalyConfig:
     oi_fresh_ms: int = 5 * 60 * 1000
     trail_lookback_candles: int = 5
     trail_buffer_r: float = 0.10
+    order_reconcile_interval_cycles: int = 10
+    order_reconcile_batch_size: int = 25
 
 
 @dataclass(slots=True)
@@ -463,8 +465,10 @@ class AnomalyMicroLiveRunner:
         self._seen_decisions: set[tuple[str, str, str, int]] = set()
         self._opened_positions_total = 0
         self._closed_positions_total = 0
+        self._orphan_orders_cancelled_total = 0
         self._state_lock = threading.RLock()
         self._inactive_cursor = 0
+        self._order_reconcile_cursor = 0
         self._network_degraded = False
 
     def run(self) -> int:
@@ -493,23 +497,34 @@ class AnomalyMicroLiveRunner:
             cycle += 1
             cycle_started = time.monotonic()
             try:
-                opened_before, _, closed_before = self._live_counts()
+                opened_before, _, closed_before, orphan_before = self._live_counts()
                 batch = self._next_symbol_batch(symbols)
                 signals = self._scan_batch(batch)
                 for signal in signals:
                     self._maybe_open_position(signal)
+                orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle)
                 cycle_seconds = time.monotonic() - cycle_started
-                opened_total, active_positions, closed_total = self._live_counts()
-                if cycle == 1 or cycle % 10 == 0 or opened_total != opened_before or closed_total != closed_before:
+                opened_total, active_positions, closed_total, orphan_total = self._live_counts()
+                should_log = (
+                    cycle == 1
+                    or cycle % 10 == 0
+                    or opened_total != opened_before
+                    or closed_total != closed_before
+                    or orphan_total != orphan_before
+                )
+                if should_log:
                     opened_delta = opened_total - opened_before
+                    orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
                     self.logger(
                         f"live: {cycle_seconds:.1f}s · открыто {opened_total} (+{opened_delta}) · "
-                        f"слежу {active_positions} · закрыто {closed_total}"
+                        f"слежу {active_positions} · закрыто {closed_total}{orphan_text}"
                     )
                 self._network_degraded = False
                 time.sleep(self.config.scan_sleep_seconds)
             except KeyboardInterrupt:
-                self.logger("live: остановлено пользователем")
+                orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle, force=True)
+                suffix = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
+                self.logger(f"live: остановлено пользователем{suffix}")
                 return 0
             except LiveDataIntegrityError as exc:
                 self.logger(f"live: остановлено из-за ошибки целостности live-данных: {exc}")
@@ -529,7 +544,9 @@ class AnomalyMicroLiveRunner:
                     )
                 self._network_degraded = True
                 time.sleep(self.config.network_sleep_seconds)
-        self.logger("live: достигнут лимит циклов")
+        orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle, force=True)
+        suffix = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
+        self.logger(f"live: достигнут лимит циклов{suffix}")
         return 0
 
     def _validate_startup(self) -> None:
@@ -1399,6 +1416,8 @@ class AnomalyMicroLiveRunner:
         if reason.startswith("стоп"):
             with self._state_lock:
                 self._recent_stops.setdefault(symbol_key, []).append(time.time())
+        else:
+            self._cancel_position_stop_order(position, reason=reason)
         self.artifacts.append_event(
             "position_closed",
             position.signal.symbol,
@@ -1579,6 +1598,90 @@ class AnomalyMicroLiveRunner:
             end_timestamp_ms=int(end_timestamp_ms),
         )
 
+    def _reconcile_orphan_orders(self, symbols: list[str], *, cycle: int, force: bool = False) -> int:
+        if not symbols:
+            return 0
+        if not force and cycle != 1 and cycle % self.config.order_reconcile_interval_cycles != 0:
+            return 0
+        checked_symbols: set[str] = set()
+        cancelled_total = 0
+        max_checks = len(symbols) if force else min(self.config.order_reconcile_batch_size, len(symbols))
+        for _ in range(max_checks):
+            symbol = symbols[self._order_reconcile_cursor % len(symbols)]
+            self._order_reconcile_cursor += 1
+            symbol_key = _position_symbol_key(symbol)
+            if symbol_key in checked_symbols:
+                continue
+            checked_symbols.add(symbol_key)
+            with self._state_lock:
+                if symbol_key in self._open_positions or symbol_key in self._opening_symbols:
+                    continue
+            try:
+                cancelled_total += self._cancel_orphan_orders_for_symbol(symbol, symbol_key=symbol_key)
+            except Exception as exc:
+                self.artifacts.append_event(
+                    "orphan_order_reconcile_failed",
+                    symbol,
+                    {"symbol_key": symbol_key, "reason": f"{type(exc).__name__}: {exc}"},
+                )
+        if cancelled_total:
+            with self._state_lock:
+                self._orphan_orders_cancelled_total += cancelled_total
+        return cancelled_total
+
+    def _cancel_orphan_orders_for_symbol(self, symbol: str, *, symbol_key: str) -> int:
+        orders = self.exchange.fetch_open_orders(symbol)
+        order_ids = [_resolve_order_id(order) for order in orders]
+        order_ids = [order_id for order_id in order_ids if order_id]
+        if not order_ids:
+            return 0
+        actual_amount = abs(self.exchange.fetch_symbol_position_amount(symbol))
+        if actual_amount > 0.0:
+            self.artifacts.append_event(
+                "orphan_order_reconcile_kept_with_position",
+                symbol,
+                {"symbol_key": symbol_key, "open_orders": len(order_ids), "exchange_position_amount": actual_amount},
+            )
+            return 0
+        cancelled = 0
+        failed = 0
+        for order_id in order_ids:
+            try:
+                self.exchange.cancel_order(symbol, order_id)
+                cancelled += 1
+            except Exception as exc:
+                failed += 1
+                self.artifacts.append_event(
+                    "orphan_order_cancel_failed",
+                    symbol,
+                    {"symbol_key": symbol_key, "order_id": order_id, "reason": f"{type(exc).__name__}: {exc}"},
+                )
+        self.artifacts.append_event(
+            "orphan_orders_reconciled",
+            symbol,
+            {"symbol_key": symbol_key, "seen": len(order_ids), "cancelled": cancelled, "failed": failed},
+        )
+        return cancelled
+
+    def _cancel_position_stop_order(self, position: LivePosition, *, reason: str) -> None:
+        order_id = str(position.stop_order_id or "").strip()
+        if not order_id:
+            return
+        try:
+            self.exchange.cancel_order(position.signal.symbol, order_id)
+        except Exception as exc:
+            self.artifacts.append_event(
+                "position_stop_order_cancel_failed",
+                position.signal.symbol,
+                {"position_id": position.position_id, "order_id": order_id, "reason": reason, "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+        self.artifacts.append_event(
+            "position_stop_order_cancelled",
+            position.signal.symbol,
+            {"position_id": position.position_id, "order_id": order_id, "reason": reason},
+        )
+
     def _symbol_in_stop_cooldown(self, symbol: str) -> bool:
         symbol_key = _position_symbol_key(symbol)
         cutoff = time.time() - self.config.stop_cooldown_hours * 3600.0
@@ -1587,9 +1690,14 @@ class AnomalyMicroLiveRunner:
             self._recent_stops[symbol_key] = stops
         return len(stops) >= self.config.stop_limit_per_symbol
 
-    def _live_counts(self) -> tuple[int, int, int]:
+    def _live_counts(self) -> tuple[int, int, int, int]:
         with self._state_lock:
-            return self._opened_positions_total, len(self._open_positions), self._closed_positions_total
+            return (
+                self._opened_positions_total,
+                len(self._open_positions),
+                self._closed_positions_total,
+                self._orphan_orders_cancelled_total,
+            )
 
 
 
@@ -1605,6 +1713,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "stop_limit_per_symbol": (config.stop_limit_per_symbol, 1),
         "oi_fresh_ms": (config.oi_fresh_ms, 1),
         "trail_lookback_candles": (config.trail_lookback_candles, 1),
+        "order_reconcile_interval_cycles": (config.order_reconcile_interval_cycles, 1),
+        "order_reconcile_batch_size": (config.order_reconcile_batch_size, 1),
     }
     for name, (value, minimum) in integer_minimums.items():
         if not isinstance(value, int) or value < minimum:
@@ -1789,6 +1899,18 @@ def _format_timeframe_pairs(timeframe_pairs: tuple[tuple[Timeframe, Timeframe], 
 
 def _position_symbol_key(symbol: str) -> str:
     return _compact_symbol(symbol)
+
+
+def _resolve_order_id(order: dict[str, object]) -> str | None:
+    value = order.get("id")
+    if value is None:
+        info = order.get("info")
+        if isinstance(info, dict):
+            value = info.get("orderId") or info.get("clientOrderId")
+    if value is None:
+        return None
+    order_id = str(value).strip()
+    return order_id or None
 
 
 def _resolve_aggtrade_timestamp(row: dict[str, object]) -> int | None:

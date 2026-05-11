@@ -76,6 +76,7 @@ SUPERSEDED = заменён новым патчем
 | P076 | Strict PNO generation and human_bos parity | APPLIED locally / UNKNOWN commit | `strategy/pno/pno_strategy.py`, `strategy/pno/engine.py`, `research/*` | bugfix/strategy | Не маскировать `None` как 0 positions; `human_bos` больше не получает provisional auto-valid score и Stage5 close-trigger bypass. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P079 | Sparse entry audit trail and sizing | PROPOSED | `strategy/pno/engine.py`, `cli/commands.py`, `research/*` | data-quality/diagnostics | Писать run-level sparse target-entry materialization status, явно разделить source/target entry TF в data_load_status/run_context и расширить sparse pre-roll до required bars. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
 | P080 | Propagate sparse materialization diagnostics | PROPOSED / compile verified locally | `strategy/pno/pno_strategy.py`, `research/*` | data-quality/diagnostics | Не терять sparse-entry materialization context при merge category diagnostics; заполнять sparse_entry_materialization_status.csv и seconds_load_status.csv. | `python -m compileall data/exchanges strategy/pno cli constants.py main.py launcher.py vectorbt_runner simulation domain` |
+| P122 | Anomaly entry stop init fix | PROPOSED / compile + smoke verified locally | `research_tools/anomaly_strategy_backtest.py`, `research/*` | bugfix | Инициализировать decision/previous stop в `_resolve_signal_entry`, чтобы entry-grid не падал на `previous_stop`/`initial_stop` в non-market ветках. | `python -m compileall research_tools/anomaly_strategy_backtest.py research/PATCH_LOG.md research/RESEARCH_STATE.md` |
 
 
 ---
@@ -4687,3 +4688,49 @@ Risk:
 Medium operational risk: the reconciliation cancels all open orders on configured live symbols with zero exchange position, not only orders with a historical bot tag, because older bot orders were not tagged.
 The guard avoids symbols with an active/opening bot position and avoids cancellation when exchange position amount is non-zero.
 ```
+---
+
+## P122 — Anomaly entry stop init fix
+
+```text
+Status: PROPOSED / compile + smoke verified locally
+Type: bugfix
+Trading logic changed: no; restores intended stop initialization inside research anomaly simulator
+Files: research_tools/anomaly_strategy_backtest.py, research/*
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+run-anomaly-lab with entry-grid could enter `_resolve_signal_entry` and use `previous_stop`/`initial_stop` before either variable was initialized.
+This crashed the whole simulation with NameError before trades/results could be exported.
+```
+
+Change:
+
+```text
+Compute previous_stop from the decision box inside `_resolve_signal_entry`.
+Compute stop_at_decision from previous_stop and decision EMA20 for no-fill/timeout returns and pullback-entry invalidation while waiting for fill.
+After a real fill is found, compute final initial_stop from previous_stop and the EMA20 available on the actual entry candle.
+No silent fallback, no post-processing and no CLI behavior change.
+```
+
+Verification:
+
+```bash
+python -m compileall research_tools/anomaly_strategy_backtest.py research/PATCH_LOG.md research/RESEARCH_STATE.md
+```
+
+Smoke:
+
+```text
+Synthetic `_resolve_signal_entry` call covered market, break_box_high and pullback_box_fraction without NameError.
+```
+
+Risk:
+
+```text
+Low. This is a local initialization fix. It may allow the entry grid to proceed to real skip/closed trade outputs instead of crashing; it does not relax filters.
+```
+

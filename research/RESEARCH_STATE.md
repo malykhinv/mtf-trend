@@ -1244,3 +1244,14 @@ When a live position is finalized for a non-stop reason, the current stop order 
 The live loop also periodically reconciles configured symbols: if a base coin has no local open/opening position and the exchange position amount is zero, any remaining open exchange orders for that symbol are cancelled and recorded in live_events.csv. On max-cycle stop or Ctrl+C it does a final full configured-symbol reconciliation before returning.
 This does not alter signal logic, entry logic, TP/SL thresholds or position sizing.
 ```
+---
+
+## 2026-05-11 anomaly entry-grid crash fix
+
+```text
+Observed error: run-anomaly-lab entry-grid crashed in `_resolve_signal_entry` with `NameError: previous_stop is not defined`.
+Root cause: non-market entry resolver used stop variables before local initialization.
+P122 proposes initializing previous_stop/stop_at_decision inside the resolver and preserving actual-entry EMA20 stop recalculation after fill.
+Next check: rerun the same 3d anomaly lab command and confirm it reaches artifact export; then inspect grid summary, not profitability first.
+```
+

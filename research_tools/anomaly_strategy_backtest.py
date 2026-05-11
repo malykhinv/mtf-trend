@@ -400,6 +400,14 @@ def _resolve_signal_entry(
     box_low = float(box["low"].min())
     box_high = float(box["high"].max())
     box_range = max(box_high - box_low, 0.0)
+    previous_stop = box_low - config.stop_buffer_range_fraction * box_range
+    decision_row = frame.loc[frame["timestamp"].eq(decision_timestamp_ms)]
+    decision_ema20 = (
+        _safe_float(decision_row["ema20"].iloc[0])
+        if not decision_row.empty and "ema20" in decision_row.columns
+        else None
+    )
+    stop_at_decision = max(previous_stop, decision_ema20) if decision_ema20 is not None else previous_stop
 
     if config.entry_method == "market":
         entry_ts = decision_timestamp_ms
@@ -407,12 +415,12 @@ def _resolve_signal_entry(
     else:
         future = frame.loc[frame["timestamp"] > decision_timestamp_ms].head(config.entry_timeout_candles)
         if future.empty:
-            return decision_timestamp_ms, float("nan"), initial_stop, float("nan"), box_range, box_high
+            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high
         if config.entry_method == "break_box_high":
             trigger = box_high
             hit = future.loc[future["high"].astype(float).ge(trigger)]
             if hit.empty:
-                return decision_timestamp_ms, float("nan"), initial_stop, float("nan"), box_range, box_high
+                return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high
             entry_ts = int(hit["timestamp"].iloc[0])
             entry_price = trigger
         elif config.entry_method == "pullback_box_fraction":
@@ -422,14 +430,14 @@ def _resolve_signal_entry(
             for _, row in future.iterrows():
                 low = float(row["low"])
                 high = float(row["high"])
-                if low <= initial_stop:
-                    return decision_timestamp_ms, float("nan"), initial_stop, float("nan"), box_range, box_high
+                if low <= stop_at_decision:
+                    return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high
                 if low <= trigger <= high:
                     entry_ts = int(row["timestamp"])
                     entry_price = trigger
                     break
             if not np.isfinite(entry_price):
-                return decision_timestamp_ms, float("nan"), initial_stop, float("nan"), box_range, box_high
+                return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high
         else:
             raise ValueError(f"unsupported entry_method: {config.entry_method}")
 
