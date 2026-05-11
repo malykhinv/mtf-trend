@@ -67,114 +67,6 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--with-derivatives-context", action="store_true", default=False, help="Also fetch funding/premium/long-short context")
     update.add_argument("--skip-derivatives-context", action="store_true", default=False, help="Deprecated no-op unless --with-derivatives-context is used")
     update.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for the period (unix ms)")
-    run_bt = subparsers.add_parser("run-backtest", help="Run a backtest on cached data")
-    run_bt.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
-    run_bt.add_argument(
-        "--top-n",
-        type=_positive_int_for("--top-n"),
-        default=None,
-        help="Number of symbols after strategy pre-filtering or generic volume pre-rank",
-    )
-    run_bt.add_argument("--days", type=_positive_int_for("--days"), default=None, help="Limit backtest to the last N days of cached data")
-    run_bt.add_argument("--end-timestamp-ms", type=int, default=None, help="Anchor end timestamp for --days window (unix ms)")
-    run_bt.add_argument("--levels-tf", default=None, help="Levels timeframe, e.g. 1d")
-    run_bt.add_argument("--entry-tf", default=None, help="Entry timeframe, e.g. 15m")
-    run_bt.add_argument(
-        "--strategy",
-        choices=["pno"],
-        default="pno",
-        help="Strategy id for backtest",
-    )
-    run_bt.add_argument("--pno-deposit", type=float, default=None, help="Deposit used for PNO position sizing")
-    run_bt.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per position for PNO")
-    run_bt.add_argument(
-        "--pno-entry-confirmation-mode",
-        choices=["close_above"],
-        default=None,
-        help="Filter PNO grid by entry confirmation mode (close_above)",
-    )
-    run_bt.add_argument(
-        "--pno-category-mode",
-        choices=["all", "core", "discovery"],
-        default=None,
-        help="PNO category runtime mode: all, core only, or discovery only",
-    )
-    run_bt.add_argument(
-        "--pno-all-tf-pairs",
-        action="store_true",
-        help="Run all supported PNO backtest timeframe pairs in one command and save each pair into its own subdirectory",
-    )
-    run_bt.add_argument(
-        "--pno-stage",
-        type=_positive_int_for("--pno-stage"),
-        default=None,
-        help="Export only one PNO logical stage in diagnostics (1..5)",
-    )
-    run_bt.add_argument(
-        "--pno-through-stage",
-        type=_positive_int_for("--pno-through-stage"),
-        default=None,
-        help="Export cumulative PNO logical stages 1..N in diagnostics (1..5)",
-    )
-    run_bt.add_argument(
-        "--plot-rejected",
-        default=None,
-        help="Export PNO rejected stage-review artifacts when plotting (true/false)",
-    )
-    run_bt.add_argument(
-        "--collect-diagnostics",
-        default=None,
-        help="Collect full PNO diagnostics during the backtest pass (true/false)",
-    )
-    run_bt.add_argument("--plot", default=None, help="Deprecated alias for --plot-rejected (true/false)")
-    run_bt.add_argument(
-        "--light-run",
-        default=None,
-        help="Deprecated inverse alias for --collect-diagnostics (true/false)",
-    )
-    run_bt.add_argument("--plot-from-results", action="store_true", help="Build diagnostics from results.csv without a full backtest")
-    run_bt.add_argument("--results-input", default=None, help="Path to CSV with results for --plot-from-results")
-    run_bt.add_argument("--id", type=_positive_int_for("--id"), default=None, help="Combination ID in the CSV")
-
-    plot_bt = subparsers.add_parser(
-        "plot-backtest",
-        help="Rebuild plots for a saved backtest run",
-    )
-    plot_bt.add_argument("--run-dir", required=True, help="Path to the saved backtest run directory")
-
-    pno_stage = subparsers.add_parser(
-        "pno-stage",
-        help="Run compact PNO stage review on the PNO backtest timeframe pair",
-    )
-    pno_stage.add_argument(
-        "preset",
-        choices=[
-            "s1", "s2", "s3", "s4", "s5",
-            "t1", "t2", "t3", "t4", "t5",
-            "stage1", "stage2", "stage3", "stage4", "stage5",
-            "through1", "through2", "through3", "through4", "through5",
-        ],
-        help="Stage preset: sN/stageN for one stage, tN/throughN for cumulative 1..N",
-    )
-    pno_stage.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT ETH/USDT")
-    pno_stage.add_argument(
-        "--top-n",
-        type=_positive_int_for("--top-n"),
-        default=None,
-        help="Number of symbols after volume pre-rank",
-    )
-    pno_stage.add_argument("--levels-tf", default=None, help="PNO pump/search timeframe, backtest pair only")
-    pno_stage.add_argument("--entry-tf", default=None, help="PNO pullback/entry timeframe, backtest pair only")
-    pno_stage.add_argument("--pno-deposit", type=float, default=None, help="Deposit used for PNO sizing")
-    pno_stage.add_argument("--pno-risk-pct", type=float, default=None, help="Risk per position for PNO")
-    pno_stage.add_argument(
-        "--pno-category-mode",
-        choices=["all", "core", "discovery"],
-        default=None,
-        help="PNO category runtime mode: all, core only, or discovery only",
-    )
-    pno_stage.add_argument("--output-dir", default=None, help="Root directory for stage review results")
-
     anomaly_lab = subparsers.add_parser(
         "run-anomaly-lab",
         help="Run early anomaly-continuation research backtest on cached data",
@@ -273,9 +165,6 @@ def resolve_handler(command_name: str) -> Handler:
     handlers: dict[str, Handler] = {
         "fetch-data": commands.fetch_data,
         "update-cache": commands.update_cache,
-        "run-backtest": commands.run_backtest,
-        "plot-backtest": commands.plot_backtest,
-        "pno-stage": commands.run_pno_stage,
         "run-anomaly-lab": commands.run_anomaly_lab,
         "run-anomaly-live": commands.run_anomaly_live,
         "check-quality": commands.check_quality,

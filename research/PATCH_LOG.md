@@ -5005,3 +5005,62 @@ Risk:
 ```text
 Low. This is a symbol rename and docstring cleanup. The numeric defaults and legacy PNO env variable names are preserved.
 ```
+
+---
+
+## P128 — Remove PNO active source path
+
+```text
+Status: PROPOSED / compile + grep verified locally
+Type: cleanup / architecture
+Trading logic changed: yes, PNO is removed as runnable strategy; anomaly logic unchanged
+Files: README.md, cli/commands.py, cli/parser.py, cli/pno_diagnostics.py, config/__init__.py, config/strategy_config.py, research/RESEARCH_STATE.md, research/STRATEGY_SPEC.md, research/LIVE_VALIDATION_PLAN.md, research/PATCH_LOG.md, strategy/factory.py, strategy/pno/*, vectorbt_runner/data_preparer.py
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+After P123-P127 the anomaly path was import-decoupled from PNO, but the repo still exposed PNO as the default strategy/backtest/diagnostics CLI surface.
+The user decision is explicit: PNO is no longer launched at all, and no legacy pno_legacy_commands module should be created.
+```
+
+Change:
+
+```text
+Delete strategy/pno/ and cli/pno_diagnostics.py.
+Remove run-backtest, plot-backtest and pno-stage parser/handler registrations.
+Reduce cli/commands.py to active data/anomaly/quality/cache commands.
+Make StrategyConfig anomaly-only and remove PNO sizing/category fields from config loading.
+Replace the strategy factory implementation with an explicit no-executable-strategy error instead of importing PNO.
+Rewrite README, RESEARCH_STATE and STRATEGY_SPEC around anomaly-first research.
+Keep historical PNO entries in PATCH_LOG/EXPERIMENT_LOG as history, not active contracts.
+```
+
+Verification:
+
+```bash
+python -m compileall cli config constants.py research_tools vectorbt_runner strategy main.py
+python - <<'PY'
+from cli.parser import build_parser
+parser = build_parser()
+print(sorted(action.dest for action in parser._actions))
+PY
+python - <<'PY'
+from pathlib import Path
+hits = []
+for path in Path('.').rglob('*.py'):
+    if '.git' in path.parts or '__pycache__' in path.parts:
+        continue
+    text = path.read_text(encoding='utf-8')
+    if any(token in text for token in ('pno', 'PNO', 'Pno', 'Bee Bite', 'bee_bite')):
+        hits.append(str(path))
+print(hits)
+PY
+```
+
+Risk:
+
+```text
+Medium. This intentionally breaks all old PNO commands and saved PNO artifact rebuild workflows. Anomaly lab/live and data commands are preserved. main.py Linux windll import remains intentionally unchanged per user instruction.
+```

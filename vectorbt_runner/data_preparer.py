@@ -324,7 +324,7 @@ class DataPreparer:
     ) -> pd.DataFrame:
         """Загружает данные по одному символу для бэктеста.
 
-        Compatibility wrapper. Research/PNO paths should prefer
+        Compatibility wrapper. Research paths should prefer
         load_symbol_data_result() and inspect status/reason instead of treating
         every empty frame as identical.
         """

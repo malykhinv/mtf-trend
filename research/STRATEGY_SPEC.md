@@ -1,327 +1,119 @@
-# PNO Strategy Spec
+# Anomaly Strategy Spec
 
-Краткая спецификация PNO. Держать компактной. Менять только если меняется смысл стратегии или торговая логика.
-
----
-
-## 1. Суть
-
-PNO — лонговая momentum-continuation стратегия после пампа.
-
-```text
-real pump → active high → controlled pullback → BOS/reclaim → close_above → next-bar entry → TP1 active high → runner
-```
+Compact current strategy spec. Historical PNO material was retired from the active source tree.
 
 ---
 
-## 15. Baseline fallback rule
+## 1. Core idea
+
+The system trades only after detecting an abnormal market wake-up and classifying whether the anomaly is likely organic and still executable.
 
 ```text
-Baseline PNO must not construct a trading level from fallback highs when confirmed/shelf highs are absent.
-No confirmed or shelf level means no Stage4 setup.
-ideal_like category profiles must not ignore close_above/decay invalidation inside the baseline comparison.
-category_3 baseline must not enable ideal_like fallback level construction.
-Relaxed or ideal-like level behavior is allowed only as an explicitly named experiment/profile with separate diagnostics.
+abnormal activity -> nature/category check -> controlled continuation -> executable entry -> managed exit
 ```
 
-Стратегия не торгует:
-
-```text
-любой откат
-wick-touch
-ловлю ножа
-простой “памп был — покупаю”
-```
+The strategy is not “buy any pump”, “buy any pullback”, or “rename PNO”. The first question is the nature of the anomaly.
 
 ---
 
-## 2. Stage pipeline
+## 2. Required anomaly evidence
+
+A candidate must show enough live-available evidence:
 
 ```text
-Stage1: Pump
-Stage2: High Pullback
-Stage3: Valid Pullback
-Stage4: Level / BOS Setup
-Stage5: Position
+quote_volume expansion
+trade_count expansion
+price displacement
+verticality / directional intent
+retention after impulse
+limited whipsaw before impulse
+acceptable initial risk
 ```
+
+If real quote-volume or trade-count is unavailable, conclusions about tape/flow/organic behavior are limited and the candidate should be rejected or marked explicitly degraded.
 
 ---
 
-## 3. Хороший памп
+## 3. Category / nature checks
 
-Памп должен выглядеть как настоящее пробуждение рынка:
+The system should separate at least:
 
 ```text
-быстрое направленное движение
-рост объёма
-рост real trade-count
-достаточный real quote_volume в USDT
-нормальные тела свечей
-не один верхний фитиль
-не frozen/zero-body tape
-не тонкая ликвидность
+organic wake-up
+thin-liquidity spike
+exhausted blow-off
+news/one-print jump
+choppy fake-out
+late continuation
 ```
 
-Если real trade-count или quote_volume USDT отсутствуют, PNO не должен заменять их volume/close*volume proxy; символ должен явно отклоняться по data quality.
+Category labels are research contracts. They must be backed by observable features, not visual preference.
 
 ---
 
-## 4. Active high
+## 4. Entry logic
 
-`active_high` — главный high пампа.
+Entry must be executable without future information.
 
-Используется как:
+Allowed research entry families:
 
 ```text
-верхняя граница setup
-TP1
-проверка, не опоздал ли entry
+market after confirmed wake-up
+break_box_high
+pullback_box_fraction
 ```
 
-Если TP1/active high достигнут до executable entry, позиция часто invalid.
-
----
-
-## 5. Здоровый откат
-
-Откат должен:
+Every entry test must preserve:
 
 ```text
-снять перегрев
-не уничтожить памп
-не пробить критические structural floors
-сохранить читаемую структуру
-дать lower-high / BOS context
-не стать хаотичной пилой
-```
-
-Плохой откат:
-
-```text
-слишком мелкий → плохой RR
-слишком глубокий → pump thesis сломан
-слишком долгий → stale setup
-слишком много upper wicks → продавец силён
+known signal timestamp
+known entry price rule
+known stop rule
+timeout
+fees/slippage assumptions
 ```
 
 ---
 
-## 6. Stage4 level / BOS
+## 5. Exit logic
 
-Рабочий уровень — это место, выше которого откат считается сломанным вверх.
-
-Источники:
+Current research exit families:
 
 ```text
-structure_high
-BOS
-local high cluster
-reclaim level
+structural_trail
+ema20_close
+ema20_negative_pnl_be_escape
 ```
 
-Хороший level:
-
-```text
-свежий
-не затёртый
-не слишком близко к active_high
-даёт нормальный RR до TP1
-связан с реальной структурой отката
-не является нижним устаревшим BOS под более свежими local highs
-не отбрасывается только из-за более раннего local high перед выбранным BOS
-```
-
-Stage4 rows не равны independent setups. Один и тот же level может повторяться несколько entry bars.
-
-
-После P081 `human_bos_below_prior_local_high` не является торговым reject-фильтром: более ранний local high перед выбранным BOS сам по себе не отменяет setup. Более свежий local high после выбранного BOS всё ещё может сделать уровень устаревшим через `human_bos_obsolete_under_later_local_high`.
-
-`human_bos` не является bypass-режимом. Он должен проходить те же проверки свежести уровня, overhead/untested-high context, close_above decay и close-trigger quality, что и обычный reclaim level. Его Stage4 score/validity до пересчёта считается provisional, а не принятым setup.
+Exit evaluation must report average trade, winrate, tail dependence, monthly distribution and dependence on top outliers before claiming edge.
 
 ---
 
-## 7. Entry mode
+## 6. Data-quality contract
 
-Primary mode:
-
-```text
-close_above
-```
-
-Сигнал:
+No silent fallback for core evidence:
 
 ```text
-signal close > level
+quote_volume missing != close * volume substitute
+number_of_trades missing != trades/trade_count alias substitute
+open_interest missing/stale != neutral context
+empty cache window != valid zero-signal result
 ```
 
-Недостаточно:
-
-```text
-signal high >= level
-```
-
-Почему:
-
-```text
-wick-touch = касание
-close_above = временное принятие выше уровня
-```
-
-Не заменять `close_above` на wick-touch.  
-Если нужен ранний вход — только отдельный эксперимент:
-
-```text
-touch + retest hold
-```
+Unknown or degraded source must become an explicit status/reason.
 
 ---
 
-## 8. Executable entry
+## 7. Current invalid assumptions
 
-В `close_above` вход обычно на следующей entry-TF свече.
-
-Перед сделкой проверить:
+Do not assume:
 
 ```text
-есть следующая свеча
-entry ниже active_high
-entry ниже TP1
-TP1 не был достигнут signal candle
-actual_entry_pos не слишком высоко
-net RR до TP1 достаточный
-stop ниже entry
+anomaly means continuation
+large candle means organic demand
+higher future high means executable edge
+visual setup means live-available setup
+single run means stable edge
 ```
 
----
-
-## 9. Stop-loss
-
-SL структурный, не произвольный процент.
-
-Источники:
-
-```text
-ниже structure_low
-ниже last red candle low
-ниже pullback_low
-+ небольшой noise buffer
-```
-
-SL стоит там, где идея “откат закончился” становится ложной.
-
----
-
-## 10. TP / BE / Runner
-
-TP1:
-
-```text
-active_high
-```
-
-BE:
-
-```text
-после ~70–80% пути до TP1 можно подтягивать SL к BE/BE+
-```
-
-Runner:
-
-```text
-вести по trailing / EMA / structure
-```
-
-Runner не должен оправдывать плохой RR до TP1.
-
-Anomaly-lab exit research:
-
-```text
-structural_trail: current default, TP1 partial then structural trailing stop.
-ema20_close: exit on the first closed candle below EMA20; decision is available only after candle close.
-ema20_negative_pnl_be_escape: after close < EMA20 and close < entry, arm a BE escape; exit at entry only if a later candle trades back to entry before stop.
-```
-
-EMA exits are research-grid variants, not a proven replacement for structural trailing.
-
----
-
-## 11. Stage5 reject reasons
-
-Stage5 должен по возможности логировать точную причину:
-
-```text
-no_close_above
-actual_entry_pos_too_high
-entry_price_above_active_high
-entry_price_above_tp1
-net_rr_too_low
-no_next_entry_bar
-close_trigger_filter_failed
-entry_invalidated_before_trigger
-tp1_already_tagged_in_signal
-stop_not_below_entry
-position_size_non_positive
-```
-
-Общая причина `level_crossed_no_trade` недостаточна для исследования.
-
----
-
-## 12. Хороший PNO setup
-
-```text
-реальный памп
-здоровый откат
-понятный active_high
-читаемая структура отката
-свежий BOS/level
-есть close_above
-entry исполним
-TP1 ещё не достигнут
-entry_pos не слишком высокий
-RR до TP1 достаточный
-SL структурный
-data quality понятна
-```
-
----
-
-## 13. Плохой PNO setup
-
-```text
-памп одним фитилём
-нет real trade-count
-откат уничтожил импульс
-level слишком близко к active_high
-только wick-touch
-entry выше active_high/TP1
-RR плохой
-setup stale
-много upper wicks
-тонкая ликвидность
-```
-
----
-
-## 14. Исследовательский порядок улучшений
-
-```text
-1. диагностика
-2. качество данных
-3. entry TF comparison
-4. устойчивость по периодам
-5. изменение фильтров
-6. оптимизация параметров
-```
-
-Не менять торговую логику, пока неизвестно, почему текущая логика отказывает.
-
----
-
-## 15. Live timeframe and position-key parity
-
-```text
-Live PNO/anomaly execution must use the same configured PNO timeframe set as backtest comparison: 5m/30s, 5m/15s, 1m/5s.
-Live charts must display entry timeframe candles and levels timeframe context, not hard-coded 1m + 5m panels.
-Live position state must be keyed by base coin symbol, not raw exchange pair string, so one coin cannot have two concurrent positions through aliases.
-```
+The research objective is to break weak anomaly categories cheaply before optimizing parameters.

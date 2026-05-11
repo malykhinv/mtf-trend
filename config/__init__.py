@@ -9,15 +9,9 @@ from config.app_config import AppConfig
 from config.backtest_config import BacktestConfig
 from config.fetch_config import FetchConfig
 from config.simulation_config import SimulationConfig
-from config.strategy_config import (
-    DEFAULT_STRATEGY_ENTRY_TIMEFRAME,
-    DEFAULT_STRATEGY_LEVELS_TIMEFRAME,
-    StrategyConfig,
-)
+from config.strategy_config import StrategyConfig
 from constants import (
     DEFAULT_BACKTEST_OUTPUT_FILE,
-    DEFAULT_POSITION_DEPOSIT,
-    DEFAULT_POSITION_RISK_PCT,
     DEFAULT_CACHE_DIR,
     DEFAULT_COMMISSION_RATE,
     DEFAULT_LOG_LEVEL,
@@ -41,7 +35,7 @@ __all__ = [
     "load_config",
 ]
 
-SUPPORTED_STRATEGY_IDS = {"pno"}
+SUPPORTED_STRATEGY_IDS = {"anomaly"}
 
 
 # region Приватные
@@ -69,7 +63,7 @@ def _parse_timeframe(value: str, *, env_name: str) -> Timeframe:
     raise ValueError(f"Invalid {env_name}: {value}. Supported values: {supported}")
 
 
-def _parse_strategy_id(value: str | None, *, default: str = "pno") -> str:
+def _parse_strategy_id(value: str | None, *, default: str = "anomaly") -> str:
     strategy_id = (value or default).strip().lower()
     if strategy_id not in SUPPORTED_STRATEGY_IDS:
         supported = ", ".join(sorted(SUPPORTED_STRATEGY_IDS))
@@ -124,27 +118,8 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     )
 
     strategy_id = _parse_strategy_id(os.getenv("STRATEGY_ID"))
-    strategy_entry_timeframe = _parse_timeframe(
-        os.getenv(
-            "ENTRY_TIMEFRAME",
-            DEFAULT_STRATEGY_ENTRY_TIMEFRAME.value,
-        ),
-        env_name="ENTRY_TIMEFRAME",
-    )
-    strategy_levels_timeframe = _parse_timeframe(
-        os.getenv(
-            "LEVELS_TIMEFRAME",
-            DEFAULT_STRATEGY_LEVELS_TIMEFRAME.value,
-        ),
-        env_name="LEVELS_TIMEFRAME",
-    )
-
     strategy_cfg = StrategyConfig(
         strategy_id=strategy_id,
-        levels_timeframe=strategy_levels_timeframe,
-        entry_timeframe=strategy_entry_timeframe,
-        pno_deposit=float(os.getenv("PNO_DEPOSIT", str(DEFAULT_POSITION_DEPOSIT))),
-        pno_risk_pct=float(os.getenv("PNO_RISK_PCT", str(DEFAULT_POSITION_RISK_PCT))),
     )
 
     simulation_cfg = SimulationConfig(

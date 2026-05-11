@@ -2,7 +2,7 @@
 
 Status: IMPLEMENTATION STARTED
 Date: 2026-05-09  
-Branch: codex/pno-anomaly-continuation-lab  
+Branch: UNKNOWN / anomaly-first local patch stack
 Mode: micro-live first, not paper-first  
 Purpose: live validation with real micro fills, full audit trail and strict safety.
 
