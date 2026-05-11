@@ -1,6 +1,6 @@
 # Anomaly Strategy Spec
 
-Compact current strategy spec. Historical PNO material was retired from the active source tree.
+Compact current strategy spec for the anomaly-first trading system.
 
 ---
 
@@ -12,7 +12,7 @@ The system trades only after detecting an abnormal market wake-up and classifyin
 abnormal activity -> nature/category check -> controlled continuation -> executable entry -> managed exit
 ```
 
-The strategy is not “buy any pump”, “buy any pullback”, or “rename PNO”. The first question is the nature of the anomaly.
+The first question is the nature of the anomaly. Entry logic is secondary and must not smuggle in future information or visual hindsight.
 
 ---
 

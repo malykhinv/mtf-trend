@@ -2,7 +2,7 @@
 
 Repository for researching and validating an anomaly-first trading system: detect market wake-up events, classify their nature, and only then test executable continuation logic.
 
-The project is no longer built around PNO. PNO strategy code and PNO CLI commands are removed from the active source tree.
+The active source tree is anomaly-only. Retired strategy artifacts are not part of the runtime, CLI, strategy factory, or current research contract.
 
 ## What the project does
 
@@ -20,7 +20,7 @@ The system researches anomaly wake-up behavior:
 abnormal activity -> nature/category check -> controlled continuation -> executable entry -> managed exit
 ```
 
-The focus is not “a pullback pattern”. The focus is whether the anomaly is organic, tradable, exhausted, manipulated, too thin, too late, or not actionable.
+The focus is not a generic pullback pattern. The focus is whether the anomaly is organic, tradable, exhausted, manipulated, too thin, too late, or not actionable.
 
 ## Quick start
 
