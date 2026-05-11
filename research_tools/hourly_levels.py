@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import math
+import re
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -75,6 +76,20 @@ class HourlyLevelMetric:
     context: str
     trend_state: str
     chart_path: str
+
+
+def _ascii_safe_chart_text(value: object) -> str:
+    """Return text that matplotlib default fonts can render without missing-glyph warnings."""
+    text = str(value)
+    if text.isascii():
+        return text
+    return text.encode("unicode_escape", errors="backslashreplace").decode("ascii")
+
+
+def _safe_chart_file_stem(value: object) -> str:
+    text = _ascii_safe_chart_text(value).replace("/", "_").replace(":", "_")
+    text = re.sub(r"[^A-Za-z0-9_.\-]+", "_", text)
+    return text.strip("._") or "symbol"
 
 
 @dataclass(frozen=True, slots=True)
@@ -469,7 +484,8 @@ def save_hourly_level_chart(symbol: str, frame_1h: pd.DataFrame, levels: list[Ho
     tick_labels = [_timestamp_to_utc(int(chart_frame["timestamp"].iloc[pos]))[5:16].replace("T", " ") for pos in tick_positions]
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels, rotation=30, ha="right")
-    ax.set_title(f"{symbol} 1h overhead levels")
+    chart_symbol = _ascii_safe_chart_text(symbol)
+    ax.set_title(f"{chart_symbol} 1h overhead levels")
     ax.set_xlim(-1, len(chart_frame) + 1)
     ax.grid(True, alpha=0.20)
     fig.tight_layout()
@@ -515,7 +531,7 @@ def run_hourly_level_scan(config: HourlyLevelScanConfig) -> dict[str, object]:
                     )
                 )
                 continue
-            safe_name = symbol.replace("/", "_").replace(":", "_")
+            safe_name = _safe_chart_file_stem(symbol)
             chart_path = charts_dir / f"{safe_name}_1h_levels.png"
             levels, trend, reason = find_hourly_overhead_levels(
                 frame_1h,

@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P137 proposed locally on top of ZIP-derived source
-Last active patch: P137 1h overhead-level scanner repair
+Local patch stack: P130-P138 proposed locally on top of ZIP-derived source
+Last active patch: P138 hourly-level chart text ASCII-safe
 Updated: 2026-05-11
 ```
 
@@ -142,5 +142,19 @@ Next verification:
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py -h
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05
+```
+
+
+---
+
+## 12. Current audit note — P138
+
+P138 is diagnostics-only. It prevents hourly-level chart generation from spamming matplotlib missing-glyph warnings for symbols containing non-ASCII characters. CSV outputs still keep original symbols; only chart titles and file stems are converted to ASCII-safe text when needed.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05
 ```

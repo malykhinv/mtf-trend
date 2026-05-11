@@ -14,6 +14,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P130 | Strict live fills and executable market entry | PROPOSED | `data/exchanges/*`, `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `cli/*`, `research/*` | bugfix | Stop executing stale live signals; require exchange fill fields; separate signal price from actual fill; compute live PnL/BE/TP from actual fill; make market backtest enter on execution candle. | `python -m compileall data/exchanges research_tools cli constants.py main.py` |
 | P131 | Live blocked-order Telegram alerts | PROPOSED | `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `research/*` | bugfix | Send Telegram event alerts when a selected live signal is blocked as stale/non-executable; make entry-price drift guard absolute in live and market backtest. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic stale/drift smoke. |
 | P137 | Repair 1h overhead level scanner wiring | PROPOSED | `research_tools/hourly_levels.py`, `cli/*`, `research/*` | diagnostics | Restore the non-empty scanner module and register `run-hourly-levels`; detect bounce-validated 1h overhead levels and export metrics/charts. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-hourly-levels --source-timeframe 5m --days 45`. |
+| P138 | Make hourly-level chart text ASCII-safe | PROPOSED | `research_tools/hourly_levels.py`, `research/*` | diagnostics | Avoid matplotlib missing-glyph warning spam by rendering non-ASCII symbols as escaped ASCII in chart titles/filenames. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; run `run-hourly-levels` on symbols with non-ASCII names. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -273,3 +274,31 @@ python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3
 ### Risk
 
 Low: diagnostics only. It does not change live signal selection, order execution, stops, exits, or backtest trading rules.
+
+
+## P138 — Make hourly-level chart text ASCII-safe
+
+Status: PROPOSED
+Date: 2026-05-11
+Commit: UNKNOWN
+
+### Reason
+
+Some cached futures symbols contain non-ASCII characters. Matplotlib's default DejaVu Sans font cannot render those glyphs, so every saved chart can emit repeated `Glyph ... missing from font(s) DejaVu Sans` warnings during `tight_layout()` and `savefig()`.
+
+### Change
+
+- Render chart titles with an ASCII-safe symbol representation using unicode escapes for non-ASCII characters.
+- Use the same ASCII-safe representation for chart file stems.
+- Do not suppress warnings globally; avoid creating unsupported glyphs in the chart text.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05
+```
+
+### Risk
+
+Low: diagnostics/chart output only. CSV keeps the original symbol value; only chart title/file stem becomes ASCII-safe when needed.
