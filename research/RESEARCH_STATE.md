@@ -1255,3 +1255,14 @@ P122 proposes initializing previous_stop/stop_at_decision inside the resolver an
 Next check: rerun the same 3d anomaly lab command and confirm it reaches artifact export; then inspect grid summary, not profitability first.
 ```
 
+
+---
+
+## 2026-05-11 anomaly decoupling from PNO runtime helpers
+
+```text
+P123 proposes the first PNO-rudiment removal step.
+Anomaly live/backtest should own their timeframe pairs and use neutral charting helpers instead of importing strategy.pno.config or cli.pno_diagnostics.
+Trading logic is unchanged: this only removes direct anomaly runtime dependencies on PNO modules.
+Next check: isolate CLI top-level imports, because main.py -> cli.parser -> cli.commands still imports PNO for legacy commands.
+```

@@ -4734,3 +4734,57 @@ Risk:
 Low. This is a local initialization fix. It may allow the entry grid to proceed to real skip/closed trade outputs instead of crashing; it does not relax filters.
 ```
 
+
+---
+
+## P123 — Anomaly-owned config and charting extraction
+
+```text
+Status: PROPOSED / compile + import smoke verified locally
+Type: architecture / legacy decoupling
+Trading logic changed: no
+Files: research_tools/anomaly_config.py, research_tools/charting.py, research_tools/anomaly_micro_live.py, research_tools/anomaly_strategy_backtest.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+Anomaly live imported timeframe-pair defaults from strategy.pno.config.
+Anomaly backtest imported chart constants/helpers from cli.pno_diagnostics.
+That made PNO a runtime dependency for anomaly research/live code even after the project focus moved to anomaly nature.
+```
+
+Change:
+
+```text
+Add anomaly-owned timeframe-pair primitives and validation in research_tools/anomaly_config.py.
+Add neutral matplotlib chart helpers in research_tools/charting.py.
+Route anomaly live/backtest through those anomaly/common modules instead of strategy.pno.config and cli.pno_diagnostics.
+No PNO strategy classes, engine logic, entry filters or simulation semantics are renamed or reused as anomaly logic.
+```
+
+Verification:
+
+```bash
+python -m compileall research_tools/anomaly_config.py research_tools/charting.py research_tools/anomaly_micro_live.py research_tools/anomaly_strategy_backtest.py
+python - <<'PY'
+import sys
+import research_tools.anomaly_micro_live
+import research_tools.anomaly_strategy_backtest
+print('strategy.pno' in sys.modules)
+print('cli.pno_diagnostics' in sys.modules)
+PY
+```
+
+Smoke:
+
+```text
+Both import smoke flags were False, confirming anomaly live/backtest imports no longer load strategy.pno or cli.pno_diagnostics directly.
+```
+
+Risk:
+
+```text
+Low-to-medium charting risk: chart helpers were extracted as neutral copies for anomaly renderers, so future chart fixes must be applied to the neutral module. PNO diagnostics still has its legacy local chart helpers until the later legacy-isolation/removal patch.
+```

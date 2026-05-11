@@ -16,40 +16,38 @@ from urllib.parse import quote
 import numpy as np
 import pandas as pd
 
-from cli.pno_diagnostics import (
-    _PNO_PLOT_AXIS_FACE,
-    _PNO_PLOT_DOWN,
-    _PNO_PLOT_EMA9,
-    _PNO_PLOT_EMA20,
-    _PNO_PLOT_ENTRY,
-    _PNO_PLOT_EXIT,
-    _PNO_PLOT_FIGURE_FACE,
-    _PNO_PLOT_GRID,
-    _PNO_PLOT_MUTED,
-    _PNO_PLOT_PROFIT_EDGE,
-    _PNO_PLOT_PROFIT_FACE,
-    _PNO_PLOT_PUMP,
-    _PNO_PLOT_RISK_EDGE,
-    _PNO_PLOT_RISK_FACE,
-    _PNO_PLOT_SAVEFIG_KWARGS,
-    _PNO_PLOT_TEXT,
-    _PNO_PLOT_UP,
-    _PNO_PLOT_5M_CANDLE_WIDTH,
-    _PNO_TRADE_CHART_FIGSIZE,
-    _annotate_pno_axis_price_tag,
-    _build_pno_tick_labels_from_timestamps,
-    _build_pno_tick_positions_from_timestamps,
-    _build_pno_tick_timestamps,
-    _configure_pno_plot_axes,
-    _draw_pno_candles,
-    _draw_pno_candles_on_columns,
-    _draw_pno_price_zone,
-    _format_pno_chart_symbol,
-    _format_pno_timeframe_label,
-    _infer_pno_frame_step_ms,
-    _resolve_pno_axis_tag_positions,
-    _resolve_pno_candle_width,
-    _resolve_pno_timestamp_plot_idx,
+from research_tools.charting import (
+    CHART_5M_CANDLE_WIDTH,
+    CHART_ANOMALY,
+    CHART_DOWN,
+    CHART_EMA9,
+    CHART_EMA20,
+    CHART_ENTRY,
+    CHART_EXIT,
+    CHART_FIGURE_FACE,
+    CHART_MUTED,
+    CHART_PROFIT_EDGE,
+    CHART_PROFIT_FACE,
+    CHART_RISK_EDGE,
+    CHART_RISK_FACE,
+    CHART_SAVEFIG_KWARGS,
+    CHART_TEXT,
+    CHART_UP,
+    TRADE_CHART_FIGSIZE,
+    annotate_axis_price_tag,
+    build_tick_labels_from_timestamps,
+    build_tick_positions_from_timestamps,
+    build_tick_timestamps,
+    configure_plot_axes,
+    draw_candles,
+    draw_candles_on_columns,
+    draw_price_zone,
+    format_chart_symbol,
+    format_timeframe_label,
+    infer_frame_step_ms,
+    resolve_axis_tag_positions,
+    resolve_candle_width,
+    resolve_timestamp_plot_idx,
 )
 from research_tools.anomaly_continuation_lab import (
     AnomalyLabConfig,
@@ -1335,7 +1333,7 @@ def _annotate_anomaly_panel_message(ax, text: str) -> None:
         transform=ax.transAxes,
         ha="center",
         va="center",
-        color=_PNO_PLOT_MUTED,
+        color=CHART_MUTED,
         fontsize=7,
         alpha=0.72,
     )
@@ -1377,7 +1375,7 @@ def _render_anomaly_trade_chart(
     tp1_price = _safe_float(trade.get("tp1_price"))
     box_high = _safe_float(trade.get("box_high"))
     exit_price = _safe_float(trade.get("exit_price"))
-    timeframe_ms = int(_infer_pno_frame_step_ms(frame) or 60_000)
+    timeframe_ms = int(infer_frame_step_ms(frame) or 60_000)
     start_ts = anomaly_ts - pre_candles * timeframe_ms
     end_ts = exit_ts + post_candles * timeframe_ms
     plot_frame = _prepare_anomaly_plot_frame(frame, start_ts=start_ts, end_ts=end_ts)
@@ -1392,46 +1390,46 @@ def _render_anomaly_trade_chart(
         x_values,
         context_timeframe_ms=context_timeframe_ms,
     )
-    anomaly_idx = _resolve_pno_timestamp_plot_idx(timestamps, anomaly_ts)
-    decision_idx = _resolve_pno_timestamp_plot_idx(timestamps, decision_ts)
-    entry_idx = _resolve_pno_timestamp_plot_idx(timestamps, entry_ts)
-    exit_idx = _resolve_pno_timestamp_plot_idx(timestamps, exit_ts)
+    anomaly_idx = resolve_timestamp_plot_idx(timestamps, anomaly_ts)
+    decision_idx = resolve_timestamp_plot_idx(timestamps, decision_ts)
+    entry_idx = resolve_timestamp_plot_idx(timestamps, entry_ts)
+    exit_idx = resolve_timestamp_plot_idx(timestamps, exit_ts)
     price_axis_right_x = float(len(plot_frame) - 0.5)
 
     fig, (ax_price, ax_context, ax_volume, ax_trades) = plt.subplots(
         4,
         1,
-        figsize=_PNO_TRADE_CHART_FIGSIZE,
+        figsize=TRADE_CHART_FIGSIZE,
         sharex=True,
         gridspec_kw={"height_ratios": [4, 2, 1, 1], "hspace": 0.05},
-        facecolor=_PNO_PLOT_FIGURE_FACE,
+        facecolor=CHART_FIGURE_FACE,
     )
-    _configure_pno_plot_axes(price_ax=ax_price, volume_ax=ax_volume, trades_ax=ax_trades)
-    _configure_pno_plot_axes(price_ax=ax_context, volume_ax=ax_volume, trades_ax=ax_trades)
+    configure_plot_axes(price_ax=ax_price, volume_ax=ax_volume, trades_ax=ax_trades)
+    configure_plot_axes(price_ax=ax_context, volume_ax=ax_volume, trades_ax=ax_trades)
 
-    _draw_pno_candles(ax_price, plot_frame, x_values)
+    draw_candles(ax_price, plot_frame, x_values)
     if not context_frame.empty:
-        _draw_pno_candles_on_columns(
+        draw_candles_on_columns(
             ax_context,
             context_frame,
             x_column="plot_x",
             candle_width=max(
-                _PNO_PLOT_5M_CANDLE_WIDTH,
+                CHART_5M_CANDLE_WIDTH,
                 min(float(context_timeframe_ms) / max(float(timeframe_ms), 1.0) * 0.72, 12.0),
             ),
         )
-    ax_price.plot(x_values, plot_frame["ema9"].to_numpy(dtype=np.float64), color=_PNO_PLOT_EMA9, linewidth=1.2, alpha=0.28, zorder=2.2)
-    ax_price.plot(x_values, plot_frame["ema20"].to_numpy(dtype=np.float64), color=_PNO_PLOT_EMA20, linewidth=1.2, alpha=0.24, zorder=2.1)
+    ax_price.plot(x_values, plot_frame["ema9"].to_numpy(dtype=np.float64), color=CHART_EMA9, linewidth=1.2, alpha=0.28, zorder=2.2)
+    ax_price.plot(x_values, plot_frame["ema20"].to_numpy(dtype=np.float64), color=CHART_EMA20, linewidth=1.2, alpha=0.24, zorder=2.1)
 
-    ax_price.axvline(anomaly_idx, color=_PNO_PLOT_PUMP, linewidth=0.95, alpha=0.30, zorder=5)
-    ax_price.axvline(decision_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.18, linestyle="--", zorder=4.8)
-    ax_price.axvline(entry_idx, color=_PNO_PLOT_ENTRY, linewidth=1.0, alpha=0.45, zorder=5.2)
-    ax_price.axvline(exit_idx, color=_PNO_PLOT_EXIT, linewidth=1.0, alpha=0.52, linestyle="-.", zorder=5.3)
-    ax_context.axvline(anomaly_idx, color=_PNO_PLOT_PUMP, linewidth=0.9, alpha=0.22, zorder=5)
-    ax_context.axvline(entry_idx, color=_PNO_PLOT_ENTRY, linewidth=0.9, alpha=0.32, zorder=5)
-    ax_context.axvline(exit_idx, color=_PNO_PLOT_EXIT, linewidth=0.9, alpha=0.35, linestyle="-.", zorder=5)
+    ax_price.axvline(anomaly_idx, color=CHART_ANOMALY, linewidth=0.95, alpha=0.30, zorder=5)
+    ax_price.axvline(decision_idx, color=CHART_ENTRY, linewidth=0.9, alpha=0.18, linestyle="--", zorder=4.8)
+    ax_price.axvline(entry_idx, color=CHART_ENTRY, linewidth=1.0, alpha=0.45, zorder=5.2)
+    ax_price.axvline(exit_idx, color=CHART_EXIT, linewidth=1.0, alpha=0.52, linestyle="-.", zorder=5.3)
+    ax_context.axvline(anomaly_idx, color=CHART_ANOMALY, linewidth=0.9, alpha=0.22, zorder=5)
+    ax_context.axvline(entry_idx, color=CHART_ENTRY, linewidth=0.9, alpha=0.32, zorder=5)
+    ax_context.axvline(exit_idx, color=CHART_EXIT, linewidth=0.9, alpha=0.35, linestyle="-.", zorder=5)
 
-    _draw_pno_price_zone(
+    draw_price_zone(
         ax_price,
         timestamps=timestamps,
         start_timestamp_ms=anomaly_ts,
@@ -1450,8 +1448,8 @@ def _render_anomaly_trade_chart(
         end_idx=exit_idx,
         lower_price=initial_stop,
         upper_price=entry_price,
-        facecolor=_PNO_PLOT_RISK_FACE,
-        edgecolor=_PNO_PLOT_RISK_EDGE,
+        facecolor=CHART_RISK_FACE,
+        edgecolor=CHART_RISK_EDGE,
         alpha=0.30,
         zorder=1.05,
         frame_length=len(plot_frame),
@@ -1462,14 +1460,14 @@ def _render_anomaly_trade_chart(
         end_idx=exit_idx,
         lower_price=entry_price,
         upper_price=tp1_price,
-        facecolor=_PNO_PLOT_PROFIT_FACE,
-        edgecolor=_PNO_PLOT_PROFIT_EDGE,
+        facecolor=CHART_PROFIT_FACE,
+        edgecolor=CHART_PROFIT_EDGE,
         alpha=0.22,
         zorder=1.08,
         frame_length=len(plot_frame),
     )
 
-    tag_positions = _resolve_pno_axis_tag_positions(
+    tag_positions = resolve_axis_tag_positions(
         [
             ("TP1", tp1_price),
             ("Entry", entry_price),
@@ -1478,12 +1476,12 @@ def _render_anomaly_trade_chart(
         ]
     )
     for label, value, color, leader_x in (
-        ("TP1", tp1_price, _PNO_PLOT_PROFIT_EDGE, entry_idx - 0.5),
-        ("Entry", entry_price, _PNO_PLOT_ENTRY, entry_idx),
-        ("SL", initial_stop, _PNO_PLOT_RISK_EDGE, entry_idx - 0.5),
-        ("Exit", exit_price, _PNO_PLOT_EXIT, exit_idx),
+        ("TP1", tp1_price, CHART_PROFIT_EDGE, entry_idx - 0.5),
+        ("Entry", entry_price, CHART_ENTRY, entry_idx),
+        ("SL", initial_stop, CHART_RISK_EDGE, entry_idx - 0.5),
+        ("Exit", exit_price, CHART_EXIT, exit_idx),
     ):
-        _annotate_pno_axis_price_tag(
+        annotate_axis_price_tag(
             ax_price,
             y=value,
             label=label,
@@ -1500,11 +1498,11 @@ def _render_anomaly_trade_chart(
     volume_pct = (volume / volume_max) * 100.0 if volume_max > 0.0 else np.zeros_like(volume)
     opens = plot_frame["open"].to_numpy(dtype=np.float64)
     closes = plot_frame["close"].to_numpy(dtype=np.float64)
-    colors = np.where(closes >= opens, _PNO_PLOT_UP, _PNO_PLOT_DOWN)
+    colors = np.where(closes >= opens, CHART_UP, CHART_DOWN)
     ax_volume.bar(
         x_values,
         volume_pct,
-        width=_resolve_pno_candle_width(x_values, default=0.82),
+        width=resolve_candle_width(x_values, default=0.82),
         color=colors,
         edgecolor="none",
         alpha=0.82,
@@ -1518,7 +1516,7 @@ def _render_anomaly_trade_chart(
         ax_trades.bar(
             x_values,
             avg_trade_quote_pct,
-            width=_resolve_pno_candle_width(x_values, default=0.82),
+            width=resolve_candle_width(x_values, default=0.82),
             color=colors,
             edgecolor="none",
             alpha=0.78,
@@ -1536,36 +1534,36 @@ def _render_anomaly_trade_chart(
         context_low = context_frame["low"].to_numpy(dtype=np.float64)
         context_padding = max((float(np.nanmax(context_high)) - float(np.nanmin(context_low))) * 0.08, 1e-9)
         ax_context.set_ylim(float(np.nanmin(context_low)) - context_padding, float(np.nanmax(context_high)) + context_padding)
-    entry_candle_width = _resolve_pno_candle_width(x_values)
+    entry_candle_width = resolve_candle_width(x_values)
     ax_price.set_xlim(-max(0.5, entry_candle_width * 0.65), len(plot_frame) - 1 + max(0.5, entry_candle_width * 0.65))
     ax_context.set_xlim(ax_price.get_xlim())
     ax_volume.set_ylim(0.0, 100.0)
     ax_volume.set_yticks([0.0, 50.0, 100.0])
-    ax_volume.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
+    ax_volume.set_yticklabels(["0", "50", "100"], color=CHART_MUTED)
     ax_trades.set_ylim(0.0, 100.0)
     ax_trades.set_yticks([0.0, 50.0, 100.0])
-    ax_trades.set_yticklabels(["0", "50", "100"], color=_PNO_PLOT_MUTED)
-    ax_price.set_ylabel(_format_pno_timeframe_label(_infer_pno_frame_step_ms(plot_frame)))
-    ax_context.set_ylabel(_format_pno_timeframe_label(context_timeframe_ms))
+    ax_trades.set_yticklabels(["0", "50", "100"], color=CHART_MUTED)
+    ax_price.set_ylabel(format_timeframe_label(infer_frame_step_ms(plot_frame)))
+    ax_context.set_ylabel(format_timeframe_label(context_timeframe_ms))
     ax_volume.set_ylabel("Quote vol %")
     ax_trades.set_ylabel("Quote / trade %")
     ax_price.set_title(
         (
-            f"{_format_pno_chart_symbol(str(trade.get('symbol')))}  "
+            f"{format_chart_symbol(str(trade.get('symbol')))}  "
             f"{trade.get('entry_timestamp_utc')}  "
             f"net={float(trade.get('net_return', 0.0)):.2%}  "
             f"{trade.get('exit_reason', '')}"
         ),
         loc="left",
-        color=_PNO_PLOT_TEXT,
+        color=CHART_TEXT,
         fontsize=10,
         pad=10,
         fontweight="semibold",
     )
 
-    tick_timestamps = _build_pno_tick_timestamps(plot_frame)
-    tick_positions = _build_pno_tick_positions_from_timestamps(tick_timestamps, len(plot_frame))
-    tick_labels = _build_pno_tick_labels_from_timestamps(tick_timestamps, tick_positions)
+    tick_timestamps = build_tick_timestamps(plot_frame)
+    tick_positions = build_tick_positions_from_timestamps(tick_timestamps, len(plot_frame))
+    tick_labels = build_tick_labels_from_timestamps(tick_timestamps, tick_positions)
     ax_trades.set_xticks(tick_positions)
     ax_trades.set_xticklabels(tick_labels)
     ax_price.tick_params(axis="x", labelbottom=False)
@@ -1577,7 +1575,7 @@ def _render_anomaly_trade_chart(
     ax_trades.margins(x=0.0)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.subplots_adjust(left=0.10, right=0.80, top=0.94, bottom=0.06, hspace=0.05)
-    fig.savefig(output_path, **_PNO_PLOT_SAVEFIG_KWARGS)
+    fig.savefig(output_path, **CHART_SAVEFIG_KWARGS)
     plt.close(fig)
 
 

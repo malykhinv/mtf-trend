@@ -22,7 +22,7 @@ import pandas as pd
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from domain.enums.timeframe import Timeframe
 from research_tools.anomaly_continuation_lab import compute_start_verticality_metrics
-from strategy.pno.config import PNO_LIVE_TIMEFRAME_PAIRS, validate_pno_timeframe_pair
+from research_tools.anomaly_config import ANOMALY_LIVE_TIMEFRAME_PAIRS
 
 
 REQUIRED_PRICE_COLUMNS = ("timestamp", "open", "high", "low", "close")
@@ -118,7 +118,7 @@ class LiveAnomalyConfig:
     results_dir: Path
     symbols: tuple[str, ...]
     confirm_real_orders: bool
-    timeframe_pairs: tuple[tuple[Timeframe, Timeframe], ...] = PNO_LIVE_TIMEFRAME_PAIRS
+    timeframe_pairs: tuple[tuple[Timeframe, Timeframe], ...] = ANOMALY_LIVE_TIMEFRAME_PAIRS
     pump_categories: tuple[str, ...] = ("balanced_market", "mild_market")
     baseline_candles: int = 60
     confirmation_candles: int = 4
