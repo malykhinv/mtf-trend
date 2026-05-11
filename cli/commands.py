@@ -720,7 +720,7 @@ def _run_hourly_levels_inner(config: AppConfig, args: argparse.Namespace) -> int
         cache_dir=config.backtest.cache_dir,
         results_dir=config.backtest.results_dir,
     )
-    summary = run_hourly_level_scan(scan_config)
+    summary = run_hourly_level_scan(scan_config, progress_callback=logger.info)
     logger.info("1h level scan completed: %s", json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 

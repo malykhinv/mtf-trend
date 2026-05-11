@@ -188,6 +188,8 @@ def build_parser() -> argparse.ArgumentParser:
     hourly_levels.add_argument("--reject-downtrend-symbols", type=_str_to_bool, default=True)
     hourly_levels.add_argument("--reject-downtrend-levels", type=_str_to_bool, default=True)
     hourly_levels.add_argument("--save-empty-charts", type=_str_to_bool, default=False)
+    hourly_levels.add_argument("--progress-every-symbols", type=_positive_int_for("--progress-every-symbols"), default=5)
+    hourly_levels.add_argument("--progress-min-seconds", type=float, default=5.0)
     hourly_levels.add_argument("--output-dir", default=None)
 
     quality = subparsers.add_parser("check-quality", help="Validate cache quality")

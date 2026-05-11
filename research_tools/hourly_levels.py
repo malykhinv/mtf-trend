@@ -5,10 +5,11 @@ from __future__ import annotations
 import csv
 import math
 import re
+import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 from urllib.parse import unquote
 
 import numpy as np
@@ -42,6 +43,8 @@ class HourlyLevelScanConfig:
     reject_downtrend_symbols: bool = True
     reject_downtrend_levels: bool = True
     save_empty_charts: bool = False
+    progress_every_symbols: int = 5
+    progress_min_seconds: float = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +93,61 @@ def _safe_chart_file_stem(value: object) -> str:
     text = _ascii_safe_chart_text(value).replace("/", "_").replace(":", "_")
     text = re.sub(r"[^A-Za-z0-9_.\-]+", "_", text)
     return text.strip("._") or "symbol"
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None or not math.isfinite(float(seconds)) or seconds < 0.0:
+        return "unknown"
+    total = int(round(float(seconds)))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}h{minutes:02d}m{secs:02d}s"
+    if minutes > 0:
+        return f"{minutes}m{secs:02d}s"
+    return f"{secs}s"
+
+
+def _progress_line(
+    *,
+    done: int,
+    total: int,
+    started_at: float,
+    levels_found: int,
+    symbols_with_levels: int,
+    charts_saved: int,
+    last_symbol: str,
+    last_status: str,
+    last_reason: str,
+) -> str:
+    elapsed = max(time.monotonic() - started_at, 0.0)
+    rate = done / elapsed if elapsed > 0.0 else 0.0
+    eta = ((total - done) / rate) if rate > 0.0 and total >= done else None
+    pct = (100.0 * done / total) if total > 0 else 100.0
+    symbol_text = _ascii_safe_chart_text(last_symbol)
+    return (
+        "1h level scan progress: "
+        f"{done}/{total} ({pct:.1f}%), "
+        f"elapsed={_format_duration(elapsed)}, eta={_format_duration(eta)}, "
+        f"levels={levels_found}, symbols_with_levels={symbols_with_levels}, charts={charts_saved}, "
+        f"last={symbol_text}, status={last_status}, reason={last_reason}"
+    )
+
+
+def _should_emit_progress(
+    *,
+    done: int,
+    total: int,
+    last_emit_at: float,
+    config: HourlyLevelScanConfig,
+) -> bool:
+    if done <= 0:
+        return False
+    if done == total:
+        return True
+    if config.progress_every_symbols > 0 and done % config.progress_every_symbols == 0:
+        return True
+    return (time.monotonic() - last_emit_at) >= max(config.progress_min_seconds, 0.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -502,70 +560,123 @@ def _write_csv(path: Path, rows: Iterable[dict[str, object]], fieldnames: list[s
             writer.writerow(row)
 
 
-def run_hourly_level_scan(config: HourlyLevelScanConfig) -> dict[str, object]:
+def run_hourly_level_scan(
+    config: HourlyLevelScanConfig,
+    *,
+    progress_callback: Callable[[str], None] | None = None,
+) -> dict[str, object]:
     output_dir = config.output_dir
     charts_dir = output_dir / "charts"
     symbols = list(config.symbols) if config.symbols else _discover_cached_symbols(config.cache_dir, config.source_timeframe)
     metrics_rows: list[dict[str, object]] = []
     status_rows: list[dict[str, object]] = []
+    symbols_with_levels: set[str] = set()
+    charts_saved = 0
+    started_at = time.monotonic()
+    last_emit_at = started_at
 
-    for symbol in symbols:
+    def _emit(message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(message)
+
+    _emit(
+        "1h level scan started: "
+        f"symbols={len(symbols)}, source_timeframe={config.source_timeframe.value}, "
+        f"days={config.days}, min_touches={config.min_touches}, "
+        f"min_bounce_pct={config.min_bounce_pct:.2%}, output_dir={output_dir}"
+    )
+
+    for processed_count, symbol in enumerate(symbols, start=1):
+        last_status = "unknown"
+        last_reason = "unknown"
         try:
             source_frame, source_path = _read_cached_frame(config.cache_dir, symbol, config.source_timeframe)
             if source_frame.empty:
-                status_rows.append(asdict(SymbolScanStatus(symbol, "skipped", "source_cache_missing_or_empty", source_path=str(source_path))))
-                continue
-            frame_1h = _aggregate_to_1h(source_frame, config.source_timeframe)
-            frame_1h = _trim_to_recent_window(frame_1h, config.days, config.lookback_bars)
-            if frame_1h.empty:
-                status_rows.append(
-                    asdict(
-                        SymbolScanStatus(
-                            symbol=symbol,
-                            status="skipped",
-                            reason="empty_after_1h_aggregation",
-                            rows_source=len(source_frame),
-                            rows_1h=0,
-                            source_path=str(source_path),
+                last_status = "skipped"
+                last_reason = "source_cache_missing_or_empty"
+                status_rows.append(asdict(SymbolScanStatus(symbol, last_status, last_reason, source_path=str(source_path))))
+            else:
+                frame_1h = _aggregate_to_1h(source_frame, config.source_timeframe)
+                frame_1h = _trim_to_recent_window(frame_1h, config.days, config.lookback_bars)
+                if frame_1h.empty:
+                    last_status = "skipped"
+                    last_reason = "empty_after_1h_aggregation"
+                    status_rows.append(
+                        asdict(
+                            SymbolScanStatus(
+                                symbol=symbol,
+                                status=last_status,
+                                reason=last_reason,
+                                rows_source=len(source_frame),
+                                rows_1h=0,
+                                source_path=str(source_path),
+                            )
                         )
                     )
-                )
-                continue
-            safe_name = _safe_chart_file_stem(symbol)
-            chart_path = charts_dir / f"{safe_name}_1h_levels.png"
-            levels, trend, reason = find_hourly_overhead_levels(
-                frame_1h,
-                symbol=symbol,
-                config=config,
-                chart_path=str(chart_path),
-            )
-            if levels or config.save_empty_charts:
-                save_hourly_level_chart(symbol, frame_1h, levels, chart_path, config.chart_bars)
-            metrics_rows.extend(asdict(level) for level in levels)
-            status_rows.append(
-                asdict(
-                    SymbolScanStatus(
+                else:
+                    safe_name = _safe_chart_file_stem(symbol)
+                    chart_path = charts_dir / f"{safe_name}_1h_levels.png"
+                    levels, trend, reason = find_hourly_overhead_levels(
+                        frame_1h,
                         symbol=symbol,
-                        status="ok" if levels else "skipped",
-                        reason=reason,
-                        rows_source=len(source_frame),
-                        rows_1h=len(frame_1h),
-                        levels_found=len(levels),
-                        trend_state=trend,
-                        source_path=str(source_path),
+                        config=config,
+                        chart_path=str(chart_path),
                     )
-                )
-            )
+                    if levels or config.save_empty_charts:
+                        save_hourly_level_chart(symbol, frame_1h, levels, chart_path, config.chart_bars)
+                        charts_saved += 1
+                    if levels:
+                        symbols_with_levels.add(symbol)
+                    metrics_rows.extend(asdict(level) for level in levels)
+                    last_status = "ok" if levels else "skipped"
+                    last_reason = reason
+                    status_rows.append(
+                        asdict(
+                            SymbolScanStatus(
+                                symbol=symbol,
+                                status=last_status,
+                                reason=last_reason,
+                                rows_source=len(source_frame),
+                                rows_1h=len(frame_1h),
+                                levels_found=len(levels),
+                                trend_state=trend,
+                                source_path=str(source_path),
+                            )
+                        )
+                    )
         except Exception as exc:
+            last_status = "failed"
+            last_reason = f"scan_failed:{type(exc).__name__}"
             status_rows.append(
                 asdict(
                     SymbolScanStatus(
                         symbol=symbol,
-                        status="failed",
-                        reason=f"scan_failed:{type(exc).__name__}",
+                        status=last_status,
+                        reason=last_reason,
                     )
                 )
             )
+
+        if _should_emit_progress(
+            done=processed_count,
+            total=len(symbols),
+            last_emit_at=last_emit_at,
+            config=config,
+        ):
+            _emit(
+                _progress_line(
+                    done=processed_count,
+                    total=len(symbols),
+                    started_at=started_at,
+                    levels_found=len(metrics_rows),
+                    symbols_with_levels=len(symbols_with_levels),
+                    charts_saved=charts_saved,
+                    last_symbol=symbol,
+                    last_status=last_status,
+                    last_reason=last_reason,
+                )
+            )
+            last_emit_at = time.monotonic()
 
     summary_path = output_dir / "hourly_levels_summary.csv"
     status_path = output_dir / "hourly_levels_status.csv"
@@ -576,7 +687,9 @@ def run_hourly_level_scan(config: HourlyLevelScanConfig) -> dict[str, object]:
     return {
         "symbols_scanned": len(symbols),
         "levels_found": len(metrics_rows),
-        "symbols_with_levels": len({str(row["symbol"]) for row in metrics_rows}),
+        "symbols_with_levels": len(symbols_with_levels),
+        "charts_saved": charts_saved,
+        "elapsed_seconds": round(time.monotonic() - started_at, 3),
         "output_dir": str(output_dir),
         "summary_path": str(summary_path),
         "status_path": str(status_path),
@@ -614,4 +727,6 @@ def build_config_from_namespace(args: object, *, cache_dir: Path, results_dir: P
         reject_downtrend_symbols=bool(getattr(args, "reject_downtrend_symbols", True)),
         reject_downtrend_levels=bool(getattr(args, "reject_downtrend_levels", True)),
         save_empty_charts=bool(getattr(args, "save_empty_charts", False)),
+        progress_every_symbols=int(getattr(args, "progress_every_symbols", 5)),
+        progress_min_seconds=float(getattr(args, "progress_min_seconds", 5.0)),
     )

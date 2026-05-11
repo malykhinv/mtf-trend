@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P138 proposed locally on top of ZIP-derived source
-Last active patch: P138 hourly-level chart text ASCII-safe
+Local patch stack: P130-P139 proposed locally on top of ZIP-derived source
+Last active patch: P139 hourly-level progress and ETA
 Updated: 2026-05-11
 ```
 
@@ -157,4 +157,18 @@ Next verification:
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05
+```
+
+
+---
+
+## 13. Current audit note — P139
+
+P139 is diagnostics-only. It adds visible progress/ETA logging to `run-hourly-levels` so long all-cache chart runs are operator-observable instead of appearing stuck after the start line. It does not change level detection rules, live trading, backtest entries, exits, stops or PnL.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --progress-every-symbols 5 --progress-min-seconds 5
 ```
