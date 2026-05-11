@@ -171,6 +171,9 @@ class AnomalyBacktestConfig:
     entry_method: str = "market"
     pullback_box_fraction: float = 0.75
     entry_timeout_candles: int = 60
+    market_entry_latency_candles: int = 1
+    max_market_entry_drift_pct: float = 0.003
+    min_market_rr_to_signal_tp1: float = 0.75
     stop_buffer_range_fraction: float = 0.05
     tp1_r: float = 1.0
     tp1_fraction: float = 0.50
@@ -388,13 +391,13 @@ def _resolve_signal_entry(
     decision_timestamp_ms: int,
     decision_close: float,
     config: AnomalyBacktestConfig,
-) -> tuple[int, float, float, float, float, float]:
+) -> tuple[int, float, float, float, float, float, str]:
     box = frame.loc[
         (frame["timestamp"] >= anomaly_timestamp_ms)
         & (frame["timestamp"] <= decision_timestamp_ms)
     ]
     if box.empty:
-        return decision_timestamp_ms, float("nan"), float("nan"), float("nan"), float("nan"), float("nan")
+        return decision_timestamp_ms, float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), "empty_decision_box"
     box_low = float(box["low"].min())
     box_high = float(box["high"].max())
     box_range = max(box_high - box_low, 0.0)
@@ -406,19 +409,43 @@ def _resolve_signal_entry(
         else None
     )
     stop_at_decision = max(previous_stop, decision_ema20) if decision_ema20 is not None else previous_stop
+    signal_risk = decision_close - stop_at_decision
+    signal_tp1_price = decision_close + config.tp1_r * signal_risk if np.isfinite(signal_risk) else float("nan")
 
     if config.entry_method == "market":
-        entry_ts = decision_timestamp_ms
-        entry_price = decision_close
+        if config.market_entry_latency_candles < 1:
+            raise ValueError("market_entry_latency_candles must be >= 1")
+        future = frame.loc[frame["timestamp"] > decision_timestamp_ms].head(config.market_entry_latency_candles)
+        if len(future) < config.market_entry_latency_candles:
+            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_market_execution_candle"
+        entry_row_source = future.iloc[-1]
+        entry_ts = int(entry_row_source["timestamp"])
+        entry_price = float(entry_row_source["open"])
+        if not np.isfinite(entry_price) or entry_price <= 0.0:
+            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "invalid_market_execution_price"
+        drift_pct = _safe_divide(entry_price - decision_close, decision_close)
+        actual_risk_at_signal_stop = entry_price - stop_at_decision
+        rr_to_signal_tp1 = _safe_divide(signal_tp1_price - entry_price, actual_risk_at_signal_stop)
+        if entry_price >= signal_tp1_price:
+            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "tp1_already_reached_before_market_entry"
+        if not np.isfinite(actual_risk_at_signal_stop) or actual_risk_at_signal_stop <= 0.0:
+            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "invalid_actual_market_risk"
+        if np.isfinite(drift_pct) and drift_pct > config.max_market_entry_drift_pct:
+            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "market_entry_price_drift"
+        if not np.isfinite(rr_to_signal_tp1) or rr_to_signal_tp1 < config.min_market_rr_to_signal_tp1:
+            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "market_entry_rr_collapsed"
+        initial_stop = stop_at_decision
+        initial_risk = entry_price - initial_stop
+        return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, ""
     else:
         future = frame.loc[frame["timestamp"] > decision_timestamp_ms].head(config.entry_timeout_candles)
         if future.empty:
-            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high
+            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "entry_timeout_no_future_candles"
         if config.entry_method == "break_box_high":
             trigger = box_high
             hit = future.loc[future["high"].astype(float).ge(trigger)]
             if hit.empty:
-                return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high
+                return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "entry_trigger_not_reached"
             entry_ts = int(hit["timestamp"].iloc[0])
             entry_price = trigger
         elif config.entry_method == "pullback_box_fraction":
@@ -429,13 +456,13 @@ def _resolve_signal_entry(
                 low = float(row["low"])
                 high = float(row["high"])
                 if low <= stop_at_decision:
-                    return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high
+                    return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "stop_touched_before_entry"
                 if low <= trigger <= high:
                     entry_ts = int(row["timestamp"])
                     entry_price = trigger
                     break
             if not np.isfinite(entry_price):
-                return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high
+                return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "entry_trigger_not_reached"
         else:
             raise ValueError(f"unsupported entry_method: {config.entry_method}")
 
@@ -443,7 +470,7 @@ def _resolve_signal_entry(
     entry_ema20 = _safe_float(entry_row["ema20"].iloc[0]) if not entry_row.empty and "ema20" in entry_row.columns else None
     initial_stop = max(previous_stop, entry_ema20) if entry_ema20 is not None else previous_stop
     initial_risk = entry_price - initial_stop
-    return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high
+    return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, ""
 
 
 def simulate_long_signal(
@@ -456,7 +483,7 @@ def simulate_long_signal(
     anomaly_ts = int(signal["timestamp_ms"])
     decision_ts = int(signal["decision_timestamp_ms"])
     decision_close = float(signal["decision_close"])
-    entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high = _resolve_signal_entry(
+    entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, entry_skip_reason = _resolve_signal_entry(
         frame,
         anomaly_timestamp_ms=anomaly_ts,
         decision_timestamp_ms=decision_ts,
@@ -469,7 +496,7 @@ def simulate_long_signal(
             "decision_timestamp_ms": decision_ts,
             "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
             "status": "skipped",
-            "skip_reason": "entry_trigger_not_reached",
+            "skip_reason": entry_skip_reason or "entry_trigger_not_reached",
             "entry_method": config.entry_method,
         }
     if not np.isfinite(initial_risk) or initial_risk <= 0.0:
@@ -1371,6 +1398,8 @@ def _render_anomaly_trade_chart(
     if anomaly_ts is None or decision_ts is None or entry_ts is None or exit_ts is None:
         raise ValueError("missing_trade_timestamps")
     entry_price = _safe_float(trade.get("entry_price"))
+    signal_entry_price = _safe_float(trade.get("signal_entry_price"))
+    signal_entry_ts = _safe_int(trade.get("signal_entry_timestamp_ms")) or decision_ts
     initial_stop = _safe_float(trade.get("initial_stop"))
     tp1_price = _safe_float(trade.get("tp1_price"))
     box_high = _safe_float(trade.get("box_high"))
@@ -1393,6 +1422,7 @@ def _render_anomaly_trade_chart(
     anomaly_idx = resolve_timestamp_plot_idx(timestamps, anomaly_ts)
     decision_idx = resolve_timestamp_plot_idx(timestamps, decision_ts)
     entry_idx = resolve_timestamp_plot_idx(timestamps, entry_ts)
+    signal_entry_idx = resolve_timestamp_plot_idx(timestamps, signal_entry_ts)
     exit_idx = resolve_timestamp_plot_idx(timestamps, exit_ts)
     price_axis_right_x = float(len(plot_frame) - 0.5)
 
@@ -1423,6 +1453,8 @@ def _render_anomaly_trade_chart(
 
     ax_price.axvline(anomaly_idx, color=CHART_ANOMALY, linewidth=0.95, alpha=0.30, zorder=5)
     ax_price.axvline(decision_idx, color=CHART_ENTRY, linewidth=0.9, alpha=0.18, linestyle="--", zorder=4.8)
+    if signal_entry_price is not None and signal_entry_ts != entry_ts:
+        ax_price.axvline(signal_entry_idx, color=CHART_MUTED, linewidth=0.9, alpha=0.30, linestyle=":", zorder=5.0)
     ax_price.axvline(entry_idx, color=CHART_ENTRY, linewidth=1.0, alpha=0.45, zorder=5.2)
     ax_price.axvline(exit_idx, color=CHART_EXIT, linewidth=1.0, alpha=0.52, linestyle="-.", zorder=5.3)
     ax_context.axvline(anomaly_idx, color=CHART_ANOMALY, linewidth=0.9, alpha=0.22, zorder=5)
@@ -1467,20 +1499,24 @@ def _render_anomaly_trade_chart(
         frame_length=len(plot_frame),
     )
 
-    tag_positions = resolve_axis_tag_positions(
-        [
-            ("TP1", tp1_price),
-            ("Entry", entry_price),
-            ("SL", initial_stop),
-            ("Exit", exit_price),
-        ]
-    )
-    for label, value, color, leader_x in (
+    tag_input = [
+        ("TP1", tp1_price),
+        ("Entry", entry_price),
+        ("SL", initial_stop),
+        ("Exit", exit_price),
+    ]
+    if signal_entry_price is not None and signal_entry_ts != entry_ts:
+        tag_input.append(("Signal", signal_entry_price))
+    tag_positions = resolve_axis_tag_positions(tag_input)
+    tag_specs = [
         ("TP1", tp1_price, CHART_PROFIT_EDGE, entry_idx - 0.5),
         ("Entry", entry_price, CHART_ENTRY, entry_idx),
         ("SL", initial_stop, CHART_RISK_EDGE, entry_idx - 0.5),
         ("Exit", exit_price, CHART_EXIT, exit_idx),
-    ):
+    ]
+    if signal_entry_price is not None and signal_entry_ts != entry_ts:
+        tag_specs.append(("Signal", signal_entry_price, CHART_MUTED, signal_entry_idx))
+    for label, value, color, leader_x in tag_specs:
         annotate_axis_price_tag(
             ax_price,
             y=value,
@@ -1873,6 +1909,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--entry-method", choices=["market", "break_box_high", "pullback_box_fraction"], default="market")
     parser.add_argument("--pullback-box-fraction", type=float, default=0.75)
     parser.add_argument("--entry-timeout-candles", type=int, default=60)
+    parser.add_argument("--market-entry-latency-candles", type=int, default=1)
+    parser.add_argument("--max-market-entry-drift-pct", type=float, default=0.003)
+    parser.add_argument("--min-market-rr-to-signal-tp1", type=float, default=0.75)
     parser.add_argument("--tp1-r", type=float, default=1.0)
     parser.add_argument("--tp1-fraction", type=float, default=0.50)
     parser.add_argument("--trail-lookback-candles", type=int, default=5)
@@ -1923,6 +1962,9 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
         entry_method=args.entry_method,
         pullback_box_fraction=args.pullback_box_fraction,
         entry_timeout_candles=args.entry_timeout_candles,
+        market_entry_latency_candles=args.market_entry_latency_candles,
+        max_market_entry_drift_pct=args.max_market_entry_drift_pct,
+        min_market_rr_to_signal_tp1=args.min_market_rr_to_signal_tp1,
         tp1_r=args.tp1_r,
         tp1_fraction=args.tp1_fraction,
         trail_lookback_candles=args.trail_lookback_candles,
