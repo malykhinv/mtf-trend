@@ -214,3 +214,31 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ### Risk
 
 Low/medium: one hourly universe pass adds exchange requests. It is throttled and non-overlapping, but on a very large universe it can still add API load. If this interferes with live scans, disable it with `--top-growth-enabled false` or increase fetch spacing.
+
+## P136 — Fix live active-symbol runtime error and stop masking internal bugs as network pauses
+
+Status: PROPOSED
+Date: 2026-05-11
+Commit: UNKNOWN
+
+### Reason
+
+The first live run after P135 failed immediately with `name 'levels_timeframe_ms' is not defined`. The error came from the active-symbol pump candidate path added in P134: `_build_signal_at_start()` used `levels_timeframe_ms` without defining it locally. The live loop then incorrectly reported the programming error as a network/API pause.
+
+### Change
+
+- Define `levels_timeframe_ms` inside `_build_signal_at_start()` before using it to compute signal availability.
+- Import and catch `ExchangeConnectivityError` explicitly for network/API pauses.
+- Stop treating arbitrary `Exception` as network/API degradation in the main live loop.
+- Write unexpected internal failures as `live_internal_error` in `live_events.csv`, send a TG error, and exit with code 4.
+- Make `CcxtFuturesClient._retry_exchange_call()` raise `ExchangeConnectivityError` on retry exhaustion so real exchange connectivity failures still use the pause/retry path.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+### Risk
+
+Low/medium: real exchange retry exhaustion still pauses. Internal code errors no longer keep the bot alive pretending the API is down; live stops instead, which is the intended safe behavior.

@@ -126,7 +126,7 @@ class CcxtFuturesClient(ExchangeClient):
                 **kwargs,
             )
         except RetryExhaustedError as exc:
-            raise RuntimeError(
+            raise ExchangeConnectivityError(
                 f"Exchange retry exhausted: operation={operation} symbol={symbol} endpoint={endpoint} attempts={self._retry_attempts} cause={exc}"
             ) from exc
 

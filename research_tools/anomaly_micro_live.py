@@ -21,6 +21,7 @@ from typing import Callable
 import pandas as pd
 
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
+from domain.exceptions import ExchangeConnectivityError
 from domain.enums.timeframe import Timeframe
 from research_tools.anomaly_continuation_lab import compute_start_verticality_metrics
 from research_tools.anomaly_config import ANOMALY_LIVE_TIMEFRAME_PAIRS
@@ -723,7 +724,7 @@ class AnomalyMicroLiveRunner:
                     text=f"🧯 <b>Ошибка</b>\n\n{_telegram_code(str(exc)[:600])}",
                 )
                 return 3
-            except Exception as exc:
+            except ExchangeConnectivityError as exc:
                 if not self._network_degraded:
                     self.logger(f"live: сеть/API недоступны, жду восстановления. Причина: {exc}")
                     self.telegram.send(
@@ -733,6 +734,19 @@ class AnomalyMicroLiveRunner:
                     )
                 self._network_degraded = True
                 time.sleep(self.config.network_sleep_seconds)
+            except Exception as exc:
+                self.logger(f"live: остановлено из-за внутренней ошибки: {type(exc).__name__}: {exc}")
+                self.artifacts.append_event(
+                    "live_internal_error",
+                    "__live__",
+                    {"exception_type": type(exc).__name__, "exception_message": str(exc)[:1000]},
+                )
+                self.telegram.send(
+                    channel="events",
+                    key="live_internal_error",
+                    text=f"🧯 <b>Ошибка</b>\n\n{_telegram_code(type(exc).__name__ + ': ' + str(exc)[:500])}",
+                )
+                return 4
         orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle, force=True)
         suffix = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
         self.logger(f"live: достигнут лимит циклов{suffix}")
@@ -1244,6 +1258,7 @@ class AnomalyMicroLiveRunner:
             return None
 
         latest_decision_ts = int(decision["timestamp"])
+        levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
         latest_decision_available_ms = latest_decision_ts + levels_timeframe_ms
         if 0 <= now_ms - latest_decision_available_ms <= self.config.max_signal_age_ms:
             self._mark_active_symbol(
