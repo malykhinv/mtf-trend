@@ -128,3 +128,21 @@ single run means stable edge
 ```
 
 The research objective is to break weak anomaly categories cheaply before optimizing parameters.
+
+
+---
+
+## Live executable-entry contract
+
+A selected live signal is not automatically tradable. Before any market order, live must reject the signal when:
+
+```text
+signal age after candle close > max_signal_age_ms
+live price is invalid
+live price has already reached signal TP1
+actual live risk is invalid or too wide
+absolute live-price drift from signal entry > max_entry_price_drift_pct
+RR from live price to signal TP1 < min_executable_rr_to_signal_tp1
+```
+
+These rejects are trading decisions and must be visible in artifacts. Telegram may notify the operator, but artifact rows remain the source of truth.

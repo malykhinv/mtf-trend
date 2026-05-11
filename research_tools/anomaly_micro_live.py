@@ -1368,70 +1368,79 @@ class AnomalyMicroLiveRunner:
             )
             return False
         if signal_age_ms > self.config.max_signal_age_ms:
-            self.artifacts.append_event(
-                "reject_stale_signal",
-                signal.symbol,
-                {
-                    "decision_timestamp_ms": signal.decision_timestamp_ms,
-                    "decision_available_ms": decision_available_ms,
-                    "now_ms": now_ms,
-                    "signal_age_ms": signal_age_ms,
-                    "max_signal_age_ms": self.config.max_signal_age_ms,
-                },
-            )
+            details = {
+                "decision_timestamp_ms": signal.decision_timestamp_ms,
+                "decision_available_ms": decision_available_ms,
+                "now_ms": now_ms,
+                "signal_age_ms": signal_age_ms,
+                "max_signal_age_ms": self.config.max_signal_age_ms,
+            }
+            self.artifacts.append_event("reject_stale_signal", signal.symbol, details)
+            self._notify_order_blocked(signal, event="reject_stale_signal", details=details)
             return False
         return True
 
     def _validate_signal_executable(self, signal: LiveSignal, *, live_price: float) -> bool:
-        if not math.isfinite(live_price) or live_price <= 0.0:
-            self.artifacts.append_event(
-                "reject_invalid_live_price",
-                signal.symbol,
-                {"live_price": _finite_or_none(live_price), "decision_timestamp_ms": signal.decision_timestamp_ms},
-            )
-            return False
-        drift_pct = _safe_divide(live_price - signal.entry_price, signal.entry_price)
+        signed_drift_pct = _safe_divide(live_price - signal.entry_price, signal.entry_price)
+        abs_drift_pct = abs(signed_drift_pct) if math.isfinite(signed_drift_pct) else float("nan")
         actual_risk = live_price - signal.stop_price
         actual_risk_pct = _safe_divide(actual_risk, live_price)
         rr_to_signal_tp1 = _safe_divide(signal.tp1_price - live_price, actual_risk)
         details = {
-            "live_price": live_price,
-            "signal_entry_price": signal.entry_price,
-            "signal_tp1_price": signal.tp1_price,
-            "stop_price": signal.stop_price,
-            "drift_pct": _finite_or_none(drift_pct),
+            "live_price": _finite_or_none(live_price),
+            "signal_entry_price": _finite_or_none(signal.entry_price),
+            "signal_tp1_price": _finite_or_none(signal.tp1_price),
+            "stop_price": _finite_or_none(signal.stop_price),
+            "drift_pct": _finite_or_none(signed_drift_pct),
+            "abs_drift_pct": _finite_or_none(abs_drift_pct),
             "actual_risk_pct": _finite_or_none(actual_risk_pct),
             "rr_to_signal_tp1": _finite_or_none(rr_to_signal_tp1),
             "decision_timestamp_ms": signal.decision_timestamp_ms,
         }
+        if not math.isfinite(live_price) or live_price <= 0.0:
+            return self._reject_live_order(signal, event="reject_invalid_live_price", details=details)
         if live_price >= signal.tp1_price:
-            self.artifacts.append_event("reject_tp1_already_reached", signal.symbol, details)
-            return False
+            return self._reject_live_order(signal, event="reject_tp1_already_reached", details=details)
         if not math.isfinite(actual_risk) or actual_risk <= 0.0:
-            self.artifacts.append_event("reject_invalid_actual_risk_at_live_price", signal.symbol, details)
-            return False
+            return self._reject_live_order(signal, event="reject_invalid_actual_risk_at_live_price", details=details)
         if not math.isfinite(actual_risk_pct) or actual_risk_pct > self.config.max_initial_risk_pct:
-            self.artifacts.append_event(
-                "reject_actual_risk_too_wide_at_live_price",
-                signal.symbol,
-                {**details, "max_initial_risk_pct": self.config.max_initial_risk_pct},
+            return self._reject_live_order(
+                signal,
+                event="reject_actual_risk_too_wide_at_live_price",
+                details={**details, "max_initial_risk_pct": self.config.max_initial_risk_pct},
             )
-            return False
-        if math.isfinite(drift_pct) and drift_pct > self.config.max_entry_price_drift_pct:
-            self.artifacts.append_event(
-                "reject_entry_price_drift",
-                signal.symbol,
-                {**details, "max_entry_price_drift_pct": self.config.max_entry_price_drift_pct},
+        if not math.isfinite(abs_drift_pct) or abs_drift_pct > self.config.max_entry_price_drift_pct:
+            return self._reject_live_order(
+                signal,
+                event="reject_entry_price_drift",
+                details={**details, "max_entry_price_drift_pct": self.config.max_entry_price_drift_pct},
             )
-            return False
         if not math.isfinite(rr_to_signal_tp1) or rr_to_signal_tp1 < self.config.min_executable_rr_to_signal_tp1:
-            self.artifacts.append_event(
-                "reject_rr_collapsed",
-                signal.symbol,
-                {**details, "min_executable_rr_to_signal_tp1": self.config.min_executable_rr_to_signal_tp1},
+            return self._reject_live_order(
+                signal,
+                event="reject_rr_collapsed",
+                details={**details, "min_executable_rr_to_signal_tp1": self.config.min_executable_rr_to_signal_tp1},
             )
-            return False
         return True
+
+    def _reject_live_order(self, signal: LiveSignal, *, event: str, details: dict[str, object]) -> bool:
+        self.artifacts.append_event(event, signal.symbol, details)
+        self._notify_order_blocked(signal, event=event, details=details)
+        return False
+
+    def _notify_order_blocked(self, signal: LiveSignal, *, event: str, details: dict[str, object]) -> None:
+        try:
+            self.telegram.send(
+                channel="events",
+                key=f"order_blocked:{event}:{_position_symbol_key(signal.symbol)}",
+                text=_format_order_blocked_message(signal, event=event, details=details),
+            )
+        except Exception as exc:
+            self.artifacts.append_event(
+                "telegram_order_blocked_enqueue_failed",
+                signal.symbol,
+                {"blocked_event": event, "reason": str(exc)},
+            )
 
     def _send_or_edit_stop_message(self, position: LivePosition, *, text: str, stop_price: float, reason: str) -> None:
         if position.telegram_open_message_id is None:
@@ -2079,6 +2088,79 @@ def _category_value(category: LivePumpCategory, config: LiveAnomalyConfig, field
     if value is not None:
         return value
     return getattr(config, field_name)
+
+
+BLOCKED_ORDER_REASON_LABELS = {
+    "reject_stale_signal": "stale signal",
+    "reject_invalid_live_price": "invalid live price",
+    "reject_tp1_already_reached": "TP1 already reached",
+    "reject_invalid_actual_risk_at_live_price": "invalid live risk",
+    "reject_actual_risk_too_wide_at_live_price": "live risk too wide",
+    "reject_entry_price_drift": "entry price drift",
+    "reject_rr_collapsed": "RR collapsed",
+}
+
+
+def _format_order_blocked_message(signal: LiveSignal, *, event: str, details: dict[str, object]) -> str:
+    reason = BLOCKED_ORDER_REASON_LABELS.get(event, event)
+    symbol = _compact_symbol(signal.symbol)
+    decision_time = datetime.fromtimestamp(int(signal.decision_timestamp_ms) / 1000, UTC).strftime("%H:%M:%S UTC")
+    lines = [
+        f"{_nature_emoji('blocked:' + event + ':' + signal.symbol)} *Live вход запрещён*",
+        f"{symbol} ({_coinglass_url(signal.symbol)})",
+        f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · {signal.category_label} · {signal.session}",
+        f"Причина: `{_telegram_escape(reason)}`",
+        f"Сигнал: `{decision_time}`",
+    ]
+
+    signal_age_ms = _detail_float(details, "signal_age_ms")
+    max_signal_age_ms = _detail_float(details, "max_signal_age_ms")
+    if signal_age_ms is not None and max_signal_age_ms is not None:
+        lines.append(f"Возраст: `{signal_age_ms / 1000:.1f}s / {max_signal_age_ms / 1000:.1f}s`")
+
+    live_price = _detail_float(details, "live_price")
+    signal_entry = _detail_float(details, "signal_entry_price")
+    signal_tp1 = _detail_float(details, "signal_tp1_price")
+    stop_price = _detail_float(details, "stop_price")
+    if signal_entry is not None:
+        lines.append(f"Signal entry: `{_format_price(signal_entry)}`")
+    if live_price is not None:
+        lines.append(f"Live price: `{_format_price(live_price)}`")
+    if signal_tp1 is not None:
+        lines.append(f"Signal TP1: `{_format_price(signal_tp1)}`")
+    if stop_price is not None:
+        lines.append(f"SL: `{_format_price(stop_price)}`")
+
+    drift_pct = _detail_float(details, "drift_pct")
+    abs_drift_pct = _detail_float(details, "abs_drift_pct")
+    max_drift_pct = _detail_float(details, "max_entry_price_drift_pct")
+    if drift_pct is not None and abs_drift_pct is not None:
+        if max_drift_pct is not None:
+            lines.append(
+                f"Drift: `{_format_percent(drift_pct, signed=True, precision=2)}` "
+                f"abs `{_format_percent(abs_drift_pct, precision=2)}` / max `{_format_percent(max_drift_pct, precision=2)}`"
+            )
+        else:
+            lines.append(f"Drift: `{_format_percent(drift_pct, signed=True, precision=2)}`")
+
+    rr_to_signal_tp1 = _detail_float(details, "rr_to_signal_tp1")
+    min_rr = _detail_float(details, "min_executable_rr_to_signal_tp1")
+    if rr_to_signal_tp1 is not None:
+        rr_line = f"RR to signal TP1: `{rr_to_signal_tp1:.2f}`"
+        if min_rr is not None:
+            rr_line += f" / min `{min_rr:.2f}`"
+        lines.append(rr_line)
+
+    return "\n".join(lines)
+
+
+def _detail_float(details: dict[str, object], key: str) -> float | None:
+    value = details.get(key)
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _format_open_message(position: LivePosition) -> str:

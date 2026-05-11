@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P123-P130 proposed locally on top of ZIP-derived source
-Last active patch: P130 strict live fills and executable market entry
+Local patch stack: P123-P131 proposed locally on top of ZIP-derived source
+Last active patch: P131 live blocked-order Telegram alerts
 Updated: 2026-05-11
 ```
 
@@ -74,9 +74,16 @@ research_tools/charting.py
 
 ## 6. Next best step
 
-Apply P130 and run the live-execution smoke before using any micro-live PnL:
+Apply P131 and run the live-execution smoke before using any micro-live PnL:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-# synthetic/fake-exchange check: stale signal must emit reject_stale_signal and no market order
+# synthetic/fake-exchange check: stale/drift rejects must emit Telegram event notifications and no market order
 ```
+
+
+---
+
+## 7. Current audit note
+
+P130 compiled and addressed the main live-execution bug, but second review found one remaining realism issue: entry drift must be absolute, not only positive. P131 fixes that and adds Telegram event notifications for stale/non-executable selected signals.

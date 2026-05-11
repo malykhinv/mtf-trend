@@ -12,6 +12,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P128 | Remove retired strategy active path | PROPOSED | `strategy/`, `cli/`, `config/`, `README.md`, `research/*` | deletion | Remove retired strategy source, diagnostics, CLI, config and factory path. | `python -m compileall cli config constants.py research_tools vectorbt_runner strategy main.py` |
 | P129 | Purge retired strategy history from active memory | PROPOSED | `README.md`, `research/*.md` | cleanup | Remove stale historical strategy references from current project docs/logs. | `git grep -i retired_strategy_token -- .` returns empty for tracked files. |
 | P130 | Strict live fills and executable market entry | PROPOSED | `data/exchanges/*`, `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `cli/*`, `research/*` | bugfix | Stop executing stale live signals; require exchange fill fields; separate signal price from actual fill; compute live PnL/BE/TP from actual fill; make market backtest enter on execution candle. | `python -m compileall data/exchanges research_tools cli constants.py main.py` |
+| P131 | Live blocked-order Telegram alerts | PROPOSED | `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `research/*` | bugfix | Send Telegram event alerts when a selected live signal is blocked as stale/non-executable; make entry-price drift guard absolute in live and market backtest. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic stale/drift smoke. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -69,3 +70,30 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ### Risk
 
 Medium: live will reject more signals and backtest results for `entry_method=market` will change. This is intended; old behavior was optimistic and non-executable.
+
+## P131 — Live blocked-order Telegram alerts
+
+Status: PROPOSED
+Date: 2026-05-11
+Commit: UNKNOWN
+
+### Reason
+
+P130 blocks stale and non-executable selected live signals, but the operator would only see those decisions in `live_events.csv` unless watching artifacts. Second review also found the drift guard was one-sided: it rejected only positive drift, while a selected signal could still be bought after price moved too far below the signal entry.
+
+### Change
+
+- Send Telegram event-channel alerts for `reject_stale_signal` and live executability rejects: invalid live price, TP1 already reached, invalid/wide live risk, entry price drift, and RR collapsed.
+- Keep artifact events as source of truth; Telegram is only an operator notification queued through the existing dispatcher.
+- Change live and market-backtest entry-price drift from one-sided positive drift to absolute drift around the signal entry.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+# synthetic smoke: stale signal and absolute drift reject enqueue Telegram event and create no market order
+```
+
+### Risk
+
+Low/medium: fewer fresh-but-dislocated live entries pass, and Telegram event channel can receive more messages. Existing Telegram cooldown key is per symbol/event.

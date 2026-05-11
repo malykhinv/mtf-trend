@@ -80,3 +80,30 @@ Action:
 ```text
 P130 proposed: strict fill resolution, stale/executability rejects, actual-fill PnL/TP/BE, and execution-candle market backtest.
 ```
+
+
+---
+
+## 2026-05-11 — P131 live blocked-order notification check
+
+Input:
+
+```text
+Current local tree after P130
+Synthetic selected signals for stale and entry-drift blocks
+```
+
+Result:
+
+```text
+compileall passed
+stale signal emits reject_stale_signal and queues Telegram event
+absolute entry drift emits reject_entry_price_drift and queues Telegram event
+no market order is needed for either smoke condition
+```
+
+Next:
+
+```text
+Run one real dry/live observation window and confirm live_events.csv and Telegram event channel agree on blocked-order reasons.
+```

@@ -424,13 +424,14 @@ def _resolve_signal_entry(
         if not np.isfinite(entry_price) or entry_price <= 0.0:
             return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "invalid_market_execution_price"
         drift_pct = _safe_divide(entry_price - decision_close, decision_close)
+        abs_drift_pct = abs(drift_pct) if np.isfinite(drift_pct) else float("nan")
         actual_risk_at_signal_stop = entry_price - stop_at_decision
         rr_to_signal_tp1 = _safe_divide(signal_tp1_price - entry_price, actual_risk_at_signal_stop)
         if entry_price >= signal_tp1_price:
             return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "tp1_already_reached_before_market_entry"
         if not np.isfinite(actual_risk_at_signal_stop) or actual_risk_at_signal_stop <= 0.0:
             return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "invalid_actual_market_risk"
-        if np.isfinite(drift_pct) and drift_pct > config.max_market_entry_drift_pct:
+        if not np.isfinite(abs_drift_pct) or abs_drift_pct > config.max_market_entry_drift_pct:
             return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "market_entry_price_drift"
         if not np.isfinite(rr_to_signal_tp1) or rr_to_signal_tp1 < config.min_market_rr_to_signal_tp1:
             return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "market_entry_rr_collapsed"
