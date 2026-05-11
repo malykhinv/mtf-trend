@@ -16,8 +16,8 @@ from config.strategy_config import (
 )
 from constants import (
     DEFAULT_BACKTEST_OUTPUT_FILE,
-    DEFAULT_BEE_BITE_DEPOSIT,
-    DEFAULT_BEE_BITE_RISK_PCT,
+    DEFAULT_POSITION_DEPOSIT,
+    DEFAULT_POSITION_RISK_PCT,
     DEFAULT_CACHE_DIR,
     DEFAULT_COMMISSION_RATE,
     DEFAULT_LOG_LEVEL,
@@ -143,8 +143,8 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
         strategy_id=strategy_id,
         levels_timeframe=strategy_levels_timeframe,
         entry_timeframe=strategy_entry_timeframe,
-        pno_deposit=float(os.getenv("PNO_DEPOSIT", str(DEFAULT_BEE_BITE_DEPOSIT))),
-        pno_risk_pct=float(os.getenv("PNO_RISK_PCT", str(DEFAULT_BEE_BITE_RISK_PCT))),
+        pno_deposit=float(os.getenv("PNO_DEPOSIT", str(DEFAULT_POSITION_DEPOSIT))),
+        pno_risk_pct=float(os.getenv("PNO_RISK_PCT", str(DEFAULT_POSITION_RISK_PCT))),
     )
 
     simulation_cfg = SimulationConfig(

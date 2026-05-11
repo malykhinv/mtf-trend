@@ -1,4 +1,4 @@
-"""Simulation package exports used by the PNO project."""
+"""Shared simulation package exports for strategy and anomaly research."""
 
 from simulation.models.fill import Fill
 from simulation.order_processor import OrderProcessor

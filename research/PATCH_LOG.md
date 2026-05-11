@@ -4958,3 +4958,50 @@ Risk:
 ```text
 Low in the provided ZIP: there is no tests/ directory, so the marker excludes nothing runnable. If an external branch still has tests/test_pno.py, it should reintroduce a current, explicit legacy-test config in that branch rather than keeping stale config in anomaly-first source.
 ```
+
+---
+
+## P127 — Neutralize Bee Bite sizing constants and non-PNO package wording
+
+```text
+Status: PROPOSED / compile + grep verified locally
+Type: cleanup / naming hygiene
+Trading logic changed: no
+Files: constants.py, config/__init__.py, config/strategy_config.py, strategy/pno/config.py, simulation/__init__.py, research_tools/anomaly_continuation_lab.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+After pruning dead Bee Bite constants in P125, the remaining live sizing defaults still used old Bee Bite names even though they are generic position-sizing defaults consumed by configuration.
+A shared simulation package docstring and the anomaly continuation lab header also kept PNO-centric wording outside the legacy PNO modules.
+```
+
+Change:
+
+```text
+Rename DEFAULT_BEE_BITE_DEPOSIT to DEFAULT_POSITION_DEPOSIT.
+Rename DEFAULT_BEE_BITE_RISK_PCT to DEFAULT_POSITION_RISK_PCT.
+Update config imports/usages to the neutral constants while keeping legacy env variable names PNO_DEPOSIT and PNO_RISK_PCT unchanged for compatibility.
+Update non-PNO package/module docstrings to anomaly/strategy-neutral wording.
+No CLI behavior, strategy selection, position sizing values, PNO diagnostics, or anomaly trading logic is changed. Legacy strategy/pno config keeps the same numeric default through the neutral constant name.
+```
+
+Verification:
+
+```bash
+python -m compileall constants.py config/__init__.py config/strategy_config.py strategy/pno/config.py simulation/__init__.py research_tools/anomaly_continuation_lab.py
+python - <<'PY'
+from pathlib import Path
+for token in ("DEFAULT_BEE_BITE_DEPOSIT", "DEFAULT_BEE_BITE_RISK_PCT", "Bee Bite"):
+    hits = [str(path) for path in Path('.').rglob('*.py') if '.git' not in path.parts and token in path.read_text(encoding='utf-8')]
+    print(token, hits)
+PY
+```
+
+Risk:
+
+```text
+Low. This is a symbol rename and docstring cleanup. The numeric defaults and legacy PNO env variable names are preserved.
+```

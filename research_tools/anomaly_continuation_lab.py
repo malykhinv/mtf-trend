@@ -1,7 +1,7 @@
 """Build early anomaly-continuation research artifacts from cached OHLCV data.
 
-This module is deliberately separate from the PNO trading engine. It studies the
-early "wake-up after sleep" hypothesis without changing executable PNO logic.
+This module is deliberately separate from legacy executable strategy modules. It studies
+the early "wake-up after sleep" hypothesis without changing trading logic.
 """
 
 from __future__ import annotations

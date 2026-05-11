@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from constants import DEFAULT_BEE_BITE_DEPOSIT, DEFAULT_COMMISSION_RATE
+from constants import DEFAULT_POSITION_DEPOSIT, DEFAULT_COMMISSION_RATE
 from domain.enums.timeframe import Timeframe
 
 PnoTimeframePair = tuple[Timeframe, Timeframe]
@@ -40,7 +40,7 @@ class PnoParams:
     entry_confirmation_mode: str = "close_above"
     levels_timeframe: Timeframe = PNO_DEFAULT_LEVELS_TIMEFRAME
     entry_timeframe: Timeframe = PNO_DEFAULT_ENTRY_TIMEFRAME
-    pno_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
+    pno_deposit: float = DEFAULT_POSITION_DEPOSIT
     pno_risk_pct: float = PNO_DEFAULT_RISK_PCT
     pno_r_position: float | None = None
     fee_rate: float = DEFAULT_COMMISSION_RATE

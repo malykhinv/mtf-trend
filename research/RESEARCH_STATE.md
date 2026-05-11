@@ -1302,3 +1302,14 @@ Old P075/E023 notes remain historical context, but they no longer describe the c
 Trading logic is unchanged.
 Next check: after one anomaly smoke, decide whether PNO legacy commands should be renamed to pno-legacy-* or archived.
 ```
+
+---
+
+## 2026-05-11 neutral sizing defaults cleanup
+
+```text
+P127 proposes renaming the remaining Bee Bite sizing constants to neutral position-sizing defaults.
+Legacy PNO config/env names remain intact, but shared constants and non-PNO docstrings no longer carry old Bee Bite/PNO wording.
+Trading logic is unchanged.
+Next check: decide whether to rename visible PNO CLI commands to pno-legacy-* or keep them until legacy archival.
+```
