@@ -113,3 +113,16 @@ Next verification:
 python -m compileall data/exchanges research_tools cli constants.py main.py
 # Telegram smoke: blocked-entry, integrity, open, close and stop-update messages render with clickable symbol links.
 ```
+
+---
+
+## 10. Current audit note — P134
+
+P134 changes only live scheduling, not signal filters, fill verification, stop logic or PnL. The fixed `inactive_batch_with_active=7` behavior was wrong for live execution: active now means open/opening positions plus symbols with recent high-stage pump/signal state. Each cycle scans `active + (symbol_batch_size - active_count)` inactive symbols, live artifacts record why a symbol became active or left the active set, and selected signals blocked only by max-open-position capacity are not consumed until they expire or can be retried.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+# smoke: mark two active symbols with symbol_batch_size=20; next batch must contain both plus 18 inactive symbols.
+```

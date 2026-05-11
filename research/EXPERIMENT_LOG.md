@@ -152,3 +152,25 @@ Next:
 ```text
 Run a Telegram formatting smoke with one fake blocked order and one fake open/close message before unattended live.
 ```
+
+---
+
+## 2026-05-11 — P134 active-symbol live scheduler
+
+Input:
+
+```text
+Operator concern: live should actively follow symbols that are close to actionable state, not only symbols with already open positions. The old explanation exposed a hard-coded active-position path of active + 7 inactive symbols.
+```
+
+Result:
+
+```text
+Patch proposed. Live now keeps an active-symbol watchlist and schedules active symbols first. Inactive slots are calculated from one configured batch size: active_count=1 => 1 active + batch-1 inactive; active_count=2 => 2 active + batch-2 inactive. Active reasons, batch composition and consumed decision reasons are written to live_events.csv. Signals blocked only by max-open-position capacity remain retryable until expiry.
+```
+
+Next:
+
+```text
+Run a max-cycles smoke with --symbol-batch-size 20 and inspect active_symbol_marked / symbol_batch_selected events before unattended live.
+```

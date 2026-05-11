@@ -1091,6 +1091,8 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             ),
             position_notional_usdt=float(getattr(args, "position_notional_usdt", 12.0)),
             max_open_positions=int(getattr(args, "max_open_positions", 3)),
+            symbol_batch_size=int(getattr(args, "symbol_batch_size", 20)),
+            active_symbol_ttl_ms=int(getattr(args, "active_symbol_ttl_ms", 60_000)),
             max_signal_age_ms=int(getattr(args, "max_signal_age_ms", 60_000)),
             max_entry_price_drift_pct=float(getattr(args, "max_entry_price_drift_pct", 0.003)),
             min_executable_rr_to_signal_tp1=float(getattr(args, "min_executable_rr_to_signal_tp1", 0.75)),

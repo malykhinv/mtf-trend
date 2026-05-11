@@ -151,8 +151,8 @@ class LiveAnomalyConfig:
     max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.60
     position_notional_usdt: float = 12.0
     max_open_positions: int = 3
-    inactive_batch_size: int = 20
-    inactive_batch_with_active: int = 7
+    symbol_batch_size: int = 20
+    active_symbol_ttl_ms: int = 60_000
     signal_scan_backfill_candles: int = 10
     max_signal_age_ms: int = 60_000
     max_entry_price_drift_pct: float = 0.003
@@ -201,6 +201,15 @@ class LiveSignal:
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, sort_keys=True, allow_nan=False)
+
+
+@dataclass(slots=True)
+class LiveActiveSymbol:
+    symbol: str
+    reason: str
+    expires_at_ms: int
+    updated_at_ms: int
+    decision_timestamp_ms: int | None = None
 
 
 @dataclass(slots=True)
@@ -511,6 +520,7 @@ class AnomalyMicroLiveRunner:
         self._open_positions: dict[str, LivePosition] = {}
         self._opening_symbols: set[str] = set()
         self._recent_stops: dict[str, list[float]] = {}
+        self._active_symbols: dict[str, LiveActiveSymbol] = {}
         self._seen_decisions: set[tuple[str, str, str, int]] = set()
         self._opened_positions_total = 0
         self._closed_positions_total = 0
@@ -618,25 +628,136 @@ class AnomalyMicroLiveRunner:
             raise LiveStartupError("Биржа вернула нечисловой free USDT balance")
 
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
-        with self._state_lock:
-            active = sorted({position.signal.symbol for position in self._open_positions.values()})
-        if active:
-            inactive_size = self.config.inactive_batch_with_active
-        else:
-            inactive_size = self.config.inactive_batch_size
+        now_ms = int(time.time() * 1000)
+        active = self._active_symbol_batch(now_ms=now_ms)
+        active_keys = {_position_symbol_key(symbol) for symbol in active}
+        inactive_slots = max(0, self.config.symbol_batch_size - len(active))
         inactive: list[str] = []
         attempts = 0
-        while len(inactive) < inactive_size and attempts < len(symbols):
+        while len(inactive) < inactive_slots and attempts < len(symbols):
             symbol = symbols[self._inactive_cursor % len(symbols)]
             self._inactive_cursor += 1
             attempts += 1
             symbol_key = _position_symbol_key(symbol)
             with self._state_lock:
-                symbol_is_active = symbol_key in self._open_positions or symbol_key in self._opening_symbols
-            if symbol_is_active or self._symbol_in_stop_cooldown(symbol):
+                symbol_is_opening = symbol_key in self._opening_symbols
+            if symbol_key in active_keys or symbol_is_opening or self._symbol_in_stop_cooldown(symbol):
                 continue
             inactive.append(symbol)
-        return [*active, *inactive]
+        batch = [*active, *inactive]
+        self.artifacts.append_event(
+            "symbol_batch_selected",
+            "__live__",
+            {
+                "active_symbols": active,
+                "active_count": len(active),
+                "inactive_count": len(inactive),
+                "symbol_batch_size": self.config.symbol_batch_size,
+            },
+        )
+        return batch
+
+    def _active_symbol_batch(self, *, now_ms: int) -> list[str]:
+        with self._state_lock:
+            expired = self._prune_active_symbols_locked(now_ms)
+            symbols_by_key: dict[str, str] = {}
+            for position in self._open_positions.values():
+                symbols_by_key[_position_symbol_key(position.signal.symbol)] = position.signal.symbol
+            for state in self._active_symbols.values():
+                symbols_by_key[_position_symbol_key(state.symbol)] = state.symbol
+            active = sorted(symbols_by_key.values())
+        for state in expired:
+            self.artifacts.append_event(
+                "active_symbol_expired",
+                state.symbol,
+                {
+                    "reason": state.reason,
+                    "expires_at_ms": state.expires_at_ms,
+                    "decision_timestamp_ms": state.decision_timestamp_ms if state.decision_timestamp_ms is not None else "",
+                },
+            )
+        return active
+
+    def _mark_active_symbol(
+        self,
+        symbol: str,
+        *,
+        reason: str,
+        now_ms: int,
+        ttl_ms: int | None = None,
+        decision_timestamp_ms: int | None = None,
+    ) -> None:
+        ttl = self.config.active_symbol_ttl_ms if ttl_ms is None else ttl_ms
+        expires_at_ms = now_ms + max(1, int(ttl))
+        symbol_key = _position_symbol_key(symbol)
+        event_payload: dict[str, object] | None = None
+        with self._state_lock:
+            current = self._active_symbols.get(symbol_key)
+            should_emit = (
+                current is None
+                or current.reason != reason
+                or current.decision_timestamp_ms != decision_timestamp_ms
+                or current.expires_at_ms < now_ms
+            )
+            self._active_symbols[symbol_key] = LiveActiveSymbol(
+                symbol=symbol,
+                reason=reason,
+                expires_at_ms=expires_at_ms,
+                updated_at_ms=now_ms,
+                decision_timestamp_ms=decision_timestamp_ms,
+            )
+            if should_emit:
+                event_payload = {
+                    "reason": reason,
+                    "expires_at_ms": expires_at_ms,
+                    "ttl_ms": int(ttl),
+                    "decision_timestamp_ms": decision_timestamp_ms if decision_timestamp_ms is not None else "",
+                }
+        if event_payload is not None:
+            self.artifacts.append_event("active_symbol_marked", symbol, event_payload)
+
+    def _clear_active_symbol(self, symbol: str, *, reason: str) -> None:
+        symbol_key = _position_symbol_key(symbol)
+        removed: LiveActiveSymbol | None = None
+        with self._state_lock:
+            removed = self._active_symbols.pop(symbol_key, None)
+        if removed is not None:
+            self.artifacts.append_event(
+                "active_symbol_cleared",
+                symbol,
+                {
+                    "reason": reason,
+                    "previous_reason": removed.reason,
+                    "previous_expires_at_ms": removed.expires_at_ms,
+                    "decision_timestamp_ms": removed.decision_timestamp_ms if removed.decision_timestamp_ms is not None else "",
+                },
+            )
+
+    def _prune_active_symbols_locked(self, now_ms: int) -> list[LiveActiveSymbol]:
+        expired_keys = [key for key, state in self._active_symbols.items() if state.expires_at_ms < now_ms]
+        expired: list[LiveActiveSymbol] = []
+        for key in expired_keys:
+            state = self._active_symbols.pop(key, None)
+            if state is not None:
+                expired.append(state)
+        return expired
+
+    def _mark_signal_decision_consumed(self, signal: LiveSignal, *, reason: str) -> None:
+        key = (signal.symbol, signal.levels_timeframe.value, signal.entry_timeframe.value, int(signal.decision_timestamp_ms))
+        with self._state_lock:
+            already_seen = key in self._seen_decisions
+            self._seen_decisions.add(key)
+        if not already_seen:
+            self.artifacts.append_event(
+                "signal_decision_consumed",
+                signal.symbol,
+                {
+                    "reason": reason,
+                    "levels_tf": signal.levels_timeframe.value,
+                    "entry_tf": signal.entry_timeframe.value,
+                    "decision_timestamp_ms": int(signal.decision_timestamp_ms),
+                },
+            )
 
     def _scan_batch(self, symbols: list[str]) -> list[LiveSignal]:
         signals: list[LiveSignal] = []
@@ -696,7 +817,6 @@ class AnomalyMicroLiveRunner:
             with self._state_lock:
                 if key in self._seen_decisions:
                     continue
-                self._seen_decisions.add(key)
             signal = self._build_signal_at_start(
                 symbol,
                 frame,
@@ -707,6 +827,9 @@ class AnomalyMicroLiveRunner:
             )
             if signal is not None:
                 signals.append(signal)
+            else:
+                with self._state_lock:
+                    self._seen_decisions.add(key)
         return signals
 
     def _build_signal_at_start(
@@ -775,6 +898,17 @@ class AnomalyMicroLiveRunner:
             )
             return None
 
+        latest_decision_ts = int(decision["timestamp"])
+        latest_decision_available_ms = latest_decision_ts + levels_timeframe_ms
+        if 0 <= now_ms - latest_decision_available_ms <= self.config.max_signal_age_ms:
+            self._mark_active_symbol(
+                symbol,
+                reason="pump_flow_candidate",
+                now_ms=now_ms,
+                ttl_ms=self.config.active_symbol_ttl_ms,
+                decision_timestamp_ms=latest_decision_ts,
+            )
+
         segment_high = float(segment["high"].max())
         segment_low = float(segment["low"].min())
         impulse_range = segment_high - segment_low
@@ -793,6 +927,7 @@ class AnomalyMicroLiveRunner:
         risk = entry_price - stop_price
         initial_risk_pct = _safe_divide(risk, entry_price)
         if not math.isfinite(risk) or risk <= 0.0:
+            self._clear_active_symbol(symbol, reason="invalid_initial_risk")
             self.artifacts.append_event(
                 "reject_invalid_initial_risk",
                 symbol,
@@ -805,6 +940,7 @@ class AnomalyMicroLiveRunner:
             )
             return None
         if not math.isfinite(initial_risk_pct) or initial_risk_pct > self.config.max_initial_risk_pct:
+            self._clear_active_symbol(symbol, reason="initial_risk_too_wide")
             self.artifacts.append_event(
                 "reject_initial_risk_too_wide",
                 symbol,
@@ -1099,6 +1235,13 @@ class AnomalyMicroLiveRunner:
                 strengths=strengths,
                 weaknesses=weaknesses,
             )
+            self._mark_active_symbol(
+                symbol,
+                reason="entry_signal_selected",
+                now_ms=now_ms,
+                ttl_ms=self.config.max_signal_age_ms,
+                decision_timestamp_ms=int(decision["timestamp"]),
+            )
             self.artifacts.append_event(
                 "category_selected",
                 symbol,
@@ -1164,6 +1307,13 @@ class AnomalyMicroLiveRunner:
         reject_max_positions = False
         with self._state_lock:
             if symbol_key in self._open_positions or symbol_key in self._opening_symbols:
+                self._mark_active_symbol(
+                    signal.symbol,
+                    reason="position_already_active",
+                    now_ms=int(time.time() * 1000),
+                    decision_timestamp_ms=signal.decision_timestamp_ms,
+                )
+                self._mark_signal_decision_consumed(signal, reason="symbol_position_already_active")
                 self.artifacts.append_event(
                     "reject_symbol_position_already_active",
                     signal.symbol,
@@ -1173,10 +1323,27 @@ class AnomalyMicroLiveRunner:
             if len(self._open_positions) + len(self._opening_symbols) >= self.config.max_open_positions:
                 reject_max_positions = True
             if self._symbol_in_stop_cooldown(signal.symbol):
+                self._clear_active_symbol(signal.symbol, reason="stop_cooldown")
+                self._mark_signal_decision_consumed(signal, reason="stop_cooldown")
                 return
             if not reject_max_positions:
                 self._opening_symbols.add(symbol_key)
+        if not reject_max_positions:
+            self._mark_active_symbol(
+                signal.symbol,
+                reason="opening_position",
+                now_ms=int(time.time() * 1000),
+                ttl_ms=self.config.max_signal_age_ms,
+                decision_timestamp_ms=signal.decision_timestamp_ms,
+            )
         if reject_max_positions:
+            self._mark_active_symbol(
+                signal.symbol,
+                reason="entry_waiting_for_free_slot",
+                now_ms=int(time.time() * 1000),
+                ttl_ms=self.config.max_signal_age_ms,
+                decision_timestamp_ms=signal.decision_timestamp_ms,
+            )
             self.artifacts.append_event("reject_max_positions", signal.symbol, {"max": self.config.max_open_positions})
             return
         try:
@@ -1184,6 +1351,8 @@ class AnomalyMicroLiveRunner:
                 return
             pre_position_amount = float(self.exchange.fetch_symbol_position_amount(signal.symbol))
             if not math.isfinite(pre_position_amount):
+                self._clear_active_symbol(signal.symbol, reason="invalid_existing_exchange_position")
+                self._mark_signal_decision_consumed(signal, reason="invalid_existing_exchange_position")
                 self.artifacts.append_event(
                     "reject_invalid_existing_exchange_position",
                     signal.symbol,
@@ -1191,6 +1360,8 @@ class AnomalyMicroLiveRunner:
                 )
                 return
             if abs(pre_position_amount) > 0.0:
+                self._clear_active_symbol(signal.symbol, reason="existing_exchange_position")
+                self._mark_signal_decision_consumed(signal, reason="existing_exchange_position")
                 self.artifacts.append_event(
                     "reject_existing_exchange_position",
                     signal.symbol,
@@ -1213,6 +1384,7 @@ class AnomalyMicroLiveRunner:
                 return
             notional = self.config.position_notional_usdt
             if not math.isfinite(notional) or notional <= 0.0:
+                self._mark_signal_decision_consumed(signal, reason="invalid_position_notional")
                 self.artifacts.append_event("reject_invalid_position_notional", signal.symbol, {"position_notional": _finite_or_none(notional)})
                 return
             if balance < notional:
@@ -1314,6 +1486,8 @@ class AnomalyMicroLiveRunner:
             with self._state_lock:
                 self._open_positions[symbol_key] = position
                 self._opened_positions_total += 1
+                self._active_symbols.pop(symbol_key, None)
+            self._mark_signal_decision_consumed(signal, reason="position_opened")
         except Exception:
             with self._state_lock:
                 self._opening_symbols.discard(symbol_key)
@@ -1377,6 +1551,8 @@ class AnomalyMicroLiveRunner:
             )
             return False
         if signal_age_ms > self.config.max_signal_age_ms:
+            self._clear_active_symbol(signal.symbol, reason="stale_signal")
+            self._mark_signal_decision_consumed(signal, reason="stale_signal")
             details = {
                 "decision_timestamp_ms": signal.decision_timestamp_ms,
                 "decision_available_ms": decision_available_ms,
@@ -1433,6 +1609,8 @@ class AnomalyMicroLiveRunner:
         return True
 
     def _reject_live_order(self, signal: LiveSignal, *, event: str, details: dict[str, object]) -> bool:
+        self._clear_active_symbol(signal.symbol, reason=event)
+        self._mark_signal_decision_consumed(signal, reason=event)
         self.artifacts.append_event(event, signal.symbol, details)
         self._notify_order_blocked(signal, event=event, details=details)
         return False
@@ -2209,8 +2387,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "confirmation_candles": (config.confirmation_candles, 1),
         "min_hold_count": (config.min_hold_count, 1),
         "max_open_positions": (config.max_open_positions, 1),
-        "inactive_batch_size": (config.inactive_batch_size, 1),
-        "inactive_batch_with_active": (config.inactive_batch_with_active, 1),
+        "symbol_batch_size": (config.symbol_batch_size, 1),
+        "active_symbol_ttl_ms": (config.active_symbol_ttl_ms, 1),
         "signal_scan_backfill_candles": (config.signal_scan_backfill_candles, 1),
         "max_signal_age_ms": (config.max_signal_age_ms, 1),
         "stop_limit_per_symbol": (config.stop_limit_per_symbol, 1),
