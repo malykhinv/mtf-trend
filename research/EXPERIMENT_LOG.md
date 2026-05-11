@@ -107,3 +107,26 @@ Next:
 ```text
 Run one real dry/live observation window and confirm live_events.csv and Telegram event channel agree on blocked-order reasons.
 ```
+
+---
+
+## 2026-05-11 — P132 live/backtest audit visibility
+
+Input:
+
+```text
+Review of P130/P131 local tree
+Concern: live/backtest may still hide position-management and skip-reason failures
+```
+
+Result:
+
+```text
+Patch proposed. Live position safety now emits explicit events for verified stop state, TP1 actual fills, repeated empty monitor OHLCV, emergency reduce-only exits and integrity errors. Backtest writes anomaly_skip_reasons.csv and includes skip_reason:* metrics in profitability summary.
+```
+
+Next:
+
+```text
+Run fake-exchange smoke for initial stop verification failure, TP1 fill price different from target, and repeated empty monitor OHLCV. Then run one small anomaly backtest and inspect anomaly_skip_reasons.csv before interpreting PnL.
+```

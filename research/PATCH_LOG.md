@@ -97,3 +97,32 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ### Risk
 
 Low/medium: fewer fresh-but-dislocated live entries pass, and Telegram event channel can receive more messages. Existing Telegram cooldown key is per symbol/event.
+
+## P132 — Live position safety audit artifacts
+
+Status: PROPOSED
+Date: 2026-05-11
+Commit: UNKNOWN
+
+### Reason
+
+P130/P131 fixed stale/non-executable entry selection, but live position management could still hide operational problems: monitor integrity errors were handled like temporary network failures, TP1 partial exits used unverified fills, initial stops were accepted by id only, repeated empty monitor OHLCV had no hard failure, and market-backtest skip reasons were not exported as first-class artifacts.
+
+### Change
+
+- Verify initial and replacement stop orders through open-order state: id, side, stop type, reduce-only flag, amount and stop price.
+- If initial stop verification fails after entry fill, attempt a verified reduce-only emergency exit and write the exact outcome to `live_events.csv`.
+- Execute TP1 partial close through verified fill resolution and record actual TP1 fill price/amount/PnL in `live_events.csv`.
+- Treat `LiveDataIntegrityError` in position monitor as `position_integrity_error` with Telegram alert and no generic retry masking.
+- Record repeated empty monitor OHLCV as `position_monitor_empty_ohlcv`; after `max_monitor_empty_ohlcv_cycles`, escalate to integrity error.
+- Export `anomaly_skip_reasons.csv`, include skip reasons in profitability summary, expose execution-guard skips in entry-grid summary, and mark market backtest execution as `next_bar_open_proxy_latency_N`.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+### Risk
+
+Medium: live may halt position monitoring when exchange stop/order state cannot be verified. This is intentional; unknown protection state must be visible and handled manually instead of being treated as a transient loop error.

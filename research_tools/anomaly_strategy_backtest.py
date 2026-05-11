@@ -185,6 +185,22 @@ class AnomalyBacktestConfig:
     fee_rate: float = 0.0004
 
 
+EXECUTION_GUARD_SKIP_REASONS = {
+    "no_market_execution_candle",
+    "invalid_market_execution_price",
+    "tp1_already_reached_before_market_entry",
+    "invalid_actual_market_risk",
+    "market_entry_price_drift",
+    "market_entry_rr_collapsed",
+}
+
+
+def _execution_model_label(config: AnomalyBacktestConfig) -> str:
+    if config.entry_method == "market":
+        return f"next_bar_open_proxy_latency_{config.market_entry_latency_candles}"
+    return config.entry_method
+
+
 def _emit_progress_5pct(
     *,
     label: str,
@@ -481,6 +497,7 @@ def simulate_long_signal(
     config: AnomalyBacktestConfig,
 ) -> dict[str, object]:
     symbol = str(signal["symbol"])
+    execution_model = _execution_model_label(config)
     anomaly_ts = int(signal["timestamp_ms"])
     decision_ts = int(signal["decision_timestamp_ms"])
     decision_close = float(signal["decision_close"])
@@ -499,6 +516,7 @@ def simulate_long_signal(
             "status": "skipped",
             "skip_reason": entry_skip_reason or "entry_trigger_not_reached",
             "entry_method": config.entry_method,
+            "execution_model": execution_model,
         }
     if not np.isfinite(initial_risk) or initial_risk <= 0.0:
         return {
@@ -508,6 +526,7 @@ def simulate_long_signal(
             "status": "skipped",
             "skip_reason": "invalid_initial_risk",
             "entry_method": config.entry_method,
+            "execution_model": execution_model,
         }
     initial_risk_pct = initial_risk / entry_price
     if initial_risk_pct > config.max_initial_risk_pct:
@@ -519,6 +538,7 @@ def simulate_long_signal(
             "skip_reason": "initial_risk_too_wide",
             "initial_risk_pct": initial_risk_pct,
             "entry_method": config.entry_method,
+            "execution_model": execution_model,
         }
 
     future = frame.loc[frame["timestamp"] > entry_ts].head(config.max_hold_candles).copy()
@@ -530,6 +550,7 @@ def simulate_long_signal(
             "status": "skipped",
             "skip_reason": "no_future_candles",
             "entry_method": config.entry_method,
+            "execution_model": execution_model,
         }
 
     tp1_price = entry_price + config.tp1_r * initial_risk
@@ -639,6 +660,7 @@ def simulate_long_signal(
         "entry_timestamp_ms": entry_ts,
         "entry_timestamp_utc": _timestamp_to_utc(entry_ts),
         "entry_method": config.entry_method,
+        "execution_model": execution_model,
         "pullback_box_fraction": config.pullback_box_fraction if config.entry_method == "pullback_box_fraction" else np.nan,
         "entry_delay_candles": int((entry_ts - decision_ts) / 60_000),
         "entry_price": entry_price,
@@ -704,6 +726,8 @@ def simulate_anomaly_trades(
                     "entry_timestamp_utc": _timestamp_to_utc(entry_ts),
                     "status": "skipped",
                     "skip_reason": "overlapping_signal",
+                    "entry_method": config.entry_method,
+                    "execution_model": _execution_model_label(config),
                 }
             )
             continue
@@ -728,28 +752,56 @@ def simulate_anomaly_trades(
     return pd.DataFrame(rows)
 
 
+def summarize_trade_skip_reasons(trades: pd.DataFrame) -> pd.DataFrame:
+    columns = ["status", "skip_reason", "count", "share_of_all", "execution_guard"]
+    if trades.empty or "status" not in trades.columns:
+        return pd.DataFrame(columns=columns)
+    skipped = trades.loc[trades["status"].eq("skipped")].copy()
+    if skipped.empty:
+        return pd.DataFrame(columns=columns)
+    if "skip_reason" not in skipped.columns:
+        raise ValueError("skipped anomaly trades missing skip_reason column")
+    grouped = skipped.groupby("skip_reason", dropna=False).size().reset_index(name="count")
+    grouped["status"] = "skipped"
+    grouped["share_of_all"] = grouped["count"].astype(float) / float(len(trades))
+    grouped["execution_guard"] = grouped["skip_reason"].astype(str).isin(EXECUTION_GUARD_SKIP_REASONS)
+    return grouped[columns].sort_values(["count", "skip_reason"], ascending=[False, True]).reset_index(drop=True)
+
+
 def summarize_trades(trades: pd.DataFrame) -> pd.DataFrame:
     if trades.empty or "status" not in trades.columns:
-        return pd.DataFrame([{"metric": "closed_trades", "value": 0}])
+        return pd.DataFrame([{"metric": "closed_trades", "value": 0}, {"metric": "skipped_trades", "value": 0}])
     closed = trades.loc[trades["status"].eq("closed")].copy()
+    skipped = trades.loc[trades["status"].eq("skipped")].copy()
+    rows: list[dict[str, object]] = [
+        {"metric": "closed_trades", "value": int(len(closed))},
+        {"metric": "skipped_trades", "value": int(len(skipped))},
+    ]
+    if not skipped.empty:
+        skip_counts = summarize_trade_skip_reasons(trades)
+        execution_guard_skips = int(skip_counts.loc[skip_counts["execution_guard"].astype(bool), "count"].sum())
+        rows.append({"metric": "execution_guard_skips", "value": execution_guard_skips})
+        for _, row in skip_counts.iterrows():
+            rows.append({"metric": f"skip_reason:{row['skip_reason']}", "value": int(row["count"])})
     if closed.empty:
-        return pd.DataFrame([{"metric": "closed_trades", "value": 0}])
+        return pd.DataFrame(rows)
     net = closed["net_return"].astype(float)
     gross_r = closed["gross_r"].astype(float)
     wins = net > 0
-    rows = [
-        {"metric": "closed_trades", "value": int(len(closed))},
-        {"metric": "symbols", "value": int(closed["symbol"].nunique())},
-        {"metric": "win_rate", "value": float(wins.mean())},
-        {"metric": "avg_net_return", "value": float(net.mean())},
-        {"metric": "median_net_return", "value": float(net.median())},
-        {"metric": "sum_net_return", "value": float(net.sum())},
-        {"metric": "avg_gross_r", "value": float(gross_r.mean())},
-        {"metric": "median_gross_r", "value": float(gross_r.median())},
-        {"metric": "tp1_hit_rate", "value": float(closed["tp1_hit"].astype(bool).mean())},
-        {"metric": "avg_mfe_pct", "value": float(closed["mfe_pct"].astype(float).mean())},
-        {"metric": "avg_mae_pct", "value": float(closed["mae_pct"].astype(float).mean())},
-    ]
+    rows.extend(
+        [
+            {"metric": "symbols", "value": int(closed["symbol"].nunique())},
+            {"metric": "win_rate", "value": float(wins.mean())},
+            {"metric": "avg_net_return", "value": float(net.mean())},
+            {"metric": "median_net_return", "value": float(net.median())},
+            {"metric": "sum_net_return", "value": float(net.sum())},
+            {"metric": "avg_gross_r", "value": float(gross_r.mean())},
+            {"metric": "median_gross_r", "value": float(gross_r.median())},
+            {"metric": "tp1_hit_rate", "value": float(closed["tp1_hit"].astype(bool).mean())},
+            {"metric": "avg_mfe_pct", "value": float(closed["mfe_pct"].astype(float).mean())},
+            {"metric": "avg_mae_pct", "value": float(closed["mae_pct"].astype(float).mean())},
+        ]
+    )
     by_reason = closed.groupby("exit_reason").size().reset_index(name="count")
     for _, row in by_reason.iterrows():
         rows.append({"metric": f"exit_reason:{row['exit_reason']}", "value": int(row["count"])})
@@ -1096,6 +1148,9 @@ def summarize_entry_grid_variant(
     variant_id: int | None = None,
 ) -> dict[str, object]:
     closed = trades.loc[trades.get("status", pd.Series(dtype=str)).eq("closed")].copy()
+    skip_summary = summarize_trade_skip_reasons(trades)
+    top_skip_reason = str(skip_summary.iloc[0]["skip_reason"]) if not skip_summary.empty else ""
+    execution_guard_skips = int(skip_summary.loc[skip_summary["execution_guard"].astype(bool), "count"].sum()) if not skip_summary.empty else 0
     row: dict[str, object] = {
         "variant_id": int(variant_id) if variant_id is not None else -1,
         "entry_method": config.entry_method,
@@ -1117,6 +1172,8 @@ def summarize_entry_grid_variant(
         "signals": int(signal_count),
         "closed_trades": int(len(closed)),
         "skipped_trades": int(len(trades) - len(closed)),
+        "execution_guard_skips": execution_guard_skips,
+        "top_skip_reason": top_skip_reason,
     }
     if closed.empty:
         return row
@@ -1800,10 +1857,12 @@ def run_anomaly_strategy_backtest(
     print(f"anomaly trades: simulating {len(signals)} signals", flush=True)
     trades = simulate_anomaly_trades(signals, config=config, progress_label="anomaly trades")
     summary = summarize_trades(trades)
+    skip_reasons = summarize_trade_skip_reasons(trades)
     _write_artifact_frames(
         [
             (output_dir / "anomaly_trades.csv", trades),
             (output_dir / "anomaly_profitability_summary.csv", summary),
+            (output_dir / "anomaly_skip_reasons.csv", skip_reasons),
             (output_dir / "anomaly_profitability_by_symbol.csv", summarize_trades_by_symbol(trades)),
         ],
         progress_label="anomaly artifacts: trade files",
@@ -1836,10 +1895,12 @@ def run_anomaly_strategy_backtest(
                 )
                 best_config_frame = pd.DataFrame([{**asdict(best_config), "lab_config": asdict(best_config.lab_config)}])
                 best_health = build_edge_health_table(best_trades, label=best_label)
+                best_skip_reasons = summarize_trade_skip_reasons(best_trades)
                 _write_artifact_frames(
                     [
                         (output_dir / "anomaly_entry_grid_best_trades.csv", best_trades),
                         (output_dir / "anomaly_entry_grid_best_config.csv", best_config_frame),
+                        (output_dir / "anomaly_entry_grid_best_skip_reasons.csv", best_skip_reasons),
                         (output_dir / "anomaly_edge_health.csv", best_health),
                     ],
                     progress_label="anomaly artifacts: best grid files",
@@ -1869,6 +1930,7 @@ def run_anomaly_strategy_backtest(
         )
     run_config = {
         **asdict(config),
+        "execution_model": _execution_model_label(config),
         "lab_config": asdict(config.lab_config),
     }
     _write_artifact_frames(

@@ -87,3 +87,16 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ## 7. Current audit note
 
 P130 compiled and addressed the main live-execution bug, but second review found one remaining realism issue: entry drift must be absolute, not only positive. P131 fixes that and adds Telegram event notifications for stale/non-executable selected signals.
+
+---
+
+## 8. Current audit note — P132
+
+P132 is proposed after P130/P131. Entry selection is no longer the only audit risk: position protection and exit accounting must also be strict. Live now treats unknown stop/fill/monitor data as explicit artifact events and integrity errors instead of temporary noise. Backtest artifacts now export skip-reason distribution so reduced trade count is explainable.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+# fake-exchange smoke: stop verification failure, TP1 verified fill, repeated empty monitor OHLCV
+```

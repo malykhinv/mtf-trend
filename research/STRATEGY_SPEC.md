@@ -146,3 +146,21 @@ RR from live price to signal TP1 < min_executable_rr_to_signal_tp1
 ```
 
 These rejects are trading decisions and must be visible in artifacts. Telegram may notify the operator, but artifact rows remain the source of truth.
+
+---
+
+## Live position-management contract
+
+After entry fill, live must not assume the position is safely managed unless exchange state confirms it:
+
+```text
+initial stop id visible in open orders
+stop side/type/reduceOnly/amount/stopPrice verified
+TP1 partial exit fill resolved from exchange order/trade payload
+position monitor OHLCV available repeatedly enough to manage BE/trail
+integrity errors written as artifacts and surfaced to Telegram
+```
+
+If stop/fill/monitor state is unknown, the run must emit an explicit artifact reason. It must not count synthetic TP1/BE/PnL as reliable edge evidence.
+
+Backtest market entries remain a proxy, not real exchange fills. Artifacts must label the execution model and export skipped-entry reasons, especially stale/non-executable/price-drift/RR-collapse reasons.

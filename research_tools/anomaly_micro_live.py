@@ -157,6 +157,7 @@ class LiveAnomalyConfig:
     max_entry_price_drift_pct: float = 0.003
     min_executable_rr_to_signal_tp1: float = 0.75
     max_position_amount_slippage_ratio: float = 0.05
+    max_monitor_empty_ohlcv_cycles: int = 3
     scan_sleep_seconds: float = 2.0
     network_sleep_seconds: float = 30.0
     max_cycles: int | None = None
@@ -1266,18 +1267,26 @@ class AnomalyMicroLiveRunner:
             actual_tp1_price = actual_entry_price + actual_initial_risk
             actual_notional = actual_entry_price * position_delta_amount
             actual_risk_usdt = position_delta_amount * actual_initial_risk
+            position_id = f"{signal.symbol.replace('/', '_').replace(':', '_')}_{signal.decision_timestamp_ms}_{fill.order_id}"
             try:
-                stop_order = self.exchange.create_stop_market_order(signal.symbol, "sell", position_delta_amount, actual_stop_price)
-            except Exception:
-                self.exchange.create_market_order(signal.symbol, "sell", position_delta_amount, reduce_only=True)
+                stop_order_id = self._create_verified_position_stop_order(
+                    signal.symbol,
+                    amount=position_delta_amount,
+                    stop_price=actual_stop_price,
+                    position_id=position_id,
+                    reason="initial_stop",
+                )
+            except Exception as exc:
+                self._close_unprotected_entry_exposure(
+                    signal.symbol,
+                    amount=position_delta_amount,
+                    position_id=position_id,
+                    reason=f"initial_stop_failed:{type(exc).__name__}",
+                )
                 raise
-            stop_order_id = str(stop_order.get("id", ""))
-            if not stop_order_id:
-                self.exchange.create_market_order(signal.symbol, "sell", position_delta_amount, reduce_only=True)
-                raise LiveDataIntegrityError(f"stop order returned no id: symbol={signal.symbol}")
             opened_at_ms = int(fill.timestamp_ms)
             position = LivePosition(
-                position_id=f"{signal.symbol.replace('/', '_').replace(':', '_')}_{signal.decision_timestamp_ms}_{fill.order_id}",
+                position_id=position_id,
                 signal=signal,
                 amount=float(position_delta_amount),
                 notional_usdt=float(actual_notional),
@@ -1525,12 +1534,26 @@ class AnomalyMicroLiveRunner:
     def _monitor_position(self, position: LivePosition) -> None:
         signal = position.signal
         last_stop_price = position.stop_price
+        empty_ohlcv_cycles = 0
         while True:
             try:
                 actual_amount = abs(self.exchange.fetch_symbol_position_amount(signal.symbol))
                 managed_amount = min(actual_amount, max(position.remaining_amount, 0.0))
                 if actual_amount <= 0.0:
-                    self._finalize_position(position, reason="позиция закрыта на бирже", pnl_price=position.current_stop_price)
+                    self.artifacts.append_event(
+                        "position_closed_externally_unverified_exit_price",
+                        signal.symbol,
+                        {
+                            "position_id": position.position_id,
+                            "pnl_price_proxy": position.current_stop_price,
+                            "reason": "exchange_position_amount_zero_before_monitor_decision",
+                        },
+                    )
+                    self._finalize_position(
+                        position,
+                        reason="позиция закрыта на бирже (exit fill unresolved; pnl proxy)",
+                        pnl_price=position.current_stop_price,
+                    )
                     return
                 if managed_amount <= 0.0:
                     raise LiveDataIntegrityError(f"managed position amount is zero while exchange position is open: {position.position_id}")
@@ -1542,21 +1565,57 @@ class AnomalyMicroLiveRunner:
                     now_ms,
                 )
                 if frame.empty:
+                    empty_ohlcv_cycles += 1
+                    details = {
+                        "position_id": position.position_id,
+                        "empty_ohlcv_cycles": empty_ohlcv_cycles,
+                        "max_empty_ohlcv_cycles": self.config.max_monitor_empty_ohlcv_cycles,
+                        "from_timestamp_ms": position.entry_fill_timestamp_ms,
+                        "to_timestamp_ms": now_ms,
+                    }
+                    self.artifacts.append_event("position_monitor_empty_ohlcv", signal.symbol, details)
+                    if empty_ohlcv_cycles >= self.config.max_monitor_empty_ohlcv_cycles:
+                        raise LiveDataIntegrityError(
+                            f"monitor OHLCV empty for {empty_ohlcv_cycles} consecutive cycles: position_id={position.position_id}"
+                        )
                     time.sleep(15.0)
                     continue
+                empty_ohlcv_cycles = 0
                 latest = frame.sort_values("timestamp").iloc[-1]
                 latest_high = float(latest["high"])
                 latest_low = float(latest["low"])
                 latest_close = float(latest["close"])
                 if not position.tp1_done and latest_high >= position.tp1_price:
                     close_amount = max(min(managed_amount, position.remaining_amount) * 0.5, 0.0)
+                    tp1_fill = None
                     if close_amount > 0.0:
-                        self.exchange.create_market_order(signal.symbol, "sell", close_amount, reduce_only=True)
-                        position.realized_pnl_usdt += close_amount * (position.tp1_price - position.entry_price)
+                        tp1_fill = self.exchange.create_market_order_with_fill(signal.symbol, "sell", close_amount, reduce_only=True)
+                        if tp1_fill.filled_amount <= 0.0 or not math.isfinite(tp1_fill.average_price):
+                            raise LiveDataIntegrityError(
+                                f"TP1 reduce-only fill invalid: position_id={position.position_id} order_id={tp1_fill.order_id}"
+                            )
+                        position.realized_pnl_usdt += tp1_fill.filled_amount * (tp1_fill.average_price - position.entry_price)
+                        self.artifacts.append_event(
+                            "tp1_partial_exit_filled",
+                            signal.symbol,
+                            {
+                                "position_id": position.position_id,
+                                "order_id": tp1_fill.order_id,
+                                "status": tp1_fill.status,
+                                "fill_timestamp_ms": tp1_fill.timestamp_ms,
+                                "fill_price": tp1_fill.average_price,
+                                "filled_amount": tp1_fill.filled_amount,
+                                "requested_amount": close_amount,
+                                "cost": tp1_fill.cost,
+                                "fee_cost": tp1_fill.fee_cost,
+                                "realized_pnl_usdt": position.realized_pnl_usdt,
+                            },
+                        )
                     time.sleep(2.0)
                     actual_after_tp1 = abs(self.exchange.fetch_symbol_position_amount(signal.symbol))
                     position.tp1_done = True
-                    position.remaining_amount = min(actual_after_tp1, max(position.amount - close_amount, 0.0))
+                    filled_close_amount = tp1_fill.filled_amount if tp1_fill is not None else close_amount
+                    position.remaining_amount = min(actual_after_tp1, max(position.amount - filled_close_amount, 0.0))
                     if position.remaining_amount <= 0.0:
                         self._finalize_position(position, reason="TP1 закрыл позицию полностью", pnl_price=position.tp1_price)
                         return
@@ -1600,13 +1659,70 @@ class AnomalyMicroLiveRunner:
                 if latest_low <= last_stop_price:
                     time.sleep(3.0)
                     if abs(self.exchange.fetch_symbol_position_amount(signal.symbol)) <= 0.0:
-                        self._finalize_position(position, reason="стоп исполнен на бирже", pnl_price=last_stop_price)
+                        stop_exit_price = last_stop_price
+                        stop_exit_reason = "стоп исполнен на бирже"
+                        try:
+                            stop_fill = self.exchange.fetch_order_fill(signal.symbol, position.stop_order_id)
+                        except Exception as exc:
+                            self.artifacts.append_event(
+                                "stop_exit_fill_unresolved",
+                                signal.symbol,
+                                {
+                                    "position_id": position.position_id,
+                                    "stop_order_id": position.stop_order_id,
+                                    "pnl_price_proxy": last_stop_price,
+                                    "error": f"{type(exc).__name__}: {exc}",
+                                },
+                            )
+                            stop_exit_reason = "стоп исполнен на бирже (fill unresolved; pnl proxy)"
+                        else:
+                            stop_exit_price = float(stop_fill.average_price)
+                            self.artifacts.append_event(
+                                "stop_exit_filled",
+                                signal.symbol,
+                                {
+                                    "position_id": position.position_id,
+                                    "order_id": stop_fill.order_id,
+                                    "status": stop_fill.status,
+                                    "fill_timestamp_ms": stop_fill.timestamp_ms,
+                                    "fill_price": stop_fill.average_price,
+                                    "filled_amount": stop_fill.filled_amount,
+                                    "cost": stop_fill.cost,
+                                    "fee_cost": stop_fill.fee_cost,
+                                },
+                            )
+                        self._finalize_position(position, reason=stop_exit_reason, pnl_price=stop_exit_price)
                         return
                 time.sleep(15.0)
+            except LiveDataIntegrityError as exc:
+                self._record_position_integrity_error(position, reason=str(exc))
+                return
             except Exception as exc:
-                self.artifacts.append_event("position_monitor_error", signal.symbol, {"reason": str(exc)})
+                self.artifacts.append_event(
+                    "position_monitor_error",
+                    signal.symbol,
+                    {"position_id": position.position_id, "reason": f"{type(exc).__name__}: {exc}"},
+                )
                 self.logger(f"live: позиция {signal.symbol}, временная ошибка ведения: {exc}")
                 time.sleep(30.0)
+
+    def _record_position_integrity_error(self, position: LivePosition, *, reason: str) -> None:
+        symbol = position.signal.symbol
+        details = {
+            "position_id": position.position_id,
+            "reason": reason,
+            "entry_price": position.entry_price,
+            "remaining_amount": position.remaining_amount,
+            "stop_order_id": position.stop_order_id,
+            "current_stop_price": position.current_stop_price,
+        }
+        self.artifacts.append_event("position_integrity_error", symbol, details)
+        self.telegram.send(
+            channel="events",
+            key=f"position_integrity_error:{position.position_id}",
+            text=_format_position_integrity_error_message(position, reason=reason),
+        )
+        self.logger(f"live: {_compact_symbol(symbol)} integrity error · {reason}")
 
     def _finalize_position(self, position: LivePosition, *, reason: str, pnl_price: float | None) -> None:
         symbol_key = _position_symbol_key(position.signal.symbol)
@@ -1869,6 +1985,137 @@ class AnomalyMicroLiveRunner:
         )
         return cancelled
 
+    def _create_verified_position_stop_order(
+        self,
+        symbol: str,
+        *,
+        amount: float,
+        stop_price: float,
+        position_id: str,
+        reason: str,
+    ) -> str:
+        if not math.isfinite(amount) or amount <= 0.0:
+            raise LiveDataIntegrityError(f"invalid stop order amount: position_id={position_id} amount={amount}")
+        if not math.isfinite(stop_price) or stop_price <= 0.0:
+            raise LiveDataIntegrityError(f"invalid stop order price: position_id={position_id} stop_price={stop_price}")
+        stop_order = self.exchange.create_stop_market_order(symbol, "sell", amount, stop_price)
+        stop_order_id = str(stop_order.get("id") or "").strip()
+        if not stop_order_id:
+            raise LiveDataIntegrityError(f"stop order returned no id: position_id={position_id} symbol={symbol}")
+        self._verify_open_stop_order(
+            symbol,
+            order_id=stop_order_id,
+            expected_side="sell",
+            expected_amount=amount,
+            expected_stop_price=stop_price,
+            position_id=position_id,
+            reason=reason,
+        )
+        self.artifacts.append_event(
+            "position_stop_order_verified",
+            symbol,
+            {
+                "position_id": position_id,
+                "order_id": stop_order_id,
+                "stop_price": stop_price,
+                "amount": amount,
+                "reason": reason,
+            },
+        )
+        return stop_order_id
+
+    def _verify_open_stop_order(
+        self,
+        symbol: str,
+        *,
+        order_id: str,
+        expected_side: str,
+        expected_amount: float,
+        expected_stop_price: float,
+        position_id: str,
+        reason: str,
+    ) -> None:
+        open_orders = self.exchange.fetch_open_orders(symbol)
+        order = next(
+            (row for row in open_orders if isinstance(row, dict) and str(row.get("id") or "").strip() == order_id),
+            None,
+        )
+        if order is None:
+            raise LiveDataIntegrityError(
+                f"stop order not visible in open orders: position_id={position_id} order_id={order_id} reason={reason}"
+            )
+        side = _order_text_field(order, "side")
+        if side is None or side.lower() != expected_side.lower():
+            raise LiveDataIntegrityError(
+                f"stop order side not verified: position_id={position_id} order_id={order_id} side={side!r} expected={expected_side}"
+            )
+        order_type = _order_text_field(order, "type")
+        if order_type is None or "stop" not in order_type.lower():
+            raise LiveDataIntegrityError(
+                f"stop order type not verified: position_id={position_id} order_id={order_id} type={order_type!r}"
+            )
+        reduce_only = _order_bool_field(order, "reduceOnly")
+        if reduce_only is not True:
+            raise LiveDataIntegrityError(
+                f"stop order reduceOnly not verified: position_id={position_id} order_id={order_id} reduceOnly={reduce_only!r}"
+            )
+        amount = _order_float_field(order, "amount", "origQty")
+        amount_delta = abs(amount - expected_amount) if amount is not None else float("nan")
+        amount_delta_ratio = _safe_divide(amount_delta, expected_amount) if amount is not None else float("nan")
+        if amount is None or not math.isfinite(amount_delta_ratio) or amount_delta_ratio > self.config.max_position_amount_slippage_ratio:
+            raise LiveDataIntegrityError(
+                f"stop order amount not verified: position_id={position_id} order_id={order_id} "
+                f"amount={amount!r} expected={expected_amount}"
+            )
+        stop_price = _order_float_field(order, "stopPrice")
+        price_delta_ratio = _safe_divide(abs(stop_price - expected_stop_price), expected_stop_price) if stop_price is not None else float("nan")
+        if stop_price is None or not math.isfinite(price_delta_ratio) or price_delta_ratio > 1e-4:
+            raise LiveDataIntegrityError(
+                f"stop order stopPrice not verified: position_id={position_id} order_id={order_id} "
+                f"stopPrice={stop_price!r} expected={expected_stop_price}"
+            )
+
+    def _close_unprotected_entry_exposure(
+        self,
+        symbol: str,
+        *,
+        amount: float,
+        position_id: str,
+        reason: str,
+    ) -> None:
+        try:
+            fill = self.exchange.create_market_order_with_fill(symbol, "sell", amount, reduce_only=True)
+        except Exception as exc:
+            self.artifacts.append_event(
+                "unprotected_entry_reduce_only_exit_failed",
+                symbol,
+                {
+                    "position_id": position_id,
+                    "amount": amount,
+                    "reason": reason,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            raise LiveDataIntegrityError(
+                f"unprotected entry exposure could not be closed: position_id={position_id} symbol={symbol} reason={reason}"
+            ) from exc
+        self.artifacts.append_event(
+            "unprotected_entry_reduce_only_exit_filled",
+            symbol,
+            {
+                "position_id": position_id,
+                "amount_requested": amount,
+                "order_id": fill.order_id,
+                "status": fill.status,
+                "fill_timestamp_ms": fill.timestamp_ms,
+                "fill_price": fill.average_price,
+                "filled_amount": fill.filled_amount,
+                "cost": fill.cost,
+                "fee_cost": fill.fee_cost,
+                "reason": reason,
+            },
+        )
+
     def _replace_position_stop_order(
         self,
         position: LivePosition,
@@ -1882,15 +2129,13 @@ class AnomalyMicroLiveRunner:
             raise LiveDataIntegrityError(f"invalid stop replacement amount: position_id={position.position_id} amount={amount}")
         if not math.isfinite(stop_price) or stop_price <= 0.0:
             raise LiveDataIntegrityError(f"invalid stop replacement price: position_id={position.position_id} stop_price={stop_price}")
-        new_stop_order = self.exchange.create_stop_market_order(
+        new_stop_order_id = self._create_verified_position_stop_order(
             position.signal.symbol,
-            "sell",
-            amount,
-            stop_price,
+            amount=amount,
+            stop_price=stop_price,
+            position_id=position.position_id,
+            reason=reason,
         )
-        new_stop_order_id = str(new_stop_order.get("id") or "").strip()
-        if not new_stop_order_id:
-            raise LiveDataIntegrityError(f"replacement stop order returned no id: position_id={position.position_id}")
         cancel_error: str | None = None
         if old_stop_order_id:
             try:
@@ -1899,10 +2144,6 @@ class AnomalyMicroLiveRunner:
                 cancel_error = f"{type(exc).__name__}: {exc}"
         open_orders = self.exchange.fetch_open_orders(position.signal.symbol)
         open_order_ids = {str(order.get("id") or "").strip() for order in open_orders if isinstance(order, dict)}
-        if new_stop_order_id not in open_order_ids:
-            raise LiveDataIntegrityError(
-                f"replacement stop order not visible in open orders: position_id={position.position_id} new_order_id={new_stop_order_id}"
-            )
         if cancel_error is not None and old_stop_order_id in open_order_ids:
             raise LiveDataIntegrityError(
                 f"old stop cancel failed and old order remains open: position_id={position.position_id} "
@@ -1977,6 +2218,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "trail_lookback_candles": (config.trail_lookback_candles, 1),
         "order_reconcile_interval_cycles": (config.order_reconcile_interval_cycles, 1),
         "order_reconcile_batch_size": (config.order_reconcile_batch_size, 1),
+        "max_monitor_empty_ohlcv_cycles": (config.max_monitor_empty_ohlcv_cycles, 1),
     }
     for name, (value, minimum) in integer_minimums.items():
         if not isinstance(value, int) or value < minimum:
@@ -2161,6 +2403,65 @@ def _detail_float(details: dict[str, object], key: str) -> float | None:
     except (TypeError, ValueError):
         return None
     return number if math.isfinite(number) else None
+
+
+def _format_position_integrity_error_message(position: LivePosition, *, reason: str) -> str:
+    symbol = _compact_symbol(position.signal.symbol)
+    return (
+        f"🚨 *Live integrity error*\n"
+        f"{symbol} ({_coinglass_url(position.signal.symbol)})\n"
+        f"position `{_telegram_escape(position.position_id)}`\n"
+        f"Причина: `{_telegram_escape(reason)}`\n"
+        f"Entry: `{_format_price(position.entry_price)}` · amount `{position.remaining_amount:.8g}`\n"
+        f"Stop: `{_format_price(position.current_stop_price)}` · order `{_telegram_escape(str(position.stop_order_id))}`\n"
+        "Ведение позиции остановлено: требуется ручная проверка биржи и live_events.csv."
+    )
+
+def _order_info(order: dict[str, object]) -> dict[str, object]:
+    info = order.get("info")
+    return info if isinstance(info, dict) else {}
+
+
+def _order_text_field(order: dict[str, object], key: str) -> str | None:
+    value = order.get(key)
+    if value is None or value == "":
+        value = _order_info(order).get(key)
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
+def _order_float_field(order: dict[str, object], *keys: str) -> float | None:
+    info = _order_info(order)
+    for key in keys:
+        for source in (order, info):
+            value = source.get(key)
+            if value is None or value == "":
+                continue
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(parsed):
+                return parsed
+    return None
+
+
+def _order_bool_field(order: dict[str, object], key: str) -> bool | None:
+    value = order.get(key)
+    if value is None or value == "":
+        value = _order_info(order).get(key)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes"}:
+            return True
+        if normalized in {"false", "0", "no"}:
+            return False
+    if isinstance(value, (int, float)) and math.isfinite(float(value)):
+        return bool(value)
+    return None
 
 
 def _format_open_message(position: LivePosition) -> str:
