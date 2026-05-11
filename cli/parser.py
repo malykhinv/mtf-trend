@@ -190,6 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     hourly_levels.add_argument("--max-levels-per-symbol", type=_positive_int_for("--max-levels-per-symbol"), default=4)
     hourly_levels.add_argument("--reject-pierced-levels", type=_str_to_bool, default=True)
     hourly_levels.add_argument("--max-level-pierce-pct", type=float, default=0.015)
+    hourly_levels.add_argument("--fast-source-trim", type=_str_to_bool, default=True)
     hourly_levels.add_argument("--save-empty-charts", type=_str_to_bool, default=False)
     hourly_levels.add_argument("--progress-every-symbols", type=_positive_int_for("--progress-every-symbols"), default=5)
     hourly_levels.add_argument("--progress-min-seconds", type=float, default=5.0)

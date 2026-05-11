@@ -17,6 +17,8 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P138 | Make hourly-level chart text ASCII-safe | PROPOSED | `research_tools/hourly_levels.py`, `research/*` | diagnostics | Avoid matplotlib missing-glyph warning spam by rendering non-ASCII symbols as escaped ASCII in chart titles/filenames. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; run `run-hourly-levels` on symbols with non-ASCII names. |
 | P139 | Add hourly-level scan progress and ETA | PROPOSED | `research_tools/hourly_levels.py`, `cli/*`, `research/*` | diagnostics | Emit start/progress lines with processed count, elapsed time, ETA, levels, chart count and last symbol status during long all-cache hourly-level scans. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; run `run-hourly-levels` and verify progress appears before completion. |
 | P140 | Humanize and de-spike hourly levels | PROPOSED | `research_tools/hourly_levels.py`, `cli/parser.py`, `research/*` | diagnostics | Draw dark bot-style charts, count retouches only after a meaningful reset away from the level, cap nearby levels per symbol, draw levels from first valid touch, and reject pierced/spiked-through resistance levels by default. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; rerun `run-hourly-levels` with pierced-level guard enabled. |
+| P141 | Speed up hourly-level scan and chart run | PROPOSED | `research_tools/hourly_levels.py`, `cli/parser.py`, `research/*` | diagnostics | Read only scanner-needed parquet columns, trim stale source candles before 1h aggregation, and replace expensive pandas per-row/copy checks in touch/break/pierce logic with numpy scans. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; rerun `run-hourly-levels` and compare elapsed_seconds. |
+| P142 | Remove hourly chart tight-layout pass | PROPOSED | `research_tools/hourly_levels.py`, `research/*` | diagnostics | Replace matplotlib `tight_layout()` with fixed subplot margins to avoid warning spam and avoid an unnecessary per-chart layout solver pass. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; run chart export and confirm no tight_layout warning. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -362,3 +364,60 @@ python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3
 ### Risk
 
 Low/medium for diagnostics: the scanner will output fewer levels, and some previously visible wick-spiked levels will disappear. Trading/live/backtest execution logic is unchanged.
+
+## P141 — Speed up hourly-level scan and chart run
+
+Status: PROPOSED
+Date: 2026-05-11
+Commit: UNKNOWN
+
+### Reason
+
+`run-hourly-levels` was doing avoidable work: loading every parquet column, resampling the full cached history even when only the recent `days/lookback_bars` window is needed, and using pandas row/copy loops inside per-level touch, break and pierce checks. Chart runs then paid that cost for every scanned symbol before saving review images.
+
+### Change
+
+- Read only OHLCV columns used by the hourly-level scanner instead of full parquet payloads.
+- Add `--fast-source-trim true` default: trim raw cached candles to the needed recent 1h review window plus buffer before aggregation.
+- Replace per-row `iterrows()` touch detection with numpy candidate-index scanning while preserving the retouch re-arm rule.
+- Replace break/pierce dataframe copies with numpy slices.
+- Progress start line now reports whether fast source trimming is enabled.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --touch-tolerance-pct 0.006 --fast-source-trim true --progress-every-symbols 5 --progress-min-seconds 5
+```
+
+### Risk
+
+Low/medium for diagnostics. Source pre-trim intentionally keeps a buffer before the final review window; disabling `--fast-source-trim false` restores the slower full-source aggregation path for exact forensic comparison. Trading/live/backtest execution is unchanged.
+
+
+## P142 — Remove hourly chart tight-layout pass
+
+Status: PROPOSED
+Date: 2026-05-11
+Commit: UNKNOWN
+
+### Reason
+
+After the humanized chart layout, `matplotlib` warns that the figure contains axes not compatible with `tight_layout()`. The warning is caused by right-side price tags drawn outside the axes; `tight_layout()` is also unnecessary work on every saved chart.
+
+### Change
+
+- Replace `fig.tight_layout()` in hourly-level chart export with explicit `fig.subplots_adjust(...)` margins.
+- Reserve fixed right margin for price tags instead of asking matplotlib's layout solver to infer it.
+- Do not suppress warnings globally; remove the warning source.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --fast-source-trim true
+```
+
+### Risk
+
+Low: chart layout only. Level detection, CSV metrics, live trading and backtest behavior are unchanged.

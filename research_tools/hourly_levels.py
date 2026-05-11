@@ -17,6 +17,10 @@ import pandas as pd
 
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.timeframe import Timeframe
+_HOURLY_LEVEL_REQUIRED_COLUMNS = ("timestamp", "open", "high", "low", "close")
+_HOURLY_LEVEL_OPTIONAL_COLUMNS = ("volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume")
+_HOUR_MS = 3_600_000
+
 from research_tools.charting import (
     CHART_AXIS_FACE,
     CHART_DOWN,
@@ -68,6 +72,7 @@ class HourlyLevelScanConfig:
     max_levels_per_symbol: int = 4
     reject_pierced_levels: bool = True
     max_level_pierce_pct: float = 0.015
+    fast_source_trim: bool = True
     save_empty_charts: bool = False
     progress_every_symbols: int = 5
     progress_min_seconds: float = 5.0
@@ -226,14 +231,43 @@ def _discover_cached_symbols(cache_dir: Path, timeframe: Timeframe) -> list[str]
     return symbols
 
 
+def _cached_data_path(cache_dir: Path, symbol: str, timeframe: Timeframe) -> Path:
+    return cache_dir / ParquetStorage.encode_symbol_for_path(symbol) / timeframe.value / "data.parquet"
+
+
+def _read_parquet_columns(path: Path) -> list[str] | None:
+    """Return the small column subset needed by the scanner, or None if schema inspection is unavailable."""
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        return None
+
+    try:
+        schema_names = set(pq.read_schema(path).names)
+    except Exception:
+        return None
+
+    requested = [*_HOURLY_LEVEL_REQUIRED_COLUMNS, *_HOURLY_LEVEL_OPTIONAL_COLUMNS]
+    available = [column for column in requested if column in schema_names]
+    return available or None
+
+
 def _read_cached_frame(cache_dir: Path, symbol: str, timeframe: Timeframe) -> tuple[pd.DataFrame, Path]:
-    storage = ParquetStorage(base_dir=cache_dir)
-    result = storage.load_result(symbol, timeframe)
-    if not result.ok:
-        return pd.DataFrame(), result.path
-    frame = result.frame.copy()
+    path = _cached_data_path(cache_dir, symbol, timeframe)
+    if not path.exists():
+        return pd.DataFrame(), path
+
+    try:
+        columns = _read_parquet_columns(path)
+        frame = pd.read_parquet(path, columns=columns) if columns is not None else pd.read_parquet(path)
+    except Exception:
+        return pd.DataFrame(), path
+
+    if frame.empty:
+        return pd.DataFrame(), path
+
     frame = frame.drop_duplicates("timestamp", keep="last").sort_values("timestamp").reset_index(drop=True)
-    return frame, result.path
+    return frame, path
 
 
 def _prepare_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
@@ -287,6 +321,28 @@ def _trim_to_recent_window(frame_1h: pd.DataFrame, days: int, lookback_bars: int
     trimmed = frame_1h.loc[frame_1h["timestamp"].ge(min_ts)].copy()
     if lookback_bars > 0 and len(trimmed) > lookback_bars:
         trimmed = trimmed.tail(lookback_bars).copy()
+    trimmed.reset_index(drop=True, inplace=True)
+    return trimmed
+
+
+def _trim_source_frame_for_hourly(frame: pd.DataFrame, config: HourlyLevelScanConfig) -> pd.DataFrame:
+    """Trim raw cached candles before 1h aggregation to avoid resampling stale history."""
+    if not config.fast_source_trim or frame.empty or "timestamp" not in frame.columns:
+        return frame
+
+    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce")
+    latest_ts = _safe_float(timestamps.max())
+    if latest_ts is None:
+        return frame
+
+    days_hours = max(int(config.days) * 24, 1)
+    lookback_hours = int(config.lookback_bars) if config.lookback_bars > 0 else days_hours
+    target_hours = min(days_hours, lookback_hours)
+    buffer_hours = max(24, config.bounce_lookahead_bars + config.recent_move_lookback_bars + config.pivot_side_bars * 2)
+    min_ts = int(latest_ts) - (target_hours + buffer_hours) * _HOUR_MS
+    trimmed = frame.loc[timestamps.ge(min_ts)].copy()
+    if trimmed.empty:
+        return frame
     trimmed.reset_index(drop=True, inplace=True)
     return trimmed
 
@@ -378,42 +434,53 @@ def _touch_reactions(
     min_retouch_distance_pct: float,
 ) -> list[TouchReaction]:
     touches: list[TouchReaction] = []
+    if frame.empty or level_price <= 0.0:
+        return touches
+
     band_low = level_price * (1.0 - tolerance_pct)
     band_high = level_price * (1.0 + tolerance_pct)
     rearm_price = level_price * (1.0 - max(min_retouch_distance_pct, tolerance_pct))
+
+    timestamps = frame["timestamp"].astype("int64").to_numpy()
+    highs = frame["high"].astype(float).to_numpy()
+    lows = frame["low"].astype(float).to_numpy()
+    closes = frame["close"].astype(float).to_numpy()
+    candidate_indices = np.flatnonzero((highs >= band_low) & (lows <= band_high))
+    if candidate_indices.size == 0:
+        return touches
+
     armed = True
-
-    for idx, row in frame.iterrows():
-        high = float(row["high"])
-        low = float(row["low"])
-        close = float(row["close"])
-
+    last_touch_idx = -1
+    frame_len = len(frame)
+    for idx_raw in candidate_indices.tolist():
+        idx = int(idx_raw)
         if not armed:
-            if low <= rearm_price or close <= rearm_price:
+            reset_lows = lows[last_touch_idx + 1: idx + 1]
+            reset_closes = closes[last_touch_idx + 1: idx + 1]
+            if reset_lows.size and (float(np.min(reset_lows)) <= rearm_price or float(np.min(reset_closes)) <= rearm_price):
                 armed = True
             else:
                 continue
 
-        if high < band_low or low > band_high:
+        future_start = idx + 1
+        if future_start >= frame_len:
             continue
-
-        future = frame.iloc[idx + 1: idx + 1 + bounce_lookahead_bars]
-        if future.empty:
-            continue
-        forward_low = float(future["low"].min())
-        touch_high = max(high, level_price)
+        future_end = min(future_start + bounce_lookahead_bars, frame_len)
+        forward_low = float(np.min(lows[future_start:future_end]))
+        touch_high = max(float(highs[idx]), level_price)
         reaction_pct = max((touch_high - forward_low) / touch_high, 0.0) if touch_high > 0.0 else 0.0
         touches.append(
             TouchReaction(
-                timestamp_ms=int(row["timestamp"]),
-                timestamp_utc=_timestamp_to_utc(int(row["timestamp"])),
+                timestamp_ms=int(timestamps[idx]),
+                timestamp_utc=_timestamp_to_utc(int(timestamps[idx])),
                 touch_high=touch_high,
-                close=close,
+                close=float(closes[idx]),
                 reaction_pct=reaction_pct,
                 valid=reaction_pct >= min_bounce_pct,
             )
         )
         armed = False
+        last_touch_idx = idx
     return touches
 
 
@@ -425,20 +492,25 @@ def _level_pierce_stats(
     accepted_close_tolerance_pct: float,
     min_pierce_pct: float,
 ) -> tuple[int, float]:
-    after = frame.loc[frame["timestamp"].ge(after_timestamp_ms)].copy()
-    if after.empty or level_price <= 0.0:
+    if frame.empty or level_price <= 0.0:
         return 0, 0.0
 
-    highs = after["high"].astype(float)
-    closes = after["close"].astype(float)
+    timestamps = frame["timestamp"].astype("int64").to_numpy()
+    start_idx = int(np.searchsorted(timestamps, int(after_timestamp_ms), side="left"))
+    if start_idx >= len(frame):
+        return 0, 0.0
+
+    highs = frame["high"].astype(float).to_numpy()[start_idx:]
+    closes = frame["close"].astype(float).to_numpy()[start_idx:]
     pierce_pct = (highs / level_price) - 1.0
     rejected_pierce = (
-        pierce_pct.gt(max(min_pierce_pct, 0.0))
-        & closes.le(level_price * (1.0 + accepted_close_tolerance_pct))
+        pierce_pct > max(min_pierce_pct, 0.0)
+    ) & (
+        closes <= level_price * (1.0 + accepted_close_tolerance_pct)
     )
-    if not bool(rejected_pierce.any()):
+    if not bool(np.any(rejected_pierce)):
         return 0, 0.0
-    return int(rejected_pierce.sum()), float(pierce_pct.loc[rejected_pierce].max())
+    return int(np.sum(rejected_pierce)), float(np.max(pierce_pct[rejected_pierce]))
 
 
 def _select_major_levels(
@@ -464,12 +536,16 @@ def _has_held_break_above(
     close_tolerance_pct: float,
     hold_bars: int,
 ) -> bool:
-    if hold_bars <= 0:
+    if hold_bars <= 0 or frame.empty:
         return False
-    after = frame.loc[frame["timestamp"].gt(after_timestamp_ms)].copy()
-    if after.empty:
+
+    timestamps = frame["timestamp"].astype("int64").to_numpy()
+    start_idx = int(np.searchsorted(timestamps, int(after_timestamp_ms), side="right"))
+    if start_idx >= len(frame):
         return False
-    closes_above = after["close"].astype(float).gt(level_price * (1.0 + close_tolerance_pct))
+
+    closes = frame["close"].astype(float).to_numpy()[start_idx:]
+    closes_above = closes > level_price * (1.0 + close_tolerance_pct)
     run = 0
     for is_above in closes_above.tolist():
         run = run + 1 if bool(is_above) else 0
@@ -641,6 +717,18 @@ def _draw_volume_panel(volume_ax: object, chart_frame: pd.DataFrame, x_values: n
         volume_ax.set_ylim(0.0, float(np.nanmax(volumes)) * 1.25)
 
 
+def _apply_hourly_chart_layout(fig: object) -> None:
+    # Fixed layout is intentional here. tight_layout is slower and warns with our
+    # right-side axis tags, because those labels are drawn outside the axes.
+    fig.subplots_adjust(
+        left=0.055,
+        right=0.855,
+        top=0.925,
+        bottom=0.075,
+        hspace=0.035,
+    )
+
+
 def save_hourly_level_chart(symbol: str, frame_1h: pd.DataFrame, levels: list[HourlyLevelMetric], output_path: Path, chart_bars: int) -> None:
     import matplotlib.pyplot as plt
 
@@ -746,7 +834,7 @@ def save_hourly_level_chart(symbol: str, frame_1h: pd.DataFrame, levels: list[Ho
     price_ax.set_title(f"{chart_symbol} 1h overhead levels", fontsize=15, color=CHART_TEXT, pad=12, weight="bold")
     price_ax.set_ylabel("Price", fontsize=8, color=CHART_MUTED)
     price_ax.set_xlim(-1, len(chart_frame) + 2)
-    fig.tight_layout()
+    _apply_hourly_chart_layout(fig)
     fig.savefig(output_path, **CHART_SAVEFIG_KWARGS)
     plt.close(fig)
 
@@ -783,7 +871,8 @@ def run_hourly_level_scan(
         "1h level scan started: "
         f"symbols={len(symbols)}, source_timeframe={config.source_timeframe.value}, "
         f"days={config.days}, min_touches={config.min_touches}, "
-        f"min_bounce_pct={config.min_bounce_pct:.2%}, output_dir={output_dir}"
+        f"min_bounce_pct={config.min_bounce_pct:.2%}, fast_source_trim={config.fast_source_trim}, "
+        f"output_dir={output_dir}"
     )
 
     for processed_count, symbol in enumerate(symbols, start=1):
@@ -796,6 +885,7 @@ def run_hourly_level_scan(
                 last_reason = "source_cache_missing_or_empty"
                 status_rows.append(asdict(SymbolScanStatus(symbol, last_status, last_reason, source_path=str(source_path))))
             else:
+                source_frame = _trim_source_frame_for_hourly(source_frame, config)
                 frame_1h = _aggregate_to_1h(source_frame, config.source_timeframe)
                 frame_1h = _trim_to_recent_window(frame_1h, config.days, config.lookback_bars)
                 if frame_1h.empty:
@@ -929,6 +1019,7 @@ def build_config_from_namespace(args: object, *, cache_dir: Path, results_dir: P
         max_levels_per_symbol=int(getattr(args, "max_levels_per_symbol", 4)),
         reject_pierced_levels=bool(getattr(args, "reject_pierced_levels", True)),
         max_level_pierce_pct=float(getattr(args, "max_level_pierce_pct", 0.015)),
+        fast_source_trim=bool(getattr(args, "fast_source_trim", True)),
         save_empty_charts=bool(getattr(args, "save_empty_charts", False)),
         progress_every_symbols=int(getattr(args, "progress_every_symbols", 5)),
         progress_min_seconds=float(getattr(args, "progress_min_seconds", 5.0)),

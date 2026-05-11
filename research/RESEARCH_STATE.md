@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P140 proposed locally on top of ZIP-derived source
-Last active patch: P140 humanized/de-spiked hourly levels
+Local patch stack: P130-P142 proposed locally on top of ZIP-derived source
+Last active patch: P142 hourly chart fixed layout
 Updated: 2026-05-11
 ```
 
@@ -185,4 +185,32 @@ Next verification:
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --touch-tolerance-pct 0.006 --reject-pierced-levels true --max-level-pierce-pct 0.015 --max-levels-per-symbol 4
+```
+
+
+---
+
+## 15. Current audit note — P141
+
+P141 is diagnostics-only. It speeds up `run-hourly-levels` by reducing parquet payloads, trimming source candles before 1h aggregation, and replacing pandas row/copy loops in level validation with numpy scans. Use `--fast-source-trim false` only when an exact full-history aggregation comparison is needed.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --fast-source-trim true
+```
+
+
+---
+
+## 16. Current audit note — P142
+
+P142 is diagnostics/chart-output only. It removes the `tight_layout()` solver from hourly-level charts and uses explicit subplot margins because the chart intentionally draws price tags outside the right edge of the price panel. This removes the warning and avoids a small per-chart layout cost.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --fast-source-trim true
 ```

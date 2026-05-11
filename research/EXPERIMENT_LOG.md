@@ -310,3 +310,49 @@ Next:
 ```bash
 python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --touch-tolerance-pct 0.006 --reject-pierced-levels true --max-level-pierce-pct 0.015 --max-levels-per-symbol 4 --progress-every-symbols 5 --progress-min-seconds 5 --output-dir results/hourly_levels_manual_review
 ```
+
+
+---
+
+## 2026-05-11 — P141 hourly-level speedup
+
+Input:
+
+```text
+Need to reduce time spent scanning hourly levels and generating review charts; current full-cache runs are slower than necessary.
+```
+
+Result:
+
+```text
+Patch proposed. The scanner reads only needed parquet columns, trims source candles before 1h aggregation, and uses numpy scans for touch/break/pierce validation.
+```
+
+Next:
+
+```bash
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --touch-tolerance-pct 0.006 --fast-source-trim true --progress-every-symbols 5 --progress-min-seconds 5 --output-dir results/hourly_levels_manual_review
+```
+
+
+---
+
+## 2026-05-11 — P142 hourly-level chart layout warning cleanup
+
+Input:
+
+```text
+During fast hourly-level scan, chart export emitted: `UserWarning: This figure includes Axes that are not compatible with tight_layout, so results might be incorrect.`
+```
+
+Result:
+
+```text
+Patch proposed. Chart export now uses fixed subplot margins instead of `tight_layout()`, so right-side price tags are supported without warning spam and without a per-chart layout solver pass.
+```
+
+Next:
+
+```bash
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --fast-source-trim true --output-dir results/hourly_levels_manual_review
+```
