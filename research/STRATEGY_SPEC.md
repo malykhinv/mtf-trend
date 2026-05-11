@@ -73,6 +73,17 @@ timeout
 fees/slippage assumptions
 ```
 
+Live execution contract:
+
+```text
+signal_entry_price/time != actual_fill_price/time
+actual fill must come from exchange order/trade payloads
+no candle/ticker-derived synthetic fill for ledger/PnL
+no stale signal order after freshness window
+no order if TP1 is already reached or RR collapsed at live price
+BE/TP/PnL are computed from actual fill, not signal close
+```
+
 ---
 
 ## 5. Exit logic

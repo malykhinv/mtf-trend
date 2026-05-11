@@ -53,3 +53,30 @@ summary metrics
 reject/status distribution
 no hidden fallback for core evidence
 ```
+
+
+---
+
+## 2026-05-11 — NVDA micro-live execution audit
+
+Input:
+
+```text
+Run artifact: 20260511_134124
+Symbol: NVDA/USDT:USDT
+Observed issue: plotted entry time near live order handling, but entry price from older signal close
+```
+
+Conclusion:
+
+```text
+The position is invalid for edge/PnL measurement.
+The runner selected an old backfilled signal and then recorded/managed the trade using signal entry price instead of verified exchange fill.
+A live-realistic backtest must not enter at decision close for market entries.
+```
+
+Action:
+
+```text
+P130 proposed: strict fill resolution, stale/executability rejects, actual-fill PnL/TP/BE, and execution-candle market backtest.
+```

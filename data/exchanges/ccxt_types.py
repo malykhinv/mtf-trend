@@ -2,7 +2,22 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol, TypedDict, runtime_checkable
+
+
+@dataclass(frozen=True, slots=True)
+class ExchangeOrderFill:
+    """Normalized executed order fill. Missing execution fields are not inferred from candles."""
+
+    order_id: str
+    status: str
+    timestamp_ms: int
+    average_price: float
+    filled_amount: float
+    cost: float | None = None
+    fee_cost: float | None = None
+    fee_currency: str | None = None
 
 
 class CcxtClientOptions(TypedDict, total=False):

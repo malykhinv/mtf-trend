@@ -25,6 +25,7 @@ from data.exchanges.ccxt_types import (
     CcxtBinanceKlineApi,
     CcxtClientOptions,
     CcxtFuturesApi,
+    ExchangeOrderFill,
     CcxtOpenInterestApi,
 )
 from domain.abstract.exchange_client import ExchangeClient
@@ -278,6 +279,27 @@ class CcxtFuturesClient(ExchangeClient):
             raise RuntimeError("fetch_balance has no free USDT value")
         return float(free["USDT"])
 
+    def fetch_last_price(self, symbol: str) -> float:
+        """Returns current exchange last/mark price from ticker payload; missing price is a hard error."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        payload = self._retry_exchange_call(
+            operation="ccxt_fetch_ticker",
+            symbol=symbol,
+            endpoint="fetch_ticker",
+            call=raw_client.fetch_ticker,
+            args=(symbol,),
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("fetch_ticker returned invalid payload")
+        price = self._first_finite_float(payload.get("last"))
+        info = payload.get("info")
+        if price is None and isinstance(info, dict):
+            price = self._first_finite_float(info.get("lastPrice"))
+        if price is None or price <= 0.0:
+            raise RuntimeError("fetch_ticker returned no finite positive last price")
+        return price
+
     def create_market_order(self, symbol: str, side: str, amount: float, *, reduce_only: bool = False) -> dict[str, object]:
         """Places a real REST market order through CCXT."""
         self._ensure_markets_loaded()
@@ -294,6 +316,205 @@ class CcxtFuturesClient(ExchangeClient):
         if not isinstance(payload, dict):
             raise RuntimeError("create_order returned invalid payload")
         return dict(payload)
+
+    def create_market_order_with_fill(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        *,
+        reduce_only: bool = False,
+    ) -> ExchangeOrderFill:
+        """Places a market order and returns verified execution fill fields.
+
+        The method deliberately does not infer execution price from candles or current ticker.
+        If exchange order/trade payloads do not expose fill price and amount, the caller
+        gets a hard error instead of an optimistic synthetic fill.
+        """
+        order = self.create_market_order(symbol, side, amount, reduce_only=reduce_only)
+        order_id = str(order.get("id") or "").strip()
+        if not order_id:
+            raise RuntimeError("create_order returned no order id")
+        return self.fetch_order_fill(symbol, order_id, submitted_order=order)
+
+    def fetch_order_fill(
+        self,
+        symbol: str,
+        order_id: str,
+        *,
+        submitted_order: dict[str, object] | None = None,
+    ) -> ExchangeOrderFill:
+        """Returns normalized fill for an existing order; unresolved fill is a hard error."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        payloads: list[dict[str, object]] = []
+        if submitted_order is not None:
+            payloads.append(dict(submitted_order))
+        fetched = self._retry_exchange_call(
+            operation="ccxt_fetch_order",
+            symbol=symbol,
+            endpoint="fetch_order",
+            call=raw_client.fetch_order,
+            args=(order_id, symbol),
+        )
+        if not isinstance(fetched, dict):
+            raise RuntimeError("fetch_order returned invalid payload")
+        payloads.append(dict(fetched))
+        trades = self.fetch_my_trades_for_order(symbol, order_id)
+        fill = self._normalize_order_fill(order_id=order_id, order_payloads=payloads, trade_payloads=trades)
+        if fill is None:
+            raise RuntimeError(f"order fill unresolved: symbol={symbol} order_id={order_id}")
+        return fill
+
+    def fetch_my_trades_for_order(self, symbol: str, order_id: str) -> list[dict[str, object]]:
+        """Returns account trades for one order id through CCXT."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        payload = self._retry_exchange_call(
+            operation="ccxt_fetch_my_trades_for_order",
+            symbol=symbol,
+            endpoint="fetch_my_trades",
+            call=raw_client.fetch_my_trades,
+            args=(symbol, None, None),
+            params={"orderId": order_id},
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError("fetch_my_trades returned invalid payload")
+        return [dict(row) for row in payload if isinstance(row, dict)]
+
+    @classmethod
+    def _normalize_order_fill(
+        cls,
+        *,
+        order_id: str,
+        order_payloads: list[dict[str, object]],
+        trade_payloads: list[dict[str, object]],
+    ) -> ExchangeOrderFill | None:
+        for payload in reversed(order_payloads):
+            status = str(payload.get("status") or "").lower()
+            timestamp_ms = cls._first_finite_int(payload.get("timestamp"), payload.get("lastTradeTimestamp"))
+            average_price = cls._first_finite_float(payload.get("average"))
+            filled_amount = cls._first_finite_float(payload.get("filled"))
+            cost = cls._first_finite_float(payload.get("cost"))
+            info = payload.get("info")
+            if isinstance(info, dict):
+                timestamp_ms = timestamp_ms or cls._first_finite_int(
+                    info.get("updateTime"),
+                    info.get("time"),
+                    info.get("transactTime"),
+                )
+                average_price = average_price or cls._first_finite_float(info.get("avgPrice"))
+                filled_amount = filled_amount or cls._first_finite_float(
+                    info.get("executedQty"),
+                    info.get("cumQty"),
+                )
+                cost = cost or cls._first_finite_float(
+                    info.get("cumQuote"),
+                    info.get("cummulativeQuoteQty"),
+                )
+            fee_cost, fee_currency = cls._extract_fee(payload.get("fee"))
+            if timestamp_ms is not None and average_price and filled_amount:
+                if cost is None and trade_payloads:
+                    cost = cls._sum_trade_cost(trade_payloads)
+                return ExchangeOrderFill(
+                    order_id=order_id,
+                    status=status or "unknown",
+                    timestamp_ms=timestamp_ms,
+                    average_price=average_price,
+                    filled_amount=filled_amount,
+                    cost=cost,
+                    fee_cost=fee_cost,
+                    fee_currency=fee_currency,
+                )
+
+        if not trade_payloads:
+            return None
+        total_amount = 0.0
+        total_cost = 0.0
+        timestamps: list[int] = []
+        fee_cost_total = 0.0
+        fee_currency: str | None = None
+        for trade in trade_payloads:
+            amount = cls._first_finite_float(trade.get("amount"))
+            price = cls._first_finite_float(trade.get("price"))
+            cost = cls._first_finite_float(trade.get("cost"))
+            timestamp_ms = cls._first_finite_int(trade.get("timestamp"))
+            if timestamp_ms is not None:
+                timestamps.append(timestamp_ms)
+            if amount is None or amount <= 0.0:
+                return None
+            if cost is None:
+                if price is None or price <= 0.0:
+                    return None
+                cost = price * amount
+            total_amount += amount
+            total_cost += cost
+            fee_cost, current_fee_currency = cls._extract_fee(trade.get("fee"))
+            if fee_cost is not None:
+                fee_cost_total += fee_cost
+                fee_currency = fee_currency or current_fee_currency
+        if total_amount <= 0.0 or total_cost <= 0.0 or not timestamps:
+            return None
+        return ExchangeOrderFill(
+            order_id=order_id,
+            status="closed",
+            timestamp_ms=max(timestamps),
+            average_price=total_cost / total_amount,
+            filled_amount=total_amount,
+            cost=total_cost,
+            fee_cost=fee_cost_total if fee_cost_total > 0.0 else None,
+            fee_currency=fee_currency,
+        )
+
+    @staticmethod
+    def _extract_fee(payload: object) -> tuple[float | None, str | None]:
+        if not isinstance(payload, dict):
+            return None, None
+        cost = CcxtFuturesClient._first_finite_float(payload.get("cost"))
+        currency = payload.get("currency")
+        return cost, str(currency) if isinstance(currency, str) and currency else None
+
+    @staticmethod
+    def _sum_trade_cost(trades: list[dict[str, object]]) -> float | None:
+        total = 0.0
+        seen = False
+        for trade in trades:
+            cost = CcxtFuturesClient._first_finite_float(trade.get("cost"))
+            if cost is None:
+                amount = CcxtFuturesClient._first_finite_float(trade.get("amount"))
+                price = CcxtFuturesClient._first_finite_float(trade.get("price"))
+                if amount is None or price is None:
+                    return None
+                cost = amount * price
+            total += cost
+            seen = True
+        return total if seen and total > 0.0 else None
+
+    @staticmethod
+    def _first_finite_float(*values: object) -> float | None:
+        for value in values:
+            if value is None or value == "":
+                continue
+            try:
+                parsed = float(cast(Any, value))
+            except (TypeError, ValueError):
+                continue
+            if isfinite(parsed):
+                return parsed
+        return None
+
+    @staticmethod
+    def _first_finite_int(*values: object) -> int | None:
+        for value in values:
+            if value is None or value == "":
+                continue
+            try:
+                parsed = int(float(cast(Any, value)))
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                return parsed
+        return None
 
     def create_stop_market_order(self, symbol: str, side: str, amount: float, stop_price: float) -> dict[str, object]:
         """Places a reduce-only STOP_MARKET order. If this fails, caller must close exposure immediately."""

@@ -39,9 +39,19 @@ LIVE_LEDGER_COLUMNS = (
     "opened_at_utc",
     "closed_at_utc",
     "entry_price",
+    "signal_entry_price",
+    "entry_fill_timestamp_ms",
+    "entry_order_submitted_at_ms",
+    "entry_order_status",
     "stop_price",
     "tp1_price",
     "amount",
+    "entry_filled_amount",
+    "entry_cost_usdt",
+    "entry_fee_usdt",
+    "pre_position_amount",
+    "post_position_amount",
+    "position_delta_amount",
     "notional_usdt",
     "risk_usdt",
     "realized_pnl_usdt",
@@ -143,6 +153,10 @@ class LiveAnomalyConfig:
     inactive_batch_size: int = 20
     inactive_batch_with_active: int = 7
     signal_scan_backfill_candles: int = 10
+    max_signal_age_ms: int = 60_000
+    max_entry_price_drift_pct: float = 0.003
+    min_executable_rr_to_signal_tp1: float = 0.75
+    max_position_amount_slippage_ratio: float = 0.05
     scan_sleep_seconds: float = 2.0
     network_sleep_seconds: float = 30.0
     max_cycles: int | None = None
@@ -198,6 +212,19 @@ class LivePosition:
     stop_order_id: str
     opened_at_utc: str
     opened_at_ms: int
+    entry_price: float
+    stop_price: float
+    tp1_price: float
+    initial_risk: float
+    entry_fill_timestamp_ms: int
+    entry_order_submitted_at_ms: int
+    entry_order_status: str
+    entry_filled_amount: float
+    entry_cost_usdt: float | None
+    entry_fee_usdt: float | None
+    pre_position_amount: float
+    post_position_amount: float
+    position_delta_amount: float
     telegram_open_message_id: int | None = None
     telegram_stop_message_id: int | None = None
     remaining_amount: float = 0.0
@@ -384,10 +411,20 @@ class LiveArtifactWriter:
                     "session": signal.session,
                     "opened_at_utc": position.opened_at_utc,
                     "closed_at_utc": "",
-                    "entry_price": signal.entry_price,
-                    "stop_price": signal.stop_price,
-                    "tp1_price": signal.tp1_price,
+                    "entry_price": position.entry_price,
+                    "signal_entry_price": signal.entry_price,
+                    "entry_fill_timestamp_ms": position.entry_fill_timestamp_ms,
+                    "entry_order_submitted_at_ms": position.entry_order_submitted_at_ms,
+                    "entry_order_status": position.entry_order_status,
+                    "stop_price": position.stop_price,
+                    "tp1_price": position.tp1_price,
                     "amount": position.amount,
+                    "entry_filled_amount": position.entry_filled_amount,
+                    "entry_cost_usdt": position.entry_cost_usdt if position.entry_cost_usdt is not None else "",
+                    "entry_fee_usdt": position.entry_fee_usdt if position.entry_fee_usdt is not None else "",
+                    "pre_position_amount": position.pre_position_amount,
+                    "post_position_amount": position.post_position_amount,
+                    "position_delta_amount": position.position_delta_amount,
                     "notional_usdt": position.notional_usdt,
                     "risk_usdt": position.risk_usdt,
                     "realized_pnl_usdt": "",
@@ -423,10 +460,20 @@ class LiveArtifactWriter:
                     "session": signal.session,
                     "opened_at_utc": position.opened_at_utc,
                     "closed_at_utc": datetime.now(UTC).isoformat(),
-                    "entry_price": signal.entry_price,
-                    "stop_price": signal.stop_price,
-                    "tp1_price": signal.tp1_price,
+                    "entry_price": position.entry_price,
+                    "signal_entry_price": signal.entry_price,
+                    "entry_fill_timestamp_ms": position.entry_fill_timestamp_ms,
+                    "entry_order_submitted_at_ms": position.entry_order_submitted_at_ms,
+                    "entry_order_status": position.entry_order_status,
+                    "stop_price": position.stop_price,
+                    "tp1_price": position.tp1_price,
                     "amount": position.amount,
+                    "entry_filled_amount": position.entry_filled_amount,
+                    "entry_cost_usdt": position.entry_cost_usdt if position.entry_cost_usdt is not None else "",
+                    "entry_fee_usdt": position.entry_fee_usdt if position.entry_fee_usdt is not None else "",
+                    "pre_position_amount": position.pre_position_amount,
+                    "post_position_amount": position.post_position_amount,
+                    "position_delta_amount": position.position_delta_amount,
                     "notional_usdt": position.notional_usdt,
                     "risk_usdt": position.risk_usdt,
                     "realized_pnl_usdt": pnl_usdt,
@@ -1132,28 +1179,40 @@ class AnomalyMicroLiveRunner:
             self.artifacts.append_event("reject_max_positions", signal.symbol, {"max": self.config.max_open_positions})
             return
         try:
+            if not self._validate_signal_freshness(signal):
+                return
+            pre_position_amount = float(self.exchange.fetch_symbol_position_amount(signal.symbol))
+            if not math.isfinite(pre_position_amount):
+                self.artifacts.append_event(
+                    "reject_invalid_existing_exchange_position",
+                    signal.symbol,
+                    {"exchange_position_amount": _finite_or_none(pre_position_amount)},
+                )
+                return
+            if abs(pre_position_amount) > 0.0:
+                self.artifacts.append_event(
+                    "reject_existing_exchange_position",
+                    signal.symbol,
+                    {"exchange_position_amount": pre_position_amount},
+                )
+                return
+            live_price = float(self.exchange.fetch_last_price(signal.symbol))
+            if not self._validate_signal_executable(signal, live_price=live_price):
+                return
             try:
                 balance = float(self.exchange.fetch_usdt_free_balance())
             except (TypeError, ValueError) as exc:
                 self.artifacts.append_event("reject_invalid_free_balance", signal.symbol, {"free_usdt": None, "reason": str(exc)})
-                with self._state_lock:
-                    self._opening_symbols.discard(symbol_key)
                 return
             if not math.isfinite(balance):
                 self.artifacts.append_event("reject_invalid_free_balance", signal.symbol, {"free_usdt": None})
-                with self._state_lock:
-                    self._opening_symbols.discard(symbol_key)
                 return
             if balance <= 0.0:
                 self.artifacts.append_event("reject_no_free_balance", signal.symbol, {"free_usdt": balance})
-                with self._state_lock:
-                    self._opening_symbols.discard(symbol_key)
                 return
             notional = self.config.position_notional_usdt
             if not math.isfinite(notional) or notional <= 0.0:
                 self.artifacts.append_event("reject_invalid_position_notional", signal.symbol, {"position_notional": _finite_or_none(notional)})
-                with self._state_lock:
-                    self._opening_symbols.discard(symbol_key)
                 return
             if balance < notional:
                 self.artifacts.append_event(
@@ -1161,42 +1220,98 @@ class AnomalyMicroLiveRunner:
                     signal.symbol,
                     {"free_usdt": balance, "position_notional": notional},
                 )
-                with self._state_lock:
-                    self._opening_symbols.discard(symbol_key)
                 return
-            risk_per_unit = signal.entry_price - signal.stop_price
-            amount_by_risk = notional / signal.entry_price
-            actual_risk_usdt = amount_by_risk * risk_per_unit
-            entry_order = self.exchange.create_market_order(signal.symbol, "buy", amount_by_risk)
-            entry_order_id = str(entry_order.get("id", ""))
+            amount_requested = notional / live_price
+            if not math.isfinite(amount_requested) or amount_requested <= 0.0:
+                self.artifacts.append_event(
+                    "reject_invalid_order_amount",
+                    signal.symbol,
+                    {"live_price": _finite_or_none(live_price), "position_notional": _finite_or_none(notional)},
+                )
+                return
+            entry_order_submitted_at_ms = int(time.time() * 1000)
+            fill = self.exchange.create_market_order_with_fill(signal.symbol, "buy", amount_requested)
+            post_position_amount = float(self.exchange.fetch_symbol_position_amount(signal.symbol))
+            position_delta_amount = post_position_amount - pre_position_amount
+            if not math.isfinite(post_position_amount) or not math.isfinite(position_delta_amount):
+                raise LiveDataIntegrityError(
+                    f"invalid post-entry position amount: symbol={signal.symbol} pre={pre_position_amount} post={post_position_amount}"
+                )
+            if position_delta_amount <= 0.0:
+                raise LiveDataIntegrityError(
+                    f"entry order filled but exchange position did not increase: symbol={signal.symbol} order_id={fill.order_id} "
+                    f"pre={pre_position_amount} post={post_position_amount}"
+                )
+            fill_position_slippage = abs(position_delta_amount - fill.filled_amount) / max(fill.filled_amount, 1e-12)
+            if fill_position_slippage > self.config.max_position_amount_slippage_ratio:
+                raise LiveDataIntegrityError(
+                    f"entry fill/position amount mismatch: symbol={signal.symbol} order_id={fill.order_id} "
+                    f"filled={fill.filled_amount} delta={position_delta_amount}"
+                )
+            actual_entry_price = float(fill.average_price)
+            actual_stop_price = float(signal.stop_price)
+            actual_initial_risk = actual_entry_price - actual_stop_price
+            actual_initial_risk_pct = _safe_divide(actual_initial_risk, actual_entry_price)
+            if not math.isfinite(actual_initial_risk) or actual_initial_risk <= 0.0:
+                self.exchange.create_market_order(signal.symbol, "sell", position_delta_amount, reduce_only=True)
+                raise LiveDataIntegrityError(
+                    f"invalid actual initial risk after fill: symbol={signal.symbol} entry={actual_entry_price} stop={actual_stop_price}"
+                )
+            if not math.isfinite(actual_initial_risk_pct) or actual_initial_risk_pct > self.config.max_initial_risk_pct:
+                self.exchange.create_market_order(signal.symbol, "sell", position_delta_amount, reduce_only=True)
+                raise LiveDataIntegrityError(
+                    f"actual initial risk too wide after fill: symbol={signal.symbol} risk_pct={actual_initial_risk_pct} "
+                    f"max={self.config.max_initial_risk_pct}"
+                )
+            actual_tp1_price = actual_entry_price + actual_initial_risk
+            actual_notional = actual_entry_price * position_delta_amount
+            actual_risk_usdt = position_delta_amount * actual_initial_risk
             try:
-                stop_order = self.exchange.create_stop_market_order(signal.symbol, "sell", amount_by_risk, signal.stop_price)
+                stop_order = self.exchange.create_stop_market_order(signal.symbol, "sell", position_delta_amount, actual_stop_price)
             except Exception:
-                self.exchange.create_market_order(signal.symbol, "sell", amount_by_risk, reduce_only=True)
+                self.exchange.create_market_order(signal.symbol, "sell", position_delta_amount, reduce_only=True)
                 raise
             stop_order_id = str(stop_order.get("id", ""))
-            opened_at_ms = int(time.time() * 1000)
+            if not stop_order_id:
+                self.exchange.create_market_order(signal.symbol, "sell", position_delta_amount, reduce_only=True)
+                raise LiveDataIntegrityError(f"stop order returned no id: symbol={signal.symbol}")
+            opened_at_ms = int(fill.timestamp_ms)
             position = LivePosition(
-                position_id=f"{signal.symbol.replace('/', '_').replace(':', '_')}_{signal.decision_timestamp_ms}",
+                position_id=f"{signal.symbol.replace('/', '_').replace(':', '_')}_{signal.decision_timestamp_ms}_{fill.order_id}",
                 signal=signal,
-                amount=float(amount_by_risk),
-                notional_usdt=float(notional),
+                amount=float(position_delta_amount),
+                notional_usdt=float(actual_notional),
                 risk_usdt=float(actual_risk_usdt),
-                entry_order_id=entry_order_id,
+                entry_order_id=fill.order_id,
                 stop_order_id=stop_order_id,
                 opened_at_utc=datetime.fromtimestamp(opened_at_ms / 1000, UTC).isoformat(),
                 opened_at_ms=opened_at_ms,
-                remaining_amount=float(amount_by_risk),
-                current_stop_price=float(signal.stop_price),
+                entry_price=actual_entry_price,
+                stop_price=actual_stop_price,
+                tp1_price=actual_tp1_price,
+                initial_risk=actual_initial_risk,
+                entry_fill_timestamp_ms=int(fill.timestamp_ms),
+                entry_order_submitted_at_ms=entry_order_submitted_at_ms,
+                entry_order_status=fill.status,
+                entry_filled_amount=float(fill.filled_amount),
+                entry_cost_usdt=fill.cost,
+                entry_fee_usdt=fill.fee_cost,
+                pre_position_amount=pre_position_amount,
+                post_position_amount=post_position_amount,
+                position_delta_amount=position_delta_amount,
+                remaining_amount=float(position_delta_amount),
+                current_stop_price=actual_stop_price,
             )
             with self._state_lock:
                 self._open_positions[symbol_key] = position
                 self._opened_positions_total += 1
-                self._opening_symbols.discard(symbol_key)
         except Exception:
             with self._state_lock:
                 self._opening_symbols.discard(symbol_key)
             raise
+        finally:
+            with self._state_lock:
+                self._opening_symbols.discard(symbol_key)
         self.artifacts.append_position(position)
         self.artifacts.append_event(
             "position_opened",
@@ -1206,6 +1321,14 @@ class AnomalyMicroLiveRunner:
                 "category_id": signal.category_id,
                 "category_label": signal.category_label,
                 "category_priority": signal.category_priority,
+                "signal_entry_price": signal.entry_price,
+                "actual_entry_price": position.entry_price,
+                "entry_fill_timestamp_ms": position.entry_fill_timestamp_ms,
+                "entry_order_submitted_at_ms": position.entry_order_submitted_at_ms,
+                "entry_filled_amount": position.entry_filled_amount,
+                "position_delta_amount": position.position_delta_amount,
+                "tp1_price": position.tp1_price,
+                "stop_price": position.stop_price,
             },
         )
         try:
@@ -1218,7 +1341,7 @@ class AnomalyMicroLiveRunner:
             self.logger(f"live: позиция {signal.symbol} открыта, но Telegram-вход не отправлен: {exc}")
         self.logger(
             f"live: {_compact_symbol(signal.symbol)} открыт · {signal.levels_timeframe.value}/{signal.entry_timeframe.value} · "
-            f"риск {actual_risk_usdt:.2f} · notional {notional:.2f}"
+            f"entry {position.entry_price:.6g} · риск {position.risk_usdt:.2f} · notional {position.notional_usdt:.2f}"
         )
         threading.Thread(
             target=self._monitor_position,
@@ -1226,6 +1349,89 @@ class AnomalyMicroLiveRunner:
             name=f"position-{_compact_symbol(signal.symbol)}",
             daemon=True,
         ).start()
+
+    def _validate_signal_freshness(self, signal: LiveSignal) -> bool:
+        levels_timeframe_ms = int(signal.levels_timeframe.to_milliseconds())
+        decision_available_ms = int(signal.decision_timestamp_ms) + levels_timeframe_ms
+        now_ms = int(time.time() * 1000)
+        signal_age_ms = now_ms - decision_available_ms
+        if signal_age_ms < 0:
+            self.artifacts.append_event(
+                "reject_signal_not_closed_yet",
+                signal.symbol,
+                {
+                    "decision_timestamp_ms": signal.decision_timestamp_ms,
+                    "decision_available_ms": decision_available_ms,
+                    "now_ms": now_ms,
+                    "signal_age_ms": signal_age_ms,
+                },
+            )
+            return False
+        if signal_age_ms > self.config.max_signal_age_ms:
+            self.artifacts.append_event(
+                "reject_stale_signal",
+                signal.symbol,
+                {
+                    "decision_timestamp_ms": signal.decision_timestamp_ms,
+                    "decision_available_ms": decision_available_ms,
+                    "now_ms": now_ms,
+                    "signal_age_ms": signal_age_ms,
+                    "max_signal_age_ms": self.config.max_signal_age_ms,
+                },
+            )
+            return False
+        return True
+
+    def _validate_signal_executable(self, signal: LiveSignal, *, live_price: float) -> bool:
+        if not math.isfinite(live_price) or live_price <= 0.0:
+            self.artifacts.append_event(
+                "reject_invalid_live_price",
+                signal.symbol,
+                {"live_price": _finite_or_none(live_price), "decision_timestamp_ms": signal.decision_timestamp_ms},
+            )
+            return False
+        drift_pct = _safe_divide(live_price - signal.entry_price, signal.entry_price)
+        actual_risk = live_price - signal.stop_price
+        actual_risk_pct = _safe_divide(actual_risk, live_price)
+        rr_to_signal_tp1 = _safe_divide(signal.tp1_price - live_price, actual_risk)
+        details = {
+            "live_price": live_price,
+            "signal_entry_price": signal.entry_price,
+            "signal_tp1_price": signal.tp1_price,
+            "stop_price": signal.stop_price,
+            "drift_pct": _finite_or_none(drift_pct),
+            "actual_risk_pct": _finite_or_none(actual_risk_pct),
+            "rr_to_signal_tp1": _finite_or_none(rr_to_signal_tp1),
+            "decision_timestamp_ms": signal.decision_timestamp_ms,
+        }
+        if live_price >= signal.tp1_price:
+            self.artifacts.append_event("reject_tp1_already_reached", signal.symbol, details)
+            return False
+        if not math.isfinite(actual_risk) or actual_risk <= 0.0:
+            self.artifacts.append_event("reject_invalid_actual_risk_at_live_price", signal.symbol, details)
+            return False
+        if not math.isfinite(actual_risk_pct) or actual_risk_pct > self.config.max_initial_risk_pct:
+            self.artifacts.append_event(
+                "reject_actual_risk_too_wide_at_live_price",
+                signal.symbol,
+                {**details, "max_initial_risk_pct": self.config.max_initial_risk_pct},
+            )
+            return False
+        if math.isfinite(drift_pct) and drift_pct > self.config.max_entry_price_drift_pct:
+            self.artifacts.append_event(
+                "reject_entry_price_drift",
+                signal.symbol,
+                {**details, "max_entry_price_drift_pct": self.config.max_entry_price_drift_pct},
+            )
+            return False
+        if not math.isfinite(rr_to_signal_tp1) or rr_to_signal_tp1 < self.config.min_executable_rr_to_signal_tp1:
+            self.artifacts.append_event(
+                "reject_rr_collapsed",
+                signal.symbol,
+                {**details, "min_executable_rr_to_signal_tp1": self.config.min_executable_rr_to_signal_tp1},
+            )
+            return False
+        return True
 
     def _send_or_edit_stop_message(self, position: LivePosition, *, text: str, stop_price: float, reason: str) -> None:
         if position.telegram_open_message_id is None:
@@ -1309,18 +1515,21 @@ class AnomalyMicroLiveRunner:
 
     def _monitor_position(self, position: LivePosition) -> None:
         signal = position.signal
-        last_stop_price = signal.stop_price
+        last_stop_price = position.stop_price
         while True:
             try:
                 actual_amount = abs(self.exchange.fetch_symbol_position_amount(signal.symbol))
+                managed_amount = min(actual_amount, max(position.remaining_amount, 0.0))
                 if actual_amount <= 0.0:
                     self._finalize_position(position, reason="позиция закрыта на бирже", pnl_price=position.current_stop_price)
                     return
+                if managed_amount <= 0.0:
+                    raise LiveDataIntegrityError(f"managed position amount is zero while exchange position is open: {position.position_id}")
                 now_ms = int(time.time() * 1000)
                 frame = self.exchange.fetch_ohlcv(
                     signal.symbol,
                     Timeframe.M1,
-                    signal.decision_timestamp_ms,
+                    position.entry_fill_timestamp_ms,
                     now_ms,
                 )
                 if frame.empty:
@@ -1330,62 +1539,48 @@ class AnomalyMicroLiveRunner:
                 latest_high = float(latest["high"])
                 latest_low = float(latest["low"])
                 latest_close = float(latest["close"])
-                if not position.tp1_done and latest_high >= signal.tp1_price:
-                    close_amount = max(actual_amount * 0.5, 0.0)
+                if not position.tp1_done and latest_high >= position.tp1_price:
+                    close_amount = max(min(managed_amount, position.remaining_amount) * 0.5, 0.0)
                     if close_amount > 0.0:
                         self.exchange.create_market_order(signal.symbol, "sell", close_amount, reduce_only=True)
-                        position.realized_pnl_usdt += close_amount * (signal.tp1_price - signal.entry_price)
+                        position.realized_pnl_usdt += close_amount * (position.tp1_price - position.entry_price)
                     time.sleep(2.0)
                     actual_after_tp1 = abs(self.exchange.fetch_symbol_position_amount(signal.symbol))
                     position.tp1_done = True
-                    position.remaining_amount = actual_after_tp1
+                    position.remaining_amount = min(actual_after_tp1, max(position.amount - close_amount, 0.0))
                     if position.remaining_amount <= 0.0:
-                        self._finalize_position(position, reason="TP1 закрыл позицию полностью", pnl_price=signal.tp1_price)
+                        self._finalize_position(position, reason="TP1 закрыл позицию полностью", pnl_price=position.tp1_price)
                         return
-                    new_stop_order = self.exchange.create_stop_market_order(
-                        signal.symbol,
-                        "sell",
-                        position.remaining_amount,
-                        signal.entry_price,
+                    self._replace_position_stop_order(
+                        position,
+                        amount=position.remaining_amount,
+                        stop_price=position.entry_price,
+                        reason="tp1_be",
                     )
-                    old_stop_order_id = position.stop_order_id
-                    position.stop_order_id = str(new_stop_order.get("id", position.stop_order_id))
-                    position.current_stop_price = signal.entry_price
-                    try:
-                        self.exchange.cancel_order(signal.symbol, old_stop_order_id)
-                    except Exception as exc:
-                        self.artifacts.append_event("old_stop_cancel_failed_after_be", signal.symbol, {"reason": str(exc)})
-                    last_stop_price = signal.entry_price
+                    last_stop_price = position.entry_price
                     self.artifacts.append_event("tp1_and_stop_to_be", signal.symbol, {"position_id": position.position_id})
                     self._send_or_edit_stop_message(
                         position,
-                        stop_price=signal.entry_price,
+                        stop_price=position.entry_price,
                         reason="tp1_be",
-                        text=_format_stop_move_message(position, stop_price=signal.entry_price, label="BE"),
+                        text=_format_stop_move_message(position, stop_price=position.entry_price, label="BE"),
                     )
                 if position.tp1_done:
                     latest_ts = int(latest["timestamp"])
                     prior = frame.loc[frame["timestamp"].astype(int) < latest_ts].tail(self.config.trail_lookback_candles)
                     if not prior.empty:
                         trail_low = float(prior["low"].min())
-                        structural_stop = trail_low - self.config.trail_buffer_r * signal.initial_risk
+                        structural_stop = trail_low - self.config.trail_buffer_r * position.initial_risk
                     else:
                         structural_stop = last_stop_price
                     new_stop = max(last_stop_price, structural_stop)
                     if new_stop > last_stop_price and new_stop < latest_close:
-                        new_stop_order = self.exchange.create_stop_market_order(
-                            signal.symbol,
-                            "sell",
-                            actual_amount,
-                            new_stop,
+                        self._replace_position_stop_order(
+                            position,
+                            amount=min(actual_amount, position.remaining_amount),
+                            stop_price=new_stop,
+                            reason="structural_trail",
                         )
-                        old_stop_order_id = position.stop_order_id
-                        position.stop_order_id = str(new_stop_order.get("id", position.stop_order_id))
-                        position.current_stop_price = new_stop
-                        try:
-                            self.exchange.cancel_order(signal.symbol, old_stop_order_id)
-                        except Exception as exc:
-                            self.artifacts.append_event("old_stop_cancel_failed_after_trail", signal.symbol, {"reason": str(exc)})
                         last_stop_price = new_stop
                         self._send_or_edit_stop_message(
                             position,
@@ -1409,9 +1604,9 @@ class AnomalyMicroLiveRunner:
         with self._state_lock:
             self._open_positions.pop(symbol_key, None)
             self._closed_positions_total += 1
-        exit_price = pnl_price if pnl_price is not None else position.signal.entry_price
+        exit_price = pnl_price if pnl_price is not None else position.entry_price
         remaining_amount = position.remaining_amount if position.remaining_amount > 0.0 else position.amount
-        pnl_usdt = position.realized_pnl_usdt + remaining_amount * (exit_price - position.signal.entry_price)
+        pnl_usdt = position.realized_pnl_usdt + remaining_amount * (exit_price - position.entry_price)
         pnl_pct = _safe_divide(pnl_usdt, position.notional_usdt)
         if reason.startswith("стоп"):
             with self._state_lock:
@@ -1492,9 +1687,11 @@ class AnomalyMicroLiveRunner:
                 "entry_timestamp_ms": int(position.opened_at_ms),
                 "entry_timestamp_utc": position.opened_at_utc,
                 "exit_timestamp_ms": int(exit_timestamp_ms),
-                "entry_price": float(signal.entry_price),
-                "initial_stop": float(signal.stop_price),
-                "tp1_price": float(signal.tp1_price),
+                "entry_price": float(position.entry_price),
+                "signal_entry_price": float(signal.entry_price),
+                "signal_entry_timestamp_ms": int(signal.decision_timestamp_ms),
+                "initial_stop": float(position.stop_price),
+                "tp1_price": float(position.tp1_price),
                 "box_high": float(signal.box_high),
                 "exit_price": float(exit_price),
                 "net_return": float(pnl_pct),
@@ -1663,6 +1860,61 @@ class AnomalyMicroLiveRunner:
         )
         return cancelled
 
+    def _replace_position_stop_order(
+        self,
+        position: LivePosition,
+        *,
+        amount: float,
+        stop_price: float,
+        reason: str,
+    ) -> None:
+        old_stop_order_id = str(position.stop_order_id or "").strip()
+        if not math.isfinite(amount) or amount <= 0.0:
+            raise LiveDataIntegrityError(f"invalid stop replacement amount: position_id={position.position_id} amount={amount}")
+        if not math.isfinite(stop_price) or stop_price <= 0.0:
+            raise LiveDataIntegrityError(f"invalid stop replacement price: position_id={position.position_id} stop_price={stop_price}")
+        new_stop_order = self.exchange.create_stop_market_order(
+            position.signal.symbol,
+            "sell",
+            amount,
+            stop_price,
+        )
+        new_stop_order_id = str(new_stop_order.get("id") or "").strip()
+        if not new_stop_order_id:
+            raise LiveDataIntegrityError(f"replacement stop order returned no id: position_id={position.position_id}")
+        cancel_error: str | None = None
+        if old_stop_order_id:
+            try:
+                self.exchange.cancel_order(position.signal.symbol, old_stop_order_id)
+            except Exception as exc:
+                cancel_error = f"{type(exc).__name__}: {exc}"
+        open_orders = self.exchange.fetch_open_orders(position.signal.symbol)
+        open_order_ids = {str(order.get("id") or "").strip() for order in open_orders if isinstance(order, dict)}
+        if new_stop_order_id not in open_order_ids:
+            raise LiveDataIntegrityError(
+                f"replacement stop order not visible in open orders: position_id={position.position_id} new_order_id={new_stop_order_id}"
+            )
+        if cancel_error is not None and old_stop_order_id in open_order_ids:
+            raise LiveDataIntegrityError(
+                f"old stop cancel failed and old order remains open: position_id={position.position_id} "
+                f"old_order_id={old_stop_order_id} error={cancel_error}"
+            )
+        position.stop_order_id = new_stop_order_id
+        position.current_stop_price = stop_price
+        self.artifacts.append_event(
+            "position_stop_order_replaced",
+            position.signal.symbol,
+            {
+                "position_id": position.position_id,
+                "old_order_id": old_stop_order_id,
+                "new_order_id": new_stop_order_id,
+                "stop_price": stop_price,
+                "amount": amount,
+                "reason": reason,
+                "old_cancel_error": cancel_error or "",
+            },
+        )
+
     def _cancel_position_stop_order(self, position: LivePosition, *, reason: str) -> None:
         order_id = str(position.stop_order_id or "").strip()
         if not order_id:
@@ -1710,6 +1962,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "inactive_batch_size": (config.inactive_batch_size, 1),
         "inactive_batch_with_active": (config.inactive_batch_with_active, 1),
         "signal_scan_backfill_candles": (config.signal_scan_backfill_candles, 1),
+        "max_signal_age_ms": (config.max_signal_age_ms, 1),
         "stop_limit_per_symbol": (config.stop_limit_per_symbol, 1),
         "oi_fresh_ms": (config.oi_fresh_ms, 1),
         "trail_lookback_candles": (config.trail_lookback_candles, 1),
@@ -1726,6 +1979,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "max_initial_risk_pct": config.max_initial_risk_pct,
         "position_notional_usdt": config.position_notional_usdt,
         "network_sleep_seconds": config.network_sleep_seconds,
+        "min_executable_rr_to_signal_tp1": config.min_executable_rr_to_signal_tp1,
+        "max_position_amount_slippage_ratio": config.max_position_amount_slippage_ratio,
     }
     for name, value in required_positive.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
@@ -1738,6 +1993,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "stop_cooldown_hours": config.stop_cooldown_hours,
         "telegram_cooldown_seconds": config.telegram_cooldown_seconds,
         "trail_buffer_r": config.trail_buffer_r,
+        "max_entry_price_drift_pct": config.max_entry_price_drift_pct,
     }
     for name, value in required_non_negative.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=True)
@@ -1827,9 +2083,9 @@ def _category_value(category: LivePumpCategory, config: LiveAnomalyConfig, field
 
 def _format_open_message(position: LivePosition) -> str:
     signal = position.signal
-    entry_price = float(signal.entry_price)
-    tp_pct = _safe_divide(float(signal.tp1_price) - entry_price, entry_price)
-    sl_pct = _safe_divide(entry_price - float(signal.stop_price), entry_price)
+    entry_price = float(position.entry_price)
+    tp_pct = _safe_divide(float(position.tp1_price) - entry_price, entry_price)
+    sl_pct = _safe_divide(entry_price - float(position.stop_price), entry_price)
     detail_lines = [
         f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · {signal.category_label} · {signal.session}",
         (
@@ -1845,9 +2101,10 @@ def _format_open_message(position: LivePosition) -> str:
     symbol = _compact_symbol(signal.symbol)
     return (
         f"{_nature_emoji('open:' + signal.symbol)} {symbol} ({_coinglass_url(signal.symbol)}) LONG\n\n"
-        f"Вход {_format_price(entry_price)}\n\n"
-        f"TP {_format_price(signal.tp1_price)} {_format_percent(tp_pct)}\n"
-        f"SL {_format_price(signal.stop_price)} {_format_percent(sl_pct)}\n\n"
+        f"Вход {_format_price(entry_price)}\n"
+        f"сигнал {_format_price(signal.entry_price)}\n\n"
+        f"TP {_format_price(position.tp1_price)} {_format_percent(tp_pct)}\n"
+        f"SL {_format_price(position.stop_price)} {_format_percent(sl_pct)}\n\n"
         + "\n".join(detail_lines)
         + category_review
     )
@@ -1871,7 +2128,7 @@ def _format_close_message(position: LivePosition, *, pnl_usdt: float, pnl_pct: f
 
 def _format_stop_move_message(position: LivePosition, *, stop_price: float, label: str) -> str:
     signal = position.signal
-    stop_distance_from_entry = _safe_divide(float(stop_price) - float(signal.entry_price), float(signal.entry_price))
+    stop_distance_from_entry = _safe_divide(float(stop_price) - float(position.entry_price), float(position.entry_price))
     return (
         f"{_nature_emoji('stop:' + label + ':' + position.position_id)} "
         f"{_compact_symbol(signal.symbol)} {label} {_format_percent(stop_distance_from_entry, signed=True, precision=2)}"

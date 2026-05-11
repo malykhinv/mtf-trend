@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P123-P129 proposed locally on top of ZIP-derived source
-Last active patch: P129 purge retired strategy history from active research memory
+Local patch stack: P123-P130 proposed locally on top of ZIP-derived source
+Last active patch: P130 strict live fills and executable market entry
 Updated: 2026-05-11
 ```
 
@@ -66,16 +66,17 @@ research_tools/charting.py
 1. Anomaly live/backtest logic still needs robustness evaluation across months and regimes.
 2. Micro-live execution has real slippage, spread, partial fills and operational failure modes.
 3. OI/derivatives context availability can limit category classification.
-4. `main.py` still has a known Linux `ctypes.windll` import issue; intentionally not fixed in the current cleanup stack.
-5. Historical local artifacts may contain stale compiled files; they are ignored by git and should be deleted locally.
+4. The 2026-05-11 NVDA micro-live position is audit-invalid for edge/PnL: stale signal execution mixed signal close with later live order timing.
+5. `main.py` still has a known Linux `ctypes.windll` import issue; intentionally not fixed in the current cleanup stack.
+6. Historical local artifacts may contain stale compiled files; they are ignored by git and should be deleted locally.
 
 ---
 
 ## 6. Next best step
 
-Run a clean import/CLI smoke after applying P123-P129, then run a small anomaly-lab sample on cached data:
+Apply P130 and run the live-execution smoke before using any micro-live PnL:
 
 ```bash
-python -m compileall cli config constants.py research_tools vectorbt_runner strategy main.py
-python main.py run-anomaly-lab --days 3 --timeframe 1m --run-entry-grid false
+python -m compileall data/exchanges research_tools cli constants.py main.py
+# synthetic/fake-exchange check: stale signal must emit reject_stale_signal and no market order
 ```
