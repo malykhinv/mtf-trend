@@ -174,3 +174,25 @@ Next:
 ```text
 Run a max-cycles smoke with --symbol-batch-size 20 and inspect active_symbol_marked / symbol_batch_selected events before unattended live.
 ```
+
+---
+
+## 2026-05-11 — P135 hourly live top-growth artifacts
+
+Input:
+
+```text
+Need hourly live records of the top growing symbols, capped at five and only when hourly growth is at least 10%, saved as Notepad-readable files for later backtest/manual analysis.
+```
+
+Result:
+
+```text
+Patch proposed. Each live run now has a top_growth/ directory with hourly closed-1h top files, matching per-symbol status files and an index CSV. The top file is capped/thresholded; the status file preserves skipped/error reasons so the universe is auditable.
+```
+
+Next:
+
+```text
+Run live for slightly over one hour, then inspect top_growth_index.csv, top_growth_*.csv and top_growth_status_*.csv before using the snapshot as a candidate source for replay/backtest.
+```

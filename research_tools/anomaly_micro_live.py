@@ -29,7 +29,59 @@ from research_tools.anomaly_config import ANOMALY_LIVE_TIMEFRAME_PAIRS
 REQUIRED_PRICE_COLUMNS = ("timestamp", "open", "high", "low", "close")
 REQUIRED_FLOW_COLUMNS = ("quote_volume", "number_of_trades")
 OPTIONAL_FLOW_COLUMNS = ("taker_buy_quote_volume",)
+HOUR_MS = 60 * 60 * 1000
 NATURE_EMOJIS = ("🏔️", "🌋", "🌊", "🌙", "🌓", "🌘", "🌄", "🌅", "🌌", "🌧️", "🌩️", "🪨")
+TOP_GROWTH_COLUMNS = (
+    "snapshot_utc",
+    "period_start_utc",
+    "period_end_utc",
+    "rank",
+    "symbol",
+    "growth_pct",
+    "growth_fraction",
+    "open",
+    "close",
+    "high",
+    "low",
+    "quote_volume",
+    "number_of_trades",
+    "taker_buy_quote_volume",
+    "threshold_pct",
+    "timeframe",
+    "source",
+)
+TOP_GROWTH_STATUS_COLUMNS = (
+    "snapshot_utc",
+    "period_start_utc",
+    "period_end_utc",
+    "symbol",
+    "status",
+    "reason",
+    "growth_pct",
+    "growth_fraction",
+    "open",
+    "close",
+    "high",
+    "low",
+    "quote_volume",
+    "number_of_trades",
+    "taker_buy_quote_volume",
+    "candle_timestamp_ms",
+    "timeframe",
+)
+TOP_GROWTH_INDEX_COLUMNS = (
+    "snapshot_utc",
+    "period_start_utc",
+    "period_end_utc",
+    "top_count",
+    "symbols_total",
+    "ok_count",
+    "failed_count",
+    "threshold_pct",
+    "limit",
+    "top_file",
+    "status_file",
+)
 LIVE_LEDGER_COLUMNS = (
     "position_id",
     "status",
@@ -153,6 +205,10 @@ class LiveAnomalyConfig:
     max_open_positions: int = 3
     symbol_batch_size: int = 20
     active_symbol_ttl_ms: int = 60_000
+    top_growth_enabled: bool = True
+    top_growth_min_return_pct: float = 0.10
+    top_growth_limit: int = 5
+    top_growth_fetch_spacing_seconds: float = 0.05
     signal_scan_backfill_candles: int = 10
     max_signal_age_ms: int = 60_000
     max_entry_price_drift_pct: float = 0.003
@@ -379,9 +435,13 @@ class LiveArtifactWriter:
         self.root.mkdir(parents=True, exist_ok=True)
         self.ledger_path = self.root / "live_positions.csv"
         self.events_path = self.root / "live_events.csv"
+        self.top_growth_dir = self.root / "top_growth"
+        self.top_growth_dir.mkdir(parents=True, exist_ok=True)
+        self.top_growth_index_path = self.top_growth_dir / "top_growth_index.csv"
         self._lock = threading.Lock()
         self._ensure_csv(self.ledger_path, LIVE_LEDGER_COLUMNS)
         self._ensure_csv(self.events_path, ("timestamp_utc", "event", "symbol", "details_json"))
+        self._ensure_csv(self.top_growth_index_path, TOP_GROWTH_INDEX_COLUMNS)
 
     @staticmethod
     def _ensure_csv(path: Path, columns: tuple[str, ...]) -> None:
@@ -389,6 +449,73 @@ class LiveArtifactWriter:
             return
         with path.open("w", newline="", encoding="utf-8") as handle:
             csv.DictWriter(handle, fieldnames=list(columns)).writeheader()
+
+    def write_top_growth_snapshot(
+        self,
+        *,
+        period_start_ms: int,
+        period_end_ms: int,
+        snapshot_utc: str,
+        top_rows: list[dict[str, object]],
+        status_rows: list[dict[str, object]],
+        symbols_total: int,
+        threshold_pct: float,
+        limit: int,
+    ) -> tuple[Path, Path]:
+        period_start_utc = datetime.fromtimestamp(period_start_ms / 1000, UTC).isoformat()
+        period_end_utc = datetime.fromtimestamp(period_end_ms / 1000, UTC).isoformat()
+        stamp = datetime.fromtimestamp(period_start_ms / 1000, UTC).strftime("%Y%m%d_%H0000_UTC")
+        top_path = self.top_growth_dir / f"top_growth_{stamp}.csv"
+        status_path = self.top_growth_dir / f"top_growth_status_{stamp}.csv"
+        enriched_top_rows = [
+            {
+                "snapshot_utc": snapshot_utc,
+                "period_start_utc": period_start_utc,
+                "period_end_utc": period_end_utc,
+                **row,
+            }
+            for row in top_rows
+        ]
+        enriched_status_rows = [
+            {
+                "snapshot_utc": snapshot_utc,
+                "period_start_utc": period_start_utc,
+                "period_end_utc": period_end_utc,
+                **row,
+            }
+            for row in status_rows
+        ]
+        ok_count = sum(1 for row in enriched_status_rows if row.get("status") == "ok")
+        failed_count = len(enriched_status_rows) - ok_count
+        index_row = {
+            "snapshot_utc": snapshot_utc,
+            "period_start_utc": period_start_utc,
+            "period_end_utc": period_end_utc,
+            "top_count": len(enriched_top_rows),
+            "symbols_total": symbols_total,
+            "ok_count": ok_count,
+            "failed_count": failed_count,
+            "threshold_pct": threshold_pct,
+            "limit": limit,
+            "top_file": top_path.name,
+            "status_file": status_path.name,
+        }
+        with self._lock:
+            self._write_csv_atomic(top_path, TOP_GROWTH_COLUMNS, enriched_top_rows)
+            self._write_csv_atomic(status_path, TOP_GROWTH_STATUS_COLUMNS, enriched_status_rows)
+            with self.top_growth_index_path.open("a", newline="", encoding="utf-8-sig") as handle:
+                csv.DictWriter(handle, fieldnames=list(TOP_GROWTH_INDEX_COLUMNS)).writerow(index_row)
+        return top_path, status_path
+
+    @staticmethod
+    def _write_csv_atomic(path: Path, columns: tuple[str, ...], rows: list[dict[str, object]]) -> None:
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        with tmp_path.open("w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(columns), extrasaction="ignore")
+            writer.writeheader()
+            for row in rows:
+                writer.writerow(row)
+        tmp_path.replace(path)
 
     def append_event(self, event: str, symbol: str, details: dict[str, object]) -> None:
         try:
@@ -529,6 +656,9 @@ class AnomalyMicroLiveRunner:
         self._inactive_cursor = 0
         self._order_reconcile_cursor = 0
         self._network_degraded = False
+        self._top_growth_lock = threading.Lock()
+        self._top_growth_exported_periods: set[int] = set()
+        self._top_growth_inflight_periods: set[int] = set()
 
     def run(self) -> int:
         self._validate_startup()
@@ -556,6 +686,7 @@ class AnomalyMicroLiveRunner:
             cycle_started = time.monotonic()
             try:
                 opened_before, _, closed_before, orphan_before = self._live_counts()
+                self._maybe_start_top_growth_export(symbols)
                 batch = self._next_symbol_batch(symbols)
                 signals = self._scan_batch(batch)
                 for signal in signals:
@@ -626,6 +757,220 @@ class AnomalyMicroLiveRunner:
             raise LiveStartupError("Биржа вернула нечисловой free USDT balance") from exc
         if not math.isfinite(balance):
             raise LiveStartupError("Биржа вернула нечисловой free USDT balance")
+
+    def _maybe_start_top_growth_export(self, symbols: list[str]) -> None:
+        if not self.config.top_growth_enabled:
+            return
+        now_ms = int(time.time() * 1000)
+        period_start_ms = ((now_ms // HOUR_MS) - 1) * HOUR_MS
+        if period_start_ms < 0:
+            return
+        period_end_ms = period_start_ms + HOUR_MS
+        with self._top_growth_lock:
+            if self._top_growth_inflight_periods:
+                return
+            if period_start_ms in self._top_growth_exported_periods:
+                return
+            self._top_growth_inflight_periods.add(period_start_ms)
+        self.artifacts.append_event(
+            "top_growth_snapshot_started",
+            "__live__",
+            {
+                "period_start_ms": period_start_ms,
+                "period_end_ms": period_end_ms,
+                "symbols_total": len(symbols),
+                "threshold_pct": self.config.top_growth_min_return_pct * 100.0,
+                "limit": self.config.top_growth_limit,
+            },
+        )
+        thread = threading.Thread(
+            target=self._export_top_growth_snapshot,
+            args=(tuple(symbols), period_start_ms),
+            name=f"top-growth-{period_start_ms}",
+            daemon=True,
+        )
+        thread.start()
+
+    def _export_top_growth_snapshot(self, symbols: tuple[str, ...], period_start_ms: int) -> None:
+        period_end_ms = period_start_ms + HOUR_MS
+        try:
+            snapshot_utc = datetime.now(UTC).isoformat()
+            top_rows, status_rows = self._collect_top_growth_snapshot(
+                symbols=symbols,
+                period_start_ms=period_start_ms,
+                period_end_ms=period_end_ms,
+                snapshot_utc=snapshot_utc,
+            )
+            top_path, status_path = self.artifacts.write_top_growth_snapshot(
+                period_start_ms=period_start_ms,
+                period_end_ms=period_end_ms,
+                snapshot_utc=snapshot_utc,
+                top_rows=top_rows,
+                status_rows=status_rows,
+                symbols_total=len(symbols),
+                threshold_pct=self.config.top_growth_min_return_pct * 100.0,
+                limit=self.config.top_growth_limit,
+            )
+            self.artifacts.append_event(
+                "top_growth_snapshot_saved",
+                "__live__",
+                {
+                    "period_start_ms": period_start_ms,
+                    "period_end_ms": period_end_ms,
+                    "top_count": len(top_rows),
+                    "symbols_total": len(symbols),
+                    "ok_count": sum(1 for row in status_rows if row.get("status") == "ok"),
+                    "failed_count": sum(1 for row in status_rows if row.get("status") != "ok"),
+                    "top_file": str(top_path.relative_to(self.artifacts.root)),
+                    "status_file": str(status_path.relative_to(self.artifacts.root)),
+                },
+            )
+        except Exception as exc:
+            self.artifacts.append_event(
+                "top_growth_snapshot_failed",
+                "__live__",
+                {
+                    "period_start_ms": period_start_ms,
+                    "period_end_ms": period_end_ms,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:500],
+                },
+            )
+        finally:
+            with self._top_growth_lock:
+                self._top_growth_inflight_periods.discard(period_start_ms)
+                self._top_growth_exported_periods.add(period_start_ms)
+
+    def _collect_top_growth_snapshot(
+        self,
+        *,
+        symbols: tuple[str, ...],
+        period_start_ms: int,
+        period_end_ms: int,
+        snapshot_utc: str,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        threshold_fraction = float(self.config.top_growth_min_return_pct)
+        threshold_pct = threshold_fraction * 100.0
+        limit = int(self.config.top_growth_limit)
+        candidates: list[dict[str, object]] = []
+        status_rows: list[dict[str, object]] = []
+        for symbol in symbols:
+            status_row = self._load_top_growth_symbol_row(
+                symbol=symbol,
+                period_start_ms=period_start_ms,
+                period_end_ms=period_end_ms,
+                snapshot_utc=snapshot_utc,
+            )
+            status_rows.append(status_row)
+            if status_row.get("status") == "ok":
+                growth_fraction = _row_float_or_none(status_row, "growth_fraction")
+                if growth_fraction is not None and growth_fraction >= threshold_fraction:
+                    candidates.append(
+                        {
+                            "symbol": symbol,
+                            "growth_pct": status_row.get("growth_pct", ""),
+                            "growth_fraction": status_row.get("growth_fraction", ""),
+                            "open": status_row.get("open", ""),
+                            "close": status_row.get("close", ""),
+                            "high": status_row.get("high", ""),
+                            "low": status_row.get("low", ""),
+                            "quote_volume": status_row.get("quote_volume", ""),
+                            "number_of_trades": status_row.get("number_of_trades", ""),
+                            "taker_buy_quote_volume": status_row.get("taker_buy_quote_volume", ""),
+                            "threshold_pct": threshold_pct,
+                            "timeframe": Timeframe.H1.value,
+                            "source": "exchange_1h_closed_candle",
+                        }
+                    )
+            spacing = float(self.config.top_growth_fetch_spacing_seconds)
+            if math.isfinite(spacing) and spacing > 0.0:
+                time.sleep(spacing)
+        candidates.sort(
+            key=lambda row: (
+                _row_float_or_none(row, "growth_fraction") or -math.inf,
+                _row_float_or_none(row, "quote_volume") or -math.inf,
+            ),
+            reverse=True,
+        )
+        top_rows: list[dict[str, object]] = []
+        for rank, row in enumerate(candidates[:limit], start=1):
+            growth_fraction = _row_float_or_none(row, "growth_fraction")
+            top_rows.append({"rank": rank, "growth_multiple": (1.0 + growth_fraction) if growth_fraction is not None else "", **row})
+        return top_rows, status_rows
+
+    def _load_top_growth_symbol_row(
+        self,
+        *,
+        symbol: str,
+        period_start_ms: int,
+        period_end_ms: int,
+        snapshot_utc: str,
+    ) -> dict[str, object]:
+        base: dict[str, object] = {
+            "symbol": symbol,
+            "status": "failed",
+            "reason": "unknown",
+            "growth_pct": "",
+            "growth_fraction": "",
+            "open": "",
+            "close": "",
+            "high": "",
+            "low": "",
+            "quote_volume": "",
+            "number_of_trades": "",
+            "taker_buy_quote_volume": "",
+            "candle_timestamp_ms": "",
+            "timeframe": Timeframe.H1.value,
+        }
+        try:
+            frame = self.exchange.fetch_ohlcv(symbol, Timeframe.H1, period_start_ms, period_end_ms - 1)
+        except Exception as exc:
+            return {**base, "reason": f"fetch_ohlcv_failed:{type(exc).__name__}:{str(exc)[:160]}"}
+        if frame.empty:
+            return {**base, "reason": "empty_ohlcv"}
+        missing = [column for column in REQUIRED_PRICE_COLUMNS if column not in frame.columns]
+        if missing:
+            return {**base, "reason": "missing_price_columns:" + ",".join(missing)}
+        work = frame.copy()
+        work["timestamp"] = pd.to_numeric(work["timestamp"], errors="coerce")
+        exact = work.loc[work["timestamp"].astype("Int64") == int(period_start_ms)]
+        if exact.empty:
+            timestamps = pd.to_numeric(work["timestamp"], errors="coerce").dropna().astype("int64")
+            reason = "no_exact_hour_candle"
+            if not timestamps.empty:
+                reason += f":first={int(timestamps.min())}:last={int(timestamps.max())}"
+            return {**base, "reason": reason}
+        row = exact.sort_values("timestamp").iloc[-1]
+        open_price = _series_float_or_none(row, "open")
+        close_price = _series_float_or_none(row, "close")
+        high_price = _series_float_or_none(row, "high")
+        low_price = _series_float_or_none(row, "low")
+        if open_price is None or close_price is None or high_price is None or low_price is None or open_price <= 0.0:
+            return {
+                **base,
+                "reason": "invalid_price_values",
+                "open": _finite_or_blank(open_price),
+                "close": _finite_or_blank(close_price),
+                "high": _finite_or_blank(high_price),
+                "low": _finite_or_blank(low_price),
+                "candle_timestamp_ms": int(period_start_ms),
+            }
+        growth_fraction = (close_price - open_price) / open_price
+        return {
+            **base,
+            "status": "ok",
+            "reason": "ok",
+            "growth_pct": growth_fraction * 100.0,
+            "growth_fraction": growth_fraction,
+            "open": open_price,
+            "close": close_price,
+            "high": high_price,
+            "low": low_price,
+            "quote_volume": _finite_or_blank(_series_float_or_none(row, "quote_volume")),
+            "number_of_trades": _finite_or_blank(_series_float_or_none(row, "number_of_trades")),
+            "taker_buy_quote_volume": _finite_or_blank(_series_float_or_none(row, "taker_buy_quote_volume")),
+            "candle_timestamp_ms": int(period_start_ms),
+        }
 
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
         now_ms = int(time.time() * 1000)
@@ -2389,6 +2734,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "max_open_positions": (config.max_open_positions, 1),
         "symbol_batch_size": (config.symbol_batch_size, 1),
         "active_symbol_ttl_ms": (config.active_symbol_ttl_ms, 1),
+        "top_growth_limit": (config.top_growth_limit, 1),
         "signal_scan_backfill_candles": (config.signal_scan_backfill_candles, 1),
         "max_signal_age_ms": (config.max_signal_age_ms, 1),
         "stop_limit_per_symbol": (config.stop_limit_per_symbol, 1),
@@ -2410,6 +2756,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "network_sleep_seconds": config.network_sleep_seconds,
         "min_executable_rr_to_signal_tp1": config.min_executable_rr_to_signal_tp1,
         "max_position_amount_slippage_ratio": config.max_position_amount_slippage_ratio,
+        "top_growth_min_return_pct": config.top_growth_min_return_pct,
     }
     for name, value in required_positive.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
@@ -2423,6 +2770,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "telegram_cooldown_seconds": config.telegram_cooldown_seconds,
         "trail_buffer_r": config.trail_buffer_r,
         "max_entry_price_drift_pct": config.max_entry_price_drift_pct,
+        "top_growth_fetch_spacing_seconds": config.top_growth_fetch_spacing_seconds,
     }
     for name, value in required_non_negative.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=True)
@@ -2826,6 +3174,21 @@ def _format_usdt(value: float) -> str:
     sign = "+" if value >= 0.0 else "-"
     rendered = f"{abs(float(value)):.3f}".rstrip("0").rstrip(".")
     return f"{sign}{rendered.replace('.', ',')}"
+
+
+def _series_float_or_none(row: pd.Series, column: str) -> float | None:
+    if column not in row.index:
+        return None
+    return _finite_or_none(row.get(column))
+
+
+def _row_float_or_none(row: dict[str, object], column: str) -> float | None:
+    return _finite_or_none(row.get(column))
+
+
+def _finite_or_blank(value: float | None) -> float | str:
+    finite = _finite_or_none(value)
+    return finite if finite is not None else ""
 
 
 def _finite_or_none(value: float | None) -> float | None:

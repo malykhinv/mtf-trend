@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P123-P131 proposed locally on top of ZIP-derived source
-Last active patch: P131 live blocked-order Telegram alerts
+Local patch stack: P130-P135 proposed locally on top of ZIP-derived source
+Last active patch: P135 hourly live top-growth artifacts
 Updated: 2026-05-11
 ```
 
@@ -69,6 +69,7 @@ research_tools/charting.py
 4. The 2026-05-11 NVDA micro-live position is audit-invalid for edge/PnL: stale signal execution mixed signal close with later live order timing.
 5. `main.py` still has a known Linux `ctypes.windll` import issue; intentionally not fixed in the current cleanup stack.
 6. Historical local artifacts may contain stale compiled files; they are ignored by git and should be deleted locally.
+7. Live now exports hourly closed-1h top-growth snapshots under each run's `top_growth/` directory; these artifacts are audit/backtest inputs, not trading signals.
 
 ---
 
