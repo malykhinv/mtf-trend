@@ -4851,3 +4851,60 @@ Risk:
 ```text
 Low-to-medium legacy CLI risk: PNO-only symbols are now lazy-loaded. PNO run-backtest, plot-backtest and pno-stage still call the loader before using PNO objects. A full PNO backtest smoke should be run in the target environment with pyarrow installed.
 ```
+
+---
+
+## P125 — Prune unused PNO launcher and dead Bee Bite constants
+
+```text
+Status: PROPOSED / compile + grep verified locally
+Type: cleanup / legacy surface reduction
+Trading logic changed: no
+Files: launcher.py, constants.py, data/liquidity/__init__.py, README.md, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+After P123/P124, anomaly startup no longer needs PNO runtime imports, but the repo still exposed a root PNO-only launcher and kept old Bee Bite constants that are not imported by current source files.
+The launcher duplicated main.py CLI behavior while hard-coding PNO-only assumptions.
+```
+
+Change:
+
+```text
+Delete launcher.py.
+Remove unused BEE_BITE_STAGE4_* and BEE_BITE_STAGE1_* constants from constants.py.
+Change data.liquidity package docstring from PNO-specific to shared data/research wording.
+Update the active README compileall command so it no longer references deleted launcher.py.
+No strategy/pno engine, PNO diagnostics, anomaly entry logic, risk logic or data-loading behavior is changed.
+```
+
+Verification:
+
+```bash
+python -m compileall constants.py data/liquidity README.md cli config strategy/pno research_tools main.py
+python - <<'PY'
+from pathlib import Path
+removed = [
+    'BEE_BITE_STAGE4_TAKER_FEE_RATE',
+    'BEE_BITE_STAGE4_SLIPPAGE_RATE',
+    'BEE_BITE_STAGE1_MIN_VOLUME_USDT',
+]
+for token in removed:
+    hits = []
+    for path in Path('.').rglob('*.py'):
+        if '__pycache__' in path.parts:
+            continue
+        if token in path.read_text(encoding='utf-8'):
+            hits.append(str(path))
+    print(token, hits)
+PY
+```
+
+Risk:
+
+```text
+Low. Deleted symbols were grep-dead in source after excluding __pycache__. Legacy PNO commands remain available through main.py; only the duplicate root launcher is removed.
+```

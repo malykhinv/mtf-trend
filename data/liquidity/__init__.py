@@ -1,4 +1,4 @@
-"""Liquidity helpers used by the PNO project."""
+"""Liquidity helpers shared by research and data-loading workflows."""
 
 from data.liquidity.daily_volume_ranker import DailyVolumeRanker
 

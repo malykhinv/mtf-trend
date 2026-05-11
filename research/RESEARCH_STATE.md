@@ -1278,3 +1278,15 @@ PNO remains available only through explicit legacy backtest/stage/plot paths gua
 Trading logic is unchanged.
 Next check: run one anomaly-lab smoke in the real project environment, then decide whether to archive or delete legacy PNO modules.
 ```
+
+---
+
+## 2026-05-11 unused PNO launcher/constants cleanup
+
+```text
+P125 proposes pruning the first truly unused PNO surface after P123/P124 isolation.
+Deleted: root launcher.py, unused BEE_BITE_STAGE4_* constants, unused BEE_BITE_STAGE1_* constants.
+Kept: strategy/pno and cli/pno_diagnostics, because legacy PNO backtest/stage/plot commands still reference them explicitly.
+Trading logic is unchanged.
+Next check: decide whether to move legacy PNO commands behind pno-legacy naming or archive strategy/pno after one explicit legacy smoke.
+```

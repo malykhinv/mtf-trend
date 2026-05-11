@@ -251,7 +251,7 @@ average position > +1.0%
 После code/config patch:
 
 ```bash
-python -m compileall domain/enums data/exchanges strategy/pno cli constants.py main.py launcher.py
+python -m compileall domain/enums data/exchanges strategy/pno cli constants.py main.py
 ```
 
 Перед тяжёлым full run:
