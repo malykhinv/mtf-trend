@@ -100,3 +100,16 @@ Next verification:
 python -m compileall data/exchanges research_tools cli constants.py main.py
 # fake-exchange smoke: stop verification failure, TP1 verified fill, repeated empty monitor OHLCV
 ```
+
+---
+
+## 9. Current audit note — P133
+
+P133 is Telegram wording only. It does not change live trading decisions, fills, stop verification, PnL calculation, or backtest logic. Telegram becomes concise; `live_events.csv` remains the detailed source of truth for blocked-entry and integrity details.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+# Telegram smoke: blocked-entry, integrity, open, close and stop-update messages render with clickable symbol links.
+```

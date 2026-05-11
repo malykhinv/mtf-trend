@@ -130,3 +130,25 @@ Next:
 ```text
 Run fake-exchange smoke for initial stop verification failure, TP1 fill price different from target, and repeated empty monitor OHLCV. Then run one small anomaly backtest and inspect anomaly_skip_reasons.csv before interpreting PnL.
 ```
+
+---
+
+## 2026-05-11 — P133 Telegram wording cleanup
+
+Input:
+
+```text
+Operator-requested Telegram message templates for live start/error/pause/blocked-entry/integrity/open/close/stop events.
+```
+
+Result:
+
+```text
+Patch proposed. Messages are shorter, symbols are clickable Coinglass links, blocked/integrity messages show concise reasons, and full detail remains in live_events.csv.
+```
+
+Next:
+
+```text
+Run a Telegram formatting smoke with one fake blocked order and one fake open/close message before unattended live.
+```

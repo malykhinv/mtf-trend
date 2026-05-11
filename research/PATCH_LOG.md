@@ -126,3 +126,30 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ### Risk
 
 Medium: live may halt position monitoring when exchange stop/order state cannot be verified. This is intentional; unknown protection state must be visible and handled manually instead of being treated as a transient loop error.
+
+## P133 — Human Telegram live messages
+
+Status: PROPOSED
+Date: 2026-05-11
+Commit: UNKNOWN
+
+### Reason
+
+Live Telegram messages were technically correct but too verbose and used raw Coinglass URLs. Operator messages should be short, human-readable and use clickable symbols while `live_events.csv` remains the full audit source.
+
+### Change
+
+- Replace startup/error/network blocked-entry/integrity/open/close/stop Telegram text with compact human-style templates.
+- Render symbols as Telegram HTML links to Coinglass instead of printing a separate raw URL.
+- Keep detailed blocked-entry and integrity metadata in artifacts; Telegram only shows the concise reason and context.
+- Display close location as `SL`, `BE`, `TP-` or `TP+`.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+### Risk
+
+Low: Telegram wording changes only. Audit detail is intentionally preserved in `live_events.csv`, not repeated in every operator message.

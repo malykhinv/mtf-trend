@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import html
 import json
 import math
 import os
@@ -301,7 +302,7 @@ class TelegramDispatcher:
         payload: dict[str, object] = {
             "chat_id": chat_id,
             "text": text,
-            "parse_mode": "Markdown",
+            "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
         if reply_to_message_id is not None:
@@ -328,7 +329,7 @@ class TelegramDispatcher:
             "chat_id": chat_id,
             "message_id": message_id,
             "text": text,
-            "parse_mode": "Markdown",
+            "parse_mode": "HTML",
             "disable_web_page_preview": True,
         }
         data = urllib.parse.urlencode(payload).encode("utf-8")
@@ -345,7 +346,7 @@ class TelegramDispatcher:
         token = self._config.positions_bot_token if channel == "positions" else self._config.events_bot_token
         chat_id = self._config.positions_chat_id if channel == "positions" else self._config.events_chat_id
         boundary = f"----codex{uuid4().hex}"
-        fields: dict[str, object] = {"chat_id": chat_id, "caption": caption, "parse_mode": "Markdown"}
+        fields: dict[str, object] = {"chat_id": chat_id, "caption": caption, "parse_mode": "HTML"}
         if reply_to_message_id is not None:
             fields["reply_to_message_id"] = reply_to_message_id
         body = bytearray()
@@ -530,14 +531,13 @@ class AnomalyMicroLiveRunner:
             f"live: старт · символов {len(symbols)} · TF {timeframe_pairs_label} · max {self.config.max_open_positions}"
         )
         self.logger(f"live: артефакты {self.artifacts.root}")
+        trading_mode = "с торговлей" if self.config.confirm_real_orders else "без торговли"
         self.telegram.send(
             channel="events",
             key="live_started",
             text=(
-                "🛰️ *Live запущен*\n"
-                "REST-only обход активен. Реальные ордера разрешены явным флагом.\n"
-                f"TF: `{_telegram_escape(timeframe_pairs_label)}`.\n"
-                f"Категории: `{category_ids}`."
+                f"🛰️ <b>Запуск {trading_mode}</b>\n\n"
+                f"TF: {_telegram_escape(timeframe_pairs_label)}"
             ),
         )
         cycle = 0
@@ -579,7 +579,7 @@ class AnomalyMicroLiveRunner:
                 self.telegram.send(
                     channel="events",
                     key="live_data_integrity_error",
-                    text=f"🧯 *Live остановлен*\nОшибка целостности данных.\n`{_telegram_escape(str(exc)[:600])}`",
+                    text=f"🧯 <b>Ошибка</b>\n\n{_telegram_code(str(exc)[:600])}",
                 )
                 return 3
             except Exception as exc:
@@ -588,7 +588,7 @@ class AnomalyMicroLiveRunner:
                     self.telegram.send(
                         channel="events",
                         key="network_degraded",
-                        text=f"🪁 *Пауза по сети/API*\nБот не падает, ждёт восстановления.\nПричина: `{_telegram_escape(str(exc)[:300])}`",
+                        text=f"🪁 Пауза\n\n{_telegram_code(str(exc)[:300])}",
                     )
                 self._network_degraded = True
                 time.sleep(self.config.network_sleep_seconds)
@@ -2333,67 +2333,25 @@ def _category_value(category: LivePumpCategory, config: LiveAnomalyConfig, field
 
 
 BLOCKED_ORDER_REASON_LABELS = {
-    "reject_stale_signal": "stale signal",
-    "reject_invalid_live_price": "invalid live price",
-    "reject_tp1_already_reached": "TP1 already reached",
-    "reject_invalid_actual_risk_at_live_price": "invalid live risk",
-    "reject_actual_risk_too_wide_at_live_price": "live risk too wide",
-    "reject_entry_price_drift": "entry price drift",
-    "reject_rr_collapsed": "RR collapsed",
+    "reject_stale_signal": "сигнал устарел",
+    "reject_invalid_live_price": "live-price невалидный",
+    "reject_tp1_already_reached": "TP1 уже достигнут",
+    "reject_invalid_actual_risk_at_live_price": "риск от live-price невалидный",
+    "reject_actual_risk_too_wide_at_live_price": "риск от live-price слишком широкий",
+    "reject_entry_price_drift": "live-price слишком далеко от цены сигнала",
+    "reject_rr_collapsed": "RR до TP1 развалился",
 }
 
 
 def _format_order_blocked_message(signal: LiveSignal, *, event: str, details: dict[str, object]) -> str:
     reason = BLOCKED_ORDER_REASON_LABELS.get(event, event)
-    symbol = _compact_symbol(signal.symbol)
-    decision_time = datetime.fromtimestamp(int(signal.decision_timestamp_ms) / 1000, UTC).strftime("%H:%M:%S UTC")
-    lines = [
-        f"{_nature_emoji('blocked:' + event + ':' + signal.symbol)} *Live вход запрещён*",
-        f"{symbol} ({_coinglass_url(signal.symbol)})",
-        f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · {signal.category_label} · {signal.session}",
-        f"Причина: `{_telegram_escape(reason)}`",
-        f"Сигнал: `{decision_time}`",
-    ]
-
-    signal_age_ms = _detail_float(details, "signal_age_ms")
-    max_signal_age_ms = _detail_float(details, "max_signal_age_ms")
-    if signal_age_ms is not None and max_signal_age_ms is not None:
-        lines.append(f"Возраст: `{signal_age_ms / 1000:.1f}s / {max_signal_age_ms / 1000:.1f}s`")
-
-    live_price = _detail_float(details, "live_price")
-    signal_entry = _detail_float(details, "signal_entry_price")
-    signal_tp1 = _detail_float(details, "signal_tp1_price")
-    stop_price = _detail_float(details, "stop_price")
-    if signal_entry is not None:
-        lines.append(f"Signal entry: `{_format_price(signal_entry)}`")
-    if live_price is not None:
-        lines.append(f"Live price: `{_format_price(live_price)}`")
-    if signal_tp1 is not None:
-        lines.append(f"Signal TP1: `{_format_price(signal_tp1)}`")
-    if stop_price is not None:
-        lines.append(f"SL: `{_format_price(stop_price)}`")
-
-    drift_pct = _detail_float(details, "drift_pct")
-    abs_drift_pct = _detail_float(details, "abs_drift_pct")
-    max_drift_pct = _detail_float(details, "max_entry_price_drift_pct")
-    if drift_pct is not None and abs_drift_pct is not None:
-        if max_drift_pct is not None:
-            lines.append(
-                f"Drift: `{_format_percent(drift_pct, signed=True, precision=2)}` "
-                f"abs `{_format_percent(abs_drift_pct, precision=2)}` / max `{_format_percent(max_drift_pct, precision=2)}`"
-            )
-        else:
-            lines.append(f"Drift: `{_format_percent(drift_pct, signed=True, precision=2)}`")
-
-    rr_to_signal_tp1 = _detail_float(details, "rr_to_signal_tp1")
-    min_rr = _detail_float(details, "min_executable_rr_to_signal_tp1")
-    if rr_to_signal_tp1 is not None:
-        rr_line = f"RR to signal TP1: `{rr_to_signal_tp1:.2f}`"
-        if min_rr is not None:
-            rr_line += f" / min `{min_rr:.2f}`"
-        lines.append(rr_line)
-
-    return "\n".join(lines)
+    return (
+        f"{_nature_emoji('blocked:' + event + ':' + signal.symbol)} "
+        f"<b>{_telegram_symbol_link(signal.symbol)} Позиция не открыта</b>\n\n"
+        f"{_telegram_escape(reason)}\n\n"
+        f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · "
+        f"{_telegram_escape(signal.category_label)} · {_telegram_escape(signal.session)}"
+    )
 
 
 def _detail_float(details: dict[str, object], key: str) -> float | None:
@@ -2406,15 +2364,10 @@ def _detail_float(details: dict[str, object], key: str) -> float | None:
 
 
 def _format_position_integrity_error_message(position: LivePosition, *, reason: str) -> str:
-    symbol = _compact_symbol(position.signal.symbol)
     return (
-        f"🚨 *Live integrity error*\n"
-        f"{symbol} ({_coinglass_url(position.signal.symbol)})\n"
-        f"position `{_telegram_escape(position.position_id)}`\n"
-        f"Причина: `{_telegram_escape(reason)}`\n"
-        f"Entry: `{_format_price(position.entry_price)}` · amount `{position.remaining_amount:.8g}`\n"
-        f"Stop: `{_format_price(position.current_stop_price)}` · order `{_telegram_escape(str(position.stop_order_id))}`\n"
-        "Ведение позиции остановлено: требуется ручная проверка биржи и live_events.csv."
+        f"🚨 <b>{_telegram_symbol_link(position.signal.symbol)} Ошибка ведения позиции</b>\n\n"
+        f"{_telegram_escape(reason)}\n\n"
+        f"ID: {_telegram_code(position.position_id)}"
     )
 
 def _order_info(order: dict[str, object]) -> dict[str, object]:
@@ -2469,52 +2422,36 @@ def _format_open_message(position: LivePosition) -> str:
     entry_price = float(position.entry_price)
     tp_pct = _safe_divide(float(position.tp1_price) - entry_price, entry_price)
     sl_pct = _safe_divide(entry_price - float(position.stop_price), entry_price)
-    detail_lines = [
-        f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · {signal.category_label} · {signal.session}",
-        (
-            f"retention {_format_percent(signal.price_retention, precision=0)} · "
-            f"q×{signal.quote_ratio_start:.1f} · trades×{signal.trade_ratio_start:.1f}"
-        ),
-    ]
-    if signal.strengths:
-        detail_lines.append("+ " + "; ".join(signal.strengths[:2]))
-    if signal.weaknesses:
-        detail_lines.append("− " + "; ".join(signal.weaknesses[:2]))
-    category_review = _format_category_rejection_summary(signal.category_rejections)
-    symbol = _compact_symbol(signal.symbol)
+    weaknesses = _format_weaknesses(signal.weaknesses)
     return (
-        f"{_nature_emoji('open:' + signal.symbol)} {symbol} ({_coinglass_url(signal.symbol)}) LONG\n\n"
-        f"Вход {_format_price(entry_price)}\n"
-        f"сигнал {_format_price(signal.entry_price)}\n\n"
-        f"TP {_format_price(position.tp1_price)} {_format_percent(tp_pct)}\n"
-        f"SL {_format_price(position.stop_price)} {_format_percent(sl_pct)}\n\n"
-        + "\n".join(detail_lines)
-        + category_review
+        f"{_nature_emoji('open:' + signal.symbol)} <b>{_telegram_symbol_link(signal.symbol)} LONG</b>\n\n"
+        f"Сигнал: {_format_price(signal.entry_price)}\n\n"
+        f"Вход: {_format_price(entry_price)}\n\n"
+        f"TP1: {_format_price(position.tp1_price)} {_format_percent(tp_pct)}\n"
+        f"SL: {_format_price(position.stop_price)} {_format_percent(sl_pct)}\n\n"
+        f"Препятствия: {weaknesses}\n\n"
+        f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · "
+        f"{_telegram_escape(signal.category_label)} · {_telegram_escape(signal.session)}"
     )
 
 
 def _format_close_message(position: LivePosition, *, pnl_usdt: float, pnl_pct: float, exit_price: float) -> str:
-    signal = position.signal
-    symbol = _compact_symbol(signal.symbol)
-    detail_lines = [
-        f"выход {_format_price(exit_price)}",
-        f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · {signal.category_label} · {signal.session}",
-    ]
-    if position.tp1_done:
-        detail_lines.append("TP1 был взят")
+    exit_zone = _format_exit_zone(position, exit_price=exit_price)
     return (
-        f"{_nature_emoji('close:' + position.position_id)} {symbol} {_format_usdt(pnl_usdt)} USDT\n\n"
+        f"{_nature_emoji('close:' + position.position_id)} "
+        f"<b>{_telegram_symbol_link(position.signal.symbol)} {_format_usdt(pnl_usdt)} USDT</b>\n\n"
         f"PNL {_format_percent(pnl_pct, signed=False)}\n\n"
-        + "\n".join(detail_lines)
+        f"{exit_zone}"
     )
 
 
 def _format_stop_move_message(position: LivePosition, *, stop_price: float, label: str) -> str:
-    signal = position.signal
     stop_distance_from_entry = _safe_divide(float(stop_price) - float(position.entry_price), float(position.entry_price))
+    display_label = _format_stop_zone(position, stop_price=stop_price, fallback_label=label)
     return (
         f"{_nature_emoji('stop:' + label + ':' + position.position_id)} "
-        f"{_compact_symbol(signal.symbol)} {label} {_format_percent(stop_distance_from_entry, signed=True, precision=2)}"
+        f"<b>{_telegram_symbol_link(position.signal.symbol)} {display_label} "
+        f"{_format_percent(stop_distance_from_entry, signed=True, precision=2)}</b>"
     )
 
 
@@ -2663,6 +2600,38 @@ def _coinglass_url(symbol: str) -> str:
     return f"https://www.coinglass.com/tv/Binance_{_compact_symbol(symbol)}USDT"
 
 
+def _telegram_symbol_link(symbol: str) -> str:
+    compact = _telegram_escape(_compact_symbol(symbol))
+    return f'<a href="{_coinglass_url(symbol)}">{compact}</a>'
+
+
+def _format_weaknesses(weaknesses: list[str]) -> str:
+    if not weaknesses:
+        return "нет"
+    return ", ".join(_telegram_escape(str(item)) for item in weaknesses)
+
+
+def _format_exit_zone(position: LivePosition, *, exit_price: float) -> str:
+    if not position.tp1_done:
+        return "SL"
+    entry_price = float(position.entry_price)
+    if math.isfinite(exit_price) and math.isfinite(entry_price):
+        tolerance = max(abs(entry_price), 1.0) * 1e-4
+        if abs(float(exit_price) - entry_price) <= tolerance:
+            return "BE"
+    return _format_stop_zone(position, stop_price=exit_price, fallback_label="SL")
+
+
+def _format_stop_zone(position: LivePosition, *, stop_price: float, fallback_label: str) -> str:
+    if not position.tp1_done:
+        return fallback_label
+    price = float(stop_price)
+    tp1_price = float(position.tp1_price)
+    if not math.isfinite(price) or not math.isfinite(tp1_price):
+        return fallback_label
+    return "TP-" if price < tp1_price else "TP+"
+
+
 def _format_price(value: float) -> str:
     return f"{float(value):.6g}"
 
@@ -2728,4 +2697,8 @@ def _session_name(timestamp_ms: int) -> str:
 
 
 def _telegram_escape(value: str) -> str:
-    return value.replace("`", "'")
+    return html.escape(str(value), quote=False)
+
+
+def _telegram_code(value: str) -> str:
+    return f"<code>{_telegram_escape(str(value))}</code>"
