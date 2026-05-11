@@ -4908,3 +4908,53 @@ Risk:
 ```text
 Low. Deleted symbols were grep-dead in source after excluding __pycache__. Legacy PNO commands remain available through main.py; only the duplicate root launcher is removed.
 ```
+
+---
+
+## P126 — Remove stale PNO historical pytest marker
+
+```text
+Status: PROPOSED / compile + grep verified locally
+Type: cleanup / test config hygiene
+Trading logic changed: no
+Files: pyproject.toml, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+pyproject.toml still excludes a pno_historical pytest marker, but the current ZIP contains no tests/ directory and no tests/test_pno.py to run through that marker.
+Keeping the marker makes the active test configuration claim that a historical PNO test bucket exists in the checkout when it does not.
+```
+
+Change:
+
+```text
+Remove the stale [tool.pytest.ini_options] marker block from pyproject.toml.
+Do not modify PNO strategy code, anomaly code, CLI handlers, or data-loading behavior.
+Do not rewrite old historical patch-log entries; add a current-state note that the marker is no longer present in this ZIP-derived source tree.
+```
+
+Verification:
+
+```bash
+python -m compileall pyproject.toml research/PATCH_LOG.md research/RESEARCH_STATE.md
+python - <<'PY'
+from pathlib import Path
+for token in ("pno_historical", "tests/test_pno.py"):
+    active_hits = [
+        str(path)
+        for path in [Path("pyproject.toml")]
+        if token in path.read_text(encoding="utf-8")
+    ]
+    print(token, active_hits)
+print("tests_dir_exists", Path("tests").exists())
+PY
+```
+
+Risk:
+
+```text
+Low in the provided ZIP: there is no tests/ directory, so the marker excludes nothing runnable. If an external branch still has tests/test_pno.py, it should reintroduce a current, explicit legacy-test config in that branch rather than keeping stale config in anomaly-first source.
+```

@@ -1290,3 +1290,15 @@ Kept: strategy/pno and cli/pno_diagnostics, because legacy PNO backtest/stage/pl
 Trading logic is unchanged.
 Next check: decide whether to move legacy PNO commands behind pno-legacy naming or archive strategy/pno after one explicit legacy smoke.
 ```
+
+---
+
+## 2026-05-11 stale PNO pytest marker cleanup
+
+```text
+P126 proposes removing the obsolete pno_historical pytest marker from pyproject.toml.
+The current ZIP-derived source tree has no tests/ directory, so the marker is not an active historical-test bucket; it is only stale PNO surface.
+Old P075/E023 notes remain historical context, but they no longer describe the current checkout after this cleanup.
+Trading logic is unchanged.
+Next check: after one anomaly smoke, decide whether PNO legacy commands should be renamed to pno-legacy-* or archived.
+```

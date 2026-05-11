@@ -23,9 +23,3 @@ build-backend = "setuptools.build_meta"
 "data/fetchers/market_data_fetcher.py" = ["BLE001"]
 "data/fetchers/ohlcv_fetcher.py" = ["BLE001"]
 "data/fetchers/oi_fetcher.py" = ["BLE001"]
-
-[tool.pytest.ini_options]
-addopts = ["-m", "not pno_historical"]
-markers = [
-  "pno_historical: stale PNO regression suite kept for investigation; excluded from the default runnable test suite",
-]
