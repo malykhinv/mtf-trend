@@ -17,6 +17,29 @@ import pandas as pd
 
 from data.storage.parquet_storage import ParquetStorage
 from domain.enums.timeframe import Timeframe
+from research_tools.charting import (
+    CHART_AXIS_FACE,
+    CHART_DOWN,
+    CHART_ENTRY,
+    CHART_EXIT,
+    CHART_FIGURE_FACE,
+    CHART_GRID,
+    CHART_LEVEL,
+    CHART_MUTED,
+    CHART_SAVEFIG_KWARGS,
+    CHART_TEXT,
+    CHART_UP,
+    annotate_axis_price_tag,
+    build_tick_labels_from_timestamps,
+    build_tick_positions_from_timestamps,
+    build_tick_timestamps,
+    configure_plot_axes,
+    draw_candles,
+    format_chart_symbol,
+    format_price_label,
+    resolve_axis_tag_positions,
+    resolve_timestamp_plot_idx,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +65,9 @@ class HourlyLevelScanConfig:
     break_hold_bars: int = 2
     reject_downtrend_symbols: bool = True
     reject_downtrend_levels: bool = True
+    max_levels_per_symbol: int = 4
+    reject_pierced_levels: bool = True
+    max_level_pierce_pct: float = 0.015
     save_empty_charts: bool = False
     progress_every_symbols: int = 5
     progress_min_seconds: float = 5.0
@@ -75,6 +101,8 @@ class HourlyLevelMetric:
     median_valid_reaction_pct: float
     recent_move_pct: float
     reaction_to_recent_move_ratio: float
+    pierce_count: int
+    max_pierce_pct: float
     strength_score: float
     context: str
     trend_state: str
@@ -299,20 +327,45 @@ def _pivot_high_prices(frame: pd.DataFrame, side_bars: int) -> list[tuple[int, f
     return pivots
 
 
-def _cluster_prices(pivots: list[tuple[int, float]], tolerance_pct: float) -> list[float]:
+@dataclass(frozen=True, slots=True)
+class LevelCluster:
+    level_price: float
+    pivot_count: int
+    first_pivot_timestamp_ms: int
+    last_pivot_timestamp_ms: int
+    min_price: float
+    max_price: float
+
+
+def _cluster_prices(pivots: list[tuple[int, float]], tolerance_pct: float) -> list[LevelCluster]:
     clusters: list[list[tuple[int, float]]] = []
     for pivot in sorted(pivots, key=lambda item: item[1]):
         _, price = pivot
         attached = False
         for cluster in clusters:
             center = float(np.median([item[1] for item in cluster]))
-            if abs(price - center) / center <= tolerance_pct:
+            if center > 0.0 and abs(price - center) / center <= tolerance_pct:
                 cluster.append(pivot)
                 attached = True
                 break
         if not attached:
             clusters.append([pivot])
-    return [float(np.median([item[1] for item in cluster])) for cluster in clusters]
+
+    resolved: list[LevelCluster] = []
+    for cluster in clusters:
+        timestamps = [item[0] for item in cluster]
+        prices = [item[1] for item in cluster]
+        resolved.append(
+            LevelCluster(
+                level_price=float(max(prices)),
+                pivot_count=len(cluster),
+                first_pivot_timestamp_ms=min(timestamps),
+                last_pivot_timestamp_ms=max(timestamps),
+                min_price=float(min(prices)),
+                max_price=float(max(prices)),
+            )
+        )
+    return resolved
 
 
 def _touch_reactions(
@@ -322,16 +375,28 @@ def _touch_reactions(
     tolerance_pct: float,
     min_bounce_pct: float,
     bounce_lookahead_bars: int,
+    min_retouch_distance_pct: float,
 ) -> list[TouchReaction]:
     touches: list[TouchReaction] = []
     band_low = level_price * (1.0 - tolerance_pct)
     band_high = level_price * (1.0 + tolerance_pct)
+    rearm_price = level_price * (1.0 - max(min_retouch_distance_pct, tolerance_pct))
+    armed = True
+
     for idx, row in frame.iterrows():
         high = float(row["high"])
         low = float(row["low"])
         close = float(row["close"])
+
+        if not armed:
+            if low <= rearm_price or close <= rearm_price:
+                armed = True
+            else:
+                continue
+
         if high < band_low or low > band_high:
             continue
+
         future = frame.iloc[idx + 1: idx + 1 + bounce_lookahead_bars]
         if future.empty:
             continue
@@ -348,7 +413,47 @@ def _touch_reactions(
                 valid=reaction_pct >= min_bounce_pct,
             )
         )
+        armed = False
     return touches
+
+
+def _level_pierce_stats(
+    frame: pd.DataFrame,
+    *,
+    level_price: float,
+    after_timestamp_ms: int,
+    accepted_close_tolerance_pct: float,
+    min_pierce_pct: float,
+) -> tuple[int, float]:
+    after = frame.loc[frame["timestamp"].ge(after_timestamp_ms)].copy()
+    if after.empty or level_price <= 0.0:
+        return 0, 0.0
+
+    highs = after["high"].astype(float)
+    closes = after["close"].astype(float)
+    pierce_pct = (highs / level_price) - 1.0
+    rejected_pierce = (
+        pierce_pct.gt(max(min_pierce_pct, 0.0))
+        & closes.le(level_price * (1.0 + accepted_close_tolerance_pct))
+    )
+    if not bool(rejected_pierce.any()):
+        return 0, 0.0
+    return int(rejected_pierce.sum()), float(pierce_pct.loc[rejected_pierce].max())
+
+
+def _select_major_levels(
+    metrics: list[HourlyLevelMetric],
+    *,
+    max_levels: int,
+    min_level_separation_pct: float,
+) -> list[HourlyLevelMetric]:
+    selected: list[HourlyLevelMetric] = []
+    for metric in metrics:
+        if all(abs(metric.level_price - existing.level_price) / existing.level_price >= min_level_separation_pct for existing in selected):
+            selected.append(metric)
+        if len(selected) >= max_levels:
+            break
+    return selected
 
 
 def _has_held_break_above(
@@ -403,10 +508,11 @@ def find_hourly_overhead_levels(
     latest_ts = int(frame["timestamp"].iloc[-1])
     recent_move = _recent_move_pct(frame, config.recent_move_lookback_bars)
     pivots = _pivot_high_prices(frame, config.pivot_side_bars)
-    level_prices = _cluster_prices(pivots, config.touch_tolerance_pct)
+    level_clusters = _cluster_prices(pivots, config.touch_tolerance_pct)
     metrics: list[HourlyLevelMetric] = []
 
-    for level_price in level_prices:
+    for cluster in level_clusters:
+        level_price = cluster.level_price
         distance_pct = (level_price - latest_close) / latest_close if latest_close > 0.0 else float("nan")
         if not math.isfinite(distance_pct):
             continue
@@ -419,6 +525,7 @@ def find_hourly_overhead_levels(
             tolerance_pct=config.touch_tolerance_pct,
             min_bounce_pct=config.min_bounce_pct,
             bounce_lookahead_bars=config.bounce_lookahead_bars,
+            min_retouch_distance_pct=max(config.min_bounce_pct, config.touch_tolerance_pct * 3.0),
         )
         valid_touches = [touch for touch in touches if touch.valid]
         if len(valid_touches) < config.min_touches:
@@ -433,11 +540,21 @@ def find_hourly_overhead_levels(
         ):
             continue
 
+        first_valid_touch_ts = min(touch.timestamp_ms for touch in valid_touches)
         if config.reject_downtrend_levels:
-            first_valid = min(touch.timestamp_ms for touch in valid_touches)
-            segment = frame.loc[(frame["timestamp"] >= first_valid) & (frame["timestamp"] <= last_valid_touch_ts)]
+            segment = frame.loc[(frame["timestamp"] >= first_valid_touch_ts) & (frame["timestamp"] <= last_valid_touch_ts)]
             if len(segment) >= 72 and _trend_state(segment) == "downtrend":
                 continue
+
+        pierce_count, max_pierce_pct = _level_pierce_stats(
+            frame,
+            level_price=level_price,
+            after_timestamp_ms=first_valid_touch_ts,
+            accepted_close_tolerance_pct=config.break_close_tolerance_pct,
+            min_pierce_pct=config.max_level_pierce_pct,
+        )
+        if config.reject_pierced_levels and pierce_count > 0:
+            continue
 
         reactions = [touch.reaction_pct for touch in valid_touches]
         max_reaction = max(reactions)
@@ -474,39 +591,54 @@ def find_hourly_overhead_levels(
                 median_valid_reaction_pct=median_reaction,
                 recent_move_pct=recent_move,
                 reaction_to_recent_move_ratio=ratio,
+                pierce_count=pierce_count,
+                max_pierce_pct=max_pierce_pct,
                 strength_score=float(strength),
                 context=context,
                 trend_state=trend,
                 chart_path=chart_path,
             )
         )
-    metrics.sort(key=lambda item: (item.context != "bullish_target", item.distance_pct, -item.strength_score))
+    metrics.sort(key=lambda item: (item.distance_pct, -item.strength_score))
+    metrics = _select_major_levels(
+        metrics,
+        max_levels=config.max_levels_per_symbol,
+        min_level_separation_pct=max(config.touch_tolerance_pct * 2.5, 0.012),
+    )
     return metrics, trend, "ok" if metrics else "no_valid_overhead_levels"
 
 
-def _draw_candles(ax: object, frame: pd.DataFrame) -> None:
-    import matplotlib.patches as patches
+def _level_color(context: str) -> str:
+    if context == "bullish_target":
+        return CHART_EXIT
+    if context == "danger_ceiling":
+        return CHART_LEVEL
+    return CHART_ENTRY
 
-    width = 0.60
-    for idx, row in enumerate(frame.itertuples(index=False)):
-        open_price = float(getattr(row, "open"))
-        high = float(getattr(row, "high"))
-        low = float(getattr(row, "low"))
-        close = float(getattr(row, "close"))
-        edge = "#00a070" if close >= open_price else "#d84a5f"
-        ax.vlines(idx, low, high, linewidth=0.8, color=edge, alpha=0.80)
-        body_low = min(open_price, close)
-        body_height = max(abs(close - open_price), max(high - low, 1e-12) * 0.015)
-        rect = patches.Rectangle(
-            (idx - width / 2, body_low),
-            width,
-            body_height,
-            linewidth=0.7,
-            edgecolor=edge,
-            facecolor=edge,
-            alpha=0.70,
-        )
-        ax.add_patch(rect)
+
+def _level_label(context: str) -> str:
+    if context == "bullish_target":
+        return "target"
+    if context == "danger_ceiling":
+        return "ceiling"
+    return "level"
+
+
+def _draw_volume_panel(volume_ax: object, chart_frame: pd.DataFrame, x_values: np.ndarray) -> None:
+    volume_column = "quote_volume" if "quote_volume" in chart_frame.columns else "volume"
+    if volume_column not in chart_frame.columns:
+        volume_ax.set_visible(False)
+        return
+    volumes = pd.to_numeric(chart_frame[volume_column], errors="coerce").fillna(0.0).to_numpy(dtype=float)
+    colors = np.where(
+        chart_frame["close"].astype(float).to_numpy() >= chart_frame["open"].astype(float).to_numpy(),
+        CHART_UP,
+        CHART_DOWN,
+    )
+    volume_ax.bar(x_values, volumes, width=0.72, color=colors.tolist(), alpha=0.42)
+    volume_ax.set_ylabel("Vol", fontsize=8, color=CHART_MUTED)
+    if volumes.size and float(np.nanmax(volumes)) > 0.0:
+        volume_ax.set_ylim(0.0, float(np.nanmax(volumes)) * 1.25)
 
 
 def save_hourly_level_chart(symbol: str, frame_1h: pd.DataFrame, levels: list[HourlyLevelMetric], output_path: Path, chart_bars: int) -> None:
@@ -516,38 +648,106 @@ def save_hourly_level_chart(symbol: str, frame_1h: pd.DataFrame, levels: list[Ho
     if chart_frame.empty:
         return
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(15, 7))
-    _draw_candles(ax, chart_frame)
+
+    x_values = np.arange(len(chart_frame), dtype=float)
+    fig, (price_ax, volume_ax) = plt.subplots(
+        2,
+        1,
+        figsize=(15, 8),
+        sharex=True,
+        gridspec_kw={"height_ratios": [4.2, 1.0], "hspace": 0.03},
+        facecolor=CHART_FIGURE_FACE,
+    )
+    configure_plot_axes(price_ax=price_ax, volume_ax=volume_ax)
+    draw_candles(price_ax, chart_frame, x_values, alpha=0.98)
+    _draw_volume_panel(volume_ax, chart_frame, x_values)
+
     latest_close = float(chart_frame["close"].iloc[-1])
-    ax.axhline(latest_close, linestyle="--", linewidth=0.8, alpha=0.55)
-    for level in levels:
-        level_color = "#f0b429" if level.context == "bullish_target" else "#c084fc"
-        ax.axhline(level.level_price, linewidth=1.2, alpha=0.85, color=level_color)
+    y_values = [latest_close, *chart_frame["low"].astype(float).tolist(), *chart_frame["high"].astype(float).tolist()]
+    y_values.extend(level.level_price for level in levels)
+    finite_y = [float(value) for value in y_values if math.isfinite(float(value))]
+    if finite_y:
+        y_min = min(finite_y)
+        y_max = max(finite_y)
+        padding = max((y_max - y_min) * 0.08, max(abs(latest_close), 1e-12) * 0.002)
+        price_ax.set_ylim(y_min - padding, y_max + padding)
+    price_ax.axhline(latest_close, linestyle="--", linewidth=0.8, alpha=0.45, color=CHART_MUTED, zorder=2.7)
+
+    timestamps = chart_frame["timestamp"].astype("int64").to_numpy()
+    tag_items: list[tuple[str, float | None]] = [("last", latest_close)]
+    for level_index, level in enumerate(levels, start=1):
+        tag_items.append((f"{_level_label(level.context)}{level_index}", level.level_price))
+    tag_positions = resolve_axis_tag_positions(tag_items)
+
+    for level_index, level in enumerate(levels, start=1):
+        level_color = _level_color(level.context)
+        start_idx = resolve_timestamp_plot_idx(timestamps, level.first_touch_timestamp_ms)
+        end_idx = max(len(chart_frame) - 1, start_idx)
+        price_ax.hlines(
+            level.level_price,
+            start_idx,
+            end_idx,
+            linewidth=1.15,
+            alpha=0.86,
+            color=level_color,
+            zorder=3.2,
+        )
+        price_ax.scatter(
+            [start_idx],
+            [level.level_price],
+            s=14,
+            color=level_color,
+            zorder=4.5,
+            alpha=0.95,
+        )
+        tag_key = f"{_level_label(level.context)}{level_index}"
+        annotate_axis_price_tag(
+            price_ax,
+            y=level.level_price,
+            label=_level_label(level.context),
+            color=level_color,
+            leader_start_x=end_idx,
+            text_y=tag_positions.get(tag_key),
+        )
         label = (
-            f"{level.level_price:.8g} | {level.context} | "
-            f"touches={level.valid_touch_count} | dist={level.distance_pct:.1%} | "
+            f"{_level_label(level.context)} {format_price_label(level.level_price)}  "
+            f"t={level.valid_touch_count}  dist={level.distance_pct:.1%}  "
             f"bounce={level.max_reaction_pct:.1%}"
         )
-        ax.text(
-            max(len(chart_frame) - 1, 0),
+        if level.pierce_count > 0:
+            label += f"  pierce={level.max_pierce_pct:.1%}"
+        price_ax.text(
+            end_idx,
             level.level_price,
             label,
             va="bottom",
             ha="right",
-            fontsize=8,
+            fontsize=7.4,
             color=level_color,
+            alpha=0.92,
+            zorder=5.0,
         )
-    tick_step = max(len(chart_frame) // 8, 1)
-    tick_positions = list(range(0, len(chart_frame), tick_step))
-    tick_labels = [_timestamp_to_utc(int(chart_frame["timestamp"].iloc[pos]))[5:16].replace("T", " ") for pos in tick_positions]
-    ax.set_xticks(tick_positions)
-    ax.set_xticklabels(tick_labels, rotation=30, ha="right")
-    chart_symbol = _ascii_safe_chart_text(symbol)
-    ax.set_title(f"{chart_symbol} 1h overhead levels")
-    ax.set_xlim(-1, len(chart_frame) + 1)
-    ax.grid(True, alpha=0.20)
+
+    annotate_axis_price_tag(
+        price_ax,
+        y=latest_close,
+        label="last",
+        color=CHART_MUTED,
+        text_y=tag_positions.get("last"),
+    )
+
+    tick_timestamps = build_tick_timestamps(chart_frame)
+    tick_positions = build_tick_positions_from_timestamps(tick_timestamps, len(chart_frame))
+    tick_labels = build_tick_labels_from_timestamps(tick_timestamps, tick_positions)
+    volume_ax.set_xticks(tick_positions.tolist())
+    volume_ax.set_xticklabels(tick_labels, rotation=0, ha="center", color=CHART_MUTED)
+
+    chart_symbol = format_chart_symbol(symbol)
+    price_ax.set_title(f"{chart_symbol} 1h overhead levels", fontsize=15, color=CHART_TEXT, pad=12, weight="bold")
+    price_ax.set_ylabel("Price", fontsize=8, color=CHART_MUTED)
+    price_ax.set_xlim(-1, len(chart_frame) + 2)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=140)
+    fig.savefig(output_path, **CHART_SAVEFIG_KWARGS)
     plt.close(fig)
 
 
@@ -726,6 +926,9 @@ def build_config_from_namespace(args: object, *, cache_dir: Path, results_dir: P
         break_hold_bars=int(getattr(args, "break_hold_bars", 2)),
         reject_downtrend_symbols=bool(getattr(args, "reject_downtrend_symbols", True)),
         reject_downtrend_levels=bool(getattr(args, "reject_downtrend_levels", True)),
+        max_levels_per_symbol=int(getattr(args, "max_levels_per_symbol", 4)),
+        reject_pierced_levels=bool(getattr(args, "reject_pierced_levels", True)),
+        max_level_pierce_pct=float(getattr(args, "max_level_pierce_pct", 0.015)),
         save_empty_charts=bool(getattr(args, "save_empty_charts", False)),
         progress_every_symbols=int(getattr(args, "progress_every_symbols", 5)),
         progress_min_seconds=float(getattr(args, "progress_min_seconds", 5.0)),

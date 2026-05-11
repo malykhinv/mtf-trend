@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P139 proposed locally on top of ZIP-derived source
-Last active patch: P139 hourly-level progress and ETA
+Local patch stack: P130-P140 proposed locally on top of ZIP-derived source
+Last active patch: P140 humanized/de-spiked hourly levels
 Updated: 2026-05-11
 ```
 
@@ -171,4 +171,18 @@ Next verification:
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --progress-every-symbols 5 --progress-min-seconds 5
+```
+
+
+---
+
+## 14. Current audit note — P140
+
+P140 is diagnostics-only. It makes `run-hourly-levels` closer to human chart review: repeated candles near the same price no longer count as independent touches unless price first resets away from the level, chart levels start at the first valid touch, close duplicate levels are capped, and pierced/spiked-through resistance is rejected by default.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --touch-tolerance-pct 0.006 --reject-pierced-levels true --max-level-pierce-pct 0.015 --max-levels-per-symbol 4
 ```

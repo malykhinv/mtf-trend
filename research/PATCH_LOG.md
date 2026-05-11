@@ -16,6 +16,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P137 | Repair 1h overhead level scanner wiring | PROPOSED | `research_tools/hourly_levels.py`, `cli/*`, `research/*` | diagnostics | Restore the non-empty scanner module and register `run-hourly-levels`; detect bounce-validated 1h overhead levels and export metrics/charts. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-hourly-levels --source-timeframe 5m --days 45`. |
 | P138 | Make hourly-level chart text ASCII-safe | PROPOSED | `research_tools/hourly_levels.py`, `research/*` | diagnostics | Avoid matplotlib missing-glyph warning spam by rendering non-ASCII symbols as escaped ASCII in chart titles/filenames. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; run `run-hourly-levels` on symbols with non-ASCII names. |
 | P139 | Add hourly-level scan progress and ETA | PROPOSED | `research_tools/hourly_levels.py`, `cli/*`, `research/*` | diagnostics | Emit start/progress lines with processed count, elapsed time, ETA, levels, chart count and last symbol status during long all-cache hourly-level scans. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; run `run-hourly-levels` and verify progress appears before completion. |
+| P140 | Humanize and de-spike hourly levels | PROPOSED | `research_tools/hourly_levels.py`, `cli/parser.py`, `research/*` | diagnostics | Draw dark bot-style charts, count retouches only after a meaningful reset away from the level, cap nearby levels per symbol, draw levels from first valid touch, and reject pierced/spiked-through resistance levels by default. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; rerun `run-hourly-levels` with pierced-level guard enabled. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -331,3 +332,33 @@ python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3
 ### Risk
 
 Low: diagnostics only. More console/log lines during long scanner runs; level detection, live execution and backtest behavior are unchanged.
+
+## P140 — Humanize and de-spike hourly levels
+
+Status: PROPOSED
+Date: 2026-05-11
+Commit: UNKNOWN
+
+### Reason
+
+The first hourly-level charts were visually and logically noisy: one local grind near resistance could be counted as dozens of touches, levels were drawn as infinite full-chart horizontals, nearby duplicate levels crowded the chart, and wick spikes through resistance could still leave a level marked as valid.
+
+### Change
+
+- Reuse the shared dark chart style from `research_tools/charting.py` and add a volume panel.
+- Count a new touch only after price has moved materially away from the previous touch and then returned to the level.
+- Draw each level segment from its first valid touch instead of as a full-width horizontal line.
+- Cap major levels per symbol with `--max-levels-per-symbol` and de-duplicate close levels.
+- Reject pierced levels by default with `--reject-pierced-levels true`: if price spikes materially above the level and closes back below the accepted-break zone, the level is treated as damaged rather than clean resistance.
+- Export `pierce_count` and `max_pierce_pct` in the summary for audit when the guard is disabled.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --touch-tolerance-pct 0.006 --reject-pierced-levels true --max-level-pierce-pct 0.015 --max-levels-per-symbol 4 --progress-every-symbols 5 --progress-min-seconds 5
+```
+
+### Risk
+
+Low/medium for diagnostics: the scanner will output fewer levels, and some previously visible wick-spiked levels will disappear. Trading/live/backtest execution logic is unchanged.
