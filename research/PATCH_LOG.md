@@ -4788,3 +4788,66 @@ Risk:
 ```text
 Low-to-medium charting risk: chart helpers were extracted as neutral copies for anomaly renderers, so future chart fixes must be applied to the neutral module. PNO diagnostics still has its legacy local chart helpers until the later legacy-isolation/removal patch.
 ```
+
+---
+
+## P124 — Lazy-isolate legacy PNO CLI imports
+
+```text
+Status: PROPOSED / compile + parser/config smoke verified locally
+Type: architecture / legacy isolation
+Trading logic changed: no
+Files: cli/commands.py, cli/parser.py, config/__init__.py, config/strategy_config.py, strategy/factory.py, research/PATCH_LOG.md, research/RESEARCH_STATE.md
+Commit: UNKNOWN
+```
+
+Problem:
+
+```text
+After P123, anomaly live/backtest modules no longer imported PNO directly, but the application entry path still loaded PNO indirectly.
+main.py imports config and cli.parser; config imported strategy.pno.config for default timeframes, cli.parser imported cli.commands at module import time, and cli.commands imported PNO strategy/diagnostics at top level.
+That meant anomaly commands were still coupled to legacy PNO during startup/parser construction.
+```
+
+Change:
+
+```text
+Move config default timeframe constants into config/strategy_config.py without importing strategy.pno.config.
+Make strategy/factory.py import PnoStrategy only inside the pno branch.
+Make cli.parser import cli.commands only inside resolve_handler, not during parser construction.
+Move cli.commands PNO strategy/diagnostics imports behind _ensure_pno_legacy_runtime(), called only by PNO backtest/stage/plot paths.
+No PNO classes or engine code are renamed to anomaly; legacy PNO remains explicit and isolated.
+```
+
+Verification:
+
+```bash
+python -m compileall cli/commands.py cli/parser.py config/__init__.py config/strategy_config.py strategy/factory.py main.py
+python - <<'PY'
+import sys
+import config
+from cli.parser import build_parser
+print('after parser import:', 'strategy.pno' in sys.modules, 'cli.pno_diagnostics' in sys.modules)
+config.load_config(env_path='/tmp/nonexistent_env_for_smoke')
+print('after load_config:', 'strategy.pno' in sys.modules, 'cli.pno_diagnostics' in sys.modules)
+parser = build_parser()
+args = parser.parse_args(['run-anomaly-lab', '--days', '1'])
+print(args.command)
+print('after parser build/parse:', 'strategy.pno' in sys.modules, 'cli.pno_diagnostics' in sys.modules)
+PY
+```
+
+Smoke:
+
+```text
+after parser import: False False
+after load_config: False False
+run-anomaly-lab
+after parser build/parse: False False
+```
+
+Risk:
+
+```text
+Low-to-medium legacy CLI risk: PNO-only symbols are now lazy-loaded. PNO run-backtest, plot-backtest and pno-stage still call the loader before using PNO objects. A full PNO backtest smoke should be run in the target environment with pyarrow installed.
+```

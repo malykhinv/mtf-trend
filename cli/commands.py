@@ -46,27 +46,10 @@ from domain.models.reporting.quality_summary import QualitySummary
 from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
 from strategy.factory import build_strategy
-from strategy.pno import PnoParams, PnoStrategy
-from strategy.pno.config import (
-    PNO_BACKTEST_TIMEFRAME_PAIRS,
-    resolve_pno_default_timeframe_pair,
-    validate_pno_timeframe_pair,
-)
-from strategy.pno.engine import PNO_STAGE_4_LEVEL, PNO_STAGE_5_POSITION, PNO_STAGE_SEQUENCE
 from utils.logger import get_logger
 from utils.symbols import normalize_symbol
 from vectorbt_runner import BacktestRunner, DataPreparer, SymbolDataLoadResult, SymbolMtfFrames
 from vectorbt_runner.backtest_runner import BacktestGenerationDiagnosticsCache
-from cli.pno_diagnostics import (
-    _export_pno_research_context,
-    _export_pno_stage_reviews,
-    _read_csv_with_status,
-    _render_pno_position_charts_for_symbol,
-    _safe_float,
-    _safe_int,
-    _select_stage_review_rejection_rows,
-    _to_compact_json,
-)
 
 # region Приватные
 
@@ -232,12 +215,57 @@ _PNO_STAGE_REVIEW_RUN_SUMMARY_COLUMNS: tuple[str, ...] = (
     "events_path",
     "summary_path",
 )
+_PNO_STAGE_COUNT = 5
 _PNO_STAGE_PRESETS: dict[str, tuple[int | None, int | None]] = {
-    **{f"s{idx}": (idx, None) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
-    **{f"stage{idx}": (idx, None) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
-    **{f"t{idx}": (None, idx) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
-    **{f"through{idx}": (None, idx) for idx in range(1, len(PNO_STAGE_SEQUENCE) + 1)},
+    **{f"s{idx}": (idx, None) for idx in range(1, _PNO_STAGE_COUNT + 1)},
+    **{f"stage{idx}": (idx, None) for idx in range(1, _PNO_STAGE_COUNT + 1)},
+    **{f"t{idx}": (None, idx) for idx in range(1, _PNO_STAGE_COUNT + 1)},
+    **{f"through{idx}": (None, idx) for idx in range(1, _PNO_STAGE_COUNT + 1)},
 }
+_PNO_LEGACY_RUNTIME_LOADED = False
+
+
+def _ensure_pno_legacy_runtime() -> None:
+    """Load PNO-only strategy/diagnostics symbols only for legacy PNO commands."""
+
+    global _PNO_LEGACY_RUNTIME_LOADED
+    if _PNO_LEGACY_RUNTIME_LOADED:
+        return
+
+    from cli import pno_diagnostics as diagnostics
+    from strategy.pno import PnoParams as _PnoParams, PnoStrategy as _PnoStrategy
+    from strategy.pno.config import (
+        PNO_BACKTEST_TIMEFRAME_PAIRS as _PNO_BACKTEST_TIMEFRAME_PAIRS,
+        resolve_pno_default_timeframe_pair as _resolve_pno_default_timeframe_pair,
+        validate_pno_timeframe_pair as _validate_pno_timeframe_pair,
+    )
+    from strategy.pno.engine import (
+        PNO_STAGE_4_LEVEL as _PNO_STAGE_4_LEVEL,
+        PNO_STAGE_5_POSITION as _PNO_STAGE_5_POSITION,
+        PNO_STAGE_SEQUENCE as _PNO_STAGE_SEQUENCE,
+    )
+
+    globals().update(
+        {
+            "PnoParams": _PnoParams,
+            "PnoStrategy": _PnoStrategy,
+            "PNO_BACKTEST_TIMEFRAME_PAIRS": _PNO_BACKTEST_TIMEFRAME_PAIRS,
+            "resolve_pno_default_timeframe_pair": _resolve_pno_default_timeframe_pair,
+            "validate_pno_timeframe_pair": _validate_pno_timeframe_pair,
+            "PNO_STAGE_4_LEVEL": _PNO_STAGE_4_LEVEL,
+            "PNO_STAGE_5_POSITION": _PNO_STAGE_5_POSITION,
+            "PNO_STAGE_SEQUENCE": _PNO_STAGE_SEQUENCE,
+            "_export_pno_research_context": diagnostics._export_pno_research_context,
+            "_export_pno_stage_reviews": diagnostics._export_pno_stage_reviews,
+            "_read_csv_with_status": diagnostics._read_csv_with_status,
+            "_render_pno_position_charts_for_symbol": diagnostics._render_pno_position_charts_for_symbol,
+            "_safe_float": diagnostics._safe_float,
+            "_safe_int": diagnostics._safe_int,
+            "_select_stage_review_rejection_rows": diagnostics._select_stage_review_rejection_rows,
+            "_to_compact_json": diagnostics._to_compact_json,
+        }
+    )
+    _PNO_LEGACY_RUNTIME_LOADED = True
 
 
 def _pno_output_symbol_stem(symbol: object) -> str:
@@ -275,6 +303,7 @@ def _warn_if_pno_backtest_window_too_short(
     if strategy_id != "pno" or backtest_days is None:
         return
 
+    _ensure_pno_legacy_runtime()
     defaults = PnoParams(symbol="", levels_timeframe=levels_timeframe)
     required_levels_bars_by_timeframe = {
         Timeframe.M5: defaults.min_data_5m,
@@ -1723,6 +1752,7 @@ def _flatten_position_for_diagnostics(position: object) -> dict[str, object]:
 
 
 def _resolve_pno_stage_ids(args: argparse.Namespace) -> tuple[str, ...]:
+    _ensure_pno_legacy_runtime()
     raw_stage = getattr(args, "pno_stage", None)
     raw_through_stage = getattr(args, "pno_through_stage", None)
     if raw_stage is not None and raw_through_stage is not None:
@@ -3055,6 +3085,7 @@ def _resolve_backtest_timeframes(
     if strategy_id != "pno":
         raise ValueError(f"Unsupported strategy for backtest timeframe resolution: {strategy_id}")
 
+    _ensure_pno_legacy_runtime()
     fallback_pair = (
         configured_levels_timeframe,
         configured_entry_timeframe,
@@ -3089,6 +3120,7 @@ def _with_pno_stage_args(
     preset_stage: int | None,
     preset_through_stage: int | None,
 ) -> argparse.Namespace:
+    _ensure_pno_legacy_runtime()
     cloned = argparse.Namespace(**vars(args))
     default_levels_timeframe, default_entry_timeframe = resolve_pno_default_timeframe_pair(mode="backtest")
     cloned.command = "run-backtest"
@@ -3387,6 +3419,8 @@ def _run_backtest_inner(config: AppConfig, args: argparse.Namespace) -> int:
         if getattr(args, "strategy", None) is not None
         else str(config.strategy.strategy_id).strip().lower()
     )
+    if strategy_id == "pno":
+        _ensure_pno_legacy_runtime()
     config.strategy.strategy_id = strategy_id
     config.backtest.results_dir = _resolve_results_dir_for_strategy(config.backtest.results_dir, strategy_id)
     run_root_dir_raw = getattr(args, "backtest_run_root_dir", None)
@@ -3935,6 +3969,7 @@ def _collect_pno_stage_summary_rows(
 
 
 def _run_pno_stage_inner(config: AppConfig, args: argparse.Namespace) -> int:
+    _ensure_pno_legacy_runtime()
     logger = get_logger("pno-stage", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
     preset_stage, preset_through_stage, preset_name = _resolve_pno_stage_preset(getattr(args, "preset", None))
     timestamp_label = time.strftime("%Y%m%d_%H%M%S")
@@ -4275,6 +4310,8 @@ def run_backtest(config: AppConfig, args: argparse.Namespace) -> int:
         if getattr(args, "strategy", None) is not None
         else str(config.strategy.strategy_id).strip().lower()
     )
+    if strategy_id == "pno":
+        _ensure_pno_legacy_runtime()
     run_root_dir = _resolve_backtest_run_root_dir(config.backtest.results_dir, strategy_id)
     run_root_dir.mkdir(parents=True, exist_ok=True)
     if strategy_id == "pno" and bool(getattr(args, "pno_all_tf_pairs", False)):
@@ -4307,6 +4344,7 @@ def _run_backtest_all_pno_timeframe_pairs(
 ) -> int:
     if str(strategy_id).strip().lower() != "pno":
         raise ValueError("multi-timeframe backtest run is supported only for PNO")
+    _ensure_pno_legacy_runtime()
 
     exit_codes: list[int] = []
     for levels_timeframe, entry_timeframe in PNO_BACKTEST_TIMEFRAME_PAIRS:
@@ -4328,11 +4366,13 @@ def _run_backtest_all_pno_timeframe_pairs(
 
 def plot_backtest(config: AppConfig, args: argparse.Namespace) -> int:
     """Rebuilds plots for a saved backtest run without rerunning the grid."""
+    _ensure_pno_legacy_runtime()
     return _run_with_logging("plot-backtest", config, lambda: _plot_backtest_inner(config, args))
 
 
 def run_pno_stage(config: AppConfig, args: argparse.Namespace) -> int:
     """Runs compact stage review for PNO on the standard 1m/5m pipeline."""
+    _ensure_pno_legacy_runtime()
     return _run_with_logging("pno-stage", config, lambda: _run_pno_stage_inner(config, args))
 
 

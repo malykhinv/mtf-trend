@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 
-from cli import commands
 from config import AppConfig
 from constants import (
     DEFAULT_FETCH_DAYS,
@@ -269,6 +268,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def resolve_handler(command_name: str) -> Handler:
+    from cli import commands
+
     handlers: dict[str, Handler] = {
         "fetch-data": commands.fetch_data,
         "update-cache": commands.update_cache,

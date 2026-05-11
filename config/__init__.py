@@ -9,7 +9,11 @@ from config.app_config import AppConfig
 from config.backtest_config import BacktestConfig
 from config.fetch_config import FetchConfig
 from config.simulation_config import SimulationConfig
-from config.strategy_config import StrategyConfig
+from config.strategy_config import (
+    DEFAULT_STRATEGY_ENTRY_TIMEFRAME,
+    DEFAULT_STRATEGY_LEVELS_TIMEFRAME,
+    StrategyConfig,
+)
 from constants import (
     DEFAULT_BACKTEST_OUTPUT_FILE,
     DEFAULT_BEE_BITE_DEPOSIT,
@@ -27,10 +31,6 @@ from constants import (
     DEFAULT_LIQUIDITY_SKIP_ERROR_RATIO_THRESHOLD,
 )
 from domain.enums.timeframe import Timeframe
-from strategy.pno.config import (
-    PNO_DEFAULT_ENTRY_TIMEFRAME,
-    PNO_DEFAULT_LEVELS_TIMEFRAME,
-)
 
 __all__ = [
     "AppConfig",
@@ -127,14 +127,14 @@ def load_config(env_path: str | Path = ".env") -> AppConfig:
     strategy_entry_timeframe = _parse_timeframe(
         os.getenv(
             "ENTRY_TIMEFRAME",
-            PNO_DEFAULT_ENTRY_TIMEFRAME.value,
+            DEFAULT_STRATEGY_ENTRY_TIMEFRAME.value,
         ),
         env_name="ENTRY_TIMEFRAME",
     )
     strategy_levels_timeframe = _parse_timeframe(
         os.getenv(
             "LEVELS_TIMEFRAME",
-            PNO_DEFAULT_LEVELS_TIMEFRAME.value,
+            DEFAULT_STRATEGY_LEVELS_TIMEFRAME.value,
         ),
         env_name="LEVELS_TIMEFRAME",
     )

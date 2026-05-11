@@ -6,14 +6,15 @@ from dataclasses import dataclass
 
 from constants import DEFAULT_BEE_BITE_DEPOSIT
 from domain.enums.timeframe import Timeframe
-from strategy.pno.config import PNO_DEFAULT_ENTRY_TIMEFRAME, PNO_DEFAULT_LEVELS_TIMEFRAME
+DEFAULT_STRATEGY_LEVELS_TIMEFRAME = Timeframe.M5
+DEFAULT_STRATEGY_ENTRY_TIMEFRAME = Timeframe.S30
 
 
 @dataclass(slots=True)
 class StrategyConfig:
     strategy_id: str = "pno"
-    levels_timeframe: Timeframe = PNO_DEFAULT_LEVELS_TIMEFRAME
-    entry_timeframe: Timeframe = PNO_DEFAULT_ENTRY_TIMEFRAME
+    levels_timeframe: Timeframe = DEFAULT_STRATEGY_LEVELS_TIMEFRAME
+    entry_timeframe: Timeframe = DEFAULT_STRATEGY_ENTRY_TIMEFRAME
     pno_deposit: float = DEFAULT_BEE_BITE_DEPOSIT
     pno_risk_pct: float = 0.05
     pno_entry_confirmation_mode: str | None = None

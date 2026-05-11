@@ -1266,3 +1266,15 @@ Anomaly live/backtest should own their timeframe pairs and use neutral charting 
 Trading logic is unchanged: this only removes direct anomaly runtime dependencies on PNO modules.
 Next check: isolate CLI top-level imports, because main.py -> cli.parser -> cli.commands still imports PNO for legacy commands.
 ```
+
+---
+
+## 2026-05-11 legacy PNO CLI isolation
+
+```text
+P124 proposes the second PNO-rudiment removal step on top of P123.
+Anomaly startup/parser/config paths should no longer load strategy.pno or cli.pno_diagnostics.
+PNO remains available only through explicit legacy backtest/stage/plot paths guarded by a lazy loader.
+Trading logic is unchanged.
+Next check: run one anomaly-lab smoke in the real project environment, then decide whether to archive or delete legacy PNO modules.
+```
