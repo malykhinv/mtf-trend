@@ -319,7 +319,6 @@ class CcxtFuturesClient(ExchangeClient):
             symbol="__tickers__",
             endpoint="fetch_tickers",
             call=self._client.fetch_tickers,
-            args=(requested_symbols,),
         )
         if not isinstance(payload, dict):
             raise RuntimeError("fetch_tickers returned invalid payload")

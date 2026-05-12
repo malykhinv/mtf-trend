@@ -500,3 +500,33 @@ python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-b
 ### Risk
 
 Low/medium. It cannot remove cold symbols or create trades, but each promoted radar symbol adds extra OHLCV work. If cycle time worsens or rate-limit pressure appears, reduce `--ticker-radar-watch-batch-size` or disable with `--ticker-radar-enabled false`.
+
+
+---
+
+## P146 — Ticker-radar safety cleanup
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+Post-P145 audit found three low/medium-risk scheduler issues: passing a large symbol list into `fetch_tickers` can create exchange-specific oversized requests; radar-waiting symbols could be selected again by inactive rotation and waste a cold slot; and symbols promoted to real active state kept stale radar-watch entries until TTL expiry.
+
+### Change
+
+- Fetch ticker snapshots through the typed boundary with one all-tickers request and local filtering, avoiding giant per-symbol ticker query parameters.
+- Exclude `ticker_radar_waiting_symbols` from inactive selection so unchanged radar watches do not consume cold slots.
+- Clear a symbol from ticker-radar watch when it becomes a real active symbol and emit `ticker_radar_watch_cleared`.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+# synthetic smoke: radar waiting symbols are not reselected as inactive; active promotion clears radar watch.
+```
+
+### Risk
+
+Low. Trading logic is unchanged. The patch only reduces scheduler waste and makes ticker fetch safer for large universes.

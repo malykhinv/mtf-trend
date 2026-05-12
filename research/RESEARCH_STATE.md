@@ -248,3 +248,19 @@ Next verification:
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20
 ```
+
+
+---
+
+## Current audit note — P146
+
+P146 is a safety cleanup for the P145 ticker-radar scheduler. It does not change strategy thresholds or execution guards. It avoids oversized ticker queries, prevents radar-waiting symbols from wasting inactive slots, and clears ticker-radar watch state once a symbol becomes a real active symbol.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20 --ticker-radar-watch-batch-size 2
+```
+
+Watch `ticker_radar_watch_cleared`, `ticker_radar_waiting_count`, `inactive_count`, `effective_scan_count`, cycle time and `ticker_radar_failed`.

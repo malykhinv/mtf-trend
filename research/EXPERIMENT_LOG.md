@@ -434,3 +434,26 @@ Next:
 ```text
 Run a 60-cycle live smoke and compare ticker_radar_promoted, effective_scan_count, inactive_count, reject_stale_signal and cycle time. If extra radar work increases latency or rate-limit pressure, lower ticker_radar_watch_batch_size before adding any stronger scheduler changes.
 ```
+
+
+---
+
+## 2026-05-12 — P146 ticker-radar audit cleanup
+
+Input:
+
+```text
+After applying P143-P145, operator asked to check the patches for errors before continuing.
+```
+
+Result:
+
+```text
+Audit found no compile errors, but found scheduler hygiene issues: huge fetch_tickers(symbols) requests are risky on large universes, radar-waiting symbols could waste inactive slots, and radar watch state was not cleared on active promotion. P146 proposed targeted cleanup without changing signal logic.
+```
+
+Next:
+
+```text
+Apply P146, then run a 60-cycle live smoke with ticker_radar_watch_batch_size=2 before increasing radar pressure.
+```

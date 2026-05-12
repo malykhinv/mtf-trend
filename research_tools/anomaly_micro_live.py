@@ -1055,6 +1055,7 @@ class AnomalyMicroLiveRunner:
         active_keys = {_position_symbol_key(symbol) for symbol in [*active_due, *active_waiting]}
         radar_due, radar_waiting = self._ticker_radar_batch(now_ms=now_ms, excluded_keys=active_keys)
         radar_due_keys = {_position_symbol_key(symbol) for symbol in radar_due}
+        radar_waiting_keys = {_position_symbol_key(symbol) for symbol in radar_waiting}
         inactive_slots = max(0, self.config.symbol_batch_size - len(active_due))
         inactive: list[str] = []
         attempts = 0
@@ -1068,6 +1069,7 @@ class AnomalyMicroLiveRunner:
             if (
                 symbol_key in active_keys
                 or symbol_key in radar_due_keys
+                or symbol_key in radar_waiting_keys
                 or symbol_is_opening
                 or self._symbol_in_stop_cooldown(symbol)
             ):
@@ -1338,6 +1340,7 @@ class AnomalyMicroLiveRunner:
         expires_at_ms = now_ms + max(1, int(ttl))
         symbol_key = _position_symbol_key(symbol)
         event_payload: dict[str, object] | None = None
+        cleared_radar_watch: LiveTickerRadarWatch | None = None
         with self._state_lock:
             current = self._active_symbols.get(symbol_key)
             should_emit = (
@@ -1353,6 +1356,7 @@ class AnomalyMicroLiveRunner:
                 updated_at_ms=now_ms,
                 decision_timestamp_ms=decision_timestamp_ms,
             )
+            cleared_radar_watch = self._ticker_radar_watch.pop(symbol_key, None)
             if should_emit:
                 event_payload = {
                     "reason": reason,
@@ -1360,6 +1364,25 @@ class AnomalyMicroLiveRunner:
                     "ttl_ms": int(ttl),
                     "decision_timestamp_ms": decision_timestamp_ms if decision_timestamp_ms is not None else "",
                 }
+        if cleared_radar_watch is not None:
+            self.artifacts.append_event(
+                "ticker_radar_watch_cleared",
+                symbol,
+                {
+                    "reason": "promoted_to_active_symbol",
+                    "active_reason": reason,
+                    "watch_reason": cleared_radar_watch.reason,
+                    "score": cleared_radar_watch.score,
+                    "expires_at_ms": cleared_radar_watch.expires_at_ms,
+                    "price_delta_pct": cleared_radar_watch.price_delta_pct,
+                    "quote_volume_delta": cleared_radar_watch.quote_volume_delta,
+                    "quote_volume_delta_ratio": (
+                        cleared_radar_watch.quote_volume_delta_ratio
+                        if cleared_radar_watch.quote_volume_delta_ratio is not None
+                        else ""
+                    ),
+                },
+            )
         if event_payload is not None:
             self.artifacts.append_event("active_symbol_marked", symbol, event_payload)
 
