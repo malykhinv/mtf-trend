@@ -175,9 +175,11 @@ Overhead levels are context, not an entry trigger. They may support a long-conti
 A valid 1h overhead level must satisfy:
 
 ```text
-at least 3 valid touches in the same price band
+at least 3 valid high-based touches in the same price band
+each counted touch is at least 6h after the previous counted touch
 each valid touch has a meaningful bounce after touch
 level is above current price
+level is not pierced by later wick/high
 level is not a held broken level
 symbol/level context is not a clear downtrend pseudo-resistance
 ```
@@ -194,7 +196,7 @@ reaction_to_recent_move_ratio
 context = bullish_target / danger_ceiling / overhead_level
 ```
 
-A touch is valid even if it includes a wick through the level only when the subsequent bounce proves the level mattered. Wick-only markings without reaction are not valid levels.
+A touch is valid only when the candle high is near the level while the candle body remains below the touch band. Body/interior range intersections and later wick/high pierces are rejected instead of being rescued by a later bounce.
 
 
 ---

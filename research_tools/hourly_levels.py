@@ -56,6 +56,7 @@ class HourlyLevelScanConfig:
     lookback_bars: int = 720
     chart_bars: int = 240
     min_touches: int = 3
+    min_touch_spacing_hours: int = 6
     touch_tolerance_pct: float = 0.006
     min_bounce_pct: float = 0.05
     bounce_lookahead_bars: int = 12
@@ -71,7 +72,7 @@ class HourlyLevelScanConfig:
     reject_downtrend_levels: bool = True
     max_levels_per_symbol: int = 4
     reject_pierced_levels: bool = True
-    max_level_pierce_pct: float = 0.015
+    max_level_pierce_pct: float = 0.0
     fast_source_trim: bool = True
     save_empty_charts: bool = False
     progress_every_symbols: int = 5
@@ -432,20 +433,27 @@ def _touch_reactions(
     min_bounce_pct: float,
     bounce_lookahead_bars: int,
     min_retouch_distance_pct: float,
+    min_touch_spacing_ms: int,
 ) -> list[TouchReaction]:
     touches: list[TouchReaction] = []
     if frame.empty or level_price <= 0.0:
         return touches
 
     band_low = level_price * (1.0 - tolerance_pct)
-    band_high = level_price * (1.0 + tolerance_pct)
     rearm_price = level_price * (1.0 - max(min_retouch_distance_pct, tolerance_pct))
+    max_touch_high = level_price * (1.0 + 1e-12)
 
     timestamps = frame["timestamp"].astype("int64").to_numpy()
+    opens = frame["open"].astype(float).to_numpy()
     highs = frame["high"].astype(float).to_numpy()
     lows = frame["low"].astype(float).to_numpy()
     closes = frame["close"].astype(float).to_numpy()
-    candidate_indices = np.flatnonzero((highs >= band_low) & (lows <= band_high))
+    body_tops = np.maximum(opens, closes)
+    candidate_indices = np.flatnonzero(
+        (highs >= band_low)
+        & (highs <= max_touch_high)
+        & (body_tops < band_low)
+    )
     if candidate_indices.size == 0:
         return touches
 
@@ -462,17 +470,21 @@ def _touch_reactions(
             else:
                 continue
 
+        timestamp_ms = int(timestamps[idx])
+        if touches and timestamp_ms - touches[-1].timestamp_ms < min_touch_spacing_ms:
+            continue
+
         future_start = idx + 1
         if future_start >= frame_len:
             continue
         future_end = min(future_start + bounce_lookahead_bars, frame_len)
         forward_low = float(np.min(lows[future_start:future_end]))
-        touch_high = max(float(highs[idx]), level_price)
+        touch_high = float(highs[idx])
         reaction_pct = max((touch_high - forward_low) / touch_high, 0.0) if touch_high > 0.0 else 0.0
         touches.append(
             TouchReaction(
-                timestamp_ms=int(timestamps[idx]),
-                timestamp_utc=_timestamp_to_utc(int(timestamps[idx])),
+                timestamp_ms=timestamp_ms,
+                timestamp_utc=_timestamp_to_utc(timestamp_ms),
                 touch_high=touch_high,
                 close=float(closes[idx]),
                 reaction_pct=reaction_pct,
@@ -489,7 +501,6 @@ def _level_pierce_stats(
     *,
     level_price: float,
     after_timestamp_ms: int,
-    accepted_close_tolerance_pct: float,
     min_pierce_pct: float,
 ) -> tuple[int, float]:
     if frame.empty or level_price <= 0.0:
@@ -501,16 +512,11 @@ def _level_pierce_stats(
         return 0, 0.0
 
     highs = frame["high"].astype(float).to_numpy()[start_idx:]
-    closes = frame["close"].astype(float).to_numpy()[start_idx:]
     pierce_pct = (highs / level_price) - 1.0
-    rejected_pierce = (
-        pierce_pct > max(min_pierce_pct, 0.0)
-    ) & (
-        closes <= level_price * (1.0 + accepted_close_tolerance_pct)
-    )
-    if not bool(np.any(rejected_pierce)):
+    pierced = pierce_pct > max(min_pierce_pct, 0.0)
+    if not bool(np.any(pierced)):
         return 0, 0.0
-    return int(np.sum(rejected_pierce)), float(np.max(pierce_pct[rejected_pierce]))
+    return int(np.sum(pierced)), float(np.max(pierce_pct[pierced]))
 
 
 def _select_major_levels(
@@ -602,6 +608,7 @@ def find_hourly_overhead_levels(
             min_bounce_pct=config.min_bounce_pct,
             bounce_lookahead_bars=config.bounce_lookahead_bars,
             min_retouch_distance_pct=max(config.min_bounce_pct, config.touch_tolerance_pct * 3.0),
+            min_touch_spacing_ms=max(int(config.min_touch_spacing_hours), 0) * _HOUR_MS,
         )
         valid_touches = [touch for touch in touches if touch.valid]
         if len(valid_touches) < config.min_touches:
@@ -626,7 +633,6 @@ def find_hourly_overhead_levels(
             frame,
             level_price=level_price,
             after_timestamp_ms=first_valid_touch_ts,
-            accepted_close_tolerance_pct=config.break_close_tolerance_pct,
             min_pierce_pct=config.max_level_pierce_pct,
         )
         if config.reject_pierced_levels and pierce_count > 0:
@@ -871,6 +877,7 @@ def run_hourly_level_scan(
         "1h level scan started: "
         f"symbols={len(symbols)}, source_timeframe={config.source_timeframe.value}, "
         f"days={config.days}, min_touches={config.min_touches}, "
+        f"min_touch_spacing_hours={config.min_touch_spacing_hours}, "
         f"min_bounce_pct={config.min_bounce_pct:.2%}, fast_source_trim={config.fast_source_trim}, "
         f"output_dir={output_dir}"
     )
@@ -1003,6 +1010,7 @@ def build_config_from_namespace(args: object, *, cache_dir: Path, results_dir: P
         lookback_bars=int(getattr(args, "lookback_bars", 720)),
         chart_bars=int(getattr(args, "chart_bars", 240)),
         min_touches=int(getattr(args, "min_touches", 3)),
+        min_touch_spacing_hours=int(getattr(args, "min_touch_spacing_hours", 6)),
         touch_tolerance_pct=float(getattr(args, "touch_tolerance_pct", 0.006)),
         min_bounce_pct=float(getattr(args, "min_bounce_pct", 0.05)),
         bounce_lookahead_bars=int(getattr(args, "bounce_lookahead_bars", 12)),
@@ -1018,7 +1026,7 @@ def build_config_from_namespace(args: object, *, cache_dir: Path, results_dir: P
         reject_downtrend_levels=bool(getattr(args, "reject_downtrend_levels", True)),
         max_levels_per_symbol=int(getattr(args, "max_levels_per_symbol", 4)),
         reject_pierced_levels=bool(getattr(args, "reject_pierced_levels", True)),
-        max_level_pierce_pct=float(getattr(args, "max_level_pierce_pct", 0.015)),
+        max_level_pierce_pct=float(getattr(args, "max_level_pierce_pct", 0.0)),
         fast_source_trim=bool(getattr(args, "fast_source_trim", True)),
         save_empty_charts=bool(getattr(args, "save_empty_charts", False)),
         progress_every_symbols=int(getattr(args, "progress_every_symbols", 5)),

@@ -457,3 +457,26 @@ Next:
 ```text
 Apply P146, then run a 60-cycle live smoke with ticker_radar_watch_batch_size=2 before increasing radar pressure.
 ```
+
+
+---
+
+## 2026-05-12 — P149 strict 1h level filter
+
+Input:
+
+```text
+Operator found false 1h levels: pierced levels, touches repeated too close together, and levels drawn by body/interior candle intersections instead of highs.
+```
+
+Result:
+
+```text
+Patch proposed. The hourly-level diagnostic now requires high-based touches, 6h spacing between counted touches, and strict pierced-level rejection by default. This is diagnostics-only and should be validated by comparing emitted charts/CSV counts before using levels as continuation context.
+```
+
+Next:
+
+```text
+Run run-hourly-levels on the same cache/output window used for the rejected examples and inspect whether body/interior and wicked-through levels disappear without losing clean high-touch levels.
+```

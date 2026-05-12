@@ -22,6 +22,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P143 | Speed up live scan without hiding stale rejects | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance | Fetch each levels timeframe once per symbol per cycle, reject stale decisions before heavy signal build while preserving `reject_stale_signal` artifacts, and move top-growth export to standalone CLI. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; live smoke: `reject_stale_signal` remains visible with `stage=prescan`; `run-anomaly-live` no longer starts top-growth. |
 | P144 | Skip unchanged live signal rescans | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-performance | Do not spend OHLCV/API budget rescanning a symbol/timeframe until a new closed levels candle exists; active symbols are checked every cycle but only due ones consume scan slots, while waiting active symbols remain visible in `symbol_batch_selected`. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic scheduler smoke: active waiting symbol is not scanned again on unchanged closed candle and frees a slot for inactive scan. |
 | P148 | Inline live heartbeat status | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-operator-ux | Keep routine live heartbeat status on one mutable console line while preserving real events/errors/position logs as normal sequential lines; clarify that the number is cycle duration. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; console smoke: consecutive heartbeat lines overwrite in-place, any event log first terminates the heartbeat line. |
+| P149 | Strict high-based hourly levels | PROPOSED | `research_tools/hourly_levels.py`, `cli/parser.py`, `research/*` | diagnostics | Count only high-based 1h touches, enforce 6h spacing between counted touches, and reject pierced levels strictly by default. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; rerun `run-hourly-levels` with `--min-touch-spacing-hours 6 --max-level-pierce-pct 0.0`. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -591,3 +592,34 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 
 Low. Trading logic, artifacts, order guards, Telegram payloads and backtest behavior are unchanged. The only behavior change is console presentation of routine heartbeat status.
 
+
+---
+
+## P149 — Strict high-based hourly levels
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+The 1h overhead-level scanner still accepted visually weak levels: range intersections could count as touches even when the level ran through the candle body/interior, touches could cluster too close in time, and the pierce filter allowed small wick pierces by default.
+
+### Change
+
+- Count touches only when the 1h candle high is near the level and the candle body remains below the touch band.
+- Require at least 6h between counted touches by default via `--min-touch-spacing-hours`.
+- Make pierced-level rejection strict by default: any later high above the level is counted as a pierce when `--reject-pierced-levels true`.
+- Keep the existing bounce/re-arm checks; the patch tightens touch eligibility instead of post-processing chart output.
+- Update the 1h overhead-level strategy spec to match the stricter diagnostic contract.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 30 --min-touches 3 --min-touch-spacing-hours 6 --reject-pierced-levels true --max-level-pierce-pct 0.0
+```
+
+### Risk
+
+Medium for diagnostics: fewer levels will be emitted, especially symbols where prior detections were body/interior intersections or recently repeated taps. Live trading and anomaly backtest execution are unchanged.

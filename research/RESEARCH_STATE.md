@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P148 proposed locally on top of ZIP-derived source
-Last active patch: P148 inline live heartbeat status
+Local patch stack: P130-P149 proposed locally on top of ZIP-derived source
+Last active patch: P149 strict high-based hourly levels
 Updated: 2026-05-12
 ```
 
@@ -312,3 +312,22 @@ Known caveat:
 External/non-interactive loggers keep the old sparse heartbeat cadence to avoid writing every cycle to file-like logs.
 ```
 
+
+---
+
+## Current audit note — P149
+
+P149 is diagnostics-only. `run-hourly-levels` now counts only high-based 1h touches: the candle high must be near the level, the candle body must remain below the touch band, counted touches must be separated by at least 6h, and pierced levels are rejected strictly by default. This should reduce false overhead levels drawn through candle bodies or already wicked-through highs.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 30 --min-touches 3 --min-touch-spacing-hours 6 --reject-pierced-levels true --max-level-pierce-pct 0.0
+```
+
+Known effect:
+
+```text
+Level count should drop versus P148; compare charts before treating the reduced output as a strategy signal.
+```
