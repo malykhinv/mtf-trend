@@ -408,3 +408,22 @@ Known effect:
 ```text
 Telegram text appearance changes only; live signal, order, stop, chart, and artifact semantics are unchanged.
 ```
+
+---
+
+## Current audit note — P155
+
+P155 is live audit-only. Network degradation/recovery, async Telegram failures, open/close Telegram photo fallbacks, and stop-cooldown signal rejects are now explicit `live_events.csv` events instead of being visible only through console output or implicit fallback behavior.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --max-cycles 1 --symbols BTC/USDT:USDT --confirm-real-orders false
+```
+
+Known effect:
+
+```text
+No signal/order/risk behavior changes. live_events.csv should become more verbose around Telegram delivery and temporary API/network degradation.
+```

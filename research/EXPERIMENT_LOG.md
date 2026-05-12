@@ -590,3 +590,25 @@ Next:
 ```text
 Trigger one startup/error/blocked/open-message smoke and verify Telegram rendering: context lines are monospace, error text is monospace, and the same symbol keeps the same animal emoji across open/stop/close/blocked messages.
 ```
+
+---
+
+## 2026-05-12 — P155 live audit failure visibility
+
+Input:
+
+```text
+Operator asked whether live run problems are fully visible in logs/artifacts and approved adding missing audit events.
+```
+
+Result:
+
+```text
+Patch proposed. Live now records network degradation/recovery, Telegram async/photo failures, open/close message fallbacks, and stop-cooldown rejects in live_events.csv without changing trading behavior.
+```
+
+Next:
+
+```text
+Run a controlled smoke with a fake/invalid Telegram token or blocked network path and verify live_events.csv contains telegram_async_send_failed or telegram_open/close fallback events instead of relying on console logs only.
+```

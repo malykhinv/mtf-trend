@@ -374,22 +374,39 @@ class _LiveStatusLogger:
 
 
 class TelegramDispatcher:
-    def __init__(self, config: TelegramConfig, *, logger: Callable[[str], None], cooldown_seconds: float) -> None:
+    def __init__(
+        self,
+        config: TelegramConfig,
+        *,
+        logger: Callable[[str], None],
+        cooldown_seconds: float,
+        event_writer: Callable[[str, str, dict[str, object]], None] | None = None,
+    ) -> None:
         self._config = config
         self._logger = logger
         self._cooldown_seconds = cooldown_seconds
+        self._event_writer = event_writer
         self._queue: queue.Queue[dict[str, object]] = queue.Queue()
         self._last_sent: dict[str, float] = {}
         self._thread = threading.Thread(target=self._run, name="telegram-dispatcher", daemon=True)
         self._thread.start()
 
-    def send(self, *, channel: str, key: str, text: str, reply_to_message_id: int | None = None) -> None:
+    def send(
+        self,
+        *,
+        channel: str,
+        key: str,
+        text: str,
+        reply_to_message_id: int | None = None,
+        symbol: str = "__telegram__",
+    ) -> None:
         self._queue.put(
             {
                 "channel": channel,
                 "key": key,
                 "text": text,
                 "reply_to_message_id": reply_to_message_id,
+                "symbol": symbol,
             }
         )
 
@@ -405,6 +422,17 @@ class TelegramDispatcher:
             return True
         except Exception as exc:
             self._logger(f"telegram: график не отправлен, причина: {exc}")
+            self._append_event(
+                "telegram_photo_send_failed",
+                "__telegram__",
+                {
+                    "channel": channel,
+                    "photo_path": str(photo_path),
+                    "reply_to_message_id": reply_to_message_id or "",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:1000],
+                },
+            )
             return False
 
     def send_photo_sync(self, *, channel: str, photo_path: Path, caption: str, reply_to_message_id: int | None = None) -> int | None:
@@ -430,8 +458,30 @@ class TelegramDispatcher:
                     item["message_id"] = message_id
             except Exception as exc:
                 self._logger(f"telegram: сообщение не отправлено, причина: {exc}")
+                self._append_event(
+                    "telegram_async_send_failed",
+                    str(item.get("symbol") or "__telegram__"),
+                    {
+                        "channel": str(item.get("channel") or ""),
+                        "key": str(item.get("key") or ""),
+                        "reply_to_message_id": item.get("reply_to_message_id")
+                        if isinstance(item.get("reply_to_message_id"), int)
+                        else "",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:1000],
+                        "text_preview": str(item.get("text") or "")[:240],
+                    },
+                )
             finally:
                 self._queue.task_done()
+
+    def _append_event(self, event: str, symbol: str, details: dict[str, object]) -> None:
+        if self._event_writer is None:
+            return
+        try:
+            self._event_writer(event, symbol, details)
+        except Exception as exc:
+            self._logger(f"telegram: artifact event не записан, причина: {exc}")
 
     def _send_message(self, *, channel: str, text: str, reply_to_message_id: int | None) -> int | None:
         if channel == "positions":
@@ -982,7 +1032,12 @@ class AnomalyMicroLiveRunner:
         self.artifacts = LiveArtifactWriter(
             config.results_dir / "live_anomaly_runs" / datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         )
-        self.telegram = TelegramDispatcher(telegram, logger=logger, cooldown_seconds=config.telegram_cooldown_seconds)
+        self.telegram = TelegramDispatcher(
+            telegram,
+            logger=logger,
+            cooldown_seconds=config.telegram_cooldown_seconds,
+            event_writer=self.artifacts.append_event,
+        )
         self._open_positions: dict[str, LivePosition] = {}
         self._opening_symbols: set[str] = set()
         self._recent_stops: dict[str, list[float]] = {}
@@ -1049,6 +1104,12 @@ class AnomalyMicroLiveRunner:
                         f"live: цикл {cycle_seconds:.1f}s · открыто {opened_total} (+{opened_delta}) · "
                         f"слежу {active_positions} · закрыто {closed_total}{orphan_text}"
                     )
+                if self._network_degraded:
+                    self.artifacts.append_event(
+                        "network_recovered",
+                        "__live__",
+                        {"cycle": cycle, "cycle_seconds": cycle_seconds},
+                    )
                 self._network_degraded = False
                 time.sleep(self.config.scan_sleep_seconds)
             except KeyboardInterrupt:
@@ -1067,6 +1128,16 @@ class AnomalyMicroLiveRunner:
             except ExchangeConnectivityError as exc:
                 if not self._network_degraded:
                     self.logger(f"live: сеть/API недоступны, жду восстановления. Причина: {exc}")
+                    self.artifacts.append_event(
+                        "network_degraded",
+                        "__live__",
+                        {
+                            "cycle": cycle,
+                            "sleep_seconds": self.config.network_sleep_seconds,
+                            "exception_type": type(exc).__name__,
+                            "exception_message": str(exc)[:1000],
+                        },
+                    )
                     self.telegram.send(
                         channel="events",
                         key="network_degraded",
@@ -2140,6 +2211,18 @@ class AnomalyMicroLiveRunner:
             if self._symbol_in_stop_cooldown(signal.symbol):
                 self._clear_active_symbol(signal.symbol, reason="stop_cooldown")
                 self._mark_signal_decision_consumed(signal, reason="stop_cooldown")
+                self.artifacts.append_event(
+                    "reject_stop_cooldown",
+                    signal.symbol,
+                    {
+                        "symbol_key": symbol_key,
+                        "levels_tf": signal.levels_timeframe.value,
+                        "entry_tf": signal.entry_timeframe.value,
+                        "decision_timestamp_ms": signal.decision_timestamp_ms,
+                        "stop_cooldown_hours": self.config.stop_cooldown_hours,
+                        "stop_limit_per_symbol": self.config.stop_limit_per_symbol,
+                    },
+                )
                 return
             if not reject_max_positions:
                 self._opening_symbols.add(symbol_key)
@@ -2339,6 +2422,12 @@ class AnomalyMicroLiveRunner:
                         photo_path=open_chart_path,
                         caption=open_text,
                     )
+                    if position.telegram_open_message_id is None:
+                        self.artifacts.append_event(
+                            "telegram_open_chart_missing_id",
+                            signal.symbol,
+                            {"position_id": position.position_id, "chart_path": str(open_chart_path)},
+                        )
                 except Exception as exc:
                     self.artifacts.append_event(
                         "telegram_open_chart_failed",
@@ -2347,10 +2436,24 @@ class AnomalyMicroLiveRunner:
                     )
                     self.logger(f"live: позиция {signal.symbol} открыта, но Telegram-график входа не отправлен: {exc}")
             if position.telegram_open_message_id is None:
+                self.artifacts.append_event(
+                    "telegram_open_text_fallback",
+                    signal.symbol,
+                    {
+                        "position_id": position.position_id,
+                        "reason": "chart_unavailable" if open_chart_path is None else "chart_photo_unavailable",
+                    },
+                )
                 position.telegram_open_message_id = self.telegram.send_sync(
                     channel="positions",
                     text=open_text,
                 )
+                if position.telegram_open_message_id is None:
+                    self.artifacts.append_event(
+                        "telegram_open_text_missing_id",
+                        signal.symbol,
+                        {"position_id": position.position_id},
+                    )
         except Exception as exc:
             self.artifacts.append_event("telegram_open_failed", signal.symbol, {"position_id": position.position_id, "reason": str(exc)})
             self.logger(f"live: позиция {signal.symbol} открыта, но Telegram-вход не отправлен: {exc}")
@@ -2440,6 +2543,7 @@ class AnomalyMicroLiveRunner:
                 channel="events",
                 key=f"order_blocked:{event}:{_position_symbol_key(signal.symbol)}",
                 text=_format_order_blocked_message(signal, event=event, details=details),
+                symbol=signal.symbol,
             )
         except Exception as exc:
             self.artifacts.append_event(
@@ -2718,6 +2822,7 @@ class AnomalyMicroLiveRunner:
             channel="events",
             key=f"position_integrity_error:{position.position_id}",
             text=_format_position_integrity_error_message(position, reason=reason),
+            symbol=symbol,
         )
         self.logger(f"live: {_compact_symbol(symbol)} integrity error · {reason}")
 
@@ -2755,18 +2860,53 @@ class AnomalyMicroLiveRunner:
             pnl_pct=pnl_pct,
         )
         close_text = _format_close_message(position, pnl_usdt=pnl_usdt, pnl_pct=pnl_pct, exit_price=exit_price)
-        if chart_path is not None and self.telegram.send_photo(
-            channel="positions",
-            photo_path=chart_path,
-            caption=close_text,
-            reply_to_message_id=position.telegram_open_message_id,
-        ):
-            return
+        if chart_path is not None:
+            try:
+                close_message_id = self.telegram.send_photo_sync(
+                    channel="positions",
+                    photo_path=chart_path,
+                    caption=close_text,
+                    reply_to_message_id=position.telegram_open_message_id,
+                )
+                if close_message_id is not None:
+                    self.artifacts.append_event(
+                        "telegram_close_photo_sent",
+                        position.signal.symbol,
+                        {"position_id": position.position_id, "message_id": close_message_id, "chart_path": str(chart_path)},
+                    )
+                    return
+                self.artifacts.append_event(
+                    "telegram_close_photo_missing_id",
+                    position.signal.symbol,
+                    {"position_id": position.position_id, "chart_path": str(chart_path)},
+                )
+            except Exception as exc:
+                self.artifacts.append_event(
+                    "telegram_close_photo_failed",
+                    position.signal.symbol,
+                    {
+                        "position_id": position.position_id,
+                        "chart_path": str(chart_path),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc)[:1000],
+                    },
+                )
+                self.logger(f"live: позиция {position.signal.symbol} закрыта, но Telegram-график закрытия не отправлен: {exc}")
+        self.artifacts.append_event(
+            "telegram_close_text_fallback",
+            position.signal.symbol,
+            {
+                "position_id": position.position_id,
+                "reason": "chart_unavailable" if chart_path is None else "chart_photo_unavailable",
+                "reply_to_message_id": position.telegram_open_message_id or "",
+            },
+        )
         self.telegram.send(
             channel="positions",
             key=f"close:{position.position_id}",
             reply_to_message_id=position.telegram_open_message_id,
             text=close_text,
+            symbol=position.signal.symbol,
         )
 
     def _render_open_chart(self, position: LivePosition) -> Path | None:

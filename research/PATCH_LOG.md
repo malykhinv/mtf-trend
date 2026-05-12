@@ -783,3 +783,39 @@ PY
 ### Risk
 
 Low for trading logic: Telegram/UI-only. Low operator UX risk: symbol emoji assignment changes once after deployment but remains stable across future runs for the same compact symbol.
+
+---
+
+## P155 — Make live audit failures explicit
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+Several live operator/audit failures were visible only in console logs or implicit fallbacks. That is not enough for post-run review because console output can be lost and Telegram delivery is not the source of truth.
+
+### Change
+
+- Add `network_degraded` and `network_recovered` events to `live_events.csv`.
+- Give `TelegramDispatcher` an artifact event writer and record async Telegram send failures as `telegram_async_send_failed`.
+- Record generic `telegram_photo_send_failed` from the photo helper.
+- Record open-message chart missing id and text fallback/missing-id events.
+- Record close-message photo sent/missing/failed events and explicit text fallback.
+- Record `reject_stop_cooldown` when a valid signal is consumed because the symbol is still in stop cooldown.
+- Preserve existing text/chart fallback behavior; no order, signal, risk, stop, TP, or monitor logic is changed.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python - <<'PY'
+# synthetic Telegram dispatcher failure callback smoke
+# static grep smoke for network_degraded/network_recovered/reject_stop_cooldown/telegram_close_photo_failed
+PY
+```
+
+### Risk
+
+Low for trading logic: audit-only. Low runtime risk: Telegram failure events are written through the existing artifact writer lock. If artifact event writing itself fails inside the Telegram dispatcher, the failure is logged instead of recursively trying to write another event.

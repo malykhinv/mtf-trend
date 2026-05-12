@@ -265,3 +265,20 @@ TF/context lines are rendered as Telegram code
 ```
 
 The symbol emoji must be algorithmic, not per-symbol hardcoded and not Python `hash()` based. It is derived from a stable digest of the compact symbol string so the same symbol maps to the same animal across runs.
+
+---
+
+## Live audit failure visibility
+
+Live audit truth must not depend on console output or Telegram delivery. Important operator-path failures and fallbacks must be visible in `live_events.csv`, including:
+
+```text
+network_degraded / network_recovered
+telegram_async_send_failed
+telegram_photo_send_failed
+telegram_open_chart_failed / telegram_open_chart_missing_id / telegram_open_text_fallback / telegram_open_text_missing_id
+telegram_close_photo_sent / telegram_close_photo_failed / telegram_close_photo_missing_id / telegram_close_text_fallback
+reject_stop_cooldown
+```
+
+These events are diagnostic/audit artifacts only. They must not change signal selection, entry execution, stop placement, TP/SL math, or position monitoring.
