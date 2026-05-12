@@ -978,3 +978,53 @@ The cautious red flags cut frequency hard and improve the same-window metrics, b
 Do not trust the 100% WR on 1m/5s as stable.
 The next required test is to extend/fix 1s coverage to the requested end and rerun the same base-vs-cautious comparison without changing thresholds.
 ```
+
+---
+
+## 2026-05-12 - Dormancy / recent-spike sanity check
+
+Question:
+
+```text
+Does 98 trades in 3 active days mean the strategy is not really detecting multi-day sleep?
+Should recent similar spikes / recent failed spikes be cheap red flags?
+```
+
+Current implementation read:
+
+```text
+The current "sleep" proxy is local: baseline_candles=60 on the setup timeframe.
+That means about 60 minutes for 1m setup and about 5 hours for 5m setup.
+It is not a real 24h/72h dormancy condition.
+```
+
+Quick artifact check:
+
+```text
+Sample: 98 closed true-TF P164 trades from 2026-05-04..2026-05-06 UTC.
+Proxy: count previous same-symbol anomaly candidates in the prior 72h from the same artifact family.
+
+prior_72h_candidates = 0:
+n = 23, avg = -0.0431%, WR = 60.87%, sum = -0.99%
+
+prior_72h_candidates > 0:
+n = 75, avg = +0.4235%, WR = 61.33%, sum = +31.77%
+
+prior_72h_candidates >= 2:
+n = 56, avg = +0.5647%, WR = 62.50%, sum = +31.62%
+
+prior_72h_candidates >= 5:
+n = 26, avg = -0.0214%, WR = 46.15%, sum = -0.56%
+
+prior_72h_fast_fades > 0:
+n = 1, avg = -2.1897%, WR = 0.00%
+```
+
+Interpretation:
+
+```text
+Do not filter all recent activity. Repeated attention can mean the symbol is in an active theme and still tradable.
+The better hypothesis is serial failed/overcrowded wake-ups: many recent similar spikes, especially if mature prior spikes faded quickly.
+This must be implemented first as diagnostics: prior_spike_count_24h/72h, prior_fast_fade_count_24h/72h, time_since_prior_spike, and prior_spike_density.
+Only then test a cheap red flag such as prior_spike_count_72h >= 5 or prior_fast_fade_count_72h > 0.
+```

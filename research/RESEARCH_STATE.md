@@ -701,3 +701,12 @@ The "7 day" true-TF sample is confirmed to be only 3 active executable-data days
 Same-window cautious red flags improved combined true-TF result to 36 closed trades, avg +0.9198%, sum +33.11%, WR 83.33%, TP1 77.78%.
 This is a candidate filter set, not a proven grid. Next step: fetch/repair 1s coverage through the requested end and rerun base vs cautious with unchanged thresholds.
 ```
+
+Dormancy note:
+
+```text
+Current anomaly "sleep" is only a local 60 setup-candle baseline, not a 24h/72h dormancy rule.
+Quick same-artifact check did not support rejecting all symbols with any recent spike; 1-4 prior same-symbol candidates in 72h were not bad.
+High serial density looked weaker: prior_72h_candidates >= 5 had avg -0.0214% and WR 46.15% on 26 trades.
+Next diagnostic patch should add prior_spike_count_24h/72h, prior_fast_fade_count_24h/72h and time_since_prior_spike before using this as a filter.
+```
