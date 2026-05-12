@@ -245,3 +245,5 @@ bottom: normalized quote-volume and number_of_trades line curves
 The 1h context panel may draw strict overhead levels from the hourly-level diagnostic, but those levels must be unlabeled chart context only. They must not be treated as an entry/exit rule unless a separate strategy patch wires them into the decision path and updates backtest/live parity.
 
 The lower flow panel is shape/timing context: quote volume and trade count are each normalized to 0-100 within the displayed trade window and are not comparable as absolute magnitudes.
+
+Live open-position Telegram charts use the same three-panel renderer after verified fill/stop creation. Because the trade is not closed yet, they must not draw completed risk/reward rectangles; they show TP1 and SL as horizontal levels instead. Telegram is operator UI only: `live_events.csv` and live position state remain the audit source of truth.

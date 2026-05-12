@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import time
 from dataclasses import asdict
@@ -1490,6 +1491,9 @@ def _render_anomaly_trade_chart(
     pre_candles: int = 30,
     post_candles: int = 90,
     context_timeframe_ms: int | None = 300_000,
+    hourly_context_frame: pd.DataFrame | None = None,
+    draw_risk_reward_blocks: bool = True,
+    draw_exit_marker: bool | None = None,
 ) -> None:
     import matplotlib
 
@@ -1499,9 +1503,13 @@ def _render_anomaly_trade_chart(
     anomaly_ts = _safe_int(trade.get("anomaly_timestamp_ms")) or _safe_int(trade.get("decision_timestamp_ms"))
     decision_ts = _safe_int(trade.get("decision_timestamp_ms")) or anomaly_ts
     entry_ts = _safe_int(trade.get("entry_timestamp_ms")) or decision_ts
-    exit_ts = _safe_int(trade.get("exit_timestamp_ms")) or entry_ts
+    raw_exit_ts = _safe_int(trade.get("exit_timestamp_ms"))
+    exit_ts = raw_exit_ts or entry_ts
     if anomaly_ts is None or decision_ts is None or entry_ts is None or exit_ts is None:
         raise ValueError("missing_trade_timestamps")
+    if draw_exit_marker is None:
+        status = str(trade.get("status", "")).lower()
+        draw_exit_marker = raw_exit_ts is not None and raw_exit_ts != entry_ts and status != "open"
     entry_price = _safe_float(trade.get("entry_price"))
     signal_entry_price = _safe_float(trade.get("signal_entry_price"))
     signal_entry_ts = _safe_int(trade.get("signal_entry_timestamp_ms")) or decision_ts
@@ -1518,8 +1526,9 @@ def _render_anomaly_trade_chart(
     x_values = np.arange(len(plot_frame), dtype=np.float64)
     timestamps = plot_frame["timestamp"].to_numpy(dtype=np.int64)
     _ = context_timeframe_ms  # Kept for the public renderer signature; trade charts now use fixed 1h/7d context.
+    context_source_frame = hourly_context_frame if hourly_context_frame is not None else frame
     context_frame = _build_trade_chart_hourly_context(
-        frame,
+        context_source_frame,
         end_timestamp_ms=entry_ts,
         days=_TRADE_CHART_CONTEXT_DAYS,
     )
@@ -1569,7 +1578,8 @@ def _render_anomaly_trade_chart(
     if signal_entry_price is not None and signal_entry_ts != entry_ts:
         ax_price.axvline(signal_entry_idx, color=CHART_MUTED, linewidth=0.9, alpha=0.30, linestyle=":", zorder=5.0)
     ax_price.axvline(entry_idx, color=CHART_ENTRY, linewidth=1.0, alpha=0.45, zorder=5.2)
-    ax_price.axvline(exit_idx, color=CHART_EXIT, linewidth=1.0, alpha=0.52, linestyle="-.", zorder=5.3)
+    if draw_exit_marker:
+        ax_price.axvline(exit_idx, color=CHART_EXIT, linewidth=1.0, alpha=0.52, linestyle="-.", zorder=5.3)
 
     draw_price_zone(
         ax_price,
@@ -1584,37 +1594,44 @@ def _render_anomaly_trade_chart(
         linewidth=0.9,
         zorder=2.0,
     )
-    _draw_anomaly_trade_block(
-        ax_price,
-        start_idx=entry_idx,
-        end_idx=exit_idx,
-        lower_price=initial_stop,
-        upper_price=entry_price,
-        facecolor=CHART_RISK_FACE,
-        edgecolor=CHART_RISK_EDGE,
-        alpha=0.30,
-        zorder=1.05,
-        frame_length=len(plot_frame),
-    )
-    _draw_anomaly_trade_block(
-        ax_price,
-        start_idx=entry_idx,
-        end_idx=exit_idx,
-        lower_price=entry_price,
-        upper_price=tp1_price,
-        facecolor=CHART_PROFIT_FACE,
-        edgecolor=CHART_PROFIT_EDGE,
-        alpha=0.22,
-        zorder=1.08,
-        frame_length=len(plot_frame),
-    )
+    if draw_risk_reward_blocks:
+        _draw_anomaly_trade_block(
+            ax_price,
+            start_idx=entry_idx,
+            end_idx=exit_idx,
+            lower_price=initial_stop,
+            upper_price=entry_price,
+            facecolor=CHART_RISK_FACE,
+            edgecolor=CHART_RISK_EDGE,
+            alpha=0.30,
+            zorder=1.05,
+            frame_length=len(plot_frame),
+        )
+        _draw_anomaly_trade_block(
+            ax_price,
+            start_idx=entry_idx,
+            end_idx=exit_idx,
+            lower_price=entry_price,
+            upper_price=tp1_price,
+            facecolor=CHART_PROFIT_FACE,
+            edgecolor=CHART_PROFIT_EDGE,
+            alpha=0.22,
+            zorder=1.08,
+            frame_length=len(plot_frame),
+        )
+    else:
+        if tp1_price is not None:
+            ax_price.axhline(tp1_price, color=CHART_PROFIT_EDGE, linewidth=1.1, alpha=0.78, linestyle="--", zorder=4.35)
+        if initial_stop is not None:
+            ax_price.axhline(initial_stop, color=CHART_RISK_EDGE, linewidth=1.1, alpha=0.78, linestyle="--", zorder=4.35)
 
     tag_input = [
         ("TP1", tp1_price),
         ("Entry", entry_price),
         ("SL", initial_stop),
-        ("Exit", exit_price),
     ]
+    if draw_exit_marker:
+        tag_input.append(("Exit", exit_price))
     if signal_entry_price is not None and signal_entry_ts != entry_ts:
         tag_input.append(("Signal", signal_entry_price))
     tag_positions = resolve_axis_tag_positions(tag_input)
@@ -1622,8 +1639,9 @@ def _render_anomaly_trade_chart(
         ("TP1", tp1_price, CHART_PROFIT_EDGE, entry_idx - 0.5),
         ("Entry", entry_price, CHART_ENTRY, entry_idx),
         ("SL", initial_stop, CHART_RISK_EDGE, entry_idx - 0.5),
-        ("Exit", exit_price, CHART_EXIT, exit_idx),
     ]
+    if draw_exit_marker:
+        tag_specs.append(("Exit", exit_price, CHART_EXIT, exit_idx))
     if signal_entry_price is not None and signal_entry_ts != entry_ts:
         tag_specs.append(("Signal", signal_entry_price, CHART_MUTED, signal_entry_idx))
     for label, value, color, leader_x in tag_specs:
@@ -1664,8 +1682,20 @@ def _render_anomaly_trade_chart(
 
     high_values = plot_frame["high"].to_numpy(dtype=np.float64)
     low_values = plot_frame["low"].to_numpy(dtype=np.float64)
-    padding = max((float(np.nanmax(high_values)) - float(np.nanmin(low_values))) * 0.05, 1e-9)
-    ax_price.set_ylim(float(np.nanmin(low_values)) - padding, float(np.nanmax(high_values)) + padding)
+    price_ylim_values = [
+        *high_values.tolist(),
+        *low_values.tolist(),
+        entry_price,
+        initial_stop,
+        tp1_price,
+    ]
+    if draw_exit_marker:
+        price_ylim_values.append(exit_price)
+    finite_price_ylim_values = [float(value) for value in price_ylim_values if value is not None and math.isfinite(float(value))]
+    if not finite_price_ylim_values:
+        raise ValueError("empty_price_axis_values")
+    padding = max((max(finite_price_ylim_values) - min(finite_price_ylim_values)) * 0.05, 1e-9)
+    ax_price.set_ylim(min(finite_price_ylim_values) - padding, max(finite_price_ylim_values) + padding)
     if not context_frame.empty:
         context_high = context_frame["high"].to_numpy(dtype=np.float64)
         context_low = context_frame["low"].to_numpy(dtype=np.float64)
@@ -1717,6 +1747,9 @@ def render_anomaly_trade_chart(
     pre_candles: int = 30,
     post_candles: int = 90,
     context_timeframe_ms: int | None = 300_000,
+    hourly_context_frame: pd.DataFrame | None = None,
+    draw_risk_reward_blocks: bool = True,
+    draw_exit_marker: bool | None = None,
 ) -> None:
     """Render one anomaly trade chart through the canonical backtest chart renderer."""
 
@@ -1728,6 +1761,9 @@ def render_anomaly_trade_chart(
         pre_candles=pre_candles,
         post_candles=post_candles,
         context_timeframe_ms=context_timeframe_ms,
+        hourly_context_frame=hourly_context_frame,
+        draw_risk_reward_blocks=draw_risk_reward_blocks,
+        draw_exit_marker=draw_exit_marker,
     )
 
 

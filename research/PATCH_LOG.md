@@ -25,6 +25,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P149 | Strict high-based hourly levels | PROPOSED | `research_tools/hourly_levels.py`, `cli/parser.py`, `research/*` | diagnostics | Count only high-based 1h touches, enforce 6h spacing between counted touches, and reject pierced levels strictly by default. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; rerun `run-hourly-levels` with `--min-touch-spacing-hours 6 --max-level-pierce-pct 0.0`. |
 | P150 | Reject stale source candles for 1h levels | PROPOSED | `research_tools/hourly_levels.py`, `cli/parser.py`, `research/*` | diagnostics | Reject a pivot/high level source when any close in the previous 12h is above that candidate high. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; rerun `run-hourly-levels` with `--level-source-close-lookback-hours 12`. |
 | P151 | Rework trade chart context and flow panels | PROPOSED | `research_tools/anomaly_strategy_backtest.py`, `research/*` | diagnostics | Merge quote-volume and relative trade-count into one bottom line panel, and replace the middle context with independent 1h/7d candles plus strict hourly levels. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic `render_anomaly_trade_chart` smoke. |
+| P152 | Attach open-position trade chart | PROPOSED | `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `research/*` | live-operator-ux | Send the canonical three-panel trade chart with live open-position Telegram messages; open charts use TP1/SL lines instead of risk/reward rectangles. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic open `render_anomaly_trade_chart` smoke. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -689,3 +690,34 @@ PY
 ### Risk
 
 Low for trading logic: this is chart/artifact-only. Medium for chart review: lower flow lines are independently normalized to 0-100, so they compare timing/shape, not absolute magnitude.
+
+---
+
+## P152 — Attach open-position trade chart
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+The operator should see the same three-panel trade context immediately when a live position opens, not only after close. The open chart must avoid implying a completed risk/reward box and should instead show active TP1/SL levels.
+
+### Change
+
+- Add a synchronous Telegram photo send path that returns the Telegram message id, preserving later stop/close replies to the opening message.
+- Render an open-position chart after verified entry fill and stop placement.
+- Reuse the canonical trade-chart renderer with an explicit 1h context frame, so the middle panel covers 7 days before entry without forcing the top trade-window fetch to load 7 days of small-timeframe data.
+- For open charts, disable risk/reward rectangles and draw TP1 as a green dashed level and SL as a red dashed level.
+- Keep text-only Telegram fallback if chart rendering or photo delivery fails.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+# synthetic open render_anomaly_trade_chart smoke with hourly_context_frame and no risk/reward blocks
+```
+
+### Risk
+
+Low for trading logic: the patch runs after verified open state is created and does not alter signal selection, order placement, stop placement, TP/SL math, or monitoring. Medium for live operator UX/API load: each opened position now performs one extra chart render and one H1 OHLCV context fetch before sending the Telegram open photo. Context fetch failures are recorded as `chart_context_fetch_failed`; chart/photo failures fall back to text-only Telegram.

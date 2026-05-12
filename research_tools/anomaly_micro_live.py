@@ -393,6 +393,9 @@ class TelegramDispatcher:
             self._logger(f"telegram: график не отправлен, причина: {exc}")
             return False
 
+    def send_photo_sync(self, *, channel: str, photo_path: Path, caption: str, reply_to_message_id: int | None = None) -> int | None:
+        return self._send_photo(channel=channel, photo_path=photo_path, caption=caption, reply_to_message_id=reply_to_message_id)
+
     def _run(self) -> None:
         while True:
             item = self._queue.get()
@@ -466,7 +469,7 @@ class TelegramDispatcher:
         edited_id = result.get("message_id")
         return int(edited_id) if edited_id is not None else None
 
-    def _send_photo(self, *, channel: str, photo_path: Path, caption: str, reply_to_message_id: int | None) -> None:
+    def _send_photo(self, *, channel: str, photo_path: Path, caption: str, reply_to_message_id: int | None) -> int | None:
         token = self._config.positions_bot_token if channel == "positions" else self._config.events_bot_token
         chat_id = self._config.positions_chat_id if channel == "positions" else self._config.events_chat_id
         boundary = f"----codex{uuid4().hex}"
@@ -485,7 +488,12 @@ class TelegramDispatcher:
             headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
         )
         with urllib.request.urlopen(request, timeout=15) as response:
-            response.read()
+            raw = json.loads(response.read().decode("utf-8"))
+        result = raw.get("result") if isinstance(raw, dict) else None
+        if not isinstance(result, dict):
+            return None
+        message_id = result.get("message_id")
+        return int(message_id) if message_id is not None else None
 
 
 class LiveArtifactWriter:
@@ -2307,11 +2315,28 @@ class AnomalyMicroLiveRunner:
                 "stop_price": position.stop_price,
             },
         )
+        open_text = _format_open_message(position)
+        open_chart_path = self._render_open_chart(position)
         try:
-            position.telegram_open_message_id = self.telegram.send_sync(
-                channel="positions",
-                text=_format_open_message(position),
-            )
+            if open_chart_path is not None:
+                try:
+                    position.telegram_open_message_id = self.telegram.send_photo_sync(
+                        channel="positions",
+                        photo_path=open_chart_path,
+                        caption=open_text,
+                    )
+                except Exception as exc:
+                    self.artifacts.append_event(
+                        "telegram_open_chart_failed",
+                        signal.symbol,
+                        {"position_id": position.position_id, "chart_path": str(open_chart_path), "reason": str(exc)},
+                    )
+                    self.logger(f"live: позиция {signal.symbol} открыта, но Telegram-график входа не отправлен: {exc}")
+            if position.telegram_open_message_id is None:
+                position.telegram_open_message_id = self.telegram.send_sync(
+                    channel="positions",
+                    text=open_text,
+                )
         except Exception as exc:
             self.artifacts.append_event("telegram_open_failed", signal.symbol, {"position_id": position.position_id, "reason": str(exc)})
             self.logger(f"live: позиция {signal.symbol} открыта, но Telegram-вход не отправлен: {exc}")
@@ -2729,6 +2754,108 @@ class AnomalyMicroLiveRunner:
             reply_to_message_id=position.telegram_open_message_id,
             text=close_text,
         )
+
+    def _render_open_chart(self, position: LivePosition) -> Path | None:
+        signal = position.signal
+        try:
+            from research_tools.anomaly_strategy_backtest import render_anomaly_trade_chart
+
+            entry_timeframe_ms = int(signal.entry_timeframe.to_milliseconds())
+            opened_at_ms = int(position.opened_at_ms)
+            start_ms = int(signal.start_timestamp_ms) - max(35 * 60_000, 70 * entry_timeframe_ms)
+            end_ms = max(int(time.time() * 1000), opened_at_ms + max(60_000, 4 * entry_timeframe_ms))
+            frame = self._fetch_chart_frame(
+                signal.symbol,
+                signal.entry_timeframe,
+                start_timestamp_ms=start_ms,
+                end_timestamp_ms=end_ms,
+            )
+            if frame.empty:
+                self.artifacts.append_event(
+                    "chart_render_failed",
+                    signal.symbol,
+                    {"position_id": position.position_id, "stage": "open", "reason": "empty_plot_source_frame"},
+                )
+                return None
+
+            try:
+                hourly_context_frame = self._fetch_chart_frame(
+                    signal.symbol,
+                    Timeframe.H1,
+                    start_timestamp_ms=opened_at_ms - 7 * 24 * HOUR_MS - HOUR_MS,
+                    end_timestamp_ms=opened_at_ms,
+                )
+            except Exception as exc:
+                hourly_context_frame = pd.DataFrame()
+                self.artifacts.append_event(
+                    "chart_context_fetch_failed",
+                    signal.symbol,
+                    {
+                        "position_id": position.position_id,
+                        "stage": "open",
+                        "timeframe": Timeframe.H1.value,
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+
+            chart_dir = self.artifacts.root / "charts"
+            chart_dir.mkdir(parents=True, exist_ok=True)
+            path = chart_dir / f"{position.position_id}_open.png"
+            trade_row = {
+                "symbol": signal.symbol,
+                "status": "open",
+                "anomaly_timestamp_ms": int(signal.start_timestamp_ms),
+                "decision_timestamp_ms": int(signal.decision_timestamp_ms),
+                "entry_timestamp_ms": int(position.opened_at_ms),
+                "entry_timestamp_utc": position.opened_at_utc,
+                "entry_price": float(position.entry_price),
+                "signal_entry_price": float(signal.entry_price),
+                "signal_entry_timestamp_ms": int(signal.decision_timestamp_ms),
+                "initial_stop": float(position.stop_price),
+                "tp1_price": float(position.tp1_price),
+                "box_high": float(signal.box_high),
+                "net_return": 0.0,
+                "exit_reason": "open",
+                "category_id": signal.category_id,
+                "category_label": signal.category_label,
+                "levels_timeframe": signal.levels_timeframe.value,
+                "entry_timeframe": signal.entry_timeframe.value,
+            }
+            render_anomaly_trade_chart(
+                frame=frame,
+                trade=trade_row,
+                output_path=path,
+                context_timeframe_ms=int(signal.levels_timeframe.to_milliseconds()),
+                hourly_context_frame=hourly_context_frame,
+                draw_risk_reward_blocks=False,
+                draw_exit_marker=False,
+            )
+            self.artifacts.append_event(
+                "chart_rendered",
+                signal.symbol,
+                {
+                    "position_id": position.position_id,
+                    "stage": "open",
+                    "chart_path": str(path),
+                    "renderer": "anomaly_backtest_trade_chart",
+                    "levels_tf": signal.levels_timeframe.value,
+                    "entry_tf": signal.entry_timeframe.value,
+                },
+            )
+            return path
+        except Exception as exc:
+            self.artifacts.append_event(
+                "chart_render_failed",
+                signal.symbol,
+                {
+                    "position_id": position.position_id,
+                    "stage": "open",
+                    "renderer": "anomaly_backtest_trade_chart",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            return None
+
 
     def _render_close_chart(
         self,

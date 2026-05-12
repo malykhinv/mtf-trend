@@ -81,14 +81,14 @@ research_tools/hourly_levels.py
 
 ## 6. Next best step
 
-Apply P151, then regenerate a small chart sample and visually verify the 1h/7d context plus merged flow panel before using chart screenshots for review:
+Apply P152, then run a dry/live open-position smoke and verify that the Telegram opening message is a photo caption with TP1/SL lines and that later close/stop messages still reply to it:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-lab --days 30
+python main.py run-anomaly-live --max-cycles 3 --symbols BTC/USDT:USDT --confirm-real-orders false
 ```
 
-Check `ticker_radar_snapshot`, `ticker_radar_promoted`, `symbol_batch_selected.effective_scan_count`, `inactive_count`, `reject_stale_signal`, and cycle time. If radar load is high, rerun with `--ticker-radar-watch-batch-size 2`.
+Check `chart_rendered` with `stage=open`, `chart_context_fetch_failed`, `telegram_open_chart_failed`, and that stop/close Telegram messages still reply to `telegram_open_message_id`.
 
 
 ---
@@ -369,4 +369,23 @@ Known effect:
 
 ```text
 The lower panel compares normalized shapes only: orange quote volume and green number_of_trades are each scaled to their own chart-window maximum.
+```
+
+---
+
+## Current audit note — P152
+
+P152 is live operator UX and chart-artifact only. After a verified entry fill and stop placement, live now attempts to render the canonical three-panel trade chart for the opening Telegram message. Open charts replace risk/reward shaded rectangles with TP1/SL horizontal lines, while preserving the independent 1h/7d context and merged flow panel. Text-only Telegram remains a fallback.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --max-cycles 3 --symbols BTC/USDT:USDT --confirm-real-orders false
+```
+
+Known effect:
+
+```text
+A real opened position now performs one additional H1 context fetch and Telegram photo upload; failures are recorded as chart_render_failed, chart_context_fetch_failed, or telegram_open_chart_failed and should not block position monitoring.
 ```
