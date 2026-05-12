@@ -389,3 +389,26 @@ No top_growth_snapshot_started during live.
 No duplicate 5m OHLCV fetch per symbol for 5m/30s + 5m/15s.
 Stale historical decisions remain visible as reject_stale_signal with stage=prescan.
 ```
+
+---
+
+## 2026-05-12 — P144 unchanged-candle live scan skip
+
+Input:
+
+```text
+Post-P143 live scan still rescans active symbols each cycle even when no new closed levels candle exists.
+Operator requirement: active symbols must remain observable, but stale/unchanged scan work should not block cold-universe traversal.
+```
+
+Result:
+
+```text
+Patch proposed. The runner tracks the last scanned closed candle per symbol/timeframe, skips duplicate OHLCV scans until a new closed candle exists, reports waiting active symbols in symbol_batch_selected, and preserves empty OHLCV artifacts.
+```
+
+Next:
+
+```text
+Run a 60-cycle live latency smoke and compare symbols_per_minute, batch cycle time, active_waiting_count, reject_stale_signal and signal_scan_empty_ohlcv before implementing ticker-radar promotion.
+```

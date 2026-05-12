@@ -20,6 +20,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P141 | Speed up hourly-level scan and chart run | PROPOSED | `research_tools/hourly_levels.py`, `cli/parser.py`, `research/*` | diagnostics | Read only scanner-needed parquet columns, trim stale source candles before 1h aggregation, and replace expensive pandas per-row/copy checks in touch/break/pierce logic with numpy scans. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; rerun `run-hourly-levels` and compare elapsed_seconds. |
 | P142 | Remove hourly chart tight-layout pass | PROPOSED | `research_tools/hourly_levels.py`, `research/*` | diagnostics | Replace matplotlib `tight_layout()` with fixed subplot margins to avoid warning spam and avoid an unnecessary per-chart layout solver pass. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; run chart export and confirm no tight_layout warning. |
 | P143 | Speed up live scan without hiding stale rejects | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance | Fetch each levels timeframe once per symbol per cycle, reject stale decisions before heavy signal build while preserving `reject_stale_signal` artifacts, and move top-growth export to standalone CLI. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; live smoke: `reject_stale_signal` remains visible with `stage=prescan`; `run-anomaly-live` no longer starts top-growth. |
+| P144 | Skip unchanged live signal rescans | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-performance | Do not spend OHLCV/API budget rescanning a symbol/timeframe until a new closed levels candle exists; active symbols are checked every cycle but only due ones consume scan slots, while waiting active symbols remain visible in `symbol_batch_selected`. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic scheduler smoke: active waiting symbol is not scanned again on unchanged closed candle and frees a slot for inactive scan. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -454,3 +455,17 @@ python main.py run-anomaly-top-growth --top-growth-min-return-pct 0.10 --top-gro
 ### Risk
 
 Low/medium. Signal rules and order execution are unchanged, but live scan ordering and artifact staging change. Top-growth is now an explicit operator command rather than an automatic live side task.
+
+---
+
+## 17. Current audit note — P144
+
+P144 is live-performance only. It adds a per-symbol/per-levels-timeframe closed-candle scan ledger so the runner does not re-fetch OHLCV for the same already-processed closed candle. Active symbols are still evaluated every cycle for scheduling, but if no new closed candle exists they are reported as `active_waiting_*` in `symbol_batch_selected` and their slot is released to inactive symbols. Empty OHLCV results are visible as `signal_scan_empty_ohlcv`; exchange/network exceptions are not marked as scanned and still bubble through the existing retry path.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+# synthetic smoke: repeated _scan_batch on unchanged now_ms fetches each symbol/timeframe once, then fetches again after the next closed candle.
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20
+```

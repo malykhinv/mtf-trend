@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P143 proposed locally on top of ZIP-derived source
-Last active patch: P143 live scan latency cleanup
+Local patch stack: P130-P144 proposed locally on top of ZIP-derived source
+Last active patch: P144 skip unchanged live signal rescans
 Updated: 2026-05-12
 ```
 
@@ -73,17 +73,20 @@ research_tools/hourly_levels.py
 5. `main.py` still has a known Linux `ctypes.windll` import issue; intentionally not fixed in the current cleanup stack.
 6. Historical local artifacts may contain stale compiled files; they are ignored by git and should be deleted locally.
 7. Top-growth snapshots are now exported only by standalone `run-anomaly-top-growth`; live trading loop must not spend REST/API budget on top-growth side work.
+8. Active symbols whose latest closed levels candle was already scanned are now kept visible as `active_waiting_*` in batch artifacts and should not consume OHLCV scan slots until a new closed candle exists.
 
 ---
 
 ## 6. Next best step
 
-Apply P131 and run the live-execution smoke before using any micro-live PnL:
+Apply P144 and run a short live latency smoke before adding ticker-radar promotion:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-# synthetic/fake-exchange check: stale/drift rejects must emit Telegram event notifications and no market order
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20
 ```
+
+Check `symbol_batch_selected` for `active_waiting_count`, `reject_stale_signal` for zero/low counts, and fetch/cycle speed before touching signal thresholds.
 
 
 ---
@@ -229,4 +232,18 @@ Next verification:
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-anomaly-live --confirm-real-orders --max-cycles 30 --symbol-batch-size 20
 python main.py run-anomaly-top-growth --top-growth-min-return-pct 0.10 --top-growth-limit 5
+```
+
+
+---
+
+## 18. Current audit note — P144
+
+P144 keeps the live universe fixed and does not add dynamic pruning. It reduces repeated REST work by remembering the last closed candle scanned per symbol and levels timeframe. Active symbols remain operator-visible every cycle, but unchanged active symbols move to `active_waiting_symbols` and free their slot for inactive rotation. This should improve cold-universe traversal without weakening stale-signal guards or hiding stale/empty-data artifacts.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20
 ```

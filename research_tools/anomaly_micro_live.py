@@ -903,6 +903,7 @@ class AnomalyMicroLiveRunner:
         self._recent_stops: dict[str, list[float]] = {}
         self._active_symbols: dict[str, LiveActiveSymbol] = {}
         self._seen_decisions: set[tuple[str, str, str, int]] = set()
+        self._last_signal_scan_closed_at: dict[tuple[str, str], int] = {}
         self._opened_positions_total = 0
         self._closed_positions_total = 0
         self._orphan_orders_cancelled_total = 0
@@ -1023,9 +1024,9 @@ class AnomalyMicroLiveRunner:
 
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
         now_ms = int(time.time() * 1000)
-        active = self._active_symbol_batch(now_ms=now_ms)
-        active_keys = {_position_symbol_key(symbol) for symbol in active}
-        inactive_slots = max(0, self.config.symbol_batch_size - len(active))
+        active_due, active_waiting = self._active_symbol_batch(now_ms=now_ms)
+        active_keys = {_position_symbol_key(symbol) for symbol in [*active_due, *active_waiting]}
+        inactive_slots = max(0, self.config.symbol_batch_size - len(active_due))
         inactive: list[str] = []
         attempts = 0
         while len(inactive) < inactive_slots and attempts < len(symbols):
@@ -1038,20 +1039,22 @@ class AnomalyMicroLiveRunner:
             if symbol_key in active_keys or symbol_is_opening or self._symbol_in_stop_cooldown(symbol):
                 continue
             inactive.append(symbol)
-        batch = [*active, *inactive]
+        batch = [*active_due, *inactive]
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
             {
-                "active_symbols": active,
-                "active_count": len(active),
+                "active_symbols": active_due,
+                "active_count": len(active_due),
+                "active_waiting_count": len(active_waiting),
+                "active_waiting_symbols": active_waiting,
                 "inactive_count": len(inactive),
                 "symbol_batch_size": self.config.symbol_batch_size,
             },
         )
         return batch
 
-    def _active_symbol_batch(self, *, now_ms: int) -> list[str]:
+    def _active_symbol_batch(self, *, now_ms: int) -> tuple[list[str], list[str]]:
         with self._state_lock:
             expired = self._prune_active_symbols_locked(now_ms)
             symbols_by_key: dict[str, str] = {}
@@ -1059,7 +1062,14 @@ class AnomalyMicroLiveRunner:
                 symbols_by_key[_position_symbol_key(position.signal.symbol)] = position.signal.symbol
             for state in self._active_symbols.values():
                 symbols_by_key[_position_symbol_key(state.symbol)] = state.symbol
-            active = sorted(symbols_by_key.values())
+            active_symbols = sorted(symbols_by_key.values())
+        active_due: list[str] = []
+        active_waiting: list[str] = []
+        for symbol in active_symbols:
+            if self._signal_scan_due_for_symbol(symbol, now_ms=now_ms):
+                active_due.append(symbol)
+            else:
+                active_waiting.append(symbol)
         for state in expired:
             self.artifacts.append_event(
                 "active_symbol_expired",
@@ -1070,7 +1080,7 @@ class AnomalyMicroLiveRunner:
                     "decision_timestamp_ms": state.decision_timestamp_ms if state.decision_timestamp_ms is not None else "",
                 },
             )
-        return active
+        return active_due, active_waiting
 
     def _mark_active_symbol(
         self,
@@ -1153,6 +1163,40 @@ class AnomalyMicroLiveRunner:
                 },
             )
 
+    def _signal_scan_due_for_symbol(self, symbol: str, *, now_ms: int) -> bool:
+        symbol_key = _position_symbol_key(symbol)
+        with self._state_lock:
+            for levels_timeframe, _ in self.config.timeframe_pairs:
+                closed_timestamp_ms = _latest_closed_candle_start_ms(levels_timeframe, now_ms=now_ms)
+                scan_key = (symbol_key, levels_timeframe.value)
+                if self._last_signal_scan_closed_at.get(scan_key) != closed_timestamp_ms:
+                    return True
+        return False
+
+    def _signal_scan_due_for_timeframe(
+        self,
+        symbol: str,
+        levels_timeframe: Timeframe,
+        *,
+        closed_timestamp_ms: int,
+    ) -> bool:
+        symbol_key = _position_symbol_key(symbol)
+        scan_key = (symbol_key, levels_timeframe.value)
+        with self._state_lock:
+            return self._last_signal_scan_closed_at.get(scan_key) != int(closed_timestamp_ms)
+
+    def _mark_signal_scan_closed_at(
+        self,
+        symbol: str,
+        levels_timeframe: Timeframe,
+        *,
+        closed_timestamp_ms: int,
+    ) -> None:
+        symbol_key = _position_symbol_key(symbol)
+        scan_key = (symbol_key, levels_timeframe.value)
+        with self._state_lock:
+            self._last_signal_scan_closed_at[scan_key] = int(closed_timestamp_ms)
+
     def _scan_batch(self, symbols: list[str]) -> list[LiveSignal]:
         signals: list[LiveSignal] = []
         now_ms = int(time.time() * 1000)
@@ -1167,8 +1211,31 @@ class AnomalyMicroLiveRunner:
                 + self.config.signal_scan_backfill_candles
                 + 5
             ) * timeframe_ms
+            latest_closed_ts = _latest_closed_candle_start_ms(levels_timeframe, now_ms=now_ms)
             for symbol in symbols:
+                if not self._signal_scan_due_for_timeframe(
+                    symbol,
+                    levels_timeframe,
+                    closed_timestamp_ms=latest_closed_ts,
+                ):
+                    continue
                 frame = self.exchange.fetch_ohlcv(symbol, levels_timeframe, now_ms - lookback_ms, now_ms)
+                self._mark_signal_scan_closed_at(
+                    symbol,
+                    levels_timeframe,
+                    closed_timestamp_ms=latest_closed_ts,
+                )
+                if frame.empty:
+                    self.artifacts.append_event(
+                        "signal_scan_empty_ohlcv",
+                        symbol,
+                        {
+                            "levels_tf": levels_timeframe.value,
+                            "closed_timestamp_ms": latest_closed_ts,
+                            "lookback_ms": lookback_ms,
+                        },
+                    )
+                    continue
                 for entry_timeframe in entry_timeframes:
                     signals.extend(
                         self._build_recent_signals(
@@ -2914,6 +2981,13 @@ def _category_value(category: LivePumpCategory, config: LiveAnomalyConfig, field
     if value is not None:
         return value
     return getattr(config, field_name)
+
+
+def _latest_closed_candle_start_ms(timeframe: Timeframe, *, now_ms: int) -> int:
+    timeframe_ms = int(timeframe.to_milliseconds())
+    if timeframe_ms <= 0:
+        raise ValueError(f"invalid timeframe milliseconds: {timeframe.value}")
+    return ((int(now_ms) - timeframe_ms) // timeframe_ms) * timeframe_ms
 
 
 def _decision_freshness_details(
