@@ -856,3 +856,43 @@ Positive mark basis is the strongest single pre-entry separator in this sample.
 Fast_fade rows are strongly negative, but only 4 examples.
 Do not build a confident production grid until the same TF-set logic is rerun on a longer 1s-backed window.
 ```
+
+Leakage audit:
+
+```text
+Executable filters in build_anomaly_signals use pre-decision columns: retention/hold/risk/OI/context and configured min/max fields.
+future_high, future_low, future_ret_high_after_decision, future_dd_low_after_decision, outcome_label, exit_reason, tp1_hit and return columns are diagnostics only and are not part of current signal filtering.
+The next-bar market-entry resolver intentionally reads candles after decision for execution simulation. This is not a signal leak, but it is still an execution-model assumption and should be stress-tested with slippage/spread.
+Fields named next_n_* are misleading in pair-aware mode: they are computed from the closed LTF confirmation segment before the decision timestamp, not from candles after decision.
+```
+
+Run-period clarification:
+
+```text
+Commands used --days 7 --end-timestamp-ms 1778488560000.
+Closed true-TF trades are concentrated on 2026-05-04, 2026-05-05 and 2026-05-06 UTC only.
+Counts by TF set:
+5m/30s: 4 / 10 / 3
+1m/15s: 12 / 29 / 3
+1m/5s: 12 / 23 / 2
+Total: 98 closed trades over 3 active UTC days.
+```
+
+Red-flag hypotheses to test first:
+
+```text
+1. mark_discount_or_flat, especially with oi_down_price_up.
+2. stale/missing derivatives context.
+3. excessive taker-buy quote-share delta at start/confirmation.
+4. high quote/trade effort per unit of price displacement.
+5. future diagnostic fast_fade label must not be used directly; derive only pre-entry proxies for it.
+```
+
+Bottleneck notes:
+
+```text
+5m/30s took about 8.8 minutes, 1m/15s about 26.1 minutes, and 1m/5s about 36.8 minutes.
+The slow part is candidate construction over 350 symbols with 1s parquet reads, in-memory 1s->target aggregation and repeated LTF segment scans.
+Derivative-context enrichment and trade/chart simulation are secondary for these runs.
+Speed patch priority: materialize honest 1s-derived 5s/15s/30s caches with source provenance, then reuse them across TF-set runs.
+```

@@ -682,3 +682,13 @@ Most useful observed pattern:
 ```text
 Winners are concentrated in clean/high-retention/large-ticket setups, especially when mark is positive versus decision close. Fast-fade labels and mark-discount/flat + oi_down_price_up + clean/high-retention/large-ticket setups are weak.
 ```
+
+Leakage/bottleneck status:
+
+```text
+P164 audit found no direct use of future_* / outcome / exit-result fields in executable anomaly signal filters.
+Those fields are still exported for diagnostics and must stay forbidden for grid filters.
+The run command used --days 7, but the 98 closed true-TF trades occurred only on 2026-05-04..2026-05-06 UTC.
+That density is high enough to start cutting with red-flag hypotheses, but the filters are not proven until tested on a longer 1s-backed window.
+Main runtime bottleneck is repeated full-symbol 1s parquet reads + in-memory aggregation/scanning for each TF set; materialized 5s/15s/30s caches are the highest-value speed patch.
+```
