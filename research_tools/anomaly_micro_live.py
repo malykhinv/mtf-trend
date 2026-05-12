@@ -2703,7 +2703,8 @@ class AnomalyMicroLiveRunner:
                 latest_low = float(latest["low"])
                 latest_close = float(latest["close"])
                 if not position.tp1_done and latest_high >= position.tp1_price:
-                    close_amount = max(min(managed_amount, position.remaining_amount) * 0.5, 0.0)
+                    previous_remaining_amount = max(position.remaining_amount, 0.0)
+                    close_amount = max(min(managed_amount, previous_remaining_amount) * 0.5, 0.0)
                     tp1_fill = None
                     if close_amount > 0.0:
                         tp1_fill = self.exchange.create_market_order_with_fill(signal.symbol, "sell", close_amount, reduce_only=True)
@@ -2732,9 +2733,30 @@ class AnomalyMicroLiveRunner:
                     actual_after_tp1 = abs(self.exchange.fetch_symbol_position_amount(signal.symbol))
                     position.tp1_done = True
                     filled_close_amount = tp1_fill.filled_amount if tp1_fill is not None else close_amount
-                    position.remaining_amount = min(actual_after_tp1, max(position.amount - filled_close_amount, 0.0))
+                    expected_remaining_amount = max(previous_remaining_amount - filled_close_amount, 0.0)
+                    position.remaining_amount = min(actual_after_tp1, expected_remaining_amount)
                     if position.remaining_amount <= 0.0:
-                        self._finalize_position(position, reason="TP1 закрыл позицию полностью", pnl_price=position.tp1_price)
+                        unresolved_threshold = previous_remaining_amount * self.config.max_position_amount_slippage_ratio
+                        if expected_remaining_amount > max(unresolved_threshold, 1e-12):
+                            unresolved_details = {
+                                "position_id": position.position_id,
+                                "previous_remaining_amount": previous_remaining_amount,
+                                "tp1_filled_amount": filled_close_amount,
+                                "expected_remaining_amount": expected_remaining_amount,
+                                "exchange_position_amount_after_tp1": actual_after_tp1,
+                                "realized_pnl_usdt": position.realized_pnl_usdt,
+                            }
+                            self.artifacts.append_event("tp1_remaining_exit_unresolved", signal.symbol, unresolved_details)
+                            self._finalize_unresolved_position_exit(
+                                position,
+                                reason="TP1 fill подтверждён, но остаток позиции исчез без exit fill",
+                                source_event="tp1_remaining_exit_unresolved",
+                                details=unresolved_details,
+                                cancel_stop_order=True,
+                                record_stop_cooldown=False,
+                            )
+                            return
+                        self._finalize_position(position, reason="TP1 закрыл позицию полностью", pnl_price=position.tp1_price, exit_amount=0.0)
                         return
                     self._replace_position_stop_order(
                         position,
@@ -2883,14 +2905,25 @@ class AnomalyMicroLiveRunner:
         )
         self.logger(f"live: {_compact_symbol(symbol)} exit unresolved · {reason}")
 
-    def _finalize_position(self, position: LivePosition, *, reason: str, pnl_price: float | None) -> None:
+    def _finalize_position(
+        self,
+        position: LivePosition,
+        *,
+        reason: str,
+        pnl_price: float | None,
+        exit_amount: float | None = None,
+    ) -> None:
         symbol_key = _position_symbol_key(position.signal.symbol)
         with self._state_lock:
             self._open_positions.pop(symbol_key, None)
             self._closed_positions_total += 1
         exit_price = pnl_price if pnl_price is not None else position.entry_price
-        remaining_amount = position.remaining_amount if position.remaining_amount > 0.0 else position.amount
-        pnl_usdt = position.realized_pnl_usdt + remaining_amount * (exit_price - position.entry_price)
+        terminal_exit_amount = max(position.remaining_amount, 0.0) if exit_amount is None else exit_amount
+        if not math.isfinite(terminal_exit_amount) or terminal_exit_amount < 0.0:
+            raise LiveDataIntegrityError(
+                f"invalid terminal exit amount: position_id={position.position_id} exit_amount={terminal_exit_amount}"
+            )
+        pnl_usdt = position.realized_pnl_usdt + terminal_exit_amount * (exit_price - position.entry_price)
         pnl_pct = _safe_divide(pnl_usdt, position.notional_usdt)
         if reason.startswith("стоп"):
             with self._state_lock:
@@ -2905,6 +2938,9 @@ class AnomalyMicroLiveRunner:
                 "reason": reason,
                 "pnl_pct": pnl_pct,
                 "pnl_usdt": pnl_usdt,
+                "realized_pnl_before_terminal_exit_usdt": position.realized_pnl_usdt,
+                "terminal_exit_amount": terminal_exit_amount,
+                "terminal_exit_price": exit_price,
             },
         )
         self.artifacts.append_position_close(position, reason=reason, pnl_usdt=pnl_usdt, pnl_pct=pnl_pct)

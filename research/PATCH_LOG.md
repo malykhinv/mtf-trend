@@ -895,7 +895,7 @@ Medium. This changes signal timing and candidate construction. It should increas
 
 ## P159 — HTF/LTF live health and rounded TP1 target
 
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Date: 2026-05-12
 Commit: UNKNOWN
 
@@ -931,7 +931,7 @@ Medium. TP1 is now usually farther than exactly 1R, so TP1 hit-rate may drop whi
 
 ## P160 — Remove retired closed-HTF live/backtest code
 
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Date: 2026-05-12
 Commit: UNKNOWN
 
@@ -962,7 +962,7 @@ Low. This is deletion-only cleanup of functions with no runtime call sites in th
 
 ## P161 — Fix anomaly market-entry safe divide helper
 
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Date: 2026-05-12
 Commit: UNKNOWN
 
@@ -986,3 +986,37 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ### Risk
 
 Low. This is a direct NameError fix in the executable backtest path; no thresholds, signal filters, TP/SL logic, live order logic, or data-quality fallback behavior change.
+
+---
+
+## P162 — Fix live terminal PnL amount accounting
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+Live terminal PnL could double-count size when a position had `remaining_amount == 0`. `_finalize_position()` fell back to the original `position.amount`, so a TP1/full-close path could add a second terminal PnL leg on top of already realized PnL. A second related audit issue existed in the TP1 monitor branch: if the TP1 reduce-only fill was only partial but the exchange position became zero, the disappeared remainder had no verified exit fill and should not be written as a normal closed trade with proxy PnL.
+
+### Change
+
+- `_finalize_position()` now uses the verified remaining amount by default and accepts an explicit terminal `exit_amount`; it never falls back from zero remaining amount to the original entry amount.
+- `position_closed` events now include terminal exit amount/price and realized PnL before the terminal leg for audit.
+- TP1 monitoring now tracks previous remaining amount, TP1 filled amount and expected remaining amount.
+- If TP1 fill is confirmed but a material residual position disappears without a verified fill, live records `tp1_remaining_exit_unresolved` and finalizes as `position_exit_unresolved` with blank realized PnL instead of fabricating a normal closed trade.
+- If TP1 genuinely closes the whole remaining amount, `_finalize_position(..., exit_amount=0.0)` records only the already verified realized PnL.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+python main.py run-anomaly-lab --help
+# synthetic smoke still needed: remaining_amount=0 terminal close must not add position.amount PnL
+# synthetic smoke still needed: partial TP1 fill + exchange amount zero -> position_exit_unresolved, blank realized PnL
+```
+
+### Risk
+
+Low-to-medium audit semantics change. Some rows that previously looked like normal profitable/loss-making closes can become `exit_unresolved` when the residual exchange exposure disappears without a verified fill. That is intentional; trading entry/selection logic is unchanged.

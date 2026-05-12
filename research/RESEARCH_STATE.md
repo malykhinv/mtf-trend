@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P155 applied locally on top of ZIP-derived source; P156/P159/P160 proposed; P161 proposed
-Last active patch: P161 anomaly market-entry safe divide helper fix
+Local patch stack: P130-P161 present in uploaded ZIP / UNKNOWN commit; P162 proposed
+Last active patch: P162 live terminal PnL amount accounting
 Updated: 2026-05-12
 ```
 
@@ -81,14 +81,15 @@ research_tools/hourly_levels.py
 
 ## 6. Next best step
 
-Apply P156, then verify that live can start on Linux and that unresolved live exits no longer become normal closed trades with proxy PnL:
+Apply P162, then verify that terminal live PnL uses only verified remaining size and unresolved residual exits do not become normal closed trades:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-anomaly-live --help
+python main.py run-anomaly-lab --help
 ```
 
-Synthetic/fake-exchange smoke should force `position_closed_externally_unverified_exit_price` and `stop_exit_fill_unresolved`; expected result is `position_exit_unresolved`, ledger `status=exit_unresolved`, and blank realized PnL fields.
+Synthetic/fake-exchange smoke should force `remaining_amount=0` terminal close and partial TP1 fill followed by exchange amount zero. Expected result: no fallback to `position.amount` for PnL; material missing residual fill ends as `position_exit_unresolved` with blank realized PnL fields.
 
 
 ---
@@ -552,4 +553,26 @@ Known effect:
 
 ```text
 No trading semantics should change. The previous run stopped before evaluating market-entry drift/RR guards; after P161 it should either simulate trades or emit normal skip reasons such as market_entry_price_drift / market_entry_rr_collapsed.
+```
+
+---
+
+## Current audit note — P162
+
+P162 fixes live terminal PnL accounting. Normal `position_closed` rows now calculate the terminal PnL leg from the verified remaining amount, not from original entry size when `remaining_amount == 0`. TP1 monitoring also treats a disappeared material residual position after a partial TP1 fill as unresolved exit evidence, not as a normal close.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+python main.py run-anomaly-lab --help
+# synthetic: remaining_amount=0 terminal close does not add position.amount PnL
+# synthetic: partial TP1 fill + exchange amount zero -> position_exit_unresolved, blank realized PnL
+```
+
+Known effect:
+
+```text
+Live PnL can decrease versus old artifacts because previously double-counted or proxy-counted terminal size is no longer included. Treat older live ledger rows around TP1/full-close residuals as audit-suspect until revalidated.
 ```
