@@ -623,3 +623,34 @@ python main.py run-hourly-levels --source-timeframe 5m --days 30 --min-touches 3
 ### Risk
 
 Medium for diagnostics: fewer levels will be emitted, especially symbols where prior detections were body/interior intersections or recently repeated taps. Live trading and anomaly backtest execution are unchanged.
+
+---
+
+## P150 — Reject stale source candles for 1h levels
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+A pivot high can look like resistance even when the market closed above that same price shortly before it. Such a candle is not a clean source for an overhead level: the level was already accepted/reclaimed within the previous 12h.
+
+### Change
+
+- Add `level_source_close_lookback_hours=12` to the hourly-level scan config.
+- Filter pivot/high source candles before level clustering: if any close in the previous 12h is above the candidate candle high, that candle is not allowed to seed a level.
+- Expose the guard as `--level-source-close-lookback-hours` and print it in scan startup context.
+- Keep the guard at pivot selection time, not as chart/output post-processing.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 30 --level-source-close-lookback-hours 12
+```
+
+### Risk
+
+Medium for diagnostics: fewer levels will be emitted when a later-looking pivot is actually below a recent accepted close. Live trading and anomaly backtest execution are unchanged.
+

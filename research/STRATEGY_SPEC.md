@@ -178,6 +178,7 @@ A valid 1h overhead level must satisfy:
 at least 3 valid high-based touches in the same price band
 each counted touch is at least 6h after the previous counted touch
 each valid touch has a meaningful bounce after touch
+a source pivot/high candle has no close above its high in the previous 12h
 level is above current price
 level is not pierced by later wick/high
 level is not a held broken level
@@ -196,7 +197,7 @@ reaction_to_recent_move_ratio
 context = bullish_target / danger_ceiling / overhead_level
 ```
 
-A touch is valid only when the candle high is near the level while the candle body remains below the touch band. Body/interior range intersections and later wick/high pierces are rejected instead of being rescued by a later bounce.
+A touch is valid only when the candle high is near the level while the candle body remains below the touch band. A candle is not allowed to seed a level when any close in the previous 12h is above that candle high. Body/interior range intersections and later wick/high pierces are rejected instead of being rescued by a later bounce.
 
 
 ---

@@ -331,3 +331,23 @@ Known effect:
 ```text
 Level count should drop versus P148; compare charts before treating the reduced output as a strategy signal.
 ```
+
+---
+
+## Current audit note — P150
+
+P150 is diagnostics-only. `run-hourly-levels` now rejects a pivot/high source candle when any close in the previous 12h is above that candle high. This prevents building overhead levels from candles whose price was already accepted/reclaimed shortly before the supposed resistance touch.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-hourly-levels --source-timeframe 5m --days 30 --level-source-close-lookback-hours 12
+```
+
+Known effect:
+
+```text
+Level count can drop again versus P149; rejected cases should be those with a source high below a close from the previous 12h.
+```
+

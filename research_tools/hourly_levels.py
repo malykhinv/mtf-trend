@@ -57,6 +57,7 @@ class HourlyLevelScanConfig:
     chart_bars: int = 240
     min_touches: int = 3
     min_touch_spacing_hours: int = 6
+    level_source_close_lookback_hours: int = 12
     touch_tolerance_pct: float = 0.006
     min_bounce_pct: float = 0.05
     bounce_lookahead_bars: int = 12
@@ -370,17 +371,32 @@ def _trend_state(frame: pd.DataFrame) -> str:
     return "mixed"
 
 
-def _pivot_high_prices(frame: pd.DataFrame, side_bars: int) -> list[tuple[int, float]]:
+def _pivot_high_prices(
+    frame: pd.DataFrame,
+    side_bars: int,
+    prior_close_lookback_hours: int,
+) -> list[tuple[int, float]]:
     highs = frame["high"].astype(float).reset_index(drop=True)
+    closes = frame["close"].astype(float).reset_index(drop=True)
     timestamps = frame["timestamp"].astype("int64").reset_index(drop=True)
     if len(frame) < side_bars * 2 + 1:
         return []
+    prior_close_lookback_ms = max(int(prior_close_lookback_hours), 0) * _HOUR_MS
     pivots: list[tuple[int, float]] = []
     for idx in range(side_bars, len(frame) - side_bars):
         window = highs.iloc[idx - side_bars: idx + side_bars + 1]
         value = float(highs.iloc[idx])
-        if value >= float(window.max()) and value > 0.0:
-            pivots.append((int(timestamps.iloc[idx]), value))
+        if value <= 0.0 or value < float(window.max()):
+            continue
+
+        timestamp_ms = int(timestamps.iloc[idx])
+        if prior_close_lookback_ms > 0:
+            prior_start_ms = timestamp_ms - prior_close_lookback_ms
+            prior_closes = closes.loc[(timestamps >= prior_start_ms) & (timestamps < timestamp_ms)]
+            if not prior_closes.empty and bool((prior_closes > value).any()):
+                continue
+
+        pivots.append((timestamp_ms, value))
     return pivots
 
 
@@ -589,7 +605,11 @@ def find_hourly_overhead_levels(
     latest_close = float(frame["close"].iloc[-1])
     latest_ts = int(frame["timestamp"].iloc[-1])
     recent_move = _recent_move_pct(frame, config.recent_move_lookback_bars)
-    pivots = _pivot_high_prices(frame, config.pivot_side_bars)
+    pivots = _pivot_high_prices(
+        frame,
+        config.pivot_side_bars,
+        config.level_source_close_lookback_hours,
+    )
     level_clusters = _cluster_prices(pivots, config.touch_tolerance_pct)
     metrics: list[HourlyLevelMetric] = []
 
@@ -878,6 +898,7 @@ def run_hourly_level_scan(
         f"symbols={len(symbols)}, source_timeframe={config.source_timeframe.value}, "
         f"days={config.days}, min_touches={config.min_touches}, "
         f"min_touch_spacing_hours={config.min_touch_spacing_hours}, "
+        f"level_source_close_lookback_hours={config.level_source_close_lookback_hours}, "
         f"min_bounce_pct={config.min_bounce_pct:.2%}, fast_source_trim={config.fast_source_trim}, "
         f"output_dir={output_dir}"
     )
@@ -1011,6 +1032,7 @@ def build_config_from_namespace(args: object, *, cache_dir: Path, results_dir: P
         chart_bars=int(getattr(args, "chart_bars", 240)),
         min_touches=int(getattr(args, "min_touches", 3)),
         min_touch_spacing_hours=int(getattr(args, "min_touch_spacing_hours", 6)),
+        level_source_close_lookback_hours=int(getattr(args, "level_source_close_lookback_hours", 12)),
         touch_tolerance_pct=float(getattr(args, "touch_tolerance_pct", 0.006)),
         min_bounce_pct=float(getattr(args, "min_bounce_pct", 0.05)),
         bounce_lookahead_bars=int(getattr(args, "bounce_lookahead_bars", 12)),

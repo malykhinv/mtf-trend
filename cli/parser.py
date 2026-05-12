@@ -195,6 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
     hourly_levels.add_argument("--chart-bars", type=_positive_int_for("--chart-bars"), default=240)
     hourly_levels.add_argument("--min-touches", type=_positive_int_for("--min-touches"), default=3)
     hourly_levels.add_argument("--min-touch-spacing-hours", type=_positive_int_for("--min-touch-spacing-hours"), default=6)
+    hourly_levels.add_argument("--level-source-close-lookback-hours", type=_positive_int_for("--level-source-close-lookback-hours"), default=12)
     hourly_levels.add_argument("--touch-tolerance-pct", type=float, default=0.006)
     hourly_levels.add_argument("--min-bounce-pct", type=float, default=0.05)
     hourly_levels.add_argument("--bounce-lookahead-bars", type=_positive_int_for("--bounce-lookahead-bars"), default=12)

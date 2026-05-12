@@ -480,3 +480,26 @@ Next:
 ```text
 Run run-hourly-levels on the same cache/output window used for the rejected examples and inspect whether body/interior and wicked-through levels disappear without losing clean high-touch levels.
 ```
+
+---
+
+## 2026-05-12 — P150 source-candle close-above guard
+
+Input:
+
+```text
+Operator clarified that a 1h level must not be built from a candle if there was a close above that would-be level during the previous 12h.
+```
+
+Result:
+
+```text
+Patch proposed. Pivot/high source candles are now filtered before clustering when any close in the previous 12h is above the candidate candle high. This is diagnostics-only and should remove stale/reclaimed resistance sources from run-hourly-levels output.
+```
+
+Next:
+
+```text
+Run run-hourly-levels on the same rejected examples and confirm that levels sourced from candles below a prior 12h close disappear while clean untouched high-based levels remain.
+```
+
