@@ -8,6 +8,7 @@ import json
 import math
 import os
 import queue
+import sys
 import threading
 import time
 import urllib.parse
@@ -317,6 +318,45 @@ class LivePosition:
     tp1_done: bool = False
     current_stop_price: float = 0.0
     realized_pnl_usdt: float = 0.0
+
+
+class _LiveStatusLogger:
+    """Console logger that keeps the live heartbeat on one mutable terminal line."""
+
+    def __init__(self, logger: Callable[[str], None]) -> None:
+        self._logger = logger
+        self._inline_status_enabled = logger is print and sys.stdout.isatty()
+        self._lock = threading.RLock()
+        self._status_line_open = False
+        self._status_line_length = 0
+
+    @property
+    def inline_status_enabled(self) -> bool:
+        return self._inline_status_enabled
+
+    def __call__(self, message: str) -> None:
+        with self._lock:
+            self._finish_status_line_if_needed()
+            self._logger(message)
+
+    def status(self, message: str) -> None:
+        with self._lock:
+            if not self._inline_status_enabled:
+                self._logger(message)
+                return
+            padding = " " * max(0, self._status_line_length - len(message))
+            sys.stdout.write(f"\r{message}{padding}")
+            sys.stdout.flush()
+            self._status_line_open = True
+            self._status_line_length = len(message)
+
+    def _finish_status_line_if_needed(self) -> None:
+        if not self._inline_status_enabled or not self._status_line_open:
+            return
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        self._status_line_open = False
+        self._status_line_length = 0
 
 
 class TelegramDispatcher:
@@ -914,7 +954,8 @@ class AnomalyMicroLiveRunner:
     ) -> None:
         self.config = config
         self.exchange = exchange_client
-        self.logger = logger
+        self._status_logger = _LiveStatusLogger(logger)
+        self.logger = self._status_logger
         self._pump_categories = _resolve_live_pump_categories(config.pump_categories)
         self.artifacts = LiveArtifactWriter(
             config.results_dir / "live_anomaly_runs" / datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
@@ -972,18 +1013,18 @@ class AnomalyMicroLiveRunner:
                 orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle)
                 cycle_seconds = time.monotonic() - cycle_started
                 opened_total, active_positions, closed_total, orphan_total = self._live_counts()
-                should_log = (
+                should_log_status = self._status_logger.inline_status_enabled or (
                     cycle == 1
                     or cycle % 10 == 0
                     or opened_total != opened_before
                     or closed_total != closed_before
                     or orphan_total != orphan_before
                 )
-                if should_log:
+                if should_log_status:
                     opened_delta = opened_total - opened_before
                     orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
-                    self.logger(
-                        f"live: {cycle_seconds:.1f}s · открыто {opened_total} (+{opened_delta}) · "
+                    self._status_logger.status(
+                        f"live: цикл {cycle_seconds:.1f}s · открыто {opened_total} (+{opened_delta}) · "
                         f"слежу {active_positions} · закрыто {closed_total}{orphan_text}"
                     )
                 self._network_degraded = False

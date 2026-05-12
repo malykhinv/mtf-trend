@@ -837,7 +837,7 @@ Do not change exchange-facing symbols or ledger identifiers for display cleanup.
 ```text
 Run run-anomaly-live with a tiny symbol set and --max-cycles 1.
 Expected startup log includes TF 5m/30s, 5m/15s, 1m/5s.
-Expected cycle log shape: `live: 1.2s · открыто 0 (+0) · слежу 0 · закрыто 0`.
+Expected console heartbeat shape: `live: цикл 1.2s · открыто 0 (+0) · слежу 0 · закрыто 0`; consecutive heartbeat updates overwrite the same terminal line.
 For a closed 5m/15s live position, chart top panel is 15s and context panel is 5m; for 1m/5s, top is 5s and context is 1m.
 Use duplicate aliases for one coin in a controlled dry/smoke harness and verify only one active base-symbol position key is accepted.
 ```
@@ -850,6 +850,6 @@ Use duplicate aliases for one coin in a controlled dry/smoke harness and verify 
 ```text
 Live must not leave exchange orders on configured symbols after the bot has no local position and the exchange reports zero position amount.
 Expected behavior: known stop order is cancelled during non-stop finalization; periodic reconciliation cancels remaining open orders for zero-position symbols and writes orphan_orders_reconciled to live_events.csv. Max-cycle stop and Ctrl+C run one final full reconciliation before return.
-Expected log shape when cleanup happens: `live: 1.2s · открыто 1 (+0) · слежу 0 · закрыто 1 · ордера -2`.
+Expected console heartbeat shape when cleanup happens: `live: цикл 1.2s · открыто 1 (+0) · слежу 0 · закрыто 1 · ордера -2`.
 Do not use this as a broad account-wide cancel-all; the scope is configured live symbols and zero-position base coins.
 ```

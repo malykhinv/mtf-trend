@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P147 proposed locally on top of ZIP-derived source
-Last active patch: P147 operator command runbook and 30d defaults
+Local patch stack: P130-P148 proposed locally on top of ZIP-derived source
+Last active patch: P148 inline live heartbeat status
 Updated: 2026-05-12
 ```
 
@@ -293,3 +293,22 @@ Operational rule:
 ```text
 Copy commands from COMMANDS.md; change the 30-day baseline in constants.py instead of expanding command lines.
 ```
+---
+
+## Current audit note — P148
+
+P148 is live console UX only. Routine heartbeat status now updates one terminal line in-place for the default interactive console runner, while real event/error/position/Telegram failure logs first terminate that status line and remain permanent sequential logs. The heartbeat label now says `live: цикл ...s`, because the value is cycle duration, not wall-clock interval between printed lines.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --max-cycles 3 --symbols BTC/USDT:USDT --confirm-real-orders false
+```
+
+Known caveat:
+
+```text
+External/non-interactive loggers keep the old sparse heartbeat cadence to avoid writing every cycle to file-like logs.
+```
+

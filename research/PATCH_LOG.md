@@ -21,6 +21,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P142 | Remove hourly chart tight-layout pass | PROPOSED | `research_tools/hourly_levels.py`, `research/*` | diagnostics | Replace matplotlib `tight_layout()` with fixed subplot margins to avoid warning spam and avoid an unnecessary per-chart layout solver pass. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; run chart export and confirm no tight_layout warning. |
 | P143 | Speed up live scan without hiding stale rejects | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance | Fetch each levels timeframe once per symbol per cycle, reject stale decisions before heavy signal build while preserving `reject_stale_signal` artifacts, and move top-growth export to standalone CLI. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; live smoke: `reject_stale_signal` remains visible with `stage=prescan`; `run-anomaly-live` no longer starts top-growth. |
 | P144 | Skip unchanged live signal rescans | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-performance | Do not spend OHLCV/API budget rescanning a symbol/timeframe until a new closed levels candle exists; active symbols are checked every cycle but only due ones consume scan slots, while waiting active symbols remain visible in `symbol_batch_selected`. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic scheduler smoke: active waiting symbol is not scanned again on unchanged closed candle and frees a slot for inactive scan. |
+| P148 | Inline live heartbeat status | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-operator-ux | Keep routine live heartbeat status on one mutable console line while preserving real events/errors/position logs as normal sequential lines; clarify that the number is cycle duration. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; console smoke: consecutive heartbeat lines overwrite in-place, any event log first terminates the heartbeat line. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -559,3 +560,34 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ### Risk
 
 Low. This is operator UX/default wiring only. It changes default day windows to 30 days and does not change strategy thresholds, live execution guards, ticker-radar behavior, or order logic.
+---
+
+## P148 — Inline live heartbeat status
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+The routine live heartbeat looked like a periodic event log, but the displayed seconds were only the latest cycle duration and the line was emitted on the old `cycle % 10` cadence. That created noisy historical status lines and made the operator read `20.3s` as a wall-clock heartbeat interval.
+
+### Change
+
+- Add a small live-only status logger boundary around the runner logger.
+- For the default interactive console logger, render routine heartbeat status with carriage-return overwrite instead of appending a new line.
+- Before any non-status live/Telegram/error/position log, terminate the current heartbeat line so important events remain sequential.
+- Rename the heartbeat text to `live: цикл ...s` to make the value clearly a cycle duration.
+- Keep the old sparse status cadence for external/non-interactive loggers.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+# console smoke: 20s -> 19s -> 22s heartbeat updates collapse to one visible status line; an error/position log appears as a new permanent line.
+```
+
+### Risk
+
+Low. Trading logic, artifacts, order guards, Telegram payloads and backtest behavior are unchanged. The only behavior change is console presentation of routine heartbeat status.
+
