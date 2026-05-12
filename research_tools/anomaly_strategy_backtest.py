@@ -64,6 +64,8 @@ from research_tools.anomaly_continuation_lab import (
 _HOUR_MS = 3_600_000
 _DAY_MS = 86_400_000
 _TRADE_CHART_CONTEXT_DAYS = 4
+_MATERIALIZED_SUBMINUTE_CACHE_VERSION = "p165_1s_ohlcv_to_subminute_v1"
+_BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_frame", "stale_asof"}
 _TRADE_CHART_FLOW_PROVENANCE = {
     "trade_count_proxy_used": False,
     "levels_trade_count_source": "cached_ohlcv.number_of_trades",
@@ -202,6 +204,13 @@ class AnomalyBacktestConfig:
     max_start_range_pct_ratio_to_baseline: float | None = None
     max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.60
     min_next_taker_buy_quote_share: float | None = None
+    red_flag_profile: str = "none"
+    min_mark_close_vs_decision_close_basis: float | None = None
+    reject_oi_down_mark_discount: bool = False
+    reject_stale_derivatives_context: bool = False
+    max_start_taker_buy_quote_share_delta: float | None = None
+    max_next_taker_buy_quote_share_delta: float | None = None
+    max_start_trade_ratio_per_abs_return: float | None = None
     max_initial_risk_pct: float = 0.16
     entry_method: str = "market"
     pullback_box_fraction: float = 0.75
@@ -234,6 +243,169 @@ def _execution_model_label(config: AnomalyBacktestConfig) -> str:
     if config.entry_method == "market":
         return f"next_bar_open_proxy_latency_{config.market_entry_latency_candles}"
     return config.entry_method
+
+
+def _apply_red_flag_profile(config: AnomalyBacktestConfig) -> AnomalyBacktestConfig:
+    profile = str(config.red_flag_profile or "none").strip().lower()
+    if profile == "none":
+        return config
+    if profile == "cautious":
+        return replace(
+            config,
+            min_mark_close_vs_decision_close_basis=(
+                0.0
+                if config.min_mark_close_vs_decision_close_basis is None
+                else config.min_mark_close_vs_decision_close_basis
+            ),
+            reject_oi_down_mark_discount=True if not config.reject_oi_down_mark_discount else config.reject_oi_down_mark_discount,
+            reject_stale_derivatives_context=True
+            if not config.reject_stale_derivatives_context
+            else config.reject_stale_derivatives_context,
+            max_start_taker_buy_quote_share_delta=(
+                0.50
+                if config.max_start_taker_buy_quote_share_delta is None
+                else config.max_start_taker_buy_quote_share_delta
+            ),
+            max_next_taker_buy_quote_share_delta=(
+                0.40
+                if config.max_next_taker_buy_quote_share_delta is None
+                else config.max_next_taker_buy_quote_share_delta
+            ),
+            max_start_quote_ratio_per_abs_return=(
+                50_000.0
+                if config.max_start_quote_ratio_per_abs_return is None
+                else config.max_start_quote_ratio_per_abs_return
+            ),
+            max_start_trade_ratio_per_abs_return=(
+                5_000.0
+                if config.max_start_trade_ratio_per_abs_return is None
+                else config.max_start_trade_ratio_per_abs_return
+            ),
+        )
+    if profile == "strict":
+        return replace(
+            config,
+            min_mark_close_vs_decision_close_basis=(
+                0.001
+                if config.min_mark_close_vs_decision_close_basis is None
+                else config.min_mark_close_vs_decision_close_basis
+            ),
+            reject_oi_down_mark_discount=True if not config.reject_oi_down_mark_discount else config.reject_oi_down_mark_discount,
+            reject_stale_derivatives_context=True
+            if not config.reject_stale_derivatives_context
+            else config.reject_stale_derivatives_context,
+            max_start_taker_buy_quote_share_delta=(
+                0.30
+                if config.max_start_taker_buy_quote_share_delta is None
+                else config.max_start_taker_buy_quote_share_delta
+            ),
+            max_next_taker_buy_quote_share_delta=(
+                0.30
+                if config.max_next_taker_buy_quote_share_delta is None
+                else config.max_next_taker_buy_quote_share_delta
+            ),
+            max_start_quote_ratio_per_abs_return=(
+                25_000.0
+                if config.max_start_quote_ratio_per_abs_return is None
+                else config.max_start_quote_ratio_per_abs_return
+            ),
+            max_start_trade_ratio_per_abs_return=(
+                5_000.0
+                if config.max_start_trade_ratio_per_abs_return is None
+                else config.max_start_trade_ratio_per_abs_return
+            ),
+        )
+    raise ValueError(f"unsupported red_flag_profile: {config.red_flag_profile}")
+
+
+def _context_status_columns(frame: pd.DataFrame) -> list[str]:
+    return [
+        column
+        for column in frame.columns
+        if column == "oi_status" or column.endswith("_status")
+    ]
+
+
+def _red_flag_violation_masks(signals: pd.DataFrame, *, config: AnomalyBacktestConfig) -> dict[str, pd.Series]:
+    if signals.empty:
+        return {}
+    masks: dict[str, pd.Series] = {}
+    index = signals.index
+    if config.min_mark_close_vs_decision_close_basis is not None:
+        mark_basis = pd.to_numeric(signals["mark_close_vs_decision_close_basis"], errors="coerce")
+        masks["mark_basis_below_min"] = mark_basis.lt(config.min_mark_close_vs_decision_close_basis) | mark_basis.isna()
+    if config.reject_oi_down_mark_discount:
+        mark_basis = pd.to_numeric(signals["mark_close_vs_decision_close_basis"], errors="coerce")
+        masks["oi_down_with_mark_discount"] = (
+            signals["oi_price_interaction_3x5m"].astype(str).eq("oi_down_price_up")
+            & mark_basis.le(0.0)
+        ) | mark_basis.isna()
+    if config.reject_stale_derivatives_context:
+        status_columns = _context_status_columns(signals)
+        if status_columns:
+            bad_status = pd.Series(False, index=index)
+            for column in status_columns:
+                bad_status |= signals[column].astype(str).isin(_BAD_CONTEXT_STATUSES)
+            masks["stale_or_missing_market_context"] = bad_status
+        else:
+            masks["stale_or_missing_market_context"] = pd.Series(True, index=index)
+    if config.max_start_taker_buy_quote_share_delta is not None:
+        start_delta = pd.to_numeric(signals["start_taker_buy_quote_share_delta"], errors="coerce")
+        masks["start_taker_buy_delta_above_max"] = (
+            start_delta.gt(config.max_start_taker_buy_quote_share_delta) | start_delta.isna()
+        )
+    if config.max_next_taker_buy_quote_share_delta is not None:
+        next_delta = pd.to_numeric(signals["next_n_taker_buy_quote_share_delta"], errors="coerce")
+        masks["confirmation_taker_buy_delta_above_max"] = (
+            next_delta.gt(config.max_next_taker_buy_quote_share_delta) | next_delta.isna()
+        )
+    if config.max_start_trade_ratio_per_abs_return is not None:
+        trade_effort = pd.to_numeric(signals["start_trade_ratio_per_abs_return"], errors="coerce")
+        masks["trade_effort_per_return_above_max"] = (
+            trade_effort.gt(config.max_start_trade_ratio_per_abs_return) | trade_effort.isna()
+        )
+    return masks
+
+
+def build_red_flag_summary(candidates: pd.DataFrame, *, config: AnomalyBacktestConfig) -> pd.DataFrame:
+    config = _apply_red_flag_profile(config)
+    if candidates.empty:
+        return pd.DataFrame(
+            [{"red_flag": "__total_candidates__", "rows": 0, "share": 0.0, "profile": config.red_flag_profile}]
+        )
+    masks = _red_flag_violation_masks(candidates, config=config)
+    rows: list[dict[str, object]] = [
+        {
+            "red_flag": "__total_candidates__",
+            "rows": int(len(candidates)),
+            "share": 1.0,
+            "profile": config.red_flag_profile,
+        }
+    ]
+    for name, mask in masks.items():
+        count = int(mask.fillna(False).sum())
+        rows.append(
+            {
+                "red_flag": name,
+                "rows": count,
+                "share": _safe_divide_value(count, len(candidates)),
+                "profile": config.red_flag_profile,
+            }
+        )
+    if masks:
+        any_mask = pd.Series(False, index=candidates.index)
+        for mask in masks.values():
+            any_mask |= mask.fillna(False)
+        count = int(any_mask.sum())
+        rows.append(
+            {
+                "red_flag": "__any_red_flag__",
+                "rows": count,
+                "share": _safe_divide_value(count, len(candidates)),
+                "profile": config.red_flag_profile,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def _emit_progress_5pct(
@@ -447,6 +619,182 @@ def _aggregate_frame_to_timeframe(frame: pd.DataFrame, *, timeframe_ms: int) -> 
     return aggregated
 
 
+def _materialized_entry_flow_source(frame: pd.DataFrame, *, entry_timeframe: str) -> str:
+    if "aggregation_source_timeframe" not in frame.columns:
+        return "cached_ohlcv"
+    source = str(frame["aggregation_source_timeframe"].dropna().iloc[0]) if not frame.empty else ""
+    version = (
+        str(frame["aggregation_version"].dropna().iloc[0])
+        if "aggregation_version" in frame.columns and not frame.empty
+        else ""
+    )
+    if source == "1s" and version == _MATERIALIZED_SUBMINUTE_CACHE_VERSION:
+        return f"cached_1s_aggregated_to_{entry_timeframe}"
+    return "cached_ohlcv"
+
+
+def materialize_subminute_entry_caches(
+    *,
+    cache_dir: Path,
+    target_timeframes: Iterable[str],
+    symbols: Iterable[str] | None = None,
+    overwrite: bool = False,
+    progress_label: str | None = None,
+) -> pd.DataFrame:
+    wanted_symbols = set(symbols) if symbols is not None else None
+    targets = tuple(dict.fromkeys(str(timeframe) for timeframe in target_timeframes))
+    for target in targets:
+        target_ms = _timeframe_to_milliseconds(target)
+        if target == "1s" or target_ms <= 0 or target_ms >= 60_000 or target_ms % 1000 != 0:
+            raise ValueError(f"target subminute timeframe must be derived from 1s: {target}")
+    paths = sorted(cache_dir.glob("*%2FUSDT%3AUSDT/1s/data.parquet"))
+    if wanted_symbols is not None:
+        paths = [path for path in paths if _symbol_from_cache_symbol_dir(path.parent.parent) in wanted_symbols]
+    rows: list[dict[str, object]] = []
+    started_at = time.monotonic()
+    next_progress_pct = 0
+    total = max(1, len(paths) * max(1, len(targets)))
+    done = 0
+    for path in paths:
+        symbol = _symbol_from_cache_symbol_dir(path.parent.parent)
+        try:
+            source_frame = _read_symbol_frame(cache_dir, symbol, "1s")
+        except Exception as exc:
+            for target in targets:
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "target_timeframe": target,
+                        "source_timeframe": "1s",
+                        "status": "error",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                done += 1
+            continue
+        for target in targets:
+            done += 1
+            output_path = cache_dir / _cache_symbol_dir_name(symbol) / target / "data.parquet"
+            if output_path.exists() and not overwrite:
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "target_timeframe": target,
+                        "source_timeframe": "1s",
+                        "status": "exists",
+                        "path": str(output_path),
+                    }
+                )
+            else:
+                aggregated = _aggregate_frame_to_timeframe(
+                    source_frame,
+                    timeframe_ms=_timeframe_to_milliseconds(target),
+                )
+                if aggregated.empty:
+                    rows.append(
+                        {
+                            "symbol": symbol,
+                            "target_timeframe": target,
+                            "source_timeframe": "1s",
+                            "status": "empty",
+                            "path": str(output_path),
+                        }
+                    )
+                else:
+                    aggregated = aggregated.copy()
+                    aggregated["aggregation_source_timeframe"] = "1s"
+                    aggregated["aggregation_target_timeframe"] = target
+                    aggregated["aggregation_version"] = _MATERIALIZED_SUBMINUTE_CACHE_VERSION
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    aggregated.to_parquet(output_path, index=False)
+                    rows.append(
+                        {
+                            "symbol": symbol,
+                            "target_timeframe": target,
+                            "source_timeframe": "1s",
+                            "status": "written",
+                            "path": str(output_path),
+                            "rows": int(len(aggregated)),
+                            "min_timestamp_ms": int(aggregated["timestamp"].min()),
+                            "max_timestamp_ms": int(aggregated["timestamp"].max()),
+                            "min_timestamp_utc": _timestamp_to_utc(int(aggregated["timestamp"].min())),
+                            "max_timestamp_utc": _timestamp_to_utc(int(aggregated["timestamp"].max())),
+                        }
+                    )
+            if progress_label is not None:
+                current_pct = int(100 * done / total)
+                if current_pct >= next_progress_pct or done == total:
+                    _emit_progress(label=progress_label, done=done, total=total, started_at=started_at)
+                    next_progress_pct = current_pct + 5
+    return pd.DataFrame(rows)
+
+
+def build_entry_cache_coverage(
+    *,
+    cache_dir: Path,
+    setup_timeframe: str,
+    entry_timeframe: str,
+    start_ms: int,
+    end_ms: int,
+    symbols: Iterable[str] | None = None,
+) -> pd.DataFrame:
+    wanted_symbols = set(symbols) if symbols is not None else None
+    rows: list[dict[str, object]] = []
+    for requested, cache_timeframe, role in (
+        (setup_timeframe, setup_timeframe, "setup"),
+        (entry_timeframe, _resolve_entry_cache_timeframe(cache_dir, entry_timeframe), "entry"),
+    ):
+        symbol_rows: list[tuple[str, int, int, int]] = []
+        for path in cache_dir.glob(f"*%2FUSDT%3AUSDT/{cache_timeframe}/data.parquet"):
+            symbol = _symbol_from_cache_symbol_dir(path.parent.parent)
+            if wanted_symbols is not None and symbol not in wanted_symbols:
+                continue
+            try:
+                timestamps = pd.read_parquet(path, columns=["timestamp"])["timestamp"]
+            except Exception:
+                continue
+            if timestamps.empty:
+                continue
+            symbol_rows.append((symbol, int(timestamps.min()), int(timestamps.max()), int(len(timestamps))))
+        if symbol_rows:
+            min_ts = min(row[1] for row in symbol_rows)
+            max_ts = max(row[2] for row in symbol_rows)
+            rows.append(
+                {
+                    "role": role,
+                    "requested_timeframe": requested,
+                    "cache_timeframe": cache_timeframe,
+                    "symbols": len(symbol_rows),
+                    "rows": sum(row[3] for row in symbol_rows),
+                    "global_min_timestamp_ms": min_ts,
+                    "global_max_timestamp_ms": max_ts,
+                    "global_min_timestamp_utc": _timestamp_to_utc(min_ts),
+                    "global_max_timestamp_utc": _timestamp_to_utc(max_ts),
+                    "requested_start_timestamp_ms": int(start_ms),
+                    "requested_end_timestamp_ms": int(end_ms),
+                    "requested_start_timestamp_utc": _timestamp_to_utc(int(start_ms)),
+                    "requested_end_timestamp_utc": _timestamp_to_utc(int(end_ms)),
+                    "symbols_covering_start": sum(1 for _, min_symbol_ts, _, _ in symbol_rows if min_symbol_ts <= start_ms),
+                    "symbols_covering_end": sum(1 for _, _, max_symbol_ts, _ in symbol_rows if max_symbol_ts >= end_ms),
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "role": role,
+                    "requested_timeframe": requested,
+                    "cache_timeframe": cache_timeframe,
+                    "symbols": 0,
+                    "rows": 0,
+                    "requested_start_timestamp_ms": int(start_ms),
+                    "requested_end_timestamp_ms": int(end_ms),
+                    "requested_start_timestamp_utc": _timestamp_to_utc(int(start_ms)),
+                    "requested_end_timestamp_utc": _timestamp_to_utc(int(end_ms)),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def _resolve_entry_cache_timeframe(cache_dir: Path, entry_timeframe: str) -> str:
     if any(cache_dir.glob(f"*%2FUSDT%3AUSDT/{entry_timeframe}/data.parquet")):
         return entry_timeframe
@@ -475,6 +823,7 @@ def build_anomaly_signals(
     *,
     config: AnomalyBacktestConfig,
 ) -> pd.DataFrame:
+    config = _apply_red_flag_profile(config)
     if candidates.empty:
         return pd.DataFrame()
     required = {
@@ -502,10 +851,21 @@ def build_anomaly_signals(
         "max_prior_up_down_whipsaw_to_impulse_range": "prior_up_down_whipsaw_to_impulse_range",
         "min_next_taker_buy_quote_share": "next_n_taker_buy_quote_share_mean",
         "max_price_retention": "price_retention_next_n",
+        "min_mark_close_vs_decision_close_basis": "mark_close_vs_decision_close_basis",
+        "max_start_taker_buy_quote_share_delta": "start_taker_buy_quote_share_delta",
+        "max_next_taker_buy_quote_share_delta": "next_n_taker_buy_quote_share_delta",
+        "max_start_trade_ratio_per_abs_return": "start_trade_ratio_per_abs_return",
     }
     for config_field, column in optional_filter_columns.items():
         if getattr(config, config_field) is not None:
             required.add(column)
+    if config.reject_oi_down_mark_discount:
+        required.add("mark_close_vs_decision_close_basis")
+        required.add("oi_price_interaction_3x5m")
+    if config.reject_stale_derivatives_context:
+        context_columns = _context_status_columns(candidates)
+        if not context_columns:
+            required.add("mark_status")
     missing = required.difference(candidates.columns)
     if missing:
         if "status" in candidates.columns and candidates["status"].astype(str).eq("error").any():
@@ -557,6 +917,8 @@ def build_anomaly_signals(
         mask &= signals["next_n_taker_buy_quote_share_mean"].astype(float).ge(
             config.min_next_taker_buy_quote_share
         )
+    for red_flag_mask in _red_flag_violation_masks(signals, config=config).values():
+        mask &= ~red_flag_mask.fillna(True)
     signals = signals.loc[mask].copy()
     if signals.empty:
         return signals
@@ -728,11 +1090,9 @@ def collect_pair_anomaly_rows(
                     entry_frame,
                     timeframe_ms=_timeframe_to_milliseconds(entry_timeframe),
                 )
-            entry_flow_source = (
-                f"cached_{entry_cache_timeframe}_aggregated_to_{entry_timeframe}"
-                if entry_cache_timeframe != entry_timeframe
-                else "cached_ohlcv"
-            )
+                entry_flow_source = f"cached_{entry_cache_timeframe}_aggregated_to_{entry_timeframe}"
+            else:
+                entry_flow_source = _materialized_entry_flow_source(entry_frame, entry_timeframe=entry_timeframe)
             rows.extend(_collect_symbol_pair_rows(
                 symbol=symbol,
                 setup_frame=setup_frame,
@@ -788,6 +1148,8 @@ def _collect_symbol_pair_rows(
     entry_frame = entry_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
     rows: list[dict[str, object]] = []
     setup_timestamps = setup_frame["timestamp"].astype("int64").to_numpy()
+    entry_timestamps = entry_frame["timestamp"].astype("int64").to_numpy()
+    entry_max_timestamp = int(entry_timestamps[-1]) if len(entry_timestamps) else 0
     last_selected_setup_idx = -10**9
     max_forward = max(lab_config.forward_high_candles, lab_config.forward_low_candles)
     for setup_idx, setup_start in enumerate(setup_timestamps):
@@ -799,10 +1161,9 @@ def _collect_symbol_pair_rows(
         baseline = setup_frame.iloc[setup_idx - lab_config.baseline_candles : setup_idx].copy()
         if baseline.empty:
             continue
-        entry_segment_full = entry_frame.loc[
-            (entry_frame["timestamp"].astype("int64") >= setup_start)
-            & (entry_frame["timestamp"].astype("int64") < setup_start + setup_ms)
-        ].copy()
+        entry_start_pos = int(np.searchsorted(entry_timestamps, setup_start, side="left"))
+        entry_end_pos_exclusive = int(np.searchsorted(entry_timestamps, setup_start + setup_ms, side="left"))
+        entry_segment_full = entry_frame.iloc[entry_start_pos:entry_end_pos_exclusive]
         if len(entry_segment_full) < lab_config.confirmation_candles:
             continue
         selected_this_setup = False
@@ -810,7 +1171,7 @@ def _collect_symbol_pair_rows(
             entry_segment = entry_segment_full.iloc[: entry_end_pos + 1].copy()
             decision = entry_segment.iloc[-1]
             decision_ts = int(decision["timestamp"])
-            if decision_ts + max_forward * entry_ms >= int(entry_frame["timestamp"].max()):
+            if decision_ts + max_forward * entry_ms >= entry_max_timestamp:
                 continue
             forming_setup = _aggregate_ohlcv_to_candle(entry_segment, timestamp_ms=setup_start)
             if forming_setup is None:
@@ -2590,6 +2951,7 @@ def run_anomaly_strategy_backtest(
     grid_exit_rules: Iterable[str] = ("structural_trail",),
     derivatives_context_fetcher: object | None = None,
 ) -> Path:
+    config = _apply_red_flag_profile(config)
     output_dir = config.lab_config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     if _effective_entry_timeframe(config) != _effective_setup_timeframe(config):
@@ -2615,7 +2977,17 @@ def run_anomaly_strategy_backtest(
             candidates["setup_elapsed_fraction"] = 1.0
             candidates["setup_closed_entry_candles"] = candidates.get("confirmation_candles", config.lab_config.confirmation_candles)
     print("anomaly signals: filtering", flush=True)
-    signals = build_anomaly_signals(candidates, config=config)
+    pre_context_config = replace(
+        config,
+        red_flag_profile="none",
+        min_mark_close_vs_decision_close_basis=None,
+        reject_oi_down_mark_discount=False,
+        reject_stale_derivatives_context=False,
+    )
+    signals = build_anomaly_signals(
+        candidates,
+        config=pre_context_config if derivatives_context_fetcher is not None else config,
+    )
     grid_signal_sets: list[tuple[AnomalyBacktestConfig, pd.DataFrame]] | None = None
     if derivatives_context_fetcher is not None:
         if run_entry_grid:
@@ -2647,10 +3019,29 @@ def run_anomaly_strategy_backtest(
             context_signals,
             cache_dir=config.lab_config.cache_dir,
         )
+        red_flag_universe = build_anomaly_signals(candidates, config=pre_context_config)
         signals = build_anomaly_signals(candidates, config=config)
+    else:
+        red_flag_universe = build_anomaly_signals(candidates, config=pre_context_config)
+    end_ms = config.lab_config.end_timestamp_ms
+    if end_ms is None:
+        end_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
+    start_ms = int((datetime.fromtimestamp(int(end_ms) / 1000, UTC) - pd.Timedelta(days=config.lab_config.days)).timestamp() * 1000)
     _write_artifact_frames(
         [
             (output_dir / "anomaly_candidates.csv", candidates),
+            (
+                output_dir / "entry_cache_coverage.csv",
+                build_entry_cache_coverage(
+                    cache_dir=config.lab_config.cache_dir,
+                    setup_timeframe=_effective_setup_timeframe(config),
+                    entry_timeframe=_effective_entry_timeframe(config),
+                    start_ms=start_ms,
+                    end_ms=int(end_ms),
+                    symbols=symbols,
+                ),
+            ),
+            (output_dir / "anomaly_red_flag_summary.csv", build_red_flag_summary(red_flag_universe, config=config)),
             (output_dir / "oi_context_status.csv", build_oi_context_status(candidates)),
             (output_dir / "market_context_status.csv", build_derivatives_context_status(candidates)),
             (output_dir / "anomaly_signals.csv", signals),
@@ -2773,9 +3164,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-start-trade-ratio", type=float, default=None)
     parser.add_argument("--max-start-avg-trade-quote-size-ratio", type=float, default=None)
     parser.add_argument("--max-start-quote-ratio-per-abs-return", type=float, default=None)
+    parser.add_argument("--max-start-trade-ratio-per-abs-return", type=float, default=None)
     parser.add_argument("--max-start-range-pct-ratio-to-baseline", type=float, default=None)
     parser.add_argument("--max-prior-up-down-whipsaw-to-impulse-range", type=float, default=0.60)
     parser.add_argument("--min-next-taker-buy-quote-share", type=float, default=None)
+    parser.add_argument("--red-flag-profile", choices=["none", "cautious", "strict"], default="none")
+    parser.add_argument("--min-mark-close-vs-decision-close-basis", type=float, default=None)
+    parser.add_argument("--reject-oi-down-mark-discount", action="store_true")
+    parser.add_argument("--reject-stale-derivatives-context", action="store_true")
+    parser.add_argument("--max-start-taker-buy-quote-share-delta", type=float, default=None)
+    parser.add_argument("--max-next-taker-buy-quote-share-delta", type=float, default=None)
     parser.add_argument("--max-initial-risk-pct", type=float, default=0.16)
     parser.add_argument("--entry-method", choices=["market", "break_box_high", "pullback_box_fraction"], default="market")
     parser.add_argument("--pullback-box-fraction", type=float, default=0.75)
@@ -2833,9 +3231,16 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
         max_start_trade_ratio=args.max_start_trade_ratio,
         max_start_avg_trade_quote_size_ratio=args.max_start_avg_trade_quote_size_ratio,
         max_start_quote_ratio_per_abs_return=args.max_start_quote_ratio_per_abs_return,
+        max_start_trade_ratio_per_abs_return=args.max_start_trade_ratio_per_abs_return,
         max_start_range_pct_ratio_to_baseline=args.max_start_range_pct_ratio_to_baseline,
         max_prior_up_down_whipsaw_to_impulse_range=args.max_prior_up_down_whipsaw_to_impulse_range,
         min_next_taker_buy_quote_share=args.min_next_taker_buy_quote_share,
+        red_flag_profile=args.red_flag_profile,
+        min_mark_close_vs_decision_close_basis=args.min_mark_close_vs_decision_close_basis,
+        reject_oi_down_mark_discount=bool(args.reject_oi_down_mark_discount),
+        reject_stale_derivatives_context=bool(args.reject_stale_derivatives_context),
+        max_start_taker_buy_quote_share_delta=args.max_start_taker_buy_quote_share_delta,
+        max_next_taker_buy_quote_share_delta=args.max_next_taker_buy_quote_share_delta,
         max_initial_risk_pct=args.max_initial_risk_pct,
         entry_method=args.entry_method,
         pullback_box_fraction=args.pullback_box_fraction,

@@ -321,8 +321,18 @@ LTF = entry permission
 exchange fill = risk/PnL source of truth
 ```
 
+Intended anomaly TF sets are:
+
+```text
+5m/30s
+1m/15s
+1m/5s
+```
+
 For a pair such as `5m/30s`, live does not wait for the 5m candle to close. It aggregates closed 30s buckets inside the current 5m bucket and evaluates setup flow on the forming HTF candle. Forming HTF flow is judged by pace-normalized quote-volume and trade-count ratios against the closed HTF baseline, plus a raw-progress floor so very small early bursts are not treated as a real wake-up.
 
 LTF confirmation should not re-prove the whole pump thesis. It confirms that the entry is still executable: activation hold, path/verticality, freshness, price drift, TP already reached, RR collapse and actual exchange fillability.
 
 TP1 is a management milestone, not proof that market room exists. The default TP1 target is the nearest higher round market number above the old 1R target. The round step is derived from current price and movement size so the level is psychologically/operationally cleaner without jumping to an unrelated far-away target.
+
+Optional red-flag profiles are research/backtest filters only until proven on longer data. They may use only pre-decision/live-available fields such as mark basis, OI interaction, context freshness, taker-buy share delta and effort-per-return. They must not use `future_*`, `outcome_label`, `exit_reason`, `tp1_hit`, MFE/MAE or realized return fields.

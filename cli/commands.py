@@ -1027,6 +1027,11 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 if getattr(args, "max_start_quote_ratio_per_abs_return", None) is None
                 else float(args.max_start_quote_ratio_per_abs_return)
             ),
+            max_start_trade_ratio_per_abs_return=(
+                None
+                if getattr(args, "max_start_trade_ratio_per_abs_return", None) is None
+                else float(args.max_start_trade_ratio_per_abs_return)
+            ),
             max_start_range_pct_ratio_to_baseline=(
                 None
                 if getattr(args, "max_start_range_pct_ratio_to_baseline", None) is None
@@ -1041,6 +1046,24 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 None
                 if getattr(args, "min_next_taker_buy_quote_share", None) is None
                 else float(args.min_next_taker_buy_quote_share)
+            ),
+            red_flag_profile=str(getattr(args, "red_flag_profile", "none")),
+            min_mark_close_vs_decision_close_basis=(
+                None
+                if getattr(args, "min_mark_close_vs_decision_close_basis", None) is None
+                else float(args.min_mark_close_vs_decision_close_basis)
+            ),
+            reject_oi_down_mark_discount=bool(getattr(args, "reject_oi_down_mark_discount", False)),
+            reject_stale_derivatives_context=bool(getattr(args, "reject_stale_derivatives_context", False)),
+            max_start_taker_buy_quote_share_delta=(
+                None
+                if getattr(args, "max_start_taker_buy_quote_share_delta", None) is None
+                else float(args.max_start_taker_buy_quote_share_delta)
+            ),
+            max_next_taker_buy_quote_share_delta=(
+                None
+                if getattr(args, "max_next_taker_buy_quote_share_delta", None) is None
+                else float(args.max_next_taker_buy_quote_share_delta)
             ),
             max_initial_risk_pct=float(args.max_initial_risk_pct),
             entry_method=str(getattr(args, "entry_method", "market")),
@@ -1077,6 +1100,35 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
         return 0
 
     return _run_with_logging("run-anomaly-lab", config, _run)
+
+
+def materialize_anomaly_subminute_cache(config: AppConfig, args: argparse.Namespace) -> int:
+    """Materializes 1s-derived subminute anomaly entry caches."""
+
+    def _run() -> int:
+        from research_tools.anomaly_strategy_backtest import materialize_subminute_entry_caches
+
+        manifest = materialize_subminute_entry_caches(
+            cache_dir=config.backtest.cache_dir,
+            target_timeframes=getattr(args, "timeframes", None) or ["5s", "15s", "30s"],
+            symbols=getattr(args, "symbols", None),
+            overwrite=bool(getattr(args, "overwrite", False)),
+            progress_label="materialize anomaly subminute cache",
+        )
+        output_arg = getattr(args, "output", None)
+        output_path = (
+            Path(str(output_arg))
+            if output_arg
+            else config.backtest.results_dir / "anomaly_subminute_cache_materialization.csv"
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest.to_csv(output_path, index=False)
+        status_counts = manifest["status"].value_counts().to_dict() if "status" in manifest.columns else {}
+        print(f"wrote anomaly subminute cache manifest to {output_path}")
+        print(f"status counts: {status_counts}")
+        return 0
+
+    return _run_with_logging("materialize-anomaly-subminute-cache", config, _run)
 
 
 def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:

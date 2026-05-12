@@ -8,7 +8,7 @@ AnomalyTimeframePair = tuple[Timeframe, Timeframe]
 
 ANOMALY_BACKTEST_TIMEFRAME_PAIRS: tuple[AnomalyTimeframePair, ...] = (
     (Timeframe.M5, Timeframe.S30),
-    (Timeframe.M5, Timeframe.S15),
+    (Timeframe.M1, Timeframe.S15),
     (Timeframe.M1, Timeframe.S5),
 )
 ANOMALY_LIVE_TIMEFRAME_PAIRS: tuple[AnomalyTimeframePair, ...] = ANOMALY_BACKTEST_TIMEFRAME_PAIRS

@@ -97,9 +97,16 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--max-start-trade-ratio", type=float, default=None)
     anomaly_lab.add_argument("--max-start-avg-trade-quote-size-ratio", type=float, default=None)
     anomaly_lab.add_argument("--max-start-quote-ratio-per-abs-return", type=float, default=None)
+    anomaly_lab.add_argument("--max-start-trade-ratio-per-abs-return", type=float, default=None)
     anomaly_lab.add_argument("--max-start-range-pct-ratio-to-baseline", type=float, default=None)
     anomaly_lab.add_argument("--max-prior-up-down-whipsaw-to-impulse-range", type=float, default=0.60)
     anomaly_lab.add_argument("--min-next-taker-buy-quote-share", type=float, default=None)
+    anomaly_lab.add_argument("--red-flag-profile", choices=["none", "cautious", "strict"], default="none")
+    anomaly_lab.add_argument("--min-mark-close-vs-decision-close-basis", type=float, default=None)
+    anomaly_lab.add_argument("--reject-oi-down-mark-discount", type=_str_to_bool, default=False)
+    anomaly_lab.add_argument("--reject-stale-derivatives-context", type=_str_to_bool, default=False)
+    anomaly_lab.add_argument("--max-start-taker-buy-quote-share-delta", type=float, default=None)
+    anomaly_lab.add_argument("--max-next-taker-buy-quote-share-delta", type=float, default=None)
     anomaly_lab.add_argument("--max-initial-risk-pct", type=float, default=0.16)
     anomaly_lab.add_argument(
         "--entry-method",
@@ -128,6 +135,15 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--grid-pullback-fractions", default="0.65,0.75,0.85")
     anomaly_lab.add_argument("--grid-exhaustion-profiles", default="none")
     anomaly_lab.add_argument("--grid-exit-rules", default="structural_trail")
+
+    materialize_subminute = subparsers.add_parser(
+        "materialize-anomaly-subminute-cache",
+        help="Materialize honest 1s-derived 5s/15s/30s anomaly entry caches",
+    )
+    materialize_subminute.add_argument("--symbols", nargs="*", default=None, help="Optional symbols; default scans all 1s cache symbols")
+    materialize_subminute.add_argument("--timeframes", nargs="*", default=["5s", "15s", "30s"], help="Target subminute timeframes derived from 1s")
+    materialize_subminute.add_argument("--overwrite", type=_str_to_bool, default=False)
+    materialize_subminute.add_argument("--output", default=None, help="Optional materialization manifest CSV path")
 
     anomaly_live = subparsers.add_parser(
         "run-anomaly-live",
@@ -235,6 +251,7 @@ def resolve_handler(command_name: str) -> Handler:
         "fetch-data": commands.fetch_data,
         "update-cache": commands.update_cache,
         "run-anomaly-lab": commands.run_anomaly_lab,
+        "materialize-anomaly-subminute-cache": commands.materialize_anomaly_subminute_cache,
         "run-anomaly-live": commands.run_anomaly_live,
         "run-anomaly-top-growth": commands.run_anomaly_top_growth,
         "run-hourly-levels": commands.run_hourly_levels,

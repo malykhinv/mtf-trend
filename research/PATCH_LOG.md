@@ -1098,3 +1098,44 @@ python main.py run-anomaly-lab --setup-timeframe 1m --entry-timeframe 5s --days 
 ### Risk
 
 Low/medium: diagnostics-only, but fresh subminute backtests may now run from `1s` cache instead of failing on absent aggregated `5s/15s/30s` cache directories. It does not aggregate from `1m`, and provenance labels distinguish the `1s` aggregation path.
+
+---
+
+## P165 - Materialize subminute anomaly cache and add red-flag profiles
+
+Status: APPLIED locally / UNKNOWN commit
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+True anomaly TF-set runs were too slow and the 7-day result was misleading: the setup cache covered the requested end timestamp, but executable `1s`/derived subminute cache ended on 2026-05-06 11:40 UTC while the requested end was 2026-05-11 08:36 UTC. That made the run effectively a 3-active-day sample. The first red-flag filters also needed to be explicit and audit-visible, not hidden in post-analysis.
+
+### Change
+
+- Add `materialize-anomaly-subminute-cache` CLI command.
+- Materialize honest `1s -> 5s/15s/30s` parquet caches with aggregation provenance columns.
+- Preserve provenance in anomaly artifacts when exact subminute cache is materialized from `1s`.
+- Add `entry_cache_coverage.csv` to anomaly-lab artifacts so requested start/end coverage is visible.
+- Replace repeated boolean LTF slicing in pair candidate collection with timestamp `searchsorted`.
+- Add optional `red_flag_profile` values:
+  - `none`
+  - `cautious`
+  - `strict`
+- Add explicit pre-decision red-flag filters for mark basis, OI-down + mark discount, stale/missing context, taker-buy delta and trade/quote effort per return.
+- Add `anomaly_red_flag_summary.csv` over the pre-red-flag signal universe.
+- Correct intended anomaly TF-set config from `5m/15s` to `1m/15s`.
+
+### Validation
+
+```bash
+python -m compileall research_tools/anomaly_strategy_backtest.py research_tools/anomaly_config.py cli/parser.py cli/commands.py
+python main.py materialize-anomaly-subminute-cache --timeframes 5s 15s 30s --overwrite true --output .output/results/anomaly_subminute_cache_materialization_p165.csv
+python main.py run-anomaly-lab --days 7 --setup-timeframe 5m --entry-timeframe 30s --end-timestamp-ms 1778488560000 --output-dir .output/results/anomaly_lab_p165_5m30s_cautious --run-entry-grid false --red-flag-profile cautious
+python main.py run-anomaly-lab --days 7 --setup-timeframe 1m --entry-timeframe 15s --end-timestamp-ms 1778488560000 --output-dir .output/results/anomaly_lab_p165_1m15s_cautious --run-entry-grid false --red-flag-profile cautious
+python main.py run-anomaly-lab --days 7 --setup-timeframe 1m --entry-timeframe 5s --end-timestamp-ms 1778488560000 --output-dir .output/results/anomaly_lab_p165_1m5s_cautious --run-entry-grid false --red-flag-profile cautious
+```
+
+### Risk
+
+Medium research risk: `cautious`/`strict` profiles are not production-proven and are currently fit from a very small 3-active-day sample. Defaults remain unchanged. Low data-risk: derived caches are explicitly marked as `1s` aggregation and do not fabricate missing post-2026-05-06 executable data.

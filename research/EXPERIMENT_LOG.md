@@ -896,3 +896,85 @@ The slow part is candidate construction over 350 symbols with 1s parquet reads, 
 Derivative-context enrichment and trade/chart simulation are secondary for these runs.
 Speed patch priority: materialize honest 1s-derived 5s/15s/30s caches with source provenance, then reuse them across TF-set runs.
 ```
+
+---
+
+## 2026-05-12 - P165 subminute cache / red-flag validation
+
+Coverage finding:
+
+```text
+Requested end timestamp: 1778488560000 = 2026-05-11T08:36:00Z
+Requested start timestamp: 2026-05-04T08:36:00Z
+Setup cache coverage: 1m/5m reaches requested end.
+Executable subminute cache coverage: 1s-derived 5s/15s/30s reaches only 2026-05-06T11:40:xxZ.
+Therefore the previous "7 day" true-TF result is actually a 3-active-day executable-data sample, not evidence that four days had no trades.
+```
+
+Materialization:
+
+```text
+Command: materialize-anomaly-subminute-cache --timeframes 5s 15s 30s --overwrite true
+Manifest: .output/results/anomaly_subminute_cache_materialization_p165.csv
+Written rows: 1050 cache files = 350 symbols * 3 target TFs.
+Source remains cached 1s OHLCV; no 1m fallback and no fabricated missing days.
+```
+
+Speed result:
+
+```text
+Old true-TF runs:
+5m/30s ~8.8m
+1m/15s ~26.1m
+1m/5s ~36.8m
+
+P165 after materialized cache + searchsorted slicing:
+5m/30s cautious ~4.6m
+1m/15s cautious ~3.4m on first post-optimization run, ~5.6m on rerun
+1m/5s cautious ~11.2m
+```
+
+Red-flag profile result on same incomplete executable-data window:
+
+```text
+5m/30s cautious:
+closed trades = 8
+avg net return = +0.3529%
+sum net return = +2.82%
+WR = 62.50%
+TP1 = 62.50%
+
+1m/15s cautious:
+closed trades = 18
+avg net return = +1.1566%
+sum net return = +20.82%
+WR = 83.33%
+TP1 = 72.22%
+pre-red-flag signal universe = 33
+any red flag = 15
+mark_basis_below_min = 15
+oi_down_with_mark_discount = 9
+stale_or_missing_market_context = 2
+
+1m/5s cautious:
+closed trades = 10
+avg net return = +0.9471%
+sum net return = +9.47%
+WR = 100.00%
+TP1 = 100.00%
+
+Combined cautious:
+closed trades = 36
+avg net return = +0.9198%
+sum net return = +33.11%
+WR = 83.33%
+TP1 = 77.78%
+```
+
+Interpretation:
+
+```text
+The cautious red flags cut frequency hard and improve the same-window metrics, but this is not yet proven edge because the executable-data sample is only 3 active UTC days.
+Do not trust the 100% WR on 1m/5s as stable.
+The next required test is to extend/fix 1s coverage to the requested end and rerun the same base-vs-cautious comparison without changing thresholds.
+```
