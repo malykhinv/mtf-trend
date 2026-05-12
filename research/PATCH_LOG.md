@@ -1020,3 +1020,47 @@ python main.py run-anomaly-lab --help
 ### Risk
 
 Low-to-medium audit semantics change. Some rows that previously looked like normal profitable/loss-making closes can become `exit_unresolved` when the residual exchange exposure disappears without a verified fill. That is intentional; trading entry/selection logic is unchanged.
+
+---
+
+## P163 - Export anomaly flow provenance and rework trade-chart stack
+
+Status: APPLIED locally / UNKNOWN commit
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+The latest `anomaly_lab` artifact could not prove quote-volume / trade-count provenance from exported CSVs, which blocks strong conclusions about anomaly nature at artifact-review level. The trade chart also needed an operator-driven layout correction: visible HTF context, bottom `1h` panel, 4-day level-search window, Russian panel labels, and less merged candle rendering on dense windows.
+
+### Change
+
+- Export explicit anomaly flow provenance fields into candidate/signal/trade artifacts:
+  - `trade_count_proxy_used`
+  - `levels_trade_count_source`
+  - `entry_trade_count_source`
+  - `levels_quote_volume_source`
+  - `entry_quote_volume_source`
+- Keep provenance explicit as cached OHLCV native fields; no proxy fallback is introduced.
+- Rebuild canonical anomaly trade charts as:
+  - LTF panel
+  - HTF panel
+  - normalized volume/trades panel
+  - bottom 1h context panel
+- Make 1h context end at the hour candle that contains the main chart end, use a 4-day window, and search chart levels only inside that same 4-day window.
+- Render Russian watermark-style panel names in the upper-left background of each panel.
+- Narrow candle bodies adaptively as panel density increases.
+- Fetch 4-day 1h context for both live open and close charts.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-lab --help
+# synthetic/render smoke: canonical chart contains LTF/HTF/flow/1h panels and saves successfully
+# artifact check: provenance columns exist in anomaly_candidates.csv / anomaly_signals.csv / anomaly_trades.csv
+```
+
+### Risk
+
+Low for trading logic: artifact/export/chart behavior only. Medium for visual artifact expectations: chart layout and chart aspect ratio change materially, so chart consumers should not assume the old three-panel geometry.

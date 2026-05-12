@@ -40,7 +40,7 @@ CHART_PANEL_EDGE = "#1e293b"
 CHART_CANDLE_WIDTH = 0.64
 CHART_5M_CANDLE_WIDTH = 4.0
 CHART_MAX_X_TICKS = 8
-TRADE_CHART_FIGSIZE = (8.0, 8.0)
+TRADE_CHART_FIGSIZE = (8.0, 10.0)
 CHART_AXIS_TAG_LABEL_WIDTH = 7
 CHART_AXIS_TAG_TEXT_WIDTH = 20
 CHART_SAVEFIG_KWARGS = {"dpi": 100, "facecolor": CHART_FIGURE_FACE, "pil_kwargs": {"compress_level": 1}}
@@ -54,7 +54,10 @@ def resolve_candle_width(x_values: np.ndarray, *, default: float = CHART_CANDLE_
     diffs = diffs[diffs > 0.0]
     if diffs.size == 0:
         return float(default)
-    return max(min(float(np.median(diffs)) * 0.72, float(np.min(diffs)) * 0.92), 0.18)
+    spacing_width = min(float(np.median(diffs)) * 0.72, float(np.min(diffs)) * 0.92)
+    crowding_scale = min(1.0, 120.0 / max(float(finite_x.size), 1.0))
+    adaptive_width = spacing_width * max(crowding_scale, 0.32)
+    return max(min(adaptive_width, spacing_width), 0.08)
 
 
 def draw_candles(

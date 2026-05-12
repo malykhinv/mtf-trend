@@ -262,16 +262,17 @@ Ticker-derived rows are diagnostic/scheduler artifacts only. Final signal validi
 Trade screenshots are diagnostic artifacts, not trading signals. The canonical trade chart should show:
 
 ```text
-top: trade-window candles with entry/exit/risk/TP annotations
-middle: independent 1h context covering the last 7 fully closed days before entry
-bottom: normalized quote-volume and number_of_trades line curves
+top: LTF trade-window candles with entry/exit/risk/TP annotations
+second: HTF candles for the same local trade window
+third: normalized quote-volume and number_of_trades line curves
+bottom: independent 1h context covering the last 4 days through the candle that contains the main chart end
 ```
 
-The 1h context panel may draw strict overhead levels from the hourly-level diagnostic, but those levels must be discovered only from the same displayed 7-day 1h window. They must be unlabeled chart context only and must not be treated as an entry/exit rule unless a separate strategy patch wires them into the decision path and updates backtest/live parity.
+The 1h context panel may draw strict overhead levels from the hourly-level diagnostic, but those levels must be discovered only from the same displayed 4-day 1h window. They must be unlabeled chart context only and must not be treated as an entry/exit rule unless a separate strategy patch wires them into the decision path and updates backtest/live parity.
 
 The lower flow panel is shape/timing context: quote volume and trade count are each normalized to 0-100 within the displayed trade window and are not comparable as absolute magnitudes.
 
-Live open-position Telegram charts use the same three-panel renderer after verified fill/stop creation. Because the trade is not closed yet, they must not draw completed risk/reward rectangles; they show TP1 and SL as horizontal levels instead. Telegram is operator UI only: `live_events.csv` and live position state remain the audit source of truth.
+Live open/close Telegram charts use the same four-panel renderer after verified fill/stop creation. Because the trade is not closed yet, open charts must not draw completed risk/reward rectangles; they show TP1 and SL as horizontal levels instead. Telegram is operator UI only: `live_events.csv` and live position state remain the audit source of truth.
 
 ---
 

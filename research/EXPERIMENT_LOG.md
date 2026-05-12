@@ -634,3 +634,153 @@ Next:
 ```text
 Rerun the same anomaly backtest. Expected outcome: no `_safe_divide` NameError; inspect generated skip-reason artifacts before interpreting PnL.
 ```
+
+---
+
+## 2026-05-12 â€” anomaly_lab 1m/1m closed-setup review
+
+Input:
+
+```text
+Artifact: .output/results/anomaly_lab
+Config: setup_timeframe=1m, entry_timeframe=1m, feature_contract=closed_setup_tf_v1
+Execution model: next_bar_open_proxy_latency_1
+Observed entry interval: 2026-05-04 13:48 UTC -> 2026-05-11 08:32 UTC
+```
+
+Result:
+
+```text
+Candidates: 44,824
+Signals: 1,121
+Closed trades: 1,095
+Skipped trades: 26
+Symbols with closed trades: 476
+
+Win rate: 45.57%
+Average net return: -0.0760%
+Median net return: -0.1810%
+Sum net return: -83.20%
+TP1 hit rate: 43.93%
+
+Positive trade sum: +570.79%
+Negative trade sum: -653.99%
+Top 5 winners sum: +65.78%
+Top 15 winners sum: +145.58%
+```
+
+Consistency check:
+
+```text
+Only 2 of 8 active days were positive.
+Best day: 2026-05-05, +0.96%
+Worst day: 2026-05-04, -27.27%
+Only month present: 2026-05, so no month-level robustness can be claimed.
+```
+
+Main execution skips:
+
+```text
+market_entry_rr_collapsed: 10
+overlapping_signal: 9
+invalid_actual_market_risk: 6
+market_entry_price_drift: 1
+```
+
+Data-quality notes:
+
+```text
+All closed trades show flow_taker_buy_status=ok and oi_status=ok.
+However, exported anomaly CSVs do not include explicit provenance fields such as:
+trade_count_proxy_used
+levels_trade_count_source / entry_trade_count_source
+levels_quote_volume_source / entry_quote_volume_source
+
+Therefore conclusions about tape/flow/organic anomaly nature remain limited at artifact-review level.
+```
+
+Conclusion:
+
+```text
+This run does not support a profitable or robust edge for the tested 1m/1m closed-setup contract.
+High trade count is not the bottleneck; expectancy and day-level stability are.
+Do not optimize thresholds from this artifact before provenance is explicit and before comparing against the pair-aware HTF/LTF contract on the same window.
+```
+
+---
+
+## 2026-05-12 - P163 provenance export and chart layout correction
+
+Input:
+
+```text
+Operator asked to execute the next-best research step and update canonical charts:
+explicit artifact provenance, chart panel reorder, 4-day 1h context, Russian panel labels, and denser candle readability.
+```
+
+Result:
+
+```text
+Patch applied locally.
+Fresh anomaly-lab exports now carry:
+trade_count_proxy_used
+levels_trade_count_source / entry_trade_count_source
+levels_quote_volume_source / entry_quote_volume_source
+
+Canonical chart order is now:
+LTF -> HTF -> volume/trades -> 1h.
+The 1h panel covers 4 days, ends at the hour candle that contains the main chart end, and level search uses exactly that 4-day window.
+```
+
+Next:
+
+```text
+Validate P163 with compile/render smoke, rerun anomaly-lab on the existing 1m/1m window so provenance is materialized in CSV artifacts, then compare against the same-window pair-aware HTF/LTF contract before tuning filters.
+```
+
+Validation:
+
+```text
+compileall passed.
+run-anomaly-lab --help passed.
+Synthetic render smoke saved .output/results/anomaly_lab_p163_chart_smoke.png.
+Fresh 1m/1m run completed at .output/results/anomaly_lab_p163_1m1m.
+Fresh 5m/1m run completed at .output/results/anomaly_lab_p163_5m1m.
+Provenance columns exist in candidates/signals/trades for both fresh runs.
+```
+
+Same-window comparison:
+
+```text
+End timestamp: 1778488560000
+
+1m/1m closed_setup_tf_v1:
+closed trades: 1105
+skipped trades: 26
+symbols: 480
+win rate: 45.79%
+avg net return: -0.0568%
+median net return: -0.1794%
+sum net return: -62.73%
+TP1 hit rate: 44.16%
+positive days: 1 of 8
+worst day: 2026-05-10, -21.99%
+
+5m/1m htf_setup_ltf_entry_v1:
+closed trades: 423
+skipped trades: 1
+symbols: 305
+win rate: 47.75%
+avg net return: -0.0521%
+median net return: -0.2407%
+sum net return: -22.05%
+TP1 hit rate: 45.15%
+positive days: 4 of 8
+worst day: 2026-05-06, -16.32%
+```
+
+Conclusion:
+
+```text
+HTF/LTF is less damaging and more evenly distributed by day than 1m/1m, but still negative. It is not a tradable edge. The useful follow-up is category/rejection research: separate losing wake-up types from the minority that can reach TP1/trail, instead of tightening generic entry parameters.
+```

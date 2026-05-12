@@ -51,6 +51,13 @@ OPTIONAL_FLOW_COLUMNS = (
     "taker_buy_volume",
     "taker_buy_quote_volume",
 )
+_ANOMALY_FLOW_PROVENANCE = {
+    "trade_count_proxy_used": False,
+    "levels_trade_count_source": "cached_ohlcv.number_of_trades",
+    "entry_trade_count_source": "cached_ohlcv.number_of_trades",
+    "levels_quote_volume_source": "cached_ohlcv.quote_volume",
+    "entry_quote_volume_source": "cached_ohlcv.quote_volume",
+}
 
 DERIVATIVES_CONTEXT_SPECS: tuple[dict[str, object], ...] = (
     {
@@ -578,6 +585,7 @@ def collect_symbol_anomaly_rows(
                     future_dd_low=future_dd_low,
                     config=config,
                 ),
+                **_ANOMALY_FLOW_PROVENANCE,
                 **verticality,
                 **flow,
                 **effort_sleep,

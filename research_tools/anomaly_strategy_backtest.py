@@ -43,7 +43,6 @@ from research_tools.charting import (
     draw_candles,
     draw_price_zone,
     format_chart_symbol,
-    format_timeframe_label,
     infer_frame_step_ms,
     resolve_axis_tag_positions,
     resolve_candle_width,
@@ -64,9 +63,21 @@ from research_tools.anomaly_continuation_lab import (
 
 _HOUR_MS = 3_600_000
 _DAY_MS = 86_400_000
-_TRADE_CHART_CONTEXT_DAYS = 7
+_TRADE_CHART_CONTEXT_DAYS = 4
+_TRADE_CHART_FLOW_PROVENANCE = {
+    "trade_count_proxy_used": False,
+    "levels_trade_count_source": "cached_ohlcv.number_of_trades",
+    "entry_trade_count_source": "cached_ohlcv.number_of_trades",
+    "levels_quote_volume_source": "cached_ohlcv.quote_volume",
+    "entry_quote_volume_source": "cached_ohlcv.quote_volume",
+}
 
 TRADE_SIGNAL_CONTEXT_COLUMNS = (
+    "trade_count_proxy_used",
+    "levels_trade_count_source",
+    "entry_trade_count_source",
+    "levels_quote_volume_source",
+    "entry_quote_volume_source",
     "feature_contract",
     "setup_timeframe",
     "entry_timeframe",
@@ -882,6 +893,7 @@ def _build_pair_candidate_row(
         "future_ret_high_after_decision": future_ret_high,
         "future_dd_low_after_decision": future_dd_low,
         "outcome_label": _classify_pair_outcome(future_ret_high=future_ret_high, future_dd_low=future_dd_low, config=lab_config),
+        **_TRADE_CHART_FLOW_PROVENANCE,
         **verticality,
         **taker_metrics,
         "start_avg_trade_quote_size": start_avg_trade_quote,
@@ -1874,7 +1886,7 @@ def _build_trade_chart_hourly_context(frame: pd.DataFrame, *, end_timestamp_ms: 
     if frame.empty or required.difference(frame.columns):
         return pd.DataFrame()
 
-    end_exclusive = (int(end_timestamp_ms) // _HOUR_MS) * _HOUR_MS
+    end_exclusive = ((int(end_timestamp_ms) // _HOUR_MS) + 1) * _HOUR_MS
     start_inclusive = end_exclusive - max(int(days), 1) * _DAY_MS
     source = frame.copy()
     source["timestamp"] = pd.to_numeric(source["timestamp"], errors="coerce")
@@ -1924,7 +1936,7 @@ def _slice_trade_chart_hourly_level_context(
     if hourly_context.empty or "timestamp" not in hourly_context.columns:
         return pd.DataFrame()
 
-    end_exclusive = (int(end_timestamp_ms) // _HOUR_MS) * _HOUR_MS
+    end_exclusive = ((int(end_timestamp_ms) // _HOUR_MS) + 1) * _HOUR_MS
     start_inclusive = end_exclusive - max(int(days), 1) * _DAY_MS
     sliced = hourly_context.copy()
     sliced["timestamp"] = pd.to_numeric(sliced["timestamp"], errors="coerce")
@@ -1975,6 +1987,85 @@ def _find_trade_chart_hourly_levels(
         config=config,
     )
     return list(levels)
+
+
+def _build_trade_chart_timeframe_context(
+    frame: pd.DataFrame,
+    *,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+    timeframe_ms: int | None,
+) -> pd.DataFrame:
+    required = {"timestamp", "open", "high", "low", "close"}
+    if frame.empty or required.difference(frame.columns):
+        return pd.DataFrame()
+    if timeframe_ms is None or int(timeframe_ms) <= 0:
+        return pd.DataFrame()
+
+    source = frame.copy()
+    source["timestamp"] = pd.to_numeric(source["timestamp"], errors="coerce")
+    source = source.dropna(subset=["timestamp", "open", "high", "low", "close"])
+    source["timestamp"] = source["timestamp"].astype("int64")
+    source = source.loc[
+        source["timestamp"].ge(int(start_timestamp_ms))
+        & source["timestamp"].le(int(end_timestamp_ms))
+    ].copy()
+    if source.empty:
+        return pd.DataFrame()
+    for column in ("open", "high", "low", "close", "volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume"):
+        if column in source.columns:
+            source[column] = pd.to_numeric(source[column], errors="coerce")
+    source = source.dropna(subset=["open", "high", "low", "close"])
+    if source.empty:
+        return pd.DataFrame()
+    source.sort_values("timestamp", inplace=True)
+    source.drop_duplicates("timestamp", keep="last", inplace=True)
+    source["bucket"] = (source["timestamp"] // int(timeframe_ms)) * int(timeframe_ms)
+    aggregation: dict[str, str] = {
+        "timestamp": "first",
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+    }
+    for column in ("volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume"):
+        if column in source.columns:
+            aggregation[column] = "sum"
+    grouped = source.groupby("bucket", as_index=False).agg(aggregation)
+    grouped["timestamp"] = grouped["bucket"].astype("int64")
+    grouped.drop(columns=["bucket"], inplace=True)
+    grouped.sort_values("timestamp", inplace=True)
+    grouped.reset_index(drop=True, inplace=True)
+    return grouped
+
+
+def _format_ru_timeframe_label(step_ms: int | None) -> str:
+    if step_ms is None or step_ms <= 0:
+        return "Цена"
+    seconds = step_ms / 1000.0
+    if seconds < 60:
+        return f"{seconds:g}с"
+    minutes = seconds / 60.0
+    if minutes < 60:
+        return f"{minutes:g}м"
+    hours = minutes / 60.0
+    return f"{hours:g}ч"
+
+
+def _annotate_chart_panel_label(ax, text: str) -> None:
+    ax.text(
+        0.02,
+        0.96,
+        text,
+        transform=ax.transAxes,
+        ha="left",
+        va="top",
+        color="#ffffff",
+        fontsize=28,
+        fontweight="bold",
+        alpha=0.25,
+        zorder=0.2,
+    )
 
 
 def _apply_trade_chart_ticks(ax, frame: pd.DataFrame) -> None:
@@ -2029,18 +2120,24 @@ def _render_anomaly_trade_chart(
         raise ValueError("empty_plot_window")
     x_values = np.arange(len(plot_frame), dtype=np.float64)
     timestamps = plot_frame["timestamp"].to_numpy(dtype=np.int64)
-    _ = context_timeframe_ms  # Kept for the public renderer signature; trade charts now use fixed 1h/7d context.
+    htf_frame = _build_trade_chart_timeframe_context(
+        frame,
+        start_timestamp_ms=start_ts,
+        end_timestamp_ms=end_ts,
+        timeframe_ms=context_timeframe_ms,
+    )
+    htf_x_values = np.arange(len(htf_frame), dtype=np.float64)
     context_source_frame = hourly_context_frame if hourly_context_frame is not None else frame
     context_frame = _build_trade_chart_hourly_context(
         context_source_frame,
-        end_timestamp_ms=entry_ts,
+        end_timestamp_ms=end_ts,
         days=_TRADE_CHART_CONTEXT_DAYS,
     )
     context_x_values = np.arange(len(context_frame), dtype=np.float64)
     context_levels = _find_trade_chart_hourly_levels(
         context_frame,
         symbol=str(trade.get("symbol", "")),
-        end_timestamp_ms=entry_ts,
+        end_timestamp_ms=end_ts,
         days=_TRADE_CHART_CONTEXT_DAYS,
     )
     anomaly_idx = resolve_timestamp_plot_idx(timestamps, anomaly_ts)
@@ -2050,17 +2147,22 @@ def _render_anomaly_trade_chart(
     exit_idx = resolve_timestamp_plot_idx(timestamps, exit_ts)
     price_axis_right_x = float(len(plot_frame) - 0.5)
 
-    fig, (ax_price, ax_context, ax_flow) = plt.subplots(
-        3,
+    fig, (ax_price, ax_htf, ax_flow, ax_context) = plt.subplots(
+        4,
         1,
         figsize=TRADE_CHART_FIGSIZE,
         sharex=False,
-        gridspec_kw={"height_ratios": [4.0, 3.0, 1.15], "hspace": 0.08},
+        gridspec_kw={"height_ratios": [2.0, 2.0, 1.0, 1.0], "hspace": 0.08},
         facecolor=CHART_FIGURE_FACE,
     )
-    configure_plot_axes(price_ax=ax_price, volume_ax=ax_context, trades_ax=ax_flow)
+    configure_plot_axes(price_ax=ax_price, volume_ax=ax_htf, trades_ax=ax_flow)
+    configure_plot_axes(price_ax=ax_context, volume_ax=ax_context)
 
     draw_candles(ax_price, plot_frame, x_values)
+    if not htf_frame.empty:
+        draw_candles(ax_htf, htf_frame, htf_x_values, alpha=0.94, zorder=3.0)
+    else:
+        _annotate_anomaly_panel_message(ax_htf, "HTF context unavailable")
     if not context_frame.empty:
         draw_candles(ax_context, context_frame, context_x_values, alpha=0.92, zorder=3.0)
         for level in context_levels:
@@ -2075,7 +2177,7 @@ def _render_anomaly_trade_chart(
                     zorder=4.5,
                 )
     else:
-        _annotate_anomaly_panel_message(ax_context, "1h / 7d context unavailable")
+        _annotate_anomaly_panel_message(ax_context, "1h / 4d context unavailable")
     ax_price.plot(x_values, plot_frame["ema9"].to_numpy(dtype=np.float64), color=CHART_EMA9, linewidth=1.2, alpha=0.28, zorder=2.2)
     ax_price.plot(x_values, plot_frame["ema20"].to_numpy(dtype=np.float64), color=CHART_EMA20, linewidth=1.2, alpha=0.24, zorder=2.1)
 
@@ -2207,16 +2309,29 @@ def _render_anomaly_trade_chart(
         context_low = context_frame["low"].to_numpy(dtype=np.float64)
         context_padding = max((float(np.nanmax(context_high)) - float(np.nanmin(context_low))) * 0.08, 1e-9)
         ax_context.set_ylim(float(np.nanmin(context_low)) - context_padding, float(np.nanmax(context_high)) + context_padding)
+    if not htf_frame.empty:
+        htf_high = htf_frame["high"].to_numpy(dtype=np.float64)
+        htf_low = htf_frame["low"].to_numpy(dtype=np.float64)
+        htf_padding = max((float(np.nanmax(htf_high)) - float(np.nanmin(htf_low))) * 0.06, 1e-9)
+        ax_htf.set_ylim(float(np.nanmin(htf_low)) - htf_padding, float(np.nanmax(htf_high)) + htf_padding)
     entry_candle_width = resolve_candle_width(x_values)
     ax_price.set_xlim(-max(0.5, entry_candle_width * 0.65), len(plot_frame) - 1 + max(0.5, entry_candle_width * 0.65))
     if not context_frame.empty:
         ax_context.set_xlim(-0.5, len(context_frame) - 0.5)
+    if not htf_frame.empty:
+        htf_candle_width = resolve_candle_width(htf_x_values)
+        ax_htf.set_xlim(-max(0.5, htf_candle_width * 0.65), len(htf_frame) - 1 + max(0.5, htf_candle_width * 0.65))
     ax_flow.set_ylim(0.0, 100.0)
     ax_flow.set_yticks([0.0, 50.0, 100.0])
     ax_flow.set_yticklabels(["0", "50", "100"], color=CHART_MUTED)
-    ax_price.set_ylabel(format_timeframe_label(infer_frame_step_ms(plot_frame)))
-    ax_context.set_ylabel("1h / 7d")
-    ax_flow.set_ylabel("Vol / trades %")
+    ax_price.set_ylabel(_format_ru_timeframe_label(infer_frame_step_ms(plot_frame)))
+    ax_htf.set_ylabel(_format_ru_timeframe_label(context_timeframe_ms))
+    ax_flow.set_ylabel("Объем / сделки %")
+    ax_context.set_ylabel("1ч")
+    _annotate_chart_panel_label(ax_price, _format_ru_timeframe_label(infer_frame_step_ms(plot_frame)))
+    _annotate_chart_panel_label(ax_htf, _format_ru_timeframe_label(context_timeframe_ms))
+    _annotate_chart_panel_label(ax_flow, "Объем / сделки")
+    _annotate_chart_panel_label(ax_context, "1ч")
     ax_price.set_title(
         (
             f"{format_chart_symbol(str(trade.get('symbol')))}  "
@@ -2231,12 +2346,15 @@ def _render_anomaly_trade_chart(
         fontweight="semibold",
     )
 
+    _apply_trade_chart_ticks(ax_htf, htf_frame)
     _apply_trade_chart_ticks(ax_context, context_frame)
     _apply_trade_chart_ticks(ax_flow, plot_frame)
     ax_price.tick_params(axis="x", labelbottom=False)
+    ax_htf.tick_params(axis="x", labelbottom=True)
     ax_context.tick_params(axis="x", labelbottom=True)
     ax_flow.tick_params(axis="x", labelbottom=True)
     ax_price.margins(x=0.01)
+    ax_htf.margins(x=0.01)
     ax_context.margins(x=0.0)
     ax_flow.margins(x=0.0)
     output_path.parent.mkdir(parents=True, exist_ok=True)

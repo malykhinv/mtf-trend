@@ -376,7 +376,7 @@ The lower panel compares normalized shapes only: orange quote volume and green n
 
 ## Current audit note — P152
 
-P152 is live operator UX and chart-artifact only. After a verified entry fill and stop placement, live now attempts to render the canonical three-panel trade chart for the opening Telegram message. Open charts replace risk/reward shaded rectangles with TP1/SL horizontal lines, while preserving the independent 1h/7d context and merged flow panel. Text-only Telegram remains a fallback. P153 tightens the same chart path: levels drawn on the middle panel are searched only inside the displayed 7-day 1h context window.
+P152 is live operator UX and chart-artifact only. After a verified entry fill and stop placement, live now attempts to render the canonical trade chart for the opening Telegram message. P163 supersedes the older three-panel layout: current charts are `LTF -> HTF -> volume/trades -> 1h`, the bottom 1h context spans 4 days through the candle that contains the main chart end, and chart levels are searched only inside that visible 4-day context window. Open charts replace risk/reward shaded rectangles with TP1/SL horizontal lines. Text-only Telegram remains a fallback.
 
 Next verification:
 
@@ -388,7 +388,7 @@ python main.py run-anomaly-live --help
 Known effect:
 
 ```text
-A real opened position now performs one additional H1 context fetch and Telegram photo upload; failures are recorded as chart_render_failed, chart_context_fetch_failed, or telegram_open_chart_failed and should not block position monitoring. Any levels drawn in the 1h context panel must have been discovered from the same visible 7-day context, not older hidden history.
+A real opened position now performs one additional H1 context fetch and Telegram photo upload; failures are recorded as chart_render_failed, chart_context_fetch_failed, or telegram_open_chart_failed and should not block position monitoring. Any levels drawn in the 1h context panel must have been discovered from the same visible 4-day context, not older hidden history.
 ```
 
 ---
@@ -575,4 +575,57 @@ Known effect:
 
 ```text
 Live PnL can decrease versus old artifacts because previously double-counted or proxy-counted terminal size is no longer included. Treat older live ledger rows around TP1/full-close residuals as audit-suspect until revalidated.
+```
+
+---
+
+## Latest anomaly-lab readout
+
+```text
+Artifact: .output/results/anomaly_lab
+Config: 1m/1m, feature_contract=closed_setup_tf_v1, 7-day window
+Observed entries: 2026-05-04 13:48 UTC -> 2026-05-11 08:32 UTC
+```
+
+Verdict:
+
+```text
+1095 closed trades across 476 symbols, but aggregate edge is negative:
+avg net return = -0.0760%
+sum net return = -83.20%
+win rate = 45.57%
+positive days = 2 of 8
+```
+
+This run rejects any claim of stable edge for the tested `closed_setup_tf_v1` setup. Signal frequency is high, but expectancy, median trade, and day-level consistency are weak.
+
+Current best next research step:
+
+```text
+P163 makes quote-volume / trade-count provenance explicit in fresh anomaly-lab exports.
+Next compare the same window against the pair-aware HTF/LTF contract before tuning filters.
+```
+
+Same-window P163 comparison result:
+
+```text
+1m/1m closed_setup_tf_v1:
+closed trades = 1105
+avg net return = -0.0568%
+median net return = -0.1794%
+sum net return = -62.73%
+positive days = 1 of 8
+
+5m/1m htf_setup_ltf_entry_v1:
+closed trades = 423
+avg net return = -0.0521%
+median net return = -0.2407%
+sum net return = -22.05%
+positive days = 4 of 8
+```
+
+Interpretation:
+
+```text
+HTF/LTF reduces trade count and aggregate damage, and improves day-level distribution, but it still does not produce positive expectancy. Do not claim edge. The next useful research step is not parameter tuning; first inspect why TP1/trail winners fail to overcome stop-loss mass and whether anomaly category separation can reject the losing wake-up types.
 ```

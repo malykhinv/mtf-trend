@@ -3029,8 +3029,8 @@ class AnomalyMicroLiveRunner:
                 hourly_context_frame = self._fetch_chart_frame(
                     signal.symbol,
                     Timeframe.H1,
-                    start_timestamp_ms=opened_at_ms - 7 * 24 * HOUR_MS - HOUR_MS,
-                    end_timestamp_ms=opened_at_ms,
+                    start_timestamp_ms=opened_at_ms - 4 * 24 * HOUR_MS - HOUR_MS,
+                    end_timestamp_ms=opened_at_ms + HOUR_MS,
                 )
             except Exception as exc:
                 hourly_context_frame = pd.DataFrame()
@@ -3136,6 +3136,25 @@ class AnomalyMicroLiveRunner:
             chart_dir = self.artifacts.root / "charts"
             chart_dir.mkdir(parents=True, exist_ok=True)
             path = chart_dir / f"{position.position_id}.png"
+            try:
+                hourly_context_frame = self._fetch_chart_frame(
+                    signal.symbol,
+                    Timeframe.H1,
+                    start_timestamp_ms=end_ms - 4 * 24 * HOUR_MS - HOUR_MS,
+                    end_timestamp_ms=end_ms + HOUR_MS,
+                )
+            except Exception as exc:
+                hourly_context_frame = pd.DataFrame()
+                self.artifacts.append_event(
+                    "chart_context_fetch_failed",
+                    signal.symbol,
+                    {
+                        "position_id": position.position_id,
+                        "stage": "close",
+                        "timeframe": Timeframe.H1.value,
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    },
+                )
             trade_row = {
                 "symbol": signal.symbol,
                 "status": "closed",
@@ -3163,6 +3182,7 @@ class AnomalyMicroLiveRunner:
                 trade=trade_row,
                 output_path=path,
                 context_timeframe_ms=int(signal.levels_timeframe.to_milliseconds()),
+                hourly_context_frame=hourly_context_frame,
             )
             self.artifacts.append_event(
                 "chart_rendered",
