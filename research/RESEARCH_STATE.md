@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P155 applied locally on top of ZIP-derived source; P156 proposed
-Last active patch: P156 live unresolved-exit audit hardening
+Local patch stack: P130-P155 applied locally on top of ZIP-derived source; P156/P159/P160 proposed; P161 proposed
+Last active patch: P161 anomaly market-entry safe divide helper fix
 Updated: 2026-05-12
 ```
 
@@ -532,4 +532,24 @@ Known effect:
 
 ```text
 No trading behavior should change. If a future patch needs closed-HTF-only logic, it should be reintroduced explicitly with matching live/backtest artifacts instead of editing dead legacy methods.
+```
+
+---
+
+## Current audit note — P161
+
+P161 fixes a backtest runtime blocker in the market-entry execution path. `_resolve_signal_entry()` already had a module-local safe divide helper named `_safe_divide_value`, but the drift/RR guard used the stale `_safe_divide` name and crashed before skip reasons or trades could be written.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-lab --setup-timeframe 5m --entry-timeframe 30s --days 30
+# launcher.py is absent in the uploaded ZIP
+```
+
+Known effect:
+
+```text
+No trading semantics should change. The previous run stopped before evaluating market-entry drift/RR guards; after P161 it should either simulate trades or emit normal skip reasons such as market_entry_price_drift / market_entry_rr_collapsed.
 ```

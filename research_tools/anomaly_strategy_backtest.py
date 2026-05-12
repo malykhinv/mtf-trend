@@ -538,10 +538,10 @@ def _resolve_signal_entry(
         entry_price = float(entry_row_source["open"])
         if not np.isfinite(entry_price) or entry_price <= 0.0:
             return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "invalid_market_execution_price"
-        drift_pct = _safe_divide(entry_price - decision_close, decision_close)
+        drift_pct = _safe_divide_value(entry_price - decision_close, decision_close)
         abs_drift_pct = abs(drift_pct) if np.isfinite(drift_pct) else float("nan")
         actual_risk_at_signal_stop = entry_price - stop_at_decision
-        rr_to_signal_tp1 = _safe_divide(signal_tp1_price - entry_price, actual_risk_at_signal_stop)
+        rr_to_signal_tp1 = _safe_divide_value(signal_tp1_price - entry_price, actual_risk_at_signal_stop)
         if entry_price >= signal_tp1_price:
             return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "tp1_already_reached_before_market_entry"
         if not np.isfinite(actual_risk_at_signal_stop) or actual_risk_at_signal_stop <= 0.0:

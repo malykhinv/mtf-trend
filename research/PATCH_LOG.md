@@ -957,3 +957,32 @@ python main.py run-anomaly-lab --help
 ### Risk
 
 Low. This is deletion-only cleanup of functions with no runtime call sites in the current P159 path. No signal thresholds, entry/exit rules, order handling, stop handling, TP1 math, or backtest execution semantics are changed.
+
+---
+
+## P161 — Fix anomaly market-entry safe divide helper
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+Market-entry backtest execution crashed during `simulate_anomaly_trades()` because `_resolve_signal_entry()` called the old helper name `_safe_divide`, while this module defines and uses `_safe_divide_value`.
+
+### Change
+
+- Replace the two stale `_safe_divide(...)` calls in market-entry drift/RR guards with the existing local `_safe_divide_value(...)` helper.
+- Keep market-entry execution semantics unchanged: drift remains absolute, TP1-before-entry and RR-collapse guards still use next-bar-open proxy prices.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+# launcher.py is absent in the uploaded ZIP
+# synthetic smoke: market entry path calls _resolve_signal_entry without NameError
+```
+
+### Risk
+
+Low. This is a direct NameError fix in the executable backtest path; no thresholds, signal filters, TP/SL logic, live order logic, or data-quality fallback behavior change.

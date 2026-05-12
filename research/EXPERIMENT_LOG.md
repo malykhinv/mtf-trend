@@ -612,3 +612,25 @@ Next:
 ```text
 Run a controlled smoke with a fake/invalid Telegram token or blocked network path and verify live_events.csv contains telegram_async_send_failed or telegram_open/close fallback events instead of relying on console logs only.
 ```
+
+---
+
+## 2026-05-12 — P161 anomaly market-entry NameError
+
+Input:
+
+```text
+Backtest run crashed at anomaly trades simulation with `NameError: name '_safe_divide' is not defined` in `_resolve_signal_entry()`.
+```
+
+Result:
+
+```text
+Patch proposed. Market-entry drift and RR guards now call the existing `_safe_divide_value` helper in `anomaly_strategy_backtest.py`; execution model and thresholds are unchanged.
+```
+
+Next:
+
+```text
+Rerun the same anomaly backtest. Expected outcome: no `_safe_divide` NameError; inspect generated skip-reason artifacts before interpreting PnL.
+```
