@@ -204,3 +204,25 @@ A touch is valid even if it includes a wick through the level only when the subs
 Live may skip expensive signal construction for decisions that are already older than `max_signal_age_ms`, but the skip is still an audit decision and must be written to artifacts, e.g. `reject_stale_signal` with a prescan stage.
 
 Top-growth snapshots are research/audit data, not trading signals. They should run through an explicit standalone command so they do not compete with live discovery and execution guards for API budget.
+
+---
+
+## Live ticker-radar scheduling contract
+
+Ticker radar is allowed only as a scheduling priority layer:
+
+```text
+ticker snapshot delta -> bounded watch promotion -> normal closed-kline deep scan -> normal signal/risk/execution guards
+```
+
+It must not:
+
+```text
+open a trade
+replace quote_volume / number_of_trades evidence from closed klines
+prune or permanently skip cold-universe symbols
+hide missing ticker fields behind proxy volume
+consume normal round-robin inactive slots without explicit operator configuration
+```
+
+Ticker-derived rows are diagnostic/scheduler artifacts only. Final signal validity still depends on the existing closed-kline flow, category, risk and execution checks.

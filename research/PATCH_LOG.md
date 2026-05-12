@@ -469,3 +469,34 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 # synthetic smoke: repeated _scan_batch on unchanged now_ms fetches each symbol/timeframe once, then fetches again after the next closed candle.
 python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20
 ```
+
+
+## P145 — Ticker-radar live watch promotion
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+P143/P144 reduce redundant live work, but a full cold-universe round-robin can still discover fast wake-ups too late. The next acceleration must not prune the universe, must not trade from ticker data, and must not hide normal round-robin candidates.
+
+### Change
+
+- Add a typed `fetch_ticker_snapshots(...)` exchange boundary returning explicit source/status fields for ticker `last`, real 24h `quoteVolume`, and optional trade count.
+- Add live ticker-radar state that compares current ticker snapshots to the previous snapshot and promotes only symbols with positive price delta plus real quote-volume delta.
+- Add a separate bounded ticker-radar watch layer in scheduling. Radar watch symbols are extra scans; they do not consume normal inactive round-robin slots.
+- Add artifacts: `ticker_radar_snapshot`, `ticker_radar_promoted`, `ticker_radar_missing_fields`, `ticker_radar_failed`, `ticker_radar_watch_expired`, and ticker-radar fields in `symbol_batch_selected`.
+- Preserve strategy logic: radar data cannot open a position and cannot replace kline-based quote-volume/trade-count evidence.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+# synthetic smoke: first snapshot does not promote; second snapshot with price+quote delta promotes one symbol; batch keeps normal inactive slots and adds the radar symbol as an extra scan.
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20 --ticker-radar-watch-batch-size 5
+```
+
+### Risk
+
+Low/medium. It cannot remove cold symbols or create trades, but each promoted radar symbol adds extra OHLCV work. If cycle time worsens or rate-limit pressure appears, reduce `--ticker-radar-watch-batch-size` or disable with `--ticker-radar-enabled false`.

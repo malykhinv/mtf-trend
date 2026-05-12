@@ -20,6 +20,27 @@ class ExchangeOrderFill:
     fee_currency: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ExchangeTickerSnapshot:
+    """Normalized ticker snapshot for live scheduling priority only.
+
+    These fields are not a trading signal and must not replace kline-based
+    quote-volume / trade-count evidence. Missing values are explicit None/status
+    fields instead of proxy fallbacks.
+    """
+
+    symbol: str
+    fetched_at_ms: int
+    last_price: float | None
+    quote_volume_24h: float | None
+    trade_count_24h: int | None
+    last_price_source: str
+    quote_volume_source: str
+    trade_count_source: str
+    status: str
+    reason: str | None = None
+
+
 class CcxtClientOptions(TypedDict, total=False):
     defaultType: str
     fetchCurrencies: bool

@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P144 proposed locally on top of ZIP-derived source
-Last active patch: P144 skip unchanged live signal rescans
+Local patch stack: P130-P145 proposed locally on top of ZIP-derived source
+Last active patch: P145 ticker-radar live watch promotion
 Updated: 2026-05-12
 ```
 
@@ -74,19 +74,20 @@ research_tools/hourly_levels.py
 6. Historical local artifacts may contain stale compiled files; they are ignored by git and should be deleted locally.
 7. Top-growth snapshots are now exported only by standalone `run-anomaly-top-growth`; live trading loop must not spend REST/API budget on top-growth side work.
 8. Active symbols whose latest closed levels candle was already scanned are now kept visible as `active_waiting_*` in batch artifacts and should not consume OHLCV scan slots until a new closed candle exists.
+9. Ticker radar is scheduling-only: it can add bounded extra watch scans, but cannot remove symbols from round-robin, cannot open trades, and cannot replace closed-kline flow evidence.
 
 ---
 
 ## 6. Next best step
 
-Apply P144 and run a short live latency smoke before adding ticker-radar promotion:
+Apply P145 and run a short live latency smoke with ticker radar enabled, then inspect whether radar promotions reduce stale discovery without reducing cold round-robin coverage:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20 --ticker-radar-watch-batch-size 5
 ```
 
-Check `symbol_batch_selected` for `active_waiting_count`, `reject_stale_signal` for zero/low counts, and fetch/cycle speed before touching signal thresholds.
+Check `ticker_radar_snapshot`, `ticker_radar_promoted`, `symbol_batch_selected.effective_scan_count`, `inactive_count`, `reject_stale_signal`, and cycle time.
 
 
 ---

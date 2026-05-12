@@ -12,6 +12,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from collections import deque
 from uuid import uuid4
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -21,6 +22,7 @@ from typing import Callable
 import pandas as pd
 
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
+from data.exchanges.ccxt_types import ExchangeTickerSnapshot
 from domain.exceptions import ExchangeConnectivityError
 from domain.enums.timeframe import Timeframe
 from research_tools.anomaly_continuation_lab import compute_start_verticality_metrics
@@ -206,6 +208,14 @@ class LiveAnomalyConfig:
     max_open_positions: int = 3
     symbol_batch_size: int = 20
     active_symbol_ttl_ms: int = 60_000
+    ticker_radar_enabled: bool = True
+    ticker_radar_interval_seconds: float = 5.0
+    ticker_radar_watch_ttl_ms: int = 120_000
+    ticker_radar_watch_batch_size: int = 5
+    ticker_radar_max_promotions_per_cycle: int = 20
+    ticker_radar_min_price_delta_pct: float = 0.003
+    ticker_radar_min_quote_volume_delta_usdt: float = 10_000.0
+    ticker_radar_min_quote_volume_delta_ratio: float = 3.0
     signal_scan_backfill_candles: int = 10
     max_signal_age_ms: int = 60_000
     max_entry_price_drift_pct: float = 0.003
@@ -263,6 +273,18 @@ class LiveActiveSymbol:
     expires_at_ms: int
     updated_at_ms: int
     decision_timestamp_ms: int | None = None
+
+
+@dataclass(slots=True)
+class LiveTickerRadarWatch:
+    symbol: str
+    reason: str
+    expires_at_ms: int
+    updated_at_ms: int
+    score: float
+    price_delta_pct: float
+    quote_volume_delta: float
+    quote_volume_delta_ratio: float | None
 
 
 @dataclass(slots=True)
@@ -902,6 +924,10 @@ class AnomalyMicroLiveRunner:
         self._opening_symbols: set[str] = set()
         self._recent_stops: dict[str, list[float]] = {}
         self._active_symbols: dict[str, LiveActiveSymbol] = {}
+        self._ticker_radar_watch: dict[str, LiveTickerRadarWatch] = {}
+        self._ticker_radar_snapshots: dict[str, ExchangeTickerSnapshot] = {}
+        self._ticker_radar_quote_delta_history: dict[str, deque[float]] = {}
+        self._last_ticker_radar_at_ms = 0
         self._seen_decisions: set[tuple[str, str, str, int]] = set()
         self._last_signal_scan_closed_at: dict[tuple[str, str], int] = {}
         self._opened_positions_total = 0
@@ -938,6 +964,7 @@ class AnomalyMicroLiveRunner:
             cycle_started = time.monotonic()
             try:
                 opened_before, _, closed_before, orphan_before = self._live_counts()
+                self._maybe_update_ticker_radar(symbols)
                 batch = self._next_symbol_batch(symbols)
                 signals = self._scan_batch(batch)
                 for signal in signals:
@@ -1026,6 +1053,8 @@ class AnomalyMicroLiveRunner:
         now_ms = int(time.time() * 1000)
         active_due, active_waiting = self._active_symbol_batch(now_ms=now_ms)
         active_keys = {_position_symbol_key(symbol) for symbol in [*active_due, *active_waiting]}
+        radar_due, radar_waiting = self._ticker_radar_batch(now_ms=now_ms, excluded_keys=active_keys)
+        radar_due_keys = {_position_symbol_key(symbol) for symbol in radar_due}
         inactive_slots = max(0, self.config.symbol_batch_size - len(active_due))
         inactive: list[str] = []
         attempts = 0
@@ -1036,10 +1065,15 @@ class AnomalyMicroLiveRunner:
             symbol_key = _position_symbol_key(symbol)
             with self._state_lock:
                 symbol_is_opening = symbol_key in self._opening_symbols
-            if symbol_key in active_keys or symbol_is_opening or self._symbol_in_stop_cooldown(symbol):
+            if (
+                symbol_key in active_keys
+                or symbol_key in radar_due_keys
+                or symbol_is_opening
+                or self._symbol_in_stop_cooldown(symbol)
+            ):
                 continue
             inactive.append(symbol)
-        batch = [*active_due, *inactive]
+        batch = [*active_due, *radar_due, *inactive]
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
@@ -1048,8 +1082,13 @@ class AnomalyMicroLiveRunner:
                 "active_count": len(active_due),
                 "active_waiting_count": len(active_waiting),
                 "active_waiting_symbols": active_waiting,
+                "ticker_radar_symbols": radar_due,
+                "ticker_radar_count": len(radar_due),
+                "ticker_radar_waiting_count": len(radar_waiting),
+                "ticker_radar_waiting_symbols": radar_waiting,
                 "inactive_count": len(inactive),
                 "symbol_batch_size": self.config.symbol_batch_size,
+                "effective_scan_count": len(batch),
             },
         )
         return batch
@@ -1081,6 +1120,210 @@ class AnomalyMicroLiveRunner:
                 },
             )
         return active_due, active_waiting
+
+    def _ticker_radar_batch(self, *, now_ms: int, excluded_keys: set[str]) -> tuple[list[str], list[str]]:
+        if not self.config.ticker_radar_enabled or self.config.ticker_radar_watch_batch_size <= 0:
+            return [], []
+        with self._state_lock:
+            expired = self._prune_ticker_radar_watch_locked(now_ms)
+            watch_items = sorted(
+                self._ticker_radar_watch.values(),
+                key=lambda item: (item.score, item.updated_at_ms, item.symbol),
+                reverse=True,
+            )
+        for item in expired:
+            self.artifacts.append_event(
+                "ticker_radar_watch_expired",
+                item.symbol,
+                {
+                    "reason": item.reason,
+                    "score": item.score,
+                    "expires_at_ms": item.expires_at_ms,
+                    "price_delta_pct": item.price_delta_pct,
+                    "quote_volume_delta": item.quote_volume_delta,
+                    "quote_volume_delta_ratio": item.quote_volume_delta_ratio if item.quote_volume_delta_ratio is not None else "",
+                },
+            )
+        due: list[str] = []
+        waiting: list[str] = []
+        for item in watch_items:
+            symbol_key = _position_symbol_key(item.symbol)
+            with self._state_lock:
+                symbol_is_opening = symbol_key in self._opening_symbols
+            if symbol_key in excluded_keys or symbol_is_opening or self._symbol_in_stop_cooldown(item.symbol):
+                continue
+            if self._signal_scan_due_for_symbol(item.symbol, now_ms=now_ms):
+                if len(due) < self.config.ticker_radar_watch_batch_size:
+                    due.append(item.symbol)
+            else:
+                waiting.append(item.symbol)
+        return due, waiting
+
+    def _maybe_update_ticker_radar(self, symbols: list[str]) -> None:
+        if not self.config.ticker_radar_enabled:
+            return
+        now_ms = int(time.time() * 1000)
+        interval_ms = int(self.config.ticker_radar_interval_seconds * 1000.0)
+        if now_ms - self._last_ticker_radar_at_ms < max(1, interval_ms):
+            return
+        self._last_ticker_radar_at_ms = now_ms
+        try:
+            snapshots = self.exchange.fetch_ticker_snapshots(tuple(symbols))
+        except Exception as exc:
+            self.artifacts.append_event(
+                "ticker_radar_failed",
+                "__live__",
+                {"exception_type": type(exc).__name__, "exception_message": str(exc)[:500]},
+            )
+            return
+        promotions = self._evaluate_ticker_radar_snapshots(snapshots, now_ms=now_ms)
+        for promotion in promotions[: self.config.ticker_radar_max_promotions_per_cycle]:
+            self._mark_ticker_radar_watch(
+                str(promotion["symbol"]),
+                now_ms=now_ms,
+                reason="ticker_radar",
+                score=float(promotion["score"]),
+                price_delta_pct=float(promotion["price_delta_pct"]),
+                quote_volume_delta=float(promotion["quote_volume_delta"]),
+                quote_volume_delta_ratio=(
+                    None
+                    if promotion["quote_volume_delta_ratio"] is None
+                    else float(promotion["quote_volume_delta_ratio"])
+                ),
+            )
+        missing_count = sum(1 for snapshot in snapshots if snapshot.status != "ok")
+        self.artifacts.append_event(
+            "ticker_radar_snapshot",
+            "__live__",
+            {
+                "symbols_total": len(snapshots),
+                "ok_count": len(snapshots) - missing_count,
+                "missing_count": missing_count,
+                "promoted_count": min(len(promotions), self.config.ticker_radar_max_promotions_per_cycle),
+                "promotion_candidates_count": len(promotions),
+                "interval_seconds": self.config.ticker_radar_interval_seconds,
+                "watch_batch_size": self.config.ticker_radar_watch_batch_size,
+            },
+        )
+
+    def _evaluate_ticker_radar_snapshots(
+        self,
+        snapshots: list[ExchangeTickerSnapshot],
+        *,
+        now_ms: int,
+    ) -> list[dict[str, object]]:
+        promotions: list[dict[str, object]] = []
+        for snapshot in snapshots:
+            symbol_key = _position_symbol_key(snapshot.symbol)
+            previous = self._ticker_radar_snapshots.get(symbol_key)
+            if snapshot.status != "ok":
+                self.artifacts.append_event(
+                    "ticker_radar_missing_fields",
+                    snapshot.symbol,
+                    {
+                        "status": snapshot.status,
+                        "reason": snapshot.reason or "",
+                        "last_price_source": snapshot.last_price_source,
+                        "quote_volume_source": snapshot.quote_volume_source,
+                        "trade_count_source": snapshot.trade_count_source,
+                    },
+                )
+                self._ticker_radar_snapshots[symbol_key] = snapshot
+                continue
+            self._ticker_radar_snapshots[symbol_key] = snapshot
+            if previous is None or previous.status != "ok":
+                continue
+            price_delta_pct = _safe_divide(
+                float(snapshot.last_price or float("nan")) - float(previous.last_price or float("nan")),
+                float(previous.last_price or float("nan")),
+            )
+            quote_volume_delta = float(snapshot.quote_volume_24h or 0.0) - float(previous.quote_volume_24h or 0.0)
+            if quote_volume_delta > 0.0:
+                history = self._ticker_radar_quote_delta_history.setdefault(symbol_key, deque(maxlen=24))
+                baseline = _median_positive(list(history))
+                quote_volume_delta_ratio = _safe_divide(quote_volume_delta, baseline) if baseline is not None else None
+                history.append(quote_volume_delta)
+            else:
+                quote_volume_delta_ratio = None
+            if not math.isfinite(price_delta_pct) or price_delta_pct < self.config.ticker_radar_min_price_delta_pct:
+                continue
+            if quote_volume_delta < self.config.ticker_radar_min_quote_volume_delta_usdt:
+                continue
+            if (
+                quote_volume_delta_ratio is not None
+                and quote_volume_delta_ratio < self.config.ticker_radar_min_quote_volume_delta_ratio
+            ):
+                continue
+            score = (
+                price_delta_pct * 100.0
+                + math.log1p(max(0.0, quote_volume_delta / max(1.0, self.config.ticker_radar_min_quote_volume_delta_usdt)))
+                + (math.log1p(quote_volume_delta_ratio) if quote_volume_delta_ratio is not None else 0.0)
+            )
+            promotions.append(
+                {
+                    "symbol": snapshot.symbol,
+                    "score": score,
+                    "price_delta_pct": price_delta_pct,
+                    "quote_volume_delta": quote_volume_delta,
+                    "quote_volume_delta_ratio": quote_volume_delta_ratio,
+                    "last_price_source": snapshot.last_price_source,
+                    "quote_volume_source": snapshot.quote_volume_source,
+                    "trade_count_source": snapshot.trade_count_source,
+                    "now_ms": now_ms,
+                }
+            )
+        promotions.sort(key=lambda item: (float(item["score"]), str(item["symbol"])), reverse=True)
+        return promotions
+
+    def _mark_ticker_radar_watch(
+        self,
+        symbol: str,
+        *,
+        now_ms: int,
+        reason: str,
+        score: float,
+        price_delta_pct: float,
+        quote_volume_delta: float,
+        quote_volume_delta_ratio: float | None,
+    ) -> None:
+        expires_at_ms = now_ms + max(1, int(self.config.ticker_radar_watch_ttl_ms))
+        symbol_key = _position_symbol_key(symbol)
+        event_payload: dict[str, object] | None = None
+        with self._state_lock:
+            current = self._ticker_radar_watch.get(symbol_key)
+            should_emit = current is None or current.expires_at_ms < now_ms or score > current.score
+            self._ticker_radar_watch[symbol_key] = LiveTickerRadarWatch(
+                symbol=symbol,
+                reason=reason,
+                expires_at_ms=expires_at_ms,
+                updated_at_ms=now_ms,
+                score=score,
+                price_delta_pct=price_delta_pct,
+                quote_volume_delta=quote_volume_delta,
+                quote_volume_delta_ratio=quote_volume_delta_ratio,
+            )
+            if should_emit:
+                event_payload = {
+                    "reason": reason,
+                    "expires_at_ms": expires_at_ms,
+                    "ttl_ms": int(self.config.ticker_radar_watch_ttl_ms),
+                    "score": score,
+                    "price_delta_pct": price_delta_pct,
+                    "quote_volume_delta": quote_volume_delta,
+                    "quote_volume_delta_ratio": quote_volume_delta_ratio if quote_volume_delta_ratio is not None else "",
+                    "source": "ticker_delta_priority_only",
+                }
+        if event_payload is not None:
+            self.artifacts.append_event("ticker_radar_promoted", symbol, event_payload)
+
+    def _prune_ticker_radar_watch_locked(self, now_ms: int) -> list[LiveTickerRadarWatch]:
+        expired_keys = [key for key, state in self._ticker_radar_watch.items() if state.expires_at_ms < now_ms]
+        expired: list[LiveTickerRadarWatch] = []
+        for key in expired_keys:
+            state = self._ticker_radar_watch.pop(key, None)
+            if state is not None:
+                expired.append(state)
+        return expired
 
     def _mark_active_symbol(
         self,
@@ -2862,6 +3105,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "max_open_positions": (config.max_open_positions, 1),
         "symbol_batch_size": (config.symbol_batch_size, 1),
         "active_symbol_ttl_ms": (config.active_symbol_ttl_ms, 1),
+        "ticker_radar_watch_ttl_ms": (config.ticker_radar_watch_ttl_ms, 1),
+        "ticker_radar_max_promotions_per_cycle": (config.ticker_radar_max_promotions_per_cycle, 1),
         "signal_scan_backfill_candles": (config.signal_scan_backfill_candles, 1),
         "max_signal_age_ms": (config.max_signal_age_ms, 1),
         "stop_limit_per_symbol": (config.stop_limit_per_symbol, 1),
@@ -2874,6 +3119,11 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
     for name, (value, minimum) in integer_minimums.items():
         if not isinstance(value, int) or value < minimum:
             raise LiveStartupError(f"Некорректный live config: {name} должен быть целым >= {minimum}, получено {value!r}")
+    if not isinstance(config.ticker_radar_watch_batch_size, int) or config.ticker_radar_watch_batch_size < 0:
+        raise LiveStartupError(
+            "Некорректный live config: ticker_radar_watch_batch_size должен быть целым >= 0, "
+            f"получено {config.ticker_radar_watch_batch_size!r}"
+        )
 
     required_positive = {
         "min_quote_ratio_start": config.min_quote_ratio_start,
@@ -2883,6 +3133,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "network_sleep_seconds": config.network_sleep_seconds,
         "min_executable_rr_to_signal_tp1": config.min_executable_rr_to_signal_tp1,
         "max_position_amount_slippage_ratio": config.max_position_amount_slippage_ratio,
+        "ticker_radar_interval_seconds": config.ticker_radar_interval_seconds,
+        "ticker_radar_min_quote_volume_delta_ratio": config.ticker_radar_min_quote_volume_delta_ratio,
     }
     for name, value in required_positive.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
@@ -2896,6 +3148,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "telegram_cooldown_seconds": config.telegram_cooldown_seconds,
         "trail_buffer_r": config.trail_buffer_r,
         "max_entry_price_drift_pct": config.max_entry_price_drift_pct,
+        "ticker_radar_min_price_delta_pct": config.ticker_radar_min_price_delta_pct,
+        "ticker_radar_min_quote_volume_delta_usdt": config.ticker_radar_min_quote_volume_delta_usdt,
     }
     for name, value in required_non_negative.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=True)
@@ -3356,6 +3610,16 @@ def _safe_divide(numerator: float, denominator: float) -> float:
     if not math.isfinite(numerator) or not math.isfinite(denominator) or abs(denominator) <= 1e-12:
         return float("nan")
     return float(numerator / denominator)
+
+
+def _median_positive(values: list[float]) -> float | None:
+    finite_positive = sorted(float(value) for value in values if math.isfinite(float(value)) and float(value) > 0.0)
+    if not finite_positive:
+        return None
+    mid = len(finite_positive) // 2
+    if len(finite_positive) % 2:
+        return finite_positive[mid]
+    return (finite_positive[mid - 1] + finite_positive[mid]) / 2.0
 
 
 def _prior_up_down_whipsaw_to_impulse_range(baseline: pd.DataFrame, *, impulse_range: float) -> float:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from math import isfinite
 from typing import Any, Callable, cast
 
@@ -27,6 +28,7 @@ from data.exchanges.ccxt_types import (
     CcxtFuturesApi,
     ExchangeOrderFill,
     CcxtOpenInterestApi,
+    ExchangeTickerSnapshot,
 )
 from domain.abstract.exchange_client import ExchangeClient
 from domain.exceptions import ExchangeConnectivityError
@@ -299,6 +301,126 @@ class CcxtFuturesClient(ExchangeClient):
         if price is None or price <= 0.0:
             raise RuntimeError("fetch_ticker returned no finite positive last price")
         return price
+
+    def fetch_ticker_snapshots(self, symbols: tuple[str, ...] | list[str]) -> list[ExchangeTickerSnapshot]:
+        """Returns normalized ticker snapshots for live scheduling priority.
+
+        This method deliberately does not synthesize quote volume from base volume
+        and price. Missing ticker fields are explicit status/source values because
+        ticker radar must never become hidden proxy flow evidence.
+        """
+        self._ensure_markets_loaded()
+        requested_symbols = list(dict.fromkeys(str(symbol) for symbol in symbols if str(symbol).strip()))
+        fetched_at_ms = int(time.time() * 1000)
+        if not requested_symbols:
+            return []
+        payload = self._retry_exchange_call(
+            operation="ccxt_fetch_tickers",
+            symbol="__tickers__",
+            endpoint="fetch_tickers",
+            call=self._client.fetch_tickers,
+            args=(requested_symbols,),
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("fetch_tickers returned invalid payload")
+
+        tickers_by_symbol: dict[str, dict[str, object]] = {}
+        for key, value in payload.items():
+            if not isinstance(value, dict):
+                continue
+            if isinstance(key, str):
+                tickers_by_symbol[key] = value
+            raw_symbol = value.get("symbol")
+            if isinstance(raw_symbol, str) and raw_symbol:
+                tickers_by_symbol.setdefault(raw_symbol, value)
+
+        snapshots: list[ExchangeTickerSnapshot] = []
+        for symbol in requested_symbols:
+            ticker = tickers_by_symbol.get(symbol)
+            if not isinstance(ticker, dict):
+                snapshots.append(
+                    ExchangeTickerSnapshot(
+                        symbol=symbol,
+                        fetched_at_ms=fetched_at_ms,
+                        last_price=None,
+                        quote_volume_24h=None,
+                        trade_count_24h=None,
+                        last_price_source="missing",
+                        quote_volume_source="missing",
+                        trade_count_source="missing",
+                        status="missing_ticker",
+                        reason="fetch_tickers_payload_missing_symbol",
+                    )
+                )
+                continue
+            snapshots.append(self._normalize_ticker_snapshot(symbol, ticker, fetched_at_ms=fetched_at_ms))
+        return snapshots
+
+    @classmethod
+    def _normalize_ticker_snapshot(
+        cls,
+        symbol: str,
+        ticker: dict[str, object],
+        *,
+        fetched_at_ms: int,
+    ) -> ExchangeTickerSnapshot:
+        info = ticker.get("info")
+        info_dict = info if isinstance(info, dict) else {}
+        last_price, last_price_source = cls._first_positive_float_with_source(
+            (
+                ("last", ticker.get("last")),
+                ("close", ticker.get("close")),
+                ("info.lastPrice", info_dict.get("lastPrice")),
+            )
+        )
+        quote_volume, quote_volume_source = cls._first_positive_float_with_source(
+            (
+                ("quoteVolume", ticker.get("quoteVolume")),
+                ("info.quoteVolume", info_dict.get("quoteVolume")),
+            )
+        )
+        trade_count_float, trade_count_source = cls._first_positive_float_with_source(
+            (
+                ("count", ticker.get("count")),
+                ("trades", ticker.get("trades")),
+                ("info.count", info_dict.get("count")),
+                ("info.tradeCount", info_dict.get("tradeCount")),
+                ("info.numberOfTrades", info_dict.get("numberOfTrades")),
+            )
+        )
+        trade_count = int(trade_count_float) if trade_count_float is not None else None
+        missing: list[str] = []
+        if last_price is None:
+            missing.append("last_price")
+        if quote_volume is None:
+            missing.append("quote_volume_24h")
+        status = "ok" if not missing else "missing_required_fields"
+        reason = ",".join(missing) if missing else None
+        return ExchangeTickerSnapshot(
+            symbol=symbol,
+            fetched_at_ms=fetched_at_ms,
+            last_price=last_price,
+            quote_volume_24h=quote_volume,
+            trade_count_24h=trade_count,
+            last_price_source=last_price_source,
+            quote_volume_source=quote_volume_source,
+            trade_count_source=trade_count_source,
+            status=status,
+            reason=reason,
+        )
+
+    @staticmethod
+    def _first_positive_float_with_source(candidates: tuple[tuple[str, object], ...]) -> tuple[float | None, str]:
+        for source, value in candidates:
+            if not isinstance(value, (int, float, str, bytes)):
+                continue
+            try:
+                parsed = float(value)
+            except (TypeError, ValueError):
+                continue
+            if isfinite(parsed) and parsed > 0.0:
+                return parsed, source
+        return None, "missing"
 
     def create_market_order(self, symbol: str, side: str, amount: float, *, reduce_only: bool = False) -> dict[str, object]:
         """Places a real REST market order through CCXT."""
