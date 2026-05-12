@@ -9,6 +9,7 @@ import shutil
 import time
 from collections import Counter
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from logging import Logger
 from pathlib import Path
 from typing import Callable, cast
@@ -1096,6 +1097,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             ),
             grid_exit_rules=_parse_grid_exit_rules(str(getattr(args, "grid_exit_rules", "structural_trail"))),
             derivatives_context_fetcher=derivatives_context_fetcher,
+            render_charts=bool(getattr(args, "render_charts", True)),
         )
         return 0
 
@@ -1129,6 +1131,123 @@ def materialize_anomaly_subminute_cache(config: AppConfig, args: argparse.Namesp
         return 0
 
     return _run_with_logging("materialize-anomaly-subminute-cache", config, _run)
+
+
+def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace) -> int:
+    """Backfills true 1s OHLCV cache from Binance futures aggTrades."""
+
+    def _run() -> int:
+        from data.storage.parquet_storage import ParquetStorage
+        from research_tools.anomaly_micro_live import _aggregate_aggtrades_to_ohlcv_frame, _resolve_aggtrade_id, _resolve_aggtrade_timestamp
+
+        logger = get_logger("backfill-anomaly-aggtrade-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+        _, exchange_client, _ = _build_fetch_stack(config)
+        symbols = _resolve_fetch_symbol_list(config=config, args=args, logger=logger)
+        max_symbols = getattr(args, "max_symbols", None)
+        if max_symbols is not None:
+            symbols = symbols[: int(max_symbols)]
+        start_timestamp_ms, end_timestamp_ms = _fetch_period(config, int(args.days), getattr(args, "end_timestamp_ms", None))
+        chunk_ms = int(args.chunk_hours) * 3_600_000
+        storage = ParquetStorage(
+            base_dir=config.backtest.cache_dir,
+            log_level=config.backtest.log_level,
+            logs_dir=config.backtest.logs_dir,
+        )
+        rows: list[dict[str, object]] = []
+        for symbol_index, symbol in enumerate(symbols, start=1):
+            symbol_added = 0
+            symbol_skipped_chunks = 0
+            symbol_fetched_chunks = 0
+            symbol_status = "ok"
+            symbol_error = ""
+            chunk_start = int(start_timestamp_ms)
+            logger.warning("aggTrades 1s backfill %s/%s %s", symbol_index, len(symbols), symbol)
+            try:
+                market_id = exchange_client.get_market_id(symbol)
+                while chunk_start <= int(end_timestamp_ms):
+                    chunk_end = min(int(end_timestamp_ms), chunk_start + chunk_ms - 1)
+                    existing_first = storage.get_first_timestamp(symbol, Timeframe.S1)
+                    existing_last = storage.get_last_timestamp(symbol, Timeframe.S1)
+                    if existing_first is not None and existing_last is not None and existing_first <= chunk_start and existing_last >= chunk_end:
+                        symbol_skipped_chunks += 1
+                        chunk_start = chunk_end + 1
+                        continue
+                    symbol_fetched_chunks += 1
+                    all_rows: list[dict[str, object]] = []
+                    next_from_id: int | None = None
+                    previous_last_id: int | None = None
+                    while True:
+                        params: dict[str, object] = {
+                            "symbol": market_id,
+                            "limit": 1000,
+                            "startTime": int(chunk_start),
+                            "endTime": int(chunk_end),
+                        }
+                        if next_from_id is not None:
+                            params = {
+                                "symbol": market_id,
+                                "limit": 1000,
+                                "fromId": int(next_from_id),
+                                "endTime": int(chunk_end),
+                            }
+                        batch = exchange_client.fetch_binance_agg_trades(symbol=symbol, params=params)
+                        if not batch:
+                            break
+                        all_rows.extend(dict(row) for row in batch)
+                        last_row = batch[-1]
+                        last_id = _resolve_aggtrade_id(dict(last_row))
+                        last_ts = _resolve_aggtrade_timestamp(dict(last_row))
+                        if last_id is None or (previous_last_id is not None and last_id <= previous_last_id):
+                            break
+                        previous_last_id = last_id
+                        next_from_id = last_id + 1
+                        if last_ts is None or last_ts >= chunk_end or len(batch) < 1000:
+                            break
+                    if all_rows:
+                        frame = _aggregate_aggtrades_to_ohlcv_frame(
+                            pd.DataFrame(all_rows),
+                            timeframe_ms=1000,
+                            start_timestamp_ms=int(chunk_start),
+                            end_timestamp_ms=int(chunk_end),
+                        )
+                        if not frame.empty:
+                            frame["aggregation_source"] = "binance_futures_aggTrades"
+                            frame["aggregation_target_timeframe"] = "1s"
+                            frame["aggregation_version"] = "p166_aggtrades_to_1s_v1"
+                            symbol_added += storage.save_incremental(symbol, Timeframe.S1, frame)
+                    chunk_start = chunk_end + 1
+            except Exception as exc:
+                symbol_status = "error"
+                symbol_error = f"{type(exc).__name__}: {exc}"
+                logger.exception("aggTrades 1s backfill failed for %s: %s", symbol, exc)
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "status": symbol_status,
+                    "error": symbol_error,
+                    "added_rows": int(symbol_added),
+                    "fetched_chunks": int(symbol_fetched_chunks),
+                    "skipped_existing_chunks": int(symbol_skipped_chunks),
+                    "start_timestamp_ms": int(start_timestamp_ms),
+                    "end_timestamp_ms": int(end_timestamp_ms),
+                    "start_timestamp_utc": datetime.fromtimestamp(int(start_timestamp_ms) / 1000, UTC).isoformat(),
+                    "end_timestamp_utc": datetime.fromtimestamp(int(end_timestamp_ms) / 1000, UTC).isoformat(),
+                }
+            )
+        manifest = pd.DataFrame(rows)
+        output_arg = getattr(args, "output", None)
+        output_path = (
+            Path(str(output_arg))
+            if output_arg
+            else config.backtest.results_dir / "anomaly_aggtrade_1s_backfill.csv"
+        )
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest.to_csv(output_path, index=False)
+        print(f"wrote anomaly aggTrade 1s backfill manifest to {output_path}")
+        print(f"status counts: {manifest['status'].value_counts().to_dict() if 'status' in manifest.columns else {}}")
+        return 0 if manifest.empty or not manifest["status"].eq("error").any() else 1
+
+    return _run_with_logging("backfill-anomaly-aggtrade-cache", config, _run)
 
 
 def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:

@@ -129,6 +129,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomaly_lab.add_argument("--max-hold-candles", type=_positive_int_for("--max-hold-candles"), default=240)
     anomaly_lab.add_argument("--fee-rate", type=float, default=0.0004)
+    anomaly_lab.add_argument("--render-charts", type=_str_to_bool, default=True)
     anomaly_lab.add_argument("--run-entry-grid", type=_str_to_bool, default=False)
     anomaly_lab.add_argument("--grid-oi3-values", default="0.01,0.02,0.03")
     anomaly_lab.add_argument("--grid-hold-values", default="1,2")
@@ -144,6 +145,19 @@ def build_parser() -> argparse.ArgumentParser:
     materialize_subminute.add_argument("--timeframes", nargs="*", default=["5s", "15s", "30s"], help="Target subminute timeframes derived from 1s")
     materialize_subminute.add_argument("--overwrite", type=_str_to_bool, default=False)
     materialize_subminute.add_argument("--output", default=None, help="Optional materialization manifest CSV path")
+
+    backfill_aggtrades = subparsers.add_parser(
+        "backfill-anomaly-aggtrade-cache",
+        help="Backfill true 1s anomaly cache from Binance futures aggTrades",
+    )
+    backfill_aggtrades.add_argument("--symbols", nargs="*", default=None, help="Optional symbols; default uses liquid universe")
+    backfill_aggtrades.add_argument("--top-n", type=_positive_int_for("--top-n"), default=None)
+    backfill_aggtrades.add_argument("--days", type=_positive_int_for("--days"), default=14)
+    backfill_aggtrades.add_argument("--end-timestamp-ms", type=int, default=None)
+    backfill_aggtrades.add_argument("--chunk-hours", type=_positive_int_for("--chunk-hours"), default=1)
+    backfill_aggtrades.add_argument("--max-symbols", type=_positive_int_for("--max-symbols"), default=None)
+    backfill_aggtrades.add_argument("--min-volume-usd", type=float, default=DEFAULT_MIN_VOLUME_USD)
+    backfill_aggtrades.add_argument("--output", default=None, help="Optional backfill manifest CSV path")
 
     anomaly_live = subparsers.add_parser(
         "run-anomaly-live",
@@ -252,6 +266,7 @@ def resolve_handler(command_name: str) -> Handler:
         "update-cache": commands.update_cache,
         "run-anomaly-lab": commands.run_anomaly_lab,
         "materialize-anomaly-subminute-cache": commands.materialize_anomaly_subminute_cache,
+        "backfill-anomaly-aggtrade-cache": commands.backfill_anomaly_aggtrade_cache,
         "run-anomaly-live": commands.run_anomaly_live,
         "run-anomaly-top-growth": commands.run_anomaly_top_growth,
         "run-hourly-levels": commands.run_hourly_levels,

@@ -147,6 +147,15 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "start_trades_per_abs_return",
     "start_quote_ratio_per_abs_return",
     "start_trade_ratio_per_abs_return",
+    "prior_spike_count_24h",
+    "prior_spike_count_72h",
+    "prior_fast_fade_count_24h",
+    "prior_fast_fade_count_72h",
+    "prior_big_move_count_24h",
+    "prior_big_move_count_72h",
+    "prior_spike_density_72h",
+    "time_since_prior_spike_ms",
+    "time_since_prior_spike_hours",
     "post_start_pullback_fraction_of_box",
     "oi_timeframe",
     "oi_status",
@@ -795,6 +804,67 @@ def build_entry_cache_coverage(
     return pd.DataFrame(rows)
 
 
+def enrich_candidates_with_recent_spike_context(
+    candidates: pd.DataFrame,
+    *,
+    config: AnomalyBacktestConfig,
+) -> pd.DataFrame:
+    if candidates.empty or "symbol" not in candidates.columns or "decision_timestamp_ms" not in candidates.columns:
+        return candidates
+    result = candidates.copy()
+    for column in (
+        "prior_spike_count_24h",
+        "prior_spike_count_72h",
+        "prior_fast_fade_count_24h",
+        "prior_fast_fade_count_72h",
+        "prior_big_move_count_24h",
+        "prior_big_move_count_72h",
+        "prior_spike_density_72h",
+        "time_since_prior_spike_ms",
+        "time_since_prior_spike_hours",
+    ):
+        result[column] = np.nan
+    entry_ms = _timeframe_to_milliseconds(_effective_entry_timeframe(config))
+    maturity_ms = max(config.lab_config.forward_high_candles, config.lab_config.forward_low_candles) * entry_ms
+    for _, group in result.groupby("symbol", sort=False):
+        ordered = group.copy()
+        ordered["_decision_ts_numeric"] = pd.to_numeric(ordered["decision_timestamp_ms"], errors="coerce")
+        ordered = ordered.dropna(subset=["_decision_ts_numeric"]).sort_values("_decision_ts_numeric")
+        if ordered.empty:
+            continue
+        timestamps = ordered["_decision_ts_numeric"].astype("int64").to_numpy()
+        labels = (
+            ordered["outcome_label"].astype(str).to_numpy()
+            if "outcome_label" in ordered.columns
+            else np.array([""] * len(ordered), dtype=object)
+        )
+        for pos, row_index in enumerate(ordered.index):
+            decision_ts = int(timestamps[pos])
+            prior_end = int(np.searchsorted(timestamps, decision_ts, side="left"))
+            prior_start_24h = int(np.searchsorted(timestamps, decision_ts - _DAY_MS, side="left"))
+            prior_start_72h = int(np.searchsorted(timestamps, decision_ts - 3 * _DAY_MS, side="left"))
+            mature_cutoff = decision_ts - maturity_ms
+            mature_end = int(np.searchsorted(timestamps, mature_cutoff, side="right"))
+            mature_24h_start = min(prior_start_24h, mature_end)
+            mature_72h_start = min(prior_start_72h, mature_end)
+            mature_labels_24h = labels[mature_24h_start:mature_end]
+            mature_labels_72h = labels[mature_72h_start:mature_end]
+            prior_count_24h = max(0, prior_end - prior_start_24h)
+            prior_count_72h = max(0, prior_end - prior_start_72h)
+            result.at[row_index, "prior_spike_count_24h"] = prior_count_24h
+            result.at[row_index, "prior_spike_count_72h"] = prior_count_72h
+            result.at[row_index, "prior_fast_fade_count_24h"] = int((mature_labels_24h == "fast_fade").sum())
+            result.at[row_index, "prior_fast_fade_count_72h"] = int((mature_labels_72h == "fast_fade").sum())
+            result.at[row_index, "prior_big_move_count_24h"] = int((mature_labels_24h == "big_move").sum())
+            result.at[row_index, "prior_big_move_count_72h"] = int((mature_labels_72h == "big_move").sum())
+            result.at[row_index, "prior_spike_density_72h"] = _safe_divide_value(prior_count_72h, 3.0)
+            if prior_end > 0:
+                elapsed_ms = int(decision_ts - timestamps[prior_end - 1])
+                result.at[row_index, "time_since_prior_spike_ms"] = elapsed_ms
+                result.at[row_index, "time_since_prior_spike_hours"] = _safe_divide_value(elapsed_ms, _HOUR_MS)
+    return result
+
+
 def _resolve_entry_cache_timeframe(cache_dir: Path, entry_timeframe: str) -> str:
     if any(cache_dir.glob(f"*%2FUSDT%3AUSDT/{entry_timeframe}/data.parquet")):
         return entry_timeframe
@@ -1121,6 +1191,7 @@ def collect_pair_anomaly_rows(
     if not result.empty and "timestamp_ms" in result.columns:
         result.sort_values(["timestamp_ms", "symbol", "decision_timestamp_ms"], inplace=True)
         result.reset_index(drop=True, inplace=True)
+    result = enrich_candidates_with_recent_spike_context(result, config=config)
     result = enrich_candidates_with_open_interest(result, cache_dir=lab_config.cache_dir, progress_label=f"{progress_label}: oi context" if progress_label is not None else None)
     if include_derivatives_context:
         result = enrich_candidates_with_derivatives_context(result, cache_dir=lab_config.cache_dir, progress_label=f"{progress_label}: derivatives context" if progress_label is not None else None)
@@ -2950,6 +3021,7 @@ def run_anomaly_strategy_backtest(
     grid_exhaustion_profiles: Iterable[str] = ("none",),
     grid_exit_rules: Iterable[str] = ("structural_trail",),
     derivatives_context_fetcher: object | None = None,
+    render_charts: bool = True,
 ) -> Path:
     config = _apply_red_flag_profile(config)
     output_dir = config.lab_config.output_dir
@@ -3099,10 +3171,14 @@ def run_anomaly_strategy_backtest(
                     ],
                     progress_label="anomaly artifacts: best grid files",
                 )
-                chart_status = render_anomaly_trade_charts(
-                    best_trades,
-                    config=best_config,
-                    output_dir=output_dir / "charts" / "best_grid_variant",
+                chart_status = (
+                    render_anomaly_trade_charts(
+                        best_trades,
+                        config=best_config,
+                        output_dir=output_dir / "charts" / "best_grid_variant",
+                    )
+                    if render_charts
+                    else pd.DataFrame([{"status": "skipped", "reason": "render_charts_false"}])
                 )
                 _write_artifact_frames(
                     [(output_dir / "anomaly_trade_chart_status.csv", chart_status)],
@@ -3110,10 +3186,14 @@ def run_anomaly_strategy_backtest(
                 )
     elif not trades.empty:
         health = build_edge_health_table(trades, label="primary")
-        chart_status = render_anomaly_trade_charts(
-            trades,
-            config=config,
-            output_dir=output_dir / "charts" / "primary",
+        chart_status = (
+            render_anomaly_trade_charts(
+                trades,
+                config=config,
+                output_dir=output_dir / "charts" / "primary",
+            )
+            if render_charts
+            else pd.DataFrame([{"status": "skipped", "reason": "render_charts_false"}])
         )
         _write_artifact_frames(
             [
@@ -3188,6 +3268,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--exit-rule", choices=sorted(EXIT_RULES), default="structural_trail")
     parser.add_argument("--max-hold-candles", type=int, default=240)
     parser.add_argument("--fee-rate", type=float, default=0.0004)
+    parser.add_argument("--render-charts", choices=["true", "false"], default="true")
     parser.add_argument("--run-entry-grid", action="store_true")
     parser.add_argument("--grid-oi3-values", default="0.01,0.02,0.03")
     parser.add_argument("--grid-hold-values", default="1,2")
@@ -3269,6 +3350,7 @@ def main(argv: list[str] | None = None) -> int:
         grid_pullback_fractions=_parse_grid_values(args.grid_pullback_fractions, cast=float),
         grid_exhaustion_profiles=_parse_grid_profile_values(args.grid_exhaustion_profiles),
         grid_exit_rules=_parse_grid_exit_rules(args.grid_exit_rules),
+        render_charts=str(args.render_charts).lower() == "true",
     )
     print(f"wrote anomaly strategy artifacts to {output_dir}")
     return 0

@@ -1028,3 +1028,90 @@ The better hypothesis is serial failed/overcrowded wake-ups: many recent similar
 This must be implemented first as diagnostics: prior_spike_count_24h/72h, prior_fast_fade_count_24h/72h, time_since_prior_spike, and prior_spike_density.
 Only then test a cheap red flag such as prior_spike_count_72h >= 5 or prior_fast_fade_count_72h > 0.
 ```
+
+---
+
+## 2026-05-12 - P166 14d runner-oriented anomaly study
+
+Cache/backfill result:
+
+```text
+`update-cache --timeframes 1s` is not valid for Binance futures: fapi klines rejects interval=1s.
+Implemented explicit aggTrades -> 1s backfill.
+Smoke backfill:
+COIN/USDT:USDT + HOOD/USDT:USDT, 1 day, chunk-hours=24, status ok.
+Materialized 1s -> 5s/15s/30s after the smoke.
+Full aggTrades backfill for 350+ symbols * 14 days is too slow to run blindly in this session.
+```
+
+Run window:
+
+```text
+days = 14
+end = 1778488560000 = 2026-05-11T08:36:00Z
+render_charts = false
+```
+
+Coverage caveat:
+
+```text
+Setup cache covers the requested end.
+Subminute cache is improved by the smoke backfill but still not complete for the whole universe.
+Full-universe 14d results are valid for symbols/windows with executable subminute cache and must be read with `entry_cache_coverage.csv`.
+Full 1m/5s universe did not complete within 1 hour, so the 5s result below is active-symbol subset only.
+```
+
+Results:
+
+```text
+5m/30s base full:
+closed = 60, skipped = 1
+avg = +0.0418%, sum = +2.51%, WR = 50.00%, TP1 = 45.00%, runner = 41.67%
+
+5m/30s cautious full:
+closed = 32
+avg = +0.8597%, sum = +27.51%, WR = 65.63%, TP1 = 59.38%, runner = 56.25%
+
+1m/15s base full:
+closed = 148, skipped = 1
+avg = +0.6110%, sum = +90.43%, WR = 63.51%, TP1 = 60.14%, runner = 59.46%
+
+1m/15s cautious full:
+closed = 62
+avg = +1.4642%, sum = +90.78%, WR = 80.65%, TP1 = 77.42%, runner = 75.81%
+
+1m/5s active-symbol subset base:
+closed = 81, skipped = 2
+avg = +0.3455%, sum = +27.98%, WR = 55.56%, TP1 = 55.56%, runner = 54.32%
+
+1m/5s active-symbol subset cautious:
+closed = 17
+avg = +1.1908%, sum = +20.24%, WR = 88.24%, TP1 = 82.35%, runner = 82.35%
+```
+
+Runner metric read:
+
+```text
+Full base sample = 5m/30s + 1m/15s = 208 closed trades, avg +0.4468%, sum +92.94%, WR 59.62%, runner 54.33%.
+
+Strongest early runner separators:
+1. Positive/large mark basis versus decision close.
+   Lowest quartile avg -0.6422%, runner 34.62%; highest quartile avg +1.9295%, runner 71.15%.
+2. Mark close momentum in the 1/3/6 context bars.
+   mark_close_change_pct_6 lowest quartile avg -0.2385%, runner 27.50%; highest quartile avg +1.8409%, runner 66.67%.
+3. Low effort per price displacement.
+   start_trade_ratio_per_abs_return highest quartile avg -0.3236%, runner 38.46%; lowest quartile avg +1.1711%, runner 61.54%.
+   start_quote_ratio_per_abs_return highest quartile avg -0.3526%, runner 42.31%; lowest quartile avg +1.0825%, runner 63.46%.
+4. Moderate hold ratio is better than extremes.
+   hold_ratio 0.5..0.75 avg +0.8890%, runner 63.77%; low hold avg +0.2142%, high hold avg +0.2499%.
+5. Recent prior spike is not automatically bad.
+   time_since_prior_spike 2.4h..4.7h avg +0.9479%; >10.8h avg -0.2042%.
+```
+
+Interpretation:
+
+```text
+The runner signature is not "first spike after total dormancy".
+The better early runner profile is: real mark-led displacement, broad enough continuation, not too much quote/trade effort per unit return, and not a stale isolated one-off.
+Current cautious filters improve runner rate and expectancy, but they still need a clean full subminute backfill before being treated as production grid.
+```

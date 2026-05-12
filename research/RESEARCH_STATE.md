@@ -710,3 +710,14 @@ Quick same-artifact check did not support rejecting all symbols with any recent 
 High serial density looked weaker: prior_72h_candidates >= 5 had avg -0.0214% and WR 46.15% on 26 trades.
 Next diagnostic patch should add prior_spike_count_24h/72h, prior_fast_fade_count_24h/72h and time_since_prior_spike before using this as a filter.
 ```
+
+P166 14d runner-study status:
+
+```text
+Added aggTrades -> 1s backfill command, render_charts switch, and recent-spike diagnostics.
+Binance futures kline endpoint cannot fetch 1s; any 1s backfill must use aggTrades.
+Full 14d all-symbol 1m/5s did not complete within 1 hour, so current 5s evidence is active-symbol subset only.
+Best full-universe result is 1m/15s cautious: 62 closed, avg +1.4642%, sum +90.78%, WR 80.65%, TP1 77.42%, runner 75.81%.
+Runner separators in the full base sample: positive mark basis, strong mark context momentum, low quote/trade effort per return, and mid-range hold ratio.
+Next step: do targeted aggTrades backfill for candidate-bearing symbols/windows, then rerun 1m/5s full without changing thresholds.
+```

@@ -336,3 +336,15 @@ LTF confirmation should not re-prove the whole pump thesis. It confirms that the
 TP1 is a management milestone, not proof that market room exists. The default TP1 target is the nearest higher round market number above the old 1R target. The round step is derived from current price and movement size so the level is psychologically/operationally cleaner without jumping to an unrelated far-away target.
 
 Optional red-flag profiles are research/backtest filters only until proven on longer data. They may use only pre-decision/live-available fields such as mark basis, OI interaction, context freshness, taker-buy share delta and effort-per-return. They must not use `future_*`, `outcome_label`, `exit_reason`, `tp1_hit`, MFE/MAE or realized return fields.
+
+Runner-oriented research should prioritize early features available at decision time:
+
+```text
+mark basis versus decision close
+mark/contract context momentum before decision
+quote/trade effort per unit of price displacement
+hold ratio / retention shape inside the LTF confirmation segment
+recent same-symbol spike density and time since prior spike
+```
+
+Recent prior spikes are not automatically invalid. They can indicate an active theme. The red flag to test is serial failed or overcrowded wake-ups, not any prior attention.

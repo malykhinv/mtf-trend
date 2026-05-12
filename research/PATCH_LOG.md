@@ -1139,3 +1139,43 @@ python main.py run-anomaly-lab --days 7 --setup-timeframe 1m --entry-timeframe 5
 ### Risk
 
 Medium research risk: `cautious`/`strict` profiles are not production-proven and are currently fit from a very small 3-active-day sample. Defaults remain unchanged. Low data-risk: derived caches are explicitly marked as `1s` aggregation and do not fabricate missing post-2026-05-06 executable data.
+
+---
+
+## P166 - Add aggTrade backfill and runner/dormancy diagnostics
+
+Status: APPLIED locally / UNKNOWN commit
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+The intended 14-day anomaly study needs honest executable subminute data. Binance futures kline API rejects `1s` with `Invalid interval`, so `update-cache --timeframes 1s` cannot be used for this. Recent-spike / dormancy and early-runner separation also needed first-class artifact columns instead of ad hoc notebook logic.
+
+### Change
+
+- Add `backfill-anomaly-aggtrade-cache` CLI command to build true `1s` OHLCV from Binance futures `aggTrades`.
+- Add chunk skipping for already covered `1s` windows and write a backfill manifest.
+- Add `--render-charts true/false` to anomaly-lab so metric sweeps can skip PNG rendering.
+- Add recent-spike diagnostics to pair-aware candidates/signals/trades:
+  - `prior_spike_count_24h/72h`
+  - `prior_fast_fade_count_24h/72h`
+  - `prior_big_move_count_24h/72h`
+  - `prior_spike_density_72h`
+  - `time_since_prior_spike_ms/hours`
+- Prior fast-fade / big-move counts only include matured prior spikes whose diagnostic forward window ended before the current decision.
+
+### Validation
+
+```bash
+python -m compileall cli/commands.py cli/parser.py research_tools/anomaly_strategy_backtest.py
+python main.py backfill-anomaly-aggtrade-cache --help
+python main.py backfill-anomaly-aggtrade-cache --symbols COIN/USDT:USDT HOOD/USDT:USDT --days 1 --end-timestamp-ms 1778488560000 --chunk-hours 24
+python main.py materialize-anomaly-subminute-cache --timeframes 5s 15s 30s --overwrite true
+python main.py run-anomaly-lab --days 14 --setup-timeframe 5m --entry-timeframe 30s --end-timestamp-ms 1778488560000 --render-charts false
+python main.py run-anomaly-lab --days 14 --setup-timeframe 1m --entry-timeframe 15s --end-timestamp-ms 1778488560000 --render-charts false
+```
+
+### Risk
+
+Medium. The aggTrade backfill is honest but can be very slow for a large active universe. Full `1m/5s` 14-day universe did not complete in one hour; use active-symbol subset results only as directional evidence.
