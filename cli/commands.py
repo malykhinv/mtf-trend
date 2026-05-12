@@ -979,7 +979,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
         lab_config = AnomalyLabConfig(
             cache_dir=config.backtest.cache_dir,
             output_dir=output_dir,
-            timeframe=str(getattr(args, "setup_timeframe", None) or args.timeframe),
+            timeframe=str(args.timeframe),
             days=int(args.days),
             end_timestamp_ms=getattr(args, "end_timestamp_ms", None),
             baseline_candles=int(args.baseline_candles),
@@ -989,15 +989,8 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             min_quote_ratio_start=float(args.min_quote_ratio_start),
             min_trade_ratio_start=float(args.min_trade_ratio_start),
         )
-        setup_timeframe = str(getattr(args, "setup_timeframe", None) or args.timeframe)
-        entry_timeframe = str(getattr(args, "entry_timeframe", None) or setup_timeframe)
         backtest_config = AnomalyBacktestConfig(
             lab_config=lab_config,
-            setup_timeframe=setup_timeframe,
-            entry_timeframe=entry_timeframe,
-            feature_contract=(
-                "htf_setup_ltf_entry_v1" if entry_timeframe != setup_timeframe else "closed_setup_tf_v1"
-            ),
             min_price_retention=float(args.min_price_retention),
             max_price_retention=(
                 None if getattr(args, "max_price_retention", None) is None else float(args.max_price_retention)

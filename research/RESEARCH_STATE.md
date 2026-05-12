@@ -449,30 +449,3 @@ Known effect:
 ```text
 Closed-position counts still advance because exchange exposure is gone, but edge/PnL analysis must use only ledger rows with status=closed and verified exit fill.
 ```
-
-
----
-
-## Current audit note — P158
-
-P158 is proposed on top of P156; P157 was not applied. It changes live/backtest signal architecture from fake timeframe labels to a two-stage model:
-
-```text
-forming HTF setup from closed LTF buckets -> LTF entry permission -> live exchange guards
-```
-
-Live no longer waits for the full HTF candle to close. For `5m/30s`, the default `confirmation_candles=4` means the earliest setup decision is after 4 closed 30s buckets, about 2 minutes. HTF/forming-HTF flow remains the source of setup quality; LTF is used for entry freshness, activation hold and execution path quality, not for re-proving the whole pump thesis.
-
-Next verification:
-
-```bash
-python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-lab --setup-timeframe 5m --entry-timeframe 30s --days 30
-python main.py run-anomaly-live --help
-```
-
-Known effect:
-
-```text
-Backtest artifacts with feature_contract=htf_setup_ltf_entry_v1 are not comparable to old closed_setup_tf_v1 results. Pair-aware backtest needs cached entry timeframe data; missing 30s/15s/5s cache is a data availability problem, not a strategy result.
-```

@@ -258,9 +258,6 @@ class LiveSignal:
     symbol: str
     levels_timeframe: Timeframe
     entry_timeframe: Timeframe
-    setup_source: str
-    setup_elapsed_fraction: float
-    setup_closed_entry_candles: int
     decision_timestamp_ms: int
     start_timestamp_ms: int
     session: str
@@ -1595,9 +1592,9 @@ class AnomalyMicroLiveRunner:
     def _signal_scan_due_for_symbol(self, symbol: str, *, now_ms: int) -> bool:
         symbol_key = _position_symbol_key(symbol)
         with self._state_lock:
-            for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
-                closed_timestamp_ms = _latest_closed_candle_start_ms(entry_timeframe, now_ms=now_ms)
-                scan_key = (symbol_key, levels_timeframe.value, entry_timeframe.value)
+            for levels_timeframe, _ in self.config.timeframe_pairs:
+                closed_timestamp_ms = _latest_closed_candle_start_ms(levels_timeframe, now_ms=now_ms)
+                scan_key = (symbol_key, levels_timeframe.value)
                 if self._last_signal_scan_closed_at.get(scan_key) != closed_timestamp_ms:
                     return True
         return False
@@ -1606,12 +1603,11 @@ class AnomalyMicroLiveRunner:
         self,
         symbol: str,
         levels_timeframe: Timeframe,
-        entry_timeframe: Timeframe,
         *,
         closed_timestamp_ms: int,
     ) -> bool:
         symbol_key = _position_symbol_key(symbol)
-        scan_key = (symbol_key, levels_timeframe.value, entry_timeframe.value)
+        scan_key = (symbol_key, levels_timeframe.value)
         with self._state_lock:
             return self._last_signal_scan_closed_at.get(scan_key) != int(closed_timestamp_ms)
 
@@ -1619,500 +1615,64 @@ class AnomalyMicroLiveRunner:
         self,
         symbol: str,
         levels_timeframe: Timeframe,
-        entry_timeframe: Timeframe,
         *,
         closed_timestamp_ms: int,
     ) -> None:
         symbol_key = _position_symbol_key(symbol)
-        scan_key = (symbol_key, levels_timeframe.value, entry_timeframe.value)
+        scan_key = (symbol_key, levels_timeframe.value)
         with self._state_lock:
             self._last_signal_scan_closed_at[scan_key] = int(closed_timestamp_ms)
 
     def _scan_batch(self, symbols: list[str]) -> list[LiveSignal]:
         signals: list[LiveSignal] = []
         now_ms = int(time.time() * 1000)
+        entry_timeframes_by_levels: dict[Timeframe, list[Timeframe]] = {}
         for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
-            levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
-            entry_timeframe_ms = int(entry_timeframe.to_milliseconds())
-            setup_lookback_ms = (self.config.baseline_candles + 5) * levels_timeframe_ms
-            latest_closed_entry_ts = _latest_closed_candle_start_ms(entry_timeframe, now_ms=now_ms)
-            setup_start_ts = (latest_closed_entry_ts // levels_timeframe_ms) * levels_timeframe_ms
-            entry_lookback_start_ms = setup_start_ts
+            entry_timeframes_by_levels.setdefault(levels_timeframe, []).append(entry_timeframe)
+        for levels_timeframe, entry_timeframes in entry_timeframes_by_levels.items():
+            timeframe_ms = int(levels_timeframe.to_milliseconds())
+            lookback_ms = (
+                self.config.baseline_candles
+                + self.config.confirmation_candles
+                + self.config.signal_scan_backfill_candles
+                + 5
+            ) * timeframe_ms
+            latest_closed_ts = _latest_closed_candle_start_ms(levels_timeframe, now_ms=now_ms)
             for symbol in symbols:
                 if not self._signal_scan_due_for_timeframe(
                     symbol,
                     levels_timeframe,
-                    entry_timeframe,
-                    closed_timestamp_ms=latest_closed_entry_ts,
+                    closed_timestamp_ms=latest_closed_ts,
                 ):
                     continue
+                frame = self.exchange.fetch_ohlcv(symbol, levels_timeframe, now_ms - lookback_ms, now_ms)
                 self._mark_signal_scan_closed_at(
                     symbol,
                     levels_timeframe,
-                    entry_timeframe,
-                    closed_timestamp_ms=latest_closed_entry_ts,
+                    closed_timestamp_ms=latest_closed_ts,
                 )
-                try:
-                    setup_frame = self.exchange.fetch_ohlcv(
-                        symbol,
-                        levels_timeframe,
-                        setup_start_ts - setup_lookback_ms,
-                        now_ms,
-                    )
-                except Exception as exc:
+                if frame.empty:
                     self.artifacts.append_event(
-                        "signal_setup_fetch_failed",
+                        "signal_scan_empty_ohlcv",
                         symbol,
                         {
                             "levels_tf": levels_timeframe.value,
-                            "entry_tf": entry_timeframe.value,
-                            "reason": f"{type(exc).__name__}: {exc}",
+                            "closed_timestamp_ms": latest_closed_ts,
+                            "lookback_ms": lookback_ms,
                         },
                     )
                     continue
-                try:
-                    entry_frame = self._fetch_chart_frame(
-                        symbol,
-                        entry_timeframe,
-                        start_timestamp_ms=entry_lookback_start_ms,
-                        end_timestamp_ms=now_ms,
+                for entry_timeframe in entry_timeframes:
+                    signals.extend(
+                        self._build_recent_signals(
+                            symbol,
+                            frame,
+                            now_ms=now_ms,
+                            levels_timeframe=levels_timeframe,
+                            entry_timeframe=entry_timeframe,
+                        )
                     )
-                except Exception as exc:
-                    self.artifacts.append_event(
-                        "signal_entry_fetch_failed",
-                        symbol,
-                        {
-                            "levels_tf": levels_timeframe.value,
-                            "entry_tf": entry_timeframe.value,
-                            "reason": f"{type(exc).__name__}: {exc}",
-                        },
-                    )
-                    continue
-                signal = self._build_forming_setup_signal(
-                    symbol,
-                    setup_frame,
-                    entry_frame,
-                    now_ms=now_ms,
-                    levels_timeframe=levels_timeframe,
-                    entry_timeframe=entry_timeframe,
-                    setup_start_ts=setup_start_ts,
-                    latest_closed_entry_ts=latest_closed_entry_ts,
-                )
-                if signal is not None:
-                    signals.append(signal)
         return signals
-
-    def _build_forming_setup_signal(
-        self,
-        symbol: str,
-        setup_frame: pd.DataFrame,
-        entry_frame: pd.DataFrame,
-        *,
-        now_ms: int,
-        levels_timeframe: Timeframe,
-        entry_timeframe: Timeframe,
-        setup_start_ts: int,
-        latest_closed_entry_ts: int,
-    ) -> LiveSignal | None:
-        if setup_frame.empty or entry_frame.empty:
-            self.artifacts.append_event(
-                "signal_scan_empty_ohlcv",
-                symbol,
-                {
-                    "levels_tf": levels_timeframe.value,
-                    "entry_tf": entry_timeframe.value,
-                    "setup_start_timestamp_ms": int(setup_start_ts),
-                    "reason": "empty_setup_or_entry_frame",
-                },
-            )
-            return None
-        missing_setup_price = [column for column in REQUIRED_PRICE_COLUMNS if column not in setup_frame.columns]
-        missing_setup_flow = [column for column in REQUIRED_FLOW_COLUMNS if column not in setup_frame.columns]
-        missing_entry_price = [column for column in REQUIRED_PRICE_COLUMNS if column not in entry_frame.columns]
-        missing_entry_flow = [column for column in REQUIRED_FLOW_COLUMNS if column not in entry_frame.columns]
-        if missing_setup_price or missing_setup_flow or missing_entry_price or missing_entry_flow:
-            self.artifacts.append_event(
-                "reject_missing_signal_columns",
-                symbol,
-                {
-                    "levels_tf": levels_timeframe.value,
-                    "entry_tf": entry_timeframe.value,
-                    "missing_setup_price": missing_setup_price,
-                    "missing_setup_flow": missing_setup_flow,
-                    "missing_entry_price": missing_entry_price,
-                    "missing_entry_flow": missing_entry_flow,
-                },
-            )
-            return None
-        levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
-        entry_timeframe_ms = int(entry_timeframe.to_milliseconds())
-        setup_frame = setup_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
-        entry_frame = entry_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
-        setup_history = setup_frame.loc[setup_frame["timestamp"].astype(int) < int(setup_start_ts)].tail(self.config.baseline_candles).copy()
-        entry_segment = entry_frame.loc[
-            (entry_frame["timestamp"].astype(int) >= int(setup_start_ts))
-            & (entry_frame["timestamp"].astype(int) <= int(latest_closed_entry_ts))
-        ].copy()
-        if len(setup_history) < self.config.baseline_candles or entry_segment.empty:
-            return None
-        seed_close = float(setup_history.iloc[-1]["close"])
-        entry_segment = _fill_missing_ohlcv_buckets(
-            entry_segment,
-            start_timestamp_ms=int(setup_start_ts),
-            end_timestamp_ms=int(latest_closed_entry_ts),
-            timeframe_ms=entry_timeframe_ms,
-            seed_close=seed_close,
-        )
-        if len(entry_segment) < self.config.confirmation_candles:
-            self.artifacts.append_event(
-                "reject_setup_too_early",
-                symbol,
-                {
-                    "levels_tf": levels_timeframe.value,
-                    "entry_tf": entry_timeframe.value,
-                    "setup_start_timestamp_ms": int(setup_start_ts),
-                    "closed_entry_candles": int(len(entry_segment)),
-                    "min_closed_entry_candles": int(self.config.confirmation_candles),
-                },
-            )
-            return None
-        setup_elapsed_fraction = min(1.0, len(entry_segment) * entry_timeframe_ms / levels_timeframe_ms)
-        forming_setup = _aggregate_frame_to_candle(entry_segment, timestamp_ms=int(setup_start_ts))
-        if forming_setup is None:
-            return None
-        decision_ts = int(entry_segment.iloc[-1]["timestamp"])
-        key = (symbol, levels_timeframe.value, entry_timeframe.value, decision_ts)
-        with self._state_lock:
-            if key in self._seen_decisions:
-                return None
-        freshness = _decision_freshness_details(
-            decision_timestamp_ms=decision_ts,
-            signal_timeframe=entry_timeframe,
-            now_ms=now_ms,
-            max_signal_age_ms=self.config.max_signal_age_ms,
-        )
-        if freshness["signal_age_ms"] > self.config.max_signal_age_ms:
-            with self._state_lock:
-                self._seen_decisions.add(key)
-            self.artifacts.append_event(
-                "reject_stale_signal",
-                symbol,
-                {
-                    **freshness,
-                    "stage": "prescan",
-                    "levels_tf": levels_timeframe.value,
-                    "entry_tf": entry_timeframe.value,
-                    "setup_source": "forming_htf_from_entry_tf",
-                },
-            )
-            return None
-        signal = self._build_signal_from_components(
-            symbol=symbol,
-            baseline=setup_history,
-            setup_row=forming_setup,
-            entry_segment=entry_segment,
-            now_ms=now_ms,
-            levels_timeframe=levels_timeframe,
-            entry_timeframe=entry_timeframe,
-            setup_source="forming_htf_from_entry_tf",
-            setup_elapsed_fraction=setup_elapsed_fraction,
-            setup_closed_entry_candles=len(entry_segment),
-        )
-        if signal is None:
-            with self._state_lock:
-                self._seen_decisions.add(key)
-        return signal
-
-    def _build_signal_from_components(
-        self,
-        *,
-        symbol: str,
-        baseline: pd.DataFrame,
-        setup_row: pd.Series,
-        entry_segment: pd.DataFrame,
-        now_ms: int,
-        levels_timeframe: Timeframe,
-        entry_timeframe: Timeframe,
-        setup_source: str,
-        setup_elapsed_fraction: float,
-        setup_closed_entry_candles: int,
-    ) -> LiveSignal | None:
-        if baseline.empty or entry_segment.empty:
-            return None
-        decision = entry_segment.iloc[-1]
-        baseline_quote = float(pd.to_numeric(baseline["quote_volume"], errors="coerce").median())
-        baseline_trades = float(pd.to_numeric(baseline["number_of_trades"], errors="coerce").median())
-        start_quote = float(setup_row["quote_volume"])
-        start_trades = float(setup_row["number_of_trades"])
-        start_open = float(setup_row["open"])
-        start_close = float(setup_row["close"])
-        start_high = float(setup_row["high"])
-        start_low = float(setup_row["low"])
-        start_ret = _safe_divide(start_close - start_open, start_open)
-        abs_start_ret = abs(start_ret) if math.isfinite(start_ret) else float("nan")
-        baseline_avg_trade_quote = _safe_divide(baseline_quote, baseline_trades)
-        start_avg_trade_quote = _safe_divide(start_quote, start_trades)
-        start_avg_trade_ratio = _safe_divide(start_avg_trade_quote, baseline_avg_trade_quote)
-        start_quote_ratio_per_abs_return = _safe_divide(_safe_divide(start_quote, baseline_quote), abs_start_ret)
-        baseline_range_pct = float(
-            ((baseline["high"].astype(float) - baseline["low"].astype(float)) / baseline["close"].astype(float).replace(0.0, pd.NA)).median()
-        )
-        start_range_pct_ratio = _safe_divide(_safe_divide(start_high - start_low, start_open), baseline_range_pct)
-        quote_ratio = _safe_divide(start_quote, baseline_quote)
-        trade_ratio = _safe_divide(start_trades, baseline_trades)
-        if not math.isfinite(quote_ratio) or not math.isfinite(trade_ratio):
-            self.artifacts.append_event(
-                "reject_invalid_flow_ratios",
-                symbol,
-                {
-                    "baseline_quote": _finite_or_none(baseline_quote),
-                    "baseline_trades": _finite_or_none(baseline_trades),
-                    "start_quote": _finite_or_none(start_quote),
-                    "start_trades": _finite_or_none(start_trades),
-                    "quote_ratio": _finite_or_none(quote_ratio),
-                    "trade_ratio": _finite_or_none(trade_ratio),
-                    "decision_timestamp_ms": int(decision["timestamp"]),
-                    "setup_source": setup_source,
-                },
-            )
-            return None
-        if quote_ratio < self.config.min_quote_ratio_start or trade_ratio < self.config.min_trade_ratio_start:
-            self.artifacts.append_event(
-                "reject_weak_start_flow",
-                symbol,
-                {
-                    "quote_ratio": quote_ratio,
-                    "trade_ratio": trade_ratio,
-                    "min_quote_ratio": self.config.min_quote_ratio_start,
-                    "min_trade_ratio": self.config.min_trade_ratio_start,
-                    "decision_timestamp_ms": int(decision["timestamp"]),
-                    "setup_source": setup_source,
-                },
-            )
-            return None
-
-        latest_decision_ts = int(decision["timestamp"])
-        decision_available_ms = latest_decision_ts + int(entry_timeframe.to_milliseconds())
-        if 0 <= now_ms - decision_available_ms <= self.config.max_signal_age_ms:
-            self._mark_active_symbol(
-                symbol,
-                reason="pump_flow_candidate",
-                now_ms=now_ms,
-                ttl_ms=self.config.active_symbol_ttl_ms,
-                decision_timestamp_ms=latest_decision_ts,
-            )
-
-        segment_high = float(max(start_high, pd.to_numeric(entry_segment["high"], errors="coerce").max()))
-        segment_low = float(min(start_low, pd.to_numeric(entry_segment["low"], errors="coerce").min()))
-        impulse_range = segment_high - segment_low
-        prior_whipsaw = _prior_up_down_whipsaw_to_impulse_range(baseline, impulse_range=impulse_range)
-        decision_close = float(decision["close"])
-        price_retention = _safe_divide(decision_close - start_open, segment_high - start_open)
-        verticality = compute_start_verticality_metrics(entry_segment)
-        verticality_score = float(verticality["start_verticality_score"])
-        activation_price = start_open + max(0.0, start_close - start_open) * 0.50
-        hold_count = int((entry_segment["close"].astype(float) >= activation_price).sum())
-        setup_with_current = pd.concat([baseline, pd.DataFrame([setup_row.to_dict()])], ignore_index=True)
-        ema20 = setup_with_current["close"].astype(float).ewm(span=20, adjust=False).mean()
-        decision_ema20 = float(ema20.iloc[-1])
-        previous_stop = segment_low - self.config.stop_buffer_range_fraction * impulse_range
-        stop_price = max(previous_stop, decision_ema20)
-        entry_price = decision_close
-        risk = entry_price - stop_price
-        initial_risk_pct = _safe_divide(risk, entry_price)
-        if not math.isfinite(risk) or risk <= 0.0:
-            self._clear_active_symbol(symbol, reason="invalid_initial_risk")
-            self.artifacts.append_event(
-                "reject_invalid_initial_risk",
-                symbol,
-                {
-                    "entry_price": _finite_or_none(entry_price),
-                    "stop_price": _finite_or_none(stop_price),
-                    "risk": _finite_or_none(risk),
-                    "decision_timestamp_ms": int(decision["timestamp"]),
-                    "setup_source": setup_source,
-                },
-            )
-            return None
-        if not math.isfinite(initial_risk_pct) or initial_risk_pct > self.config.max_initial_risk_pct:
-            self._clear_active_symbol(symbol, reason="initial_risk_too_wide")
-            self.artifacts.append_event(
-                "reject_initial_risk_too_wide",
-                symbol,
-                {
-                    "initial_risk_pct": _finite_or_none(initial_risk_pct),
-                    "max": self.config.max_initial_risk_pct,
-                    "decision_timestamp_ms": int(decision["timestamp"]),
-                    "setup_source": setup_source,
-                },
-            )
-            return None
-        tp1_price = entry_price + risk
-
-        category_rejections: list[dict[str, object]] = []
-        oi_change_loaded = False
-        oi_change: float | None = None
-        oi_change_reason: str | None = None
-        next_taker_share_loaded = False
-        next_taker_share = float("nan")
-        for category in self._pump_categories:
-            max_start_quote_ratio = _category_value(category, self.config, "max_start_quote_ratio")
-            if max_start_quote_ratio is not None and quote_ratio > max_start_quote_ratio:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_exhausted_quote_ratio", {"quote_ratio": quote_ratio, "max": max_start_quote_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            max_start_trade_ratio = _category_value(category, self.config, "max_start_trade_ratio")
-            if max_start_trade_ratio is not None and trade_ratio > max_start_trade_ratio:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_exhausted_trade_ratio", {"trade_ratio": trade_ratio, "max": max_start_trade_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            max_avg_trade_ratio = _category_value(category, self.config, "max_start_avg_trade_quote_size_ratio")
-            if max_avg_trade_ratio is not None and not math.isfinite(start_avg_trade_ratio):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_avg_trade_quote_size_ratio", {"ratio": _finite_or_none(start_avg_trade_ratio), "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            if max_avg_trade_ratio is not None and start_avg_trade_ratio > max_avg_trade_ratio:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_large_print_signature", {"ratio": start_avg_trade_ratio, "max": max_avg_trade_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            max_quote_per_return = _category_value(category, self.config, "max_start_quote_ratio_per_abs_return")
-            if max_quote_per_return is not None and not math.isfinite(start_quote_ratio_per_abs_return):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_quote_ratio_per_abs_return", {"ratio": _finite_or_none(start_quote_ratio_per_abs_return), "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            if max_quote_per_return is not None and start_quote_ratio_per_abs_return > max_quote_per_return:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_poor_effort_per_return", {"ratio": start_quote_ratio_per_abs_return, "max": max_quote_per_return, "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            max_range_ratio = _category_value(category, self.config, "max_start_range_pct_ratio_to_baseline")
-            if max_range_ratio is not None and not math.isfinite(start_range_pct_ratio):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_range_expansion_ratio", {"ratio": _finite_or_none(start_range_pct_ratio), "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            if max_range_ratio is not None and start_range_pct_ratio > max_range_ratio:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_extreme_range_expansion", {"ratio": start_range_pct_ratio, "max": max_range_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            max_prior_whipsaw = self.config.max_prior_up_down_whipsaw_to_impulse_range
-            if max_prior_whipsaw is not None and not math.isfinite(prior_whipsaw):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_prior_whipsaw", {"prior_up_down_whipsaw_to_impulse_range": _finite_or_none(prior_whipsaw), "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            if max_prior_whipsaw is not None and prior_whipsaw > max_prior_whipsaw:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_prior_up_down_whipsaw", {"prior_up_down_whipsaw_to_impulse_range": prior_whipsaw, "max": max_prior_whipsaw, "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            if not math.isfinite(price_retention):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_price_retention", {"price_retention": _finite_or_none(price_retention), "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            if price_retention < self.config.min_price_retention:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_low_price_retention", {"price_retention": price_retention, "min": self.config.min_price_retention, "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            max_price_retention = _category_value(category, self.config, "max_price_retention")
-            if max_price_retention is not None and price_retention > max_price_retention:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_overextended_retention", {"price_retention": price_retention, "max": max_price_retention, "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            min_next_taker_share = _category_value(category, self.config, "min_next_taker_buy_quote_share")
-            if min_next_taker_share is not None:
-                if "taker_buy_quote_volume" not in entry_segment.columns:
-                    category_rejections.append(self._record_category_reject(category, symbol, "reject_missing_taker_buy_share", {"required": min_next_taker_share, "decision_timestamp_ms": int(decision["timestamp"])}))
-                    continue
-                if not next_taker_share_loaded:
-                    taker_quote = pd.to_numeric(entry_segment["taker_buy_quote_volume"], errors="coerce")
-                    quote_volume = pd.to_numeric(entry_segment["quote_volume"], errors="coerce")
-                    valid_taker_share_rows = taker_quote.notna() & quote_volume.notna() & quote_volume.gt(0.0)
-                    if not bool(valid_taker_share_rows.all()):
-                        next_taker_share = float("nan")
-                    else:
-                        next_taker_share = float((taker_quote / quote_volume).mean())
-                    next_taker_share_loaded = True
-                if not math.isfinite(next_taker_share):
-                    category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_taker_buy_share", {"share": _finite_or_none(next_taker_share), "decision_timestamp_ms": int(decision["timestamp"])}))
-                    continue
-                if next_taker_share < min_next_taker_share:
-                    category_rejections.append(self._record_category_reject(category, symbol, "reject_weak_next_taker_buy_share", {"share": next_taker_share, "min": min_next_taker_share, "decision_timestamp_ms": int(decision["timestamp"])}))
-                    continue
-            if not math.isfinite(verticality_score):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_verticality", {"verticality_score": _finite_or_none(verticality_score), "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            if verticality_score < self.config.min_verticality_score:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_low_verticality", {"verticality_score": verticality_score, "min": self.config.min_verticality_score, "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            if hold_count < self.config.min_hold_count:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_low_hold_count", {"hold_count": hold_count, "min": self.config.min_hold_count, "decision_timestamp_ms": int(decision["timestamp"])}))
-                continue
-            if self.config.min_oi_change_pct_3x5m is not None:
-                if not oi_change_loaded:
-                    oi_result = self._fetch_live_oi_change(symbol, now_ms=now_ms)
-                    oi_change = oi_result.value
-                    oi_change_reason = oi_result.reason
-                    oi_change_loaded = True
-                if oi_change is None or not math.isfinite(oi_change) or oi_change <= self.config.min_oi_change_pct_3x5m:
-                    category_rejections.append(self._record_category_reject(category, symbol, "reject_oi", {"oi_change_pct_3x5m": _finite_or_none(oi_change), "oi_status": oi_change_reason or "below_threshold", "required_gt": self.config.min_oi_change_pct_3x5m, "decision_timestamp_ms": int(decision["timestamp"])}))
-                    continue
-
-            strengths = [
-                f"категория {category.category_id}",
-                f"setup flow x{quote_ratio:.1f}/{trade_ratio:.1f}",
-                f"entry hold {hold_count}",
-                f"удержание {price_retention:.0%}",
-                f"вертикальность {verticality_score:.2f}",
-            ]
-            if oi_change is not None:
-                strengths.append(f"OI {oi_change:.1%}")
-            weaknesses: list[str] = []
-            if "taker_buy_quote_volume" not in entry_segment.columns:
-                weaknesses.append("нет taker-buy в entry flow")
-            signal = LiveSignal(
-                category_id=category.category_id,
-                category_label=category.label,
-                category_priority=category.priority,
-                symbol=symbol,
-                levels_timeframe=levels_timeframe,
-                entry_timeframe=entry_timeframe,
-                setup_source=setup_source,
-                setup_elapsed_fraction=float(setup_elapsed_fraction),
-                setup_closed_entry_candles=int(setup_closed_entry_candles),
-                decision_timestamp_ms=int(decision["timestamp"]),
-                start_timestamp_ms=int(setup_row["timestamp"]),
-                session=_session_name(int(decision["timestamp"])),
-                entry_price=entry_price,
-                stop_price=stop_price,
-                tp1_price=tp1_price,
-                box_high=segment_high,
-                initial_risk=risk,
-                initial_risk_pct=initial_risk_pct,
-                quote_ratio_start=quote_ratio,
-                trade_ratio_start=trade_ratio,
-                price_retention=price_retention,
-                hold_count=hold_count,
-                verticality_score=verticality_score,
-                oi_change_pct_3x5m=oi_change,
-                category_rejections=list(category_rejections),
-                strengths=strengths,
-                weaknesses=weaknesses,
-            )
-            self._mark_active_symbol(
-                symbol,
-                reason="entry_signal_selected",
-                now_ms=now_ms,
-                ttl_ms=self.config.max_signal_age_ms,
-                decision_timestamp_ms=int(decision["timestamp"]),
-            )
-            self.artifacts.append_event(
-                "category_selected",
-                symbol,
-                {
-                    "category_id": category.category_id,
-                    "category_label": category.label,
-                    "category_priority": category.priority,
-                    "decision_timestamp_ms": int(decision["timestamp"]),
-                    "prior_category_rejections": category_rejections,
-                    "levels_tf": levels_timeframe.value,
-                    "entry_tf": entry_timeframe.value,
-                    "setup_source": setup_source,
-                    "setup_elapsed_fraction": float(setup_elapsed_fraction),
-                    "setup_closed_entry_candles": int(setup_closed_entry_candles),
-                },
-            )
-            if category_rejections:
-                rejected_ids = ",".join(str(row.get("category_id")) for row in category_rejections)
-                self.logger(
-                    f"live: {_compact_symbol(symbol)} {levels_timeframe.value}/{entry_timeframe.value} · "
-                    f"сигнал {category.category_id} · раньше отвалилось {rejected_ids}"
-                )
-            return signal
-        return None
 
     def _build_recent_signals(
         self,
@@ -2568,9 +2128,6 @@ class AnomalyMicroLiveRunner:
                 symbol=symbol,
                 levels_timeframe=levels_timeframe,
                 entry_timeframe=entry_timeframe,
-                setup_source="closed_htf",
-                setup_elapsed_fraction=1.0,
-                setup_closed_entry_candles=int(len(segment)),
                 decision_timestamp_ms=int(decision["timestamp"]),
                 start_timestamp_ms=int(start["timestamp"]),
                 session=_session_name(int(decision["timestamp"])),
@@ -2941,7 +2498,7 @@ class AnomalyMicroLiveRunner:
         now_ms = int(time.time() * 1000)
         details = _decision_freshness_details(
             decision_timestamp_ms=int(signal.decision_timestamp_ms),
-            signal_timeframe=signal.entry_timeframe,
+            levels_timeframe=signal.levels_timeframe,
             now_ms=now_ms,
             max_signal_age_ms=self.config.max_signal_age_ms,
         )
@@ -4108,16 +3665,12 @@ def _latest_closed_candle_start_ms(timeframe: Timeframe, *, now_ms: int) -> int:
 def _decision_freshness_details(
     *,
     decision_timestamp_ms: int,
+    levels_timeframe: Timeframe,
     now_ms: int,
     max_signal_age_ms: int,
-    levels_timeframe: Timeframe | None = None,
-    signal_timeframe: Timeframe | None = None,
 ) -> dict[str, object]:
-    resolved_timeframe = signal_timeframe or levels_timeframe
-    if resolved_timeframe is None:
-        raise ValueError("decision freshness requires a timeframe")
-    signal_timeframe_ms = int(resolved_timeframe.to_milliseconds())
-    decision_available_ms = int(decision_timestamp_ms) + signal_timeframe_ms
+    levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
+    decision_available_ms = int(decision_timestamp_ms) + levels_timeframe_ms
     signal_age_ms = int(now_ms) - decision_available_ms
     return {
         "decision_timestamp_ms": int(decision_timestamp_ms),
@@ -4296,49 +3849,6 @@ def _resolve_aggtrade_timestamp(row: dict[str, object]) -> int | None:
     return None
 
 
-def _fill_missing_ohlcv_buckets(
-    frame: pd.DataFrame,
-    *,
-    start_timestamp_ms: int,
-    end_timestamp_ms: int,
-    timeframe_ms: int,
-    seed_close: float,
-) -> pd.DataFrame:
-    if timeframe_ms <= 0 or end_timestamp_ms < start_timestamp_ms:
-        return frame.copy()
-    full_index = pd.DataFrame(
-        {"timestamp": list(range(int(start_timestamp_ms), int(end_timestamp_ms) + int(timeframe_ms), int(timeframe_ms)))}
-    )
-    merged = full_index.merge(frame.copy(), on="timestamp", how="left")
-    merged["close"] = pd.to_numeric(merged["close"], errors="coerce").ffill().fillna(float(seed_close))
-    for price_column in ("open", "high", "low"):
-        merged[price_column] = pd.to_numeric(merged[price_column], errors="coerce").fillna(merged["close"])
-    for volume_column in ("volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume"):
-        if volume_column not in merged.columns:
-            merged[volume_column] = 0.0
-        merged[volume_column] = pd.to_numeric(merged[volume_column], errors="coerce").fillna(0.0)
-    return merged.reset_index(drop=True)
-
-
-def _aggregate_frame_to_candle(frame: pd.DataFrame, *, timestamp_ms: int) -> pd.Series | None:
-    if frame.empty:
-        return None
-    required = [column for column in REQUIRED_PRICE_COLUMNS if column in frame.columns]
-    if len(required) < len(REQUIRED_PRICE_COLUMNS):
-        return None
-    ordered = frame.copy().sort_values("timestamp")
-    row: dict[str, object] = {
-        "timestamp": int(timestamp_ms),
-        "open": float(ordered.iloc[0]["open"]),
-        "high": float(pd.to_numeric(ordered["high"], errors="coerce").max()),
-        "low": float(pd.to_numeric(ordered["low"], errors="coerce").min()),
-        "close": float(ordered.iloc[-1]["close"]),
-    }
-    for column in ("volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume"):
-        if column in ordered.columns:
-            row[column] = float(pd.to_numeric(ordered[column], errors="coerce").fillna(0.0).sum())
-    return pd.Series(row)
-
 def _resolve_aggtrade_id(row: dict[str, object]) -> int | None:
     for column in ("aggregate_trade_id", "a"):
         if column not in row:
@@ -4411,15 +3921,6 @@ def _aggregate_aggtrades_to_ohlcv_frame(
         .reset_index()
         .rename(columns={"bucket": "timestamp"})
     )
-    first_bucket = int((int(start_timestamp_ms) // int(timeframe_ms)) * int(timeframe_ms))
-    last_bucket = int((int(end_timestamp_ms) // int(timeframe_ms)) * int(timeframe_ms))
-    full_index = pd.DataFrame({"timestamp": list(range(first_bucket, last_bucket + int(timeframe_ms), int(timeframe_ms)))})
-    aggregated = full_index.merge(aggregated, on="timestamp", how="left")
-    aggregated["close"] = aggregated["close"].ffill().bfill()
-    for price_column in ("open", "high", "low"):
-        aggregated[price_column] = aggregated[price_column].fillna(aggregated["close"])
-    for volume_column in ("volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume"):
-        aggregated[volume_column] = aggregated[volume_column].fillna(0.0)
     return aggregated.loc[:, columns].reset_index(drop=True)
 
 def _telegram_signal_context(signal: LiveSignal) -> str:
