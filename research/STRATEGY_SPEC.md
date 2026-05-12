@@ -242,7 +242,7 @@ middle: independent 1h context covering the last 7 fully closed days before entr
 bottom: normalized quote-volume and number_of_trades line curves
 ```
 
-The 1h context panel may draw strict overhead levels from the hourly-level diagnostic, but those levels must be unlabeled chart context only. They must not be treated as an entry/exit rule unless a separate strategy patch wires them into the decision path and updates backtest/live parity.
+The 1h context panel may draw strict overhead levels from the hourly-level diagnostic, but those levels must be discovered only from the same displayed 7-day 1h window. They must be unlabeled chart context only and must not be treated as an entry/exit rule unless a separate strategy patch wires them into the decision path and updates backtest/live parity.
 
 The lower flow panel is shape/timing context: quote volume and trade count are each normalized to 0-100 within the displayed trade window and are not comparable as absolute magnitudes.
 

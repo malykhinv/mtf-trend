@@ -547,3 +547,24 @@ Next:
 ```text
 Run one controlled dry/live open-message smoke and verify: photo is sent, caption matches the old open text, TP1 is green, SL is red, no risk/reward rectangles are shown, and close/stop messages still reply to the opening message id.
 ```
+---
+
+## 2026-05-12 — P153 trade-chart level-search window
+
+Input:
+
+```text
+Operator clarified that levels on the live/open trade chart must be searched only on the 7-day 1h context interval shown in the chart.
+```
+
+Result:
+
+```text
+Patch proposed. Trade-chart level discovery now explicitly slices the supplied hourly context to the same [entry_hour - 7d, entry_hour) window before running the strict hourly-level scanner. Older hidden context cannot contribute levels to the visible 1h panel.
+```
+
+Next:
+
+```text
+Regenerate an open-position chart for a symbol with older resistance history and verify that levels without touches inside the visible 7-day context no longer appear.
+```

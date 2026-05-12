@@ -375,7 +375,7 @@ The lower panel compares normalized shapes only: orange quote volume and green n
 
 ## Current audit note — P152
 
-P152 is live operator UX and chart-artifact only. After a verified entry fill and stop placement, live now attempts to render the canonical three-panel trade chart for the opening Telegram message. Open charts replace risk/reward shaded rectangles with TP1/SL horizontal lines, while preserving the independent 1h/7d context and merged flow panel. Text-only Telegram remains a fallback.
+P152 is live operator UX and chart-artifact only. After a verified entry fill and stop placement, live now attempts to render the canonical three-panel trade chart for the opening Telegram message. Open charts replace risk/reward shaded rectangles with TP1/SL horizontal lines, while preserving the independent 1h/7d context and merged flow panel. Text-only Telegram remains a fallback. P153 tightens the same chart path: levels drawn on the middle panel are searched only inside the displayed 7-day 1h context window.
 
 Next verification:
 
@@ -387,5 +387,5 @@ python main.py run-anomaly-live --max-cycles 3 --symbols BTC/USDT:USDT --confirm
 Known effect:
 
 ```text
-A real opened position now performs one additional H1 context fetch and Telegram photo upload; failures are recorded as chart_render_failed, chart_context_fetch_failed, or telegram_open_chart_failed and should not block position monitoring.
+A real opened position now performs one additional H1 context fetch and Telegram photo upload; failures are recorded as chart_render_failed, chart_context_fetch_failed, or telegram_open_chart_failed and should not block position monitoring. Any levels drawn in the 1h context panel must have been discovered from the same visible 7-day context, not older hidden history.
 ```

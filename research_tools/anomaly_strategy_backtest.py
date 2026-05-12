@@ -1451,8 +1451,49 @@ def _build_trade_chart_hourly_context(frame: pd.DataFrame, *, end_timestamp_ms: 
     return hourly
 
 
-def _find_trade_chart_hourly_levels(hourly_context: pd.DataFrame, *, symbol: str) -> list[object]:
-    if hourly_context.empty:
+def _slice_trade_chart_hourly_level_context(
+    hourly_context: pd.DataFrame,
+    *,
+    end_timestamp_ms: int,
+    days: int,
+) -> pd.DataFrame:
+    """Return the exact 1h context window used for chart-level discovery."""
+    if hourly_context.empty or "timestamp" not in hourly_context.columns:
+        return pd.DataFrame()
+
+    end_exclusive = (int(end_timestamp_ms) // _HOUR_MS) * _HOUR_MS
+    start_inclusive = end_exclusive - max(int(days), 1) * _DAY_MS
+    sliced = hourly_context.copy()
+    sliced["timestamp"] = pd.to_numeric(sliced["timestamp"], errors="coerce")
+    sliced = sliced.dropna(subset=["timestamp"])
+    if sliced.empty:
+        return pd.DataFrame()
+    sliced["timestamp"] = sliced["timestamp"].astype("int64")
+    sliced = sliced.loc[
+        sliced["timestamp"].ge(start_inclusive)
+        & sliced["timestamp"].lt(end_exclusive)
+    ].copy()
+    if sliced.empty:
+        return pd.DataFrame()
+    sliced.sort_values("timestamp", inplace=True)
+    sliced.drop_duplicates("timestamp", keep="last", inplace=True)
+    sliced.reset_index(drop=True, inplace=True)
+    return sliced
+
+
+def _find_trade_chart_hourly_levels(
+    hourly_context: pd.DataFrame,
+    *,
+    symbol: str,
+    end_timestamp_ms: int,
+    days: int = _TRADE_CHART_CONTEXT_DAYS,
+) -> list[object]:
+    level_context = _slice_trade_chart_hourly_level_context(
+        hourly_context,
+        end_timestamp_ms=end_timestamp_ms,
+        days=days,
+    )
+    if level_context.empty:
         return []
 
     from research_tools.hourly_levels import HourlyLevelScanConfig, find_hourly_overhead_levels
@@ -1461,12 +1502,12 @@ def _find_trade_chart_hourly_levels(hourly_context: pd.DataFrame, *, symbol: str
         cache_dir=Path(),
         output_dir=Path(),
         symbols=(symbol,),
-        days=_TRADE_CHART_CONTEXT_DAYS,
-        lookback_bars=_TRADE_CHART_CONTEXT_DAYS * 24,
-        chart_bars=_TRADE_CHART_CONTEXT_DAYS * 24,
+        days=days,
+        lookback_bars=days * 24,
+        chart_bars=days * 24,
     )
     levels, _trend, _reason = find_hourly_overhead_levels(
-        hourly_context,
+        level_context,
         symbol=symbol,
         config=config,
     )
@@ -1536,6 +1577,8 @@ def _render_anomaly_trade_chart(
     context_levels = _find_trade_chart_hourly_levels(
         context_frame,
         symbol=str(trade.get("symbol", "")),
+        end_timestamp_ms=entry_ts,
+        days=_TRADE_CHART_CONTEXT_DAYS,
     )
     anomaly_idx = resolve_timestamp_plot_idx(timestamps, anomaly_ts)
     decision_idx = resolve_timestamp_plot_idx(timestamps, decision_ts)
