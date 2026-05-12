@@ -824,7 +824,7 @@ Low for trading logic: audit-only. Low runtime risk: Telegram failure events are
 
 ## P156 — Stop unresolved live exits from producing proxy PnL
 
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Date: 2026-05-12
 Commit: UNKNOWN
 
@@ -853,3 +853,40 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Medium audit semantics change: some rows previously counted as normal closed trades now become non-PnL terminal rows. Trading entry logic, verified stop placement, TP1 behavior, and verified stop-fill close logic are unchanged.
+
+
+---
+
+## P158 — Split HTF setup from LTF live entry
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+The previous live code used the configured `levels_timeframe/entry_timeframe` pair mostly as a label: the signal was built on the higher timeframe only. P157 was intentionally not applied because making the entry timeframe the whole signal source would reject valid HTF flow wake-ups whenever micro candles were noisy. The strategy needs a two-stage contract instead: HTF/forming-HTF detects the pump wake-up, LTF confirms that the entry is still executable.
+
+### Change
+
+- Live scans every closed `entry_timeframe` candle, not every closed `levels_timeframe` candle.
+- Live builds a forming HTF setup candle from closed LTF candles inside the current HTF bucket.
+- HTF/forming-HTF owns dormancy baseline, quote-volume/trade-count anomaly, exhaustion checks, initial risk box and setup context.
+- LTF owns freshness, entry activation hold, verticality/path confirmation and final live execution guards.
+- Sub-minute live frames keep zero-flow buckets visible so no-trade periods do not disappear from the signal path.
+- Backtest gains pair-aware `--setup-timeframe` / `--entry-timeframe` mode with `feature_contract=htf_setup_ltf_entry_v1`.
+- Backtest forms HTF setup rows from historical entry-timeframe candles and simulates entries/exits on the entry timeframe.
+- `entry_delay_candles` is now calculated from the actual simulation frame step.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+python main.py run-anomaly-lab --help
+# synthetic pair-aware backtest smoke: 5m setup + 30s entry creates one forming_htf_from_entry_tf_backtest candidate after 4 closed entry candles
+```
+
+### Risk
+
+Medium. This changes signal timing and candidate construction. It should increase comparability between live and backtest, but historical results from older single-timeframe backtests are not directly comparable to `htf_setup_ltf_entry_v1` runs. Requires cache for the chosen entry timeframe; without it, pair-aware backtest records explicit read errors instead of pretending comparability.

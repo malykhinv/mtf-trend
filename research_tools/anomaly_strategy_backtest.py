@@ -55,6 +55,8 @@ from research_tools.anomaly_continuation_lab import (
     build_derivatives_context_status,
     build_oi_context_status,
     collect_anomaly_lab_rows,
+    compute_start_verticality_metrics,
+    enrich_candidates_with_open_interest,
     enrich_candidates_with_derivatives_context,
     _empty_context_columns,
     _emit_progress,
@@ -65,6 +67,13 @@ _DAY_MS = 86_400_000
 _TRADE_CHART_CONTEXT_DAYS = 7
 
 TRADE_SIGNAL_CONTEXT_COLUMNS = (
+    "feature_contract",
+    "setup_timeframe",
+    "entry_timeframe",
+    "setup_source",
+    "setup_elapsed_fraction",
+    "setup_closed_entry_candles",
+    "entry_activation_price",
     "start_trade_count",
     "baseline_trade_count_median",
     "baseline_quote_volume_median",
@@ -74,6 +83,10 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "next_n_quote_volume_mean",
     "hold_count_next_n_candles",
     "hold_ratio_next_n_candles",
+    "hold_count_model",
+    "flow_hold_count_next_n_candles",
+    "flow_hold_ratio_next_n_candles",
+    "price_retention_model",
     "next_n_trade_decay",
     "next_n_quote_decay",
     "price_retention_next_n",
@@ -157,10 +170,13 @@ for _context_spec in DERIVATIVES_CONTEXT_SPECS:
 @dataclass(frozen=True, slots=True)
 class AnomalyBacktestConfig:
     lab_config: AnomalyLabConfig
+    setup_timeframe: str | None = None
+    entry_timeframe: str | None = None
+    feature_contract: str = "closed_setup_tf_v1"
     min_price_retention: float = 0.70
     max_price_retention: float | None = None
     min_verticality_score: float = 0.25
-    min_hold_count: int = 0
+    min_hold_count: int = 2
     min_oi_change_pct_3x5m: float | None = None
     require_oi_status_ok: bool = False
     exhaustion_profile: str = "none"
@@ -269,6 +285,73 @@ def _safe_int(value: object) -> int | None:
         return None
 
 
+def _timeframe_to_milliseconds(timeframe: str) -> int:
+    match = re.fullmatch(r"(\d+)([smhdw])", str(timeframe))
+    if match is None:
+        raise ValueError(f"unsupported timeframe: {timeframe}")
+    amount = int(match.group(1))
+    unit = match.group(2)
+    seconds_by_unit = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    return amount * seconds_by_unit[unit] * 1000
+
+
+def _effective_setup_timeframe(config: AnomalyBacktestConfig) -> str:
+    return str(config.setup_timeframe or config.lab_config.timeframe)
+
+
+def _effective_entry_timeframe(config: AnomalyBacktestConfig) -> str:
+    return str(config.entry_timeframe or config.lab_config.timeframe)
+
+
+def _symbol_from_cache_symbol_dir(symbol_dir: Path) -> str:
+    from urllib.parse import unquote
+
+    return unquote(symbol_dir.name)
+
+
+def _safe_divide_value(numerator: float, denominator: float) -> float:
+    if not np.isfinite(numerator) or not np.isfinite(denominator) or abs(denominator) <= 1e-12:
+        return float("nan")
+    return float(numerator / denominator)
+
+
+def _prior_up_down_whipsaw_to_impulse_range(baseline: pd.DataFrame, *, impulse_range: float) -> float:
+    if baseline.empty or not np.isfinite(impulse_range) or impulse_range <= 0.0:
+        return float("nan")
+    highs = baseline["high"].astype(float)
+    lows = baseline["low"].astype(float)
+    high_pos = int(highs.to_numpy().argmax()) if not highs.empty else -1
+    if high_pos < 0:
+        return float("nan")
+    high_value = float(highs.iloc[high_pos])
+    low_before_high = float(lows.iloc[: high_pos + 1].min())
+    low_after_high = float(lows.iloc[high_pos:].min())
+    prior_up_leg = high_value - low_before_high
+    prior_down_leg = high_value - low_after_high
+    up_ratio = _safe_divide_value(prior_up_leg, impulse_range)
+    down_ratio = _safe_divide_value(prior_down_leg, impulse_range)
+    if not np.isfinite(up_ratio) or not np.isfinite(down_ratio):
+        return float("nan")
+    return float(min(up_ratio, down_ratio))
+
+
+def _aggregate_ohlcv_to_candle(frame: pd.DataFrame, *, timestamp_ms: int) -> pd.Series | None:
+    if frame.empty:
+        return None
+    ordered = frame.copy().sort_values("timestamp")
+    row: dict[str, object] = {
+        "timestamp": int(timestamp_ms),
+        "open": float(ordered.iloc[0]["open"]),
+        "high": float(pd.to_numeric(ordered["high"], errors="coerce").max()),
+        "low": float(pd.to_numeric(ordered["low"], errors="coerce").min()),
+        "close": float(ordered.iloc[-1]["close"]),
+    }
+    for column in ("volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume"):
+        if column in ordered.columns:
+            row[column] = float(pd.to_numeric(ordered[column], errors="coerce").fillna(0.0).sum())
+    return pd.Series(row)
+
+
 def _cache_symbol_dir_name(symbol: str) -> str:
     return quote(symbol, safe="")
 
@@ -324,6 +407,8 @@ def build_anomaly_signals(
             required.add(column)
     missing = required.difference(candidates.columns)
     if missing:
+        if "status" in candidates.columns and candidates["status"].astype(str).eq("error").any():
+            return pd.DataFrame()
         raise ValueError(f"candidates missing required columns: {sorted(missing)}")
 
     signals = candidates.copy()
@@ -492,6 +577,350 @@ def _resolve_signal_entry(
     initial_stop = max(previous_stop, entry_ema20) if entry_ema20 is not None else previous_stop
     initial_risk = entry_price - initial_stop
     return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, ""
+
+
+
+def collect_pair_anomaly_rows(
+    config: AnomalyBacktestConfig,
+    *,
+    symbols: Iterable[str] | None = None,
+    progress_label: str | None = None,
+    include_derivatives_context: bool = True,
+) -> pd.DataFrame:
+    setup_timeframe = _effective_setup_timeframe(config)
+    entry_timeframe = _effective_entry_timeframe(config)
+    lab_config = config.lab_config
+    end_ms = lab_config.end_timestamp_ms
+    if end_ms is None:
+        # Use entry timeframe as the source of truth for executable decisions.
+        max_timestamp: int | None = None
+        for path in lab_config.cache_dir.glob(f"*/{entry_timeframe}/data.parquet"):
+            try:
+                timestamps = pd.read_parquet(path, columns=["timestamp"])
+            except Exception:
+                continue
+            if timestamps.empty:
+                continue
+            current = int(timestamps["timestamp"].max())
+            max_timestamp = current if max_timestamp is None else max(max_timestamp, current)
+        if max_timestamp is None:
+            end_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
+        else:
+            end_ms = max_timestamp
+    start_ms = int((datetime.fromtimestamp(int(end_ms) / 1000, UTC) - pd.Timedelta(days=lab_config.days)).timestamp() * 1000)
+    wanted_symbols = set(symbols) if symbols is not None else None
+    paths = sorted(lab_config.cache_dir.glob(f"*%2FUSDT%3AUSDT/{setup_timeframe}/data.parquet"))
+    if wanted_symbols is not None:
+        paths = [path for path in paths if _symbol_from_cache_symbol_dir(path.parent.parent) in wanted_symbols]
+    rows: list[dict[str, object]] = []
+    progress_started_at = time.monotonic()
+    next_progress_pct = 0
+    for processed_count, path in enumerate(paths, start=1):
+        symbol = _symbol_from_cache_symbol_dir(path.parent.parent)
+        try:
+            setup_frame = _read_symbol_frame(lab_config.cache_dir, symbol, setup_timeframe)
+            entry_frame = _read_symbol_frame(lab_config.cache_dir, symbol, entry_timeframe)
+            setup_frame = setup_frame.loc[(setup_frame["timestamp"] >= start_ms - lab_config.baseline_candles * _timeframe_to_milliseconds(setup_timeframe)) & (setup_frame["timestamp"] <= int(end_ms))].copy()
+            entry_frame = entry_frame.loc[(entry_frame["timestamp"] >= start_ms) & (entry_frame["timestamp"] <= int(end_ms))].copy()
+            rows.extend(_collect_symbol_pair_rows(symbol=symbol, setup_frame=setup_frame, entry_frame=entry_frame, config=config))
+        except Exception as exc:
+            rows.append(
+                {
+                    "symbol": symbol,
+                    "timeframe": setup_timeframe,
+                    "setup_timeframe": setup_timeframe,
+                    "entry_timeframe": entry_timeframe,
+                    "feature_contract": "htf_setup_ltf_entry_v1",
+                    "status": "error",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+        if progress_label is not None and paths:
+            current_pct = int(100 * processed_count / len(paths))
+            if current_pct >= next_progress_pct or processed_count == len(paths):
+                _emit_progress(label=progress_label, done=processed_count, total=len(paths), started_at=progress_started_at)
+                next_progress_pct = current_pct + 5
+    result = pd.DataFrame(rows)
+    if not result.empty and "timestamp_ms" in result.columns:
+        result.sort_values(["timestamp_ms", "symbol", "decision_timestamp_ms"], inplace=True)
+        result.reset_index(drop=True, inplace=True)
+    result = enrich_candidates_with_open_interest(result, cache_dir=lab_config.cache_dir, progress_label=f"{progress_label}: oi context" if progress_label is not None else None)
+    if include_derivatives_context:
+        result = enrich_candidates_with_derivatives_context(result, cache_dir=lab_config.cache_dir, progress_label=f"{progress_label}: derivatives context" if progress_label is not None else None)
+    return result
+
+
+def _collect_symbol_pair_rows(
+    *,
+    symbol: str,
+    setup_frame: pd.DataFrame,
+    entry_frame: pd.DataFrame,
+    config: AnomalyBacktestConfig,
+) -> list[dict[str, object]]:
+    lab_config = config.lab_config
+    setup_timeframe = _effective_setup_timeframe(config)
+    entry_timeframe = _effective_entry_timeframe(config)
+    setup_ms = _timeframe_to_milliseconds(setup_timeframe)
+    entry_ms = _timeframe_to_milliseconds(entry_timeframe)
+    if setup_ms <= 0 or entry_ms <= 0 or entry_ms > setup_ms:
+        raise ValueError(f"invalid setup/entry timeframe pair: {setup_timeframe}/{entry_timeframe}")
+    if setup_frame.empty or entry_frame.empty:
+        return []
+    setup_frame = setup_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    entry_frame = entry_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    rows: list[dict[str, object]] = []
+    setup_timestamps = setup_frame["timestamp"].astype("int64").to_numpy()
+    last_selected_setup_idx = -10**9
+    max_forward = max(lab_config.forward_high_candles, lab_config.forward_low_candles)
+    for setup_idx, setup_start in enumerate(setup_timestamps):
+        setup_start = int(setup_start)
+        if setup_idx < lab_config.baseline_candles:
+            continue
+        if setup_idx - last_selected_setup_idx < lab_config.cooldown_candles:
+            continue
+        baseline = setup_frame.iloc[setup_idx - lab_config.baseline_candles : setup_idx].copy()
+        if baseline.empty:
+            continue
+        entry_segment_full = entry_frame.loc[
+            (entry_frame["timestamp"].astype("int64") >= setup_start)
+            & (entry_frame["timestamp"].astype("int64") < setup_start + setup_ms)
+        ].copy()
+        if len(entry_segment_full) < lab_config.confirmation_candles:
+            continue
+        selected_this_setup = False
+        for entry_end_pos in range(lab_config.confirmation_candles - 1, len(entry_segment_full)):
+            entry_segment = entry_segment_full.iloc[: entry_end_pos + 1].copy()
+            decision = entry_segment.iloc[-1]
+            decision_ts = int(decision["timestamp"])
+            if decision_ts + max_forward * entry_ms >= int(entry_frame["timestamp"].max()):
+                continue
+            forming_setup = _aggregate_ohlcv_to_candle(entry_segment, timestamp_ms=setup_start)
+            if forming_setup is None:
+                continue
+            row = _build_pair_candidate_row(
+                symbol=symbol,
+                setup_timeframe=setup_timeframe,
+                entry_timeframe=entry_timeframe,
+                setup_ms=setup_ms,
+                entry_ms=entry_ms,
+                setup_idx=setup_idx,
+                baseline=baseline,
+                setup_row=forming_setup,
+                entry_segment=entry_segment,
+                entry_frame=entry_frame,
+                config=config,
+            )
+            if row is None:
+                continue
+            rows.append(row)
+            last_selected_setup_idx = setup_idx
+            selected_this_setup = True
+            break
+        if selected_this_setup:
+            continue
+    return rows
+
+
+def _build_pair_candidate_row(
+    *,
+    symbol: str,
+    setup_timeframe: str,
+    entry_timeframe: str,
+    setup_ms: int,
+    entry_ms: int,
+    setup_idx: int,
+    baseline: pd.DataFrame,
+    setup_row: pd.Series,
+    entry_segment: pd.DataFrame,
+    entry_frame: pd.DataFrame,
+    config: AnomalyBacktestConfig,
+) -> dict[str, object] | None:
+    lab_config = config.lab_config
+    quote_volume = pd.to_numeric(baseline["quote_volume"], errors="coerce")
+    trade_count = pd.to_numeric(baseline["number_of_trades"], errors="coerce")
+    baseline_quote_value = float(quote_volume.median())
+    baseline_trade_value = float(trade_count.median())
+    start_quote = float(setup_row["quote_volume"])
+    start_trades = float(setup_row["number_of_trades"])
+    start_quote_ratio = _safe_divide_value(start_quote, baseline_quote_value)
+    start_trade_ratio = _safe_divide_value(start_trades, baseline_trade_value)
+    if not np.isfinite(start_quote_ratio) or not np.isfinite(start_trade_ratio):
+        return None
+    if start_quote_ratio < lab_config.min_quote_ratio_start or start_trade_ratio < lab_config.min_trade_ratio_start:
+        return None
+    start_open = float(setup_row["open"])
+    start_high = float(setup_row["high"])
+    start_low = float(setup_row["low"])
+    start_close = float(setup_row["close"])
+    decision = entry_segment.iloc[-1]
+    decision_ts = int(decision["timestamp"])
+    decision_close = float(decision["close"])
+    impulse_low = float(min(start_low, pd.to_numeric(entry_segment["low"], errors="coerce").min()))
+    impulse_high = float(max(start_high, pd.to_numeric(entry_segment["high"], errors="coerce").max()))
+    impulse_range = impulse_high - impulse_low
+    if not np.isfinite(impulse_range) or impulse_range <= 0.0:
+        return None
+    activation_price = start_open + max(0.0, start_close - start_open) * 0.50
+    hold_count = int(pd.to_numeric(entry_segment["close"], errors="coerce").ge(activation_price).sum())
+    price_retention = _safe_divide_value(decision_close - start_open, impulse_high - start_open)
+    verticality = compute_start_verticality_metrics(entry_segment)
+    future = entry_frame.loc[entry_frame["timestamp"].astype("int64") > decision_ts]
+    future_high = float(pd.to_numeric(future.head(lab_config.forward_high_candles)["high"], errors="coerce").max())
+    future_low = float(pd.to_numeric(future.head(lab_config.forward_low_candles)["low"], errors="coerce").min())
+    future_ret_high = _safe_divide_value(future_high - decision_close, decision_close)
+    future_dd_low = _safe_divide_value(future_low - decision_close, decision_close)
+    setup_with_current = pd.concat([baseline, pd.DataFrame([setup_row.to_dict()])], ignore_index=True)
+    decision_ema20 = float(setup_with_current["close"].astype(float).ewm(span=20, adjust=False).mean().iloc[-1])
+    range_series = baseline["high"].astype(float) - baseline["low"].astype(float)
+    baseline_range = float(range_series.median())
+    baseline_range_pct = float((range_series / baseline["close"].astype(float).replace(0.0, np.nan)).median())
+    start_range = start_high - start_low
+    start_ret = _safe_divide_value(start_close - start_open, start_open)
+    abs_start_ret = abs(start_ret) if np.isfinite(start_ret) else float("nan")
+    baseline_avg_trade_quote = _safe_divide_value(baseline_quote_value, baseline_trade_value)
+    start_avg_trade_quote = _safe_divide_value(start_quote, start_trades)
+    prior_whipsaw = _prior_up_down_whipsaw_to_impulse_range(baseline, impulse_range=impulse_range)
+    flow_hold_count = int(
+        (
+            pd.to_numeric(entry_segment["quote_volume"], errors="coerce").ge(max(0.35 * start_quote, 3.0 * baseline_quote_value))
+            & pd.to_numeric(entry_segment["number_of_trades"], errors="coerce").ge(max(0.35 * start_trades, 3.0 * baseline_trade_value))
+        ).sum()
+    )
+    next_quote_mean = float(pd.to_numeric(entry_segment["quote_volume"], errors="coerce").mean())
+    next_trade_mean = float(pd.to_numeric(entry_segment["number_of_trades"], errors="coerce").mean())
+    taker_metrics = _pair_taker_metrics(entry_segment, baseline, baseline_quote_value)
+    return {
+        "symbol": symbol,
+        "timeframe": setup_timeframe,
+        "feature_contract": "htf_setup_ltf_entry_v1",
+        "setup_timeframe": setup_timeframe,
+        "entry_timeframe": entry_timeframe,
+        "setup_source": "forming_htf_from_entry_tf_backtest",
+        "setup_elapsed_fraction": min(1.0, len(entry_segment) * entry_ms / setup_ms),
+        "setup_closed_entry_candles": int(len(entry_segment)),
+        "timestamp_ms": int(setup_row["timestamp"]),
+        "timestamp_utc": _timestamp_to_utc(int(setup_row["timestamp"])),
+        "decision_timestamp_ms": decision_ts,
+        "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
+        "confirmation_candles": int(lab_config.confirmation_candles),
+        "baseline_candles": int(lab_config.baseline_candles),
+        "start_open": start_open,
+        "start_high": start_high,
+        "start_low": start_low,
+        "start_close": start_close,
+        "decision_close": decision_close,
+        "decision_ema20": decision_ema20,
+        "start_quote_volume": start_quote,
+        "start_trade_count": start_trades,
+        "baseline_quote_volume_median": baseline_quote_value,
+        "baseline_trade_count_median": baseline_trade_value,
+        "start_quote_ratio": start_quote_ratio,
+        "start_trade_ratio": start_trade_ratio,
+        "next_n_quote_volume_mean": next_quote_mean,
+        "next_n_trade_count_mean": next_trade_mean,
+        "next_n_quote_decay": _safe_divide_value(next_quote_mean, start_quote),
+        "next_n_trade_decay": _safe_divide_value(next_trade_mean, start_trades),
+        "hold_count_next_n_candles": hold_count,
+        "hold_ratio_next_n_candles": _safe_divide_value(hold_count, len(entry_segment)),
+        "hold_count_model": "entry_price_activation_hold",
+        "flow_hold_count_next_n_candles": flow_hold_count,
+        "flow_hold_ratio_next_n_candles": _safe_divide_value(flow_hold_count, len(entry_segment)),
+        "price_retention_next_n": price_retention,
+        "price_retention_model": "decision_close_vs_setup_open_to_high",
+        "entry_activation_price": activation_price,
+        "midpoint_lost_next_n": bool(decision_close < activation_price),
+        "new_high_count_next_n": int(pd.to_numeric(entry_segment["high"], errors="coerce").gt(float(entry_segment.iloc[0]["high"])).sum()),
+        "decision_box_low": impulse_low,
+        "decision_box_high": impulse_high,
+        "decision_box_range": impulse_range,
+        "future_high": future_high,
+        "future_low": future_low,
+        "future_ret_high_after_decision": future_ret_high,
+        "future_dd_low_after_decision": future_dd_low,
+        "outcome_label": _classify_pair_outcome(future_ret_high=future_ret_high, future_dd_low=future_dd_low, config=lab_config),
+        **verticality,
+        **taker_metrics,
+        "start_avg_trade_quote_size": start_avg_trade_quote,
+        "baseline_avg_trade_quote_size_median": baseline_avg_trade_quote,
+        "start_avg_trade_quote_size_ratio": _safe_divide_value(start_avg_trade_quote, baseline_avg_trade_quote),
+        "next_n_avg_trade_quote_size_mean": _safe_divide_value(next_quote_mean, next_trade_mean),
+        "next_n_avg_trade_quote_size_decay": _safe_divide_value(_safe_divide_value(next_quote_mean, next_trade_mean), start_avg_trade_quote),
+        "decision_return_from_start_open": _safe_divide_value(decision_close - start_open, start_open),
+        "start_close_position_in_range": _safe_divide_value(start_close - start_low, start_range),
+        "start_body_to_range": _safe_divide_value(abs(start_close - start_open), start_range),
+        "start_upper_wick_to_range": _safe_divide_value(start_high - max(start_open, start_close), start_range),
+        "start_lower_wick_to_range": _safe_divide_value(min(start_open, start_close) - start_low, start_range),
+        "baseline_range_median": baseline_range,
+        "baseline_range_pct_median": baseline_range_pct,
+        "baseline_zero_range_share": float(range_series.le(0.0).mean()),
+        "baseline_return_range_pct": _safe_divide_value(float(baseline["high"].max()) - float(baseline["low"].min()), start_open),
+        "baseline_close_return_range_pct": _safe_divide_value(float(baseline["close"].max()) - float(baseline["close"].min()), start_open),
+        "baseline_return_from_first_close_pct": _safe_divide_value(float(baseline["close"].iloc[-1]) - float(baseline["close"].iloc[0]), float(baseline["close"].iloc[0])),
+        "prior_up_leg_to_impulse_range": float("nan"),
+        "prior_down_leg_to_impulse_range": float("nan"),
+        "prior_up_down_whipsaw_to_impulse_range": prior_whipsaw,
+        "start_range_ratio_to_baseline": _safe_divide_value(start_range, baseline_range),
+        "start_range_pct": _safe_divide_value(start_range, start_open),
+        "start_range_pct_ratio_to_baseline": _safe_divide_value(_safe_divide_value(start_range, start_open), baseline_range_pct),
+        "start_quote_per_abs_return": _safe_divide_value(start_quote, abs_start_ret),
+        "start_trades_per_abs_return": _safe_divide_value(start_trades, abs_start_ret),
+        "start_quote_ratio_per_abs_return": _safe_divide_value(start_quote_ratio, abs_start_ret),
+        "start_trade_ratio_per_abs_return": _safe_divide_value(start_trade_ratio, abs_start_ret),
+        "post_start_pullback_fraction_of_box": _safe_divide_value(impulse_high - float(pd.to_numeric(entry_segment["low"], errors="coerce").min()), impulse_range),
+    }
+
+
+def _pair_taker_metrics(entry_segment: pd.DataFrame, baseline: pd.DataFrame, baseline_quote_value: float) -> dict[str, object]:
+    default = {
+        "flow_taker_buy_status": "missing_columns",
+        "start_taker_buy_quote_share": float("nan"),
+        "baseline_taker_buy_quote_share_median": float("nan"),
+        "start_taker_buy_quote_share_delta": float("nan"),
+        "next_n_taker_buy_quote_share_mean": float("nan"),
+        "next_n_taker_buy_quote_share_delta": float("nan"),
+        "next_n_taker_buy_quote_share_decay": float("nan"),
+    }
+    if "taker_buy_quote_volume" not in entry_segment.columns:
+        return default
+    quote_volume = pd.to_numeric(entry_segment["quote_volume"], errors="coerce")
+    taker_quote = pd.to_numeric(entry_segment["taker_buy_quote_volume"], errors="coerce")
+    share = taker_quote / quote_volume.replace(0.0, np.nan)
+    start_share = float(share.iloc[0])
+    next_share = float(share.mean())
+    baseline_share = float("nan")
+    if "taker_buy_quote_volume" in baseline.columns:
+        baseline_quote = pd.to_numeric(baseline["quote_volume"], errors="coerce")
+        baseline_taker = pd.to_numeric(baseline["taker_buy_quote_volume"], errors="coerce")
+        baseline_share = float((baseline_taker / baseline_quote.replace(0.0, np.nan)).median())
+    return {
+        "flow_taker_buy_status": "ok" if np.isfinite(start_share) else "missing_values",
+        "start_taker_buy_quote_share": start_share,
+        "baseline_taker_buy_quote_share_median": baseline_share,
+        "start_taker_buy_quote_share_delta": start_share - baseline_share,
+        "next_n_taker_buy_quote_share_mean": next_share,
+        "next_n_taker_buy_quote_share_delta": next_share - baseline_share,
+        "next_n_taker_buy_quote_share_decay": _safe_divide_value(next_share, start_share),
+    }
+
+
+def _classify_pair_outcome(*, future_ret_high: float, future_dd_low: float, config: AnomalyLabConfig) -> str:
+    if np.isfinite(future_ret_high) and future_ret_high >= config.big_move_threshold:
+        return "big_25p"
+    if np.isfinite(future_ret_high) and np.isfinite(future_dd_low) and future_ret_high < config.fade_max_upside and future_dd_low <= config.fade_drawdown_threshold:
+        return "fast_fade"
+    return "other"
+
+
+def _entry_delay_candles(
+    frame: pd.DataFrame,
+    *,
+    entry_timestamp_ms: int,
+    decision_timestamp_ms: int,
+) -> int:
+    frame_step_ms = int(infer_frame_step_ms(frame) or 60_000)
+    if frame_step_ms <= 0:
+        frame_step_ms = 60_000
+    return max(0, int(round((int(entry_timestamp_ms) - int(decision_timestamp_ms)) / frame_step_ms)))
 
 
 def simulate_long_signal(
@@ -666,7 +1095,8 @@ def simulate_long_signal(
         "entry_method": config.entry_method,
         "execution_model": execution_model,
         "pullback_box_fraction": config.pullback_box_fraction if config.entry_method == "pullback_box_fraction" else np.nan,
-        "entry_delay_candles": int((entry_ts - decision_ts) / 60_000),
+        "entry_delay_ms": int(entry_ts - decision_ts),
+        "entry_delay_candles": _entry_delay_candles(frame, entry_timestamp_ms=entry_ts, decision_timestamp_ms=decision_ts),
         "entry_price": entry_price,
         "initial_stop": initial_stop,
         "initial_risk": initial_risk,
@@ -737,7 +1167,7 @@ def simulate_anomaly_trades(
             continue
         frame = frame_cache.get(symbol)
         if frame is None:
-            frame = _read_symbol_frame(config.lab_config.cache_dir, symbol, config.lab_config.timeframe)
+            frame = _read_symbol_frame(config.lab_config.cache_dir, symbol, _effective_entry_timeframe(config))
             frame_cache[symbol] = frame
         result = simulate_long_signal(frame, signal, config=config)
         rows.append(result)
@@ -1838,7 +2268,7 @@ def render_anomaly_trade_charts(
         try:
             frame = frame_cache.get(symbol)
             if frame is None:
-                frame = _read_symbol_frame(config.lab_config.cache_dir, symbol, config.lab_config.timeframe)
+                frame = _read_symbol_frame(config.lab_config.cache_dir, symbol, _effective_entry_timeframe(config))
                 frame_cache[symbol] = frame
             render_anomaly_trade_chart(frame=frame, trade=trade, output_path=chart_path)
             chart_status = "rendered"
@@ -1923,12 +2353,28 @@ def run_anomaly_strategy_backtest(
 ) -> Path:
     output_dir = config.lab_config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    candidates = collect_anomaly_lab_rows(
-        config.lab_config,
-        symbols=symbols,
-        progress_label="anomaly candidates",
-        include_derivatives_context=derivatives_context_fetcher is None,
-    )
+    if _effective_entry_timeframe(config) != _effective_setup_timeframe(config):
+        candidates = collect_pair_anomaly_rows(
+            config,
+            symbols=symbols,
+            progress_label="anomaly candidates",
+            include_derivatives_context=derivatives_context_fetcher is None,
+        )
+    else:
+        candidates = collect_anomaly_lab_rows(
+            config.lab_config,
+            symbols=symbols,
+            progress_label="anomaly candidates",
+            include_derivatives_context=derivatives_context_fetcher is None,
+        )
+        if not candidates.empty:
+            candidates = candidates.copy()
+            candidates["feature_contract"] = "closed_setup_tf_v1"
+            candidates["setup_timeframe"] = _effective_setup_timeframe(config)
+            candidates["entry_timeframe"] = _effective_entry_timeframe(config)
+            candidates["setup_source"] = "closed_setup_tf"
+            candidates["setup_elapsed_fraction"] = 1.0
+            candidates["setup_closed_entry_candles"] = candidates.get("confirmation_candles", config.lab_config.confirmation_candles)
     print("anomaly signals: filtering", flush=True)
     signals = build_anomaly_signals(candidates, config=config)
     grid_signal_sets: list[tuple[AnomalyBacktestConfig, pd.DataFrame]] | None = None
@@ -2045,6 +2491,9 @@ def run_anomaly_strategy_backtest(
         )
     run_config = {
         **asdict(config),
+        "feature_contract": config.feature_contract,
+        "setup_timeframe": _effective_setup_timeframe(config),
+        "entry_timeframe": _effective_entry_timeframe(config),
         "execution_model": _execution_model_label(config),
         "lab_config": asdict(config.lab_config),
     }
@@ -2060,7 +2509,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-dir", type=Path, default=Path(".output/cache"))
     parser.add_argument("--output-dir", type=Path, default=Path(".output/results/anomaly_lab"))
     parser.add_argument("--days", type=int, default=31)
-    parser.add_argument("--timeframe", default="1m")
+    parser.add_argument("--timeframe", default="1m", help="Legacy single-timeframe mode; used as setup timeframe unless --setup-timeframe is set")
+    parser.add_argument("--setup-timeframe", default=None, help="HTF setup timeframe, e.g. 5m")
+    parser.add_argument("--entry-timeframe", default=None, help="LTF execution timeframe, e.g. 30s. If omitted, equals setup/timeframe")
     parser.add_argument("--end-timestamp-ms", type=int, default=None)
     parser.add_argument("--symbols", nargs="*", default=None)
     parser.add_argument("--baseline-candles", type=int, default=60)
@@ -2072,7 +2523,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-price-retention", type=float, default=0.70)
     parser.add_argument("--max-price-retention", type=float, default=None)
     parser.add_argument("--min-verticality-score", type=float, default=0.25)
-    parser.add_argument("--min-hold-count", type=int, default=0)
+    parser.add_argument("--min-hold-count", type=int, default=2)
     parser.add_argument("--min-oi-change-pct-3x5m", type=float, default=None)
     parser.add_argument("--require-oi-status-ok", action="store_true")
     parser.add_argument("--exhaustion-profile", choices=sorted(EXHAUSTION_PROFILES), default="none")
@@ -2110,7 +2561,7 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
     lab_config = AnomalyLabConfig(
         cache_dir=args.cache_dir,
         output_dir=args.output_dir,
-        timeframe=args.timeframe,
+        timeframe=args.setup_timeframe or args.timeframe,
         days=args.days,
         end_timestamp_ms=args.end_timestamp_ms,
         baseline_candles=args.baseline_candles,
@@ -2122,6 +2573,13 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
     )
     return AnomalyBacktestConfig(
         lab_config=lab_config,
+        setup_timeframe=args.setup_timeframe or args.timeframe,
+        entry_timeframe=args.entry_timeframe or args.setup_timeframe or args.timeframe,
+        feature_contract=(
+            "htf_setup_ltf_entry_v1"
+            if (args.entry_timeframe or args.setup_timeframe or args.timeframe) != (args.setup_timeframe or args.timeframe)
+            else "closed_setup_tf_v1"
+        ),
         min_price_retention=args.min_price_retention,
         max_price_retention=args.max_price_retention,
         min_verticality_score=args.min_verticality_score,
