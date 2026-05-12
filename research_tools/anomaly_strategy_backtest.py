@@ -410,6 +410,66 @@ def _read_symbol_frame(cache_dir: Path, symbol: str, timeframe: str) -> pd.DataF
     return frame
 
 
+def _aggregate_frame_to_timeframe(frame: pd.DataFrame, *, timeframe_ms: int) -> pd.DataFrame:
+    if frame.empty or timeframe_ms <= 0:
+        return pd.DataFrame()
+    required = {"timestamp", "open", "high", "low", "close"}
+    if required.difference(frame.columns):
+        return pd.DataFrame()
+    prepared = frame.copy()
+    for column in ("timestamp", "open", "high", "low", "close", "volume", "quote_volume", "number_of_trades", "taker_buy_volume", "taker_buy_quote_volume"):
+        if column in prepared.columns:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close"])
+    if prepared.empty:
+        return pd.DataFrame()
+    prepared["timestamp"] = prepared["timestamp"].astype("int64")
+    prepared.sort_values("timestamp", inplace=True)
+    prepared.drop_duplicates("timestamp", keep="last", inplace=True)
+    prepared["bucket"] = (prepared["timestamp"] // int(timeframe_ms)) * int(timeframe_ms)
+    aggregation: dict[str, str] = {
+        "timestamp": "first",
+        "open": "first",
+        "high": "max",
+        "low": "min",
+        "close": "last",
+    }
+    for column in ("volume", "quote_volume", "number_of_trades", "taker_buy_volume", "taker_buy_quote_volume"):
+        if column in prepared.columns:
+            aggregation[column] = "sum"
+    aggregated = prepared.groupby("bucket", as_index=False).agg(aggregation)
+    aggregated["timestamp"] = aggregated["bucket"].astype("int64")
+    aggregated.drop(columns=["bucket"], inplace=True)
+    aggregated.sort_values("timestamp", inplace=True)
+    aggregated.reset_index(drop=True, inplace=True)
+    if "ema20" not in aggregated.columns and "close" in aggregated.columns:
+        aggregated["ema20"] = aggregated["close"].astype(float).ewm(span=20, adjust=False).mean()
+    return aggregated
+
+
+def _resolve_entry_cache_timeframe(cache_dir: Path, entry_timeframe: str) -> str:
+    if any(cache_dir.glob(f"*%2FUSDT%3AUSDT/{entry_timeframe}/data.parquet")):
+        return entry_timeframe
+    entry_ms = _timeframe_to_milliseconds(entry_timeframe)
+    if 0 < entry_ms < 60_000 and entry_ms % 1000 == 0 and any(cache_dir.glob("*%2FUSDT%3AUSDT/1s/data.parquet")):
+        return "1s"
+    return entry_timeframe
+
+
+def _read_entry_simulation_frame(cache_dir: Path, symbol: str, entry_timeframe: str) -> pd.DataFrame:
+    entry_cache_timeframe = _resolve_entry_cache_timeframe(cache_dir, entry_timeframe)
+    frame = _read_symbol_frame(cache_dir, symbol, entry_cache_timeframe)
+    if entry_cache_timeframe == entry_timeframe:
+        return frame
+    aggregated = _aggregate_frame_to_timeframe(
+        frame,
+        timeframe_ms=_timeframe_to_milliseconds(entry_timeframe),
+    )
+    if aggregated.empty:
+        raise ValueError(f"empty_1s_aggregation_for_entry_timeframe:{entry_timeframe}")
+    return aggregated
+
+
 def build_anomaly_signals(
     candidates: pd.DataFrame,
     *,
@@ -610,12 +670,13 @@ def collect_pair_anomaly_rows(
 ) -> pd.DataFrame:
     setup_timeframe = _effective_setup_timeframe(config)
     entry_timeframe = _effective_entry_timeframe(config)
+    entry_cache_timeframe = _resolve_entry_cache_timeframe(config.lab_config.cache_dir, entry_timeframe)
     lab_config = config.lab_config
     end_ms = lab_config.end_timestamp_ms
     if end_ms is None:
         # Use entry timeframe as the source of truth for executable decisions.
         max_timestamp: int | None = None
-        for path in lab_config.cache_dir.glob(f"*/{entry_timeframe}/data.parquet"):
+        for path in lab_config.cache_dir.glob(f"*/{entry_cache_timeframe}/data.parquet"):
             try:
                 timestamps = pd.read_parquet(path, columns=["timestamp"])
             except Exception:
@@ -636,7 +697,7 @@ def collect_pair_anomaly_rows(
     if entry_timeframe != setup_timeframe and _timeframe_to_milliseconds(entry_timeframe) < 60_000:
         symbols_with_entry_cache = {
             _symbol_from_cache_symbol_dir(path.parent.parent)
-            for path in lab_config.cache_dir.glob(f"*%2FUSDT%3AUSDT/{entry_timeframe}/data.parquet")
+            for path in lab_config.cache_dir.glob(f"*%2FUSDT%3AUSDT/{entry_cache_timeframe}/data.parquet")
         }
         if not symbols_with_entry_cache:
             return pd.DataFrame([
@@ -659,10 +720,26 @@ def collect_pair_anomaly_rows(
         symbol = _symbol_from_cache_symbol_dir(path.parent.parent)
         try:
             setup_frame = _read_symbol_frame(lab_config.cache_dir, symbol, setup_timeframe)
-            entry_frame = _read_symbol_frame(lab_config.cache_dir, symbol, entry_timeframe)
+            entry_frame = _read_symbol_frame(lab_config.cache_dir, symbol, entry_cache_timeframe)
             setup_frame = setup_frame.loc[(setup_frame["timestamp"] >= start_ms - lab_config.baseline_candles * _timeframe_to_milliseconds(setup_timeframe)) & (setup_frame["timestamp"] <= int(end_ms))].copy()
             entry_frame = entry_frame.loc[(entry_frame["timestamp"] >= start_ms) & (entry_frame["timestamp"] <= int(end_ms))].copy()
-            rows.extend(_collect_symbol_pair_rows(symbol=symbol, setup_frame=setup_frame, entry_frame=entry_frame, config=config))
+            if entry_cache_timeframe != entry_timeframe:
+                entry_frame = _aggregate_frame_to_timeframe(
+                    entry_frame,
+                    timeframe_ms=_timeframe_to_milliseconds(entry_timeframe),
+                )
+            entry_flow_source = (
+                f"cached_{entry_cache_timeframe}_aggregated_to_{entry_timeframe}"
+                if entry_cache_timeframe != entry_timeframe
+                else "cached_ohlcv"
+            )
+            rows.extend(_collect_symbol_pair_rows(
+                symbol=symbol,
+                setup_frame=setup_frame,
+                entry_frame=entry_frame,
+                config=config,
+                entry_flow_source=entry_flow_source,
+            ))
         except Exception as exc:
             rows.append(
                 {
@@ -696,6 +773,7 @@ def _collect_symbol_pair_rows(
     setup_frame: pd.DataFrame,
     entry_frame: pd.DataFrame,
     config: AnomalyBacktestConfig,
+    entry_flow_source: str = "cached_ohlcv",
 ) -> list[dict[str, object]]:
     lab_config = config.lab_config
     setup_timeframe = _effective_setup_timeframe(config)
@@ -749,6 +827,7 @@ def _collect_symbol_pair_rows(
                 entry_segment=entry_segment,
                 entry_frame=entry_frame,
                 config=config,
+                entry_flow_source=entry_flow_source,
             )
             if row is None:
                 continue
@@ -774,6 +853,7 @@ def _build_pair_candidate_row(
     entry_segment: pd.DataFrame,
     entry_frame: pd.DataFrame,
     config: AnomalyBacktestConfig,
+    entry_flow_source: str = "cached_ohlcv",
 ) -> dict[str, object] | None:
     lab_config = config.lab_config
     quote_volume = pd.to_numeric(baseline["quote_volume"], errors="coerce")
@@ -893,7 +973,11 @@ def _build_pair_candidate_row(
         "future_ret_high_after_decision": future_ret_high,
         "future_dd_low_after_decision": future_dd_low,
         "outcome_label": _classify_pair_outcome(future_ret_high=future_ret_high, future_dd_low=future_dd_low, config=lab_config),
-        **_TRADE_CHART_FLOW_PROVENANCE,
+        **{
+            **_TRADE_CHART_FLOW_PROVENANCE,
+            "entry_trade_count_source": f"{entry_flow_source}.number_of_trades",
+            "entry_quote_volume_source": f"{entry_flow_source}.quote_volume",
+        },
         **verticality,
         **taker_metrics,
         "start_avg_trade_quote_size": start_avg_trade_quote,
@@ -1231,7 +1315,11 @@ def simulate_anomaly_trades(
             continue
         frame = frame_cache.get(symbol)
         if frame is None:
-            frame = _read_symbol_frame(config.lab_config.cache_dir, symbol, _effective_entry_timeframe(config))
+            frame = _read_entry_simulation_frame(
+                config.lab_config.cache_dir,
+                symbol,
+                _effective_entry_timeframe(config),
+            )
             frame_cache[symbol] = frame
         result = simulate_long_signal(frame, signal, config=config)
         rows.append(result)
@@ -2061,7 +2149,7 @@ def _annotate_chart_panel_label(ax, text: str) -> None:
         ha="left",
         va="top",
         color="#ffffff",
-        fontsize=28,
+        fontsize=18,
         fontweight="bold",
         alpha=0.25,
         zorder=0.2,
@@ -2542,7 +2630,10 @@ def run_anomaly_strategy_backtest(
             grid_signal_sets = _build_entry_grid_signal_sets(candidates, grid_variants)
             context_signals = _signal_universe_from_signal_sets(grid_signal_sets)
         else:
-            context_signals = signals.loc[:, ["symbol", "decision_timestamp_ms"]].copy()
+            if {"symbol", "decision_timestamp_ms"}.issubset(signals.columns):
+                context_signals = signals.loc[:, ["symbol", "decision_timestamp_ms"]].copy()
+            else:
+                context_signals = pd.DataFrame(columns=["symbol", "decision_timestamp_ms"])
         context_fetch_status = _fetch_derivatives_context_for_signal_universe(
             context_signals,
             derivatives_context_fetcher=derivatives_context_fetcher,

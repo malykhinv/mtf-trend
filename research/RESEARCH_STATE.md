@@ -629,3 +629,56 @@ Interpretation:
 ```text
 HTF/LTF reduces trade count and aggregate damage, and improves day-level distribution, but it still does not produce positive expectancy. Do not claim edge. The next useful research step is not parameter tuning; first inspect why TP1/trail winners fail to overcome stop-loss mass and whether anomaly category separation can reject the losing wake-up types.
 ```
+
+Correction:
+
+```text
+5m/1m was only a cheap proxy and is not an intended trading TF set. Do not use it as the trading-grid result.
+```
+
+Latest intended TF-set result:
+
+```text
+Data source: cached 1s OHLCV aggregated in memory to 30s/15s/5s entry frames.
+Provenance labels: cached_1s_aggregated_to_<tf>.number_of_trades / quote_volume.
+
+5m/30s:
+closed trades = 17
+avg net return = +0.1281%
+sum net return = +2.18%
+win rate = 52.94%
+TP1 hit rate = 47.06%
+
+1m/15s:
+closed trades = 44
+avg net return = +0.5832%
+sum net return = +25.66%
+win rate = 70.45%
+TP1 hit rate = 65.91%
+
+1m/5s:
+closed trades = 37
+avg net return = +0.0793%
+sum net return = +2.94%
+win rate = 54.05%
+TP1 hit rate = 51.35%
+
+Combined:
+closed trades = 98
+avg net return = +0.3140%
+sum net return = +30.78%
+win rate = 61.22%
+TP1 hit rate = 57.14%
+```
+
+Reliability note:
+
+```text
+This is promising but not yet "big and confident plus": only 98 trades, only 3 active UTC days, and the best TF set is 1m/15s with 44 trades. Treat patterns as candidate grid hypotheses, not proven production filters.
+```
+
+Most useful observed pattern:
+
+```text
+Winners are concentrated in clean/high-retention/large-ticket setups, especially when mark is positive versus decision close. Fast-fade labels and mark-discount/flat + oi_down_price_up + clean/high-retention/large-ticket setups are weak.
+```

@@ -784,3 +784,75 @@ Conclusion:
 ```text
 HTF/LTF is less damaging and more evenly distributed by day than 1m/1m, but still negative. It is not a tradable edge. The useful follow-up is category/rejection research: separate losing wake-up types from the minority that can reach TP1/trail, instead of tightening generic entry parameters.
 ```
+
+Correction:
+
+```text
+The 5m/1m comparison was only a cheap proxy and is not one of the intended TF sets.
+Do not use it as a trading-grid result.
+The intended TF sets are 5m/30s, 1m/15s, and 1m/5s.
+```
+
+---
+
+## 2026-05-12 - Intended subminute TF-set run attempt
+
+Input:
+
+```text
+Requested TF sets:
+5m/30s
+1m/15s
+1m/5s
+End timestamp: 1778488560000
+```
+
+Initial result:
+
+```text
+All three commands hit a diagnostics crash before writing normal no-signal artifacts:
+KeyError: None of [Index(['symbol', 'decision_timestamp_ms'], dtype='object')] are in the [columns]
+```
+
+Cause:
+
+```text
+The local cache has 1m, 5m and 1s directories visible, but not 30s/15s/5s directories. Pair-aware subminute backtest can therefore produce no valid signal frame. The derivative-context fetch setup did not handle an empty no-column signals frame.
+```
+
+Action:
+
+```text
+P164 applied locally: empty/no-column post-filter signals now produce an empty signal universe instead of crashing.
+Because 350 symbols have `1s` cache, pair-aware backtest can now aggregate `1s` to the intended `30s/15s/5s` entry frames in memory.
+Fresh artifacts must label entry flow source as `cached_1s_aggregated_to_<tf>`.
+Second fix: trade simulation now uses the same aggregated entry frame instead of looking for a non-existent exact `30s/15s/5s` cache file.
+```
+
+Validation result:
+
+```text
+5m/30s artifact: .output/results/anomaly_lab_p164_5m30s_from1s
+1m/15s artifact: .output/results/anomaly_lab_p164_1m15s_from1s
+1m/5s artifact: .output/results/anomaly_lab_p164_1m5s_from1s
+Metric analysis: .output/results/anomaly_metric_analysis_tfsets
+```
+
+Performance:
+
+```text
+5m/30s: 17 closed trades, avg +0.1281%, sum +2.18%, WR 52.94%, TP1 47.06%
+1m/15s: 44 closed trades, avg +0.5832%, sum +25.66%, WR 70.45%, TP1 65.91%
+1m/5s: 37 closed trades, avg +0.0793%, sum +2.94%, WR 54.05%, TP1 51.35%
+Combined: 98 closed trades, avg +0.3140%, sum +30.78%, WR 61.22%, TP1 57.14%
+```
+
+Pattern readout:
+
+```text
+Best current TF set is 1m/15s, but sample is only 44 trades.
+Best broad nature combos require clean path + high retention + large ticket + taker improvement.
+Positive mark basis is the strongest single pre-entry separator in this sample.
+Fast_fade rows are strongly negative, but only 4 examples.
+Do not build a confident production grid until the same TF-set logic is rerun on a longer 1s-backed window.
+```

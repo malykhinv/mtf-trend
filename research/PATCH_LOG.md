@@ -1064,3 +1064,37 @@ python main.py run-anomaly-lab --help
 ### Risk
 
 Low for trading logic: artifact/export/chart behavior only. Medium for visual artifact expectations: chart layout and chart aspect ratio change materially, so chart consumers should not assume the old three-panel geometry.
+
+---
+
+## P164 - Handle empty subminute anomaly signal sets
+
+Status: APPLIED locally / UNKNOWN commit
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+Running the intended subminute TF sets (`5m/30s`, `1m/15s`, `1m/5s`) exposed a diagnostics bug when entry-timeframe cache is absent. The pair-aware collector can return no valid signal rows, but derivative-context fetch setup still tried to select `symbol` and `decision_timestamp_ms` from an empty no-column signals frame.
+
+### Change
+
+- If post-filter signals are empty or lack the signal-universe columns, use an empty `symbol/decision_timestamp_ms` frame.
+- Let the existing no-signal derivative context path write empty fetch status instead of crashing.
+- Reduce trade-chart watermark label font size from 28 to 18.
+- For pair-aware subminute backtests, use cached `1s` OHLCV as an in-memory source for `5s/15s/30s` entry frames when exact entry-timeframe cache directories are absent.
+- Mark entry provenance as `cached_1s_aggregated_to_<tf>` when that fallback is used.
+- Use the same `1s -> target subminute` aggregation path during trade simulation, not only during candidate construction.
+
+### Validation
+
+```bash
+python -m compileall research_tools/anomaly_strategy_backtest.py
+python main.py run-anomaly-lab --setup-timeframe 5m --entry-timeframe 30s --days 7
+python main.py run-anomaly-lab --setup-timeframe 1m --entry-timeframe 15s --days 7
+python main.py run-anomaly-lab --setup-timeframe 1m --entry-timeframe 5s --days 7
+```
+
+### Risk
+
+Low/medium: diagnostics-only, but fresh subminute backtests may now run from `1s` cache instead of failing on absent aggregated `5s/15s/30s` cache directories. It does not aggregate from `1m`, and provenance labels distinguish the `1s` aggregation path.
