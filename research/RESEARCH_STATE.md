@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P149 proposed locally on top of ZIP-derived source
-Last active patch: P149 strict high-based hourly levels
+Local patch stack: P130-P151 proposed locally on top of ZIP-derived source
+Last active patch: P151 trade chart context/flow visualization
 Updated: 2026-05-12
 ```
 
@@ -81,11 +81,11 @@ research_tools/hourly_levels.py
 
 ## 6. Next best step
 
-Apply P147, use `COMMANDS.md` as the command source, then run the short live latency smoke:
+Apply P151, then regenerate a small chart sample and visually verify the 1h/7d context plus merged flow panel before using chart screenshots for review:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-live --confirm-real-orders --max-cycles 60
+python main.py run-anomaly-lab --days 30
 ```
 
 Check `ticker_radar_snapshot`, `ticker_radar_promoted`, `symbol_batch_selected.effective_scan_count`, `inactive_count`, `reject_stale_signal`, and cycle time. If radar load is high, rerun with `--ticker-radar-watch-batch-size 2`.
@@ -247,7 +247,7 @@ Next verification:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20
+python main.py run-anomaly-lab --days 30 --symbol-batch-size 20
 ```
 
 
@@ -261,7 +261,7 @@ Next verification:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-live --confirm-real-orders --max-cycles 60
+python main.py run-anomaly-lab --days 30
 ```
 
 Watch `ticker_radar_watch_cleared`, `ticker_radar_waiting_count`, `inactive_count`, `effective_scan_count`, cycle time and `ticker_radar_failed`.
@@ -351,3 +351,22 @@ Known effect:
 Level count can drop again versus P149; rejected cases should be those with a source high below a close from the previous 12h.
 ```
 
+
+---
+
+## Current audit note — P151
+
+P151 is artifact-only. Trade charts now use three panels: top trade-window candles with execution annotations, middle independent 1h context for the last 7 fully closed days before entry with unlabeled strict hourly levels, and bottom normalized quote-volume/trade-count line curves. Trading/backtest execution logic is unchanged.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-lab --days 30
+```
+
+Known effect:
+
+```text
+The lower panel compares normalized shapes only: orange quote volume and green number_of_trades are each scaled to their own chart-window maximum.
+```

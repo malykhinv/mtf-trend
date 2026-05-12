@@ -229,3 +229,19 @@ consume normal round-robin inactive slots without explicit operator configuratio
 ```
 
 Ticker-derived rows are diagnostic/scheduler artifacts only. Final signal validity still depends on the existing closed-kline flow, category, risk and execution checks.
+
+---
+
+## Trade chart review artifact
+
+Trade screenshots are diagnostic artifacts, not trading signals. The canonical trade chart should show:
+
+```text
+top: trade-window candles with entry/exit/risk/TP annotations
+middle: independent 1h context covering the last 7 fully closed days before entry
+bottom: normalized quote-volume and number_of_trades line curves
+```
+
+The 1h context panel may draw strict overhead levels from the hourly-level diagnostic, but those levels must be unlabeled chart context only. They must not be treated as an entry/exit rule unless a separate strategy patch wires them into the decision path and updates backtest/live parity.
+
+The lower flow panel is shape/timing context: quote volume and trade count are each normalized to 0-100 within the displayed trade window and are not comparable as absolute magnitudes.

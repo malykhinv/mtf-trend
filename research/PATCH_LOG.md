@@ -23,6 +23,8 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P144 | Skip unchanged live signal rescans | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-performance | Do not spend OHLCV/API budget rescanning a symbol/timeframe until a new closed levels candle exists; active symbols are checked every cycle but only due ones consume scan slots, while waiting active symbols remain visible in `symbol_batch_selected`. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic scheduler smoke: active waiting symbol is not scanned again on unchanged closed candle and frees a slot for inactive scan. |
 | P148 | Inline live heartbeat status | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-operator-ux | Keep routine live heartbeat status on one mutable console line while preserving real events/errors/position logs as normal sequential lines; clarify that the number is cycle duration. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; console smoke: consecutive heartbeat lines overwrite in-place, any event log first terminates the heartbeat line. |
 | P149 | Strict high-based hourly levels | PROPOSED | `research_tools/hourly_levels.py`, `cli/parser.py`, `research/*` | diagnostics | Count only high-based 1h touches, enforce 6h spacing between counted touches, and reject pierced levels strictly by default. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; rerun `run-hourly-levels` with `--min-touch-spacing-hours 6 --max-level-pierce-pct 0.0`. |
+| P150 | Reject stale source candles for 1h levels | PROPOSED | `research_tools/hourly_levels.py`, `cli/parser.py`, `research/*` | diagnostics | Reject a pivot/high level source when any close in the previous 12h is above that candidate high. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; rerun `run-hourly-levels` with `--level-source-close-lookback-hours 12`. |
+| P151 | Rework trade chart context and flow panels | PROPOSED | `research_tools/anomaly_strategy_backtest.py`, `research/*` | diagnostics | Merge quote-volume and relative trade-count into one bottom line panel, and replace the middle context with independent 1h/7d candles plus strict hourly levels. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic `render_anomaly_trade_chart` smoke. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -654,3 +656,36 @@ python main.py run-hourly-levels --source-timeframe 5m --days 30 --level-source-
 
 Medium for diagnostics: fewer levels will be emitted when a later-looking pivot is actually below a recent accepted close. Live trading and anomaly backtest execution are unchanged.
 
+
+---
+
+## P151 — Rework trade chart context and flow panels
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+The trade chart spent two lower panels on histogram-style volume and quote-per-trade bars, while the context panel only showed a short timeframe-compressed view tied to the same x-axis as the trade window. This made it harder to review a trade against broader 1h resistance context.
+
+### Change
+
+- Merge quote volume and `number_of_trades` into one bottom panel.
+- Render both lower metrics as normalized line curves: quote volume in orange, relative trade count in green.
+- Replace the old time-aligned context panel with an independent 1h context panel covering the last 7 fully closed days before entry.
+- Draw strict `run-hourly-levels` overhead levels on the 1h context panel as unlabeled horizontal lines without legend.
+- Keep trade execution/chart annotations on the upper trade-window panel only.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python - <<'PY'
+# synthetic render_anomaly_trade_chart smoke
+PY
+```
+
+### Risk
+
+Low for trading logic: this is chart/artifact-only. Medium for chart review: lower flow lines are independently normalized to 0-100, so they compare timing/shape, not absolute magnitude.
