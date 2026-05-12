@@ -356,3 +356,36 @@ Next:
 ```bash
 python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --fast-source-trim true --output-dir results/hourly_levels_manual_review
 ```
+
+
+---
+
+## 2026-05-12 — P143 live scan latency cleanup
+
+Input:
+
+```text
+2026-05-11/12 micro-live run: 563 symbols, no positions, all selected signals rejected as stale after roughly 5-8 minutes. Operator requested first clean speedup patch without losing stale-reject artifacts and with top-growth moved out of live.
+```
+
+Result:
+
+```text
+Patch proposed. Live now fetches each levels timeframe once per symbol per cycle, skips expensive build for stale backfilled decisions while preserving reject_stale_signal artifacts, and runs top-growth only through standalone run-anomaly-top-growth.
+```
+
+Next:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 30 --symbol-batch-size 20
+python main.py run-anomaly-top-growth --top-growth-min-return-pct 0.10 --top-growth-limit 5
+```
+
+Success criteria:
+
+```text
+No top_growth_snapshot_started during live.
+No duplicate 5m OHLCV fetch per symbol for 5m/30s + 5m/15s.
+Stale historical decisions remain visible as reject_stale_signal with stage=prescan.
+```

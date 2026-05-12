@@ -19,6 +19,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P140 | Humanize and de-spike hourly levels | PROPOSED | `research_tools/hourly_levels.py`, `cli/parser.py`, `research/*` | diagnostics | Draw dark bot-style charts, count retouches only after a meaningful reset away from the level, cap nearby levels per symbol, draw levels from first valid touch, and reject pierced/spiked-through resistance levels by default. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; rerun `run-hourly-levels` with pierced-level guard enabled. |
 | P141 | Speed up hourly-level scan and chart run | PROPOSED | `research_tools/hourly_levels.py`, `cli/parser.py`, `research/*` | diagnostics | Read only scanner-needed parquet columns, trim stale source candles before 1h aggregation, and replace expensive pandas per-row/copy checks in touch/break/pierce logic with numpy scans. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; rerun `run-hourly-levels` and compare elapsed_seconds. |
 | P142 | Remove hourly chart tight-layout pass | PROPOSED | `research_tools/hourly_levels.py`, `research/*` | diagnostics | Replace matplotlib `tight_layout()` with fixed subplot margins to avoid warning spam and avoid an unnecessary per-chart layout solver pass. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; run chart export and confirm no tight_layout warning. |
+| P143 | Speed up live scan without hiding stale rejects | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance | Fetch each levels timeframe once per symbol per cycle, reject stale decisions before heavy signal build while preserving `reject_stale_signal` artifacts, and move top-growth export to standalone CLI. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; live smoke: `reject_stale_signal` remains visible with `stage=prescan`; `run-anomaly-live` no longer starts top-growth. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -421,3 +422,35 @@ python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3
 ### Risk
 
 Low: chart layout only. Level detection, CSV metrics, live trading and backtest behavior are unchanged.
+
+
+## P143 — Speed up live scan without hiding stale rejects
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+The 2026-05-11/12 micro-live run found selected signals only after they were already stale. Safety worked, but discovery was too slow: the live loop scanned the same `5m` levels timeframe separately for `5m/30s` and `5m/15s`, and top-growth snapshots competed with live REST/API budget. Stale decisions must still remain visible in artifacts.
+
+### Change
+
+- Group live scan work by `levels_timeframe`, so one `5m` OHLCV fetch per symbol serves both `5m/30s` and `5m/15s` entry metadata.
+- Add a prescan freshness guard before `_build_signal_at_start()`: stale decisions are marked consumed and written as `reject_stale_signal` with `stage=prescan`, but the expensive signal/category build is skipped.
+- Keep the execution-time freshness guard for selected signals and mark those rows with `stage=execution_guard`.
+- Remove top-growth from the live loop and add standalone `run-anomaly-top-growth` CLI for closed-hour top-growth artifacts.
+- Do not add dynamic universe pruning and do not relax `max_signal_age_ms`.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-top-growth --top-growth-min-return-pct 0.10 --top-growth-limit 5
+# live smoke: run-anomaly-live no longer emits top_growth_snapshot_started during trading loop
+# artifact smoke: stale backfilled decisions still emit reject_stale_signal with stage=prescan
+```
+
+### Risk
+
+Low/medium. Signal rules and order execution are unchanged, but live scan ordering and artifact staging change. Top-growth is now an explicit operator command rather than an automatic live side task.

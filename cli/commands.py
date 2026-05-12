@@ -1115,10 +1115,6 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             max_open_positions=int(getattr(args, "max_open_positions", 3)),
             symbol_batch_size=int(getattr(args, "symbol_batch_size", 20)),
             active_symbol_ttl_ms=int(getattr(args, "active_symbol_ttl_ms", 60_000)),
-            top_growth_enabled=_to_bool_flag(getattr(args, "top_growth_enabled", True), default=True),
-            top_growth_min_return_pct=float(getattr(args, "top_growth_min_return_pct", 0.10)),
-            top_growth_limit=int(getattr(args, "top_growth_limit", 5)),
-            top_growth_fetch_spacing_seconds=float(getattr(args, "top_growth_fetch_spacing_seconds", 0.05)),
             max_signal_age_ms=int(getattr(args, "max_signal_age_ms", 60_000)),
             max_entry_price_drift_pct=float(getattr(args, "max_entry_price_drift_pct", 0.003)),
             min_executable_rr_to_signal_tp1=float(getattr(args, "min_executable_rr_to_signal_tp1", 0.75)),
@@ -1141,6 +1137,38 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             return 2
 
     return _run_with_logging("run-anomaly-live", config, _run)
+
+
+def run_anomaly_top_growth(config: AppConfig, args: argparse.Namespace) -> int:
+    """Exports standalone closed-hour top-growth artifacts."""
+
+    def _run() -> int:
+        from research_tools.anomaly_micro_live import (
+            LiveStartupError,
+            TopGrowthSnapshotConfig,
+            TopGrowthSnapshotRunner,
+            parse_top_growth_period_start_ms,
+        )
+
+        top_growth_config = TopGrowthSnapshotConfig(
+            results_dir=config.backtest.results_dir,
+            symbols=tuple(getattr(args, "symbols", None) or ()),
+            period_start_ms=parse_top_growth_period_start_ms(getattr(args, "period_start_utc", None)),
+            min_return_pct=float(getattr(args, "top_growth_min_return_pct", 0.10)),
+            limit=int(getattr(args, "top_growth_limit", 5)),
+            fetch_spacing_seconds=float(getattr(args, "top_growth_fetch_spacing_seconds", 0.05)),
+        )
+        _, exchange_client, _ = _build_fetch_stack(config)
+        try:
+            return TopGrowthSnapshotRunner(
+                config=top_growth_config,
+                exchange_client=exchange_client,
+            ).run()
+        except LiveStartupError as exc:
+            print(f"top-growth: запуск остановлен: {exc}", flush=True)
+            return 2
+
+    return _run_with_logging("run-anomaly-top-growth", config, _run)
 
 
 def check_quality(config: AppConfig, args: argparse.Namespace) -> int:

@@ -9,9 +9,9 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P142 proposed locally on top of ZIP-derived source
-Last active patch: P142 hourly chart fixed layout
-Updated: 2026-05-11
+Local patch stack: P130-P143 proposed locally on top of ZIP-derived source
+Last active patch: P143 live scan latency cleanup
+Updated: 2026-05-12
 ```
 
 The project direction is anomaly-first: anomaly nature/category research, anomaly continuation backtests, and strict REST-only micro-live validation.
@@ -46,6 +46,7 @@ fetch-data
 update-cache
 run-anomaly-lab
 run-anomaly-live
+run-anomaly-top-growth
 run-hourly-levels
 check-quality
 clear-cache
@@ -71,7 +72,7 @@ research_tools/hourly_levels.py
 4. The 2026-05-11 NVDA micro-live position is audit-invalid for edge/PnL: stale signal execution mixed signal close with later live order timing.
 5. `main.py` still has a known Linux `ctypes.windll` import issue; intentionally not fixed in the current cleanup stack.
 6. Historical local artifacts may contain stale compiled files; they are ignored by git and should be deleted locally.
-7. Live now exports hourly closed-1h top-growth snapshots under each run's `top_growth/` directory; these artifacts are audit/backtest inputs, not trading signals.
+7. Top-growth snapshots are now exported only by standalone `run-anomaly-top-growth`; live trading loop must not spend REST/API budget on top-growth side work.
 
 ---
 
@@ -213,4 +214,19 @@ Next verification:
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-hourly-levels --source-timeframe 5m --days 45 --min-touches 3 --min-bounce-pct 0.05 --fast-source-trim true
+```
+
+
+---
+
+## 17. Current audit note — P143
+
+P143 is live-performance/audit cleanup. It does not relax stale-signal safety, does not change signal thresholds, and does not add dynamic universe pruning. Live scan now deduplicates OHLCV fetches by `levels_timeframe`, records stale backfilled decisions before expensive signal build as `reject_stale_signal` with `stage=prescan`, and moves top-growth collection to standalone `run-anomaly-top-growth`.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 30 --symbol-batch-size 20
+python main.py run-anomaly-top-growth --top-growth-min-return-pct 0.10 --top-growth-limit 5
 ```

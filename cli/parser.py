@@ -152,10 +152,6 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--max-open-positions", type=_positive_int_for("--max-open-positions"), default=3)
     anomaly_live.add_argument("--symbol-batch-size", type=_positive_int_for("--symbol-batch-size"), default=20)
     anomaly_live.add_argument("--active-symbol-ttl-ms", type=_positive_int_for("--active-symbol-ttl-ms"), default=60_000)
-    anomaly_live.add_argument("--top-growth-enabled", type=_str_to_bool, default=True)
-    anomaly_live.add_argument("--top-growth-min-return-pct", type=float, default=0.10)
-    anomaly_live.add_argument("--top-growth-limit", type=_positive_int_for("--top-growth-limit"), default=5)
-    anomaly_live.add_argument("--top-growth-fetch-spacing-seconds", type=float, default=0.05)
     anomaly_live.add_argument("--max-signal-age-ms", type=_positive_int_for("--max-signal-age-ms"), default=60_000)
     anomaly_live.add_argument("--max-entry-price-drift-pct", type=float, default=0.003)
     anomaly_live.add_argument("--min-executable-rr-to-signal-tp1", type=float, default=0.75)
@@ -163,6 +159,20 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--scan-sleep-seconds", type=float, default=2.0)
     anomaly_live.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_live.add_argument("--trail-buffer-r", type=float, default=0.10)
+
+    top_growth = subparsers.add_parser(
+        "run-anomaly-top-growth",
+        help="Export standalone closed-hour top-growth artifacts without running live trading",
+    )
+    top_growth.add_argument("--symbols", nargs="*", default=None, help="Optional symbols; default scans all USDT swap symbols")
+    top_growth.add_argument(
+        "--period-start-utc",
+        default=None,
+        help="Closed 1h candle start, e.g. 2026-05-12T04:00:00Z. Default: previous closed hour",
+    )
+    top_growth.add_argument("--top-growth-min-return-pct", type=float, default=0.10)
+    top_growth.add_argument("--top-growth-limit", type=_positive_int_for("--top-growth-limit"), default=5)
+    top_growth.add_argument("--top-growth-fetch-spacing-seconds", type=float, default=0.05)
 
     hourly_levels = subparsers.add_parser(
         "run-hourly-levels",
@@ -212,6 +222,7 @@ def resolve_handler(command_name: str) -> Handler:
         "update-cache": commands.update_cache,
         "run-anomaly-lab": commands.run_anomaly_lab,
         "run-anomaly-live": commands.run_anomaly_live,
+        "run-anomaly-top-growth": commands.run_anomaly_top_growth,
         "run-hourly-levels": commands.run_hourly_levels,
         "check-quality": commands.check_quality,
         "clear-cache": commands.clear_cache,

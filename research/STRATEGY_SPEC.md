@@ -195,3 +195,12 @@ context = bullish_target / danger_ceiling / overhead_level
 ```
 
 A touch is valid even if it includes a wick through the level only when the subsequent bounce proves the level mattered. Wick-only markings without reaction are not valid levels.
+
+
+---
+
+## Live discovery latency contract
+
+Live may skip expensive signal construction for decisions that are already older than `max_signal_age_ms`, but the skip is still an audit decision and must be written to artifacts, e.g. `reject_stale_signal` with a prescan stage.
+
+Top-growth snapshots are research/audit data, not trading signals. They should run through an explicit standalone command so they do not compete with live discovery and execution guards for API budget.

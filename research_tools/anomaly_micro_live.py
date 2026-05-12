@@ -206,10 +206,6 @@ class LiveAnomalyConfig:
     max_open_positions: int = 3
     symbol_batch_size: int = 20
     active_symbol_ttl_ms: int = 60_000
-    top_growth_enabled: bool = True
-    top_growth_min_return_pct: float = 0.10
-    top_growth_limit: int = 5
-    top_growth_fetch_spacing_seconds: float = 0.05
     signal_scan_backfill_candles: int = 10
     max_signal_age_ms: int = 60_000
     max_entry_price_drift_pct: float = 0.003
@@ -628,6 +624,263 @@ class LiveArtifactWriter:
             )
 
 
+@dataclass(frozen=True, slots=True)
+class TopGrowthSnapshotConfig:
+    results_dir: Path
+    symbols: tuple[str, ...]
+    period_start_ms: int | None = None
+    min_return_pct: float = 0.10
+    limit: int = 5
+    fetch_spacing_seconds: float = 0.05
+
+
+class TopGrowthSnapshotRunner:
+    def __init__(
+        self,
+        *,
+        config: TopGrowthSnapshotConfig,
+        exchange_client: CcxtFuturesClient,
+        logger: Callable[[str], None] = print,
+    ) -> None:
+        self.config = config
+        self.exchange = exchange_client
+        self.logger = logger
+        self.artifacts = LiveArtifactWriter(
+            config.results_dir / "top_growth_runs" / datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+        )
+
+    def run(self) -> int:
+        _validate_top_growth_config_values(self.config)
+        symbols = list(self.config.symbols) or self.exchange.list_usdt_swap_symbols()
+        if not symbols:
+            raise LiveStartupError("Нет символов для top-growth snapshot")
+        now_ms = int(time.time() * 1000)
+        period_start_ms = self.config.period_start_ms
+        if period_start_ms is None:
+            period_start_ms = _previous_closed_hour_start_ms(now_ms)
+        period_end_ms = period_start_ms + HOUR_MS
+        if period_end_ms > now_ms:
+            raise LiveStartupError("top-growth period должен быть полностью закрытым 1h интервалом")
+        snapshot_utc = datetime.now(UTC).isoformat()
+        self.artifacts.append_event(
+            "top_growth_snapshot_started",
+            "__top_growth__",
+            {
+                "period_start_ms": period_start_ms,
+                "period_end_ms": period_end_ms,
+                "symbols_total": len(symbols),
+                "threshold_pct": self.config.min_return_pct * 100.0,
+                "limit": self.config.limit,
+                "source": "standalone_command",
+            },
+        )
+        top_rows, status_rows = _collect_top_growth_snapshot(
+            exchange=self.exchange,
+            symbols=tuple(symbols),
+            period_start_ms=period_start_ms,
+            period_end_ms=period_end_ms,
+            snapshot_utc=snapshot_utc,
+            threshold_fraction=self.config.min_return_pct,
+            limit=self.config.limit,
+            fetch_spacing_seconds=self.config.fetch_spacing_seconds,
+        )
+        top_path, status_path = self.artifacts.write_top_growth_snapshot(
+            period_start_ms=period_start_ms,
+            period_end_ms=period_end_ms,
+            snapshot_utc=snapshot_utc,
+            top_rows=top_rows,
+            status_rows=status_rows,
+            symbols_total=len(symbols),
+            threshold_pct=self.config.min_return_pct * 100.0,
+            limit=self.config.limit,
+        )
+        self.artifacts.append_event(
+            "top_growth_snapshot_saved",
+            "__top_growth__",
+            {
+                "period_start_ms": period_start_ms,
+                "period_end_ms": period_end_ms,
+                "top_count": len(top_rows),
+                "symbols_total": len(symbols),
+                "ok_count": sum(1 for row in status_rows if row.get("status") == "ok"),
+                "failed_count": sum(1 for row in status_rows if row.get("status") != "ok"),
+                "top_file": str(top_path.relative_to(self.artifacts.root)),
+                "status_file": str(status_path.relative_to(self.artifacts.root)),
+                "source": "standalone_command",
+            },
+        )
+        period_start_utc = datetime.fromtimestamp(period_start_ms / 1000, UTC).isoformat()
+        self.logger(
+            "top-growth: "
+            f"{period_start_utc} · top {len(top_rows)} · "
+            f"ok {sum(1 for row in status_rows if row.get('status') == 'ok')}/{len(status_rows)} · "
+            f"артефакты {self.artifacts.root}"
+        )
+        return 0
+
+
+def _collect_top_growth_snapshot(
+    *,
+    exchange: CcxtFuturesClient,
+    symbols: tuple[str, ...],
+    period_start_ms: int,
+    period_end_ms: int,
+    snapshot_utc: str,
+    threshold_fraction: float,
+    limit: int,
+    fetch_spacing_seconds: float,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    threshold_pct = threshold_fraction * 100.0
+    candidates: list[dict[str, object]] = []
+    status_rows: list[dict[str, object]] = []
+    for symbol in symbols:
+        status_row = _load_top_growth_symbol_row(
+            exchange=exchange,
+            symbol=symbol,
+            period_start_ms=period_start_ms,
+            period_end_ms=period_end_ms,
+            snapshot_utc=snapshot_utc,
+        )
+        status_rows.append(status_row)
+        if status_row.get("status") == "ok":
+            growth_fraction = _row_float_or_none(status_row, "growth_fraction")
+            if growth_fraction is not None and growth_fraction >= threshold_fraction:
+                candidates.append(
+                    {
+                        "symbol": symbol,
+                        "growth_pct": status_row.get("growth_pct", ""),
+                        "growth_fraction": status_row.get("growth_fraction", ""),
+                        "open": status_row.get("open", ""),
+                        "close": status_row.get("close", ""),
+                        "high": status_row.get("high", ""),
+                        "low": status_row.get("low", ""),
+                        "quote_volume": status_row.get("quote_volume", ""),
+                        "number_of_trades": status_row.get("number_of_trades", ""),
+                        "taker_buy_quote_volume": status_row.get("taker_buy_quote_volume", ""),
+                        "threshold_pct": threshold_pct,
+                        "timeframe": Timeframe.H1.value,
+                        "source": "exchange_1h_closed_candle",
+                    }
+                )
+        spacing = float(fetch_spacing_seconds)
+        if math.isfinite(spacing) and spacing > 0.0:
+            time.sleep(spacing)
+    candidates.sort(
+        key=lambda row: (
+            _row_float_or_none(row, "growth_fraction") or -math.inf,
+            _row_float_or_none(row, "quote_volume") or -math.inf,
+        ),
+        reverse=True,
+    )
+    top_rows: list[dict[str, object]] = []
+    for rank, row in enumerate(candidates[:limit], start=1):
+        growth_fraction = _row_float_or_none(row, "growth_fraction")
+        top_rows.append({"rank": rank, "growth_multiple": (1.0 + growth_fraction) if growth_fraction is not None else "", **row})
+    return top_rows, status_rows
+
+
+def _load_top_growth_symbol_row(
+    *,
+    exchange: CcxtFuturesClient,
+    symbol: str,
+    period_start_ms: int,
+    period_end_ms: int,
+    snapshot_utc: str,
+) -> dict[str, object]:
+    base: dict[str, object] = {
+        "symbol": symbol,
+        "status": "failed",
+        "reason": "unknown",
+        "growth_pct": "",
+        "growth_fraction": "",
+        "open": "",
+        "close": "",
+        "high": "",
+        "low": "",
+        "quote_volume": "",
+        "number_of_trades": "",
+        "taker_buy_quote_volume": "",
+        "candle_timestamp_ms": "",
+        "timeframe": Timeframe.H1.value,
+    }
+    try:
+        frame = exchange.fetch_ohlcv(symbol, Timeframe.H1, period_start_ms, period_end_ms - 1)
+    except Exception as exc:
+        return {**base, "reason": f"fetch_ohlcv_failed:{type(exc).__name__}:{str(exc)[:160]}"}
+    if frame.empty:
+        return {**base, "reason": "empty_ohlcv"}
+    missing = [column for column in REQUIRED_PRICE_COLUMNS if column not in frame.columns]
+    if missing:
+        return {**base, "reason": "missing_price_columns:" + ",".join(missing)}
+    work = frame.copy()
+    work["timestamp"] = pd.to_numeric(work["timestamp"], errors="coerce")
+    exact = work.loc[work["timestamp"].astype("Int64") == int(period_start_ms)]
+    if exact.empty:
+        timestamps = pd.to_numeric(work["timestamp"], errors="coerce").dropna().astype("int64")
+        reason = "no_exact_hour_candle"
+        if not timestamps.empty:
+            reason += f":first={int(timestamps.min())}:last={int(timestamps.max())}"
+        return {**base, "reason": reason}
+    row = exact.sort_values("timestamp").iloc[-1]
+    open_price = _series_float_or_none(row, "open")
+    close_price = _series_float_or_none(row, "close")
+    high_price = _series_float_or_none(row, "high")
+    low_price = _series_float_or_none(row, "low")
+    if open_price is None or close_price is None or high_price is None or low_price is None or open_price <= 0.0:
+        return {
+            **base,
+            "reason": "invalid_price_values",
+            "open": _finite_or_blank(open_price),
+            "close": _finite_or_blank(close_price),
+            "high": _finite_or_blank(high_price),
+            "low": _finite_or_blank(low_price),
+            "candle_timestamp_ms": int(period_start_ms),
+        }
+    growth_fraction = (close_price - open_price) / open_price
+    return {
+        **base,
+        "status": "ok",
+        "reason": "ok",
+        "growth_pct": growth_fraction * 100.0,
+        "growth_fraction": growth_fraction,
+        "open": open_price,
+        "close": close_price,
+        "high": high_price,
+        "low": low_price,
+        "quote_volume": _finite_or_blank(_series_float_or_none(row, "quote_volume")),
+        "number_of_trades": _finite_or_blank(_series_float_or_none(row, "number_of_trades")),
+        "taker_buy_quote_volume": _finite_or_blank(_series_float_or_none(row, "taker_buy_quote_volume")),
+        "candle_timestamp_ms": int(period_start_ms),
+    }
+
+
+def parse_top_growth_period_start_ms(value: str | None) -> int | None:
+    if value is None or not str(value).strip():
+        return None
+    raw = str(value).strip().replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError as exc:
+        raise LiveStartupError("period-start-utc должен быть ISO timestamp, например 2026-05-12T04:00:00Z") from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    parsed_utc = parsed.astimezone(UTC)
+    if parsed_utc.minute != 0 or parsed_utc.second != 0 or parsed_utc.microsecond != 0:
+        raise LiveStartupError("period-start-utc должен указывать на начало закрытой 1h свечи")
+    return int(parsed_utc.timestamp() * 1000)
+
+
+def _previous_closed_hour_start_ms(now_ms: int) -> int:
+    return ((now_ms // HOUR_MS) - 1) * HOUR_MS
+
+
+def _validate_top_growth_config_values(config: TopGrowthSnapshotConfig) -> None:
+    if config.limit < 1:
+        raise LiveStartupError(f"Некорректный top-growth config: limit должен быть >= 1, получено {config.limit!r}")
+    _require_finite_config_number("top_growth_min_return_pct", config.min_return_pct, min_value=0.0, allow_equal_min=False)
+    _require_finite_config_number("top_growth_fetch_spacing_seconds", config.fetch_spacing_seconds, min_value=0.0, allow_equal_min=True)
+
+
 class AnomalyMicroLiveRunner:
     def __init__(
         self,
@@ -657,9 +910,6 @@ class AnomalyMicroLiveRunner:
         self._inactive_cursor = 0
         self._order_reconcile_cursor = 0
         self._network_degraded = False
-        self._top_growth_lock = threading.Lock()
-        self._top_growth_exported_periods: set[int] = set()
-        self._top_growth_inflight_periods: set[int] = set()
 
     def run(self) -> int:
         self._validate_startup()
@@ -687,7 +937,6 @@ class AnomalyMicroLiveRunner:
             cycle_started = time.monotonic()
             try:
                 opened_before, _, closed_before, orphan_before = self._live_counts()
-                self._maybe_start_top_growth_export(symbols)
                 batch = self._next_symbol_batch(symbols)
                 signals = self._scan_batch(batch)
                 for signal in signals:
@@ -771,220 +1020,6 @@ class AnomalyMicroLiveRunner:
             raise LiveStartupError("Биржа вернула нечисловой free USDT balance") from exc
         if not math.isfinite(balance):
             raise LiveStartupError("Биржа вернула нечисловой free USDT balance")
-
-    def _maybe_start_top_growth_export(self, symbols: list[str]) -> None:
-        if not self.config.top_growth_enabled:
-            return
-        now_ms = int(time.time() * 1000)
-        period_start_ms = ((now_ms // HOUR_MS) - 1) * HOUR_MS
-        if period_start_ms < 0:
-            return
-        period_end_ms = period_start_ms + HOUR_MS
-        with self._top_growth_lock:
-            if self._top_growth_inflight_periods:
-                return
-            if period_start_ms in self._top_growth_exported_periods:
-                return
-            self._top_growth_inflight_periods.add(period_start_ms)
-        self.artifacts.append_event(
-            "top_growth_snapshot_started",
-            "__live__",
-            {
-                "period_start_ms": period_start_ms,
-                "period_end_ms": period_end_ms,
-                "symbols_total": len(symbols),
-                "threshold_pct": self.config.top_growth_min_return_pct * 100.0,
-                "limit": self.config.top_growth_limit,
-            },
-        )
-        thread = threading.Thread(
-            target=self._export_top_growth_snapshot,
-            args=(tuple(symbols), period_start_ms),
-            name=f"top-growth-{period_start_ms}",
-            daemon=True,
-        )
-        thread.start()
-
-    def _export_top_growth_snapshot(self, symbols: tuple[str, ...], period_start_ms: int) -> None:
-        period_end_ms = period_start_ms + HOUR_MS
-        try:
-            snapshot_utc = datetime.now(UTC).isoformat()
-            top_rows, status_rows = self._collect_top_growth_snapshot(
-                symbols=symbols,
-                period_start_ms=period_start_ms,
-                period_end_ms=period_end_ms,
-                snapshot_utc=snapshot_utc,
-            )
-            top_path, status_path = self.artifacts.write_top_growth_snapshot(
-                period_start_ms=period_start_ms,
-                period_end_ms=period_end_ms,
-                snapshot_utc=snapshot_utc,
-                top_rows=top_rows,
-                status_rows=status_rows,
-                symbols_total=len(symbols),
-                threshold_pct=self.config.top_growth_min_return_pct * 100.0,
-                limit=self.config.top_growth_limit,
-            )
-            self.artifacts.append_event(
-                "top_growth_snapshot_saved",
-                "__live__",
-                {
-                    "period_start_ms": period_start_ms,
-                    "period_end_ms": period_end_ms,
-                    "top_count": len(top_rows),
-                    "symbols_total": len(symbols),
-                    "ok_count": sum(1 for row in status_rows if row.get("status") == "ok"),
-                    "failed_count": sum(1 for row in status_rows if row.get("status") != "ok"),
-                    "top_file": str(top_path.relative_to(self.artifacts.root)),
-                    "status_file": str(status_path.relative_to(self.artifacts.root)),
-                },
-            )
-        except Exception as exc:
-            self.artifacts.append_event(
-                "top_growth_snapshot_failed",
-                "__live__",
-                {
-                    "period_start_ms": period_start_ms,
-                    "period_end_ms": period_end_ms,
-                    "error_type": type(exc).__name__,
-                    "error": str(exc)[:500],
-                },
-            )
-        finally:
-            with self._top_growth_lock:
-                self._top_growth_inflight_periods.discard(period_start_ms)
-                self._top_growth_exported_periods.add(period_start_ms)
-
-    def _collect_top_growth_snapshot(
-        self,
-        *,
-        symbols: tuple[str, ...],
-        period_start_ms: int,
-        period_end_ms: int,
-        snapshot_utc: str,
-    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-        threshold_fraction = float(self.config.top_growth_min_return_pct)
-        threshold_pct = threshold_fraction * 100.0
-        limit = int(self.config.top_growth_limit)
-        candidates: list[dict[str, object]] = []
-        status_rows: list[dict[str, object]] = []
-        for symbol in symbols:
-            status_row = self._load_top_growth_symbol_row(
-                symbol=symbol,
-                period_start_ms=period_start_ms,
-                period_end_ms=period_end_ms,
-                snapshot_utc=snapshot_utc,
-            )
-            status_rows.append(status_row)
-            if status_row.get("status") == "ok":
-                growth_fraction = _row_float_or_none(status_row, "growth_fraction")
-                if growth_fraction is not None and growth_fraction >= threshold_fraction:
-                    candidates.append(
-                        {
-                            "symbol": symbol,
-                            "growth_pct": status_row.get("growth_pct", ""),
-                            "growth_fraction": status_row.get("growth_fraction", ""),
-                            "open": status_row.get("open", ""),
-                            "close": status_row.get("close", ""),
-                            "high": status_row.get("high", ""),
-                            "low": status_row.get("low", ""),
-                            "quote_volume": status_row.get("quote_volume", ""),
-                            "number_of_trades": status_row.get("number_of_trades", ""),
-                            "taker_buy_quote_volume": status_row.get("taker_buy_quote_volume", ""),
-                            "threshold_pct": threshold_pct,
-                            "timeframe": Timeframe.H1.value,
-                            "source": "exchange_1h_closed_candle",
-                        }
-                    )
-            spacing = float(self.config.top_growth_fetch_spacing_seconds)
-            if math.isfinite(spacing) and spacing > 0.0:
-                time.sleep(spacing)
-        candidates.sort(
-            key=lambda row: (
-                _row_float_or_none(row, "growth_fraction") or -math.inf,
-                _row_float_or_none(row, "quote_volume") or -math.inf,
-            ),
-            reverse=True,
-        )
-        top_rows: list[dict[str, object]] = []
-        for rank, row in enumerate(candidates[:limit], start=1):
-            growth_fraction = _row_float_or_none(row, "growth_fraction")
-            top_rows.append({"rank": rank, "growth_multiple": (1.0 + growth_fraction) if growth_fraction is not None else "", **row})
-        return top_rows, status_rows
-
-    def _load_top_growth_symbol_row(
-        self,
-        *,
-        symbol: str,
-        period_start_ms: int,
-        period_end_ms: int,
-        snapshot_utc: str,
-    ) -> dict[str, object]:
-        base: dict[str, object] = {
-            "symbol": symbol,
-            "status": "failed",
-            "reason": "unknown",
-            "growth_pct": "",
-            "growth_fraction": "",
-            "open": "",
-            "close": "",
-            "high": "",
-            "low": "",
-            "quote_volume": "",
-            "number_of_trades": "",
-            "taker_buy_quote_volume": "",
-            "candle_timestamp_ms": "",
-            "timeframe": Timeframe.H1.value,
-        }
-        try:
-            frame = self.exchange.fetch_ohlcv(symbol, Timeframe.H1, period_start_ms, period_end_ms - 1)
-        except Exception as exc:
-            return {**base, "reason": f"fetch_ohlcv_failed:{type(exc).__name__}:{str(exc)[:160]}"}
-        if frame.empty:
-            return {**base, "reason": "empty_ohlcv"}
-        missing = [column for column in REQUIRED_PRICE_COLUMNS if column not in frame.columns]
-        if missing:
-            return {**base, "reason": "missing_price_columns:" + ",".join(missing)}
-        work = frame.copy()
-        work["timestamp"] = pd.to_numeric(work["timestamp"], errors="coerce")
-        exact = work.loc[work["timestamp"].astype("Int64") == int(period_start_ms)]
-        if exact.empty:
-            timestamps = pd.to_numeric(work["timestamp"], errors="coerce").dropna().astype("int64")
-            reason = "no_exact_hour_candle"
-            if not timestamps.empty:
-                reason += f":first={int(timestamps.min())}:last={int(timestamps.max())}"
-            return {**base, "reason": reason}
-        row = exact.sort_values("timestamp").iloc[-1]
-        open_price = _series_float_or_none(row, "open")
-        close_price = _series_float_or_none(row, "close")
-        high_price = _series_float_or_none(row, "high")
-        low_price = _series_float_or_none(row, "low")
-        if open_price is None or close_price is None or high_price is None or low_price is None or open_price <= 0.0:
-            return {
-                **base,
-                "reason": "invalid_price_values",
-                "open": _finite_or_blank(open_price),
-                "close": _finite_or_blank(close_price),
-                "high": _finite_or_blank(high_price),
-                "low": _finite_or_blank(low_price),
-                "candle_timestamp_ms": int(period_start_ms),
-            }
-        growth_fraction = (close_price - open_price) / open_price
-        return {
-            **base,
-            "status": "ok",
-            "reason": "ok",
-            "growth_pct": growth_fraction * 100.0,
-            "growth_fraction": growth_fraction,
-            "open": open_price,
-            "close": close_price,
-            "high": high_price,
-            "low": low_price,
-            "quote_volume": _finite_or_blank(_series_float_or_none(row, "quote_volume")),
-            "number_of_trades": _finite_or_blank(_series_float_or_none(row, "number_of_trades")),
-            "taker_buy_quote_volume": _finite_or_blank(_series_float_or_none(row, "taker_buy_quote_volume")),
-            "candle_timestamp_ms": int(period_start_ms),
-        }
 
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
         now_ms = int(time.time() * 1000)
@@ -1121,7 +1156,10 @@ class AnomalyMicroLiveRunner:
     def _scan_batch(self, symbols: list[str]) -> list[LiveSignal]:
         signals: list[LiveSignal] = []
         now_ms = int(time.time() * 1000)
+        entry_timeframes_by_levels: dict[Timeframe, list[Timeframe]] = {}
         for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
+            entry_timeframes_by_levels.setdefault(levels_timeframe, []).append(entry_timeframe)
+        for levels_timeframe, entry_timeframes in entry_timeframes_by_levels.items():
             timeframe_ms = int(levels_timeframe.to_milliseconds())
             lookback_ms = (
                 self.config.baseline_candles
@@ -1131,15 +1169,16 @@ class AnomalyMicroLiveRunner:
             ) * timeframe_ms
             for symbol in symbols:
                 frame = self.exchange.fetch_ohlcv(symbol, levels_timeframe, now_ms - lookback_ms, now_ms)
-                signals.extend(
-                    self._build_recent_signals(
-                        symbol,
-                        frame,
-                        now_ms=now_ms,
-                        levels_timeframe=levels_timeframe,
-                        entry_timeframe=entry_timeframe,
+                for entry_timeframe in entry_timeframes:
+                    signals.extend(
+                        self._build_recent_signals(
+                            symbol,
+                            frame,
+                            now_ms=now_ms,
+                            levels_timeframe=levels_timeframe,
+                            entry_timeframe=entry_timeframe,
+                        )
                     )
-                )
         return signals
 
     def _build_recent_signals(
@@ -1176,6 +1215,26 @@ class AnomalyMicroLiveRunner:
             with self._state_lock:
                 if key in self._seen_decisions:
                     continue
+            freshness = _decision_freshness_details(
+                decision_timestamp_ms=decision_ts,
+                levels_timeframe=levels_timeframe,
+                now_ms=now_ms,
+                max_signal_age_ms=self.config.max_signal_age_ms,
+            )
+            if freshness["signal_age_ms"] > self.config.max_signal_age_ms:
+                with self._state_lock:
+                    self._seen_decisions.add(key)
+                self.artifacts.append_event(
+                    "reject_stale_signal",
+                    symbol,
+                    {
+                        **freshness,
+                        "stage": "prescan",
+                        "levels_tf": levels_timeframe.value,
+                        "entry_tf": entry_timeframe.value,
+                    },
+                )
+                continue
             signal = self._build_signal_at_start(
                 symbol,
                 frame,
@@ -1894,33 +1953,20 @@ class AnomalyMicroLiveRunner:
         ).start()
 
     def _validate_signal_freshness(self, signal: LiveSignal) -> bool:
-        levels_timeframe_ms = int(signal.levels_timeframe.to_milliseconds())
-        decision_available_ms = int(signal.decision_timestamp_ms) + levels_timeframe_ms
         now_ms = int(time.time() * 1000)
-        signal_age_ms = now_ms - decision_available_ms
-        if signal_age_ms < 0:
-            self.artifacts.append_event(
-                "reject_signal_not_closed_yet",
-                signal.symbol,
-                {
-                    "decision_timestamp_ms": signal.decision_timestamp_ms,
-                    "decision_available_ms": decision_available_ms,
-                    "now_ms": now_ms,
-                    "signal_age_ms": signal_age_ms,
-                },
-            )
+        details = _decision_freshness_details(
+            decision_timestamp_ms=int(signal.decision_timestamp_ms),
+            levels_timeframe=signal.levels_timeframe,
+            now_ms=now_ms,
+            max_signal_age_ms=self.config.max_signal_age_ms,
+        )
+        if details["signal_age_ms"] < 0:
+            self.artifacts.append_event("reject_signal_not_closed_yet", signal.symbol, details)
             return False
-        if signal_age_ms > self.config.max_signal_age_ms:
+        if details["signal_age_ms"] > self.config.max_signal_age_ms:
             self._clear_active_symbol(signal.symbol, reason="stale_signal")
             self._mark_signal_decision_consumed(signal, reason="stale_signal")
-            details = {
-                "decision_timestamp_ms": signal.decision_timestamp_ms,
-                "decision_available_ms": decision_available_ms,
-                "now_ms": now_ms,
-                "signal_age_ms": signal_age_ms,
-                "max_signal_age_ms": self.config.max_signal_age_ms,
-            }
-            self.artifacts.append_event("reject_stale_signal", signal.symbol, details)
+            self.artifacts.append_event("reject_stale_signal", signal.symbol, {**details, "stage": "execution_guard"})
             self._notify_order_blocked(signal, event="reject_stale_signal", details=details)
             return False
         return True
@@ -2749,7 +2795,6 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "max_open_positions": (config.max_open_positions, 1),
         "symbol_batch_size": (config.symbol_batch_size, 1),
         "active_symbol_ttl_ms": (config.active_symbol_ttl_ms, 1),
-        "top_growth_limit": (config.top_growth_limit, 1),
         "signal_scan_backfill_candles": (config.signal_scan_backfill_candles, 1),
         "max_signal_age_ms": (config.max_signal_age_ms, 1),
         "stop_limit_per_symbol": (config.stop_limit_per_symbol, 1),
@@ -2771,7 +2816,6 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "network_sleep_seconds": config.network_sleep_seconds,
         "min_executable_rr_to_signal_tp1": config.min_executable_rr_to_signal_tp1,
         "max_position_amount_slippage_ratio": config.max_position_amount_slippage_ratio,
-        "top_growth_min_return_pct": config.top_growth_min_return_pct,
     }
     for name, value in required_positive.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
@@ -2785,7 +2829,6 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "telegram_cooldown_seconds": config.telegram_cooldown_seconds,
         "trail_buffer_r": config.trail_buffer_r,
         "max_entry_price_drift_pct": config.max_entry_price_drift_pct,
-        "top_growth_fetch_spacing_seconds": config.top_growth_fetch_spacing_seconds,
     }
     for name, value in required_non_negative.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=True)
@@ -2871,6 +2914,25 @@ def _category_value(category: LivePumpCategory, config: LiveAnomalyConfig, field
     if value is not None:
         return value
     return getattr(config, field_name)
+
+
+def _decision_freshness_details(
+    *,
+    decision_timestamp_ms: int,
+    levels_timeframe: Timeframe,
+    now_ms: int,
+    max_signal_age_ms: int,
+) -> dict[str, object]:
+    levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
+    decision_available_ms = int(decision_timestamp_ms) + levels_timeframe_ms
+    signal_age_ms = int(now_ms) - decision_available_ms
+    return {
+        "decision_timestamp_ms": int(decision_timestamp_ms),
+        "decision_available_ms": decision_available_ms,
+        "now_ms": int(now_ms),
+        "signal_age_ms": signal_age_ms,
+        "max_signal_age_ms": int(max_signal_age_ms),
+    }
 
 
 BLOCKED_ORDER_REASON_LABELS = {
