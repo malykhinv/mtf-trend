@@ -389,3 +389,22 @@ Known effect:
 ```text
 A real opened position now performs one additional H1 context fetch and Telegram photo upload; failures are recorded as chart_render_failed, chart_context_fetch_failed, or telegram_open_chart_failed and should not block position monitoring. Any levels drawn in the 1h context panel must have been discovered from the same visible 7-day context, not older hidden history.
 ```
+
+---
+
+## Current audit note — P154
+
+P154 is Telegram operator UI only. Symbol-specific messages now use a deterministic animal emoji derived from compact symbol text, so open/stop/close/blocked/error messages for the same symbol share one stable emoji across process restarts. Service messages use fixed `🚧`/`⚠️` icons, timeframe/context lines are monospace, and error payloads are monospace.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --max-cycles 1 --symbols BTC/USDT:USDT --confirm-real-orders false
+```
+
+Known effect:
+
+```text
+Telegram text appearance changes only; live signal, order, stop, chart, and artifact semantics are unchanged.
+```

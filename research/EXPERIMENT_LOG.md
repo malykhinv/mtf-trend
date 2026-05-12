@@ -568,3 +568,25 @@ Next:
 ```text
 Regenerate an open-position chart for a symbol with older resistance history and verify that levels without touches inside the visible 7-day context no longer appear.
 ```
+
+---
+
+## 2026-05-12 — P154 Telegram style normalization
+
+Input:
+
+```text
+Operator requested unified Telegram text style: monospace TF/context lines, monospace error payloads, deterministic animal emoji per symbol, and fixed service icons for non-symbol messages.
+```
+
+Result:
+
+```text
+Patch proposed. Telegram formatter paths now share deterministic symbol emoji assignment and consistent code formatting for service context and errors. This is UI-only and does not alter live execution.
+```
+
+Next:
+
+```text
+Trigger one startup/error/blocked/open-message smoke and verify Telegram rendering: context lines are monospace, error text is monospace, and the same symbol keeps the same animal emoji across open/stop/close/blocked messages.
+```

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import html
 import json
 import math
@@ -34,7 +35,20 @@ REQUIRED_PRICE_COLUMNS = ("timestamp", "open", "high", "low", "close")
 REQUIRED_FLOW_COLUMNS = ("quote_volume", "number_of_trades")
 OPTIONAL_FLOW_COLUMNS = ("taker_buy_quote_volume",)
 HOUR_MS = 60 * 60 * 1000
-NATURE_EMOJIS = ("🏔️", "🌋", "🌊", "🌙", "🌓", "🌘", "🌄", "🌅", "🌌", "🌧️", "🌩️", "🪨")
+ANIMAL_EMOJIS = (
+    "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
+    "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦆", "🦅",
+    "🦉", "🦇", "🐺", "🐗", "🐴", "🦄", "🐝", "🐛", "🦋", "🐌",
+    "🐞", "🐜", "🦗", "🕷️", "🦂", "🐢", "🐍", "🦎", "🦖", "🦕",
+    "🐙", "🦑", "🦐", "🦞", "🦀", "🐡", "🐠", "🐟", "🐬", "🐳",
+    "🐋", "🦈", "🐊", "🐅", "🐆", "🦓", "🦍", "🦧", "🐘", "🦛",
+    "🦏", "🐪", "🐫", "🦒", "🦘", "🦬", "🐃", "🐂", "🐄", "🐎",
+    "🐖", "🐏", "🐑", "🦙", "🐐", "🦌", "🐕", "🐩", "🐈", "🐓",
+    "🦃", "🦚", "🦜", "🦢", "🦩", "🕊️", "🐇", "🦝", "🦨", "🦡",
+    "🦫", "🦦", "🦥", "🐁", "🐀", "🐿️", "🦔",
+)
+SERVICE_WARNING_EMOJI = "⚠️"
+SERVICE_WORK_EMOJI = "🚧"
 TOP_GROWTH_COLUMNS = (
     "snapshot_utc",
     "period_start_utc",
@@ -1003,8 +1017,8 @@ class AnomalyMicroLiveRunner:
             channel="events",
             key="live_started",
             text=(
-                f"🛰️ <b>Запуск {trading_mode}</b>\n\n"
-                f"TF: {_telegram_escape(timeframe_pairs_label)}"
+                f"{SERVICE_WORK_EMOJI} <b>Запуск {trading_mode}</b>\n\n"
+                f"{_telegram_code(timeframe_pairs_label)}"
             ),
         )
         cycle = 0
@@ -1047,7 +1061,7 @@ class AnomalyMicroLiveRunner:
                 self.telegram.send(
                     channel="events",
                     key="live_data_integrity_error",
-                    text=f"🧯 <b>Ошибка</b>\n\n{_telegram_code(str(exc)[:600])}",
+                    text=f"{SERVICE_WARNING_EMOJI} <b>Ошибка</b>\n\n{_telegram_code(str(exc)[:600])}",
                 )
                 return 3
             except ExchangeConnectivityError as exc:
@@ -1056,7 +1070,7 @@ class AnomalyMicroLiveRunner:
                     self.telegram.send(
                         channel="events",
                         key="network_degraded",
-                        text=f"🪁 Пауза\n\n{_telegram_code(str(exc)[:300])}",
+                        text=f"{SERVICE_WORK_EMOJI} <b>Пауза</b>\n\n{_telegram_code(str(exc)[:300])}",
                     )
                 self._network_degraded = True
                 time.sleep(self.config.network_sleep_seconds)
@@ -1070,7 +1084,7 @@ class AnomalyMicroLiveRunner:
                 self.telegram.send(
                     channel="events",
                     key="live_internal_error",
-                    text=f"🧯 <b>Ошибка</b>\n\n{_telegram_code(type(exc).__name__ + ': ' + str(exc)[:500])}",
+                    text=f"{SERVICE_WARNING_EMOJI} <b>Ошибка</b>\n\n{_telegram_code(type(exc).__name__ + ': ' + str(exc)[:500])}",
                 )
                 return 4
         orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle, force=True)
@@ -3468,11 +3482,10 @@ BLOCKED_ORDER_REASON_LABELS = {
 def _format_order_blocked_message(signal: LiveSignal, *, event: str, details: dict[str, object]) -> str:
     reason = BLOCKED_ORDER_REASON_LABELS.get(event, event)
     return (
-        f"{_nature_emoji('blocked:' + event + ':' + signal.symbol)} "
+        f"{_symbol_emoji(signal.symbol)} "
         f"<b>{_telegram_symbol_link(signal.symbol)} Позиция не открыта</b>\n\n"
         f"{_telegram_escape(reason)}\n\n"
-        f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · "
-        f"{_telegram_escape(signal.category_label)} · {_telegram_escape(signal.session)}"
+        f"{_telegram_signal_context(signal)}"
     )
 
 
@@ -3487,8 +3500,9 @@ def _detail_float(details: dict[str, object], key: str) -> float | None:
 
 def _format_position_integrity_error_message(position: LivePosition, *, reason: str) -> str:
     return (
-        f"🚨 <b>{_telegram_symbol_link(position.signal.symbol)} Ошибка ведения позиции</b>\n\n"
-        f"{_telegram_escape(reason)}\n\n"
+        f"{_symbol_emoji(position.signal.symbol)} "
+        f"<b>{_telegram_symbol_link(position.signal.symbol)} Ошибка ведения позиции</b>\n\n"
+        f"{_telegram_code(reason)}\n\n"
         f"ID: {_telegram_code(position.position_id)}"
     )
 
@@ -3546,21 +3560,20 @@ def _format_open_message(position: LivePosition) -> str:
     sl_pct = _safe_divide(entry_price - float(position.stop_price), entry_price)
     weaknesses = _format_weaknesses(signal.weaknesses)
     return (
-        f"{_nature_emoji('open:' + signal.symbol)} <b>{_telegram_symbol_link(signal.symbol)} LONG</b>\n\n"
+        f"{_symbol_emoji(signal.symbol)} <b>{_telegram_symbol_link(signal.symbol)} LONG</b>\n\n"
         f"Сигнал: {_format_price(signal.entry_price)}\n\n"
         f"Вход: {_format_price(entry_price)}\n\n"
         f"TP1: {_format_price(position.tp1_price)} {_format_percent(tp_pct)}\n"
         f"SL: {_format_price(position.stop_price)} {_format_percent(sl_pct)}\n\n"
         f"Препятствия: {weaknesses}\n\n"
-        f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · "
-        f"{_telegram_escape(signal.category_label)} · {_telegram_escape(signal.session)}"
+        f"{_telegram_signal_context(signal)}"
     )
 
 
 def _format_close_message(position: LivePosition, *, pnl_usdt: float, pnl_pct: float, exit_price: float) -> str:
     exit_zone = _format_exit_zone(position, exit_price=exit_price)
     return (
-        f"{_nature_emoji('close:' + position.position_id)} "
+        f"{_symbol_emoji(position.signal.symbol)} "
         f"<b>{_telegram_symbol_link(position.signal.symbol)} {_format_usdt(pnl_usdt)} USDT</b>\n\n"
         f"PNL {_format_percent(pnl_pct, signed=False)}\n\n"
         f"{exit_zone}"
@@ -3571,7 +3584,7 @@ def _format_stop_move_message(position: LivePosition, *, stop_price: float, labe
     stop_distance_from_entry = _safe_divide(float(stop_price) - float(position.entry_price), float(position.entry_price))
     display_label = _format_stop_zone(position, stop_price=stop_price, fallback_label=label)
     return (
-        f"{_nature_emoji('stop:' + label + ':' + position.position_id)} "
+        f"{_symbol_emoji(position.signal.symbol)} "
         f"<b>{_telegram_symbol_link(position.signal.symbol)} {display_label} "
         f"{_format_percent(stop_distance_from_entry, signed=True, precision=2)}</b>"
     )
@@ -3697,9 +3710,18 @@ def _aggregate_aggtrades_to_ohlcv_frame(
     )
     return aggregated.loc[:, columns].reset_index(drop=True)
 
-def _nature_emoji(key: str) -> str:
-    index = sum(ord(char) for char in key) % len(NATURE_EMOJIS)
-    return NATURE_EMOJIS[index]
+def _telegram_signal_context(signal: LiveSignal) -> str:
+    return _telegram_code(
+        f"{signal.levels_timeframe.value}/{signal.entry_timeframe.value} · "
+        f"{signal.category_label} · {signal.session}"
+    )
+
+
+def _symbol_emoji(symbol: str) -> str:
+    compact = _compact_symbol(symbol).upper()
+    digest = hashlib.sha256(compact.encode("utf-8")).digest()
+    index = int.from_bytes(digest[:8], "big") % len(ANIMAL_EMOJIS)
+    return ANIMAL_EMOJIS[index]
 
 
 QUOTE_SYMBOL_SUFFIXES = ("USDT", "USDC", "BUSD", "FDUSD", "TUSD", "USD")

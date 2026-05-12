@@ -247,3 +247,21 @@ The 1h context panel may draw strict overhead levels from the hourly-level diagn
 The lower flow panel is shape/timing context: quote volume and trade count are each normalized to 0-100 within the displayed trade window and are not comparable as absolute magnitudes.
 
 Live open-position Telegram charts use the same three-panel renderer after verified fill/stop creation. Because the trade is not closed yet, they must not draw completed risk/reward rectangles; they show TP1 and SL as horizontal levels instead. Telegram is operator UI only: `live_events.csv` and live position state remain the audit source of truth.
+
+---
+
+## Telegram operator-message style
+
+Telegram is operator UI only; audit truth remains in `live_events.csv`, ledger files, exchange state, and chart artifacts.
+
+Style contract:
+
+```text
+symbol-specific messages use one deterministic animal emoji per compact symbol
+service/startup/pause messages use 🚧
+service/error messages use ⚠️
+error payloads and integrity reasons are rendered as Telegram code
+TF/context lines are rendered as Telegram code
+```
+
+The symbol emoji must be algorithmic, not per-symbol hardcoded and not Python `hash()` based. It is derived from a stable digest of the compact symbol string so the same symbol maps to the same animal across runs.

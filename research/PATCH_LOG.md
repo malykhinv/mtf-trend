@@ -751,3 +751,35 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ### Risk
 
 Low for trading logic: chart-only. Medium for chart review: some previously drawn context levels may disappear when their confirming touches existed only outside the visible 7-day panel.
+---
+
+## P154 — Standardize Telegram text style and symbol emoji
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+Telegram operator messages used mixed icon semantics and mixed plain/code formatting for timeframe/context and error payloads. Position messages also used event-specific pseudo-random nature emojis, so the same symbol could show different emojis across open/stop/close messages.
+
+### Change
+
+- Replace event-key nature emojis with deterministic animal emojis derived from the compact symbol string via SHA-256.
+- Use the same animal emoji for every symbol-specific message: blocked order, open, stop move, close, and position integrity error.
+- Use service emojis for non-symbol service messages: `🚧` for startup/network pause and `⚠️` for errors.
+- Render startup timeframe pairs and symbol signal context lines as Telegram `<code>...</code>`.
+- Render error details/reasons as Telegram `<code>...</code>` consistently.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python - <<'PY'
+# synthetic Telegram formatter smoke: stable BTC emoji, escaped code context, service error text
+PY
+```
+
+### Risk
+
+Low for trading logic: Telegram/UI-only. Low operator UX risk: symbol emoji assignment changes once after deployment but remains stable across future runs for the same compact symbol.
