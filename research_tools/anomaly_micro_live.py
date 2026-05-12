@@ -716,13 +716,39 @@ class LiveArtifactWriter:
         pnl_usdt: float,
         pnl_pct: float,
     ) -> None:
+        self._append_position_terminal_row(
+            position,
+            status="closed",
+            reason=reason,
+            pnl_usdt=pnl_usdt,
+            pnl_pct=pnl_pct,
+        )
+
+    def append_position_exit_unresolved(self, position: LivePosition, *, reason: str) -> None:
+        self._append_position_terminal_row(
+            position,
+            status="exit_unresolved",
+            reason=reason,
+            pnl_usdt=None,
+            pnl_pct=None,
+        )
+
+    def _append_position_terminal_row(
+        self,
+        position: LivePosition,
+        *,
+        status: str,
+        reason: str,
+        pnl_usdt: float | None,
+        pnl_pct: float | None,
+    ) -> None:
         signal = position.signal
         with self._lock, self.ledger_path.open("a", newline="", encoding="utf-8") as handle:
             writer = csv.DictWriter(handle, fieldnames=list(LIVE_LEDGER_COLUMNS))
             writer.writerow(
                 {
                     "position_id": position.position_id,
-                    "status": "closed",
+                    "status": status,
                     "symbol": signal.symbol,
                     "signal_category_id": signal.category_id,
                     "signal_category_label": signal.category_label,
@@ -745,8 +771,8 @@ class LiveArtifactWriter:
                     "position_delta_amount": position.position_delta_amount,
                     "notional_usdt": position.notional_usdt,
                     "risk_usdt": position.risk_usdt,
-                    "realized_pnl_usdt": pnl_usdt,
-                    "realized_pnl_pct": pnl_pct,
+                    "realized_pnl_usdt": pnl_usdt if pnl_usdt is not None else "",
+                    "realized_pnl_pct": pnl_pct if pnl_pct is not None else "",
                     "signal_json": signal.to_json(),
                     "entry_order_id": position.entry_order_id,
                     "stop_order_id": position.stop_order_id,
@@ -2646,14 +2672,20 @@ class AnomalyMicroLiveRunner:
                         signal.symbol,
                         {
                             "position_id": position.position_id,
-                            "pnl_price_proxy": position.current_stop_price,
+                            "last_known_stop_price": position.current_stop_price,
                             "reason": "exchange_position_amount_zero_before_monitor_decision",
                         },
                     )
-                    self._finalize_position(
+                    self._finalize_unresolved_position_exit(
                         position,
-                        reason="позиция закрыта на бирже (exit fill unresolved; pnl proxy)",
-                        pnl_price=position.current_stop_price,
+                        reason="позиция закрыта на бирже, но exit fill не восстановлен",
+                        source_event="position_closed_externally_unverified_exit_price",
+                        details={
+                            "exchange_position_amount": actual_amount,
+                            "last_known_stop_price": position.current_stop_price,
+                        },
+                        cancel_stop_order=True,
+                        record_stop_cooldown=False,
                     )
                     return
                 if managed_amount <= 0.0:
@@ -2765,17 +2797,22 @@ class AnomalyMicroLiveRunner:
                         try:
                             stop_fill = self.exchange.fetch_order_fill(signal.symbol, position.stop_order_id)
                         except Exception as exc:
-                            self.artifacts.append_event(
-                                "stop_exit_fill_unresolved",
-                                signal.symbol,
-                                {
-                                    "position_id": position.position_id,
-                                    "stop_order_id": position.stop_order_id,
-                                    "pnl_price_proxy": last_stop_price,
-                                    "error": f"{type(exc).__name__}: {exc}",
-                                },
+                            unresolved_details = {
+                                "position_id": position.position_id,
+                                "stop_order_id": position.stop_order_id,
+                                "last_known_stop_price": last_stop_price,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            }
+                            self.artifacts.append_event("stop_exit_fill_unresolved", signal.symbol, unresolved_details)
+                            self._finalize_unresolved_position_exit(
+                                position,
+                                reason="стоп закрыл позицию на бирже, но exit fill не восстановлен",
+                                source_event="stop_exit_fill_unresolved",
+                                details=unresolved_details,
+                                cancel_stop_order=False,
+                                record_stop_cooldown=True,
                             )
-                            stop_exit_reason = "стоп исполнен на бирже (fill unresolved; pnl proxy)"
+                            return
                         else:
                             stop_exit_price = float(stop_fill.average_price)
                             self.artifacts.append_event(
@@ -2825,6 +2862,42 @@ class AnomalyMicroLiveRunner:
             symbol=symbol,
         )
         self.logger(f"live: {_compact_symbol(symbol)} integrity error · {reason}")
+
+    def _finalize_unresolved_position_exit(
+        self,
+        position: LivePosition,
+        *,
+        reason: str,
+        source_event: str,
+        details: dict[str, object],
+        cancel_stop_order: bool,
+        record_stop_cooldown: bool,
+    ) -> None:
+        symbol = position.signal.symbol
+        symbol_key = _position_symbol_key(symbol)
+        with self._state_lock:
+            self._open_positions.pop(symbol_key, None)
+            self._closed_positions_total += 1
+            if record_stop_cooldown:
+                self._recent_stops.setdefault(symbol_key, []).append(time.time())
+        if cancel_stop_order:
+            self._cancel_position_stop_order(position, reason=reason)
+        event_details = {
+            "position_id": position.position_id,
+            "reason": reason,
+            "source_event": source_event,
+            "pnl_status": "unresolved",
+            **details,
+        }
+        self.artifacts.append_event("position_exit_unresolved", symbol, event_details)
+        self.artifacts.append_position_exit_unresolved(position, reason=reason)
+        self.telegram.send(
+            channel="events",
+            key=f"position_exit_unresolved:{position.position_id}",
+            text=_format_position_integrity_error_message(position, reason=reason),
+            symbol=symbol,
+        )
+        self.logger(f"live: {_compact_symbol(symbol)} exit unresolved · {reason}")
 
     def _finalize_position(self, position: LivePosition, *, reason: str, pnl_price: float | None) -> None:
         symbol_key = _position_symbol_key(position.signal.symbol)

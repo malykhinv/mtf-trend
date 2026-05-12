@@ -788,7 +788,7 @@ Low for trading logic: Telegram/UI-only. Low operator UX risk: symbol emoji assi
 
 ## P155 — Make live audit failures explicit
 
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Date: 2026-05-12
 Commit: UNKNOWN
 
@@ -819,3 +819,37 @@ PY
 ### Risk
 
 Low for trading logic: audit-only. Low runtime risk: Telegram failure events are written through the existing artifact writer lock. If artifact event writing itself fails inside the Telegram dispatcher, the failure is logged instead of recursively trying to write another event.
+
+---
+
+## P156 — Stop unresolved live exits from producing proxy PnL
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+Live could remove an already-closed exchange position from monitoring while still writing it as a normal `position_closed` row with PnL calculated from a proxy stop/last-known price when the actual exit fill was not recovered. That makes edge/PnL review look more certain than the exchange evidence supports. The same patch also fixes the Linux CLI startup blocker caused by importing `ctypes.windll` at module import time.
+
+### Change
+
+- Import `ctypes.windll` only inside the Windows console-encoding branch so `python main.py -h` works on Linux.
+- Add ledger terminal status `exit_unresolved` for live positions whose exchange exposure is gone but actual exit fill is unknown.
+- Replace proxy-PnL finalization for external zero-position and unresolved stop-fill cases with `position_exit_unresolved` artifacts and blank realized PnL fields.
+- Keep stop cooldown accounting when the stop appears to have closed the exchange position but the stop fill cannot be recovered.
+- Preserve verified-fill close behavior for TP1/full stop exits.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py -h
+python main.py run-anomaly-live --help
+# fake-exchange smoke: external zero amount -> position_exit_unresolved, ledger status=exit_unresolved, no realized PnL
+# fake-exchange smoke: stop trigger + fetch_order_fill failure -> position_exit_unresolved, ledger status=exit_unresolved, no realized PnL
+```
+
+### Risk
+
+Medium audit semantics change: some rows previously counted as normal closed trades now become non-PnL terminal rows. Trading entry logic, verified stop placement, TP1 behavior, and verified stop-fill close logic are unchanged.

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import sys
-from ctypes import windll
 
 from cli.parser import build_parser, resolve_handler
 from config import load_config
@@ -26,15 +25,20 @@ def _force_single_thread_mode() -> None:
 def _configure_console_encoding() -> None:
     if os.name == "nt":
         try:
-            kernel32 = getattr(windll, "kernel32", None)
-            set_console_cp = getattr(kernel32, "SetConsoleCP", None)
-            set_console_output_cp = getattr(kernel32, "SetConsoleOutputCP", None)
-            if callable(set_console_cp):
-                set_console_cp(65001)
-            if callable(set_console_output_cp):
-                set_console_output_cp(65001)
-        except OSError:
-            pass
+            from ctypes import windll as ctypes_windll
+        except ImportError:
+            ctypes_windll = None
+        if ctypes_windll is not None:
+            try:
+                kernel32 = getattr(ctypes_windll, "kernel32", None)
+                set_console_cp = getattr(kernel32, "SetConsoleCP", None)
+                set_console_output_cp = getattr(kernel32, "SetConsoleOutputCP", None)
+                if callable(set_console_cp):
+                    set_console_cp(65001)
+                if callable(set_console_output_cp):
+                    set_console_output_cp(65001)
+            except OSError:
+                pass
     for stream_name in ("stdout", "stderr"):
         stream = getattr(sys, stream_name, None)
         if stream is None:

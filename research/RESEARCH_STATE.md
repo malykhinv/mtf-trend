@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P151 proposed locally on top of ZIP-derived source
-Last active patch: P151 trade chart context/flow visualization
+Local patch stack: P130-P155 applied locally on top of ZIP-derived source; P156 proposed
+Last active patch: P156 live unresolved-exit audit hardening
 Updated: 2026-05-12
 ```
 
@@ -70,7 +70,7 @@ research_tools/hourly_levels.py
 2. Micro-live execution has real slippage, spread, partial fills and operational failure modes.
 3. OI/derivatives context availability can limit category classification.
 4. The 2026-05-11 NVDA micro-live position is audit-invalid for edge/PnL: stale signal execution mixed signal close with later live order timing.
-5. `main.py` still has a known Linux `ctypes.windll` import issue; intentionally not fixed in the current cleanup stack.
+5. P156 fixes the Linux `main.py` startup blocker by importing `ctypes.windll` only on Windows.
 6. Historical local artifacts may contain stale compiled files; they are ignored by git and should be deleted locally.
 7. Top-growth snapshots are now exported only by standalone `run-anomaly-top-growth`; live trading loop must not spend REST/API budget on top-growth side work.
 8. Active symbols whose latest closed levels candle was already scanned are now kept visible as `active_waiting_*` in batch artifacts and should not consume OHLCV scan slots until a new closed candle exists.
@@ -81,14 +81,14 @@ research_tools/hourly_levels.py
 
 ## 6. Next best step
 
-Apply P152, then run a dry/live open-position smoke and verify that the Telegram opening message is a photo caption with TP1/SL lines and that later close/stop messages still reply to it:
+Apply P156, then verify that live can start on Linux and that unresolved live exits no longer become normal closed trades with proxy PnL:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-live --max-cycles 3 --symbols BTC/USDT:USDT --confirm-real-orders false
+python main.py run-anomaly-live --help
 ```
 
-Check `chart_rendered` with `stage=open`, `chart_context_fetch_failed`, `telegram_open_chart_failed`, and that stop/close Telegram messages still reply to `telegram_open_message_id`.
+Synthetic/fake-exchange smoke should force `position_closed_externally_unverified_exit_price` and `stop_exit_fill_unresolved`; expected result is `position_exit_unresolved`, ledger `status=exit_unresolved`, and blank realized PnL fields.
 
 
 ---
@@ -285,7 +285,7 @@ python main.py run-hourly-levels --help
 Known caveat:
 
 ```text
-python main.py --help may still fail on Linux because main.py imports ctypes.windll unconditionally.
+P156 removes the Linux `ctypes.windll` startup blocker; keep `python main.py --help` in verification.
 ```
 
 Operational rule:
@@ -303,7 +303,7 @@ Next verification:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-live --max-cycles 3 --symbols BTC/USDT:USDT --confirm-real-orders false
+python main.py run-anomaly-live --help
 ```
 
 Known caveat:
@@ -381,7 +381,7 @@ Next verification:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-live --max-cycles 3 --symbols BTC/USDT:USDT --confirm-real-orders false
+python main.py run-anomaly-live --help
 ```
 
 Known effect:
@@ -400,7 +400,7 @@ Next verification:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-live --max-cycles 1 --symbols BTC/USDT:USDT --confirm-real-orders false
+python main.py run-anomaly-live --help
 ```
 
 Known effect:
@@ -419,11 +419,33 @@ Next verification:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-live --max-cycles 1 --symbols BTC/USDT:USDT --confirm-real-orders false
+python main.py run-anomaly-live --help
 ```
 
 Known effect:
 
 ```text
 No signal/order/risk behavior changes. live_events.csv should become more verbose around Telegram delivery and temporary API/network degradation.
+```
+
+---
+
+## Current audit note — P156
+
+P156 is live safety/audit cleanup. Linux CLI startup no longer imports `ctypes.windll` at module import time, so `python main.py -h` can run on Linux. Live monitor no longer converts externally closed or stop-closed positions with unresolved exit fill into normal `position_closed` rows with proxy PnL. Such cases now end as `position_exit_unresolved`, write ledger `status=exit_unresolved`, keep realized PnL blank, and notify events as an integrity/audit problem.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py -h
+python main.py run-anomaly-live --help
+# fake-exchange smoke: exchange amount zero before monitor decision -> position_exit_unresolved, no realized PnL
+# fake-exchange smoke: stop triggered but fetch_order_fill fails -> position_exit_unresolved, no realized PnL, stop cooldown recorded
+```
+
+Known effect:
+
+```text
+Closed-position counts still advance because exchange exposure is gone, but edge/PnL analysis must use only ledger rows with status=closed and verified exit fill.
 ```
