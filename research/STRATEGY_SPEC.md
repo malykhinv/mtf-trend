@@ -84,6 +84,31 @@ no order if TP1 is already reached or RR collapsed at live price
 BE/TP/PnL are computed from actual fill, not signal close
 ```
 
+
+
+---
+
+## 4A. Timeframe contract
+
+The strategy uses separate setup and execution timeframes.
+
+```text
+setup_timeframe / HTF:
+- dormancy baseline;
+- abnormal quote-volume and trade-count expansion;
+- price expansion and retention at setup level;
+- exhaustion / category checks;
+- initial risk box context.
+
+entry_timeframe / LTF:
+- does not re-prove the whole pump thesis;
+- confirms the setup is still alive and executable;
+- checks activation hold, path/verticality, freshness, drift/RR and live price guards;
+- supplies the executable decision timestamp for market-entry proxy and live order guards.
+```
+
+Live may create a setup before the HTF candle closes by aggregating already closed LTF candles inside the current HTF bucket. This must be marked as `setup_source=forming_htf_from_entry_tf` with `setup_elapsed_fraction` and `setup_closed_entry_candles`. Backtest parity mode must use the same contract and write `feature_contract=htf_setup_ltf_entry_v1`.
+
 ---
 
 ## 5. Exit logic
@@ -282,3 +307,21 @@ reject_stop_cooldown
 ```
 
 These events are diagnostic/audit artifacts only. They must not change signal selection, entry execution, stop placement, TP/SL math, or position monitoring.
+
+---
+
+## HTF/LTF live-entry contract
+
+The current live/backtest contract is:
+
+```text
+HTF/forming HTF = setup quality
+LTF = entry permission
+exchange fill = risk/PnL source of truth
+```
+
+For a pair such as `5m/30s`, live does not wait for the 5m candle to close. It aggregates closed 30s buckets inside the current 5m bucket and evaluates setup flow on the forming HTF candle. Forming HTF flow is judged by pace-normalized quote-volume and trade-count ratios against the closed HTF baseline, plus a raw-progress floor so very small early bursts are not treated as a real wake-up.
+
+LTF confirmation should not re-prove the whole pump thesis. It confirms that the entry is still executable: activation hold, path/verticality, freshness, price drift, TP already reached, RR collapse and actual exchange fillability.
+
+TP1 is a management milestone, not proof that market room exists. The default TP1 target is the nearest higher round market number above the old 1R target. The round step is derived from current price and movement size so the level is psychologically/operationally cleaner without jumping to an unrelated far-away target.

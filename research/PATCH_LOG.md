@@ -824,7 +824,7 @@ Low for trading logic: audit-only. Low runtime risk: Telegram failure events are
 
 ## P156 — Stop unresolved live exits from producing proxy PnL
 
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Date: 2026-05-12
 Commit: UNKNOWN
 
@@ -853,3 +853,76 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Medium audit semantics change: some rows previously counted as normal closed trades now become non-PnL terminal rows. Trading entry logic, verified stop placement, TP1 behavior, and verified stop-fill close logic are unchanged.
+
+
+---
+
+## P158 — Split HTF setup from LTF live entry
+
+Status: SUPERSEDED by P159 combined patch
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+The previous live code used the configured `levels_timeframe/entry_timeframe` pair mostly as a label: the signal was built on the higher timeframe only. P157 was intentionally not applied because making the entry timeframe the whole signal source would reject valid HTF flow wake-ups whenever micro candles were noisy. The strategy needs a two-stage contract instead: HTF/forming-HTF detects the pump wake-up, LTF confirms that the entry is still executable.
+
+### Change
+
+- Live scans every closed `entry_timeframe` candle, not every closed `levels_timeframe` candle.
+- Live builds a forming HTF setup candle from closed LTF candles inside the current HTF bucket.
+- HTF/forming-HTF owns dormancy baseline, quote-volume/trade-count anomaly, exhaustion checks, initial risk box and setup context.
+- LTF owns freshness, entry activation hold, verticality/path confirmation and final live execution guards.
+- Sub-minute live frames keep zero-flow buckets visible so no-trade periods do not disappear from the signal path.
+- Backtest gains pair-aware `--setup-timeframe` / `--entry-timeframe` mode with `feature_contract=htf_setup_ltf_entry_v1`.
+- Backtest forms HTF setup rows from historical entry-timeframe candles and simulates entries/exits on the entry timeframe.
+- `entry_delay_candles` is now calculated from the actual simulation frame step.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+python main.py run-anomaly-lab --help
+# synthetic pair-aware backtest smoke: 5m setup + 30s entry creates one forming_htf_from_entry_tf_backtest candidate after 4 closed entry candles
+```
+
+### Risk
+
+Medium. This changes signal timing and candidate construction. It should increase comparability between live and backtest, but historical results from older single-timeframe backtests are not directly comparable to `htf_setup_ltf_entry_v1` runs. Requires cache for the chosen entry timeframe; without it, pair-aware backtest records explicit read errors instead of pretending comparability.
+
+---
+
+## P159 — HTF/LTF live health and rounded TP1 target
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+P158 fixed the fake timeframe-label problem but left four live-health issues: forming HTF flow was compared to full HTF baseline without pace normalization, transient entry/setup fetch failures consumed the scan slot, pair-aware sub-minute backtest could silently depend on missing historical entry-TF cache, and TP1 remained a raw 1R level rather than the next usable round number above 1R.
+
+### Change
+
+- TP1 is now the nearest higher round market number above the previous 1R TP1, with the rounding step derived from current price and movement size.
+- Live pre-order RR/TP-already-reached guards use the rounded TP1, and verified-fill position management recomputes TP1 from the actual fill then rounds it again.
+- Forming HTF setup flow uses pace-normalized quote/trade ratios while also requiring a raw-progress floor so tiny early microbursts do not pass as HTF wake-ups.
+- Live scan timestamps are marked only after setup and entry data fetch/build completes; transient fetch failures are visible but retryable on the next cycle.
+- Pair-aware backtest applies the same pace-normalized forming HTF ratio contract.
+- Pair-aware sub-minute backtest now explicitly errors with `missing_subminute_entry_cache:<tf>` / `requires_historical_aggtrades_cache` when no historical entry-TF cache exists instead of pretending comparability.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+python main.py run-anomaly-lab --help
+# synthetic: 1R TP is rounded upward to the next movement-sized 1/2/5 grid level
+# synthetic: forming 5m from 30s uses quote/trade pace ratios plus raw-progress floor
+# synthetic: setup/entry fetch failure does not advance _last_signal_scan_closed_at
+```
+
+### Risk
+
+Medium. TP1 is now usually farther than exactly 1R, so TP1 hit-rate may drop while RR/chase checks become more meaningful. Pace-normalized forming HTF can admit earlier setups, but the raw-progress floor is meant to prevent single-bucket noise from passing. Historical results before P159 are not directly comparable.
