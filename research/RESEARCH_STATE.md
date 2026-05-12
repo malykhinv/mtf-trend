@@ -509,3 +509,27 @@ Known effect:
 ```text
 TP1 hit-rate and RR guard behavior can change because TP1 is no longer exactly 1R. Treat P159 results as a new feature_contract-era run; do not compare PnL directly to old closed_setup_tf_v1 or raw-P158 runs.
 ```
+
+---
+
+## Current audit note — P160
+
+P160 is cleanup-only on top of P159. It removes retired closed-HTF live signal builders and unused backtest helpers so the maintained path is unambiguous:
+
+```text
+forming HTF setup from closed LTF buckets -> LTF entry permission -> live exchange guards
+```
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+python main.py run-anomaly-lab --help
+```
+
+Known effect:
+
+```text
+No trading behavior should change. If a future patch needs closed-HTF-only logic, it should be reintroduced explicitly with matching live/backtest artifacts instead of editing dead legacy methods.
+```

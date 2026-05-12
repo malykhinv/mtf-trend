@@ -494,31 +494,6 @@ def build_anomaly_signals(
     return signals
 
 
-def _resolve_signal_stop(
-    frame: pd.DataFrame,
-    *,
-    anomaly_timestamp_ms: int,
-    decision_timestamp_ms: int,
-    entry_price: float,
-    config: AnomalyBacktestConfig,
-) -> tuple[float, float, float]:
-    box = frame.loc[
-        (frame["timestamp"] >= anomaly_timestamp_ms)
-        & (frame["timestamp"] <= decision_timestamp_ms)
-    ]
-    if box.empty:
-        return float("nan"), float("nan"), float("nan")
-    box_low = float(box["low"].min())
-    box_high = float(box["high"].max())
-    box_range = max(box_high - box_low, 0.0)
-    previous_stop = box_low - config.stop_buffer_range_fraction * box_range
-    entry_row = frame.loc[frame["timestamp"].eq(decision_timestamp_ms)]
-    entry_ema20 = _safe_float(entry_row["ema20"].iloc[0]) if not entry_row.empty and "ema20" in entry_row.columns else None
-    initial_stop = max(previous_stop, entry_ema20) if entry_ema20 is not None else previous_stop
-    initial_risk = entry_price - initial_stop
-    return initial_stop, initial_risk, box_range
-
-
 def _resolve_signal_entry(
     frame: pd.DataFrame,
     *,
@@ -1460,25 +1435,6 @@ def _iter_entry_grid_configs(
                             )
                         )
     return variants
-
-
-def _entry_grid_signal_universe(
-    candidates: pd.DataFrame,
-    variants: Iterable[AnomalyBacktestConfig],
-) -> pd.DataFrame:
-    signal_frames: list[pd.DataFrame] = []
-    for variant in variants:
-        signals = build_anomaly_signals(candidates, config=variant)
-        if not signals.empty:
-            signal_frames.append(signals.loc[:, ["symbol", "decision_timestamp_ms"]].copy())
-    if not signal_frames:
-        return pd.DataFrame(columns=["symbol", "decision_timestamp_ms"])
-    universe = pd.concat(signal_frames, ignore_index=True)
-    universe.dropna(subset=["symbol", "decision_timestamp_ms"], inplace=True)
-    universe.drop_duplicates(["symbol", "decision_timestamp_ms"], inplace=True)
-    universe.sort_values(["symbol", "decision_timestamp_ms"], inplace=True)
-    universe.reset_index(drop=True, inplace=True)
-    return universe
 
 
 def _build_entry_grid_signal_sets(

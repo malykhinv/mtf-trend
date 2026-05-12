@@ -926,3 +926,34 @@ python main.py run-anomaly-lab --help
 ### Risk
 
 Medium. TP1 is now usually farther than exactly 1R, so TP1 hit-rate may drop while RR/chase checks become more meaningful. Pace-normalized forming HTF can admit earlier setups, but the raw-progress floor is meant to prevent single-bucket noise from passing. Historical results before P159 are not directly comparable.
+
+---
+
+## P160 — Remove retired closed-HTF live/backtest code
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+After P159, the active live path is `forming HTF setup from closed LTF buckets -> LTF entry permission`. The older closed-HTF signal builder remained in `anomaly_micro_live.py` but was no longer reachable. Backtest also retained two unused helper functions from the older single-timeframe/grid path. Leaving these around increases the risk that future patches edit inactive code or reintroduce closed-HTF semantics by mistake.
+
+### Change
+
+- Remove unused live methods `_build_recent_signals()` and `_build_signal_at_start()`.
+- Remove unused Telegram/category formatting helpers `_detail_float()` and `_format_category_rejection_summary()`.
+- Remove unused backtest helpers `_resolve_signal_stop()` and `_entry_grid_signal_universe()`.
+- Keep active HTF/LTF signal construction, category rejection events, order/fill/stop handling, TP1 rounding and pair-aware backtest logic unchanged.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+python main.py run-anomaly-lab --help
+```
+
+### Risk
+
+Low. This is deletion-only cleanup of functions with no runtime call sites in the current P159 path. No signal thresholds, entry/exit rules, order handling, stop handling, TP1 math, or backtest execution semantics are changed.
