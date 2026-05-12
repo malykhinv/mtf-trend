@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P145 proposed locally on top of ZIP-derived source
-Last active patch: P145 ticker-radar live watch promotion
+Local patch stack: P130-P147 proposed locally on top of ZIP-derived source
+Last active patch: P147 operator command runbook and 30d defaults
 Updated: 2026-05-12
 ```
 
@@ -75,19 +75,20 @@ research_tools/hourly_levels.py
 7. Top-growth snapshots are now exported only by standalone `run-anomaly-top-growth`; live trading loop must not spend REST/API budget on top-growth side work.
 8. Active symbols whose latest closed levels candle was already scanned are now kept visible as `active_waiting_*` in batch artifacts and should not consume OHLCV scan slots until a new closed candle exists.
 9. Ticker radar is scheduling-only: it can add bounded extra watch scans, but cannot remove symbols from round-robin, cannot open trades, and cannot replace closed-kline flow evidence.
+10. Operator commands now live in root `COMMANDS.md`; the shared command baseline is 30 days via `DEFAULT_COMMANDS_BASE_DAYS`.
 
 ---
 
 ## 6. Next best step
 
-Apply P145 and run a short live latency smoke with ticker radar enabled, then inspect whether radar promotions reduce stale discovery without reducing cold round-robin coverage:
+Apply P147, use `COMMANDS.md` as the command source, then run the short live latency smoke:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20 --ticker-radar-watch-batch-size 5
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 60
 ```
 
-Check `ticker_radar_snapshot`, `ticker_radar_promoted`, `symbol_batch_selected.effective_scan_count`, `inactive_count`, `reject_stale_signal`, and cycle time.
+Check `ticker_radar_snapshot`, `ticker_radar_promoted`, `symbol_batch_selected.effective_scan_count`, `inactive_count`, `reject_stale_signal`, and cycle time. If radar load is high, rerun with `--ticker-radar-watch-batch-size 2`.
 
 
 ---
@@ -260,7 +261,35 @@ Next verification:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
-python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20 --ticker-radar-watch-batch-size 2
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 60
 ```
 
 Watch `ticker_radar_watch_cleared`, `ticker_radar_waiting_count`, `inactive_count`, `effective_scan_count`, cycle time and `ticker_radar_failed`.
+
+---
+
+## Current audit note — P147
+
+P147 is operator UX/default wiring only. It adds root `COMMANDS.md` as the single copy-paste command file and centralizes the shared 30-day command baseline in `constants.py`.
+
+Next verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py fetch-data --help
+python main.py run-anomaly-lab --help
+python main.py run-anomaly-live --help
+python main.py run-hourly-levels --help
+```
+
+Known caveat:
+
+```text
+python main.py --help may still fail on Linux because main.py imports ctypes.windll unconditionally.
+```
+
+Operational rule:
+
+```text
+Copy commands from COMMANDS.md; change the 30-day baseline in constants.py instead of expanding command lines.
+```

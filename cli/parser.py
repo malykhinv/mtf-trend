@@ -7,7 +7,9 @@ from collections.abc import Callable
 
 from config import AppConfig
 from constants import (
+    DEFAULT_ANOMALY_LAB_DAYS,
     DEFAULT_FETCH_DAYS,
+    DEFAULT_HOURLY_LEVELS_DAYS,
     DEFAULT_MIN_VOLUME_USD,
     DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
     DEFAULT_UPDATE_DAYS,
@@ -72,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run early anomaly-continuation research backtest on cached data",
     )
     anomaly_lab.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT:USDT")
-    anomaly_lab.add_argument("--days", type=_positive_int_for("--days"), default=31)
+    anomaly_lab.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_ANOMALY_LAB_DAYS)
     anomaly_lab.add_argument("--timeframe", default="1m")
     anomaly_lab.add_argument("--end-timestamp-ms", type=int, default=None)
     anomaly_lab.add_argument("--output-dir", default=None)
@@ -188,7 +190,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     hourly_levels.add_argument("--symbols", nargs="*", default=None, help="Optional symbols; default scans all cached symbols")
     hourly_levels.add_argument("--source-timeframe", default="5m", help="Cached timeframe to read; 5m is aggregated to 1h")
-    hourly_levels.add_argument("--days", type=_positive_int_for("--days"), default=45)
+    hourly_levels.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_HOURLY_LEVELS_DAYS)
     hourly_levels.add_argument("--lookback-bars", type=_positive_int_for("--lookback-bars"), default=720)
     hourly_levels.add_argument("--chart-bars", type=_positive_int_for("--chart-bars"), default=240)
     hourly_levels.add_argument("--min-touches", type=_positive_int_for("--min-touches"), default=3)

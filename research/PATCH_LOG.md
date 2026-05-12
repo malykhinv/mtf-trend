@@ -530,3 +530,32 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ### Risk
 
 Low. Trading logic is unchanged. The patch only reduces scheduler waste and makes ticker fetch safer for large universes.
+
+---
+
+## P147 — Add operator command runbook and 30d defaults
+
+Status: PROPOSED
+Date: 2026-05-12
+Commit: UNKNOWN
+
+### Reason
+
+Operator commands had drifted into chat history and long CLI lines. The base research/cache window also differed by command, which made copy-paste runs error-prone.
+
+### Change
+
+- Add root `COMMANDS.md` with short copy-paste commands for cache, quality, lab, live smoke/full live, top-growth and hourly-level diagnostics.
+- Add `DEFAULT_COMMANDS_BASE_DAYS = 30` in `constants.py`.
+- Use that base for `fetch-data`, `update-cache`, `run-anomaly-lab`, and `run-hourly-levels`.
+- Keep strategy/live/radar thresholds unchanged.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+### Risk
+
+Low. This is operator UX/default wiring only. It changes default day windows to 30 days and does not change strategy thresholds, live execution guards, ticker-radar behavior, or order logic.
