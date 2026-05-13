@@ -381,6 +381,32 @@ Runner category profiles are research filters, not final production rules:
 runner_balanced = positive mark basis >= 10bp + capped quote/trade extremeness + capped effort per return + capped start taker-buy share delta + no prior mature fast-fade in 72h
 runner_reclaim = runner_balanced + reclaim-like candle shape with lower wick present and upper wick not excessive
 runner_flow = runner_balanced + at least one confirmation candle with flow hold
+runner_oi_confirmed = runner_balanced + mark basis >= 30bp + OI 3x5m change > 0.3%
 ```
 
+`runner_oi_confirmed` is the current strongest live-entry category candidate from the partial 30d artifacts. Live can enforce the OI and mark-basis parts directly; the prior mature fast-fade rule remains fully proven in backtest artifacts only until live has persisted enough same-symbol outcome history.
+
 These profiles may be used in backtest and shadow-live diagnostics. They should not be enabled for real orders until validated on complete executable coverage and live shadow/replay parity.
+
+Live entry-lag diagnostics:
+
+```text
+first_executable_entry_timestamp_ms = decision_timestamp_ms + entry_tf_ms
+entry_lag_ms = live_fill_or_check_timestamp_ms - first_executable_entry_timestamp_ms
+entry_lag_ltf_candles = floor(entry_lag_ms / entry_tf_ms)
+entered_late_vs_first_executable = entry_lag_ltf_candles >= 1
+```
+
+Lag diagnostics are not trade filters by themselves. They are used to decide whether live missed the early PNO execution window or whether a signal was still executable after drift/RR checks.
+
+Live scheduler scan-gap diagnostics:
+
+```text
+previous_live_scan_closed_timestamp_ms = last closed LTF candle this symbol/TF was scanned through
+first_unscanned_decision_timestamp_ms = previous_live_scan_closed_timestamp_ms + entry_tf_ms
+live_scan_gap_ltf_candles = max(0, (current_signal_decision_timestamp_ms - previous_live_scan_closed_timestamp_ms) / entry_tf_ms - 1)
+```
+
+This measures the N -> N+5 scheduler problem directly. It does not claim that every skipped candle had a valid trade; it shows how many closed LTF decisions live did not evaluate before the current detected signal.
+
+When `live_scan_gap_ltf_candles > 0`, live may emit `missed_entry_replay_probe` from a background thread. The probe replays skipped LTF decision candles from the already loaded OHLCV window and reports the first skipped candle where the same live filter would have selected a signal. It must not block order placement. The probe starts from the earliest skipped candle and reports `probe_truncated=true` if `signal_scan_backfill_candles` prevented checking the full skipped interval.

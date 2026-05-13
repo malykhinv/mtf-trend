@@ -1437,7 +1437,7 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             cache_dir=config.backtest.cache_dir,
             pump_categories=tuple(
                 item.strip()
-                for item in str(getattr(args, "pump_categories", "balanced_market,mild_market")).split(",")
+                for item in str(getattr(args, "pump_categories", "runner_oi_confirmed")).split(",")
                 if item.strip()
             ),
             baseline_candles=int(getattr(args, "baseline_candles", 60)),
@@ -1490,6 +1490,7 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                 getattr(args, "live_ohlcv_cache_flush_interval_seconds", 10.0)
             ),
             live_ohlcv_cache_max_buffer_rows=int(getattr(args, "live_ohlcv_cache_max_buffer_rows", 5_000)),
+            signal_scan_backfill_candles=int(getattr(args, "signal_scan_backfill_candles", 10)),
             max_cycles=getattr(args, "max_cycles", None),
             trail_lookback_candles=int(getattr(args, "trail_lookback_candles", 5)),
             trail_buffer_r=float(getattr(args, "trail_buffer_r", 0.10)),

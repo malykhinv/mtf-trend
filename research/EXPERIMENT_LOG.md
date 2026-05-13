@@ -1360,3 +1360,89 @@ Interpretation:
 Runner-balanced is the best current category hypothesis. It separates clean runners from fast-fade/overheated/noisy pumps much better than the base filter.
 Do not treat as proven edge yet: replay is in-sample, 1m/5s is missing, and executable coverage is incomplete at the requested end.
 ```
+
+---
+
+## 2026-05-13 - P174 OI-confirmed runner category replay
+
+Input:
+
+```text
+Source candidates: .output/results/anomaly_lab
+Completed pairs: 5m_30s, 1m_15s
+Missing pair: 1m_5s
+Command: python main.py run-anomaly-lab --days 30 --reuse-candidates-dir .output/results/anomaly_lab --output-dir .output/results/anomaly_lab_reuse_runner_oi_confirmed --red-flag-profile runner_oi_confirmed --render-charts false
+```
+
+OI readout:
+
+```text
+Baseline completed-pair sample: OI > 0.3% improved avg/WR versus flat or negative OI; OI > 5% was only 4 trades and negative.
+Runner-balanced sample: OI > 0.3% produced 43 trades, avg +2.486%, WR 88.37%, TP1 83.72%.
+Runner-balanced + OI > 0.3% + mark basis >= 30bp produced 36 trades, avg +2.831%, WR 88.89%, TP1 86.11%.
+```
+
+Result:
+
+```text
+5m/30s runner_oi_confirmed: 15 closed, avg +2.574%, median +1.717%, sum +38.61%, WR 100.00%, TP1 100.00%
+1m/15s runner_oi_confirmed: 21 closed, avg +3.014%, median +2.710%, sum +63.29%, WR 80.95%, TP1 76.19%
+Combined: 36 closed, avg +2.831%, median +1.885%, sum +101.90%, WR 88.89%, TP1 86.11%, top10 dependency 75.58%
+```
+
+Interpretation:
+
+```text
+OI should be enforced as moderate confirmation for live category selection. Do not require OI > 5%; it is too sparse and looked bad in this run.
+The category remains in-sample and narrow. Next validation is shadow-live parity plus complete 1m/5s coverage, not stronger thresholds.
+```
+
+---
+
+## 2026-05-13 - P175 live entry lag diagnostics
+
+Patch:
+
+```text
+Added first-executable entry lag diagnostics to live opened positions and order-block/reject events.
+The metric compares decision_timestamp_ms + entry_tf_ms against order submit/fill/check timestamps.
+entered_late_vs_first_executable is true when lag is at least one entry LTF candle.
+Added scheduler scan-gap fields so live can show when a symbol/TF was not scanned for N closed LTF candles before the detected signal.
+Added non-blocking missed_entry_replay_probe to identify the first skipped LTF decision candle where the same live filter would already have selected a signal.
+```
+
+Validation:
+
+```text
+Compileall passed for research_tools/anomaly_micro_live.py.
+Synthetic 1m/15s replay smoke found the expected first prior signal and lag count.
+```
+
+Next readout:
+
+```text
+Run shadow/micro-live and group position_opened/reject_entry_price_drift/reject_rr_collapsed/reject_stale_signal by entry_lag_ltf_candles.
+If profitable-looking signals cluster in rejected lag >= 1, scheduler latency is still a primary blocker.
+```
+
+---
+
+## 2026-05-13 - P176 live correctness review
+
+Finding:
+
+```text
+The missed-entry replay probe was non-blocking, but with a large skipped interval it checked the newest skipped candles first while reporting first_prior_signal_found. That could understate the real live-vs-backtest scheduler lag.
+```
+
+Patch:
+
+```text
+Probe skipped LTF decisions from the earliest missed candle, emit truncation fields, and expose --signal-scan-backfill-candles for scarce API-limit sessions.
+```
+
+Next live-readout:
+
+```text
+For scarce limits start shadow/test live with a low signal-scan-backfill-candles value and monitor missed_entry_replay_probe status/probe_truncated plus live_ohlcv_cache_read filled/gap rates.
+```

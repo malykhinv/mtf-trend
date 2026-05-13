@@ -108,7 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--min-next-taker-buy-quote-share", type=float, default=None)
     anomaly_lab.add_argument(
         "--red-flag-profile",
-        choices=["none", "cautious", "strict", "runner_balanced", "runner_reclaim", "runner_flow"],
+        choices=["none", "cautious", "strict", "runner_balanced", "runner_reclaim", "runner_flow", "runner_oi_confirmed"],
         default="none",
     )
     anomaly_lab.add_argument("--min-mark-close-vs-decision-close-basis", type=float, default=None)
@@ -182,8 +182,8 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--max-cycles", type=_positive_int_for("--max-cycles"), default=None)
     anomaly_live.add_argument(
         "--pump-categories",
-        default="balanced_market,mild_market",
-        help="Comma-separated live pump categories, tried by priority. Supported: balanced_market,mild_market",
+        default="runner_oi_confirmed",
+        help="Comma-separated live pump categories, tried by priority. Supported: runner_oi_confirmed,balanced_market,mild_market",
     )
     anomaly_live.add_argument("--baseline-candles", type=_positive_int_for("--baseline-candles"), default=60)
     anomaly_live.add_argument("--confirmation-candles", type=_positive_int_for("--confirmation-candles"), default=4)
@@ -192,7 +192,7 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--min-price-retention", type=float, default=0.70)
     anomaly_live.add_argument("--min-verticality-score", type=float, default=0.25)
     anomaly_live.add_argument("--min-hold-count", type=int, default=2)
-    anomaly_live.add_argument("--min-oi-change-pct-3x5m", type=float, default=0.05)
+    anomaly_live.add_argument("--min-oi-change-pct-3x5m", type=float, default=None)
     anomaly_live.add_argument("--max-initial-risk-pct", type=float, default=0.16)
     anomaly_live.add_argument("--stop-buffer-range-fraction", type=float, default=0.05)
     anomaly_live.add_argument("--max-prior-up-down-whipsaw-to-impulse-range", type=float, default=0.60)
@@ -239,6 +239,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomaly_live.add_argument("--live-ohlcv-cache-flush-interval-seconds", type=float, default=10.0)
     anomaly_live.add_argument("--live-ohlcv-cache-max-buffer-rows", type=_positive_int_for("--live-ohlcv-cache-max-buffer-rows"), default=5_000)
+    anomaly_live.add_argument(
+        "--signal-scan-backfill-candles",
+        type=_positive_int_for("--signal-scan-backfill-candles"),
+        default=10,
+        help="Max skipped LTF candles replayed by missed-entry diagnostics; lower this when exchange context limits are tight.",
+    )
     anomaly_live.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_live.add_argument("--trail-buffer-r", type=float, default=0.10)
 

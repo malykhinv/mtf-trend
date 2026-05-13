@@ -1411,3 +1411,97 @@ Combined: 124 closed, avg +1.7739%, median +1.3985%, sum +219.97%, WR 80.65%, TP
 ### Risk
 
 Medium/high: this is an in-sample replay on partial executable coverage and excludes the interrupted 1m/5s pair. Treat it as a strong category hypothesis, not proven production edge.
+
+## P174 - Align live entry category with OI-confirmed runner replay
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+The previous live defaults traded `balanced_market,mild_market`, while the strongest recent backtest category was a runner-oriented replay. OI is materially useful in the latest artifacts, but the useful zone is moderate confirmation, not the old live default `OI > 5%`.
+
+### Change
+
+- Add backtest red-flag profile `runner_oi_confirmed`.
+- Add live pump category `runner_oi_confirmed` and make it the live default category.
+- Live `runner_oi_confirmed` requires `OI 3x5m > 0.3%`, mark basis >= 30bp, quote/trade ratio caps, quote/trade effort caps and start taker-buy delta cap.
+- Live mark basis is fetched from Binance mark-price context as-of the decision timestamp; missing/stale mark context is a category reject, not a fallback.
+- Live OI requirement is category-level; the global live OI default is now unset unless a category or CLI flag requires it.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe main.py run-anomaly-lab --days 30 --reuse-candidates-dir .output\results\anomaly_lab --output-dir .output\results\anomaly_lab_reuse_runner_oi_confirmed --red-flag-profile runner_oi_confirmed --render-charts false
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_micro_live.py research_tools\anomaly_strategy_backtest.py cli\parser.py cli\commands.py
+```
+
+Replay used completed pairs only:
+
+```text
+5m/30s runner_oi_confirmed: 15 closed, avg +2.574%, median +1.717%, sum +38.61%, WR 100.00%, TP1 100.00%
+1m/15s runner_oi_confirmed: 21 closed, avg +3.014%, median +2.710%, sum +63.29%, WR 80.95%, TP1 76.19%
+Combined: 36 closed, avg +2.831%, median +1.885%, sum +101.90%, WR 88.89%, TP1 86.11%, top10 dependency 75.58%
+```
+
+### Risk
+
+High: this is very selective, in-sample, excludes interrupted 1m/5s, and top10 dependency is high. Live still cannot perfectly enforce backtest `prior_fast_fade_count_72h` until it has persisted enough same-symbol signal outcomes.
+
+## P175 - Add live entry lag diagnostics
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+Live can arrive after the first closed-candle executable entry that the backtest model would have used. This must be measured without slowing the trading path.
+
+### Change
+
+- Add `first_executable_entry_timestamp_ms`, `entry_lag_ms`, `entry_lag_ltf_candles`, `entered_late_vs_first_executable`, `entry_order_submit_lag_ms`, and `entry_order_submit_lag_ltf_candles` to `live_positions.csv`.
+- Add `previous_live_scan_closed_timestamp_ms`, `first_unscanned_decision_timestamp_ms`, and `live_scan_gap_ltf_candles` to distinguish order-entry lag from symbol-scheduler scan lag.
+- Add non-blocking `missed_entry_replay_probe`: when a selected signal has a scan gap, a background thread replays the skipped LTF decision candles from the already loaded OHLCV window and emits the first earlier candle where the same live category filter would have selected a signal.
+- Add the same fill-lag fields to `position_opened` events.
+- Add entry-lag diagnostics to execution guards/reject events such as stale signal, entry drift and RR collapse.
+- The diagnostic uses only existing signal timestamps, order submission timestamp, fill timestamp and the already-fetched live price. It performs no extra exchange request.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_micro_live.py
+Inline smoke: synthetic 1m/15s scan-gap replay found the first prior signal at the 4th skipped 15s candle and reported a 6-LTF-candle lag to the current signal.
+```
+
+### Risk
+
+Low: this is diagnostic-only. Existing live ledger readers that assume the exact old column set may need to tolerate the added columns.
+
+## P176 - Make missed-entry replay probe honest and budget-tunable
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+The missed-entry probe must not understate live scheduler lag when the skipped window is larger than the probe cap, and API/context limits are scarce.
+
+### Change
+
+- Replay skipped LTF decisions from the earliest missed candle, not from the newest skipped tail.
+- Add `candidate_decision_count_total`, `probe_truncated`, and `unprobed_newer_decision_count` to probe events.
+- If no prior signal is found in a truncated prefix, emit `no_prior_signal_found_in_probed_prefix` instead of implying that the full skipped window was checked.
+- Expose live `--signal-scan-backfill-candles` so the probe budget can be lowered without code edits.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_micro_live.py cli\parser.py cli\commands.py
+```
+
+### Risk
+
+Low/medium: this is diagnostic-only, but OI/mark-confirmed categories can still spend context calls inside the background probe. Use a lower `--signal-scan-backfill-candles` when exchange limits are tight.

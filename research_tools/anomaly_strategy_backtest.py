@@ -391,6 +391,25 @@ def _apply_red_flag_profile(config: AnomalyBacktestConfig) -> AnomalyBacktestCon
                 else balanced.min_flow_hold_count
             ),
         )
+    if profile == "runner_oi_confirmed":
+        balanced = _apply_red_flag_profile(replace(config, red_flag_profile="runner_balanced"))
+        return replace(
+            balanced,
+            red_flag_profile=config.red_flag_profile,
+            min_oi_change_pct_3x5m=(
+                0.003
+                if balanced.min_oi_change_pct_3x5m is None
+                else balanced.min_oi_change_pct_3x5m
+            ),
+            min_mark_close_vs_decision_close_basis=max(
+                0.003,
+                (
+                    0.003
+                    if balanced.min_mark_close_vs_decision_close_basis is None
+                    else balanced.min_mark_close_vs_decision_close_basis
+                ),
+            ),
+        )
     raise ValueError(f"unsupported red_flag_profile: {config.red_flag_profile}")
 
 
@@ -3598,7 +3617,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--min-next-taker-buy-quote-share", type=float, default=None)
     parser.add_argument(
         "--red-flag-profile",
-        choices=["none", "cautious", "strict", "runner_balanced", "runner_reclaim", "runner_flow"],
+        choices=["none", "cautious", "strict", "runner_balanced", "runner_reclaim", "runner_flow", "runner_oi_confirmed"],
         default="none",
     )
     parser.add_argument("--min-mark-close-vs-decision-close-basis", type=float, default=None)

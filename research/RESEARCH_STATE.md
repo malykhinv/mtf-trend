@@ -774,3 +774,35 @@ Runner-balanced replay from existing candidates: 124 closed, avg +1.7739%, media
 Runner-balanced rules are in-sample category hypothesis: mark basis >= 10bp, quote/trade effort caps, start taker-buy delta cap, prior fast-fade 72h cap.
 Next proof step: rerun runner_balanced on fixed-end complete 1s/subminute coverage including 1m/5s, then compare out-of-sample or later-window replay before live.
 ```
+
+P174 OI-confirmed live-category status:
+
+```text
+OI is not optional noise. In the latest completed-pair artifacts, moderate positive OI confirmation improves the runner category, while extreme OI > 5% is too sparse and bad in-sample.
+Runner-balanced + OI 3x5m > 0.3% + mark basis >= 30bp replay:
+5m/30s: 15 closed, avg +2.574%, median +1.717%, sum +38.61%, WR 100.00%, TP1 100.00%
+1m/15s: 21 closed, avg +3.014%, median +2.710%, sum +63.29%, WR 80.95%, TP1 76.19%
+Combined: 36 closed, avg +2.831%, median +1.885%, sum +101.90%, WR 88.89%, TP1 86.11%, top10 dependency 75.58%
+Live default category is now runner_oi_confirmed. Missing/stale mark or OI context is a reject, not neutral.
+Residual risk: the category is selective, in-sample, missing 1m/5s, and live cannot yet fully match backtest prior_fast_fade_count_72h at startup.
+```
+
+P175 live-lag diagnostic status:
+
+```text
+Live now records first executable entry timestamp and lag from that timestamp to order submit/fill.
+entered_late_vs_first_executable means fill lag >= 1 entry LTF candle.
+Live also records scheduler scan gap: previous closed LTF candle seen for that symbol/TF, first unscanned decision timestamp, and skipped LTF candle count before the current detected signal.
+If a selected signal has a scan gap, live starts a background missed_entry_replay_probe over the already loaded candle window and writes the first skipped LTF candle where the same live category filter would already have selected a signal.
+Reject events for stale/drift/RR collapse include the same lag fields, so shadow-live can separate missed timing from bad signal quality.
+The scan-gap counters add no exchange calls. The replay probe is non-blocking; for OI/mark-confirmed categories it may fetch OI/mark context in the background and must be monitored separately from order latency.
+```
+
+P176 live honesty/budget status:
+
+```text
+missed_entry_replay_probe now probes skipped LTF decisions from the earliest missed candle. If the skipped window is larger than signal_scan_backfill_candles, the event is marked probe_truncated and reports unprobed_newer_decision_count.
+No-signal status in a truncated probe is no_prior_signal_found_in_probed_prefix, not a claim about the whole skipped interval.
+Live exposes --signal-scan-backfill-candles so context/API budget can be reduced for scarce-limit sessions.
+Residual limit risk remains: runner_oi_confirmed replay checks can request OI/mark context in the background. This is diagnostic-only but should be run with a small cap during real test live.
+```

@@ -112,6 +112,15 @@ LIVE_LEDGER_COLUMNS = (
     "closed_at_utc",
     "entry_price",
     "signal_entry_price",
+    "first_executable_entry_timestamp_ms",
+    "entry_lag_ms",
+    "entry_lag_ltf_candles",
+    "entered_late_vs_first_executable",
+    "entry_order_submit_lag_ms",
+    "entry_order_submit_lag_ltf_candles",
+    "previous_live_scan_closed_timestamp_ms",
+    "first_unscanned_decision_timestamp_ms",
+    "live_scan_gap_ltf_candles",
     "entry_fill_timestamp_ms",
     "entry_order_submitted_at_ms",
     "entry_order_status",
@@ -159,12 +168,16 @@ class LivePumpCategory:
     category_id: str
     label: str
     priority: int
+    min_oi_change_pct_3x5m: float | None = None
+    min_mark_close_vs_decision_close_basis: float | None = None
     max_start_quote_ratio: float | None = None
     max_start_trade_ratio: float | None = None
     max_start_avg_trade_quote_size_ratio: float | None = None
     max_start_quote_ratio_per_abs_return: float | None = None
+    max_start_trade_ratio_per_abs_return: float | None = None
     max_start_range_pct_ratio_to_baseline: float | None = None
     min_next_taker_buy_quote_share: float | None = None
+    max_start_taker_buy_quote_share_delta: float | None = None
     max_price_retention: float | None = None
 
 
@@ -174,16 +187,36 @@ class LiveOiChangeResult:
     reason: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class LiveMarkBasisResult:
+    value: float | None
+    reason: str | None = None
+    timestamp_ms: int | None = None
+    age_ms: int | None = None
+
+
 SUPPORTED_LIVE_PUMP_CATEGORIES: dict[str, LivePumpCategory] = {
+    "runner_oi_confirmed": LivePumpCategory(
+        category_id="runner_oi_confirmed",
+        label="runner OI confirmed",
+        priority=1,
+        min_oi_change_pct_3x5m=0.003,
+        min_mark_close_vs_decision_close_basis=0.003,
+        max_start_quote_ratio=1000.0,
+        max_start_trade_ratio=250.0,
+        max_start_quote_ratio_per_abs_return=20_000.0,
+        max_start_trade_ratio_per_abs_return=3_000.0,
+        max_start_taker_buy_quote_share_delta=0.25,
+    ),
     "balanced_market": LivePumpCategory(
         category_id="balanced_market",
         label="balanced market",
-        priority=1,
+        priority=2,
     ),
     "mild_market": LivePumpCategory(
         category_id="mild_market",
         label="mild market",
-        priority=2,
+        priority=3,
         max_start_quote_ratio=120.0,
         max_start_trade_ratio=60.0,
         max_start_avg_trade_quote_size_ratio=10.0,
@@ -202,7 +235,7 @@ class LiveAnomalyConfig:
     confirm_real_orders: bool
     cache_dir: Path | None = None
     timeframe_pairs: tuple[tuple[Timeframe, Timeframe], ...] = ANOMALY_LIVE_TIMEFRAME_PAIRS
-    pump_categories: tuple[str, ...] = ("balanced_market", "mild_market")
+    pump_categories: tuple[str, ...] = ("runner_oi_confirmed",)
     baseline_candles: int = 60
     confirmation_candles: int = 4
     min_quote_ratio_start: float = 5.0
@@ -211,13 +244,16 @@ class LiveAnomalyConfig:
     max_start_trade_ratio: float | None = 40.0
     max_start_avg_trade_quote_size_ratio: float | None = 7.0
     max_start_quote_ratio_per_abs_return: float | None = 15_000.0
+    max_start_trade_ratio_per_abs_return: float | None = None
     max_start_range_pct_ratio_to_baseline: float | None = 25.0
     min_next_taker_buy_quote_share: float | None = 0.48
+    max_start_taker_buy_quote_share_delta: float | None = None
     max_price_retention: float | None = 0.96
     min_price_retention: float = 0.70
     min_verticality_score: float = 0.25
     min_hold_count: int = 2
-    min_oi_change_pct_3x5m: float | None = 0.05
+    min_oi_change_pct_3x5m: float | None = None
+    min_mark_close_vs_decision_close_basis: float | None = None
     max_initial_risk_pct: float = 0.16
     stop_buffer_range_fraction: float = 0.05
     max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.60
@@ -284,6 +320,9 @@ class LiveSignal:
     hold_count: int
     verticality_score: float
     oi_change_pct_3x5m: float | None
+    previous_live_scan_closed_timestamp_ms: int | None = None
+    first_unscanned_decision_timestamp_ms: int | None = None
+    live_scan_gap_ltf_candles: int = 0
     category_rejections: list[dict[str, object]] = field(default_factory=list)
     strengths: list[str] = field(default_factory=list)
     weaknesses: list[str] = field(default_factory=list)
@@ -328,6 +367,15 @@ class LivePosition:
     stop_price: float
     tp1_price: float
     initial_risk: float
+    first_executable_entry_timestamp_ms: int
+    entry_lag_ms: int
+    entry_lag_ltf_candles: int
+    entered_late_vs_first_executable: bool
+    entry_order_submit_lag_ms: int
+    entry_order_submit_lag_ltf_candles: int
+    previous_live_scan_closed_timestamp_ms: int | None
+    first_unscanned_decision_timestamp_ms: int | None
+    live_scan_gap_ltf_candles: int
     entry_fill_timestamp_ms: int
     entry_order_submitted_at_ms: int
     entry_order_status: str
@@ -693,6 +741,15 @@ class LiveArtifactWriter:
                     "closed_at_utc": "",
                     "entry_price": position.entry_price,
                     "signal_entry_price": signal.entry_price,
+                    "first_executable_entry_timestamp_ms": position.first_executable_entry_timestamp_ms,
+                    "entry_lag_ms": position.entry_lag_ms,
+                    "entry_lag_ltf_candles": position.entry_lag_ltf_candles,
+                    "entered_late_vs_first_executable": position.entered_late_vs_first_executable,
+                    "entry_order_submit_lag_ms": position.entry_order_submit_lag_ms,
+                    "entry_order_submit_lag_ltf_candles": position.entry_order_submit_lag_ltf_candles,
+                    "previous_live_scan_closed_timestamp_ms": position.previous_live_scan_closed_timestamp_ms or "",
+                    "first_unscanned_decision_timestamp_ms": position.first_unscanned_decision_timestamp_ms or "",
+                    "live_scan_gap_ltf_candles": position.live_scan_gap_ltf_candles,
                     "entry_fill_timestamp_ms": position.entry_fill_timestamp_ms,
                     "entry_order_submitted_at_ms": position.entry_order_submitted_at_ms,
                     "entry_order_status": position.entry_order_status,
@@ -768,6 +825,15 @@ class LiveArtifactWriter:
                     "closed_at_utc": datetime.now(UTC).isoformat(),
                     "entry_price": position.entry_price,
                     "signal_entry_price": signal.entry_price,
+                    "first_executable_entry_timestamp_ms": position.first_executable_entry_timestamp_ms,
+                    "entry_lag_ms": position.entry_lag_ms,
+                    "entry_lag_ltf_candles": position.entry_lag_ltf_candles,
+                    "entered_late_vs_first_executable": position.entered_late_vs_first_executable,
+                    "entry_order_submit_lag_ms": position.entry_order_submit_lag_ms,
+                    "entry_order_submit_lag_ltf_candles": position.entry_order_submit_lag_ltf_candles,
+                    "previous_live_scan_closed_timestamp_ms": position.previous_live_scan_closed_timestamp_ms or "",
+                    "first_unscanned_decision_timestamp_ms": position.first_unscanned_decision_timestamp_ms or "",
+                    "live_scan_gap_ltf_candles": position.live_scan_gap_ltf_candles,
                     "entry_fill_timestamp_ms": position.entry_fill_timestamp_ms,
                     "entry_order_submitted_at_ms": position.entry_order_submitted_at_ms,
                     "entry_order_status": position.entry_order_status,
@@ -1671,6 +1737,17 @@ class AnomalyMicroLiveRunner:
         with self._state_lock:
             self._last_signal_scan_closed_at[scan_key] = int(closed_timestamp_ms)
 
+    def _previous_signal_scan_closed_at(
+        self,
+        symbol: str,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+    ) -> int | None:
+        symbol_key = _position_symbol_key(symbol)
+        scan_key = (symbol_key, levels_timeframe.value, entry_timeframe.value)
+        with self._state_lock:
+            return self._last_signal_scan_closed_at.get(scan_key)
+
     def _scan_batch(self, symbols: list[str]) -> list[LiveSignal]:
         if self.config.scan_hot_timeframes_per_symbol:
             return self._scan_batch_by_symbol(symbols)
@@ -1758,6 +1835,7 @@ class AnomalyMicroLiveRunner:
                     entry_timeframe=entry_timeframe,
                     setup_start_ts=setup_start_ts,
                     latest_closed_entry_ts=latest_closed_entry_ts,
+                    previous_scan_closed_ts=self._previous_signal_scan_closed_at(symbol, levels_timeframe, entry_timeframe),
                 )
                 evaluated_count += 1
                 self._mark_signal_scan_closed_at(
@@ -1850,6 +1928,7 @@ class AnomalyMicroLiveRunner:
                     entry_timeframe=entry_timeframe,
                     setup_start_ts=setup_start_ts,
                     latest_closed_entry_ts=latest_closed_entry_ts,
+                    previous_scan_closed_ts=self._previous_signal_scan_closed_at(symbol, levels_timeframe, entry_timeframe),
                 )
                 self._mark_signal_scan_closed_at(
                     symbol,
@@ -1872,6 +1951,7 @@ class AnomalyMicroLiveRunner:
         entry_timeframe: Timeframe,
         setup_start_ts: int,
         latest_closed_entry_ts: int,
+        previous_scan_closed_ts: int | None = None,
     ) -> LiveSignal | None:
         if setup_frame.empty or entry_frame.empty:
             self.artifacts.append_event(
@@ -1976,11 +2056,207 @@ class AnomalyMicroLiveRunner:
             setup_source="forming_htf_from_entry_tf",
             setup_elapsed_fraction=setup_elapsed_fraction,
             setup_closed_entry_candles=len(entry_segment),
+            emit_diagnostics=True,
         )
         if signal is None:
             with self._state_lock:
                 self._seen_decisions.add(key)
+        else:
+            gap = _live_scan_gap_details(
+                decision_timestamp_ms=decision_ts,
+                previous_scan_closed_timestamp_ms=previous_scan_closed_ts,
+                entry_timeframe=entry_timeframe,
+            )
+            signal.previous_live_scan_closed_timestamp_ms = gap["previous_live_scan_closed_timestamp_ms"]
+            signal.first_unscanned_decision_timestamp_ms = gap["first_unscanned_decision_timestamp_ms"]
+            signal.live_scan_gap_ltf_candles = int(gap["live_scan_gap_ltf_candles"])
+            if signal.live_scan_gap_ltf_candles > 0:
+                self._start_missed_entry_replay_probe(
+                    symbol=symbol,
+                    setup_frame=setup_frame,
+                    entry_frame=entry_frame,
+                    now_ms=now_ms,
+                    levels_timeframe=levels_timeframe,
+                    entry_timeframe=entry_timeframe,
+                    current_signal=signal,
+                )
         return signal
+
+    def _start_missed_entry_replay_probe(
+        self,
+        *,
+        symbol: str,
+        setup_frame: pd.DataFrame,
+        entry_frame: pd.DataFrame,
+        now_ms: int,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+        current_signal: LiveSignal,
+    ) -> None:
+        threading.Thread(
+            target=self._run_missed_entry_replay_probe,
+            kwargs={
+                "symbol": symbol,
+                "setup_frame": setup_frame.copy(deep=False),
+                "entry_frame": entry_frame.copy(deep=False),
+                "now_ms": int(now_ms),
+                "levels_timeframe": levels_timeframe,
+                "entry_timeframe": entry_timeframe,
+                "current_signal": current_signal,
+            },
+            name=f"missed-entry-probe-{_compact_symbol(symbol)}-{entry_timeframe.value}",
+            daemon=True,
+        ).start()
+
+    def _run_missed_entry_replay_probe(
+        self,
+        *,
+        symbol: str,
+        setup_frame: pd.DataFrame,
+        entry_frame: pd.DataFrame,
+        now_ms: int,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+        current_signal: LiveSignal,
+    ) -> None:
+        try:
+            result = self._probe_first_missed_entry_signal(
+                symbol=symbol,
+                setup_frame=setup_frame,
+                entry_frame=entry_frame,
+                now_ms=now_ms,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                current_signal=current_signal,
+            )
+            self.artifacts.append_event("missed_entry_replay_probe", symbol, result)
+        except Exception as exc:
+            self.artifacts.append_event(
+                "missed_entry_replay_probe_failed",
+                symbol,
+                {
+                    "levels_tf": levels_timeframe.value,
+                    "entry_tf": entry_timeframe.value,
+                    "current_decision_timestamp_ms": int(current_signal.decision_timestamp_ms),
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc)[:1000],
+                },
+            )
+
+    def _probe_first_missed_entry_signal(
+        self,
+        *,
+        symbol: str,
+        setup_frame: pd.DataFrame,
+        entry_frame: pd.DataFrame,
+        now_ms: int,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+        current_signal: LiveSignal,
+    ) -> dict[str, object]:
+        entry_timeframe_ms = int(entry_timeframe.to_milliseconds())
+        levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
+        previous_ts = current_signal.previous_live_scan_closed_timestamp_ms
+        if previous_ts is None or entry_timeframe_ms <= 0 or levels_timeframe_ms <= 0:
+            return {
+                "status": "no_previous_scan",
+                "levels_tf": levels_timeframe.value,
+                "entry_tf": entry_timeframe.value,
+                "current_decision_timestamp_ms": int(current_signal.decision_timestamp_ms),
+            }
+        first_candidate_ts = int(previous_ts) + entry_timeframe_ms
+        last_candidate_ts = int(current_signal.decision_timestamp_ms) - entry_timeframe_ms
+        if first_candidate_ts > last_candidate_ts:
+            return {
+                "status": "no_missed_closed_candles",
+                "levels_tf": levels_timeframe.value,
+                "entry_tf": entry_timeframe.value,
+                "current_decision_timestamp_ms": int(current_signal.decision_timestamp_ms),
+                "previous_live_scan_closed_timestamp_ms": int(previous_ts),
+            }
+        max_probe = max(1, int(self.config.signal_scan_backfill_candles))
+        all_candidate_timestamps = list(range(first_candidate_ts, last_candidate_ts + 1, entry_timeframe_ms))
+        probe_truncated = len(all_candidate_timestamps) > max_probe
+        candidate_timestamps = all_candidate_timestamps[:max_probe]
+        setup_frame = setup_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+        entry_frame = entry_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+        for candidate_ts in candidate_timestamps:
+            setup_start_ts = (int(candidate_ts) // levels_timeframe_ms) * levels_timeframe_ms
+            setup_history = setup_frame.loc[setup_frame["timestamp"].astype(int) < setup_start_ts].tail(self.config.baseline_candles).copy()
+            if len(setup_history) < self.config.baseline_candles:
+                continue
+            entry_segment = entry_frame.loc[
+                (entry_frame["timestamp"].astype(int) >= setup_start_ts)
+                & (entry_frame["timestamp"].astype(int) <= int(candidate_ts))
+            ].copy()
+            if entry_segment.empty:
+                continue
+            seed_close = float(setup_history.iloc[-1]["close"])
+            entry_segment = _fill_missing_ohlcv_buckets(
+                entry_segment,
+                start_timestamp_ms=setup_start_ts,
+                end_timestamp_ms=int(candidate_ts),
+                timeframe_ms=entry_timeframe_ms,
+                seed_close=seed_close,
+            )
+            if len(entry_segment) < self.config.confirmation_candles:
+                continue
+            forming_setup = _aggregate_frame_to_candle(entry_segment, timestamp_ms=setup_start_ts)
+            if forming_setup is None:
+                continue
+            setup_elapsed_fraction = min(1.0, len(entry_segment) * entry_timeframe_ms / levels_timeframe_ms)
+            signal = self._build_signal_from_components(
+                symbol=symbol,
+                baseline=setup_history,
+                setup_row=forming_setup,
+                entry_segment=entry_segment,
+                now_ms=now_ms,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                setup_source="forming_htf_from_entry_tf_replay_probe",
+                setup_elapsed_fraction=setup_elapsed_fraction,
+                setup_closed_entry_candles=len(entry_segment),
+                emit_diagnostics=False,
+            )
+            if signal is None:
+                continue
+            missed_lag_ltf = int((int(current_signal.decision_timestamp_ms) - int(signal.decision_timestamp_ms)) // entry_timeframe_ms)
+            return {
+                "status": "first_prior_signal_found",
+                "levels_tf": levels_timeframe.value,
+                "entry_tf": entry_timeframe.value,
+                "current_decision_timestamp_ms": int(current_signal.decision_timestamp_ms),
+                "previous_live_scan_closed_timestamp_ms": int(previous_ts),
+                "first_unscanned_decision_timestamp_ms": int(first_candidate_ts),
+                "first_prior_signal_decision_timestamp_ms": int(signal.decision_timestamp_ms),
+                "missed_signal_lag_ltf_candles": missed_lag_ltf,
+                "missed_signal_lag_ms": missed_lag_ltf * entry_timeframe_ms,
+                "candidate_decision_count_total": len(all_candidate_timestamps),
+                "probed_decision_count": len(candidate_timestamps),
+                "probe_max_candles": max_probe,
+                "probe_truncated": bool(probe_truncated),
+                "unprobed_newer_decision_count": max(0, len(all_candidate_timestamps) - len(candidate_timestamps)),
+                "category_id": signal.category_id,
+                "category_label": signal.category_label,
+                "signal_entry_price": _finite_or_none(signal.entry_price),
+                "signal_stop_price": _finite_or_none(signal.stop_price),
+                "signal_tp1_price": _finite_or_none(signal.tp1_price),
+            }
+        status = "no_prior_signal_found_in_probed_prefix" if probe_truncated else "no_prior_signal_found"
+        return {
+            "status": status,
+            "levels_tf": levels_timeframe.value,
+            "entry_tf": entry_timeframe.value,
+            "current_decision_timestamp_ms": int(current_signal.decision_timestamp_ms),
+            "previous_live_scan_closed_timestamp_ms": int(previous_ts),
+            "first_unscanned_decision_timestamp_ms": int(first_candidate_ts),
+            "last_probed_decision_timestamp_ms": int(candidate_timestamps[-1]),
+            "candidate_decision_count_total": len(all_candidate_timestamps),
+            "probed_decision_count": len(candidate_timestamps),
+            "probe_max_candles": max_probe,
+            "probe_truncated": bool(probe_truncated),
+            "unprobed_newer_decision_count": max(0, len(all_candidate_timestamps) - len(candidate_timestamps)),
+        }
 
     def _build_signal_from_components(
         self,
@@ -1995,6 +2271,7 @@ class AnomalyMicroLiveRunner:
         setup_source: str,
         setup_elapsed_fraction: float,
         setup_closed_entry_candles: int,
+        emit_diagnostics: bool = True,
     ) -> LiveSignal | None:
         if baseline.empty or entry_segment.empty:
             return None
@@ -2014,6 +2291,8 @@ class AnomalyMicroLiveRunner:
         start_avg_trade_ratio = _safe_divide(start_avg_trade_quote, baseline_avg_trade_quote)
         raw_quote_ratio_for_return = _safe_divide(start_quote, baseline_quote)
         start_quote_ratio_per_abs_return = _safe_divide(raw_quote_ratio_for_return, abs_start_ret)
+        raw_trade_ratio_for_return = _safe_divide(start_trades, baseline_trades)
+        start_trade_ratio_per_abs_return = _safe_divide(raw_trade_ratio_for_return, abs_start_ret)
         baseline_range_pct = float(
             ((baseline["high"].astype(float) - baseline["low"].astype(float)) / baseline["close"].astype(float).replace(0.0, pd.NA)).median()
         )
@@ -2032,23 +2311,24 @@ class AnomalyMicroLiveRunner:
             min_raw_quote_ratio = self.config.min_quote_ratio_start
             min_raw_trade_ratio = self.config.min_trade_ratio_start
         if not math.isfinite(quote_ratio) or not math.isfinite(trade_ratio) or not math.isfinite(raw_quote_ratio) or not math.isfinite(raw_trade_ratio):
-            self.artifacts.append_event(
-                "reject_invalid_flow_ratios",
-                symbol,
-                {
-                    "baseline_quote": _finite_or_none(baseline_quote),
-                    "baseline_trades": _finite_or_none(baseline_trades),
-                    "start_quote": _finite_or_none(start_quote),
-                    "start_trades": _finite_or_none(start_trades),
-                    "raw_quote_ratio": _finite_or_none(raw_quote_ratio),
-                    "raw_trade_ratio": _finite_or_none(raw_trade_ratio),
-                    "quote_pace_ratio": _finite_or_none(quote_ratio),
-                    "trade_pace_ratio": _finite_or_none(trade_ratio),
-                    "setup_elapsed_fraction": float(setup_elapsed_fraction),
-                    "decision_timestamp_ms": int(decision["timestamp"]),
-                    "setup_source": setup_source,
-                },
-            )
+            if emit_diagnostics:
+                self.artifacts.append_event(
+                    "reject_invalid_flow_ratios",
+                    symbol,
+                    {
+                        "baseline_quote": _finite_or_none(baseline_quote),
+                        "baseline_trades": _finite_or_none(baseline_trades),
+                        "start_quote": _finite_or_none(start_quote),
+                        "start_trades": _finite_or_none(start_trades),
+                        "raw_quote_ratio": _finite_or_none(raw_quote_ratio),
+                        "raw_trade_ratio": _finite_or_none(raw_trade_ratio),
+                        "quote_pace_ratio": _finite_or_none(quote_ratio),
+                        "trade_pace_ratio": _finite_or_none(trade_ratio),
+                        "setup_elapsed_fraction": float(setup_elapsed_fraction),
+                        "decision_timestamp_ms": int(decision["timestamp"]),
+                        "setup_source": setup_source,
+                    },
+                )
             return None
         if (
             quote_ratio < self.config.min_quote_ratio_start
@@ -2056,28 +2336,29 @@ class AnomalyMicroLiveRunner:
             or raw_quote_ratio < min_raw_quote_ratio
             or raw_trade_ratio < min_raw_trade_ratio
         ):
-            self.artifacts.append_event(
-                "reject_weak_start_flow",
-                symbol,
-                {
-                    "raw_quote_ratio": raw_quote_ratio,
-                    "raw_trade_ratio": raw_trade_ratio,
-                    "quote_pace_ratio": quote_ratio,
-                    "trade_pace_ratio": trade_ratio,
-                    "min_quote_pace_ratio": self.config.min_quote_ratio_start,
-                    "min_trade_pace_ratio": self.config.min_trade_ratio_start,
-                    "min_raw_quote_ratio": min_raw_quote_ratio,
-                    "min_raw_trade_ratio": min_raw_trade_ratio,
-                    "setup_elapsed_fraction": float(setup_elapsed_fraction),
-                    "decision_timestamp_ms": int(decision["timestamp"]),
-                    "setup_source": setup_source,
-                },
-            )
+            if emit_diagnostics:
+                self.artifacts.append_event(
+                    "reject_weak_start_flow",
+                    symbol,
+                    {
+                        "raw_quote_ratio": raw_quote_ratio,
+                        "raw_trade_ratio": raw_trade_ratio,
+                        "quote_pace_ratio": quote_ratio,
+                        "trade_pace_ratio": trade_ratio,
+                        "min_quote_pace_ratio": self.config.min_quote_ratio_start,
+                        "min_trade_pace_ratio": self.config.min_trade_ratio_start,
+                        "min_raw_quote_ratio": min_raw_quote_ratio,
+                        "min_raw_trade_ratio": min_raw_trade_ratio,
+                        "setup_elapsed_fraction": float(setup_elapsed_fraction),
+                        "decision_timestamp_ms": int(decision["timestamp"]),
+                        "setup_source": setup_source,
+                    },
+                )
             return None
 
         latest_decision_ts = int(decision["timestamp"])
         decision_available_ms = latest_decision_ts + int(entry_timeframe.to_milliseconds())
-        if 0 <= now_ms - decision_available_ms <= self.config.max_signal_age_ms:
+        if emit_diagnostics and 0 <= now_ms - decision_available_ms <= self.config.max_signal_age_ms:
             self._mark_active_symbol(
                 symbol,
                 reason="pump_flow_candidate",
@@ -2105,31 +2386,33 @@ class AnomalyMicroLiveRunner:
         risk = entry_price - stop_price
         initial_risk_pct = _safe_divide(risk, entry_price)
         if not math.isfinite(risk) or risk <= 0.0:
-            self._clear_active_symbol(symbol, reason="invalid_initial_risk")
-            self.artifacts.append_event(
-                "reject_invalid_initial_risk",
-                symbol,
-                {
-                    "entry_price": _finite_or_none(entry_price),
-                    "stop_price": _finite_or_none(stop_price),
-                    "risk": _finite_or_none(risk),
-                    "decision_timestamp_ms": int(decision["timestamp"]),
-                    "setup_source": setup_source,
-                },
-            )
+            if emit_diagnostics:
+                self._clear_active_symbol(symbol, reason="invalid_initial_risk")
+                self.artifacts.append_event(
+                    "reject_invalid_initial_risk",
+                    symbol,
+                    {
+                        "entry_price": _finite_or_none(entry_price),
+                        "stop_price": _finite_or_none(stop_price),
+                        "risk": _finite_or_none(risk),
+                        "decision_timestamp_ms": int(decision["timestamp"]),
+                        "setup_source": setup_source,
+                    },
+                )
             return None
         if not math.isfinite(initial_risk_pct) or initial_risk_pct > self.config.max_initial_risk_pct:
-            self._clear_active_symbol(symbol, reason="initial_risk_too_wide")
-            self.artifacts.append_event(
-                "reject_initial_risk_too_wide",
-                symbol,
-                {
-                    "initial_risk_pct": _finite_or_none(initial_risk_pct),
-                    "max": self.config.max_initial_risk_pct,
-                    "decision_timestamp_ms": int(decision["timestamp"]),
-                    "setup_source": setup_source,
-                },
-            )
+            if emit_diagnostics:
+                self._clear_active_symbol(symbol, reason="initial_risk_too_wide")
+                self.artifacts.append_event(
+                    "reject_initial_risk_too_wide",
+                    symbol,
+                    {
+                        "initial_risk_pct": _finite_or_none(initial_risk_pct),
+                        "max": self.config.max_initial_risk_pct,
+                        "decision_timestamp_ms": int(decision["timestamp"]),
+                        "setup_source": setup_source,
+                    },
+                )
             return None
         base_tp1_price = entry_price + risk
         tp1_price, tp1_round_step = _round_up_tp1_to_market_number(
@@ -2142,59 +2425,112 @@ class AnomalyMicroLiveRunner:
         oi_change_loaded = False
         oi_change: float | None = None
         oi_change_reason: str | None = None
+        mark_basis_loaded = False
+        mark_basis: LiveMarkBasisResult | None = None
         next_taker_share_loaded = False
         next_taker_share = float("nan")
+        start_taker_share_delta_loaded = False
+        start_taker_share_delta = float("nan")
+
+        def record_category_reject(
+            category: LivePumpCategory,
+            symbol: str,
+            reason: str,
+            details: dict[str, object],
+        ) -> dict[str, object]:
+            return self._record_category_reject(
+                category,
+                symbol,
+                reason,
+                details,
+                emit=emit_diagnostics,
+            )
+
         for category in self._pump_categories:
+            min_mark_basis = _category_value(category, self.config, "min_mark_close_vs_decision_close_basis")
+            if min_mark_basis is not None:
+                if not mark_basis_loaded:
+                    mark_basis = self._fetch_live_mark_basis(
+                        symbol,
+                        decision_timestamp_ms=int(decision["timestamp"]),
+                        decision_close=decision_close,
+                    )
+                    mark_basis_loaded = True
+                basis_value = mark_basis.value if mark_basis is not None else None
+                if basis_value is None or not math.isfinite(basis_value) or basis_value < min_mark_basis:
+                    category_rejections.append(
+                        record_category_reject(
+                            category,
+                            symbol,
+                            "reject_mark_basis_below_min",
+                            {
+                                "mark_close_vs_decision_close_basis": _finite_or_none(basis_value),
+                                "mark_basis_status": mark_basis.reason if mark_basis is not None else "not_loaded",
+                                "mark_timestamp_ms": mark_basis.timestamp_ms if mark_basis is not None and mark_basis.timestamp_ms is not None else "",
+                                "mark_age_ms": mark_basis.age_ms if mark_basis is not None and mark_basis.age_ms is not None else "",
+                                "min": min_mark_basis,
+                                "decision_timestamp_ms": int(decision["timestamp"]),
+                            },
+                        )
+                    )
+                    continue
             max_start_quote_ratio = _category_value(category, self.config, "max_start_quote_ratio")
             if max_start_quote_ratio is not None and quote_ratio > max_start_quote_ratio:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_exhausted_quote_ratio", {"quote_ratio": quote_ratio, "max": max_start_quote_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_exhausted_quote_ratio", {"quote_ratio": quote_ratio, "max": max_start_quote_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             max_start_trade_ratio = _category_value(category, self.config, "max_start_trade_ratio")
             if max_start_trade_ratio is not None and trade_ratio > max_start_trade_ratio:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_exhausted_trade_ratio", {"trade_ratio": trade_ratio, "max": max_start_trade_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_exhausted_trade_ratio", {"trade_ratio": trade_ratio, "max": max_start_trade_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             max_avg_trade_ratio = _category_value(category, self.config, "max_start_avg_trade_quote_size_ratio")
             if max_avg_trade_ratio is not None and not math.isfinite(start_avg_trade_ratio):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_avg_trade_quote_size_ratio", {"ratio": _finite_or_none(start_avg_trade_ratio), "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_invalid_avg_trade_quote_size_ratio", {"ratio": _finite_or_none(start_avg_trade_ratio), "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             if max_avg_trade_ratio is not None and start_avg_trade_ratio > max_avg_trade_ratio:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_large_print_signature", {"ratio": start_avg_trade_ratio, "max": max_avg_trade_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_large_print_signature", {"ratio": start_avg_trade_ratio, "max": max_avg_trade_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             max_quote_per_return = _category_value(category, self.config, "max_start_quote_ratio_per_abs_return")
             if max_quote_per_return is not None and not math.isfinite(start_quote_ratio_per_abs_return):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_quote_ratio_per_abs_return", {"ratio": _finite_or_none(start_quote_ratio_per_abs_return), "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_invalid_quote_ratio_per_abs_return", {"ratio": _finite_or_none(start_quote_ratio_per_abs_return), "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             if max_quote_per_return is not None and start_quote_ratio_per_abs_return > max_quote_per_return:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_poor_effort_per_return", {"ratio": start_quote_ratio_per_abs_return, "max": max_quote_per_return, "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_poor_effort_per_return", {"ratio": start_quote_ratio_per_abs_return, "max": max_quote_per_return, "decision_timestamp_ms": int(decision["timestamp"])}))
+                continue
+            max_trade_per_return = _category_value(category, self.config, "max_start_trade_ratio_per_abs_return")
+            if max_trade_per_return is not None and not math.isfinite(start_trade_ratio_per_abs_return):
+                category_rejections.append(record_category_reject(category, symbol, "reject_invalid_trade_ratio_per_abs_return", {"ratio": _finite_or_none(start_trade_ratio_per_abs_return), "decision_timestamp_ms": int(decision["timestamp"])}))
+                continue
+            if max_trade_per_return is not None and start_trade_ratio_per_abs_return > max_trade_per_return:
+                category_rejections.append(record_category_reject(category, symbol, "reject_poor_trade_effort_per_return", {"ratio": start_trade_ratio_per_abs_return, "max": max_trade_per_return, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             max_range_ratio = _category_value(category, self.config, "max_start_range_pct_ratio_to_baseline")
             if max_range_ratio is not None and not math.isfinite(start_range_pct_ratio):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_range_expansion_ratio", {"ratio": _finite_or_none(start_range_pct_ratio), "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_invalid_range_expansion_ratio", {"ratio": _finite_or_none(start_range_pct_ratio), "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             if max_range_ratio is not None and start_range_pct_ratio > max_range_ratio:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_extreme_range_expansion", {"ratio": start_range_pct_ratio, "max": max_range_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_extreme_range_expansion", {"ratio": start_range_pct_ratio, "max": max_range_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             max_prior_whipsaw = self.config.max_prior_up_down_whipsaw_to_impulse_range
             if max_prior_whipsaw is not None and not math.isfinite(prior_whipsaw):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_prior_whipsaw", {"prior_up_down_whipsaw_to_impulse_range": _finite_or_none(prior_whipsaw), "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_invalid_prior_whipsaw", {"prior_up_down_whipsaw_to_impulse_range": _finite_or_none(prior_whipsaw), "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             if max_prior_whipsaw is not None and prior_whipsaw > max_prior_whipsaw:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_prior_up_down_whipsaw", {"prior_up_down_whipsaw_to_impulse_range": prior_whipsaw, "max": max_prior_whipsaw, "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_prior_up_down_whipsaw", {"prior_up_down_whipsaw_to_impulse_range": prior_whipsaw, "max": max_prior_whipsaw, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             if not math.isfinite(price_retention):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_price_retention", {"price_retention": _finite_or_none(price_retention), "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_invalid_price_retention", {"price_retention": _finite_or_none(price_retention), "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             if price_retention < self.config.min_price_retention:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_low_price_retention", {"price_retention": price_retention, "min": self.config.min_price_retention, "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_low_price_retention", {"price_retention": price_retention, "min": self.config.min_price_retention, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             max_price_retention = _category_value(category, self.config, "max_price_retention")
             if max_price_retention is not None and price_retention > max_price_retention:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_overextended_retention", {"price_retention": price_retention, "max": max_price_retention, "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_overextended_retention", {"price_retention": price_retention, "max": max_price_retention, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             min_next_taker_share = _category_value(category, self.config, "min_next_taker_buy_quote_share")
             if min_next_taker_share is not None:
                 if "taker_buy_quote_volume" not in entry_segment.columns:
-                    category_rejections.append(self._record_category_reject(category, symbol, "reject_missing_taker_buy_share", {"required": min_next_taker_share, "decision_timestamp_ms": int(decision["timestamp"])}))
+                    category_rejections.append(record_category_reject(category, symbol, "reject_missing_taker_buy_share", {"required": min_next_taker_share, "decision_timestamp_ms": int(decision["timestamp"])}))
                     continue
                 if not next_taker_share_loaded:
                     taker_quote = pd.to_numeric(entry_segment["taker_buy_quote_volume"], errors="coerce")
@@ -2206,28 +2542,52 @@ class AnomalyMicroLiveRunner:
                         next_taker_share = float((taker_quote / quote_volume).mean())
                     next_taker_share_loaded = True
                 if not math.isfinite(next_taker_share):
-                    category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_taker_buy_share", {"share": _finite_or_none(next_taker_share), "decision_timestamp_ms": int(decision["timestamp"])}))
+                    category_rejections.append(record_category_reject(category, symbol, "reject_invalid_taker_buy_share", {"share": _finite_or_none(next_taker_share), "decision_timestamp_ms": int(decision["timestamp"])}))
                     continue
                 if next_taker_share < min_next_taker_share:
-                    category_rejections.append(self._record_category_reject(category, symbol, "reject_weak_next_taker_buy_share", {"share": next_taker_share, "min": min_next_taker_share, "decision_timestamp_ms": int(decision["timestamp"])}))
+                    category_rejections.append(record_category_reject(category, symbol, "reject_weak_next_taker_buy_share", {"share": next_taker_share, "min": min_next_taker_share, "decision_timestamp_ms": int(decision["timestamp"])}))
+                    continue
+            max_start_taker_delta = _category_value(category, self.config, "max_start_taker_buy_quote_share_delta")
+            if max_start_taker_delta is not None:
+                if "taker_buy_quote_volume" not in entry_segment.columns or "taker_buy_quote_volume" not in baseline.columns:
+                    category_rejections.append(record_category_reject(category, symbol, "reject_missing_start_taker_buy_delta", {"required_max": max_start_taker_delta, "decision_timestamp_ms": int(decision["timestamp"])}))
+                    continue
+                if not start_taker_share_delta_loaded:
+                    start_quote_volume = float(pd.to_numeric(pd.Series([entry_segment.iloc[0]["quote_volume"]]), errors="coerce").iloc[0])
+                    start_taker_quote = float(pd.to_numeric(pd.Series([entry_segment.iloc[0]["taker_buy_quote_volume"]]), errors="coerce").iloc[0])
+                    baseline_quote_volume = pd.to_numeric(baseline["quote_volume"], errors="coerce")
+                    baseline_taker_quote = pd.to_numeric(baseline["taker_buy_quote_volume"], errors="coerce")
+                    baseline_share = float((baseline_taker_quote / baseline_quote_volume.replace(0.0, pd.NA)).median())
+                    start_share = _safe_divide(start_taker_quote, start_quote_volume)
+                    start_taker_share_delta = start_share - baseline_share
+                    start_taker_share_delta_loaded = True
+                if not math.isfinite(start_taker_share_delta):
+                    category_rejections.append(record_category_reject(category, symbol, "reject_invalid_start_taker_buy_delta", {"delta": _finite_or_none(start_taker_share_delta), "decision_timestamp_ms": int(decision["timestamp"])}))
+                    continue
+                if start_taker_share_delta > max_start_taker_delta:
+                    category_rejections.append(record_category_reject(category, symbol, "reject_start_taker_buy_delta_above_max", {"delta": start_taker_share_delta, "max": max_start_taker_delta, "decision_timestamp_ms": int(decision["timestamp"])}))
                     continue
             if not math.isfinite(verticality_score):
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_invalid_verticality", {"verticality_score": _finite_or_none(verticality_score), "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_invalid_verticality", {"verticality_score": _finite_or_none(verticality_score), "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             if verticality_score < self.config.min_verticality_score:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_low_verticality", {"verticality_score": verticality_score, "min": self.config.min_verticality_score, "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_low_verticality", {"verticality_score": verticality_score, "min": self.config.min_verticality_score, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             if hold_count < self.config.min_hold_count:
-                category_rejections.append(self._record_category_reject(category, symbol, "reject_low_hold_count", {"hold_count": hold_count, "min": self.config.min_hold_count, "decision_timestamp_ms": int(decision["timestamp"])}))
+                category_rejections.append(record_category_reject(category, symbol, "reject_low_hold_count", {"hold_count": hold_count, "min": self.config.min_hold_count, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
-            if self.config.min_oi_change_pct_3x5m is not None:
+            min_oi_change = _category_value(category, self.config, "min_oi_change_pct_3x5m")
+            if min_oi_change is not None:
                 if not oi_change_loaded:
-                    oi_result = self._fetch_live_oi_change(symbol, now_ms=now_ms)
+                    oi_result = self._fetch_live_oi_change(
+                        symbol,
+                        decision_timestamp_ms=int(decision["timestamp"]),
+                    )
                     oi_change = oi_result.value
                     oi_change_reason = oi_result.reason
                     oi_change_loaded = True
-                if oi_change is None or not math.isfinite(oi_change) or oi_change <= self.config.min_oi_change_pct_3x5m:
-                    category_rejections.append(self._record_category_reject(category, symbol, "reject_oi", {"oi_change_pct_3x5m": _finite_or_none(oi_change), "oi_status": oi_change_reason or "below_threshold", "required_gt": self.config.min_oi_change_pct_3x5m, "decision_timestamp_ms": int(decision["timestamp"])}))
+                if oi_change is None or not math.isfinite(oi_change) or oi_change <= min_oi_change:
+                    category_rejections.append(record_category_reject(category, symbol, "reject_oi", {"oi_change_pct_3x5m": _finite_or_none(oi_change), "oi_status": oi_change_reason or "below_threshold", "required_gt": min_oi_change, "decision_timestamp_ms": int(decision["timestamp"])}))
                     continue
 
             strengths = [
@@ -2267,41 +2627,45 @@ class AnomalyMicroLiveRunner:
                 hold_count=hold_count,
                 verticality_score=verticality_score,
                 oi_change_pct_3x5m=oi_change,
+                previous_live_scan_closed_timestamp_ms=None,
+                first_unscanned_decision_timestamp_ms=None,
+                live_scan_gap_ltf_candles=0,
                 category_rejections=list(category_rejections),
                 strengths=strengths,
                 weaknesses=weaknesses,
             )
-            self._mark_active_symbol(
-                symbol,
-                reason="entry_signal_selected",
-                now_ms=now_ms,
-                ttl_ms=self.config.max_signal_age_ms,
-                decision_timestamp_ms=int(decision["timestamp"]),
-            )
-            self.artifacts.append_event(
-                "category_selected",
-                symbol,
-                {
-                    "category_id": category.category_id,
-                    "category_label": category.label,
-                    "category_priority": category.priority,
-                    "decision_timestamp_ms": int(decision["timestamp"]),
-                    "prior_category_rejections": category_rejections,
-                    "levels_tf": levels_timeframe.value,
-                    "entry_tf": entry_timeframe.value,
-                    "setup_source": setup_source,
-                    "setup_elapsed_fraction": float(setup_elapsed_fraction),
-                    "setup_closed_entry_candles": int(setup_closed_entry_candles),
-                    "raw_quote_ratio": _finite_or_none(raw_quote_ratio),
-                    "raw_trade_ratio": _finite_or_none(raw_trade_ratio),
-                    "quote_pace_ratio": _finite_or_none(quote_ratio),
-                    "trade_pace_ratio": _finite_or_none(trade_ratio),
-                    "base_tp1_price": _finite_or_none(base_tp1_price),
-                    "tp1_price": _finite_or_none(tp1_price),
-                    "tp1_round_step": _finite_or_none(tp1_round_step),
-                },
-            )
-            if category_rejections:
+            if emit_diagnostics:
+                self._mark_active_symbol(
+                    symbol,
+                    reason="entry_signal_selected",
+                    now_ms=now_ms,
+                    ttl_ms=self.config.max_signal_age_ms,
+                    decision_timestamp_ms=int(decision["timestamp"]),
+                )
+                self.artifacts.append_event(
+                    "category_selected",
+                    symbol,
+                    {
+                        "category_id": category.category_id,
+                        "category_label": category.label,
+                        "category_priority": category.priority,
+                        "decision_timestamp_ms": int(decision["timestamp"]),
+                        "prior_category_rejections": category_rejections,
+                        "levels_tf": levels_timeframe.value,
+                        "entry_tf": entry_timeframe.value,
+                        "setup_source": setup_source,
+                        "setup_elapsed_fraction": float(setup_elapsed_fraction),
+                        "setup_closed_entry_candles": int(setup_closed_entry_candles),
+                        "raw_quote_ratio": _finite_or_none(raw_quote_ratio),
+                        "raw_trade_ratio": _finite_or_none(raw_trade_ratio),
+                        "quote_pace_ratio": _finite_or_none(quote_ratio),
+                        "trade_pace_ratio": _finite_or_none(trade_ratio),
+                        "base_tp1_price": _finite_or_none(base_tp1_price),
+                        "tp1_price": _finite_or_none(tp1_price),
+                        "tp1_round_step": _finite_or_none(tp1_round_step),
+                    },
+                )
+            if emit_diagnostics and category_rejections:
                 rejected_ids = ",".join(str(row.get("category_id")) for row in category_rejections)
                 self.logger(
                     f"live: {_compact_symbol(symbol)} {levels_timeframe.value}/{entry_timeframe.value} · "
@@ -2316,6 +2680,7 @@ class AnomalyMicroLiveRunner:
         symbol: str,
         reason: str,
         details: dict[str, object],
+        emit: bool = True,
     ) -> dict[str, object]:
         payload: dict[str, object] = {
             "category_id": category.category_id,
@@ -2324,11 +2689,12 @@ class AnomalyMicroLiveRunner:
             "reason": reason,
             **details,
         }
-        self.artifacts.append_event("category_rejected", symbol, payload)
+        if emit:
+            self.artifacts.append_event("category_rejected", symbol, payload)
         return payload
 
-    def _fetch_live_oi_change(self, symbol: str, *, now_ms: int) -> LiveOiChangeResult:
-        end_ms = now_ms
+    def _fetch_live_oi_change(self, symbol: str, *, decision_timestamp_ms: int) -> LiveOiChangeResult:
+        end_ms = int(decision_timestamp_ms)
         start_ms = end_ms - 25 * 60_000
         frame = self.exchange.fetch_open_interest(symbol, Timeframe.M5, start_ms, end_ms)
         if frame.empty:
@@ -2339,7 +2705,7 @@ class AnomalyMicroLiveRunner:
         if len(frame) < 4:
             return LiveOiChangeResult(None, "oi_history_too_short")
         latest_ts = int(frame.iloc[-1]["timestamp"])
-        if latest_ts < now_ms - self.config.oi_fresh_ms:
+        if latest_ts < end_ms - self.config.oi_fresh_ms:
             return LiveOiChangeResult(None, "oi_stale")
         current = float(frame.iloc[-1]["open_interest"])
         previous = float(frame.iloc[-4]["open_interest"])
@@ -2349,6 +2715,50 @@ class AnomalyMicroLiveRunner:
         if not math.isfinite(value):
             return LiveOiChangeResult(None, "oi_invalid_change")
         return LiveOiChangeResult(value)
+
+    def _fetch_live_mark_basis(
+        self,
+        symbol: str,
+        *,
+        decision_timestamp_ms: int,
+        decision_close: float,
+    ) -> LiveMarkBasisResult:
+        if not math.isfinite(decision_close) or decision_close <= 0.0:
+            return LiveMarkBasisResult(None, "invalid_decision_close")
+        fetcher = getattr(self.exchange, "fetch_binance_derivatives_context", None)
+        if not callable(fetcher):
+            return LiveMarkBasisResult(None, "mark_context_fetch_unavailable")
+        end_ms = int(decision_timestamp_ms)
+        start_ms = end_ms - 20 * 60_000
+        try:
+            frame = fetcher(
+                symbol=symbol,
+                source="mark",
+                start_timestamp_ms=start_ms,
+                end_timestamp_ms=end_ms,
+                period="5m",
+                limit=20,
+            )
+        except Exception as exc:
+            return LiveMarkBasisResult(None, f"mark_context_error:{type(exc).__name__}")
+        if frame.empty:
+            return LiveMarkBasisResult(None, "mark_context_empty")
+        if "timestamp" not in frame.columns or "close" not in frame.columns:
+            return LiveMarkBasisResult(None, "mark_context_missing_columns")
+        prepared = frame.sort_values("timestamp").dropna(subset=["timestamp", "close"]).reset_index(drop=True)
+        prepared = prepared.loc[pd.to_numeric(prepared["timestamp"], errors="coerce").le(end_ms)]
+        if prepared.empty:
+            return LiveMarkBasisResult(None, "no_mark_before_decision")
+        row = prepared.iloc[-1]
+        mark_ts = int(row["timestamp"])
+        mark_close = float(row["close"])
+        age_ms = int(end_ms - mark_ts)
+        if age_ms > 5 * 60_000:
+            return LiveMarkBasisResult(None, "mark_context_stale", timestamp_ms=mark_ts, age_ms=age_ms)
+        basis = _safe_divide(mark_close - decision_close, decision_close)
+        if not math.isfinite(basis):
+            return LiveMarkBasisResult(None, "invalid_mark_basis", timestamp_ms=mark_ts, age_ms=age_ms)
+        return LiveMarkBasisResult(basis, "ok", timestamp_ms=mark_ts, age_ms=age_ms)
 
     def _maybe_open_position(self, signal: LiveSignal) -> None:
         symbol_key = _position_symbol_key(signal.symbol)
@@ -2505,6 +2915,8 @@ class AnomalyMicroLiveRunner:
             actual_notional = actual_entry_price * position_delta_amount
             actual_risk_usdt = position_delta_amount * actual_initial_risk
             position_id = f"{signal.symbol.replace('/', '_').replace(':', '_')}_{signal.decision_timestamp_ms}_{fill.order_id}"
+            entry_fill_lag = _entry_lag_details(signal, observed_timestamp_ms=int(fill.timestamp_ms))
+            entry_submit_lag = _entry_lag_details(signal, observed_timestamp_ms=entry_order_submitted_at_ms)
             try:
                 stop_order_id = self._create_verified_position_stop_order(
                     signal.symbol,
@@ -2536,6 +2948,15 @@ class AnomalyMicroLiveRunner:
                 stop_price=actual_stop_price,
                 tp1_price=actual_tp1_price,
                 initial_risk=actual_initial_risk,
+                first_executable_entry_timestamp_ms=int(entry_fill_lag["first_executable_entry_timestamp_ms"]),
+                entry_lag_ms=int(entry_fill_lag["entry_lag_ms"]),
+                entry_lag_ltf_candles=int(entry_fill_lag["entry_lag_ltf_candles"]),
+                entered_late_vs_first_executable=bool(entry_fill_lag["entered_late_vs_first_executable"]),
+                entry_order_submit_lag_ms=int(entry_submit_lag["entry_lag_ms"]),
+                entry_order_submit_lag_ltf_candles=int(entry_submit_lag["entry_lag_ltf_candles"]),
+                previous_live_scan_closed_timestamp_ms=signal.previous_live_scan_closed_timestamp_ms,
+                first_unscanned_decision_timestamp_ms=signal.first_unscanned_decision_timestamp_ms,
+                live_scan_gap_ltf_candles=signal.live_scan_gap_ltf_candles,
                 entry_fill_timestamp_ms=int(fill.timestamp_ms),
                 entry_order_submitted_at_ms=entry_order_submitted_at_ms,
                 entry_order_status=fill.status,
@@ -2571,6 +2992,15 @@ class AnomalyMicroLiveRunner:
                 "category_priority": signal.category_priority,
                 "signal_entry_price": signal.entry_price,
                 "actual_entry_price": position.entry_price,
+                "first_executable_entry_timestamp_ms": position.first_executable_entry_timestamp_ms,
+                "entry_lag_ms": position.entry_lag_ms,
+                "entry_lag_ltf_candles": position.entry_lag_ltf_candles,
+                "entered_late_vs_first_executable": position.entered_late_vs_first_executable,
+                "entry_order_submit_lag_ms": position.entry_order_submit_lag_ms,
+                "entry_order_submit_lag_ltf_candles": position.entry_order_submit_lag_ltf_candles,
+                "previous_live_scan_closed_timestamp_ms": position.previous_live_scan_closed_timestamp_ms or "",
+                "first_unscanned_decision_timestamp_ms": position.first_unscanned_decision_timestamp_ms or "",
+                "live_scan_gap_ltf_candles": position.live_scan_gap_ltf_candles,
                 "entry_fill_timestamp_ms": position.entry_fill_timestamp_ms,
                 "entry_order_submitted_at_ms": position.entry_order_submitted_at_ms,
                 "entry_filled_amount": position.entry_filled_amount,
@@ -2645,6 +3075,14 @@ class AnomalyMicroLiveRunner:
             now_ms=now_ms,
             max_signal_age_ms=self.config.max_signal_age_ms,
         )
+        details.update(_entry_lag_details(signal, observed_timestamp_ms=now_ms))
+        details.update(
+            {
+                "previous_live_scan_closed_timestamp_ms": signal.previous_live_scan_closed_timestamp_ms or "",
+                "first_unscanned_decision_timestamp_ms": signal.first_unscanned_decision_timestamp_ms or "",
+                "live_scan_gap_ltf_candles": signal.live_scan_gap_ltf_candles,
+            }
+        )
         if details["signal_age_ms"] < 0:
             self.artifacts.append_event("reject_signal_not_closed_yet", signal.symbol, details)
             return False
@@ -2657,6 +3095,7 @@ class AnomalyMicroLiveRunner:
         return True
 
     def _validate_signal_executable(self, signal: LiveSignal, *, live_price: float) -> bool:
+        now_ms = int(time.time() * 1000)
         signed_drift_pct = _safe_divide(live_price - signal.entry_price, signal.entry_price)
         abs_drift_pct = abs(signed_drift_pct) if math.isfinite(signed_drift_pct) else float("nan")
         actual_risk = live_price - signal.stop_price
@@ -2672,6 +3111,10 @@ class AnomalyMicroLiveRunner:
             "actual_risk_pct": _finite_or_none(actual_risk_pct),
             "rr_to_signal_tp1": _finite_or_none(rr_to_signal_tp1),
             "decision_timestamp_ms": signal.decision_timestamp_ms,
+            "previous_live_scan_closed_timestamp_ms": signal.previous_live_scan_closed_timestamp_ms or "",
+            "first_unscanned_decision_timestamp_ms": signal.first_unscanned_decision_timestamp_ms or "",
+            "live_scan_gap_ltf_candles": signal.live_scan_gap_ltf_candles,
+            **_entry_lag_details(signal, observed_timestamp_ms=now_ms),
         }
         if not math.isfinite(live_price) or live_price <= 0.0:
             return self._reject_live_order(signal, event="reject_invalid_live_price", details=details)
@@ -4193,6 +4636,43 @@ def _decision_freshness_details(
         "now_ms": int(now_ms),
         "signal_age_ms": signal_age_ms,
         "max_signal_age_ms": int(max_signal_age_ms),
+    }
+
+
+def _entry_lag_details(signal: LiveSignal, *, observed_timestamp_ms: int) -> dict[str, object]:
+    entry_timeframe_ms = int(signal.entry_timeframe.to_milliseconds())
+    first_executable_ms = int(signal.decision_timestamp_ms) + entry_timeframe_ms
+    lag_ms = int(observed_timestamp_ms) - first_executable_ms
+    lag_candles = int(math.floor(lag_ms / entry_timeframe_ms)) if entry_timeframe_ms > 0 else 0
+    return {
+        "first_executable_entry_timestamp_ms": first_executable_ms,
+        "observed_entry_check_timestamp_ms": int(observed_timestamp_ms),
+        "entry_lag_ms": lag_ms,
+        "entry_lag_ltf_candles": lag_candles,
+        "entered_late_vs_first_executable": bool(lag_ms >= entry_timeframe_ms),
+    }
+
+
+def _live_scan_gap_details(
+    *,
+    decision_timestamp_ms: int,
+    previous_scan_closed_timestamp_ms: int | None,
+    entry_timeframe: Timeframe,
+) -> dict[str, object]:
+    entry_timeframe_ms = int(entry_timeframe.to_milliseconds())
+    if previous_scan_closed_timestamp_ms is None or entry_timeframe_ms <= 0:
+        return {
+            "previous_live_scan_closed_timestamp_ms": None,
+            "first_unscanned_decision_timestamp_ms": None,
+            "live_scan_gap_ltf_candles": 0,
+        }
+    previous_ts = int(previous_scan_closed_timestamp_ms)
+    decision_ts = int(decision_timestamp_ms)
+    skipped = max(0, int((decision_ts - previous_ts) // entry_timeframe_ms) - 1)
+    return {
+        "previous_live_scan_closed_timestamp_ms": previous_ts,
+        "first_unscanned_decision_timestamp_ms": previous_ts + entry_timeframe_ms if skipped > 0 else decision_ts,
+        "live_scan_gap_ltf_candles": skipped,
     }
 
 
