@@ -2022,7 +2022,7 @@ class AnomalyMicroLiveRunner:
                 ),
                 "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
                 "cache_provider": "parquet_tail_fetch_v1" if self._ohlcv_cache_storage is not None else "disabled",
-                "inactive_subminute_scan_policy": "event_driven_ws_default_active_or_ticker_radar_only",
+                "inactive_subminute_scan_policy": "event_driven_default_active_or_ticker_radar_only",
                 "inactive_scan_slots_default_policy": "zero_for_subminute_ticker_radar unless explicitly configured",
                 "symbol_batch_size_role": "legacy inactive scan cap, not WS market discovery",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
@@ -2030,6 +2030,7 @@ class AnomalyMicroLiveRunner:
                     _live_config_has_subminute_entry_pairs(self.config)
                 ),
                 "ticker_snapshot_source": self.ticker_snapshot_source.source_id,
+                "ticker_snapshot_degraded_source_policy": "rest_fetch_tickers_after_primary_ws_failure_with_live_events",
                 "live_ws_ticker_enabled": bool(self.config.live_ws_ticker_enabled),
                 "live_ws_ticker_stale_ms": int(self.config.live_ws_ticker_stale_ms),
                 "live_ws_ticker_startup_wait_seconds": float(self.config.live_ws_ticker_startup_wait_seconds),
@@ -2252,11 +2253,99 @@ class AnomalyMicroLiveRunner:
     def _ticker_radar_required_for_subminute_gate(self) -> bool:
         return bool(self.config.ticker_radar_enabled and _live_config_has_subminute_entry_pairs(self.config))
 
+    def _fetch_ticker_radar_snapshots(
+        self,
+        symbols: list[str],
+        *,
+        stage: str,
+    ) -> tuple[list[ExchangeTickerSnapshot], str, str, str]:
+        primary_source = self.ticker_snapshot_source
+        try:
+            snapshots = primary_source.fetch_snapshots(tuple(symbols))
+            return snapshots, primary_source.source_id, "primary", ""
+        except Exception as primary_exc:
+            if primary_source.source_id == "rest_fetch_tickers":
+                raise
+            self.artifacts.append_event(
+                "ticker_radar_primary_source_failed",
+                "__live__",
+                {
+                    "stage": stage,
+                    "primary_source": primary_source.source_id,
+                    "exception_type": type(primary_exc).__name__,
+                    "exception_message": str(primary_exc)[:500],
+                    "symbols_total": len(symbols),
+                    "policy": "try_explicit_rest_ticker_radar_after_primary_ws_failure",
+                },
+            )
+            fallback_source = RestLiveTickerSnapshotSource(self.exchange)
+            try:
+                snapshots = fallback_source.fetch_snapshots(tuple(symbols))
+            except Exception as fallback_exc:
+                self.artifacts.append_event(
+                    "ticker_radar_fallback_source_failed",
+                    "__live__",
+                    {
+                        "stage": stage,
+                        "primary_source": primary_source.source_id,
+                        "fallback_source": fallback_source.source_id,
+                        "primary_exception_type": type(primary_exc).__name__,
+                        "primary_exception_message": str(primary_exc)[:500],
+                        "fallback_exception_type": type(fallback_exc).__name__,
+                        "fallback_exception_message": str(fallback_exc)[:500],
+                        "symbols_total": len(symbols),
+                        "policy": "refuse_without_any_working_ticker_radar_source",
+                    },
+                )
+                raise ExchangeConnectivityError(
+                    "ticker radar primary source failed and explicit REST ticker fallback also failed; "
+                    f"primary_source={primary_source.source_id}; primary_error={type(primary_exc).__name__}: {primary_exc}; "
+                    f"fallback_source={fallback_source.source_id}; fallback_error={type(fallback_exc).__name__}: {fallback_exc}"
+                ) from fallback_exc
+            missing_count = sum(1 for snapshot in snapshots if snapshot.status != "ok")
+            self.artifacts.append_event(
+                "ticker_radar_source_degraded",
+                "__live__",
+                {
+                    "stage": stage,
+                    "primary_source": primary_source.source_id,
+                    "fallback_source": fallback_source.source_id,
+                    "primary_exception_type": type(primary_exc).__name__,
+                    "primary_exception_message": str(primary_exc)[:500],
+                    "symbols_total": len(snapshots),
+                    "ok_count": len(snapshots) - missing_count,
+                    "missing_count": missing_count,
+                    "policy": "explicit_rest_ticker_radar_fallback_no_ohlcv_or_aggtrade_full_scan",
+                },
+            )
+            return (
+                snapshots,
+                fallback_source.source_id,
+                "degraded_rest_fallback",
+                f"primary {primary_source.source_id} failed: {type(primary_exc).__name__}: {str(primary_exc)[:240]}",
+            )
+
     def _validate_required_ticker_radar_source(self, symbols: list[str]) -> None:
         if not self._ticker_radar_required_for_subminute_gate():
             return
         try:
-            snapshots = self.ticker_snapshot_source.fetch_snapshots(tuple(symbols))
+            snapshots, source, source_status, reason = self._fetch_ticker_radar_snapshots(symbols, stage="startup")
+        except ExchangeConnectivityError as exc:
+            self.artifacts.append_event(
+                "ticker_radar_startup_failed",
+                "__live__",
+                {
+                    "source": self.ticker_snapshot_source.source_id,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc)[:500],
+                    "symbols_total": len(symbols),
+                    "policy": "startup_refuse_without_any_working_ticker_radar_source",
+                },
+            )
+            raise LiveStartupError(
+                "subminute live discovery requires a working ticker radar source before the first cycle; "
+                f"error={type(exc).__name__}: {exc}"
+            ) from exc
         except Exception as exc:
             self.artifacts.append_event(
                 "ticker_radar_startup_failed",
@@ -2271,8 +2360,7 @@ class AnomalyMicroLiveRunner:
             )
             raise LiveStartupError(
                 "subminute live discovery requires a working ticker radar source before the first cycle; "
-                f"source={self.ticker_snapshot_source.source_id}; error={type(exc).__name__}: {exc}; "
-                "no REST/full-scan fallback is used"
+                f"source={self.ticker_snapshot_source.source_id}; error={type(exc).__name__}: {exc}"
             ) from exc
         missing_count = sum(1 for snapshot in snapshots if snapshot.status != "ok")
         if snapshots and missing_count == len(snapshots):
@@ -2280,23 +2368,25 @@ class AnomalyMicroLiveRunner:
                 "ticker_radar_startup_failed",
                 "__live__",
                 {
-                    "source": self.ticker_snapshot_source.source_id,
+                    "source": source,
+                    "source_status": source_status,
                     "symbols_total": len(snapshots),
                     "missing_count": missing_count,
-                    "policy": "startup_refuse_without_required_ticker_radar",
+                    "policy": "startup_refuse_without_valid_ticker_radar_payload",
                     "reason": "all_ticker_snapshots_missing",
                 },
             )
             raise LiveStartupError(
                 "subminute live discovery requires ticker radar snapshots with price and quote_volume; "
-                f"source={self.ticker_snapshot_source.source_id}; all {len(snapshots)} snapshots are missing; "
-                "no REST/full-scan fallback is used"
+                f"source={source}; all {len(snapshots)} snapshots are missing"
             )
         self.artifacts.append_event(
             "ticker_radar_startup_ready",
             "__live__",
             {
-                "source": self.ticker_snapshot_source.source_id,
+                "source": source,
+                "source_status": source_status,
+                "source_reason": reason,
                 "symbols_total": len(snapshots),
                 "ok_count": len(snapshots) - missing_count,
                 "missing_count": missing_count,
@@ -2438,7 +2528,7 @@ class AnomalyMicroLiveRunner:
                     if self.config.inactive_scan_slots_per_cycle is not None
                     else ""
                 ),
-                "inactive_subminute_scan_policy": "event_driven_ws_default_active_or_ticker_radar_only",
+                "inactive_subminute_scan_policy": "event_driven_default_active_or_ticker_radar_only",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "scan_hot_timeframes_per_symbol": bool(self.config.scan_hot_timeframes_per_symbol),
                 "symbol_batch_size": self.config.symbol_batch_size,
@@ -2676,13 +2766,13 @@ class AnomalyMicroLiveRunner:
         return due, waiting
 
     def _maybe_update_ticker_radar(self, symbols: list[str]) -> LiveTickerRadarCycleStats:
-        source = self.ticker_snapshot_source.source_id
+        configured_source = self.ticker_snapshot_source.source_id
         if not self.config.ticker_radar_enabled:
             return LiveTickerRadarCycleStats(
                 enabled=False,
                 attempted=False,
                 status="disabled",
-                source=source,
+                source=configured_source,
                 reason="ticker_radar_disabled",
             )
         now_ms = int(time.time() * 1000)
@@ -2692,15 +2782,15 @@ class AnomalyMicroLiveRunner:
                 enabled=True,
                 attempted=False,
                 status="not_due",
-                source=source,
+                source=configured_source,
                 reason="interval_not_elapsed",
             )
         self._last_ticker_radar_at_ms = now_ms
         try:
-            snapshots = self.ticker_snapshot_source.fetch_snapshots(tuple(symbols))
+            snapshots, source, source_status, source_reason = self._fetch_ticker_radar_snapshots(symbols, stage="cycle")
         except Exception as exc:
             payload = {
-                "source": source,
+                "source": configured_source,
                 "exception_type": type(exc).__name__,
                 "exception_message": str(exc)[:500],
                 "required_for_inactive_subminute_gate": bool(self._ticker_radar_required_for_subminute_gate()),
@@ -2709,15 +2799,43 @@ class AnomalyMicroLiveRunner:
             if self._ticker_radar_required_for_subminute_gate():
                 raise ExchangeConnectivityError(
                     "ticker radar source is required for inactive subminute discovery and is unavailable; "
-                    f"source={source}; error={type(exc).__name__}: {exc}"
+                    f"source={configured_source}; error={type(exc).__name__}: {exc}"
                 ) from exc
             return LiveTickerRadarCycleStats(
                 enabled=True,
                 attempted=True,
                 status="failed",
-                source=source,
+                source=configured_source,
                 symbols_total=len(symbols),
                 reason=f"{type(exc).__name__}: {str(exc)[:240]}",
+            )
+        missing_count = sum(1 for snapshot in snapshots if snapshot.status != "ok")
+        if snapshots and missing_count == len(snapshots):
+            self.artifacts.append_event(
+                "ticker_radar_snapshot_all_missing",
+                "__live__",
+                {
+                    "source": source,
+                    "source_status": source_status,
+                    "source_reason": source_reason,
+                    "symbols_total": len(snapshots),
+                    "missing_count": missing_count,
+                    "required_for_inactive_subminute_gate": bool(self._ticker_radar_required_for_subminute_gate()),
+                },
+            )
+            if self._ticker_radar_required_for_subminute_gate():
+                raise ExchangeConnectivityError(
+                    "ticker radar source returned no usable snapshots for inactive subminute discovery; "
+                    f"source={source}; symbols_total={len(snapshots)}"
+                )
+            return LiveTickerRadarCycleStats(
+                enabled=True,
+                attempted=True,
+                status="all_missing",
+                source=source,
+                symbols_total=len(snapshots),
+                missing_count=missing_count,
+                reason="all_ticker_snapshots_missing",
             )
         promotions = self._evaluate_ticker_radar_snapshots(snapshots, now_ms=now_ms)
         promoted_count = min(len(promotions), self.config.ticker_radar_max_promotions_per_cycle)
@@ -2735,7 +2853,6 @@ class AnomalyMicroLiveRunner:
                     else float(promotion["quote_volume_delta_ratio"])
                 ),
             )
-        missing_count = sum(1 for snapshot in snapshots if snapshot.status != "ok")
         ok_count = len(snapshots) - missing_count
         snapshot_status = "ok" if ok_count > 0 else "all_missing"
         self.artifacts.append_event(
@@ -2750,7 +2867,9 @@ class AnomalyMicroLiveRunner:
                 "interval_seconds": self.config.ticker_radar_interval_seconds,
                 "watch_batch_size": self.config.ticker_radar_watch_batch_size,
                 "source": source,
-                "status": snapshot_status,
+                "source_status": source_status,
+                "source_reason": source_reason,
+                "status": snapshot_status if source_status == "primary" else source_status,
                 "required_for_inactive_subminute_gate": bool(self._ticker_radar_required_for_subminute_gate()),
             },
         )
@@ -2762,13 +2881,14 @@ class AnomalyMicroLiveRunner:
         return LiveTickerRadarCycleStats(
             enabled=True,
             attempted=True,
-            status=snapshot_status,
+            status=snapshot_status if source_status == "primary" else source_status,
             source=source,
             symbols_total=len(snapshots),
             ok_count=ok_count,
             missing_count=missing_count,
             promoted_count=promoted_count,
             promotion_candidates_count=len(promotions),
+            reason=source_reason,
         )
 
     def _evaluate_ticker_radar_snapshots(

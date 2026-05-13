@@ -908,3 +908,14 @@ Expected console style: live · 5.0s · события 104 · активно 2 �
 Routine WS counters stay out of the operator heartbeat; only short WS issue suffixes are appended when attention is required.
 No trading logic, signal filters, order path, fill/stop handling, or PnL accounting changes.
 ```
+
+P189 ticker-radar degraded source status:
+
+```text
+Status: PROPOSED, commit UNKNOWN.
+The Windows live start showed WS DNS failure for fstream.binance.com before the first cycle.
+Patch P189 keeps WS ticker as primary but allows explicit REST ticker-radar degradation when the primary WS ticker source fails.
+The degradation is visible through ticker_radar_primary_source_failed, ticker_radar_source_degraded, ticker_radar_snapshot.source_status=degraded_rest_fallback, and live_cycle_summary.ticker_radar_status.
+No OHLCV/aggTrade full-scan fallback is restored; if both WS and REST ticker sources fail, or if all ticker snapshots are missing, live refuses/pauses instead of hiding the problem.
+Next validation: run live again and inspect live_events.csv for ticker_radar_source_degraded plus nonzero ticker_radar_startup_ready.ok_count.
+```

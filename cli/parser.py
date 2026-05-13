@@ -223,7 +223,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--live-ws-ticker-enabled",
         type=_str_to_bool,
         default=True,
-        help="Use Binance !ticker@arr WebSocket as ticker radar source. No REST fallback is used while enabled.",
+        help="Use Binance !ticker@arr WebSocket as primary ticker radar source; REST ticker radar is used only as explicit degraded source with live_events diagnostics.",
     )
     anomaly_live.add_argument("--live-ws-ticker-stale-ms", type=_positive_int_for("--live-ws-ticker-stale-ms"), default=5_000)
     anomaly_live.add_argument("--live-ws-ticker-startup-wait-seconds", type=float, default=10.0)

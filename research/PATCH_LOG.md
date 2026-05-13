@@ -2010,3 +2010,34 @@ python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/comm
 ### Risk
 
 Medium. Default live may use bounded REST aggTrade repair for hot radar symbols, increasing API cost. This is intentional and visible; set `--live-ws-aggtrade-max-backfill-ms 0` for strict WS-only diagnostics.
+
+## P189 - Add explicit REST ticker-radar degraded source for WS DNS failures
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+A real Windows live start stopped before the first cycle because the Binance futures WebSocket host could not be resolved:
+`ClientConnectorDNSError: Cannot connect to host fstream.binance.com`. Strict startup refusal was honest, but operationally too brittle because ticker-radar discovery already has a normalized REST ticker snapshot source that can be used without restoring hidden OHLCV/aggTrade full-universe scans.
+
+### Change
+
+- Keep WS `!ticker@arr` as primary ticker-radar source when `live_ws_ticker_enabled=true`.
+- If the primary WS ticker source fails at startup or during a ticker-radar cycle, try `RestLiveTickerSnapshotSource` as an explicit degraded ticker-radar source.
+- Emit `ticker_radar_primary_source_failed`, `ticker_radar_source_degraded`, and, if needed, `ticker_radar_fallback_source_failed` events with source ids, exception details, and snapshot ok/missing counts.
+- Refuse startup / pause the live loop if both WS and REST ticker-radar sources fail, or if the chosen source returns all snapshots missing.
+- Do not restore hidden OHLCV/aggTrade full-universe scans; fallback is ticker snapshots only and remains visible in `ticker_radar_snapshot.source_status=degraded_rest_fallback`.
+
+### Validation
+
+```bash
+python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py
+```
+
+Expected live smoke with broken WS DNS but working REST API: startup continues, `ticker_radar_source_degraded` is written, `ticker_radar_startup_ready.source=rest_fetch_tickers`, and `live_cycle_summary.ticker_radar_status=degraded_rest_fallback`. If REST/DNS is also broken, startup still fails instead of scanning with fake data.
+
+### Risk
+
+Medium. REST ticker polling is slower and less reactive than WS ticker pushes, so discovery latency can increase during degraded mode. This is preferable to pretending WS is healthy or silently restoring full inactive subminute scans.
