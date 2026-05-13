@@ -1593,3 +1593,31 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Medium and explicit: with subminute entry pairs, cold inactive discovery depends on ticker radar before precise `aggTrades` evaluation. This is intentional to protect live latency. If missed top-growth artifacts show radar is too strict, adjust ticker-radar thresholds/watch batch size; do not restore full inactive subminute `aggTrades` scans.
+
+## P180 - Keep live cycle summary JSON finite before first closed trade
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+After P178/P179, the live status line writes local closed-trade PnL into `live_cycle_summary`. Before the first closed trade, closed notional is zero, and the old `_safe_divide` path produced `NaN`. `append_event(..., allow_nan=False)` correctly rejected that as a live-data integrity error.
+
+### Change
+
+- Make `_closed_pnl_pct_total` return `0.0` when there are no locally finalized closed trades yet.
+- Keep integrity strict: non-finite local PnL counters still raise `LiveDataIntegrityError` instead of being written to artifacts.
+- Do not fetch balance/PnL from the exchange and do not change trading logic.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+# synthetic smoke: no closed trades -> closed_pnl_pct=0.0 and live_cycle_summary JSON is allow_nan=False compliant.
+```
+
+### Risk
+
+Low: this only fixes local status/artifact accounting before the first closed trade. Real closed-trade PnL remains based on `_finalize_position` counters.

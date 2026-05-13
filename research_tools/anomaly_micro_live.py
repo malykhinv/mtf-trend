@@ -1402,7 +1402,17 @@ class AnomalyMicroLiveRunner:
             return len(active_keys)
 
     def _closed_pnl_pct_total(self) -> float:
-        return _safe_divide(self._closed_pnl_usdt_total, self._closed_notional_usdt_total)
+        pnl_total = float(self._closed_pnl_usdt_total)
+        notional_total = float(self._closed_notional_usdt_total)
+        if not math.isfinite(pnl_total) or not math.isfinite(notional_total):
+            raise LiveDataIntegrityError(
+                "Non-finite local closed PnL counters: "
+                f"pnl_usdt={self._closed_pnl_usdt_total!r} "
+                f"notional_usdt={self._closed_notional_usdt_total!r}"
+            )
+        if abs(notional_total) <= 1e-12:
+            return 0.0
+        return pnl_total / notional_total
 
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
         now_ms = int(time.time() * 1000)
