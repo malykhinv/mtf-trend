@@ -90,7 +90,9 @@ Live scheduling contract:
 selected hot symbol -> scan all due configured TF sets -> then move to next symbol
 cold universe discovery is explicit budget, not implicit heavy work
 ticker-radar promotion can add watch symbols but cannot itself open trades
+in subminute WS-live, implicit inactive round-robin discovery is disabled; set inactive_scan_slots_per_cycle explicitly only for diagnostics/backfill coverage
 inactive_scan_slots_per_cycle=0 means active/radar-only scan and must be visible in artifacts
+operator heartbeat must report scheduler timing plus ticker/aggTrade health, not ambiguous batch/full-cycle timing
 ```
 
 Live data-access contract:

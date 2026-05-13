@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184 present in uploaded ZIP / UNKNOWN commit; P185 proposed
-Last active patch: P185 WS live startup/backfill budget
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed
+Last active patch: P186 WS scheduler heartbeat diagnostics
 Updated: 2026-05-13
 ```
 
@@ -86,19 +86,20 @@ research_tools/hourly_levels.py
 18. P180 fixes live startup/first-cycle status artifacts after P178/P179: local closed-trade PnL is `0.0` until the first finalized closed trade, while non-finite local PnL counters still raise integrity errors.
 19. P181 changes live operator status/artifact numbering only: it displays `цикл batch/full-cycle` so batch ticks are not confused with completed universe passes.
 20. P185 proposes strict WS live health: subminute live refuses blind ticker-radar startup, and WS aggTrade precise scans no longer perform unbounded REST backfill by default.
+21. P186 proposes event-driven WS scheduler semantics: subminute+ticker-radar live defaults to zero implicit inactive scan slots, and the operator heartbeat reports ticker/aggTrade health instead of ambiguous batch/full-cycle timing.
 
 ---
 
 ## 6. Next best step
 
-Apply P185 on top of the uploaded ZIP, then rerun the same live command and check startup plus the first `live_cycle_summary`:
+Apply P186 on top of the uploaded ZIP, then run a short WS-live smoke and inspect `live_events.csv`:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-anomaly-live --help
 ```
 
-Read startup events and `live_cycle_summary`: ticker radar must be ready before subminute live starts; `batch_in_full_cycle` starts at 1; `closed_pnl_pct` is `0.0` before any closed trade; cold inactive subminute pairs are deferred; promoted precise symbols either have covered WS aggTrade rows or explicit `coverage_pending` without unbounded REST backfill. If top-growth misses appear, tune ticker-radar thresholds/watch batch size or set a small explicit `--live-ws-aggtrade-max-backfill-ms` instead of restoring full inactive aggTrades scans.
+Expected readout: startup still refuses blind ticker radar from P185; `live_cycle_summary.scheduler_cycle_seconds` is the decision heartbeat; ticker fields show source/status/ok/missing/promoted counts; aggTrade fields show connection/target/subscribed counts; default subminute WS mode has `symbol_batch_selected.inactive_scan_slots_source=default_ws_event_driven_subminute` and `inactive_count=0`. If diagnostic cold coverage is needed, set `--inactive-scan-slots-per-cycle` explicitly.
 
 Latest next step after P167:
 

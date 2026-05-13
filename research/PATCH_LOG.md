@@ -1916,3 +1916,34 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Medium and intentional: strict default WS coverage can skip fresh radar symbols until the WS buffer has enough history, especially for 5m/30s windows. If that misses too many opportunities, set a small explicit backfill budget instead of restoring unbounded REST backfill.
+
+## P186 - Make WS scheduler heartbeat and diagnostics event-driven
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+The current ZIP has P185 and partial scheduler knobs, but subminute WS-live still treats `symbol_batch_size` as implicit inactive market discovery. The operator status also prints ambiguous cycle/full-cycle timing, which keeps the old polling mental model alive and hides the actual WebSocket health signals.
+
+### Change
+
+- Default subminute+ticker-radar live to zero implicit inactive round-robin slots; inactive scans run only when `inactive_scan_slots_per_cycle` is explicitly configured or in legacy non-subminute mode.
+- Keep `symbol_batch_size` as a legacy inactive scan cap outside the WS event-driven default; it is no longer presented as WebSocket market discovery.
+- Add typed per-cycle ticker-radar and aggTrade subscription stats to `live_cycle_summary`.
+- Replace the inline status from `цикл ...s/full...` with WebSocket-relevant heartbeat diagnostics: scheduler seconds, ticker radar status/coverage/promotions, aggTrade connection/target/subscribed counts, precise vs inactive scan counts, and legacy coverage only when relevant.
+- No change to signal filters, entry guards, order/fill/stop logic, or PnL accounting.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+```
+
+Expected smoke readout: `symbol_batch_selected.inactive_scan_slots_source=default_ws_event_driven_subminute`, `inactive_count=0` by default for subminute WS-live, `live_cycle_summary.scheduler_cycle_seconds` exists, and the console status reports ticker/aggTrade health instead of ambiguous cycle/full-cycle timing.
+
+### Risk
+
+Low/medium and intentional. Cold inactive scans stop pretending to be WebSocket discovery. If ticker radar misses movers, fix ticker WS health/thresholds or set an explicit diagnostic inactive budget; do not restore hidden polling discovery through `symbol_batch_size`.

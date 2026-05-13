@@ -1637,3 +1637,25 @@ Action:
 ```text
 P185 proposed: refuse blind ticker-radar startup and make WS aggTrade REST backfill explicitly bounded, defaulting to strict WS coverage.
 ```
+---
+
+## 2026-05-13 - P186 rebuild on current ZIP
+
+Input:
+
+```text
+Current code ZIP contains P185 and partial scheduler knobs, but P186 did not apply cleanly.
+User requested that the cycle-time log report WebSocket-relevant health instead of ambiguous cycle timing.
+```
+
+Conclusion:
+
+```text
+In WS-live, the decision heartbeat is the relevant timing metric. Legacy batch coverage is secondary and should not be the primary operator status line. Market discovery should come from ticker WS/radar; inactive round-robin is only an explicit diagnostic/legacy budget.
+```
+
+Action:
+
+```text
+P186 rebuilt against the current ZIP: event-driven inactive-scan default, typed ticker/aggTrade per-cycle stats, and WebSocket-focused live status output.
+```

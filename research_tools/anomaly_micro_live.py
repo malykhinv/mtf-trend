@@ -1093,6 +1093,32 @@ class LiveSymbolBatchSelection:
     batch_in_full_cycle: int
     full_symbol_cycle: int
     precise_budget_remaining_after_active: int | None
+    inactive_scan_slots: int
+    inactive_scan_slots_source: str
+
+
+@dataclass(frozen=True, slots=True)
+class LiveTickerRadarCycleStats:
+    enabled: bool
+    attempted: bool
+    status: str
+    source: str
+    symbols_total: int = 0
+    ok_count: int = 0
+    missing_count: int = 0
+    promoted_count: int = 0
+    promotion_candidates_count: int = 0
+    reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class LiveWsAggTradeSubscriptionStats:
+    enabled: bool
+    source: str
+    target_count: int = 0
+    subscribed_count: int | str = ""
+    connection_status: str = ""
+    last_error: str = ""
 
 
 @dataclass(slots=True)
@@ -1930,6 +1956,9 @@ class AnomalyMicroLiveRunner:
         self._cycle_aggtrade_network_calls = 0
         self._cycle_aggtrade_cache_hits = 0
         self._current_batch_symbol_scan_mode: dict[str, str] = {}
+        self._current_scheduler_source = "uninitialized"
+        self._current_inactive_scan_slots = 0
+        self._current_inactive_scan_slots_source = ""
         self._cycle_precise_scan_symbols = 0
         self._cycle_inactive_visit_symbols = 0
         self._cycle_deferred_inactive_subminute_pairs = 0
@@ -1978,7 +2007,9 @@ class AnomalyMicroLiveRunner:
                 ),
                 "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
                 "cache_provider": "parquet_tail_fetch_v1" if self._ohlcv_cache_storage is not None else "disabled",
-                "inactive_subminute_scan_policy": "defer_until_ticker_radar_or_active",
+                "inactive_subminute_scan_policy": "event_driven_ws_default_active_or_ticker_radar_only",
+                "inactive_scan_slots_default_policy": "zero_for_subminute_ticker_radar unless explicitly configured",
+                "symbol_batch_size_role": "legacy inactive scan cap, not WS market discovery",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "ticker_radar_required_for_inactive_subminute_gate": bool(
                     _live_config_has_subminute_entry_pairs(self.config)
@@ -2017,13 +2048,13 @@ class AnomalyMicroLiveRunner:
             try:
                 opened_before, _, closed_before, orphan_before = self._live_counts()
                 ticker_started = time.monotonic()
-                self._maybe_update_ticker_radar(symbols)
+                ticker_stats = self._maybe_update_ticker_radar(symbols)
                 ticker_seconds = time.monotonic() - ticker_started
                 batch_select_started = time.monotonic()
                 batch = self._next_symbol_batch(symbols)
                 batch_select_seconds = time.monotonic() - batch_select_started
                 ws_aggtrade_started = time.monotonic()
-                self._update_ws_aggtrade_subscriptions(batch)
+                ws_aggtrade_stats = self._update_ws_aggtrade_subscriptions(batch)
                 ws_aggtrade_seconds = time.monotonic() - ws_aggtrade_started
                 scan_started = time.monotonic()
                 signals = self._scan_batch(batch)
@@ -2052,12 +2083,31 @@ class AnomalyMicroLiveRunner:
                     "__live__",
                     {
                         "cycle": cycle,
+                        "scheduler_cycle_seconds": round(cycle_seconds, 3),
                         "batch_in_full_cycle": self._current_symbol_universe_batch_index,
                         "full_symbol_cycle": self._current_symbol_universe_cycle_index,
+                        "legacy_batch_seconds": round(cycle_seconds, 3),
                         "batch_seconds": round(cycle_seconds, 3),
+                        "scheduler_source": self._current_scheduler_source,
+                        "inactive_scan_slots_per_cycle": self._current_inactive_scan_slots,
+                        "inactive_scan_slots_source": self._current_inactive_scan_slots_source,
                         "ticker_radar_seconds": round(ticker_seconds, 3),
+                        "ticker_radar_status": ticker_stats.status,
+                        "ticker_radar_attempted": bool(ticker_stats.attempted),
+                        "ticker_radar_source": ticker_stats.source,
+                        "ticker_radar_symbols_total": ticker_stats.symbols_total,
+                        "ticker_radar_ok_count": ticker_stats.ok_count,
+                        "ticker_radar_missing_count": ticker_stats.missing_count,
+                        "ticker_radar_promoted_count": ticker_stats.promoted_count,
+                        "ticker_radar_promotion_candidates_count": ticker_stats.promotion_candidates_count,
                         "batch_select_seconds": round(batch_select_seconds, 3),
                         "ws_aggtrade_subscription_seconds": round(ws_aggtrade_seconds, 3),
+                        "ws_aggtrade_enabled": bool(ws_aggtrade_stats.enabled),
+                        "ws_aggtrade_source": ws_aggtrade_stats.source,
+                        "ws_aggtrade_target_count": ws_aggtrade_stats.target_count,
+                        "ws_aggtrade_subscribed_count": ws_aggtrade_stats.subscribed_count,
+                        "ws_aggtrade_connection_status": ws_aggtrade_stats.connection_status,
+                        "ws_aggtrade_last_error": ws_aggtrade_stats.last_error[:500],
                         "signal_scan_seconds": round(scan_seconds, 3),
                         "open_signal_seconds": round(open_seconds, 3),
                         "order_reconcile_seconds": round(reconcile_seconds, 3),
@@ -2086,10 +2136,23 @@ class AnomalyMicroLiveRunner:
                 )
                 if should_log_status:
                     orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
+                    coverage_text = (
+                        "coverage ws-event"
+                        if self._current_inactive_scan_slots_source == "default_ws_event_driven_subminute"
+                        else (
+                            f"coverage {self._current_symbol_universe_batch_index}/"
+                            f"{self._current_symbol_universe_cycle_index} {full_cycle_seconds:.1f}s"
+                        )
+                    )
                     self._status_logger.status(
-                        f"live: цикл {self._current_symbol_universe_batch_index}/"
-                        f"{self._current_symbol_universe_cycle_index} · "
-                        f"{cycle_seconds:.1f}s/{full_cycle_seconds:.1f}s · "
+                        f"live: scheduler {cycle_seconds:.1f}s · "
+                        f"ticker {ticker_stats.status} "
+                        f"{ticker_stats.ok_count}/{ticker_stats.symbols_total} "
+                        f"promoted {ticker_stats.promoted_count} · "
+                        f"aggTrade {ws_aggtrade_stats.connection_status or 'disabled'} "
+                        f"target {ws_aggtrade_stats.target_count}/sub {ws_aggtrade_stats.subscribed_count} · "
+                        f"scan precise {self._cycle_precise_scan_symbols}/inactive {self._cycle_inactive_visit_symbols} · "
+                        f"{coverage_text} · "
                         f"открыто {opened_total} · активно {active_symbol_count} · "
                         f"закрыто {closed_total} · PNL {_format_percent(closed_pnl_pct, signed=False)}{orphan_text}"
                     )
@@ -2328,6 +2391,9 @@ class AnomalyMicroLiveRunner:
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
         selection = self._select_next_symbol_batch(symbols)
         self._current_batch_symbol_scan_mode = dict(selection.scan_modes)
+        self._current_scheduler_source = selection.scheduler_source
+        self._current_inactive_scan_slots = selection.inactive_scan_slots
+        self._current_inactive_scan_slots_source = selection.inactive_scan_slots_source
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
@@ -2352,15 +2418,18 @@ class AnomalyMicroLiveRunner:
                     else ""
                 ),
                 "inactive_count": len(selection.inactive),
-                "inactive_scan_slots_per_cycle": (
+                "inactive_scan_slots_per_cycle": selection.inactive_scan_slots,
+                "inactive_scan_slots_source": selection.inactive_scan_slots_source,
+                "configured_inactive_scan_slots_per_cycle": (
                     self.config.inactive_scan_slots_per_cycle
                     if self.config.inactive_scan_slots_per_cycle is not None
                     else ""
                 ),
-                "inactive_subminute_scan_policy": "defer_until_ticker_radar_or_active",
+                "inactive_subminute_scan_policy": "event_driven_ws_default_active_or_ticker_radar_only",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "scan_hot_timeframes_per_symbol": bool(self.config.scan_hot_timeframes_per_symbol),
                 "symbol_batch_size": self.config.symbol_batch_size,
+                "symbol_batch_size_role": "legacy_inactive_scan_cap_when_no_explicit_inactive_budget",
                 "batch_in_full_cycle": selection.batch_in_full_cycle,
                 "full_symbol_cycle": selection.full_symbol_cycle,
                 "effective_scan_count": len(selection.batch),
@@ -2379,9 +2448,13 @@ class AnomalyMicroLiveRunner:
         )
         return list(selection.batch)
 
-    def _update_ws_aggtrade_subscriptions(self, batch: list[str]) -> None:
+    def _update_ws_aggtrade_subscriptions(self, batch: list[str]) -> LiveWsAggTradeSubscriptionStats:
         if self.aggtrade_source is None:
-            return
+            return LiveWsAggTradeSubscriptionStats(
+                enabled=False,
+                source="disabled",
+                connection_status="disabled",
+            )
         if not _live_config_has_subminute_entry_pairs(self.config):
             target_symbols: tuple[str, ...] = ()
         else:
@@ -2409,6 +2482,21 @@ class AnomalyMicroLiveRunner:
                 "target_symbols": status.get("target_symbols", list(target_symbols)),
             },
         )
+        return LiveWsAggTradeSubscriptionStats(
+            enabled=True,
+            source=str(status.get("source", self.aggtrade_source.source_id)),
+            target_count=int(status.get("target_count", len(target_symbols)) or 0),
+            subscribed_count=status.get("subscribed_count", ""),
+            connection_status=str(status.get("connection_status", "")),
+            last_error=str(status.get("last_error", ""))[:500],
+        )
+
+    def _default_inactive_scan_slots(self) -> tuple[int, str]:
+        if self.config.inactive_scan_slots_per_cycle is not None:
+            return max(0, int(self.config.inactive_scan_slots_per_cycle)), "explicit_config"
+        if self.config.ticker_radar_enabled and _live_config_has_subminute_entry_pairs(self.config):
+            return 0, "default_ws_event_driven_subminute"
+        return max(0, int(self.config.symbol_batch_size)), "legacy_symbol_batch_size"
 
     def _select_next_symbol_batch(self, symbols: list[str]) -> LiveSymbolBatchSelection:
         now_ms = int(time.time() * 1000)
@@ -2429,10 +2517,11 @@ class AnomalyMicroLiveRunner:
         )
         radar_due_keys = {_position_symbol_key(symbol) for symbol in radar_due}
         radar_waiting_keys = {_position_symbol_key(symbol) for symbol in radar_waiting}
-        if self.config.inactive_scan_slots_per_cycle is None:
-            inactive_slots = max(0, self.config.symbol_batch_size - len(active_due))
+        base_inactive_slots, inactive_slots_source = self._default_inactive_scan_slots()
+        if self.config.inactive_scan_slots_per_cycle is None and inactive_slots_source == "legacy_symbol_batch_size":
+            inactive_slots = max(0, base_inactive_slots - len(active_due))
         else:
-            inactive_slots = max(0, int(self.config.inactive_scan_slots_per_cycle))
+            inactive_slots = base_inactive_slots
         inactive: list[str] = []
         attempts = 0
         while len(inactive) < inactive_slots and attempts < len(symbols):
@@ -2471,8 +2560,14 @@ class AnomalyMicroLiveRunner:
             self._symbol_universe_batch_index = 0
         else:
             self._symbol_universe_batch_index = batch_in_full_cycle
+        if inactive_slots_source == "default_ws_event_driven_subminute":
+            scheduler_source = "ws_event_driven_scheduler"
+        elif inactive_slots_source == "explicit_config":
+            scheduler_source = "configured_budget_scheduler"
+        else:
+            scheduler_source = "legacy_rest_round_robin_scheduler"
         return LiveSymbolBatchSelection(
-            scheduler_source="rest_round_robin_scheduler",
+            scheduler_source=scheduler_source,
             active_due=tuple(active_due),
             active_waiting=tuple(active_waiting),
             radar_due=tuple(radar_due),
@@ -2485,6 +2580,8 @@ class AnomalyMicroLiveRunner:
             batch_in_full_cycle=batch_in_full_cycle,
             full_symbol_cycle=batch_full_cycle,
             precise_budget_remaining_after_active=precise_budget_remaining,
+            inactive_scan_slots=inactive_slots,
+            inactive_scan_slots_source=inactive_slots_source,
         )
 
     def _active_symbol_batch(self, *, now_ms: int) -> tuple[list[str], list[str]]:
@@ -2565,19 +2662,32 @@ class AnomalyMicroLiveRunner:
                 waiting.append(item.symbol)
         return due, waiting
 
-    def _maybe_update_ticker_radar(self, symbols: list[str]) -> None:
+    def _maybe_update_ticker_radar(self, symbols: list[str]) -> LiveTickerRadarCycleStats:
+        source = self.ticker_snapshot_source.source_id
         if not self.config.ticker_radar_enabled:
-            return
+            return LiveTickerRadarCycleStats(
+                enabled=False,
+                attempted=False,
+                status="disabled",
+                source=source,
+                reason="ticker_radar_disabled",
+            )
         now_ms = int(time.time() * 1000)
         interval_ms = int(self.config.ticker_radar_interval_seconds * 1000.0)
         if now_ms - self._last_ticker_radar_at_ms < max(1, interval_ms):
-            return
+            return LiveTickerRadarCycleStats(
+                enabled=True,
+                attempted=False,
+                status="not_due",
+                source=source,
+                reason="interval_not_elapsed",
+            )
         self._last_ticker_radar_at_ms = now_ms
         try:
             snapshots = self.ticker_snapshot_source.fetch_snapshots(tuple(symbols))
         except Exception as exc:
             payload = {
-                "source": self.ticker_snapshot_source.source_id,
+                "source": source,
                 "exception_type": type(exc).__name__,
                 "exception_message": str(exc)[:500],
                 "required_for_inactive_subminute_gate": bool(self._ticker_radar_required_for_subminute_gate()),
@@ -2586,10 +2696,18 @@ class AnomalyMicroLiveRunner:
             if self._ticker_radar_required_for_subminute_gate():
                 raise ExchangeConnectivityError(
                     "ticker radar source is required for inactive subminute discovery and is unavailable; "
-                    f"source={self.ticker_snapshot_source.source_id}; error={type(exc).__name__}: {exc}"
+                    f"source={source}; error={type(exc).__name__}: {exc}"
                 ) from exc
-            return
+            return LiveTickerRadarCycleStats(
+                enabled=True,
+                attempted=True,
+                status="failed",
+                source=source,
+                symbols_total=len(symbols),
+                reason=f"{type(exc).__name__}: {str(exc)[:240]}",
+            )
         promotions = self._evaluate_ticker_radar_snapshots(snapshots, now_ms=now_ms)
+        promoted_count = min(len(promotions), self.config.ticker_radar_max_promotions_per_cycle)
         for promotion in promotions[: self.config.ticker_radar_max_promotions_per_cycle]:
             self._mark_ticker_radar_watch(
                 str(promotion["symbol"]),
@@ -2612,12 +2730,23 @@ class AnomalyMicroLiveRunner:
                 "symbols_total": len(snapshots),
                 "ok_count": len(snapshots) - missing_count,
                 "missing_count": missing_count,
-                "promoted_count": min(len(promotions), self.config.ticker_radar_max_promotions_per_cycle),
+                "promoted_count": promoted_count,
                 "promotion_candidates_count": len(promotions),
                 "interval_seconds": self.config.ticker_radar_interval_seconds,
                 "watch_batch_size": self.config.ticker_radar_watch_batch_size,
-                "source": self.ticker_snapshot_source.source_id,
+                "source": source,
             },
+        )
+        return LiveTickerRadarCycleStats(
+            enabled=True,
+            attempted=True,
+            status="ok",
+            source=source,
+            symbols_total=len(snapshots),
+            ok_count=len(snapshots) - missing_count,
+            missing_count=missing_count,
+            promoted_count=promoted_count,
+            promotion_candidates_count=len(promotions),
         )
 
     def _evaluate_ticker_radar_snapshots(
