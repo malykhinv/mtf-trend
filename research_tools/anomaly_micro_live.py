@@ -49,6 +49,7 @@ CACHED_OHLCV_DTYPES = {
 }
 HOUR_MS = 60 * 60 * 1000
 BINANCE_FUTURES_ALL_TICKER_WS_URL = "wss://fstream.binance.com/ws/!ticker@arr"
+BINANCE_FUTURES_COMBINED_WS_URL = "wss://fstream.binance.com/stream"
 ANIMAL_EMOJIS = (
     "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
     "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦆", "🦅",
@@ -199,6 +200,20 @@ class AggTradeRawRange:
     start_timestamp_ms: int
     end_timestamp_ms: int
     rows: tuple[dict[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WsAggTradeReadResult:
+    rows: tuple[dict[str, object], ...]
+    missing_ranges: tuple[tuple[int, int], ...]
+    status: str
+    reason: str | None
+    subscribed: bool
+    connection_status: str
+    last_error: str | None
+    last_trade_timestamp_ms: int | None
+    last_receive_at_ms: int | None
+    buffer_row_count: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -432,6 +447,403 @@ class BinanceWsAllTickerSnapshotSource:
             self._last_error = error
 
 
+class BinanceWsAggTradeBuffer:
+    source_id = "binance_ws_aggtrade"
+
+    def __init__(
+        self,
+        *,
+        exchange: CcxtFuturesClient,
+        buffer_minutes: int,
+        stale_ms: int,
+        logger: Callable[[str], None] = print,
+    ) -> None:
+        self.exchange = exchange
+        self.buffer_ms = max(60_000, int(buffer_minutes) * 60_000)
+        self.stale_ms = int(stale_ms)
+        self.logger = logger
+        self._lock = threading.RLock()
+        self._stop_event = threading.Event()
+        self._target_market_ids: set[str] = set()
+        self._symbol_by_market_id: dict[str, str] = {}
+        self._subscribed_market_ids: set[str] = set()
+        self._rows_by_market_id: dict[str, deque[dict[str, object]]] = {}
+        self._active_since_ms_by_market_id: dict[str, int] = {}
+        self._gap_ranges_by_market_id: dict[str, list[tuple[int, int]]] = {}
+        self._last_aggtrade_id_by_market_id: dict[str, int] = {}
+        self._last_trade_timestamp_by_market_id: dict[str, int] = {}
+        self._last_receive_at_by_market_id: dict[str, int] = {}
+        self._connection_status = "starting"
+        self._last_error: str | None = None
+        self._subscription_request_id = 0
+        self._thread = threading.Thread(target=self._run_thread, name="binance-ws-aggtrade", daemon=True)
+        self._thread.start()
+
+    def set_symbols(self, symbols: tuple[str, ...] | list[str] | set[str]) -> dict[str, object]:
+        target_market_ids: set[str] = set()
+        symbol_by_market_id: dict[str, str] = {}
+        for symbol in symbols:
+            try:
+                market_id = self.exchange.get_market_id(symbol)
+            except Exception:
+                continue
+            market_id = str(market_id).strip().upper()
+            if not market_id:
+                continue
+            target_market_ids.add(market_id)
+            symbol_by_market_id[market_id] = str(symbol)
+        now_ms = int(time.time() * 1000)
+        with self._lock:
+            removed = self._target_market_ids - target_market_ids
+            self._target_market_ids = target_market_ids
+            self._symbol_by_market_id = symbol_by_market_id
+            for market_id in removed:
+                self._rows_by_market_id.pop(market_id, None)
+                self._active_since_ms_by_market_id.pop(market_id, None)
+                self._gap_ranges_by_market_id.pop(market_id, None)
+                self._last_aggtrade_id_by_market_id.pop(market_id, None)
+                self._last_trade_timestamp_by_market_id.pop(market_id, None)
+                self._last_receive_at_by_market_id.pop(market_id, None)
+            return {
+                "source": self.source_id,
+                "target_count": len(target_market_ids),
+                "subscribed_count": len(self._subscribed_market_ids),
+                "connection_status": self._connection_status,
+                "last_error": self._last_error or "",
+                "updated_at_ms": now_ms,
+                "target_symbols": [symbol_by_market_id[market_id] for market_id in sorted(target_market_ids)],
+            }
+
+    def read_rows(self, symbol: str, *, start_timestamp_ms: int, end_timestamp_ms: int) -> WsAggTradeReadResult:
+        market_id = str(self.exchange.get_market_id(symbol)).strip().upper()
+        request_start = int(start_timestamp_ms)
+        request_end = int(end_timestamp_ms)
+        if request_start > request_end:
+            return WsAggTradeReadResult((), (), "empty_request", None, False, "empty_request", None, None, None, 0)
+        now_ms = int(time.time() * 1000)
+        with self._lock:
+            rows_deque = self._rows_by_market_id.get(market_id, deque())
+            rows = [dict(row) for row in rows_deque]
+            subscribed = market_id in self._subscribed_market_ids
+            connection_status = self._connection_status
+            last_error = self._last_error
+            gap_ranges = list(self._gap_ranges_by_market_id.get(market_id, []))
+            last_trade_timestamp_ms = self._last_trade_timestamp_by_market_id.get(market_id)
+            last_receive_at_ms = self._last_receive_at_by_market_id.get(market_id)
+            buffer_row_count = len(rows_deque)
+        filtered = _filter_aggtrade_rows_by_time(
+            rows,
+            start_timestamp_ms=request_start,
+            end_timestamp_ms=request_end,
+        )
+        filtered = _dedupe_aggtrade_rows(filtered)
+        if not subscribed:
+            return WsAggTradeReadResult(
+                tuple(filtered),
+                ((request_start, request_end),),
+                "not_subscribed",
+                "symbol_not_in_ws_subscription",
+                False,
+                connection_status,
+                last_error,
+                last_trade_timestamp_ms,
+                last_receive_at_ms,
+                buffer_row_count,
+            )
+        if connection_status != "connected":
+            return WsAggTradeReadResult(
+                tuple(filtered),
+                ((request_start, request_end),),
+                "not_connected",
+                f"ws_status={connection_status}",
+                True,
+                connection_status,
+                last_error,
+                last_trade_timestamp_ms,
+                last_receive_at_ms,
+                buffer_row_count,
+            )
+        if last_receive_at_ms is not None and now_ms - int(last_receive_at_ms) > self.stale_ms:
+            return WsAggTradeReadResult(
+                tuple(filtered),
+                ((request_start, request_end),),
+                "stale",
+                f"last_receive_age_ms={now_ms - int(last_receive_at_ms)}",
+                True,
+                connection_status,
+                last_error,
+                last_trade_timestamp_ms,
+                last_receive_at_ms,
+                buffer_row_count,
+            )
+        missing_ranges = self._missing_ranges_from_rows(filtered, request_start=request_start, request_end=request_end)
+        missing_ranges.extend(
+            (max(request_start, gap_start), min(request_end, gap_end))
+            for gap_start, gap_end in gap_ranges
+            if max(request_start, gap_start) <= min(request_end, gap_end)
+        )
+        missing_ranges = self._merge_time_ranges(missing_ranges)
+        status = "covered" if not missing_ranges else "partial"
+        reason = None if not missing_ranges else "ws_rows_do_not_cover_full_requested_interval"
+        return WsAggTradeReadResult(
+            tuple(filtered),
+            tuple(missing_ranges),
+            status,
+            reason,
+            True,
+            connection_status,
+            last_error,
+            last_trade_timestamp_ms,
+            last_receive_at_ms,
+            buffer_row_count,
+        )
+
+    def add_backfill_rows(
+        self,
+        symbol: str,
+        rows: list[dict[str, object]],
+        *,
+        start_timestamp_ms: int | None = None,
+        end_timestamp_ms: int | None = None,
+    ) -> None:
+        market_id = str(self.exchange.get_market_id(symbol)).strip().upper()
+        now_ms = int(time.time() * 1000)
+        with self._lock:
+            if start_timestamp_ms is not None and end_timestamp_ms is not None:
+                self._remove_gap_coverage_locked(
+                    market_id,
+                    start_timestamp_ms=int(start_timestamp_ms),
+                    end_timestamp_ms=int(end_timestamp_ms),
+                )
+            if not rows:
+                return
+            rows_deque = self._rows_by_market_id.setdefault(market_id, deque())
+            for row in rows:
+                row_copy = dict(row)
+                timestamp_ms = _resolve_aggtrade_timestamp(row_copy)
+                if timestamp_ms is None:
+                    continue
+                rows_deque.append(row_copy)
+                self._last_trade_timestamp_by_market_id[market_id] = max(
+                    int(timestamp_ms),
+                    int(self._last_trade_timestamp_by_market_id.get(market_id, timestamp_ms)),
+                )
+                self._last_receive_at_by_market_id[market_id] = now_ms
+            self._prune_market_locked(market_id, now_ms=now_ms)
+
+    def close(self) -> None:
+        self._stop_event.set()
+
+    @staticmethod
+    def _missing_ranges_from_rows(
+        rows: list[dict[str, object]],
+        *,
+        request_start: int,
+        request_end: int,
+    ) -> list[tuple[int, int]]:
+        if not rows:
+            return [(request_start, request_end)]
+        timestamps = [
+            int(timestamp_ms)
+            for timestamp_ms in (_resolve_aggtrade_timestamp(row) for row in rows)
+            if timestamp_ms is not None
+        ]
+        if not timestamps:
+            return [(request_start, request_end)]
+        first_ts = min(timestamps)
+        last_ts = max(timestamps)
+        missing: list[tuple[int, int]] = []
+        if request_start < first_ts:
+            missing.append((request_start, first_ts - 1))
+        if last_ts < request_end:
+            missing.append((last_ts + 1, request_end))
+        return missing
+
+    @staticmethod
+    def _merge_time_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+        normalized = sorted((int(start), int(end)) for start, end in ranges if int(start) <= int(end))
+        if not normalized:
+            return []
+        merged = [normalized[0]]
+        for start, end in normalized[1:]:
+            if start <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    def _remove_gap_coverage_locked(self, market_id: str, *, start_timestamp_ms: int, end_timestamp_ms: int) -> None:
+        remaining: list[tuple[int, int]] = []
+        for gap_start, gap_end in self._gap_ranges_by_market_id.get(market_id, []):
+            if int(end_timestamp_ms) < gap_start or int(start_timestamp_ms) > gap_end:
+                remaining.append((gap_start, gap_end))
+                continue
+            if int(start_timestamp_ms) > gap_start:
+                remaining.append((gap_start, int(start_timestamp_ms) - 1))
+            if int(end_timestamp_ms) < gap_end:
+                remaining.append((int(end_timestamp_ms) + 1, gap_end))
+        if remaining:
+            self._gap_ranges_by_market_id[market_id] = remaining
+        else:
+            self._gap_ranges_by_market_id.pop(market_id, None)
+
+    def _run_thread(self) -> None:
+        while not self._stop_event.is_set():
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self._run_ws_loop())
+            except Exception as exc:
+                self._set_status("error", f"{type(exc).__name__}: {exc}")
+            finally:
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+            if not self._stop_event.is_set():
+                time.sleep(2.0)
+
+    async def _run_ws_loop(self) -> None:
+        import aiohttp
+
+        self._set_status("connecting", None)
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.ws_connect(BINANCE_FUTURES_COMBINED_WS_URL, heartbeat=20) as ws:
+                with self._lock:
+                    self._subscribed_market_ids = set()
+                self._set_status("connected", None)
+                while not self._stop_event.is_set():
+                    await self._sync_subscriptions(ws)
+                    try:
+                        message = await asyncio.wait_for(ws.receive(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    if message.type == aiohttp.WSMsgType.TEXT:
+                        self._handle_ws_payload(message.data)
+                    elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
+                        self._set_status("closed", "ws_closed")
+                        return
+                    elif message.type == aiohttp.WSMsgType.ERROR:
+                        self._set_status("error", f"ws_error:{ws.exception()}")
+                        return
+                await ws.close()
+
+    async def _sync_subscriptions(self, ws: object) -> None:
+        with self._lock:
+            target = set(self._target_market_ids)
+            subscribed = set(self._subscribed_market_ids)
+        to_subscribe = sorted(target - subscribed)
+        to_unsubscribe = sorted(subscribed - target)
+        if to_subscribe:
+            await self._send_subscription_message(ws, "SUBSCRIBE", to_subscribe)
+            now_ms = int(time.time() * 1000)
+            with self._lock:
+                for market_id in to_subscribe:
+                    self._subscribed_market_ids.add(market_id)
+                    self._rows_by_market_id[market_id] = deque()
+                    self._active_since_ms_by_market_id[market_id] = now_ms
+                    self._gap_ranges_by_market_id.pop(market_id, None)
+                    self._last_aggtrade_id_by_market_id.pop(market_id, None)
+                    self._last_trade_timestamp_by_market_id.pop(market_id, None)
+                    self._last_receive_at_by_market_id.pop(market_id, None)
+        if to_unsubscribe:
+            await self._send_subscription_message(ws, "UNSUBSCRIBE", to_unsubscribe)
+            with self._lock:
+                for market_id in to_unsubscribe:
+                    self._subscribed_market_ids.discard(market_id)
+                    self._rows_by_market_id.pop(market_id, None)
+                    self._active_since_ms_by_market_id.pop(market_id, None)
+                    self._gap_ranges_by_market_id.pop(market_id, None)
+                    self._last_aggtrade_id_by_market_id.pop(market_id, None)
+                    self._last_trade_timestamp_by_market_id.pop(market_id, None)
+                    self._last_receive_at_by_market_id.pop(market_id, None)
+
+    async def _send_subscription_message(self, ws: object, method: str, market_ids: list[str]) -> None:
+        if not market_ids:
+            return
+        with self._lock:
+            self._subscription_request_id += 1
+            request_id = self._subscription_request_id
+        payload = {
+            "method": method,
+            "params": [f"{market_id.lower()}@aggTrade" for market_id in market_ids],
+            "id": request_id,
+        }
+        await ws.send_json(payload)
+
+    def _handle_ws_payload(self, raw: str) -> None:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            self._set_status("payload_error", f"json:{exc}")
+            return
+        if isinstance(payload, dict) and "result" in payload and "id" in payload:
+            return
+        if isinstance(payload, dict) and ("code" in payload or "msg" in payload):
+            self._set_status("subscription_error", f"{payload.get('code', '')}:{payload.get('msg', '')}"[:500])
+            return
+        data = payload.get("data") if isinstance(payload, dict) else payload
+        if not isinstance(data, dict):
+            self._set_status("payload_error", f"unexpected_payload:{type(payload).__name__}")
+            return
+        if data.get("e") != "aggTrade":
+            return
+        market_id = str(data.get("s", "")).strip().upper()
+        if not market_id:
+            return
+        timestamp_ms = _optional_int(data.get("T"))
+        price = _optional_float(data.get("p"))
+        quantity = _optional_float(data.get("q"))
+        if timestamp_ms is None or price is None or quantity is None:
+            self._set_status("payload_error", f"aggtrade_missing_required_fields:{market_id}")
+            return
+        aggtrade_id = _optional_int(data.get("a"))
+        row = {
+            "a": aggtrade_id if aggtrade_id is not None else data.get("a"),
+            "p": str(data.get("p")),
+            "q": str(data.get("q")),
+            "T": int(timestamp_ms),
+            "m": bool(data.get("m")),
+        }
+        now_ms = int(time.time() * 1000)
+        with self._lock:
+            previous_id = self._last_aggtrade_id_by_market_id.get(market_id)
+            previous_ts = self._last_trade_timestamp_by_market_id.get(market_id)
+            if aggtrade_id is not None and previous_id is not None and aggtrade_id > previous_id + 1 and previous_ts is not None:
+                gap_start = min(int(previous_ts) + 1, int(timestamp_ms))
+                gap_end = max(int(previous_ts) + 1, int(timestamp_ms) - 1)
+                if gap_start <= gap_end:
+                    gaps = self._gap_ranges_by_market_id.setdefault(market_id, [])
+                    gaps.append((gap_start, gap_end))
+                    self._gap_ranges_by_market_id[market_id] = self._merge_time_ranges(gaps)
+            rows_deque = self._rows_by_market_id.setdefault(market_id, deque())
+            rows_deque.append(row)
+            if aggtrade_id is not None:
+                self._last_aggtrade_id_by_market_id[market_id] = int(aggtrade_id)
+            self._last_trade_timestamp_by_market_id[market_id] = int(timestamp_ms)
+            self._last_receive_at_by_market_id[market_id] = now_ms
+            self._connection_status = "connected"
+            self._last_error = None
+            self._prune_market_locked(market_id, now_ms=now_ms)
+
+    def _prune_market_locked(self, market_id: str, *, now_ms: int) -> None:
+        rows_deque = self._rows_by_market_id.get(market_id)
+        if rows_deque is None:
+            return
+        min_timestamp_ms = int(now_ms) - self.buffer_ms
+        while rows_deque:
+            timestamp_ms = _resolve_aggtrade_timestamp(rows_deque[0])
+            if timestamp_ms is None or int(timestamp_ms) >= min_timestamp_ms:
+                break
+            rows_deque.popleft()
+
+    def _set_status(self, status: str, error: str | None) -> None:
+        with self._lock:
+            self._connection_status = status
+            self._last_error = error
+
+
 SUPPORTED_LIVE_PUMP_CATEGORIES: dict[str, LivePumpCategory] = {
     "runner_oi_confirmed": LivePumpCategory(
         category_id="runner_oi_confirmed",
@@ -549,6 +961,9 @@ class LiveAnomalyConfig:
     live_ws_ticker_enabled: bool = True
     live_ws_ticker_stale_ms: int = 5_000
     live_ws_ticker_startup_wait_seconds: float = 10.0
+    live_ws_aggtrade_enabled: bool = True
+    live_ws_aggtrade_stale_ms: int = 5_000
+    live_ws_aggtrade_buffer_minutes: int = 20
     ticker_radar_interval_seconds: float = 5.0
     ticker_radar_watch_ttl_ms: int = 120_000
     ticker_radar_watch_batch_size: int = 5
@@ -1447,6 +1862,16 @@ class AnomalyMicroLiveRunner:
             )
         else:
             self.ticker_snapshot_source = RestLiveTickerSnapshotSource(exchange_client)
+        self.aggtrade_source = (
+            BinanceWsAggTradeBuffer(
+                exchange=exchange_client,
+                buffer_minutes=config.live_ws_aggtrade_buffer_minutes,
+                stale_ms=config.live_ws_aggtrade_stale_ms,
+                logger=self.logger,
+            )
+            if config.live_ws_aggtrade_enabled
+            else None
+        )
         self._pump_categories = _resolve_live_pump_categories(config.pump_categories)
         self.artifacts = LiveArtifactWriter(
             config.results_dir / "live_anomaly_runs" / datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
@@ -1537,6 +1962,10 @@ class AnomalyMicroLiveRunner:
                 "ticker_snapshot_source": self.ticker_snapshot_source.source_id,
                 "live_ws_ticker_enabled": bool(self.config.live_ws_ticker_enabled),
                 "live_ws_ticker_stale_ms": int(self.config.live_ws_ticker_stale_ms),
+                "aggtrade_source": self.aggtrade_source.source_id if self.aggtrade_source is not None else "rest_fetch_aggtrades",
+                "live_ws_aggtrade_enabled": bool(self.config.live_ws_aggtrade_enabled),
+                "live_ws_aggtrade_stale_ms": int(self.config.live_ws_aggtrade_stale_ms),
+                "live_ws_aggtrade_buffer_minutes": int(self.config.live_ws_aggtrade_buffer_minutes),
                 "exclude_default_high_cap_symbols": bool(self.config.exclude_default_high_cap_symbols),
                 "excluded_high_cap_bases": sorted(LIVE_DEFAULT_EXCLUDED_HIGH_CAP_BASES),
             },
@@ -1562,6 +1991,9 @@ class AnomalyMicroLiveRunner:
                 batch_select_started = time.monotonic()
                 batch = self._next_symbol_batch(symbols)
                 batch_select_seconds = time.monotonic() - batch_select_started
+                ws_aggtrade_started = time.monotonic()
+                self._update_ws_aggtrade_subscriptions(batch)
+                ws_aggtrade_seconds = time.monotonic() - ws_aggtrade_started
                 scan_started = time.monotonic()
                 signals = self._scan_batch(batch)
                 scan_seconds = time.monotonic() - scan_started
@@ -1594,6 +2026,7 @@ class AnomalyMicroLiveRunner:
                         "batch_seconds": round(cycle_seconds, 3),
                         "ticker_radar_seconds": round(ticker_seconds, 3),
                         "batch_select_seconds": round(batch_select_seconds, 3),
+                        "ws_aggtrade_subscription_seconds": round(ws_aggtrade_seconds, 3),
                         "signal_scan_seconds": round(scan_seconds, 3),
                         "open_signal_seconds": round(open_seconds, 3),
                         "order_reconcile_seconds": round(reconcile_seconds, 3),
@@ -1642,6 +2075,7 @@ class AnomalyMicroLiveRunner:
                 self._flush_live_ohlcv_cache_if_due(force=True, reason="keyboard_interrupt")
                 suffix = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
                 self.logger(f"live: остановлено пользователем{suffix}")
+                self._close_live_sources()
                 return 0
             except LiveDataIntegrityError as exc:
                 self._flush_live_ohlcv_cache_if_due(force=True, reason="data_integrity_error")
@@ -1651,6 +2085,7 @@ class AnomalyMicroLiveRunner:
                     key="live_data_integrity_error",
                     text=f"{SERVICE_WARNING_EMOJI} <b>Ошибка</b>\n\n{_telegram_code(str(exc)[:600])}",
                 )
+                self._close_live_sources()
                 return 3
             except ExchangeConnectivityError as exc:
                 if not self._network_degraded:
@@ -1685,12 +2120,27 @@ class AnomalyMicroLiveRunner:
                     key="live_internal_error",
                     text=f"{SERVICE_WARNING_EMOJI} <b>Ошибка</b>\n\n{_telegram_code(type(exc).__name__ + ': ' + str(exc)[:500])}",
                 )
+                self._close_live_sources()
                 return 4
         orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle, force=True)
         self._flush_live_ohlcv_cache_if_due(force=True, reason="max_cycles")
         suffix = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
         self.logger(f"live: достигнут лимит циклов{suffix}")
+        self._close_live_sources()
         return 0
+
+    def _close_live_sources(self) -> None:
+        for source in (self.ticker_snapshot_source, self.aggtrade_source):
+            close = getattr(source, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception as exc:
+                    self.artifacts.append_event(
+                        "live_source_close_failed",
+                        "__live__",
+                        {"source": getattr(source, "source_id", type(source).__name__), "reason": f"{type(exc).__name__}: {exc}"},
+                    )
 
     def _filter_live_symbol_universe(self, symbols: list[str], *, explicit_symbols: bool) -> list[str]:
         if explicit_symbols or not self.config.exclude_default_high_cap_symbols:
@@ -1842,6 +2292,37 @@ class AnomalyMicroLiveRunner:
             },
         )
         return list(selection.batch)
+
+    def _update_ws_aggtrade_subscriptions(self, batch: list[str]) -> None:
+        if self.aggtrade_source is None:
+            return
+        if not _live_config_has_subminute_entry_pairs(self.config):
+            target_symbols: tuple[str, ...] = ()
+        else:
+            target_by_key = {
+                _position_symbol_key(symbol): symbol
+                for symbol in batch
+                if self._subminute_entry_scan_allowed(symbol)
+            }
+            with self._state_lock:
+                for state in self._active_symbols.values():
+                    target_by_key[_position_symbol_key(state.symbol)] = state.symbol
+                for watch in self._ticker_radar_watch.values():
+                    target_by_key[_position_symbol_key(watch.symbol)] = watch.symbol
+            target_symbols = tuple(target_by_key.values())
+        status = self.aggtrade_source.set_symbols(target_symbols)
+        self.artifacts.append_event(
+            "ws_aggtrade_subscription_target",
+            "__live__",
+            {
+                "source": status.get("source", self.aggtrade_source.source_id),
+                "target_count": status.get("target_count", len(target_symbols)),
+                "subscribed_count": status.get("subscribed_count", ""),
+                "connection_status": status.get("connection_status", ""),
+                "last_error": str(status.get("last_error", ""))[:500],
+                "target_symbols": status.get("target_symbols", list(target_symbols)),
+            },
+        )
 
     def _select_next_symbol_batch(self, symbols: list[str]) -> LiveSymbolBatchSelection:
         now_ms = int(time.time() * 1000)
@@ -4623,7 +5104,11 @@ class AnomalyMicroLiveRunner:
             if not fetched.empty:
                 fetched = fetched.copy()
                 fetched["live_cache_source"] = (
-                    "exchange_ohlcv" if timeframe_ms >= int(Timeframe.M1.to_milliseconds()) else "binance_futures_aggTrades"
+                    "exchange_ohlcv"
+                    if timeframe_ms >= int(Timeframe.M1.to_milliseconds())
+                    else "binance_futures_ws_aggTrade_explicit_backfill"
+                    if self.aggtrade_source is not None
+                    else "binance_futures_aggTrades"
                 )
                 fetched["live_cache_target_timeframe"] = timeframe.value
                 fetched["live_cache_version"] = "p168_live_ohlcv_cache_v1"
@@ -4702,11 +5187,18 @@ class AnomalyMicroLiveRunner:
         timeframe_ms = int(timeframe.to_milliseconds())
         if timeframe_ms <= 0 or timeframe_ms >= int(Timeframe.M1.to_milliseconds()):
             raise ValueError(f"invalid_seconds_chart_timeframe:{timeframe.value}")
-        all_rows = self._fetch_aggtrade_raw_rows_cached(
-            symbol,
-            start_timestamp_ms=int(start_timestamp_ms),
-            end_timestamp_ms=int(end_timestamp_ms),
-        )
+        if self.aggtrade_source is not None:
+            all_rows = self._fetch_ws_aggtrade_raw_rows(
+                symbol,
+                start_timestamp_ms=int(start_timestamp_ms),
+                end_timestamp_ms=int(end_timestamp_ms),
+            )
+        else:
+            all_rows = self._fetch_aggtrade_raw_rows_cached(
+                symbol,
+                start_timestamp_ms=int(start_timestamp_ms),
+                end_timestamp_ms=int(end_timestamp_ms),
+            )
         if not all_rows:
             return pd.DataFrame(columns=list(REQUIRED_PRICE_COLUMNS) + ["volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume"])
         return _aggregate_aggtrades_to_ohlcv_frame(
@@ -4715,6 +5207,98 @@ class AnomalyMicroLiveRunner:
             start_timestamp_ms=int(start_timestamp_ms),
             end_timestamp_ms=int(end_timestamp_ms),
         )
+
+    def _fetch_ws_aggtrade_raw_rows(
+        self,
+        symbol: str,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> list[dict[str, object]]:
+        source = self.aggtrade_source
+        if source is None:
+            raise LiveDataIntegrityError("ws aggTrade source is disabled on WS fetch path")
+        self._cycle_aggtrade_requests += 1
+        request_start_ms = int(start_timestamp_ms)
+        request_end_ms = int(end_timestamp_ms)
+        read_result = source.read_rows(
+            symbol,
+            start_timestamp_ms=request_start_ms,
+            end_timestamp_ms=request_end_ms,
+        )
+        all_rows = [dict(row) for row in read_result.rows]
+        backfilled_rows = 0
+        backfill_ranges: list[str] = []
+        symbol_key = _position_symbol_key(symbol)
+        cached_ranges = self._current_cycle_aggtrade_cache.get(symbol_key, [])
+        for missing_start_ms, missing_end_ms in read_result.missing_ranges:
+            missing_start_ms = int(missing_start_ms)
+            missing_end_ms = int(missing_end_ms)
+            cycle_missing_ranges = _missing_aggtrade_raw_ranges(
+                cached_ranges,
+                start_timestamp_ms=missing_start_ms,
+                end_timestamp_ms=missing_end_ms,
+            )
+            if not cycle_missing_ranges:
+                self._cycle_aggtrade_cache_hits += 1
+            for cycle_missing_start_ms, cycle_missing_end_ms in cycle_missing_ranges:
+                rows = self._fetch_aggtrade_raw_rows(
+                    symbol,
+                    start_timestamp_ms=int(cycle_missing_start_ms),
+                    end_timestamp_ms=int(cycle_missing_end_ms),
+                )
+                raw_range = AggTradeRawRange(
+                    start_timestamp_ms=int(cycle_missing_start_ms),
+                    end_timestamp_ms=int(cycle_missing_end_ms),
+                    rows=tuple(rows),
+                )
+                self._current_cycle_aggtrade_cache.setdefault(symbol_key, []).append(raw_range)
+                cached_ranges = self._current_cycle_aggtrade_cache.get(symbol_key, [])
+                source.add_backfill_rows(
+                    symbol,
+                    rows,
+                    start_timestamp_ms=int(cycle_missing_start_ms),
+                    end_timestamp_ms=int(cycle_missing_end_ms),
+                )
+                backfilled_rows += int(len(rows))
+                backfill_ranges.append(f"{cycle_missing_start_ms}:{cycle_missing_end_ms}")
+        for cached_range in self._current_cycle_aggtrade_cache.get(symbol_key, []):
+            if cached_range.end_timestamp_ms < request_start_ms or cached_range.start_timestamp_ms > request_end_ms:
+                continue
+            all_rows.extend(
+                _filter_aggtrade_rows_by_time(
+                    cached_range.rows,
+                    start_timestamp_ms=request_start_ms,
+                    end_timestamp_ms=request_end_ms,
+                )
+            )
+        all_rows = _dedupe_aggtrade_rows(all_rows)
+        if not read_result.missing_ranges:
+            self._cycle_aggtrade_cache_hits += 1
+        self.artifacts.append_event(
+            "ws_aggtrade_frame_read",
+            symbol,
+            {
+                "source": source.source_id,
+                "status": read_result.status,
+                "reason": read_result.reason or "",
+                "subscribed": bool(read_result.subscribed),
+                "connection_status": read_result.connection_status,
+                "last_error": (read_result.last_error or "")[:500],
+                "start_timestamp_ms": request_start_ms,
+                "end_timestamp_ms": request_end_ms,
+                "ws_rows": int(len(read_result.rows)),
+                "buffer_row_count": int(read_result.buffer_row_count),
+                "missing_range_count": int(len(read_result.missing_ranges)),
+                "missing_ranges": [f"{start}:{end}" for start, end in read_result.missing_ranges],
+                "backfill_ranges": backfill_ranges,
+                "backfilled_rows": int(backfilled_rows),
+                "result_rows": int(len(all_rows)),
+                "last_trade_timestamp_ms": read_result.last_trade_timestamp_ms if read_result.last_trade_timestamp_ms is not None else "",
+                "last_receive_at_ms": read_result.last_receive_at_ms if read_result.last_receive_at_ms is not None else "",
+            },
+        )
+        return all_rows
 
     def _fetch_aggtrade_raw_rows_cached(
         self,
@@ -5102,6 +5686,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "ticker_radar_watch_ttl_ms": (config.ticker_radar_watch_ttl_ms, 1),
         "ticker_radar_max_promotions_per_cycle": (config.ticker_radar_max_promotions_per_cycle, 1),
         "live_ws_ticker_stale_ms": (config.live_ws_ticker_stale_ms, 1),
+        "live_ws_aggtrade_stale_ms": (config.live_ws_aggtrade_stale_ms, 1),
+        "live_ws_aggtrade_buffer_minutes": (config.live_ws_aggtrade_buffer_minutes, 1),
         "signal_scan_backfill_candles": (config.signal_scan_backfill_candles, 1),
         "max_signal_age_ms": (config.max_signal_age_ms, 1),
         "stop_limit_per_symbol": (config.stop_limit_per_symbol, 1),

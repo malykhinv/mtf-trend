@@ -227,6 +227,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomaly_live.add_argument("--live-ws-ticker-stale-ms", type=_positive_int_for("--live-ws-ticker-stale-ms"), default=5_000)
     anomaly_live.add_argument("--live-ws-ticker-startup-wait-seconds", type=float, default=10.0)
+    anomaly_live.add_argument(
+        "--live-ws-aggtrade-enabled",
+        type=_str_to_bool,
+        default=True,
+        help="Use Binance aggTrade WebSocket for subminute precise scan; uncovered ranges are explicit diagnostic backfills.",
+    )
+    anomaly_live.add_argument("--live-ws-aggtrade-stale-ms", type=_positive_int_for("--live-ws-aggtrade-stale-ms"), default=5_000)
+    anomaly_live.add_argument("--live-ws-aggtrade-buffer-minutes", type=_positive_int_for("--live-ws-aggtrade-buffer-minutes"), default=20)
     anomaly_live.add_argument("--ticker-radar-interval-seconds", type=float, default=5.0)
     anomaly_live.add_argument("--ticker-radar-watch-ttl-ms", type=_positive_int_for("--ticker-radar-watch-ttl-ms"), default=120_000)
     anomaly_live.add_argument("--ticker-radar-watch-batch-size", type=int, default=5)

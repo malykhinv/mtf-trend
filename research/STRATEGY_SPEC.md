@@ -445,3 +445,5 @@ Ticker radar ingestion is abstracted behind `LiveTickerSnapshotSource`. The curr
 Live scheduler selection is represented by `LiveSymbolBatchSelection`. Every selected symbol must have a scan reason such as `precise_active`, `precise_ticker_radar`, or `inactive_deferred_subminute`. Future reactive schedulers may change selection priority, but must keep explicit waiting/deferred/drop diagnostics.
 
 Current live ticker radar source defaults to Binance USD-M futures `!ticker@arr` WebSocket. When this source is enabled, REST ticker fallback is forbidden; stale/not-ready stream state must pause radar promotions and be visible as `ticker_radar_failed`.
+
+Current live subminute tape source defaults to Binance USD-M futures `@aggTrade` WebSocket for active and ticker-radar watch symbols. REST `aggTrades` is allowed only as explicit missing-range backfill when WS rows do not honestly cover the requested interval or an aggregate trade id gap is detected. Those backfills must be visible in `ws_aggtrade_frame_read`; they are not a silent fallback and should be treated as a data-health signal.

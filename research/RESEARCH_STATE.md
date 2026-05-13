@@ -885,3 +885,13 @@ REST ticker source remains available only through explicit --live-ws-ticker-enab
 This changes scheduling/wake-up transport only; PNO signal logic, subminute candles, OI/mark, and order path remain unchanged.
 Next live validation must inspect ticker_radar_failed, ticker_radar_snapshot source, radar promotion counts, and whether WS not-ready/stale causes unacceptable blind periods.
 ```
+
+P184 reactive rollout status:
+
+```text
+Step 4 implemented: subminute precise scan now has a primary Binance WS aggTrade buffer for active/ticker-radar watch symbols.
+REST aggTrade is no longer the primary subminute path while live_ws_aggtrade_enabled=true; it is used only as explicit missing-range backfill with ws_aggtrade_frame_read diagnostics.
+WS aggregate trade id gaps are treated as data holes and must be backfilled before a requested interval is considered covered.
+Local validation passed compile/smoke, but the current environment still cannot resolve fstream.binance.com, so real WS freshness/throughput is UNKNOWN until a live run on the trading host produces connected ws_aggtrade events.
+Next validation should compare aggtrade_network_calls and ws_aggtrade_frame_read.status over a 10-30 minute live sample with real DNS/connectivity.
+```

@@ -1856,3 +1856,34 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Low: operator/artifact numbering only. The counter is tied to the inactive round-robin cursor, so active/radar-only loops without inactive progress should be interpreted as scheduler ticks, not completed full-universe coverage.
+
+## P184 - DANGER: WS aggTrade source for subminute precise scan
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+The live loop already avoids full cold subminute scans, but precise active/radar scans still pay repeated REST `aggTrades` tail fetches. The next clean reactive step is a primary WS aggTrade buffer for watched symbols, with explicit gap diagnostics and no silent REST fallback.
+
+### Change
+
+- Add `BinanceWsAggTradeBuffer` using Binance USD-M combined streams and dynamic `@aggTrade` subscriptions for active/ticker-radar watch symbols.
+- Default `run-anomaly-live` to `live_ws_aggtrade_enabled=true`.
+- Subminute precise scan reads from WS rows first; uncovered ranges are explicitly REST-backfilled and logged as `ws_aggtrade_frame_read`, not hidden.
+- Detect stream holes by aggregate trade id gaps and keep those time ranges missing until explicit backfill covers them.
+- Add `ws_aggtrade_subscription_target`, `ws_aggtrade_subscription_seconds`, and live cache provenance for WS-backed explicit backfill.
+
+### Validation
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py cli/commands.py cli/parser.py main.py
+python main.py run-anomaly-live --help
+# inline smoke: WS aggTrade id gap is detected, backfill coverage removes the gap.
+# short live max-cycles=1: startup/artifacts ok; local DNS could not resolve fstream.binance.com, so no real WS tape validation occurred in this environment.
+```
+
+### Risk
+
+Medium. WS coverage cannot prove a quiet symbol had zero trades without an exchange heartbeat, so empty/partial intervals remain explicit backfills. This is honest but means first-cycle radar symbols can still pay REST cost until the WS buffer warms. Real validation must inspect `ws_aggtrade_frame_read.status`, `missing_ranges`, `backfill_ranges`, and `aggtrade_network_calls`.

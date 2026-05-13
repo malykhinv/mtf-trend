@@ -1583,3 +1583,32 @@ Next readout:
 ```text
 Run a short live sample and check ticker_radar_snapshot.source, ticker_radar_failed reasons, radar promotions, and whether WS startup/stale windows create blind periods.
 ```
+
+---
+
+## 2026-05-13 - P184 WS aggTrade precise-scan source
+
+Patch:
+
+```text
+Added Binance WS aggTrade buffer for active/ticker-radar watch symbols.
+Subminute precise scan reads WS rows first and emits ws_aggtrade_frame_read for coverage/backfill health.
+Aggregate trade id gaps are treated as missing intervals until explicit backfill covers them.
+```
+
+Validation:
+
+```text
+compileall passed.
+run-anomaly-live --help exposes live-ws-aggtrade controls.
+Inline WS buffer smoke passed: id gap -> partial read; explicit backfill coverage -> covered read.
+Short live max-cycles=1 with --confirm-real-orders exited 0 and wrote live_cache_config/ws_aggtrade_subscription_target/live_cycle_summary.
+The live sample could not validate real WS messages because local DNS could not resolve fstream.binance.com; ticker and aggTrade WS sources both reported that condition explicitly.
+```
+
+Next readout:
+
+```text
+Run 10-30 minutes on the trading host and inspect ws_aggtrade_subscription_target.connection_status, ws_aggtrade_frame_read.status, missing_range_count, backfill_ranges, aggtrade_network_calls, and precise_scan_symbols.
+Success criterion: active/radar symbols move from first-cycle backfilled/partial to mostly covered after warm-up, without ticker-radar blind periods or hidden REST fallback.
+```
