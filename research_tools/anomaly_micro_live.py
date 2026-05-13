@@ -3422,7 +3422,12 @@ class AnomalyMicroLiveRunner:
             cached_rows_before = int(len(self._live_ohlcv_frame_cache[memory_key]))
             cached = self._live_ohlcv_frame_cache[memory_key]
         else:
-            load_result = storage.load_result(symbol, timeframe)
+            load_result = storage.load_window_result(
+                symbol,
+                timeframe,
+                start_timestamp_ms=expected_start_ms,
+                end_timestamp_ms=expected_end_ms,
+            )
             load_status = load_result.status
             load_reason = load_result.reason
             cached_rows_before = int(len(load_result.frame)) if load_result.frame is not None else 0
@@ -3439,11 +3444,12 @@ class AnomalyMicroLiveRunner:
             timeframe_ms=timeframe_ms,
         )
         for missing_start_ms, missing_end_ms in missing_ranges:
+            fetch_end_ms = int(missing_end_ms) + timeframe_ms - 1
             fetched = self._fetch_uncached_chart_frame(
                 symbol,
                 timeframe,
                 start_timestamp_ms=missing_start_ms,
-                end_timestamp_ms=missing_end_ms,
+                end_timestamp_ms=fetch_end_ms,
             )
             if not fetched.empty:
                 fetched = fetched.copy()
@@ -3453,7 +3459,7 @@ class AnomalyMicroLiveRunner:
                 fetched["live_cache_target_timeframe"] = timeframe.value
                 fetched["live_cache_version"] = "p168_live_ohlcv_cache_v1"
                 fetched_rows += int(len(fetched))
-                fetched_ranges.append(f"{missing_start_ms}:{missing_end_ms}")
+                fetched_ranges.append(f"{missing_start_ms}:{fetch_end_ms}")
                 fetched_frames.append(fetched)
         if fetched_frames:
             fetched_combined = _prepare_cached_ohlcv_frame(pd.concat(fetched_frames, ignore_index=True))
@@ -3461,9 +3467,10 @@ class AnomalyMicroLiveRunner:
                 added_rows = int(storage.save_incremental(symbol, timeframe, fetched_combined))
             cached = _prepare_cached_ohlcv_frame(pd.concat([cached, fetched_combined], ignore_index=True))
             self._live_ohlcv_frame_cache[memory_key] = cached
+        window_end_ms = min(int(end_timestamp_ms), int(expected_end_ms))
         window = cached.loc[
             (cached["timestamp"].astype("int64") >= int(start_timestamp_ms))
-            & (cached["timestamp"].astype("int64") <= int(end_timestamp_ms))
+            & (cached["timestamp"].astype("int64") <= int(window_end_ms))
         ].copy()
         remaining_ranges = _missing_ohlcv_ranges(
             window,
@@ -3502,6 +3509,9 @@ class AnomalyMicroLiveRunner:
                 "load_reason": load_reason,
                 "cached_rows_before": cached_rows_before,
                 "window_rows": int(len(window)),
+                "expected_start_ms": int(expected_start_ms),
+                "expected_end_ms": int(expected_end_ms),
+                "window_end_ms": int(window_end_ms),
                 "missing_range_count": int(len(missing_ranges)),
                 "remaining_gap_count": int(len(remaining_ranges)),
                 "fetched_rows": fetched_rows,
@@ -3533,6 +3543,7 @@ class AnomalyMicroLiveRunner:
                 params["endTime"] = int(end_timestamp_ms)
             else:
                 params["fromId"] = int(next_from_id)
+                params["endTime"] = int(end_timestamp_ms)
             rows = self.exchange.fetch_binance_agg_trades(symbol=symbol, params=params)
             if not rows:
                 break
@@ -3544,7 +3555,7 @@ class AnomalyMicroLiveRunner:
                 break
             previous_last_id = last_id
             next_from_id = last_id + 1
-            if last_ts is not None and last_ts > int(end_timestamp_ms):
+            if last_ts is not None and last_ts >= int(end_timestamp_ms):
                 break
             if len(rows) < 1000:
                 break

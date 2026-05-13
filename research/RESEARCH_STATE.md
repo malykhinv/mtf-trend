@@ -78,6 +78,7 @@ research_tools/hourly_levels.py
 10. Operator commands now live in root `COMMANDS.md`; the shared command baseline is 30 days via `DEFAULT_COMMANDS_BASE_DAYS`.
 11. P167 changes live scheduling/performance, not entry filters: selected hot symbols are scanned across all due TF sets in one pass, and production-fast live can set `--inactive-scan-slots-per-cycle 0` to rely on active state plus ticker radar instead of heavy cold round-robin aggTrade work.
 12. P168 changes live data access: live now reads parquet first, fetches only missing ranges, writes fetched rows with provenance, and emits cache gap events instead of treating incomplete cache as a silent no-signal condition.
+13. P169 fixes live cache candle boundaries: subminute missing ranges fetch through the final candle end, parquet first-load reads only the requested window, and decision frames exclude accidental non-closed cached candles.
 
 ---
 
@@ -99,7 +100,7 @@ Latest next step after P167:
 python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20 --inactive-scan-slots-per-cycle 0 --ticker-radar-watch-batch-size 10 --scan-hot-timeframes-per-symbol true --live-ohlcv-cache-enabled true --live-ohlcv-cache-write-enabled true
 ```
 
-Read `live_events.csv` first: `ticker_radar_snapshot`, `ticker_radar_promoted`, `symbol_batch_selected`, `signal_symbol_scan_summary`, `live_ohlcv_cache_read`, and `live_ohlcv_cache_gap` must prove that the loop is active/radar driven, cache-backed, fast, and not silently skipping diagnostics.
+Read `live_events.csv` first: `ticker_radar_snapshot`, `ticker_radar_promoted`, `symbol_batch_selected`, `signal_symbol_scan_summary`, `live_ohlcv_cache_read`, and `live_ohlcv_cache_gap` must prove that the loop is active/radar driven, cache-backed, fast, closed-candle aligned, and not silently skipping diagnostics.
 
 
 ---

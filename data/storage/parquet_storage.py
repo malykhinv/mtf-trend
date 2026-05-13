@@ -151,6 +151,69 @@ class ParquetStorage:
     def load(self, symbol: str, timeframe: Timeframe) -> pd.DataFrame:
         return self.load_result(symbol, timeframe).frame
 
+    def load_window_result(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> ParquetLoadResult:
+        path = self._data_path(symbol, timeframe)
+        if not path.exists():
+            return ParquetLoadResult(
+                frame=pd.DataFrame(),
+                ok=False,
+                status="missing",
+                reason="parquet_file_missing",
+                path=path,
+            )
+        try:
+            frame = pd.read_parquet(
+                path,
+                filters=[
+                    ("timestamp", ">=", int(start_timestamp_ms)),
+                    ("timestamp", "<=", int(end_timestamp_ms)),
+                ],
+            )
+        except Exception:
+            base = self.load_result(symbol, timeframe)
+            if not base.ok or base.frame.empty or "timestamp" not in base.frame.columns:
+                return base
+            timestamps = pd.to_numeric(base.frame["timestamp"], errors="coerce")
+            frame = base.frame.loc[
+                (timestamps >= int(start_timestamp_ms))
+                & (timestamps <= int(end_timestamp_ms))
+            ].copy()
+        if frame.empty:
+            return ParquetLoadResult(
+                frame=frame,
+                ok=False,
+                status="empty_window",
+                reason="parquet_window_empty",
+                path=path,
+                rows=0,
+            )
+        try:
+            prepared = self._ensure_columns(frame)
+        except ValueError:
+            return ParquetLoadResult(
+                frame=pd.DataFrame(),
+                ok=False,
+                status="schema_invalid",
+                reason="parquet_missing_timestamp",
+                path=path,
+                rows=int(len(frame)),
+                missing_columns=("timestamp",),
+            )
+        return ParquetLoadResult(
+            frame=prepared,
+            ok=True,
+            status="ok",
+            reason="parquet_window_loaded",
+            path=path,
+            rows=int(len(prepared)),
+        )
+
     def get_last_timestamp(self, symbol: str, timeframe: Timeframe) -> int | None:
         data = self.load(symbol, timeframe)
         if data.empty or "timestamp" not in data.columns:

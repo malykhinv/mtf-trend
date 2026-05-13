@@ -98,6 +98,8 @@ Live data-access contract:
 ```text
 read local parquet first
 fetch only missing OHLCV / aggTrade-derived ranges
+subminute missing ranges must fetch through final candle end, not only final candle open
+decision frames must include closed candles only
 write fetched live rows with provenance/version
 remaining cache gaps must emit artifacts
 cache gaps are not valid zero-signal evidence

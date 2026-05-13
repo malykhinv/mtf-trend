@@ -1180,3 +1180,31 @@ Readout:
 Expected: first scan for a hot symbol may show status=filled and fetched_rows>0; repeated scans should move toward status=hit or load_status=memory_hit.
 Any live_ohlcv_cache_gap means the signal evidence is incomplete and should be investigated before treating missed/no-signal rows as meaningful.
 ```
+
+---
+
+## 2026-05-13 - P169 live cache/exchange boundary audit
+
+Audit result:
+
+```text
+Order/fill/position paths were not changed by P168; monitor OHLCV still goes directly to exchange, which is correct for position safety.
+Signal setup/entry data path had one important boundary risk: cache missing ranges are candle-start based, but aggTrades must be fetched through the final candle end.
+```
+
+Fix:
+
+```text
+Parquet first-load uses timestamp window filters.
+Subminute missing range fetch uses missing_end + timeframe_ms - 1.
+Paged aggTrades calls include endTime.
+Decision frames are clipped to expected closed-candle end.
+```
+
+Live-smoke readout:
+
+```text
+For each live_ohlcv_cache_read row, expected_end_ms/window_end_ms should equal the latest closed candle start for that timeframe.
+For subminute filled rows, fetched_ranges should end at candle_end_ms, not candle_start_ms.
+Remaining live_ohlcv_cache_gap rows are hard data-quality signals, not no-signal evidence.
+```

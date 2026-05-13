@@ -29,6 +29,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P153 | Limit trade-chart level discovery to 7d context | PROPOSED | `research_tools/anomaly_strategy_backtest.py`, `research/*` | diagnostics | Ensure levels drawn on trade/open charts are discovered only from the same 1h/7d context window shown in the middle panel, even if a wider context frame is supplied. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic wider-context level smoke. |
 | P167 | Symbol-first live multi-TF scan | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance | For selected live symbols, scan all due TF sets before moving to the next symbol, cache setup/entry fetches within the batch, and add an explicit cold round-robin slot cap so fast live can prioritize active/radar symbols without hiding skipped work. | `python -m compileall research_tools/anomaly_micro_live.py cli/commands.py cli/parser.py`; `python main.py run-anomaly-live --help`. |
 | P168 | Cache-backed live OHLCV fetch | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance/data-quality | Live reads local parquet first, fetches only missing OHLCV/aggTrade-derived ranges, writes fetched rows with provenance, keeps a process-memory frame cache, and emits explicit cache read/gap artifacts. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-anomaly-live --help`. |
+| P169 | Fix live cache candle boundary reads | PROPOSED | `data/storage/parquet_storage.py`, `research_tools/anomaly_micro_live.py`, `research/*` | bugfix/live-performance | Read only requested parquet windows, fetch subminute missing ranges through the full final candle, pass aggTrades endTime on paged requests, and exclude non-closed cached candles from live decision frames. | `python -m compileall data/storage/parquet_storage.py research_tools/anomaly_micro_live.py`; `python main.py run-anomaly-live --help`. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -1239,3 +1240,33 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Medium: `save_incremental` rewrites the target parquet file, so live cache writes should be watched during high-churn runs. Remaining gaps are not hidden; they emit `live_ohlcv_cache_gap` and can still lead to existing empty/missing-signal rejects.
+
+## P169 - Fix live cache candle boundary reads
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+Review of P168 found a candle-boundary risk: live cache missing ranges are represented by candle start timestamps, but subminute `aggTrades` must be fetched through the end of the final candle. Reading whole parquet files on first use was also unnecessary work for large caches.
+
+### Change
+
+- Add `ParquetStorage.load_window_result()` with parquet timestamp filters and safe full-load fallback.
+- Live cache first-load now reads only the requested closed-candle window.
+- Missing range fetches now request `missing_end + timeframe_ms - 1`, so the last subminute candle is complete.
+- Paged `aggTrades` calls keep `endTime`, reducing overshoot beyond the requested window.
+- Live decision frames return only closed cached candles up to `expected_end_ms`; accidental current/partial cached rows are excluded.
+- `live_ohlcv_cache_read` now reports expected/window end timestamps.
+
+### Validation
+
+```bash
+python -m compileall data/storage/parquet_storage.py research_tools/anomaly_micro_live.py
+python main.py run-anomaly-live --help
+```
+
+### Risk
+
+Low/medium: parquet filter support depends on the installed parquet engine; fallback preserves behavior by loading and filtering in memory. The main remaining speed limit is `save_incremental`, which still rewrites the target parquet file when live writes fetched rows.
