@@ -1486,6 +1486,7 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             live_ws_aggtrade_enabled=_to_bool_flag(getattr(args, "live_ws_aggtrade_enabled", True), default=True),
             live_ws_aggtrade_stale_ms=int(getattr(args, "live_ws_aggtrade_stale_ms", 5_000)),
             live_ws_aggtrade_buffer_minutes=int(getattr(args, "live_ws_aggtrade_buffer_minutes", 20)),
+            live_ws_aggtrade_max_backfill_ms=int(getattr(args, "live_ws_aggtrade_max_backfill_ms", 0)),
             ticker_radar_interval_seconds=float(getattr(args, "ticker_radar_interval_seconds", 5.0)),
             ticker_radar_watch_ttl_ms=int(getattr(args, "ticker_radar_watch_ttl_ms", 120_000)),
             ticker_radar_watch_batch_size=int(getattr(args, "ticker_radar_watch_batch_size", 5)),

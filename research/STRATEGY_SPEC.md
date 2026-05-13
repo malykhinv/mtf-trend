@@ -104,6 +104,8 @@ write fetched live rows with provenance/version
 live parquet writes may be buffered, but buffered/flushed/failed counts must be visible
 remaining cache gaps must emit artifacts
 cache gaps are not valid zero-signal evidence
+WS ticker radar required for subminute live must be healthy before startup continues
+WS aggTrade missing coverage must be explicit; unbounded REST backfill is not a default live path
 ```
 
 

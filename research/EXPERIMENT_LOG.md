@@ -1612,3 +1612,28 @@ Next readout:
 Run 10-30 minutes on the trading host and inspect ws_aggtrade_subscription_target.connection_status, ws_aggtrade_frame_read.status, missing_range_count, backfill_ranges, aggtrade_network_calls, and precise_scan_symbols.
 Success criterion: active/radar symbols move from first-cycle backfilled/partial to mostly covered after warm-up, without ticker-radar blind periods or hidden REST fallback.
 ```
+
+---
+
+## 2026-05-13 - Short WS live artifact audit and P185
+
+Input:
+
+```text
+Artifacts: uploaded 20260513_180525
+Rows: 1 live_cycle_summary, 0 positions, 0 top-growth snapshots
+Observed source health: ticker WS DNS failure; aggTrade WS target_count=0/subscribed_count=0
+```
+
+Conclusion:
+
+```text
+This run does not validate live WebSocket health or edge. It validates only that the old loop could keep running blind when the required ticker radar was unavailable.
+The next latency target should treat the outer loop as a scheduler tick, not a full-universe scan. WebSocket ingestion is continuous, but signal evaluation remains closed-candle/batch gated.
+```
+
+Action:
+
+```text
+P185 proposed: refuse blind ticker-radar startup and make WS aggTrade REST backfill explicitly bounded, defaulting to strict WS coverage.
+```

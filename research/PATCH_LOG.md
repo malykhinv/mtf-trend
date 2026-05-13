@@ -1887,3 +1887,32 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Medium. WS coverage cannot prove a quiet symbol had zero trades without an exchange heartbeat, so empty/partial intervals remain explicit backfills. This is honest but means first-cycle radar symbols can still pay REST cost until the WS buffer warms. Real validation must inspect `ws_aggtrade_frame_read.status`, `missing_ranges`, `backfill_ranges`, and `aggtrade_network_calls`.
+
+## P185 - Bound WS aggTrade backfill and fail fast on blind ticker radar
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+The short WS live artifacts showed a dangerous blind mode: ticker radar could be unavailable while the loop still emitted cycles with no real discovery. Separately, WS aggTrade precise scans can still spend a full slow cycle in REST backfills when the WS buffer has not yet covered the requested subminute window. That makes a nominal WebSocket run behave like a delayed REST scan.
+
+### Change
+
+- Refuse live startup when subminute entry pairs require ticker radar but the configured ticker source is not ready/healthy.
+- Add `live_ws_aggtrade_max_backfill_ms` / `--live-ws-aggtrade-max-backfill-ms` with default `0`.
+- When a WS aggTrade precise scan has uncovered ranges larger than that explicit budget, do not REST-backfill; emit `ws_aggtrade_frame_read.status=coverage_pending`, emit `signal_entry_ws_aggtrade_pending`, and leave the signal unscanned for a later covered pass.
+- Keep REST backfill possible only by explicitly raising the budget; it is visible through `missing_total_ms`, `backfill_max_ms`, `backfill_skipped`, and `backfill_ranges`.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py launcher.py
+python main.py run-anomaly-live --help
+# live smoke: with WS connected, first promoted symbols should show coverage_pending until the buffer covers the requested interval; cycle time should not be dominated by REST aggTrade backfill.
+```
+
+### Risk
+
+Medium and intentional: strict default WS coverage can skip fresh radar symbols until the WS buffer has enough history, especially for 5m/30s windows. If that misses too many opportunities, set a small explicit backfill budget instead of restoring unbounded REST backfill.

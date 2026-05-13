@@ -169,6 +169,29 @@ class LiveDataIntegrityError(RuntimeError):
     """Live artifact/data integrity failure that must not be hidden as a network issue."""
 
 
+class LiveWsAggTradeCoveragePending(RuntimeError):
+    """Raised when strict WS aggTrade coverage is insufficient for subminute signal evaluation."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        symbol: str,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+        missing_ranges: tuple[tuple[int, int], ...],
+        status: str,
+        reason: str | None,
+    ) -> None:
+        super().__init__(message)
+        self.symbol = symbol
+        self.start_timestamp_ms = int(start_timestamp_ms)
+        self.end_timestamp_ms = int(end_timestamp_ms)
+        self.missing_ranges = missing_ranges
+        self.status = status
+        self.reason = reason
+
+
 @dataclass(frozen=True, slots=True)
 class TelegramConfig:
     events_bot_token: str
@@ -964,6 +987,7 @@ class LiveAnomalyConfig:
     live_ws_aggtrade_enabled: bool = True
     live_ws_aggtrade_stale_ms: int = 5_000
     live_ws_aggtrade_buffer_minutes: int = 20
+    live_ws_aggtrade_max_backfill_ms: int = 0
     ticker_radar_interval_seconds: float = 5.0
     ticker_radar_watch_ttl_ms: int = 120_000
     ticker_radar_watch_batch_size: int = 5
@@ -1962,14 +1986,21 @@ class AnomalyMicroLiveRunner:
                 "ticker_snapshot_source": self.ticker_snapshot_source.source_id,
                 "live_ws_ticker_enabled": bool(self.config.live_ws_ticker_enabled),
                 "live_ws_ticker_stale_ms": int(self.config.live_ws_ticker_stale_ms),
+                "live_ws_ticker_startup_wait_seconds": float(self.config.live_ws_ticker_startup_wait_seconds),
                 "aggtrade_source": self.aggtrade_source.source_id if self.aggtrade_source is not None else "rest_fetch_aggtrades",
                 "live_ws_aggtrade_enabled": bool(self.config.live_ws_aggtrade_enabled),
                 "live_ws_aggtrade_stale_ms": int(self.config.live_ws_aggtrade_stale_ms),
                 "live_ws_aggtrade_buffer_minutes": int(self.config.live_ws_aggtrade_buffer_minutes),
+                "live_ws_aggtrade_max_backfill_ms": int(self.config.live_ws_aggtrade_max_backfill_ms),
                 "exclude_default_high_cap_symbols": bool(self.config.exclude_default_high_cap_symbols),
                 "excluded_high_cap_bases": sorted(LIVE_DEFAULT_EXCLUDED_HIGH_CAP_BASES),
             },
         )
+        try:
+            self._validate_required_ticker_radar_source(symbols)
+        except LiveStartupError:
+            self._close_live_sources()
+            raise
         self.telegram.send(
             channel="events",
             key="live_started",
@@ -2141,6 +2172,61 @@ class AnomalyMicroLiveRunner:
                         "__live__",
                         {"source": getattr(source, "source_id", type(source).__name__), "reason": f"{type(exc).__name__}: {exc}"},
                     )
+
+    def _ticker_radar_required_for_subminute_gate(self) -> bool:
+        return bool(self.config.ticker_radar_enabled and _live_config_has_subminute_entry_pairs(self.config))
+
+    def _validate_required_ticker_radar_source(self, symbols: list[str]) -> None:
+        if not self._ticker_radar_required_for_subminute_gate():
+            return
+        try:
+            snapshots = self.ticker_snapshot_source.fetch_snapshots(tuple(symbols))
+        except Exception as exc:
+            self.artifacts.append_event(
+                "ticker_radar_startup_failed",
+                "__live__",
+                {
+                    "source": self.ticker_snapshot_source.source_id,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc)[:500],
+                    "symbols_total": len(symbols),
+                    "policy": "startup_refuse_without_required_ticker_radar",
+                },
+            )
+            raise LiveStartupError(
+                "subminute live discovery requires a working ticker radar source before the first cycle; "
+                f"source={self.ticker_snapshot_source.source_id}; error={type(exc).__name__}: {exc}; "
+                "no REST/full-scan fallback is used"
+            ) from exc
+        missing_count = sum(1 for snapshot in snapshots if snapshot.status != "ok")
+        if snapshots and missing_count == len(snapshots):
+            self.artifacts.append_event(
+                "ticker_radar_startup_failed",
+                "__live__",
+                {
+                    "source": self.ticker_snapshot_source.source_id,
+                    "symbols_total": len(snapshots),
+                    "missing_count": missing_count,
+                    "policy": "startup_refuse_without_required_ticker_radar",
+                    "reason": "all_ticker_snapshots_missing",
+                },
+            )
+            raise LiveStartupError(
+                "subminute live discovery requires ticker radar snapshots with price and quote_volume; "
+                f"source={self.ticker_snapshot_source.source_id}; all {len(snapshots)} snapshots are missing; "
+                "no REST/full-scan fallback is used"
+            )
+        self.artifacts.append_event(
+            "ticker_radar_startup_ready",
+            "__live__",
+            {
+                "source": self.ticker_snapshot_source.source_id,
+                "symbols_total": len(snapshots),
+                "ok_count": len(snapshots) - missing_count,
+                "missing_count": missing_count,
+                "policy": "required_for_inactive_subminute_gate",
+            },
+        )
 
     def _filter_live_symbol_universe(self, symbols: list[str], *, explicit_symbols: bool) -> list[str]:
         if explicit_symbols or not self.config.exclude_default_high_cap_symbols:
@@ -2490,15 +2576,18 @@ class AnomalyMicroLiveRunner:
         try:
             snapshots = self.ticker_snapshot_source.fetch_snapshots(tuple(symbols))
         except Exception as exc:
-            self.artifacts.append_event(
-                "ticker_radar_failed",
-                "__live__",
-                {
-                    "source": self.ticker_snapshot_source.source_id,
-                    "exception_type": type(exc).__name__,
-                    "exception_message": str(exc)[:500],
-                },
-            )
+            payload = {
+                "source": self.ticker_snapshot_source.source_id,
+                "exception_type": type(exc).__name__,
+                "exception_message": str(exc)[:500],
+                "required_for_inactive_subminute_gate": bool(self._ticker_radar_required_for_subminute_gate()),
+            }
+            self.artifacts.append_event("ticker_radar_failed", "__live__", payload)
+            if self._ticker_radar_required_for_subminute_gate():
+                raise ExchangeConnectivityError(
+                    "ticker radar source is required for inactive subminute discovery and is unavailable; "
+                    f"source={self.ticker_snapshot_source.source_id}; error={type(exc).__name__}: {exc}"
+                ) from exc
             return
         promotions = self._evaluate_ticker_radar_snapshots(snapshots, now_ms=now_ms)
         for promotion in promotions[: self.config.ticker_radar_max_promotions_per_cycle]:
@@ -2836,6 +2925,7 @@ class AnomalyMicroLiveRunner:
             entry_fetch_count = 0
             signal_count = 0
             fetch_failures = 0
+            entry_ws_coverage_pending = 0
             skipped_not_due = 0
             skipped_inactive_subminute = 0
             for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
@@ -2889,6 +2979,24 @@ class AnomalyMicroLiveRunner:
                             end_timestamp_ms=now_ms,
                         )
                         entry_fetch_count += 1
+                    except LiveWsAggTradeCoveragePending as exc:
+                        entry_ws_coverage_pending += 1
+                        self.artifacts.append_event(
+                            "signal_entry_ws_aggtrade_pending",
+                            symbol,
+                            {
+                                "levels_tf": levels_timeframe.value,
+                                "entry_tf": entry_timeframe.value,
+                                "reason": str(exc),
+                                "ws_status": exc.status,
+                                "ws_reason": exc.reason or "",
+                                "start_timestamp_ms": exc.start_timestamp_ms,
+                                "end_timestamp_ms": exc.end_timestamp_ms,
+                                "missing_ranges": [f"{start}:{end}" for start, end in exc.missing_ranges],
+                                "backfill_max_ms": int(self.config.live_ws_aggtrade_max_backfill_ms),
+                            },
+                        )
+                        continue
                     except Exception as exc:
                         fetch_failures += 1
                         self.artifacts.append_event(
@@ -2937,6 +3045,7 @@ class AnomalyMicroLiveRunner:
                     "setup_fetch_count": setup_fetch_count,
                     "entry_fetch_count": entry_fetch_count,
                     "fetch_failure_count": fetch_failures,
+                    "entry_ws_aggtrade_pending_count": entry_ws_coverage_pending,
                     "signal_count": signal_count,
                     "duration_ms": round((time.monotonic() - started_at) * 1000.0, 3),
                 },
@@ -2989,6 +3098,23 @@ class AnomalyMicroLiveRunner:
                         start_timestamp_ms=entry_lookback_start_ms,
                         end_timestamp_ms=now_ms,
                     )
+                except LiveWsAggTradeCoveragePending as exc:
+                    self.artifacts.append_event(
+                        "signal_entry_ws_aggtrade_pending",
+                        symbol,
+                        {
+                            "levels_tf": levels_timeframe.value,
+                            "entry_tf": entry_timeframe.value,
+                            "reason": str(exc),
+                            "ws_status": exc.status,
+                            "ws_reason": exc.reason or "",
+                            "start_timestamp_ms": exc.start_timestamp_ms,
+                            "end_timestamp_ms": exc.end_timestamp_ms,
+                            "missing_ranges": [f"{start}:{end}" for start, end in exc.missing_ranges],
+                            "backfill_max_ms": int(self.config.live_ws_aggtrade_max_backfill_ms),
+                        },
+                    )
+                    continue
                 except Exception as exc:
                     self.artifacts.append_event(
                         "signal_entry_fetch_failed",
@@ -5208,6 +5334,10 @@ class AnomalyMicroLiveRunner:
             end_timestamp_ms=int(end_timestamp_ms),
         )
 
+    @staticmethod
+    def _time_ranges_duration_ms(ranges: tuple[tuple[int, int], ...] | list[tuple[int, int]]) -> int:
+        return int(sum(max(0, int(end) - int(start) + 1) for start, end in ranges))
+
     def _fetch_ws_aggtrade_raw_rows(
         self,
         symbol: str,
@@ -5229,6 +5359,48 @@ class AnomalyMicroLiveRunner:
         all_rows = [dict(row) for row in read_result.rows]
         backfilled_rows = 0
         backfill_ranges: list[str] = []
+        missing_total_ms = self._time_ranges_duration_ms(read_result.missing_ranges)
+        max_backfill_ms = int(self.config.live_ws_aggtrade_max_backfill_ms)
+        if read_result.missing_ranges and missing_total_ms > max_backfill_ms:
+            self.artifacts.append_event(
+                "ws_aggtrade_frame_read",
+                symbol,
+                {
+                    "source": source.source_id,
+                    "status": "coverage_pending",
+                    "read_status": read_result.status,
+                    "reason": read_result.reason or "",
+                    "subscribed": bool(read_result.subscribed),
+                    "connection_status": read_result.connection_status,
+                    "last_error": (read_result.last_error or "")[:500],
+                    "start_timestamp_ms": request_start_ms,
+                    "end_timestamp_ms": request_end_ms,
+                    "ws_rows": int(len(read_result.rows)),
+                    "buffer_row_count": int(read_result.buffer_row_count),
+                    "missing_range_count": int(len(read_result.missing_ranges)),
+                    "missing_ranges": [f"{start}:{end}" for start, end in read_result.missing_ranges],
+                    "missing_total_ms": int(missing_total_ms),
+                    "backfill_max_ms": int(max_backfill_ms),
+                    "backfill_skipped": True,
+                    "backfill_ranges": [],
+                    "backfilled_rows": 0,
+                    "result_rows": 0,
+                    "last_trade_timestamp_ms": read_result.last_trade_timestamp_ms if read_result.last_trade_timestamp_ms is not None else "",
+                    "last_receive_at_ms": read_result.last_receive_at_ms if read_result.last_receive_at_ms is not None else "",
+                },
+            )
+            raise LiveWsAggTradeCoveragePending(
+                "ws_aggtrade_coverage_pending;"
+                f"status={read_result.status};"
+                f"missing_total_ms={missing_total_ms};"
+                f"backfill_max_ms={max_backfill_ms}",
+                symbol=symbol,
+                start_timestamp_ms=request_start_ms,
+                end_timestamp_ms=request_end_ms,
+                missing_ranges=tuple(read_result.missing_ranges),
+                status=read_result.status,
+                reason=read_result.reason,
+            )
         symbol_key = _position_symbol_key(symbol)
         cached_ranges = self._current_cycle_aggtrade_cache.get(symbol_key, [])
         for missing_start_ms, missing_end_ms in read_result.missing_ranges:
@@ -5291,6 +5463,9 @@ class AnomalyMicroLiveRunner:
                 "buffer_row_count": int(read_result.buffer_row_count),
                 "missing_range_count": int(len(read_result.missing_ranges)),
                 "missing_ranges": [f"{start}:{end}" for start, end in read_result.missing_ranges],
+                "missing_total_ms": int(missing_total_ms),
+                "backfill_max_ms": int(max_backfill_ms),
+                "backfill_skipped": False,
                 "backfill_ranges": backfill_ranges,
                 "backfilled_rows": int(backfilled_rows),
                 "result_rows": int(len(all_rows)),
@@ -5713,6 +5888,14 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         raise LiveStartupError(
             "Некорректный live config: max_precise_scan_symbols_per_cycle должен быть целым >= 1 или None, "
             f"получено {config.max_precise_scan_symbols_per_cycle!r}"
+        )
+    if (
+        not isinstance(config.live_ws_aggtrade_max_backfill_ms, int)
+        or config.live_ws_aggtrade_max_backfill_ms < 0
+    ):
+        raise LiveStartupError(
+            "Некорректный live config: live_ws_aggtrade_max_backfill_ms должен быть целым >= 0, "
+            f"получено {config.live_ws_aggtrade_max_backfill_ms!r}"
         )
     if config.live_ohlcv_cache_flush_max_symbol_timeframes is not None and (
         not isinstance(config.live_ohlcv_cache_flush_max_symbol_timeframes, int)

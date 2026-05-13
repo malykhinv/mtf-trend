@@ -235,6 +235,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomaly_live.add_argument("--live-ws-aggtrade-stale-ms", type=_positive_int_for("--live-ws-aggtrade-stale-ms"), default=5_000)
     anomaly_live.add_argument("--live-ws-aggtrade-buffer-minutes", type=_positive_int_for("--live-ws-aggtrade-buffer-minutes"), default=20)
+    anomaly_live.add_argument(
+        "--live-ws-aggtrade-max-backfill-ms",
+        type=int,
+        default=0,
+        help=(
+            "Maximum uncovered aggTrade milliseconds that may be REST-backfilled per WS precise scan; "
+            "0 means strict WS coverage only and skips the signal until coverage is available."
+        ),
+    )
     anomaly_live.add_argument("--ticker-radar-interval-seconds", type=float, default=5.0)
     anomaly_live.add_argument("--ticker-radar-watch-ttl-ms", type=_positive_int_for("--ticker-radar-watch-ttl-ms"), default=120_000)
     anomaly_live.add_argument("--ticker-radar-watch-batch-size", type=int, default=5)
