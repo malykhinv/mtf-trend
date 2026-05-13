@@ -1970,6 +1970,10 @@ class AnomalyMicroLiveRunner:
         self._cycle_aggtrade_requests = 0
         self._cycle_aggtrade_network_calls = 0
         self._cycle_aggtrade_cache_hits = 0
+        self._cycle_ws_aggtrade_backfill_reads = 0
+        self._cycle_ws_aggtrade_backfilled_rows = 0
+        self._cycle_ws_aggtrade_coverage_pending = 0
+        self._cycle_ws_aggtrade_not_connected_backfill_reads = 0
         self._current_batch_symbol_scan_mode: dict[str, str] = {}
         self._current_scheduler_source = "uninitialized"
         self._current_inactive_scan_slots = 0
@@ -2137,6 +2141,11 @@ class AnomalyMicroLiveRunner:
                         "aggtrade_requests": self._cycle_aggtrade_requests,
                         "aggtrade_network_calls": self._cycle_aggtrade_network_calls,
                         "aggtrade_cache_hits": self._cycle_aggtrade_cache_hits,
+                        "ws_aggtrade_backfill_reads": self._cycle_ws_aggtrade_backfill_reads,
+                        "ws_aggtrade_backfilled_rows": self._cycle_ws_aggtrade_backfilled_rows,
+                        "ws_aggtrade_not_connected_backfill_reads": self._cycle_ws_aggtrade_not_connected_backfill_reads,
+                        "ws_aggtrade_coverage_pending_count": self._cycle_ws_aggtrade_coverage_pending,
+                        "ws_aggtrade_effective_source": self._ws_aggtrade_effective_source_for_cycle(ws_aggtrade_stats),
                         "precise_scan_symbols": self._cycle_precise_scan_symbols,
                         "inactive_visit_symbols": self._cycle_inactive_visit_symbols,
                         "deferred_inactive_subminute_pairs": self._cycle_deferred_inactive_subminute_pairs,
@@ -2158,10 +2167,18 @@ class AnomalyMicroLiveRunner:
                         ws_issue_text = " · WS: ticker REST"
                     elif ws_aggtrade_stats.enabled and ws_aggtrade_stats.target_count > 0:
                         subscribed_count = _optional_int(ws_aggtrade_stats.subscribed_count)
-                        if (ws_aggtrade_stats.connection_status or "").lower() != "connected":
-                            ws_issue_text = " · WS: flow подключается"
+                        connection_status = (ws_aggtrade_stats.connection_status or "").lower()
+                        if connection_status != "connected":
+                            if self._cycle_ws_aggtrade_coverage_pending > 0:
+                                ws_issue_text = " · WS: flow pending"
+                            elif self._cycle_ws_aggtrade_backfill_reads > 0:
+                                ws_issue_text = " · WS: flow REST"
+                            else:
+                                ws_issue_text = " · WS: flow нет"
                         elif subscribed_count != ws_aggtrade_stats.target_count:
                             ws_issue_text = " · WS: flow подписка"
+                        elif self._cycle_ws_aggtrade_backfill_reads > 0:
+                            ws_issue_text = " · WS: flow gap REST"
                     coverage_text = ""
                     if self._current_inactive_scan_slots_source != "default_ws_event_driven_subminute":
                         coverage_text = f" · обход ~{full_cycle_seconds:.0f}s"
@@ -2460,6 +2477,10 @@ class AnomalyMicroLiveRunner:
         self._cycle_aggtrade_requests = 0
         self._cycle_aggtrade_network_calls = 0
         self._cycle_aggtrade_cache_hits = 0
+        self._cycle_ws_aggtrade_backfill_reads = 0
+        self._cycle_ws_aggtrade_backfilled_rows = 0
+        self._cycle_ws_aggtrade_coverage_pending = 0
+        self._cycle_ws_aggtrade_not_connected_backfill_reads = 0
         self._current_batch_symbol_scan_mode = {}
         self._cycle_precise_scan_symbols = 0
         self._cycle_inactive_visit_symbols = 0
@@ -2595,6 +2616,21 @@ class AnomalyMicroLiveRunner:
             connection_status=str(status.get("connection_status", "")),
             last_error=str(status.get("last_error", ""))[:500],
         )
+
+
+    def _ws_aggtrade_effective_source_for_cycle(self, stats: LiveWsAggTradeSubscriptionStats) -> str:
+        if not stats.enabled:
+            return "disabled"
+        if self._cycle_ws_aggtrade_coverage_pending > 0:
+            return "uncovered_ws_pending"
+        connection_status = (stats.connection_status or "").lower()
+        if connection_status == "connected":
+            if self._cycle_ws_aggtrade_backfill_reads > 0:
+                return "ws_with_rest_gap_backfill"
+            return "ws"
+        if self._cycle_ws_aggtrade_backfill_reads > 0:
+            return "rest_backfill_degraded"
+        return f"ws_{connection_status or 'unknown'}_no_entry_read"
 
     def _default_inactive_scan_slots(self) -> tuple[int, str]:
         if self.config.inactive_scan_slots_per_cycle is not None:
@@ -5678,6 +5714,7 @@ class AnomalyMicroLiveRunner:
         missing_total_ms = self._time_ranges_duration_ms(read_result.missing_ranges)
         max_backfill_ms = int(self.config.live_ws_aggtrade_max_backfill_ms)
         if read_result.missing_ranges and missing_total_ms > max_backfill_ms:
+            self._cycle_ws_aggtrade_coverage_pending += 1
             self.artifacts.append_event(
                 "ws_aggtrade_frame_read",
                 symbol,
@@ -5761,7 +5798,12 @@ class AnomalyMicroLiveRunner:
                 )
             )
         all_rows = _dedupe_aggtrade_rows(all_rows)
-        if not read_result.missing_ranges:
+        if read_result.missing_ranges:
+            self._cycle_ws_aggtrade_backfill_reads += 1
+            self._cycle_ws_aggtrade_backfilled_rows += int(backfilled_rows)
+            if (read_result.connection_status or "").lower() != "connected":
+                self._cycle_ws_aggtrade_not_connected_backfill_reads += 1
+        else:
             self._cycle_aggtrade_cache_hits += 1
         self.artifacts.append_event(
             "ws_aggtrade_frame_read",

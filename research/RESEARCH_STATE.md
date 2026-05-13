@@ -927,3 +927,12 @@ Status: PROPOSED. Commit: UNKNOWN.
 Reason: after P189, degraded REST ticker discovery can start live when WS ticker DNS is broken, but the 300000 ms aggTrade backfill cap can still miss the last fresh 5m/30s setup scan when WS aggTrade is unavailable/cold. P190 raises the default cap to 360000 ms and exposes degraded ticker status in the console line.
 
 Validation target: inspect `live_events.csv` for `ticker_radar_source_degraded`, `ticker_radar_snapshot.source_status=degraded_rest_fallback`, `ws_aggtrade_frame_read.backfill_max_ms=360000`, low `signal_entry_ws_aggtrade_pending` count, and acceptable `signal_scan_seconds` / `aggtrade_network_calls`.
+
+
+### 2026-05-13 - P191 proposed: distinguish aggTrade flow connecting vs REST degraded vs pending
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Reason: the operator line `WS: flow подключается` can persist for minutes when Binance aggTrade WS is down, but current logic may still evaluate entries through explicit bounded REST aggTrade backfill. The previous UI state is too ambiguous for live safety.
+
+Validation target: after applying P191, inspect console and `live_events.csv`: `WS: flow REST` means degraded REST backfill is covering requested flow windows; `WS: flow pending` means entries can be missed; `live_cycle_summary.ws_aggtrade_effective_source` must match the console state.

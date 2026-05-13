@@ -2066,3 +2066,28 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ```
 
 Live smoke expectation: with WS ticker DNS broken but REST available, startup continues in degraded REST mode; fresh 5m/30s radar-promoted scans should backfill bounded gaps up to 360000 ms instead of `coverage_pending` at the end of the setup window.
+
+
+## P191 - proposed - make aggTrade WS degraded execution visible in live status
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- A live run stayed for several minutes on the operator line `WS: flow подключается` while ticker discovery had already been moved to explicit degraded REST mode.
+- That string conflates three materially different states: WS is still warming up, WS is unavailable but bounded REST aggTrade backfill is covering requested flow windows, or WS/REST coverage is pending and entries can be missed.
+
+Changes:
+- Add per-cycle counters for WS aggTrade REST backfill reads, backfilled rows, not-connected backfill reads, and coverage-pending reads.
+- Add `live_cycle_summary.ws_aggtrade_effective_source` with explicit values such as `rest_backfill_degraded`, `uncovered_ws_pending`, `ws_with_rest_gap_backfill`, or `ws_*_no_entry_read`.
+- Replace the long-running generic status suffix `WS: flow подключается` with more diagnostic operator states: `WS: flow REST`, `WS: flow pending`, `WS: flow нет`, or `WS: flow gap REST`.
+
+Risk:
+Low. Trading logic and order execution are unchanged. The patch only makes the existing degraded aggTrade path and coverage holes visible at cycle/operator level.
+
+Validation:
+```
+python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Live smoke expectation: if aggTrade WS cannot connect but bounded REST aggTrade reads are covering entry windows, the console should show `WS: flow REST` and `live_cycle_summary.ws_aggtrade_effective_source=rest_backfill_degraded`; if coverage still exceeds the backfill budget, it should show `WS: flow pending` and emit `signal_entry_ws_aggtrade_pending`.
