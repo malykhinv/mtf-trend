@@ -971,134 +971,190 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             _parse_grid_profile_values,
             run_anomaly_strategy_backtest,
         )
+        from research_tools.anomaly_config import ANOMALY_BACKTEST_TIMEFRAME_PAIRS
 
         output_dir = (
             Path(str(args.output_dir))
             if getattr(args, "output_dir", None)
             else config.backtest.results_dir / "anomaly_lab"
         )
-        lab_config = AnomalyLabConfig(
-            cache_dir=config.backtest.cache_dir,
-            output_dir=output_dir,
-            timeframe=str(getattr(args, "setup_timeframe", None) or args.timeframe),
-            days=int(args.days),
-            end_timestamp_ms=getattr(args, "end_timestamp_ms", None),
-            baseline_candles=int(args.baseline_candles),
-            confirmation_candles=int(args.confirmation_candles),
-            forward_high_candles=int(args.forward_high_candles),
-            forward_low_candles=int(args.forward_low_candles),
-            min_quote_ratio_start=float(args.min_quote_ratio_start),
-            min_trade_ratio_start=float(args.min_trade_ratio_start),
-        )
-        setup_timeframe = str(getattr(args, "setup_timeframe", None) or args.timeframe)
-        entry_timeframe = str(getattr(args, "entry_timeframe", None) or setup_timeframe)
-        backtest_config = AnomalyBacktestConfig(
-            lab_config=lab_config,
-            setup_timeframe=setup_timeframe,
-            entry_timeframe=entry_timeframe,
-            feature_contract=(
-                "htf_setup_ltf_entry_v1" if entry_timeframe != setup_timeframe else "closed_setup_tf_v1"
-            ),
-            min_price_retention=float(args.min_price_retention),
-            max_price_retention=(
-                None if getattr(args, "max_price_retention", None) is None else float(args.max_price_retention)
-            ),
-            min_verticality_score=float(args.min_verticality_score),
-            min_hold_count=int(args.min_hold_count),
-            min_oi_change_pct_3x5m=(
-                None
-                if getattr(args, "min_oi_change_pct_3x5m", None) is None
-                else float(args.min_oi_change_pct_3x5m)
-            ),
-            require_oi_status_ok=bool(getattr(args, "require_oi_status_ok", False)),
-            exhaustion_profile=str(getattr(args, "exhaustion_profile", "none")),
-            max_start_quote_ratio=(
-                None if getattr(args, "max_start_quote_ratio", None) is None else float(args.max_start_quote_ratio)
-            ),
-            max_start_trade_ratio=(
-                None if getattr(args, "max_start_trade_ratio", None) is None else float(args.max_start_trade_ratio)
-            ),
-            max_start_avg_trade_quote_size_ratio=(
-                None
-                if getattr(args, "max_start_avg_trade_quote_size_ratio", None) is None
-                else float(args.max_start_avg_trade_quote_size_ratio)
-            ),
-            max_start_quote_ratio_per_abs_return=(
-                None
-                if getattr(args, "max_start_quote_ratio_per_abs_return", None) is None
-                else float(args.max_start_quote_ratio_per_abs_return)
-            ),
-            max_start_trade_ratio_per_abs_return=(
-                None
-                if getattr(args, "max_start_trade_ratio_per_abs_return", None) is None
-                else float(args.max_start_trade_ratio_per_abs_return)
-            ),
-            max_start_range_pct_ratio_to_baseline=(
-                None
-                if getattr(args, "max_start_range_pct_ratio_to_baseline", None) is None
-                else float(args.max_start_range_pct_ratio_to_baseline)
-            ),
-            max_prior_up_down_whipsaw_to_impulse_range=(
-                None
-                if getattr(args, "max_prior_up_down_whipsaw_to_impulse_range", None) is None
-                else float(args.max_prior_up_down_whipsaw_to_impulse_range)
-            ),
-            min_next_taker_buy_quote_share=(
-                None
-                if getattr(args, "min_next_taker_buy_quote_share", None) is None
-                else float(args.min_next_taker_buy_quote_share)
-            ),
-            red_flag_profile=str(getattr(args, "red_flag_profile", "none")),
-            min_mark_close_vs_decision_close_basis=(
-                None
-                if getattr(args, "min_mark_close_vs_decision_close_basis", None) is None
-                else float(args.min_mark_close_vs_decision_close_basis)
-            ),
-            reject_oi_down_mark_discount=bool(getattr(args, "reject_oi_down_mark_discount", False)),
-            reject_stale_derivatives_context=bool(getattr(args, "reject_stale_derivatives_context", False)),
-            max_start_taker_buy_quote_share_delta=(
-                None
-                if getattr(args, "max_start_taker_buy_quote_share_delta", None) is None
-                else float(args.max_start_taker_buy_quote_share_delta)
-            ),
-            max_next_taker_buy_quote_share_delta=(
-                None
-                if getattr(args, "max_next_taker_buy_quote_share_delta", None) is None
-                else float(args.max_next_taker_buy_quote_share_delta)
-            ),
-            max_initial_risk_pct=float(args.max_initial_risk_pct),
-            entry_method=str(getattr(args, "entry_method", "market")),
-            pullback_box_fraction=float(getattr(args, "pullback_box_fraction", 0.75)),
-            entry_timeout_candles=int(getattr(args, "entry_timeout_candles", 60)),
-            market_entry_latency_candles=int(getattr(args, "market_entry_latency_candles", 1)),
-            max_market_entry_drift_pct=float(getattr(args, "max_market_entry_drift_pct", 0.003)),
-            min_market_rr_to_signal_tp1=float(getattr(args, "min_market_rr_to_signal_tp1", 0.75)),
-            tp1_r=float(args.tp1_r),
-            tp1_fraction=float(args.tp1_fraction),
-            trail_lookback_candles=int(args.trail_lookback_candles),
-            trail_buffer_r=float(args.trail_buffer_r),
-            exit_rule=str(getattr(args, "exit_rule", "structural_trail")),
-            max_hold_candles=int(args.max_hold_candles),
-            fee_rate=float(args.fee_rate),
-        )
         _, _, derivatives_context_fetcher = _build_fetch_stack(config)
-        run_anomaly_strategy_backtest(
-            backtest_config,
-            symbols=getattr(args, "symbols", None),
-            run_entry_grid=bool(getattr(args, "run_entry_grid", False)),
-            grid_oi3_values=_parse_grid_values(str(getattr(args, "grid_oi3_values", "0.01,0.02,0.03")), cast=float),
-            grid_hold_values=_parse_grid_values(str(getattr(args, "grid_hold_values", "1,2")), cast=int),
-            grid_pullback_fractions=_parse_grid_values(
-                str(getattr(args, "grid_pullback_fractions", "0.65,0.75,0.85")),
-                cast=float,
-            ),
-            grid_exhaustion_profiles=_parse_grid_profile_values(
-                str(getattr(args, "grid_exhaustion_profiles", "none"))
-            ),
-            grid_exit_rules=_parse_grid_exit_rules(str(getattr(args, "grid_exit_rules", "structural_trail"))),
-            derivatives_context_fetcher=derivatives_context_fetcher,
-            render_charts=bool(getattr(args, "render_charts", True)),
+
+        explicit_timeframe = any(
+            getattr(args, name, None)
+            for name in ("timeframe", "setup_timeframe", "entry_timeframe")
         )
+        if explicit_timeframe:
+            setup_timeframe = str(
+                getattr(args, "setup_timeframe", None)
+                or getattr(args, "timeframe", None)
+                or ANOMALY_BACKTEST_TIMEFRAME_PAIRS[0][0].value
+            )
+            timeframe_pairs = ((setup_timeframe, str(getattr(args, "entry_timeframe", None) or setup_timeframe)),)
+        else:
+            timeframe_pairs = tuple(
+                (setup_timeframe.value, entry_timeframe.value)
+                for setup_timeframe, entry_timeframe in ANOMALY_BACKTEST_TIMEFRAME_PAIRS
+            )
+
+        run_index_rows: list[dict[str, str]] = []
+
+        def _run_timeframe_pair(setup_timeframe: str, entry_timeframe: str, pair_output_dir: Path) -> None:
+            lab_config = AnomalyLabConfig(
+                cache_dir=config.backtest.cache_dir,
+                output_dir=pair_output_dir,
+                timeframe=setup_timeframe,
+                days=int(args.days),
+                end_timestamp_ms=getattr(args, "end_timestamp_ms", None),
+                baseline_candles=int(args.baseline_candles),
+                confirmation_candles=int(args.confirmation_candles),
+                forward_high_candles=int(args.forward_high_candles),
+                forward_low_candles=int(args.forward_low_candles),
+                min_quote_ratio_start=float(args.min_quote_ratio_start),
+                min_trade_ratio_start=float(args.min_trade_ratio_start),
+            )
+            feature_contract = (
+                "htf_setup_ltf_entry_v1" if entry_timeframe != setup_timeframe else "closed_setup_tf_v1"
+            )
+            backtest_config = AnomalyBacktestConfig(
+                lab_config=lab_config,
+                setup_timeframe=setup_timeframe,
+                entry_timeframe=entry_timeframe,
+                feature_contract=feature_contract,
+                min_price_retention=float(args.min_price_retention),
+                max_price_retention=(
+                    None if getattr(args, "max_price_retention", None) is None else float(args.max_price_retention)
+                ),
+                min_verticality_score=float(args.min_verticality_score),
+                min_hold_count=int(args.min_hold_count),
+                min_oi_change_pct_3x5m=(
+                    None
+                    if getattr(args, "min_oi_change_pct_3x5m", None) is None
+                    else float(args.min_oi_change_pct_3x5m)
+                ),
+                require_oi_status_ok=bool(getattr(args, "require_oi_status_ok", False)),
+                exhaustion_profile=str(getattr(args, "exhaustion_profile", "none")),
+                max_start_quote_ratio=(
+                    None if getattr(args, "max_start_quote_ratio", None) is None else float(args.max_start_quote_ratio)
+                ),
+                max_start_trade_ratio=(
+                    None if getattr(args, "max_start_trade_ratio", None) is None else float(args.max_start_trade_ratio)
+                ),
+                max_start_avg_trade_quote_size_ratio=(
+                    None
+                    if getattr(args, "max_start_avg_trade_quote_size_ratio", None) is None
+                    else float(args.max_start_avg_trade_quote_size_ratio)
+                ),
+                max_start_quote_ratio_per_abs_return=(
+                    None
+                    if getattr(args, "max_start_quote_ratio_per_abs_return", None) is None
+                    else float(args.max_start_quote_ratio_per_abs_return)
+                ),
+                max_start_trade_ratio_per_abs_return=(
+                    None
+                    if getattr(args, "max_start_trade_ratio_per_abs_return", None) is None
+                    else float(args.max_start_trade_ratio_per_abs_return)
+                ),
+                max_start_range_pct_ratio_to_baseline=(
+                    None
+                    if getattr(args, "max_start_range_pct_ratio_to_baseline", None) is None
+                    else float(args.max_start_range_pct_ratio_to_baseline)
+                ),
+                max_prior_up_down_whipsaw_to_impulse_range=(
+                    None
+                    if getattr(args, "max_prior_up_down_whipsaw_to_impulse_range", None) is None
+                    else float(args.max_prior_up_down_whipsaw_to_impulse_range)
+                ),
+                min_next_taker_buy_quote_share=(
+                    None
+                    if getattr(args, "min_next_taker_buy_quote_share", None) is None
+                    else float(args.min_next_taker_buy_quote_share)
+                ),
+                red_flag_profile=str(getattr(args, "red_flag_profile", "none")),
+                min_mark_close_vs_decision_close_basis=(
+                    None
+                    if getattr(args, "min_mark_close_vs_decision_close_basis", None) is None
+                    else float(args.min_mark_close_vs_decision_close_basis)
+                ),
+                reject_oi_down_mark_discount=bool(getattr(args, "reject_oi_down_mark_discount", False)),
+                reject_stale_derivatives_context=bool(getattr(args, "reject_stale_derivatives_context", False)),
+                max_start_taker_buy_quote_share_delta=(
+                    None
+                    if getattr(args, "max_start_taker_buy_quote_share_delta", None) is None
+                    else float(args.max_start_taker_buy_quote_share_delta)
+                ),
+                max_next_taker_buy_quote_share_delta=(
+                    None
+                    if getattr(args, "max_next_taker_buy_quote_share_delta", None) is None
+                    else float(args.max_next_taker_buy_quote_share_delta)
+                ),
+                max_initial_risk_pct=float(args.max_initial_risk_pct),
+                entry_method=str(getattr(args, "entry_method", "market")),
+                pullback_box_fraction=float(getattr(args, "pullback_box_fraction", 0.75)),
+                entry_timeout_candles=int(getattr(args, "entry_timeout_candles", 60)),
+                market_entry_latency_candles=int(getattr(args, "market_entry_latency_candles", 1)),
+                max_market_entry_drift_pct=float(getattr(args, "max_market_entry_drift_pct", 0.003)),
+                min_market_rr_to_signal_tp1=float(getattr(args, "min_market_rr_to_signal_tp1", 0.75)),
+                tp1_r=float(args.tp1_r),
+                tp1_fraction=float(args.tp1_fraction),
+                trail_lookback_candles=int(args.trail_lookback_candles),
+                trail_buffer_r=float(args.trail_buffer_r),
+                exit_rule=str(getattr(args, "exit_rule", "structural_trail")),
+                max_hold_candles=int(args.max_hold_candles),
+                fee_rate=float(args.fee_rate),
+            )
+            print(
+                f"anomaly-lab: running {setup_timeframe}/{entry_timeframe} -> {pair_output_dir}",
+                flush=True,
+            )
+            run_anomaly_strategy_backtest(
+                backtest_config,
+                symbols=getattr(args, "symbols", None),
+                run_entry_grid=bool(getattr(args, "run_entry_grid", False)),
+                grid_oi3_values=_parse_grid_values(
+                    str(getattr(args, "grid_oi3_values", "0.01,0.02,0.03")),
+                    cast=float,
+                ),
+                grid_hold_values=_parse_grid_values(str(getattr(args, "grid_hold_values", "1,2")), cast=int),
+                grid_pullback_fractions=_parse_grid_values(
+                    str(getattr(args, "grid_pullback_fractions", "0.65,0.75,0.85")),
+                    cast=float,
+                ),
+                grid_exhaustion_profiles=_parse_grid_profile_values(
+                    str(getattr(args, "grid_exhaustion_profiles", "none"))
+                ),
+                grid_exit_rules=_parse_grid_exit_rules(str(getattr(args, "grid_exit_rules", "structural_trail"))),
+                derivatives_context_fetcher=derivatives_context_fetcher,
+                render_charts=bool(getattr(args, "render_charts", True)),
+            )
+            run_index_rows.append(
+                {
+                    "setup_timeframe": setup_timeframe,
+                    "entry_timeframe": entry_timeframe,
+                    "feature_contract": feature_contract,
+                    "output_dir": str(pair_output_dir),
+                }
+            )
+
+        for setup_timeframe, entry_timeframe in timeframe_pairs:
+            pair_output_dir = (
+                output_dir
+                if explicit_timeframe
+                else output_dir / f"{setup_timeframe}_{entry_timeframe}".replace("/", "_")
+            )
+            _run_timeframe_pair(setup_timeframe, entry_timeframe, pair_output_dir)
+
+        if not explicit_timeframe:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            index_path = output_dir / "anomaly_lab_timeframe_runs.csv"
+            with index_path.open("w", newline="", encoding="utf-8") as file:
+                writer = csv.DictWriter(
+                    file,
+                    fieldnames=["setup_timeframe", "entry_timeframe", "feature_contract", "output_dir"],
+                )
+                writer.writeheader()
+                writer.writerows(run_index_rows)
+            print(f"anomaly-lab: wrote timeframe run index -> {index_path}", flush=True)
         return 0
 
     return _run_with_logging("run-anomaly-lab", config, _run)

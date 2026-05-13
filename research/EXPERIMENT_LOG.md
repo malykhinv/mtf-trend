@@ -1234,3 +1234,23 @@ Readout:
 Healthy live should show live_ohlcv_cache_buffered followed by live_ohlcv_cache_flush_summary with remaining_rows=0.
 If remaining_rows grows, parquet writes are the bottleneck or failing; trading decisions may still be using fresh memory rows, but cache/replay completeness is degraded until flush succeeds.
 ```
+
+---
+
+## 2026-05-13 - P171 anomaly lab default TF-set run
+
+Experiment contract:
+
+```text
+Command: python main.py run-anomaly-lab --days 7
+Expected TF sets: 5m/30s, 1m/15s, 1m/5s
+Expected artifact layout: output_dir/5m_30s, output_dir/1m_15s, output_dir/1m_5s plus anomaly_lab_timeframe_runs.csv
+Legacy single 1m/1m runs must be explicit, not parser default.
+```
+
+Readout:
+
+```text
+After the next real run, analyze per-pair summaries from the indexed subdirectories only.
+If a root-level output exists from an older 1m/1m run, treat it as stale unless its timestamp and run index prove otherwise.
+```

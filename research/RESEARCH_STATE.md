@@ -733,3 +733,12 @@ Best full-universe result is 1m/15s cautious: 62 closed, avg +1.4642%, sum +90.7
 Runner separators in the full base sample: positive mark basis, strong mark context momentum, low quote/trade effort per return, and mid-range hold ratio.
 Next step: do targeted aggTrades backfill for candidate-bearing symbols/windows, then rerun 1m/5s full without changing thresholds.
 ```
+
+P171 command-contract status:
+
+```text
+`python main.py run-anomaly-lab --days N` now means the full working anomaly TF set: 5m/30s, 1m/15s, 1m/5s.
+The old 1m/1m mode is no longer implicit; it only runs when explicitly requested with `--timeframe 1m` or an equivalent single-pair override.
+Multi-run artifacts are separated by pair under the output directory and indexed by anomaly_lab_timeframe_runs.csv.
+Next readout should compare all three per-pair summaries from the same end timestamp; do not mix old root-level 1m/1m artifacts with new per-pair outputs.
+```

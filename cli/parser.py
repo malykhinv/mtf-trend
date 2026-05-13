@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomaly_lab.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT:USDT")
     anomaly_lab.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_ANOMALY_LAB_DAYS)
-    anomaly_lab.add_argument("--timeframe", default="1m", help="Legacy single-timeframe mode; used as setup timeframe unless --setup-timeframe is set")
+    anomaly_lab.add_argument("--timeframe", default=None, help="Legacy single-timeframe mode; used as setup timeframe unless --setup-timeframe is set")
     anomaly_lab.add_argument("--setup-timeframe", default=None, help="HTF setup timeframe, e.g. 5m")
     anomaly_lab.add_argument("--entry-timeframe", default=None, help="LTF execution timeframe, e.g. 30s. If omitted, equals setup/timeframe")
     anomaly_lab.add_argument("--end-timestamp-ms", type=int, default=None)

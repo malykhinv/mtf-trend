@@ -1300,3 +1300,39 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Low/medium: a hard process crash can lose rows still in the write buffer, but trading decisions use the in-memory fetched frame immediately and the missing cache rows can be re-fetched. Flush failures are kept visible and failed rows remain pending for the next flush attempt.
+
+## P171 - Run anomaly lab across working TF sets by default
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+`python main.py run-anomaly-lab --days 7` silently inherited the legacy parser default `--timeframe 1m`, so the command ran `1m/1m` instead of the current working anomaly TF sets.
+
+### Change
+
+- Remove the hidden `--timeframe 1m` parser default.
+- Treat no explicit timeframe flags as a multi-run over `5m/30s`, `1m/15s`, and `1m/5s`.
+- Keep explicit `--timeframe`, `--setup-timeframe`, or `--entry-timeframe` as single-pair override mode.
+- Write multi-run outputs into per-pair subdirectories and emit `anomaly_lab_timeframe_runs.csv`.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall cli\commands.py cli\parser.py research_tools\anomaly_strategy_backtest.py research_tools\anomaly_config.py main.py
+.venv\Scripts\python.exe -c "from cli.parser import build_parser; p=build_parser(); a=p.parse_args(['run-anomaly-lab','--days','7']); print(a.timeframe, a.setup_timeframe, a.entry_timeframe)"
+```
+
+Monkeypatched smoke confirmed default pairs:
+
+```text
+5m/30s
+1m/15s
+1m/5s
+```
+
+### Risk
+
+Low/medium: the default command now does roughly three backtests instead of one, so runtime and chart generation cost increase. This is intended because the old default result was misleading; explicit `--timeframe 1m` still allows the legacy single run.
