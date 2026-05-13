@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179 applied locally by user / UNKNOWN commit; P180 proposed on top of P179
-Last active patch: P180 finite local closed-PnL cycle summary fix
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181 proposed on top of P180
+Last active patch: P181 live batch/full-cycle status numbering
 Updated: 2026-05-13
 ```
 
@@ -84,19 +84,20 @@ research_tools/hourly_levels.py
 16. P178 proposes per-cycle raw aggTrades range reuse for S30/S15/S5 live scans and status logging as `batch/full` cycle time with local closed-trade PnL only.
 17. P179 proposes deferring inactive subminute `aggTrades` scans until ticker-radar or active state, with startup refusal instead of fallback when ticker radar is unavailable.
 18. P180 fixes live startup/first-cycle status artifacts after P178/P179: local closed-trade PnL is `0.0` until the first finalized closed trade, while non-finite local PnL counters still raise integrity errors.
+19. P181 changes live operator status/artifact numbering only: it displays `цикл batch/full-cycle` so batch ticks are not confused with completed universe passes.
 
 ---
 
 ## 6. Next best step
 
-Apply P180 after P177/P178/P179, then rerun the same live command and check the first `live_cycle_summary`:
+Apply P181 after P177/P178/P179/P180, then rerun the same live command and check the first `live_cycle_summary`:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-anomaly-live --help
 ```
 
-Read `live_cycle_summary` and verify `closed_pnl_pct` is `0.0` before any closed trade, `deferred_inactive_subminute_pairs > 0` on cold inactive cycles, `aggtrade_network_calls` drops sharply, and ticker-radar promoted symbols still receive precise subminute scans. If top-growth misses appear, tune ticker-radar thresholds/watch batch size instead of restoring full inactive aggTrades scans.
+Read `live_cycle_summary` and verify `batch_in_full_cycle` starts at 1, `full_symbol_cycle` starts at 1, the inline status shows `цикл batch/full-cycle`, `closed_pnl_pct` is `0.0` before any closed trade, `deferred_inactive_subminute_pairs > 0` on cold inactive cycles, and ticker-radar promoted symbols still receive precise subminute scans. If top-growth misses appear, tune ticker-radar thresholds/watch batch size instead of restoring full inactive aggTrades scans.
 
 Latest next step after P167:
 

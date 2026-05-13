@@ -31,6 +31,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P168 | Cache-backed live OHLCV fetch | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance/data-quality | Live reads local parquet first, fetches only missing OHLCV/aggTrade-derived ranges, writes fetched rows with provenance, keeps a process-memory frame cache, and emits explicit cache read/gap artifacts. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-anomaly-live --help`. |
 | P169 | Fix live cache candle boundary reads | PROPOSED | `data/storage/parquet_storage.py`, `research_tools/anomaly_micro_live.py`, `research/*` | bugfix/live-performance | Read only requested parquet windows, fetch subminute missing ranges through the full final candle, pass aggTrades endTime on paged requests, and exclude non-closed cached candles from live decision frames. | `python -m compileall data/storage/parquet_storage.py research_tools/anomaly_micro_live.py`; `python main.py run-anomaly-live --help`. |
 | P170 | Buffer live OHLCV cache writes | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance/data-quality | Buffer live-fetched OHLCV rows in memory, flush parquet writes by interval/row cap or on shutdown/error, and emit buffered/flushed/failed artifacts instead of rewriting parquet during every fetch. | `python -m compileall data/exchanges data/storage research_tools cli constants.py main.py`; `python main.py run-anomaly-live --help`. |
+| P181 | Number live batches within full symbol cycles | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-operator-ux | Show operator status as `cycle batch/full-cycle` so batch ticks are not confused with full universe passes. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-anomaly-live --help`. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -1621,3 +1622,33 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Low: this only fixes local status/artifact accounting before the first closed trade. Real closed-trade PnL remains based on `_finalize_position` counters.
+
+## P181 - Number live batches within full symbol cycles
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+After P178, the inline live status showed `batch_seconds/full_symbol_cycle_seconds`, but the word `цикл` still looked like the outer while-loop tick. Operators need to know both the current batch number inside the full round-robin pass and which full pass over the symbol universe is running.
+
+### Change
+
+- Track `batch_in_full_cycle` and `full_symbol_cycle` separately from the existing outer loop `cycle`.
+- Reset batch numbering to 1 when a full inactive round-robin pass completes.
+- Change the inline status to `цикл batch/full-cycle · batch_seconds/full_symbol_cycle_seconds · ...`.
+- Add the same counters to `live_cycle_summary` and `symbol_batch_selected` artifacts.
+- Do not change scheduling, signal selection, data fetching, orders, or PnL accounting.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+# synthetic smoke: batch counter starts at 1, increments per selected batch, and resets after cursor completes a full symbol-universe pass.
+```
+
+### Risk
+
+Low: operator/artifact numbering only. The counter is tied to the inactive round-robin cursor, so active/radar-only loops without inactive progress should be interpreted as scheduler ticks, not completed full-universe coverage.

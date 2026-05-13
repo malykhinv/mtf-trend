@@ -1188,6 +1188,10 @@ class AnomalyMicroLiveRunner:
         self._cycle_deferred_inactive_subminute_pairs = 0
         self._symbol_universe_scan_started_at = time.monotonic()
         self._last_symbol_universe_cycle_seconds: float | None = None
+        self._symbol_universe_cycle_index = 1
+        self._symbol_universe_batch_index = 0
+        self._current_symbol_universe_cycle_index = 1
+        self._current_symbol_universe_batch_index = 1
         self._ohlcv_cache_storage = (
             ParquetStorage(base_dir=config.cache_dir)
             if config.live_ohlcv_cache_enabled and config.cache_dir is not None
@@ -1263,6 +1267,8 @@ class AnomalyMicroLiveRunner:
                     "__live__",
                     {
                         "cycle": cycle,
+                        "batch_in_full_cycle": self._current_symbol_universe_batch_index,
+                        "full_symbol_cycle": self._current_symbol_universe_cycle_index,
                         "batch_seconds": round(cycle_seconds, 3),
                         "full_symbol_cycle_seconds": round(full_cycle_seconds, 3),
                         "opened_total": opened_total,
@@ -1289,7 +1295,9 @@ class AnomalyMicroLiveRunner:
                 if should_log_status:
                     orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
                     self._status_logger.status(
-                        f"live: цикл {cycle_seconds:.1f}s/{full_cycle_seconds:.1f}s · "
+                        f"live: цикл {self._current_symbol_universe_batch_index}/"
+                        f"{self._current_symbol_universe_cycle_index} · "
+                        f"{cycle_seconds:.1f}s/{full_cycle_seconds:.1f}s · "
                         f"открыто {opened_total} · активно {active_symbol_count} · "
                         f"закрыто {closed_total} · PNL {_format_percent(closed_pnl_pct, signed=False)}{orphan_text}"
                     )
@@ -1417,6 +1425,10 @@ class AnomalyMicroLiveRunner:
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
         now_ms = int(time.time() * 1000)
         inactive_cursor_before = self._inactive_cursor
+        batch_full_cycle = self._symbol_universe_cycle_index
+        batch_in_full_cycle = self._symbol_universe_batch_index + 1
+        self._current_symbol_universe_cycle_index = batch_full_cycle
+        self._current_symbol_universe_batch_index = batch_in_full_cycle
         active_due, active_waiting = self._active_symbol_batch(now_ms=now_ms)
         active_keys = {_position_symbol_key(symbol) for symbol in [*active_due, *active_waiting]}
         radar_due, radar_waiting = self._ticker_radar_batch(now_ms=now_ms, excluded_keys=active_keys)
@@ -1457,6 +1469,14 @@ class AnomalyMicroLiveRunner:
             now_monotonic = time.monotonic()
             self._last_symbol_universe_cycle_seconds = now_monotonic - self._symbol_universe_scan_started_at
             self._symbol_universe_scan_started_at = now_monotonic
+            completed_cycles = max(
+                1,
+                self._inactive_cursor // len(symbols) - inactive_cursor_before // len(symbols),
+            )
+            self._symbol_universe_cycle_index += completed_cycles
+            self._symbol_universe_batch_index = 0
+        else:
+            self._symbol_universe_batch_index = batch_in_full_cycle
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
@@ -1479,6 +1499,8 @@ class AnomalyMicroLiveRunner:
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "scan_hot_timeframes_per_symbol": bool(self.config.scan_hot_timeframes_per_symbol),
                 "symbol_batch_size": self.config.symbol_batch_size,
+                "batch_in_full_cycle": batch_in_full_cycle,
+                "full_symbol_cycle": batch_full_cycle,
                 "effective_scan_count": len(batch),
                 "inactive_cursor_before": inactive_cursor_before,
                 "inactive_cursor_after": self._inactive_cursor,
