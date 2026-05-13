@@ -763,3 +763,14 @@ It now collects candidates in one symbol-major pass, reading each symbol/timefra
 Per-pair artifacts remain separated under the same indexed output directories.
 Next validation on a real run: compare candidate/signal/trade counts against the prior indexed run at a fixed end timestamp; any difference must be explained before interpreting PnL changes.
 ```
+
+P173 runner-category replay status:
+
+```text
+Current .output/results/anomaly_lab is not a complete 3-TF run: 5m_30s and 1m_15s are complete, 1m_5s has no candidate/trade artifacts because the command was interrupted.
+The completed run is 30 requested days with 26 active trade days, but executable subminute coverage is partial and symbols_covering_end=0, so it is not full-universe production evidence.
+Baseline completed pairs: 567 closed, avg +0.5950%, median +0.3274%, sum +337.38%, WR 56.79%, TP1 54.14%, top10 dependency 42.26%.
+Runner-balanced replay from existing candidates: 124 closed, avg +1.7739%, median +1.3985%, sum +219.97%, WR 80.65%, TP1 75.81%, active days 25, top10 dependency 46.56%.
+Runner-balanced rules are in-sample category hypothesis: mark basis >= 10bp, quote/trade effort caps, start taker-buy delta cap, prior fast-fade 72h cap.
+Next proof step: rerun runner_balanced on fixed-end complete 1s/subminute coverage including 1m/5s, then compare out-of-sample or later-window replay before live.
+```

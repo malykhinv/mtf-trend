@@ -1371,3 +1371,43 @@ Direct single-config comparison on ATH/USDT:USDT 1m/15s over 7 days produced the
 ### Risk
 
 Medium: candidate collection order changed for default multi-TF runs. The per-pair downstream logic is unchanged, but the next full run should compare candidate/signal counts against the prior indexed run for the same end timestamp before using profitability deltas.
+
+## P173 - Add runner category filters and candidate reuse replay
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+The latest anomaly-lab directory had completed 5m/30s and 1m/15s artifacts, but 1m/5s was interrupted. Recollecting all candidates took hours, while filter iteration only needs the existing enriched `anomaly_candidates.csv` files.
+
+### Change
+
+- Add red-flag profiles: `runner_balanced`, `runner_reclaim`, `runner_flow`.
+- Add filter fields for flow hold, 72h prior spike/fade counts, lower wick and upper wick shape.
+- Extend red-flag summaries to include quote/trade ratio caps and effort-per-return caps.
+- Add `--reuse-candidates-dir` to `run-anomaly-lab`; it replays filters from existing candidate artifacts and skips missing pair artifacts explicitly.
+- Reused candidate mode avoids refetching derivatives context because existing candidates are already enriched.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall cli\commands.py cli\parser.py research_tools\anomaly_strategy_backtest.py main.py
+.venv\Scripts\python.exe main.py run-anomaly-lab --help
+.venv\Scripts\python.exe main.py run-anomaly-lab --days 30 --reuse-candidates-dir .output\results\anomaly_lab --output-dir .output\results\anomaly_lab_reuse_runner_balanced_fast --red-flag-profile runner_balanced --render-charts false
+```
+
+### Result
+
+Replay used completed pairs only:
+
+```text
+5m/30s runner_balanced: 42 closed, avg +1.6435%, median +1.5601%, sum +69.03%, WR 83.33%, TP1 78.57%
+1m/15s runner_balanced: 82 closed, avg +1.8407%, median +1.2530%, sum +150.94%, WR 79.27%, TP1 74.39%
+Combined: 124 closed, avg +1.7739%, median +1.3985%, sum +219.97%, WR 80.65%, TP1 75.81%, active days 25
+```
+
+### Risk
+
+Medium/high: this is an in-sample replay on partial executable coverage and excludes the interrupted 1m/5s pair. Treat it as a strong category hypothesis, not proven production edge.

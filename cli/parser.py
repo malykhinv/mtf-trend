@@ -80,6 +80,11 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--entry-timeframe", default=None, help="LTF execution timeframe, e.g. 30s. If omitted, equals setup/timeframe")
     anomaly_lab.add_argument("--end-timestamp-ms", type=int, default=None)
     anomaly_lab.add_argument("--output-dir", default=None)
+    anomaly_lab.add_argument(
+        "--reuse-candidates-dir",
+        default=None,
+        help="Reuse existing anomaly_candidates.csv artifacts from a previous anomaly-lab output root.",
+    )
     anomaly_lab.add_argument("--baseline-candles", type=_positive_int_for("--baseline-candles"), default=60)
     anomaly_lab.add_argument("--confirmation-candles", type=_positive_int_for("--confirmation-candles"), default=4)
     anomaly_lab.add_argument("--forward-high-candles", type=_positive_int_for("--forward-high-candles"), default=240)
@@ -101,12 +106,21 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--max-start-range-pct-ratio-to-baseline", type=float, default=None)
     anomaly_lab.add_argument("--max-prior-up-down-whipsaw-to-impulse-range", type=float, default=0.60)
     anomaly_lab.add_argument("--min-next-taker-buy-quote-share", type=float, default=None)
-    anomaly_lab.add_argument("--red-flag-profile", choices=["none", "cautious", "strict"], default="none")
+    anomaly_lab.add_argument(
+        "--red-flag-profile",
+        choices=["none", "cautious", "strict", "runner_balanced", "runner_reclaim", "runner_flow"],
+        default="none",
+    )
     anomaly_lab.add_argument("--min-mark-close-vs-decision-close-basis", type=float, default=None)
     anomaly_lab.add_argument("--reject-oi-down-mark-discount", type=_str_to_bool, default=False)
     anomaly_lab.add_argument("--reject-stale-derivatives-context", type=_str_to_bool, default=False)
     anomaly_lab.add_argument("--max-start-taker-buy-quote-share-delta", type=float, default=None)
     anomaly_lab.add_argument("--max-next-taker-buy-quote-share-delta", type=float, default=None)
+    anomaly_lab.add_argument("--min-flow-hold-count", type=int, default=None)
+    anomaly_lab.add_argument("--max-prior-spike-count-72h", type=int, default=None)
+    anomaly_lab.add_argument("--max-prior-fast-fade-count-72h", type=int, default=None)
+    anomaly_lab.add_argument("--min-start-lower-wick-to-range", type=float, default=None)
+    anomaly_lab.add_argument("--max-start-upper-wick-to-range", type=float, default=None)
     anomaly_lab.add_argument("--max-initial-risk-pct", type=float, default=0.16)
     anomaly_lab.add_argument(
         "--entry-method",

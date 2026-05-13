@@ -999,6 +999,12 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             )
 
         run_index_rows: list[dict[str, str]] = []
+        reuse_candidates_dir = (
+            Path(str(getattr(args, "reuse_candidates_dir")))
+            if getattr(args, "reuse_candidates_dir", None)
+            else None
+        )
+        collection_mode = "single_pair" if explicit_timeframe else "symbol_major_precollected"
 
         def _build_timeframe_pair_config(
             setup_timeframe: str,
@@ -1070,6 +1076,29 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                     if getattr(args, "max_prior_up_down_whipsaw_to_impulse_range", None) is None
                     else float(args.max_prior_up_down_whipsaw_to_impulse_range)
                 ),
+                min_flow_hold_count=(
+                    None if getattr(args, "min_flow_hold_count", None) is None else int(args.min_flow_hold_count)
+                ),
+                max_prior_spike_count_72h=(
+                    None
+                    if getattr(args, "max_prior_spike_count_72h", None) is None
+                    else int(args.max_prior_spike_count_72h)
+                ),
+                max_prior_fast_fade_count_72h=(
+                    None
+                    if getattr(args, "max_prior_fast_fade_count_72h", None) is None
+                    else int(args.max_prior_fast_fade_count_72h)
+                ),
+                min_start_lower_wick_to_range=(
+                    None
+                    if getattr(args, "min_start_lower_wick_to_range", None) is None
+                    else float(args.min_start_lower_wick_to_range)
+                ),
+                max_start_upper_wick_to_range=(
+                    None
+                    if getattr(args, "max_start_upper_wick_to_range", None) is None
+                    else float(args.max_start_upper_wick_to_range)
+                ),
                 min_next_taker_buy_quote_share=(
                     None
                     if getattr(args, "min_next_taker_buy_quote_share", None) is None
@@ -1115,6 +1144,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             pair_output_dir: Path,
             *,
             precollected_candidates: pd.DataFrame | None = None,
+            collection_mode: str,
         ) -> None:
             backtest_config = _build_timeframe_pair_config(
                 setup_timeframe,
@@ -1143,7 +1173,9 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                     str(getattr(args, "grid_exhaustion_profiles", "none"))
                 ),
                 grid_exit_rules=_parse_grid_exit_rules(str(getattr(args, "grid_exit_rules", "structural_trail"))),
-                derivatives_context_fetcher=derivatives_context_fetcher,
+                derivatives_context_fetcher=(
+                    None if collection_mode == "reused_candidates" else derivatives_context_fetcher
+                ),
                 render_charts=bool(getattr(args, "render_charts", True)),
             )
             run_index_rows.append(
@@ -1151,35 +1183,61 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                     "setup_timeframe": setup_timeframe,
                     "entry_timeframe": entry_timeframe,
                     "feature_contract": backtest_config.feature_contract,
-                    "collection_mode": (
-                        "single_pair" if explicit_timeframe else "symbol_major_precollected"
-                    ),
+                    "collection_mode": collection_mode,
                     "output_dir": str(pair_output_dir),
                 }
             )
 
         precollected_by_pair: dict[tuple[str, str], pd.DataFrame] = {}
-        if not explicit_timeframe:
-            collection_configs = [
-                _build_timeframe_pair_config(
-                    setup_timeframe,
-                    entry_timeframe,
-                    output_dir / f"{setup_timeframe}_{entry_timeframe}".replace("/", "_"),
+        timeframe_pairs_to_run = timeframe_pairs
+        if reuse_candidates_dir is not None:
+            loaded_pairs: list[tuple[str, str]] = []
+            for setup_timeframe, entry_timeframe in timeframe_pairs:
+                pair_dir = f"{setup_timeframe}_{entry_timeframe}".replace("/", "_")
+                candidate_path = (
+                    reuse_candidates_dir / "anomaly_candidates.csv"
+                    if explicit_timeframe
+                    else reuse_candidates_dir / pair_dir / "anomaly_candidates.csv"
                 )
-                for setup_timeframe, entry_timeframe in timeframe_pairs
-            ]
-            print(
-                "anomaly-lab: collecting candidates in one symbol-major pass across timeframe pairs",
-                flush=True,
-            )
-            precollected_by_pair = collect_pair_anomaly_rows_for_configs(
-                collection_configs,
-                symbols=getattr(args, "symbols", None),
-                progress_label="anomaly candidates tf-set",
-                include_derivatives_context=False,
-            )
+                if candidate_path.exists():
+                    precollected_by_pair[(setup_timeframe, entry_timeframe)] = pd.read_csv(candidate_path)
+                    loaded_pairs.append((setup_timeframe, entry_timeframe))
+                    print(
+                        f"anomaly-lab: reused candidates {setup_timeframe}/{entry_timeframe} <- {candidate_path}",
+                        flush=True,
+                    )
+                else:
+                    print(
+                        f"anomaly-lab: missing reused candidates {setup_timeframe}/{entry_timeframe} <- {candidate_path}",
+                        flush=True,
+                    )
+            if not loaded_pairs:
+                raise FileNotFoundError(f"no reusable anomaly_candidates.csv files found in {reuse_candidates_dir}")
+            timeframe_pairs_to_run = tuple(loaded_pairs)
+            collection_mode = "reused_candidates"
 
-        for setup_timeframe, entry_timeframe in timeframe_pairs:
+        if not explicit_timeframe:
+            if reuse_candidates_dir is None:
+                collection_configs = [
+                    _build_timeframe_pair_config(
+                        setup_timeframe,
+                        entry_timeframe,
+                        output_dir / f"{setup_timeframe}_{entry_timeframe}".replace("/", "_"),
+                    )
+                    for setup_timeframe, entry_timeframe in timeframe_pairs
+                ]
+                print(
+                    "anomaly-lab: collecting candidates in one symbol-major pass across timeframe pairs",
+                    flush=True,
+                )
+                precollected_by_pair = collect_pair_anomaly_rows_for_configs(
+                    collection_configs,
+                    symbols=getattr(args, "symbols", None),
+                    progress_label="anomaly candidates tf-set",
+                    include_derivatives_context=False,
+                )
+
+        for setup_timeframe, entry_timeframe in timeframe_pairs_to_run:
             pair_output_dir = (
                 output_dir
                 if explicit_timeframe
@@ -1190,6 +1248,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 entry_timeframe,
                 pair_output_dir,
                 precollected_candidates=precollected_by_pair.get((setup_timeframe, entry_timeframe)),
+                collection_mode=collection_mode,
             )
 
         if not explicit_timeframe:

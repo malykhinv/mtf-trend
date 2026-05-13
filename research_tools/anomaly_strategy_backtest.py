@@ -212,6 +212,11 @@ class AnomalyBacktestConfig:
     max_start_quote_ratio_per_abs_return: float | None = None
     max_start_range_pct_ratio_to_baseline: float | None = None
     max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.60
+    min_flow_hold_count: int | None = None
+    max_prior_spike_count_72h: int | None = None
+    max_prior_fast_fade_count_72h: int | None = None
+    min_start_lower_wick_to_range: float | None = None
+    max_start_upper_wick_to_range: float | None = None
     min_next_taker_buy_quote_share: float | None = None
     red_flag_profile: str = "none"
     min_mark_close_vs_decision_close_basis: float | None = None
@@ -324,6 +329,68 @@ def _apply_red_flag_profile(config: AnomalyBacktestConfig) -> AnomalyBacktestCon
                 else config.max_start_trade_ratio_per_abs_return
             ),
         )
+    if profile == "runner_balanced":
+        return replace(
+            config,
+            min_mark_close_vs_decision_close_basis=(
+                0.001
+                if config.min_mark_close_vs_decision_close_basis is None
+                else config.min_mark_close_vs_decision_close_basis
+            ),
+            max_start_quote_ratio=(
+                1000.0 if config.max_start_quote_ratio is None else config.max_start_quote_ratio
+            ),
+            max_start_trade_ratio=(
+                250.0 if config.max_start_trade_ratio is None else config.max_start_trade_ratio
+            ),
+            max_start_quote_ratio_per_abs_return=(
+                20_000.0
+                if config.max_start_quote_ratio_per_abs_return is None
+                else config.max_start_quote_ratio_per_abs_return
+            ),
+            max_start_trade_ratio_per_abs_return=(
+                3_000.0
+                if config.max_start_trade_ratio_per_abs_return is None
+                else config.max_start_trade_ratio_per_abs_return
+            ),
+            max_start_taker_buy_quote_share_delta=(
+                0.25
+                if config.max_start_taker_buy_quote_share_delta is None
+                else config.max_start_taker_buy_quote_share_delta
+            ),
+            max_prior_fast_fade_count_72h=(
+                0
+                if config.max_prior_fast_fade_count_72h is None
+                else config.max_prior_fast_fade_count_72h
+            ),
+        )
+    if profile == "runner_reclaim":
+        balanced = _apply_red_flag_profile(replace(config, red_flag_profile="runner_balanced"))
+        return replace(
+            balanced,
+            red_flag_profile=config.red_flag_profile,
+            min_start_lower_wick_to_range=(
+                0.0
+                if balanced.min_start_lower_wick_to_range is None
+                else balanced.min_start_lower_wick_to_range
+            ),
+            max_start_upper_wick_to_range=(
+                0.20
+                if balanced.max_start_upper_wick_to_range is None
+                else balanced.max_start_upper_wick_to_range
+            ),
+        )
+    if profile == "runner_flow":
+        balanced = _apply_red_flag_profile(replace(config, red_flag_profile="runner_balanced"))
+        return replace(
+            balanced,
+            red_flag_profile=config.red_flag_profile,
+            min_flow_hold_count=(
+                1
+                if balanced.min_flow_hold_count is None
+                else balanced.min_flow_hold_count
+            ),
+        )
     raise ValueError(f"unsupported red_flag_profile: {config.red_flag_profile}")
 
 
@@ -373,6 +440,32 @@ def _red_flag_violation_masks(signals: pd.DataFrame, *, config: AnomalyBacktestC
         masks["trade_effort_per_return_above_max"] = (
             trade_effort.gt(config.max_start_trade_ratio_per_abs_return) | trade_effort.isna()
         )
+    if config.max_start_quote_ratio_per_abs_return is not None:
+        quote_effort = pd.to_numeric(signals["start_quote_ratio_per_abs_return"], errors="coerce")
+        masks["quote_effort_per_return_above_max"] = (
+            quote_effort.gt(config.max_start_quote_ratio_per_abs_return) | quote_effort.isna()
+        )
+    if config.max_start_quote_ratio is not None:
+        quote_ratio = pd.to_numeric(signals["start_quote_ratio"], errors="coerce")
+        masks["start_quote_ratio_above_max"] = quote_ratio.gt(config.max_start_quote_ratio) | quote_ratio.isna()
+    if config.max_start_trade_ratio is not None:
+        trade_ratio = pd.to_numeric(signals["start_trade_ratio"], errors="coerce")
+        masks["start_trade_ratio_above_max"] = trade_ratio.gt(config.max_start_trade_ratio) | trade_ratio.isna()
+    if config.min_flow_hold_count is not None:
+        flow_hold = pd.to_numeric(signals["flow_hold_count_next_n_candles"], errors="coerce")
+        masks["flow_hold_count_below_min"] = flow_hold.lt(config.min_flow_hold_count) | flow_hold.isna()
+    if config.max_prior_spike_count_72h is not None:
+        prior_spikes = pd.to_numeric(signals["prior_spike_count_72h"], errors="coerce").fillna(0.0)
+        masks["prior_spike_count_72h_above_max"] = prior_spikes.gt(config.max_prior_spike_count_72h)
+    if config.max_prior_fast_fade_count_72h is not None:
+        prior_fast_fades = pd.to_numeric(signals["prior_fast_fade_count_72h"], errors="coerce").fillna(0.0)
+        masks["prior_fast_fade_count_72h_above_max"] = prior_fast_fades.gt(config.max_prior_fast_fade_count_72h)
+    if config.min_start_lower_wick_to_range is not None:
+        lower_wick = pd.to_numeric(signals["start_lower_wick_to_range"], errors="coerce")
+        masks["start_lower_wick_below_min"] = lower_wick.le(config.min_start_lower_wick_to_range) | lower_wick.isna()
+    if config.max_start_upper_wick_to_range is not None:
+        upper_wick = pd.to_numeric(signals["start_upper_wick_to_range"], errors="coerce")
+        masks["start_upper_wick_above_max"] = upper_wick.gt(config.max_start_upper_wick_to_range) | upper_wick.isna()
     return masks
 
 
@@ -919,6 +1012,11 @@ def build_anomaly_signals(
         "max_start_quote_ratio_per_abs_return": "start_quote_ratio_per_abs_return",
         "max_start_range_pct_ratio_to_baseline": "start_range_pct_ratio_to_baseline",
         "max_prior_up_down_whipsaw_to_impulse_range": "prior_up_down_whipsaw_to_impulse_range",
+        "min_flow_hold_count": "flow_hold_count_next_n_candles",
+        "max_prior_spike_count_72h": "prior_spike_count_72h",
+        "max_prior_fast_fade_count_72h": "prior_fast_fade_count_72h",
+        "min_start_lower_wick_to_range": "start_lower_wick_to_range",
+        "max_start_upper_wick_to_range": "start_upper_wick_to_range",
         "min_next_taker_buy_quote_share": "next_n_taker_buy_quote_share_mean",
         "max_price_retention": "price_retention_next_n",
         "min_mark_close_vs_decision_close_basis": "mark_close_vs_decision_close_basis",
@@ -987,6 +1085,21 @@ def build_anomaly_signals(
         mask &= signals["next_n_taker_buy_quote_share_mean"].astype(float).ge(
             config.min_next_taker_buy_quote_share
         )
+    if config.min_flow_hold_count is not None:
+        mask &= signals["flow_hold_count_next_n_candles"].astype(float).ge(config.min_flow_hold_count)
+    if config.max_prior_spike_count_72h is not None:
+        mask &= signals["prior_spike_count_72h"].fillna(0.0).astype(float).le(config.max_prior_spike_count_72h)
+    if config.max_prior_fast_fade_count_72h is not None:
+        mask &= (
+            signals["prior_fast_fade_count_72h"]
+            .fillna(0.0)
+            .astype(float)
+            .le(config.max_prior_fast_fade_count_72h)
+        )
+    if config.min_start_lower_wick_to_range is not None:
+        mask &= signals["start_lower_wick_to_range"].astype(float).gt(config.min_start_lower_wick_to_range)
+    if config.max_start_upper_wick_to_range is not None:
+        mask &= signals["start_upper_wick_to_range"].astype(float).le(config.max_start_upper_wick_to_range)
     for red_flag_mask in _red_flag_violation_masks(signals, config=config).values():
         mask &= ~red_flag_mask.fillna(True)
     signals = signals.loc[mask].copy()
@@ -2393,6 +2506,11 @@ def summarize_entry_grid_variant(
         "max_start_avg_trade_quote_size_ratio": config.max_start_avg_trade_quote_size_ratio,
         "max_start_quote_ratio_per_abs_return": config.max_start_quote_ratio_per_abs_return,
         "max_start_range_pct_ratio_to_baseline": config.max_start_range_pct_ratio_to_baseline,
+        "min_flow_hold_count": config.min_flow_hold_count,
+        "max_prior_spike_count_72h": config.max_prior_spike_count_72h,
+        "max_prior_fast_fade_count_72h": config.max_prior_fast_fade_count_72h,
+        "min_start_lower_wick_to_range": config.min_start_lower_wick_to_range,
+        "max_start_upper_wick_to_range": config.max_start_upper_wick_to_range,
         "min_next_taker_buy_quote_share": config.min_next_taker_buy_quote_share,
         "max_price_retention": config.max_price_retention,
         "signals": int(signal_count),
@@ -3478,12 +3596,21 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-start-range-pct-ratio-to-baseline", type=float, default=None)
     parser.add_argument("--max-prior-up-down-whipsaw-to-impulse-range", type=float, default=0.60)
     parser.add_argument("--min-next-taker-buy-quote-share", type=float, default=None)
-    parser.add_argument("--red-flag-profile", choices=["none", "cautious", "strict"], default="none")
+    parser.add_argument(
+        "--red-flag-profile",
+        choices=["none", "cautious", "strict", "runner_balanced", "runner_reclaim", "runner_flow"],
+        default="none",
+    )
     parser.add_argument("--min-mark-close-vs-decision-close-basis", type=float, default=None)
     parser.add_argument("--reject-oi-down-mark-discount", action="store_true")
     parser.add_argument("--reject-stale-derivatives-context", action="store_true")
     parser.add_argument("--max-start-taker-buy-quote-share-delta", type=float, default=None)
     parser.add_argument("--max-next-taker-buy-quote-share-delta", type=float, default=None)
+    parser.add_argument("--min-flow-hold-count", type=int, default=None)
+    parser.add_argument("--max-prior-spike-count-72h", type=int, default=None)
+    parser.add_argument("--max-prior-fast-fade-count-72h", type=int, default=None)
+    parser.add_argument("--min-start-lower-wick-to-range", type=float, default=None)
+    parser.add_argument("--max-start-upper-wick-to-range", type=float, default=None)
     parser.add_argument("--max-initial-risk-pct", type=float, default=0.16)
     parser.add_argument("--entry-method", choices=["market", "break_box_high", "pullback_box_fraction"], default="market")
     parser.add_argument("--pullback-box-fraction", type=float, default=0.75)
@@ -3545,6 +3672,11 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
         max_start_trade_ratio_per_abs_return=args.max_start_trade_ratio_per_abs_return,
         max_start_range_pct_ratio_to_baseline=args.max_start_range_pct_ratio_to_baseline,
         max_prior_up_down_whipsaw_to_impulse_range=args.max_prior_up_down_whipsaw_to_impulse_range,
+        min_flow_hold_count=args.min_flow_hold_count,
+        max_prior_spike_count_72h=args.max_prior_spike_count_72h,
+        max_prior_fast_fade_count_72h=args.max_prior_fast_fade_count_72h,
+        min_start_lower_wick_to_range=args.min_start_lower_wick_to_range,
+        max_start_upper_wick_to_range=args.max_start_upper_wick_to_range,
         min_next_taker_buy_quote_share=args.min_next_taker_buy_quote_share,
         red_flag_profile=args.red_flag_profile,
         min_mark_close_vs_decision_close_basis=args.min_mark_close_vs_decision_close_basis,

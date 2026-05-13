@@ -1321,3 +1321,42 @@ Next readout:
 ```text
 Run a fixed-end small sample and compare candidate/signal/trade counts against the previous sequential collector before using any profitability changes.
 ```
+
+---
+
+## 2026-05-13 - P173 runner-category filter replay
+
+Input:
+
+```text
+Path: .output/results/anomaly_lab
+Completed pairs: 5m_30s, 1m_15s
+Interrupted/missing pair: 1m_5s
+Requested days: 30
+Actual closed-trade range: 2026-04-11..2026-05-06 UTC
+Coverage caveat: subminute entry cache has symbols_covering_end=0
+```
+
+Baseline completed pairs:
+
+```text
+5m/30s: 157 closed, avg +0.6001%, median +0.5604%, sum +94.22%, WR 57.32%, TP1 51.59%
+1m/15s: 410 closed, avg +0.5931%, median +0.2762%, sum +243.16%, WR 56.59%, TP1 55.12%
+Combined: 567 closed, avg +0.5950%, median +0.3274%, sum +337.38%, WR 56.79%, TP1 54.14%
+```
+
+Runner-balanced replay:
+
+```text
+Command: python main.py run-anomaly-lab --days 30 --reuse-candidates-dir .output/results/anomaly_lab --output-dir .output/results/anomaly_lab_reuse_runner_balanced_fast --red-flag-profile runner_balanced --render-charts false
+5m/30s: 42 closed, avg +1.6435%, median +1.5601%, sum +69.03%, WR 83.33%, TP1 78.57%
+1m/15s: 82 closed, avg +1.8407%, median +1.2530%, sum +150.94%, WR 79.27%, TP1 74.39%
+Combined: 124 closed, avg +1.7739%, median +1.3985%, sum +219.97%, WR 80.65%, TP1 75.81%, active days 25
+```
+
+Interpretation:
+
+```text
+Runner-balanced is the best current category hypothesis. It separates clean runners from fast-fade/overheated/noisy pumps much better than the base filter.
+Do not treat as proven edge yet: replay is in-sample, 1m/5s is missing, and executable coverage is incomplete at the requested end.
+```

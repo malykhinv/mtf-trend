@@ -374,3 +374,13 @@ recent same-symbol spike density and time since prior spike
 ```
 
 Recent prior spikes are not automatically invalid. They can indicate an active theme. The red flag to test is serial failed or overcrowded wake-ups, not any prior attention.
+
+Runner category profiles are research filters, not final production rules:
+
+```text
+runner_balanced = positive mark basis >= 10bp + capped quote/trade extremeness + capped effort per return + capped start taker-buy share delta + no prior mature fast-fade in 72h
+runner_reclaim = runner_balanced + reclaim-like candle shape with lower wick present and upper wick not excessive
+runner_flow = runner_balanced + at least one confirmation candle with flow hold
+```
+
+These profiles may be used in backtest and shadow-live diagnostics. They should not be enabled for real orders until validated on complete executable coverage and live shadow/replay parity.
