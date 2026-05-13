@@ -1979,3 +1979,34 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ### Risk
 
 Low. This is operator UI and event counting only. Trading logic, signal filters, order path, fill/stop handling, and PnL accounting are unchanged.
+
+## P188 - Prevent hidden WS-live missed-entry paths
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+The uploaded ZIP can still miss actionable live entries without an obvious operator-level failure: freshly promoted ticker-radar symbols require subminute aggTrade history from the setup bucket, max-position rejects are not consumed but also are not re-scanned until the next candle, and position monitor threads classify every unexpected exception as a temporary handling error.
+
+### Change
+
+- Default `live_ws_aggtrade_max_backfill_ms` / `--live-ws-aggtrade-max-backfill-ms` to `300000` so radar-promoted symbols can repair the initial bounded WS coverage gap instead of always waiting for the buffer to accumulate history.
+- Keep the backfill explicit in existing artifacts: `ws_aggtrade_frame_read` still records missing ranges, `backfill_max_ms`, `backfill_skipped`, `backfill_ranges`, and row counts.
+- Runtime ticker radar now emits `ticker_radar_snapshot.status` and raises `ExchangeConnectivityError` if all snapshots are unusable while subminute inactive discovery depends on ticker radar.
+- `reject_max_positions` now re-enables scanning of the same unconsumed decision candle until it is stale/free-slot executable, and writes `signal_scan_retry_enabled`.
+- Position monitor threads now treat only `ExchangeConnectivityError` as temporary network degradation; unexpected exceptions become `position_monitor_internal_error` + `position_integrity_error` instead of being hidden as temporary noise.
+
+### Validation
+
+```bash
+python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py
+# smoke: radar-promoted fresh symbol should show bounded backfill instead of persistent coverage_pending when missing_total_ms <= 300000
+# smoke: max_open_positions reject should emit signal_scan_retry_enabled and retry before signal stales
+# smoke: injected monitor ValueError should emit position_monitor_internal_error and position_integrity_error, not position_monitor_error
+```
+
+### Risk
+
+Medium. Default live may use bounded REST aggTrade repair for hot radar symbols, increasing API cost. This is intentional and visible; set `--live-ws-aggtrade-max-backfill-ms 0` for strict WS-only diagnostics.

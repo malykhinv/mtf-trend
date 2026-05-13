@@ -50,6 +50,7 @@ CACHED_OHLCV_DTYPES = {
 HOUR_MS = 60 * 60 * 1000
 BINANCE_FUTURES_ALL_TICKER_WS_URL = "wss://fstream.binance.com/ws/!ticker@arr"
 BINANCE_FUTURES_COMBINED_WS_URL = "wss://fstream.binance.com/stream"
+DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS = 300_000
 ANIMAL_EMOJIS = (
     "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
     "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦆", "🦅",
@@ -987,7 +988,7 @@ class LiveAnomalyConfig:
     live_ws_aggtrade_enabled: bool = True
     live_ws_aggtrade_stale_ms: int = 5_000
     live_ws_aggtrade_buffer_minutes: int = 20
-    live_ws_aggtrade_max_backfill_ms: int = 0
+    live_ws_aggtrade_max_backfill_ms: int = DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS
     ticker_radar_interval_seconds: float = 5.0
     ticker_radar_watch_ttl_ms: int = 120_000
     ticker_radar_watch_batch_size: int = 5
@@ -2735,27 +2736,36 @@ class AnomalyMicroLiveRunner:
                 ),
             )
         missing_count = sum(1 for snapshot in snapshots if snapshot.status != "ok")
+        ok_count = len(snapshots) - missing_count
+        snapshot_status = "ok" if ok_count > 0 else "all_missing"
         self.artifacts.append_event(
             "ticker_radar_snapshot",
             "__live__",
             {
                 "symbols_total": len(snapshots),
-                "ok_count": len(snapshots) - missing_count,
+                "ok_count": ok_count,
                 "missing_count": missing_count,
                 "promoted_count": promoted_count,
                 "promotion_candidates_count": len(promotions),
                 "interval_seconds": self.config.ticker_radar_interval_seconds,
                 "watch_batch_size": self.config.ticker_radar_watch_batch_size,
                 "source": source,
+                "status": snapshot_status,
+                "required_for_inactive_subminute_gate": bool(self._ticker_radar_required_for_subminute_gate()),
             },
         )
+        if snapshots and ok_count == 0 and self._ticker_radar_required_for_subminute_gate():
+            raise ExchangeConnectivityError(
+                "ticker radar source returned no usable snapshots while inactive subminute discovery depends on it; "
+                f"source={source}; missing={missing_count}/{len(snapshots)}"
+            )
         return LiveTickerRadarCycleStats(
             enabled=True,
             attempted=True,
-            status="ok",
+            status=snapshot_status,
             source=source,
             symbols_total=len(snapshots),
-            ok_count=len(snapshots) - missing_count,
+            ok_count=ok_count,
             missing_count=missing_count,
             promoted_count=promoted_count,
             promotion_candidates_count=len(promotions),
@@ -3017,6 +3027,27 @@ class AnomalyMicroLiveRunner:
         scan_key = (symbol_key, levels_timeframe.value, entry_timeframe.value)
         with self._state_lock:
             self._last_signal_scan_closed_at[scan_key] = int(closed_timestamp_ms)
+
+    def _forget_signal_scan_closed_at(self, signal: LiveSignal, *, reason: str) -> None:
+        symbol_key = _position_symbol_key(signal.symbol)
+        scan_key = (symbol_key, signal.levels_timeframe.value, signal.entry_timeframe.value)
+        removed_timestamp_ms: int | None = None
+        with self._state_lock:
+            current = self._last_signal_scan_closed_at.get(scan_key)
+            if current == int(signal.decision_timestamp_ms):
+                removed_timestamp_ms = self._last_signal_scan_closed_at.pop(scan_key)
+        if removed_timestamp_ms is not None:
+            self.artifacts.append_event(
+                "signal_scan_retry_enabled",
+                signal.symbol,
+                {
+                    "reason": reason,
+                    "levels_tf": signal.levels_timeframe.value,
+                    "entry_tf": signal.entry_timeframe.value,
+                    "decision_timestamp_ms": int(signal.decision_timestamp_ms),
+                    "removed_scan_closed_timestamp_ms": int(removed_timestamp_ms),
+                },
+            )
 
     def _previous_signal_scan_closed_at(
         self,
@@ -4162,7 +4193,18 @@ class AnomalyMicroLiveRunner:
                 ttl_ms=self.config.max_signal_age_ms,
                 decision_timestamp_ms=signal.decision_timestamp_ms,
             )
-            self.artifacts.append_event("reject_max_positions", signal.symbol, {"max": self.config.max_open_positions})
+            self._forget_signal_scan_closed_at(signal, reason="entry_waiting_for_free_slot")
+            self.artifacts.append_event(
+                "reject_max_positions",
+                signal.symbol,
+                {
+                    "max": self.config.max_open_positions,
+                    "levels_tf": signal.levels_timeframe.value,
+                    "entry_tf": signal.entry_timeframe.value,
+                    "decision_timestamp_ms": signal.decision_timestamp_ms,
+                    "retry_until_stale": True,
+                },
+            )
             return
         try:
             if not self._validate_signal_freshness(signal):
@@ -4791,14 +4833,25 @@ class AnomalyMicroLiveRunner:
             except LiveDataIntegrityError as exc:
                 self._record_position_integrity_error(position, reason=str(exc))
                 return
-            except Exception as exc:
+            except ExchangeConnectivityError as exc:
                 self.artifacts.append_event(
-                    "position_monitor_error",
+                    "position_monitor_network_degraded",
                     signal.symbol,
                     {"position_id": position.position_id, "reason": f"{type(exc).__name__}: {exc}"},
                 )
-                self.logger(f"live: позиция {signal.symbol}, временная ошибка ведения: {exc}")
+                self.logger(f"live: позиция {signal.symbol}, сеть/API временно недоступны: {exc}")
                 time.sleep(30.0)
+            except Exception as exc:
+                self.artifacts.append_event(
+                    "position_monitor_internal_error",
+                    signal.symbol,
+                    {"position_id": position.position_id, "reason": f"{type(exc).__name__}: {exc}"},
+                )
+                self._record_position_integrity_error(
+                    position,
+                    reason=f"position monitor internal error: {type(exc).__name__}: {exc}",
+                )
+                return
 
     def _record_position_integrity_error(self, position: LivePosition, *, reason: str) -> None:
         symbol = position.signal.symbol
