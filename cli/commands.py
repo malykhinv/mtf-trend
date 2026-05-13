@@ -1317,6 +1317,10 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                 getattr(args, "live_ohlcv_cache_write_enabled", True),
                 default=True,
             ),
+            live_ohlcv_cache_flush_interval_seconds=float(
+                getattr(args, "live_ohlcv_cache_flush_interval_seconds", 10.0)
+            ),
+            live_ohlcv_cache_max_buffer_rows=int(getattr(args, "live_ohlcv_cache_max_buffer_rows", 5_000)),
             max_cycles=getattr(args, "max_cycles", None),
             trail_lookback_candles=int(getattr(args, "trail_lookback_candles", 5)),
             trail_buffer_r=float(getattr(args, "trail_buffer_r", 0.10)),

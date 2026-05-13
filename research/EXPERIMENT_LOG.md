@@ -1208,3 +1208,29 @@ For each live_ohlcv_cache_read row, expected_end_ms/window_end_ms should equal t
 For subminute filled rows, fetched_ranges should end at candle_end_ms, not candle_start_ms.
 Remaining live_ohlcv_cache_gap rows are hard data-quality signals, not no-signal evidence.
 ```
+
+---
+
+## 2026-05-13 - P170 buffered live cache writer
+
+Hypothesis:
+
+```text
+The safe live speedup after cache-backed reads is to move parquet rewrites out of the signal fetch path. Decisions can use fetched rows immediately from process memory; persistence can flush by interval/row cap with artifacts.
+```
+
+Implementation:
+
+```text
+live_ohlcv_cache_flush_interval_seconds default = 10
+live_ohlcv_cache_max_buffer_rows default = 5000
+flush on normal cycle when due, max-cycles, keyboard interrupt, data-integrity stop and internal-error stop
+flush failures remain visible and pending
+```
+
+Readout:
+
+```text
+Healthy live should show live_ohlcv_cache_buffered followed by live_ohlcv_cache_flush_summary with remaining_rows=0.
+If remaining_rows grows, parquet writes are the bottleneck or failing; trading decisions may still be using fresh memory rows, but cache/replay completeness is degraded until flush succeeds.
+```

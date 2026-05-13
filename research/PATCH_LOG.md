@@ -30,6 +30,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P167 | Symbol-first live multi-TF scan | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance | For selected live symbols, scan all due TF sets before moving to the next symbol, cache setup/entry fetches within the batch, and add an explicit cold round-robin slot cap so fast live can prioritize active/radar symbols without hiding skipped work. | `python -m compileall research_tools/anomaly_micro_live.py cli/commands.py cli/parser.py`; `python main.py run-anomaly-live --help`. |
 | P168 | Cache-backed live OHLCV fetch | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance/data-quality | Live reads local parquet first, fetches only missing OHLCV/aggTrade-derived ranges, writes fetched rows with provenance, keeps a process-memory frame cache, and emits explicit cache read/gap artifacts. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-anomaly-live --help`. |
 | P169 | Fix live cache candle boundary reads | PROPOSED | `data/storage/parquet_storage.py`, `research_tools/anomaly_micro_live.py`, `research/*` | bugfix/live-performance | Read only requested parquet windows, fetch subminute missing ranges through the full final candle, pass aggTrades endTime on paged requests, and exclude non-closed cached candles from live decision frames. | `python -m compileall data/storage/parquet_storage.py research_tools/anomaly_micro_live.py`; `python main.py run-anomaly-live --help`. |
+| P170 | Buffer live OHLCV cache writes | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance/data-quality | Buffer live-fetched OHLCV rows in memory, flush parquet writes by interval/row cap or on shutdown/error, and emit buffered/flushed/failed artifacts instead of rewriting parquet during every fetch. | `python -m compileall data/exchanges data/storage research_tools cli constants.py main.py`; `python main.py run-anomaly-live --help`. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -1270,3 +1271,32 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Low/medium: parquet filter support depends on the installed parquet engine; fallback preserves behavior by loading and filtering in memory. The main remaining speed limit is `save_incremental`, which still rewrites the target parquet file when live writes fetched rows.
+
+## P170 - Buffer live OHLCV cache writes
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+P168/P169 made live cache-backed and closed-candle aligned, but `save_incremental` still rewrites the target parquet file. Calling it during each selected-symbol fetch can slow the live loop exactly when hot symbols need fast follow-up scans.
+
+### Change
+
+- Add `--live-ohlcv-cache-flush-interval-seconds` and `--live-ohlcv-cache-max-buffer-rows`.
+- Buffer fetched live OHLCV rows in process memory after they are already merged into the decision frame cache.
+- Flush buffered parquet writes after the interval/cap, and force flush on max-cycles, keyboard interrupt, data-integrity stop and internal-error stop.
+- Emit `live_ohlcv_cache_buffered`, `live_ohlcv_cache_flushed`, `live_ohlcv_cache_flush_failed`, and `live_ohlcv_cache_flush_summary`.
+- If memory cache does not cover a wider later request, read that window from parquet before going to the exchange.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges data/storage research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+```
+
+### Risk
+
+Low/medium: a hard process crash can lose rows still in the write buffer, but trading decisions use the in-memory fetched frame immediately and the missing cache rows can be re-fetched. Flush failures are kept visible and failed rows remain pending for the next flush attempt.

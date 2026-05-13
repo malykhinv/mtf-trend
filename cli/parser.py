@@ -223,6 +223,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Persist live-fetched OHLCV/aggTrade-derived frames into the local parquet cache.",
     )
+    anomaly_live.add_argument("--live-ohlcv-cache-flush-interval-seconds", type=float, default=10.0)
+    anomaly_live.add_argument("--live-ohlcv-cache-max-buffer-rows", type=_positive_int_for("--live-ohlcv-cache-max-buffer-rows"), default=5_000)
     anomaly_live.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_live.add_argument("--trail-buffer-r", type=float, default=0.10)
 

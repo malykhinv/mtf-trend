@@ -245,6 +245,8 @@ class LiveAnomalyConfig:
     network_sleep_seconds: float = 30.0
     live_ohlcv_cache_enabled: bool = True
     live_ohlcv_cache_write_enabled: bool = True
+    live_ohlcv_cache_flush_interval_seconds: float = 10.0
+    live_ohlcv_cache_max_buffer_rows: int = 5_000
     max_cycles: int | None = None
     stop_cooldown_hours: float = 12.0
     stop_limit_per_symbol: int = 2
@@ -1096,6 +1098,9 @@ class AnomalyMicroLiveRunner:
             else None
         )
         self._live_ohlcv_frame_cache: dict[tuple[str, str], pd.DataFrame] = {}
+        self._live_ohlcv_write_buffer: dict[tuple[str, str, str], list[pd.DataFrame]] = {}
+        self._live_ohlcv_pending_rows = 0
+        self._last_live_ohlcv_cache_flush_at = time.monotonic()
 
     def run(self) -> int:
         self._validate_startup()
@@ -1115,6 +1120,8 @@ class AnomalyMicroLiveRunner:
             {
                 "live_ohlcv_cache_enabled": bool(self.config.live_ohlcv_cache_enabled),
                 "live_ohlcv_cache_write_enabled": bool(self.config.live_ohlcv_cache_write_enabled),
+                "live_ohlcv_cache_flush_interval_seconds": self.config.live_ohlcv_cache_flush_interval_seconds,
+                "live_ohlcv_cache_max_buffer_rows": self.config.live_ohlcv_cache_max_buffer_rows,
                 "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
                 "cache_provider": "parquet_tail_fetch_v1" if self._ohlcv_cache_storage is not None else "disabled",
             },
@@ -1139,6 +1146,7 @@ class AnomalyMicroLiveRunner:
                 for signal in signals:
                     self._maybe_open_position(signal)
                 orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle)
+                self._flush_live_ohlcv_cache_if_due(reason="cycle")
                 cycle_seconds = time.monotonic() - cycle_started
                 opened_total, active_positions, closed_total, orphan_total = self._live_counts()
                 should_log_status = self._status_logger.inline_status_enabled or (
@@ -1165,10 +1173,12 @@ class AnomalyMicroLiveRunner:
                 time.sleep(self.config.scan_sleep_seconds)
             except KeyboardInterrupt:
                 orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle, force=True)
+                self._flush_live_ohlcv_cache_if_due(force=True, reason="keyboard_interrupt")
                 suffix = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
                 self.logger(f"live: остановлено пользователем{suffix}")
                 return 0
             except LiveDataIntegrityError as exc:
+                self._flush_live_ohlcv_cache_if_due(force=True, reason="data_integrity_error")
                 self.logger(f"live: остановлено из-за ошибки целостности live-данных: {exc}")
                 self.telegram.send(
                     channel="events",
@@ -1198,6 +1208,7 @@ class AnomalyMicroLiveRunner:
                 time.sleep(self.config.network_sleep_seconds)
             except Exception as exc:
                 self.logger(f"live: остановлено из-за внутренней ошибки: {type(exc).__name__}: {exc}")
+                self._flush_live_ohlcv_cache_if_due(force=True, reason="internal_error")
                 self.artifacts.append_event(
                     "live_internal_error",
                     "__live__",
@@ -1210,6 +1221,7 @@ class AnomalyMicroLiveRunner:
                 )
                 return 4
         orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle, force=True)
+        self._flush_live_ohlcv_cache_if_due(force=True, reason="max_cycles")
         suffix = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
         self.logger(f"live: достигнут лимит циклов{suffix}")
         return 0
@@ -3355,6 +3367,97 @@ class AnomalyMicroLiveRunner:
             )
             return None
 
+    def _buffer_live_ohlcv_cache_write(self, symbol: str, timeframe: Timeframe, frame: pd.DataFrame) -> int:
+        if self._ohlcv_cache_storage is None or not self.config.live_ohlcv_cache_write_enabled or frame.empty:
+            return 0
+        prepared = _prepare_cached_ohlcv_frame(frame)
+        if prepared.empty:
+            return 0
+        symbol_key = _position_symbol_key(symbol)
+        buffer_key = (symbol_key, symbol, timeframe.value)
+        self._live_ohlcv_write_buffer.setdefault(buffer_key, []).append(prepared)
+        buffered_rows = int(len(prepared))
+        self._live_ohlcv_pending_rows += buffered_rows
+        self.artifacts.append_event(
+            "live_ohlcv_cache_buffered",
+            symbol,
+            {
+                "timeframe": timeframe.value,
+                "buffered_rows": buffered_rows,
+                "pending_rows": int(self._live_ohlcv_pending_rows),
+                "min_timestamp_ms": int(prepared["timestamp"].min()),
+                "max_timestamp_ms": int(prepared["timestamp"].max()),
+            },
+        )
+        return buffered_rows
+
+    def _flush_live_ohlcv_cache_if_due(self, *, force: bool = False, reason: str) -> int:
+        storage = self._ohlcv_cache_storage
+        if storage is None or not self._live_ohlcv_write_buffer:
+            return 0
+        elapsed = time.monotonic() - self._last_live_ohlcv_cache_flush_at
+        if (
+            not force
+            and elapsed < float(self.config.live_ohlcv_cache_flush_interval_seconds)
+            and self._live_ohlcv_pending_rows < int(self.config.live_ohlcv_cache_max_buffer_rows)
+        ):
+            return 0
+        pending_items = self._live_ohlcv_write_buffer
+        pending_rows = int(self._live_ohlcv_pending_rows)
+        self._live_ohlcv_write_buffer = {}
+        self._live_ohlcv_pending_rows = 0
+        flushed_rows_total = 0
+        remaining: dict[tuple[str, str, str], list[pd.DataFrame]] = {}
+        remaining_rows = 0
+        for (_symbol_key, symbol, timeframe_value), frames in pending_items.items():
+            try:
+                timeframe = Timeframe(timeframe_value)
+                combined = _prepare_cached_ohlcv_frame(pd.concat(frames, ignore_index=True))
+                added_rows = int(storage.save_incremental(symbol, timeframe, combined))
+                flushed_rows_total += int(len(combined))
+                self.artifacts.append_event(
+                    "live_ohlcv_cache_flushed",
+                    symbol,
+                    {
+                        "timeframe": timeframe.value,
+                        "reason": reason,
+                        "input_rows": int(len(combined)),
+                        "added_rows": added_rows,
+                        "pending_rows_before_flush": pending_rows,
+                    },
+                )
+            except Exception as exc:
+                remaining[(_symbol_key, symbol, timeframe_value)] = frames
+                failed_rows = sum(len(frame) for frame in frames)
+                remaining_rows += int(failed_rows)
+                self.artifacts.append_event(
+                    "live_ohlcv_cache_flush_failed",
+                    symbol,
+                    {
+                        "timeframe": timeframe_value,
+                        "reason": reason,
+                        "input_rows": int(failed_rows),
+                        "exception_type": type(exc).__name__,
+                        "exception_message": str(exc)[:1000],
+                    },
+                )
+        self._live_ohlcv_write_buffer = remaining
+        self._live_ohlcv_pending_rows = remaining_rows
+        self._last_live_ohlcv_cache_flush_at = time.monotonic()
+        self.artifacts.append_event(
+            "live_ohlcv_cache_flush_summary",
+            "__live__",
+            {
+                "reason": reason,
+                "force": bool(force),
+                "pending_rows_before_flush": pending_rows,
+                "flushed_rows": int(flushed_rows_total),
+                "remaining_rows": int(remaining_rows),
+                "failed_symbol_timeframes": int(len(remaining)),
+            },
+        )
+        return flushed_rows_total
+
 
     def _fetch_chart_frame(
         self,
@@ -3415,8 +3518,13 @@ class AnomalyMicroLiveRunner:
         cache_end_ms = _latest_closed_candle_start_ms(timeframe, now_ms=int(end_timestamp_ms))
         expected_start_ms = (int(start_timestamp_ms) // timeframe_ms) * timeframe_ms
         expected_end_ms = min(cache_end_ms, (int(end_timestamp_ms) // timeframe_ms) * timeframe_ms)
-        memory_key = (_position_symbol_key(symbol), timeframe.value)
-        if memory_key in self._live_ohlcv_frame_cache:
+        symbol_key = _position_symbol_key(symbol)
+        memory_key = (symbol_key, timeframe.value)
+        if memory_key in self._live_ohlcv_frame_cache and _cached_frame_covers_window(
+            self._live_ohlcv_frame_cache[memory_key],
+            start_timestamp_ms=expected_start_ms,
+            end_timestamp_ms=expected_end_ms,
+        ):
             load_status = "memory_hit"
             load_reason = "process_memory_cache"
             cached_rows_before = int(len(self._live_ohlcv_frame_cache[memory_key]))
@@ -3432,9 +3540,13 @@ class AnomalyMicroLiveRunner:
             load_reason = load_result.reason
             cached_rows_before = int(len(load_result.frame)) if load_result.frame is not None else 0
             cached = _prepare_cached_ohlcv_frame(load_result.frame)
+            if memory_key in self._live_ohlcv_frame_cache:
+                cached = _prepare_cached_ohlcv_frame(
+                    pd.concat([self._live_ohlcv_frame_cache[memory_key], cached], ignore_index=True)
+                )
             self._live_ohlcv_frame_cache[memory_key] = cached
         fetched_rows = 0
-        added_rows = 0
+        buffered_rows = 0
         fetched_ranges: list[str] = []
         fetched_frames: list[pd.DataFrame] = []
         missing_ranges = _missing_ohlcv_ranges(
@@ -3464,7 +3576,7 @@ class AnomalyMicroLiveRunner:
         if fetched_frames:
             fetched_combined = _prepare_cached_ohlcv_frame(pd.concat(fetched_frames, ignore_index=True))
             if self.config.live_ohlcv_cache_write_enabled:
-                added_rows = int(storage.save_incremental(symbol, timeframe, fetched_combined))
+                buffered_rows = self._buffer_live_ohlcv_cache_write(symbol, timeframe, fetched_combined)
             cached = _prepare_cached_ohlcv_frame(pd.concat([cached, fetched_combined], ignore_index=True))
             self._live_ohlcv_frame_cache[memory_key] = cached
         window_end_ms = min(int(end_timestamp_ms), int(expected_end_ms))
@@ -3495,7 +3607,7 @@ class AnomalyMicroLiveRunner:
                     "missing_ranges": [f"{start}:{end}" for start, end in remaining_ranges],
                     "fetched_ranges": fetched_ranges,
                     "fetched_rows": fetched_rows,
-                    "added_rows": added_rows,
+                    "buffered_rows": buffered_rows,
                     "write_enabled": bool(self.config.live_ohlcv_cache_write_enabled),
                 },
             )
@@ -3515,7 +3627,8 @@ class AnomalyMicroLiveRunner:
                 "missing_range_count": int(len(missing_ranges)),
                 "remaining_gap_count": int(len(remaining_ranges)),
                 "fetched_rows": fetched_rows,
-                "added_rows": added_rows,
+                "buffered_rows": buffered_rows,
+                "pending_rows": int(self._live_ohlcv_pending_rows),
                 "write_enabled": bool(self.config.live_ohlcv_cache_write_enabled),
             },
         )
@@ -3869,6 +3982,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "order_reconcile_interval_cycles": (config.order_reconcile_interval_cycles, 1),
         "order_reconcile_batch_size": (config.order_reconcile_batch_size, 1),
         "max_monitor_empty_ohlcv_cycles": (config.max_monitor_empty_ohlcv_cycles, 1),
+        "live_ohlcv_cache_max_buffer_rows": (config.live_ohlcv_cache_max_buffer_rows, 1),
     }
     for name, (value, minimum) in integer_minimums.items():
         if not isinstance(value, int) or value < minimum:
@@ -3912,6 +4026,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "max_entry_price_drift_pct": config.max_entry_price_drift_pct,
         "ticker_radar_min_price_delta_pct": config.ticker_radar_min_price_delta_pct,
         "ticker_radar_min_quote_volume_delta_usdt": config.ticker_radar_min_quote_volume_delta_usdt,
+        "live_ohlcv_cache_flush_interval_seconds": config.live_ohlcv_cache_flush_interval_seconds,
     }
     for name, value in required_non_negative.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=True)
@@ -4016,6 +4131,15 @@ def _prepare_cached_ohlcv_frame(frame: pd.DataFrame) -> pd.DataFrame:
     prepared = prepared.loc[prepared["timestamp"].notna()].copy()
     prepared["timestamp"] = prepared["timestamp"].astype("int64")
     return prepared.drop_duplicates("timestamp", keep="last").sort_values("timestamp").reset_index(drop=True)
+
+
+def _cached_frame_covers_window(frame: pd.DataFrame, *, start_timestamp_ms: int, end_timestamp_ms: int) -> bool:
+    if frame is None or frame.empty or "timestamp" not in frame.columns:
+        return False
+    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce").dropna()
+    if timestamps.empty:
+        return False
+    return int(timestamps.min()) <= int(start_timestamp_ms) and int(timestamps.max()) >= int(end_timestamp_ms)
 
 
 def _missing_ohlcv_ranges(

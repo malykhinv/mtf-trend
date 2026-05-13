@@ -101,6 +101,7 @@ fetch only missing OHLCV / aggTrade-derived ranges
 subminute missing ranges must fetch through final candle end, not only final candle open
 decision frames must include closed candles only
 write fetched live rows with provenance/version
+live parquet writes may be buffered, but buffered/flushed/failed counts must be visible
 remaining cache gaps must emit artifacts
 cache gaps are not valid zero-signal evidence
 ```
