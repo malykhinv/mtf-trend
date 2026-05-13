@@ -1947,3 +1947,35 @@ Expected smoke readout: `symbol_batch_selected.inactive_scan_slots_source=defaul
 ### Risk
 
 Low/medium and intentional. Cold inactive scans stop pretending to be WebSocket discovery. If ticker radar misses movers, fix ticker WS health/thresholds or set an explicit diagnostic inactive budget; do not restore hidden polling discovery through `symbol_batch_size`.
+
+## P187 - Restore compact human live heartbeat
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+P186 exposed useful WebSocket counters, but putting them directly into the inline operator heartbeat made the console noisy and hard to read. Routine console status should show only the live tempo and business-level state; detailed WS diagnostics remain in `live_cycle_summary`.
+
+### Change
+
+- Replace verbose inline `scheduler/ticker/aggTrade/scan/coverage` text with a compact line:
+
+```text
+live · 5.0s · события 104 · активно 2 · позиции 1 · закрыто 2 · PNL 4.60%
+```
+
+- Track `live_events.csv` rows in `LiveArtifactWriter` and expose the count as `events_written` for the operator heartbeat.
+- Append only short exception suffixes when something requires attention, e.g. `WS: ticker нет`, `WS: flow подключается`, `WS: flow подписка`, legacy `обход ~...s`, or cancelled orphan orders.
+- Do not remove detailed per-cycle WebSocket diagnostics from `live_cycle_summary`.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+### Risk
+
+Low. This is operator UI and event counting only. Trading logic, signal filters, order path, fill/stop handling, and PnL accounting are unchanged.

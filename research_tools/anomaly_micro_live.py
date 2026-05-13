@@ -1398,9 +1398,17 @@ class LiveArtifactWriter:
         self.top_growth_dir.mkdir(parents=True, exist_ok=True)
         self.top_growth_index_path = self.top_growth_dir / "top_growth_index.csv"
         self._lock = threading.Lock()
+        self._events_written = self._count_existing_csv_rows(self.events_path)
         self._ensure_csv(self.ledger_path, LIVE_LEDGER_COLUMNS)
         self._ensure_csv(self.events_path, ("timestamp_utc", "event", "symbol", "details_json"))
         self._ensure_csv(self.top_growth_index_path, TOP_GROWTH_INDEX_COLUMNS)
+
+    @staticmethod
+    def _count_existing_csv_rows(path: Path) -> int:
+        if not path.exists():
+            return 0
+        with path.open("r", newline="", encoding="utf-8") as handle:
+            return max(sum(1 for _ in handle) - 1, 0)
 
     @staticmethod
     def _ensure_csv(path: Path, columns: tuple[str, ...]) -> None:
@@ -1493,6 +1501,12 @@ class LiveArtifactWriter:
                     "details_json": details_json,
                 }
             )
+            self._events_written += 1
+
+    @property
+    def events_written(self) -> int:
+        with self._lock:
+            return self._events_written
 
     def append_position(self, position: LivePosition, *, status: str = "open") -> None:
         signal = position.signal
@@ -2135,26 +2149,24 @@ class AnomalyMicroLiveRunner:
                     or orphan_total != orphan_before
                 )
                 if should_log_status:
+                    ws_issue_text = ""
+                    if ticker_stats.status == "failed":
+                        ws_issue_text = " · WS: ticker нет"
+                    elif ws_aggtrade_stats.enabled and ws_aggtrade_stats.target_count > 0:
+                        subscribed_count = _optional_int(ws_aggtrade_stats.subscribed_count)
+                        if (ws_aggtrade_stats.connection_status or "").lower() != "connected":
+                            ws_issue_text = " · WS: flow подключается"
+                        elif subscribed_count != ws_aggtrade_stats.target_count:
+                            ws_issue_text = " · WS: flow подписка"
+                    coverage_text = ""
+                    if self._current_inactive_scan_slots_source != "default_ws_event_driven_subminute":
+                        coverage_text = f" · обход ~{full_cycle_seconds:.0f}s"
                     orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
-                    coverage_text = (
-                        "coverage ws-event"
-                        if self._current_inactive_scan_slots_source == "default_ws_event_driven_subminute"
-                        else (
-                            f"coverage {self._current_symbol_universe_batch_index}/"
-                            f"{self._current_symbol_universe_cycle_index} {full_cycle_seconds:.1f}s"
-                        )
-                    )
                     self._status_logger.status(
-                        f"live: scheduler {cycle_seconds:.1f}s · "
-                        f"ticker {ticker_stats.status} "
-                        f"{ticker_stats.ok_count}/{ticker_stats.symbols_total} "
-                        f"promoted {ticker_stats.promoted_count} · "
-                        f"aggTrade {ws_aggtrade_stats.connection_status or 'disabled'} "
-                        f"target {ws_aggtrade_stats.target_count}/sub {ws_aggtrade_stats.subscribed_count} · "
-                        f"scan precise {self._cycle_precise_scan_symbols}/inactive {self._cycle_inactive_visit_symbols} · "
-                        f"{coverage_text} · "
-                        f"открыто {opened_total} · активно {active_symbol_count} · "
-                        f"закрыто {closed_total} · PNL {_format_percent(closed_pnl_pct, signed=False)}{orphan_text}"
+                        f"live · {cycle_seconds:.1f}s · события {self.artifacts.events_written} · "
+                        f"активно {active_symbol_count} · позиции {open_positions} · "
+                        f"закрыто {closed_total} · PNL {_format_percent(closed_pnl_pct, signed=False)}"
+                        f"{ws_issue_text}{coverage_text}{orphan_text}"
                     )
                 if self._network_degraded:
                     self.artifacts.append_event(

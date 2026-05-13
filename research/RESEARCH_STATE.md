@@ -897,3 +897,13 @@ WS aggregate trade id gaps are treated as data holes and must be backfilled befo
 Local validation passed compile/smoke, but the current environment still cannot resolve fstream.binance.com, so real WS freshness/throughput is UNKNOWN until a live run on the trading host produces connected ws_aggtrade events.
 Next validation should compare aggtrade_network_calls and ws_aggtrade_frame_read.status over a 10-30 minute live sample with real DNS/connectivity.
 ```
+
+P187 operator heartbeat status:
+
+```text
+P187 is PROPOSED against P186 current code.
+It restores a compact human live status line while keeping P186 detailed WebSocket diagnostics in artifacts.
+Expected console style: live · 5.0s · события 104 · активно 2 · позиции 1 · закрыто 2 · PNL 4.60%.
+Routine WS counters stay out of the operator heartbeat; only short WS issue suffixes are appended when attention is required.
+No trading logic, signal filters, order path, fill/stop handling, or PnL accounting changes.
+```
