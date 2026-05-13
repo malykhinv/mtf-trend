@@ -28,6 +28,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P152 | Attach open-position trade chart | PROPOSED | `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `research/*` | live-operator-ux | Send the canonical three-panel trade chart with live open-position Telegram messages; open charts use TP1/SL lines instead of risk/reward rectangles. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic open `render_anomaly_trade_chart` smoke. |
 | P153 | Limit trade-chart level discovery to 7d context | PROPOSED | `research_tools/anomaly_strategy_backtest.py`, `research/*` | diagnostics | Ensure levels drawn on trade/open charts are discovered only from the same 1h/7d context window shown in the middle panel, even if a wider context frame is supplied. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic wider-context level smoke. |
 | P167 | Symbol-first live multi-TF scan | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance | For selected live symbols, scan all due TF sets before moving to the next symbol, cache setup/entry fetches within the batch, and add an explicit cold round-robin slot cap so fast live can prioritize active/radar symbols without hiding skipped work. | `python -m compileall research_tools/anomaly_micro_live.py cli/commands.py cli/parser.py`; `python main.py run-anomaly-live --help`. |
+| P168 | Cache-backed live OHLCV fetch | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance/data-quality | Live reads local parquet first, fetches only missing OHLCV/aggTrade-derived ranges, writes fetched rows with provenance, keeps a process-memory frame cache, and emits explicit cache read/gap artifacts. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-anomaly-live --help`. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -1208,3 +1209,33 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Low/medium: setting `--inactive-scan-slots-per-cycle 0` deliberately stops cold round-robin discovery and relies on ticker radar plus active state. This is suitable for fast production-style live only if ticker snapshots are healthy; artifacts now show the chosen cap and effective scan count.
+
+## P168 - Cache-backed live OHLCV fetch
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+P167 reduces which symbols are scanned, but selected symbols still re-requested full setup/entry windows from the exchange. REST-only live should reuse the same honest parquet cache as research where possible, fetch only exact missing ranges, and make any remaining cache gap explicit.
+
+### Change
+
+- Wire `cache_dir` into `LiveAnomalyConfig`.
+- Add `--live-ohlcv-cache-enabled` and `--live-ohlcv-cache-write-enabled` CLI flags.
+- Route live setup and entry frame fetches through a parquet-backed provider.
+- Load cached frames once per process and reuse them from memory across cycles.
+- For missing ranges, fetch only those ranges from exchange OHLCV or Binance futures `aggTrades`, then write one incremental parquet batch with `live_cache_source`, target timeframe and version.
+- Emit `live_cache_config`, `live_ohlcv_cache_read`, and `live_ohlcv_cache_gap` events.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+```
+
+### Risk
+
+Medium: `save_incremental` rewrites the target parquet file, so live cache writes should be watched during high-churn runs. Remaining gaps are not hidden; they emit `live_ohlcv_cache_gap` and can still lead to existing empty/missing-signal rejects.

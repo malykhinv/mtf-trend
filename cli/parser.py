@@ -211,6 +211,18 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--min-executable-rr-to-signal-tp1", type=float, default=0.75)
     anomaly_live.add_argument("--max-position-amount-slippage-ratio", type=float, default=0.05)
     anomaly_live.add_argument("--scan-sleep-seconds", type=float, default=2.0)
+    anomaly_live.add_argument(
+        "--live-ohlcv-cache-enabled",
+        type=_str_to_bool,
+        default=True,
+        help="Use local OHLCV parquet cache in live and fetch only missing ranges.",
+    )
+    anomaly_live.add_argument(
+        "--live-ohlcv-cache-write-enabled",
+        type=_str_to_bool,
+        default=True,
+        help="Persist live-fetched OHLCV/aggTrade-derived frames into the local parquet cache.",
+    )
     anomaly_live.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_live.add_argument("--trail-buffer-r", type=float, default=0.10)
 

@@ -1265,6 +1265,7 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             results_dir=config.backtest.results_dir,
             symbols=tuple(getattr(args, "symbols", None) or ()),
             confirm_real_orders=bool(getattr(args, "confirm_real_orders", False)),
+            cache_dir=config.backtest.cache_dir,
             pump_categories=tuple(
                 item.strip()
                 for item in str(getattr(args, "pump_categories", "balanced_market,mild_market")).split(",")
@@ -1311,6 +1312,11 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             min_executable_rr_to_signal_tp1=float(getattr(args, "min_executable_rr_to_signal_tp1", 0.75)),
             max_position_amount_slippage_ratio=float(getattr(args, "max_position_amount_slippage_ratio", 0.05)),
             scan_sleep_seconds=float(getattr(args, "scan_sleep_seconds", 2.0)),
+            live_ohlcv_cache_enabled=_to_bool_flag(getattr(args, "live_ohlcv_cache_enabled", True), default=True),
+            live_ohlcv_cache_write_enabled=_to_bool_flag(
+                getattr(args, "live_ohlcv_cache_write_enabled", True),
+                default=True,
+            ),
             max_cycles=getattr(args, "max_cycles", None),
             trail_lookback_candles=int(getattr(args, "trail_lookback_candles", 5)),
             trail_buffer_r=float(getattr(args, "trail_buffer_r", 0.10)),

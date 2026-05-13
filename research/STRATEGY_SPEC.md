@@ -93,6 +93,16 @@ ticker-radar promotion can add watch symbols but cannot itself open trades
 inactive_scan_slots_per_cycle=0 means active/radar-only scan and must be visible in artifacts
 ```
 
+Live data-access contract:
+
+```text
+read local parquet first
+fetch only missing OHLCV / aggTrade-derived ranges
+write fetched live rows with provenance/version
+remaining cache gaps must emit artifacts
+cache gaps are not valid zero-signal evidence
+```
+
 
 
 ---

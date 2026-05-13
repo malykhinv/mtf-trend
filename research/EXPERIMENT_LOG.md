@@ -1147,3 +1147,36 @@ Readout:
 If ticker_radar_snapshot is healthy and symbol_batch_selected shows active/radar-driven batches with low duration_ms in signal_symbol_scan_summary, keep this as live baseline.
 If ticker radar has missing fields or no promotions, do not treat active/radar-only mode as coverage-complete; increase inactive_scan_slots_per_cycle or fix ticker data first.
 ```
+
+---
+
+## 2026-05-13 - P168 live cache-backed fetch prep
+
+Hypothesis:
+
+```text
+For REST-only live, selected-symbol latency is dominated by repeated full-window OHLCV and subminute aggTrade fetches. A cache-backed provider should make repeated scans mostly local, fetch only exact missing ranges, and improve later replay by writing live-fetched rows with provenance.
+```
+
+Implementation to validate:
+
+```text
+live_ohlcv_cache_enabled = true
+live_ohlcv_cache_write_enabled = true
+setup and entry frames both use parquet-tail-fetch
+process memory cache avoids re-reading parquet every cycle
+remaining cache gaps emit live_ohlcv_cache_gap
+```
+
+Next smoke:
+
+```bash
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20 --inactive-scan-slots-per-cycle 0 --ticker-radar-watch-batch-size 10 --scan-hot-timeframes-per-symbol true --live-ohlcv-cache-enabled true --live-ohlcv-cache-write-enabled true
+```
+
+Readout:
+
+```text
+Expected: first scan for a hot symbol may show status=filled and fetched_rows>0; repeated scans should move toward status=hit or load_status=memory_hit.
+Any live_ohlcv_cache_gap means the signal evidence is incomplete and should be investigated before treating missed/no-signal rows as meaningful.
+```

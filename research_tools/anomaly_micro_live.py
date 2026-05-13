@@ -25,6 +25,7 @@ import pandas as pd
 
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from data.exchanges.ccxt_types import ExchangeTickerSnapshot
+from data.storage.parquet_storage import ParquetStorage
 from domain.exceptions import ExchangeConnectivityError
 from domain.enums.timeframe import Timeframe
 from research_tools.anomaly_continuation_lab import compute_start_verticality_metrics
@@ -199,6 +200,7 @@ class LiveAnomalyConfig:
     results_dir: Path
     symbols: tuple[str, ...]
     confirm_real_orders: bool
+    cache_dir: Path | None = None
     timeframe_pairs: tuple[tuple[Timeframe, Timeframe], ...] = ANOMALY_LIVE_TIMEFRAME_PAIRS
     pump_categories: tuple[str, ...] = ("balanced_market", "mild_market")
     baseline_candles: int = 60
@@ -241,6 +243,8 @@ class LiveAnomalyConfig:
     max_monitor_empty_ohlcv_cycles: int = 3
     scan_sleep_seconds: float = 2.0
     network_sleep_seconds: float = 30.0
+    live_ohlcv_cache_enabled: bool = True
+    live_ohlcv_cache_write_enabled: bool = True
     max_cycles: int | None = None
     stop_cooldown_hours: float = 12.0
     stop_limit_per_symbol: int = 2
@@ -1086,6 +1090,12 @@ class AnomalyMicroLiveRunner:
         self._inactive_cursor = 0
         self._order_reconcile_cursor = 0
         self._network_degraded = False
+        self._ohlcv_cache_storage = (
+            ParquetStorage(base_dir=config.cache_dir)
+            if config.live_ohlcv_cache_enabled and config.cache_dir is not None
+            else None
+        )
+        self._live_ohlcv_frame_cache: dict[tuple[str, str], pd.DataFrame] = {}
 
     def run(self) -> int:
         self._validate_startup()
@@ -1099,6 +1109,16 @@ class AnomalyMicroLiveRunner:
         )
         self.logger(f"live: артефакты {self.artifacts.root}")
         trading_mode = "с торговлей" if self.config.confirm_real_orders else "без торговли"
+        self.artifacts.append_event(
+            "live_cache_config",
+            "__live__",
+            {
+                "live_ohlcv_cache_enabled": bool(self.config.live_ohlcv_cache_enabled),
+                "live_ohlcv_cache_write_enabled": bool(self.config.live_ohlcv_cache_write_enabled),
+                "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
+                "cache_provider": "parquet_tail_fetch_v1" if self._ohlcv_cache_storage is not None else "disabled",
+            },
+        )
         self.telegram.send(
             channel="events",
             key="live_started",
@@ -1676,11 +1696,11 @@ class AnomalyMicroLiveRunner:
                 setup_key = (symbol, levels_timeframe.value, setup_start_ts)
                 if setup_key not in setup_cache:
                     try:
-                        setup_cache[setup_key] = self.exchange.fetch_ohlcv(
+                        setup_cache[setup_key] = self._fetch_chart_frame(
                             symbol,
                             levels_timeframe,
-                            setup_start_ts - setup_lookback_ms,
-                            now_ms,
+                            start_timestamp_ms=setup_start_ts - setup_lookback_ms,
+                            end_timestamp_ms=now_ms,
                         )
                         setup_fetch_count += 1
                     except Exception as exc:
@@ -1774,11 +1794,11 @@ class AnomalyMicroLiveRunner:
                 ):
                     continue
                 try:
-                    setup_frame = self.exchange.fetch_ohlcv(
+                    setup_frame = self._fetch_chart_frame(
                         symbol,
                         levels_timeframe,
-                        setup_start_ts - setup_lookback_ms,
-                        now_ms,
+                        start_timestamp_ms=setup_start_ts - setup_lookback_ms,
+                        end_timestamp_ms=now_ms,
                     )
                 except Exception as exc:
                     self.artifacts.append_event(
@@ -3344,6 +3364,28 @@ class AnomalyMicroLiveRunner:
         start_timestamp_ms: int,
         end_timestamp_ms: int,
     ) -> pd.DataFrame:
+        if self._ohlcv_cache_storage is not None:
+            return self._fetch_cached_chart_frame(
+                symbol,
+                timeframe,
+                start_timestamp_ms=start_timestamp_ms,
+                end_timestamp_ms=end_timestamp_ms,
+            )
+        return self._fetch_uncached_chart_frame(
+            symbol,
+            timeframe,
+            start_timestamp_ms=start_timestamp_ms,
+            end_timestamp_ms=end_timestamp_ms,
+        )
+
+    def _fetch_uncached_chart_frame(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
         if int(timeframe.to_milliseconds()) >= int(Timeframe.M1.to_milliseconds()):
             return self.exchange.fetch_ohlcv(symbol, timeframe, start_timestamp_ms, end_timestamp_ms)
         return self._fetch_aggtrade_chart_frame(
@@ -3352,6 +3394,122 @@ class AnomalyMicroLiveRunner:
             start_timestamp_ms=start_timestamp_ms,
             end_timestamp_ms=end_timestamp_ms,
         )
+
+    def _fetch_cached_chart_frame(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> pd.DataFrame:
+        storage = self._ohlcv_cache_storage
+        if storage is None:
+            return self._fetch_uncached_chart_frame(
+                symbol,
+                timeframe,
+                start_timestamp_ms=start_timestamp_ms,
+                end_timestamp_ms=end_timestamp_ms,
+            )
+        timeframe_ms = int(timeframe.to_milliseconds())
+        cache_end_ms = _latest_closed_candle_start_ms(timeframe, now_ms=int(end_timestamp_ms))
+        expected_start_ms = (int(start_timestamp_ms) // timeframe_ms) * timeframe_ms
+        expected_end_ms = min(cache_end_ms, (int(end_timestamp_ms) // timeframe_ms) * timeframe_ms)
+        memory_key = (_position_symbol_key(symbol), timeframe.value)
+        if memory_key in self._live_ohlcv_frame_cache:
+            load_status = "memory_hit"
+            load_reason = "process_memory_cache"
+            cached_rows_before = int(len(self._live_ohlcv_frame_cache[memory_key]))
+            cached = self._live_ohlcv_frame_cache[memory_key]
+        else:
+            load_result = storage.load_result(symbol, timeframe)
+            load_status = load_result.status
+            load_reason = load_result.reason
+            cached_rows_before = int(len(load_result.frame)) if load_result.frame is not None else 0
+            cached = _prepare_cached_ohlcv_frame(load_result.frame)
+            self._live_ohlcv_frame_cache[memory_key] = cached
+        fetched_rows = 0
+        added_rows = 0
+        fetched_ranges: list[str] = []
+        fetched_frames: list[pd.DataFrame] = []
+        missing_ranges = _missing_ohlcv_ranges(
+            cached,
+            start_timestamp_ms=expected_start_ms,
+            end_timestamp_ms=expected_end_ms,
+            timeframe_ms=timeframe_ms,
+        )
+        for missing_start_ms, missing_end_ms in missing_ranges:
+            fetched = self._fetch_uncached_chart_frame(
+                symbol,
+                timeframe,
+                start_timestamp_ms=missing_start_ms,
+                end_timestamp_ms=missing_end_ms,
+            )
+            if not fetched.empty:
+                fetched = fetched.copy()
+                fetched["live_cache_source"] = (
+                    "exchange_ohlcv" if timeframe_ms >= int(Timeframe.M1.to_milliseconds()) else "binance_futures_aggTrades"
+                )
+                fetched["live_cache_target_timeframe"] = timeframe.value
+                fetched["live_cache_version"] = "p168_live_ohlcv_cache_v1"
+                fetched_rows += int(len(fetched))
+                fetched_ranges.append(f"{missing_start_ms}:{missing_end_ms}")
+                fetched_frames.append(fetched)
+        if fetched_frames:
+            fetched_combined = _prepare_cached_ohlcv_frame(pd.concat(fetched_frames, ignore_index=True))
+            if self.config.live_ohlcv_cache_write_enabled:
+                added_rows = int(storage.save_incremental(symbol, timeframe, fetched_combined))
+            cached = _prepare_cached_ohlcv_frame(pd.concat([cached, fetched_combined], ignore_index=True))
+            self._live_ohlcv_frame_cache[memory_key] = cached
+        window = cached.loc[
+            (cached["timestamp"].astype("int64") >= int(start_timestamp_ms))
+            & (cached["timestamp"].astype("int64") <= int(end_timestamp_ms))
+        ].copy()
+        remaining_ranges = _missing_ohlcv_ranges(
+            window,
+            start_timestamp_ms=expected_start_ms,
+            end_timestamp_ms=expected_end_ms,
+            timeframe_ms=timeframe_ms,
+        )
+        cache_status = "hit" if not missing_ranges else "filled"
+        if remaining_ranges:
+            cache_status = "gap"
+            self.artifacts.append_event(
+                "live_ohlcv_cache_gap",
+                symbol,
+                {
+                    "timeframe": timeframe.value,
+                    "cache_status": load_status,
+                    "cache_reason": load_reason,
+                    "start_timestamp_ms": int(start_timestamp_ms),
+                    "end_timestamp_ms": int(end_timestamp_ms),
+                    "expected_start_ms": int(expected_start_ms),
+                    "expected_end_ms": int(expected_end_ms),
+                    "missing_ranges": [f"{start}:{end}" for start, end in remaining_ranges],
+                    "fetched_ranges": fetched_ranges,
+                    "fetched_rows": fetched_rows,
+                    "added_rows": added_rows,
+                    "write_enabled": bool(self.config.live_ohlcv_cache_write_enabled),
+                },
+            )
+        self.artifacts.append_event(
+            "live_ohlcv_cache_read",
+            symbol,
+            {
+                "timeframe": timeframe.value,
+                "status": cache_status,
+                "load_status": load_status,
+                "load_reason": load_reason,
+                "cached_rows_before": cached_rows_before,
+                "window_rows": int(len(window)),
+                "missing_range_count": int(len(missing_ranges)),
+                "remaining_gap_count": int(len(remaining_ranges)),
+                "fetched_rows": fetched_rows,
+                "added_rows": added_rows,
+                "write_enabled": bool(self.config.live_ohlcv_cache_write_enabled),
+            },
+        )
+        return window.sort_values("timestamp").reset_index(drop=True)
 
     def _fetch_aggtrade_chart_frame(
         self,
@@ -3835,6 +3993,49 @@ def _latest_closed_candle_start_ms(timeframe: Timeframe, *, now_ms: int) -> int:
     if timeframe_ms <= 0:
         raise ValueError(f"invalid timeframe milliseconds: {timeframe.value}")
     return ((int(now_ms) - timeframe_ms) // timeframe_ms) * timeframe_ms
+
+
+def _prepare_cached_ohlcv_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty or "timestamp" not in frame.columns:
+        return pd.DataFrame(columns=list(REQUIRED_PRICE_COLUMNS) + ["volume", "quote_volume", "number_of_trades"])
+    prepared = frame.copy()
+    for column in prepared.columns:
+        if column == "timestamp" or column in REQUIRED_PRICE_COLUMNS or column in REQUIRED_FLOW_COLUMNS or column in OPTIONAL_FLOW_COLUMNS:
+            prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    prepared = prepared.loc[prepared["timestamp"].notna()].copy()
+    prepared["timestamp"] = prepared["timestamp"].astype("int64")
+    return prepared.drop_duplicates("timestamp", keep="last").sort_values("timestamp").reset_index(drop=True)
+
+
+def _missing_ohlcv_ranges(
+    frame: pd.DataFrame,
+    *,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+    timeframe_ms: int,
+) -> list[tuple[int, int]]:
+    if timeframe_ms <= 0 or int(end_timestamp_ms) < int(start_timestamp_ms):
+        return []
+    expected = range(int(start_timestamp_ms), int(end_timestamp_ms) + 1, int(timeframe_ms))
+    present = set()
+    if frame is not None and not frame.empty and "timestamp" in frame.columns:
+        present = set(pd.to_numeric(frame["timestamp"], errors="coerce").dropna().astype("int64").tolist())
+    ranges: list[tuple[int, int]] = []
+    range_start: int | None = None
+    previous_missing: int | None = None
+    for timestamp_ms in expected:
+        if int(timestamp_ms) in present:
+            if range_start is not None and previous_missing is not None:
+                ranges.append((range_start, previous_missing))
+                range_start = None
+                previous_missing = None
+            continue
+        if range_start is None:
+            range_start = int(timestamp_ms)
+        previous_missing = int(timestamp_ms)
+    if range_start is not None and previous_missing is not None:
+        ranges.append((range_start, previous_missing))
+    return ranges
 
 
 def _decision_freshness_details(
