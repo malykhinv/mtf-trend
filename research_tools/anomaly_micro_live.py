@@ -193,6 +193,13 @@ class LivePumpCategory:
 
 
 @dataclass(frozen=True, slots=True)
+class AggTradeRawRange:
+    start_timestamp_ms: int
+    end_timestamp_ms: int
+    rows: tuple[dict[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class LiveOiChangeResult:
     value: float | None
     reason: str | None = None
@@ -1164,11 +1171,19 @@ class AnomalyMicroLiveRunner:
         self._last_signal_scan_closed_at: dict[tuple[str, str], int] = {}
         self._opened_positions_total = 0
         self._closed_positions_total = 0
+        self._closed_pnl_usdt_total = 0.0
+        self._closed_notional_usdt_total = 0.0
         self._orphan_orders_cancelled_total = 0
         self._state_lock = threading.RLock()
         self._inactive_cursor = 0
         self._order_reconcile_cursor = 0
         self._network_degraded = False
+        self._current_cycle_aggtrade_cache: dict[str, list[AggTradeRawRange]] = {}
+        self._cycle_aggtrade_requests = 0
+        self._cycle_aggtrade_network_calls = 0
+        self._cycle_aggtrade_cache_hits = 0
+        self._symbol_universe_scan_started_at = time.monotonic()
+        self._last_symbol_universe_cycle_seconds: float | None = None
         self._ohlcv_cache_storage = (
             ParquetStorage(base_dir=config.cache_dir)
             if config.live_ohlcv_cache_enabled and config.cache_dir is not None
@@ -1215,6 +1230,7 @@ class AnomalyMicroLiveRunner:
         while self.config.max_cycles is None or cycle < self.config.max_cycles:
             cycle += 1
             cycle_started = time.monotonic()
+            self._reset_cycle_fetch_state()
             try:
                 opened_before, _, closed_before, orphan_before = self._live_counts()
                 self._maybe_update_ticker_radar(symbols)
@@ -1225,7 +1241,32 @@ class AnomalyMicroLiveRunner:
                 orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle)
                 self._flush_live_ohlcv_cache_if_due(reason="cycle")
                 cycle_seconds = time.monotonic() - cycle_started
-                opened_total, active_positions, closed_total, orphan_total = self._live_counts()
+                opened_total, open_positions, closed_total, orphan_total = self._live_counts()
+                active_symbol_count = self._active_live_symbol_count()
+                closed_pnl_pct = self._closed_pnl_pct_total()
+                full_cycle_seconds = self._full_symbol_cycle_seconds(
+                    batch_seconds=cycle_seconds,
+                    batch_size=len(batch),
+                    symbols_total=len(symbols),
+                )
+                self.artifacts.append_event(
+                    "live_cycle_summary",
+                    "__live__",
+                    {
+                        "cycle": cycle,
+                        "batch_seconds": round(cycle_seconds, 3),
+                        "full_symbol_cycle_seconds": round(full_cycle_seconds, 3),
+                        "opened_total": opened_total,
+                        "open_positions": open_positions,
+                        "active_symbol_count": active_symbol_count,
+                        "closed_total": closed_total,
+                        "closed_pnl_pct": closed_pnl_pct,
+                        "aggtrade_requests": self._cycle_aggtrade_requests,
+                        "aggtrade_network_calls": self._cycle_aggtrade_network_calls,
+                        "aggtrade_cache_hits": self._cycle_aggtrade_cache_hits,
+                        "orphan_orders_cancelled": orphan_cancelled,
+                    },
+                )
                 should_log_status = self._status_logger.inline_status_enabled or (
                     cycle == 1
                     or cycle % 10 == 0
@@ -1234,11 +1275,11 @@ class AnomalyMicroLiveRunner:
                     or orphan_total != orphan_before
                 )
                 if should_log_status:
-                    opened_delta = opened_total - opened_before
                     orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
                     self._status_logger.status(
-                        f"live: цикл {cycle_seconds:.1f}s · открыто {opened_total} (+{opened_delta}) · "
-                        f"слежу {active_positions} · закрыто {closed_total}{orphan_text}"
+                        f"live: цикл {cycle_seconds:.1f}s/{full_cycle_seconds:.1f}s · "
+                        f"открыто {opened_total} · активно {active_symbol_count} · "
+                        f"закрыто {closed_total} · PNL {_format_percent(closed_pnl_pct, signed=False)}{orphan_text}"
                     )
                 if self._network_degraded:
                     self.artifacts.append_event(
@@ -1323,8 +1364,33 @@ class AnomalyMicroLiveRunner:
         if not math.isfinite(balance):
             raise LiveStartupError("Биржа вернула нечисловой free USDT balance")
 
+    def _reset_cycle_fetch_state(self) -> None:
+        self._current_cycle_aggtrade_cache = {}
+        self._cycle_aggtrade_requests = 0
+        self._cycle_aggtrade_network_calls = 0
+        self._cycle_aggtrade_cache_hits = 0
+
+    def _full_symbol_cycle_seconds(self, *, batch_seconds: float, batch_size: int, symbols_total: int) -> float:
+        if self._last_symbol_universe_cycle_seconds is not None:
+            return self._last_symbol_universe_cycle_seconds
+        if batch_size <= 0 or symbols_total <= 0:
+            return float(batch_seconds)
+        batches_per_universe = math.ceil(symbols_total / max(1, batch_size))
+        return float(batch_seconds) * float(max(1, batches_per_universe))
+
+    def _active_live_symbol_count(self) -> int:
+        with self._state_lock:
+            active_keys = set(self._active_symbols)
+            active_keys.update(self._opening_symbols)
+            active_keys.update(_position_symbol_key(position.signal.symbol) for position in self._open_positions.values())
+            return len(active_keys)
+
+    def _closed_pnl_pct_total(self) -> float:
+        return _safe_divide(self._closed_pnl_usdt_total, self._closed_notional_usdt_total)
+
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
         now_ms = int(time.time() * 1000)
+        inactive_cursor_before = self._inactive_cursor
         active_due, active_waiting = self._active_symbol_batch(now_ms=now_ms)
         active_keys = {_position_symbol_key(symbol) for symbol in [*active_due, *active_waiting]}
         radar_due, radar_waiting = self._ticker_radar_batch(now_ms=now_ms, excluded_keys=active_keys)
@@ -1353,6 +1419,10 @@ class AnomalyMicroLiveRunner:
                 continue
             inactive.append(symbol)
         batch = [*active_due, *radar_due, *inactive]
+        if symbols and self._inactive_cursor // len(symbols) > inactive_cursor_before // len(symbols):
+            now_monotonic = time.monotonic()
+            self._last_symbol_universe_cycle_seconds = now_monotonic - self._symbol_universe_scan_started_at
+            self._symbol_universe_scan_started_at = now_monotonic
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
@@ -1374,6 +1444,13 @@ class AnomalyMicroLiveRunner:
                 "scan_hot_timeframes_per_symbol": bool(self.config.scan_hot_timeframes_per_symbol),
                 "symbol_batch_size": self.config.symbol_batch_size,
                 "effective_scan_count": len(batch),
+                "inactive_cursor_before": inactive_cursor_before,
+                "inactive_cursor_after": self._inactive_cursor,
+                "last_full_symbol_cycle_seconds": (
+                    round(self._last_symbol_universe_cycle_seconds, 3)
+                    if self._last_symbol_universe_cycle_seconds is not None
+                    else ""
+                ),
             },
         )
         return batch
@@ -3538,6 +3615,10 @@ class AnomalyMicroLiveRunner:
             )
         pnl_usdt = position.realized_pnl_usdt + terminal_exit_amount * (exit_price - position.entry_price)
         pnl_pct = _safe_divide(pnl_usdt, position.notional_usdt)
+        if math.isfinite(pnl_usdt) and math.isfinite(position.notional_usdt) and position.notional_usdt > 0.0:
+            with self._state_lock:
+                self._closed_pnl_usdt_total += float(pnl_usdt)
+                self._closed_notional_usdt_total += float(position.notional_usdt)
         if reason.startswith("стоп"):
             with self._state_lock:
                 self._recent_stops.setdefault(symbol_key, []).append(time.time())
@@ -4097,6 +4178,58 @@ class AnomalyMicroLiveRunner:
         timeframe_ms = int(timeframe.to_milliseconds())
         if timeframe_ms <= 0 or timeframe_ms >= int(Timeframe.M1.to_milliseconds()):
             raise ValueError(f"invalid_seconds_chart_timeframe:{timeframe.value}")
+        all_rows = self._fetch_aggtrade_raw_rows_cached(
+            symbol,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+        )
+        if not all_rows:
+            return pd.DataFrame(columns=list(REQUIRED_PRICE_COLUMNS) + ["volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume"])
+        return _aggregate_aggtrades_to_ohlcv_frame(
+            pd.DataFrame(all_rows),
+            timeframe_ms=timeframe_ms,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+        )
+
+    def _fetch_aggtrade_raw_rows_cached(
+        self,
+        symbol: str,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> list[dict[str, object]]:
+        self._cycle_aggtrade_requests += 1
+        symbol_key = _position_symbol_key(symbol)
+        for cached_range in self._current_cycle_aggtrade_cache.get(symbol_key, []):
+            if cached_range.start_timestamp_ms <= int(start_timestamp_ms) and cached_range.end_timestamp_ms >= int(end_timestamp_ms):
+                self._cycle_aggtrade_cache_hits += 1
+                return _filter_aggtrade_rows_by_time(
+                    cached_range.rows,
+                    start_timestamp_ms=int(start_timestamp_ms),
+                    end_timestamp_ms=int(end_timestamp_ms),
+                )
+        rows = self._fetch_aggtrade_raw_rows(
+            symbol,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+        )
+        self._current_cycle_aggtrade_cache.setdefault(symbol_key, []).append(
+            AggTradeRawRange(
+                start_timestamp_ms=int(start_timestamp_ms),
+                end_timestamp_ms=int(end_timestamp_ms),
+                rows=tuple(rows),
+            )
+        )
+        return rows
+
+    def _fetch_aggtrade_raw_rows(
+        self,
+        symbol: str,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> list[dict[str, object]]:
         market_id = self.exchange.get_market_id(symbol)
         all_rows: list[dict[str, object]] = []
         next_from_id: int | None = None
@@ -4109,6 +4242,7 @@ class AnomalyMicroLiveRunner:
             else:
                 params["fromId"] = int(next_from_id)
                 params["endTime"] = int(end_timestamp_ms)
+            self._cycle_aggtrade_network_calls += 1
             rows = self.exchange.fetch_binance_agg_trades(symbol=symbol, params=params)
             if not rows:
                 break
@@ -4124,14 +4258,7 @@ class AnomalyMicroLiveRunner:
                 break
             if len(rows) < 1000:
                 break
-        if not all_rows:
-            return pd.DataFrame(columns=list(REQUIRED_PRICE_COLUMNS) + ["volume", "quote_volume", "number_of_trades", "taker_buy_quote_volume"])
-        return _aggregate_aggtrades_to_ohlcv_frame(
-            pd.DataFrame(all_rows),
-            timeframe_ms=timeframe_ms,
-            start_timestamp_ms=int(start_timestamp_ms),
-            end_timestamp_ms=int(end_timestamp_ms),
-        )
+        return all_rows
 
     def _reconcile_orphan_orders(self, symbols: list[str], *, cycle: int, force: bool = False) -> int:
         if not symbols:
@@ -4873,6 +5000,22 @@ def _resolve_aggtrade_timestamp(row: dict[str, object]) -> int | None:
         except (TypeError, ValueError):
             return None
     return None
+
+
+def _filter_aggtrade_rows_by_time(
+    rows: tuple[dict[str, object], ...] | list[dict[str, object]],
+    *,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+) -> list[dict[str, object]]:
+    filtered: list[dict[str, object]] = []
+    for row in rows:
+        timestamp_ms = _resolve_aggtrade_timestamp(row)
+        if timestamp_ms is None:
+            continue
+        if int(start_timestamp_ms) <= timestamp_ms <= int(end_timestamp_ms):
+            filtered.append(dict(row))
+    return filtered
 
 
 def _fill_missing_ohlcv_buckets(

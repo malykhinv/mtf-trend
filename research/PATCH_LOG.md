@@ -1508,7 +1508,7 @@ Low/medium: this is diagnostic-only, but OI/mark-confirmed categories can still 
 
 ## P177 - Fix live OHLCV cache concat warning
 
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Date: 2026-05-13
 Commit: UNKNOWN
 
@@ -1532,3 +1532,33 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ### Risk
 
 Low: cache-frame assembly only. Empty cache placeholders are skipped before concat, while non-empty candles still go through the same timestamp dedupe/sort preparation.
+
+
+## P178 - Reduce live aggTrades duplicate fetches and expose honest cycle timing
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+Live batch scans can spend most of the cycle in repeated Binance `aggTrades` REST calls for the same symbol/time window across S30/S15/S5 entry frames. Operator status also showed only the last batch duration, not the effective full universe rotation time, and did not expose local closed-trade PnL.
+
+### Change
+
+- Add a per-cycle raw aggTrades range cache. If a later S15/S5 request is covered by an earlier S30/S15 raw window for the same symbol, reuse the raw rows and aggregate locally to the requested timeframe.
+- Keep closed-candle OHLCV output and signal logic unchanged: the same raw trades are aggregated through the existing `_aggregate_aggtrades_to_ohlcv_frame` path.
+- Emit `live_cycle_summary` with batch seconds, full-symbol-cycle seconds, active symbol count, local closed PnL percent, and aggTrades request/cache-hit/network-call counts.
+- Change operator status to `цикл batch/full · открыто N · активно N · закрыто N · PNL X%`.
+- Track PnL only from locally finalized closed positions; no exchange balance/PnL fetch is used for the status line.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+```
+
+### Risk
+
+Low/medium: raw aggTrade rows are reused only within the same live cycle and only when the cached raw range fully covers the requested window. This should reduce duplicate REST calls without changing signal thresholds, but live smoke must confirm `aggtrade_network_calls < aggtrade_requests` and no increase in cache gaps/stale rejects.
