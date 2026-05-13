@@ -9,9 +9,9 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P161 present in uploaded ZIP / UNKNOWN commit; P162 proposed
-Last active patch: P162 live terminal PnL amount accounting
-Updated: 2026-05-12
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177 proposed
+Last active patch: P177 live OHLCV cache concat warning fix
+Updated: 2026-05-13
 ```
 
 The project direction is anomaly-first: anomaly nature/category research, anomaly continuation backtests, and strict REST-only micro-live validation.
@@ -80,20 +80,20 @@ research_tools/hourly_levels.py
 12. P168 changes live data access: live now reads parquet first, fetches only missing ranges, writes fetched rows with provenance, and emits cache gap events instead of treating incomplete cache as a silent no-signal condition.
 13. P169 fixes live cache candle boundaries: subminute missing ranges fetch through the final candle end, parquet first-load reads only the requested window, and decision frames exclude accidental non-closed cached candles.
 14. P170 buffers live cache writes so hot-loop decisions are not blocked by parquet rewrites; buffered/flushed/failed rows are explicit live artifacts.
+15. P177 fixes the live OHLCV cache concat path that emitted pandas `FutureWarning` when empty cache placeholders were concatenated with fetched candles; it does not change signal or trading logic.
 
 ---
 
 ## 6. Next best step
 
-Apply P162, then verify that terminal live PnL uses only verified remaining size and unresolved residual exits do not become normal closed trades:
+Apply P177, then verify that live OHLCV cache fill no longer emits pandas concat `FutureWarning` when a cache window is empty before fetched candles are merged:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-anomaly-live --help
-python main.py run-anomaly-lab --help
 ```
 
-Synthetic/fake-exchange smoke should force `remaining_amount=0` terminal close and partial TP1 fill followed by exchange amount zero. Expected result: no fallback to `position.amount` for PnL; material missing residual fill ends as `position_exit_unresolved` with blank realized PnL fields.
+Synthetic/live-cache smoke should start from an empty cache window, fetch missing candles, merge them into memory cache, and produce no pandas concat `FutureWarning`.
 
 Latest next step after P167:
 

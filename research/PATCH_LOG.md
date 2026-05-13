@@ -1505,3 +1505,30 @@ The missed-entry probe must not understate live scheduler lag when the skipped w
 ### Risk
 
 Low/medium: this is diagnostic-only, but OI/mark-confirmed categories can still spend context calls inside the background probe. Use a lower `--signal-scan-backfill-candles` when exchange limits are tight.
+
+## P177 - Fix live OHLCV cache concat warning
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+Live cache fill could concatenate an empty cache placeholder with freshly fetched candles. Pandas 2.2 emits `FutureWarning` for this pattern, and future dtype inference could change.
+
+### Change
+
+- Add a typed empty OHLCV cache frame schema.
+- Add `_concat_cached_ohlcv_frames` that prepares inputs and excludes empty cache placeholders before `pd.concat`.
+- Use the helper for live cache memory merge, fetched candle merge, and buffered cache flush.
+- Keep live signal, entry, stop and PnL logic unchanged.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+### Risk
+
+Low: cache-frame assembly only. Empty cache placeholders are skipped before concat, while non-empty candles still go through the same timestamp dedupe/sort preparation.

@@ -35,6 +35,17 @@ from research_tools.anomaly_config import ANOMALY_LIVE_TIMEFRAME_PAIRS
 REQUIRED_PRICE_COLUMNS = ("timestamp", "open", "high", "low", "close")
 REQUIRED_FLOW_COLUMNS = ("quote_volume", "number_of_trades")
 OPTIONAL_FLOW_COLUMNS = ("taker_buy_quote_volume",)
+CACHED_OHLCV_DTYPES = {
+    "timestamp": "int64",
+    "open": "float64",
+    "high": "float64",
+    "low": "float64",
+    "close": "float64",
+    "volume": "float64",
+    "quote_volume": "float64",
+    "number_of_trades": "float64",
+    "taker_buy_quote_volume": "float64",
+}
 HOUR_MS = 60 * 60 * 1000
 ANIMAL_EMOJIS = (
     "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
@@ -3855,7 +3866,7 @@ class AnomalyMicroLiveRunner:
         for (_symbol_key, symbol, timeframe_value), frames in pending_items.items():
             try:
                 timeframe = Timeframe(timeframe_value)
-                combined = _prepare_cached_ohlcv_frame(pd.concat(frames, ignore_index=True))
+                combined = _concat_cached_ohlcv_frames(frames)
                 added_rows = int(storage.save_incremental(symbol, timeframe, combined))
                 flushed_rows_total += int(len(combined))
                 self.artifacts.append_event(
@@ -3984,9 +3995,7 @@ class AnomalyMicroLiveRunner:
             cached_rows_before = int(len(load_result.frame)) if load_result.frame is not None else 0
             cached = _prepare_cached_ohlcv_frame(load_result.frame)
             if memory_key in self._live_ohlcv_frame_cache:
-                cached = _prepare_cached_ohlcv_frame(
-                    pd.concat([self._live_ohlcv_frame_cache[memory_key], cached], ignore_index=True)
-                )
+                cached = _concat_cached_ohlcv_frames([self._live_ohlcv_frame_cache[memory_key], cached])
             self._live_ohlcv_frame_cache[memory_key] = cached
         fetched_rows = 0
         buffered_rows = 0
@@ -4017,10 +4026,10 @@ class AnomalyMicroLiveRunner:
                 fetched_ranges.append(f"{missing_start_ms}:{fetch_end_ms}")
                 fetched_frames.append(fetched)
         if fetched_frames:
-            fetched_combined = _prepare_cached_ohlcv_frame(pd.concat(fetched_frames, ignore_index=True))
+            fetched_combined = _concat_cached_ohlcv_frames(fetched_frames)
             if self.config.live_ohlcv_cache_write_enabled:
                 buffered_rows = self._buffer_live_ohlcv_cache_write(symbol, timeframe, fetched_combined)
-            cached = _prepare_cached_ohlcv_frame(pd.concat([cached, fetched_combined], ignore_index=True))
+            cached = _concat_cached_ohlcv_frames([cached, fetched_combined])
             self._live_ohlcv_frame_cache[memory_key] = cached
         window_end_ms = min(int(end_timestamp_ms), int(expected_end_ms))
         window = cached.loc[
@@ -4564,16 +4573,35 @@ def _latest_closed_candle_start_ms(timeframe: Timeframe, *, now_ms: int) -> int:
     return ((int(now_ms) - timeframe_ms) // timeframe_ms) * timeframe_ms
 
 
-def _prepare_cached_ohlcv_frame(frame: pd.DataFrame) -> pd.DataFrame:
+def _empty_cached_ohlcv_frame() -> pd.DataFrame:
+    return pd.DataFrame({column: pd.Series(dtype=dtype) for column, dtype in CACHED_OHLCV_DTYPES.items()})
+
+
+def _prepare_cached_ohlcv_frame(frame: pd.DataFrame | None) -> pd.DataFrame:
     if frame is None or frame.empty or "timestamp" not in frame.columns:
-        return pd.DataFrame(columns=list(REQUIRED_PRICE_COLUMNS) + ["volume", "quote_volume", "number_of_trades"])
+        return _empty_cached_ohlcv_frame()
     prepared = frame.copy()
     for column in prepared.columns:
         if column == "timestamp" or column in REQUIRED_PRICE_COLUMNS or column in REQUIRED_FLOW_COLUMNS or column in OPTIONAL_FLOW_COLUMNS:
             prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
     prepared = prepared.loc[prepared["timestamp"].notna()].copy()
+    if prepared.empty:
+        return _empty_cached_ohlcv_frame()
     prepared["timestamp"] = prepared["timestamp"].astype("int64")
     return prepared.drop_duplicates("timestamp", keep="last").sort_values("timestamp").reset_index(drop=True)
+
+
+def _concat_cached_ohlcv_frames(frames: list[pd.DataFrame | None]) -> pd.DataFrame:
+    prepared_frames: list[pd.DataFrame] = []
+    for frame in frames:
+        prepared = _prepare_cached_ohlcv_frame(frame)
+        if not prepared.empty:
+            prepared_frames.append(prepared)
+    if not prepared_frames:
+        return _empty_cached_ohlcv_frame()
+    if len(prepared_frames) == 1:
+        return prepared_frames[0].copy()
+    return _prepare_cached_ohlcv_frame(pd.concat(prepared_frames, ignore_index=True))
 
 
 def _cached_frame_covers_window(frame: pd.DataFrame, *, start_timestamp_ms: int, end_timestamp_ms: int) -> bool:
