@@ -1182,6 +1182,10 @@ class AnomalyMicroLiveRunner:
         self._cycle_aggtrade_requests = 0
         self._cycle_aggtrade_network_calls = 0
         self._cycle_aggtrade_cache_hits = 0
+        self._current_batch_symbol_scan_mode: dict[str, str] = {}
+        self._cycle_precise_scan_symbols = 0
+        self._cycle_inactive_visit_symbols = 0
+        self._cycle_deferred_inactive_subminute_pairs = 0
         self._symbol_universe_scan_started_at = time.monotonic()
         self._last_symbol_universe_cycle_seconds: float | None = None
         self._ohlcv_cache_storage = (
@@ -1216,6 +1220,11 @@ class AnomalyMicroLiveRunner:
                 "live_ohlcv_cache_max_buffer_rows": self.config.live_ohlcv_cache_max_buffer_rows,
                 "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
                 "cache_provider": "parquet_tail_fetch_v1" if self._ohlcv_cache_storage is not None else "disabled",
+                "inactive_subminute_scan_policy": "defer_until_ticker_radar_or_active",
+                "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
+                "ticker_radar_required_for_inactive_subminute_gate": bool(
+                    _live_config_has_subminute_entry_pairs(self.config)
+                ),
             },
         )
         self.telegram.send(
@@ -1264,6 +1273,9 @@ class AnomalyMicroLiveRunner:
                         "aggtrade_requests": self._cycle_aggtrade_requests,
                         "aggtrade_network_calls": self._cycle_aggtrade_network_calls,
                         "aggtrade_cache_hits": self._cycle_aggtrade_cache_hits,
+                        "precise_scan_symbols": self._cycle_precise_scan_symbols,
+                        "inactive_visit_symbols": self._cycle_inactive_visit_symbols,
+                        "deferred_inactive_subminute_pairs": self._cycle_deferred_inactive_subminute_pairs,
                         "orphan_orders_cancelled": orphan_cancelled,
                     },
                 )
@@ -1369,6 +1381,10 @@ class AnomalyMicroLiveRunner:
         self._cycle_aggtrade_requests = 0
         self._cycle_aggtrade_network_calls = 0
         self._cycle_aggtrade_cache_hits = 0
+        self._current_batch_symbol_scan_mode = {}
+        self._cycle_precise_scan_symbols = 0
+        self._cycle_inactive_visit_symbols = 0
+        self._cycle_deferred_inactive_subminute_pairs = 0
 
     def _full_symbol_cycle_seconds(self, *, batch_seconds: float, batch_size: int, symbols_total: int) -> float:
         if self._last_symbol_universe_cycle_seconds is not None:
@@ -1419,6 +1435,14 @@ class AnomalyMicroLiveRunner:
                 continue
             inactive.append(symbol)
         batch = [*active_due, *radar_due, *inactive]
+        batch_scan_modes: dict[str, str] = {}
+        for symbol in active_due:
+            batch_scan_modes[_position_symbol_key(symbol)] = "precise_active"
+        for symbol in radar_due:
+            batch_scan_modes[_position_symbol_key(symbol)] = "precise_ticker_radar"
+        for symbol in inactive:
+            batch_scan_modes[_position_symbol_key(symbol)] = "inactive_deferred_subminute"
+        self._current_batch_symbol_scan_mode = batch_scan_modes
         if symbols and self._inactive_cursor // len(symbols) > inactive_cursor_before // len(symbols):
             now_monotonic = time.monotonic()
             self._last_symbol_universe_cycle_seconds = now_monotonic - self._symbol_universe_scan_started_at
@@ -1441,6 +1465,8 @@ class AnomalyMicroLiveRunner:
                     if self.config.inactive_scan_slots_per_cycle is not None
                     else ""
                 ),
+                "inactive_subminute_scan_policy": "defer_until_ticker_radar_or_active",
+                "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "scan_hot_timeframes_per_symbol": bool(self.config.scan_hot_timeframes_per_symbol),
                 "symbol_batch_size": self.config.symbol_batch_size,
                 "effective_scan_count": len(batch),
@@ -1836,7 +1862,26 @@ class AnomalyMicroLiveRunner:
         with self._state_lock:
             return self._last_signal_scan_closed_at.get(scan_key)
 
+    def _batch_scan_mode_for_symbol(self, symbol: str) -> str:
+        return self._current_batch_symbol_scan_mode.get(_position_symbol_key(symbol), "precise_direct")
+
+    def _subminute_entry_scan_allowed(self, symbol: str) -> bool:
+        return self._batch_scan_mode_for_symbol(symbol).startswith("precise")
+
+    def _should_defer_inactive_subminute_pair(self, symbol: str, entry_timeframe: Timeframe) -> bool:
+        if int(entry_timeframe.to_milliseconds()) >= int(Timeframe.M1.to_milliseconds()):
+            return False
+        return not self._subminute_entry_scan_allowed(symbol)
+
+    def _count_symbol_scan_mode(self, symbol: str) -> None:
+        if self._batch_scan_mode_for_symbol(symbol).startswith("precise"):
+            self._cycle_precise_scan_symbols += 1
+        else:
+            self._cycle_inactive_visit_symbols += 1
+
     def _scan_batch(self, symbols: list[str]) -> list[LiveSignal]:
+        for symbol in symbols:
+            self._count_symbol_scan_mode(symbol)
         if self.config.scan_hot_timeframes_per_symbol:
             return self._scan_batch_by_symbol(symbols)
         return self._scan_batch_by_timeframe(symbols)
@@ -1855,6 +1900,7 @@ class AnomalyMicroLiveRunner:
             signal_count = 0
             fetch_failures = 0
             skipped_not_due = 0
+            skipped_inactive_subminute = 0
             for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
                 levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
                 setup_lookback_ms = (self.config.baseline_candles + 5) * levels_timeframe_ms
@@ -1870,6 +1916,10 @@ class AnomalyMicroLiveRunner:
                     skipped_not_due += 1
                     continue
                 due_count += 1
+                if self._should_defer_inactive_subminute_pair(symbol, entry_timeframe):
+                    skipped_inactive_subminute += 1
+                    self._cycle_deferred_inactive_subminute_pairs += 1
+                    continue
                 setup_key = (symbol, levels_timeframe.value, setup_start_ts)
                 if setup_key not in setup_cache:
                     try:
@@ -1940,10 +1990,13 @@ class AnomalyMicroLiveRunner:
                 symbol,
                 {
                     "mode": "timeframes_per_symbol",
+                    "scan_mode": self._batch_scan_mode_for_symbol(symbol),
+                    "subminute_entry_scan_allowed": bool(self._subminute_entry_scan_allowed(symbol)),
                     "timeframe_pairs": [f"{levels.value}/{entry.value}" for levels, entry in self.config.timeframe_pairs],
                     "due_timeframe_count": due_count,
                     "evaluated_timeframe_count": evaluated_count,
                     "skipped_not_due_count": skipped_not_due,
+                    "skipped_inactive_subminute_count": skipped_inactive_subminute,
                     "setup_fetch_count": setup_fetch_count,
                     "entry_fetch_count": entry_fetch_count,
                     "fetch_failure_count": fetch_failures,
@@ -1970,6 +2023,9 @@ class AnomalyMicroLiveRunner:
                     entry_timeframe,
                     closed_timestamp_ms=latest_closed_entry_ts,
                 ):
+                    continue
+                if self._should_defer_inactive_subminute_pair(symbol, entry_timeframe):
+                    self._cycle_deferred_inactive_subminute_pairs += 1
                     continue
                 try:
                     setup_frame = self._fetch_chart_frame(
@@ -4543,6 +4599,13 @@ class AnomalyMicroLiveRunner:
 
 
 
+def _live_config_has_subminute_entry_pairs(config: LiveAnomalyConfig) -> bool:
+    return any(
+        int(entry_timeframe.to_milliseconds()) < int(Timeframe.M1.to_milliseconds())
+        for _, entry_timeframe in config.timeframe_pairs
+    )
+
+
 def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
     integer_minimums = {
         "baseline_candles": (config.baseline_candles, 1),
@@ -4571,6 +4634,19 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
             "Некорректный live config: ticker_radar_watch_batch_size должен быть целым >= 0, "
             f"получено {config.ticker_radar_watch_batch_size!r}"
         )
+
+    if _live_config_has_subminute_entry_pairs(config):
+        if not config.ticker_radar_enabled:
+            raise LiveStartupError(
+                "Некорректный live config: subminute entry TF требует ticker_radar_enabled=true. "
+                "Inactive subminute aggTrades scans are deliberately deferred until ticker-radar or active state; "
+                "there is no silent fallback to full inactive aggTrades scans."
+            )
+        if config.ticker_radar_watch_batch_size < 1:
+            raise LiveStartupError(
+                "Некорректный live config: subminute entry TF требует ticker_radar_watch_batch_size >= 1, "
+                "иначе inactive symbols не смогут попасть в precise scan без возврата к full aggTrades scan."
+            )
 
     if config.inactive_scan_slots_per_cycle is not None and (
         not isinstance(config.inactive_scan_slots_per_cycle, int) or config.inactive_scan_slots_per_cycle < 0

@@ -1562,3 +1562,34 @@ python main.py run-anomaly-live --help
 ### Risk
 
 Low/medium: raw aggTrade rows are reused only within the same live cycle and only when the cached raw range fully covers the requested window. This should reduce duplicate REST calls without changing signal thresholds, but live smoke must confirm `aggtrade_network_calls < aggtrade_requests` and no increase in cache gaps/stale rejects.
+
+## P179 - Defer inactive subminute aggTrades until ticker-radar or active state
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+Cold inactive symbols can dominate live cycle time by fetching S5/S15/S30 entry frames through Binance `aggTrades` before any cheap wake-up evidence exists. A fallback back to full inactive subminute scans would reintroduce the same latency and stale-entry problem, so the scheduler must make discovery explicit instead of hiding the old behavior behind a fallback.
+
+### Change
+
+- Inactive round-robin symbols defer subminute entry pairs (`S5`/`S15`/`S30`) and do not call `_fetch_chart_frame` / `fetch_binance_agg_trades` for those pairs.
+- Precise subminute scans remain enabled for active symbols, opening/open positions through active scheduling, and ticker-radar watch symbols.
+- No silent fallback to full inactive `aggTrades` scans exists.
+- Startup validation refuses subminute live pairs when `ticker_radar_enabled=false` or `ticker_radar_watch_batch_size < 1`, because that would make inactive discovery blind after deferring subminute scans.
+- Deferred inactive pairs are not marked as scanned; once ticker radar promotes the symbol or the symbol becomes active, the latest due precise entry candle is still evaluated.
+- Add diagnostics: `inactive_subminute_scan_policy`, `scan_mode`, `subminute_entry_scan_allowed`, `inactive_visit_symbols`, `precise_scan_symbols`, `deferred_inactive_subminute_pairs`, and per-symbol `skipped_inactive_subminute_count`.
+
+### Validation
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+# synthetic smoke: inactive S5/S30 defers without fetching, ticker-radar S5 fetches, ticker_radar_enabled=false with subminute pairs raises LiveStartupError.
+```
+
+### Risk
+
+Medium and explicit: with subminute entry pairs, cold inactive discovery depends on ticker radar before precise `aggTrades` evaluation. This is intentional to protect live latency. If missed top-growth artifacts show radar is too strict, adjust ticker-radar thresholds/watch batch size; do not restore full inactive subminute `aggTrades` scans.

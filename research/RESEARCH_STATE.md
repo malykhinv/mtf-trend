@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177 applied locally by user / UNKNOWN commit; P178 proposed
-Last active patch: P178 live cycle timing and aggTrades duplicate fetch reduction
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177 applied locally by user / UNKNOWN commit; P178 proposed; P179 proposed on top of P178
+Last active patch: P179 inactive subminute aggTrades deferral without fallback
 Updated: 2026-05-13
 ```
 
@@ -82,19 +82,20 @@ research_tools/hourly_levels.py
 14. P170 buffers live cache writes so hot-loop decisions are not blocked by parquet rewrites; buffered/flushed/failed rows are explicit live artifacts.
 15. P177 fixes the live OHLCV cache concat path that emitted pandas `FutureWarning` when empty cache placeholders were concatenated with fetched candles; it does not change signal or trading logic.
 16. P178 proposes per-cycle raw aggTrades range reuse for S30/S15/S5 live scans and status logging as `batch/full` cycle time with local closed-trade PnL only.
+17. P179 proposes deferring inactive subminute `aggTrades` scans until ticker-radar or active state, with startup refusal instead of fallback when ticker radar is unavailable.
 
 ---
 
 ## 6. Next best step
 
-Apply P178 after P177, then run a short live smoke focused on cycle timing and raw aggTrades duplication:
+Apply P178 after P177, then P179, and run a short live smoke focused on scheduler gating and raw aggTrades budget:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-anomaly-live --help
 ```
 
-Read `live_cycle_summary` and verify `aggtrade_network_calls < aggtrade_requests` on cycles where S30/S15/S5 are all due for the same symbol, while stale/reject distribution does not worsen.
+Read `live_cycle_summary` and verify `deferred_inactive_subminute_pairs > 0` on cold inactive cycles, `aggtrade_network_calls` drops sharply, and ticker-radar promoted symbols still receive precise subminute scans. If top-growth misses appear, tune ticker-radar thresholds/watch batch size instead of restoring full inactive aggTrades scans.
 
 Latest next step after P167:
 
