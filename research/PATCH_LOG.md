@@ -2133,3 +2133,21 @@ Changes:
 Validation to run after apply:
 - `python -m compileall data/exchanges research_tools cli constants.py main.py`
 - Small live smoke: expect `ticker_radar_startup_ready.source=binance_ws_all_ticker`, no repeated `ticker_radar_source_degraded`, and `ws_aggtrade_effective_source=ws` after subscription warm-up.
+
+
+## P194 — seed WS ticker startup cache and show anomaly count in operator line (PROPOSED)
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Reason: after P193, ticker WS is healthy but the all-ticker stream warms gradually, leaving the first live seconds with partial universe coverage. The console also showed `события`, which was only the audit-row count and could be mistaken for detected anomalies.
+
+Changes:
+- Add a one-shot REST ticker startup seed for the Binance WS ticker cache when subminute ticker-radar discovery is required.
+- Mark seeded snapshots with `rest_startup_seed.*` source labels and `source_status=primary_seeded_rest` / `WS: ticker seed` until real WS updates replace them.
+- Emit `ticker_radar_startup_seeded` or `ticker_radar_startup_seed_failed` in `live_events.csv`; failed seed does not fake success and live still relies on primary WS or explicit degraded fallback.
+- Replace inline `события <audit rows>` with `аномалии <detected ticker-radar promotions>` and store `detected_anomalies_total` in `live_cycle_summary`.
+
+Validation to run after apply:
+- `python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py`
+- `python -m compileall data/exchanges research_tools cli constants.py main.py`
+- Small live smoke: expect `ticker_radar_startup_seeded.seeded_count` close to universe size, no startup burst of `ticker_radar_missing_fields`, and console heartbeat like `live · ... · аномалии 0 · ...`; during the first seed-backed cycle `ticker_radar_snapshot.source_status=primary_seeded_rest`, then normal WS cycles should return to `primary` once ticker messages arrive.

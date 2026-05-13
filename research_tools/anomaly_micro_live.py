@@ -338,6 +338,9 @@ class BinanceWsAllTickerSnapshotSource:
         self._last_message_at_ms: int | None = None
         self._last_error: str | None = None
         self._connection_status = "starting"
+        self._last_payload_source = "none"
+        self._seeded_at_ms: int | None = None
+        self._seeded_count = 0
         self._startup_wait_until_monotonic = time.monotonic() + max(0.0, self.startup_wait_seconds)
         self._thread = threading.Thread(target=self._run_thread, name="binance-ws-all-ticker", daemon=True)
         self._thread.start()
@@ -394,6 +397,62 @@ class BinanceWsAllTickerSnapshotSource:
                     )
                 )
         return snapshots
+
+    def seed_from_snapshots(self, snapshots: list[ExchangeTickerSnapshot]) -> dict[str, object]:
+        now_ms = int(time.time() * 1000)
+        updates: dict[str, ExchangeTickerSnapshot] = {}
+        ok_count = 0
+        missing_count = 0
+        for snapshot in snapshots:
+            if snapshot.status != "ok":
+                missing_count += 1
+                continue
+            try:
+                market_id = str(self.exchange.get_market_id(snapshot.symbol)).strip().upper()
+            except Exception:
+                missing_count += 1
+                continue
+            if not market_id:
+                missing_count += 1
+                continue
+            ok_count += 1
+            updates[market_id] = ExchangeTickerSnapshot(
+                symbol=snapshot.symbol,
+                fetched_at_ms=now_ms,
+                last_price=snapshot.last_price,
+                quote_volume_24h=snapshot.quote_volume_24h,
+                trade_count_24h=snapshot.trade_count_24h,
+                last_price_source=f"rest_startup_seed.{snapshot.last_price_source}",
+                quote_volume_source=f"rest_startup_seed.{snapshot.quote_volume_source}",
+                trade_count_source=f"rest_startup_seed.{snapshot.trade_count_source}",
+                status="ok",
+                reason=None,
+            )
+        with self._lock:
+            if updates:
+                self._ticker_by_market_id.update(updates)
+                self._last_message_at_ms = now_ms
+                self._last_error = None
+                self._last_payload_source = "rest_startup_seed"
+                self._seeded_at_ms = now_ms
+                self._seeded_count = len(updates)
+                self._ready_event.set()
+            return {
+                "seeded_count": len(updates),
+                "ok_count": ok_count,
+                "missing_count": missing_count,
+                "seeded_at_ms": self._seeded_at_ms if updates else "",
+            }
+
+    def source_status(self) -> tuple[str, str]:
+        with self._lock:
+            if self._last_payload_source == "rest_startup_seed":
+                return (
+                    "primary_seeded_rest",
+                    f"seeded_at_ms={self._seeded_at_ms if self._seeded_at_ms is not None else ''};"
+                    f"seeded_count={self._seeded_count}",
+                )
+        return "primary", ""
 
     def close(self) -> None:
         self._stop_event.set()
@@ -489,6 +548,7 @@ class BinanceWsAllTickerSnapshotSource:
             self._ticker_by_market_id.update(updates)
             self._last_message_at_ms = now_ms
             self._last_error = None
+            self._last_payload_source = "ws"
             self._connection_status = "connected"
             self._ready_event.set()
 
@@ -1013,6 +1073,7 @@ class LiveAnomalyConfig:
     live_ws_ticker_enabled: bool = True
     live_ws_ticker_stale_ms: int = 5_000
     live_ws_ticker_startup_wait_seconds: float = 10.0
+    live_ws_ticker_startup_seed_enabled: bool = True
     live_ws_aggtrade_enabled: bool = True
     live_ws_aggtrade_stale_ms: int = 5_000
     live_ws_aggtrade_buffer_minutes: int = 20
@@ -1990,6 +2051,7 @@ class AnomalyMicroLiveRunner:
         self._closed_pnl_usdt_total = 0.0
         self._closed_notional_usdt_total = 0.0
         self._orphan_orders_cancelled_total = 0
+        self._detected_anomalies_total = 0
         self._state_lock = threading.RLock()
         self._inactive_cursor = 0
         self._order_reconcile_cursor = 0
@@ -2066,6 +2128,7 @@ class AnomalyMicroLiveRunner:
                 "live_ws_ticker_enabled": bool(self.config.live_ws_ticker_enabled),
                 "live_ws_ticker_stale_ms": int(self.config.live_ws_ticker_stale_ms),
                 "live_ws_ticker_startup_wait_seconds": float(self.config.live_ws_ticker_startup_wait_seconds),
+                "live_ws_ticker_startup_seed_enabled": bool(self.config.live_ws_ticker_startup_seed_enabled),
                 "aggtrade_source": self.aggtrade_source.source_id if self.aggtrade_source is not None else "rest_fetch_aggtrades",
                 "live_ws_aggtrade_enabled": bool(self.config.live_ws_aggtrade_enabled),
                 "live_ws_aggtrade_stale_ms": int(self.config.live_ws_aggtrade_stale_ms),
@@ -2075,6 +2138,7 @@ class AnomalyMicroLiveRunner:
                 "excluded_high_cap_bases": sorted(LIVE_DEFAULT_EXCLUDED_HIGH_CAP_BASES),
             },
         )
+        self._seed_startup_ticker_radar(symbols)
         try:
             self._validate_required_ticker_radar_source(symbols)
         except LiveStartupError:
@@ -2121,6 +2185,7 @@ class AnomalyMicroLiveRunner:
                 opened_total, open_positions, closed_total, orphan_total = self._live_counts()
                 active_symbol_count = self._active_live_symbol_count()
                 closed_pnl_pct = self._closed_pnl_pct_total()
+                detected_anomalies_total = self._detected_anomalies_count()
                 full_cycle_seconds = self._full_symbol_cycle_seconds(
                     batch_seconds=cycle_seconds,
                     batch_size=len(batch),
@@ -2148,6 +2213,7 @@ class AnomalyMicroLiveRunner:
                         "ticker_radar_missing_count": ticker_stats.missing_count,
                         "ticker_radar_promoted_count": ticker_stats.promoted_count,
                         "ticker_radar_promotion_candidates_count": ticker_stats.promotion_candidates_count,
+                        "detected_anomalies_total": detected_anomalies_total,
                         "batch_select_seconds": round(batch_select_seconds, 3),
                         "ws_aggtrade_subscription_seconds": round(ws_aggtrade_seconds, 3),
                         "ws_aggtrade_enabled": bool(ws_aggtrade_stats.enabled),
@@ -2197,6 +2263,8 @@ class AnomalyMicroLiveRunner:
                         ws_issue_text = " · WS: ticker нет" + (f"/{ticker_error_label}" if ticker_error_label else "")
                     elif ticker_stats.status == "degraded_rest_fallback":
                         ws_issue_text = " · WS: ticker REST" + (f"/{ticker_error_label}" if ticker_error_label else "")
+                    elif ticker_stats.status == "primary_seeded_rest":
+                        ws_issue_text = " · WS: ticker seed"
                     elif ws_aggtrade_stats.enabled and ws_aggtrade_stats.target_count > 0:
                         subscribed_count = _optional_int(ws_aggtrade_stats.subscribed_count)
                         connection_status = (ws_aggtrade_stats.connection_status or "").lower()
@@ -2216,7 +2284,7 @@ class AnomalyMicroLiveRunner:
                         coverage_text = f" · обход ~{full_cycle_seconds:.0f}s"
                     orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
                     self._status_logger.status(
-                        f"live · {cycle_seconds:.1f}s · события {self.artifacts.events_written} · "
+                        f"live · {cycle_seconds:.1f}s · аномалии {detected_anomalies_total} · "
                         f"активно {active_symbol_count} · позиции {open_positions} · "
                         f"закрыто {closed_total} · PNL {_format_percent(closed_pnl_pct, signed=False)}"
                         f"{ws_issue_text}{coverage_text}{orphan_text}"
@@ -2313,7 +2381,12 @@ class AnomalyMicroLiveRunner:
         primary_source = self.ticker_snapshot_source
         try:
             snapshots = primary_source.fetch_snapshots(tuple(symbols))
-            return snapshots, primary_source.source_id, "primary", ""
+            source_status = "primary"
+            source_reason = ""
+            status_provider = getattr(primary_source, "source_status", None)
+            if callable(status_provider):
+                source_status, source_reason = status_provider()
+            return snapshots, primary_source.source_id, source_status, source_reason
         except Exception as primary_exc:
             if primary_source.source_id == "rest_fetch_tickers":
                 raise
@@ -2375,6 +2448,48 @@ class AnomalyMicroLiveRunner:
                 "degraded_rest_fallback",
                 f"primary {primary_source.source_id} failed: {type(primary_exc).__name__}: {str(primary_exc)[:240]}",
             )
+
+    def _seed_startup_ticker_radar(self, symbols: list[str]) -> None:
+        if not (
+            self.config.live_ws_ticker_startup_seed_enabled
+            and self._ticker_radar_required_for_subminute_gate()
+        ):
+            return
+        seed_consumer = getattr(self.ticker_snapshot_source, "seed_from_snapshots", None)
+        if not callable(seed_consumer):
+            return
+        seed_source = RestLiveTickerSnapshotSource(self.exchange)
+        try:
+            snapshots = seed_source.fetch_snapshots(tuple(symbols))
+            seed_result = seed_consumer(snapshots)
+        except Exception as exc:
+            self.artifacts.append_event(
+                "ticker_radar_startup_seed_failed",
+                "__live__",
+                {
+                    "seed_source": seed_source.source_id,
+                    "primary_source": self.ticker_snapshot_source.source_id,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc)[:500],
+                    "symbols_total": len(symbols),
+                    "policy": "continue_with_primary_ws_or_explicit_degraded_fallback",
+                },
+            )
+            return
+        self.artifacts.append_event(
+            "ticker_radar_startup_seeded",
+            "__live__",
+            {
+                "seed_source": seed_source.source_id,
+                "primary_source": self.ticker_snapshot_source.source_id,
+                "symbols_total": len(symbols),
+                "seeded_count": seed_result.get("seeded_count", 0),
+                "ok_count": seed_result.get("ok_count", 0),
+                "missing_count": seed_result.get("missing_count", 0),
+                "seeded_at_ms": seed_result.get("seeded_at_ms", ""),
+                "policy": "one_rest_snapshot_initializes_ws_ticker_cache_only",
+            },
+        )
 
     def _validate_required_ticker_radar_source(self, symbols: list[str]) -> None:
         if not self._ticker_radar_required_for_subminute_gate():
@@ -3030,6 +3145,10 @@ class AnomalyMicroLiveRunner:
         promotions.sort(key=lambda item: (float(item["score"]), str(item["symbol"])), reverse=True)
         return promotions
 
+    def _detected_anomalies_count(self) -> int:
+        with self._state_lock:
+            return self._detected_anomalies_total
+
     def _mark_ticker_radar_watch(
         self,
         symbol: str,
@@ -3058,7 +3177,9 @@ class AnomalyMicroLiveRunner:
                 quote_volume_delta_ratio=quote_volume_delta_ratio,
             )
             if should_emit:
+                self._detected_anomalies_total += 1
                 event_payload = {
+                    "detected_anomaly_index": self._detected_anomalies_total,
                     "reason": reason,
                     "expires_at_ms": expires_at_ms,
                     "ttl_ms": int(self.config.ticker_radar_watch_ttl_ms),

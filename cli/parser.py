@@ -228,6 +228,12 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--live-ws-ticker-stale-ms", type=_positive_int_for("--live-ws-ticker-stale-ms"), default=5_000)
     anomaly_live.add_argument("--live-ws-ticker-startup-wait-seconds", type=float, default=10.0)
     anomaly_live.add_argument(
+        "--live-ws-ticker-startup-seed-enabled",
+        type=_str_to_bool,
+        default=True,
+        help="Seed the WS ticker cache once from REST at startup so discovery does not begin with a partially warmed !ticker stream; seed usage is reported in live_events.",
+    )
+    anomaly_live.add_argument(
         "--live-ws-aggtrade-enabled",
         type=_str_to_bool,
         default=True,

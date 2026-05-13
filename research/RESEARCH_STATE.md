@@ -954,3 +954,12 @@ Current commit: UNKNOWN.
 A post-P192 live smoke no longer shows DNS failures, but ticker WS remains `connected` without messages and discovery falls back to REST. The likely current root cause is stale unrouted Binance futures WebSocket URLs for market streams. Proposed P193 routes ticker and aggTrade streams through `/market`, matching Binance's migrated USD-M futures WebSocket structure.
 
 Next check: run a short live smoke and verify ticker discovery uses `binance_ws_all_ticker`, aggTrade effective source is mostly `ws`, and REST degraded events disappear except during real transport failures.
+
+
+## 2026-05-13 — P194 proposed: WS ticker startup seed and anomaly heartbeat counter
+
+Current commit: UNKNOWN.
+
+A post-P193 live smoke showed ticker discovery on the primary WS route, but the all-ticker cache warmed from roughly 100/525 to 524/525 over the first seconds. Proposed P194 seeds the WS ticker cache once from REST at startup with explicit `rest_startup_seed.*` labels, avoiding the initial blind spot without hiding the source. The inline heartbeat should stop using audit row count as `события` and instead show cumulative detected ticker-radar anomaly promotions.
+
+Next check: run a short live smoke and verify `ticker_radar_startup_seeded`, low/no initial `ticker_radar_missing_fields` spam, `аномалии` in the console, and transition from `primary_seeded_rest` to primary WS after real stream updates.
