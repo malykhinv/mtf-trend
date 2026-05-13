@@ -945,3 +945,12 @@ Status: PROPOSED. Commit: UNKNOWN.
 Reason: live artifacts showed REST ticker discovery working but both aiohttp WebSockets failing with `ClientConnectorDNSError: Could not contact DNS servers`. The next clean fix is to force aiohttp WS connections through `ThreadedResolver` / OS `getaddrinfo`, then surface the remaining DNS cause directly in the inline live status.
 
 Validation target: after applying P192, run live and check whether `WS: ticker REST/dns` disappears. If it remains, run OS-level DNS checks for `fstream.binance.com`; code is then reporting a real local DNS/network problem rather than masking it.
+
+
+## 2026-05-13 — P193 proposed: Binance futures WS market route
+
+Current commit: UNKNOWN.
+
+A post-P192 live smoke no longer shows DNS failures, but ticker WS remains `connected` without messages and discovery falls back to REST. The likely current root cause is stale unrouted Binance futures WebSocket URLs for market streams. Proposed P193 routes ticker and aggTrade streams through `/market`, matching Binance's migrated USD-M futures WebSocket structure.
+
+Next check: run a short live smoke and verify ticker discovery uses `binance_ws_all_ticker`, aggTrade effective source is mostly `ws`, and REST degraded events disappear except during real transport failures.

@@ -2117,3 +2117,19 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ```
 
 Live smoke expectation: if the previous failure came from aiohttp's async DNS resolver, WS ticker/flow should connect and the `/dns` degraded suffix should disappear. If local DNS/network still cannot resolve `fstream.binance.com`, the console should explicitly show `WS: ticker REST/dns` or `WS: flow REST/dns` and artifacts should keep the full exception.
+
+
+## P193 — route Binance futures WS market streams to /market (PROPOSED)
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Reason: after P192, live artifacts show DNS is no longer the blocker: WS transport reaches `connected`, but all-ticker stays `ws_ticker_not_ready;status=connected;last_message_at_ms=` and ticker discovery degrades to REST. Binance USD-M futures docs moved regular market streams such as `!ticker@arr` and `<symbol>@aggTrade` to the routed `/market` WebSocket endpoint; legacy unrouted `/ws` and `/stream` paths can connect but stop pushing market streams after the migration deadline.
+
+Changes:
+- Change all-market ticker URL from `wss://fstream.binance.com/ws/!ticker@arr` to `wss://fstream.binance.com/market/ws/!ticker@arr`.
+- Change dynamic aggTrade combined connection from `wss://fstream.binance.com/stream` to `wss://fstream.binance.com/market/stream`.
+- Keep ThreadedResolver and explicit REST degraded fallback; no silent fallback is added.
+
+Validation to run after apply:
+- `python -m compileall data/exchanges research_tools cli constants.py main.py`
+- Small live smoke: expect `ticker_radar_startup_ready.source=binance_ws_all_ticker`, no repeated `ticker_radar_source_degraded`, and `ws_aggtrade_effective_source=ws` after subscription warm-up.

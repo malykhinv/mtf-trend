@@ -48,8 +48,8 @@ CACHED_OHLCV_DTYPES = {
     "taker_buy_quote_volume": "float64",
 }
 HOUR_MS = 60 * 60 * 1000
-BINANCE_FUTURES_ALL_TICKER_WS_URL = "wss://fstream.binance.com/ws/!ticker@arr"
-BINANCE_FUTURES_COMBINED_WS_URL = "wss://fstream.binance.com/stream"
+BINANCE_FUTURES_ALL_TICKER_WS_URL = "wss://fstream.binance.com/market/ws/!ticker@arr"
+BINANCE_FUTURES_COMBINED_WS_URL = "wss://fstream.binance.com/market/stream"
 DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS = 360_000
 ANIMAL_EMOJIS = (
     "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
