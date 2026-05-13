@@ -969,6 +969,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             _parse_grid_values,
             _parse_grid_exit_rules,
             _parse_grid_profile_values,
+            collect_pair_anomaly_rows_for_configs,
             run_anomaly_strategy_backtest,
         )
         from research_tools.anomaly_config import ANOMALY_BACKTEST_TIMEFRAME_PAIRS
@@ -999,7 +1000,11 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
 
         run_index_rows: list[dict[str, str]] = []
 
-        def _run_timeframe_pair(setup_timeframe: str, entry_timeframe: str, pair_output_dir: Path) -> None:
+        def _build_timeframe_pair_config(
+            setup_timeframe: str,
+            entry_timeframe: str,
+            pair_output_dir: Path,
+        ) -> AnomalyBacktestConfig:
             lab_config = AnomalyLabConfig(
                 cache_dir=config.backtest.cache_dir,
                 output_dir=pair_output_dir,
@@ -1016,7 +1021,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             feature_contract = (
                 "htf_setup_ltf_entry_v1" if entry_timeframe != setup_timeframe else "closed_setup_tf_v1"
             )
-            backtest_config = AnomalyBacktestConfig(
+            return AnomalyBacktestConfig(
                 lab_config=lab_config,
                 setup_timeframe=setup_timeframe,
                 entry_timeframe=entry_timeframe,
@@ -1103,6 +1108,19 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 max_hold_candles=int(args.max_hold_candles),
                 fee_rate=float(args.fee_rate),
             )
+
+        def _run_timeframe_pair(
+            setup_timeframe: str,
+            entry_timeframe: str,
+            pair_output_dir: Path,
+            *,
+            precollected_candidates: pd.DataFrame | None = None,
+        ) -> None:
+            backtest_config = _build_timeframe_pair_config(
+                setup_timeframe,
+                entry_timeframe,
+                pair_output_dir,
+            )
             print(
                 f"anomaly-lab: running {setup_timeframe}/{entry_timeframe} -> {pair_output_dir}",
                 flush=True,
@@ -1110,6 +1128,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             run_anomaly_strategy_backtest(
                 backtest_config,
                 symbols=getattr(args, "symbols", None),
+                precollected_candidates=precollected_candidates,
                 run_entry_grid=bool(getattr(args, "run_entry_grid", False)),
                 grid_oi3_values=_parse_grid_values(
                     str(getattr(args, "grid_oi3_values", "0.01,0.02,0.03")),
@@ -1131,9 +1150,33 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 {
                     "setup_timeframe": setup_timeframe,
                     "entry_timeframe": entry_timeframe,
-                    "feature_contract": feature_contract,
+                    "feature_contract": backtest_config.feature_contract,
+                    "collection_mode": (
+                        "single_pair" if explicit_timeframe else "symbol_major_precollected"
+                    ),
                     "output_dir": str(pair_output_dir),
                 }
+            )
+
+        precollected_by_pair: dict[tuple[str, str], pd.DataFrame] = {}
+        if not explicit_timeframe:
+            collection_configs = [
+                _build_timeframe_pair_config(
+                    setup_timeframe,
+                    entry_timeframe,
+                    output_dir / f"{setup_timeframe}_{entry_timeframe}".replace("/", "_"),
+                )
+                for setup_timeframe, entry_timeframe in timeframe_pairs
+            ]
+            print(
+                "anomaly-lab: collecting candidates in one symbol-major pass across timeframe pairs",
+                flush=True,
+            )
+            precollected_by_pair = collect_pair_anomaly_rows_for_configs(
+                collection_configs,
+                symbols=getattr(args, "symbols", None),
+                progress_label="anomaly candidates tf-set",
+                include_derivatives_context=False,
             )
 
         for setup_timeframe, entry_timeframe in timeframe_pairs:
@@ -1142,7 +1185,12 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 if explicit_timeframe
                 else output_dir / f"{setup_timeframe}_{entry_timeframe}".replace("/", "_")
             )
-            _run_timeframe_pair(setup_timeframe, entry_timeframe, pair_output_dir)
+            _run_timeframe_pair(
+                setup_timeframe,
+                entry_timeframe,
+                pair_output_dir,
+                precollected_candidates=precollected_by_pair.get((setup_timeframe, entry_timeframe)),
+            )
 
         if not explicit_timeframe:
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -1150,7 +1198,13 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             with index_path.open("w", newline="", encoding="utf-8") as file:
                 writer = csv.DictWriter(
                     file,
-                    fieldnames=["setup_timeframe", "entry_timeframe", "feature_contract", "output_dir"],
+                    fieldnames=[
+                        "setup_timeframe",
+                        "entry_timeframe",
+                        "feature_contract",
+                        "collection_mode",
+                        "output_dir",
+                    ],
                 )
                 writer.writeheader()
                 writer.writerows(run_index_rows)

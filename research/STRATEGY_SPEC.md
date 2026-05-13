@@ -353,6 +353,8 @@ Intended anomaly TF sets are:
 
 The anomaly-lab CLI default must run all three intended TF sets when no timeframe flags are provided. Single-pair runs are explicit override/debug mode only, via `--timeframe`, `--setup-timeframe`, or `--entry-timeframe`.
 
+Default multi-TF backtests should collect setup candidates in a symbol-major pass: for a selected symbol, evaluate all intended TF sets before moving to the next symbol. Per-pair artifacts stay separated, but symbol/frame reads should not be repeated once per TF set.
+
 For a pair such as `5m/30s`, live does not wait for the 5m candle to close. It aggregates closed 30s buckets inside the current 5m bucket and evaluates setup flow on the forming HTF candle. Forming HTF flow is judged by pace-normalized quote-volume and trade-count ratios against the closed HTF baseline, plus a raw-progress floor so very small early bursts are not treated as a real wake-up.
 
 LTF confirmation should not re-prove the whole pump thesis. It confirms that the entry is still executable: activation hold, path/verticality, freshness, price drift, TP already reached, RR collapse and actual exchange fillability.

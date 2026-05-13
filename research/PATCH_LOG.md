@@ -1336,3 +1336,38 @@ Monkeypatched smoke confirmed default pairs:
 ### Risk
 
 Low/medium: the default command now does roughly three backtests instead of one, so runtime and chart generation cost increase. This is intended because the old default result was misleading; explicit `--timeframe 1m` still allows the legacy single run.
+
+## P172 - Collect anomaly TF sets in one symbol-major pass
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+P171 made the default anomaly lab run all working TF sets, but it still launched three independent backtests. That meant the backtest walked the symbol universe once per TF pair instead of checking all TF sets while the symbol frames were already loaded.
+
+### Change
+
+- Add `collect_pair_anomaly_rows_for_configs()` for symbol-major candidate collection across multiple `AnomalyBacktestConfig` objects.
+- Read each symbol/timeframe frame once per symbol pass, then evaluate all eligible TF pairs for that symbol.
+- Let `run_anomaly_strategy_backtest()` accept `precollected_candidates`, preserving existing per-pair artifact writing, signal filtering, trade simulation, grids and charts.
+- Change default `run-anomaly-lab` multi-TF mode to precollect candidates once, then run per-pair artifact pipelines from those precollected rows.
+- Add `collection_mode` to `anomaly_lab_timeframe_runs.csv`.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall cli\commands.py cli\parser.py research_tools\anomaly_strategy_backtest.py main.py
+```
+
+Smoke checks:
+
+```text
+CLI default calls collect_pair_anomaly_rows_for_configs once with 5m/30s, 1m/15s, 1m/5s, then runs three per-pair artifact pipelines with precollected candidates.
+Direct single-config comparison on ATH/USDT:USDT 1m/15s over 7 days produced the same candidate decision timestamp in single and multi collectors.
+```
+
+### Risk
+
+Medium: candidate collection order changed for default multi-TF runs. The per-pair downstream logic is unchanged, but the next full run should compare candidate/signal counts against the prior indexed run for the same end timestamp before using profitability deltas.

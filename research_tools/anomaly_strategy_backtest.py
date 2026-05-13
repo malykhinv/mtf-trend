@@ -1198,6 +1198,233 @@ def collect_pair_anomaly_rows(
     return result
 
 
+def _pair_key(config: AnomalyBacktestConfig) -> tuple[str, str]:
+    return (_effective_setup_timeframe(config), _effective_entry_timeframe(config))
+
+
+def _resolve_pair_collection_window(config: AnomalyBacktestConfig) -> tuple[int, int, str]:
+    lab_config = config.lab_config
+    entry_timeframe = _effective_entry_timeframe(config)
+    entry_cache_timeframe = _resolve_entry_cache_timeframe(lab_config.cache_dir, entry_timeframe)
+    end_ms = lab_config.end_timestamp_ms
+    if end_ms is None:
+        max_timestamp: int | None = None
+        for path in lab_config.cache_dir.glob(f"*/{entry_cache_timeframe}/data.parquet"):
+            try:
+                timestamps = pd.read_parquet(path, columns=["timestamp"])
+            except Exception:
+                continue
+            if timestamps.empty:
+                continue
+            current = int(timestamps["timestamp"].max())
+            max_timestamp = current if max_timestamp is None else max(max_timestamp, current)
+        end_ms = int(datetime.now(tz=UTC).timestamp() * 1000) if max_timestamp is None else max_timestamp
+    start_ms = int(
+        (
+            datetime.fromtimestamp(int(end_ms) / 1000, UTC)
+            - pd.Timedelta(days=lab_config.days)
+        ).timestamp()
+        * 1000
+    )
+    return start_ms, int(end_ms), entry_cache_timeframe
+
+
+def _cache_symbols_for_timeframe(cache_dir: Path, timeframe: str) -> set[str]:
+    return {
+        _symbol_from_cache_symbol_dir(path.parent.parent)
+        for path in cache_dir.glob(f"*%2FUSDT%3AUSDT/{timeframe}/data.parquet")
+    }
+
+
+def collect_pair_anomaly_rows_for_configs(
+    configs: Iterable[AnomalyBacktestConfig],
+    *,
+    symbols: Iterable[str] | None = None,
+    progress_label: str | None = None,
+    include_derivatives_context: bool = True,
+) -> dict[tuple[str, str], pd.DataFrame]:
+    """Collect pair candidates in one symbol-major pass across multiple TF sets."""
+
+    resolved_configs = [_apply_red_flag_profile(config) for config in configs]
+    if not resolved_configs:
+        return {}
+
+    wanted_symbols = set(symbols) if symbols is not None else None
+    states: list[dict[str, object]] = []
+    rows_by_key: dict[tuple[str, str], list[dict[str, object]]] = {}
+    for config in resolved_configs:
+        setup_timeframe, entry_timeframe = _pair_key(config)
+        key = (setup_timeframe, entry_timeframe)
+        rows_by_key.setdefault(key, [])
+        start_ms, end_ms, entry_cache_timeframe = _resolve_pair_collection_window(config)
+        setup_symbols = _cache_symbols_for_timeframe(config.lab_config.cache_dir, setup_timeframe)
+        if wanted_symbols is not None:
+            setup_symbols &= wanted_symbols
+        entry_ms = _timeframe_to_milliseconds(entry_timeframe)
+        eligible_symbols = set(setup_symbols)
+        if entry_timeframe != setup_timeframe and entry_ms < 60_000:
+            entry_symbols = _cache_symbols_for_timeframe(config.lab_config.cache_dir, entry_cache_timeframe)
+            if wanted_symbols is not None:
+                entry_symbols &= wanted_symbols
+            if not entry_symbols:
+                rows_by_key[key].append(
+                    {
+                        "symbol": "__all__",
+                        "timeframe": setup_timeframe,
+                        "setup_timeframe": setup_timeframe,
+                        "entry_timeframe": entry_timeframe,
+                        "feature_contract": "htf_setup_ltf_entry_v1",
+                        "status": "error",
+                        "error": f"missing_subminute_entry_cache:{entry_timeframe}",
+                        "execution_model": "requires_historical_aggtrades_cache",
+                    }
+                )
+                eligible_symbols = set()
+            else:
+                eligible_symbols &= entry_symbols
+        states.append(
+            {
+                "config": config,
+                "key": key,
+                "setup_timeframe": setup_timeframe,
+                "entry_timeframe": entry_timeframe,
+                "entry_cache_timeframe": entry_cache_timeframe,
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "eligible_symbols": eligible_symbols,
+            }
+        )
+
+    all_symbols = sorted(
+        {
+            symbol
+            for state in states
+            for symbol in state["eligible_symbols"]  # type: ignore[union-attr]
+        }
+    )
+    progress_started_at = time.monotonic()
+    next_progress_pct = 0
+    for processed_count, symbol in enumerate(all_symbols, start=1):
+        symbol_states = [
+            state
+            for state in states
+            if symbol in state["eligible_symbols"]  # type: ignore[operator]
+        ]
+        frame_cache: dict[str, pd.DataFrame] = {}
+        frame_errors: dict[str, Exception] = {}
+        required_timeframes = sorted(
+            {
+                str(state["setup_timeframe"])
+                for state in symbol_states
+            }
+            | {
+                str(state["entry_cache_timeframe"])
+                for state in symbol_states
+            }
+        )
+        cache_dir = resolved_configs[0].lab_config.cache_dir
+        for timeframe in required_timeframes:
+            try:
+                frame_cache[timeframe] = _read_symbol_frame(cache_dir, symbol, timeframe)
+            except Exception as exc:
+                frame_errors[timeframe] = exc
+
+        for state in symbol_states:
+            config = state["config"]
+            assert isinstance(config, AnomalyBacktestConfig)
+            setup_timeframe = str(state["setup_timeframe"])
+            entry_timeframe = str(state["entry_timeframe"])
+            entry_cache_timeframe = str(state["entry_cache_timeframe"])
+            key = state["key"]
+            assert isinstance(key, tuple)
+            try:
+                if setup_timeframe in frame_errors:
+                    raise frame_errors[setup_timeframe]
+                if entry_cache_timeframe in frame_errors:
+                    raise frame_errors[entry_cache_timeframe]
+                start_ms = int(state["start_ms"])
+                end_ms = int(state["end_ms"])
+                setup_ms = _timeframe_to_milliseconds(setup_timeframe)
+                setup_frame = frame_cache[setup_timeframe]
+                entry_frame = frame_cache[entry_cache_timeframe]
+                setup_frame = setup_frame.loc[
+                    (setup_frame["timestamp"] >= start_ms - config.lab_config.baseline_candles * setup_ms)
+                    & (setup_frame["timestamp"] <= end_ms)
+                ].copy()
+                entry_frame = entry_frame.loc[
+                    (entry_frame["timestamp"] >= start_ms)
+                    & (entry_frame["timestamp"] <= end_ms)
+                ].copy()
+                if entry_cache_timeframe != entry_timeframe:
+                    entry_frame = _aggregate_frame_to_timeframe(
+                        entry_frame,
+                        timeframe_ms=_timeframe_to_milliseconds(entry_timeframe),
+                    )
+                    entry_flow_source = f"cached_{entry_cache_timeframe}_aggregated_to_{entry_timeframe}"
+                else:
+                    entry_flow_source = _materialized_entry_flow_source(
+                        entry_frame,
+                        entry_timeframe=entry_timeframe,
+                    )
+                rows_by_key[key].extend(
+                    _collect_symbol_pair_rows(
+                        symbol=symbol,
+                        setup_frame=setup_frame,
+                        entry_frame=entry_frame,
+                        config=config,
+                        entry_flow_source=entry_flow_source,
+                    )
+                )
+            except Exception as exc:
+                rows_by_key[key].append(
+                    {
+                        "symbol": symbol,
+                        "timeframe": setup_timeframe,
+                        "setup_timeframe": setup_timeframe,
+                        "entry_timeframe": entry_timeframe,
+                        "feature_contract": "htf_setup_ltf_entry_v1",
+                        "status": "error",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+        if progress_label is not None and all_symbols:
+            current_pct = int(100 * processed_count / len(all_symbols))
+            if current_pct >= next_progress_pct or processed_count == len(all_symbols):
+                _emit_progress(
+                    label=progress_label,
+                    done=processed_count,
+                    total=len(all_symbols),
+                    started_at=progress_started_at,
+                )
+                next_progress_pct = current_pct + 5
+
+    result_by_key: dict[tuple[str, str], pd.DataFrame] = {}
+    for state in states:
+        config = state["config"]
+        assert isinstance(config, AnomalyBacktestConfig)
+        key = state["key"]
+        assert isinstance(key, tuple)
+        result = pd.DataFrame(rows_by_key.get(key, []))
+        if not result.empty and "timestamp_ms" in result.columns:
+            result.sort_values(["timestamp_ms", "symbol", "decision_timestamp_ms"], inplace=True)
+            result.reset_index(drop=True, inplace=True)
+        result = enrich_candidates_with_recent_spike_context(result, config=config)
+        context_label = f"{progress_label} {key[0]}/{key[1]}" if progress_label is not None else None
+        result = enrich_candidates_with_open_interest(
+            result,
+            cache_dir=config.lab_config.cache_dir,
+            progress_label=f"{context_label}: oi context" if context_label is not None else None,
+        )
+        if include_derivatives_context:
+            result = enrich_candidates_with_derivatives_context(
+                result,
+                cache_dir=config.lab_config.cache_dir,
+                progress_label=f"{context_label}: derivatives context" if context_label is not None else None,
+            )
+        result_by_key[key] = result
+    return result_by_key
+
+
 def _collect_symbol_pair_rows(
     *,
     symbol: str,
@@ -3014,6 +3241,7 @@ def run_anomaly_strategy_backtest(
     config: AnomalyBacktestConfig,
     *,
     symbols: Iterable[str] | None = None,
+    precollected_candidates: pd.DataFrame | None = None,
     run_entry_grid: bool = False,
     grid_oi3_values: Iterable[float] = (0.01, 0.02, 0.03),
     grid_hold_values: Iterable[int] = (1, 2),
@@ -3026,7 +3254,9 @@ def run_anomaly_strategy_backtest(
     config = _apply_red_flag_profile(config)
     output_dir = config.lab_config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
-    if _effective_entry_timeframe(config) != _effective_setup_timeframe(config):
+    if precollected_candidates is not None:
+        candidates = precollected_candidates.copy()
+    elif _effective_entry_timeframe(config) != _effective_setup_timeframe(config):
         candidates = collect_pair_anomaly_rows(
             config,
             symbols=symbols,

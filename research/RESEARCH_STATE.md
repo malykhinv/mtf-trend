@@ -742,3 +742,24 @@ The old 1m/1m mode is no longer implicit; it only runs when explicitly requested
 Multi-run artifacts are separated by pair under the output directory and indexed by anomaly_lab_timeframe_runs.csv.
 Next readout should compare all three per-pair summaries from the same end timestamp; do not mix old root-level 1m/1m artifacts with new per-pair outputs.
 ```
+
+2026-05-13 indexed anomaly-lab readout:
+
+```text
+Analyzed .output/results/anomaly_lab indexed subdirs only: 5m_30s, 1m_15s, 1m_5s.
+Closed trades: 98 across only 3 active UTC days, combined avg +0.3140%, median +0.2478%, sum +30.78%, WR 61.22%, TP1 57.14%.
+Best set remains 1m/15s: 44 closed, avg +0.5832%, sum +25.66%, WR 70.45%, TP1 65.91%.
+Reliability is not live-ready: entry cache coverage has symbols_covering_end=0 and entry caches end around 2026-05-11 08:35Z while requested end is 2026-05-13; no complete 7-day executable window.
+Combined result becomes negative without top 10 winners, so current edge is candidate evidence, not proven stability.
+Most promising live-available filter family: positive mark basis/context momentum + flow_hold>=1 + cap extreme effort/quote/trade ratios + reject serial/fast-fade recent context.
+Critical live-prep item: add a paper/live shadow run that logs selected TF arbitration, cache coverage, would-enter/would-skip reasons, and exchange fillability before real order launch.
+```
+
+P172 backtest orchestration status:
+
+```text
+Default multi-TF anomaly lab no longer walks symbols separately for 5m/30s, 1m/15s and 1m/5s.
+It now collects candidates in one symbol-major pass, reading each symbol/timeframe frame once and evaluating all eligible TF pairs before moving to the next symbol.
+Per-pair artifacts remain separated under the same indexed output directories.
+Next validation on a real run: compare candidate/signal/trade counts against the prior indexed run at a fixed end timestamp; any difference must be explained before interpreting PnL changes.
+```

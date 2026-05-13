@@ -1254,3 +1254,70 @@ Readout:
 After the next real run, analyze per-pair summaries from the indexed subdirectories only.
 If a root-level output exists from an older 1m/1m run, treat it as stale unless its timestamp and run index prove otherwise.
 ```
+
+---
+
+## 2026-05-13 - Indexed anomaly-lab live readiness analysis
+
+Data:
+
+```text
+Path: .output/results/anomaly_lab
+Included: indexed subdirs 5m_30s, 1m_15s, 1m_5s
+Excluded: root-level CSVs/charts from older single-run artifacts
+Feature contract: htf_setup_ltf_entry_v1
+Entry sources: cached_1s_aggregated_to_30s/15s/5s with real number_of_trades and quote_volume sources
+```
+
+Result:
+
+```text
+5m/30s: 17 closed, avg +0.1281%, sum +2.18%, WR 52.94%, TP1 47.06%
+1m/15s: 44 closed, avg +0.5832%, sum +25.66%, WR 70.45%, TP1 65.91%
+1m/5s: 37 closed, avg +0.0793%, sum +2.94%, WR 54.05%, TP1 51.35%
+Combined: 98 closed, avg +0.3140%, median +0.2478%, sum +30.78%, WR 61.22%, TP1 57.14%
+Active trade days: 2026-05-04..2026-05-06 UTC only
+```
+
+Reliability:
+
+```text
+Not production-live-ready. The evidence is promising but too short and top-tail sensitive.
+Top 5 winners contribute +21.79%; removing them leaves +8.98%.
+Removing top 10 winners leaves -3.90%, so the current result is not robust enough.
+Entry cache coverage has symbols_covering_end=0 for all entry TFs; the run requested through 2026-05-13 but executable subminute coverage ends around 2026-05-11 08:35Z.
+```
+
+Live-roadmap implication:
+
+```text
+Do not launch real orders from this evidence alone.
+Next most valuable work is a strict paper/shadow live readiness run with the same TF arbitration as production, explicit cache/exchange coverage telemetry, would-enter/would-skip diagnostics, and fillability checks.
+Candidate filters to validate before enabling: mark basis > 0, flow_hold>=1, effort-per-return cap, extreme quote/trade ratio cap, recent serial failed-spike/fast-fade context.
+```
+
+---
+
+## 2026-05-13 - P172 symbol-major multi-TF backtest collector
+
+Implementation:
+
+```text
+Default run-anomaly-lab multi-TF mode precollects candidates once across 5m/30s, 1m/15s, 1m/5s.
+The collector loops symbols first, reads required setup/entry cache frames once per symbol, and evaluates all eligible TF configs before the next symbol.
+Each pair still writes its own candidates/signals/trades/charts/run_config artifacts.
+```
+
+Validation:
+
+```text
+Compileall passed.
+Monkeypatched CLI smoke confirmed one collector call and three per-pair artifact pipeline calls receiving precollected candidates.
+Single vs multi collector comparison for ATH/USDT:USDT 1m/15s over 7 days matched candidate timestamp 1777885245000.
+```
+
+Next readout:
+
+```text
+Run a fixed-end small sample and compare candidate/signal/trade counts against the previous sequential collector before using any profitability changes.
+```
