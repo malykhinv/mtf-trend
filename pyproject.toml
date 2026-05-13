@@ -8,6 +8,7 @@ dependencies = [
   "pandas>=2.0",
   "ccxt>=4.0",
   "requests>=2.31",
+  "aiohttp>=3.9",
   "vectorbt>=0.26",
   "pyarrow>=14.0",
   "matplotlib>=3.8",

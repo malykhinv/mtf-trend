@@ -1446,3 +1446,140 @@ Next live-readout:
 ```text
 For scarce limits start shadow/test live with a low signal-scan-backfill-candles value and monitor missed_entry_replay_probe status/probe_truncated plus live_ohlcv_cache_read filled/gap rates.
 ```
+
+---
+
+## 2026-05-13 - P177 live latency review
+
+Readout from `.output/results/live_anomaly_runs/20260513_131621`:
+
+```text
+Full symbol cycle: roughly 10-12.5 minutes.
+Last 50 cycles: batch_seconds avg 21.65s, p50 21.64s, max 38.97s.
+Inactive symbols are nearly free because subminute pairs are deferred.
+Precise ticker-radar/active symbols cost roughly 2s median and up to 9.75s each, mostly from subminute aggTrade tail fetches.
+```
+
+Decision:
+
+```text
+Do not add another per-symbol 1m/5m OHLCV wake-up yet; it risks becoming a hidden second scan path.
+Add timing attribution and explicit precise-scan budget first.
+```
+
+Next live-readout:
+
+```text
+Run a short live sample and compare ticker_radar_seconds, signal_scan_seconds, cache_flush_seconds, precise_scan_symbols, ticker_radar_waiting_count, and aggtrade_network_calls.
+```
+
+---
+
+## 2026-05-13 - P178 live high-cap exclusion
+
+Decision:
+
+```text
+Use a conservative static list for default live universe only. Do not call CoinGecko or another external source.
+This is a universe narrowing choice, not proof of edge.
+```
+
+Expected readout:
+
+```text
+Next live run should contain live_symbol_universe_filter with excluded_count and excluded_symbols.
+Compare cycle timings before/after, but do not interpret PnL improvement as edge until the excluded universe is disclosed.
+```
+
+---
+
+## 2026-05-13 - Live timing diagnostic run 20260513_164045
+
+Input:
+
+```text
+Artifacts: .output/results/live_anomaly_runs/20260513_164045
+Duration: 69 completed live_cycle_summary rows
+Universe: 563 symbols; run predates static high-cap exclusion because live_symbol_universe_filter is absent.
+Orders: 0 opened, 0 closed
+```
+
+Timing readout:
+
+```text
+batch_seconds avg 16.259s, p50 16.047s, p90 27.656s, p95 31.578s, max 43.500s
+signal_scan_seconds avg 10.161s, p50 9.562s, p95 20.109s, max 34.375s
+cache_flush_seconds avg 4.977s, p50 4.000s, p95 11.734s, max 15.109s
+ticker_radar_seconds avg 0.454s, p50 0.313s, max 8.422s
+order_reconcile_seconds avg 0.665s; mostly 0 but occasional ~6.4-6.9s spikes
+```
+
+Interpretation:
+
+```text
+Main bottleneck is precise signal scan (~62.5% of batch time), then cache flush (~30.6%).
+Inactive symbols are almost free because subminute pairs are deferred.
+Precise ticker-radar symbols cost p50 ~2.0s, p95 ~5.7s, max 9.75s.
+AggTrade tail fetches remain the expensive path: 765 aggTrade requests, 612 network calls, 251 cycle-local cache hits.
+Cache flush is unexpectedly large and needs batching/less frequent flush or async/deferred write investigation.
+```
+
+Trading readout:
+
+```text
+No category_selected and no positions. Rejections were mostly reject_weak_start_flow (429) and reject_setup_too_early (326).
+This run proves latency bottlenecks, not edge.
+```
+
+---
+
+## 2026-05-13 - P179 live speed patch
+
+Patch:
+
+```text
+Expanded static high-cap exclusion list.
+Bounded non-forced live cache flush to 20 symbol/timeframe shards per cycle and changed defaults to 30s/50k rows.
+Implemented partial aggTrade raw range reuse inside the cycle cache.
+```
+
+Validation:
+
+```text
+compileall passed.
+run-anomaly-live --help exposes live_ohlcv_cache_flush_max_symbol_timeframes.
+Inline aggTrade range/dedupe smoke passed.
+```
+
+Next readout:
+
+```text
+Run the same default live command and compare against 20260513_164045:
+batch_seconds, signal_scan_seconds, cache_flush_seconds, aggtrade_network_calls, aggtrade_cache_hits, live_ohlcv_cache_gap, deferred_symbol_timeframes.
+```
+
+---
+
+## 2026-05-13 - P183 WebSocket ticker source
+
+Patch:
+
+```text
+Default live ticker radar source changed from REST fetch_tickers to Binance USD-M futures !ticker@arr WebSocket.
+No REST fallback is used while live_ws_ticker_enabled=true.
+```
+
+Validation:
+
+```text
+compileall passed.
+run-anomaly-live --help exposes live-ws-ticker controls.
+Inline not-ready and payload-normalization smokes passed.
+Real public WS smoke could not connect because local DNS could not resolve fstream.binance.com in the test environment; no REST fallback was used.
+```
+
+Next readout:
+
+```text
+Run a short live sample and check ticker_radar_snapshot.source, ticker_radar_failed reasons, radar promotions, and whether WS startup/stale windows create blind periods.
+```

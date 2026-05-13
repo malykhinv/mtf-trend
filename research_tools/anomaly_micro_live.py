@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import hashlib
 import html
@@ -19,7 +20,7 @@ from uuid import uuid4
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Protocol
 
 import pandas as pd
 
@@ -47,6 +48,7 @@ CACHED_OHLCV_DTYPES = {
     "taker_buy_quote_volume": "float64",
 }
 HOUR_MS = 60 * 60 * 1000
+BINANCE_FUTURES_ALL_TICKER_WS_URL = "wss://fstream.binance.com/ws/!ticker@arr"
 ANIMAL_EMOJIS = (
     "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
     "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦆", "🦅",
@@ -213,6 +215,223 @@ class LiveMarkBasisResult:
     age_ms: int | None = None
 
 
+class LiveTickerSnapshotSource(Protocol):
+    @property
+    def source_id(self) -> str:
+        """Stable diagnostics id for the ticker snapshot source."""
+
+    def fetch_snapshots(self, symbols: tuple[str, ...]) -> list[ExchangeTickerSnapshot]:
+        """Return ticker snapshots for the requested live universe."""
+
+
+@dataclass(frozen=True, slots=True)
+class RestLiveTickerSnapshotSource:
+    exchange: CcxtFuturesClient
+
+    @property
+    def source_id(self) -> str:
+        return "rest_fetch_tickers"
+
+    def fetch_snapshots(self, symbols: tuple[str, ...]) -> list[ExchangeTickerSnapshot]:
+        return self.exchange.fetch_ticker_snapshots(symbols)
+
+
+def _optional_float(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _optional_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+class BinanceWsAllTickerSnapshotSource:
+    source_id = "binance_ws_all_ticker"
+
+    def __init__(
+        self,
+        *,
+        exchange: CcxtFuturesClient,
+        stale_ms: int,
+        startup_wait_seconds: float,
+        logger: Callable[[str], None] = print,
+    ) -> None:
+        self.exchange = exchange
+        self.stale_ms = int(stale_ms)
+        self.startup_wait_seconds = float(startup_wait_seconds)
+        self.logger = logger
+        self._lock = threading.RLock()
+        self._stop_event = threading.Event()
+        self._ready_event = threading.Event()
+        self._ticker_by_market_id: dict[str, ExchangeTickerSnapshot] = {}
+        self._last_message_at_ms: int | None = None
+        self._last_error: str | None = None
+        self._connection_status = "starting"
+        self._startup_wait_until_monotonic = time.monotonic() + max(0.0, self.startup_wait_seconds)
+        self._thread = threading.Thread(target=self._run_thread, name="binance-ws-all-ticker", daemon=True)
+        self._thread.start()
+
+    def fetch_snapshots(self, symbols: tuple[str, ...]) -> list[ExchangeTickerSnapshot]:
+        if not symbols:
+            return []
+        wait_seconds = max(0.0, self._startup_wait_until_monotonic - time.monotonic())
+        if not self._ready_event.wait(timeout=wait_seconds):
+            raise RuntimeError(self._status_reason("ws_ticker_not_ready"))
+        now_ms = int(time.time() * 1000)
+        with self._lock:
+            last_message_at_ms = self._last_message_at_ms
+            last_error = self._last_error
+            connection_status = self._connection_status
+        if last_message_at_ms is None:
+            raise RuntimeError(self._status_reason("ws_ticker_no_messages"))
+        if now_ms - int(last_message_at_ms) > self.stale_ms:
+            raise RuntimeError(self._status_reason("ws_ticker_stale"))
+        snapshots: list[ExchangeTickerSnapshot] = []
+        with self._lock:
+            ticker_by_market_id = dict(self._ticker_by_market_id)
+        for symbol in symbols:
+            market_id = self.exchange.get_market_id(symbol)
+            snapshot = ticker_by_market_id.get(market_id)
+            if snapshot is None:
+                snapshots.append(
+                    ExchangeTickerSnapshot(
+                        symbol=symbol,
+                        fetched_at_ms=now_ms,
+                        last_price=None,
+                        quote_volume_24h=None,
+                        trade_count_24h=None,
+                        last_price_source="binance_ws_all_ticker",
+                        quote_volume_source="binance_ws_all_ticker",
+                        trade_count_source="binance_ws_all_ticker",
+                        status="missing",
+                        reason=f"ws_ticker_missing_market_id:{market_id}",
+                    )
+                )
+            else:
+                snapshots.append(
+                    ExchangeTickerSnapshot(
+                        symbol=symbol,
+                        fetched_at_ms=snapshot.fetched_at_ms,
+                        last_price=snapshot.last_price,
+                        quote_volume_24h=snapshot.quote_volume_24h,
+                        trade_count_24h=snapshot.trade_count_24h,
+                        last_price_source=snapshot.last_price_source,
+                        quote_volume_source=snapshot.quote_volume_source,
+                        trade_count_source=snapshot.trade_count_source,
+                        status=snapshot.status,
+                        reason=snapshot.reason,
+                    )
+                )
+        return snapshots
+
+    def close(self) -> None:
+        self._stop_event.set()
+
+    def _status_reason(self, reason: str) -> str:
+        with self._lock:
+            parts = [
+                reason,
+                f"status={self._connection_status}",
+                f"last_message_at_ms={self._last_message_at_ms if self._last_message_at_ms is not None else ''}",
+            ]
+            if self._last_error:
+                parts.append(f"last_error={self._last_error[:240]}")
+        return ";".join(parts)
+
+    def _run_thread(self) -> None:
+        while not self._stop_event.is_set():
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(self._run_ws_loop())
+            except Exception as exc:
+                self._set_status("error", f"{type(exc).__name__}: {exc}")
+            finally:
+                try:
+                    loop.close()
+                except Exception:
+                    pass
+            if not self._stop_event.is_set():
+                time.sleep(2.0)
+
+    async def _run_ws_loop(self) -> None:
+        import aiohttp
+
+        self._set_status("connecting", None)
+        timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=30)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.ws_connect(BINANCE_FUTURES_ALL_TICKER_WS_URL, heartbeat=20) as ws:
+                self._set_status("connected", None)
+                async for message in ws:
+                    if self._stop_event.is_set():
+                        await ws.close()
+                        return
+                    if message.type == aiohttp.WSMsgType.TEXT:
+                        self._handle_ws_payload(message.data)
+                    elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
+                        self._set_status("closed", "ws_closed")
+                        return
+                    elif message.type == aiohttp.WSMsgType.ERROR:
+                        self._set_status("error", f"ws_error:{ws.exception()}")
+                        return
+
+    def _handle_ws_payload(self, raw: str) -> None:
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            self._set_status("payload_error", f"json:{exc}")
+            return
+        rows = payload if isinstance(payload, list) else payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            self._set_status("payload_error", f"unexpected_payload:{type(payload).__name__}")
+            return
+        now_ms = int(time.time() * 1000)
+        updates: dict[str, ExchangeTickerSnapshot] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            market_id = str(row.get("s", "")).strip().upper()
+            if not market_id:
+                continue
+            last_price = _optional_float(row.get("c"))
+            quote_volume = _optional_float(row.get("q"))
+            trade_count = _optional_int(row.get("n"))
+            status = "ok" if last_price is not None and quote_volume is not None else "missing_fields"
+            reason = None if status == "ok" else "ws_ticker_missing_last_or_quote_volume"
+            updates[market_id] = ExchangeTickerSnapshot(
+                symbol=market_id,
+                fetched_at_ms=now_ms,
+                last_price=last_price,
+                quote_volume_24h=quote_volume,
+                trade_count_24h=trade_count,
+                last_price_source="binance_ws_all_ticker",
+                quote_volume_source="binance_ws_all_ticker",
+                trade_count_source="binance_ws_all_ticker",
+                status=status,
+                reason=reason,
+            )
+        if not updates:
+            self._set_status("payload_error", "no_valid_ticker_rows")
+            return
+        with self._lock:
+            self._ticker_by_market_id.update(updates)
+            self._last_message_at_ms = now_ms
+            self._last_error = None
+            self._connection_status = "connected"
+            self._ready_event.set()
+
+    def _set_status(self, status: str, error: str | None) -> None:
+        with self._lock:
+            self._connection_status = status
+            self._last_error = error
+
+
 SUPPORTED_LIVE_PUMP_CATEGORIES: dict[str, LivePumpCategory] = {
     "runner_oi_confirmed": LivePumpCategory(
         category_id="runner_oi_confirmed",
@@ -244,6 +463,50 @@ SUPPORTED_LIVE_PUMP_CATEGORIES: dict[str, LivePumpCategory] = {
         max_price_retention=0.98,
     ),
 }
+
+LIVE_DEFAULT_EXCLUDED_HIGH_CAP_BASES: frozenset[str] = frozenset(
+    {
+        "BTC",
+        "ETH",
+        "BNB",
+        "SOL",
+        "XRP",
+        "DOGE",
+        "ADA",
+        "TRX",
+        "LINK",
+        "AVAX",
+        "TON",
+        "SHIB",
+        "SUI",
+        "HBAR",
+        "XLM",
+        "UNI",
+        "ETC",
+        "NEAR",
+        "APT",
+        "ICP",
+        "ATOM",
+        "FIL",
+        "ARB",
+        "OP",
+        "AAVE",
+        "INJ",
+        "TIA",
+        "WIF",
+        "SEI",
+        "ENA",
+        "TAO",
+        "WLD",
+        "FET",
+        "RENDER",
+        "ALGO",
+        "VET",
+        "LTC",
+        "BCH",
+        "DOT",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,15 +540,20 @@ class LiveAnomalyConfig:
     max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.60
     position_notional_usdt: float = 12.0
     max_open_positions: int = 3
+    exclude_default_high_cap_symbols: bool = True
     symbol_batch_size: int = 20
     inactive_scan_slots_per_cycle: int | None = None
     scan_hot_timeframes_per_symbol: bool = True
     active_symbol_ttl_ms: int = 60_000
     ticker_radar_enabled: bool = True
+    live_ws_ticker_enabled: bool = True
+    live_ws_ticker_stale_ms: int = 5_000
+    live_ws_ticker_startup_wait_seconds: float = 10.0
     ticker_radar_interval_seconds: float = 5.0
     ticker_radar_watch_ttl_ms: int = 120_000
     ticker_radar_watch_batch_size: int = 5
     ticker_radar_max_promotions_per_cycle: int = 20
+    max_precise_scan_symbols_per_cycle: int | None = None
     ticker_radar_min_price_delta_pct: float = 0.003
     ticker_radar_min_quote_volume_delta_usdt: float = 10_000.0
     ticker_radar_min_quote_volume_delta_ratio: float = 3.0
@@ -299,8 +567,9 @@ class LiveAnomalyConfig:
     network_sleep_seconds: float = 30.0
     live_ohlcv_cache_enabled: bool = True
     live_ohlcv_cache_write_enabled: bool = True
-    live_ohlcv_cache_flush_interval_seconds: float = 10.0
-    live_ohlcv_cache_max_buffer_rows: int = 5_000
+    live_ohlcv_cache_flush_interval_seconds: float = 30.0
+    live_ohlcv_cache_max_buffer_rows: int = 50_000
+    live_ohlcv_cache_flush_max_symbol_timeframes: int | None = 20
     max_cycles: int | None = None
     stop_cooldown_hours: float = 12.0
     stop_limit_per_symbol: int = 2
@@ -368,6 +637,23 @@ class LiveTickerRadarWatch:
     price_delta_pct: float
     quote_volume_delta: float
     quote_volume_delta_ratio: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class LiveSymbolBatchSelection:
+    scheduler_source: str
+    active_due: tuple[str, ...]
+    active_waiting: tuple[str, ...]
+    radar_due: tuple[str, ...]
+    radar_waiting: tuple[str, ...]
+    inactive: tuple[str, ...]
+    batch: tuple[str, ...]
+    scan_modes: dict[str, str]
+    inactive_cursor_before: int
+    inactive_cursor_after: int
+    batch_in_full_cycle: int
+    full_symbol_cycle: int
+    precise_budget_remaining_after_active: int | None
 
 
 @dataclass(slots=True)
@@ -1143,12 +1429,24 @@ class AnomalyMicroLiveRunner:
         config: LiveAnomalyConfig,
         telegram: TelegramConfig,
         exchange_client: CcxtFuturesClient,
+        ticker_snapshot_source: LiveTickerSnapshotSource | None = None,
         logger: Callable[[str], None] = print,
     ) -> None:
         self.config = config
         self.exchange = exchange_client
         self._status_logger = _LiveStatusLogger(logger)
         self.logger = self._status_logger
+        if ticker_snapshot_source is not None:
+            self.ticker_snapshot_source = ticker_snapshot_source
+        elif config.live_ws_ticker_enabled:
+            self.ticker_snapshot_source = BinanceWsAllTickerSnapshotSource(
+                exchange=exchange_client,
+                stale_ms=config.live_ws_ticker_stale_ms,
+                startup_wait_seconds=config.live_ws_ticker_startup_wait_seconds,
+                logger=self.logger,
+            )
+        else:
+            self.ticker_snapshot_source = RestLiveTickerSnapshotSource(exchange_client)
         self._pump_categories = _resolve_live_pump_categories(config.pump_categories)
         self.artifacts = LiveArtifactWriter(
             config.results_dir / "live_anomaly_runs" / datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
@@ -1204,7 +1502,9 @@ class AnomalyMicroLiveRunner:
 
     def run(self) -> int:
         self._validate_startup()
-        symbols = list(self.config.symbols) or self.exchange.list_usdt_swap_symbols()
+        explicit_symbols = bool(self.config.symbols)
+        symbols = list(self.config.symbols) if explicit_symbols else self.exchange.list_usdt_swap_symbols()
+        symbols = self._filter_live_symbol_universe(symbols, explicit_symbols=explicit_symbols)
         if not symbols:
             raise LiveStartupError("Нет символов для live-обхода")
         category_ids = ",".join(category.category_id for category in self._pump_categories)
@@ -1222,6 +1522,11 @@ class AnomalyMicroLiveRunner:
                 "live_ohlcv_cache_write_enabled": bool(self.config.live_ohlcv_cache_write_enabled),
                 "live_ohlcv_cache_flush_interval_seconds": self.config.live_ohlcv_cache_flush_interval_seconds,
                 "live_ohlcv_cache_max_buffer_rows": self.config.live_ohlcv_cache_max_buffer_rows,
+                "live_ohlcv_cache_flush_max_symbol_timeframes": (
+                    self.config.live_ohlcv_cache_flush_max_symbol_timeframes
+                    if self.config.live_ohlcv_cache_flush_max_symbol_timeframes is not None
+                    else ""
+                ),
                 "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
                 "cache_provider": "parquet_tail_fetch_v1" if self._ohlcv_cache_storage is not None else "disabled",
                 "inactive_subminute_scan_policy": "defer_until_ticker_radar_or_active",
@@ -1229,6 +1534,11 @@ class AnomalyMicroLiveRunner:
                 "ticker_radar_required_for_inactive_subminute_gate": bool(
                     _live_config_has_subminute_entry_pairs(self.config)
                 ),
+                "ticker_snapshot_source": self.ticker_snapshot_source.source_id,
+                "live_ws_ticker_enabled": bool(self.config.live_ws_ticker_enabled),
+                "live_ws_ticker_stale_ms": int(self.config.live_ws_ticker_stale_ms),
+                "exclude_default_high_cap_symbols": bool(self.config.exclude_default_high_cap_symbols),
+                "excluded_high_cap_bases": sorted(LIVE_DEFAULT_EXCLUDED_HIGH_CAP_BASES),
             },
         )
         self.telegram.send(
@@ -1246,13 +1556,25 @@ class AnomalyMicroLiveRunner:
             self._reset_cycle_fetch_state()
             try:
                 opened_before, _, closed_before, orphan_before = self._live_counts()
+                ticker_started = time.monotonic()
                 self._maybe_update_ticker_radar(symbols)
+                ticker_seconds = time.monotonic() - ticker_started
+                batch_select_started = time.monotonic()
                 batch = self._next_symbol_batch(symbols)
+                batch_select_seconds = time.monotonic() - batch_select_started
+                scan_started = time.monotonic()
                 signals = self._scan_batch(batch)
+                scan_seconds = time.monotonic() - scan_started
+                open_started = time.monotonic()
                 for signal in signals:
                     self._maybe_open_position(signal)
+                open_seconds = time.monotonic() - open_started
+                reconcile_started = time.monotonic()
                 orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle)
+                reconcile_seconds = time.monotonic() - reconcile_started
+                flush_started = time.monotonic()
                 self._flush_live_ohlcv_cache_if_due(reason="cycle")
+                cache_flush_seconds = time.monotonic() - flush_started
                 cycle_seconds = time.monotonic() - cycle_started
                 opened_total, open_positions, closed_total, orphan_total = self._live_counts()
                 active_symbol_count = self._active_live_symbol_count()
@@ -1270,6 +1592,12 @@ class AnomalyMicroLiveRunner:
                         "batch_in_full_cycle": self._current_symbol_universe_batch_index,
                         "full_symbol_cycle": self._current_symbol_universe_cycle_index,
                         "batch_seconds": round(cycle_seconds, 3),
+                        "ticker_radar_seconds": round(ticker_seconds, 3),
+                        "batch_select_seconds": round(batch_select_seconds, 3),
+                        "signal_scan_seconds": round(scan_seconds, 3),
+                        "open_signal_seconds": round(open_seconds, 3),
+                        "order_reconcile_seconds": round(reconcile_seconds, 3),
+                        "cache_flush_seconds": round(cache_flush_seconds, 3),
                         "full_symbol_cycle_seconds": round(full_cycle_seconds, 3),
                         "opened_total": opened_total,
                         "open_positions": open_positions,
@@ -1364,6 +1692,45 @@ class AnomalyMicroLiveRunner:
         self.logger(f"live: достигнут лимит циклов{suffix}")
         return 0
 
+    def _filter_live_symbol_universe(self, symbols: list[str], *, explicit_symbols: bool) -> list[str]:
+        if explicit_symbols or not self.config.exclude_default_high_cap_symbols:
+            self.artifacts.append_event(
+                "live_symbol_universe_filter",
+                "__live__",
+                {
+                    "source": "explicit_symbols" if explicit_symbols else "exchange_usdt_swap_symbols",
+                    "input_count": len(symbols),
+                    "output_count": len(symbols),
+                    "excluded_count": 0,
+                    "excluded_symbols": [],
+                    "excluded_bases": [],
+                    "reason": "disabled_for_explicit_symbols" if explicit_symbols else "high_cap_filter_disabled",
+                },
+            )
+            return symbols
+        kept: list[str] = []
+        excluded: list[str] = []
+        for symbol in symbols:
+            base = _compact_symbol(symbol)
+            if base in LIVE_DEFAULT_EXCLUDED_HIGH_CAP_BASES:
+                excluded.append(symbol)
+            else:
+                kept.append(symbol)
+        self.artifacts.append_event(
+            "live_symbol_universe_filter",
+            "__live__",
+            {
+                "source": "exchange_usdt_swap_symbols",
+                "input_count": len(symbols),
+                "output_count": len(kept),
+                "excluded_count": len(excluded),
+                "excluded_symbols": excluded,
+                "excluded_bases": sorted({_compact_symbol(symbol) for symbol in excluded}),
+                "reason": "static_high_cap_exclusion",
+            },
+        )
+        return kept
+
     def _validate_startup(self) -> None:
         if not self.config.confirm_real_orders:
             raise LiveStartupError("Для micro-live нужен явный флаг --confirm-real-orders")
@@ -1423,6 +1790,60 @@ class AnomalyMicroLiveRunner:
         return pnl_total / notional_total
 
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
+        selection = self._select_next_symbol_batch(symbols)
+        self._current_batch_symbol_scan_mode = dict(selection.scan_modes)
+        self.artifacts.append_event(
+            "symbol_batch_selected",
+            "__live__",
+            {
+                "scheduler_source": selection.scheduler_source,
+                "active_symbols": list(selection.active_due),
+                "active_count": len(selection.active_due),
+                "active_waiting_count": len(selection.active_waiting),
+                "active_waiting_symbols": list(selection.active_waiting),
+                "ticker_radar_symbols": list(selection.radar_due),
+                "ticker_radar_count": len(selection.radar_due),
+                "ticker_radar_waiting_count": len(selection.radar_waiting),
+                "ticker_radar_waiting_symbols": list(selection.radar_waiting),
+                "max_precise_scan_symbols_per_cycle": (
+                    self.config.max_precise_scan_symbols_per_cycle
+                    if self.config.max_precise_scan_symbols_per_cycle is not None
+                    else ""
+                ),
+                "precise_budget_remaining_after_active": (
+                    selection.precise_budget_remaining_after_active
+                    if selection.precise_budget_remaining_after_active is not None
+                    else ""
+                ),
+                "inactive_count": len(selection.inactive),
+                "inactive_scan_slots_per_cycle": (
+                    self.config.inactive_scan_slots_per_cycle
+                    if self.config.inactive_scan_slots_per_cycle is not None
+                    else ""
+                ),
+                "inactive_subminute_scan_policy": "defer_until_ticker_radar_or_active",
+                "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
+                "scan_hot_timeframes_per_symbol": bool(self.config.scan_hot_timeframes_per_symbol),
+                "symbol_batch_size": self.config.symbol_batch_size,
+                "batch_in_full_cycle": selection.batch_in_full_cycle,
+                "full_symbol_cycle": selection.full_symbol_cycle,
+                "effective_scan_count": len(selection.batch),
+                "scan_reason_by_symbol": {
+                    symbol: selection.scan_modes.get(_position_symbol_key(symbol), "unknown")
+                    for symbol in selection.batch
+                },
+                "inactive_cursor_before": selection.inactive_cursor_before,
+                "inactive_cursor_after": selection.inactive_cursor_after,
+                "last_full_symbol_cycle_seconds": (
+                    round(self._last_symbol_universe_cycle_seconds, 3)
+                    if self._last_symbol_universe_cycle_seconds is not None
+                    else ""
+                ),
+            },
+        )
+        return list(selection.batch)
+
+    def _select_next_symbol_batch(self, symbols: list[str]) -> LiveSymbolBatchSelection:
         now_ms = int(time.time() * 1000)
         inactive_cursor_before = self._inactive_cursor
         batch_full_cycle = self._symbol_universe_cycle_index
@@ -1431,7 +1852,14 @@ class AnomalyMicroLiveRunner:
         self._current_symbol_universe_batch_index = batch_in_full_cycle
         active_due, active_waiting = self._active_symbol_batch(now_ms=now_ms)
         active_keys = {_position_symbol_key(symbol) for symbol in [*active_due, *active_waiting]}
-        radar_due, radar_waiting = self._ticker_radar_batch(now_ms=now_ms, excluded_keys=active_keys)
+        precise_budget_remaining = None
+        if self.config.max_precise_scan_symbols_per_cycle is not None:
+            precise_budget_remaining = max(0, int(self.config.max_precise_scan_symbols_per_cycle) - len(active_due))
+        radar_due, radar_waiting = self._ticker_radar_batch(
+            now_ms=now_ms,
+            excluded_keys=active_keys,
+            max_due=precise_budget_remaining,
+        )
         radar_due_keys = {_position_symbol_key(symbol) for symbol in radar_due}
         radar_waiting_keys = {_position_symbol_key(symbol) for symbol in radar_waiting}
         if self.config.inactive_scan_slots_per_cycle is None:
@@ -1464,7 +1892,6 @@ class AnomalyMicroLiveRunner:
             batch_scan_modes[_position_symbol_key(symbol)] = "precise_ticker_radar"
         for symbol in inactive:
             batch_scan_modes[_position_symbol_key(symbol)] = "inactive_deferred_subminute"
-        self._current_batch_symbol_scan_mode = batch_scan_modes
         if symbols and self._inactive_cursor // len(symbols) > inactive_cursor_before // len(symbols):
             now_monotonic = time.monotonic()
             self._last_symbol_universe_cycle_seconds = now_monotonic - self._symbol_universe_scan_started_at
@@ -1477,41 +1904,21 @@ class AnomalyMicroLiveRunner:
             self._symbol_universe_batch_index = 0
         else:
             self._symbol_universe_batch_index = batch_in_full_cycle
-        self.artifacts.append_event(
-            "symbol_batch_selected",
-            "__live__",
-            {
-                "active_symbols": active_due,
-                "active_count": len(active_due),
-                "active_waiting_count": len(active_waiting),
-                "active_waiting_symbols": active_waiting,
-                "ticker_radar_symbols": radar_due,
-                "ticker_radar_count": len(radar_due),
-                "ticker_radar_waiting_count": len(radar_waiting),
-                "ticker_radar_waiting_symbols": radar_waiting,
-                "inactive_count": len(inactive),
-                "inactive_scan_slots_per_cycle": (
-                    self.config.inactive_scan_slots_per_cycle
-                    if self.config.inactive_scan_slots_per_cycle is not None
-                    else ""
-                ),
-                "inactive_subminute_scan_policy": "defer_until_ticker_radar_or_active",
-                "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
-                "scan_hot_timeframes_per_symbol": bool(self.config.scan_hot_timeframes_per_symbol),
-                "symbol_batch_size": self.config.symbol_batch_size,
-                "batch_in_full_cycle": batch_in_full_cycle,
-                "full_symbol_cycle": batch_full_cycle,
-                "effective_scan_count": len(batch),
-                "inactive_cursor_before": inactive_cursor_before,
-                "inactive_cursor_after": self._inactive_cursor,
-                "last_full_symbol_cycle_seconds": (
-                    round(self._last_symbol_universe_cycle_seconds, 3)
-                    if self._last_symbol_universe_cycle_seconds is not None
-                    else ""
-                ),
-            },
+        return LiveSymbolBatchSelection(
+            scheduler_source="rest_round_robin_scheduler",
+            active_due=tuple(active_due),
+            active_waiting=tuple(active_waiting),
+            radar_due=tuple(radar_due),
+            radar_waiting=tuple(radar_waiting),
+            inactive=tuple(inactive),
+            batch=tuple(batch),
+            scan_modes=batch_scan_modes,
+            inactive_cursor_before=inactive_cursor_before,
+            inactive_cursor_after=self._inactive_cursor,
+            batch_in_full_cycle=batch_in_full_cycle,
+            full_symbol_cycle=batch_full_cycle,
+            precise_budget_remaining_after_active=precise_budget_remaining,
         )
-        return batch
 
     def _active_symbol_batch(self, *, now_ms: int) -> tuple[list[str], list[str]]:
         with self._state_lock:
@@ -1541,9 +1948,19 @@ class AnomalyMicroLiveRunner:
             )
         return active_due, active_waiting
 
-    def _ticker_radar_batch(self, *, now_ms: int, excluded_keys: set[str]) -> tuple[list[str], list[str]]:
+    def _ticker_radar_batch(
+        self,
+        *,
+        now_ms: int,
+        excluded_keys: set[str],
+        max_due: int | None = None,
+    ) -> tuple[list[str], list[str]]:
         if not self.config.ticker_radar_enabled or self.config.ticker_radar_watch_batch_size <= 0:
             return [], []
+        due_limit = self.config.ticker_radar_watch_batch_size if max_due is None else min(
+            self.config.ticker_radar_watch_batch_size,
+            max(0, int(max_due)),
+        )
         with self._state_lock:
             expired = self._prune_ticker_radar_watch_locked(now_ms)
             watch_items = sorted(
@@ -1573,8 +1990,10 @@ class AnomalyMicroLiveRunner:
             if symbol_key in excluded_keys or symbol_is_opening or self._symbol_in_stop_cooldown(item.symbol):
                 continue
             if self._signal_scan_due_for_symbol(item.symbol, now_ms=now_ms):
-                if len(due) < self.config.ticker_radar_watch_batch_size:
+                if len(due) < due_limit:
                     due.append(item.symbol)
+                else:
+                    waiting.append(item.symbol)
             else:
                 waiting.append(item.symbol)
         return due, waiting
@@ -1588,12 +2007,16 @@ class AnomalyMicroLiveRunner:
             return
         self._last_ticker_radar_at_ms = now_ms
         try:
-            snapshots = self.exchange.fetch_ticker_snapshots(tuple(symbols))
+            snapshots = self.ticker_snapshot_source.fetch_snapshots(tuple(symbols))
         except Exception as exc:
             self.artifacts.append_event(
                 "ticker_radar_failed",
                 "__live__",
-                {"exception_type": type(exc).__name__, "exception_message": str(exc)[:500]},
+                {
+                    "source": self.ticker_snapshot_source.source_id,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc)[:500],
+                },
             )
             return
         promotions = self._evaluate_ticker_radar_snapshots(snapshots, now_ms=now_ms)
@@ -1623,6 +2046,7 @@ class AnomalyMicroLiveRunner:
                 "promotion_candidates_count": len(promotions),
                 "interval_seconds": self.config.ticker_radar_interval_seconds,
                 "watch_batch_size": self.config.ticker_radar_watch_batch_size,
+                "source": self.ticker_snapshot_source.source_id,
             },
         )
 
@@ -4032,7 +4456,15 @@ class AnomalyMicroLiveRunner:
         flushed_rows_total = 0
         remaining: dict[tuple[str, str, str], list[pd.DataFrame]] = {}
         remaining_rows = 0
-        for (_symbol_key, symbol, timeframe_value), frames in pending_items.items():
+        failed_symbol_timeframes = 0
+        flush_limit = None if force else self.config.live_ohlcv_cache_flush_max_symbol_timeframes
+        items = list(pending_items.items())
+        selected_items = items if flush_limit is None else items[: max(0, int(flush_limit))]
+        deferred_items = items[len(selected_items) :]
+        for key, frames in deferred_items:
+            remaining[key] = frames
+            remaining_rows += int(sum(len(frame) for frame in frames))
+        for (_symbol_key, symbol, timeframe_value), frames in selected_items:
             try:
                 timeframe = Timeframe(timeframe_value)
                 combined = _concat_cached_ohlcv_frames(frames)
@@ -4051,6 +4483,7 @@ class AnomalyMicroLiveRunner:
                 )
             except Exception as exc:
                 remaining[(_symbol_key, symbol, timeframe_value)] = frames
+                failed_symbol_timeframes += 1
                 failed_rows = sum(len(frame) for frame in frames)
                 remaining_rows += int(failed_rows)
                 self.artifacts.append_event(
@@ -4076,7 +4509,10 @@ class AnomalyMicroLiveRunner:
                 "pending_rows_before_flush": pending_rows,
                 "flushed_rows": int(flushed_rows_total),
                 "remaining_rows": int(remaining_rows),
-                "failed_symbol_timeframes": int(len(remaining)),
+                "failed_symbol_timeframes": int(failed_symbol_timeframes),
+                "flushed_symbol_timeframes": int(len(selected_items)),
+                "deferred_symbol_timeframes": int(len(deferred_items)),
+                "flush_max_symbol_timeframes": flush_limit if flush_limit is not None else "",
             },
         )
         return flushed_rows_total
@@ -4289,27 +4725,44 @@ class AnomalyMicroLiveRunner:
     ) -> list[dict[str, object]]:
         self._cycle_aggtrade_requests += 1
         symbol_key = _position_symbol_key(symbol)
-        for cached_range in self._current_cycle_aggtrade_cache.get(symbol_key, []):
-            if cached_range.start_timestamp_ms <= int(start_timestamp_ms) and cached_range.end_timestamp_ms >= int(end_timestamp_ms):
-                self._cycle_aggtrade_cache_hits += 1
-                return _filter_aggtrade_rows_by_time(
-                    cached_range.rows,
-                    start_timestamp_ms=int(start_timestamp_ms),
-                    end_timestamp_ms=int(end_timestamp_ms),
-                )
-        rows = self._fetch_aggtrade_raw_rows(
-            symbol,
-            start_timestamp_ms=int(start_timestamp_ms),
-            end_timestamp_ms=int(end_timestamp_ms),
+        request_start_ms = int(start_timestamp_ms)
+        request_end_ms = int(end_timestamp_ms)
+        cached_ranges = self._current_cycle_aggtrade_cache.get(symbol_key, [])
+        missing_ranges = _missing_aggtrade_raw_ranges(
+            cached_ranges,
+            start_timestamp_ms=request_start_ms,
+            end_timestamp_ms=request_end_ms,
         )
-        self._current_cycle_aggtrade_cache.setdefault(symbol_key, []).append(
-            AggTradeRawRange(
-                start_timestamp_ms=int(start_timestamp_ms),
-                end_timestamp_ms=int(end_timestamp_ms),
-                rows=tuple(rows),
+        if not missing_ranges:
+            self._cycle_aggtrade_cache_hits += 1
+        elif len(missing_ranges) < 1 + len(cached_ranges):
+            self._cycle_aggtrade_cache_hits += 1
+        for missing_start_ms, missing_end_ms in missing_ranges:
+            rows = self._fetch_aggtrade_raw_rows(
+                symbol,
+                start_timestamp_ms=int(missing_start_ms),
+                end_timestamp_ms=int(missing_end_ms),
             )
-        )
-        return rows
+            self._current_cycle_aggtrade_cache.setdefault(symbol_key, []).append(
+                AggTradeRawRange(
+                    start_timestamp_ms=int(missing_start_ms),
+                    end_timestamp_ms=int(missing_end_ms),
+                    rows=tuple(rows),
+                )
+            )
+        all_ranges = self._current_cycle_aggtrade_cache.get(symbol_key, [])
+        all_rows: list[dict[str, object]] = []
+        for cached_range in all_ranges:
+            if cached_range.end_timestamp_ms < request_start_ms or cached_range.start_timestamp_ms > request_end_ms:
+                continue
+            all_rows.extend(
+                _filter_aggtrade_rows_by_time(
+                    cached_range.rows,
+                    start_timestamp_ms=request_start_ms,
+                    end_timestamp_ms=request_end_ms,
+                )
+            )
+        return _dedupe_aggtrade_rows(all_rows)
 
     def _fetch_aggtrade_raw_rows(
         self,
@@ -4648,6 +5101,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "active_symbol_ttl_ms": (config.active_symbol_ttl_ms, 1),
         "ticker_radar_watch_ttl_ms": (config.ticker_radar_watch_ttl_ms, 1),
         "ticker_radar_max_promotions_per_cycle": (config.ticker_radar_max_promotions_per_cycle, 1),
+        "live_ws_ticker_stale_ms": (config.live_ws_ticker_stale_ms, 1),
         "signal_scan_backfill_candles": (config.signal_scan_backfill_candles, 1),
         "max_signal_age_ms": (config.max_signal_age_ms, 1),
         "stop_limit_per_symbol": (config.stop_limit_per_symbol, 1),
@@ -4665,6 +5119,22 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         raise LiveStartupError(
             "Некорректный live config: ticker_radar_watch_batch_size должен быть целым >= 0, "
             f"получено {config.ticker_radar_watch_batch_size!r}"
+        )
+    if config.max_precise_scan_symbols_per_cycle is not None and (
+        not isinstance(config.max_precise_scan_symbols_per_cycle, int)
+        or config.max_precise_scan_symbols_per_cycle < 1
+    ):
+        raise LiveStartupError(
+            "Некорректный live config: max_precise_scan_symbols_per_cycle должен быть целым >= 1 или None, "
+            f"получено {config.max_precise_scan_symbols_per_cycle!r}"
+        )
+    if config.live_ohlcv_cache_flush_max_symbol_timeframes is not None and (
+        not isinstance(config.live_ohlcv_cache_flush_max_symbol_timeframes, int)
+        or config.live_ohlcv_cache_flush_max_symbol_timeframes < 1
+    ):
+        raise LiveStartupError(
+            "Некорректный live config: live_ohlcv_cache_flush_max_symbol_timeframes должен быть целым >= 1 или None, "
+            f"получено {config.live_ohlcv_cache_flush_max_symbol_timeframes!r}"
         )
 
     if _live_config_has_subminute_entry_pairs(config):
@@ -4697,6 +5167,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "min_executable_rr_to_signal_tp1": config.min_executable_rr_to_signal_tp1,
         "max_position_amount_slippage_ratio": config.max_position_amount_slippage_ratio,
         "ticker_radar_interval_seconds": config.ticker_radar_interval_seconds,
+        "live_ws_ticker_startup_wait_seconds": config.live_ws_ticker_startup_wait_seconds,
         "ticker_radar_min_quote_volume_delta_ratio": config.ticker_radar_min_quote_volume_delta_ratio,
     }
     for name, value in required_positive.items():
@@ -5124,6 +5595,66 @@ def _filter_aggtrade_rows_by_time(
         if int(start_timestamp_ms) <= timestamp_ms <= int(end_timestamp_ms):
             filtered.append(dict(row))
     return filtered
+
+
+def _missing_aggtrade_raw_ranges(
+    cached_ranges: list[AggTradeRawRange],
+    *,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+) -> list[tuple[int, int]]:
+    request_start = int(start_timestamp_ms)
+    request_end = int(end_timestamp_ms)
+    if request_start > request_end:
+        return []
+    coverage: list[tuple[int, int]] = []
+    for cached_range in cached_ranges:
+        overlap_start = max(request_start, int(cached_range.start_timestamp_ms))
+        overlap_end = min(request_end, int(cached_range.end_timestamp_ms))
+        if overlap_start <= overlap_end:
+            coverage.append((overlap_start, overlap_end))
+    if not coverage:
+        return [(request_start, request_end)]
+    coverage.sort()
+    merged: list[tuple[int, int]] = []
+    for start, end in coverage:
+        if not merged or start > merged[-1][1] + 1:
+            merged.append((start, end))
+        else:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+    missing: list[tuple[int, int]] = []
+    cursor = request_start
+    for start, end in merged:
+        if cursor < start:
+            missing.append((cursor, start - 1))
+        cursor = max(cursor, end + 1)
+    if cursor <= request_end:
+        missing.append((cursor, request_end))
+    return missing
+
+
+def _dedupe_aggtrade_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    deduped: dict[tuple[object, int], dict[str, object]] = {}
+    fallback_index = 0
+    for row in rows:
+        agg_id = _resolve_aggtrade_id(row)
+        timestamp_ms = _resolve_aggtrade_timestamp(row)
+        if timestamp_ms is None:
+            fallback_index += 1
+            key = (f"missing_ts:{fallback_index}", fallback_index)
+        elif agg_id is None:
+            fallback_index += 1
+            key = (f"missing_id:{fallback_index}", timestamp_ms)
+        else:
+            key = (agg_id, timestamp_ms)
+        deduped[key] = dict(row)
+    return sorted(
+        deduped.values(),
+        key=lambda row: (
+            _resolve_aggtrade_timestamp(row) if _resolve_aggtrade_timestamp(row) is not None else -1,
+            _resolve_aggtrade_id(row) if _resolve_aggtrade_id(row) is not None else -1,
+        ),
+    )
 
 
 def _fill_missing_ohlcv_buckets(

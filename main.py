@@ -50,13 +50,17 @@ def _configure_console_encoding() -> None:
 
 # endregion Приватные
 def main() -> int:
-    _force_single_thread_mode()
-    _configure_console_encoding()
-    config = load_config()
-    parser = build_parser()
-    args = parser.parse_args()
-    handler = resolve_handler(args.command)
-    return handler(config, args)
+    try:
+        _force_single_thread_mode()
+        _configure_console_encoding()
+        config = load_config()
+        parser = build_parser()
+        args = parser.parse_args()
+        handler = resolve_handler(args.command)
+        return handler(config, args)
+    except KeyboardInterrupt:
+        print("Команда остановлена пользователем.", flush=True)
+        return 130
 
 
 if __name__ == "__main__":

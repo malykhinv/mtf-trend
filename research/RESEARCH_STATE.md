@@ -810,3 +810,78 @@ No-signal status in a truncated probe is no_prior_signal_found_in_probed_prefix,
 Live exposes --signal-scan-backfill-candles so context/API budget can be reduced for scarce-limit sessions.
 Residual limit risk remains: runner_oi_confirmed replay checks can request OI/mark context in the background. This is diagnostic-only but should be run with a small cap during real test live.
 ```
+
+P177 live latency status:
+
+```text
+Current live evidence shows full-universe cold pass around 10-12.5 minutes, but inactive symbols are mostly deferred and cheap; expensive time is concentrated in precise_ticker_radar/precise_active scans that fetch subminute aggTrade tails.
+Adding another per-symbol "cheap" 1m/5m wake-up is not clean yet because it can become a second hidden OHLCV scan path. The clean first step is attribution plus explicit precise-scan budgeting.
+live_cycle_summary now records ticker_radar_seconds, batch_select_seconds, signal_scan_seconds, open_signal_seconds, order_reconcile_seconds, and cache_flush_seconds.
+Live exposes max_precise_scan_symbols_per_cycle. Active symbols are not dropped; only ticker-radar watch symbols beyond the remaining budget wait and are logged.
+```
+
+P178 live universe status:
+
+```text
+Default live universe now excludes a conservative static high-cap major list without calling external market-cap sources.
+This is not a hidden edge filter: live writes live_symbol_universe_filter with excluded symbols and counts.
+Explicit --symbols are not filtered, so manual tests remain exact.
+Risk: static high-cap exclusion introduces selection bias and should not be back-justified as data-derived cap ranking.
+```
+
+20260513_164045 live timing readout:
+
+```text
+Run had 69 cycle summaries, 563-symbol universe, and predates the high-cap exclusion patch.
+No trades opened and no category_selected events; this is a latency/bottleneck sample only.
+Latency split: signal_scan_seconds avg 10.161s (~62.5% of batch time), cache_flush_seconds avg 4.977s (~30.6%), ticker_radar_seconds avg 0.454s, order_reconcile occasional ~6.5s spikes.
+Precise ticker-radar scans cost p50 ~2.0s, p95 ~5.7s, max 9.75s per symbol; inactive deferred scans are near-zero.
+Next speed work should target subminute aggTrade tail fetch count and cache flush overhead before adding another OHLCV wake-up path.
+```
+
+P179 live speed patch status:
+
+```text
+Implemented bounded cache flush and partial aggTrade raw cache reuse.
+Default live cache flush changed from 10s/5k rows to 30s/50k rows, with at most 20 symbol/timeframe shards flushed per non-forced cycle.
+Forced shutdown/error/max-cycle flush still drains all pending shards.
+AggTrade cycle cache now subtracts already covered raw intervals and fetches only missing time ranges, instead of requiring one cached range to cover the whole request.
+Flush diagnostics now separate failed_symbol_timeframes from deferred_symbol_timeframes.
+Next live timing comparison should check cache_flush_seconds, deferred_symbol_timeframes, aggtrade_network_calls, aggtrade_cache_hits, and live_ohlcv_cache_gap.
+```
+
+P180 interrupt handling status:
+
+```text
+Ctrl+C is now handled at the command wrapper and top-level main boundary.
+Expected behavior: no traceback, exit code 130, short message that the command was stopped by the user.
+Live's internal KeyboardInterrupt cleanup remains the preferred path when the interrupt lands inside the live loop.
+```
+
+P181 reactive rollout status:
+
+```text
+Reactive migration plan: keep PNO decision logic synchronous; make ingestion/scheduling event-driven through narrow data-source interfaces.
+Step 1 completed: ticker radar now reads through LiveTickerSnapshotSource. Default source is RestLiveTickerSnapshotSource, so behavior remains REST-backed.
+ticker_radar_snapshot and ticker_radar_failed now include source id. This is the first provenance hook for future WS ticker shadow/primary mode.
+Next step should be a LiveScheduler/scan-reason seam or WS ticker shadow source, not WS aggTrade trading data yet.
+```
+
+P182 reactive rollout status:
+
+```text
+Step 2 completed: current live batch selection is now represented as LiveSymbolBatchSelection.
+Behavior remains rest_round_robin_scheduler with the same active/radar/inactive composition.
+symbol_batch_selected now includes scheduler_source and scan_reason_by_symbol, preparing for a future event-driven scheduler without changing PNO evaluation.
+No symbols should be silently dropped by future scheduler modes; queued/waiting reasons must stay explicit.
+```
+
+P183 reactive rollout status:
+
+```text
+Step 3 completed: live ticker radar now defaults to Binance WS !ticker@arr through BinanceWsAllTickerSnapshotSource.
+No REST fallback is used while live_ws_ticker_enabled=true. If WS is not ready/stale/broken, ticker_radar_failed is emitted with source=binance_ws_all_ticker and radar promotions pause.
+REST ticker source remains available only through explicit --live-ws-ticker-enabled false.
+This changes scheduling/wake-up transport only; PNO signal logic, subminute candles, OI/mark, and order path remain unchanged.
+Next live validation must inspect ticker_radar_failed, ticker_radar_snapshot source, radar promotion counts, and whether WS not-ready/stale causes unacceptable blind periods.
+```

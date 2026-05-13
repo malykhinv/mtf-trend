@@ -83,6 +83,11 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
         code = body()
         logger.debug("Команда завершена: %s, код %s", command_name, code)
         return code
+    except KeyboardInterrupt:
+        message = f"Команда остановлена пользователем: {command_name}"
+        logger.info(message)
+        print(message, flush=True)
+        return 130
     except Exception as exc:
         logger.exception("Ошибка: %s", exc)
         return 1
@@ -1461,6 +1466,10 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             ),
             position_notional_usdt=float(getattr(args, "position_notional_usdt", 12.0)),
             max_open_positions=int(getattr(args, "max_open_positions", 3)),
+            exclude_default_high_cap_symbols=_to_bool_flag(
+                getattr(args, "exclude_default_high_cap_symbols", True),
+                default=True,
+            ),
             symbol_batch_size=int(getattr(args, "symbol_batch_size", 20)),
             inactive_scan_slots_per_cycle=getattr(args, "inactive_scan_slots_per_cycle", None),
             scan_hot_timeframes_per_symbol=_to_bool_flag(
@@ -1469,10 +1478,16 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             ),
             active_symbol_ttl_ms=int(getattr(args, "active_symbol_ttl_ms", 60_000)),
             ticker_radar_enabled=_to_bool_flag(getattr(args, "ticker_radar_enabled", True), default=True),
+            live_ws_ticker_enabled=_to_bool_flag(getattr(args, "live_ws_ticker_enabled", True), default=True),
+            live_ws_ticker_stale_ms=int(getattr(args, "live_ws_ticker_stale_ms", 5_000)),
+            live_ws_ticker_startup_wait_seconds=float(
+                getattr(args, "live_ws_ticker_startup_wait_seconds", 10.0)
+            ),
             ticker_radar_interval_seconds=float(getattr(args, "ticker_radar_interval_seconds", 5.0)),
             ticker_radar_watch_ttl_ms=int(getattr(args, "ticker_radar_watch_ttl_ms", 120_000)),
             ticker_radar_watch_batch_size=int(getattr(args, "ticker_radar_watch_batch_size", 5)),
             ticker_radar_max_promotions_per_cycle=int(getattr(args, "ticker_radar_max_promotions_per_cycle", 20)),
+            max_precise_scan_symbols_per_cycle=getattr(args, "max_precise_scan_symbols_per_cycle", None),
             ticker_radar_min_price_delta_pct=float(getattr(args, "ticker_radar_min_price_delta_pct", 0.003)),
             ticker_radar_min_quote_volume_delta_usdt=float(getattr(args, "ticker_radar_min_quote_volume_delta_usdt", 10_000.0)),
             ticker_radar_min_quote_volume_delta_ratio=float(getattr(args, "ticker_radar_min_quote_volume_delta_ratio", 3.0)),
@@ -1487,9 +1502,14 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                 default=True,
             ),
             live_ohlcv_cache_flush_interval_seconds=float(
-                getattr(args, "live_ohlcv_cache_flush_interval_seconds", 10.0)
+                getattr(args, "live_ohlcv_cache_flush_interval_seconds", 30.0)
             ),
-            live_ohlcv_cache_max_buffer_rows=int(getattr(args, "live_ohlcv_cache_max_buffer_rows", 5_000)),
+            live_ohlcv_cache_max_buffer_rows=int(getattr(args, "live_ohlcv_cache_max_buffer_rows", 50_000)),
+            live_ohlcv_cache_flush_max_symbol_timeframes=getattr(
+                args,
+                "live_ohlcv_cache_flush_max_symbol_timeframes",
+                20,
+            ),
             signal_scan_backfill_candles=int(getattr(args, "signal_scan_backfill_candles", 10)),
             max_cycles=getattr(args, "max_cycles", None),
             trail_lookback_candles=int(getattr(args, "trail_lookback_candles", 5)),

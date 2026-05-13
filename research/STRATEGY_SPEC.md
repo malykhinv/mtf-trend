@@ -410,3 +410,38 @@ live_scan_gap_ltf_candles = max(0, (current_signal_decision_timestamp_ms - previ
 This measures the N -> N+5 scheduler problem directly. It does not claim that every skipped candle had a valid trade; it shows how many closed LTF decisions live did not evaluate before the current detected signal.
 
 When `live_scan_gap_ltf_candles > 0`, live may emit `missed_entry_replay_probe` from a background thread. The probe replays skipped LTF decision candles from the already loaded OHLCV window and reports the first skipped candle where the same live filter would have selected a signal. It must not block order placement. The probe starts from the earliest skipped candle and reports `probe_truncated=true` if `signal_scan_backfill_candles` prevented checking the full skipped interval.
+
+Live scan budgeting:
+
+```text
+ticker_radar = cheap all-symbol wake-up from exchange tickers
+precise scan = expensive active/radar scan that may fetch subminute aggTrade tails
+max_precise_scan_symbols_per_cycle = optional cap for active + ticker-radar precise scans
+```
+
+The precise cap must never drop active symbols. If active symbols use the whole budget, ticker-radar watch symbols wait and must be visible in artifacts.
+
+Live default universe excludes a static list of obvious high-cap majors because PNO targets early runner potential, not large-cap continuation. This filter is intentionally not a market-cap oracle and must be logged in artifacts. Explicit `--symbols` bypass the filter.
+
+Live cache and subminute data policy:
+
+```text
+Subminute OHLCV is derived from Binance aggTrades.
+Cycle-local aggTrade raw cache may reuse overlapping raw time ranges, but missing intervals must still be fetched or reported as cache gaps.
+Live OHLCV cache writes may be deferred for speed; graceful shutdown/error paths force a full flush.
+```
+
+Deferred cache writes must not be interpreted as missing data if in-memory frames already cover the current decision window. Persistent cache loss after a hard kill is a speed/cache durability issue, not a trading-decision fallback.
+
+Reactive live migration rule:
+
+```text
+Data ingestion and scheduling may become event-driven.
+PNO decision logic must stay synchronous over explicit OHLCV/context windows until shadow parity proves otherwise.
+```
+
+Ticker radar ingestion is abstracted behind `LiveTickerSnapshotSource`. The current source is REST `fetch_tickers`; future WS ticker sources must publish the same normalized `ExchangeTickerSnapshot` contract and source id in diagnostics.
+
+Live scheduler selection is represented by `LiveSymbolBatchSelection`. Every selected symbol must have a scan reason such as `precise_active`, `precise_ticker_radar`, or `inactive_deferred_subminute`. Future reactive schedulers may change selection priority, but must keep explicit waiting/deferred/drop diagnostics.
+
+Current live ticker radar source defaults to Binance USD-M futures `!ticker@arr` WebSocket. When this source is enabled, REST ticker fallback is forbidden; stale/not-ready stream state must pause radar promotions and be visible as `ticker_radar_failed`.

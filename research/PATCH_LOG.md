@@ -1507,6 +1507,210 @@ The missed-entry probe must not understate live scheduler lag when the skipped w
 
 Low/medium: this is diagnostic-only, but OI/mark-confirmed categories can still spend context calls inside the background probe. Use a lower `--signal-scan-backfill-candles` when exchange limits are tight.
 
+## P177 - Live latency accounting and precise-scan budget
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+The current live loop can report a 10+ minute full-universe cycle while the expensive work is concentrated in active/radar precise scans. We need honest timing attribution before adding more wake-up logic, and a clean budget control that does not hide active symbols.
+
+### Change
+
+- Add stage timings to `live_cycle_summary`: ticker radar, batch selection, signal scan, open-signal handling, order reconcile, and cache flush seconds.
+- Add optional `max_precise_scan_symbols_per_cycle`.
+- Active symbols are never dropped by the cap. The cap only limits how many ticker-radar watch symbols are promoted into expensive precise scans in the current cycle; overflow remains in `ticker_radar_waiting_symbols`.
+- Expose CLI `--max-precise-scan-symbols-per-cycle`.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_micro_live.py cli\parser.py cli\commands.py
+.venv\Scripts\python.exe main.py run-anomaly-live --help
+```
+
+### Risk
+
+Low for diagnostics, medium for cap usage: too low a cap can delay radar-watch symbols. This is explicit in artifacts via waiting counts/symbols, not hidden.
+
+## P178 - Static high-cap live universe exclusion
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+PNO is looking for early runner potential. Large-cap majors rarely provide the 20%+ runner profile and still consume ticker/universe slots. We need a no-external-source way to remove obvious majors without pretending this is a market-cap oracle.
+
+### Change
+
+- Add a conservative static high-cap base list for live default universe: BTC, ETH, BNB, SOL, XRP, DOGE, ADA, TRX, LINK, AVAX, LTC, BCH, DOT.
+- Apply it only to the default exchange USDT-swap universe.
+- Do not filter explicit `--symbols`; manual symbol tests remain exact.
+- Emit `live_symbol_universe_filter` with input/output counts and excluded symbols.
+- Expose `--exclude-default-high-cap-symbols` to disable the filter.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_micro_live.py cli\parser.py cli\commands.py
+.venv\Scripts\python.exe main.py run-anomaly-live --help
+```
+
+### Risk
+
+Medium: this is a subjective static universe choice, not a data-derived market-cap filter. It improves focus and speed but creates selection bias; excluded symbols must stay visible in artifacts.
+
+## P179 - Live cache flush and aggTrade tail cost reduction
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+Timing run `20260513_164045` showed signal scan and cache flush as the dominant live bottlenecks. The expensive scan path repeatedly touches subminute aggTrade tails; cache flush can block a cycle for 10-15 seconds.
+
+### Change
+
+- Expand the static live high-cap exclusion list with additional obvious majors.
+- Change live OHLCV cache write defaults to flush less often and with a larger buffer: 30 seconds and 50k rows.
+- Add `live_ohlcv_cache_flush_max_symbol_timeframes` default 20 to bound non-forced flush work per cycle.
+- Keep forced shutdown/error/max-cycle flush behavior as full flush.
+- Split flush summary into `failed_symbol_timeframes` and `deferred_symbol_timeframes` so deferred work is not mislabeled as failed.
+- Improve cycle-local aggTrade raw cache from full-range-only hits to partial interval coverage: only missing raw time intervals are fetched, then cached rows are deduped and sorted before aggregation.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_micro_live.py cli\parser.py cli\commands.py
+.venv\Scripts\python.exe main.py run-anomaly-live --help
+Inline smoke: aggTrade missing-range subtraction and dedupe passed.
+```
+
+### Risk
+
+Medium: fewer cache flushes means a hard process kill can lose more recently fetched cache rows, but trading diagnostics/events are still written immediately and the cache is forced on graceful shutdown. Partial aggTrade cache must be monitored with `aggtrade_cache_hits`, `aggtrade_network_calls`, and `live_ohlcv_cache_gap`.
+
+## P180 - Human KeyboardInterrupt handling
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+Ctrl+C during live or another CLI command should stop cleanly without a Python traceback.
+
+### Change
+
+- Catch `KeyboardInterrupt` in the common command wrapper and return code 130 with a short user-facing message.
+- Catch `KeyboardInterrupt` at top-level `main()` as a final guard for interrupts outside command wrappers.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall main.py cli\commands.py research_tools\anomaly_micro_live.py
+.venv\Scripts\python.exe main.py run-anomaly-live --help
+```
+
+### Risk
+
+Low. Existing live-loop cleanup still handles graceful live interruption first; this patch covers interrupts that escape that loop.
+
+## P181 - First reactive seam: live ticker snapshot source
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+Reactive live should be introduced through narrow data-source seams, not by rewriting PNO decision logic. The first safe seam is ticker radar ingestion because it is scheduling-only and does not directly decide trades.
+
+### Change
+
+- Add `LiveTickerSnapshotSource` protocol.
+- Add `RestLiveTickerSnapshotSource` implementation backed by current exchange `fetch_ticker_snapshots`.
+- Inject the source into `AnomalyMicroLiveRunner`; default behavior remains REST-backed.
+- Add ticker radar `source` to `ticker_radar_snapshot` and `ticker_radar_failed` events.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_micro_live.py cli\commands.py cli\parser.py main.py
+.venv\Scripts\python.exe main.py run-anomaly-live --help
+Inline smoke: fake ticker source promoted a symbol and wrote source=fake_ticker_source in ticker_radar_snapshot.
+```
+
+### Risk
+
+Low: no trade decision logic changes. Future WS ticker source can be plugged into the same protocol and compared in shadow before becoming primary.
+
+## P182 - Second reactive seam: live scheduler batch selection
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+Reactive ingestion should change how symbols become scan candidates without changing PNO evaluation. The scheduler needs an explicit selection contract and scan-reason provenance before WS/event-driven sources are introduced.
+
+### Change
+
+- Add `LiveSymbolBatchSelection` data structure.
+- Split current `_next_symbol_batch` into selection plus event emission.
+- Preserve current REST/ticker-radar/round-robin behavior under `scheduler_source=rest_round_robin_scheduler`.
+- Add `scan_reason_by_symbol` to `symbol_batch_selected` diagnostics.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_micro_live.py cli\commands.py cli\parser.py main.py
+.venv\Scripts\python.exe main.py run-anomaly-live --help
+Inline smoke: scheduler selection returns the same inactive batch and writes scheduler_source/scan_reason_by_symbol.
+```
+
+### Risk
+
+Low: this is a structural seam only. Future scheduler implementations must not silently drop symbols; waiting/dropped reasons must be explicit in `symbol_batch_selected`.
+
+## P183 - WebSocket ticker radar source without REST fallback
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+The next reactive step is to make all-symbol ticker wake-up event-driven. This must not silently fall back to REST, because hidden transport fallback would mask stream gaps and latency problems.
+
+### Change
+
+- Add `BinanceWsAllTickerSnapshotSource` backed by Binance USD-M futures `!ticker@arr`.
+- Make WebSocket ticker source the live default via `live_ws_ticker_enabled=True`.
+- Add `--live-ws-ticker-enabled`, `--live-ws-ticker-stale-ms`, and `--live-ws-ticker-startup-wait-seconds`.
+- If WebSocket ticker is not ready, stale, malformed, or disconnected, ticker radar emits `ticker_radar_failed` with `source=binance_ws_all_ticker`; no REST fallback is used.
+- Keep explicit REST ticker source available only when `--live-ws-ticker-enabled false`.
+- Add `aiohttp` dependency for WebSocket transport.
+
+### Validation
+
+```bash
+.venv\Scripts\python.exe -m compileall research_tools\anomaly_micro_live.py cli\commands.py cli\parser.py main.py
+.venv\Scripts\python.exe main.py run-anomaly-live --help
+Inline smoke: not-ready WS source raises explicit ws_ticker_not_ready.
+Inline smoke: WS all-ticker payload normalizes to ExchangeTickerSnapshot with source=binance_ws_all_ticker.
+```
+
+### Risk
+
+Medium/high: while WS ticker is unhealthy, radar promotions stop instead of falling back to REST. This is intentional honesty. Live diagnostics must monitor `ticker_radar_failed`, `source`, and stale/not-ready reasons before reducing REST cold audit further.
+
 ## P177 - Fix live OHLCV cache concat warning
 
 Status: APPLIED locally / UNKNOWN commit

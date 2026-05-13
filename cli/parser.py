@@ -198,6 +198,12 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--max-prior-up-down-whipsaw-to-impulse-range", type=float, default=0.60)
     anomaly_live.add_argument("--position-notional-usdt", type=float, default=12.0)
     anomaly_live.add_argument("--max-open-positions", type=_positive_int_for("--max-open-positions"), default=3)
+    anomaly_live.add_argument(
+        "--exclude-default-high-cap-symbols",
+        type=_str_to_bool,
+        default=True,
+        help="Exclude a static high-cap major list from default exchange universe; explicit --symbols are not filtered.",
+    )
     anomaly_live.add_argument("--symbol-batch-size", type=_positive_int_for("--symbol-batch-size"), default=20)
     anomaly_live.add_argument(
         "--inactive-scan-slots-per-cycle",
@@ -213,10 +219,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomaly_live.add_argument("--active-symbol-ttl-ms", type=_positive_int_for("--active-symbol-ttl-ms"), default=60_000)
     anomaly_live.add_argument("--ticker-radar-enabled", type=_str_to_bool, default=True)
+    anomaly_live.add_argument(
+        "--live-ws-ticker-enabled",
+        type=_str_to_bool,
+        default=True,
+        help="Use Binance !ticker@arr WebSocket as ticker radar source. No REST fallback is used while enabled.",
+    )
+    anomaly_live.add_argument("--live-ws-ticker-stale-ms", type=_positive_int_for("--live-ws-ticker-stale-ms"), default=5_000)
+    anomaly_live.add_argument("--live-ws-ticker-startup-wait-seconds", type=float, default=10.0)
     anomaly_live.add_argument("--ticker-radar-interval-seconds", type=float, default=5.0)
     anomaly_live.add_argument("--ticker-radar-watch-ttl-ms", type=_positive_int_for("--ticker-radar-watch-ttl-ms"), default=120_000)
     anomaly_live.add_argument("--ticker-radar-watch-batch-size", type=int, default=5)
     anomaly_live.add_argument("--ticker-radar-max-promotions-per-cycle", type=_positive_int_for("--ticker-radar-max-promotions-per-cycle"), default=20)
+    anomaly_live.add_argument(
+        "--max-precise-scan-symbols-per-cycle",
+        type=_positive_int_for("--max-precise-scan-symbols-per-cycle"),
+        default=None,
+        help="Optional cap for expensive active+radar precise scans per cycle; active symbols are never dropped.",
+    )
     anomaly_live.add_argument("--ticker-radar-min-price-delta-pct", type=float, default=0.003)
     anomaly_live.add_argument("--ticker-radar-min-quote-volume-delta-usdt", type=float, default=10_000.0)
     anomaly_live.add_argument("--ticker-radar-min-quote-volume-delta-ratio", type=float, default=3.0)
@@ -237,8 +257,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Persist live-fetched OHLCV/aggTrade-derived frames into the local parquet cache.",
     )
-    anomaly_live.add_argument("--live-ohlcv-cache-flush-interval-seconds", type=float, default=10.0)
-    anomaly_live.add_argument("--live-ohlcv-cache-max-buffer-rows", type=_positive_int_for("--live-ohlcv-cache-max-buffer-rows"), default=5_000)
+    anomaly_live.add_argument("--live-ohlcv-cache-flush-interval-seconds", type=float, default=30.0)
+    anomaly_live.add_argument("--live-ohlcv-cache-max-buffer-rows", type=_positive_int_for("--live-ohlcv-cache-max-buffer-rows"), default=50_000)
+    anomaly_live.add_argument(
+        "--live-ohlcv-cache-flush-max-symbol-timeframes",
+        type=_positive_int_for("--live-ohlcv-cache-flush-max-symbol-timeframes"),
+        default=20,
+        help="Max symbol/timeframe cache shards flushed per non-forced cycle; forced shutdown flushes all pending shards.",
+    )
     anomaly_live.add_argument(
         "--signal-scan-backfill-candles",
         type=_positive_int_for("--signal-scan-backfill-candles"),
