@@ -2091,3 +2091,29 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 ```
 
 Live smoke expectation: if aggTrade WS cannot connect but bounded REST aggTrade reads are covering entry windows, the console should show `WS: flow REST` and `live_cycle_summary.ws_aggtrade_effective_source=rest_backfill_degraded`; if coverage still exceeds the backfill budget, it should show `WS: flow pending` and emit `signal_entry_ws_aggtrade_pending`.
+
+
+## P192 - proposed - force aiohttp WS to use OS DNS resolver and show WS DNS label
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- A live run showed both Binance ticker and aggTrade WebSockets failing with `ClientConnectorDNSError: Could not contact DNS servers` while REST ticker fetches continued to work.
+- That points to the aiohttp WebSocket DNS resolver path rather than a generic exchange/data outage.
+- The operator line only showed `WS: ticker REST` / `WS: flow REST`, so the root transport cause was buried in `live_events.csv`.
+
+Changes:
+- Force aiohttp WebSocket sessions to use `aiohttp.ThreadedResolver()` via an explicit `TCPConnector`, matching the OS `getaddrinfo` path used by normal REST clients instead of any c-ares/async resolver path that can fail independently.
+- Add short WS error labels (`dns`, `timeout`, `ssl`, `proxy`, `connect`) to `live_cycle_summary`.
+- Append those labels to the inline operator status, for example `WS: ticker REST/dns` or `WS: flow REST/dns`.
+
+Risk:
+Low/medium. Trading logic is unchanged. The patch changes WebSocket transport resolver selection and diagnostics only. If the OS itself cannot resolve `fstream.binance.com`, the status will still show `/dns` and the environment must be fixed; no silent success is introduced.
+
+Validation:
+```
+python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Live smoke expectation: if the previous failure came from aiohttp's async DNS resolver, WS ticker/flow should connect and the `/dns` degraded suffix should disappear. If local DNS/network still cannot resolve `fstream.binance.com`, the console should explicitly show `WS: ticker REST/dns` or `WS: flow REST/dns` and artifacts should keep the full exception.

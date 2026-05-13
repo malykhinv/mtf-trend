@@ -936,3 +936,12 @@ Status: PROPOSED. Commit: UNKNOWN.
 Reason: the operator line `WS: flow подключается` can persist for minutes when Binance aggTrade WS is down, but current logic may still evaluate entries through explicit bounded REST aggTrade backfill. The previous UI state is too ambiguous for live safety.
 
 Validation target: after applying P191, inspect console and `live_events.csv`: `WS: flow REST` means degraded REST backfill is covering requested flow windows; `WS: flow pending` means entries can be missed; `live_cycle_summary.ws_aggtrade_effective_source` must match the console state.
+
+
+### 2026-05-13 - P192 proposed: fix aiohttp WS DNS resolver path and expose DNS in operator line
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Reason: live artifacts showed REST ticker discovery working but both aiohttp WebSockets failing with `ClientConnectorDNSError: Could not contact DNS servers`. The next clean fix is to force aiohttp WS connections through `ThreadedResolver` / OS `getaddrinfo`, then surface the remaining DNS cause directly in the inline live status.
+
+Validation target: after applying P192, run live and check whether `WS: ticker REST/dns` disappears. If it remains, run OS-level DNS checks for `fstream.binance.com`; code is then reporting a real local DNS/network problem rather than masking it.

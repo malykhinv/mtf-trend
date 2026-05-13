@@ -290,6 +290,32 @@ def _optional_int(value: object) -> int | None:
         return None
 
 
+def _ws_error_short_label(error: str | None) -> str:
+    text = str(error or "")
+    lowered = text.lower()
+    if "clientconnectordnserror" in lowered or "could not contact dns servers" in lowered:
+        return "dns"
+    if "timeout" in lowered:
+        return "timeout"
+    if "ssl" in lowered:
+        return "ssl"
+    if "proxy" in lowered:
+        return "proxy"
+    if "connection refused" in lowered or "connect call failed" in lowered:
+        return "connect"
+    return "error" if text else ""
+
+
+def _aiohttp_ws_connector() -> object:
+    import aiohttp
+
+    # Force aiohttp to use the same OS getaddrinfo resolver path as REST/ccxt.
+    # In environments where aiodns/c-ares cannot contact DNS servers, REST can work
+    # while aiohttp WebSockets fail with ClientConnectorDNSError. This is not a
+    # data fallback: WS still has to connect or report the real transport error.
+    return aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver(), ttl_dns_cache=300)
+
+
 class BinanceWsAllTickerSnapshotSource:
     source_id = "binance_ws_all_ticker"
 
@@ -404,7 +430,8 @@ class BinanceWsAllTickerSnapshotSource:
 
         self._set_status("connecting", None)
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=30)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        connector = _aiohttp_ws_connector()
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             async with session.ws_connect(BINANCE_FUTURES_ALL_TICKER_WS_URL, heartbeat=20) as ws:
                 self._set_status("connected", None)
                 async for message in ws:
@@ -732,7 +759,8 @@ class BinanceWsAggTradeBuffer:
 
         self._set_status("connecting", None)
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=30)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
+        connector = _aiohttp_ws_connector()
+        async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             async with session.ws_connect(BINANCE_FUTURES_COMBINED_WS_URL, heartbeat=20) as ws:
                 with self._lock:
                     self._subscribed_market_ids = set()
@@ -2128,6 +2156,8 @@ class AnomalyMicroLiveRunner:
                         "ws_aggtrade_subscribed_count": ws_aggtrade_stats.subscribed_count,
                         "ws_aggtrade_connection_status": ws_aggtrade_stats.connection_status,
                         "ws_aggtrade_last_error": ws_aggtrade_stats.last_error[:500],
+                        "ws_aggtrade_error_label": _ws_error_short_label(ws_aggtrade_stats.last_error),
+                        "ticker_radar_error_label": _ws_error_short_label(ticker_stats.reason),
                         "signal_scan_seconds": round(scan_seconds, 3),
                         "open_signal_seconds": round(open_seconds, 3),
                         "order_reconcile_seconds": round(reconcile_seconds, 3),
@@ -2161,20 +2191,22 @@ class AnomalyMicroLiveRunner:
                 )
                 if should_log_status:
                     ws_issue_text = ""
+                    ticker_error_label = _ws_error_short_label(ticker_stats.reason)
+                    flow_error_label = _ws_error_short_label(ws_aggtrade_stats.last_error)
                     if ticker_stats.status == "failed":
-                        ws_issue_text = " · WS: ticker нет"
+                        ws_issue_text = " · WS: ticker нет" + (f"/{ticker_error_label}" if ticker_error_label else "")
                     elif ticker_stats.status == "degraded_rest_fallback":
-                        ws_issue_text = " · WS: ticker REST"
+                        ws_issue_text = " · WS: ticker REST" + (f"/{ticker_error_label}" if ticker_error_label else "")
                     elif ws_aggtrade_stats.enabled and ws_aggtrade_stats.target_count > 0:
                         subscribed_count = _optional_int(ws_aggtrade_stats.subscribed_count)
                         connection_status = (ws_aggtrade_stats.connection_status or "").lower()
                         if connection_status != "connected":
                             if self._cycle_ws_aggtrade_coverage_pending > 0:
-                                ws_issue_text = " · WS: flow pending"
+                                ws_issue_text = " · WS: flow pending" + (f"/{flow_error_label}" if flow_error_label else "")
                             elif self._cycle_ws_aggtrade_backfill_reads > 0:
-                                ws_issue_text = " · WS: flow REST"
+                                ws_issue_text = " · WS: flow REST" + (f"/{flow_error_label}" if flow_error_label else "")
                             else:
-                                ws_issue_text = " · WS: flow нет"
+                                ws_issue_text = " · WS: flow нет" + (f"/{flow_error_label}" if flow_error_label else "")
                         elif subscribed_count != ws_aggtrade_stats.target_count:
                             ws_issue_text = " · WS: flow подписка"
                         elif self._cycle_ws_aggtrade_backfill_reads > 0:
