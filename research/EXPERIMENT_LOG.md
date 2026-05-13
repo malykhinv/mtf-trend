@@ -1115,3 +1115,35 @@ The runner signature is not "first spike after total dormancy".
 The better early runner profile is: real mark-led displacement, broad enough continuation, not too much quote/trade effort per unit return, and not a stale isolated one-off.
 Current cautious filters improve runner rate and expectancy, but they still need a clean full subminute backfill before being treated as production grid.
 ```
+
+---
+
+## 2026-05-13 - P167 live scan scheduling prep
+
+Hypothesis:
+
+```text
+Backtest does not miss closed-candle signals because it scans the whole window. REST-only live cannot do full universe * all subminute TFs every cycle cheaply, so it should spend heavy aggTrade/entry-frame work only on hot symbols and scan all due TF sets for each selected symbol before moving on.
+```
+
+Implementation to validate:
+
+```text
+scan_hot_timeframes_per_symbol = true
+inactive_scan_slots_per_cycle = 0 for production-fast smoke
+ticker radar remains scheduling-only
+signal_symbol_scan_summary must show per-symbol due/evaluated/fetch counts
+```
+
+Next smoke:
+
+```bash
+python main.py run-anomaly-live --confirm-real-orders --max-cycles 60 --symbol-batch-size 20 --inactive-scan-slots-per-cycle 0 --ticker-radar-watch-batch-size 10 --scan-hot-timeframes-per-symbol true
+```
+
+Readout:
+
+```text
+If ticker_radar_snapshot is healthy and symbol_batch_selected shows active/radar-driven batches with low duration_ms in signal_symbol_scan_summary, keep this as live baseline.
+If ticker radar has missing fields or no promotions, do not treat active/radar-only mode as coverage-complete; increase inactive_scan_slots_per_cycle or fix ticker data first.
+```

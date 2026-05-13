@@ -27,6 +27,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P151 | Rework trade chart context and flow panels | PROPOSED | `research_tools/anomaly_strategy_backtest.py`, `research/*` | diagnostics | Merge quote-volume and relative trade-count into one bottom line panel, and replace the middle context with independent 1h/7d candles plus strict hourly levels. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic `render_anomaly_trade_chart` smoke. |
 | P152 | Attach open-position trade chart | PROPOSED | `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `research/*` | live-operator-ux | Send the canonical three-panel trade chart with live open-position Telegram messages; open charts use TP1/SL lines instead of risk/reward rectangles. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic open `render_anomaly_trade_chart` smoke. |
 | P153 | Limit trade-chart level discovery to 7d context | PROPOSED | `research_tools/anomaly_strategy_backtest.py`, `research/*` | diagnostics | Ensure levels drawn on trade/open charts are discovered only from the same 1h/7d context window shown in the middle panel, even if a wider context frame is supplied. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic wider-context level smoke. |
+| P167 | Symbol-first live multi-TF scan | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance | For selected live symbols, scan all due TF sets before moving to the next symbol, cache setup/entry fetches within the batch, and add an explicit cold round-robin slot cap so fast live can prioritize active/radar symbols without hiding skipped work. | `python -m compileall research_tools/anomaly_micro_live.py cli/commands.py cli/parser.py`; `python main.py run-anomaly-live --help`. |
 
 ## P129 — Purge retired strategy history from active memory
 
@@ -1179,3 +1180,31 @@ python main.py run-anomaly-lab --days 14 --setup-timeframe 1m --entry-timeframe 
 ### Risk
 
 Medium. The aggTrade backfill is honest but can be very slow for a large active universe. Full `1m/5s` 14-day universe did not complete in one hour; use active-symbol subset results only as directional evidence.
+
+## P167 - Symbol-first live multi-TF scan
+
+Status: PROPOSED
+Date: 2026-05-13
+Commit: UNKNOWN
+
+### Reason
+
+REST-only live should not spend heavy subminute aggTrade work evenly across cold symbols when the goal is early runner capture. Once a symbol is selected by active state or ticker radar, all configured TF sets should be checked together so `5m/30s`, `1m/15s`, and `1m/5s` do not wait on separate outer loops.
+
+### Change
+
+- Add `scan_hot_timeframes_per_symbol=true` as the default live scan mode.
+- Add `inactive_scan_slots_per_cycle` as an explicit optional cap for cold round-robin scans; `0` means active/radar-only scanning.
+- Cache setup and entry frames inside a live batch so shared setup windows are not refetched for the same symbol.
+- Export `signal_symbol_scan_summary` and add scan-mode/cold-slot fields to `symbol_batch_selected`.
+
+### Validation
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py cli/commands.py cli/parser.py
+python main.py run-anomaly-live --help
+```
+
+### Risk
+
+Low/medium: setting `--inactive-scan-slots-per-cycle 0` deliberately stops cold round-robin discovery and relies on ticker radar plus active state. This is suitable for fast production-style live only if ticker snapshots are healthy; artifacts now show the chosen cap and effective scan count.

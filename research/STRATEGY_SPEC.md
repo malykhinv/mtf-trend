@@ -84,6 +84,15 @@ no order if TP1 is already reached or RR collapsed at live price
 BE/TP/PnL are computed from actual fill, not signal close
 ```
 
+Live scheduling contract:
+
+```text
+selected hot symbol -> scan all due configured TF sets -> then move to next symbol
+cold universe discovery is explicit budget, not implicit heavy work
+ticker-radar promotion can add watch symbols but cannot itself open trades
+inactive_scan_slots_per_cycle=0 means active/radar-only scan and must be visible in artifacts
+```
+
 
 
 ---

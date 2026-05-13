@@ -1292,6 +1292,11 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             position_notional_usdt=float(getattr(args, "position_notional_usdt", 12.0)),
             max_open_positions=int(getattr(args, "max_open_positions", 3)),
             symbol_batch_size=int(getattr(args, "symbol_batch_size", 20)),
+            inactive_scan_slots_per_cycle=getattr(args, "inactive_scan_slots_per_cycle", None),
+            scan_hot_timeframes_per_symbol=_to_bool_flag(
+                getattr(args, "scan_hot_timeframes_per_symbol", True),
+                default=True,
+            ),
             active_symbol_ttl_ms=int(getattr(args, "active_symbol_ttl_ms", 60_000)),
             ticker_radar_enabled=_to_bool_flag(getattr(args, "ticker_radar_enabled", True), default=True),
             ticker_radar_interval_seconds=float(getattr(args, "ticker_radar_interval_seconds", 5.0)),

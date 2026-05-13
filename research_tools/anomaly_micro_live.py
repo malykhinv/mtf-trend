@@ -222,6 +222,8 @@ class LiveAnomalyConfig:
     position_notional_usdt: float = 12.0
     max_open_positions: int = 3
     symbol_batch_size: int = 20
+    inactive_scan_slots_per_cycle: int | None = None
+    scan_hot_timeframes_per_symbol: bool = True
     active_symbol_ttl_ms: int = 60_000
     ticker_radar_enabled: bool = True
     ticker_radar_interval_seconds: float = 5.0
@@ -1219,7 +1221,10 @@ class AnomalyMicroLiveRunner:
         radar_due, radar_waiting = self._ticker_radar_batch(now_ms=now_ms, excluded_keys=active_keys)
         radar_due_keys = {_position_symbol_key(symbol) for symbol in radar_due}
         radar_waiting_keys = {_position_symbol_key(symbol) for symbol in radar_waiting}
-        inactive_slots = max(0, self.config.symbol_batch_size - len(active_due))
+        if self.config.inactive_scan_slots_per_cycle is None:
+            inactive_slots = max(0, self.config.symbol_batch_size - len(active_due))
+        else:
+            inactive_slots = max(0, int(self.config.inactive_scan_slots_per_cycle))
         inactive: list[str] = []
         attempts = 0
         while len(inactive) < inactive_slots and attempts < len(symbols):
@@ -1252,6 +1257,12 @@ class AnomalyMicroLiveRunner:
                 "ticker_radar_waiting_count": len(radar_waiting),
                 "ticker_radar_waiting_symbols": radar_waiting,
                 "inactive_count": len(inactive),
+                "inactive_scan_slots_per_cycle": (
+                    self.config.inactive_scan_slots_per_cycle
+                    if self.config.inactive_scan_slots_per_cycle is not None
+                    else ""
+                ),
+                "scan_hot_timeframes_per_symbol": bool(self.config.scan_hot_timeframes_per_symbol),
                 "symbol_batch_size": self.config.symbol_batch_size,
                 "effective_scan_count": len(batch),
             },
@@ -1629,6 +1640,122 @@ class AnomalyMicroLiveRunner:
             self._last_signal_scan_closed_at[scan_key] = int(closed_timestamp_ms)
 
     def _scan_batch(self, symbols: list[str]) -> list[LiveSignal]:
+        if self.config.scan_hot_timeframes_per_symbol:
+            return self._scan_batch_by_symbol(symbols)
+        return self._scan_batch_by_timeframe(symbols)
+
+    def _scan_batch_by_symbol(self, symbols: list[str]) -> list[LiveSignal]:
+        signals: list[LiveSignal] = []
+        now_ms = int(time.time() * 1000)
+        setup_cache: dict[tuple[str, str, int], pd.DataFrame] = {}
+        entry_cache: dict[tuple[str, str, int, int], pd.DataFrame] = {}
+        for symbol in symbols:
+            started_at = time.monotonic()
+            due_count = 0
+            evaluated_count = 0
+            setup_fetch_count = 0
+            entry_fetch_count = 0
+            signal_count = 0
+            fetch_failures = 0
+            skipped_not_due = 0
+            for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
+                levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
+                setup_lookback_ms = (self.config.baseline_candles + 5) * levels_timeframe_ms
+                latest_closed_entry_ts = _latest_closed_candle_start_ms(entry_timeframe, now_ms=now_ms)
+                setup_start_ts = (latest_closed_entry_ts // levels_timeframe_ms) * levels_timeframe_ms
+                entry_lookback_start_ms = setup_start_ts
+                if not self._signal_scan_due_for_timeframe(
+                    symbol,
+                    levels_timeframe,
+                    entry_timeframe,
+                    closed_timestamp_ms=latest_closed_entry_ts,
+                ):
+                    skipped_not_due += 1
+                    continue
+                due_count += 1
+                setup_key = (symbol, levels_timeframe.value, setup_start_ts)
+                if setup_key not in setup_cache:
+                    try:
+                        setup_cache[setup_key] = self.exchange.fetch_ohlcv(
+                            symbol,
+                            levels_timeframe,
+                            setup_start_ts - setup_lookback_ms,
+                            now_ms,
+                        )
+                        setup_fetch_count += 1
+                    except Exception as exc:
+                        fetch_failures += 1
+                        self.artifacts.append_event(
+                            "signal_setup_fetch_failed",
+                            symbol,
+                            {
+                                "levels_tf": levels_timeframe.value,
+                                "entry_tf": entry_timeframe.value,
+                                "reason": f"{type(exc).__name__}: {exc}",
+                            },
+                        )
+                        continue
+                entry_key = (symbol, entry_timeframe.value, entry_lookback_start_ms, now_ms)
+                if entry_key not in entry_cache:
+                    try:
+                        entry_cache[entry_key] = self._fetch_chart_frame(
+                            symbol,
+                            entry_timeframe,
+                            start_timestamp_ms=entry_lookback_start_ms,
+                            end_timestamp_ms=now_ms,
+                        )
+                        entry_fetch_count += 1
+                    except Exception as exc:
+                        fetch_failures += 1
+                        self.artifacts.append_event(
+                            "signal_entry_fetch_failed",
+                            symbol,
+                            {
+                                "levels_tf": levels_timeframe.value,
+                                "entry_tf": entry_timeframe.value,
+                                "reason": f"{type(exc).__name__}: {exc}",
+                            },
+                        )
+                        continue
+                signal = self._build_forming_setup_signal(
+                    symbol,
+                    setup_cache[setup_key],
+                    entry_cache[entry_key],
+                    now_ms=now_ms,
+                    levels_timeframe=levels_timeframe,
+                    entry_timeframe=entry_timeframe,
+                    setup_start_ts=setup_start_ts,
+                    latest_closed_entry_ts=latest_closed_entry_ts,
+                )
+                evaluated_count += 1
+                self._mark_signal_scan_closed_at(
+                    symbol,
+                    levels_timeframe,
+                    entry_timeframe,
+                    closed_timestamp_ms=latest_closed_entry_ts,
+                )
+                if signal is not None:
+                    signals.append(signal)
+                    signal_count += 1
+            self.artifacts.append_event(
+                "signal_symbol_scan_summary",
+                symbol,
+                {
+                    "mode": "timeframes_per_symbol",
+                    "timeframe_pairs": [f"{levels.value}/{entry.value}" for levels, entry in self.config.timeframe_pairs],
+                    "due_timeframe_count": due_count,
+                    "evaluated_timeframe_count": evaluated_count,
+                    "skipped_not_due_count": skipped_not_due,
+                    "setup_fetch_count": setup_fetch_count,
+                    "entry_fetch_count": entry_fetch_count,
+                    "fetch_failure_count": fetch_failures,
+                    "signal_count": signal_count,
+                    "duration_ms": round((time.monotonic() - started_at) * 1000.0, 3),
+                },
+            )
+        return signals
+
+    def _scan_batch_by_timeframe(self, symbols: list[str]) -> list[LiveSignal]:
         signals: list[LiveSignal] = []
         now_ms = int(time.time() * 1000)
         for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
@@ -3581,6 +3708,14 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         raise LiveStartupError(
             "Некорректный live config: ticker_radar_watch_batch_size должен быть целым >= 0, "
             f"получено {config.ticker_radar_watch_batch_size!r}"
+        )
+
+    if config.inactive_scan_slots_per_cycle is not None and (
+        not isinstance(config.inactive_scan_slots_per_cycle, int) or config.inactive_scan_slots_per_cycle < 0
+    ):
+        raise LiveStartupError(
+            "invalid live config: inactive_scan_slots_per_cycle must be an integer >= 0 or None, "
+            f"got {config.inactive_scan_slots_per_cycle!r}"
         )
 
     required_positive = {

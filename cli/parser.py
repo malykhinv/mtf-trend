@@ -185,6 +185,18 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--position-notional-usdt", type=float, default=12.0)
     anomaly_live.add_argument("--max-open-positions", type=_positive_int_for("--max-open-positions"), default=3)
     anomaly_live.add_argument("--symbol-batch-size", type=_positive_int_for("--symbol-batch-size"), default=20)
+    anomaly_live.add_argument(
+        "--inactive-scan-slots-per-cycle",
+        type=int,
+        default=None,
+        help="Optional cold round-robin slots per live cycle; 0 means only active/ticker-radar symbols are scanned.",
+    )
+    anomaly_live.add_argument(
+        "--scan-hot-timeframes-per-symbol",
+        type=_str_to_bool,
+        default=True,
+        help="When true, each selected symbol is scanned across all due timeframe pairs before moving on.",
+    )
     anomaly_live.add_argument("--active-symbol-ttl-ms", type=_positive_int_for("--active-symbol-ttl-ms"), default=60_000)
     anomaly_live.add_argument("--ticker-radar-enabled", type=_str_to_bool, default=True)
     anomaly_live.add_argument("--ticker-radar-interval-seconds", type=float, default=5.0)
