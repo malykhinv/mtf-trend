@@ -50,7 +50,7 @@ CACHED_OHLCV_DTYPES = {
 HOUR_MS = 60 * 60 * 1000
 BINANCE_FUTURES_ALL_TICKER_WS_URL = "wss://fstream.binance.com/ws/!ticker@arr"
 BINANCE_FUTURES_COMBINED_WS_URL = "wss://fstream.binance.com/stream"
-DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS = 300_000
+DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS = 360_000
 ANIMAL_EMOJIS = (
     "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
     "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦆", "🦅",
@@ -2154,6 +2154,8 @@ class AnomalyMicroLiveRunner:
                     ws_issue_text = ""
                     if ticker_stats.status == "failed":
                         ws_issue_text = " · WS: ticker нет"
+                    elif ticker_stats.status == "degraded_rest_fallback":
+                        ws_issue_text = " · WS: ticker REST"
                     elif ws_aggtrade_stats.enabled and ws_aggtrade_stats.target_count > 0:
                         subscribed_count = _optional_int(ws_aggtrade_stats.subscribed_count)
                         if (ws_aggtrade_stats.connection_status or "").lower() != "connected":

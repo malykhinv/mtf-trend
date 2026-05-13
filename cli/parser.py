@@ -238,10 +238,10 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument(
         "--live-ws-aggtrade-max-backfill-ms",
         type=int,
-        default=300_000,
+        default=360_000,
         help=(
             "Maximum uncovered aggTrade milliseconds that may be REST-backfilled per WS precise scan; "
-            "0 means strict WS coverage only and skips the signal until coverage is available."
+            "0 means strict WS coverage only and skips the signal until coverage is available. Default: 360000."
         ),
     )
     anomaly_live.add_argument("--ticker-radar-interval-seconds", type=float, default=5.0)

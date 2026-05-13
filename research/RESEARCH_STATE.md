@@ -100,7 +100,7 @@ python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-anomaly-live --help
 ```
 
-Expected readout: startup still refuses blind ticker radar from P185; `live_cycle_summary.scheduler_cycle_seconds` is the decision heartbeat; ticker fields show source/status/ok/missing/promoted counts; all-missing required ticker radar becomes `network_degraded`; radar-promoted fresh symbols use explicit bounded aggTrade backfill when `missing_total_ms <= 300000`; max-position rejects emit `signal_scan_retry_enabled` before stale expiry. If diagnostic cold coverage is needed, set `--inactive-scan-slots-per-cycle` explicitly.
+Expected readout: startup still refuses blind ticker radar from P185; `live_cycle_summary.scheduler_cycle_seconds` is the decision heartbeat; ticker fields show source/status/ok/missing/promoted counts; all-missing required ticker radar becomes `network_degraded`; radar-promoted fresh symbols use explicit bounded aggTrade backfill when `missing_total_ms <= 360000`; max-position rejects emit `signal_scan_retry_enabled` before stale expiry. If diagnostic cold coverage is needed, set `--inactive-scan-slots-per-cycle` explicitly.
 
 Latest next step after P167:
 
@@ -919,3 +919,11 @@ The degradation is visible through ticker_radar_primary_source_failed, ticker_ra
 No OHLCV/aggTrade full-scan fallback is restored; if both WS and REST ticker sources fail, or if all ticker snapshots are missing, live refuses/pauses instead of hiding the problem.
 Next validation: run live again and inspect live_events.csv for ticker_radar_source_degraded plus nonzero ticker_radar_startup_ready.ok_count.
 ```
+
+### 2026-05-13 - P190 proposed: default WS aggTrade backfill budget widened
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Reason: after P189, degraded REST ticker discovery can start live when WS ticker DNS is broken, but the 300000 ms aggTrade backfill cap can still miss the last fresh 5m/30s setup scan when WS aggTrade is unavailable/cold. P190 raises the default cap to 360000 ms and exposes degraded ticker status in the console line.
+
+Validation target: inspect `live_events.csv` for `ticker_radar_source_degraded`, `ticker_radar_snapshot.source_status=degraded_rest_fallback`, `ws_aggtrade_frame_read.backfill_max_ms=360000`, low `signal_entry_ws_aggtrade_pending` count, and acceptable `signal_scan_seconds` / `aggtrade_network_calls`.

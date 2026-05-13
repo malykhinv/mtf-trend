@@ -2041,3 +2041,28 @@ Expected live smoke with broken WS DNS but working REST API: startup continues, 
 ### Risk
 
 Medium. REST ticker polling is slower and less reactive than WS ticker pushes, so discovery latency can increase during degraded mode. This is preferable to pretending WS is healthy or silently restoring full inactive subminute scans.
+
+## P190 - proposed - widen default WS aggTrade backfill budget for 5m/30s live
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- After P189, a broken Binance WS ticker can be replaced by explicit degraded REST ticker radar, but the default WS aggTrade backfill budget stayed at 300000 ms.
+- For the default 5m/30s pair, the last valid scan of the previous 5m forming setup can request slightly more than 300000 ms of aggTrade history while the signal is still fresh.
+- With WS aggTrade unavailable or cold, that path can emit `coverage_pending` and miss the executable window even though REST aggTrade could have repaired a bounded gap.
+
+Changes:
+- Raise the default `live_ws_aggtrade_max_backfill_ms` / `--live-ws-aggtrade-max-backfill-ms` to 360000.
+- Keep the behavior explicit through `ws_aggtrade_frame_read.backfill_max_ms`, `backfill_ranges`, `backfill_skipped`, and `signal_entry_ws_aggtrade_pending`.
+- Show degraded ticker discovery in the operator status line as `WS: ticker REST` instead of only relying on CSV artifacts.
+
+Risk:
+Medium: degraded WS runs may perform more REST aggTrade work on radar-promoted symbols. This is bounded and visible, but cycle latency must be watched through `signal_scan_seconds` and `aggtrade_network_calls`.
+
+Validation:
+```
+python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Live smoke expectation: with WS ticker DNS broken but REST available, startup continues in degraded REST mode; fresh 5m/30s radar-promoted scans should backfill bounded gaps up to 360000 ms instead of `coverage_pending` at the end of the setup window.
