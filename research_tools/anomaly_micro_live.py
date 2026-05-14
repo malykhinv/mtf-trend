@@ -69,6 +69,9 @@ DANGER_ADAPTIVE_COLD_COVERAGE_ACTIVE_WAITING_SOFT_CAP = 3
 DANGER_ADAPTIVE_COLD_COVERAGE_NETWORK_CALLS_HIGH = 4
 DANGER_ADAPTIVE_COLD_COVERAGE_REST_FETCHED_MS_HIGH = 120_000
 DANGER_ADAPTIVE_COLD_COVERAGE_PENDING_GAPS_HIGH = 3
+DEFAULT_LATENCY_SLA_DUE_SCAN_P95_SECONDS = 15.0
+DEFAULT_LATENCY_SLA_MIN_DUE_SAMPLES = 1
+LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON = "latency_sla_due_scan_p95_above_threshold"
 DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE = "DANGER_local_memory_position_guard_no_pre_entry_exchange_position_fetch"
 DANGER_CHEAP_FLOW_RADAR_SOURCE = "DANGER_ws_ticker_trade_count_flow_radar"
 DANGER_TICKER_FLOW_RADAR_MIN_QUOTE_VOLUME_DELTA_USDT = 5_000.0
@@ -104,6 +107,7 @@ VISIBILITY_WARM_WATCH_EVENTS = frozenset(
         "warm_watch_marked",
         "warm_watch_updated",
         "warm_watch_precise_promoted",
+        "warm_watch_precise_deferred_latency_sla",
         "warm_watch_rejected",
         "warm_watch_expired",
         "warm_watch_cleared",
@@ -1428,6 +1432,9 @@ class LiveAnomalyConfig:
     ticker_radar_watch_batch_size: int = 5
     ticker_radar_max_promotions_per_cycle: int = 20
     max_precise_scan_symbols_per_cycle: int | None = None
+    latency_sla_controller_enabled: bool = True
+    latency_sla_due_scan_p95_seconds: float = DEFAULT_LATENCY_SLA_DUE_SCAN_P95_SECONDS
+    latency_sla_min_due_samples: int = DEFAULT_LATENCY_SLA_MIN_DUE_SAMPLES
     ticker_radar_min_price_delta_pct: float = 0.003
     ticker_radar_min_quote_volume_delta_usdt: float = 10_000.0
     ticker_radar_min_quote_volume_delta_ratio: float = 3.0
@@ -1636,6 +1643,40 @@ class LiveSymbolContextSnapshot:
 
 
 @dataclass(frozen=True, slots=True)
+class LiveLatencySlaStatus:
+    enabled: bool
+    status: str
+    optional_scans_allowed: bool
+    due_scan_p95_seconds: float | None
+    due_scan_max_seconds: float | None
+    due_scan_samples: int
+    threshold_seconds: float
+    min_due_samples: int
+    reason: str
+
+    def event_payload(self) -> dict[str, object]:
+        return {
+            "latency_sla_enabled": bool(self.enabled),
+            "latency_sla_status": self.status,
+            "latency_sla_optional_scans_allowed": bool(self.optional_scans_allowed),
+            "latency_sla_due_scan_p95_seconds": (
+                round(float(self.due_scan_p95_seconds), 3)
+                if self.due_scan_p95_seconds is not None
+                else ""
+            ),
+            "latency_sla_due_scan_max_seconds": (
+                round(float(self.due_scan_max_seconds), 3)
+                if self.due_scan_max_seconds is not None
+                else ""
+            ),
+            "latency_sla_due_scan_samples": int(self.due_scan_samples),
+            "latency_sla_threshold_seconds": float(self.threshold_seconds),
+            "latency_sla_min_due_samples": int(self.min_due_samples),
+            "latency_sla_reason": self.reason,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class LiveSymbolBatchSelection:
     scheduler_source: str
     active_due: tuple[str, ...]
@@ -1643,6 +1684,14 @@ class LiveSymbolBatchSelection:
     radar_due: tuple[str, ...]
     radar_waiting: tuple[str, ...]
     warm_watch_waiting: tuple[str, ...]
+    latency_sla_status: str
+    latency_sla_optional_scans_allowed: bool
+    latency_sla_due_scan_p95_seconds: float | None
+    latency_sla_due_scan_max_seconds: float | None
+    latency_sla_due_scan_samples: int
+    latency_sla_threshold_seconds: float
+    latency_sla_min_due_samples: int
+    latency_sla_reason: str
     inactive: tuple[str, ...]
     batch: tuple[str, ...]
     scan_modes: dict[str, str]
@@ -1696,6 +1745,7 @@ class LiveTickerRadarCycleStats:
     warm_watch_marked_count: int = 0
     warm_watch_promoted_count: int = 0
     warm_watch_rejected_count: int = 0
+    warm_watch_deferred_count: int = 0
     danger_flow_radar_promoted_count: int = 0
     danger_flow_radar_candidate_count: int = 0
     reason: str = ""
@@ -2923,6 +2973,14 @@ class AnomalyMicroLiveRunner:
         self._current_inactive_cold_coverage_load_factor = 0.0
         self._current_inactive_cold_coverage_pressure_ewma = 0.0
         self._current_inactive_cold_coverage_cycle_seconds_ewma = DANGER_ADAPTIVE_COLD_COVERAGE_SLOW_CYCLE_SECONDS
+        self._current_latency_sla_status = "not_started"
+        self._current_latency_sla_optional_scans_allowed = True
+        self._current_latency_sla_due_scan_p95_seconds: float | None = None
+        self._current_latency_sla_due_scan_max_seconds: float | None = None
+        self._current_latency_sla_due_scan_samples = 0
+        self._current_latency_sla_threshold_seconds = float(config.latency_sla_due_scan_p95_seconds)
+        self._current_latency_sla_min_due_samples = int(config.latency_sla_min_due_samples)
+        self._current_latency_sla_reason = "not_started"
         self._cold_coverage_pressure_ewma = 0.0
         self._scheduler_cycle_seconds_ewma = DANGER_ADAPTIVE_COLD_COVERAGE_SLOW_CYCLE_SECONDS
         self._cycle_precise_scan_symbols = 0
@@ -3002,6 +3060,10 @@ class AnomalyMicroLiveRunner:
                 "inactive_cold_coverage_default_danger": True,
                 "inactive_cold_coverage_health_gate_min_pct": DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO * 100.0,
                 "inactive_cold_coverage_requires_no_active_or_position": True,
+                "latency_sla_controller_enabled": bool(self.config.latency_sla_controller_enabled),
+                "latency_sla_policy": "protect_active_and_radar_due_scan_latency_by_gating_optional_warm_and_cold",
+                "latency_sla_due_scan_p95_seconds": float(self.config.latency_sla_due_scan_p95_seconds),
+                "latency_sla_min_due_samples": int(self.config.latency_sla_min_due_samples),
                 "danger_local_entry_position_guard_enabled": bool(self.config.danger_local_entry_position_guard_enabled),
                 "danger_local_entry_position_guard_source": (
                     DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE
@@ -3156,6 +3218,23 @@ class AnomalyMicroLiveRunner:
                         "warm_watch_marked_count": ticker_stats.warm_watch_marked_count,
                         "warm_watch_promoted_count": ticker_stats.warm_watch_promoted_count,
                         "warm_watch_rejected_count": ticker_stats.warm_watch_rejected_count,
+                        "warm_watch_deferred_count": ticker_stats.warm_watch_deferred_count,
+                        "latency_sla_status": self._current_latency_sla_status,
+                        "latency_sla_optional_scans_allowed": bool(self._current_latency_sla_optional_scans_allowed),
+                        "latency_sla_due_scan_p95_seconds": (
+                            round(float(self._current_latency_sla_due_scan_p95_seconds), 3)
+                            if self._current_latency_sla_due_scan_p95_seconds is not None
+                            else ""
+                        ),
+                        "latency_sla_due_scan_max_seconds": (
+                            round(float(self._current_latency_sla_due_scan_max_seconds), 3)
+                            if self._current_latency_sla_due_scan_max_seconds is not None
+                            else ""
+                        ),
+                        "latency_sla_due_scan_samples": int(self._current_latency_sla_due_scan_samples),
+                        "latency_sla_threshold_seconds": float(self._current_latency_sla_threshold_seconds),
+                        "latency_sla_min_due_samples": int(self._current_latency_sla_min_due_samples),
+                        "latency_sla_reason": self._current_latency_sla_reason,
                         "symbol_context_snapshot_seconds": round(context_snapshot_seconds, 3),
                         "symbol_context_snapshot_enabled": bool(context_snapshot_stats.enabled),
                         "symbol_context_snapshot_attempted": bool(context_snapshot_stats.attempted),
@@ -3931,6 +4010,14 @@ class AnomalyMicroLiveRunner:
         self._current_inactive_cold_coverage_load_factor = selection.inactive_cold_coverage_load_factor
         self._current_inactive_cold_coverage_pressure_ewma = selection.inactive_cold_coverage_pressure_ewma
         self._current_inactive_cold_coverage_cycle_seconds_ewma = selection.inactive_cold_coverage_cycle_seconds_ewma
+        self._current_latency_sla_status = selection.latency_sla_status
+        self._current_latency_sla_optional_scans_allowed = selection.latency_sla_optional_scans_allowed
+        self._current_latency_sla_due_scan_p95_seconds = selection.latency_sla_due_scan_p95_seconds
+        self._current_latency_sla_due_scan_max_seconds = selection.latency_sla_due_scan_max_seconds
+        self._current_latency_sla_due_scan_samples = selection.latency_sla_due_scan_samples
+        self._current_latency_sla_threshold_seconds = selection.latency_sla_threshold_seconds
+        self._current_latency_sla_min_due_samples = selection.latency_sla_min_due_samples
+        self._current_latency_sla_reason = selection.latency_sla_reason
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
@@ -3946,6 +4033,22 @@ class AnomalyMicroLiveRunner:
                 "ticker_radar_waiting_symbols": list(selection.radar_waiting),
                 "warm_watch_waiting_count": len(selection.warm_watch_waiting),
                 "warm_watch_waiting_symbols": list(selection.warm_watch_waiting),
+                "latency_sla_status": selection.latency_sla_status,
+                "latency_sla_optional_scans_allowed": bool(selection.latency_sla_optional_scans_allowed),
+                "latency_sla_due_scan_p95_seconds": (
+                    round(float(selection.latency_sla_due_scan_p95_seconds), 3)
+                    if selection.latency_sla_due_scan_p95_seconds is not None
+                    else ""
+                ),
+                "latency_sla_due_scan_max_seconds": (
+                    round(float(selection.latency_sla_due_scan_max_seconds), 3)
+                    if selection.latency_sla_due_scan_max_seconds is not None
+                    else ""
+                ),
+                "latency_sla_due_scan_samples": int(selection.latency_sla_due_scan_samples),
+                "latency_sla_threshold_seconds": float(selection.latency_sla_threshold_seconds),
+                "latency_sla_min_due_samples": int(selection.latency_sla_min_due_samples),
+                "latency_sla_reason": selection.latency_sla_reason,
                 "max_precise_scan_symbols_per_cycle": (
                     self.config.max_precise_scan_symbols_per_cycle
                     if self.config.max_precise_scan_symbols_per_cycle is not None
@@ -4217,6 +4320,102 @@ class AnomalyMicroLiveRunner:
             return 1.0
         return (value - low) / (high - low)
 
+    def _current_latency_sla_backlog_status(self, *, now_ms: int) -> LiveLatencySlaStatus:
+        with self._state_lock:
+            active_by_key: dict[str, str] = {}
+            for position in self._open_positions.values():
+                active_by_key[_position_symbol_key(position.signal.symbol)] = position.signal.symbol
+            for state in self._active_symbols.values():
+                active_by_key[_position_symbol_key(state.symbol)] = state.symbol
+            radar_by_key = {
+                _position_symbol_key(watch.symbol): watch.symbol
+                for watch in self._ticker_radar_watch.values()
+            }
+        return self._latency_sla_status(
+            now_ms=now_ms,
+            active_symbols=tuple(active_by_key.values()),
+            radar_symbols=tuple(radar_by_key.values()),
+        )
+
+    def _latency_sla_status(
+        self,
+        *,
+        now_ms: int,
+        active_symbols: tuple[str, ...] | list[str],
+        radar_symbols: tuple[str, ...] | list[str],
+    ) -> LiveLatencySlaStatus:
+        threshold_seconds = float(self.config.latency_sla_due_scan_p95_seconds)
+        min_due_samples = max(1, int(self.config.latency_sla_min_due_samples))
+        if not self.config.latency_sla_controller_enabled:
+            return LiveLatencySlaStatus(
+                enabled=False,
+                status="disabled",
+                optional_scans_allowed=True,
+                due_scan_p95_seconds=None,
+                due_scan_max_seconds=None,
+                due_scan_samples=0,
+                threshold_seconds=threshold_seconds,
+                min_due_samples=min_due_samples,
+                reason="controller_disabled",
+            )
+        symbols_by_key: dict[str, str] = {}
+        for symbol in [*active_symbols, *radar_symbols]:
+            symbols_by_key[_position_symbol_key(symbol)] = symbol
+        latencies: list[float] = []
+        for symbol in symbols_by_key.values():
+            latencies.extend(self._due_signal_scan_latency_seconds(symbol, now_ms=now_ms))
+        sample_count = len(latencies)
+        if sample_count < min_due_samples:
+            return LiveLatencySlaStatus(
+                enabled=True,
+                status="insufficient_due_samples",
+                optional_scans_allowed=True,
+                due_scan_p95_seconds=None,
+                due_scan_max_seconds=max(latencies) if latencies else None,
+                due_scan_samples=sample_count,
+                threshold_seconds=threshold_seconds,
+                min_due_samples=min_due_samples,
+                reason="not_enough_active_or_radar_due_scans",
+            )
+        p95_seconds = _percentile(latencies, 0.95)
+        max_seconds = max(latencies)
+        if p95_seconds > threshold_seconds:
+            return LiveLatencySlaStatus(
+                enabled=True,
+                status="breached",
+                optional_scans_allowed=False,
+                due_scan_p95_seconds=p95_seconds,
+                due_scan_max_seconds=max_seconds,
+                due_scan_samples=sample_count,
+                threshold_seconds=threshold_seconds,
+                min_due_samples=min_due_samples,
+                reason=LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON,
+            )
+        return LiveLatencySlaStatus(
+            enabled=True,
+            status="ok",
+            optional_scans_allowed=True,
+            due_scan_p95_seconds=p95_seconds,
+            due_scan_max_seconds=max_seconds,
+            due_scan_samples=sample_count,
+            threshold_seconds=threshold_seconds,
+            min_due_samples=min_due_samples,
+            reason="within_sla",
+        )
+
+    def _due_signal_scan_latency_seconds(self, symbol: str, *, now_ms: int) -> list[float]:
+        symbol_key = _position_symbol_key(symbol)
+        latencies: list[float] = []
+        with self._state_lock:
+            for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
+                closed_timestamp_ms = _latest_closed_candle_start_ms(entry_timeframe, now_ms=now_ms)
+                scan_key = (symbol_key, levels_timeframe.value, entry_timeframe.value)
+                if self._last_signal_scan_closed_at.get(scan_key) == closed_timestamp_ms:
+                    continue
+                candle_close_ms = closed_timestamp_ms + int(entry_timeframe.to_milliseconds())
+                latencies.append(max(0.0, (int(now_ms) - candle_close_ms) / 1000.0))
+        return latencies
+
     def _adaptive_cold_coverage_slots(
         self,
         *,
@@ -4332,6 +4531,11 @@ class AnomalyMicroLiveRunner:
             now_ms=now_ms,
             excluded_keys=active_keys | radar_due_keys | radar_waiting_keys,
         )
+        latency_sla = self._latency_sla_status(
+            now_ms=now_ms,
+            active_symbols=tuple(active_due),
+            radar_symbols=tuple([*radar_due, *radar_waiting]),
+        )
         warm_watch_keys = {_position_symbol_key(symbol) for symbol in warm_watch_waiting}
         base_inactive_slots, inactive_slots_source = self._default_inactive_scan_slots()
         cold_coverage_health_ratio = self._current_ws_health_ratio()
@@ -4382,6 +4586,14 @@ class AnomalyMicroLiveRunner:
             if inactive_slots_before_budget > 0 and inactive_slots <= 0:
                 inactive_slots_source = COLD_COVERAGE_GATED_OFF_SOURCE
                 cold_coverage_gate_reason = "precise_scan_budget_exhausted"
+        if (
+            self._inactive_slots_are_precise_cold_coverage(inactive_slots_source)
+            and inactive_slots > 0
+            and not latency_sla.optional_scans_allowed
+        ):
+            inactive_slots = 0
+            inactive_slots_source = COLD_COVERAGE_GATED_OFF_SOURCE
+            cold_coverage_gate_reason = latency_sla.reason or LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON
         inactive: list[str] = []
         attempts = 0
         while len(inactive) < inactive_slots and attempts < len(symbols):
@@ -4447,6 +4659,14 @@ class AnomalyMicroLiveRunner:
             radar_due=tuple(radar_due),
             radar_waiting=tuple(radar_waiting),
             warm_watch_waiting=tuple(warm_watch_waiting),
+            latency_sla_status=latency_sla.status,
+            latency_sla_optional_scans_allowed=latency_sla.optional_scans_allowed,
+            latency_sla_due_scan_p95_seconds=latency_sla.due_scan_p95_seconds,
+            latency_sla_due_scan_max_seconds=latency_sla.due_scan_max_seconds,
+            latency_sla_due_scan_samples=latency_sla.due_scan_samples,
+            latency_sla_threshold_seconds=latency_sla.threshold_seconds,
+            latency_sla_min_due_samples=latency_sla.min_due_samples,
+            latency_sla_reason=latency_sla.reason,
             inactive=tuple(inactive),
             batch=tuple(batch),
             scan_modes=batch_scan_modes,
@@ -4676,6 +4896,7 @@ class AnomalyMicroLiveRunner:
         warm_watch_marked_count = 0
         warm_watch_promoted_count = 0
         warm_watch_rejected_count = 0
+        warm_watch_deferred_count = 0
         danger_flow_candidate_count = sum(
             1 for promotion in promotions if promotion.get("promotion_source") == DANGER_CHEAP_FLOW_RADAR_SOURCE
         )
@@ -4696,6 +4917,8 @@ class AnomalyMicroLiveRunner:
                     danger_flow_promoted_count += 1
             elif action == "rejected":
                 warm_watch_rejected_count += 1
+            elif action == "deferred":
+                warm_watch_deferred_count += 1
         ok_count = len(snapshots) - missing_count
         snapshot_status = "ok" if ok_count > 0 else "all_missing"
         self.artifacts.append_event(
@@ -4710,6 +4933,7 @@ class AnomalyMicroLiveRunner:
                 "warm_watch_marked_count": warm_watch_marked_count,
                 "warm_watch_promoted_count": warm_watch_promoted_count,
                 "warm_watch_rejected_count": warm_watch_rejected_count,
+                "warm_watch_deferred_count": warm_watch_deferred_count,
                 "warm_watch_enabled": bool(self.config.warm_watch_enabled),
                 "danger_flow_radar_promoted_count": danger_flow_promoted_count,
                 "danger_flow_radar_candidate_count": danger_flow_candidate_count,
@@ -4746,6 +4970,7 @@ class AnomalyMicroLiveRunner:
             warm_watch_marked_count=warm_watch_marked_count,
             warm_watch_promoted_count=warm_watch_promoted_count,
             warm_watch_rejected_count=warm_watch_rejected_count,
+            warm_watch_deferred_count=warm_watch_deferred_count,
             danger_flow_radar_promoted_count=danger_flow_promoted_count,
             danger_flow_radar_candidate_count=danger_flow_candidate_count,
             reason=source_reason,
@@ -4942,24 +5167,63 @@ class AnomalyMicroLiveRunner:
                 previous_score = current.score
                 event_name = "warm_watch_updated"
             if observations >= min_observations:
-                self._warm_watch.pop(symbol_key, None)
-                promote_payload = {
-                    "reason": WARM_WATCH_SOURCE,
-                    "radar_reason": radar_reason,
-                    "observations": observations,
-                    "min_observations_for_precise": min_observations,
-                    "first_seen_ms": first_seen_ms,
-                    "age_ms": max(0, now_ms - first_seen_ms),
-                    "score": score,
-                    "previous_score": previous_score,
-                    "price_delta_pct": price_delta_pct,
-                    "quote_volume_delta": quote_volume_delta,
-                    "quote_volume_delta_ratio": quote_volume_delta_ratio if quote_volume_delta_ratio is not None else "",
-                    "trade_count_delta": trade_count_delta if trade_count_delta is not None else "",
-                    "trade_count_delta_ratio": trade_count_delta_ratio if trade_count_delta_ratio is not None else "",
-                    "promotion_source": promotion_source,
-                    "source": WARM_WATCH_SOURCE,
-                }
+                latency_sla = self._current_latency_sla_backlog_status(now_ms=now_ms)
+                if not latency_sla.optional_scans_allowed:
+                    self._warm_watch[symbol_key] = LiveWarmWatch(
+                        symbol=symbol,
+                        reason=radar_reason,
+                        expires_at_ms=expires_at_ms,
+                        updated_at_ms=now_ms,
+                        first_seen_ms=first_seen_ms,
+                        observations=observations,
+                        score=score,
+                        price_delta_pct=price_delta_pct,
+                        quote_volume_delta=quote_volume_delta,
+                        quote_volume_delta_ratio=quote_volume_delta_ratio,
+                        trade_count_delta=trade_count_delta,
+                        trade_count_delta_ratio=trade_count_delta_ratio,
+                        promotion_source=promotion_source,
+                    )
+                    event_name = "warm_watch_precise_deferred_latency_sla"
+                    event_payload = {
+                        "reason": latency_sla.reason or LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON,
+                        "radar_reason": radar_reason,
+                        "expires_at_ms": expires_at_ms,
+                        "ttl_ms": ttl_ms,
+                        "observations": observations,
+                        "min_observations_for_precise": min_observations,
+                        "first_seen_ms": first_seen_ms,
+                        "age_ms": max(0, now_ms - first_seen_ms),
+                        "score": score,
+                        "previous_score": previous_score,
+                        "price_delta_pct": price_delta_pct,
+                        "quote_volume_delta": quote_volume_delta,
+                        "quote_volume_delta_ratio": quote_volume_delta_ratio if quote_volume_delta_ratio is not None else "",
+                        "trade_count_delta": trade_count_delta if trade_count_delta is not None else "",
+                        "trade_count_delta_ratio": trade_count_delta_ratio if trade_count_delta_ratio is not None else "",
+                        "promotion_source": promotion_source,
+                        "source": WARM_WATCH_SOURCE,
+                        **latency_sla.event_payload(),
+                    }
+                else:
+                    self._warm_watch.pop(symbol_key, None)
+                    promote_payload = {
+                        "reason": WARM_WATCH_SOURCE,
+                        "radar_reason": radar_reason,
+                        "observations": observations,
+                        "min_observations_for_precise": min_observations,
+                        "first_seen_ms": first_seen_ms,
+                        "age_ms": max(0, now_ms - first_seen_ms),
+                        "score": score,
+                        "previous_score": previous_score,
+                        "price_delta_pct": price_delta_pct,
+                        "quote_volume_delta": quote_volume_delta,
+                        "quote_volume_delta_ratio": quote_volume_delta_ratio if quote_volume_delta_ratio is not None else "",
+                        "trade_count_delta": trade_count_delta if trade_count_delta is not None else "",
+                        "trade_count_delta_ratio": trade_count_delta_ratio if trade_count_delta_ratio is not None else "",
+                        "promotion_source": promotion_source,
+                        "source": WARM_WATCH_SOURCE,
+                    }
             else:
                 self._warm_watch[symbol_key] = LiveWarmWatch(
                     symbol=symbol,
@@ -5010,6 +5274,8 @@ class AnomalyMicroLiveRunner:
             )
             return "promoted"
         self.artifacts.append_event(event_name, symbol, event_payload)
+        if event_name == "warm_watch_precise_deferred_latency_sla":
+            return "deferred"
         return "marked"
 
     def _warm_watch_reject_reason(
@@ -9420,6 +9686,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "warm_watch_min_observations_for_precise": (config.warm_watch_min_observations_for_precise, 1),
         "symbol_context_snapshot_symbols_per_cycle": (config.symbol_context_snapshot_symbols_per_cycle, 1),
         "symbol_context_snapshot_fresh_ms": (config.symbol_context_snapshot_fresh_ms, 1),
+        "latency_sla_min_due_samples": (config.latency_sla_min_due_samples, 1),
         "live_ws_ticker_stale_ms": (config.live_ws_ticker_stale_ms, 1),
         "live_ws_aggtrade_stale_ms": (config.live_ws_aggtrade_stale_ms, 1),
         "live_ws_aggtrade_buffer_minutes": (config.live_ws_aggtrade_buffer_minutes, 1),
@@ -9511,6 +9778,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "danger_ticker_flow_radar_min_quote_volume_delta_usdt": config.danger_ticker_flow_radar_min_quote_volume_delta_usdt,
         "danger_ticker_flow_radar_min_trade_count_delta_ratio": config.danger_ticker_flow_radar_min_trade_count_delta_ratio,
         "symbol_context_snapshot_interval_seconds": config.symbol_context_snapshot_interval_seconds,
+        "latency_sla_due_scan_p95_seconds": config.latency_sla_due_scan_p95_seconds,
     }
     for name, value in required_positive.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
@@ -10318,6 +10586,23 @@ def _safe_divide(numerator: float, denominator: float) -> float:
         return float("nan")
     return float(numerator / denominator)
 
+
+def _percentile(values: list[float], fraction: float) -> float:
+    finite_values = sorted(float(value) for value in values if math.isfinite(float(value)))
+    if not finite_values:
+        return float("nan")
+    fraction = max(0.0, min(1.0, float(fraction)))
+    if len(finite_values) == 1:
+        return finite_values[0]
+    position = fraction * float(len(finite_values) - 1)
+    lower_index = int(math.floor(position))
+    upper_index = int(math.ceil(position))
+    if lower_index == upper_index:
+        return finite_values[lower_index]
+    lower = finite_values[lower_index]
+    upper = finite_values[upper_index]
+    weight = position - float(lower_index)
+    return lower + (upper - lower) * weight
 
 def _median_positive(values: list[float]) -> float | None:
     finite_positive = sorted(float(value) for value in values if math.isfinite(float(value)) and float(value) > 0.0)

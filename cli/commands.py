@@ -1503,6 +1503,14 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             ticker_radar_watch_batch_size=int(getattr(args, "ticker_radar_watch_batch_size", 5)),
             ticker_radar_max_promotions_per_cycle=int(getattr(args, "ticker_radar_max_promotions_per_cycle", 20)),
             max_precise_scan_symbols_per_cycle=getattr(args, "max_precise_scan_symbols_per_cycle", None),
+            latency_sla_controller_enabled=_to_bool_flag(
+                getattr(args, "latency_sla_controller_enabled", True),
+                default=True,
+            ),
+            latency_sla_due_scan_p95_seconds=float(
+                getattr(args, "latency_sla_due_scan_p95_seconds", 15.0)
+            ),
+            latency_sla_min_due_samples=int(getattr(args, "latency_sla_min_due_samples", 1)),
             ticker_radar_min_price_delta_pct=float(getattr(args, "ticker_radar_min_price_delta_pct", 0.003)),
             ticker_radar_min_quote_volume_delta_usdt=float(getattr(args, "ticker_radar_min_quote_volume_delta_usdt", 10_000.0)),
             ticker_radar_min_quote_volume_delta_ratio=float(getattr(args, "ticker_radar_min_quote_volume_delta_ratio", 3.0)),

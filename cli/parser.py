@@ -275,6 +275,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional cap for expensive active+radar precise scans per cycle; active symbols are never dropped.",
     )
+    anomaly_live.add_argument(
+        "--latency-sla-controller-enabled",
+        type=_str_to_bool,
+        default=True,
+        help="Gate optional warm precise promotions and cold coverage when active/radar due-scan latency breaches SLA.",
+    )
+    anomaly_live.add_argument("--latency-sla-due-scan-p95-seconds", type=float, default=15.0)
+    anomaly_live.add_argument(
+        "--latency-sla-min-due-samples",
+        type=_positive_int_for("--latency-sla-min-due-samples"),
+        default=1,
+    )
     anomaly_live.add_argument("--ticker-radar-min-price-delta-pct", type=float, default=0.003)
     anomaly_live.add_argument("--ticker-radar-min-quote-volume-delta-usdt", type=float, default=10_000.0)
     anomaly_live.add_argument("--ticker-radar-min-quote-volume-delta-ratio", type=float, default=3.0)

@@ -1206,3 +1206,11 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Missing or invalid live event input remains explicit in `visibility_source_status` and `not_scanned_reason`; no live visibility is fabricated.
 - Current commit: UNKNOWN.
 - Next validation: run top-growth for a completed hour with a real live_events.csv and inspect whether top movers show the first missing stage clearly.
+
+
+## P216 proposed state
+- Live now has a latency SLA controller for optional scan expansion.
+- Active and already-promoted radar precise scans remain protected; optional cold coverage is cut to zero when active/radar due-scan p95 breaches the configured SLA.
+- Warm-watch candidates that reached the precise threshold are deferred with explicit `warm_watch_precise_deferred_latency_sla` events while SLA is breached, not silently dropped.
+- Current commit: UNKNOWN.
+- Next validation: run short dry live and inspect `latency_sla_status`, `latency_sla_due_scan_p95_seconds`, cold gate reason, and `warm_watch_deferred_count` before widening cold/warm budgets.

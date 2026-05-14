@@ -3026,3 +3026,56 @@ Risk:
 ```text
 Low/medium. This is artifact-only and does not change signal selection or orders. The first version depends on live_events.csv event coverage; if precise/category paths do not emit enough events for a symbol, the artifact will show untracked/no-actionable rather than pretending to know.
 ```
+
+
+## 2026-05-14 - P216 proposed: latency SLA optional scan controller
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+cli/parser.py
+cli/commands.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Protect active/radar reaction latency before expanding visibility with optional warm precise promotions or cold coverage.
+```
+
+Changes:
+
+```text
+- Adds latency_sla_controller config/CLI with active+radar due-scan p95 threshold and min sample count.
+- Computes due-scan latency as now minus the close time of the latest unscanned entry candle, not candle start time.
+- Keeps active and already-promoted radar precise scans eligible even when SLA is breached.
+- Gates optional precise cold coverage to zero when active/radar due-scan p95 breaches SLA.
+- Defers warm-watch-to-precise promotion while SLA is breached and emits warm_watch_precise_deferred_latency_sla instead of silently dropping the candidate.
+- Exposes latency SLA status, p95/max/sample count, threshold, reason, and warm_watch_deferred_count in live events and cycle summaries.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep latency-sla
+```
+
+Expected smoke readout:
+
+```text
+live_cache_config shows latency_sla_policy and threshold. symbol_batch_selected/live_cycle_summary show latency_sla_status. Under backlog, optional cold coverage has gate_reason=latency_sla_due_scan_p95_above_threshold and warm candidates emit warm_watch_precise_deferred_latency_sla instead of becoming ticker_radar_watch.
+```
+
+Risk:
+
+```text
+Medium. This can reduce discovery breadth during latency spikes by design. It should not suppress active/radar reaction scans or alter entry/category/order logic. If the SLA is set too low for the chosen TF/host, warm precise promotion and cold coverage may stay mostly off; artifacts will show the reason.
+```
