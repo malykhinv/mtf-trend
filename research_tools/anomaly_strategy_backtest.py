@@ -61,6 +61,14 @@ from research_tools.anomaly_continuation_lab import (
     _emit_progress,
 )
 
+from research_tools.runner_fader_prepump_context import (
+    DEFAULT_PREPUMP_CONTEXT_TIMEFRAME,
+    DEFAULT_PREPUMP_CONTEXT_WINDOWS,
+    PrepumpContextConfig,
+    parse_prepump_windows,
+    write_runner_fader_prepump_context,
+)
+
 _HOUR_MS = 3_600_000
 _DAY_MS = 86_400_000
 _TRADE_CHART_CONTEXT_DAYS = 4
@@ -245,6 +253,10 @@ class AnomalyBacktestConfig:
     exit_rule: str = "structural_trail"
     max_hold_candles: int = 240
     fee_rate: float = 0.0004
+    write_prepump_context: bool = True
+    prepump_context_timeframe: str = DEFAULT_PREPUMP_CONTEXT_TIMEFRAME
+    prepump_context_windows: str = DEFAULT_PREPUMP_CONTEXT_WINDOWS
+    prepump_context_min_coverage_ratio: float = 0.80
 
 
 EXECUTION_GUARD_SKIP_REASONS = {
@@ -594,6 +606,87 @@ def _write_artifact_frames(
             next_progress_pct=next_progress_pct,
         )
 
+
+
+def _write_prepump_context_artifacts(
+    *,
+    config: AnomalyBacktestConfig,
+    output_dir: Path,
+) -> None:
+    status_path = output_dir / "runner_fader_prepump_run_status.csv"
+    if not config.write_prepump_context:
+        _write_artifact_frames(
+            [
+                (
+                    status_path,
+                    pd.DataFrame(
+                        [
+                            {
+                                "status": "disabled",
+                                "reason": "write_prepump_context_false",
+                                "output_dir": str(output_dir),
+                            }
+                        ]
+                    ),
+                )
+            ],
+            progress_label="anomaly artifacts: prepump context status",
+        )
+        return
+    try:
+        write_runner_fader_prepump_context(
+            PrepumpContextConfig(
+                cache_dir=config.lab_config.cache_dir,
+                output_dir=output_dir,
+                artifact_dirs=(output_dir,),
+                context_timeframe=str(config.prepump_context_timeframe),
+                windows=parse_prepump_windows(str(config.prepump_context_windows)),
+                min_coverage_ratio=float(config.prepump_context_min_coverage_ratio),
+            )
+        )
+    except Exception as exc:
+        _write_artifact_frames(
+            [
+                (
+                    status_path,
+                    pd.DataFrame(
+                        [
+                            {
+                                "status": "error",
+                                "reason": type(exc).__name__,
+                                "message": str(exc),
+                                "output_dir": str(output_dir),
+                                "cache_dir": str(config.lab_config.cache_dir),
+                                "context_timeframe": str(config.prepump_context_timeframe),
+                                "windows": str(config.prepump_context_windows),
+                            }
+                        ]
+                    ),
+                )
+            ],
+            progress_label="anomaly artifacts: prepump context status",
+        )
+        return
+    _write_artifact_frames(
+        [
+            (
+                status_path,
+                pd.DataFrame(
+                    [
+                        {
+                            "status": "ok",
+                            "reason": "written",
+                            "output_dir": str(output_dir),
+                            "cache_dir": str(config.lab_config.cache_dir),
+                            "context_timeframe": str(config.prepump_context_timeframe),
+                            "windows": str(config.prepump_context_windows),
+                        }
+                    ]
+                ),
+            )
+        ],
+        progress_label="anomaly artifacts: prepump context status",
+    )
 
 def _sanitize_file_part(value: object) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value))
@@ -3663,6 +3756,7 @@ def run_anomaly_strategy_backtest(
         ],
         progress_label="anomaly artifacts: trade files",
     )
+    _write_prepump_context_artifacts(config=config, output_dir=output_dir)
     if run_entry_grid:
         print("anomaly entry grid: running variants", flush=True)
         grid = run_anomaly_entry_grid(
@@ -3807,6 +3901,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--exit-rule", choices=sorted(EXIT_RULES), default="structural_trail")
     parser.add_argument("--max-hold-candles", type=int, default=240)
     parser.add_argument("--fee-rate", type=float, default=0.0004)
+    parser.add_argument("--write-prepump-context", choices=["true", "false"], default="true")
+    parser.add_argument("--prepump-context-timeframe", default=DEFAULT_PREPUMP_CONTEXT_TIMEFRAME)
+    parser.add_argument("--prepump-context-windows", default=DEFAULT_PREPUMP_CONTEXT_WINDOWS)
+    parser.add_argument("--prepump-context-min-coverage-ratio", type=float, default=0.80)
     parser.add_argument("--render-charts", choices=["true", "false"], default="true")
     parser.add_argument("--run-entry-grid", action="store_true")
     parser.add_argument("--grid-oi3-values", default="0.01,0.02,0.03")
@@ -3880,6 +3978,10 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
         exit_rule=args.exit_rule,
         max_hold_candles=args.max_hold_candles,
         fee_rate=args.fee_rate,
+        write_prepump_context=str(args.write_prepump_context).lower() == "true",
+        prepump_context_timeframe=str(args.prepump_context_timeframe),
+        prepump_context_windows=str(args.prepump_context_windows),
+        prepump_context_min_coverage_ratio=float(args.prepump_context_min_coverage_ratio),
     )
 
 

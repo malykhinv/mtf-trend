@@ -1180,3 +1180,14 @@ Status: PROPOSED. Commit: UNKNOWN.
 ```text
 P210 keeps discovery improvements explicit and measurable. Live entry now uses local open/opening symbol memory as the pre-entry duplicate guard instead of fetching exchange position amount before every signal; startup cleanup and post-fill exchange position verification remain the safety boundary. The all-ticker WS stream already contains trade-count and quote-volume deltas, so DANGER cheap flow radar can promote early flow-only watch symbols without REST. WS aggTrade rolling buffers are widened for active/radar/watch/current cold symbols only, not for the full universe. Cold coverage usefulness is measured by cold scanned/evaluated/retryable/signal/order counters in live_cycle_summary. Next validation: 24h live, then compare cold_before_radar_count manually from ticker_radar_promoted source, cold_signal_count/order attempts, scheduler latency, and post-fill mismatch events.
 ```
+
+## P211 proposed state
+- Added proposed offline DANGER experiment for runner/fader pre-pump separability.
+- Current commit: UNKNOWN.
+- Next check: run on 30d backtest artifacts and inspect whether pre-anomaly HTF features separate runner/fader without symbol/month leakage.
+
+## P212 proposed state
+- P211 standalone runner/fader prepump study is now proposed as a default backtest artifact integration, not only a manual script.
+- Backtest artifacts should include `runner_fader_prepump_context.csv`, feature separation, label/status summaries, run config, and `runner_fader_prepump_run_status.csv`.
+- Current commit: UNKNOWN.
+- Next validation: run 30d backtest and inspect runner/fader feature separation before considering any live filter.

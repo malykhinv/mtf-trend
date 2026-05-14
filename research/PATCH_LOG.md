@@ -2858,3 +2858,16 @@ Risk:
 ```text
 High / DANGER-labeled. Flow radar can increase false positive watch symbols; widened WS buffers increase memory; local pre-entry guard assumes startup exchange-position cleanup and single live process. Do not run multiple live processes. Monitor post-fill position mismatch, scheduler_cycle_seconds, ws target counts, memory, and cold counters before judging edge.
 ```
+
+## P211 — PROPOSED — DANGER runner/fader pre-pump context study
+- Adds `research_tools/runner_fader_prepump_context.py` offline experiment.
+- Labels closed backtest trades as runner/fader/mixed and computes only pre-anomaly HTF context on 30m/1h/2h/6h windows.
+- Writes feature separation artifacts to test whether runners/faders are distinguishable before pump start.
+- Commit: UNKNOWN.
+
+## P212 — PROPOSED — DANGER backtest prepump runner/fader artifacts by default
+- Supersedes standalone-only P211 by wiring the runner/fader pre-pump context study into `run_anomaly_strategy_backtest` after `anomaly_trades.csv` is written.
+- Backtest now writes `runner_fader_prepump_*.csv` by default in the same artifact directory, using `anomaly_timestamp_ms` as the exclusive feature anchor and 30m/1h/2h/6h HTF context windows.
+- Adds `runner_fader_prepump_run_status.csv` so missing cache/read failures are visible without deleting the primary backtest artifacts.
+- Adds CLI knobs: `--write-prepump-context`, `--prepump-context-timeframe`, `--prepump-context-windows`, `--prepump-context-min-coverage-ratio`.
+- Commit: UNKNOWN.

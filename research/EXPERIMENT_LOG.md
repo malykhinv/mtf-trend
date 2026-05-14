@@ -1893,3 +1893,16 @@ Action:
 ```text
 P186 rebuilt against the current ZIP: event-driven inactive-scan default, typed ticker/aggTrade per-cycle stats, and WebSocket-focused live status output.
 ```
+
+## P211 — PROPOSED — DANGER runner/fader pre-pump context study
+Goal: test whether traded pump events can be separated into runner/fader contexts before anomaly start using 30m/1h/2h/6h price/volume/trade-count/OI/derivatives features.
+Method: use `anomaly_timestamp_ms` as exclusive feature anchor to avoid leakage; label outcomes from closed trades; compare runner vs fader feature distributions.
+Artifacts: `runner_fader_prepump_context.csv`, `runner_fader_prepump_feature_separation.csv`, label/status summaries.
+Guardrail: offline research only; no live filter until 30d+ walk-forward validation.
+Commit: UNKNOWN.
+
+## P212 — PROPOSED — DANGER default runner/fader prepump analysis in backtest
+Goal: make every normal anomaly backtest produce runner/fader pre-pump HTF-context evidence by default, so separability is reviewed with the same run artifacts as trades/PnL.
+Method: after `anomaly_trades.csv` is written, compute 30m/1h/2h/6h context features strictly before `anomaly_timestamp_ms`; write explicit run status if context build fails.
+Guardrail: this remains offline analysis only. Do not use it as a live filter until a 30d+ walk-forward split proves stable separation without symbol/month leakage.
+Commit: UNKNOWN.
