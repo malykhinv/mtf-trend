@@ -52,6 +52,7 @@ BINANCE_FUTURES_ALL_TICKER_WS_URL = "wss://fstream.binance.com/market/ws/!ticker
 BINANCE_FUTURES_COMBINED_WS_URL = "wss://fstream.binance.com/market/stream"
 DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS = 360_000
 DEFAULT_LIVE_WS_HEALTH_BOOTSTRAP_SECONDS = 180.0
+DEFAULT_LIVE_OHLCV_CACHE_FLUSH_MAX_SYMBOL_TIMEFRAMES = 4
 ANIMAL_EMOJIS = (
     "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
     "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦆", "🦅",
@@ -597,6 +598,8 @@ class BinanceWsAggTradeBuffer:
         self._target_market_ids: set[str] = set()
         self._symbol_by_market_id: dict[str, str] = {}
         self._subscribed_market_ids: set[str] = set()
+        self._pending_subscribe_request_ids: dict[int, list[str]] = {}
+        self._pending_unsubscribe_request_ids: dict[int, list[str]] = {}
         self._rows_by_market_id: dict[str, deque[dict[str, object]]] = {}
         self._active_since_ms_by_market_id: dict[str, int] = {}
         self._covered_until_ms_by_market_id: dict[str, int] = {}
@@ -893,6 +896,8 @@ class BinanceWsAggTradeBuffer:
             async with session.ws_connect(BINANCE_FUTURES_COMBINED_WS_URL, heartbeat=20) as ws:
                 with self._lock:
                     self._subscribed_market_ids = set()
+                    self._pending_subscribe_request_ids = {}
+                    self._pending_unsubscribe_request_ids = {}
                 self._set_status("connected", None)
                 while not self._stop_event.is_set():
                     await self._sync_subscriptions(ws)
@@ -926,37 +931,22 @@ class BinanceWsAggTradeBuffer:
         with self._lock:
             target = set(self._target_market_ids)
             subscribed = set(self._subscribed_market_ids)
-        to_subscribe = sorted(target - subscribed)
-        to_unsubscribe = sorted(subscribed - target)
+            pending_subscribe = {market_id for market_ids in self._pending_subscribe_request_ids.values() for market_id in market_ids}
+            pending_unsubscribe = {market_id for market_ids in self._pending_unsubscribe_request_ids.values() for market_id in market_ids}
+        to_subscribe = sorted(target - subscribed - pending_subscribe)
+        to_unsubscribe = sorted((subscribed - target) - pending_unsubscribe)
         if to_subscribe:
-            await self._send_subscription_message(ws, "SUBSCRIBE", to_subscribe)
-            now_ms = int(time.time() * 1000)
+            request_id = await self._send_subscription_message(ws, "SUBSCRIBE", to_subscribe)
             with self._lock:
-                for market_id in to_subscribe:
-                    self._subscribed_market_ids.add(market_id)
-                    self._rows_by_market_id[market_id] = deque()
-                    self._active_since_ms_by_market_id[market_id] = now_ms
-                    self._covered_until_ms_by_market_id[market_id] = now_ms
-                    self._gap_ranges_by_market_id.pop(market_id, None)
-                    self._last_aggtrade_id_by_market_id.pop(market_id, None)
-                    self._last_trade_timestamp_by_market_id.pop(market_id, None)
-                    self._last_receive_at_by_market_id.pop(market_id, None)
+                self._pending_subscribe_request_ids[request_id] = list(to_subscribe)
         if to_unsubscribe:
-            await self._send_subscription_message(ws, "UNSUBSCRIBE", to_unsubscribe)
+            request_id = await self._send_subscription_message(ws, "UNSUBSCRIBE", to_unsubscribe)
             with self._lock:
-                for market_id in to_unsubscribe:
-                    self._subscribed_market_ids.discard(market_id)
-                    self._rows_by_market_id.pop(market_id, None)
-                    self._active_since_ms_by_market_id.pop(market_id, None)
-                    self._covered_until_ms_by_market_id.pop(market_id, None)
-                    self._gap_ranges_by_market_id.pop(market_id, None)
-                    self._last_aggtrade_id_by_market_id.pop(market_id, None)
-                    self._last_trade_timestamp_by_market_id.pop(market_id, None)
-                    self._last_receive_at_by_market_id.pop(market_id, None)
+                self._pending_unsubscribe_request_ids[request_id] = list(to_unsubscribe)
 
-    async def _send_subscription_message(self, ws: object, method: str, market_ids: list[str]) -> None:
+    async def _send_subscription_message(self, ws: object, method: str, market_ids: list[str]) -> int:
         if not market_ids:
-            return
+            return 0
         with self._lock:
             self._subscription_request_id += 1
             request_id = self._subscription_request_id
@@ -966,6 +956,7 @@ class BinanceWsAggTradeBuffer:
             "id": request_id,
         }
         await ws.send_json(payload)
+        return request_id
 
     def _handle_ws_payload(self, raw: str) -> None:
         try:
@@ -974,8 +965,14 @@ class BinanceWsAggTradeBuffer:
             self._set_status("payload_error", f"json:{exc}")
             return
         if isinstance(payload, dict) and "result" in payload and "id" in payload:
+            self._handle_subscription_ack(payload)
             return
         if isinstance(payload, dict) and ("code" in payload or "msg" in payload):
+            request_id = _optional_int(payload.get("id"))
+            if request_id is not None:
+                with self._lock:
+                    self._pending_subscribe_request_ids.pop(request_id, None)
+                    self._pending_unsubscribe_request_ids.pop(request_id, None)
             self._set_status("subscription_error", f"{payload.get('code', '')}:{payload.get('msg', '')}"[:500])
             return
         data = payload.get("data") if isinstance(payload, dict) else payload
@@ -1025,6 +1022,38 @@ class BinanceWsAggTradeBuffer:
             self._connection_status = "connected"
             self._last_error = None
             self._prune_market_locked(market_id, now_ms=now_ms)
+
+    def _handle_subscription_ack(self, payload: dict[str, object]) -> None:
+        request_id = _optional_int(payload.get("id"))
+        if request_id is None:
+            return
+        now_ms = int(time.time() * 1000)
+        with self._lock:
+            subscribed = self._pending_subscribe_request_ids.pop(request_id, None)
+            unsubscribed = self._pending_unsubscribe_request_ids.pop(request_id, None)
+            if subscribed:
+                for market_id in subscribed:
+                    self._subscribed_market_ids.add(market_id)
+                    self._rows_by_market_id[market_id] = deque()
+                    self._active_since_ms_by_market_id[market_id] = now_ms
+                    self._covered_until_ms_by_market_id[market_id] = now_ms
+                    self._gap_ranges_by_market_id.pop(market_id, None)
+                    self._last_aggtrade_id_by_market_id.pop(market_id, None)
+                    self._last_trade_timestamp_by_market_id.pop(market_id, None)
+                    self._last_receive_at_by_market_id.pop(market_id, None)
+            if unsubscribed:
+                for market_id in unsubscribed:
+                    self._subscribed_market_ids.discard(market_id)
+                    self._rows_by_market_id.pop(market_id, None)
+                    self._active_since_ms_by_market_id.pop(market_id, None)
+                    self._covered_until_ms_by_market_id.pop(market_id, None)
+                    self._gap_ranges_by_market_id.pop(market_id, None)
+                    self._last_aggtrade_id_by_market_id.pop(market_id, None)
+                    self._last_trade_timestamp_by_market_id.pop(market_id, None)
+                    self._last_receive_at_by_market_id.pop(market_id, None)
+            if subscribed or unsubscribed:
+                self._connection_status = "connected"
+                self._last_error = None
 
     def _prune_market_locked(self, market_id: str, *, now_ms: int) -> None:
         rows_deque = self._rows_by_market_id.get(market_id)
@@ -1225,7 +1254,7 @@ class LiveAnomalyConfig:
     live_ohlcv_cache_write_enabled: bool = True
     live_ohlcv_cache_flush_interval_seconds: float = 30.0
     live_ohlcv_cache_max_buffer_rows: int = 50_000
-    live_ohlcv_cache_flush_max_symbol_timeframes: int | None = 20
+    live_ohlcv_cache_flush_max_symbol_timeframes: int | None = DEFAULT_LIVE_OHLCV_CACHE_FLUSH_MAX_SYMBOL_TIMEFRAMES
     max_cycles: int | None = None
     stop_cooldown_hours: float = 12.0
     stop_limit_per_symbol: int = 2

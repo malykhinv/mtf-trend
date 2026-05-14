@@ -2348,3 +2348,49 @@ python -m py_compile research_tools/anomaly_micro_live.py
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-anomaly-live --help
 ```
+
+## P202 - proposed - reduce live cache flush hot-loop stalls
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- Longest recent live run `.output/results/live_anomaly_runs/20260514_104416` had 500 cycles and 0 positions.
+- Cycle time was dominated by `signal_scan_seconds` (~1054s total) and `cache_flush_seconds` (~904s total).
+- Non-forced cache flush was writing up to 20 symbol/timeframe parquet shards synchronously in the decision loop; p95 flush was ~13.2s and max was ~31.9s.
+
+Changes:
+- Lower default `live_ohlcv_cache_flush_max_symbol_timeframes` from 20 to 4 in config, CLI parser, and command fallback.
+- Forced shutdown/error/max-cycle flush remains unlimited and persists all pending shards.
+
+Risk:
+Low for trading logic. Signal selection, categories, entry/exit, stops and cache correctness are unchanged. Runtime can carry a larger in-memory pending write queue if fetched rows arrive faster than the smaller flush budget can persist them.
+
+Validation:
+```
+python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+```
+
+## P203 - proposed - harden live WS subscription ACK and position amount parsing
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- Live review found that Binance aggTrade subscriptions were treated as active immediately after sending `SUBSCRIBE`, before the exchange ACK arrived.
+- That can make `wait_for_targets` and `read_rows` report subscribed/covered too early, especially during a subscription error or a just-promoted ticker-radar symbol.
+- Position amount parsing also preferred CCXT `contracts`/`side` before Binance `info.positionAmt`; if `contracts` is missing/zero while `positionAmt` is present, live can misread an open position as flat.
+
+Changes:
+- Track pending aggTrade subscribe/unsubscribe request ids and move symbols into the subscribed coverage set only after the WebSocket ACK payload is received.
+- Clear pending subscription state on reconnect and on subscription errors.
+- Parse `info.positionAmt` before side-based return when normalized contracts are zero.
+
+Risk:
+Low/medium. Trading thresholds are unchanged. Freshly promoted symbols may use explicit REST backfill for a little longer until WS ACK arrives, but this is more honest than claiming unacknowledged WS coverage.
+
+Validation:
+```
+python -m py_compile research_tools/anomaly_micro_live.py data/exchanges/ccxt_futures_client.py
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```

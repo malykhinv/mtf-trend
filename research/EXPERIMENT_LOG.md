@@ -1770,6 +1770,76 @@ Artifacts must be checked for reject_prior_fast_fade_filter_unavailable, reject_
 
 ---
 
+## 2026-05-14 - Live bottleneck audit 20260514_104416
+
+Input:
+
+```text
+Artifacts: .output/results/live_anomaly_runs/20260514_104416
+Duration: 500 live_cycle_summary rows, 3317 observed health seconds, 0 positions.
+```
+
+Timing:
+
+```text
+scheduler_cycle_seconds: sum 2312s, p50 1.98s, p90 13.16s, p95 17.89s, max 42.30s
+signal_scan_seconds: sum 1054s, p50 1.02s, p95 7.34s, max 16.06s
+cache_flush_seconds: sum 904s, p50 0.00s, p90 9.47s, p95 13.19s, max 31.88s
+order_reconcile_seconds: sum 344s, mostly periodic orphan reconciliation.
+```
+
+Main bottleneck:
+
+```text
+Non-forced live OHLCV cache flush writes up to 20 symbol/timeframe parquet shards synchronously in the decision loop.
+Each shard calls save_incremental: read existing parquet, merge, write tmp, validate tmp by reading it, then replace.
+This preserves cache integrity but causes 10-30s stalls; many long cycles are dominated by cache_flush_seconds, not signal logic.
+```
+
+WS/readout:
+
+```text
+ws_aggtrade_frame_read: covered 4386, partial 211, not_subscribed 1.
+aggTrade network calls 305; backfill reads 212; backfilled rows 155,799.
+The remaining REST backfill is real work, but it is not the largest pure hot-loop stall compared with cache flushing.
+```
+
+Safe action:
+
+```text
+P202 reduces default live_ohlcv_cache_flush_max_symbol_timeframes from 20 to 4.
+This does not change signal selection, entry/exit logic, cache correctness, or shutdown persistence: forced shutdown still flushes all pending shards.
+Expected effect: lower p90/p95 cycle stalls from parquet writes, at the cost of a slightly larger in-memory pending write queue.
+```
+
+---
+
+## 2026-05-14 - Live health/code review after P202
+
+Input:
+
+```text
+Current local code and latest live artifacts, especially .output/results/live_anomaly_runs/20260514_120027.
+```
+
+Findings:
+
+```text
+20260514_120027 shows improved cache flush stalls after the lower shard cap: cache_flush_seconds p95 ~1.25s, max ~4.55s versus previous 20260514_104416 p95 ~13.19s, max ~31.88s.
+WS ticker is mostly primary and aggTrade reads are mostly covered: ws_aggtrade_frame_read covered 604, partial 22, pending 0.
+No trades opened and category_selected remains 0. Current category_rejected reasons are dominated by prior_fast_fade filter cache unavailability/start gaps, not mark/OI failure.
+Code review found that aggTrade subscription coverage was optimistic before exchange ACK and position amount parsing could ignore info.positionAmt when normalized contracts were zero.
+```
+
+Action:
+
+```text
+P203 proposed: mark WS aggTrade subscriptions active only after ACK and parse Binance info.positionAmt when normalized contracts are zero.
+Do not claim live edge from these runs: they validate infrastructure health and rejection reasons only.
+```
+
+---
+
 ## 2026-05-13 - Short WS live artifact audit and P185
 
 Input:

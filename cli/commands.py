@@ -1521,7 +1521,7 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             live_ohlcv_cache_flush_max_symbol_timeframes=getattr(
                 args,
                 "live_ohlcv_cache_flush_max_symbol_timeframes",
-                20,
+                4,
             ),
             signal_scan_backfill_candles=int(getattr(args, "signal_scan_backfill_candles", 10)),
             max_cycles=getattr(args, "max_cycles", None),

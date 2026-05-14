@@ -288,7 +288,7 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument(
         "--live-ohlcv-cache-flush-max-symbol-timeframes",
         type=_positive_int_for("--live-ohlcv-cache-flush-max-symbol-timeframes"),
-        default=20,
+        default=4,
         help="Max symbol/timeframe cache shards flushed per non-forced cycle; forced shutdown flushes all pending shards.",
     )
     anomaly_live.add_argument(

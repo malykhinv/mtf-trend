@@ -709,11 +709,13 @@ class CcxtFuturesClient(ExchangeClient):
             contracts = row.get("contracts", row.get("contractSize", 0.0))
             side = str(row.get("side", "")).lower()
             amount = float(contracts or 0.0)
+            info = row.get("info")
+            if amount == 0.0 and isinstance(info, dict) and "positionAmt" in info:
+                amount = float(info["positionAmt"])
             if side == "short":
                 return -abs(amount)
             if side == "long":
                 return abs(amount)
-            info = row.get("info")
             if isinstance(info, dict) and "positionAmt" in info:
                 return float(info["positionAmt"])
             return amount

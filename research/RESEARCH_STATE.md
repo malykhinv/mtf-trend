@@ -1077,3 +1077,29 @@ The same health fields are written to live_cycle_summary for artifact validation
 This is diagnostics/operator UX only; trading logic is unchanged.
 Next validation: short live smoke and verify heartbeat stays on one line, changes color with an open position, and live_events.csv has ws_healthy/ws_health_reason/ws_health_pct changing when ticker seed, REST fallback, flow pending, or flow REST backfill occurs.
 ```
+
+## 2026-05-14 - P202 proposed: reduce live cache flush stalls
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+Longest recent live run analyzed: .output/results/live_anomaly_runs/20260514_104416.
+It ran 500 cycles, 3317 observed health seconds, 0 positions.
+Main safe bottleneck was synchronous parquet cache flush in the hot loop: cache_flush_seconds summed ~904s, p95 ~13.2s, max ~31.9s.
+P202 lowers default non-forced live_ohlcv_cache_flush_max_symbol_timeframes from 20 to 4.
+This is infrastructure/runtime only: signal selection, categories, entry/exit, stops, and forced shutdown persistence are unchanged.
+Next validation: run 10-15 minutes live and compare cache_flush_seconds p90/p95, remaining_rows, pending_rows_before_flush, live_ohlcv_cache_flush_summary count, and memory pressure.
+```
+
+## 2026-05-14 - P203 proposed: live subscription/position safety hardening
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+Live code review found two correctness risks.
+First, aggTrade WS subscriptions were considered active immediately after sending SUBSCRIBE, before Binance ACK; this could overstate WS coverage for newly promoted symbols or after subscription errors.
+Second, position amount parsing could return zero when CCXT normalized contracts were absent/zero but Binance info.positionAmt was present.
+P203 tracks pending WS subscribe/unsubscribe request ids and only marks symbols subscribed after ACK. It also uses info.positionAmt when normalized contracts are zero.
+Trading thresholds, category selection, entry/exit formulas, and cache policy are unchanged.
+Next validation: compile, then short live smoke and inspect ws_aggtrade_subscription_target, not_subscribed/covered transition, ws_aggtrade_frame_read partial/backfill rows, and any position amount readouts during a controlled position/order smoke.
+```
