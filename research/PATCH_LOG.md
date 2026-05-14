@@ -2923,3 +2923,54 @@ Risk:
 ```text
 Medium. This deliberately adds one radar-observation delay before precise scan, so it can miss one-shot pumps; the tradeoff is lower precise-scan latency pressure and better pre-pump visibility. It does not change entry/category logic.
 ```
+## 2026-05-14 - P214 proposed: rolling symbol context snapshot
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+cli/parser.py
+cli/commands.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Move expensive prior-fast-fade/HTF context work out of the precise scan path. Live keeps a cache-only rolling symbol_context_snapshot.csv and category checks consume the prepared in-memory snapshot.
+```
+
+Changes:
+
+```text
+- Adds symbol context snapshot config/CLI: enabled flag, interval, symbols per cycle, and freshness SLA.
+- Adds symbol_context_snapshot.csv artifact with per-symbol/per-timeframe baseline medians, cache coverage, available prior spike timestamps, and prior fast-fade timestamps.
+- The rolling updater reads local parquet cache only; it does not fill missing context via REST during snapshot refresh.
+- _live_prior_fast_fade_72h now reads the prepared snapshot and filters event timestamps relative to the current decision timestamp, avoiding lookahead.
+- Missing/stale/unavailable snapshots are explicit retryable category dependencies instead of hidden synchronous fallback fetches.
+- live_cycle_summary and live_events expose snapshot update status, counts, and output file.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep symbol-context
+```
+
+Expected smoke readout:
+
+```text
+live_cache_config shows symbol_context_snapshot_policy=cache_only_rolling_table_no_precise_scan_context_fetch. live_cycle_summary shows symbol_context_snapshot_status/updated/failed counts. symbol_context_snapshot.csv exists even before any trades. Category rejects caused by missing context show symbol_context_snapshot_missing/stale or context=<cache reason>, and precise scan no longer calls the old 72h context fetch path.
+```
+
+Risk:
+
+```text
+Medium. Early live cycles can reject runner categories as retryable until snapshots are populated and fresh. This is intentional latency protection, not a trading-filter change. If cache is stale or absent, the artifact will show unavailable snapshots instead of silently fetching context inside precise scan.
+```

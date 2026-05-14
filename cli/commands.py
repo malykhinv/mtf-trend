@@ -1513,6 +1513,17 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             ),
             warm_watch_min_price_delta_pct=float(getattr(args, "warm_watch_min_price_delta_pct", -0.001)),
             warm_watch_max_price_delta_pct=float(getattr(args, "warm_watch_max_price_delta_pct", 0.012)),
+            symbol_context_snapshot_enabled=_to_bool_flag(
+                getattr(args, "symbol_context_snapshot_enabled", True),
+                default=True,
+            ),
+            symbol_context_snapshot_interval_seconds=float(
+                getattr(args, "symbol_context_snapshot_interval_seconds", 60.0)
+            ),
+            symbol_context_snapshot_symbols_per_cycle=int(
+                getattr(args, "symbol_context_snapshot_symbols_per_cycle", 20)
+            ),
+            symbol_context_snapshot_fresh_ms=int(getattr(args, "symbol_context_snapshot_fresh_ms", 900_000)),
             max_signal_age_ms=int(getattr(args, "max_signal_age_ms", 60_000)),
             max_entry_price_drift_pct=float(getattr(args, "max_entry_price_drift_pct", 0.003)),
             min_executable_rr_to_signal_tp1=float(getattr(args, "min_executable_rr_to_signal_tp1", 0.75)),

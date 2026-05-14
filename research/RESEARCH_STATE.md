@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209/P213 proposed
-Last active patch: P213 warm-watch scheduler gate
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209/P213/P214 proposed
+Last active patch: P214 rolling symbol context snapshot
 Updated: 2026-05-14
 ```
 
@@ -1191,3 +1191,10 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Backtest artifacts should include `runner_fader_prepump_context.csv`, feature separation, label/status summaries, run config, and `runner_fader_prepump_run_status.csv`.
 - Current commit: UNKNOWN.
 - Next validation: run 30d backtest and inspect runner/fader feature separation before considering any live filter.
+
+## P214 proposed state
+- Live now maintains `symbol_context_snapshot.csv` as a cache-only rolling context table.
+- Prior-fast-fade category checks read the prepared snapshot instead of fetching/computing 72h context inside precise scan.
+- Missing/stale snapshots remain explicit retryable category dependencies; there is no synchronous context fallback during precise scan.
+- Current commit: UNKNOWN.
+- Next validation: run a short dry live and inspect `symbol_context_snapshot.csv`, `symbol_context_snapshot_updated`, `symbol_context_snapshot_*` fields in `live_cycle_summary`, and `reject_prior_fast_fade_filter_unavailable` reasons.

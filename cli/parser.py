@@ -292,6 +292,26 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomaly_live.add_argument("--warm-watch-min-price-delta-pct", type=float, default=-0.001)
     anomaly_live.add_argument("--warm-watch-max-price-delta-pct", type=float, default=0.012)
+    anomaly_live.add_argument(
+        "--symbol-context-snapshot-enabled",
+        type=_str_to_bool,
+        default=True,
+        help=(
+            "Maintain a cache-only rolling symbol_context_snapshot.csv and use it for prior-fast-fade "
+            "category context instead of fetching 72h context inside precise scan."
+        ),
+    )
+    anomaly_live.add_argument("--symbol-context-snapshot-interval-seconds", type=float, default=60.0)
+    anomaly_live.add_argument(
+        "--symbol-context-snapshot-symbols-per-cycle",
+        type=_positive_int_for("--symbol-context-snapshot-symbols-per-cycle"),
+        default=20,
+    )
+    anomaly_live.add_argument(
+        "--symbol-context-snapshot-fresh-ms",
+        type=_positive_int_for("--symbol-context-snapshot-fresh-ms"),
+        default=900_000,
+    )
     anomaly_live.add_argument("--max-signal-age-ms", type=_positive_int_for("--max-signal-age-ms"), default=60_000)
     anomaly_live.add_argument("--max-entry-price-drift-pct", type=float, default=0.003)
     anomaly_live.add_argument("--min-executable-rr-to-signal-tp1", type=float, default=0.75)
