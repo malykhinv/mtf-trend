@@ -53,6 +53,8 @@ BINANCE_FUTURES_COMBINED_WS_URL = "wss://fstream.binance.com/market/stream"
 DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS = 360_000
 DEFAULT_LIVE_WS_HEALTH_BOOTSTRAP_SECONDS = 180.0
 DEFAULT_LIVE_OHLCV_CACHE_FLUSH_MAX_SYMBOL_TIMEFRAMES = 4
+DEFAULT_LIVE_AGGTRADE_REST_CACHE_TTL_MS = 20 * 60_000
+DEFAULT_LIVE_AGGTRADE_REST_CACHE_PADDING_MS = 60_000
 ANIMAL_EMOJIS = (
     "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
     "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦆", "🦅",
@@ -1234,6 +1236,8 @@ class LiveAnomalyConfig:
     live_ws_aggtrade_stale_ms: int = 5_000
     live_ws_aggtrade_buffer_minutes: int = 20
     live_ws_aggtrade_max_backfill_ms: int = DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS
+    live_aggtrade_rest_cache_ttl_ms: int = DEFAULT_LIVE_AGGTRADE_REST_CACHE_TTL_MS
+    live_aggtrade_rest_cache_padding_ms: int = DEFAULT_LIVE_AGGTRADE_REST_CACHE_PADDING_MS
     ticker_radar_interval_seconds: float = 5.0
     ticker_radar_watch_ttl_ms: int = 120_000
     ticker_radar_watch_batch_size: int = 5
@@ -2214,9 +2218,13 @@ class AnomalyMicroLiveRunner:
         self._order_reconcile_cursor = 0
         self._network_degraded = False
         self._current_cycle_aggtrade_cache: dict[str, list[AggTradeRawRange]] = {}
+        self._aggtrade_raw_process_cache: dict[str, list[AggTradeRawRange]] = {}
         self._cycle_aggtrade_requests = 0
         self._cycle_aggtrade_network_calls = 0
         self._cycle_aggtrade_cache_hits = 0
+        self._cycle_aggtrade_process_cache_hits = 0
+        self._cycle_aggtrade_coalesced_missing_ranges = 0
+        self._cycle_aggtrade_rest_fetched_ms = 0
         self._cycle_ws_aggtrade_backfill_reads = 0
         self._cycle_ws_aggtrade_backfilled_rows = 0
         self._cycle_ws_aggtrade_coverage_pending = 0
@@ -2299,6 +2307,8 @@ class AnomalyMicroLiveRunner:
                 "live_ws_aggtrade_stale_ms": int(self.config.live_ws_aggtrade_stale_ms),
                 "live_ws_aggtrade_buffer_minutes": int(self.config.live_ws_aggtrade_buffer_minutes),
                 "live_ws_aggtrade_max_backfill_ms": int(self.config.live_ws_aggtrade_max_backfill_ms),
+                "live_aggtrade_rest_cache_ttl_ms": int(self.config.live_aggtrade_rest_cache_ttl_ms),
+                "live_aggtrade_rest_cache_padding_ms": int(self.config.live_aggtrade_rest_cache_padding_ms),
                 "exclude_default_high_cap_symbols": bool(self.config.exclude_default_high_cap_symbols),
                 "excluded_high_cap_bases": sorted(LIVE_DEFAULT_EXCLUDED_HIGH_CAP_BASES),
             },
@@ -2415,6 +2425,9 @@ class AnomalyMicroLiveRunner:
                         "aggtrade_requests": self._cycle_aggtrade_requests,
                         "aggtrade_network_calls": self._cycle_aggtrade_network_calls,
                         "aggtrade_cache_hits": self._cycle_aggtrade_cache_hits,
+                        "aggtrade_process_cache_hits": self._cycle_aggtrade_process_cache_hits,
+                        "aggtrade_coalesced_missing_ranges": self._cycle_aggtrade_coalesced_missing_ranges,
+                        "aggtrade_rest_fetched_ms": self._cycle_aggtrade_rest_fetched_ms,
                         "ws_aggtrade_backfill_reads": self._cycle_ws_aggtrade_backfill_reads,
                         "ws_aggtrade_backfilled_rows": self._cycle_ws_aggtrade_backfilled_rows,
                         "ws_aggtrade_not_connected_backfill_reads": self._cycle_ws_aggtrade_not_connected_backfill_reads,
@@ -2798,6 +2811,9 @@ class AnomalyMicroLiveRunner:
         self._cycle_aggtrade_requests = 0
         self._cycle_aggtrade_network_calls = 0
         self._cycle_aggtrade_cache_hits = 0
+        self._cycle_aggtrade_process_cache_hits = 0
+        self._cycle_aggtrade_coalesced_missing_ranges = 0
+        self._cycle_aggtrade_rest_fetched_ms = 0
         self._cycle_ws_aggtrade_backfill_reads = 0
         self._cycle_ws_aggtrade_backfilled_rows = 0
         self._cycle_ws_aggtrade_coverage_pending = 0
@@ -6394,6 +6410,136 @@ class AnomalyMicroLiveRunner:
     def _time_ranges_duration_ms(ranges: tuple[tuple[int, int], ...] | list[tuple[int, int]]) -> int:
         return int(sum(max(0, int(end) - int(start) + 1) for start, end in ranges))
 
+    def _prune_aggtrade_process_cache(self, symbol_key: str, *, now_ms: int) -> None:
+        ttl_ms = max(0, int(self.config.live_aggtrade_rest_cache_ttl_ms))
+        if ttl_ms <= 0:
+            self._aggtrade_raw_process_cache.pop(symbol_key, None)
+            return
+        cutoff_ms = int(now_ms) - ttl_ms
+        ranges = [
+            cached_range
+            for cached_range in self._aggtrade_raw_process_cache.get(symbol_key, [])
+            if int(cached_range.end_timestamp_ms) >= cutoff_ms
+        ]
+        if ranges:
+            self._aggtrade_raw_process_cache[symbol_key] = ranges
+        else:
+            self._aggtrade_raw_process_cache.pop(symbol_key, None)
+
+    def _aggtrade_cached_ranges(self, symbol_key: str, *, now_ms: int | None = None) -> list[AggTradeRawRange]:
+        if now_ms is not None:
+            self._prune_aggtrade_process_cache(symbol_key, now_ms=now_ms)
+        ranges = list(self._aggtrade_raw_process_cache.get(symbol_key, []))
+        ranges.extend(self._current_cycle_aggtrade_cache.get(symbol_key, []))
+        return ranges
+
+    def _remember_aggtrade_raw_range(
+        self,
+        symbol_key: str,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+        rows: list[dict[str, object]],
+    ) -> None:
+        raw_range = AggTradeRawRange(
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+            rows=tuple(dict(row) for row in rows),
+        )
+        self._current_cycle_aggtrade_cache.setdefault(symbol_key, []).append(raw_range)
+        if int(self.config.live_aggtrade_rest_cache_ttl_ms) > 0:
+            self._aggtrade_raw_process_cache.setdefault(symbol_key, []).append(raw_range)
+            self._prune_aggtrade_process_cache(symbol_key, now_ms=int(time.time() * 1000))
+
+    def _coalesce_aggtrade_missing_ranges(
+        self,
+        ranges: list[tuple[int, int]],
+        *,
+        request_start_ms: int,
+        request_end_ms: int,
+    ) -> list[tuple[int, int]]:
+        padding_ms = max(0, int(self.config.live_aggtrade_rest_cache_padding_ms))
+        padded = [
+            (max(int(request_start_ms), int(start) - padding_ms), min(int(request_end_ms), int(end) + padding_ms))
+            for start, end in ranges
+            if int(start) <= int(end)
+        ]
+        return _merge_time_ranges(padded)
+
+    def _fetch_aggtrade_raw_ranges_cached(
+        self,
+        symbol: str,
+        requested_ranges: list[tuple[int, int]],
+        *,
+        fetch_window_start_ms: int | None = None,
+        fetch_window_end_ms: int | None = None,
+    ) -> tuple[list[dict[str, object]], list[str], int, int]:
+        requested_ranges = _merge_time_ranges(
+            [(int(start), int(end)) for start, end in requested_ranges if int(start) <= int(end)]
+        )
+        if not requested_ranges:
+            return [], [], 0, 0
+        symbol_key = _position_symbol_key(symbol)
+        request_start_ms = min(start for start, _end in requested_ranges)
+        request_end_ms = max(end for _start, end in requested_ranges)
+        fetch_window_start = int(fetch_window_start_ms) if fetch_window_start_ms is not None else request_start_ms
+        fetch_window_end = int(fetch_window_end_ms) if fetch_window_end_ms is not None else request_end_ms
+        cached_ranges = self._aggtrade_cached_ranges(symbol_key, now_ms=int(time.time() * 1000))
+        missing_ranges: list[tuple[int, int]] = []
+        for requested_start, requested_end in requested_ranges:
+            missing_ranges.extend(
+                _missing_aggtrade_raw_ranges(
+                    cached_ranges,
+                    start_timestamp_ms=requested_start,
+                    end_timestamp_ms=requested_end,
+                )
+            )
+        missing_ranges = _merge_time_ranges(missing_ranges)
+        if not missing_ranges:
+            self._cycle_aggtrade_cache_hits += 1
+            self._cycle_aggtrade_process_cache_hits += 1
+        elif len(missing_ranges) < len(requested_ranges):
+            self._cycle_aggtrade_cache_hits += 1
+        original_missing_count = len(missing_ranges)
+        fetch_ranges = self._coalesce_aggtrade_missing_ranges(
+            missing_ranges,
+            request_start_ms=fetch_window_start,
+            request_end_ms=fetch_window_end,
+        )
+        if original_missing_count > len(fetch_ranges):
+            self._cycle_aggtrade_coalesced_missing_ranges += original_missing_count - len(fetch_ranges)
+        backfill_ranges: list[str] = []
+        fetched_rows_total = 0
+        for fetch_start_ms, fetch_end_ms in fetch_ranges:
+            rows = self._fetch_aggtrade_raw_rows(
+                symbol,
+                start_timestamp_ms=int(fetch_start_ms),
+                end_timestamp_ms=int(fetch_end_ms),
+            )
+            fetched_rows_total += int(len(rows))
+            self._cycle_aggtrade_rest_fetched_ms += max(0, int(fetch_end_ms) - int(fetch_start_ms) + 1)
+            backfill_ranges.append(f"{fetch_start_ms}:{fetch_end_ms}")
+            self._remember_aggtrade_raw_range(
+                symbol_key,
+                start_timestamp_ms=int(fetch_start_ms),
+                end_timestamp_ms=int(fetch_end_ms),
+                rows=rows,
+            )
+        all_ranges = self._aggtrade_cached_ranges(symbol_key)
+        all_rows: list[dict[str, object]] = []
+        for requested_start, requested_end in requested_ranges:
+            for cached_range in all_ranges:
+                if cached_range.end_timestamp_ms < requested_start or cached_range.start_timestamp_ms > requested_end:
+                    continue
+                all_rows.extend(
+                    _filter_aggtrade_rows_by_time(
+                        cached_range.rows,
+                        start_timestamp_ms=requested_start,
+                        end_timestamp_ms=requested_end,
+                    )
+                )
+        return _dedupe_aggtrade_rows(all_rows), backfill_ranges, fetched_rows_total, original_missing_count
+
     def _fetch_ws_aggtrade_raw_rows(
         self,
         symbol: str,
@@ -6458,49 +6604,25 @@ class AnomalyMicroLiveRunner:
                 status=read_result.status,
                 reason=read_result.reason,
             )
-        symbol_key = _position_symbol_key(symbol)
-        cached_ranges = self._current_cycle_aggtrade_cache.get(symbol_key, [])
-        for missing_start_ms, missing_end_ms in read_result.missing_ranges:
-            missing_start_ms = int(missing_start_ms)
-            missing_end_ms = int(missing_end_ms)
-            cycle_missing_ranges = _missing_aggtrade_raw_ranges(
-                cached_ranges,
-                start_timestamp_ms=missing_start_ms,
-                end_timestamp_ms=missing_end_ms,
+        if read_result.missing_ranges:
+            cached_rows, backfill_ranges, backfilled_rows, original_missing_count = self._fetch_aggtrade_raw_ranges_cached(
+                symbol,
+                [(int(start), int(end)) for start, end in read_result.missing_ranges],
+                fetch_window_start_ms=request_start_ms,
+                fetch_window_end_ms=request_end_ms,
             )
-            if not cycle_missing_ranges:
-                self._cycle_aggtrade_cache_hits += 1
-            for cycle_missing_start_ms, cycle_missing_end_ms in cycle_missing_ranges:
-                rows = self._fetch_aggtrade_raw_rows(
-                    symbol,
-                    start_timestamp_ms=int(cycle_missing_start_ms),
-                    end_timestamp_ms=int(cycle_missing_end_ms),
-                )
-                raw_range = AggTradeRawRange(
-                    start_timestamp_ms=int(cycle_missing_start_ms),
-                    end_timestamp_ms=int(cycle_missing_end_ms),
-                    rows=tuple(rows),
-                )
-                self._current_cycle_aggtrade_cache.setdefault(symbol_key, []).append(raw_range)
-                cached_ranges = self._current_cycle_aggtrade_cache.get(symbol_key, [])
+            all_rows.extend(cached_rows)
+            for missing_start_ms, missing_end_ms in read_result.missing_ranges:
                 source.add_backfill_rows(
                     symbol,
-                    rows,
-                    start_timestamp_ms=int(cycle_missing_start_ms),
-                    end_timestamp_ms=int(cycle_missing_end_ms),
+                    _filter_aggtrade_rows_by_time(
+                        cached_rows,
+                        start_timestamp_ms=int(missing_start_ms),
+                        end_timestamp_ms=int(missing_end_ms),
+                    ),
+                    start_timestamp_ms=int(missing_start_ms),
+                    end_timestamp_ms=int(missing_end_ms),
                 )
-                backfilled_rows += int(len(rows))
-                backfill_ranges.append(f"{cycle_missing_start_ms}:{cycle_missing_end_ms}")
-        for cached_range in self._current_cycle_aggtrade_cache.get(symbol_key, []):
-            if cached_range.end_timestamp_ms < request_start_ms or cached_range.start_timestamp_ms > request_end_ms:
-                continue
-            all_rows.extend(
-                _filter_aggtrade_rows_by_time(
-                    cached_range.rows,
-                    start_timestamp_ms=request_start_ms,
-                    end_timestamp_ms=request_end_ms,
-                )
-            )
         all_rows = _dedupe_aggtrade_rows(all_rows)
         if read_result.missing_ranges:
             self._cycle_ws_aggtrade_backfill_reads += 1
@@ -6524,6 +6646,8 @@ class AnomalyMicroLiveRunner:
                 "ws_rows": int(len(read_result.rows)),
                 "buffer_row_count": int(read_result.buffer_row_count),
                 "missing_range_count": int(len(read_result.missing_ranges)),
+                "cache_missing_range_count": int(original_missing_count) if read_result.missing_ranges else 0,
+                "network_backfill_range_count": int(len(backfill_ranges)),
                 "missing_ranges": [f"{start}:{end}" for start, end in read_result.missing_ranges],
                 "missing_total_ms": int(missing_total_ms),
                 "backfill_max_ms": int(max_backfill_ms),
@@ -6545,45 +6669,15 @@ class AnomalyMicroLiveRunner:
         end_timestamp_ms: int,
     ) -> list[dict[str, object]]:
         self._cycle_aggtrade_requests += 1
-        symbol_key = _position_symbol_key(symbol)
         request_start_ms = int(start_timestamp_ms)
         request_end_ms = int(end_timestamp_ms)
-        cached_ranges = self._current_cycle_aggtrade_cache.get(symbol_key, [])
-        missing_ranges = _missing_aggtrade_raw_ranges(
-            cached_ranges,
-            start_timestamp_ms=request_start_ms,
-            end_timestamp_ms=request_end_ms,
+        rows, _backfill_ranges, _fetched_rows_total, _missing_count = self._fetch_aggtrade_raw_ranges_cached(
+            symbol,
+            [(request_start_ms, request_end_ms)],
+            fetch_window_start_ms=request_start_ms,
+            fetch_window_end_ms=request_end_ms,
         )
-        if not missing_ranges:
-            self._cycle_aggtrade_cache_hits += 1
-        elif len(missing_ranges) < 1 + len(cached_ranges):
-            self._cycle_aggtrade_cache_hits += 1
-        for missing_start_ms, missing_end_ms in missing_ranges:
-            rows = self._fetch_aggtrade_raw_rows(
-                symbol,
-                start_timestamp_ms=int(missing_start_ms),
-                end_timestamp_ms=int(missing_end_ms),
-            )
-            self._current_cycle_aggtrade_cache.setdefault(symbol_key, []).append(
-                AggTradeRawRange(
-                    start_timestamp_ms=int(missing_start_ms),
-                    end_timestamp_ms=int(missing_end_ms),
-                    rows=tuple(rows),
-                )
-            )
-        all_ranges = self._current_cycle_aggtrade_cache.get(symbol_key, [])
-        all_rows: list[dict[str, object]] = []
-        for cached_range in all_ranges:
-            if cached_range.end_timestamp_ms < request_start_ms or cached_range.start_timestamp_ms > request_end_ms:
-                continue
-            all_rows.extend(
-                _filter_aggtrade_rows_by_time(
-                    cached_range.rows,
-                    start_timestamp_ms=request_start_ms,
-                    end_timestamp_ms=request_end_ms,
-                )
-            )
-        return _dedupe_aggtrade_rows(all_rows)
+        return rows
 
     def _fetch_aggtrade_raw_rows(
         self,
@@ -6934,6 +7028,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "order_reconcile_batch_size": (config.order_reconcile_batch_size, 1),
         "max_monitor_empty_ohlcv_cycles": (config.max_monitor_empty_ohlcv_cycles, 1),
         "live_ohlcv_cache_max_buffer_rows": (config.live_ohlcv_cache_max_buffer_rows, 1),
+        "live_aggtrade_rest_cache_ttl_ms": (config.live_aggtrade_rest_cache_ttl_ms, 1),
     }
     for name, (value, minimum) in integer_minimums.items():
         if not isinstance(value, int) or value < minimum:
@@ -6958,6 +7053,14 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         raise LiveStartupError(
             "Некорректный live config: live_ws_aggtrade_max_backfill_ms должен быть целым >= 0, "
             f"получено {config.live_ws_aggtrade_max_backfill_ms!r}"
+        )
+    if (
+        not isinstance(config.live_aggtrade_rest_cache_padding_ms, int)
+        or config.live_aggtrade_rest_cache_padding_ms < 0
+    ):
+        raise LiveStartupError(
+            "Некорректный live config: live_aggtrade_rest_cache_padding_ms должен быть целым >= 0, "
+            f"получено {config.live_aggtrade_rest_cache_padding_ms!r}"
         )
     if config.live_ohlcv_cache_flush_max_symbol_timeframes is not None and (
         not isinstance(config.live_ohlcv_cache_flush_max_symbol_timeframes, int)
@@ -7463,6 +7566,19 @@ def _missing_aggtrade_raw_ranges(
     if cursor <= request_end:
         missing.append((cursor, request_end))
     return missing
+
+
+def _merge_time_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    normalized = sorted((int(start), int(end)) for start, end in ranges if int(start) <= int(end))
+    if not normalized:
+        return []
+    merged = [normalized[0]]
+    for start, end in normalized[1:]:
+        if start <= merged[-1][1] + 1:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
 def _dedupe_aggtrade_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:

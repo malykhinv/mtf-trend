@@ -2394,3 +2394,30 @@ Validation:
 python -m py_compile research_tools/anomaly_micro_live.py data/exchanges/ccxt_futures_client.py
 python -m compileall data/exchanges research_tools cli constants.py main.py
 ```
+
+## P204 - proposed - coalesce and reuse live aggTrade REST gap backfills
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- WS aggTrade coverage is now mostly healthy, but every explicit gap/backfill can still become a separate REST `aggTrades` request.
+- Cycle-local raw cache avoids only repeated reads inside one cycle; adjacent windows across later cycles or multiple small WS holes can still hit REST repeatedly.
+- The goal is to reduce REST call count and latency without treating missing data as a zero-signal condition.
+
+Changes:
+- Add process-memory REST aggTrade raw range cache with 20 minute default TTL.
+- Coalesce uncovered aggTrade ranges and apply 60s default padding within the requested scan window, so one REST fetch can satisfy nearby 5s/15s/30s consumers and later cycles.
+- Route both WS missing-range backfill and non-WS subminute raw fetches through the same cache/planner.
+- Add CLI knobs: `--live-aggtrade-rest-cache-ttl-ms` and `--live-aggtrade-rest-cache-padding-ms`.
+- Add live_cycle_summary counters: `aggtrade_process_cache_hits`, `aggtrade_coalesced_missing_ranges`, and `aggtrade_rest_fetched_ms`.
+- Add per-read diagnostics: cache missing range count and actual network backfill range count.
+
+Risk:
+Medium operationally. The patch should reduce repeated REST work, but padding can fetch extra rows for hot symbols. It does not relax WS coverage rules, signal filters, entry guards, stops, exits, or PnL accounting.
+
+Validation:
+```
+.venv/Scripts/python.exe -m compileall data/exchanges research_tools cli constants.py main.py
+.venv/Scripts/python.exe main.py run-anomaly-live --help
+# smokes: process cache avoids second overlapping REST fetch; adjacent gaps coalesce into one padded request.
+```

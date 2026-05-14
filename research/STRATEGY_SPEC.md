@@ -432,6 +432,8 @@ Live cache and subminute data policy:
 ```text
 Subminute OHLCV is derived from Binance aggTrades.
 Cycle-local aggTrade raw cache may reuse overlapping raw time ranges, but missing intervals must still be fetched or reported as cache gaps.
+Live may also reuse explicit REST aggTrade backfill ranges from short-lived process memory and may coalesce/pad nearby missing ranges to reduce request count.
+This cache is a data-access optimization only; it must not convert uncovered windows into zero-signal evidence.
 Live OHLCV cache writes may be deferred for speed; graceful shutdown/error paths force a full flush.
 ```
 

@@ -253,6 +253,18 @@ def build_parser() -> argparse.ArgumentParser:
             "0 means strict WS coverage only and skips the signal until coverage is available. Default: 360000."
         ),
     )
+    anomaly_live.add_argument(
+        "--live-aggtrade-rest-cache-ttl-ms",
+        type=_positive_int_for("--live-aggtrade-rest-cache-ttl-ms"),
+        default=1_200_000,
+        help="Process-memory TTL for REST aggTrade backfill ranges reused across live cycles.",
+    )
+    anomaly_live.add_argument(
+        "--live-aggtrade-rest-cache-padding-ms",
+        type=int,
+        default=60_000,
+        help="Extra milliseconds fetched around uncovered aggTrade gaps so nearby future requests reuse one REST range; 0 disables padding.",
+    )
     anomaly_live.add_argument("--ticker-radar-interval-seconds", type=float, default=5.0)
     anomaly_live.add_argument("--ticker-radar-watch-ttl-ms", type=_positive_int_for("--ticker-radar-watch-ttl-ms"), default=120_000)
     anomaly_live.add_argument("--ticker-radar-watch-batch-size", type=int, default=5)

@@ -1103,3 +1103,15 @@ P203 tracks pending WS subscribe/unsubscribe request ids and only marks symbols 
 Trading thresholds, category selection, entry/exit formulas, and cache policy are unchanged.
 Next validation: compile, then short live smoke and inspect ws_aggtrade_subscription_target, not_subscribed/covered transition, ws_aggtrade_frame_read partial/backfill rows, and any position amount readouts during a controlled position/order smoke.
 ```
+
+## 2026-05-14 - P204 proposed: live aggTrade REST gap backfill optimization
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+Live REST aggTrade backfill now has a shared process-memory raw range cache and coalescing planner.
+Both WS uncovered gaps and non-WS subminute raw fetches reuse the same 20m TTL cache.
+Nearby missing ranges are coalesced and padded by 60s within the requested scan window, so one REST request can serve multiple TF consumers and later cycles.
+This is data-access/runtime only: missing coverage remains explicit, max WS backfill budget still gates whether a signal is evaluated, and no strategy thresholds or execution rules changed.
+Next validation: run 10-15 minutes live and compare aggtrade_network_calls, aggtrade_process_cache_hits, aggtrade_coalesced_missing_ranges, aggtrade_rest_fetched_ms, ws_aggtrade_backfill_reads, signal_scan_seconds, and signal_entry_ws_aggtrade_pending_count.
+```

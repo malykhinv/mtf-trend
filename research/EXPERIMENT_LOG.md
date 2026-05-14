@@ -1838,6 +1838,15 @@ P203 proposed: mark WS aggTrade subscriptions active only after ACK and parse Bi
 Do not claim live edge from these runs: they validate infrastructure health and rejection reasons only.
 ```
 
+Action P204:
+
+```text
+Implemented shared live aggTrade REST backfill optimization.
+The runner now reuses REST aggTrade raw ranges across cycles, coalesces small missing ranges, and pads fetch windows to reduce future small REST calls.
+Validation passed: compileall, run-anomaly-live --help, process-cache smoke, and coalesced-gap smoke.
+Next live readout should compare REST call count and scan latency, not PnL.
+```
+
 ---
 
 ## 2026-05-13 - Short WS live artifact audit and P185
