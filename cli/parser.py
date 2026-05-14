@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from collections.abc import Callable
 
 from config import AppConfig
@@ -304,6 +305,35 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomaly_live.add_argument("--warm-watch-min-price-delta-pct", type=float, default=-0.001)
     anomaly_live.add_argument("--warm-watch-max-price-delta-pct", type=float, default=0.012)
+    anomaly_live.add_argument(
+        "--prepump-warm-watch-scoring-enabled",
+        type=_str_to_bool,
+        default=False,
+        help=(
+            "Use a validated runner_fader_prepump_feature_separation.csv profile only to adjust "
+            "warm-watch priority scoring. This never vetoes entries."
+        ),
+    )
+    anomaly_live.add_argument("--prepump-warm-watch-profile-csv", type=Path, default=None)
+    anomaly_live.add_argument("--prepump-warm-watch-min-abs-standardized-diff", type=float, default=0.75)
+    anomaly_live.add_argument(
+        "--prepump-warm-watch-min-runner-rows",
+        type=_positive_int_for("--prepump-warm-watch-min-runner-rows"),
+        default=10,
+    )
+    anomaly_live.add_argument(
+        "--prepump-warm-watch-min-fader-rows",
+        type=_positive_int_for("--prepump-warm-watch-min-fader-rows"),
+        default=10,
+    )
+    anomaly_live.add_argument(
+        "--prepump-warm-watch-max-features",
+        type=_positive_int_for("--prepump-warm-watch-max-features"),
+        default=8,
+    )
+    anomaly_live.add_argument("--prepump-warm-watch-score-weight", type=float, default=0.35)
+    anomaly_live.add_argument("--prepump-warm-watch-windows", default="30m,1h,2h,6h")
+    anomaly_live.add_argument("--prepump-warm-watch-min-coverage-ratio", type=float, default=0.80)
     anomaly_live.add_argument(
         "--symbol-context-snapshot-enabled",
         type=_str_to_bool,

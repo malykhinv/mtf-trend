@@ -1214,3 +1214,11 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Warm-watch candidates that reached the precise threshold are deferred with explicit `warm_watch_precise_deferred_latency_sla` events while SLA is breached, not silently dropped.
 - Current commit: UNKNOWN.
 - Next validation: run short dry live and inspect `latency_sla_status`, `latency_sla_due_scan_p95_seconds`, cold gate reason, and `warm_watch_deferred_count` before widening cold/warm budgets.
+
+## P217 proposed state
+- Live can optionally use a validated P212 `runner_fader_prepump_feature_separation.csv` as a warm-watch priority scorer only.
+- The scorer is disabled by default and requires an explicit profile CSV; missing or unstable profiles fail startup instead of silently disabling.
+- `symbol_context_snapshot.csv` contract is now v2 and can include cache-only spot/flow prepump features for 30m/1h/2h/6h windows.
+- The score is bounded/additive and only affects warm/radar priority ordering; it does not reject categories, entries, or execution.
+- Current commit: UNKNOWN.
+- Next validation: run a 30d backtest with P212 artifacts, enable scoring in a dry live with the feature separation CSV, then compare warm_watch_precise_promoted symbols against later top_growth without using the score as an entry filter.

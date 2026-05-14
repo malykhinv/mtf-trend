@@ -1906,3 +1906,12 @@ Goal: make every normal anomaly backtest produce runner/fader pre-pump HTF-conte
 Method: after `anomaly_trades.csv` is written, compute 30m/1h/2h/6h context features strictly before `anomaly_timestamp_ms`; write explicit run status if context build fails.
 Guardrail: this remains offline analysis only. Do not use it as a live filter until a 30d+ walk-forward split proves stable separation without symbol/month leakage.
 Commit: UNKNOWN.
+
+## 2026-05-14 - P217 proposed live warm-watch scoring experiment
+
+Status: PROPOSED
+Commit: UNKNOWN
+
+```text
+Experiment: after a 30d P212 runner/fader prepump artifact is available, enable prepump_warm_watch_scoring in dry live using runner_fader_prepump_feature_separation.csv as the profile. Measure only scheduler impact: warm_watch_marked/updated/promoted ordering, later top_growth overlap, flow_radar false positives, and latency. Do not treat the score as an entry filter until walk-forward evidence shows stable separation outside the training period.
+```

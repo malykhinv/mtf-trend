@@ -31,6 +31,11 @@ from domain.exceptions import ExchangeConnectivityError
 from domain.enums.timeframe import Timeframe
 from research_tools.anomaly_continuation_lab import compute_start_verticality_metrics
 from research_tools.anomaly_config import ANOMALY_LIVE_TIMEFRAME_PAIRS
+from research_tools.runner_fader_prepump_context import (
+    DEFAULT_PREPUMP_CONTEXT_WINDOWS,
+    compute_spot_prepump_window_features,
+    parse_prepump_windows,
+)
 
 
 REQUIRED_PRICE_COLUMNS = ("timestamp", "open", "high", "low", "close")
@@ -84,6 +89,13 @@ DEFAULT_WARM_WATCH_TTL_MS = 10 * 60_000
 DEFAULT_WARM_WATCH_MIN_OBSERVATIONS_FOR_PRECISE = 2
 DEFAULT_WARM_WATCH_MIN_PRICE_DELTA_PCT = -0.001
 DEFAULT_WARM_WATCH_MAX_PRICE_DELTA_PCT = 0.012
+PREPUMP_WARM_WATCH_SCORING_CONTRACT = "prepump_warm_watch_scoring_v1_spot_feature_separation_midpoint"
+DEFAULT_PREPUMP_WARM_WATCH_MIN_ABS_STANDARDIZED_DIFF = 0.75
+DEFAULT_PREPUMP_WARM_WATCH_MIN_RUNNER_ROWS = 10
+DEFAULT_PREPUMP_WARM_WATCH_MIN_FADER_ROWS = 10
+DEFAULT_PREPUMP_WARM_WATCH_MAX_FEATURES = 8
+DEFAULT_PREPUMP_WARM_WATCH_SCORE_WEIGHT = 0.35
+DEFAULT_PREPUMP_WARM_WATCH_MIN_COVERAGE_RATIO = 0.80
 DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO = DANGER_ADAPTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO
 DANGER_INACTIVE_COLD_COVERAGE_SOURCE = "DANGER_default_precise_cold_coverage_subminute"
 EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE = "explicit_precise_cold_coverage"
@@ -255,7 +267,7 @@ MISSED_PUMP_VISIBILITY_COLUMNS = (
     "visibility_events_before_period_end",
     "visibility_event_parse_error_count",
 )
-SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v1_cache_only_prior_fast_fade"
+SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v2_cache_only_prior_fast_fade_prepump_spot"
 SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
     "snapshot_timestamp_utc",
     "snapshot_timestamp_ms",
@@ -282,6 +294,9 @@ SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
     "prior_fast_fade_count_available",
     "prior_spike_timestamps_ms",
     "prior_fast_fade_timestamps_ms",
+    "prepump_spot_feature_contract",
+    "prepump_spot_windows",
+    "prepump_spot_features_json",
     "compute_seconds",
 )
 LIVE_LEDGER_COLUMNS = (
@@ -359,6 +374,55 @@ class LiveWsAggTradeCoveragePending(RuntimeError):
         self.missing_ranges = missing_ranges
         self.status = status
         self.reason = reason
+
+
+@dataclass(frozen=True, slots=True)
+class LivePrepumpWarmWatchFeatureRule:
+    feature: str
+    runner_mean: float
+    fader_mean: float
+    standardized_diff: float
+    runner_count: int
+    fader_count: int
+    weight: float
+
+    @property
+    def direction(self) -> int:
+        return 1 if self.runner_mean >= self.fader_mean else -1
+
+
+@dataclass(frozen=True, slots=True)
+class LivePrepumpWarmWatchScoringProfile:
+    enabled: bool
+    status: str
+    source_path: str = ""
+    reason: str = ""
+    rules: tuple[LivePrepumpWarmWatchFeatureRule, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class LivePrepumpWarmWatchScore:
+    status: str
+    reason: str
+    raw_score: float | None = None
+    score_adjustment: float = 0.0
+    features_used: int = 0
+    features_missing: int = 0
+    top_features: tuple[str, ...] = ()
+
+    def event_payload(self) -> dict[str, object]:
+        return {
+            "prepump_warm_watch_scoring_status": self.status,
+            "prepump_warm_watch_scoring_reason": self.reason,
+            "prepump_warm_watch_score": (
+                round(float(self.raw_score), 6) if self.raw_score is not None else ""
+            ),
+            "prepump_warm_watch_score_adjustment": round(float(self.score_adjustment), 6),
+            "prepump_warm_watch_features_used": int(self.features_used),
+            "prepump_warm_watch_features_missing": int(self.features_missing),
+            "prepump_warm_watch_top_features": ";".join(self.top_features),
+            "prepump_warm_watch_scoring_contract": PREPUMP_WARM_WATCH_SCORING_CONTRACT,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -1443,6 +1507,15 @@ class LiveAnomalyConfig:
     warm_watch_min_observations_for_precise: int = DEFAULT_WARM_WATCH_MIN_OBSERVATIONS_FOR_PRECISE
     warm_watch_min_price_delta_pct: float = DEFAULT_WARM_WATCH_MIN_PRICE_DELTA_PCT
     warm_watch_max_price_delta_pct: float = DEFAULT_WARM_WATCH_MAX_PRICE_DELTA_PCT
+    prepump_warm_watch_scoring_enabled: bool = False
+    prepump_warm_watch_profile_csv: Path | None = None
+    prepump_warm_watch_min_abs_standardized_diff: float = DEFAULT_PREPUMP_WARM_WATCH_MIN_ABS_STANDARDIZED_DIFF
+    prepump_warm_watch_min_runner_rows: int = DEFAULT_PREPUMP_WARM_WATCH_MIN_RUNNER_ROWS
+    prepump_warm_watch_min_fader_rows: int = DEFAULT_PREPUMP_WARM_WATCH_MIN_FADER_ROWS
+    prepump_warm_watch_max_features: int = DEFAULT_PREPUMP_WARM_WATCH_MAX_FEATURES
+    prepump_warm_watch_score_weight: float = DEFAULT_PREPUMP_WARM_WATCH_SCORE_WEIGHT
+    prepump_warm_watch_windows: str = DEFAULT_PREPUMP_CONTEXT_WINDOWS
+    prepump_warm_watch_min_coverage_ratio: float = DEFAULT_PREPUMP_WARM_WATCH_MIN_COVERAGE_RATIO
     symbol_context_snapshot_enabled: bool = True
     symbol_context_snapshot_interval_seconds: float = 60.0
     symbol_context_snapshot_symbols_per_cycle: int = 20
@@ -1476,6 +1549,108 @@ class LiveAnomalyConfig:
     trail_buffer_r: float = 0.10
     order_reconcile_interval_cycles: int = 10
     order_reconcile_batch_size: int = 25
+
+
+def _safe_profile_float(value: object) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _safe_profile_int(value: object) -> int | None:
+    try:
+        number = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return number
+
+
+def _load_prepump_warm_watch_scoring_profile(
+    config: LiveAnomalyConfig,
+) -> LivePrepumpWarmWatchScoringProfile:
+    if not config.prepump_warm_watch_scoring_enabled:
+        return LivePrepumpWarmWatchScoringProfile(enabled=False, status="disabled", reason="disabled_by_config")
+    if config.prepump_warm_watch_profile_csv is None:
+        raise LiveStartupError(
+            "Некорректный live config: prepump warm-watch scoring enabled, "
+            "but --prepump-warm-watch-profile-csv is not set"
+        )
+    path = Path(config.prepump_warm_watch_profile_csv)
+    if not path.exists() or not path.is_file():
+        raise LiveStartupError(f"prepump warm-watch profile csv not found: {path}")
+    try:
+        frame = pd.read_csv(path)
+    except Exception as exc:
+        raise LiveStartupError(f"cannot read prepump warm-watch profile csv {path}: {type(exc).__name__}: {exc}") from exc
+    required_columns = {
+        "status",
+        "feature",
+        "runner_count",
+        "fader_count",
+        "runner_mean",
+        "fader_mean",
+        "standardized_diff",
+    }
+    missing = sorted(required_columns.difference(frame.columns))
+    if missing:
+        raise LiveStartupError(
+            f"prepump warm-watch profile csv is missing required columns: {','.join(missing)}"
+        )
+    rules: list[LivePrepumpWarmWatchFeatureRule] = []
+    min_abs_std = float(config.prepump_warm_watch_min_abs_standardized_diff)
+    min_runner_rows = int(config.prepump_warm_watch_min_runner_rows)
+    min_fader_rows = int(config.prepump_warm_watch_min_fader_rows)
+    for _, row in frame.iterrows():
+        if str(row.get("status", "")).strip() != "ok":
+            continue
+        feature = str(row.get("feature", "")).strip()
+        if not feature.startswith("pre_"):
+            continue
+        if feature.endswith("_coverage_ratio") or feature.endswith("_candles") or feature.endswith("_expected_candles"):
+            continue
+        runner_count = _safe_profile_int(row.get("runner_count"))
+        fader_count = _safe_profile_int(row.get("fader_count"))
+        runner_mean = _safe_profile_float(row.get("runner_mean"))
+        fader_mean = _safe_profile_float(row.get("fader_mean"))
+        standardized_diff = _safe_profile_float(row.get("standardized_diff"))
+        if runner_count is None or fader_count is None:
+            continue
+        if runner_count < min_runner_rows or fader_count < min_fader_rows:
+            continue
+        if runner_mean is None or fader_mean is None or standardized_diff is None:
+            continue
+        if runner_mean == fader_mean:
+            continue
+        if abs(standardized_diff) < min_abs_std:
+            continue
+        rules.append(
+            LivePrepumpWarmWatchFeatureRule(
+                feature=feature,
+                runner_mean=runner_mean,
+                fader_mean=fader_mean,
+                standardized_diff=standardized_diff,
+                runner_count=runner_count,
+                fader_count=fader_count,
+                weight=min(abs(standardized_diff), 3.0),
+            )
+        )
+    rules.sort(key=lambda item: (abs(item.standardized_diff), item.feature), reverse=True)
+    max_features = max(1, int(config.prepump_warm_watch_max_features))
+    selected = tuple(rules[:max_features])
+    if not selected:
+        raise LiveStartupError(
+            "prepump warm-watch profile csv has no usable features after stability filters; "
+            "do not enable live scoring until the 30d runner/fader separation artifact has enough stable rows"
+        )
+    return LivePrepumpWarmWatchScoringProfile(
+        enabled=True,
+        status="ok",
+        source_path=str(path),
+        reason="ok",
+        rules=selected,
+    )
 
 
 @dataclass(slots=True)
@@ -1537,6 +1712,14 @@ class LiveTickerRadarWatch:
     trade_count_delta: int | None = None
     trade_count_delta_ratio: float | None = None
     promotion_source: str = "ticker_price_volume"
+    base_score: float | None = None
+    prepump_warm_watch_score_status: str = "not_evaluated"
+    prepump_warm_watch_score_reason: str = ""
+    prepump_warm_watch_score: float | None = None
+    prepump_warm_watch_score_adjustment: float = 0.0
+    prepump_warm_watch_features_used: int = 0
+    prepump_warm_watch_features_missing: int = 0
+    prepump_warm_watch_top_features: tuple[str, ...] = ()
 
 
 @dataclass(slots=True)
@@ -1554,6 +1737,14 @@ class LiveWarmWatch:
     trade_count_delta: int | None = None
     trade_count_delta_ratio: float | None = None
     promotion_source: str = "ticker_price_volume"
+    base_score: float | None = None
+    prepump_warm_watch_score_status: str = "not_evaluated"
+    prepump_warm_watch_score_reason: str = ""
+    prepump_warm_watch_score: float | None = None
+    prepump_warm_watch_score_adjustment: float = 0.0
+    prepump_warm_watch_features_used: int = 0
+    prepump_warm_watch_features_missing: int = 0
+    prepump_warm_watch_top_features: tuple[str, ...] = ()
 
 
 def _symbol_context_csv_float(value: float | None) -> float | str:
@@ -1590,6 +1781,8 @@ class LiveSymbolContextSnapshot:
     latest_context_close: float | None
     prior_spike_timestamps_ms: tuple[int, ...] = ()
     prior_fast_fade_timestamps_ms: tuple[int, ...] = ()
+    prepump_spot_features: dict[str, object] = field(default_factory=dict)
+    prepump_spot_windows: str = ""
     compute_seconds: float = 0.0
 
     def key(self) -> tuple[str, str, str]:
@@ -1638,6 +1831,11 @@ class LiveSymbolContextSnapshot:
             "prior_fast_fade_timestamps_ms": _symbol_context_join_timestamps(
                 self.prior_fast_fade_timestamps_ms
             ),
+            "prepump_spot_feature_contract": PREPUMP_WARM_WATCH_SCORING_CONTRACT,
+            "prepump_spot_windows": self.prepump_spot_windows,
+            "prepump_spot_features_json": json.dumps(
+                self.prepump_spot_features, ensure_ascii=False, sort_keys=True, allow_nan=False
+            ) if self.prepump_spot_features else "",
             "compute_seconds": round(float(self.compute_seconds), 6),
         }
 
@@ -2902,6 +3100,7 @@ class AnomalyMicroLiveRunner:
         )
         self._pump_categories = _resolve_live_pump_categories(config.pump_categories)
         self._pump_categories_by_id = {category.category_id: category for category in self._pump_categories}
+        self._prepump_warm_watch_profile = _load_prepump_warm_watch_scoring_profile(config)
         self._prior_fast_fade_cache: dict[tuple[str, str, str, int], dict[str, object]] = {}
         self._symbol_context_snapshots: dict[tuple[str, str, str], LiveSymbolContextSnapshot] = {}
         self._symbol_context_snapshot_cursor = 0
@@ -3095,6 +3294,16 @@ class AnomalyMicroLiveRunner:
                     f"{self.config.warm_watch_min_price_delta_pct:.6f}:"
                     f"{self.config.warm_watch_max_price_delta_pct:.6f}"
                 ),
+                "prepump_warm_watch_scoring_enabled": bool(self.config.prepump_warm_watch_scoring_enabled),
+                "prepump_warm_watch_scoring_contract": PREPUMP_WARM_WATCH_SCORING_CONTRACT,
+                "prepump_warm_watch_profile_status": self._prepump_warm_watch_profile.status,
+                "prepump_warm_watch_profile_reason": self._prepump_warm_watch_profile.reason,
+                "prepump_warm_watch_profile_csv": self._prepump_warm_watch_profile.source_path,
+                "prepump_warm_watch_profile_feature_count": len(self._prepump_warm_watch_profile.rules),
+                "prepump_warm_watch_score_weight": float(self.config.prepump_warm_watch_score_weight),
+                "prepump_warm_watch_windows": str(self.config.prepump_warm_watch_windows),
+                "prepump_warm_watch_min_coverage_ratio": float(self.config.prepump_warm_watch_min_coverage_ratio),
+                "prepump_warm_watch_policy": "score_only_for_warm_watch_priority_no_entry_filter_no_trade_veto",
                 "symbol_context_snapshot_enabled": bool(self.config.symbol_context_snapshot_enabled),
                 "symbol_context_snapshot_contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
                 "symbol_context_snapshot_policy": "cache_only_rolling_table_no_precise_scan_context_fetch",
@@ -4976,6 +5185,94 @@ class AnomalyMicroLiveRunner:
             reason=source_reason,
         )
 
+
+    def _prepump_warm_watch_score_for_symbol(self, symbol: str, *, now_ms: int) -> LivePrepumpWarmWatchScore:
+        profile = self._prepump_warm_watch_profile
+        if not profile.enabled:
+            return LivePrepumpWarmWatchScore(status="disabled", reason=profile.reason)
+        if not self.config.symbol_context_snapshot_enabled:
+            return LivePrepumpWarmWatchScore(status="unavailable", reason="symbol_context_snapshot_disabled")
+        if not self.config.timeframe_pairs:
+            return LivePrepumpWarmWatchScore(status="unavailable", reason="no_timeframe_pairs")
+        levels_timeframe, entry_timeframe = self.config.timeframe_pairs[0]
+        snapshot = self._symbol_context_snapshots.get(
+            self._symbol_context_snapshot_key(symbol, levels_timeframe, entry_timeframe)
+        )
+        if snapshot is None:
+            return LivePrepumpWarmWatchScore(status="unavailable", reason="symbol_context_snapshot_missing")
+        snapshot_age_ms = max(0, int(now_ms) - int(snapshot.snapshot_timestamp_ms))
+        if snapshot_age_ms > int(self.config.symbol_context_snapshot_fresh_ms):
+            return LivePrepumpWarmWatchScore(status="unavailable", reason="symbol_context_snapshot_stale")
+        if snapshot.status != "ok":
+            return LivePrepumpWarmWatchScore(
+                status="unavailable",
+                reason=f"symbol_context_snapshot_{snapshot.status}:{snapshot.reason}",
+            )
+        if not snapshot.prepump_spot_features:
+            return LivePrepumpWarmWatchScore(status="unavailable", reason="prepump_spot_features_missing")
+
+        weighted_sum = 0.0
+        weight_total = 0.0
+        used = 0
+        missing = 0
+        contributions: list[tuple[float, str]] = []
+        for rule in profile.rules:
+            value = _safe_profile_float(snapshot.prepump_spot_features.get(rule.feature))
+            if value is None:
+                missing += 1
+                continue
+            denominator = abs(rule.runner_mean - rule.fader_mean)
+            if denominator <= 0.0 or not math.isfinite(denominator):
+                missing += 1
+                continue
+            midpoint = (rule.runner_mean + rule.fader_mean) / 2.0
+            directional_distance = float(rule.direction) * ((value - midpoint) / denominator)
+            bounded = max(-1.0, min(1.0, directional_distance))
+            contribution = bounded * rule.weight
+            weighted_sum += contribution
+            weight_total += rule.weight
+            used += 1
+            contributions.append((abs(contribution), f"{rule.feature}={value:.6g}:{bounded:.3f}"))
+        if used <= 0 or weight_total <= 0.0:
+            return LivePrepumpWarmWatchScore(
+                status="unavailable",
+                reason="no_matching_profile_features_in_snapshot",
+                features_missing=missing,
+            )
+        raw_score = weighted_sum / weight_total
+        adjustment = raw_score * float(self.config.prepump_warm_watch_score_weight)
+        contributions.sort(reverse=True)
+        top_features = tuple(item for _, item in contributions[:3])
+        return LivePrepumpWarmWatchScore(
+            status="ok",
+            reason="ok",
+            raw_score=raw_score,
+            score_adjustment=adjustment,
+            features_used=used,
+            features_missing=missing,
+            top_features=top_features,
+        )
+
+    @staticmethod
+    def _prepump_score_payload_from_promotion(promotion: dict[str, object]) -> dict[str, object]:
+        top_features = promotion.get("prepump_warm_watch_top_features")
+        if isinstance(top_features, (list, tuple)):
+            top_features_value = ";".join(str(item) for item in top_features)
+        else:
+            top_features_value = str(top_features or "")
+        return {
+            "base_score": promotion.get("base_score", promotion.get("score", "")),
+            "prepump_warm_watch_scoring_status": promotion.get("prepump_warm_watch_scoring_status", "not_evaluated"),
+            "prepump_warm_watch_scoring_reason": promotion.get("prepump_warm_watch_scoring_reason", ""),
+            "prepump_warm_watch_score": promotion.get("prepump_warm_watch_score", ""),
+            "prepump_warm_watch_score_adjustment": promotion.get("prepump_warm_watch_score_adjustment", ""),
+            "prepump_warm_watch_features_used": promotion.get("prepump_warm_watch_features_used", ""),
+            "prepump_warm_watch_features_missing": promotion.get("prepump_warm_watch_features_missing", ""),
+            "prepump_warm_watch_top_features": top_features_value,
+            "prepump_warm_watch_scoring_contract": PREPUMP_WARM_WATCH_SCORING_CONTRACT,
+        }
+
+
     def _evaluate_ticker_radar_snapshots(
         self,
         snapshots: list[ExchangeTickerSnapshot],
@@ -5068,10 +5365,15 @@ class AnomalyMicroLiveRunner:
                     + max(0.0, price_delta_pct) * 100.0
                 )
                 promotion_source = DANGER_CHEAP_FLOW_RADAR_SOURCE
+            base_score = float(score)
+            prepump_score = self._prepump_warm_watch_score_for_symbol(snapshot.symbol, now_ms=now_ms)
+            score = base_score + float(prepump_score.score_adjustment)
+            prepump_payload = prepump_score.event_payload()
             promotions.append(
                 {
                     "symbol": snapshot.symbol,
                     "score": score,
+                    "base_score": base_score,
                     "price_delta_pct": price_delta_pct,
                     "quote_volume_delta": quote_volume_delta,
                     "quote_volume_delta_ratio": quote_volume_delta_ratio,
@@ -5082,6 +5384,7 @@ class AnomalyMicroLiveRunner:
                     "quote_volume_source": snapshot.quote_volume_source,
                     "trade_count_source": snapshot.trade_count_source,
                     "now_ms": now_ms,
+                    **prepump_payload,
                 }
             )
         promotions.sort(key=lambda item: (float(item["score"]), str(item["symbol"])), reverse=True)
@@ -5096,6 +5399,17 @@ class AnomalyMicroLiveRunner:
     ) -> str:
         symbol = str(promotion["symbol"])
         score = float(promotion["score"])
+        base_score = _safe_profile_float(promotion.get("base_score"))
+        if base_score is None:
+            base_score = score
+        prepump_payload = self._prepump_score_payload_from_promotion(promotion)
+        prepump_score_value = _safe_profile_float(prepump_payload["prepump_warm_watch_score"])
+        prepump_score_adjustment = float(prepump_payload["prepump_warm_watch_score_adjustment"] or 0.0)
+        prepump_features_used = int(prepump_payload["prepump_warm_watch_features_used"] or 0)
+        prepump_features_missing = int(prepump_payload["prepump_warm_watch_features_missing"] or 0)
+        prepump_top_features = tuple(
+            item for item in str(prepump_payload["prepump_warm_watch_top_features"] or "").split(";") if item
+        )
         price_delta_pct = float(promotion["price_delta_pct"])
         quote_volume_delta = float(promotion["quote_volume_delta"])
         quote_volume_delta_ratio = (
@@ -5126,6 +5440,14 @@ class AnomalyMicroLiveRunner:
                 trade_count_delta=trade_count_delta,
                 trade_count_delta_ratio=trade_count_delta_ratio,
                 promotion_source=promotion_source,
+                base_score=base_score,
+                prepump_warm_watch_score_status=str(prepump_payload["prepump_warm_watch_scoring_status"]),
+                prepump_warm_watch_score_reason=str(prepump_payload["prepump_warm_watch_scoring_reason"]),
+                prepump_warm_watch_score=prepump_score_value,
+                prepump_warm_watch_score_adjustment=prepump_score_adjustment,
+                prepump_warm_watch_features_used=prepump_features_used,
+                prepump_warm_watch_features_missing=prepump_features_missing,
+                prepump_warm_watch_top_features=prepump_top_features,
             )
             return "promoted"
         reject_reason = self._warm_watch_reject_reason(
@@ -5146,6 +5468,7 @@ class AnomalyMicroLiveRunner:
                 trade_count_delta=trade_count_delta,
                 trade_count_delta_ratio=trade_count_delta_ratio,
                 promotion_source=promotion_source,
+                prepump_payload=prepump_payload,
             )
             return "rejected"
         symbol_key = _position_symbol_key(symbol)
@@ -5183,6 +5506,14 @@ class AnomalyMicroLiveRunner:
                         trade_count_delta=trade_count_delta,
                         trade_count_delta_ratio=trade_count_delta_ratio,
                         promotion_source=promotion_source,
+                        base_score=base_score,
+                        prepump_warm_watch_score_status=str(prepump_payload["prepump_warm_watch_scoring_status"]),
+                        prepump_warm_watch_score_reason=str(prepump_payload["prepump_warm_watch_scoring_reason"]),
+                        prepump_warm_watch_score=prepump_score_value,
+                        prepump_warm_watch_score_adjustment=prepump_score_adjustment,
+                        prepump_warm_watch_features_used=prepump_features_used,
+                        prepump_warm_watch_features_missing=prepump_features_missing,
+                        prepump_warm_watch_top_features=prepump_top_features,
                     )
                     event_name = "warm_watch_precise_deferred_latency_sla"
                     event_payload = {
@@ -5203,6 +5534,7 @@ class AnomalyMicroLiveRunner:
                         "trade_count_delta_ratio": trade_count_delta_ratio if trade_count_delta_ratio is not None else "",
                         "promotion_source": promotion_source,
                         "source": WARM_WATCH_SOURCE,
+                        **prepump_payload,
                         **latency_sla.event_payload(),
                     }
                 else:
@@ -5223,6 +5555,7 @@ class AnomalyMicroLiveRunner:
                         "trade_count_delta_ratio": trade_count_delta_ratio if trade_count_delta_ratio is not None else "",
                         "promotion_source": promotion_source,
                         "source": WARM_WATCH_SOURCE,
+                        **prepump_payload,
                     }
             else:
                 self._warm_watch[symbol_key] = LiveWarmWatch(
@@ -5239,6 +5572,14 @@ class AnomalyMicroLiveRunner:
                     trade_count_delta=trade_count_delta,
                     trade_count_delta_ratio=trade_count_delta_ratio,
                     promotion_source=promotion_source,
+                    base_score=base_score,
+                    prepump_warm_watch_score_status=str(prepump_payload["prepump_warm_watch_scoring_status"]),
+                    prepump_warm_watch_score_reason=str(prepump_payload["prepump_warm_watch_scoring_reason"]),
+                    prepump_warm_watch_score=prepump_score_value,
+                    prepump_warm_watch_score_adjustment=prepump_score_adjustment,
+                    prepump_warm_watch_features_used=prepump_features_used,
+                    prepump_warm_watch_features_missing=prepump_features_missing,
+                    prepump_warm_watch_top_features=prepump_top_features,
                 )
                 event_payload = {
                     "reason": radar_reason,
@@ -5257,6 +5598,7 @@ class AnomalyMicroLiveRunner:
                     "trade_count_delta_ratio": trade_count_delta_ratio if trade_count_delta_ratio is not None else "",
                     "promotion_source": promotion_source,
                     "source": WARM_WATCH_SOURCE,
+                    **prepump_payload,
                 }
         if promote_payload is not None:
             self.artifacts.append_event("warm_watch_precise_promoted", symbol, promote_payload)
@@ -5271,6 +5613,14 @@ class AnomalyMicroLiveRunner:
                 trade_count_delta=trade_count_delta,
                 trade_count_delta_ratio=trade_count_delta_ratio,
                 promotion_source=promotion_source,
+                base_score=base_score,
+                prepump_warm_watch_score_status=str(prepump_payload["prepump_warm_watch_scoring_status"]),
+                prepump_warm_watch_score_reason=str(prepump_payload["prepump_warm_watch_scoring_reason"]),
+                prepump_warm_watch_score=prepump_score_value,
+                prepump_warm_watch_score_adjustment=prepump_score_adjustment,
+                prepump_warm_watch_features_used=prepump_features_used,
+                prepump_warm_watch_features_missing=prepump_features_missing,
+                prepump_warm_watch_top_features=prepump_top_features,
             )
             return "promoted"
         self.artifacts.append_event(event_name, symbol, event_payload)
@@ -5313,9 +5663,11 @@ class AnomalyMicroLiveRunner:
         trade_count_delta: int | None,
         trade_count_delta_ratio: float | None,
         promotion_source: str,
+        prepump_payload: dict[str, object] | None = None,
     ) -> None:
         symbol_key = _position_symbol_key(symbol)
         previous: LiveWarmWatch | None = None
+        prepump_payload = dict(prepump_payload or LivePrepumpWarmWatchScore(status="not_evaluated", reason="").event_payload())
         with self._state_lock:
             previous = self._warm_watch.pop(symbol_key, None)
         self.artifacts.append_event(
@@ -5335,6 +5687,7 @@ class AnomalyMicroLiveRunner:
                 "trade_count_delta_ratio": trade_count_delta_ratio if trade_count_delta_ratio is not None else "",
                 "promotion_source": promotion_source,
                 "source": WARM_WATCH_SOURCE,
+                **prepump_payload,
             },
         )
 
@@ -5355,6 +5708,14 @@ class AnomalyMicroLiveRunner:
         trade_count_delta: int | None = None,
         trade_count_delta_ratio: float | None = None,
         promotion_source: str = "ticker_price_volume",
+        base_score: float | None = None,
+        prepump_warm_watch_score_status: str = "not_evaluated",
+        prepump_warm_watch_score_reason: str = "",
+        prepump_warm_watch_score: float | None = None,
+        prepump_warm_watch_score_adjustment: float = 0.0,
+        prepump_warm_watch_features_used: int = 0,
+        prepump_warm_watch_features_missing: int = 0,
+        prepump_warm_watch_top_features: tuple[str, ...] = (),
     ) -> None:
         expires_at_ms = now_ms + max(1, int(self.config.ticker_radar_watch_ttl_ms))
         symbol_key = _position_symbol_key(symbol)
@@ -5374,6 +5735,14 @@ class AnomalyMicroLiveRunner:
                 trade_count_delta=trade_count_delta,
                 trade_count_delta_ratio=trade_count_delta_ratio,
                 promotion_source=promotion_source,
+                base_score=base_score if base_score is not None else score,
+                prepump_warm_watch_score_status=prepump_warm_watch_score_status,
+                prepump_warm_watch_score_reason=prepump_warm_watch_score_reason,
+                prepump_warm_watch_score=prepump_warm_watch_score,
+                prepump_warm_watch_score_adjustment=prepump_warm_watch_score_adjustment,
+                prepump_warm_watch_features_used=prepump_warm_watch_features_used,
+                prepump_warm_watch_features_missing=prepump_warm_watch_features_missing,
+                prepump_warm_watch_top_features=prepump_warm_watch_top_features,
             )
             if should_emit:
                 self._detected_anomalies_total += 1
@@ -5383,6 +5752,7 @@ class AnomalyMicroLiveRunner:
                     "expires_at_ms": expires_at_ms,
                     "ttl_ms": int(self.config.ticker_radar_watch_ttl_ms),
                     "score": score,
+                    "base_score": base_score if base_score is not None else score,
                     "price_delta_pct": price_delta_pct,
                     "quote_volume_delta": quote_volume_delta,
                     "quote_volume_delta_ratio": quote_volume_delta_ratio if quote_volume_delta_ratio is not None else "",
@@ -5391,6 +5761,20 @@ class AnomalyMicroLiveRunner:
                     "promotion_source": promotion_source,
                     "source": promotion_source,
                     "danger_flow_radar": promotion_source == DANGER_CHEAP_FLOW_RADAR_SOURCE,
+                    "prepump_warm_watch_scoring_status": prepump_warm_watch_score_status,
+                    "prepump_warm_watch_scoring_reason": prepump_warm_watch_score_reason,
+                    "prepump_warm_watch_score": (
+                        round(float(prepump_warm_watch_score), 6)
+                        if prepump_warm_watch_score is not None
+                        else ""
+                    ),
+                    "prepump_warm_watch_score_adjustment": round(
+                        float(prepump_warm_watch_score_adjustment), 6
+                    ),
+                    "prepump_warm_watch_features_used": int(prepump_warm_watch_features_used),
+                    "prepump_warm_watch_features_missing": int(prepump_warm_watch_features_missing),
+                    "prepump_warm_watch_top_features": ";".join(prepump_warm_watch_top_features),
+                    "prepump_warm_watch_scoring_contract": PREPUMP_WARM_WATCH_SCORING_CONTRACT,
                 }
         if event_payload is not None:
             self.artifacts.append_event("ticker_radar_promoted", symbol, event_payload)
@@ -5869,6 +6253,8 @@ class AnomalyMicroLiveRunner:
             latest_context_close: float | None = None,
             prior_spike_timestamps_ms: tuple[int, ...] = (),
             prior_fast_fade_timestamps_ms: tuple[int, ...] = (),
+            prepump_spot_features: dict[str, object] | None = None,
+            prepump_spot_windows: str = "",
         ) -> LiveSymbolContextSnapshot:
             return LiveSymbolContextSnapshot(
                 symbol=symbol,
@@ -5892,6 +6278,8 @@ class AnomalyMicroLiveRunner:
                 latest_context_close=latest_context_close,
                 prior_spike_timestamps_ms=prior_spike_timestamps_ms,
                 prior_fast_fade_timestamps_ms=prior_fast_fade_timestamps_ms,
+                prepump_spot_features=dict(prepump_spot_features or {}),
+                prepump_spot_windows=prepump_spot_windows,
                 compute_seconds=time.monotonic() - started_at,
             )
 
@@ -5945,6 +6333,33 @@ class AnomalyMicroLiveRunner:
                 close = pd.to_numeric(baseline["close"], errors="coerce").replace(0.0, pd.NA)
                 ranges = (pd.to_numeric(baseline["high"], errors="coerce") - pd.to_numeric(baseline["low"], errors="coerce")) / close
                 baseline_range_pct_median = float(ranges.median())
+        prepump_spot_features: dict[str, object] = {}
+        prepump_spot_windows = ""
+        if self.config.prepump_warm_watch_scoring_enabled:
+            prepump_spot_windows = str(self.config.prepump_warm_watch_windows)
+            try:
+                prepump_spot_features = compute_spot_prepump_window_features(
+                    prepared,
+                    anchor_ms=effective_cache_end_ms,
+                    timeframe_ms=context_ms,
+                    windows=parse_prepump_windows(prepump_spot_windows),
+                    min_coverage_ratio=float(self.config.prepump_warm_watch_min_coverage_ratio),
+                )
+            except Exception as exc:
+                return build_snapshot(
+                    status="unavailable",
+                    reason=f"prepump_spot_features_error:{type(exc).__name__}:{str(exc)[:160]}",
+                    context_cache_end_ms=int(context_cache_end_ms),
+                    effective_cache_end_ms=effective_cache_end_ms,
+                    ignored_tail_ms=ignored_tail_ms,
+                    baseline_status=baseline_status,
+                    baseline_quote_volume_median=baseline_quote_volume_median,
+                    baseline_trade_count_median=baseline_trade_count_median,
+                    baseline_range_pct_median=baseline_range_pct_median,
+                    latest_context_close=latest_context_close,
+                    prepump_spot_windows=prepump_spot_windows,
+                )
+
         try:
             from research_tools.anomaly_continuation_lab import AnomalyLabConfig
             from research_tools.anomaly_strategy_backtest import AnomalyBacktestConfig, _collect_symbol_pair_rows
@@ -5990,6 +6405,8 @@ class AnomalyMicroLiveRunner:
                 baseline_trade_count_median=baseline_trade_count_median,
                 baseline_range_pct_median=baseline_range_pct_median,
                 latest_context_close=latest_context_close,
+                prepump_spot_features=prepump_spot_features,
+                prepump_spot_windows=prepump_spot_windows,
             )
         prior_spike_timestamps: list[int] = []
         prior_fast_fade_timestamps: list[int] = []
@@ -6015,6 +6432,8 @@ class AnomalyMicroLiveRunner:
             latest_context_close=latest_context_close,
             prior_spike_timestamps_ms=tuple(sorted(set(prior_spike_timestamps))),
             prior_fast_fade_timestamps_ms=tuple(sorted(set(prior_fast_fade_timestamps))),
+            prepump_spot_features=prepump_spot_features,
+            prepump_spot_windows=prepump_spot_windows,
         )
 
     def _live_prior_fast_fade_72h(
@@ -9684,6 +10103,9 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "ticker_radar_max_promotions_per_cycle": (config.ticker_radar_max_promotions_per_cycle, 1),
         "warm_watch_ttl_ms": (config.warm_watch_ttl_ms, 1),
         "warm_watch_min_observations_for_precise": (config.warm_watch_min_observations_for_precise, 1),
+        "prepump_warm_watch_min_runner_rows": (config.prepump_warm_watch_min_runner_rows, 1),
+        "prepump_warm_watch_min_fader_rows": (config.prepump_warm_watch_min_fader_rows, 1),
+        "prepump_warm_watch_max_features": (config.prepump_warm_watch_max_features, 1),
         "symbol_context_snapshot_symbols_per_cycle": (config.symbol_context_snapshot_symbols_per_cycle, 1),
         "symbol_context_snapshot_fresh_ms": (config.symbol_context_snapshot_fresh_ms, 1),
         "latency_sla_min_due_samples": (config.latency_sla_min_due_samples, 1),
@@ -9779,6 +10201,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "danger_ticker_flow_radar_min_trade_count_delta_ratio": config.danger_ticker_flow_radar_min_trade_count_delta_ratio,
         "symbol_context_snapshot_interval_seconds": config.symbol_context_snapshot_interval_seconds,
         "latency_sla_due_scan_p95_seconds": config.latency_sla_due_scan_p95_seconds,
+        "prepump_warm_watch_min_abs_standardized_diff": config.prepump_warm_watch_min_abs_standardized_diff,
     }
     for name, value in required_positive.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
@@ -9797,6 +10220,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "live_ohlcv_cache_flush_interval_seconds": config.live_ohlcv_cache_flush_interval_seconds,
         "danger_ticker_flow_radar_max_price_delta_pct": config.danger_ticker_flow_radar_max_price_delta_pct,
         "warm_watch_max_price_delta_pct": config.warm_watch_max_price_delta_pct,
+        "prepump_warm_watch_score_weight": config.prepump_warm_watch_score_weight,
+        "prepump_warm_watch_min_coverage_ratio": config.prepump_warm_watch_min_coverage_ratio,
     }
     for name, value in required_non_negative.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=True)
@@ -9833,6 +10258,17 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
             "Некорректный live config: warm_watch_max_price_delta_pct must be greater than "
             "warm_watch_min_price_delta_pct"
         )
+    if config.prepump_warm_watch_scoring_enabled:
+        try:
+            parse_prepump_windows(str(config.prepump_warm_watch_windows))
+        except ValueError as exc:
+            raise LiveStartupError(
+                f"Некорректный live config: prepump_warm_watch_windows: {exc}"
+            ) from exc
+        if float(config.prepump_warm_watch_min_coverage_ratio) > 1.0:
+            raise LiveStartupError(
+                "Некорректный live config: prepump_warm_watch_min_coverage_ratio must be <= 1.0"
+            )
     if config.danger_ticker_flow_radar_enabled and (
         config.danger_ticker_flow_radar_max_price_delta_pct
         <= config.danger_ticker_flow_radar_min_price_delta_pct

@@ -3079,3 +3079,58 @@ Risk:
 ```text
 Medium. This can reduce discovery breadth during latency spikes by design. It should not suppress active/radar reaction scans or alter entry/category/order logic. If the SLA is set too low for the chosen TF/host, warm precise promotion and cold coverage may stay mostly off; artifacts will show the reason.
 ```
+
+## 2026-05-14 - P217 proposed: prepump runner/fader warm-watch scoring
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/runner_fader_prepump_context.py
+research_tools/anomaly_micro_live.py
+cli/parser.py
+cli/commands.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Use P212 runner/fader pre-pump context only as a warm-watch priority scorer after explicit 30d validation, not as an entry filter or trade veto.
+```
+
+Changes:
+
+```text
+- Adds public compute_spot_prepump_window_features() helper so live and P212 share the same spot/flow pre-pump feature names.
+- Extends symbol_context_snapshot.csv to v2 with cache-only prepump spot/flow feature JSON for configured windows.
+- Adds optional --prepump-warm-watch-scoring-enabled and profile CSV controls.
+- Loads runner_fader_prepump_feature_separation.csv only when explicitly enabled; invalid/missing/unstable profiles fail startup instead of falling back.
+- Applies the profile only as a bounded additive warm-watch/radar priority score adjustment.
+- Emits prepump_warm_watch_* score/status fields in warm-watch and ticker-radar artifacts.
+- Does not change category selection, execution guards, entries, exits, stops, or order logic.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep prepump
+```
+
+Expected smoke readout:
+
+```text
+With scoring disabled, live behavior is unchanged except for new dormant config fields. With scoring enabled and a valid 30d feature separation CSV, live_cache_config shows profile status/feature count, symbol_context_snapshot.csv includes prepump_spot_features_json, and warm_watch/ticker_radar events include prepump_warm_watch_scoring_status plus score adjustment. No entry/category reject reason should come from prepump scoring.
+```
+
+Risk:
+
+```text
+Medium. This can change which warm-watch candidates get precise scan first, so it affects discovery priority. It intentionally cannot block a trade directly. The current live feature subset is cache-only spot/flow features; OI/derivatives prepump features remain offline-only until a typed rolling context source is added.
+```

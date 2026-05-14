@@ -356,6 +356,59 @@ def _spot_window_features(
     return values
 
 
+def compute_spot_prepump_window_features(
+    frame: pd.DataFrame,
+    *,
+    anchor_ms: int,
+    timeframe_ms: int,
+    windows: tuple[tuple[str, int], ...],
+    min_coverage_ratio: float,
+) -> dict[str, object]:
+    """Return the P212 spot/flow pre-pump feature subset for a live/cache-only anchor.
+
+    The anchor is exclusive. The helper intentionally computes only price/volume/trade/taker
+    spot features from the provided frame; it does not fetch missing data and it does not
+    infer OI or derivatives context. Callers must surface missing/insufficient coverage.
+    """
+
+    if timeframe_ms <= 0:
+        raise ValueError(f"timeframe_ms must be positive, got {timeframe_ms!r}")
+    if not windows:
+        raise ValueError("at least one pre-pump window is required")
+    if not math.isfinite(float(min_coverage_ratio)) or float(min_coverage_ratio) < 0.0:
+        raise ValueError(f"min_coverage_ratio must be finite and >= 0, got {min_coverage_ratio!r}")
+    required_columns = {"timestamp", "open", "high", "low", "close", "quote_volume", "number_of_trades"}
+    missing_columns = sorted(required_columns.difference(frame.columns))
+    if missing_columns:
+        raise ValueError("missing spot prepump columns: " + ",".join(missing_columns))
+
+    prepared = frame.copy()
+    numeric_columns = set(required_columns)
+    if "taker_buy_quote_volume" in prepared.columns:
+        numeric_columns.add("taker_buy_quote_volume")
+    for column in sorted(numeric_columns):
+        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    prepared = prepared.loc[prepared["timestamp"].notna()].copy()
+    if prepared.empty:
+        raise ValueError("empty spot prepump frame")
+    prepared["timestamp"] = prepared["timestamp"].astype(np.int64)
+    prepared.sort_values("timestamp", inplace=True)
+    prepared.drop_duplicates("timestamp", keep="last", inplace=True)
+
+    output: dict[str, object] = {}
+    for label, window_ms in windows:
+        expected_candles = max(int(math.floor(int(window_ms) / int(timeframe_ms))), 1)
+        segment = _select_window(prepared, anchor_ms=int(anchor_ms), window_ms=int(window_ms))
+        features = _spot_window_features(segment, expected_candles=expected_candles, label=str(label))
+        coverage_key = f"pre_{label}_spot_coverage_ratio"
+        status_key = f"pre_{label}_spot_status"
+        coverage = _safe_float(features.get(coverage_key))
+        if np.isfinite(coverage) and coverage < float(min_coverage_ratio):
+            features[status_key] = "insufficient_coverage"
+        output.update(features)
+    return output
+
+
 def _single_value_window_features(
     frame: pd.DataFrame | None,
     *,

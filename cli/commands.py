@@ -1521,6 +1521,26 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             ),
             warm_watch_min_price_delta_pct=float(getattr(args, "warm_watch_min_price_delta_pct", -0.001)),
             warm_watch_max_price_delta_pct=float(getattr(args, "warm_watch_max_price_delta_pct", 0.012)),
+            prepump_warm_watch_scoring_enabled=_to_bool_flag(
+                getattr(args, "prepump_warm_watch_scoring_enabled", False),
+                default=False,
+            ),
+            prepump_warm_watch_profile_csv=getattr(args, "prepump_warm_watch_profile_csv", None),
+            prepump_warm_watch_min_abs_standardized_diff=float(
+                getattr(args, "prepump_warm_watch_min_abs_standardized_diff", 0.75)
+            ),
+            prepump_warm_watch_min_runner_rows=int(
+                getattr(args, "prepump_warm_watch_min_runner_rows", 10)
+            ),
+            prepump_warm_watch_min_fader_rows=int(
+                getattr(args, "prepump_warm_watch_min_fader_rows", 10)
+            ),
+            prepump_warm_watch_max_features=int(getattr(args, "prepump_warm_watch_max_features", 8)),
+            prepump_warm_watch_score_weight=float(getattr(args, "prepump_warm_watch_score_weight", 0.35)),
+            prepump_warm_watch_windows=str(getattr(args, "prepump_warm_watch_windows", "30m,1h,2h,6h")),
+            prepump_warm_watch_min_coverage_ratio=float(
+                getattr(args, "prepump_warm_watch_min_coverage_ratio", 0.80)
+            ),
             symbol_context_snapshot_enabled=_to_bool_flag(
                 getattr(args, "symbol_context_snapshot_enabled", True),
                 default=True,
