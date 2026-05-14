@@ -1152,3 +1152,14 @@ P207 changes live mechanics in three places. First, taker-buy share parity now m
 
 Next validation: run a short dry/shadow live and inspect signal_scan_retryable_dependency_blocked counts, repeated decision timestamps until stale/final, valid_taker_share_rows/total_taker_share_rows in taker rejects, symbol_batch_selected scan modes, and API pressure metrics before any long real-order run.
 ```
+
+
+## 2026-05-14 - P208 proposed: health-gated cold coverage
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+P208 narrows the P207 DANGER cold coverage behavior. Cold coverage now runs only when the cumulative WS health percentage is strictly above 95% and the runner has no active symbols, no opening positions, and no open positions. When health is <=95% or active/position state exists, cold coverage is gated off and artifacts record inactive_cold_coverage_gate_reason plus health/threshold fields. The old heartbeat label "DANGER обход ~Ns" meant estimated full-universe cold coverage cycle time; P208 replaces it with an explicit cold full-cycle label only when cold coverage is actually running, otherwise cold off <reason>.
+
+Next validation: short live smoke and check symbol_batch_selected/live_cycle_summary for inactive_cold_coverage_gate_reason=ws_health_below_95pct during startup, then DANGER cold coverage only after health >95% and idle state.
+```

@@ -56,8 +56,10 @@ DEFAULT_LIVE_OHLCV_CACHE_FLUSH_MAX_SYMBOL_TIMEFRAMES = 4
 DEFAULT_LIVE_AGGTRADE_REST_CACHE_TTL_MS = 20 * 60_000
 DEFAULT_LIVE_AGGTRADE_REST_CACHE_PADDING_MS = 60_000
 DANGER_DEFAULT_INACTIVE_COLD_COVERAGE_SLOTS_PER_CYCLE = 5
+DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO = 0.95
 DANGER_INACTIVE_COLD_COVERAGE_SOURCE = "DANGER_default_precise_cold_coverage_subminute"
 EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE = "explicit_precise_cold_coverage"
+COLD_COVERAGE_GATED_OFF_SOURCE = "precise_cold_coverage_gated_off"
 RETRYABLE_CATEGORY_STATUS_PREFIXES = (
     "mark_context_",
     "no_mark_before_decision",
@@ -1386,6 +1388,11 @@ class LiveSymbolBatchSelection:
     inactive_scan_slots: int
     inactive_scan_slots_source: str
     inactive_cold_coverage_danger: bool
+    inactive_cold_coverage_gate_reason: str
+    inactive_cold_coverage_health_pct: float
+    inactive_cold_coverage_health_threshold_pct: float
+    inactive_cold_coverage_active_blocked: bool
+    inactive_cold_coverage_position_blocked: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -2290,6 +2297,9 @@ class AnomalyMicroLiveRunner:
         self._current_scheduler_source = "uninitialized"
         self._current_inactive_scan_slots = 0
         self._current_inactive_scan_slots_source = ""
+        self._current_inactive_cold_coverage_gate_reason = ""
+        self._current_inactive_cold_coverage_health_pct = 0.0
+        self._current_inactive_cold_coverage_health_threshold_pct = DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO * 100.0
         self._cycle_precise_scan_symbols = 0
         self._cycle_inactive_visit_symbols = 0
         self._cycle_deferred_inactive_subminute_pairs = 0
@@ -2346,13 +2356,16 @@ class AnomalyMicroLiveRunner:
                 ),
                 "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
                 "cache_provider": "parquet_tail_fetch_v1" if self._ohlcv_cache_storage is not None else "disabled",
-                "inactive_subminute_scan_policy": "DANGER_default_precise_cold_coverage_plus_active_or_ticker_radar",
+                "inactive_subminute_scan_policy": "DANGER_default_precise_cold_coverage_idle_health_gated",
                 "inactive_scan_slots_default_policy": (
                     f"DANGER default {DANGER_DEFAULT_INACTIVE_COLD_COVERAGE_SLOTS_PER_CYCLE} precise cold-coverage "
-                    "slots per cycle for subminute ticker-radar live; set inactive_scan_slots_per_cycle=0 "
-                    "to return to active/radar-only scanning"
+                    "slots per cycle for subminute ticker-radar live, gated by WS health > "
+                    f"{DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO * 100.0:.1f}% and no active/opening/open positions; "
+                    "set inactive_scan_slots_per_cycle=0 to disable cold coverage"
                 ),
                 "inactive_cold_coverage_default_danger": True,
+                "inactive_cold_coverage_health_gate_min_pct": DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO * 100.0,
+                "inactive_cold_coverage_requires_no_active_or_position": True,
                 "symbol_batch_size_role": "legacy inactive scan cap, not WS market discovery",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "ticker_radar_required_for_inactive_subminute_gate": bool(
@@ -2507,7 +2520,17 @@ class AnomalyMicroLiveRunner:
                         "precise_scan_symbols": self._cycle_precise_scan_symbols,
                         "inactive_visit_symbols": self._cycle_inactive_visit_symbols,
                         "deferred_inactive_subminute_pairs": self._cycle_deferred_inactive_subminute_pairs,
-                        "inactive_cold_coverage_danger": self._current_inactive_scan_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE,
+                        "inactive_cold_coverage_danger": (
+                            self._current_inactive_scan_slots > 0
+                            and self._current_inactive_scan_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE
+                        ),
+                        "inactive_cold_coverage_gate_reason": self._current_inactive_cold_coverage_gate_reason,
+                        "inactive_cold_coverage_health_pct_at_selection": round(
+                            self._current_inactive_cold_coverage_health_pct, 3
+                        ),
+                        "inactive_cold_coverage_health_threshold_pct": round(
+                            self._current_inactive_cold_coverage_health_threshold_pct, 3
+                        ),
                         "orphan_orders_cancelled": orphan_cancelled,
                     },
                 )
@@ -2526,9 +2549,13 @@ class AnomalyMicroLiveRunner:
                         ws_health_reason=ws_health_reason,
                     )
                     coverage_text = ""
-                    if self._current_inactive_scan_slots_source != "default_ws_event_driven_subminute":
+                    if self._current_inactive_scan_slots > 0 and self._inactive_slots_are_precise_cold_coverage(
+                        self._current_inactive_scan_slots_source
+                    ):
                         danger_prefix = "DANGER " if self._current_inactive_scan_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE else ""
-                        coverage_text = f" · {danger_prefix}обход ~{full_cycle_seconds:.0f}s"
+                        coverage_text = f" · {danger_prefix}cold ~{full_cycle_seconds:.0f}s"
+                    elif self._current_inactive_cold_coverage_gate_reason:
+                        coverage_text = f" · cold off {self._current_inactive_cold_coverage_gate_reason}"
                     orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
                     self._status_logger.status(
                         _format_live_heartbeat(
@@ -3154,6 +3181,9 @@ class AnomalyMicroLiveRunner:
         self._current_scheduler_source = selection.scheduler_source
         self._current_inactive_scan_slots = selection.inactive_scan_slots
         self._current_inactive_scan_slots_source = selection.inactive_scan_slots_source
+        self._current_inactive_cold_coverage_gate_reason = selection.inactive_cold_coverage_gate_reason
+        self._current_inactive_cold_coverage_health_pct = selection.inactive_cold_coverage_health_pct
+        self._current_inactive_cold_coverage_health_threshold_pct = selection.inactive_cold_coverage_health_threshold_pct
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
@@ -3191,7 +3221,14 @@ class AnomalyMicroLiveRunner:
                     else ""
                 ),
                 "inactive_cold_coverage_danger": bool(selection.inactive_cold_coverage_danger),
-                "inactive_subminute_scan_policy": "DANGER_default_precise_cold_coverage_plus_active_or_ticker_radar",
+                "inactive_cold_coverage_gate_reason": selection.inactive_cold_coverage_gate_reason,
+                "inactive_cold_coverage_health_pct": round(selection.inactive_cold_coverage_health_pct, 3),
+                "inactive_cold_coverage_health_threshold_pct": round(
+                    selection.inactive_cold_coverage_health_threshold_pct, 3
+                ),
+                "inactive_cold_coverage_active_blocked": bool(selection.inactive_cold_coverage_active_blocked),
+                "inactive_cold_coverage_position_blocked": bool(selection.inactive_cold_coverage_position_blocked),
+                "inactive_subminute_scan_policy": "DANGER_default_precise_cold_coverage_idle_health_gated",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "scan_hot_timeframes_per_symbol": bool(self.config.scan_hot_timeframes_per_symbol),
                 "symbol_batch_size": self.config.symbol_batch_size,
@@ -3364,6 +3401,11 @@ class AnomalyMicroLiveRunner:
             return 0.0
         return self._ws_health_healthy_seconds / self._ws_health_observed_seconds
 
+    def _current_ws_health_ratio(self) -> float:
+        if self._ws_health_observed_seconds <= 0.0:
+            return 0.0
+        return self._ws_health_healthy_seconds / self._ws_health_observed_seconds
+
     def _default_inactive_scan_slots(self) -> tuple[int, str]:
         if self.config.inactive_scan_slots_per_cycle is not None:
             return max(0, int(self.config.inactive_scan_slots_per_cycle)), EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE
@@ -3395,6 +3437,11 @@ class AnomalyMicroLiveRunner:
         radar_due_keys = {_position_symbol_key(symbol) for symbol in radar_due}
         radar_waiting_keys = {_position_symbol_key(symbol) for symbol in radar_waiting}
         base_inactive_slots, inactive_slots_source = self._default_inactive_scan_slots()
+        cold_coverage_health_ratio = self._current_ws_health_ratio()
+        cold_coverage_gate_reason = ""
+        active_blocked = bool(active_due or active_waiting)
+        with self._state_lock:
+            position_blocked = bool(self._open_positions or self._opening_symbols)
         precise_budget_remaining_after_radar = None
         if self.config.max_precise_scan_symbols_per_cycle is not None:
             precise_budget_remaining_after_radar = max(
@@ -3405,6 +3452,19 @@ class AnomalyMicroLiveRunner:
             inactive_slots = max(0, base_inactive_slots - len(active_due))
         else:
             inactive_slots = base_inactive_slots
+        if self._inactive_slots_are_precise_cold_coverage(inactive_slots_source) and inactive_slots > 0:
+            if cold_coverage_health_ratio <= DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO:
+                inactive_slots = 0
+                inactive_slots_source = COLD_COVERAGE_GATED_OFF_SOURCE
+                cold_coverage_gate_reason = "ws_health_below_95pct"
+            elif active_blocked:
+                inactive_slots = 0
+                inactive_slots_source = COLD_COVERAGE_GATED_OFF_SOURCE
+                cold_coverage_gate_reason = "active_symbols_present"
+            elif position_blocked:
+                inactive_slots = 0
+                inactive_slots_source = COLD_COVERAGE_GATED_OFF_SOURCE
+                cold_coverage_gate_reason = "open_or_opening_position_present"
         if self._inactive_slots_are_precise_cold_coverage(inactive_slots_source) and precise_budget_remaining_after_radar is not None:
             inactive_slots = min(inactive_slots, precise_budget_remaining_after_radar)
         inactive: list[str] = []
@@ -3458,6 +3518,8 @@ class AnomalyMicroLiveRunner:
             scheduler_source = "DANGER_ws_event_driven_plus_precise_cold_coverage"
         elif inactive_slots_source == EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE:
             scheduler_source = "configured_precise_cold_coverage_scheduler"
+        elif inactive_slots_source == COLD_COVERAGE_GATED_OFF_SOURCE:
+            scheduler_source = "ws_event_driven_scheduler_cold_coverage_gated"
         elif inactive_slots_source == "default_ws_event_driven_subminute":
             scheduler_source = "ws_event_driven_scheduler"
         else:
@@ -3479,7 +3541,14 @@ class AnomalyMicroLiveRunner:
             precise_budget_remaining_after_radar=precise_budget_remaining_after_radar,
             inactive_scan_slots=inactive_slots,
             inactive_scan_slots_source=inactive_slots_source,
-            inactive_cold_coverage_danger=inactive_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE,
+            inactive_cold_coverage_danger=(
+                inactive_slots > 0 and inactive_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE
+            ),
+            inactive_cold_coverage_gate_reason=cold_coverage_gate_reason,
+            inactive_cold_coverage_health_pct=cold_coverage_health_ratio * 100.0,
+            inactive_cold_coverage_health_threshold_pct=DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO * 100.0,
+            inactive_cold_coverage_active_blocked=active_blocked,
+            inactive_cold_coverage_position_blocked=position_blocked,
         )
 
     def _active_symbol_batch(self, *, now_ms: int) -> tuple[list[str], list[str]]:

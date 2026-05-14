@@ -2702,3 +2702,53 @@ Risk:
 ```text
 High / DANGER. Cold coverage intentionally increases live workload and REST/WS aggTrade pressure, and can change which symbols reach precise subminute evaluation. This is for parity/audit discovery coverage, not a proven production improvement. Monitor signal_scan_seconds, aggtrade_network_calls, ws_aggtrade_coverage_pending_count, rate-limit/API errors, and scheduler health before using real orders for long runs.
 ```
+
+
+## 2026-05-14 - P208 proposed DANGER: health-gated idle cold coverage
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Keep P207 cold coverage explicit, but prevent it from competing with active trading work or running during degraded WS health.
+```
+
+Changes:
+
+```text
+- DANGER cold coverage now requires cumulative WS health strictly above 95%.
+- DANGER/explicit precise cold coverage is gated off when any active symbol, opening position, or open position exists.
+- symbol_batch_selected and live_cycle_summary now record inactive_cold_coverage_gate_reason, health percentage at selection, threshold, and active/position blockers.
+- The heartbeat no longer prints the ambiguous Russian "DANGER обход ~Ns" when cold coverage is gated off; it prints cold off <reason>, and only prints a cold full-cycle estimate when cold coverage actually selected inactive symbols.
+- Setting inactive_scan_slots_per_cycle=0 still disables cold coverage completely.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools constants.py main.py
+```
+
+Expected smoke readout:
+
+```text
+With WS health <=95% or active/open/opening positions present, symbol_batch_selected should show scheduler_source=ws_event_driven_scheduler_cold_coverage_gated, inactive_count=0, inactive_cold_coverage_gate_reason populated, and no precise_DANGER_cold_coverage symbols. Only after health >95% and no active/open/opening positions should scheduler_source become DANGER_ws_event_driven_plus_precise_cold_coverage with inactive cold symbols.
+```
+
+Risk:
+
+```text
+Medium / DANGER-limited. Cold coverage becomes less aggressive and may miss cold discoveries during early startup, degraded WS periods, or while a setup/position is active. This is intentional: cold coverage is for idle parity/audit discovery, not for competing with live trade management.
+```
