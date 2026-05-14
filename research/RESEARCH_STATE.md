@@ -317,7 +317,7 @@ Copy commands from COMMANDS.md; change the 30-day baseline in constants.py inste
 
 ## Current audit note — P148
 
-P148 is live console UX only. Routine heartbeat status now updates one terminal line in-place for the default interactive console runner, while real event/error/position/Telegram failure logs first terminate that status line and remain permanent sequential logs. The heartbeat label now says `live: цикл ...s`, because the value is cycle duration, not wall-clock interval between printed lines.
+P148 is live console UX only. Routine heartbeat status now updates one terminal line in-place for the default interactive console runner, while real event/error/position/Telegram failure logs first terminate that status line and remain permanent sequential logs. The old `live: цикл ...s` label is superseded by P201's prefix-free heartbeat.
 
 Next verification:
 
@@ -904,7 +904,7 @@ P187 operator heartbeat status:
 ```text
 P187 is PROPOSED against P186 current code.
 It restores a compact human live status line while keeping P186 detailed WebSocket diagnostics in artifacts.
-Expected console style: live · 5.0s · события 104 · активно 2 · позиции 1 · закрыто 2 · PNL 4.60%.
+Expected console style is superseded by P201: `5.0s · 99.4% · аномалии 104 · активно 2/6 · позиции 1/2 · PNL 4.60% · ticker ok · flow ok`.
 Routine WS counters stay out of the operator heartbeat; only short WS issue suffixes are appended when attention is required.
 No trading logic, signal filters, order path, fill/stop handling, or PnL accounting changes.
 ```
@@ -1054,4 +1054,26 @@ Live now applies max_prior_fast_fade_count_72h for runner_oi_confirmed, runner_f
 The filter is computed from local cached candidate history: the 72h lookback start and internal candles must be covered, but the trailing cache lag before the live decision is ignored and exposed as ignored_tail_ms / effective_cache_end_timestamp_ms.
 Unavailable filter data rejects the category with reject_prior_fast_fade_filter_unavailable; positive prior fast-fade history rejects with reject_prior_fast_fade_72h.
 Next validation: short shadow/live run and inspect category_rejected/category_selected payloads for prior_fast_fade_count_72h, ignored_tail_ms, effective_cache_end_timestamp_ms, and whether serial fast-fade symbols disappear without making all categories unavailable.
+```
+
+## 2026-05-14 - P201 proposed: live WS healthy percentage
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+Live heartbeat now includes cumulative `соединение N%`, measured by wall-clock time between health samples.
+A cycle is healthy only when ticker radar is primary WS and flow WS, if it has targets, is connected/subscribed without coverage pending or REST backfill.
+Network-connectivity waits are sampled as unhealthy time.
+Normal ticker-radar `not_due` cycles now inherit the last attempted ticker-radar health state instead of being counted as unhealthy.
+`ticker_radar_status=ok` from `binance_ws_all_ticker` now maps to primary WS health; REST `ok` does not.
+Expected startup bootstrap is counted as healthy for the first 180 seconds: `ticker seed` and bounded startup `flow gap REST` do not force the connection percentage to begin at 0%.
+Non-bootstrap REST fallback, flow pending, subscription mismatch, and network errors still count as unhealthy connection time.
+AggTrade subscription mismatch counts as unhealthy only when subscribed targets are fewer than requested targets; extra still-active old subscriptions are overhead, not a lost connection.
+Heartbeat format is now `{seconds}s · {connection_pct}% · аномалии N · активно current/seen · позиции open/closed · PNL X% · {connection_status}`, with no `live` prefix.
+Heartbeat metric columns are compact width 9 and right-aligned; connection status is always non-empty and left-flowing without fixed padding.
+Connection status is split into healthy labels (`ticker ok`, `ticker ok · flow ok`) and degraded labels (`ticker seed`, `ticker REST`, `ticker нет`, `flow pending`, `flow REST`, `flow подписка`, `flow gap REST`).
+Heartbeat single-line rendering now uses ANSI clear-line instead of padding-only carriage return, and the line is highlighted when at least one position is open.
+The same health fields are written to live_cycle_summary for artifact validation.
+This is diagnostics/operator UX only; trading logic is unchanged.
+Next validation: short live smoke and verify heartbeat stays on one line, changes color with an open position, and live_events.csv has ws_healthy/ws_health_reason/ws_health_pct changing when ticker seed, REST fallback, flow pending, or flow REST backfill occurs.
 ```

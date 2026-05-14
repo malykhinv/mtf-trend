@@ -587,7 +587,7 @@ The routine live heartbeat looked like a periodic event log, but the displayed s
 - Add a small live-only status logger boundary around the runner logger.
 - For the default interactive console logger, render routine heartbeat status with carriage-return overwrite instead of appending a new line.
 - Before any non-status live/Telegram/error/position log, terminate the current heartbeat line so important events remain sequential.
-- Rename the heartbeat text to `live: цикл ...s` to make the value clearly a cycle duration.
+- Rename the heartbeat text to a cycle-duration label; this was later superseded by P201's prefix-free heartbeat.
 - Keep the old sparse status cadence for external/non-interactive loggers.
 
 ### Validation
@@ -1995,7 +1995,7 @@ P186 exposed useful WebSocket counters, but putting them directly into the inlin
 - Replace verbose inline `scheduler/ticker/aggTrade/scan/coverage` text with a compact line:
 
 ```text
-live · 5.0s · события 104 · активно 2 · позиции 1 · закрыто 2 · PNL 4.60%
+5.0s · 99.4% · аномалии 104 · активно 2/6 · позиции 1/2 · PNL 4.60% · ticker ok · flow ok
 ```
 
 - Track `live_events.csv` rows in `LiveArtifactWriter` and expose the count as `events_written` for the operator heartbeat.
@@ -2182,7 +2182,7 @@ Changes:
 Validation to run after apply:
 - `python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py`
 - `python -m compileall data/exchanges research_tools cli constants.py main.py`
-- Small live smoke: expect `ticker_radar_startup_seeded.seeded_count` close to universe size, no startup burst of `ticker_radar_missing_fields`, and console heartbeat like `live · ... · аномалии 0 · ...`; during the first seed-backed cycle `ticker_radar_snapshot.source_status=primary_seeded_rest`, then normal WS cycles should return to `primary` once ticker messages arrive.
+- Small live smoke: expect `ticker_radar_startup_seeded.seeded_count` close to universe size, no startup burst of `ticker_radar_missing_fields`, and console heartbeat like `... · аномалии 0 · ...`; during the first seed-backed cycle `ticker_radar_snapshot.source_status=primary_seeded_rest`, then normal WS cycles should return to `primary` once ticker messages arrive.
 
 
 ## P196 - proposed - strict backtest/live parity for forming setup decisions
@@ -2310,5 +2310,41 @@ Validation:
 ```
 python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py
 python -m compileall data/exchanges research_tools cli constants.py main.py launcher.py
+python main.py run-anomaly-live --help
+```
+
+## P201 - proposed - live WS healthy time percentage
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- The inline live heartbeat showed the current WS issue label, but not how much wall-clock time the session was actually WS-healthy versus degraded by REST seed/fallback, flow backfill, pending coverage, or network waits.
+- Operator needs a compact health percentage in the heartbeat line.
+
+Changes:
+- Track cumulative wall-clock seconds between health samples, split into WS-healthy and observed seconds.
+- A cycle is counted healthy only when ticker radar is `primary` WS and, when flow WS has targets, aggTrade WS is connected, fully subscribed, has no coverage pending, and did not use REST backfill.
+- Network-connectivity waits are sampled as unhealthy time.
+- Add `соединение N%` to the live heartbeat.
+- Add `ws_healthy`, `ws_health_reason`, `ws_health_pct`, `ws_health_observed_seconds`, and `ws_health_healthy_seconds` to `live_cycle_summary`.
+- Preserve the last attempted ticker-radar health state across `not_due` cycles so the percentage does not read as 0% between normal ticker-radar intervals.
+- Treat `ticker_radar_status=ok` from `binance_ws_all_ticker` as healthy primary WS, while REST `ok` remains non-WS health.
+- Count expected startup bootstrap as healthy for the first 180 seconds: `ticker seed` and bounded startup `flow gap REST` do not force the health percentage to begin at 0%.
+- Keep non-bootstrap REST fallback, flow pending, subscription mismatch, and network errors as unhealthy connection time.
+- Count aggTrade subscription mismatch as unhealthy only when subscribed targets are fewer than requested targets; extra still-active old subscriptions are overhead, not a lost connection.
+- Render heartbeat as `{seconds}s · {connection_pct}% · аномалии N · активно current/seen · позиции open/closed · PNL X% · {connection_status}` without the `live` prefix.
+- Align heartbeat metric columns to compact width 9 with right-aligned values; connection status is a non-empty left-flowing suffix without fixed padding.
+- Render healthy connection status as `ticker ok` / `ticker ok · flow ok`, and degraded status as `ticker seed`, `ticker REST`, `ticker нет`, `flow pending`, `flow REST`, `flow подписка`, or `flow gap REST`.
+- Restore single-line heartbeat rendering with ANSI clear-line instead of padding-only carriage return, so PowerShell does not keep duplicate heartbeat rows.
+- Highlight the heartbeat line when at least one position is open.
+- Remove the `live:` prefix from console live-run messages.
+
+Risk:
+Low. Diagnostics/operator UX only; no signal, entry, stop, exit, or sizing logic changes.
+
+Validation:
+```
+python -m py_compile research_tools/anomaly_micro_live.py
+python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-anomaly-live --help
 ```

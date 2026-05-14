@@ -51,6 +51,7 @@ HOUR_MS = 60 * 60 * 1000
 BINANCE_FUTURES_ALL_TICKER_WS_URL = "wss://fstream.binance.com/market/ws/!ticker@arr"
 BINANCE_FUTURES_COMBINED_WS_URL = "wss://fstream.binance.com/market/stream"
 DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS = 360_000
+DEFAULT_LIVE_WS_HEALTH_BOOTSTRAP_SECONDS = 180.0
 ANIMAL_EMOJIS = (
     "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
     "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦆", "🦅",
@@ -1379,14 +1380,13 @@ class LivePosition:
 
 
 class _LiveStatusLogger:
-    """Console logger that keeps the live heartbeat on one mutable terminal line."""
+    """Console logger for live heartbeat/status messages."""
 
     def __init__(self, logger: Callable[[str], None]) -> None:
         self._logger = logger
         self._inline_status_enabled = logger is print and sys.stdout.isatty()
         self._lock = threading.RLock()
         self._status_line_open = False
-        self._status_line_length = 0
 
     @property
     def inline_status_enabled(self) -> bool:
@@ -1397,16 +1397,15 @@ class _LiveStatusLogger:
             self._finish_status_line_if_needed()
             self._logger(message)
 
-    def status(self, message: str) -> None:
+    def status(self, message: str, *, highlight: bool = False) -> None:
         with self._lock:
             if not self._inline_status_enabled:
                 self._logger(message)
                 return
-            padding = " " * max(0, self._status_line_length - len(message))
-            sys.stdout.write(f"\r{message}{padding}")
+            rendered = f"\033[1;33m{message}\033[0m" if highlight else message
+            sys.stdout.write(f"\r\033[2K{rendered}")
             sys.stdout.flush()
             self._status_line_open = True
-            self._status_line_length = len(message)
 
     def _finish_status_line_if_needed(self) -> None:
         if not self._inline_status_enabled or not self._status_line_open:
@@ -1414,7 +1413,6 @@ class _LiveStatusLogger:
         sys.stdout.write("\n")
         sys.stdout.flush()
         self._status_line_open = False
-        self._status_line_length = 0
 
 
 class TelegramDispatcher:
@@ -2168,10 +2166,12 @@ class AnomalyMicroLiveRunner:
         self._opening_symbols: set[str] = set()
         self._recent_stops: dict[str, list[float]] = {}
         self._active_symbols: dict[str, LiveActiveSymbol] = {}
+        self._active_symbols_seen: set[str] = set()
         self._ticker_radar_watch: dict[str, LiveTickerRadarWatch] = {}
         self._ticker_radar_snapshots: dict[str, ExchangeTickerSnapshot] = {}
         self._ticker_radar_quote_delta_history: dict[str, deque[float]] = {}
         self._last_ticker_radar_at_ms = 0
+        self._last_ticker_radar_health_status = "unknown"
         self._seen_decisions: set[tuple[str, str, str, int]] = set()
         self._last_signal_scan_closed_at: dict[tuple[str, str], int] = {}
         self._opened_positions_total = 0
@@ -2199,6 +2199,9 @@ class AnomalyMicroLiveRunner:
         self._cycle_precise_scan_symbols = 0
         self._cycle_inactive_visit_symbols = 0
         self._cycle_deferred_inactive_subminute_pairs = 0
+        self._ws_health_observed_seconds = 0.0
+        self._ws_health_healthy_seconds = 0.0
+        self._last_ws_health_sample_at = time.monotonic()
         self._symbol_universe_scan_started_at = time.monotonic()
         self._last_symbol_universe_cycle_seconds: float | None = None
         self._symbol_universe_cycle_index = 1
@@ -2230,9 +2233,9 @@ class AnomalyMicroLiveRunner:
         category_ids = ",".join(category.category_id for category in self._pump_categories)
         timeframe_pairs_label = _format_timeframe_pairs(self.config.timeframe_pairs)
         self.logger(
-            f"live: старт · символов {len(symbols)} · TF {timeframe_pairs_label} · max {self.config.max_open_positions}"
+            f"старт · символов {len(symbols)} · TF {timeframe_pairs_label} · max {self.config.max_open_positions}"
         )
-        self.logger(f"live: артефакты {self.artifacts.root}")
+        self.logger(f"артефакты {self.artifacts.root}")
         trading_mode = "с торговлей" if self.config.confirm_real_orders else "без торговли"
         self.artifacts.append_event(
             "live_cache_config",
@@ -2317,6 +2320,7 @@ class AnomalyMicroLiveRunner:
                 cycle_seconds = time.monotonic() - cycle_started
                 opened_total, open_positions, closed_total, orphan_total = self._live_counts()
                 active_symbol_count = self._active_live_symbol_count()
+                active_symbols_seen_total = self._active_live_symbols_seen_total()
                 closed_pnl_pct = self._closed_pnl_pct_total()
                 detected_anomalies_total = self._detected_anomalies_count()
                 full_cycle_seconds = self._full_symbol_cycle_seconds(
@@ -2324,6 +2328,8 @@ class AnomalyMicroLiveRunner:
                     batch_size=len(batch),
                     symbols_total=len(symbols),
                 )
+                ws_healthy, ws_health_reason = self._is_ws_healthy_for_cycle(ticker_stats, ws_aggtrade_stats)
+                ws_health_pct = self._record_ws_health_sample(healthy=ws_healthy)
                 self.artifacts.append_event(
                     "live_cycle_summary",
                     "__live__",
@@ -2361,6 +2367,11 @@ class AnomalyMicroLiveRunner:
                             if ticker_stats.status in {"failed", "degraded_rest_fallback"}
                             else ""
                         ),
+                        "ws_healthy": bool(ws_healthy),
+                        "ws_health_reason": ws_health_reason,
+                        "ws_health_pct": round(ws_health_pct, 4),
+                        "ws_health_observed_seconds": round(self._ws_health_observed_seconds, 3),
+                        "ws_health_healthy_seconds": round(self._ws_health_healthy_seconds, 3),
                         "signal_scan_seconds": round(scan_seconds, 3),
                         "open_signal_seconds": round(open_seconds, 3),
                         "order_reconcile_seconds": round(reconcile_seconds, 3),
@@ -2369,6 +2380,7 @@ class AnomalyMicroLiveRunner:
                         "opened_total": opened_total,
                         "open_positions": open_positions,
                         "active_symbol_count": active_symbol_count,
+                        "active_symbols_seen_total": active_symbols_seen_total,
                         "closed_total": closed_total,
                         "closed_pnl_pct": closed_pnl_pct,
                         "aggtrade_requests": self._cycle_aggtrade_requests,
@@ -2393,38 +2405,30 @@ class AnomalyMicroLiveRunner:
                     or orphan_total != orphan_before
                 )
                 if should_log_status:
-                    ws_issue_text = ""
-                    ticker_error_label = _ws_error_short_label(ticker_stats.reason)
-                    flow_error_label = _ws_error_short_label(ws_aggtrade_stats.last_error)
-                    if ticker_stats.status == "failed":
-                        ws_issue_text = " · WS: ticker нет" + (f"/{ticker_error_label}" if ticker_error_label else "")
-                    elif ticker_stats.status == "degraded_rest_fallback":
-                        ws_issue_text = " · WS: ticker REST" + (f"/{ticker_error_label}" if ticker_error_label else "")
-                    elif ticker_stats.status == "primary_seeded_rest":
-                        ws_issue_text = " · WS: ticker seed"
-                    elif ws_aggtrade_stats.enabled and ws_aggtrade_stats.target_count > 0:
-                        subscribed_count = _optional_int(ws_aggtrade_stats.subscribed_count)
-                        connection_status = (ws_aggtrade_stats.connection_status or "").lower()
-                        if connection_status != "connected":
-                            if self._cycle_ws_aggtrade_coverage_pending > 0:
-                                ws_issue_text = " · WS: flow pending" + (f"/{flow_error_label}" if flow_error_label else "")
-                            elif self._cycle_ws_aggtrade_backfill_reads > 0:
-                                ws_issue_text = " · WS: flow REST" + (f"/{flow_error_label}" if flow_error_label else "")
-                            else:
-                                ws_issue_text = " · WS: flow нет" + (f"/{flow_error_label}" if flow_error_label else "")
-                        elif subscribed_count != ws_aggtrade_stats.target_count:
-                            ws_issue_text = " · WS: flow подписка"
-                        elif self._cycle_ws_aggtrade_backfill_reads > 0:
-                            ws_issue_text = " · WS: flow gap REST"
+                    connection_text = self._live_connection_status_text(
+                        ticker_stats=ticker_stats,
+                        aggtrade_stats=ws_aggtrade_stats,
+                        ws_healthy=ws_healthy,
+                        ws_health_reason=ws_health_reason,
+                    )
                     coverage_text = ""
                     if self._current_inactive_scan_slots_source != "default_ws_event_driven_subminute":
                         coverage_text = f" · обход ~{full_cycle_seconds:.0f}s"
                     orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
                     self._status_logger.status(
-                        f"live · {cycle_seconds:.1f}s · аномалии {detected_anomalies_total} · "
-                        f"активно {active_symbol_count} · позиции {open_positions} · "
-                        f"закрыто {closed_total} · PNL {_format_percent(closed_pnl_pct, signed=False)}"
-                        f"{ws_issue_text}{coverage_text}{orphan_text}"
+                        _format_live_heartbeat(
+                            cycle_seconds=cycle_seconds,
+                            connection_health_pct=ws_health_pct,
+                            anomalies_total=detected_anomalies_total,
+                            active_now=active_symbol_count,
+                            active_seen=active_symbols_seen_total,
+                            open_positions=open_positions,
+                            closed_positions=closed_total,
+                            pnl_pct=closed_pnl_pct,
+                            connection_text=connection_text,
+                            suffix=f"{coverage_text}{orphan_text}",
+                        ),
+                        highlight=open_positions > 0,
                     )
                 if self._network_degraded:
                     self.artifacts.append_event(
@@ -2438,12 +2442,12 @@ class AnomalyMicroLiveRunner:
                 orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle, force=True)
                 self._flush_live_ohlcv_cache_if_due(force=True, reason="keyboard_interrupt")
                 suffix = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
-                self.logger(f"live: остановлено пользователем{suffix}")
+                self.logger(f"остановлено пользователем{suffix}")
                 self._close_live_sources()
                 return 0
             except LiveDataIntegrityError as exc:
                 self._flush_live_ohlcv_cache_if_due(force=True, reason="data_integrity_error")
-                self.logger(f"live: остановлено из-за ошибки целостности live-данных: {exc}")
+                self.logger(f"остановлено из-за ошибки целостности live-данных: {exc}")
                 self.telegram.send(
                     channel="events",
                     key="live_data_integrity_error",
@@ -2453,7 +2457,7 @@ class AnomalyMicroLiveRunner:
                 return 3
             except ExchangeConnectivityError as exc:
                 if not self._network_degraded:
-                    self.logger(f"live: сеть/API недоступны, жду восстановления. Причина: {exc}")
+                    self.logger(f"сеть/API недоступны, жду восстановления. Причина: {exc}")
                     self.artifacts.append_event(
                         "network_degraded",
                         "__live__",
@@ -2471,8 +2475,9 @@ class AnomalyMicroLiveRunner:
                     )
                 self._network_degraded = True
                 time.sleep(self.config.network_sleep_seconds)
+                self._record_ws_health_sample(healthy=False)
             except Exception as exc:
-                self.logger(f"live: остановлено из-за внутренней ошибки: {type(exc).__name__}: {exc}")
+                self.logger(f"остановлено из-за внутренней ошибки: {type(exc).__name__}: {exc}")
                 self._flush_live_ohlcv_cache_if_due(force=True, reason="internal_error")
                 self.artifacts.append_event(
                     "live_internal_error",
@@ -2489,7 +2494,7 @@ class AnomalyMicroLiveRunner:
         orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle, force=True)
         self._flush_live_ohlcv_cache_if_due(force=True, reason="max_cycles")
         suffix = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
-        self.logger(f"live: достигнут лимит циклов{suffix}")
+        self.logger(f"достигнут лимит циклов{suffix}")
         self._close_live_sources()
         return 0
 
@@ -2788,6 +2793,10 @@ class AnomalyMicroLiveRunner:
             active_keys.update(_position_symbol_key(position.signal.symbol) for position in self._open_positions.values())
             return len(active_keys)
 
+    def _active_live_symbols_seen_total(self) -> int:
+        with self._state_lock:
+            return len(self._active_symbols_seen)
+
     def _closed_pnl_pct_total(self) -> float:
         pnl_total = float(self._closed_pnl_usdt_total)
         notional_total = float(self._closed_notional_usdt_total)
@@ -2921,6 +2930,95 @@ class AnomalyMicroLiveRunner:
         if self._cycle_ws_aggtrade_backfill_reads > 0:
             return "rest_backfill_degraded"
         return f"ws_{connection_status or 'unknown'}_no_entry_read"
+
+    def _is_ws_healthy_for_cycle(
+        self,
+        ticker_stats: LiveTickerRadarCycleStats,
+        aggtrade_stats: LiveWsAggTradeSubscriptionStats,
+    ) -> tuple[bool, str]:
+        ticker_health_status = self._ticker_health_status(status=ticker_stats.status, source=ticker_stats.source)
+        if ticker_health_status == "not_due":
+            ticker_health_status = self._last_ticker_radar_health_status
+        bootstrap = self._ws_health_observed_seconds <= DEFAULT_LIVE_WS_HEALTH_BOOTSTRAP_SECONDS
+        if ticker_health_status == "primary_seeded_rest" and bootstrap:
+            ticker_health_status = "primary"
+        if ticker_health_status != "primary":
+            return False, f"ticker_{ticker_health_status or 'unknown'}"
+        if not aggtrade_stats.enabled or aggtrade_stats.target_count <= 0:
+            return True, "ticker_primary_no_flow_targets"
+        connection_status = (aggtrade_stats.connection_status or "").lower()
+        if connection_status != "connected":
+            return False, f"flow_{connection_status or 'unknown'}"
+        subscribed_count = _optional_int(aggtrade_stats.subscribed_count)
+        if subscribed_count is None or subscribed_count < aggtrade_stats.target_count:
+            return False, "flow_subscription_mismatch"
+        if self._cycle_ws_aggtrade_coverage_pending > 0:
+            return False, "flow_coverage_pending"
+        if self._cycle_ws_aggtrade_backfill_reads > 0:
+            if bootstrap:
+                return True, "startup_flow_rest_backfill"
+            return False, "flow_rest_backfill"
+        return True, "primary_ws"
+
+    def _live_connection_status_text(
+        self,
+        *,
+        ticker_stats: LiveTickerRadarCycleStats,
+        aggtrade_stats: LiveWsAggTradeSubscriptionStats,
+        ws_healthy: bool,
+        ws_health_reason: str,
+    ) -> str:
+        ticker_error_label = _ws_error_short_label(ticker_stats.reason)
+        flow_error_label = _ws_error_short_label(aggtrade_stats.last_error)
+        if ticker_stats.status == "primary_seeded_rest":
+            return "ticker seed"
+        if ws_healthy:
+            if not aggtrade_stats.enabled or aggtrade_stats.target_count <= 0:
+                return "ticker ok"
+            return "ticker ok · flow ok"
+        if ticker_stats.status == "failed":
+            return "ticker нет" + (f"/{ticker_error_label}" if ticker_error_label else "")
+        if ticker_stats.status == "degraded_rest_fallback":
+            return "ticker REST" + (f"/{ticker_error_label}" if ticker_error_label else "")
+        if ws_health_reason.startswith("ticker_"):
+            ticker_reason = ws_health_reason.removeprefix("ticker_")
+            if ticker_reason == "rest_fetch_tickers_ok":
+                return "ticker REST ok"
+            return ticker_reason.replace("_", " ")
+        if aggtrade_stats.enabled and aggtrade_stats.target_count > 0:
+            subscribed_count = _optional_int(aggtrade_stats.subscribed_count)
+            connection_status = (aggtrade_stats.connection_status or "").lower()
+            if connection_status != "connected":
+                if self._cycle_ws_aggtrade_coverage_pending > 0:
+                    return "flow pending" + (f"/{flow_error_label}" if flow_error_label else "")
+                if self._cycle_ws_aggtrade_backfill_reads > 0:
+                    return "flow REST" + (f"/{flow_error_label}" if flow_error_label else "")
+                return "flow нет" + (f"/{flow_error_label}" if flow_error_label else "")
+            if subscribed_count is None or subscribed_count < aggtrade_stats.target_count:
+                return "flow подписка"
+            if self._cycle_ws_aggtrade_backfill_reads > 0:
+                return "flow gap REST"
+            if self._cycle_ws_aggtrade_coverage_pending > 0:
+                return "flow pending"
+        return ws_health_reason.replace("_", " ")
+
+    def _ticker_health_status(self, *, status: str, source: str) -> str:
+        if status == "ok" and source == "binance_ws_all_ticker":
+            return "primary"
+        if status == "ok":
+            return f"{source}_ok"
+        return status
+
+    def _record_ws_health_sample(self, *, healthy: bool) -> float:
+        now = time.monotonic()
+        sample_seconds = max(0.0, now - self._last_ws_health_sample_at)
+        self._last_ws_health_sample_at = now
+        self._ws_health_observed_seconds += sample_seconds
+        if healthy:
+            self._ws_health_healthy_seconds += sample_seconds
+        if self._ws_health_observed_seconds <= 0.0:
+            return 0.0
+        return self._ws_health_healthy_seconds / self._ws_health_observed_seconds
 
     def _default_inactive_scan_slots(self) -> tuple[int, str]:
         if self.config.inactive_scan_slots_per_cycle is not None:
@@ -3124,6 +3222,7 @@ class AnomalyMicroLiveRunner:
                 "required_for_inactive_subminute_gate": bool(self._ticker_radar_required_for_subminute_gate()),
             }
             self.artifacts.append_event("ticker_radar_failed", "__live__", payload)
+            self._last_ticker_radar_health_status = "failed"
             if self._ticker_radar_required_for_subminute_gate():
                 raise ExchangeConnectivityError(
                     "ticker radar source is required for inactive subminute discovery and is unavailable; "
@@ -3151,6 +3250,7 @@ class AnomalyMicroLiveRunner:
                     "required_for_inactive_subminute_gate": bool(self._ticker_radar_required_for_subminute_gate()),
                 },
             )
+            self._last_ticker_radar_health_status = "all_missing"
             if self._ticker_radar_required_for_subminute_gate():
                 raise ExchangeConnectivityError(
                     "ticker radar source returned no usable snapshots for inactive subminute discovery; "
@@ -3202,10 +3302,15 @@ class AnomalyMicroLiveRunner:
             },
         )
         if snapshots and ok_count == 0 and self._ticker_radar_required_for_subminute_gate():
+            self._last_ticker_radar_health_status = "all_missing"
             raise ExchangeConnectivityError(
                 "ticker radar source returned no usable snapshots while inactive subminute discovery depends on it; "
                 f"source={source}; missing={missing_count}/{len(snapshots)}"
             )
+        self._last_ticker_radar_health_status = self._ticker_health_status(
+            status=snapshot_status if source_status == "primary" else source_status,
+            source=source,
+        )
         return LiveTickerRadarCycleStats(
             enabled=True,
             attempted=True,
@@ -3373,6 +3478,7 @@ class AnomalyMicroLiveRunner:
                 updated_at_ms=now_ms,
                 decision_timestamp_ms=decision_timestamp_ms,
             )
+            self._active_symbols_seen.add(symbol_key)
             cleared_radar_watch = self._ticker_radar_watch.pop(symbol_key, None)
             if should_emit:
                 event_payload = {
@@ -4773,7 +4879,7 @@ class AnomalyMicroLiveRunner:
             if emit_diagnostics and category_rejections:
                 rejected_ids = ",".join(str(row.get("category_id")) for row in category_rejections)
                 self.logger(
-                    f"live: {_compact_symbol(symbol)} {levels_timeframe.value}/{entry_timeframe.value} · "
+                    f"{_compact_symbol(symbol)} {levels_timeframe.value}/{entry_timeframe.value} · "
                     f"сигнал {category.category_id} · раньше отвалилось {rejected_ids}"
                 )
             return signal
@@ -5150,7 +5256,7 @@ class AnomalyMicroLiveRunner:
                         signal.symbol,
                         {"position_id": position.position_id, "chart_path": str(open_chart_path), "reason": str(exc)},
                     )
-                    self.logger(f"live: позиция {signal.symbol} открыта, но Telegram-график входа не отправлен: {exc}")
+                    self.logger(f"позиция {signal.symbol} открыта, но Telegram-график входа не отправлен: {exc}")
             if position.telegram_open_message_id is None:
                 self.artifacts.append_event(
                     "telegram_open_text_fallback",
@@ -5172,9 +5278,9 @@ class AnomalyMicroLiveRunner:
                     )
         except Exception as exc:
             self.artifacts.append_event("telegram_open_failed", signal.symbol, {"position_id": position.position_id, "reason": str(exc)})
-            self.logger(f"live: позиция {signal.symbol} открыта, но Telegram-вход не отправлен: {exc}")
+            self.logger(f"позиция {signal.symbol} открыта, но Telegram-вход не отправлен: {exc}")
         self.logger(
-            f"live: {_compact_symbol(signal.symbol)} открыт · {signal.levels_timeframe.value}/{signal.entry_timeframe.value} · "
+            f"{_compact_symbol(signal.symbol)} открыт · {signal.levels_timeframe.value}/{signal.entry_timeframe.value} · "
             f"entry {position.entry_price:.6g} · риск {position.risk_usdt:.2f} · notional {position.notional_usdt:.2f}"
         )
         threading.Thread(
@@ -5302,7 +5408,7 @@ class AnomalyMicroLiveRunner:
                     position.signal.symbol,
                     {"position_id": position.position_id, "reason": reason, "stop_price": stop_price, "error": str(exc)},
                 )
-                self.logger(f"live: стоп-сообщение {position.signal.symbol} не отправлено: {exc}")
+                self.logger(f"стоп-сообщение {position.signal.symbol} не отправлено: {exc}")
                 return
             if message_id is None:
                 self.artifacts.append_event(
@@ -5336,7 +5442,7 @@ class AnomalyMicroLiveRunner:
                     "error": str(exc),
                 },
             )
-            self.logger(f"live: стоп-сообщение {position.signal.symbol} не отредактировано: {exc}")
+            self.logger(f"стоп-сообщение {position.signal.symbol} не отредактировано: {exc}")
             return
         if edited_message_id is None:
             self.artifacts.append_event(
@@ -5566,7 +5672,7 @@ class AnomalyMicroLiveRunner:
                     signal.symbol,
                     {"position_id": position.position_id, "reason": f"{type(exc).__name__}: {exc}"},
                 )
-                self.logger(f"live: позиция {signal.symbol}, сеть/API временно недоступны: {exc}")
+                self.logger(f"позиция {signal.symbol}, сеть/API временно недоступны: {exc}")
                 time.sleep(30.0)
             except Exception as exc:
                 self.artifacts.append_event(
@@ -5597,7 +5703,7 @@ class AnomalyMicroLiveRunner:
             text=_format_position_integrity_error_message(position, reason=reason),
             symbol=symbol,
         )
-        self.logger(f"live: {_compact_symbol(symbol)} integrity error · {reason}")
+        self.logger(f"{_compact_symbol(symbol)} integrity error · {reason}")
 
     def _finalize_unresolved_position_exit(
         self,
@@ -5633,7 +5739,7 @@ class AnomalyMicroLiveRunner:
             text=_format_position_integrity_error_message(position, reason=reason),
             symbol=symbol,
         )
-        self.logger(f"live: {_compact_symbol(symbol)} exit unresolved · {reason}")
+        self.logger(f"{_compact_symbol(symbol)} exit unresolved · {reason}")
 
     def _finalize_position(
         self,
@@ -5718,7 +5824,7 @@ class AnomalyMicroLiveRunner:
                         "error": str(exc)[:1000],
                     },
                 )
-                self.logger(f"live: позиция {position.signal.symbol} закрыта, но Telegram-график закрытия не отправлен: {exc}")
+                self.logger(f"позиция {position.signal.symbol} закрыта, но Telegram-график закрытия не отправлен: {exc}")
         self.artifacts.append_event(
             "telegram_close_text_fallback",
             position.signal.symbol,
@@ -7548,6 +7654,36 @@ def _format_stop_zone(position: LivePosition, *, stop_price: float, fallback_lab
 
 def _format_price(value: float) -> str:
     return f"{float(value):.6g}"
+
+
+def _format_live_heartbeat(
+    *,
+    cycle_seconds: float,
+    connection_health_pct: float,
+    anomalies_total: int,
+    active_now: int,
+    active_seen: int,
+    open_positions: int,
+    closed_positions: int,
+    pnl_pct: float,
+    connection_text: str,
+    suffix: str = "",
+) -> str:
+    compact_width = 9
+    anomaly_text = f"anl {anomalies_total}"
+    active_text = f"act {active_now}/{active_seen}"
+    position_text = f"pos {open_positions}/{closed_positions}"
+    pnl_text = f"pnl {_format_percent(pnl_pct, signed=False)}"
+    connection_status_text = connection_text.strip() or "status n/a"
+    return (
+        f"{f'{cycle_seconds:.1f}s':>{compact_width}} · "
+        f"{_format_percent(connection_health_pct, signed=False, precision=1):>{compact_width}} · "
+        f"{anomaly_text:>{compact_width}} · "
+        f"{active_text:>{compact_width}} · "
+        f"{position_text:>{compact_width}} · "
+        f"{pnl_text:>{compact_width}} · "
+        f"{connection_status_text}{suffix}"
+    )
 
 
 def _format_percent(value: float, *, signed: bool = False, precision: int = 1) -> str:
