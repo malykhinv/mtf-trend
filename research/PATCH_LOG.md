@@ -2511,3 +2511,51 @@ Expected smoke readout:
 ```text
 position_opened, position_stop_order_verified, tp1_partial_exit_filled, and unprotected_entry_reduce_only_exit_filled events include client_order_id. A synthetic ambiguous create_order transport failure should reconcile by client order id instead of submitting a duplicate order. A synthetic fill/position mismatch before initial stop should emit an unprotected_entry_* event before the live runner stops with LiveDataIntegrityError.
 ```
+
+## 2026-05-14 - P192 proposed: live account preflight and close-only startup position cleanup
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+data/exchanges/ccxt_futures_client.py
+data/exchanges/ccxt_types.py
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Refuse unsupported live account mode and start real-order live from a clean exchange-position state by closing any pre-existing position explicitly before the live loop.
+```
+
+Changes:
+
+```text
+- Adds Binance USD-M account-mode preflight before real-order live startup.
+- Hedge mode is a hard startup error; the live runner requires one-way position mode.
+- Reads exchange positions for the live universe before ticker startup and signal scanning.
+- Any non-flat startup position is closed with a reduce-only market order using an explicit client order id.
+- The close is verified by reading the post-close exchange position amount.
+- After a verified startup close, orphan open orders for the symbol are cancelled.
+- Startup blocks if a pre-existing position cannot be closed and verified.
+- No restore path, no ledger-based adoption, no feature flag, no silent fallback.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+```
+
+Expected smoke readout:
+
+```text
+live_events.csv contains live_account_preflight_ok before ticker startup. If the account is in hedge mode, startup stops with live_account_preflight_failed. If a live-universe symbol has a pre-existing exchange position, startup emits startup_position_cleanup_started, startup_position_closed, startup_position_cleanup_finished, then starts only after the position is verified flat and orphan orders are cancelled.
+```

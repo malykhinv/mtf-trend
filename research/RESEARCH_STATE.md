@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed
-Last active patch: P189 live aggTrade REST gap prefetch planner
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192 proposed
+Last active patch: P192 live account preflight and close-only startup position cleanup
 Updated: 2026-05-14
 ```
 
@@ -89,19 +89,21 @@ research_tools/hourly_levels.py
 21. P186 proposes event-driven WS scheduler semantics: subminute+ticker-radar live defaults to zero implicit inactive scan slots, and the operator heartbeat reports ticker/aggTrade health instead of ambiguous batch/full-cycle timing.
 22. P188 proposes WS live missed-entry hardening: bounded initial aggTrade backfill is default for radar-promoted symbols, all-missing ticker radar becomes network degradation, max-position rejects remain retryable within the same decision candle, and monitor internal errors are integrity errors.
 23. P189 proposes live aggTrade REST gap prefetch planning: precise active/radar symbols coalesce due S30/S15/S5 entry WS coverage gaps per symbol before signal evaluation, populate the WS buffer once, and expose prefetch/backfill/pending counts in `live_cycle_summary`. No new flags are introduced; oversized gaps remain explicit coverage-pending, not stale-entry fallback.
+24. P190 proposes idempotent live order placement with deterministic client order ids and pre-stop exposure cleanup.
+25. P192 proposes live account-mode preflight plus close-only startup exchange-position cleanup: unsupported hedge mode blocks startup, and any pre-existing live-universe exchange position is reduce-only closed and verified flat before the live loop.
 
 ---
 
 ## 6. Next best step
 
-Apply P189 on top of the uploaded ZIP, then run a short WS-live smoke and inspect `live_events.csv`:
+Apply P189/P190/P192 on top of the uploaded ZIP, then run a short WS-live smoke and inspect `live_events.csv`:
 
 ```bash
 python -m compileall data/exchanges research_tools cli constants.py main.py
 python main.py run-anomaly-live --help
 ```
 
-Expected readout: startup still refuses blind ticker radar from P185; `live_cycle_summary.scheduler_cycle_seconds` is the decision heartbeat; ticker fields show source/status/ok/missing/promoted counts; all-missing required ticker radar becomes `network_degraded`; precise active/radar symbols emit `aggtrade_rest_gap_prefetch` when S30/S15/S5 WS gaps exist, then later frame reads should mostly be WS/cache hits; oversized gaps still become `coverage_pending`. If diagnostic cold coverage is needed, set `--inactive-scan-slots-per-cycle` explicitly.
+Expected readout: startup still refuses blind ticker radar from P185; `live_cycle_summary.scheduler_cycle_seconds` is the decision heartbeat; ticker fields show source/status/ok/missing/promoted counts; all-missing required ticker radar becomes `network_degraded`; startup emits `live_account_preflight_ok`; pre-existing exchange positions emit `startup_position_closed` and must be verified flat before ticker startup; precise active/radar symbols emit `aggtrade_rest_gap_prefetch` when S30/S15/S5 WS gaps exist, then later frame reads should mostly be WS/cache hits; oversized gaps still become `coverage_pending`. If diagnostic cold coverage is needed, set `--inactive-scan-slots-per-cycle` explicitly.
 
 Latest next step after P167:
 

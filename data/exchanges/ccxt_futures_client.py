@@ -27,8 +27,10 @@ from data.exchanges.ccxt_types import (
     CcxtBinanceKlineApi,
     CcxtClientOptions,
     CcxtFuturesApi,
-    ExchangeOrderFill,
     CcxtOpenInterestApi,
+    ExchangeLiveAccountPreflight,
+    ExchangeOrderFill,
+    ExchangePositionSnapshot,
     ExchangeTickerSnapshot,
 )
 from domain.abstract.exchange_client import ExchangeClient
@@ -42,6 +44,10 @@ try:
     import ccxt  # type: ignore
 except ImportError:  # pragma: no cover
     ccxt = None
+
+
+def _position_symbol_key_for_exchange(symbol: str) -> str:
+    return str(symbol).replace("/", "").replace(":", "").upper()
 
 
 class CcxtFuturesClient(ExchangeClient):
@@ -837,6 +843,133 @@ class CcxtFuturesClient(ExchangeClient):
                 return float(info["positionAmt"])
             return amount
         return 0.0
+
+    @staticmethod
+    def _parse_required_exchange_bool(value: object, *, field: str, endpoint: str) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes"}:
+                return True
+            if normalized in {"false", "0", "no"}:
+                return False
+        if isinstance(value, (int, float)) and isfinite(float(value)):
+            if int(value) == 1:
+                return True
+            if int(value) == 0:
+                return False
+        raise RuntimeError(f"{endpoint} returned invalid boolean field: {field}={value!r}")
+
+    def fetch_live_account_preflight(self) -> ExchangeLiveAccountPreflight:
+        """Returns the explicit account mode snapshot required before live real-order trading."""
+        self._ensure_markets_loaded()
+        if self.exchange != Exchange.BINANCE:
+            raise NotImplementedError("live account-mode preflight is implemented only for Binance USD-M futures")
+        raw_client = cast(Any, self._client)
+        endpoint = "fapiPrivateGetPositionSideDual"
+        call = getattr(raw_client, endpoint, None)
+        if not callable(call):
+            raise RuntimeError(f"ccxt client does not expose required Binance endpoint: {endpoint}")
+        payload = self._retry_exchange_startup_call(
+            operation="ccxt_binance_position_side_dual",
+            endpoint=endpoint,
+            call=call,
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{endpoint} returned invalid payload")
+        hedge_mode_enabled = self._parse_required_exchange_bool(
+            payload.get("dualSidePosition"),
+            field="dualSidePosition",
+            endpoint=endpoint,
+        )
+        return ExchangeLiveAccountPreflight(
+            exchange=self.exchange.value,
+            position_mode="hedge" if hedge_mode_enabled else "one_way",
+            hedge_mode_enabled=hedge_mode_enabled,
+        )
+
+    @staticmethod
+    def _position_row_symbol(row: dict[str, object]) -> str | None:
+        symbol = row.get("symbol")
+        if isinstance(symbol, str) and symbol.strip():
+            return symbol.strip()
+        info = row.get("info")
+        if isinstance(info, dict):
+            raw_symbol = info.get("symbol")
+            if isinstance(raw_symbol, str) and raw_symbol.strip():
+                return raw_symbol.strip()
+        return None
+
+    @staticmethod
+    def _position_row_signed_amount(row: dict[str, object]) -> float:
+        info = row.get("info")
+        amount: float | None = None
+        source = row.get("contracts")
+        if source is not None and source != "":
+            try:
+                amount = float(source)
+            except (TypeError, ValueError):
+                amount = None
+        if (amount is None or amount == 0.0) and isinstance(info, dict) and "positionAmt" in info:
+            return float(info["positionAmt"])
+        amount = float(amount or 0.0)
+        side = str(row.get("side", "")).lower()
+        if side == "short":
+            return -abs(amount)
+        if side == "long":
+            return abs(amount)
+        if isinstance(info, dict) and "positionAmt" in info:
+            return float(info["positionAmt"])
+        return amount
+
+    def fetch_position_snapshots(self, symbols: tuple[str, ...] | list[str]) -> list[ExchangePositionSnapshot]:
+        """Returns signed exchange position amounts for a startup live universe in one account read."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        requested_symbols = tuple(dict.fromkeys(str(symbol) for symbol in symbols))
+        payload = self._retry_exchange_call(
+            operation="ccxt_fetch_positions_batch",
+            symbol="__account__",
+            endpoint="fetch_positions",
+            call=raw_client.fetch_positions,
+            args=(list(requested_symbols),),
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError("fetch_positions returned invalid payload")
+        requested_by_symbol: dict[str, str] = {}
+        for symbol in requested_symbols:
+            requested_by_symbol[_position_symbol_key_for_exchange(symbol)] = symbol
+            try:
+                requested_by_symbol[_position_symbol_key_for_exchange(self.get_market_id(symbol))] = symbol
+            except Exception:
+                pass
+        snapshots: list[ExchangePositionSnapshot] = []
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            row_symbol = self._position_row_symbol(row)
+            if row_symbol is None:
+                continue
+            symbol = requested_by_symbol.get(_position_symbol_key_for_exchange(row_symbol))
+            if symbol is None:
+                continue
+            signed_amount = self._position_row_signed_amount(row)
+            if signed_amount > 0.0:
+                side = "long"
+            elif signed_amount < 0.0:
+                side = "short"
+            else:
+                side = "flat"
+            snapshots.append(
+                ExchangePositionSnapshot(
+                    symbol=symbol,
+                    signed_amount=signed_amount,
+                    side=side,
+                    source="ccxt_fetch_positions_batch",
+                )
+            )
+        return snapshots
 
     def fetch_binance_agg_trades(
         self,

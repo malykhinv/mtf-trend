@@ -21,6 +21,25 @@ class ExchangeOrderFill:
 
 
 @dataclass(frozen=True, slots=True)
+class ExchangeLiveAccountPreflight:
+    """Explicit live account mode snapshot required before real-order live trading."""
+
+    exchange: str
+    position_mode: str
+    hedge_mode_enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ExchangePositionSnapshot:
+    """Signed exchange position amount for startup live cleanup."""
+
+    symbol: str
+    signed_amount: float
+    side: str
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
 class ExchangeTickerSnapshot:
     """Normalized ticker snapshot for live scheduling priority only.
 

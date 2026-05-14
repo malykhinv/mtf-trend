@@ -2319,6 +2319,9 @@ class AnomalyMicroLiveRunner:
                 "excluded_high_cap_bases": sorted(LIVE_DEFAULT_EXCLUDED_HIGH_CAP_BASES),
             },
         )
+        if self.config.confirm_real_orders:
+            self._validate_live_account_mode()
+            self._close_startup_exchange_positions(symbols)
         self._seed_startup_ticker_radar(symbols)
         try:
             self._validate_required_ticker_radar_source(symbols)
@@ -2817,6 +2820,150 @@ class AnomalyMicroLiveRunner:
             raise LiveStartupError("Биржа вернула нечисловой free USDT balance") from exc
         if not math.isfinite(balance):
             raise LiveStartupError("Биржа вернула нечисловой free USDT balance")
+
+    def _validate_live_account_mode(self) -> None:
+        try:
+            preflight = self.exchange.fetch_live_account_preflight()
+        except Exception as exc:
+            self.artifacts.append_event(
+                "live_account_preflight_failed",
+                "__live__",
+                {"reason": f"{type(exc).__name__}: {exc}"},
+            )
+            raise LiveStartupError("Live account-mode preflight failed before real-order startup") from exc
+        if preflight.hedge_mode_enabled:
+            self.artifacts.append_event(
+                "live_account_preflight_failed",
+                "__live__",
+                {
+                    "exchange": preflight.exchange,
+                    "position_mode": preflight.position_mode,
+                    "hedge_mode_enabled": preflight.hedge_mode_enabled,
+                    "required_position_mode": "one_way",
+                    "reason": "hedge_mode_not_supported_by_live_execution_contract",
+                },
+            )
+            raise LiveStartupError("Binance account is in hedge mode; live runner requires one-way position mode")
+        self.artifacts.append_event(
+            "live_account_preflight_ok",
+            "__live__",
+            {
+                "exchange": preflight.exchange,
+                "position_mode": preflight.position_mode,
+                "hedge_mode_enabled": preflight.hedge_mode_enabled,
+                "required_position_mode": "one_way",
+                "policy": "fail_fast_before_any_real_order",
+            },
+        )
+
+    def _close_startup_exchange_positions(self, symbols: list[str]) -> None:
+        try:
+            snapshots = self.exchange.fetch_position_snapshots(tuple(symbols))
+        except Exception as exc:
+            self.artifacts.append_event(
+                "startup_position_cleanup_failed",
+                "__live__",
+                {"stage": "fetch_positions", "reason": f"{type(exc).__name__}: {exc}"},
+            )
+            raise LiveStartupError("Startup exchange-position cleanup failed before live loop") from exc
+        nonzero_snapshots = [snapshot for snapshot in snapshots if abs(float(snapshot.signed_amount)) > 0.0]
+        self.artifacts.append_event(
+            "startup_position_cleanup_started",
+            "__live__",
+            {
+                "symbols_checked": len(symbols),
+                "position_rows": len(snapshots),
+                "nonzero_positions": len(nonzero_snapshots),
+                "policy": "reduce_only_close_all_existing_exchange_positions_before_live_loop",
+            },
+        )
+        closed = 0
+        failed = 0
+        for snapshot in nonzero_snapshots:
+            symbol = snapshot.symbol
+            signed_amount = float(snapshot.signed_amount)
+            try:
+                self._close_startup_exchange_position(
+                    symbol,
+                    signed_amount=signed_amount,
+                    reason="startup_existing_exchange_position",
+                )
+                closed += 1
+            except Exception as exc:
+                failed += 1
+                self.artifacts.append_event(
+                    "startup_position_close_failed",
+                    symbol,
+                    {
+                        "exchange_position_amount": signed_amount,
+                        "exchange_position_side": snapshot.side,
+                        "source": snapshot.source,
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                raise LiveStartupError(
+                    f"Startup exchange position could not be closed: symbol={symbol} amount={signed_amount}"
+                ) from exc
+        self.artifacts.append_event(
+            "startup_position_cleanup_finished",
+            "__live__",
+            {"closed": closed, "failed": failed},
+        )
+
+    def _close_startup_exchange_position(
+        self,
+        symbol: str,
+        *,
+        signed_amount: float,
+        reason: str,
+    ) -> None:
+        amount = abs(float(signed_amount))
+        if not math.isfinite(amount) or amount <= 0.0:
+            raise LiveDataIntegrityError(f"invalid startup exchange position amount: symbol={symbol} amount={signed_amount}")
+        side = "sell" if signed_amount > 0.0 else "buy"
+        client_order_id = _live_client_order_id("startup", symbol, reason, int(time.time() * 1000))
+        fill = self.exchange.create_market_order_with_fill(
+            symbol,
+            side,
+            amount,
+            reduce_only=True,
+            client_order_id=client_order_id,
+        )
+        post_amount = float(self.exchange.fetch_symbol_position_amount(symbol))
+        if not math.isfinite(post_amount) or abs(post_amount) > max(amount * self.config.max_position_amount_slippage_ratio, 1e-12):
+            self.artifacts.append_event(
+                "startup_position_close_unverified",
+                symbol,
+                {
+                    "reason": reason,
+                    "initial_exchange_position_amount": signed_amount,
+                    "post_exchange_position_amount": _finite_or_none(post_amount),
+                    "client_order_id": client_order_id,
+                    "order_id": fill.order_id,
+                },
+            )
+            raise LiveDataIntegrityError(
+                f"startup exchange position close not verified: symbol={symbol} post_amount={post_amount}"
+            )
+        cancelled_orders = self._cancel_orphan_orders_for_symbol(symbol, symbol_key=_position_symbol_key(symbol))
+        self.artifacts.append_event(
+            "startup_position_closed",
+            symbol,
+            {
+                "reason": reason,
+                "initial_exchange_position_amount": signed_amount,
+                "close_side": side,
+                "close_amount": amount,
+                "client_order_id": client_order_id,
+                "order_id": fill.order_id,
+                "status": fill.status,
+                "fill_timestamp_ms": fill.timestamp_ms,
+                "fill_price": fill.average_price,
+                "filled_amount": fill.filled_amount,
+                "post_exchange_position_amount": post_amount,
+                "orphan_orders_cancelled": cancelled_orders,
+            },
+        )
 
     def _reset_cycle_fetch_state(self) -> None:
         self._current_cycle_aggtrade_cache = {}
