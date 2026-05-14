@@ -580,6 +580,7 @@ class BinanceWsAggTradeBuffer:
         self._subscribed_market_ids: set[str] = set()
         self._rows_by_market_id: dict[str, deque[dict[str, object]]] = {}
         self._active_since_ms_by_market_id: dict[str, int] = {}
+        self._covered_until_ms_by_market_id: dict[str, int] = {}
         self._gap_ranges_by_market_id: dict[str, list[tuple[int, int]]] = {}
         self._last_aggtrade_id_by_market_id: dict[str, int] = {}
         self._last_trade_timestamp_by_market_id: dict[str, int] = {}
@@ -611,6 +612,7 @@ class BinanceWsAggTradeBuffer:
             for market_id in removed:
                 self._rows_by_market_id.pop(market_id, None)
                 self._active_since_ms_by_market_id.pop(market_id, None)
+                self._covered_until_ms_by_market_id.pop(market_id, None)
                 self._gap_ranges_by_market_id.pop(market_id, None)
                 self._last_aggtrade_id_by_market_id.pop(market_id, None)
                 self._last_trade_timestamp_by_market_id.pop(market_id, None)
@@ -639,6 +641,8 @@ class BinanceWsAggTradeBuffer:
             connection_status = self._connection_status
             last_error = self._last_error
             gap_ranges = list(self._gap_ranges_by_market_id.get(market_id, []))
+            active_since_ms = self._active_since_ms_by_market_id.get(market_id)
+            covered_until_ms = self._covered_until_ms_by_market_id.get(market_id)
             last_trade_timestamp_ms = self._last_trade_timestamp_by_market_id.get(market_id)
             last_receive_at_ms = self._last_receive_at_by_market_id.get(market_id)
             buffer_row_count = len(rows_deque)
@@ -674,12 +678,12 @@ class BinanceWsAggTradeBuffer:
                 last_receive_at_ms,
                 buffer_row_count,
             )
-        if last_receive_at_ms is not None and now_ms - int(last_receive_at_ms) > self.stale_ms:
+        if covered_until_ms is not None and now_ms - int(covered_until_ms) > self.stale_ms:
             return WsAggTradeReadResult(
                 tuple(filtered),
                 ((request_start, request_end),),
                 "stale",
-                f"last_receive_age_ms={now_ms - int(last_receive_at_ms)}",
+                f"coverage_age_ms={now_ms - int(covered_until_ms)}",
                 True,
                 connection_status,
                 last_error,
@@ -687,7 +691,14 @@ class BinanceWsAggTradeBuffer:
                 last_receive_at_ms,
                 buffer_row_count,
             )
-        missing_ranges = self._missing_ranges_from_rows(filtered, request_start=request_start, request_end=request_end)
+        coverage_start_ms = int(active_since_ms) if active_since_ms is not None else request_end + 1
+        coverage_end_ms = int(covered_until_ms) if covered_until_ms is not None else now_ms
+        missing_ranges = self._missing_ranges_from_coverage(
+            request_start=request_start,
+            request_end=request_end,
+            coverage_start=coverage_start_ms,
+            coverage_end=coverage_end_ms,
+        )
         missing_ranges.extend(
             (max(request_start, gap_start), min(request_end, gap_end))
             for gap_start, gap_end in gap_ranges
@@ -721,6 +732,14 @@ class BinanceWsAggTradeBuffer:
         now_ms = int(time.time() * 1000)
         with self._lock:
             if start_timestamp_ms is not None and end_timestamp_ms is not None:
+                self._active_since_ms_by_market_id[market_id] = min(
+                    int(start_timestamp_ms),
+                    int(self._active_since_ms_by_market_id.get(market_id, start_timestamp_ms)),
+                )
+                self._covered_until_ms_by_market_id[market_id] = max(
+                    int(end_timestamp_ms),
+                    int(self._covered_until_ms_by_market_id.get(market_id, end_timestamp_ms)),
+                )
                 self._remove_gap_coverage_locked(
                     market_id,
                     start_timestamp_ms=int(start_timestamp_ms),
@@ -744,6 +763,22 @@ class BinanceWsAggTradeBuffer:
 
     def close(self) -> None:
         self._stop_event.set()
+
+    def wait_for_targets(self, *, timeout_seconds: float) -> dict[str, object]:
+        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+        while True:
+            with self._lock:
+                target = set(self._target_market_ids)
+                subscribed = set(self._subscribed_market_ids)
+                status = self._connection_status
+                if target.issubset(subscribed) or time.monotonic() >= deadline or status != "connected":
+                    return {
+                        "target_count": len(target),
+                        "subscribed_count": len(subscribed),
+                        "connection_status": status,
+                        "last_error": self._last_error or "",
+                    }
+            time.sleep(0.01)
 
     @staticmethod
     def _missing_ranges_from_rows(
@@ -769,6 +804,21 @@ class BinanceWsAggTradeBuffer:
         if last_ts < request_end:
             missing.append((last_ts + 1, request_end))
         return missing
+
+    @staticmethod
+    def _missing_ranges_from_coverage(
+        *,
+        request_start: int,
+        request_end: int,
+        coverage_start: int,
+        coverage_end: int,
+    ) -> list[tuple[int, int]]:
+        missing: list[tuple[int, int]] = []
+        if coverage_start > request_start:
+            missing.append((request_start, min(request_end, coverage_start - 1)))
+        if coverage_end < request_end:
+            missing.append((max(request_start, coverage_end + 1), request_end))
+        return [(start, end) for start, end in missing if start <= end]
 
     @staticmethod
     def _merge_time_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
@@ -828,9 +878,11 @@ class BinanceWsAggTradeBuffer:
                 while not self._stop_event.is_set():
                     await self._sync_subscriptions(ws)
                     try:
-                        message = await asyncio.wait_for(ws.receive(), timeout=1.0)
+                        message = await asyncio.wait_for(ws.receive(), timeout=0.25)
                     except asyncio.TimeoutError:
+                        self._mark_subscribed_coverage_until(int(time.time() * 1000))
                         continue
+                    self._mark_subscribed_coverage_until(int(time.time() * 1000))
                     if message.type == aiohttp.WSMsgType.TEXT:
                         self._handle_ws_payload(message.data)
                     elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
@@ -840,6 +892,16 @@ class BinanceWsAggTradeBuffer:
                         self._set_status("error", f"ws_error:{ws.exception()}")
                         return
                 await ws.close()
+
+    def _mark_subscribed_coverage_until(self, timestamp_ms: int) -> None:
+        with self._lock:
+            if self._connection_status != "connected":
+                return
+            for market_id in self._subscribed_market_ids:
+                self._covered_until_ms_by_market_id[market_id] = max(
+                    int(timestamp_ms),
+                    int(self._covered_until_ms_by_market_id.get(market_id, timestamp_ms)),
+                )
 
     async def _sync_subscriptions(self, ws: object) -> None:
         with self._lock:
@@ -855,6 +917,7 @@ class BinanceWsAggTradeBuffer:
                     self._subscribed_market_ids.add(market_id)
                     self._rows_by_market_id[market_id] = deque()
                     self._active_since_ms_by_market_id[market_id] = now_ms
+                    self._covered_until_ms_by_market_id[market_id] = now_ms
                     self._gap_ranges_by_market_id.pop(market_id, None)
                     self._last_aggtrade_id_by_market_id.pop(market_id, None)
                     self._last_trade_timestamp_by_market_id.pop(market_id, None)
@@ -866,6 +929,7 @@ class BinanceWsAggTradeBuffer:
                     self._subscribed_market_ids.discard(market_id)
                     self._rows_by_market_id.pop(market_id, None)
                     self._active_since_ms_by_market_id.pop(market_id, None)
+                    self._covered_until_ms_by_market_id.pop(market_id, None)
                     self._gap_ranges_by_market_id.pop(market_id, None)
                     self._last_aggtrade_id_by_market_id.pop(market_id, None)
                     self._last_trade_timestamp_by_market_id.pop(market_id, None)
@@ -935,6 +999,10 @@ class BinanceWsAggTradeBuffer:
                 self._last_aggtrade_id_by_market_id[market_id] = int(aggtrade_id)
             self._last_trade_timestamp_by_market_id[market_id] = int(timestamp_ms)
             self._last_receive_at_by_market_id[market_id] = now_ms
+            self._covered_until_ms_by_market_id[market_id] = max(
+                int(timestamp_ms),
+                int(self._covered_until_ms_by_market_id.get(market_id, timestamp_ms)),
+            )
             self._connection_status = "connected"
             self._last_error = None
             self._prune_market_locked(market_id, now_ms=now_ms)
@@ -2086,6 +2154,11 @@ class AnomalyMicroLiveRunner:
         self._live_ohlcv_write_buffer: dict[tuple[str, str, str], list[pd.DataFrame]] = {}
         self._live_ohlcv_pending_rows = 0
         self._last_live_ohlcv_cache_flush_at = time.monotonic()
+        self._live_sources_closed = False
+
+    def shutdown(self, *, reason: str) -> None:
+        self._flush_live_ohlcv_cache_if_due(force=True, reason=reason)
+        self._close_live_sources()
 
     def run(self) -> int:
         self._validate_startup()
@@ -2223,7 +2296,11 @@ class AnomalyMicroLiveRunner:
                         "ws_aggtrade_connection_status": ws_aggtrade_stats.connection_status,
                         "ws_aggtrade_last_error": ws_aggtrade_stats.last_error[:500],
                         "ws_aggtrade_error_label": _ws_error_short_label(ws_aggtrade_stats.last_error),
-                        "ticker_radar_error_label": _ws_error_short_label(ticker_stats.reason),
+                        "ticker_radar_error_label": (
+                            _ws_error_short_label(ticker_stats.reason)
+                            if ticker_stats.status in {"failed", "degraded_rest_fallback"}
+                            else ""
+                        ),
                         "signal_scan_seconds": round(scan_seconds, 3),
                         "open_signal_seconds": round(open_seconds, 3),
                         "order_reconcile_seconds": round(reconcile_seconds, 3),
@@ -2357,6 +2434,9 @@ class AnomalyMicroLiveRunner:
         return 0
 
     def _close_live_sources(self) -> None:
+        if self._live_sources_closed:
+            return
+        self._live_sources_closed = True
         for source in (self.ticker_snapshot_source, self.aggtrade_source):
             close = getattr(source, "close", None)
             if callable(close):
@@ -2743,6 +2823,9 @@ class AnomalyMicroLiveRunner:
                     target_by_key[_position_symbol_key(watch.symbol)] = watch.symbol
             target_symbols = tuple(target_by_key.values())
         status = self.aggtrade_source.set_symbols(target_symbols)
+        if int(status.get("target_count", 0) or 0) > int(status.get("subscribed_count", 0) or 0):
+            wait_status = self.aggtrade_source.wait_for_targets(timeout_seconds=0.5)
+            status = {**status, **wait_status}
         self.artifacts.append_event(
             "ws_aggtrade_subscription_target",
             "__live__",

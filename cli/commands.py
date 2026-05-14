@@ -1523,6 +1523,7 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             trail_buffer_r=float(getattr(args, "trail_buffer_r", 0.10)),
         )
         _, exchange_client, _ = _build_fetch_stack(config)
+        runner = None
         try:
             runner = AnomalyMicroLiveRunner(
                 config=live_config,
@@ -1530,6 +1531,10 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                 exchange_client=exchange_client,
             )
             return runner.run()
+        except KeyboardInterrupt:
+            if runner is not None:
+                runner.shutdown(reason="command_keyboard_interrupt")
+            raise
         except LiveStartupError as exc:
             print(f"live: запуск остановлен: {exc}", flush=True)
             return 2

@@ -1615,6 +1615,86 @@ Success criterion: active/radar symbols move from first-cycle backfilled/partial
 
 ---
 
+## 2026-05-14 - Live health readout 20260513_202255
+
+Run:
+
+```text
+.output/results/live_anomaly_runs/20260513_202255
+Window: 2026-05-13 20:22:56 UTC to 2026-05-14 04:34:38 UTC
+Rows: 97,397 live_events; positions: 0
+Universe: 525 symbols after static high-cap exclusion
+Scheduler: ws_event_driven_scheduler, inactive_scan_slots_per_cycle=0
+```
+
+Funnel:
+
+```text
+ticker_radar_promoted: 1,626 events / 267 unique symbols
+signal_symbol_scan_summary: 5,242 symbol scans
+due/evaluated timeframe rows: 14,281 / 14,281
+fetch_failures: 0
+entry_ws_aggtrade_pending_count: 0
+category_selected: 0
+positions: 0
+```
+
+Main rejection:
+
+```text
+reject_weak_start_flow: 7,385
+reject_setup_too_early: 6,207
+category_rejected: 612
+  reject_mark_basis_below_min: 561
+  reject_prior_up_down_whipsaw: 30
+  reject_oi: 3
+reject_invalid_initial_risk: 63
+```
+
+Exchange/data health:
+
+```text
+Ticker WS: healthy after one explicit REST startup seed; 1,305/1,306 snapshots primary, ok_count=525, missing_count=0, no ticker_radar_failed.
+aggTrade WS: connected, but no clean covered reads; ws_aggtrade_frame_read status = partial 13,669, stale 586, not_subscribed 26.
+REST gap backfill remained dominant: 14,278 backfill reads, 18,357 aggTrade network calls, 969,091 backfilled rows.
+live_ohlcv_cache_gap: 87; signal_scan_empty_ohlcv: 14.
+```
+
+Interpretation:
+
+```text
+No trades are mainly explained by strategy/category filtering, not exchange failure: every due timeframe row was evaluated and no entry remained after runner_oi_confirmed filters.
+The strongest blocker is mark-basis >= 0.3%: 561/612 category rejects. OI was not the main blocker in this run.
+However WS aggTrade health is not good enough for the intended speed target. The implementation is honest because gaps are explicit, but most precise scans still rely on REST backfill.
+The current WS coverage rule is probably too strict at interval edges and treats low-trade silence as stale because Binance aggTrade has no per-symbol heartbeat. That preserves data honesty but prevents the expected REST reduction.
+```
+
+Next:
+
+```text
+Patch WS aggTrade coverage accounting: separate true id-gap holes from harmless no-trade edge intervals, track subscription warm coverage, and reduce repeated REST edge backfills without claiming uncovered windows are complete.
+Also inspect 26 not_subscribed reads as a subscription race; keep explicit backfill, but remove the race if confirmed.
+```
+
+Patch follow-up P195:
+
+```text
+Implemented WS coverage accounting fix after this readout:
+- active subscriptions now cover quiet no-trade intervals;
+- pre-subscription history still needs explicit backfill;
+- id gaps remain strict holes;
+- empty backfill responses extend coverage;
+- command-level KeyboardInterrupt now invokes runner shutdown cleanup.
+```
+
+Validation target:
+
+```text
+Repeat a 10-30 minute live health run. Expected improvement: ws_aggtrade_frame_read.status should include many covered reads after warm-up, stale/not_subscribed should be near zero, and aggtrade_network_calls/ws_aggtrade_backfill_reads should drop materially.
+```
+
+---
+
 ## 2026-05-13 - Short WS live artifact audit and P185
 
 Input:

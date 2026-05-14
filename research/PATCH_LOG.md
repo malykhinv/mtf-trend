@@ -1888,6 +1888,38 @@ python main.py run-anomaly-live --help
 
 Medium. WS coverage cannot prove a quiet symbol had zero trades without an exchange heartbeat, so empty/partial intervals remain explicit backfills. This is honest but means first-cycle radar symbols can still pay REST cost until the WS buffer warms. Real validation must inspect `ws_aggtrade_frame_read.status`, `missing_ranges`, `backfill_ranges`, and `aggtrade_network_calls`.
 
+## P195 - DANGER: live WS aggTrade coverage and shutdown health
+
+Status: PROPOSED
+Date: 2026-05-14
+Commit: UNKNOWN
+
+### Reason
+
+Live run `20260513_202255` showed connected ticker and aggTrade WebSockets, but aggTrade reads were almost always `partial`/`stale`, causing REST gap backfill on nearly every precise scan. The old coverage rule used first/last trade timestamps, so harmless no-trade edge intervals were treated as data holes. Ctrl+C could also be caught by the command wrapper before the runner's internal cleanup path.
+
+### Change
+
+- Track per-symbol WS coverage as subscription-active time, not only first/last trade timestamps.
+- Advance coverage while the combined WS connection remains alive, so quiet subscribed intervals are not repeatedly REST-backfilled.
+- Keep aggregate trade id gaps as explicit holes until REST backfill covers them.
+- When explicit backfill covers a historical range, extend the coverage start/end accordingly, including empty backfills.
+- Reduce the aggTrade WS receive timeout to make subscription changes sync faster.
+- After setting target symbols, wait briefly for the WS thread to apply subscriptions to reduce `not_subscribed` race reads.
+- Add command-level KeyboardInterrupt cleanup: if an interrupt escapes `runner.run()`, force live cache flush and close WS sources before re-raising to the common wrapper.
+
+### Validation
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py cli/commands.py cli/parser.py main.py
+# inline smoke: no-trade covered interval is covered; pre-subscription history needs backfill; empty backfill extends coverage; id-gap still creates a hole.
+git diff --check
+```
+
+### Risk
+
+Medium. The patch assumes that once Binance confirms/keeps a subscribed combined stream alive, absence of aggTrade messages for that symbol means no trades, not missing data. This is the intended WS contract; id gaps and pre-subscription history remain strict. Next live run must verify `covered` reads increase and REST backfills drop materially without new `signal_scan_empty_ohlcv` or cache gaps.
+
 ## P185 - Bound WS aggTrade backfill and fail fast on blind ticker radar
 
 Status: PROPOSED

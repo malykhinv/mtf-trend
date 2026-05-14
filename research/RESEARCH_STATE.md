@@ -963,3 +963,29 @@ Current commit: UNKNOWN.
 A post-P193 live smoke showed ticker discovery on the primary WS route, but the all-ticker cache warmed from roughly 100/525 to 524/525 over the first seconds. Proposed P194 seeds the WS ticker cache once from REST at startup with explicit `rest_startup_seed.*` labels, avoiding the initial blind spot without hiding the source. The inline heartbeat should stop using audit row count as `события` and instead show cumulative detected ticker-radar anomaly promotions.
 
 Next check: run a short live smoke and verify `ticker_radar_startup_seeded`, low/no initial `ticker_radar_missing_fields` spam, `аномалии` in the console, and transition from `primary_seeded_rest` to primary WS after real stream updates.
+
+## 2026-05-14 - live health 20260513_202255
+
+Status: analyzed.
+
+```text
+Ticker discovery health is good: startup REST seed is explicit, then primary WS snapshots are ok for 525/525 symbols with no ticker failures.
+Trading funnel is alive but produced no trades: 1,626 ticker promotions, 14,281 due/evaluated timeframe rows, 0 fetch failures, 612 category rejects, 0 category_selected.
+Main no-trade reason is strict runner_oi_confirmed filtering, especially mark basis below 0.3% (561/612 category rejects). OI rejected only 3 cases.
+aggTrade WS health is the weak point: source stayed connected, but reads were partial/stale/not_subscribed rather than covered, causing 14,278 explicit REST gap-backfill reads and 18,357 aggTrade REST network calls.
+This is honest data handling, not hidden fallback, but it means the WS migration has not yet delivered the expected speed/coverage improvement.
+Next patch should improve WS coverage accounting around no-trade edge intervals, id-gap holes, subscription warm ranges, and the small not_subscribed race.
+```
+
+## 2026-05-14 - P195 live health patch
+
+Status: PROPOSED.
+
+```text
+Implemented the first fix for 20260513_202255 health issues.
+aggTrade WS coverage now follows active subscription coverage instead of first/last trade edges, so no-trade edge intervals should stop triggering REST backfill.
+True aggregate trade id gaps remain strict holes and still require explicit backfill.
+Backfill ranges, including empty REST responses, extend coverage so the same historical pre-subscription window is not repeatedly fetched.
+Command-level KeyboardInterrupt now calls runner.shutdown(reason=command_keyboard_interrupt) before the common wrapper prints the human stop message.
+Next validation: run 10-30 minutes live and compare ws_aggtrade_frame_read.status covered/partial/stale/not_subscribed, aggtrade_network_calls, ws_aggtrade_backfill_reads, signal_scan_seconds, live_ohlcv_cache_gap, signal_scan_empty_ohlcv.
+```

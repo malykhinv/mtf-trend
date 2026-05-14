@@ -451,3 +451,5 @@ Live scheduler selection is represented by `LiveSymbolBatchSelection`. Every sel
 Current live ticker radar source defaults to Binance USD-M futures `!ticker@arr` WebSocket. When this source is enabled, REST ticker fallback is forbidden; stale/not-ready stream state must pause radar promotions and be visible as `ticker_radar_failed`.
 
 Current live subminute tape source defaults to Binance USD-M futures `@aggTrade` WebSocket for active and ticker-radar watch symbols. REST `aggTrades` is allowed only as explicit missing-range backfill when WS rows do not honestly cover the requested interval or an aggregate trade id gap is detected. Those backfills must be visible in `ws_aggtrade_frame_read`; they are not a silent fallback and should be treated as a data-health signal.
+
+For live WS aggTrade coverage, a connected active subscription is treated as covering quiet no-trade intervals; the source does not require a trade at both edges of every requested window. Pre-subscription history and detected aggregate trade id gaps remain uncovered until explicit backfill covers them.
