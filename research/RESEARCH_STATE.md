@@ -1140,3 +1140,15 @@ Status: PROPOSED. Commit: UNKNOWN.
 Ctrl+C shutdown should no longer look frozen before cleanup starts. The first interrupt records live_shutdown_started and logs the bounded forced-reconcile scope. Forced orphan-order reconciliation on shutdown/max-cycles is scoped to symbols with exchange order activity during the current live run, plus currently open/opening active symbols, instead of fetching open orders for every symbol in the live universe. This changes shutdown/runtime behavior only; signal selection, category logic, order entry, fills, stops, and exits are unchanged.
 Next validation: run live, stop with one Ctrl+C, and verify live_events.csv contains live_shutdown_started and orphan_order_reconcile_started with symbols_to_check equal to the number of run-trade symbols, not the whole universe.
 ```
+
+## 2026-05-14 - P207 proposed DANGER: retryable dependencies and cold coverage
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+Why 72h exists: max_prior_fast_fade_count_72h=0 is a red-flag exclusion inherited by the confirmed runner categories. It tries to avoid symbols that recently produced a fast fade after an apparent pump setup. It requires enough historical context to prove absence of those prior fast fades; after P205 this context is levels-timeframe history, not 72h of 5s/15s/30s executable tape.
+
+P207 changes live mechanics in three places. First, taker-buy share parity now matches backtest by averaging only valid taker/share rows with quote_volume > 0 while preserving explicit invalid-data rejects when there are no valid rows. Second, temporary category data dependencies such as prior-fast-fade coverage, mark context unavailable/stale, or OI context unavailable/stale no longer consume the decision candle; live retries the same decision until it becomes stale or receives a final reject/selected category. Third, DANGER default cold coverage adds 5 precise inactive symbols per cycle for subminute live, clearly labeled in artifacts and capped by max_precise_scan_symbols_per_cycle if configured. Set inactive_scan_slots_per_cycle=0 to disable cold coverage.
+
+Next validation: run a short dry/shadow live and inspect signal_scan_retryable_dependency_blocked counts, repeated decision timestamps until stale/final, valid_taker_share_rows/total_taker_share_rows in taker rejects, symbol_batch_selected scan modes, and API pressure metrics before any long real-order run.
+```

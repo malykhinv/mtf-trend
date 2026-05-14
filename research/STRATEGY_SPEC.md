@@ -481,5 +481,7 @@ Category priority is TF-specific:
 - 5m/30s: runner_flow, runner_oi_confirmed, runner_reclaim, runner_balanced
 - 1m/15s: runner_oi_confirmed, runner_flow, runner_reclaim, runner_balanced
 - 1m/5s: runner_oi_confirmed, runner_flow, runner_balanced, runner_reclaim
-Live category contract is live_category_overlay_v3_prior_fast_fade_cache_tail_ignored: live enforces the backtest 72h prior_fast_fade exclusion from local cached candidate history. The cache must cover the 72h lookback start and must not have internal gaps; only the trailing cache lag between latest cached candle and live decision time is ignored and written to artifacts as ignored_tail_ms. If the filter cannot be computed from cache, the category is rejected.
+Live category contract is live_category_overlay_v5_retryable_dependencies_cold_coverage: live enforces the confirmed-category 72h prior_fast_fade exclusion from levels-timeframe historical context, not from 72h of subminute executable tape. The filter exists as a red-flag exclusion against repeated fast-fade pump setups. If prior-fast-fade, mark, or OI context is temporarily unavailable/stale, the decision is not consumed; live retries until the decision becomes stale or receives a final reject/selected category. Discovery remains backtest-only and is never a live-entry category.
+
+DANGER cold coverage policy: subminute ticker-radar live has a small default precise inactive-symbol budget of 5 symbols per cycle, labeled DANGER in code and artifacts. This improves parity/audit coverage but increases API/WS aggTrade pressure and is not a proven production edge. Set inactive_scan_slots_per_cycle=0 to disable cold coverage and return to active/radar-only scanning.
 ```

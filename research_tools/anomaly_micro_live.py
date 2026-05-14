@@ -55,6 +55,20 @@ DEFAULT_LIVE_WS_HEALTH_BOOTSTRAP_SECONDS = 180.0
 DEFAULT_LIVE_OHLCV_CACHE_FLUSH_MAX_SYMBOL_TIMEFRAMES = 4
 DEFAULT_LIVE_AGGTRADE_REST_CACHE_TTL_MS = 20 * 60_000
 DEFAULT_LIVE_AGGTRADE_REST_CACHE_PADDING_MS = 60_000
+DANGER_DEFAULT_INACTIVE_COLD_COVERAGE_SLOTS_PER_CYCLE = 5
+DANGER_INACTIVE_COLD_COVERAGE_SOURCE = "DANGER_default_precise_cold_coverage_subminute"
+EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE = "explicit_precise_cold_coverage"
+RETRYABLE_CATEGORY_STATUS_PREFIXES = (
+    "mark_context_",
+    "no_mark_before_decision",
+    "oi_",
+    "context=",
+    "fetch_failed:",
+    "fetch_empty",
+    "cache_",
+    "empty:",
+    "missing_",
+)
 ANIMAL_EMOJIS = (
     "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
     "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦆", "🦅",
@@ -262,7 +276,7 @@ class LiveMarkBasisResult:
     age_ms: int | None = None
 
 
-LIVE_CATEGORY_CONTRACT = "live_category_overlay_v4_prior_fast_fade_levels_context"
+LIVE_CATEGORY_CONTRACT = "live_category_overlay_v5_retryable_dependencies_cold_coverage"
 LIVE_DEFAULT_PUMP_CATEGORY_IDS: tuple[str, ...] = (
     "runner_oi_confirmed",
     "runner_flow",
@@ -326,6 +340,31 @@ def _ws_error_short_label(error: str | None) -> str:
     if "connection refused" in lowered or "connect call failed" in lowered:
         return "connect"
     return "error" if text else ""
+
+
+def _retryable_category_reasons(category_rejections: list[dict[str, object]]) -> tuple[str, ...]:
+    retryable: list[str] = []
+    seen: set[str] = set()
+    for row in category_rejections:
+        reason = str(row.get("category_reject_reason") or row.get("reason") or "")
+        if reason == "reject_prior_fast_fade_filter_unavailable":
+            status_values = (
+                str(row.get("coverage_reason") or ""),
+                str(row.get("detail_reason") or ""),
+            )
+            is_retryable = any(value.startswith(RETRYABLE_CATEGORY_STATUS_PREFIXES) for value in status_values if value)
+        elif reason == "reject_mark_basis_below_min":
+            status = str(row.get("mark_basis_status") or "")
+            is_retryable = bool(status and status != "ok" and status.startswith(("mark_context_", "no_mark_before_decision")))
+        elif reason == "reject_oi":
+            status = str(row.get("oi_status") or "")
+            is_retryable = bool(status and status != "below_threshold" and status.startswith("oi_"))
+        else:
+            is_retryable = False
+        if is_retryable and reason not in seen:
+            retryable.append(reason)
+            seen.add(reason)
+    return tuple(retryable)
 
 
 def _aiohttp_ws_connector() -> object:
@@ -1343,8 +1382,19 @@ class LiveSymbolBatchSelection:
     batch_in_full_cycle: int
     full_symbol_cycle: int
     precise_budget_remaining_after_active: int | None
+    precise_budget_remaining_after_radar: int | None
     inactive_scan_slots: int
     inactive_scan_slots_source: str
+    inactive_cold_coverage_danger: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LiveSignalScanResult:
+    signal: LiveSignal | None
+    decision_timestamp_ms: int | None = None
+    retryable_dependency: bool = False
+    retry_reason: str = ""
+    retryable_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -2296,8 +2346,13 @@ class AnomalyMicroLiveRunner:
                 ),
                 "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
                 "cache_provider": "parquet_tail_fetch_v1" if self._ohlcv_cache_storage is not None else "disabled",
-                "inactive_subminute_scan_policy": "event_driven_default_active_or_ticker_radar_only",
-                "inactive_scan_slots_default_policy": "zero_for_subminute_ticker_radar unless explicitly configured",
+                "inactive_subminute_scan_policy": "DANGER_default_precise_cold_coverage_plus_active_or_ticker_radar",
+                "inactive_scan_slots_default_policy": (
+                    f"DANGER default {DANGER_DEFAULT_INACTIVE_COLD_COVERAGE_SLOTS_PER_CYCLE} precise cold-coverage "
+                    "slots per cycle for subminute ticker-radar live; set inactive_scan_slots_per_cycle=0 "
+                    "to return to active/radar-only scanning"
+                ),
+                "inactive_cold_coverage_default_danger": True,
                 "symbol_batch_size_role": "legacy inactive scan cap, not WS market discovery",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "ticker_radar_required_for_inactive_subminute_gate": bool(
@@ -2452,6 +2507,7 @@ class AnomalyMicroLiveRunner:
                         "precise_scan_symbols": self._cycle_precise_scan_symbols,
                         "inactive_visit_symbols": self._cycle_inactive_visit_symbols,
                         "deferred_inactive_subminute_pairs": self._cycle_deferred_inactive_subminute_pairs,
+                        "inactive_cold_coverage_danger": self._current_inactive_scan_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE,
                         "orphan_orders_cancelled": orphan_cancelled,
                     },
                 )
@@ -2471,7 +2527,8 @@ class AnomalyMicroLiveRunner:
                     )
                     coverage_text = ""
                     if self._current_inactive_scan_slots_source != "default_ws_event_driven_subminute":
-                        coverage_text = f" · обход ~{full_cycle_seconds:.0f}s"
+                        danger_prefix = "DANGER " if self._current_inactive_scan_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE else ""
+                        coverage_text = f" · {danger_prefix}обход ~{full_cycle_seconds:.0f}s"
                     orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
                     self._status_logger.status(
                         _format_live_heartbeat(
@@ -3120,6 +3177,11 @@ class AnomalyMicroLiveRunner:
                     if selection.precise_budget_remaining_after_active is not None
                     else ""
                 ),
+                "precise_budget_remaining_after_radar": (
+                    selection.precise_budget_remaining_after_radar
+                    if selection.precise_budget_remaining_after_radar is not None
+                    else ""
+                ),
                 "inactive_count": len(selection.inactive),
                 "inactive_scan_slots_per_cycle": selection.inactive_scan_slots,
                 "inactive_scan_slots_source": selection.inactive_scan_slots_source,
@@ -3128,7 +3190,8 @@ class AnomalyMicroLiveRunner:
                     if self.config.inactive_scan_slots_per_cycle is not None
                     else ""
                 ),
-                "inactive_subminute_scan_policy": "event_driven_default_active_or_ticker_radar_only",
+                "inactive_cold_coverage_danger": bool(selection.inactive_cold_coverage_danger),
+                "inactive_subminute_scan_policy": "DANGER_default_precise_cold_coverage_plus_active_or_ticker_radar",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "scan_hot_timeframes_per_symbol": bool(self.config.scan_hot_timeframes_per_symbol),
                 "symbol_batch_size": self.config.symbol_batch_size,
@@ -3303,10 +3366,14 @@ class AnomalyMicroLiveRunner:
 
     def _default_inactive_scan_slots(self) -> tuple[int, str]:
         if self.config.inactive_scan_slots_per_cycle is not None:
-            return max(0, int(self.config.inactive_scan_slots_per_cycle)), "explicit_config"
+            return max(0, int(self.config.inactive_scan_slots_per_cycle)), EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE
         if self.config.ticker_radar_enabled and _live_config_has_subminute_entry_pairs(self.config):
-            return 0, "default_ws_event_driven_subminute"
+            return DANGER_DEFAULT_INACTIVE_COLD_COVERAGE_SLOTS_PER_CYCLE, DANGER_INACTIVE_COLD_COVERAGE_SOURCE
         return max(0, int(self.config.symbol_batch_size)), "legacy_symbol_batch_size"
+
+    @staticmethod
+    def _inactive_slots_are_precise_cold_coverage(source: str) -> bool:
+        return source in {DANGER_INACTIVE_COLD_COVERAGE_SOURCE, EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE}
 
     def _select_next_symbol_batch(self, symbols: list[str]) -> LiveSymbolBatchSelection:
         now_ms = int(time.time() * 1000)
@@ -3328,10 +3395,18 @@ class AnomalyMicroLiveRunner:
         radar_due_keys = {_position_symbol_key(symbol) for symbol in radar_due}
         radar_waiting_keys = {_position_symbol_key(symbol) for symbol in radar_waiting}
         base_inactive_slots, inactive_slots_source = self._default_inactive_scan_slots()
+        precise_budget_remaining_after_radar = None
+        if self.config.max_precise_scan_symbols_per_cycle is not None:
+            precise_budget_remaining_after_radar = max(
+                0,
+                int(self.config.max_precise_scan_symbols_per_cycle) - len(active_due) - len(radar_due),
+            )
         if self.config.inactive_scan_slots_per_cycle is None and inactive_slots_source == "legacy_symbol_batch_size":
             inactive_slots = max(0, base_inactive_slots - len(active_due))
         else:
             inactive_slots = base_inactive_slots
+        if self._inactive_slots_are_precise_cold_coverage(inactive_slots_source) and precise_budget_remaining_after_radar is not None:
+            inactive_slots = min(inactive_slots, precise_budget_remaining_after_radar)
         inactive: list[str] = []
         attempts = 0
         while len(inactive) < inactive_slots and attempts < len(symbols):
@@ -3356,8 +3431,17 @@ class AnomalyMicroLiveRunner:
             batch_scan_modes[_position_symbol_key(symbol)] = "precise_active"
         for symbol in radar_due:
             batch_scan_modes[_position_symbol_key(symbol)] = "precise_ticker_radar"
+        inactive_scan_mode = (
+            "precise_DANGER_cold_coverage"
+            if inactive_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE
+            else (
+                "precise_explicit_cold_coverage"
+                if inactive_slots_source == EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE
+                else "inactive_deferred_subminute"
+            )
+        )
         for symbol in inactive:
-            batch_scan_modes[_position_symbol_key(symbol)] = "inactive_deferred_subminute"
+            batch_scan_modes[_position_symbol_key(symbol)] = inactive_scan_mode
         if symbols and self._inactive_cursor // len(symbols) > inactive_cursor_before // len(symbols):
             now_monotonic = time.monotonic()
             self._last_symbol_universe_cycle_seconds = now_monotonic - self._symbol_universe_scan_started_at
@@ -3370,10 +3454,12 @@ class AnomalyMicroLiveRunner:
             self._symbol_universe_batch_index = 0
         else:
             self._symbol_universe_batch_index = batch_in_full_cycle
-        if inactive_slots_source == "default_ws_event_driven_subminute":
+        if inactive_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE:
+            scheduler_source = "DANGER_ws_event_driven_plus_precise_cold_coverage"
+        elif inactive_slots_source == EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE:
+            scheduler_source = "configured_precise_cold_coverage_scheduler"
+        elif inactive_slots_source == "default_ws_event_driven_subminute":
             scheduler_source = "ws_event_driven_scheduler"
-        elif inactive_slots_source == "explicit_config":
-            scheduler_source = "configured_budget_scheduler"
         else:
             scheduler_source = "legacy_rest_round_robin_scheduler"
         return LiveSymbolBatchSelection(
@@ -3390,8 +3476,10 @@ class AnomalyMicroLiveRunner:
             batch_in_full_cycle=batch_in_full_cycle,
             full_symbol_cycle=batch_full_cycle,
             precise_budget_remaining_after_active=precise_budget_remaining,
+            precise_budget_remaining_after_radar=precise_budget_remaining_after_radar,
             inactive_scan_slots=inactive_slots,
             inactive_scan_slots_source=inactive_slots_source,
+            inactive_cold_coverage_danger=inactive_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE,
         )
 
     def _active_symbol_batch(self, *, now_ms: int) -> tuple[list[str], list[str]]:
@@ -4315,6 +4403,7 @@ class AnomalyMicroLiveRunner:
             setup_fetch_count = 0
             entry_fetch_count = 0
             signal_count = 0
+            retryable_dependency_count = 0
             fetch_failures = 0
             entry_ws_coverage_pending = 0
             skipped_not_due = 0
@@ -4400,7 +4489,7 @@ class AnomalyMicroLiveRunner:
                             },
                         )
                         continue
-                signal = self._build_forming_setup_signal(
+                scan_result = self._build_forming_setup_signal(
                     symbol,
                     setup_cache[setup_key],
                     entry_cache[entry_key],
@@ -4412,14 +4501,17 @@ class AnomalyMicroLiveRunner:
                     previous_scan_closed_ts=self._previous_signal_scan_closed_at(symbol, levels_timeframe, entry_timeframe),
                 )
                 evaluated_count += 1
-                self._mark_signal_scan_closed_at(
-                    symbol,
-                    levels_timeframe,
-                    entry_timeframe,
-                    closed_timestamp_ms=latest_closed_entry_ts,
-                )
-                if signal is not None:
-                    signals.append(signal)
+                if scan_result.retryable_dependency:
+                    retryable_dependency_count += 1
+                else:
+                    self._mark_signal_scan_closed_at(
+                        symbol,
+                        levels_timeframe,
+                        entry_timeframe,
+                        closed_timestamp_ms=latest_closed_entry_ts,
+                    )
+                if scan_result.signal is not None:
+                    signals.append(scan_result.signal)
                     signal_count += 1
             self.artifacts.append_event(
                 "signal_symbol_scan_summary",
@@ -4437,6 +4529,7 @@ class AnomalyMicroLiveRunner:
                     "entry_fetch_count": entry_fetch_count,
                     "fetch_failure_count": fetch_failures,
                     "entry_ws_aggtrade_pending_count": entry_ws_coverage_pending,
+                    "retryable_dependency_count": retryable_dependency_count,
                     "signal_count": signal_count,
                     "duration_ms": round((time.monotonic() - started_at) * 1000.0, 3),
                 },
@@ -4517,7 +4610,7 @@ class AnomalyMicroLiveRunner:
                         },
                     )
                     continue
-                signal = self._build_forming_setup_signal(
+                scan_result = self._build_forming_setup_signal(
                     symbol,
                     setup_frame,
                     entry_frame,
@@ -4528,14 +4621,15 @@ class AnomalyMicroLiveRunner:
                     latest_closed_entry_ts=latest_closed_entry_ts,
                     previous_scan_closed_ts=self._previous_signal_scan_closed_at(symbol, levels_timeframe, entry_timeframe),
                 )
-                self._mark_signal_scan_closed_at(
-                    symbol,
-                    levels_timeframe,
-                    entry_timeframe,
-                    closed_timestamp_ms=latest_closed_entry_ts,
-                )
-                if signal is not None:
-                    signals.append(signal)
+                if not scan_result.retryable_dependency:
+                    self._mark_signal_scan_closed_at(
+                        symbol,
+                        levels_timeframe,
+                        entry_timeframe,
+                        closed_timestamp_ms=latest_closed_entry_ts,
+                    )
+                if scan_result.signal is not None:
+                    signals.append(scan_result.signal)
         return signals
 
     def _build_forming_setup_signal(
@@ -4550,7 +4644,22 @@ class AnomalyMicroLiveRunner:
         setup_start_ts: int,
         latest_closed_entry_ts: int,
         previous_scan_closed_ts: int | None = None,
-    ) -> LiveSignal | None:
+    ) -> LiveSignalScanResult:
+        def no_signal(
+            *,
+            decision_timestamp_ms: int | None = None,
+            retryable_dependency: bool = False,
+            retry_reason: str = "",
+            retryable_reasons: tuple[str, ...] = (),
+        ) -> LiveSignalScanResult:
+            return LiveSignalScanResult(
+                signal=None,
+                decision_timestamp_ms=decision_timestamp_ms,
+                retryable_dependency=retryable_dependency,
+                retry_reason=retry_reason,
+                retryable_reasons=retryable_reasons,
+            )
+
         if setup_frame.empty or entry_frame.empty:
             self.artifacts.append_event(
                 "signal_scan_empty_ohlcv",
@@ -4562,7 +4671,7 @@ class AnomalyMicroLiveRunner:
                     "reason": "empty_setup_or_entry_frame",
                 },
             )
-            return None
+            return no_signal()
         missing_setup_price = [column for column in REQUIRED_PRICE_COLUMNS if column not in setup_frame.columns]
         missing_setup_flow = [column for column in REQUIRED_FLOW_COLUMNS if column not in setup_frame.columns]
         missing_entry_price = [column for column in REQUIRED_PRICE_COLUMNS if column not in entry_frame.columns]
@@ -4580,7 +4689,7 @@ class AnomalyMicroLiveRunner:
                     "missing_entry_flow": missing_entry_flow,
                 },
             )
-            return None
+            return no_signal()
         levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
         entry_timeframe_ms = int(entry_timeframe.to_milliseconds())
         setup_frame = setup_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
@@ -4591,7 +4700,7 @@ class AnomalyMicroLiveRunner:
             & (entry_frame["timestamp"].astype(int) <= int(latest_closed_entry_ts))
         ].copy()
         if len(setup_history) < self.config.baseline_candles or entry_segment.empty:
-            return None
+            return no_signal()
         seed_close = float(setup_history.iloc[-1]["close"])
         entry_segment = _fill_missing_ohlcv_buckets(
             entry_segment,
@@ -4612,16 +4721,16 @@ class AnomalyMicroLiveRunner:
                     "min_closed_entry_candles": int(self.config.confirmation_candles),
                 },
             )
-            return None
+            return no_signal()
         setup_elapsed_fraction = min(1.0, len(entry_segment) * entry_timeframe_ms / levels_timeframe_ms)
         forming_setup = _aggregate_frame_to_candle(entry_segment, timestamp_ms=int(setup_start_ts))
         if forming_setup is None:
-            return None
+            return no_signal()
         decision_ts = int(entry_segment.iloc[-1]["timestamp"])
         key = (symbol, levels_timeframe.value, entry_timeframe.value, decision_ts)
         with self._state_lock:
             if key in self._seen_decisions:
-                return None
+                return no_signal(decision_timestamp_ms=decision_ts)
         freshness = _decision_freshness_details(
             decision_timestamp_ms=decision_ts,
             signal_timeframe=entry_timeframe,
@@ -4642,7 +4751,8 @@ class AnomalyMicroLiveRunner:
                     "setup_source": "forming_htf_from_entry_tf",
                 },
             )
-            return None
+            return no_signal(decision_timestamp_ms=decision_ts)
+        category_rejections: list[dict[str, object]] = []
         signal = self._build_signal_from_components(
             symbol=symbol,
             baseline=setup_history,
@@ -4655,30 +4765,51 @@ class AnomalyMicroLiveRunner:
             setup_elapsed_fraction=setup_elapsed_fraction,
             setup_closed_entry_candles=len(entry_segment),
             emit_diagnostics=True,
+            category_rejections_out=category_rejections,
         )
         if signal is None:
+            retryable_reasons = _retryable_category_reasons(category_rejections)
+            if retryable_reasons:
+                self.artifacts.append_event(
+                    "signal_scan_retryable_dependency_blocked",
+                    symbol,
+                    {
+                        "levels_tf": levels_timeframe.value,
+                        "entry_tf": entry_timeframe.value,
+                        "decision_timestamp_ms": decision_ts,
+                        "retryable_reasons": list(retryable_reasons),
+                        "retry_policy": "do_not_consume_decision_until_stale_or_final_reject",
+                        "category_contract": LIVE_CATEGORY_CONTRACT,
+                    },
+                )
+                return no_signal(
+                    decision_timestamp_ms=decision_ts,
+                    retryable_dependency=True,
+                    retry_reason="category_dependency_unavailable",
+                    retryable_reasons=retryable_reasons,
+                )
             with self._state_lock:
                 self._seen_decisions.add(key)
-        else:
-            gap = _live_scan_gap_details(
-                decision_timestamp_ms=decision_ts,
-                previous_scan_closed_timestamp_ms=previous_scan_closed_ts,
+            return no_signal(decision_timestamp_ms=decision_ts)
+        gap = _live_scan_gap_details(
+            decision_timestamp_ms=decision_ts,
+            previous_scan_closed_timestamp_ms=previous_scan_closed_ts,
+            entry_timeframe=entry_timeframe,
+        )
+        signal.previous_live_scan_closed_timestamp_ms = gap["previous_live_scan_closed_timestamp_ms"]
+        signal.first_unscanned_decision_timestamp_ms = gap["first_unscanned_decision_timestamp_ms"]
+        signal.live_scan_gap_ltf_candles = int(gap["live_scan_gap_ltf_candles"])
+        if signal.live_scan_gap_ltf_candles > 0:
+            self._start_missed_entry_replay_probe(
+                symbol=symbol,
+                setup_frame=setup_frame,
+                entry_frame=entry_frame,
+                now_ms=now_ms,
+                levels_timeframe=levels_timeframe,
                 entry_timeframe=entry_timeframe,
+                current_signal=signal,
             )
-            signal.previous_live_scan_closed_timestamp_ms = gap["previous_live_scan_closed_timestamp_ms"]
-            signal.first_unscanned_decision_timestamp_ms = gap["first_unscanned_decision_timestamp_ms"]
-            signal.live_scan_gap_ltf_candles = int(gap["live_scan_gap_ltf_candles"])
-            if signal.live_scan_gap_ltf_candles > 0:
-                self._start_missed_entry_replay_probe(
-                    symbol=symbol,
-                    setup_frame=setup_frame,
-                    entry_frame=entry_frame,
-                    now_ms=now_ms,
-                    levels_timeframe=levels_timeframe,
-                    entry_timeframe=entry_timeframe,
-                    current_signal=signal,
-                )
-        return signal
+        return LiveSignalScanResult(signal=signal, decision_timestamp_ms=decision_ts)
 
     def _start_missed_entry_replay_probe(
         self,
@@ -4870,6 +5001,7 @@ class AnomalyMicroLiveRunner:
         setup_elapsed_fraction: float,
         setup_closed_entry_candles: int,
         emit_diagnostics: bool = True,
+        category_rejections_out: list[dict[str, object]] | None = None,
     ) -> LiveSignal | None:
         if baseline.empty or entry_segment.empty:
             return None
@@ -5036,6 +5168,8 @@ class AnomalyMicroLiveRunner:
         mark_basis: LiveMarkBasisResult | None = None
         next_taker_share_loaded = False
         next_taker_share = float("nan")
+        valid_taker_share_count = 0
+        total_taker_share_rows = 0
         start_taker_share_delta_loaded = False
         start_taker_share_delta = float("nan")
         prior_fast_fade_loaded = False
@@ -5047,13 +5181,16 @@ class AnomalyMicroLiveRunner:
             reason: str,
             details: dict[str, object],
         ) -> dict[str, object]:
-            return self._record_category_reject(
+            row = self._record_category_reject(
                 category,
                 symbol,
                 reason,
                 details,
                 emit=emit_diagnostics,
             )
+            if category_rejections_out is not None:
+                category_rejections_out.append(row)
+            return row
 
         for category in self._categories_for_timeframe(levels_timeframe, entry_timeframe):
             max_prior_fast_fade = _category_value(category, self.config, "max_prior_fast_fade_count_72h")
@@ -5183,16 +5320,18 @@ class AnomalyMicroLiveRunner:
                     taker_quote = pd.to_numeric(entry_segment["taker_buy_quote_volume"], errors="coerce")
                     quote_volume = pd.to_numeric(entry_segment["quote_volume"], errors="coerce")
                     valid_taker_share_rows = taker_quote.notna() & quote_volume.notna() & quote_volume.gt(0.0)
-                    if not bool(valid_taker_share_rows.all()):
+                    valid_taker_share_count = int(valid_taker_share_rows.sum())
+                    total_taker_share_rows = int(len(entry_segment))
+                    if valid_taker_share_count <= 0:
                         next_taker_share = float("nan")
                     else:
-                        next_taker_share = float((taker_quote / quote_volume).mean())
+                        next_taker_share = float((taker_quote[valid_taker_share_rows] / quote_volume[valid_taker_share_rows]).mean())
                     next_taker_share_loaded = True
                 if not math.isfinite(next_taker_share):
-                    category_rejections.append(record_category_reject(category, symbol, "reject_invalid_taker_buy_share", {"share": _finite_or_none(next_taker_share), "decision_timestamp_ms": int(decision["timestamp"])}))
+                    category_rejections.append(record_category_reject(category, symbol, "reject_invalid_taker_buy_share", {"share": _finite_or_none(next_taker_share), "valid_taker_share_rows": valid_taker_share_count, "total_taker_share_rows": total_taker_share_rows, "taker_share_contract": "mean_over_valid_quote_volume_rows", "decision_timestamp_ms": int(decision["timestamp"])}))
                     continue
                 if next_taker_share < min_next_taker_share:
-                    category_rejections.append(record_category_reject(category, symbol, "reject_weak_next_taker_buy_share", {"share": next_taker_share, "min": min_next_taker_share, "decision_timestamp_ms": int(decision["timestamp"])}))
+                    category_rejections.append(record_category_reject(category, symbol, "reject_weak_next_taker_buy_share", {"share": next_taker_share, "min": min_next_taker_share, "valid_taker_share_rows": valid_taker_share_count, "total_taker_share_rows": total_taker_share_rows, "taker_share_contract": "mean_over_valid_quote_volume_rows", "decision_timestamp_ms": int(decision["timestamp"])}))
                     continue
             max_start_taker_delta = _category_value(category, self.config, "max_start_taker_buy_quote_share_delta")
             if max_start_taker_delta is not None:
@@ -7612,13 +7751,13 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         if not config.ticker_radar_enabled:
             raise LiveStartupError(
                 "Некорректный live config: subminute entry TF требует ticker_radar_enabled=true. "
-                "Inactive subminute aggTrades scans are deliberately deferred until ticker-radar or active state; "
+                "Live uses ticker-radar/active symbols plus explicitly labeled DANGER cold coverage; "
                 "there is no silent fallback to full inactive aggTrades scans."
             )
         if config.ticker_radar_watch_batch_size < 1:
             raise LiveStartupError(
                 "Некорректный live config: subminute entry TF требует ticker_radar_watch_batch_size >= 1, "
-                "иначе inactive symbols не смогут попасть в precise scan без возврата к full aggTrades scan."
+                "иначе ticker-radar symbols не смогут попасть в precise scan; cold coverage remains bounded and DANGER-labeled."
             )
 
     if config.inactive_scan_slots_per_cycle is not None and (

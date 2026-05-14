@@ -2651,3 +2651,54 @@ Expected smoke readout:
 ```text
 On the first Ctrl+C, console immediately prints graceful shutdown with reconcile_symbols=N and live_events.csv contains live_shutdown_started. If no orders were placed in this run, forced orphan reconcile checks zero symbols instead of the whole universe. If one symbol had a live entry, forced reconcile checks that symbol only.
 ```
+
+## 2026-05-14 - P207 proposed DANGER: live retryable dependencies and cold coverage
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Keep live category rejects honest while reducing false missed entries from temporary data dependencies and making limited cold coverage explicit.
+```
+
+Changes:
+
+```text
+- Live taker-buy share now matches the backtest contract: mean taker_buy_quote_volume / quote_volume is computed only over rows with finite taker value and quote_volume > 0. If no valid rows exist, the reject remains explicit and artifacts include valid/total row counts.
+- Category dependency rejects for prior-fast-fade coverage, mark context, and OI context are treated as retryable when the blocking reason is data availability/staleness, not a real below-threshold value.
+- Retryable dependency rejects no longer consume the decision candle or mark the timeframe as scanned; live will retry until the signal goes stale or reaches a final non-retryable reject/selection.
+- Added signal_scan_retryable_dependency_blocked artifacts with retryable reasons and contract id.
+- DANGER: subminute ticker-radar live now has a small default precise cold-coverage budget of 5 inactive symbols per cycle. This is deliberately labeled DANGER in constants, scheduler source, scan mode, live_cache_config, symbol_batch_selected, and live_cycle_summary.
+- Setting inactive_scan_slots_per_cycle=0 explicitly disables cold coverage and returns to active/radar-only scanning.
+- If max_precise_scan_symbols_per_cycle is configured, DANGER cold coverage is capped by remaining precise budget after active and ticker-radar symbols.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools constants.py main.py
+```
+
+Expected smoke readout:
+
+```text
+live_events.csv should show category_contract=live_category_overlay_v5_retryable_dependencies_cold_coverage. Sparse entry segments with zero-volume synthetic buckets should no longer produce reject_invalid_taker_buy_share if at least one valid quote-volume row exists. Temporary mark/OI/prior-fast-fade unavailable rejects should emit signal_scan_retryable_dependency_blocked and the same decision timestamp can be retried until stale. symbol_batch_selected should show scheduler_source=DANGER_ws_event_driven_plus_precise_cold_coverage by default, inactive_scan_slots_source=DANGER_default_precise_cold_coverage_subminute, and cold symbols should have scan mode precise_DANGER_cold_coverage. Set inactive_scan_slots_per_cycle=0 to disable this DANGER mode.
+```
+
+Risk:
+
+```text
+High / DANGER. Cold coverage intentionally increases live workload and REST/WS aggTrade pressure, and can change which symbols reach precise subminute evaluation. This is for parity/audit discovery coverage, not a proven production improvement. Monitor signal_scan_seconds, aggtrade_network_calls, ws_aggtrade_coverage_pending_count, rate-limit/API errors, and scheduler health before using real orders for long runs.
+```
