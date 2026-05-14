@@ -1172,3 +1172,11 @@ Status: PROPOSED. Commit: UNKNOWN.
 ```text
 Cold coverage is now an adaptive idle/audit scanner rather than a fixed slot count. It is hard-off for open/opening positions and active-due symbols, soft-reduced by active-waiting symbols, and scored by WS health, scheduler heartbeat EWMA, and REST/cache pressure. This should improve missed-symbol/parity diagnostics during healthy idle periods without competing with active execution, but it must be monitored by cold score, selected slots, scheduler_cycle_seconds, aggtrade_network_calls, REST fetched span, and pending coverage gaps.
 ```
+
+## 2026-05-14 - P210 DANGER local guard / flow radar / micro-cache metrics
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+P210 keeps discovery improvements explicit and measurable. Live entry now uses local open/opening symbol memory as the pre-entry duplicate guard instead of fetching exchange position amount before every signal; startup cleanup and post-fill exchange position verification remain the safety boundary. The all-ticker WS stream already contains trade-count and quote-volume deltas, so DANGER cheap flow radar can promote early flow-only watch symbols without REST. WS aggTrade rolling buffers are widened for active/radar/watch/current cold symbols only, not for the full universe. Cold coverage usefulness is measured by cold scanned/evaluated/retryable/signal/order counters in live_cycle_summary. Next validation: 24h live, then compare cold_before_radar_count manually from ticker_radar_promoted source, cold_signal_count/order attempts, scheduler latency, and post-fill mismatch events.
+```

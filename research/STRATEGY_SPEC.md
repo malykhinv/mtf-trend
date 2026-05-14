@@ -487,3 +487,15 @@ Live category contract is live_category_overlay_v5_retryable_dependencies_cold_c
 
 DANGER cold coverage policy: subminute ticker-radar live has a small default precise inactive-symbol budget of 5 symbols per cycle, labeled DANGER in code and artifacts, but it is idle/health gated. It may run only when cumulative WS health is strictly above 95% and there are no active symbols, no opening position, and no open position. When gated off, artifacts must show inactive_cold_coverage_gate_reason and no full-universe cold-cycle estimate should be displayed as active coverage. This improves parity/audit coverage but increases API/WS aggTrade pressure and is not a proven production edge. Set inactive_scan_slots_per_cycle=0 to disable cold coverage completely.
 ```
+
+### DANGER live discovery instrumentation after P210
+
+```text
+DANGER local entry-position guard may skip the pre-entry exchange position fetch and rely on in-process open/opening symbol state. This is allowed only with startup exchange-position cleanup and post-fill exchange position verification. It is not compatible with multiple simultaneous live processes or manual external positions on the same account.
+
+DANGER cheap flow radar may use Binance all-ticker quote-volume and trade-count deltas as a scheduler watch signal only. It is not a trading signal and cannot replace kline/aggTrade evidence inside the confirmed runner category contract.
+
+Wider rolling micro-cache means a longer WS aggTrade buffer for active/radar/watch/current cold symbols. It must not subscribe to the full universe, and missing pre-subscription history remains explicit coverage debt/backfill/pending state.
+
+Cold coverage value must be judged from artifacts: cold_scanned_symbols, cold_evaluated_timeframe_count, cold_retryable_dependency_count, cold_signal_count, cold_order_attempt_count, scheduler latency, REST/cache pressure, and whether cold found symbols before ticker radar.
+```

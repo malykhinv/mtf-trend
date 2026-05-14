@@ -2809,3 +2809,52 @@ Risk:
 ```text
 Medium / DANGER-controlled. The patch can increase cold universe coverage during very healthy idle periods, which can increase discovery and parity-audit coverage, but it is not proof of PnL edge. Monitor scheduler_cycle_seconds, signal_scan_seconds, aggtrade_network_calls, aggtrade_rest_fetched_ms, ws_aggtrade_coverage_pending_count, cold score and selected slots before real-order use.
 ```
+
+## 2026-05-14 - P210 proposed DANGER: local guard, flow radar, wider micro-cache metrics
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Move more live discovery work into explicit DANGER observability without increasing exchange-position preflight latency or silently scanning the full universe.
+```
+
+Changes:
+
+```text
+- DANGER local entry-position guard now uses in-process open/opening symbol state before entry instead of fetching exchange position amount before every signal. Startup cleanup plus post-fill position verification remain required; post-fill mismatch closes only the new fill amount and raises integrity error.
+- DANGER ticker flow radar uses existing all-ticker WS quote-volume and trade-count deltas to promote early flow-only watch symbols before the normal price-delta radar threshold, without REST calls.
+- WS aggTrade rolling buffer default increases to 60 minutes, but subscriptions remain limited to active/ticker-radar/watch/current cold symbols; there is no full-universe micro-tape subscription.
+- Cold coverage usefulness is now measurable in live_cycle_summary: cold scanned symbols, due/evaluated TFs, retryable dependencies, selected signals, order attempts, and totals.
+- Heartbeat prints selected cold slots and adaptive score only when DANGER cold actually runs.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools constants.py main.py
+```
+
+Expected smoke readout:
+
+```text
+Check live_cache_config for DANGER local guard, DANGER flow radar thresholds, and widened active/radar-only micro-cache policy. In ticker_radar_snapshot, danger_flow_radar_candidate_count/promoted_count should stay visible. In live_cycle_summary, cold_* counters show whether cold coverage actually produces candidates/signals/orders or only burns latency.
+```
+
+Risk:
+
+```text
+High / DANGER-labeled. Flow radar can increase false positive watch symbols; widened WS buffers increase memory; local pre-entry guard assumes startup exchange-position cleanup and single live process. Do not run multiple live processes. Monitor post-fill position mismatch, scheduler_cycle_seconds, ws target counts, memory, and cold counters before judging edge.
+```

@@ -51,6 +51,7 @@ HOUR_MS = 60 * 60 * 1000
 BINANCE_FUTURES_ALL_TICKER_WS_URL = "wss://fstream.binance.com/market/ws/!ticker@arr"
 BINANCE_FUTURES_COMBINED_WS_URL = "wss://fstream.binance.com/market/stream"
 DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS = 360_000
+DEFAULT_LIVE_WS_AGGTRADE_BUFFER_MINUTES = 60
 DEFAULT_LIVE_WS_HEALTH_BOOTSTRAP_SECONDS = 180.0
 DEFAULT_LIVE_OHLCV_CACHE_FLUSH_MAX_SYMBOL_TIMEFRAMES = 4
 DEFAULT_LIVE_AGGTRADE_REST_CACHE_TTL_MS = 20 * 60_000
@@ -68,6 +69,13 @@ DANGER_ADAPTIVE_COLD_COVERAGE_ACTIVE_WAITING_SOFT_CAP = 3
 DANGER_ADAPTIVE_COLD_COVERAGE_NETWORK_CALLS_HIGH = 4
 DANGER_ADAPTIVE_COLD_COVERAGE_REST_FETCHED_MS_HIGH = 120_000
 DANGER_ADAPTIVE_COLD_COVERAGE_PENDING_GAPS_HIGH = 3
+DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE = "DANGER_local_memory_position_guard_no_pre_entry_exchange_position_fetch"
+DANGER_CHEAP_FLOW_RADAR_SOURCE = "DANGER_ws_ticker_trade_count_flow_radar"
+DANGER_TICKER_FLOW_RADAR_MIN_QUOTE_VOLUME_DELTA_USDT = 5_000.0
+DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA = 40
+DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA_RATIO = 3.0
+DANGER_TICKER_FLOW_RADAR_MIN_PRICE_DELTA_PCT = -0.001
+DANGER_TICKER_FLOW_RADAR_MAX_PRICE_DELTA_PCT = 0.003
 DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO = DANGER_ADAPTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO
 DANGER_INACTIVE_COLD_COVERAGE_SOURCE = "DANGER_default_precise_cold_coverage_subminute"
 EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE = "explicit_precise_cold_coverage"
@@ -1287,7 +1295,7 @@ class LiveAnomalyConfig:
     live_ws_ticker_startup_seed_enabled: bool = True
     live_ws_aggtrade_enabled: bool = True
     live_ws_aggtrade_stale_ms: int = 5_000
-    live_ws_aggtrade_buffer_minutes: int = 20
+    live_ws_aggtrade_buffer_minutes: int = DEFAULT_LIVE_WS_AGGTRADE_BUFFER_MINUTES
     live_ws_aggtrade_max_backfill_ms: int = DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS
     live_aggtrade_rest_cache_ttl_ms: int = DEFAULT_LIVE_AGGTRADE_REST_CACHE_TTL_MS
     live_aggtrade_rest_cache_padding_ms: int = DEFAULT_LIVE_AGGTRADE_REST_CACHE_PADDING_MS
@@ -1299,6 +1307,13 @@ class LiveAnomalyConfig:
     ticker_radar_min_price_delta_pct: float = 0.003
     ticker_radar_min_quote_volume_delta_usdt: float = 10_000.0
     ticker_radar_min_quote_volume_delta_ratio: float = 3.0
+    danger_ticker_flow_radar_enabled: bool = True
+    danger_ticker_flow_radar_min_quote_volume_delta_usdt: float = DANGER_TICKER_FLOW_RADAR_MIN_QUOTE_VOLUME_DELTA_USDT
+    danger_ticker_flow_radar_min_trade_count_delta: int = DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA
+    danger_ticker_flow_radar_min_trade_count_delta_ratio: float = DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA_RATIO
+    danger_ticker_flow_radar_min_price_delta_pct: float = DANGER_TICKER_FLOW_RADAR_MIN_PRICE_DELTA_PCT
+    danger_ticker_flow_radar_max_price_delta_pct: float = DANGER_TICKER_FLOW_RADAR_MAX_PRICE_DELTA_PCT
+    danger_local_entry_position_guard_enabled: bool = True
     signal_scan_backfill_candles: int = 10
     max_signal_age_ms: int = 60_000
     max_entry_price_drift_pct: float = 0.003
@@ -1379,6 +1394,9 @@ class LiveTickerRadarWatch:
     price_delta_pct: float
     quote_volume_delta: float
     quote_volume_delta_ratio: float | None
+    trade_count_delta: int | None = None
+    trade_count_delta_ratio: float | None = None
+    promotion_source: str = "ticker_price_volume"
 
 
 @dataclass(frozen=True, slots=True)
@@ -1438,6 +1456,8 @@ class LiveTickerRadarCycleStats:
     missing_count: int = 0
     promoted_count: int = 0
     promotion_candidates_count: int = 0
+    danger_flow_radar_promoted_count: int = 0
+    danger_flow_radar_candidate_count: int = 0
     reason: str = ""
 
 
@@ -1864,6 +1884,13 @@ class LiveArtifactWriter:
                     "entry_order_submitted_at_ms": position.entry_order_submitted_at_ms,
                     "entry_order_status": position.entry_order_status,
                     "stop_price": position.stop_price,
+                "source_scan_mode": source_scan_mode,
+                "danger_cold_coverage_source": source_scan_mode == "precise_DANGER_cold_coverage",
+                "entry_position_guard_source": (
+                    DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE
+                    if self.config.danger_local_entry_position_guard_enabled
+                    else "pre_entry_exchange_position_fetch"
+                ),
                     "tp1_price": position.tp1_price,
                     "amount": position.amount,
                     "entry_filled_amount": position.entry_filled_amount,
@@ -2284,6 +2311,7 @@ class AnomalyMicroLiveRunner:
         self._ticker_radar_watch: dict[str, LiveTickerRadarWatch] = {}
         self._ticker_radar_snapshots: dict[str, ExchangeTickerSnapshot] = {}
         self._ticker_radar_quote_delta_history: dict[str, deque[float]] = {}
+        self._ticker_radar_trade_delta_history: dict[str, deque[float]] = {}
         self._last_ticker_radar_at_ms = 0
         self._last_ticker_radar_health_status = "unknown"
         self._seen_decisions: set[tuple[str, str, str, int]] = set()
@@ -2331,7 +2359,19 @@ class AnomalyMicroLiveRunner:
         self._current_inactive_cold_coverage_pressure_ewma = 0.0
         self._current_inactive_cold_coverage_cycle_seconds_ewma = DANGER_ADAPTIVE_COLD_COVERAGE_SLOW_CYCLE_SECONDS
         self._cold_coverage_pressure_ewma = 0.0
+        self._scheduler_cycle_seconds_ewma = DANGER_ADAPTIVE_COLD_COVERAGE_SLOW_CYCLE_SECONDS
         self._cycle_precise_scan_symbols = 0
+        self._cycle_cold_scanned_symbols = 0
+        self._cycle_cold_due_timeframe_count = 0
+        self._cycle_cold_evaluated_timeframe_count = 0
+        self._cycle_cold_retryable_dependency_count = 0
+        self._cycle_cold_signal_count = 0
+        self._cycle_cold_order_attempt_count = 0
+        self._cold_scanned_symbols_total = 0
+        self._cold_evaluated_timeframe_total = 0
+        self._cold_retryable_dependency_total = 0
+        self._cold_signal_total = 0
+        self._cold_order_attempt_total = 0
         self._cycle_inactive_visit_symbols = 0
         self._cycle_deferred_inactive_subminute_pairs = 0
         self._ws_health_observed_seconds = 0.0
@@ -2397,6 +2437,28 @@ class AnomalyMicroLiveRunner:
                 "inactive_cold_coverage_default_danger": True,
                 "inactive_cold_coverage_health_gate_min_pct": DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO * 100.0,
                 "inactive_cold_coverage_requires_no_active_or_position": True,
+                "danger_local_entry_position_guard_enabled": bool(self.config.danger_local_entry_position_guard_enabled),
+                "danger_local_entry_position_guard_source": (
+                    DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE
+                    if self.config.danger_local_entry_position_guard_enabled
+                    else "pre_entry_exchange_position_fetch"
+                ),
+                "danger_ticker_flow_radar_enabled": bool(self.config.danger_ticker_flow_radar_enabled),
+                "danger_ticker_flow_radar_source": DANGER_CHEAP_FLOW_RADAR_SOURCE,
+                "danger_ticker_flow_radar_min_quote_volume_delta_usdt": float(
+                    self.config.danger_ticker_flow_radar_min_quote_volume_delta_usdt
+                ),
+                "danger_ticker_flow_radar_min_trade_count_delta": int(
+                    self.config.danger_ticker_flow_radar_min_trade_count_delta
+                ),
+                "danger_ticker_flow_radar_min_trade_count_delta_ratio": float(
+                    self.config.danger_ticker_flow_radar_min_trade_count_delta_ratio
+                ),
+                "danger_ticker_flow_radar_price_delta_window_pct": (
+                    f"{self.config.danger_ticker_flow_radar_min_price_delta_pct:.6f}:"
+                    f"{self.config.danger_ticker_flow_radar_max_price_delta_pct:.6f}"
+                ),
+                "danger_micro_cache_policy": "wider_ws_aggtrade_buffer_for_active_and_radar_watch_only_no_full_universe_subscription",
                 "symbol_batch_size_role": "legacy inactive scan cap, not WS market discovery",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "ticker_radar_required_for_inactive_subminute_gate": bool(
@@ -2502,6 +2564,8 @@ class AnomalyMicroLiveRunner:
                         "ticker_radar_missing_count": ticker_stats.missing_count,
                         "ticker_radar_promoted_count": ticker_stats.promoted_count,
                         "ticker_radar_promotion_candidates_count": ticker_stats.promotion_candidates_count,
+                        "danger_flow_radar_promoted_count": ticker_stats.danger_flow_radar_promoted_count,
+                        "danger_flow_radar_candidate_count": ticker_stats.danger_flow_radar_candidate_count,
                         "detected_anomalies_total": detected_anomalies_total,
                         "batch_select_seconds": round(batch_select_seconds, 3),
                         "ws_aggtrade_subscription_seconds": round(ws_aggtrade_seconds, 3),
@@ -2531,6 +2595,17 @@ class AnomalyMicroLiveRunner:
                         "open_positions": open_positions,
                         "active_symbol_count": active_symbol_count,
                         "active_symbols_seen_total": active_symbols_seen_total,
+                        "cold_scanned_symbols_cycle": self._cycle_cold_scanned_symbols,
+                        "cold_due_timeframe_count_cycle": self._cycle_cold_due_timeframe_count,
+                        "cold_evaluated_timeframe_count_cycle": self._cycle_cold_evaluated_timeframe_count,
+                        "cold_retryable_dependency_count_cycle": self._cycle_cold_retryable_dependency_count,
+                        "cold_signal_count_cycle": self._cycle_cold_signal_count,
+                        "cold_order_attempt_count_cycle": self._cycle_cold_order_attempt_count,
+                        "cold_scanned_symbols_total": self._cold_scanned_symbols_total,
+                        "cold_evaluated_timeframe_total": self._cold_evaluated_timeframe_total,
+                        "cold_retryable_dependency_total": self._cold_retryable_dependency_total,
+                        "cold_signal_total": self._cold_signal_total,
+                        "cold_order_attempt_total": self._cold_order_attempt_total,
                         "closed_total": closed_total,
                         "closed_pnl_pct": closed_pnl_pct,
                         "aggtrade_requests": self._cycle_aggtrade_requests,
@@ -2607,7 +2682,11 @@ class AnomalyMicroLiveRunner:
                         self._current_inactive_scan_slots_source
                     ):
                         danger_prefix = "DANGER " if self._current_inactive_scan_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE else ""
-                        coverage_text = f" · {danger_prefix}cold ~{full_cycle_seconds:.0f}s"
+                        coverage_text = (
+                            f" · {danger_prefix}cold {self._current_inactive_scan_slots} "
+                            f"score {self._current_inactive_cold_coverage_adaptive_score:.2f} "
+                            f"~{full_cycle_seconds:.0f}s"
+                        )
                     elif self._current_inactive_cold_coverage_gate_reason:
                         coverage_text = f" · cold off {self._current_inactive_cold_coverage_gate_reason}"
                     orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
@@ -3196,6 +3275,12 @@ class AnomalyMicroLiveRunner:
         self._cycle_precise_scan_symbols = 0
         self._cycle_inactive_visit_symbols = 0
         self._cycle_deferred_inactive_subminute_pairs = 0
+        self._cycle_cold_scanned_symbols = 0
+        self._cycle_cold_due_timeframe_count = 0
+        self._cycle_cold_evaluated_timeframe_count = 0
+        self._cycle_cold_retryable_dependency_count = 0
+        self._cycle_cold_signal_count = 0
+        self._cycle_cold_order_attempt_count = 0
 
     def _full_symbol_cycle_seconds(self, *, batch_seconds: float, batch_size: int, symbols_total: int) -> float:
         if self._last_symbol_universe_cycle_seconds is not None:
@@ -3841,6 +3926,9 @@ class AnomalyMicroLiveRunner:
                     "price_delta_pct": item.price_delta_pct,
                     "quote_volume_delta": item.quote_volume_delta,
                     "quote_volume_delta_ratio": item.quote_volume_delta_ratio if item.quote_volume_delta_ratio is not None else "",
+                    "trade_count_delta": item.trade_count_delta if item.trade_count_delta is not None else "",
+                    "trade_count_delta_ratio": item.trade_count_delta_ratio if item.trade_count_delta_ratio is not None else "",
+                    "promotion_source": item.promotion_source,
                 },
             )
         due: list[str] = []
@@ -3935,12 +4023,20 @@ class AnomalyMicroLiveRunner:
                 reason="all_ticker_snapshots_missing",
             )
         promotions = self._evaluate_ticker_radar_snapshots(snapshots, now_ms=now_ms)
-        promoted_count = min(len(promotions), self.config.ticker_radar_max_promotions_per_cycle)
-        for promotion in promotions[: self.config.ticker_radar_max_promotions_per_cycle]:
+        promoted_promotions = promotions[: self.config.ticker_radar_max_promotions_per_cycle]
+        promoted_count = len(promoted_promotions)
+        danger_flow_candidate_count = sum(
+            1 for promotion in promotions if promotion.get("promotion_source") == DANGER_CHEAP_FLOW_RADAR_SOURCE
+        )
+        danger_flow_promoted_count = sum(
+            1 for promotion in promoted_promotions if promotion.get("promotion_source") == DANGER_CHEAP_FLOW_RADAR_SOURCE
+        )
+        for promotion in promoted_promotions:
+            promotion_source = str(promotion.get("promotion_source") or "ticker_price_volume")
             self._mark_ticker_radar_watch(
                 str(promotion["symbol"]),
                 now_ms=now_ms,
-                reason="ticker_radar",
+                reason=("ticker_flow_radar" if promotion_source == DANGER_CHEAP_FLOW_RADAR_SOURCE else "ticker_radar"),
                 score=float(promotion["score"]),
                 price_delta_pct=float(promotion["price_delta_pct"]),
                 quote_volume_delta=float(promotion["quote_volume_delta"]),
@@ -3949,6 +4045,17 @@ class AnomalyMicroLiveRunner:
                     if promotion["quote_volume_delta_ratio"] is None
                     else float(promotion["quote_volume_delta_ratio"])
                 ),
+                trade_count_delta=(
+                    None
+                    if promotion.get("trade_count_delta") is None
+                    else int(promotion["trade_count_delta"])
+                ),
+                trade_count_delta_ratio=(
+                    None
+                    if promotion.get("trade_count_delta_ratio") is None
+                    else float(promotion["trade_count_delta_ratio"])
+                ),
+                promotion_source=promotion_source,
             )
         ok_count = len(snapshots) - missing_count
         snapshot_status = "ok" if ok_count > 0 else "all_missing"
@@ -3961,6 +4068,9 @@ class AnomalyMicroLiveRunner:
                 "missing_count": missing_count,
                 "promoted_count": promoted_count,
                 "promotion_candidates_count": len(promotions),
+                "danger_flow_radar_promoted_count": danger_flow_promoted_count,
+                "danger_flow_radar_candidate_count": danger_flow_candidate_count,
+                "danger_flow_radar_enabled": bool(self.config.danger_ticker_flow_radar_enabled),
                 "interval_seconds": self.config.ticker_radar_interval_seconds,
                 "watch_batch_size": self.config.ticker_radar_watch_batch_size,
                 "source": source,
@@ -3990,6 +4100,8 @@ class AnomalyMicroLiveRunner:
             missing_count=missing_count,
             promoted_count=promoted_count,
             promotion_candidates_count=len(promotions),
+            danger_flow_radar_promoted_count=danger_flow_promoted_count,
+            danger_flow_radar_candidate_count=danger_flow_candidate_count,
             reason=source_reason,
         )
 
@@ -4026,26 +4138,65 @@ class AnomalyMicroLiveRunner:
             )
             quote_volume_delta = float(snapshot.quote_volume_24h or 0.0) - float(previous.quote_volume_24h or 0.0)
             if quote_volume_delta > 0.0:
-                history = self._ticker_radar_quote_delta_history.setdefault(symbol_key, deque(maxlen=24))
-                baseline = _median_positive(list(history))
-                quote_volume_delta_ratio = _safe_divide(quote_volume_delta, baseline) if baseline is not None else None
-                history.append(quote_volume_delta)
+                quote_history = self._ticker_radar_quote_delta_history.setdefault(symbol_key, deque(maxlen=24))
+                quote_baseline = _median_positive(list(quote_history))
+                quote_volume_delta_ratio = _safe_divide(quote_volume_delta, quote_baseline) if quote_baseline is not None else None
+                quote_history.append(quote_volume_delta)
             else:
                 quote_volume_delta_ratio = None
+            trade_count_delta: int | None = None
+            trade_count_delta_ratio: float | None = None
+            if snapshot.trade_count_24h is not None and previous.trade_count_24h is not None:
+                trade_count_delta = int(snapshot.trade_count_24h) - int(previous.trade_count_24h)
+                if trade_count_delta > 0:
+                    trade_history = self._ticker_radar_trade_delta_history.setdefault(symbol_key, deque(maxlen=24))
+                    trade_baseline = _median_positive(list(trade_history))
+                    trade_count_delta_ratio = _safe_divide(float(trade_count_delta), trade_baseline) if trade_baseline is not None else None
+                    trade_history.append(float(trade_count_delta))
+            price_volume_candidate = True
             if not math.isfinite(price_delta_pct) or price_delta_pct < self.config.ticker_radar_min_price_delta_pct:
-                continue
+                price_volume_candidate = False
             if quote_volume_delta < self.config.ticker_radar_min_quote_volume_delta_usdt:
-                continue
+                price_volume_candidate = False
             if (
                 quote_volume_delta_ratio is not None
                 and quote_volume_delta_ratio < self.config.ticker_radar_min_quote_volume_delta_ratio
             ):
+                price_volume_candidate = False
+            flow_candidate = bool(self.config.danger_ticker_flow_radar_enabled)
+            if not math.isfinite(price_delta_pct):
+                flow_candidate = False
+            if price_delta_pct < self.config.danger_ticker_flow_radar_min_price_delta_pct:
+                flow_candidate = False
+            if price_delta_pct >= self.config.danger_ticker_flow_radar_max_price_delta_pct:
+                flow_candidate = False
+            if quote_volume_delta < self.config.danger_ticker_flow_radar_min_quote_volume_delta_usdt:
+                flow_candidate = False
+            if trade_count_delta is None or trade_count_delta < self.config.danger_ticker_flow_radar_min_trade_count_delta:
+                flow_candidate = False
+            if (
+                trade_count_delta_ratio is not None
+                and trade_count_delta_ratio < self.config.danger_ticker_flow_radar_min_trade_count_delta_ratio
+            ):
+                flow_candidate = False
+            if not price_volume_candidate and not flow_candidate:
                 continue
-            score = (
-                price_delta_pct * 100.0
-                + math.log1p(max(0.0, quote_volume_delta / max(1.0, self.config.ticker_radar_min_quote_volume_delta_usdt)))
-                + (math.log1p(quote_volume_delta_ratio) if quote_volume_delta_ratio is not None else 0.0)
-            )
+            if price_volume_candidate:
+                score = (
+                    price_delta_pct * 100.0
+                    + math.log1p(max(0.0, quote_volume_delta / max(1.0, self.config.ticker_radar_min_quote_volume_delta_usdt)))
+                    + (math.log1p(quote_volume_delta_ratio) if quote_volume_delta_ratio is not None else 0.0)
+                )
+                promotion_source = "ticker_price_volume"
+            else:
+                trade_component = float(trade_count_delta or 0) / max(1.0, float(self.config.danger_ticker_flow_radar_min_trade_count_delta))
+                score = (
+                    math.log1p(max(0.0, quote_volume_delta / max(1.0, self.config.danger_ticker_flow_radar_min_quote_volume_delta_usdt)))
+                    + math.log1p(max(0.0, trade_component))
+                    + (math.log1p(trade_count_delta_ratio) if trade_count_delta_ratio is not None else 0.0)
+                    + max(0.0, price_delta_pct) * 100.0
+                )
+                promotion_source = DANGER_CHEAP_FLOW_RADAR_SOURCE
             promotions.append(
                 {
                     "symbol": snapshot.symbol,
@@ -4053,6 +4204,9 @@ class AnomalyMicroLiveRunner:
                     "price_delta_pct": price_delta_pct,
                     "quote_volume_delta": quote_volume_delta,
                     "quote_volume_delta_ratio": quote_volume_delta_ratio,
+                    "trade_count_delta": trade_count_delta,
+                    "trade_count_delta_ratio": trade_count_delta_ratio,
+                    "promotion_source": promotion_source,
                     "last_price_source": snapshot.last_price_source,
                     "quote_volume_source": snapshot.quote_volume_source,
                     "trade_count_source": snapshot.trade_count_source,
@@ -4076,6 +4230,9 @@ class AnomalyMicroLiveRunner:
         price_delta_pct: float,
         quote_volume_delta: float,
         quote_volume_delta_ratio: float | None,
+        trade_count_delta: int | None = None,
+        trade_count_delta_ratio: float | None = None,
+        promotion_source: str = "ticker_price_volume",
     ) -> None:
         expires_at_ms = now_ms + max(1, int(self.config.ticker_radar_watch_ttl_ms))
         symbol_key = _position_symbol_key(symbol)
@@ -4092,6 +4249,9 @@ class AnomalyMicroLiveRunner:
                 price_delta_pct=price_delta_pct,
                 quote_volume_delta=quote_volume_delta,
                 quote_volume_delta_ratio=quote_volume_delta_ratio,
+                trade_count_delta=trade_count_delta,
+                trade_count_delta_ratio=trade_count_delta_ratio,
+                promotion_source=promotion_source,
             )
             if should_emit:
                 self._detected_anomalies_total += 1
@@ -4104,7 +4264,11 @@ class AnomalyMicroLiveRunner:
                     "price_delta_pct": price_delta_pct,
                     "quote_volume_delta": quote_volume_delta,
                     "quote_volume_delta_ratio": quote_volume_delta_ratio if quote_volume_delta_ratio is not None else "",
-                    "source": "ticker_delta_priority_only",
+                    "trade_count_delta": trade_count_delta if trade_count_delta is not None else "",
+                    "trade_count_delta_ratio": trade_count_delta_ratio if trade_count_delta_ratio is not None else "",
+                    "promotion_source": promotion_source,
+                    "source": promotion_source,
+                    "danger_flow_radar": promotion_source == DANGER_CHEAP_FLOW_RADAR_SOURCE,
                 }
         if event_payload is not None:
             self.artifacts.append_event("ticker_radar_promoted", symbol, event_payload)
@@ -4292,6 +4456,9 @@ class AnomalyMicroLiveRunner:
     def _batch_scan_mode_for_symbol(self, symbol: str) -> str:
         return self._current_batch_symbol_scan_mode.get(_position_symbol_key(symbol), "precise_direct")
 
+    def _is_danger_cold_scan_symbol(self, symbol: str) -> bool:
+        return self._batch_scan_mode_for_symbol(symbol) == "precise_DANGER_cold_coverage"
+
     def _subminute_entry_scan_allowed(self, symbol: str) -> bool:
         return self._batch_scan_mode_for_symbol(symbol).startswith("precise")
 
@@ -4303,6 +4470,9 @@ class AnomalyMicroLiveRunner:
     def _count_symbol_scan_mode(self, symbol: str) -> None:
         if self._batch_scan_mode_for_symbol(symbol).startswith("precise"):
             self._cycle_precise_scan_symbols += 1
+            if self._is_danger_cold_scan_symbol(symbol):
+                self._cycle_cold_scanned_symbols += 1
+                self._cold_scanned_symbols_total += 1
         else:
             self._cycle_inactive_visit_symbols += 1
 
@@ -4813,12 +4983,22 @@ class AnomalyMicroLiveRunner:
                 if scan_result.signal is not None:
                     signals.append(scan_result.signal)
                     signal_count += 1
+            scan_mode = self._batch_scan_mode_for_symbol(symbol)
+            if scan_mode == "precise_DANGER_cold_coverage":
+                self._cycle_cold_due_timeframe_count += due_count
+                self._cycle_cold_evaluated_timeframe_count += evaluated_count
+                self._cycle_cold_retryable_dependency_count += retryable_dependency_count
+                self._cycle_cold_signal_count += signal_count
+                self._cold_evaluated_timeframe_total += evaluated_count
+                self._cold_retryable_dependency_total += retryable_dependency_count
+                self._cold_signal_total += signal_count
             self.artifacts.append_event(
                 "signal_symbol_scan_summary",
                 symbol,
                 {
                     "mode": "timeframes_per_symbol",
-                    "scan_mode": self._batch_scan_mode_for_symbol(symbol),
+                    "scan_mode": scan_mode,
+                    "danger_cold_coverage_scan": scan_mode == "precise_DANGER_cold_coverage",
                     "subminute_entry_scan_allowed": bool(self._subminute_entry_scan_allowed(symbol)),
                     "timeframe_pairs": [f"{levels.value}/{entry.value}" for levels, entry in self.config.timeframe_pairs],
                     "due_timeframe_count": due_count,
@@ -4921,6 +5101,13 @@ class AnomalyMicroLiveRunner:
                     latest_closed_entry_ts=latest_closed_entry_ts,
                     previous_scan_closed_ts=self._previous_signal_scan_closed_at(symbol, levels_timeframe, entry_timeframe),
                 )
+                if self._is_danger_cold_scan_symbol(symbol):
+                    self._cycle_cold_due_timeframe_count += 1
+                    self._cycle_cold_evaluated_timeframe_count += 1
+                    self._cold_evaluated_timeframe_total += 1
+                    if scan_result.retryable_dependency:
+                        self._cycle_cold_retryable_dependency_count += 1
+                        self._cold_retryable_dependency_total += 1
                 if not scan_result.retryable_dependency:
                     self._mark_signal_scan_closed_at(
                         symbol,
@@ -4929,6 +5116,9 @@ class AnomalyMicroLiveRunner:
                         closed_timestamp_ms=latest_closed_entry_ts,
                     )
                 if scan_result.signal is not None:
+                    if self._is_danger_cold_scan_symbol(symbol):
+                        self._cycle_cold_signal_count += 1
+                        self._cold_signal_total += 1
                     signals.append(scan_result.signal)
         return signals
 
@@ -5877,6 +6067,10 @@ class AnomalyMicroLiveRunner:
 
     def _maybe_open_position(self, signal: LiveSignal) -> None:
         symbol_key = _position_symbol_key(signal.symbol)
+        source_scan_mode = self._batch_scan_mode_for_symbol(signal.symbol)
+        if source_scan_mode == "precise_DANGER_cold_coverage":
+            self._cycle_cold_order_attempt_count += 1
+            self._cold_order_attempt_total += 1
         reject_max_positions = False
         with self._state_lock:
             if symbol_key in self._open_positions or symbol_key in self._opening_symbols:
@@ -5945,25 +6139,39 @@ class AnomalyMicroLiveRunner:
         try:
             if not self._validate_signal_freshness(signal):
                 return
-            pre_position_amount = float(self.exchange.fetch_symbol_position_amount(signal.symbol))
-            if not math.isfinite(pre_position_amount):
-                self._clear_active_symbol(signal.symbol, reason="invalid_existing_exchange_position")
-                self._mark_signal_decision_consumed(signal, reason="invalid_existing_exchange_position")
+            if self.config.danger_local_entry_position_guard_enabled:
+                pre_position_amount = 0.0
                 self.artifacts.append_event(
-                    "reject_invalid_existing_exchange_position",
+                    "danger_local_entry_position_guard_used",
                     signal.symbol,
-                    {"exchange_position_amount": _finite_or_none(pre_position_amount)},
+                    {
+                        "source": DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE,
+                        "symbol_key": symbol_key,
+                        "source_scan_mode": source_scan_mode,
+                        "assumed_pre_position_amount": pre_position_amount,
+                        "startup_position_cleanup_required": bool(self.config.confirm_real_orders),
+                    },
                 )
-                return
-            if abs(pre_position_amount) > 0.0:
-                self._clear_active_symbol(signal.symbol, reason="existing_exchange_position")
-                self._mark_signal_decision_consumed(signal, reason="existing_exchange_position")
-                self.artifacts.append_event(
-                    "reject_existing_exchange_position",
-                    signal.symbol,
-                    {"exchange_position_amount": pre_position_amount},
-                )
-                return
+            else:
+                pre_position_amount = float(self.exchange.fetch_symbol_position_amount(signal.symbol))
+                if not math.isfinite(pre_position_amount):
+                    self._clear_active_symbol(signal.symbol, reason="invalid_existing_exchange_position")
+                    self._mark_signal_decision_consumed(signal, reason="invalid_existing_exchange_position")
+                    self.artifacts.append_event(
+                        "reject_invalid_existing_exchange_position",
+                        signal.symbol,
+                        {"exchange_position_amount": _finite_or_none(pre_position_amount)},
+                    )
+                    return
+                if abs(pre_position_amount) > 0.0:
+                    self._clear_active_symbol(signal.symbol, reason="existing_exchange_position")
+                    self._mark_signal_decision_consumed(signal, reason="existing_exchange_position")
+                    self.artifacts.append_event(
+                        "reject_existing_exchange_position",
+                        signal.symbol,
+                        {"exchange_position_amount": pre_position_amount},
+                    )
+                    return
             live_price = float(self.exchange.fetch_last_price(signal.symbol))
             if not self._validate_signal_executable(signal, live_price=live_price):
                 return
@@ -6016,40 +6224,66 @@ class AnomalyMicroLiveRunner:
             )
             self._track_order_reconcile_symbol(signal.symbol, reason="entry_order_filled")
             post_position_amount = float(self.exchange.fetch_symbol_position_amount(signal.symbol))
-            position_delta_amount = post_position_amount - pre_position_amount
-            if not math.isfinite(post_position_amount) or not math.isfinite(position_delta_amount):
-                self._close_unprotected_entry_exposure(
-                    signal.symbol,
-                    amount=fill.filled_amount,
-                    position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
-                    reason="invalid_post_entry_position_amount",
-                )
-                raise LiveDataIntegrityError(
-                    f"invalid post-entry position amount: symbol={signal.symbol} pre={pre_position_amount} post={post_position_amount}"
-                )
-            if position_delta_amount <= 0.0:
-                self._close_unprotected_entry_exposure(
-                    signal.symbol,
-                    amount=fill.filled_amount,
-                    position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
-                    reason="entry_fill_without_position_delta",
-                )
-                raise LiveDataIntegrityError(
-                    f"entry order filled but exchange position did not increase: symbol={signal.symbol} order_id={fill.order_id} "
-                    f"pre={pre_position_amount} post={post_position_amount}"
-                )
-            fill_position_slippage = abs(position_delta_amount - fill.filled_amount) / max(fill.filled_amount, 1e-12)
-            if fill_position_slippage > self.config.max_position_amount_slippage_ratio:
-                self._close_unprotected_entry_exposure(
-                    signal.symbol,
-                    amount=position_delta_amount,
-                    position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
-                    reason="entry_fill_position_amount_mismatch",
-                )
-                raise LiveDataIntegrityError(
-                    f"entry fill/position amount mismatch: symbol={signal.symbol} order_id={fill.order_id} "
-                    f"filled={fill.filled_amount} delta={position_delta_amount}"
-                )
+            if self.config.danger_local_entry_position_guard_enabled:
+                position_delta_amount = float(fill.filled_amount)
+                if not math.isfinite(post_position_amount) or not math.isfinite(position_delta_amount):
+                    self._close_unprotected_entry_exposure(
+                        signal.symbol,
+                        amount=fill.filled_amount,
+                        position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
+                        reason="invalid_post_entry_position_amount",
+                    )
+                    raise LiveDataIntegrityError(
+                        f"invalid post-entry position amount: symbol={signal.symbol} local_guard=true post={post_position_amount}"
+                    )
+                post_fill_slippage = abs(post_position_amount - fill.filled_amount) / max(fill.filled_amount, 1e-12)
+                if post_position_amount <= 0.0 or post_fill_slippage > self.config.max_position_amount_slippage_ratio:
+                    self._close_unprotected_entry_exposure(
+                        signal.symbol,
+                        amount=fill.filled_amount,
+                        position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
+                        reason="danger_local_guard_post_position_mismatch",
+                    )
+                    raise LiveDataIntegrityError(
+                        f"local guard post-entry position mismatch: symbol={signal.symbol} order_id={fill.order_id} "
+                        f"filled={fill.filled_amount} post={post_position_amount} slippage={post_fill_slippage}"
+                    )
+                fill_position_slippage = post_fill_slippage
+            else:
+                position_delta_amount = post_position_amount - pre_position_amount
+                if not math.isfinite(post_position_amount) or not math.isfinite(position_delta_amount):
+                    self._close_unprotected_entry_exposure(
+                        signal.symbol,
+                        amount=fill.filled_amount,
+                        position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
+                        reason="invalid_post_entry_position_amount",
+                    )
+                    raise LiveDataIntegrityError(
+                        f"invalid post-entry position amount: symbol={signal.symbol} pre={pre_position_amount} post={post_position_amount}"
+                    )
+                if position_delta_amount <= 0.0:
+                    self._close_unprotected_entry_exposure(
+                        signal.symbol,
+                        amount=fill.filled_amount,
+                        position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
+                        reason="entry_fill_without_position_delta",
+                    )
+                    raise LiveDataIntegrityError(
+                        f"entry order filled but exchange position did not increase: symbol={signal.symbol} order_id={fill.order_id} "
+                        f"pre={pre_position_amount} post={post_position_amount}"
+                    )
+                fill_position_slippage = abs(position_delta_amount - fill.filled_amount) / max(fill.filled_amount, 1e-12)
+                if fill_position_slippage > self.config.max_position_amount_slippage_ratio:
+                    self._close_unprotected_entry_exposure(
+                        signal.symbol,
+                        amount=position_delta_amount,
+                        position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
+                        reason="entry_fill_position_amount_mismatch",
+                    )
+                    raise LiveDataIntegrityError(
+                        f"entry fill/position amount mismatch: symbol={signal.symbol} order_id={fill.order_id} "
+                        f"filled={fill.filled_amount} delta={position_delta_amount}"
+                    )
             actual_entry_price = float(fill.average_price)
             actual_stop_price = float(signal.stop_price)
             actual_initial_risk = actual_entry_price - actual_stop_price
@@ -8005,6 +8239,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "max_monitor_empty_ohlcv_cycles": (config.max_monitor_empty_ohlcv_cycles, 1),
         "live_ohlcv_cache_max_buffer_rows": (config.live_ohlcv_cache_max_buffer_rows, 1),
         "live_aggtrade_rest_cache_ttl_ms": (config.live_aggtrade_rest_cache_ttl_ms, 1),
+        "danger_ticker_flow_radar_min_trade_count_delta": (config.danger_ticker_flow_radar_min_trade_count_delta, 1),
     }
     for name, (value, minimum) in integer_minimums.items():
         if not isinstance(value, int) or value < minimum:
@@ -8079,6 +8314,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "ticker_radar_interval_seconds": config.ticker_radar_interval_seconds,
         "live_ws_ticker_startup_wait_seconds": config.live_ws_ticker_startup_wait_seconds,
         "ticker_radar_min_quote_volume_delta_ratio": config.ticker_radar_min_quote_volume_delta_ratio,
+        "danger_ticker_flow_radar_min_quote_volume_delta_usdt": config.danger_ticker_flow_radar_min_quote_volume_delta_usdt,
+        "danger_ticker_flow_radar_min_trade_count_delta_ratio": config.danger_ticker_flow_radar_min_trade_count_delta_ratio,
     }
     for name, value in required_positive.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
@@ -8095,6 +8332,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "ticker_radar_min_price_delta_pct": config.ticker_radar_min_price_delta_pct,
         "ticker_radar_min_quote_volume_delta_usdt": config.ticker_radar_min_quote_volume_delta_usdt,
         "live_ohlcv_cache_flush_interval_seconds": config.live_ohlcv_cache_flush_interval_seconds,
+        "danger_ticker_flow_radar_max_price_delta_pct": config.danger_ticker_flow_radar_max_price_delta_pct,
     }
     for name, value in required_non_negative.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=True)
@@ -8114,6 +8352,20 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         if value is not None:
             _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
 
+    _require_finite_config_number(
+        "danger_ticker_flow_radar_min_price_delta_pct",
+        config.danger_ticker_flow_radar_min_price_delta_pct,
+        min_value=-1.0,
+        allow_equal_min=True,
+    )
+    if config.danger_ticker_flow_radar_enabled and (
+        config.danger_ticker_flow_radar_max_price_delta_pct
+        <= config.danger_ticker_flow_radar_min_price_delta_pct
+    ):
+        raise LiveStartupError(
+            "Некорректный live config: danger_ticker_flow_radar_max_price_delta_pct must be greater than "
+            "danger_ticker_flow_radar_min_price_delta_pct"
+        )
     if config.max_cycles is not None and (not isinstance(config.max_cycles, int) or config.max_cycles < 0):
         raise LiveStartupError(f"Некорректный live config: max_cycles должен быть целым >= 0, получено {config.max_cycles!r}")
 
