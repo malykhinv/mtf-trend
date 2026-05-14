@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209/P213/P214 proposed
-Last active patch: P214 rolling symbol context snapshot
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed
+Last active patch: P218 budget optional context and warm micro-cache
 Updated: 2026-05-14
 ```
 
@@ -1192,7 +1192,7 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Current commit: UNKNOWN.
 - Next validation: run 30d backtest and inspect runner/fader feature separation before considering any live filter.
 
-## P214 proposed state
+## P214 applied locally state
 - Live now maintains `symbol_context_snapshot.csv` as a cache-only rolling context table.
 - Prior-fast-fade category checks read the prepared snapshot instead of fetching/computing 72h context inside precise scan.
 - Missing/stale snapshots remain explicit retryable category dependencies; there is no synchronous context fallback during precise scan.
@@ -1200,7 +1200,7 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Next validation: run a short dry live and inspect `symbol_context_snapshot.csv`, `symbol_context_snapshot_updated`, `symbol_context_snapshot_*` fields in `live_cycle_summary`, and `reject_prior_fast_fade_filter_unavailable` reasons.
 
 
-## P215 proposed state
+## P215 applied locally state
 - Top-growth snapshots now have a mandatory missed-pump visibility artifact shape.
 - Standalone top-growth can join against a live run with `--visibility-events-csv path/to/live_events.csv` and writes radar/warm/precise/category/execution visibility columns.
 - Missing or invalid live event input remains explicit in `visibility_source_status` and `not_scanned_reason`; no live visibility is fabricated.
@@ -1208,17 +1208,26 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Next validation: run top-growth for a completed hour with a real live_events.csv and inspect whether top movers show the first missing stage clearly.
 
 
-## P216 proposed state
+## P216 applied locally state
 - Live now has a latency SLA controller for optional scan expansion.
 - Active and already-promoted radar precise scans remain protected; optional cold coverage is cut to zero when active/radar due-scan p95 breaches the configured SLA.
 - Warm-watch candidates that reached the precise threshold are deferred with explicit `warm_watch_precise_deferred_latency_sla` events while SLA is breached, not silently dropped.
 - Current commit: UNKNOWN.
 - Next validation: run short dry live and inspect `latency_sla_status`, `latency_sla_due_scan_p95_seconds`, cold gate reason, and `warm_watch_deferred_count` before widening cold/warm budgets.
 
-## P217 proposed state
+## P217 applied locally state
 - Live can optionally use a validated P212 `runner_fader_prepump_feature_separation.csv` as a warm-watch priority scorer only.
 - The scorer is disabled by default and requires an explicit profile CSV; missing or unstable profiles fail startup instead of silently disabling.
 - `symbol_context_snapshot.csv` contract is now v2 and can include cache-only spot/flow prepump features for 30m/1h/2h/6h windows.
 - The score is bounded/additive and only affects warm/radar priority ordering; it does not reject categories, entries, or execution.
 - Current commit: UNKNOWN.
 - Next validation: run a 30d backtest with P212 artifacts, enable scoring in a dry live with the feature separation CSV, then compare warm_watch_precise_promoted symbols against later top_growth without using the score as an entry filter.
+
+
+## P218 proposed state
+- Live context snapshot maintenance is now optional work after the critical scan path, not before batch selection/precise scan.
+- Snapshot updates are SLA-gated, wall-clock budgeted, and cursor advancement is tied to processed symbols only.
+- Snapshot freshness uses an effective runtime window derived from universe refresh throughput, with configured freshness as a minimum.
+- Warm-watch aggTrade micro-cache subscriptions are capped by score/recency; active, opening, current batch, and promoted radar targets remain uncapped by this warm cap.
+- Current commit: UNKNOWN.
+- Next validation: short dry live and inspect `symbol_context_snapshot_skipped`, `symbol_context_snapshot_updated`, `ws_aggtrade_subscription_target`, and `live_cycle_summary` for budget/SLA/cap fields before changing scan budgets.

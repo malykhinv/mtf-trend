@@ -76,6 +76,8 @@ DANGER_ADAPTIVE_COLD_COVERAGE_REST_FETCHED_MS_HIGH = 120_000
 DANGER_ADAPTIVE_COLD_COVERAGE_PENDING_GAPS_HIGH = 3
 DEFAULT_LATENCY_SLA_DUE_SCAN_P95_SECONDS = 15.0
 DEFAULT_LATENCY_SLA_MIN_DUE_SAMPLES = 1
+DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_CYCLE_SECONDS = 0.75
+DEFAULT_WARM_WATCH_AGGTRADE_TARGET_CAP = 40
 LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON = "latency_sla_due_scan_p95_above_threshold"
 DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE = "DANGER_local_memory_position_guard_no_pre_entry_exchange_position_fetch"
 DANGER_CHEAP_FLOW_RADAR_SOURCE = "DANGER_ws_ticker_trade_count_flow_radar"
@@ -1507,6 +1509,7 @@ class LiveAnomalyConfig:
     warm_watch_min_observations_for_precise: int = DEFAULT_WARM_WATCH_MIN_OBSERVATIONS_FOR_PRECISE
     warm_watch_min_price_delta_pct: float = DEFAULT_WARM_WATCH_MIN_PRICE_DELTA_PCT
     warm_watch_max_price_delta_pct: float = DEFAULT_WARM_WATCH_MAX_PRICE_DELTA_PCT
+    warm_watch_aggtrade_target_cap: int = DEFAULT_WARM_WATCH_AGGTRADE_TARGET_CAP
     prepump_warm_watch_scoring_enabled: bool = False
     prepump_warm_watch_profile_csv: Path | None = None
     prepump_warm_watch_min_abs_standardized_diff: float = DEFAULT_PREPUMP_WARM_WATCH_MIN_ABS_STANDARDIZED_DIFF
@@ -1520,6 +1523,7 @@ class LiveAnomalyConfig:
     symbol_context_snapshot_interval_seconds: float = 60.0
     symbol_context_snapshot_symbols_per_cycle: int = 20
     symbol_context_snapshot_fresh_ms: int = 15 * 60_000
+    symbol_context_snapshot_max_cycle_seconds: float = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_CYCLE_SECONDS
     danger_ticker_flow_radar_enabled: bool = True
     danger_ticker_flow_radar_min_quote_volume_delta_usdt: float = DANGER_TICKER_FLOW_RADAR_MIN_QUOTE_VOLUME_DELTA_USDT
     danger_ticker_flow_radar_min_trade_count_delta: int = DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA
@@ -1959,6 +1963,9 @@ class LiveSymbolContextSnapshotCycleStats:
     selected_symbols: tuple[str, ...] = ()
     updated_count: int = 0
     failed_count: int = 0
+    skipped_count: int = 0
+    cycle_budget_seconds: float = 0.0
+    effective_fresh_ms: int = 0
     output_file: str = ""
 
 
@@ -3104,6 +3111,8 @@ class AnomalyMicroLiveRunner:
         self._prior_fast_fade_cache: dict[tuple[str, str, str, int], dict[str, object]] = {}
         self._symbol_context_snapshots: dict[tuple[str, str, str], LiveSymbolContextSnapshot] = {}
         self._symbol_context_snapshot_cursor = 0
+        self._symbol_context_snapshot_last_round_robin_symbols: tuple[str, ...] = ()
+        self._symbol_context_universe_size = 0
         self._last_symbol_context_snapshot_at_ms = 0
         self._last_symbol_context_snapshot_status = "not_started"
         self.artifacts = LiveArtifactWriter(
@@ -3227,6 +3236,7 @@ class AnomalyMicroLiveRunner:
         symbols = self._filter_live_symbol_universe(symbols, explicit_symbols=explicit_symbols)
         if not symbols:
             raise LiveStartupError("Нет символов для live-обхода")
+        self._symbol_context_universe_size = len(symbols)
         category_ids = ",".join(category.category_id for category in self._pump_categories)
         timeframe_pairs_label = _format_timeframe_pairs(self.config.timeframe_pairs)
         self.logger(
@@ -3294,6 +3304,7 @@ class AnomalyMicroLiveRunner:
                     f"{self.config.warm_watch_min_price_delta_pct:.6f}:"
                     f"{self.config.warm_watch_max_price_delta_pct:.6f}"
                 ),
+                "warm_watch_aggtrade_target_cap": int(self.config.warm_watch_aggtrade_target_cap),
                 "prepump_warm_watch_scoring_enabled": bool(self.config.prepump_warm_watch_scoring_enabled),
                 "prepump_warm_watch_scoring_contract": PREPUMP_WARM_WATCH_SCORING_CONTRACT,
                 "prepump_warm_watch_profile_status": self._prepump_warm_watch_profile.status,
@@ -3314,6 +3325,12 @@ class AnomalyMicroLiveRunner:
                     self.config.symbol_context_snapshot_symbols_per_cycle
                 ),
                 "symbol_context_snapshot_fresh_ms": int(self.config.symbol_context_snapshot_fresh_ms),
+                "symbol_context_snapshot_effective_fresh_ms": int(
+                    self._effective_symbol_context_snapshot_fresh_ms(symbols_total=len(symbols))
+                ),
+                "symbol_context_snapshot_max_cycle_seconds": float(
+                    self.config.symbol_context_snapshot_max_cycle_seconds
+                ),
                 "symbol_context_snapshot_file": self.artifacts.symbol_context_snapshot_path.name,
                 "danger_micro_cache_policy": "wider_ws_aggtrade_buffer_for_active_warm_watch_radar_and_current_cold_only_no_full_universe_subscription",
                 "symbol_batch_size_role": "legacy inactive scan cap, not WS market discovery",
@@ -3365,9 +3382,16 @@ class AnomalyMicroLiveRunner:
                 ticker_started = time.monotonic()
                 ticker_stats = self._maybe_update_ticker_radar(symbols)
                 ticker_seconds = time.monotonic() - ticker_started
-                context_snapshot_started = time.monotonic()
-                context_snapshot_stats = self._maybe_update_symbol_context_snapshots(symbols)
-                context_snapshot_seconds = time.monotonic() - context_snapshot_started
+                context_snapshot_stats = LiveSymbolContextSnapshotCycleStats(
+                    enabled=bool(self.config.symbol_context_snapshot_enabled),
+                    attempted=False,
+                    status="not_attempted",
+                    reason="critical_scan_path_pending",
+                    symbols_total=len(symbols),
+                    effective_fresh_ms=self._effective_symbol_context_snapshot_fresh_ms(symbols_total=len(symbols)),
+                    output_file=self.artifacts.symbol_context_snapshot_path.name,
+                )
+                context_snapshot_seconds = 0.0
                 batch_select_started = time.monotonic()
                 batch = self._next_symbol_batch(symbols)
                 batch_select_seconds = time.monotonic() - batch_select_started
@@ -3387,6 +3411,9 @@ class AnomalyMicroLiveRunner:
                 flush_started = time.monotonic()
                 self._flush_live_ohlcv_cache_if_due(reason="cycle")
                 cache_flush_seconds = time.monotonic() - flush_started
+                context_snapshot_started = time.monotonic()
+                context_snapshot_stats = self._maybe_update_symbol_context_snapshots(symbols)
+                context_snapshot_seconds = time.monotonic() - context_snapshot_started
                 cycle_seconds = time.monotonic() - cycle_started
                 opened_total, open_positions, closed_total, orphan_total = self._live_counts()
                 active_symbol_count = self._active_live_symbol_count()
@@ -3452,6 +3479,11 @@ class AnomalyMicroLiveRunner:
                         "symbol_context_snapshot_selected_symbols_count": len(context_snapshot_stats.selected_symbols),
                         "symbol_context_snapshot_updated_count": int(context_snapshot_stats.updated_count),
                         "symbol_context_snapshot_failed_count": int(context_snapshot_stats.failed_count),
+                        "symbol_context_snapshot_skipped_count": int(context_snapshot_stats.skipped_count),
+                        "symbol_context_snapshot_cycle_budget_seconds": round(
+                            float(context_snapshot_stats.cycle_budget_seconds), 3
+                        ),
+                        "symbol_context_snapshot_effective_fresh_ms": int(context_snapshot_stats.effective_fresh_ms),
                         "symbol_context_snapshot_file": context_snapshot_stats.output_file,
                         "danger_flow_radar_promoted_count": ticker_stats.danger_flow_radar_promoted_count,
                         "danger_flow_radar_candidate_count": ticker_stats.danger_flow_radar_candidate_count,
@@ -4330,6 +4362,8 @@ class AnomalyMicroLiveRunner:
                 source="disabled",
                 connection_status="disabled",
             )
+        warm_watch_selected: list[str] = []
+        warm_watch_dropped: list[str] = []
         if not _live_config_has_subminute_entry_pairs(self.config):
             target_symbols: tuple[str, ...] = ()
         else:
@@ -4341,8 +4375,16 @@ class AnomalyMicroLiveRunner:
             with self._state_lock:
                 for state in self._active_symbols.values():
                     target_by_key[_position_symbol_key(state.symbol)] = state.symbol
-                for warm_watch in self._warm_watch.values():
+                ranked_warm_watch = sorted(
+                    self._warm_watch.values(),
+                    key=lambda item: (float(item.score), int(item.updated_at_ms), item.symbol),
+                    reverse=True,
+                )
+                warm_watch_cap = max(1, int(self.config.warm_watch_aggtrade_target_cap))
+                for warm_watch in ranked_warm_watch[:warm_watch_cap]:
                     target_by_key[_position_symbol_key(warm_watch.symbol)] = warm_watch.symbol
+                    warm_watch_selected.append(warm_watch.symbol)
+                warm_watch_dropped = [warm_watch.symbol for warm_watch in ranked_warm_watch[warm_watch_cap:]]
                 for watch in self._ticker_radar_watch.values():
                     target_by_key[_position_symbol_key(watch.symbol)] = watch.symbol
             target_symbols = tuple(target_by_key.values())
@@ -4360,6 +4402,11 @@ class AnomalyMicroLiveRunner:
                 "connection_status": status.get("connection_status", ""),
                 "last_error": str(status.get("last_error", ""))[:500],
                 "target_symbols": status.get("target_symbols", list(target_symbols)),
+                "warm_watch_aggtrade_target_cap": int(self.config.warm_watch_aggtrade_target_cap),
+                "warm_watch_aggtrade_target_count": int(len(warm_watch_selected)),
+                "warm_watch_aggtrade_dropped_count": int(len(warm_watch_dropped)),
+                "warm_watch_aggtrade_dropped_symbols": warm_watch_dropped[:50],
+                "warm_watch_aggtrade_policy": "active_and_ticker_radar_uncapped_warm_watch_bounded_by_score",
             },
         )
         return LiveWsAggTradeSubscriptionStats(
@@ -5201,7 +5248,8 @@ class AnomalyMicroLiveRunner:
         if snapshot is None:
             return LivePrepumpWarmWatchScore(status="unavailable", reason="symbol_context_snapshot_missing")
         snapshot_age_ms = max(0, int(now_ms) - int(snapshot.snapshot_timestamp_ms))
-        if snapshot_age_ms > int(self.config.symbol_context_snapshot_fresh_ms):
+        effective_fresh_ms = self._effective_symbol_context_snapshot_fresh_ms()
+        if snapshot_age_ms > effective_fresh_ms:
             return LivePrepumpWarmWatchScore(status="unavailable", reason="symbol_context_snapshot_stale")
         if snapshot.status != "ok":
             return LivePrepumpWarmWatchScore(
@@ -6112,17 +6160,75 @@ class AnomalyMicroLiveRunner:
     ) -> tuple[str, str, str]:
         return (_position_symbol_key(symbol), levels_timeframe.value, entry_timeframe.value)
 
+    def _effective_symbol_context_snapshot_fresh_ms(self, *, symbols_total: int | None = None) -> int:
+        configured_ms = max(1, int(self.config.symbol_context_snapshot_fresh_ms))
+        total = int(symbols_total if symbols_total is not None else self._symbol_context_universe_size)
+        if total <= 0:
+            return configured_ms
+        per_cycle = max(1, int(self.config.symbol_context_snapshot_symbols_per_cycle))
+        interval_ms = max(1, int(float(self.config.symbol_context_snapshot_interval_seconds) * 1000.0))
+        full_refresh_ms = int(math.ceil(float(total) / float(per_cycle)) * interval_ms)
+        return max(configured_ms, full_refresh_ms * 2)
+
+    def _symbol_context_snapshot_priority_symbols(self) -> tuple[str, ...]:
+        by_key: dict[str, str] = {}
+        with self._state_lock:
+            for position in self._open_positions.values():
+                by_key[_position_symbol_key(position.signal.symbol)] = position.signal.symbol
+            for state in self._active_symbols.values():
+                by_key[_position_symbol_key(state.symbol)] = state.symbol
+            for watch in self._ticker_radar_watch.values():
+                by_key[_position_symbol_key(watch.symbol)] = watch.symbol
+            for warm_watch in self._warm_watch.values():
+                by_key[_position_symbol_key(warm_watch.symbol)] = warm_watch.symbol
+        return tuple(by_key.values())
+
     def _next_symbol_context_snapshot_symbols(self, symbols: list[str], *, limit: int) -> tuple[str, ...]:
         unique_symbols = list(dict.fromkeys(symbols))
+        self._symbol_context_snapshot_last_round_robin_symbols = ()
         if not unique_symbols or limit <= 0:
             return ()
-        count = min(int(limit), len(unique_symbols))
+        universe_by_key = {_position_symbol_key(symbol): symbol for symbol in unique_symbols}
+        selected: list[str] = []
+        selected_keys: set[str] = set()
+        for symbol in self._symbol_context_snapshot_priority_symbols():
+            symbol_key = _position_symbol_key(symbol)
+            universe_symbol = universe_by_key.get(symbol_key)
+            if universe_symbol is None or symbol_key in selected_keys:
+                continue
+            selected.append(universe_symbol)
+            selected_keys.add(symbol_key)
+            if len(selected) >= int(limit):
+                return tuple(selected)
         start_index = self._symbol_context_snapshot_cursor % len(unique_symbols)
-        selected = [unique_symbols[(start_index + offset) % len(unique_symbols)] for offset in range(count)]
-        self._symbol_context_snapshot_cursor = (start_index + count) % len(unique_symbols)
-        return tuple(selected)
+        round_robin: list[str] = []
+        attempts = 0
+        while len(selected) + len(round_robin) < int(limit) and attempts < len(unique_symbols):
+            symbol = unique_symbols[(start_index + attempts) % len(unique_symbols)]
+            attempts += 1
+            symbol_key = _position_symbol_key(symbol)
+            if symbol_key in selected_keys:
+                continue
+            round_robin.append(symbol)
+            selected_keys.add(symbol_key)
+        self._symbol_context_snapshot_last_round_robin_symbols = tuple(round_robin)
+        return tuple([*selected, *round_robin])
+
+    def _advance_symbol_context_snapshot_cursor(self, symbols: list[str], *, processed_symbols: tuple[str, ...]) -> None:
+        unique_symbols = list(dict.fromkeys(symbols))
+        if not unique_symbols or not processed_symbols:
+            return
+        rr_keys = {_position_symbol_key(symbol) for symbol in self._symbol_context_snapshot_last_round_robin_symbols}
+        processed_round_robin = sum(1 for symbol in processed_symbols if _position_symbol_key(symbol) in rr_keys)
+        if processed_round_robin <= 0:
+            return
+        self._symbol_context_snapshot_cursor = (
+            (self._symbol_context_snapshot_cursor % len(unique_symbols)) + int(processed_round_robin)
+        ) % len(unique_symbols)
 
     def _maybe_update_symbol_context_snapshots(self, symbols: list[str]) -> LiveSymbolContextSnapshotCycleStats:
+        effective_fresh_ms = self._effective_symbol_context_snapshot_fresh_ms(symbols_total=len(symbols))
+        cycle_budget_seconds = max(0.0, float(self.config.symbol_context_snapshot_max_cycle_seconds))
         if not self.config.symbol_context_snapshot_enabled:
             return LiveSymbolContextSnapshotCycleStats(
                 enabled=False,
@@ -6130,6 +6236,8 @@ class AnomalyMicroLiveRunner:
                 status="disabled",
                 reason="symbol_context_snapshot_disabled",
                 symbols_total=len(symbols),
+                cycle_budget_seconds=cycle_budget_seconds,
+                effective_fresh_ms=effective_fresh_ms,
             )
         if self._ohlcv_cache_storage is None:
             self._last_symbol_context_snapshot_status = "cache_storage_unavailable"
@@ -6139,9 +6247,39 @@ class AnomalyMicroLiveRunner:
                 status="cache_storage_unavailable",
                 reason="live_ohlcv_cache_required_for_cache_only_context_snapshot",
                 symbols_total=len(symbols),
+                cycle_budget_seconds=cycle_budget_seconds,
+                effective_fresh_ms=effective_fresh_ms,
                 output_file=self.artifacts.symbol_context_snapshot_path.name,
             )
         now_ms = int(time.time() * 1000)
+        latency_sla = self._current_latency_sla_backlog_status(now_ms=now_ms)
+        if not latency_sla.optional_scans_allowed:
+            self._last_symbol_context_snapshot_status = "skipped_latency_sla"
+            self.artifacts.append_event(
+                "symbol_context_snapshot_skipped",
+                "__live__",
+                {
+                    "status": "skipped_latency_sla",
+                    "reason": latency_sla.reason or LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON,
+                    "contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
+                    "symbols_total": int(len(symbols)),
+                    "cycle_budget_seconds": float(cycle_budget_seconds),
+                    "effective_fresh_ms": int(effective_fresh_ms),
+                    "policy": "context_snapshot_is_optional_and_never_runs_while_active_or_radar_due_latency_sla_is_breached",
+                    **latency_sla.event_payload(),
+                },
+            )
+            return LiveSymbolContextSnapshotCycleStats(
+                enabled=True,
+                attempted=False,
+                status="skipped_latency_sla",
+                reason=latency_sla.reason or LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON,
+                symbols_total=len(symbols),
+                skipped_count=len(symbols),
+                cycle_budget_seconds=cycle_budget_seconds,
+                effective_fresh_ms=effective_fresh_ms,
+                output_file=self.artifacts.symbol_context_snapshot_path.name,
+            )
         interval_ms = max(1, int(float(self.config.symbol_context_snapshot_interval_seconds) * 1000.0))
         if self._last_symbol_context_snapshot_at_ms and now_ms - self._last_symbol_context_snapshot_at_ms < interval_ms:
             return LiveSymbolContextSnapshotCycleStats(
@@ -6150,6 +6288,8 @@ class AnomalyMicroLiveRunner:
                 status="skipped_interval",
                 reason="interval_not_elapsed",
                 symbols_total=len(symbols),
+                cycle_budget_seconds=cycle_budget_seconds,
+                effective_fresh_ms=effective_fresh_ms,
                 output_file=self.artifacts.symbol_context_snapshot_path.name,
             )
         self._last_symbol_context_snapshot_at_ms = now_ms
@@ -6165,11 +6305,19 @@ class AnomalyMicroLiveRunner:
                 status="empty_universe",
                 reason="no_symbols_to_snapshot",
                 symbols_total=len(symbols),
+                cycle_budget_seconds=cycle_budget_seconds,
+                effective_fresh_ms=effective_fresh_ms,
                 output_file=self.artifacts.symbol_context_snapshot_path.name,
             )
         updated_count = 0
         failed_count = 0
+        processed_symbols: list[str] = []
+        started_at = time.monotonic()
+        budget_exhausted = False
         for symbol in selected_symbols:
+            if processed_symbols and time.monotonic() - started_at >= cycle_budget_seconds:
+                budget_exhausted = True
+                break
             for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
                 snapshot = self._compute_symbol_context_snapshot(
                     symbol,
@@ -6182,10 +6330,22 @@ class AnomalyMicroLiveRunner:
                     updated_count += 1
                 else:
                     failed_count += 1
+            processed_symbols.append(symbol)
+            if time.monotonic() - started_at >= cycle_budget_seconds:
+                budget_exhausted = len(processed_symbols) < len(selected_symbols)
+                if budget_exhausted:
+                    break
+        self._advance_symbol_context_snapshot_cursor(symbols, processed_symbols=tuple(processed_symbols))
+        skipped_count = max(0, len(selected_symbols) - len(processed_symbols))
         output_path = self.artifacts.write_symbol_context_snapshot(list(self._symbol_context_snapshots.values()))
-        status = "ok" if failed_count == 0 else "partial" if updated_count else "failed"
-        reason = "ok" if failed_count == 0 else "some_snapshots_unavailable" if updated_count else "all_snapshots_unavailable"
+        if budget_exhausted:
+            status = "partial_budget" if processed_symbols else "skipped_budget"
+            reason = "cycle_budget_exhausted"
+        else:
+            status = "ok" if failed_count == 0 else "partial" if updated_count else "failed"
+            reason = "ok" if failed_count == 0 else "some_snapshots_unavailable" if updated_count else "all_snapshots_unavailable"
         self._last_symbol_context_snapshot_status = status
+        elapsed_seconds = time.monotonic() - started_at
         self.artifacts.append_event(
             "symbol_context_snapshot_updated",
             "__live__",
@@ -6195,16 +6355,27 @@ class AnomalyMicroLiveRunner:
                 "contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
                 "source": "cache_only_rolling_context_snapshot",
                 "symbols_total": int(len(symbols)),
-                "selected_symbols": list(selected_symbols),
-                "selected_symbols_count": int(len(selected_symbols)),
+                "selected_symbols": list(processed_symbols),
+                "selected_symbols_count": int(len(processed_symbols)),
+                "requested_symbols_count": int(len(selected_symbols)),
+                "priority_symbols_count": int(
+                    len(selected_symbols) - len(self._symbol_context_snapshot_last_round_robin_symbols)
+                ),
+                "round_robin_symbols_count": int(len(self._symbol_context_snapshot_last_round_robin_symbols)),
+                "skipped_symbols_count": int(skipped_count),
+                "skipped_symbols": list(selected_symbols[len(processed_symbols):]),
                 "timeframe_pairs": [
                     f"{levels.value}/{entry.value}" for levels, entry in self.config.timeframe_pairs
                 ],
                 "updated_count": int(updated_count),
                 "failed_count": int(failed_count),
                 "snapshot_count_total": int(len(self._symbol_context_snapshots)),
+                "elapsed_seconds": round(float(elapsed_seconds), 3),
+                "cycle_budget_seconds": float(cycle_budget_seconds),
+                "configured_fresh_ms": int(self.config.symbol_context_snapshot_fresh_ms),
+                "effective_fresh_ms": int(effective_fresh_ms),
                 "output_file": output_path.name,
-                "policy": "precise_scan_uses_ready_snapshot_no_synchronous_prior_fast_fade_fetch",
+                "policy": "optional_budgeted_context_snapshot_after_critical_scan_path_no_sync_precise_scan_fetch",
             },
         )
         return LiveSymbolContextSnapshotCycleStats(
@@ -6213,9 +6384,12 @@ class AnomalyMicroLiveRunner:
             status=status,
             reason=reason,
             symbols_total=len(symbols),
-            selected_symbols=selected_symbols,
+            selected_symbols=tuple(processed_symbols),
             updated_count=updated_count,
             failed_count=failed_count,
+            skipped_count=skipped_count,
+            cycle_budget_seconds=cycle_budget_seconds,
+            effective_fresh_ms=effective_fresh_ms,
             output_file=output_path.name,
         )
 
@@ -6233,7 +6407,7 @@ class AnomalyMicroLiveRunner:
         snapshot_ts = int(now_ms)
         decision_ts = _latest_closed_candle_start_ms(context_timeframe, now_ms=snapshot_ts)
         history_padding_ms = max(
-            int(self.config.symbol_context_snapshot_fresh_ms),
+            int(self._effective_symbol_context_snapshot_fresh_ms()),
             int(float(self.config.symbol_context_snapshot_interval_seconds) * 1000.0),
         )
         history_start_ms = decision_ts - 3 * 86_400_000 - history_padding_ms
@@ -6486,7 +6660,8 @@ class AnomalyMicroLiveRunner:
             "snapshot_source": snapshot.source,
             "snapshot_timestamp_ms": int(snapshot.snapshot_timestamp_ms),
             "snapshot_age_ms": int(snapshot_age_ms),
-            "snapshot_fresh_ms": int(self.config.symbol_context_snapshot_fresh_ms),
+            "snapshot_fresh_ms": int(self._effective_symbol_context_snapshot_fresh_ms()),
+            "snapshot_configured_fresh_ms": int(self.config.symbol_context_snapshot_fresh_ms),
             "baseline_status": snapshot.baseline_status,
             "baseline_quote_volume_median": _symbol_context_csv_float(snapshot.baseline_quote_volume_median),
             "baseline_trade_count_median": _symbol_context_csv_float(snapshot.baseline_trade_count_median),
@@ -6513,7 +6688,7 @@ class AnomalyMicroLiveRunner:
                 else ""
             ),
         }
-        if snapshot_age_ms > int(self.config.symbol_context_snapshot_fresh_ms):
+        if snapshot_age_ms > self._effective_symbol_context_snapshot_fresh_ms():
             result = {
                 **snapshot_details,
                 "status": "unavailable",
@@ -10103,6 +10278,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "ticker_radar_max_promotions_per_cycle": (config.ticker_radar_max_promotions_per_cycle, 1),
         "warm_watch_ttl_ms": (config.warm_watch_ttl_ms, 1),
         "warm_watch_min_observations_for_precise": (config.warm_watch_min_observations_for_precise, 1),
+        "warm_watch_aggtrade_target_cap": (config.warm_watch_aggtrade_target_cap, 1),
         "prepump_warm_watch_min_runner_rows": (config.prepump_warm_watch_min_runner_rows, 1),
         "prepump_warm_watch_min_fader_rows": (config.prepump_warm_watch_min_fader_rows, 1),
         "prepump_warm_watch_max_features": (config.prepump_warm_watch_max_features, 1),
@@ -10200,6 +10376,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "danger_ticker_flow_radar_min_quote_volume_delta_usdt": config.danger_ticker_flow_radar_min_quote_volume_delta_usdt,
         "danger_ticker_flow_radar_min_trade_count_delta_ratio": config.danger_ticker_flow_radar_min_trade_count_delta_ratio,
         "symbol_context_snapshot_interval_seconds": config.symbol_context_snapshot_interval_seconds,
+        "symbol_context_snapshot_max_cycle_seconds": config.symbol_context_snapshot_max_cycle_seconds,
         "latency_sla_due_scan_p95_seconds": config.latency_sla_due_scan_p95_seconds,
         "prepump_warm_watch_min_abs_standardized_diff": config.prepump_warm_watch_min_abs_standardized_diff,
     }

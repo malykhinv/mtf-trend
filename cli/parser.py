@@ -306,6 +306,12 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--warm-watch-min-price-delta-pct", type=float, default=-0.001)
     anomaly_live.add_argument("--warm-watch-max-price-delta-pct", type=float, default=0.012)
     anomaly_live.add_argument(
+        "--warm-watch-aggtrade-target-cap",
+        type=_positive_int_for("--warm-watch-aggtrade-target-cap"),
+        default=40,
+        help="Hard cap for warm-watch symbols subscribed to WS aggTrade micro-cache; active and radar targets are not capped here.",
+    )
+    anomaly_live.add_argument(
         "--prepump-warm-watch-scoring-enabled",
         type=_str_to_bool,
         default=False,
@@ -353,6 +359,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--symbol-context-snapshot-fresh-ms",
         type=_positive_int_for("--symbol-context-snapshot-fresh-ms"),
         default=900_000,
+        help="Configured minimum snapshot freshness. Runtime effective freshness is auto-raised when universe refresh throughput is slower.",
+    )
+    anomaly_live.add_argument(
+        "--symbol-context-snapshot-max-cycle-seconds",
+        type=float,
+        default=0.75,
+        help="Maximum optional wall-clock budget per live cycle for cache-only symbol context snapshot updates.",
     )
     anomaly_live.add_argument("--max-signal-age-ms", type=_positive_int_for("--max-signal-age-ms"), default=60_000)
     anomaly_live.add_argument("--max-entry-price-drift-pct", type=float, default=0.003)
