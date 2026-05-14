@@ -2466,3 +2466,48 @@ Expected smoke readout:
 ```text
 live_events.csv shows aggtrade_rest_gap_prefetch for active/radar symbols with WS gaps; subsequent ws_aggtrade_frame_read events for the same symbol/time window should have fewer network backfill ranges. live_cycle_summary exposes aggtrade_gap_prefetch_* counters. Oversized missing ranges remain coverage_pending.
 ```
+
+## 2026-05-14 - P190 proposed: idempotent live order placement and pre-stop exposure cleanup
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+data/exchanges/ccxt_futures_client.py
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Remove ambiguous state-changing REST retries from live order placement and close any verified post-entry exposure before raising pre-stop integrity errors.
+```
+
+Changes:
+
+```text
+- Live market and STOP_MARKET order placement now requires a deterministic client order id.
+- create_order is sent once; only ambiguous transport/order-mutation failures are reconciled by client order id.
+- Non-ambiguous exchange validation errors are not retried and are not relabeled as network errors.
+- Entry, TP1, stop, and protective reduce-only exits all use explicit client order ids in live artifacts.
+- Pre-stop entry integrity failures read the actual exchange position and either record no exposure or send a verified reduce-only close before raising.
+- No feature flags, no silent fallback, no candle-price fill substitution, and no trading logic threshold changes.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+```
+
+Expected smoke readout:
+
+```text
+position_opened, position_stop_order_verified, tp1_partial_exit_filled, and unprotected_entry_reduce_only_exit_filled events include client_order_id. A synthetic ambiguous create_order transport failure should reconcile by client order id instead of submitting a duplicate order. A synthetic fill/position mismatch before initial stop should emit an unprotected_entry_* event before the live runner stops with LiveDataIntegrityError.
+```

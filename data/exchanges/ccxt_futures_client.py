@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import time
@@ -421,22 +422,131 @@ class CcxtFuturesClient(ExchangeClient):
                 return parsed, source
         return None, "missing"
 
-    def create_market_order(self, symbol: str, side: str, amount: float, *, reduce_only: bool = False) -> dict[str, object]:
-        """Places a real REST market order through CCXT."""
+    @staticmethod
+    def _normalize_client_order_id(client_order_id: str) -> str:
+        raw = str(client_order_id).strip()
+        if not raw:
+            raise ValueError("client_order_id is required for live order placement")
+        normalized = re.sub(r"[^A-Za-z0-9_-]", "_", raw)
+        if len(normalized) <= 36:
+            return normalized
+        digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+        return f"{normalized[:19]}_{digest}"
+
+    def _create_order_client_id_param(self, client_order_id: str) -> dict[str, object]:
+        normalized = self._normalize_client_order_id(client_order_id)
+        if self.exchange == Exchange.BINANCE:
+            return {"newClientOrderId": normalized}
+        raise NotImplementedError("idempotent live order placement is implemented only for Binance futures")
+
+    def _fetch_order_client_id_param(self, client_order_id: str) -> dict[str, object]:
+        normalized = self._normalize_client_order_id(client_order_id)
+        if self.exchange == Exchange.BINANCE:
+            return {"origClientOrderId": normalized}
+        raise NotImplementedError("client-order-id order reconciliation is implemented only for Binance futures")
+
+    @staticmethod
+    def _resolve_order_id(payload: dict[str, object]) -> str | None:
+        value = payload.get("id")
+        if value is None:
+            info = payload.get("info")
+            if isinstance(info, dict):
+                value = info.get("orderId")
+        if value is None:
+            return None
+        order_id = str(value).strip()
+        return order_id or None
+
+    def fetch_order_by_client_order_id(self, symbol: str, client_order_id: str) -> dict[str, object]:
+        """Fetches an exchange order by explicit client order id; unresolved lookup is a hard error."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        payload = self._retry_exchange_call(
+            operation="ccxt_fetch_order_by_client_order_id",
+            symbol=symbol,
+            endpoint="fetch_order",
+            call=raw_client.fetch_order,
+            args=(None, symbol),
+            params=self._fetch_order_client_id_param(client_order_id),
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError("fetch_order by client order id returned invalid payload")
+        return dict(payload)
+
+
+    @staticmethod
+    def _is_ambiguous_order_mutation_exception(exc: Exception) -> bool:
+        if ccxt is None:
+            return False
+        ambiguous_names = (
+            "NetworkError",
+            "RequestTimeout",
+            "ExchangeNotAvailable",
+            "DDoSProtection",
+            "RateLimitExceeded",
+        )
+        ambiguous_types = tuple(
+            exc_type
+            for name in ambiguous_names
+            if isinstance((exc_type := getattr(ccxt, name, None)), type)
+        )
+        return bool(ambiguous_types) and isinstance(exc, ambiguous_types)
+
+    def _create_order_once_or_reconcile(
+        self,
+        *,
+        symbol: str,
+        order_type: str,
+        side: str,
+        amount: str,
+        client_order_id: str,
+        params: dict[str, object],
+        operation: str,
+    ) -> dict[str, object]:
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        order_params = dict(params)
+        order_params.update(self._create_order_client_id_param(client_order_id))
+        try:
+            payload = raw_client.create_order(symbol, order_type, side, amount, params=order_params)
+        except Exception as create_exc:
+            if not self._is_ambiguous_order_mutation_exception(create_exc):
+                raise
+            try:
+                return self.fetch_order_by_client_order_id(symbol, client_order_id)
+            except Exception as reconcile_exc:
+                raise ExchangeConnectivityError(
+                    f"Ambiguous create_order result unresolved: operation={operation} symbol={symbol} "
+                    f"client_order_id={self._normalize_client_order_id(client_order_id)} "
+                    f"create_error={type(create_exc).__name__}: {create_exc} "
+                    f"reconcile_error={type(reconcile_exc).__name__}: {reconcile_exc}"
+                ) from create_exc
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{operation} returned invalid payload")
+        return dict(payload)
+
+    def create_market_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        *,
+        reduce_only: bool,
+        client_order_id: str,
+    ) -> dict[str, object]:
+        """Places one market order with deterministic client id and reconciles ambiguous transport failure."""
         self._ensure_markets_loaded()
         raw_client = cast(Any, self._client)
         precise_amount = raw_client.amount_to_precision(symbol, amount)
-        payload = self._retry_exchange_call(
-            operation="ccxt_create_market_order",
+        return self._create_order_once_or_reconcile(
             symbol=symbol,
-            endpoint="create_order",
-            call=raw_client.create_order,
-            args=(symbol, "market", side, precise_amount),
+            order_type="market",
+            side=side,
+            amount=precise_amount,
+            client_order_id=client_order_id,
             params={"reduceOnly": reduce_only},
+            operation="ccxt_create_market_order",
         )
-        if not isinstance(payload, dict):
-            raise RuntimeError("create_order returned invalid payload")
-        return dict(payload)
 
     def create_market_order_with_fill(
         self,
@@ -444,7 +554,8 @@ class CcxtFuturesClient(ExchangeClient):
         side: str,
         amount: float,
         *,
-        reduce_only: bool = False,
+        reduce_only: bool,
+        client_order_id: str,
     ) -> ExchangeOrderFill:
         """Places a market order and returns verified execution fill fields.
 
@@ -452,8 +563,8 @@ class CcxtFuturesClient(ExchangeClient):
         If exchange order/trade payloads do not expose fill price and amount, the caller
         gets a hard error instead of an optimistic synthetic fill.
         """
-        order = self.create_market_order(symbol, side, amount, reduce_only=reduce_only)
-        order_id = str(order.get("id") or "").strip()
+        order = self.create_market_order(symbol, side, amount, reduce_only=reduce_only, client_order_id=client_order_id)
+        order_id = self._resolve_order_id(order)
         if not order_id:
             raise RuntimeError("create_order returned no order id")
         return self.fetch_order_fill(symbol, order_id, submitted_order=order)
@@ -637,23 +748,29 @@ class CcxtFuturesClient(ExchangeClient):
                 return parsed
         return None
 
-    def create_stop_market_order(self, symbol: str, side: str, amount: float, stop_price: float) -> dict[str, object]:
-        """Places a reduce-only STOP_MARKET order. If this fails, caller must close exposure immediately."""
+    def create_stop_market_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        stop_price: float,
+        *,
+        client_order_id: str,
+    ) -> dict[str, object]:
+        """Places one reduce-only STOP_MARKET order with deterministic client id."""
         self._ensure_markets_loaded()
         raw_client = cast(Any, self._client)
         precise_amount = raw_client.amount_to_precision(symbol, amount)
         precise_stop = raw_client.price_to_precision(symbol, stop_price)
-        payload = self._retry_exchange_call(
-            operation="ccxt_create_stop_market_order",
+        return self._create_order_once_or_reconcile(
             symbol=symbol,
-            endpoint="create_order",
-            call=raw_client.create_order,
-            args=(symbol, "STOP_MARKET", side, precise_amount),
+            order_type="STOP_MARKET",
+            side=side,
+            amount=precise_amount,
+            client_order_id=client_order_id,
             params={"stopPrice": precise_stop, "reduceOnly": True, "workingType": "MARK_PRICE"},
+            operation="ccxt_create_stop_market_order",
         )
-        if not isinstance(payload, dict):
-            raise RuntimeError("create_order returned invalid stop payload")
-        return dict(payload)
 
     def cancel_order(self, symbol: str, order_id: str) -> dict[str, object]:
         """Cancels an exchange order by id."""

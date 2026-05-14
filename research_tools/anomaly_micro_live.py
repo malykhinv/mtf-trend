@@ -5301,20 +5301,52 @@ class AnomalyMicroLiveRunner:
                 )
                 return
             entry_order_submitted_at_ms = int(time.time() * 1000)
-            fill = self.exchange.create_market_order_with_fill(signal.symbol, "buy", amount_requested)
+            entry_client_order_id = _live_client_order_id(
+                "entry",
+                signal.symbol,
+                signal.levels_timeframe.value,
+                signal.entry_timeframe.value,
+                signal.decision_timestamp_ms,
+                entry_order_submitted_at_ms,
+            )
+            fill = self.exchange.create_market_order_with_fill(
+                signal.symbol,
+                "buy",
+                amount_requested,
+                reduce_only=False,
+                client_order_id=entry_client_order_id,
+            )
             post_position_amount = float(self.exchange.fetch_symbol_position_amount(signal.symbol))
             position_delta_amount = post_position_amount - pre_position_amount
             if not math.isfinite(post_position_amount) or not math.isfinite(position_delta_amount):
+                self._close_unprotected_entry_exposure(
+                    signal.symbol,
+                    amount=fill.filled_amount,
+                    position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
+                    reason="invalid_post_entry_position_amount",
+                )
                 raise LiveDataIntegrityError(
                     f"invalid post-entry position amount: symbol={signal.symbol} pre={pre_position_amount} post={post_position_amount}"
                 )
             if position_delta_amount <= 0.0:
+                self._close_unprotected_entry_exposure(
+                    signal.symbol,
+                    amount=fill.filled_amount,
+                    position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
+                    reason="entry_fill_without_position_delta",
+                )
                 raise LiveDataIntegrityError(
                     f"entry order filled but exchange position did not increase: symbol={signal.symbol} order_id={fill.order_id} "
                     f"pre={pre_position_amount} post={post_position_amount}"
                 )
             fill_position_slippage = abs(position_delta_amount - fill.filled_amount) / max(fill.filled_amount, 1e-12)
             if fill_position_slippage > self.config.max_position_amount_slippage_ratio:
+                self._close_unprotected_entry_exposure(
+                    signal.symbol,
+                    amount=position_delta_amount,
+                    position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
+                    reason="entry_fill_position_amount_mismatch",
+                )
                 raise LiveDataIntegrityError(
                     f"entry fill/position amount mismatch: symbol={signal.symbol} order_id={fill.order_id} "
                     f"filled={fill.filled_amount} delta={position_delta_amount}"
@@ -5324,12 +5356,22 @@ class AnomalyMicroLiveRunner:
             actual_initial_risk = actual_entry_price - actual_stop_price
             actual_initial_risk_pct = _safe_divide(actual_initial_risk, actual_entry_price)
             if not math.isfinite(actual_initial_risk) or actual_initial_risk <= 0.0:
-                self.exchange.create_market_order(signal.symbol, "sell", position_delta_amount, reduce_only=True)
+                self._close_unprotected_entry_exposure(
+                    signal.symbol,
+                    amount=position_delta_amount,
+                    position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
+                    reason="invalid_actual_initial_risk_after_fill",
+                )
                 raise LiveDataIntegrityError(
                     f"invalid actual initial risk after fill: symbol={signal.symbol} entry={actual_entry_price} stop={actual_stop_price}"
                 )
             if not math.isfinite(actual_initial_risk_pct) or actual_initial_risk_pct > self.config.max_initial_risk_pct:
-                self.exchange.create_market_order(signal.symbol, "sell", position_delta_amount, reduce_only=True)
+                self._close_unprotected_entry_exposure(
+                    signal.symbol,
+                    amount=position_delta_amount,
+                    position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
+                    reason="actual_initial_risk_too_wide_after_fill",
+                )
                 raise LiveDataIntegrityError(
                     f"actual initial risk too wide after fill: symbol={signal.symbol} risk_pct={actual_initial_risk_pct} "
                     f"max={self.config.max_initial_risk_pct}"
@@ -5432,6 +5474,7 @@ class AnomalyMicroLiveRunner:
                 "live_scan_gap_ltf_candles": position.live_scan_gap_ltf_candles,
                 "entry_fill_timestamp_ms": position.entry_fill_timestamp_ms,
                 "entry_order_submitted_at_ms": position.entry_order_submitted_at_ms,
+                "entry_client_order_id": entry_client_order_id,
                 "entry_filled_amount": position.entry_filled_amount,
                 "position_delta_amount": position.position_delta_amount,
                 "base_tp1_price": _finite_or_none(actual_base_tp1_price),
@@ -5738,7 +5781,19 @@ class AnomalyMicroLiveRunner:
                     close_amount = max(min(managed_amount, previous_remaining_amount) * 0.5, 0.0)
                     tp1_fill = None
                     if close_amount > 0.0:
-                        tp1_fill = self.exchange.create_market_order_with_fill(signal.symbol, "sell", close_amount, reduce_only=True)
+                        tp1_client_order_id = _live_client_order_id(
+                            "tp1",
+                            signal.symbol,
+                            position.position_id,
+                            int(time.time() * 1000),
+                        )
+                        tp1_fill = self.exchange.create_market_order_with_fill(
+                            signal.symbol,
+                            "sell",
+                            close_amount,
+                            reduce_only=True,
+                            client_order_id=tp1_client_order_id,
+                        )
                         if tp1_fill.filled_amount <= 0.0 or not math.isfinite(tp1_fill.average_price):
                             raise LiveDataIntegrityError(
                                 f"TP1 reduce-only fill invalid: position_id={position.position_id} order_id={tp1_fill.order_id}"
@@ -5750,6 +5805,7 @@ class AnomalyMicroLiveRunner:
                             {
                                 "position_id": position.position_id,
                                 "order_id": tp1_fill.order_id,
+                                "client_order_id": tp1_client_order_id,
                                 "status": tp1_fill.status,
                                 "fill_timestamp_ms": tp1_fill.timestamp_ms,
                                 "fill_price": tp1_fill.average_price,
@@ -6955,8 +7011,15 @@ class AnomalyMicroLiveRunner:
             raise LiveDataIntegrityError(f"invalid stop order amount: position_id={position_id} amount={amount}")
         if not math.isfinite(stop_price) or stop_price <= 0.0:
             raise LiveDataIntegrityError(f"invalid stop order price: position_id={position_id} stop_price={stop_price}")
-        stop_order = self.exchange.create_stop_market_order(symbol, "sell", amount, stop_price)
-        stop_order_id = str(stop_order.get("id") or "").strip()
+        stop_client_order_id = _live_client_order_id("stop", symbol, position_id, reason)
+        stop_order = self.exchange.create_stop_market_order(
+            symbol,
+            "sell",
+            amount,
+            stop_price,
+            client_order_id=stop_client_order_id,
+        )
+        stop_order_id = _resolve_order_id(stop_order) or ""
         if not stop_order_id:
             raise LiveDataIntegrityError(f"stop order returned no id: position_id={position_id} symbol={symbol}")
         self._verify_open_stop_order(
@@ -6974,6 +7037,7 @@ class AnomalyMicroLiveRunner:
             {
                 "position_id": position_id,
                 "order_id": stop_order_id,
+                "client_order_id": stop_client_order_id,
                 "stop_price": stop_price,
                 "amount": amount,
                 "reason": reason,
@@ -7041,14 +7105,56 @@ class AnomalyMicroLiveRunner:
         reason: str,
     ) -> None:
         try:
-            fill = self.exchange.create_market_order_with_fill(symbol, "sell", amount, reduce_only=True)
+            actual_amount = abs(float(self.exchange.fetch_symbol_position_amount(symbol)))
+        except Exception as exc:
+            self.artifacts.append_event(
+                "unprotected_entry_position_read_failed",
+                symbol,
+                {
+                    "position_id": position_id,
+                    "amount_requested": amount,
+                    "reason": reason,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            raise LiveDataIntegrityError(
+                f"unprotected entry exposure amount could not be read: position_id={position_id} symbol={symbol} reason={reason}"
+            ) from exc
+        if not math.isfinite(actual_amount):
+            self.artifacts.append_event(
+                "unprotected_entry_position_amount_invalid",
+                symbol,
+                {"position_id": position_id, "amount_requested": amount, "actual_amount": actual_amount, "reason": reason},
+            )
+            raise LiveDataIntegrityError(
+                f"unprotected entry exposure amount is invalid: position_id={position_id} symbol={symbol} reason={reason}"
+            )
+        if actual_amount <= 0.0:
+            self.artifacts.append_event(
+                "unprotected_entry_no_exchange_exposure",
+                symbol,
+                {"position_id": position_id, "amount_requested": amount, "reason": reason},
+            )
+            return
+        close_amount = min(float(amount), actual_amount) if math.isfinite(amount) and amount > 0.0 else actual_amount
+        try:
+            client_order_id = _live_client_order_id("protect", symbol, position_id, reason, int(time.time() * 1000))
+            fill = self.exchange.create_market_order_with_fill(
+                symbol,
+                "sell",
+                close_amount,
+                reduce_only=True,
+                client_order_id=client_order_id,
+            )
         except Exception as exc:
             self.artifacts.append_event(
                 "unprotected_entry_reduce_only_exit_failed",
                 symbol,
                 {
                     "position_id": position_id,
-                    "amount": amount,
+                    "amount_requested": amount,
+                    "actual_amount": actual_amount,
+                    "close_amount": close_amount,
                     "reason": reason,
                     "error": f"{type(exc).__name__}: {exc}",
                 },
@@ -7062,6 +7168,9 @@ class AnomalyMicroLiveRunner:
             {
                 "position_id": position_id,
                 "amount_requested": amount,
+                "actual_amount": actual_amount,
+                "close_amount": close_amount,
+                "client_order_id": client_order_id,
                 "order_id": fill.order_id,
                 "status": fill.status,
                 "fill_timestamp_ms": fill.timestamp_ms,
@@ -7652,6 +7761,14 @@ def _format_timeframe_pairs(timeframe_pairs: tuple[tuple[Timeframe, Timeframe], 
 
 def _position_symbol_key(symbol: str) -> str:
     return _compact_symbol(symbol)
+
+
+def _live_client_order_id(prefix: str, symbol: str, *parts: object) -> str:
+    compact_symbol = re.sub(r"[^A-Za-z0-9]", "", _compact_symbol(symbol).upper()) or "SYM"
+    raw = "|".join([prefix, compact_symbol, *(str(part) for part in parts)])
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+    normalized_prefix = re.sub(r"[^A-Za-z0-9_-]", "_", str(prefix).strip())[:8] or "live"
+    return f"pa_{normalized_prefix}_{compact_symbol[:8]}_{digest}"[:36]
 
 
 def _resolve_order_id(order: dict[str, object]) -> str | None:

@@ -1116,3 +1116,13 @@ Nearby missing ranges are coalesced and padded by 60s within the requested scan 
 This is data-access/runtime only: missing coverage remains explicit, max WS backfill budget still gates whether a signal is evaluated, and no strategy thresholds or execution rules changed.
 Next validation: run 10-15 minutes live and compare aggtrade_network_calls, aggtrade_process_cache_hits, aggtrade_coalesced_missing_ranges, aggtrade_rest_fetched_ms, ws_aggtrade_backfill_reads, signal_scan_seconds, and signal_entry_ws_aggtrade_pending_count.
 ```
+
+
+## 2026-05-14 - Live execution reliability state after P190 proposal
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+P190 targets the main remaining execution reliability gap: ambiguous state-changing create_order retries and pre-stop exposure cleanup.
+Normal successful order placement adds no extra REST calls. Reconciliation only runs after an ambiguous transport/order-mutation failure. Validation/exchange errors remain hard failures, not network fallbacks. The next reliability gaps to reach 10/10 are startup recovery for existing exchange positions/local ledger, explicit account-mode preflight, and optional exchange-native TP protection if TP1 miss risk becomes material.
+```
