@@ -161,6 +161,35 @@ TOP_GROWTH_INDEX_COLUMNS = (
     "top_file",
     "status_file",
 )
+SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v1_cache_only_prior_fast_fade"
+SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
+    "snapshot_timestamp_utc",
+    "snapshot_timestamp_ms",
+    "symbol",
+    "levels_tf",
+    "entry_tf",
+    "status",
+    "reason",
+    "source",
+    "contract",
+    "context_timeframe",
+    "history_start_timestamp_ms",
+    "context_start_timestamp_ms",
+    "context_cache_end_timestamp_ms",
+    "effective_cache_end_timestamp_ms",
+    "ignored_tail_ms",
+    "baseline_candles",
+    "baseline_status",
+    "baseline_quote_volume_median",
+    "baseline_trade_count_median",
+    "baseline_range_pct_median",
+    "latest_context_close",
+    "prior_spike_count_available",
+    "prior_fast_fade_count_available",
+    "prior_spike_timestamps_ms",
+    "prior_fast_fade_timestamps_ms",
+    "compute_seconds",
+)
 LIVE_LEDGER_COLUMNS = (
     "position_id",
     "status",
@@ -1317,6 +1346,10 @@ class LiveAnomalyConfig:
     warm_watch_min_observations_for_precise: int = DEFAULT_WARM_WATCH_MIN_OBSERVATIONS_FOR_PRECISE
     warm_watch_min_price_delta_pct: float = DEFAULT_WARM_WATCH_MIN_PRICE_DELTA_PCT
     warm_watch_max_price_delta_pct: float = DEFAULT_WARM_WATCH_MAX_PRICE_DELTA_PCT
+    symbol_context_snapshot_enabled: bool = True
+    symbol_context_snapshot_interval_seconds: float = 60.0
+    symbol_context_snapshot_symbols_per_cycle: int = 20
+    symbol_context_snapshot_fresh_ms: int = 15 * 60_000
     danger_ticker_flow_radar_enabled: bool = True
     danger_ticker_flow_radar_min_quote_volume_delta_usdt: float = DANGER_TICKER_FLOW_RADAR_MIN_QUOTE_VOLUME_DELTA_USDT
     danger_ticker_flow_radar_min_trade_count_delta: int = DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA
@@ -1426,6 +1459,92 @@ class LiveWarmWatch:
     promotion_source: str = "ticker_price_volume"
 
 
+def _symbol_context_csv_float(value: float | None) -> float | str:
+    if value is None:
+        return ""
+    number = float(value)
+    return number if math.isfinite(number) else ""
+
+
+def _symbol_context_join_timestamps(values: tuple[int, ...]) -> str:
+    return ";".join(str(int(value)) for value in values)
+
+
+@dataclass(slots=True)
+class LiveSymbolContextSnapshot:
+    symbol: str
+    levels_timeframe: Timeframe
+    entry_timeframe: Timeframe
+    snapshot_timestamp_ms: int
+    status: str
+    reason: str
+    source: str
+    context_timeframe: Timeframe
+    history_start_timestamp_ms: int
+    context_start_timestamp_ms: int
+    context_cache_end_timestamp_ms: int | None
+    effective_cache_end_timestamp_ms: int | None
+    ignored_tail_ms: int | None
+    baseline_candles: int
+    baseline_status: str
+    baseline_quote_volume_median: float | None
+    baseline_trade_count_median: float | None
+    baseline_range_pct_median: float | None
+    latest_context_close: float | None
+    prior_spike_timestamps_ms: tuple[int, ...] = ()
+    prior_fast_fade_timestamps_ms: tuple[int, ...] = ()
+    compute_seconds: float = 0.0
+
+    def key(self) -> tuple[str, str, str]:
+        return (
+            _position_symbol_key(self.symbol),
+            self.levels_timeframe.value,
+            self.entry_timeframe.value,
+        )
+
+    def to_row(self) -> dict[str, object]:
+        return {
+            "snapshot_timestamp_utc": datetime.fromtimestamp(
+                int(self.snapshot_timestamp_ms) / 1000, UTC
+            ).isoformat(),
+            "snapshot_timestamp_ms": int(self.snapshot_timestamp_ms),
+            "symbol": self.symbol,
+            "levels_tf": self.levels_timeframe.value,
+            "entry_tf": self.entry_timeframe.value,
+            "status": self.status,
+            "reason": self.reason,
+            "source": self.source,
+            "contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
+            "context_timeframe": self.context_timeframe.value,
+            "history_start_timestamp_ms": int(self.history_start_timestamp_ms),
+            "context_start_timestamp_ms": int(self.context_start_timestamp_ms),
+            "context_cache_end_timestamp_ms": (
+                int(self.context_cache_end_timestamp_ms)
+                if self.context_cache_end_timestamp_ms is not None
+                else ""
+            ),
+            "effective_cache_end_timestamp_ms": (
+                int(self.effective_cache_end_timestamp_ms)
+                if self.effective_cache_end_timestamp_ms is not None
+                else ""
+            ),
+            "ignored_tail_ms": int(self.ignored_tail_ms) if self.ignored_tail_ms is not None else "",
+            "baseline_candles": int(self.baseline_candles),
+            "baseline_status": self.baseline_status,
+            "baseline_quote_volume_median": _symbol_context_csv_float(self.baseline_quote_volume_median),
+            "baseline_trade_count_median": _symbol_context_csv_float(self.baseline_trade_count_median),
+            "baseline_range_pct_median": _symbol_context_csv_float(self.baseline_range_pct_median),
+            "latest_context_close": _symbol_context_csv_float(self.latest_context_close),
+            "prior_spike_count_available": int(len(self.prior_spike_timestamps_ms)),
+            "prior_fast_fade_count_available": int(len(self.prior_fast_fade_timestamps_ms)),
+            "prior_spike_timestamps_ms": _symbol_context_join_timestamps(self.prior_spike_timestamps_ms),
+            "prior_fast_fade_timestamps_ms": _symbol_context_join_timestamps(
+                self.prior_fast_fade_timestamps_ms
+            ),
+            "compute_seconds": round(float(self.compute_seconds), 6),
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class LiveSymbolBatchSelection:
     scheduler_source: str
@@ -1490,6 +1609,19 @@ class LiveTickerRadarCycleStats:
     danger_flow_radar_promoted_count: int = 0
     danger_flow_radar_candidate_count: int = 0
     reason: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class LiveSymbolContextSnapshotCycleStats:
+    enabled: bool
+    attempted: bool
+    status: str
+    reason: str
+    symbols_total: int = 0
+    selected_symbols: tuple[str, ...] = ()
+    updated_count: int = 0
+    failed_count: int = 0
+    output_file: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -1775,11 +1907,13 @@ class LiveArtifactWriter:
         self.top_growth_dir = self.root / "top_growth"
         self.top_growth_dir.mkdir(parents=True, exist_ok=True)
         self.top_growth_index_path = self.top_growth_dir / "top_growth_index.csv"
+        self.symbol_context_snapshot_path = self.root / "symbol_context_snapshot.csv"
         self._lock = threading.Lock()
         self._events_written = self._count_existing_csv_rows(self.events_path)
         self._ensure_csv(self.ledger_path, LIVE_LEDGER_COLUMNS)
         self._ensure_csv(self.events_path, ("timestamp_utc", "event", "symbol", "details_json"))
         self._ensure_csv(self.top_growth_index_path, TOP_GROWTH_INDEX_COLUMNS)
+        self._ensure_csv(self.symbol_context_snapshot_path, SYMBOL_CONTEXT_SNAPSHOT_COLUMNS)
 
     @staticmethod
     def _count_existing_csv_rows(path: Path) -> int:
@@ -1861,6 +1995,25 @@ class LiveArtifactWriter:
             for row in rows:
                 writer.writerow(row)
         tmp_path.replace(path)
+
+    def write_symbol_context_snapshot(
+        self,
+        snapshots: list[LiveSymbolContextSnapshot],
+    ) -> Path:
+        rows = [
+            snapshot.to_row()
+            for snapshot in sorted(
+                snapshots,
+                key=lambda item: (
+                    _position_symbol_key(item.symbol),
+                    item.levels_timeframe.value,
+                    item.entry_timeframe.value,
+                ),
+            )
+        ]
+        with self._lock:
+            self._write_csv_atomic(self.symbol_context_snapshot_path, SYMBOL_CONTEXT_SNAPSHOT_COLUMNS, rows)
+        return self.symbol_context_snapshot_path
 
     def append_event(self, event: str, symbol: str, details: dict[str, object]) -> None:
         try:
@@ -2324,6 +2477,10 @@ class AnomalyMicroLiveRunner:
         self._pump_categories = _resolve_live_pump_categories(config.pump_categories)
         self._pump_categories_by_id = {category.category_id: category for category in self._pump_categories}
         self._prior_fast_fade_cache: dict[tuple[str, str, str, int], dict[str, object]] = {}
+        self._symbol_context_snapshots: dict[tuple[str, str, str], LiveSymbolContextSnapshot] = {}
+        self._symbol_context_snapshot_cursor = 0
+        self._last_symbol_context_snapshot_at_ms = 0
+        self._last_symbol_context_snapshot_status = "not_started"
         self.artifacts = LiveArtifactWriter(
             config.results_dir / "live_anomaly_runs" / datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         )
@@ -2500,6 +2657,17 @@ class AnomalyMicroLiveRunner:
                     f"{self.config.warm_watch_min_price_delta_pct:.6f}:"
                     f"{self.config.warm_watch_max_price_delta_pct:.6f}"
                 ),
+                "symbol_context_snapshot_enabled": bool(self.config.symbol_context_snapshot_enabled),
+                "symbol_context_snapshot_contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
+                "symbol_context_snapshot_policy": "cache_only_rolling_table_no_precise_scan_context_fetch",
+                "symbol_context_snapshot_interval_seconds": float(
+                    self.config.symbol_context_snapshot_interval_seconds
+                ),
+                "symbol_context_snapshot_symbols_per_cycle": int(
+                    self.config.symbol_context_snapshot_symbols_per_cycle
+                ),
+                "symbol_context_snapshot_fresh_ms": int(self.config.symbol_context_snapshot_fresh_ms),
+                "symbol_context_snapshot_file": self.artifacts.symbol_context_snapshot_path.name,
                 "danger_micro_cache_policy": "wider_ws_aggtrade_buffer_for_active_warm_watch_radar_and_current_cold_only_no_full_universe_subscription",
                 "symbol_batch_size_role": "legacy inactive scan cap, not WS market discovery",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
@@ -2550,6 +2718,9 @@ class AnomalyMicroLiveRunner:
                 ticker_started = time.monotonic()
                 ticker_stats = self._maybe_update_ticker_radar(symbols)
                 ticker_seconds = time.monotonic() - ticker_started
+                context_snapshot_started = time.monotonic()
+                context_snapshot_stats = self._maybe_update_symbol_context_snapshots(symbols)
+                context_snapshot_seconds = time.monotonic() - context_snapshot_started
                 batch_select_started = time.monotonic()
                 batch = self._next_symbol_batch(symbols)
                 batch_select_seconds = time.monotonic() - batch_select_started
@@ -2609,6 +2780,15 @@ class AnomalyMicroLiveRunner:
                         "warm_watch_marked_count": ticker_stats.warm_watch_marked_count,
                         "warm_watch_promoted_count": ticker_stats.warm_watch_promoted_count,
                         "warm_watch_rejected_count": ticker_stats.warm_watch_rejected_count,
+                        "symbol_context_snapshot_seconds": round(context_snapshot_seconds, 3),
+                        "symbol_context_snapshot_enabled": bool(context_snapshot_stats.enabled),
+                        "symbol_context_snapshot_attempted": bool(context_snapshot_stats.attempted),
+                        "symbol_context_snapshot_status": context_snapshot_stats.status,
+                        "symbol_context_snapshot_reason": context_snapshot_stats.reason,
+                        "symbol_context_snapshot_selected_symbols_count": len(context_snapshot_stats.selected_symbols),
+                        "symbol_context_snapshot_updated_count": int(context_snapshot_stats.updated_count),
+                        "symbol_context_snapshot_failed_count": int(context_snapshot_stats.failed_count),
+                        "symbol_context_snapshot_file": context_snapshot_stats.output_file,
                         "danger_flow_radar_promoted_count": ticker_stats.danger_flow_radar_promoted_count,
                         "danger_flow_radar_candidate_count": ticker_stats.danger_flow_radar_candidate_count,
                         "detected_anomalies_total": detected_anomalies_total,
@@ -4898,76 +5078,236 @@ class AnomalyMicroLiveRunner:
             return pd.DataFrame(), "cache_window_empty", None
         return effective_window.sort_values("timestamp").reset_index(drop=True), "ok", effective_end_ms
 
-    def _live_prior_fast_fade_72h(
+    def _symbol_context_snapshot_key(
+        self,
+        symbol: str,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+    ) -> tuple[str, str, str]:
+        return (_position_symbol_key(symbol), levels_timeframe.value, entry_timeframe.value)
+
+    def _next_symbol_context_snapshot_symbols(self, symbols: list[str], *, limit: int) -> tuple[str, ...]:
+        unique_symbols = list(dict.fromkeys(symbols))
+        if not unique_symbols or limit <= 0:
+            return ()
+        count = min(int(limit), len(unique_symbols))
+        start_index = self._symbol_context_snapshot_cursor % len(unique_symbols)
+        selected = [unique_symbols[(start_index + offset) % len(unique_symbols)] for offset in range(count)]
+        self._symbol_context_snapshot_cursor = (start_index + count) % len(unique_symbols)
+        return tuple(selected)
+
+    def _maybe_update_symbol_context_snapshots(self, symbols: list[str]) -> LiveSymbolContextSnapshotCycleStats:
+        if not self.config.symbol_context_snapshot_enabled:
+            return LiveSymbolContextSnapshotCycleStats(
+                enabled=False,
+                attempted=False,
+                status="disabled",
+                reason="symbol_context_snapshot_disabled",
+                symbols_total=len(symbols),
+            )
+        if self._ohlcv_cache_storage is None:
+            self._last_symbol_context_snapshot_status = "cache_storage_unavailable"
+            return LiveSymbolContextSnapshotCycleStats(
+                enabled=True,
+                attempted=False,
+                status="cache_storage_unavailable",
+                reason="live_ohlcv_cache_required_for_cache_only_context_snapshot",
+                symbols_total=len(symbols),
+                output_file=self.artifacts.symbol_context_snapshot_path.name,
+            )
+        now_ms = int(time.time() * 1000)
+        interval_ms = max(1, int(float(self.config.symbol_context_snapshot_interval_seconds) * 1000.0))
+        if self._last_symbol_context_snapshot_at_ms and now_ms - self._last_symbol_context_snapshot_at_ms < interval_ms:
+            return LiveSymbolContextSnapshotCycleStats(
+                enabled=True,
+                attempted=False,
+                status="skipped_interval",
+                reason="interval_not_elapsed",
+                symbols_total=len(symbols),
+                output_file=self.artifacts.symbol_context_snapshot_path.name,
+            )
+        self._last_symbol_context_snapshot_at_ms = now_ms
+        selected_symbols = self._next_symbol_context_snapshot_symbols(
+            symbols,
+            limit=int(self.config.symbol_context_snapshot_symbols_per_cycle),
+        )
+        if not selected_symbols:
+            self._last_symbol_context_snapshot_status = "empty_universe"
+            return LiveSymbolContextSnapshotCycleStats(
+                enabled=True,
+                attempted=True,
+                status="empty_universe",
+                reason="no_symbols_to_snapshot",
+                symbols_total=len(symbols),
+                output_file=self.artifacts.symbol_context_snapshot_path.name,
+            )
+        updated_count = 0
+        failed_count = 0
+        for symbol in selected_symbols:
+            for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
+                snapshot = self._compute_symbol_context_snapshot(
+                    symbol,
+                    levels_timeframe=levels_timeframe,
+                    entry_timeframe=entry_timeframe,
+                    now_ms=now_ms,
+                )
+                self._symbol_context_snapshots[snapshot.key()] = snapshot
+                if snapshot.status == "ok":
+                    updated_count += 1
+                else:
+                    failed_count += 1
+        output_path = self.artifacts.write_symbol_context_snapshot(list(self._symbol_context_snapshots.values()))
+        status = "ok" if failed_count == 0 else "partial" if updated_count else "failed"
+        reason = "ok" if failed_count == 0 else "some_snapshots_unavailable" if updated_count else "all_snapshots_unavailable"
+        self._last_symbol_context_snapshot_status = status
+        self.artifacts.append_event(
+            "symbol_context_snapshot_updated",
+            "__live__",
+            {
+                "status": status,
+                "reason": reason,
+                "contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
+                "source": "cache_only_rolling_context_snapshot",
+                "symbols_total": int(len(symbols)),
+                "selected_symbols": list(selected_symbols),
+                "selected_symbols_count": int(len(selected_symbols)),
+                "timeframe_pairs": [
+                    f"{levels.value}/{entry.value}" for levels, entry in self.config.timeframe_pairs
+                ],
+                "updated_count": int(updated_count),
+                "failed_count": int(failed_count),
+                "snapshot_count_total": int(len(self._symbol_context_snapshots)),
+                "output_file": output_path.name,
+                "policy": "precise_scan_uses_ready_snapshot_no_synchronous_prior_fast_fade_fetch",
+            },
+        )
+        return LiveSymbolContextSnapshotCycleStats(
+            enabled=True,
+            attempted=True,
+            status=status,
+            reason=reason,
+            symbols_total=len(symbols),
+            selected_symbols=selected_symbols,
+            updated_count=updated_count,
+            failed_count=failed_count,
+            output_file=output_path.name,
+        )
+
+    def _compute_symbol_context_snapshot(
         self,
         symbol: str,
         *,
-        decision_timestamp_ms: int,
         levels_timeframe: Timeframe,
         entry_timeframe: Timeframe,
-    ) -> dict[str, object]:
-        decision_ts = int(decision_timestamp_ms)
-        cache_key = (symbol, levels_timeframe.value, entry_timeframe.value, decision_ts)
-        cached = self._prior_fast_fade_cache.get(cache_key)
-        if cached is not None:
-            return cached
-        setup_ms = int(levels_timeframe.to_milliseconds())
-        entry_ms = int(entry_timeframe.to_milliseconds())
+        now_ms: int,
+    ) -> LiveSymbolContextSnapshot:
+        started_at = time.monotonic()
         context_timeframe = levels_timeframe
-        context_ms = setup_ms
-        maturity_ms = max(240, 60) * entry_ms
-        history_start_ms = decision_ts - 3 * 86_400_000
+        context_ms = int(context_timeframe.to_milliseconds())
+        snapshot_ts = int(now_ms)
+        decision_ts = _latest_closed_candle_start_ms(context_timeframe, now_ms=snapshot_ts)
+        history_padding_ms = max(
+            int(self.config.symbol_context_snapshot_fresh_ms),
+            int(float(self.config.symbol_context_snapshot_interval_seconds) * 1000.0),
+        )
+        history_start_ms = decision_ts - 3 * 86_400_000 - history_padding_ms
         context_start_ms = history_start_ms - int(self.config.baseline_candles) * context_ms
+
+        def build_snapshot(
+            *,
+            status: str,
+            reason: str,
+            context_cache_end_ms: int | None = None,
+            effective_cache_end_ms: int | None = None,
+            ignored_tail_ms: int | None = None,
+            baseline_status: str = "not_computed",
+            baseline_quote_volume_median: float | None = None,
+            baseline_trade_count_median: float | None = None,
+            baseline_range_pct_median: float | None = None,
+            latest_context_close: float | None = None,
+            prior_spike_timestamps_ms: tuple[int, ...] = (),
+            prior_fast_fade_timestamps_ms: tuple[int, ...] = (),
+        ) -> LiveSymbolContextSnapshot:
+            return LiveSymbolContextSnapshot(
+                symbol=symbol,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                snapshot_timestamp_ms=snapshot_ts,
+                status=status,
+                reason=reason,
+                source="cache_only_rolling_context_snapshot",
+                context_timeframe=context_timeframe,
+                history_start_timestamp_ms=history_start_ms,
+                context_start_timestamp_ms=context_start_ms,
+                context_cache_end_timestamp_ms=context_cache_end_ms,
+                effective_cache_end_timestamp_ms=effective_cache_end_ms,
+                ignored_tail_ms=ignored_tail_ms,
+                baseline_candles=int(self.config.baseline_candles),
+                baseline_status=baseline_status,
+                baseline_quote_volume_median=baseline_quote_volume_median,
+                baseline_trade_count_median=baseline_trade_count_median,
+                baseline_range_pct_median=baseline_range_pct_median,
+                latest_context_close=latest_context_close,
+                prior_spike_timestamps_ms=prior_spike_timestamps_ms,
+                prior_fast_fade_timestamps_ms=prior_fast_fade_timestamps_ms,
+                compute_seconds=time.monotonic() - started_at,
+            )
+
         context_frame, context_status, context_cache_end_ms = self._load_cached_window_allow_trailing_gap(
             symbol,
             context_timeframe,
             start_timestamp_ms=context_start_ms,
             end_timestamp_ms=decision_ts,
-            fetch_missing=True,
+            fetch_missing=False,
         )
         if context_status != "ok" or context_cache_end_ms is None:
-            result = {
-                "status": "unavailable",
-                "reason": f"context={context_status}",
-                "coverage_reason": context_status,
-                "coverage_policy": "levels_timeframe_context_fetch_missing_ignore_trailing_gap",
-                "prior_fast_fade_count_72h": None,
-                "prior_spike_count_72h": None,
-                "history_start_timestamp_ms": history_start_ms,
-                "context_timeframe": context_timeframe.value,
-                "context_start_timestamp_ms": context_start_ms,
-                "context_cache_end_timestamp_ms": context_cache_end_ms if context_cache_end_ms is not None else "",
-                "setup_cache_end_timestamp_ms": context_cache_end_ms if context_cache_end_ms is not None else "",
-                "entry_cache_end_timestamp_ms": context_cache_end_ms if context_cache_end_ms is not None else "",
-                "effective_cache_end_timestamp_ms": "",
-                "ignored_tail_ms": "",
-            }
-            self._prior_fast_fade_cache[cache_key] = result
-            return result
-        effective_cache_end_ms = min(int(context_cache_end_ms), decision_ts)
+            return build_snapshot(
+                status="unavailable",
+                reason=f"context={context_status}",
+                context_cache_end_ms=context_cache_end_ms,
+            )
+        effective_cache_end_ms = min(int(context_cache_end_ms), int(decision_ts))
+        ignored_tail_ms = max(0, int(decision_ts) - int(effective_cache_end_ms))
         if effective_cache_end_ms <= history_start_ms:
-            result = {
-                "status": "unavailable",
-                "reason": "context_cache_effective_end_before_history_start",
-                "coverage_reason": "context_cache_effective_end_before_history_start",
-                "coverage_policy": "levels_timeframe_context_fetch_missing_ignore_trailing_gap",
-                "prior_fast_fade_count_72h": None,
-                "prior_spike_count_72h": None,
-                "history_start_timestamp_ms": history_start_ms,
-                "context_timeframe": context_timeframe.value,
-                "context_start_timestamp_ms": context_start_ms,
-                "context_cache_end_timestamp_ms": int(context_cache_end_ms),
-                "setup_cache_end_timestamp_ms": int(context_cache_end_ms),
-                "entry_cache_end_timestamp_ms": int(context_cache_end_ms),
-                "effective_cache_end_timestamp_ms": effective_cache_end_ms,
-                "ignored_tail_ms": max(0, decision_ts - effective_cache_end_ms),
-            }
-            self._prior_fast_fade_cache[cache_key] = result
-            return result
+            return build_snapshot(
+                status="unavailable",
+                reason="context_cache_effective_end_before_history_start",
+                context_cache_end_ms=int(context_cache_end_ms),
+                effective_cache_end_ms=effective_cache_end_ms,
+                ignored_tail_ms=ignored_tail_ms,
+            )
+        prepared = context_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last")
+        prepared = prepared.loc[pd.to_numeric(prepared["timestamp"], errors="coerce").le(effective_cache_end_ms)]
+        latest_context_close: float | None = None
+        if not prepared.empty and "close" in prepared.columns:
+            latest_close = float(pd.to_numeric(prepared["close"], errors="coerce").iloc[-1])
+            latest_context_close = latest_close if math.isfinite(latest_close) else None
+        baseline_status = "not_computed"
+        baseline_quote_volume_median: float | None = None
+        baseline_trade_count_median: float | None = None
+        baseline_range_pct_median: float | None = None
+        required_baseline_columns = {"timestamp", "high", "low", "close", "quote_volume", "number_of_trades"}
+        missing_baseline_columns = sorted(required_baseline_columns.difference(prepared.columns))
+        if missing_baseline_columns:
+            baseline_status = "missing_columns:" + ",".join(missing_baseline_columns)
+        else:
+            baseline = prepared.loc[prepared["timestamp"].astype("int64") < effective_cache_end_ms].tail(
+                int(self.config.baseline_candles)
+            )
+            if len(baseline) < int(self.config.baseline_candles):
+                baseline_status = f"insufficient_rows:{len(baseline)}"
+            else:
+                baseline_status = "ok"
+                baseline_quote_volume_median = float(pd.to_numeric(baseline["quote_volume"], errors="coerce").median())
+                baseline_trade_count_median = float(pd.to_numeric(baseline["number_of_trades"], errors="coerce").median())
+                close = pd.to_numeric(baseline["close"], errors="coerce").replace(0.0, pd.NA)
+                ranges = (pd.to_numeric(baseline["high"], errors="coerce") - pd.to_numeric(baseline["low"], errors="coerce")) / close
+                baseline_range_pct_median = float(ranges.median())
         try:
             from research_tools.anomaly_continuation_lab import AnomalyLabConfig
             from research_tools.anomaly_strategy_backtest import AnomalyBacktestConfig, _collect_symbol_pair_rows
 
+            entry_ms = int(entry_timeframe.to_milliseconds())
             forward_high_candles = max(1, math.ceil(60 * entry_ms / context_ms))
             forward_low_candles = max(1, math.ceil(30 * entry_ms / context_ms))
             lab_config = AnomalyLabConfig(
@@ -4987,58 +5327,200 @@ class AnomalyMicroLiveRunner:
                 lab_config=lab_config,
                 setup_timeframe=context_timeframe.value,
                 entry_timeframe=context_timeframe.value,
-                feature_contract="live_prior_fast_fade_levels_context_v1",
+                feature_contract=SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
             )
             rows = _collect_symbol_pair_rows(
                 symbol=symbol,
-                setup_frame=context_frame,
-                entry_frame=context_frame,
+                setup_frame=prepared,
+                entry_frame=prepared,
                 config=backtest_config,
-                entry_flow_source="live_cache_prior_fast_fade_levels_context",
+                entry_flow_source="live_symbol_context_snapshot_cache_only",
             )
         except Exception as exc:
+            return build_snapshot(
+                status="unavailable",
+                reason=f"compute_error:{type(exc).__name__}:{str(exc)[:160]}",
+                context_cache_end_ms=int(context_cache_end_ms),
+                effective_cache_end_ms=effective_cache_end_ms,
+                ignored_tail_ms=ignored_tail_ms,
+                baseline_status=baseline_status,
+                baseline_quote_volume_median=baseline_quote_volume_median,
+                baseline_trade_count_median=baseline_trade_count_median,
+                baseline_range_pct_median=baseline_range_pct_median,
+                latest_context_close=latest_context_close,
+            )
+        prior_spike_timestamps: list[int] = []
+        prior_fast_fade_timestamps: list[int] = []
+        for row in rows:
+            try:
+                row_ts = int(row.get("decision_timestamp_ms", 0))
+            except (TypeError, ValueError):
+                continue
+            if history_start_ms <= row_ts < effective_cache_end_ms:
+                prior_spike_timestamps.append(row_ts)
+                if str(row.get("outcome_label", "")) == "fast_fade":
+                    prior_fast_fade_timestamps.append(row_ts)
+        return build_snapshot(
+            status="ok",
+            reason="ok",
+            context_cache_end_ms=int(context_cache_end_ms),
+            effective_cache_end_ms=effective_cache_end_ms,
+            ignored_tail_ms=ignored_tail_ms,
+            baseline_status=baseline_status,
+            baseline_quote_volume_median=baseline_quote_volume_median,
+            baseline_trade_count_median=baseline_trade_count_median,
+            baseline_range_pct_median=baseline_range_pct_median,
+            latest_context_close=latest_context_close,
+            prior_spike_timestamps_ms=tuple(sorted(set(prior_spike_timestamps))),
+            prior_fast_fade_timestamps_ms=tuple(sorted(set(prior_fast_fade_timestamps))),
+        )
+
+    def _live_prior_fast_fade_72h(
+        self,
+        symbol: str,
+        *,
+        decision_timestamp_ms: int,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+    ) -> dict[str, object]:
+        decision_ts = int(decision_timestamp_ms)
+        cache_key = (symbol, levels_timeframe.value, entry_timeframe.value, decision_ts)
+        cached = self._prior_fast_fade_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        setup_ms = int(levels_timeframe.to_milliseconds())
+        entry_ms = int(entry_timeframe.to_milliseconds())
+        history_start_ms = decision_ts - 3 * 86_400_000
+        context_start_ms = history_start_ms - int(self.config.baseline_candles) * setup_ms
+        base_result: dict[str, object] = {
+            "coverage_policy": "cache_only_symbol_context_snapshot_no_precise_scan_fetch",
+            "snapshot_contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
+            "history_start_timestamp_ms": history_start_ms,
+            "context_timeframe": levels_timeframe.value,
+            "context_start_timestamp_ms": context_start_ms,
+        }
+        snapshot = self._symbol_context_snapshots.get(
+            self._symbol_context_snapshot_key(symbol, levels_timeframe, entry_timeframe)
+        )
+        if snapshot is None:
             result = {
+                **base_result,
                 "status": "unavailable",
-                "reason": f"compute_error:{type(exc).__name__}:{str(exc)[:160]}",
-                "coverage_policy": "levels_timeframe_context_fetch_missing_ignore_trailing_gap",
+                "reason": "symbol_context_snapshot_missing",
                 "prior_fast_fade_count_72h": None,
                 "prior_spike_count_72h": None,
-                "history_start_timestamp_ms": history_start_ms,
-                "context_timeframe": context_timeframe.value,
-                "context_start_timestamp_ms": context_start_ms,
-                "context_cache_end_timestamp_ms": int(context_cache_end_ms),
-                "setup_cache_end_timestamp_ms": int(context_cache_end_ms),
-                "entry_cache_end_timestamp_ms": int(context_cache_end_ms),
-                "effective_cache_end_timestamp_ms": effective_cache_end_ms,
-                "ignored_tail_ms": max(0, decision_ts - effective_cache_end_ms),
+                "context_cache_end_timestamp_ms": "",
+                "setup_cache_end_timestamp_ms": "",
+                "entry_cache_end_timestamp_ms": "",
+                "effective_cache_end_timestamp_ms": "",
+                "ignored_tail_ms": "",
             }
             self._prior_fast_fade_cache[cache_key] = result
             return result
+        snapshot_age_ms = int(time.time() * 1000) - int(snapshot.snapshot_timestamp_ms)
+        snapshot_details = {
+            **base_result,
+            "snapshot_status": snapshot.status,
+            "snapshot_reason": snapshot.reason,
+            "snapshot_source": snapshot.source,
+            "snapshot_timestamp_ms": int(snapshot.snapshot_timestamp_ms),
+            "snapshot_age_ms": int(snapshot_age_ms),
+            "snapshot_fresh_ms": int(self.config.symbol_context_snapshot_fresh_ms),
+            "baseline_status": snapshot.baseline_status,
+            "baseline_quote_volume_median": _symbol_context_csv_float(snapshot.baseline_quote_volume_median),
+            "baseline_trade_count_median": _symbol_context_csv_float(snapshot.baseline_trade_count_median),
+            "baseline_range_pct_median": _symbol_context_csv_float(snapshot.baseline_range_pct_median),
+            "latest_context_close": _symbol_context_csv_float(snapshot.latest_context_close),
+            "context_cache_end_timestamp_ms": (
+                int(snapshot.context_cache_end_timestamp_ms)
+                if snapshot.context_cache_end_timestamp_ms is not None
+                else ""
+            ),
+            "setup_cache_end_timestamp_ms": (
+                int(snapshot.context_cache_end_timestamp_ms)
+                if snapshot.context_cache_end_timestamp_ms is not None
+                else ""
+            ),
+            "entry_cache_end_timestamp_ms": (
+                int(snapshot.context_cache_end_timestamp_ms)
+                if snapshot.context_cache_end_timestamp_ms is not None
+                else ""
+            ),
+            "effective_cache_end_timestamp_ms": (
+                int(snapshot.effective_cache_end_timestamp_ms)
+                if snapshot.effective_cache_end_timestamp_ms is not None
+                else ""
+            ),
+        }
+        if snapshot_age_ms > int(self.config.symbol_context_snapshot_fresh_ms):
+            result = {
+                **snapshot_details,
+                "status": "unavailable",
+                "reason": "symbol_context_snapshot_stale",
+                "prior_fast_fade_count_72h": None,
+                "prior_spike_count_72h": None,
+                "ignored_tail_ms": "",
+            }
+            self._prior_fast_fade_cache[cache_key] = result
+            return result
+        if snapshot.status != "ok" or snapshot.effective_cache_end_timestamp_ms is None:
+            result = {
+                **snapshot_details,
+                "status": "unavailable",
+                "reason": snapshot.reason,
+                "prior_fast_fade_count_72h": None,
+                "prior_spike_count_72h": None,
+                "ignored_tail_ms": snapshot.ignored_tail_ms if snapshot.ignored_tail_ms is not None else "",
+            }
+            self._prior_fast_fade_cache[cache_key] = result
+            return result
+        if int(snapshot.history_start_timestamp_ms) > history_start_ms:
+            result = {
+                **snapshot_details,
+                "status": "unavailable",
+                "reason": "symbol_context_snapshot_history_starts_after_decision_window",
+                "prior_fast_fade_count_72h": None,
+                "prior_spike_count_72h": None,
+                "ignored_tail_ms": snapshot.ignored_tail_ms if snapshot.ignored_tail_ms is not None else "",
+            }
+            self._prior_fast_fade_cache[cache_key] = result
+            return result
+        visible_end_ms = min(int(decision_ts), int(snapshot.effective_cache_end_timestamp_ms))
+        if visible_end_ms <= history_start_ms:
+            result = {
+                **snapshot_details,
+                "status": "unavailable",
+                "reason": "symbol_context_snapshot_before_history_start",
+                "prior_fast_fade_count_72h": None,
+                "prior_spike_count_72h": None,
+                "effective_cache_end_timestamp_ms": int(visible_end_ms),
+                "ignored_tail_ms": max(0, int(decision_ts) - int(visible_end_ms)),
+            }
+            self._prior_fast_fade_cache[cache_key] = result
+            return result
+        maturity_ms = max(240, 60) * entry_ms
         mature_cutoff = decision_ts - maturity_ms
-        prior_rows = [
-            row
-            for row in rows
-            if history_start_ms <= int(row.get("decision_timestamp_ms", 0)) < effective_cache_end_ms
-            and int(row.get("decision_timestamp_ms", 0)) <= mature_cutoff
+        prior_spikes = [
+            ts
+            for ts in snapshot.prior_spike_timestamps_ms
+            if history_start_ms <= int(ts) < visible_end_ms and int(ts) <= mature_cutoff
         ]
-        fast_fades = [row for row in prior_rows if str(row.get("outcome_label", "")) == "fast_fade"]
+        prior_fast_fades = [
+            ts
+            for ts in snapshot.prior_fast_fade_timestamps_ms
+            if history_start_ms <= int(ts) < visible_end_ms and int(ts) <= mature_cutoff
+        ]
         result = {
+            **snapshot_details,
             "status": "ok",
             "reason": "ok",
-            "coverage_policy": "levels_timeframe_context_fetch_missing_ignore_trailing_gap",
-            "prior_fast_fade_count_72h": int(len(fast_fades)),
-            "prior_spike_count_72h": int(len(prior_rows)),
-            "history_start_timestamp_ms": history_start_ms,
-            "context_timeframe": context_timeframe.value,
-            "context_start_timestamp_ms": context_start_ms,
-            "context_cache_end_timestamp_ms": int(context_cache_end_ms),
-            "setup_cache_end_timestamp_ms": int(context_cache_end_ms),
-            "entry_cache_end_timestamp_ms": int(context_cache_end_ms),
-            "effective_cache_end_timestamp_ms": effective_cache_end_ms,
-            "ignored_tail_ms": max(0, decision_ts - effective_cache_end_ms),
-            "ignored_tail_entry_candles": max(0, (decision_ts - effective_cache_end_ms) // entry_ms),
-            "prior_fast_fade_context_forward_high_candles": forward_high_candles,
-            "prior_fast_fade_context_forward_low_candles": forward_low_candles,
+            "prior_fast_fade_count_72h": int(len(prior_fast_fades)),
+            "prior_spike_count_72h": int(len(prior_spikes)),
+            "effective_cache_end_timestamp_ms": int(visible_end_ms),
+            "ignored_tail_ms": max(0, int(decision_ts) - int(visible_end_ms)),
+            "ignored_tail_entry_candles": max(0, (int(decision_ts) - int(visible_end_ms)) // max(1, entry_ms)),
+            "prior_fast_fade_context_forward_high_candles": max(1, math.ceil(60 * entry_ms / max(1, setup_ms))),
+            "prior_fast_fade_context_forward_low_candles": max(1, math.ceil(30 * entry_ms / max(1, setup_ms))),
         }
         self._prior_fast_fade_cache[cache_key] = result
         return result
@@ -8560,6 +9042,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "ticker_radar_max_promotions_per_cycle": (config.ticker_radar_max_promotions_per_cycle, 1),
         "warm_watch_ttl_ms": (config.warm_watch_ttl_ms, 1),
         "warm_watch_min_observations_for_precise": (config.warm_watch_min_observations_for_precise, 1),
+        "symbol_context_snapshot_symbols_per_cycle": (config.symbol_context_snapshot_symbols_per_cycle, 1),
+        "symbol_context_snapshot_fresh_ms": (config.symbol_context_snapshot_fresh_ms, 1),
         "live_ws_ticker_stale_ms": (config.live_ws_ticker_stale_ms, 1),
         "live_ws_aggtrade_stale_ms": (config.live_ws_aggtrade_stale_ms, 1),
         "live_ws_aggtrade_buffer_minutes": (config.live_ws_aggtrade_buffer_minutes, 1),
@@ -8650,6 +9134,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "ticker_radar_min_quote_volume_delta_ratio": config.ticker_radar_min_quote_volume_delta_ratio,
         "danger_ticker_flow_radar_min_quote_volume_delta_usdt": config.danger_ticker_flow_radar_min_quote_volume_delta_usdt,
         "danger_ticker_flow_radar_min_trade_count_delta_ratio": config.danger_ticker_flow_radar_min_trade_count_delta_ratio,
+        "symbol_context_snapshot_interval_seconds": config.symbol_context_snapshot_interval_seconds,
     }
     for name, value in required_positive.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
