@@ -96,6 +96,55 @@ RETRYABLE_CATEGORY_STATUS_PREFIXES = (
     "empty:",
     "missing_",
 )
+VISIBILITY_RADAR_EVENTS = frozenset(
+    {"ticker_radar_promoted", "warm_watch_marked", "warm_watch_updated", "warm_watch_precise_promoted"}
+)
+VISIBILITY_WARM_WATCH_EVENTS = frozenset(
+    {
+        "warm_watch_marked",
+        "warm_watch_updated",
+        "warm_watch_precise_promoted",
+        "warm_watch_rejected",
+        "warm_watch_expired",
+        "warm_watch_cleared",
+    }
+)
+VISIBILITY_PRECISE_SCAN_EVENTS = frozenset(
+    {
+        "signal_symbol_scan_summary",
+        "signal_setup_fetch_failed",
+        "signal_entry_fetch_failed",
+        "signal_entry_ws_aggtrade_pending",
+        "signal_scan_empty_ohlcv",
+        "reject_missing_signal_columns",
+        "reject_setup_too_early",
+        "signal_scan_retryable_dependency_blocked",
+        "category_selected",
+        "category_rejected",
+    }
+)
+VISIBILITY_EXECUTION_REJECT_EVENTS = frozenset(
+    {
+        "reject_symbol_position_already_active",
+        "reject_stop_cooldown",
+        "reject_max_positions",
+        "reject_invalid_existing_exchange_position",
+        "reject_existing_exchange_position",
+        "reject_invalid_free_balance",
+        "reject_no_free_balance",
+        "reject_invalid_position_notional",
+        "reject_insufficient_margin_for_fixed_notional",
+        "reject_invalid_order_amount",
+        "reject_signal_not_closed_yet",
+        "reject_stale_signal",
+        "reject_invalid_live_price",
+        "reject_tp1_already_reached",
+        "reject_invalid_actual_risk_at_live_price",
+        "reject_actual_risk_too_wide_at_live_price",
+        "reject_entry_price_drift",
+        "reject_rr_collapsed",
+    }
+)
 ANIMAL_EMOJIS = (
     "🐶", "🐱", "🐭", "🐹", "🐰", "🦊", "🐻", "🐼", "🐨", "🐯",
     "🦁", "🐮", "🐷", "🐸", "🐵", "🐔", "🐧", "🐦", "🦆", "🦅",
@@ -160,6 +209,47 @@ TOP_GROWTH_INDEX_COLUMNS = (
     "limit",
     "top_file",
     "status_file",
+    "visibility_file",
+)
+MISSED_PUMP_VISIBILITY_COLUMNS = (
+    "snapshot_utc",
+    "period_start_utc",
+    "period_end_utc",
+    "symbol",
+    "rank",
+    "growth_pct",
+    "growth_fraction",
+    "quote_volume",
+    "number_of_trades",
+    "taker_buy_quote_volume",
+    "live_saw_symbol_before_pump",
+    "live_saw_symbol_during_pump_hour",
+    "radar_promoted",
+    "flow_radar_promoted",
+    "warm_watch",
+    "precise_scanned",
+    "category_rejected",
+    "execution_rejected",
+    "position_opened",
+    "first_live_event_time",
+    "first_live_event_before_pump_time",
+    "first_radar_seen_time",
+    "first_flow_radar_seen_time",
+    "first_warm_watch_time",
+    "first_precise_scan_time",
+    "first_category_reject_time",
+    "first_execution_reject_time",
+    "first_position_opened_time",
+    "first_category_reject_reason",
+    "first_execution_reject_event",
+    "not_scanned_reason",
+    "visibility_source",
+    "visibility_source_status",
+    "visibility_source_reason",
+    "visibility_events_total",
+    "visibility_events_for_symbol",
+    "visibility_events_before_period_end",
+    "visibility_event_parse_error_count",
 )
 SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v1_cache_only_prior_fast_fade"
 SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
@@ -1907,12 +1997,14 @@ class LiveArtifactWriter:
         self.top_growth_dir = self.root / "top_growth"
         self.top_growth_dir.mkdir(parents=True, exist_ok=True)
         self.top_growth_index_path = self.top_growth_dir / "top_growth_index.csv"
+        self.missed_pump_visibility_path = self.top_growth_dir / "missed_pump_visibility.csv"
         self.symbol_context_snapshot_path = self.root / "symbol_context_snapshot.csv"
         self._lock = threading.Lock()
         self._events_written = self._count_existing_csv_rows(self.events_path)
         self._ensure_csv(self.ledger_path, LIVE_LEDGER_COLUMNS)
         self._ensure_csv(self.events_path, ("timestamp_utc", "event", "symbol", "details_json"))
         self._ensure_csv(self.top_growth_index_path, TOP_GROWTH_INDEX_COLUMNS)
+        self._ensure_csv(self.missed_pump_visibility_path, MISSED_PUMP_VISIBILITY_COLUMNS)
         self._ensure_csv(self.symbol_context_snapshot_path, SYMBOL_CONTEXT_SNAPSHOT_COLUMNS)
 
     @staticmethod
@@ -1937,15 +2029,17 @@ class LiveArtifactWriter:
         snapshot_utc: str,
         top_rows: list[dict[str, object]],
         status_rows: list[dict[str, object]],
+        visibility_rows: list[dict[str, object]],
         symbols_total: int,
         threshold_pct: float,
         limit: int,
-    ) -> tuple[Path, Path]:
+    ) -> tuple[Path, Path, Path]:
         period_start_utc = datetime.fromtimestamp(period_start_ms / 1000, UTC).isoformat()
         period_end_utc = datetime.fromtimestamp(period_end_ms / 1000, UTC).isoformat()
         stamp = datetime.fromtimestamp(period_start_ms / 1000, UTC).strftime("%Y%m%d_%H0000_UTC")
         top_path = self.top_growth_dir / f"top_growth_{stamp}.csv"
         status_path = self.top_growth_dir / f"top_growth_status_{stamp}.csv"
+        visibility_path = self.top_growth_dir / f"missed_pump_visibility_{stamp}.csv"
         enriched_top_rows = [
             {
                 "snapshot_utc": snapshot_utc,
@@ -1964,6 +2058,15 @@ class LiveArtifactWriter:
             }
             for row in status_rows
         ]
+        enriched_visibility_rows = [
+            {
+                "snapshot_utc": snapshot_utc,
+                "period_start_utc": period_start_utc,
+                "period_end_utc": period_end_utc,
+                **row,
+            }
+            for row in visibility_rows
+        ]
         ok_count = sum(1 for row in enriched_status_rows if row.get("status") == "ok")
         failed_count = len(enriched_status_rows) - ok_count
         index_row = {
@@ -1978,13 +2081,29 @@ class LiveArtifactWriter:
             "limit": limit,
             "top_file": top_path.name,
             "status_file": status_path.name,
+            "visibility_file": visibility_path.name,
         }
         with self._lock:
             self._write_csv_atomic(top_path, TOP_GROWTH_COLUMNS, enriched_top_rows)
             self._write_csv_atomic(status_path, TOP_GROWTH_STATUS_COLUMNS, enriched_status_rows)
+            self._write_csv_atomic(visibility_path, MISSED_PUMP_VISIBILITY_COLUMNS, enriched_visibility_rows)
+            self._append_csv_rows(
+                self.missed_pump_visibility_path,
+                MISSED_PUMP_VISIBILITY_COLUMNS,
+                enriched_visibility_rows,
+            )
             with self.top_growth_index_path.open("a", newline="", encoding="utf-8-sig") as handle:
                 csv.DictWriter(handle, fieldnames=list(TOP_GROWTH_INDEX_COLUMNS)).writerow(index_row)
-        return top_path, status_path
+        return top_path, status_path, visibility_path
+
+    @staticmethod
+    def _append_csv_rows(path: Path, columns: tuple[str, ...], rows: list[dict[str, object]]) -> None:
+        if not rows:
+            return
+        with path.open("a", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(columns), extrasaction="ignore")
+            for row in rows:
+                writer.writerow(row)
 
     @staticmethod
     def _write_csv_atomic(path: Path, columns: tuple[str, ...], rows: list[dict[str, object]]) -> None:
@@ -2190,6 +2309,16 @@ class TopGrowthSnapshotConfig:
     min_return_pct: float = 0.10
     limit: int = 5
     fetch_spacing_seconds: float = 0.05
+    visibility_events_csv: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LiveVisibilityEvent:
+    timestamp_utc: str
+    timestamp_ms: int
+    event: str
+    symbol: str
+    details: dict[str, object]
 
 
 class TopGrowthSnapshotRunner:
@@ -2242,12 +2371,19 @@ class TopGrowthSnapshotRunner:
             limit=self.config.limit,
             fetch_spacing_seconds=self.config.fetch_spacing_seconds,
         )
-        top_path, status_path = self.artifacts.write_top_growth_snapshot(
+        visibility_rows = _build_missed_pump_visibility_rows(
+            top_rows=top_rows,
+            period_start_ms=period_start_ms,
+            period_end_ms=period_end_ms,
+            visibility_events_csv=self.config.visibility_events_csv,
+        )
+        top_path, status_path, visibility_path = self.artifacts.write_top_growth_snapshot(
             period_start_ms=period_start_ms,
             period_end_ms=period_end_ms,
             snapshot_utc=snapshot_utc,
             top_rows=top_rows,
             status_rows=status_rows,
+            visibility_rows=visibility_rows,
             symbols_total=len(symbols),
             threshold_pct=self.config.min_return_pct * 100.0,
             limit=self.config.limit,
@@ -2264,6 +2400,8 @@ class TopGrowthSnapshotRunner:
                 "failed_count": sum(1 for row in status_rows if row.get("status") != "ok"),
                 "top_file": str(top_path.relative_to(self.artifacts.root)),
                 "status_file": str(status_path.relative_to(self.artifacts.root)),
+                "visibility_file": str(visibility_path.relative_to(self.artifacts.root)),
+                "visibility_events_csv": str(self.config.visibility_events_csv) if self.config.visibility_events_csv is not None else "",
                 "source": "standalone_command",
             },
         )
@@ -2335,6 +2473,244 @@ def _collect_top_growth_snapshot(
         growth_fraction = _row_float_or_none(row, "growth_fraction")
         top_rows.append({"rank": rank, "growth_multiple": (1.0 + growth_fraction) if growth_fraction is not None else "", **row})
     return top_rows, status_rows
+
+
+
+def _build_missed_pump_visibility_rows(
+    *,
+    top_rows: list[dict[str, object]],
+    period_start_ms: int,
+    period_end_ms: int,
+    visibility_events_csv: Path | None,
+) -> list[dict[str, object]]:
+    events, source_status, source_reason, parse_error_count = _read_visibility_events(visibility_events_csv)
+    events_by_symbol: dict[str, list[LiveVisibilityEvent]] = {}
+    for event in events:
+        events_by_symbol.setdefault(_position_symbol_key(event.symbol), []).append(event)
+    for symbol_events in events_by_symbol.values():
+        symbol_events.sort(key=lambda item: (item.timestamp_ms, item.event))
+
+    rows: list[dict[str, object]] = []
+    visibility_source = str(visibility_events_csv) if visibility_events_csv is not None else ""
+    for top_row in top_rows:
+        symbol = str(top_row.get("symbol") or "")
+        symbol_key = _position_symbol_key(symbol)
+        symbol_events_all = events_by_symbol.get(symbol_key, [])
+        events_to_period_end = [event for event in symbol_events_all if event.timestamp_ms <= int(period_end_ms)]
+        events_before_pump = [event for event in symbol_events_all if event.timestamp_ms < int(period_start_ms)]
+        events_during_pump_hour = [
+            event
+            for event in symbol_events_all
+            if int(period_start_ms) <= event.timestamp_ms <= int(period_end_ms)
+        ]
+
+        radar_event = _first_visibility_event(events_to_period_end, _is_visibility_radar_event)
+        flow_event = _first_visibility_event(events_to_period_end, _is_visibility_flow_radar_event)
+        warm_event = _first_visibility_event(events_to_period_end, _is_visibility_warm_watch_event)
+        precise_event = _first_visibility_event(events_to_period_end, _is_visibility_precise_scan_event)
+        category_reject_event = _first_visibility_event(
+            events_to_period_end,
+            lambda event: event.event == "category_rejected",
+        )
+        execution_reject_event = _first_visibility_event(events_to_period_end, _is_visibility_execution_reject_event)
+        position_opened_event = _first_visibility_event(
+            events_to_period_end,
+            lambda event: event.event == "position_opened",
+        )
+        first_event = events_to_period_end[0] if events_to_period_end else None
+        first_before_event = events_before_pump[0] if events_before_pump else None
+        row = {
+            "symbol": symbol,
+            "rank": top_row.get("rank", ""),
+            "growth_pct": top_row.get("growth_pct", ""),
+            "growth_fraction": top_row.get("growth_fraction", ""),
+            "quote_volume": top_row.get("quote_volume", ""),
+            "number_of_trades": top_row.get("number_of_trades", ""),
+            "taker_buy_quote_volume": top_row.get("taker_buy_quote_volume", ""),
+            "live_saw_symbol_before_pump": bool(events_before_pump),
+            "live_saw_symbol_during_pump_hour": bool(events_during_pump_hour),
+            "radar_promoted": radar_event is not None,
+            "flow_radar_promoted": flow_event is not None,
+            "warm_watch": warm_event is not None,
+            "precise_scanned": precise_event is not None,
+            "category_rejected": category_reject_event is not None,
+            "execution_rejected": execution_reject_event is not None,
+            "position_opened": position_opened_event is not None,
+            "first_live_event_time": first_event.timestamp_utc if first_event is not None else "",
+            "first_live_event_before_pump_time": (
+                first_before_event.timestamp_utc if first_before_event is not None else ""
+            ),
+            "first_radar_seen_time": radar_event.timestamp_utc if radar_event is not None else "",
+            "first_flow_radar_seen_time": flow_event.timestamp_utc if flow_event is not None else "",
+            "first_warm_watch_time": warm_event.timestamp_utc if warm_event is not None else "",
+            "first_precise_scan_time": precise_event.timestamp_utc if precise_event is not None else "",
+            "first_category_reject_time": (
+                category_reject_event.timestamp_utc if category_reject_event is not None else ""
+            ),
+            "first_execution_reject_time": (
+                execution_reject_event.timestamp_utc if execution_reject_event is not None else ""
+            ),
+            "first_position_opened_time": (
+                position_opened_event.timestamp_utc if position_opened_event is not None else ""
+            ),
+            "first_category_reject_reason": (
+                str(
+                    category_reject_event.details.get("category_reject_reason")
+                    or category_reject_event.details.get("reason")
+                    or ""
+                )
+                if category_reject_event is not None
+                else ""
+            ),
+            "first_execution_reject_event": execution_reject_event.event if execution_reject_event is not None else "",
+            "not_scanned_reason": _missed_pump_not_scanned_reason(
+                source_status=source_status,
+                source_reason=source_reason,
+                events_to_period_end=events_to_period_end,
+                radar_event=radar_event,
+                warm_event=warm_event,
+                precise_event=precise_event,
+                category_reject_event=category_reject_event,
+                execution_reject_event=execution_reject_event,
+                position_opened_event=position_opened_event,
+            ),
+            "visibility_source": visibility_source,
+            "visibility_source_status": source_status,
+            "visibility_source_reason": source_reason,
+            "visibility_events_total": len(events),
+            "visibility_events_for_symbol": len(symbol_events_all),
+            "visibility_events_before_period_end": len(events_to_period_end),
+            "visibility_event_parse_error_count": parse_error_count,
+        }
+        rows.append(row)
+    return rows
+
+
+def _read_visibility_events(path: Path | None) -> tuple[list[LiveVisibilityEvent], str, str, int]:
+    if path is None:
+        return [], "not_configured", "visibility_events_csv_not_configured", 0
+    if not path.exists():
+        return [], "missing", f"visibility_events_csv_missing:{path}", 0
+    required_columns = {"timestamp_utc", "event", "symbol", "details_json"}
+    events: list[LiveVisibilityEvent] = []
+    parse_error_count = 0
+    with path.open("r", newline="", encoding="utf-8-sig") as handle:
+        reader = csv.DictReader(handle)
+        missing = sorted(required_columns - set(reader.fieldnames or ()))
+        if missing:
+            return [], "invalid_schema", "missing_columns:" + ",".join(missing), 0
+        for row in reader:
+            timestamp_utc = str(row.get("timestamp_utc") or "")
+            event_name = str(row.get("event") or "")
+            symbol = str(row.get("symbol") or "")
+            details_json = str(row.get("details_json") or "{}")
+            try:
+                timestamp_ms = _parse_visibility_event_timestamp_ms(timestamp_utc)
+                details_raw = json.loads(details_json)
+                if not isinstance(details_raw, dict):
+                    raise ValueError("details_json_not_object")
+            except (json.JSONDecodeError, ValueError, TypeError):
+                parse_error_count += 1
+                continue
+            events.append(
+                LiveVisibilityEvent(
+                    timestamp_utc=timestamp_utc,
+                    timestamp_ms=timestamp_ms,
+                    event=event_name,
+                    symbol=symbol,
+                    details=details_raw,
+                )
+            )
+    status = "ok" if parse_error_count == 0 else "partial_parse_errors"
+    reason = "ok" if parse_error_count == 0 else f"parse_error_count:{parse_error_count}"
+    return events, status, reason, parse_error_count
+
+
+def _parse_visibility_event_timestamp_ms(value: str) -> int:
+    if not value:
+        raise ValueError("empty_timestamp_utc")
+    normalized = value.replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(normalized)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return int(parsed.timestamp() * 1000)
+
+
+def _first_visibility_event(
+    events: list[LiveVisibilityEvent],
+    predicate: Callable[[LiveVisibilityEvent], bool],
+) -> LiveVisibilityEvent | None:
+    for event in events:
+        if predicate(event):
+            return event
+    return None
+
+
+def _is_visibility_radar_event(event: LiveVisibilityEvent) -> bool:
+    return event.event in VISIBILITY_RADAR_EVENTS
+
+
+def _is_visibility_flow_radar_event(event: LiveVisibilityEvent) -> bool:
+    if event.event not in {"ticker_radar_promoted", "warm_watch_marked", "warm_watch_updated", "warm_watch_precise_promoted"}:
+        return False
+    return str(event.details.get("promotion_source") or "") == DANGER_CHEAP_FLOW_RADAR_SOURCE
+
+
+def _is_visibility_warm_watch_event(event: LiveVisibilityEvent) -> bool:
+    return event.event in VISIBILITY_WARM_WATCH_EVENTS
+
+
+def _is_visibility_precise_scan_event(event: LiveVisibilityEvent) -> bool:
+    if event.event == "signal_symbol_scan_summary":
+        evaluated_count = _visibility_int(event.details.get("evaluated_timeframe_count"))
+        due_count = _visibility_int(event.details.get("due_timeframe_count"))
+        return evaluated_count > 0 or due_count > 0
+    return event.event in VISIBILITY_PRECISE_SCAN_EVENTS
+
+
+def _is_visibility_execution_reject_event(event: LiveVisibilityEvent) -> bool:
+    if event.event == "reject_stale_signal":
+        return str(event.details.get("stage") or "") == "execution_guard"
+    return event.event in VISIBILITY_EXECUTION_REJECT_EVENTS
+
+
+def _visibility_int(value: object) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+
+
+def _missed_pump_not_scanned_reason(
+    *,
+    source_status: str,
+    source_reason: str,
+    events_to_period_end: list[LiveVisibilityEvent],
+    radar_event: LiveVisibilityEvent | None,
+    warm_event: LiveVisibilityEvent | None,
+    precise_event: LiveVisibilityEvent | None,
+    category_reject_event: LiveVisibilityEvent | None,
+    execution_reject_event: LiveVisibilityEvent | None,
+    position_opened_event: LiveVisibilityEvent | None,
+) -> str:
+    if source_status in {"not_configured", "missing", "invalid_schema"}:
+        return source_reason
+    if not events_to_period_end:
+        return "no_symbol_events_before_period_end"
+    if radar_event is None:
+        return "radar_not_promoted_before_period_end"
+    if warm_event is None:
+        return "radar_seen_without_warm_watch_artifact"
+    if precise_event is None:
+        return "warm_watch_not_precise_scanned_before_period_end"
+    if category_reject_event is not None:
+        reason = str(category_reject_event.details.get("category_reject_reason") or category_reject_event.details.get("reason") or "")
+        return f"category_rejected:{reason}" if reason else "category_rejected"
+    if execution_reject_event is not None:
+        return f"execution_rejected:{execution_reject_event.event}"
+    if position_opened_event is not None:
+        return "position_opened"
+    return "precise_scanned_no_actionable_signal_or_untracked_reject"
 
 
 def _load_top_growth_symbol_row(

@@ -1579,6 +1579,7 @@ def run_anomaly_top_growth(config: AppConfig, args: argparse.Namespace) -> int:
             parse_top_growth_period_start_ms,
         )
 
+        visibility_events_csv_arg = getattr(args, "visibility_events_csv", None)
         top_growth_config = TopGrowthSnapshotConfig(
             results_dir=config.backtest.results_dir,
             symbols=tuple(getattr(args, "symbols", None) or ()),
@@ -1586,6 +1587,7 @@ def run_anomaly_top_growth(config: AppConfig, args: argparse.Namespace) -> int:
             min_return_pct=float(getattr(args, "top_growth_min_return_pct", 0.10)),
             limit=int(getattr(args, "top_growth_limit", 5)),
             fetch_spacing_seconds=float(getattr(args, "top_growth_fetch_spacing_seconds", 0.05)),
+            visibility_events_csv=Path(visibility_events_csv_arg) if visibility_events_csv_arg else None,
         )
         _, exchange_client, _ = _build_fetch_stack(config)
         try:

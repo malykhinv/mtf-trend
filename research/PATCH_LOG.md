@@ -2974,3 +2974,55 @@ Risk:
 ```text
 Medium. Early live cycles can reject runner categories as retryable until snapshots are populated and fresh. This is intentional latency protection, not a trading-filter change. If cache is stale or absent, the artifact will show unavailable snapshots instead of silently fetching context inside precise scan.
 ```
+
+
+## 2026-05-14 - P215 proposed: missed-pump visibility artifact
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+cli/parser.py
+cli/commands.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Make top-growth pumps auditable against live scheduler visibility instead of manually guessing whether radar, warm-watch, precise scan, category, or execution guard missed them.
+```
+
+Changes:
+
+```text
+- Adds missed_pump_visibility.csv plus per-hour missed_pump_visibility_YYYYMMDD_HH0000_UTC.csv in top_growth artifacts.
+- Adds optional --visibility-events-csv for standalone top-growth runs to join top movers against a live run's live_events.csv.
+- Visibility rows expose radar_promoted, flow_radar_promoted, warm_watch, precise_scanned, category_rejected, execution_rejected, position_opened, first timestamps, and not_scanned_reason.
+- top_growth_index.csv now records the per-hour visibility file.
+- Missing/invalid live_events input is explicit in visibility_source_status/reason; no synthetic visibility is inferred.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-top-growth --help | grep visibility
+```
+
+Expected smoke readout:
+
+```text
+run-anomaly-top-growth writes top_growth/missed_pump_visibility.csv and a per-period missed_pump_visibility_*.csv. With --visibility-events-csv pointing to a live run, top movers get first radar/warm/scan/reject timestamps and a not_scanned_reason that points to radar, warm-watch, precise scan, category, execution, or missing visibility input.
+```
+
+Risk:
+
+```text
+Low/medium. This is artifact-only and does not change signal selection or orders. The first version depends on live_events.csv event coverage; if precise/category paths do not emit enough events for a symbol, the artifact will show untracked/no-actionable rather than pretending to know.
+```

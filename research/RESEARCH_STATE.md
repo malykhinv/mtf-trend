@@ -1198,3 +1198,11 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Missing/stale snapshots remain explicit retryable category dependencies; there is no synchronous context fallback during precise scan.
 - Current commit: UNKNOWN.
 - Next validation: run a short dry live and inspect `symbol_context_snapshot.csv`, `symbol_context_snapshot_updated`, `symbol_context_snapshot_*` fields in `live_cycle_summary`, and `reject_prior_fast_fade_filter_unavailable` reasons.
+
+
+## P215 proposed state
+- Top-growth snapshots now have a mandatory missed-pump visibility artifact shape.
+- Standalone top-growth can join against a live run with `--visibility-events-csv path/to/live_events.csv` and writes radar/warm/precise/category/execution visibility columns.
+- Missing or invalid live event input remains explicit in `visibility_source_status` and `not_scanned_reason`; no live visibility is fabricated.
+- Current commit: UNKNOWN.
+- Next validation: run top-growth for a completed hour with a real live_events.csv and inspect whether top movers show the first missing stage clearly.

@@ -359,6 +359,11 @@ def build_parser() -> argparse.ArgumentParser:
     top_growth.add_argument("--top-growth-min-return-pct", type=float, default=0.10)
     top_growth.add_argument("--top-growth-limit", type=_positive_int_for("--top-growth-limit"), default=5)
     top_growth.add_argument("--top-growth-fetch-spacing-seconds", type=float, default=0.05)
+    top_growth.add_argument(
+        "--visibility-events-csv",
+        default=None,
+        help="Optional live_events.csv from a live run; writes missed_pump_visibility with radar/warm/scan/reject visibility columns.",
+    )
 
     hourly_levels = subparsers.add_parser(
         "run-hourly-levels",
