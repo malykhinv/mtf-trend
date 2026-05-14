@@ -2421,3 +2421,48 @@ Validation:
 .venv/Scripts/python.exe main.py run-anomaly-live --help
 # smokes: process cache avoids second overlapping REST fetch; adjacent gaps coalesce into one padded request.
 ```
+
+---
+
+## P189 — Live aggTrade REST gap prefetch planner
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Reduce REST churn and improve live stability by coalescing due subminute S30/S15/S5 WS aggTrade gaps per precise symbol before signal evaluation.
+```
+
+Changes:
+
+```text
+- Adds a mandatory per-symbol subminute entry gap prefetch step for precise active/radar scans.
+- Reads WS coverage for all due subminute entry ranges, merges missing ranges, and performs one bounded cached REST backfill pass before timeframe evaluation.
+- Populates the WS aggTrade buffer from the coalesced backfill so later S30/S15/S5 frame reads do not re-open the same REST debt.
+- Adds `aggtrade_rest_gap_prefetch` events and cycle summary counters for requested ranges, missing ranges, backfill ranges, fetched rows, and pending oversized gaps.
+- Keeps oversized gaps as explicit coverage-pending; no stale signal fallback and no feature flag.
+```
+
+Verification:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+```
+
+Expected smoke readout:
+
+```text
+live_events.csv shows aggtrade_rest_gap_prefetch for active/radar symbols with WS gaps; subsequent ws_aggtrade_frame_read events for the same symbol/time window should have fewer network backfill ranges. live_cycle_summary exposes aggtrade_gap_prefetch_* counters. Oversized missing ranges remain coverage_pending.
+```

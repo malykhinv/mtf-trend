@@ -2229,6 +2229,12 @@ class AnomalyMicroLiveRunner:
         self._cycle_ws_aggtrade_backfilled_rows = 0
         self._cycle_ws_aggtrade_coverage_pending = 0
         self._cycle_ws_aggtrade_not_connected_backfill_reads = 0
+        self._cycle_aggtrade_gap_prefetch_symbols = 0
+        self._cycle_aggtrade_gap_prefetch_requested_ranges = 0
+        self._cycle_aggtrade_gap_prefetch_missing_ranges = 0
+        self._cycle_aggtrade_gap_prefetch_backfill_ranges = 0
+        self._cycle_aggtrade_gap_prefetch_rows = 0
+        self._cycle_aggtrade_gap_prefetch_pending = 0
         self._current_batch_symbol_scan_mode: dict[str, str] = {}
         self._current_scheduler_source = "uninitialized"
         self._current_inactive_scan_slots = 0
@@ -2428,6 +2434,12 @@ class AnomalyMicroLiveRunner:
                         "aggtrade_process_cache_hits": self._cycle_aggtrade_process_cache_hits,
                         "aggtrade_coalesced_missing_ranges": self._cycle_aggtrade_coalesced_missing_ranges,
                         "aggtrade_rest_fetched_ms": self._cycle_aggtrade_rest_fetched_ms,
+                        "aggtrade_gap_prefetch_symbols": self._cycle_aggtrade_gap_prefetch_symbols,
+                        "aggtrade_gap_prefetch_requested_ranges": self._cycle_aggtrade_gap_prefetch_requested_ranges,
+                        "aggtrade_gap_prefetch_missing_ranges": self._cycle_aggtrade_gap_prefetch_missing_ranges,
+                        "aggtrade_gap_prefetch_backfill_ranges": self._cycle_aggtrade_gap_prefetch_backfill_ranges,
+                        "aggtrade_gap_prefetch_rows": self._cycle_aggtrade_gap_prefetch_rows,
+                        "aggtrade_gap_prefetch_pending": self._cycle_aggtrade_gap_prefetch_pending,
                         "ws_aggtrade_backfill_reads": self._cycle_ws_aggtrade_backfill_reads,
                         "ws_aggtrade_backfilled_rows": self._cycle_ws_aggtrade_backfilled_rows,
                         "ws_aggtrade_not_connected_backfill_reads": self._cycle_ws_aggtrade_not_connected_backfill_reads,
@@ -2818,6 +2830,12 @@ class AnomalyMicroLiveRunner:
         self._cycle_ws_aggtrade_backfilled_rows = 0
         self._cycle_ws_aggtrade_coverage_pending = 0
         self._cycle_ws_aggtrade_not_connected_backfill_reads = 0
+        self._cycle_aggtrade_gap_prefetch_symbols = 0
+        self._cycle_aggtrade_gap_prefetch_requested_ranges = 0
+        self._cycle_aggtrade_gap_prefetch_missing_ranges = 0
+        self._cycle_aggtrade_gap_prefetch_backfill_ranges = 0
+        self._cycle_aggtrade_gap_prefetch_rows = 0
+        self._cycle_aggtrade_gap_prefetch_pending = 0
         self._current_batch_symbol_scan_mode = {}
         self._cycle_precise_scan_symbols = 0
         self._cycle_inactive_visit_symbols = 0
@@ -3882,11 +3900,153 @@ class AnomalyMicroLiveRunner:
         self._prior_fast_fade_cache[cache_key] = result
         return result
 
+    def _due_subminute_entry_raw_ranges(
+        self,
+        symbol: str,
+        *,
+        now_ms: int,
+    ) -> list[tuple[int, int]]:
+        if not self._subminute_entry_scan_allowed(symbol):
+            return []
+        ranges: list[tuple[int, int]] = []
+        for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
+            if int(entry_timeframe.to_milliseconds()) >= int(Timeframe.M1.to_milliseconds()):
+                continue
+            levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
+            latest_closed_entry_ts = _latest_closed_candle_start_ms(entry_timeframe, now_ms=now_ms)
+            setup_start_ts = (latest_closed_entry_ts // levels_timeframe_ms) * levels_timeframe_ms
+            if not self._signal_scan_due_for_timeframe(
+                symbol,
+                levels_timeframe,
+                entry_timeframe,
+                closed_timestamp_ms=latest_closed_entry_ts,
+            ):
+                continue
+            if self._should_defer_inactive_subminute_pair(symbol, entry_timeframe):
+                continue
+            ranges.append((int(setup_start_ts), int(now_ms)))
+        return _merge_time_ranges(ranges)
+
+    def _prefetch_symbol_subminute_entry_gap_debt(
+        self,
+        symbol: str,
+        *,
+        now_ms: int,
+        reason: str,
+    ) -> None:
+        source = self.aggtrade_source
+        if source is None:
+            return
+        requested_ranges = self._due_subminute_entry_raw_ranges(symbol, now_ms=now_ms)
+        if not requested_ranges:
+            return
+        missing_ranges: list[tuple[int, int]] = []
+        read_status_counts: dict[str, int] = {}
+        ws_rows_total = 0
+        buffer_rows_total = 0
+        connection_statuses: set[str] = set()
+        for start_ms, end_ms in requested_ranges:
+            read_result = source.read_rows(
+                symbol,
+                start_timestamp_ms=int(start_ms),
+                end_timestamp_ms=int(end_ms),
+            )
+            ws_rows_total += int(len(read_result.rows))
+            buffer_rows_total += int(read_result.buffer_row_count)
+            read_status_counts[read_result.status] = read_status_counts.get(read_result.status, 0) + 1
+            if read_result.connection_status:
+                connection_statuses.add(str(read_result.connection_status))
+            missing_ranges.extend((int(start), int(end)) for start, end in read_result.missing_ranges)
+        missing_ranges = _merge_time_ranges(missing_ranges)
+        if not missing_ranges:
+            return
+        missing_total_ms = self._time_ranges_duration_ms(missing_ranges)
+        max_backfill_ms = int(self.config.live_ws_aggtrade_max_backfill_ms)
+        self._cycle_aggtrade_gap_prefetch_symbols += 1
+        self._cycle_aggtrade_gap_prefetch_requested_ranges += int(len(requested_ranges))
+        self._cycle_aggtrade_gap_prefetch_missing_ranges += int(len(missing_ranges))
+        if missing_total_ms > max_backfill_ms:
+            self._cycle_aggtrade_gap_prefetch_pending += 1
+            self.artifacts.append_event(
+                "aggtrade_rest_gap_prefetch",
+                symbol,
+                {
+                    "status": "coverage_pending",
+                    "reason": "missing_total_exceeds_backfill_budget",
+                    "scan_mode": self._batch_scan_mode_for_symbol(symbol),
+                    "prefetch_reason": reason,
+                    "source": source.source_id,
+                    "requested_ranges": [f"{start}:{end}" for start, end in requested_ranges],
+                    "requested_range_count": int(len(requested_ranges)),
+                    "missing_ranges": [f"{start}:{end}" for start, end in missing_ranges],
+                    "missing_range_count": int(len(missing_ranges)),
+                    "missing_total_ms": int(missing_total_ms),
+                    "backfill_max_ms": int(max_backfill_ms),
+                    "ws_rows": int(ws_rows_total),
+                    "buffer_row_count_total": int(buffer_rows_total),
+                    "read_status_counts": read_status_counts,
+                    "connection_statuses": sorted(connection_statuses),
+                    "backfill_ranges": [],
+                    "backfilled_rows": 0,
+                },
+            )
+            return
+        request_start_ms = min(start for start, _end in requested_ranges)
+        request_end_ms = max(end for _start, end in requested_ranges)
+        self._cycle_aggtrade_requests += 1
+        rows, backfill_ranges, fetched_rows_total, cache_missing_count = self._fetch_aggtrade_raw_ranges_cached(
+            symbol,
+            missing_ranges,
+            fetch_window_start_ms=int(request_start_ms),
+            fetch_window_end_ms=int(request_end_ms),
+        )
+        for missing_start_ms, missing_end_ms in missing_ranges:
+            source.add_backfill_rows(
+                symbol,
+                _filter_aggtrade_rows_by_time(
+                    rows,
+                    start_timestamp_ms=int(missing_start_ms),
+                    end_timestamp_ms=int(missing_end_ms),
+                ),
+                start_timestamp_ms=int(missing_start_ms),
+                end_timestamp_ms=int(missing_end_ms),
+            )
+        self._cycle_aggtrade_gap_prefetch_backfill_ranges += int(len(backfill_ranges))
+        self._cycle_aggtrade_gap_prefetch_rows += int(fetched_rows_total)
+        self.artifacts.append_event(
+            "aggtrade_rest_gap_prefetch",
+            symbol,
+            {
+                "status": "backfilled",
+                "reason": "coalesced_symbol_subminute_entry_debt",
+                "scan_mode": self._batch_scan_mode_for_symbol(symbol),
+                "prefetch_reason": reason,
+                "source": source.source_id,
+                "requested_ranges": [f"{start}:{end}" for start, end in requested_ranges],
+                "requested_range_count": int(len(requested_ranges)),
+                "missing_ranges": [f"{start}:{end}" for start, end in missing_ranges],
+                "missing_range_count": int(len(missing_ranges)),
+                "missing_total_ms": int(missing_total_ms),
+                "backfill_max_ms": int(max_backfill_ms),
+                "cache_missing_range_count": int(cache_missing_count),
+                "network_backfill_range_count": int(len(backfill_ranges)),
+                "backfill_ranges": backfill_ranges,
+                "backfilled_rows": int(fetched_rows_total),
+                "ws_rows": int(ws_rows_total),
+                "buffer_row_count_total": int(buffer_rows_total),
+                "read_status_counts": read_status_counts,
+                "connection_statuses": sorted(connection_statuses),
+            },
+        )
+
     def _scan_batch(self, symbols: list[str]) -> list[LiveSignal]:
         for symbol in symbols:
             self._count_symbol_scan_mode(symbol)
         if self.config.scan_hot_timeframes_per_symbol:
             return self._scan_batch_by_symbol(symbols)
+        now_ms = int(time.time() * 1000)
+        for symbol in symbols:
+            self._prefetch_symbol_subminute_entry_gap_debt(symbol, now_ms=now_ms, reason="batch_by_timeframe")
         return self._scan_batch_by_timeframe(symbols)
 
     def _scan_batch_by_symbol(self, symbols: list[str]) -> list[LiveSignal]:
@@ -3895,6 +4055,7 @@ class AnomalyMicroLiveRunner:
         setup_cache: dict[tuple[str, str, int], pd.DataFrame] = {}
         entry_cache: dict[tuple[str, str, int, int], pd.DataFrame] = {}
         for symbol in symbols:
+            self._prefetch_symbol_subminute_entry_gap_debt(symbol, now_ms=now_ms, reason="batch_by_symbol")
             started_at = time.monotonic()
             due_count = 0
             evaluated_count = 0
