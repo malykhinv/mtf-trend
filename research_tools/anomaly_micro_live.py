@@ -76,6 +76,11 @@ DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA = 40
 DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA_RATIO = 3.0
 DANGER_TICKER_FLOW_RADAR_MIN_PRICE_DELTA_PCT = -0.001
 DANGER_TICKER_FLOW_RADAR_MAX_PRICE_DELTA_PCT = 0.003
+WARM_WATCH_SOURCE = "warm_watch_continuing_flow"
+DEFAULT_WARM_WATCH_TTL_MS = 10 * 60_000
+DEFAULT_WARM_WATCH_MIN_OBSERVATIONS_FOR_PRECISE = 2
+DEFAULT_WARM_WATCH_MIN_PRICE_DELTA_PCT = -0.001
+DEFAULT_WARM_WATCH_MAX_PRICE_DELTA_PCT = 0.012
 DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO = DANGER_ADAPTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO
 DANGER_INACTIVE_COLD_COVERAGE_SOURCE = "DANGER_default_precise_cold_coverage_subminute"
 EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE = "explicit_precise_cold_coverage"
@@ -1307,6 +1312,11 @@ class LiveAnomalyConfig:
     ticker_radar_min_price_delta_pct: float = 0.003
     ticker_radar_min_quote_volume_delta_usdt: float = 10_000.0
     ticker_radar_min_quote_volume_delta_ratio: float = 3.0
+    warm_watch_enabled: bool = True
+    warm_watch_ttl_ms: int = DEFAULT_WARM_WATCH_TTL_MS
+    warm_watch_min_observations_for_precise: int = DEFAULT_WARM_WATCH_MIN_OBSERVATIONS_FOR_PRECISE
+    warm_watch_min_price_delta_pct: float = DEFAULT_WARM_WATCH_MIN_PRICE_DELTA_PCT
+    warm_watch_max_price_delta_pct: float = DEFAULT_WARM_WATCH_MAX_PRICE_DELTA_PCT
     danger_ticker_flow_radar_enabled: bool = True
     danger_ticker_flow_radar_min_quote_volume_delta_usdt: float = DANGER_TICKER_FLOW_RADAR_MIN_QUOTE_VOLUME_DELTA_USDT
     danger_ticker_flow_radar_min_trade_count_delta: int = DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA
@@ -1399,6 +1409,23 @@ class LiveTickerRadarWatch:
     promotion_source: str = "ticker_price_volume"
 
 
+@dataclass(slots=True)
+class LiveWarmWatch:
+    symbol: str
+    reason: str
+    expires_at_ms: int
+    updated_at_ms: int
+    first_seen_ms: int
+    observations: int
+    score: float
+    price_delta_pct: float
+    quote_volume_delta: float
+    quote_volume_delta_ratio: float | None
+    trade_count_delta: int | None = None
+    trade_count_delta_ratio: float | None = None
+    promotion_source: str = "ticker_price_volume"
+
+
 @dataclass(frozen=True, slots=True)
 class LiveSymbolBatchSelection:
     scheduler_source: str
@@ -1406,6 +1433,7 @@ class LiveSymbolBatchSelection:
     active_waiting: tuple[str, ...]
     radar_due: tuple[str, ...]
     radar_waiting: tuple[str, ...]
+    warm_watch_waiting: tuple[str, ...]
     inactive: tuple[str, ...]
     batch: tuple[str, ...]
     scan_modes: dict[str, str]
@@ -1456,6 +1484,9 @@ class LiveTickerRadarCycleStats:
     missing_count: int = 0
     promoted_count: int = 0
     promotion_candidates_count: int = 0
+    warm_watch_marked_count: int = 0
+    warm_watch_promoted_count: int = 0
+    warm_watch_rejected_count: int = 0
     danger_flow_radar_promoted_count: int = 0
     danger_flow_radar_candidate_count: int = 0
     reason: str = ""
@@ -2308,6 +2339,7 @@ class AnomalyMicroLiveRunner:
         self._recent_stops: dict[str, list[float]] = {}
         self._active_symbols: dict[str, LiveActiveSymbol] = {}
         self._active_symbols_seen: set[str] = set()
+        self._warm_watch: dict[str, LiveWarmWatch] = {}
         self._ticker_radar_watch: dict[str, LiveTickerRadarWatch] = {}
         self._ticker_radar_snapshots: dict[str, ExchangeTickerSnapshot] = {}
         self._ticker_radar_quote_delta_history: dict[str, deque[float]] = {}
@@ -2458,7 +2490,17 @@ class AnomalyMicroLiveRunner:
                     f"{self.config.danger_ticker_flow_radar_min_price_delta_pct:.6f}:"
                     f"{self.config.danger_ticker_flow_radar_max_price_delta_pct:.6f}"
                 ),
-                "danger_micro_cache_policy": "wider_ws_aggtrade_buffer_for_active_and_radar_watch_only_no_full_universe_subscription",
+                "warm_watch_enabled": bool(self.config.warm_watch_enabled),
+                "warm_watch_source": WARM_WATCH_SOURCE,
+                "warm_watch_ttl_ms": int(self.config.warm_watch_ttl_ms),
+                "warm_watch_min_observations_for_precise": int(
+                    self.config.warm_watch_min_observations_for_precise
+                ),
+                "warm_watch_price_delta_window_pct": (
+                    f"{self.config.warm_watch_min_price_delta_pct:.6f}:"
+                    f"{self.config.warm_watch_max_price_delta_pct:.6f}"
+                ),
+                "danger_micro_cache_policy": "wider_ws_aggtrade_buffer_for_active_warm_watch_radar_and_current_cold_only_no_full_universe_subscription",
                 "symbol_batch_size_role": "legacy inactive scan cap, not WS market discovery",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "ticker_radar_required_for_inactive_subminute_gate": bool(
@@ -2564,6 +2606,9 @@ class AnomalyMicroLiveRunner:
                         "ticker_radar_missing_count": ticker_stats.missing_count,
                         "ticker_radar_promoted_count": ticker_stats.promoted_count,
                         "ticker_radar_promotion_candidates_count": ticker_stats.promotion_candidates_count,
+                        "warm_watch_marked_count": ticker_stats.warm_watch_marked_count,
+                        "warm_watch_promoted_count": ticker_stats.warm_watch_promoted_count,
+                        "warm_watch_rejected_count": ticker_stats.warm_watch_rejected_count,
                         "danger_flow_radar_promoted_count": ticker_stats.danger_flow_radar_promoted_count,
                         "danger_flow_radar_candidate_count": ticker_stats.danger_flow_radar_candidate_count,
                         "detected_anomalies_total": detected_anomalies_total,
@@ -3343,6 +3388,8 @@ class AnomalyMicroLiveRunner:
                 "ticker_radar_count": len(selection.radar_due),
                 "ticker_radar_waiting_count": len(selection.radar_waiting),
                 "ticker_radar_waiting_symbols": list(selection.radar_waiting),
+                "warm_watch_waiting_count": len(selection.warm_watch_waiting),
+                "warm_watch_waiting_symbols": list(selection.warm_watch_waiting),
                 "max_precise_scan_symbols_per_cycle": (
                     self.config.max_precise_scan_symbols_per_cycle
                     if self.config.max_precise_scan_symbols_per_cycle is not None
@@ -3426,6 +3473,8 @@ class AnomalyMicroLiveRunner:
             with self._state_lock:
                 for state in self._active_symbols.values():
                     target_by_key[_position_symbol_key(state.symbol)] = state.symbol
+                for warm_watch in self._warm_watch.values():
+                    target_by_key[_position_symbol_key(warm_watch.symbol)] = warm_watch.symbol
                 for watch in self._ticker_radar_watch.values():
                     target_by_key[_position_symbol_key(watch.symbol)] = watch.symbol
             target_symbols = tuple(target_by_key.values())
@@ -3723,6 +3772,11 @@ class AnomalyMicroLiveRunner:
         )
         radar_due_keys = {_position_symbol_key(symbol) for symbol in radar_due}
         radar_waiting_keys = {_position_symbol_key(symbol) for symbol in radar_waiting}
+        warm_watch_waiting = self._warm_watch_waiting_symbols(
+            now_ms=now_ms,
+            excluded_keys=active_keys | radar_due_keys | radar_waiting_keys,
+        )
+        warm_watch_keys = {_position_symbol_key(symbol) for symbol in warm_watch_waiting}
         base_inactive_slots, inactive_slots_source = self._default_inactive_scan_slots()
         cold_coverage_health_ratio = self._current_ws_health_ratio()
         cold_coverage_gate_reason = ""
@@ -3785,6 +3839,7 @@ class AnomalyMicroLiveRunner:
                 symbol_key in active_keys
                 or symbol_key in radar_due_keys
                 or symbol_key in radar_waiting_keys
+                or symbol_key in warm_watch_keys
                 or symbol_is_opening
                 or self._symbol_in_stop_cooldown(symbol)
             ):
@@ -3835,6 +3890,7 @@ class AnomalyMicroLiveRunner:
             active_waiting=tuple(active_waiting),
             radar_due=tuple(radar_due),
             radar_waiting=tuple(radar_waiting),
+            warm_watch_waiting=tuple(warm_watch_waiting),
             inactive=tuple(inactive),
             batch=tuple(batch),
             scan_modes=batch_scan_modes,
@@ -3948,6 +4004,42 @@ class AnomalyMicroLiveRunner:
                 waiting.append(item.symbol)
         return due, waiting
 
+    def _warm_watch_waiting_symbols(self, *, now_ms: int, excluded_keys: set[str]) -> list[str]:
+        with self._state_lock:
+            expired = self._prune_warm_watch_locked(now_ms)
+            warm_items = sorted(
+                self._warm_watch.values(),
+                key=lambda item: (item.updated_at_ms, item.score, item.symbol),
+                reverse=True,
+            )
+        for item in expired:
+            self.artifacts.append_event(
+                "warm_watch_expired",
+                item.symbol,
+                {
+                    "reason": item.reason,
+                    "observations": item.observations,
+                    "score": item.score,
+                    "expires_at_ms": item.expires_at_ms,
+                    "first_seen_ms": item.first_seen_ms,
+                    "price_delta_pct": item.price_delta_pct,
+                    "quote_volume_delta": item.quote_volume_delta,
+                    "quote_volume_delta_ratio": item.quote_volume_delta_ratio if item.quote_volume_delta_ratio is not None else "",
+                    "trade_count_delta": item.trade_count_delta if item.trade_count_delta is not None else "",
+                    "trade_count_delta_ratio": item.trade_count_delta_ratio if item.trade_count_delta_ratio is not None else "",
+                    "promotion_source": item.promotion_source,
+                },
+            )
+        waiting: list[str] = []
+        for item in warm_items:
+            symbol_key = _position_symbol_key(item.symbol)
+            with self._state_lock:
+                symbol_is_opening = symbol_key in self._opening_symbols
+            if symbol_key in excluded_keys or symbol_is_opening or self._symbol_in_stop_cooldown(item.symbol):
+                continue
+            waiting.append(item.symbol)
+        return waiting
+
     def _maybe_update_ticker_radar(self, symbols: list[str]) -> LiveTickerRadarCycleStats:
         configured_source = self.ticker_snapshot_source.source_id
         if not self.config.ticker_radar_enabled:
@@ -4023,40 +4115,31 @@ class AnomalyMicroLiveRunner:
                 reason="all_ticker_snapshots_missing",
             )
         promotions = self._evaluate_ticker_radar_snapshots(snapshots, now_ms=now_ms)
-        promoted_promotions = promotions[: self.config.ticker_radar_max_promotions_per_cycle]
-        promoted_count = len(promoted_promotions)
+        radar_candidates = promotions[: self.config.ticker_radar_max_promotions_per_cycle]
+        promoted_count = 0
+        warm_watch_marked_count = 0
+        warm_watch_promoted_count = 0
+        warm_watch_rejected_count = 0
         danger_flow_candidate_count = sum(
             1 for promotion in promotions if promotion.get("promotion_source") == DANGER_CHEAP_FLOW_RADAR_SOURCE
         )
-        danger_flow_promoted_count = sum(
-            1 for promotion in promoted_promotions if promotion.get("promotion_source") == DANGER_CHEAP_FLOW_RADAR_SOURCE
-        )
-        for promotion in promoted_promotions:
+        danger_flow_promoted_count = 0
+        for promotion in radar_candidates:
             promotion_source = str(promotion.get("promotion_source") or "ticker_price_volume")
-            self._mark_ticker_radar_watch(
-                str(promotion["symbol"]),
+            action = self._mark_or_promote_warm_watch(
+                promotion,
                 now_ms=now_ms,
-                reason=("ticker_flow_radar" if promotion_source == DANGER_CHEAP_FLOW_RADAR_SOURCE else "ticker_radar"),
-                score=float(promotion["score"]),
-                price_delta_pct=float(promotion["price_delta_pct"]),
-                quote_volume_delta=float(promotion["quote_volume_delta"]),
-                quote_volume_delta_ratio=(
-                    None
-                    if promotion["quote_volume_delta_ratio"] is None
-                    else float(promotion["quote_volume_delta_ratio"])
-                ),
-                trade_count_delta=(
-                    None
-                    if promotion.get("trade_count_delta") is None
-                    else int(promotion["trade_count_delta"])
-                ),
-                trade_count_delta_ratio=(
-                    None
-                    if promotion.get("trade_count_delta_ratio") is None
-                    else float(promotion["trade_count_delta_ratio"])
-                ),
                 promotion_source=promotion_source,
             )
+            if action == "marked":
+                warm_watch_marked_count += 1
+            elif action == "promoted":
+                promoted_count += 1
+                warm_watch_promoted_count += 1
+                if promotion_source == DANGER_CHEAP_FLOW_RADAR_SOURCE:
+                    danger_flow_promoted_count += 1
+            elif action == "rejected":
+                warm_watch_rejected_count += 1
         ok_count = len(snapshots) - missing_count
         snapshot_status = "ok" if ok_count > 0 else "all_missing"
         self.artifacts.append_event(
@@ -4068,6 +4151,10 @@ class AnomalyMicroLiveRunner:
                 "missing_count": missing_count,
                 "promoted_count": promoted_count,
                 "promotion_candidates_count": len(promotions),
+                "warm_watch_marked_count": warm_watch_marked_count,
+                "warm_watch_promoted_count": warm_watch_promoted_count,
+                "warm_watch_rejected_count": warm_watch_rejected_count,
+                "warm_watch_enabled": bool(self.config.warm_watch_enabled),
                 "danger_flow_radar_promoted_count": danger_flow_promoted_count,
                 "danger_flow_radar_candidate_count": danger_flow_candidate_count,
                 "danger_flow_radar_enabled": bool(self.config.danger_ticker_flow_radar_enabled),
@@ -4100,6 +4187,9 @@ class AnomalyMicroLiveRunner:
             missing_count=missing_count,
             promoted_count=promoted_count,
             promotion_candidates_count=len(promotions),
+            warm_watch_marked_count=warm_watch_marked_count,
+            warm_watch_promoted_count=warm_watch_promoted_count,
+            warm_watch_rejected_count=warm_watch_rejected_count,
             danger_flow_radar_promoted_count=danger_flow_promoted_count,
             danger_flow_radar_candidate_count=danger_flow_candidate_count,
             reason=source_reason,
@@ -4216,6 +4306,216 @@ class AnomalyMicroLiveRunner:
         promotions.sort(key=lambda item: (float(item["score"]), str(item["symbol"])), reverse=True)
         return promotions
 
+    def _mark_or_promote_warm_watch(
+        self,
+        promotion: dict[str, object],
+        *,
+        now_ms: int,
+        promotion_source: str,
+    ) -> str:
+        symbol = str(promotion["symbol"])
+        score = float(promotion["score"])
+        price_delta_pct = float(promotion["price_delta_pct"])
+        quote_volume_delta = float(promotion["quote_volume_delta"])
+        quote_volume_delta_ratio = (
+            None
+            if promotion.get("quote_volume_delta_ratio") is None
+            else float(promotion["quote_volume_delta_ratio"])
+        )
+        trade_count_delta = (
+            None
+            if promotion.get("trade_count_delta") is None
+            else int(promotion["trade_count_delta"])
+        )
+        trade_count_delta_ratio = (
+            None
+            if promotion.get("trade_count_delta_ratio") is None
+            else float(promotion["trade_count_delta_ratio"])
+        )
+        radar_reason = "ticker_flow_radar" if promotion_source == DANGER_CHEAP_FLOW_RADAR_SOURCE else "ticker_radar"
+        if not self.config.warm_watch_enabled:
+            self._mark_ticker_radar_watch(
+                symbol,
+                now_ms=now_ms,
+                reason=radar_reason,
+                score=score,
+                price_delta_pct=price_delta_pct,
+                quote_volume_delta=quote_volume_delta,
+                quote_volume_delta_ratio=quote_volume_delta_ratio,
+                trade_count_delta=trade_count_delta,
+                trade_count_delta_ratio=trade_count_delta_ratio,
+                promotion_source=promotion_source,
+            )
+            return "promoted"
+        reject_reason = self._warm_watch_reject_reason(
+            price_delta_pct=price_delta_pct,
+            quote_volume_delta=quote_volume_delta,
+            trade_count_delta=trade_count_delta,
+            promotion_source=promotion_source,
+        )
+        if reject_reason:
+            self._reject_warm_watch(
+                symbol,
+                now_ms=now_ms,
+                reason=reject_reason,
+                score=score,
+                price_delta_pct=price_delta_pct,
+                quote_volume_delta=quote_volume_delta,
+                quote_volume_delta_ratio=quote_volume_delta_ratio,
+                trade_count_delta=trade_count_delta,
+                trade_count_delta_ratio=trade_count_delta_ratio,
+                promotion_source=promotion_source,
+            )
+            return "rejected"
+        symbol_key = _position_symbol_key(symbol)
+        ttl_ms = max(1, int(self.config.warm_watch_ttl_ms))
+        expires_at_ms = now_ms + ttl_ms
+        min_observations = max(1, int(self.config.warm_watch_min_observations_for_precise))
+        event_name = "warm_watch_marked"
+        event_payload: dict[str, object]
+        promote_payload: dict[str, object] | None = None
+        with self._state_lock:
+            current = self._warm_watch.get(symbol_key)
+            if current is None or current.expires_at_ms < now_ms:
+                first_seen_ms = now_ms
+                observations = 1
+                previous_score = ""
+            else:
+                first_seen_ms = current.first_seen_ms
+                observations = current.observations + 1
+                previous_score = current.score
+                event_name = "warm_watch_updated"
+            if observations >= min_observations:
+                self._warm_watch.pop(symbol_key, None)
+                promote_payload = {
+                    "reason": WARM_WATCH_SOURCE,
+                    "radar_reason": radar_reason,
+                    "observations": observations,
+                    "min_observations_for_precise": min_observations,
+                    "first_seen_ms": first_seen_ms,
+                    "age_ms": max(0, now_ms - first_seen_ms),
+                    "score": score,
+                    "previous_score": previous_score,
+                    "price_delta_pct": price_delta_pct,
+                    "quote_volume_delta": quote_volume_delta,
+                    "quote_volume_delta_ratio": quote_volume_delta_ratio if quote_volume_delta_ratio is not None else "",
+                    "trade_count_delta": trade_count_delta if trade_count_delta is not None else "",
+                    "trade_count_delta_ratio": trade_count_delta_ratio if trade_count_delta_ratio is not None else "",
+                    "promotion_source": promotion_source,
+                    "source": WARM_WATCH_SOURCE,
+                }
+            else:
+                self._warm_watch[symbol_key] = LiveWarmWatch(
+                    symbol=symbol,
+                    reason=radar_reason,
+                    expires_at_ms=expires_at_ms,
+                    updated_at_ms=now_ms,
+                    first_seen_ms=first_seen_ms,
+                    observations=observations,
+                    score=score,
+                    price_delta_pct=price_delta_pct,
+                    quote_volume_delta=quote_volume_delta,
+                    quote_volume_delta_ratio=quote_volume_delta_ratio,
+                    trade_count_delta=trade_count_delta,
+                    trade_count_delta_ratio=trade_count_delta_ratio,
+                    promotion_source=promotion_source,
+                )
+                event_payload = {
+                    "reason": radar_reason,
+                    "expires_at_ms": expires_at_ms,
+                    "ttl_ms": ttl_ms,
+                    "observations": observations,
+                    "min_observations_for_precise": min_observations,
+                    "first_seen_ms": first_seen_ms,
+                    "age_ms": max(0, now_ms - first_seen_ms),
+                    "score": score,
+                    "previous_score": previous_score,
+                    "price_delta_pct": price_delta_pct,
+                    "quote_volume_delta": quote_volume_delta,
+                    "quote_volume_delta_ratio": quote_volume_delta_ratio if quote_volume_delta_ratio is not None else "",
+                    "trade_count_delta": trade_count_delta if trade_count_delta is not None else "",
+                    "trade_count_delta_ratio": trade_count_delta_ratio if trade_count_delta_ratio is not None else "",
+                    "promotion_source": promotion_source,
+                    "source": WARM_WATCH_SOURCE,
+                }
+        if promote_payload is not None:
+            self.artifacts.append_event("warm_watch_precise_promoted", symbol, promote_payload)
+            self._mark_ticker_radar_watch(
+                symbol,
+                now_ms=now_ms,
+                reason=WARM_WATCH_SOURCE,
+                score=score,
+                price_delta_pct=price_delta_pct,
+                quote_volume_delta=quote_volume_delta,
+                quote_volume_delta_ratio=quote_volume_delta_ratio,
+                trade_count_delta=trade_count_delta,
+                trade_count_delta_ratio=trade_count_delta_ratio,
+                promotion_source=promotion_source,
+            )
+            return "promoted"
+        self.artifacts.append_event(event_name, symbol, event_payload)
+        return "marked"
+
+    def _warm_watch_reject_reason(
+        self,
+        *,
+        price_delta_pct: float,
+        quote_volume_delta: float,
+        trade_count_delta: int | None,
+        promotion_source: str,
+    ) -> str:
+        if not math.isfinite(price_delta_pct):
+            return "invalid_price_delta"
+        if price_delta_pct < self.config.warm_watch_min_price_delta_pct:
+            return "fade_price_delta_below_min"
+        if price_delta_pct >= self.config.warm_watch_max_price_delta_pct:
+            return "chase_price_delta_above_max"
+        if not math.isfinite(quote_volume_delta) or quote_volume_delta <= 0.0:
+            return "quote_volume_delta_not_rising"
+        if promotion_source == DANGER_CHEAP_FLOW_RADAR_SOURCE and (
+            trade_count_delta is None or trade_count_delta <= 0
+        ):
+            return "trade_count_delta_not_rising"
+        return ""
+
+    def _reject_warm_watch(
+        self,
+        symbol: str,
+        *,
+        now_ms: int,
+        reason: str,
+        score: float,
+        price_delta_pct: float,
+        quote_volume_delta: float,
+        quote_volume_delta_ratio: float | None,
+        trade_count_delta: int | None,
+        trade_count_delta_ratio: float | None,
+        promotion_source: str,
+    ) -> None:
+        symbol_key = _position_symbol_key(symbol)
+        previous: LiveWarmWatch | None = None
+        with self._state_lock:
+            previous = self._warm_watch.pop(symbol_key, None)
+        self.artifacts.append_event(
+            "warm_watch_rejected",
+            symbol,
+            {
+                "reason": reason,
+                "had_previous_warm_watch": previous is not None,
+                "previous_observations": previous.observations if previous is not None else "",
+                "previous_first_seen_ms": previous.first_seen_ms if previous is not None else "",
+                "age_ms": max(0, now_ms - previous.first_seen_ms) if previous is not None else "",
+                "score": score,
+                "price_delta_pct": price_delta_pct,
+                "quote_volume_delta": quote_volume_delta,
+                "quote_volume_delta_ratio": quote_volume_delta_ratio if quote_volume_delta_ratio is not None else "",
+                "trade_count_delta": trade_count_delta if trade_count_delta is not None else "",
+                "trade_count_delta_ratio": trade_count_delta_ratio if trade_count_delta_ratio is not None else "",
+                "promotion_source": promotion_source,
+                "source": WARM_WATCH_SOURCE,
+            },
+        )
+
     def _detected_anomalies_count(self) -> int:
         with self._state_lock:
             return self._detected_anomalies_total
@@ -4282,6 +4582,15 @@ class AnomalyMicroLiveRunner:
                 expired.append(state)
         return expired
 
+    def _prune_warm_watch_locked(self, now_ms: int) -> list[LiveWarmWatch]:
+        expired_keys = [key for key, state in self._warm_watch.items() if state.expires_at_ms < now_ms]
+        expired: list[LiveWarmWatch] = []
+        for key in expired_keys:
+            state = self._warm_watch.pop(key, None)
+            if state is not None:
+                expired.append(state)
+        return expired
+
     def _mark_active_symbol(
         self,
         symbol: str,
@@ -4296,6 +4605,7 @@ class AnomalyMicroLiveRunner:
         symbol_key = _position_symbol_key(symbol)
         event_payload: dict[str, object] | None = None
         cleared_radar_watch: LiveTickerRadarWatch | None = None
+        cleared_warm_watch: LiveWarmWatch | None = None
         with self._state_lock:
             current = self._active_symbols.get(symbol_key)
             should_emit = (
@@ -4312,6 +4622,7 @@ class AnomalyMicroLiveRunner:
                 decision_timestamp_ms=decision_timestamp_ms,
             )
             self._active_symbols_seen.add(symbol_key)
+            cleared_warm_watch = self._warm_watch.pop(symbol_key, None)
             cleared_radar_watch = self._ticker_radar_watch.pop(symbol_key, None)
             if should_emit:
                 event_payload = {
@@ -4337,6 +4648,27 @@ class AnomalyMicroLiveRunner:
                         if cleared_radar_watch.quote_volume_delta_ratio is not None
                         else ""
                     ),
+                },
+            )
+        if cleared_warm_watch is not None:
+            self.artifacts.append_event(
+                "warm_watch_cleared",
+                symbol,
+                {
+                    "reason": "promoted_to_active_symbol",
+                    "active_reason": reason,
+                    "watch_reason": cleared_warm_watch.reason,
+                    "observations": cleared_warm_watch.observations,
+                    "score": cleared_warm_watch.score,
+                    "expires_at_ms": cleared_warm_watch.expires_at_ms,
+                    "price_delta_pct": cleared_warm_watch.price_delta_pct,
+                    "quote_volume_delta": cleared_warm_watch.quote_volume_delta,
+                    "quote_volume_delta_ratio": (
+                        cleared_warm_watch.quote_volume_delta_ratio
+                        if cleared_warm_watch.quote_volume_delta_ratio is not None
+                        else ""
+                    ),
+                    "promotion_source": cleared_warm_watch.promotion_source,
                 },
             )
         if event_payload is not None:
@@ -8226,6 +8558,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "active_symbol_ttl_ms": (config.active_symbol_ttl_ms, 1),
         "ticker_radar_watch_ttl_ms": (config.ticker_radar_watch_ttl_ms, 1),
         "ticker_radar_max_promotions_per_cycle": (config.ticker_radar_max_promotions_per_cycle, 1),
+        "warm_watch_ttl_ms": (config.warm_watch_ttl_ms, 1),
+        "warm_watch_min_observations_for_precise": (config.warm_watch_min_observations_for_precise, 1),
         "live_ws_ticker_stale_ms": (config.live_ws_ticker_stale_ms, 1),
         "live_ws_aggtrade_stale_ms": (config.live_ws_aggtrade_stale_ms, 1),
         "live_ws_aggtrade_buffer_minutes": (config.live_ws_aggtrade_buffer_minutes, 1),
@@ -8333,6 +8667,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "ticker_radar_min_quote_volume_delta_usdt": config.ticker_radar_min_quote_volume_delta_usdt,
         "live_ohlcv_cache_flush_interval_seconds": config.live_ohlcv_cache_flush_interval_seconds,
         "danger_ticker_flow_radar_max_price_delta_pct": config.danger_ticker_flow_radar_max_price_delta_pct,
+        "warm_watch_max_price_delta_pct": config.warm_watch_max_price_delta_pct,
     }
     for name, value in required_non_negative.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=True)
@@ -8358,6 +8693,17 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         min_value=-1.0,
         allow_equal_min=True,
     )
+    _require_finite_config_number(
+        "warm_watch_min_price_delta_pct",
+        config.warm_watch_min_price_delta_pct,
+        min_value=-1.0,
+        allow_equal_min=True,
+    )
+    if config.warm_watch_enabled and config.warm_watch_max_price_delta_pct <= config.warm_watch_min_price_delta_pct:
+        raise LiveStartupError(
+            "Некорректный live config: warm_watch_max_price_delta_pct must be greater than "
+            "warm_watch_min_price_delta_pct"
+        )
     if config.danger_ticker_flow_radar_enabled and (
         config.danger_ticker_flow_radar_max_price_delta_pct
         <= config.danger_ticker_flow_radar_min_price_delta_pct

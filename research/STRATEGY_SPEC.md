@@ -499,3 +499,19 @@ Wider rolling micro-cache means a longer WS aggTrade buffer for active/radar/wat
 
 Cold coverage value must be judged from artifacts: cold_scanned_symbols, cold_evaluated_timeframe_count, cold_retryable_dependency_count, cold_signal_count, cold_order_attempt_count, scheduler latency, REST/cache pressure, and whether cold found symbols before ticker radar.
 ```
+
+### Warm-watch scheduler gate after P213
+
+```text
+Cheap ticker/flow radar is scheduler input only. By default it must not push a symbol directly into expensive precise scan.
+
+Radar candidate -> warm-watch TTL -> micro-cache target -> precise radar watch only after repeated qualifying observations.
+
+Warm-watch promotion requires:
+- quote-volume delta still rising;
+- flow-radar candidates keep positive trade-count delta;
+- price delta stays inside the configured non-fade/non-chase window;
+- artifacts expose marked/updated/promoted/rejected/expired states.
+
+Warm-watch symbols may be subscribed in the bounded WS aggTrade micro-cache target set, but there is still no full-universe micro-tape subscription and no trade entry from cheap radar alone.
+```

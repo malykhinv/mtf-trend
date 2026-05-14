@@ -278,6 +278,20 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--ticker-radar-min-price-delta-pct", type=float, default=0.003)
     anomaly_live.add_argument("--ticker-radar-min-quote-volume-delta-usdt", type=float, default=10_000.0)
     anomaly_live.add_argument("--ticker-radar-min-quote-volume-delta-ratio", type=float, default=3.0)
+    anomaly_live.add_argument(
+        "--warm-watch-enabled",
+        type=_str_to_bool,
+        default=True,
+        help="Keep cheap radar hits in warm-watch first; precise scan only after continuing flow observations.",
+    )
+    anomaly_live.add_argument("--warm-watch-ttl-ms", type=_positive_int_for("--warm-watch-ttl-ms"), default=600_000)
+    anomaly_live.add_argument(
+        "--warm-watch-min-observations-for-precise",
+        type=_positive_int_for("--warm-watch-min-observations-for-precise"),
+        default=2,
+    )
+    anomaly_live.add_argument("--warm-watch-min-price-delta-pct", type=float, default=-0.001)
+    anomaly_live.add_argument("--warm-watch-max-price-delta-pct", type=float, default=0.012)
     anomaly_live.add_argument("--max-signal-age-ms", type=_positive_int_for("--max-signal-age-ms"), default=60_000)
     anomaly_live.add_argument("--max-entry-price-drift-pct", type=float, default=0.003)
     anomaly_live.add_argument("--min-executable-rr-to-signal-tp1", type=float, default=0.75)

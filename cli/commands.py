@@ -1506,6 +1506,13 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             ticker_radar_min_price_delta_pct=float(getattr(args, "ticker_radar_min_price_delta_pct", 0.003)),
             ticker_radar_min_quote_volume_delta_usdt=float(getattr(args, "ticker_radar_min_quote_volume_delta_usdt", 10_000.0)),
             ticker_radar_min_quote_volume_delta_ratio=float(getattr(args, "ticker_radar_min_quote_volume_delta_ratio", 3.0)),
+            warm_watch_enabled=_to_bool_flag(getattr(args, "warm_watch_enabled", True), default=True),
+            warm_watch_ttl_ms=int(getattr(args, "warm_watch_ttl_ms", 600_000)),
+            warm_watch_min_observations_for_precise=int(
+                getattr(args, "warm_watch_min_observations_for_precise", 2)
+            ),
+            warm_watch_min_price_delta_pct=float(getattr(args, "warm_watch_min_price_delta_pct", -0.001)),
+            warm_watch_max_price_delta_pct=float(getattr(args, "warm_watch_max_price_delta_pct", 0.012)),
             max_signal_age_ms=int(getattr(args, "max_signal_age_ms", 60_000)),
             max_entry_price_drift_pct=float(getattr(args, "max_entry_price_drift_pct", 0.003)),
             min_executable_rr_to_signal_tp1=float(getattr(args, "min_executable_rr_to_signal_tp1", 0.75)),

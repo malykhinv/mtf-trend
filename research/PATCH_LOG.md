@@ -12,6 +12,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P128 | Remove retired strategy active path | PROPOSED | `strategy/`, `cli/`, `config/`, `README.md`, `research/*` | deletion | Remove retired strategy source, diagnostics, CLI, config and factory path. | `python -m compileall cli config constants.py research_tools vectorbt_runner strategy main.py` |
 | P129 | Purge retired strategy history from active memory | PROPOSED | `README.md`, `research/*.md` | cleanup | Remove stale historical strategy references from current project docs/logs. | `git grep -i retired_strategy_token -- .` returns empty for tracked files. |
 | P209 | DANGER adaptive cold coverage controller | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-performance | Scale default/explicit precise cold coverage by WS health, scheduler heartbeat EWMA, active-waiting load and REST/cache pressure; hard-off for positions and active-due symbols. | `python -m compileall data/exchanges research_tools constants.py main.py` |
+| P213 | Warm-watch scheduler gate | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-scheduler | Insert warm-watch between cheap ticker/flow radar and precise scan; subscribe warm symbols to micro-cache but promote to precise only after continuing flow and non-chase/non-fade checks. | `python -m compileall data/exchanges research_tools cli constants.py main.py` |
 | P130 | Strict live fills and executable market entry | PROPOSED | `data/exchanges/*`, `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `cli/*`, `research/*` | bugfix | Stop executing stale live signals; require exchange fill fields; separate signal price from actual fill; compute live PnL/BE/TP from actual fill; make market backtest enter on execution candle. | `python -m compileall data/exchanges research_tools cli constants.py main.py` |
 | P131 | Live blocked-order Telegram alerts | PROPOSED | `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `research/*` | bugfix | Send Telegram event alerts when a selected live signal is blocked as stale/non-executable; make entry-price drift guard absolute in live and market backtest. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic stale/drift smoke. |
 | P137 | Repair 1h overhead level scanner wiring | PROPOSED | `research_tools/hourly_levels.py`, `cli/*`, `research/*` | diagnostics | Restore the non-empty scanner module and register `run-hourly-levels`; detect bounce-validated 1h overhead levels and export metrics/charts. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-hourly-levels --source-timeframe 5m --days 45`. |
@@ -2871,3 +2872,54 @@ High / DANGER-labeled. Flow radar can increase false positive watch symbols; wid
 - Adds `runner_fader_prepump_run_status.csv` so missing cache/read failures are visible without deleting the primary backtest artifacts.
 - Adds CLI knobs: `--write-prepump-context`, `--prepump-context-timeframe`, `--prepump-context-windows`, `--prepump-context-min-coverage-ratio`.
 - Commit: UNKNOWN.
+
+## 2026-05-14 - P213 proposed: warm-watch scheduler gate
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+cli/parser.py
+cli/commands.py
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Stop sending every cheap radar hit directly into expensive precise scan. Keep cheap all-symbol visibility, hold suspicious symbols in a bounded warm-watch layer, widen micro-cache only for those symbols, and scan precisely only when the next radar observation still shows rising flow without fade/chase.
+```
+
+Changes:
+
+```text
+- Adds warm-watch config/CLI: enabled flag, TTL, min observations, and price-delta window.
+- Ticker/flow radar candidates now become warm-watch rows first; precise radar watch is created only after repeated qualifying observations.
+- Warm-watch rejects explicit fade/chase/not-rising cases and writes warm_watch_rejected artifacts.
+- WS aggTrade subscription targets include active + warm-watch + precise-radar + current batch symbols, not the full universe.
+- symbol_batch_selected and live_cycle_summary expose warm-watch waiting/marked/promoted/rejected counts.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Expected smoke readout:
+
+```text
+live_cache_config shows warm_watch_* settings. ticker_radar_snapshot shows warm_watch_marked_count first, then warm_watch_promoted_count only after continuing qualifying radar observations. symbol_batch_selected shows warm_watch_waiting_count while those symbols are cached but not precise-scanned. ticker_radar_promoted appears after warm_watch_precise_promoted, not on the first cheap radar hit.
+```
+
+Risk:
+
+```text
+Medium. This deliberately adds one radar-observation delay before precise scan, so it can miss one-shot pumps; the tradeoff is lower precise-scan latency pressure and better pre-pump visibility. It does not change entry/category logic.
+```
