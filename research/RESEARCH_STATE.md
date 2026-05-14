@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205 proposed
-Last active patch: P205 live/backtest category parity and 72h prior-fast-fade context
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 proposed
+Last active patch: P209 DANGER adaptive cold coverage controller
 Updated: 2026-05-14
 ```
 
@@ -1162,4 +1162,13 @@ Status: PROPOSED. Commit: UNKNOWN.
 P208 narrows the P207 DANGER cold coverage behavior. Cold coverage now runs only when the cumulative WS health percentage is strictly above 95% and the runner has no active symbols, no opening positions, and no open positions. When health is <=95% or active/position state exists, cold coverage is gated off and artifacts record inactive_cold_coverage_gate_reason plus health/threshold fields. The old heartbeat label "DANGER обход ~Ns" meant estimated full-universe cold coverage cycle time; P208 replaces it with an explicit cold full-cycle label only when cold coverage is actually running, otherwise cold off <reason>.
 
 Next validation: short live smoke and check symbol_batch_selected/live_cycle_summary for inactive_cold_coverage_gate_reason=ws_health_below_95pct during startup, then DANGER cold coverage only after health >95% and idle state.
+```
+
+
+## 2026-05-14 - P209 DANGER adaptive cold coverage controller
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+Cold coverage is now an adaptive idle/audit scanner rather than a fixed slot count. It is hard-off for open/opening positions and active-due symbols, soft-reduced by active-waiting symbols, and scored by WS health, scheduler heartbeat EWMA, and REST/cache pressure. This should improve missed-symbol/parity diagnostics during healthy idle periods without competing with active execution, but it must be monitored by cold score, selected slots, scheduler_cycle_seconds, aggtrade_network_calls, REST fetched span, and pending coverage gaps.
 ```

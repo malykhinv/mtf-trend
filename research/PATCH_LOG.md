@@ -11,6 +11,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P127 | Neutralize old sizing names | PROPOSED | `constants.py`, `config/*`, runtime modules | cleanup | Rename old sizing defaults to neutral position defaults. | `git grep old_sizing_prefix` equivalent returns empty. |
 | P128 | Remove retired strategy active path | PROPOSED | `strategy/`, `cli/`, `config/`, `README.md`, `research/*` | deletion | Remove retired strategy source, diagnostics, CLI, config and factory path. | `python -m compileall cli config constants.py research_tools vectorbt_runner strategy main.py` |
 | P129 | Purge retired strategy history from active memory | PROPOSED | `README.md`, `research/*.md` | cleanup | Remove stale historical strategy references from current project docs/logs. | `git grep -i retired_strategy_token -- .` returns empty for tracked files. |
+| P209 | DANGER adaptive cold coverage controller | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-performance | Scale default/explicit precise cold coverage by WS health, scheduler heartbeat EWMA, active-waiting load and REST/cache pressure; hard-off for positions and active-due symbols. | `python -m compileall data/exchanges research_tools constants.py main.py` |
 | P130 | Strict live fills and executable market entry | PROPOSED | `data/exchanges/*`, `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `cli/*`, `research/*` | bugfix | Stop executing stale live signals; require exchange fill fields; separate signal price from actual fill; compute live PnL/BE/TP from actual fill; make market backtest enter on execution candle. | `python -m compileall data/exchanges research_tools cli constants.py main.py` |
 | P131 | Live blocked-order Telegram alerts | PROPOSED | `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `research/*` | bugfix | Send Telegram event alerts when a selected live signal is blocked as stale/non-executable; make entry-price drift guard absolute in live and market backtest. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic stale/drift smoke. |
 | P137 | Repair 1h overhead level scanner wiring | PROPOSED | `research_tools/hourly_levels.py`, `cli/*`, `research/*` | diagnostics | Restore the non-empty scanner module and register `run-hourly-levels`; detect bounce-validated 1h overhead levels and export metrics/charts. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-hourly-levels --source-timeframe 5m --days 45`. |
@@ -2751,4 +2752,60 @@ Risk:
 
 ```text
 Medium / DANGER-limited. Cold coverage becomes less aggressive and may miss cold discoveries during early startup, degraded WS periods, or while a setup/position is active. This is intentional: cold coverage is for idle parity/audit discovery, not for competing with live trade management.
+```
+
+
+## 2026-05-14 - P209 proposed DANGER: adaptive cold coverage controller
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Keep cold coverage useful as an idle parity/audit scanner, but make it self-throttle before it steals latency or REST/cache budget from live/radar/active work.
+```
+
+Changes:
+
+```text
+- DANGER cold coverage is now adaptive, not a fixed 5-slot gate.
+- Open/opening positions hard-disable cold coverage.
+- Active symbols due for scan hard-disable cold coverage; active waiting symbols reduce the adaptive score instead of forcing an all-or-nothing gate.
+- Adaptive score = WS-health factor * scheduler-heartbeat speed factor * active-waiting factor * REST/cache load factor.
+- WS health ramps from 95.0% to 99.5%; heartbeat EWMA ramps from 8s slow to 2s fast; REST/cache pressure EWMA is driven by aggTrade network calls, REST fetched time span, and pending WS/cache gaps.
+- Cold coverage runs only when score >= 0.30, and selected slots scale from 1 up to the configured/default hard cap.
+- Artifacts now expose inactive_cold_coverage_adaptive_score plus health/speed/active/load factors, pressure EWMA, active due/waiting counts, base slots, and max slots.
+- Heartbeat shows DANGER cold <slots> score <score> only when cold coverage actually selected symbols; otherwise it shows cold off <reason>.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools constants.py main.py
+```
+
+Expected smoke readout:
+
+```text
+With open/opening positions: cold off open_or_opening_position_present.
+With active due symbols: cold off active_due_symbols_present.
+With slow heartbeat, low WS health, active waiting soft-cap, or high REST/cache pressure: cold off <specific reason> or fewer DANGER cold slots.
+When idle, fast, healthy, and low-pressure: symbol_batch_selected shows precise_DANGER_cold_coverage symbols and inactive_cold_coverage_adaptive_score >= 0.30.
+```
+
+Risk:
+
+```text
+Medium / DANGER-controlled. The patch can increase cold universe coverage during very healthy idle periods, which can increase discovery and parity-audit coverage, but it is not proof of PnL edge. Monitor scheduler_cycle_seconds, signal_scan_seconds, aggtrade_network_calls, aggtrade_rest_fetched_ms, ws_aggtrade_coverage_pending_count, cold score and selected slots before real-order use.
 ```

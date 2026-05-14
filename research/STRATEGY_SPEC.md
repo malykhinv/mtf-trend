@@ -88,11 +88,11 @@ Live scheduling contract:
 
 ```text
 selected hot symbol -> scan all due configured TF sets -> then move to next symbol
-cold universe discovery is explicit budget, not implicit heavy work
+cold universe discovery is explicit DANGER budget, not implicit heavy work
 ticker-radar promotion can add watch symbols but cannot itself open trades
-in subminute WS-live, implicit inactive round-robin discovery is disabled; set inactive_scan_slots_per_cycle explicitly only for diagnostics/backfill coverage
+in subminute WS-live, cold coverage is an adaptive idle/audit scanner: it is hard-off for open/opening positions and active-due symbols, soft-reduced by active-waiting symbols, and scaled by WS health, scheduler heartbeat EWMA, and REST/cache pressure
 inactive_scan_slots_per_cycle=0 means active/radar-only scan and must be visible in artifacts
-operator heartbeat must report scheduler timing plus ticker/aggTrade health, not ambiguous batch/full-cycle timing
+operator heartbeat must report scheduler timing plus ticker/aggTrade health and cold coverage score/gate reason, not ambiguous batch/full-cycle timing
 ```
 
 Live data-access contract:
@@ -280,6 +280,8 @@ consume normal round-robin inactive slots without explicit operator configuratio
 ```
 
 Ticker-derived rows are diagnostic/scheduler artifacts only. Final signal validity still depends on the existing closed-kline flow, category, risk and execution checks.
+
+Cold coverage must remain visibly labeled as DANGER. It is useful for parity/audit discovery and radar-quality measurement, not as a proven production edge. If cold coverage increases `scheduler_cycle_seconds`, `signal_scan_seconds`, REST aggTrade calls/fetched span, or pending WS/cache gaps, it must self-throttle or switch off before active/radar execution quality is harmed.
 
 ---
 

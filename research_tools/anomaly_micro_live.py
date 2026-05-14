@@ -56,7 +56,19 @@ DEFAULT_LIVE_OHLCV_CACHE_FLUSH_MAX_SYMBOL_TIMEFRAMES = 4
 DEFAULT_LIVE_AGGTRADE_REST_CACHE_TTL_MS = 20 * 60_000
 DEFAULT_LIVE_AGGTRADE_REST_CACHE_PADDING_MS = 60_000
 DANGER_DEFAULT_INACTIVE_COLD_COVERAGE_SLOTS_PER_CYCLE = 5
-DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO = 0.95
+DANGER_ADAPTIVE_COLD_COVERAGE_MAX_SLOTS_PER_CYCLE = 10
+DANGER_ADAPTIVE_COLD_COVERAGE_MIN_SCORE = 0.30
+DANGER_ADAPTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO = 0.95
+DANGER_ADAPTIVE_COLD_COVERAGE_FULL_WS_HEALTH_RATIO = 0.995
+DANGER_ADAPTIVE_COLD_COVERAGE_FAST_CYCLE_SECONDS = 2.0
+DANGER_ADAPTIVE_COLD_COVERAGE_SLOW_CYCLE_SECONDS = 8.0
+DANGER_ADAPTIVE_COLD_COVERAGE_CYCLE_EWMA_ALPHA = 0.25
+DANGER_ADAPTIVE_COLD_COVERAGE_PRESSURE_EWMA_ALPHA = 0.25
+DANGER_ADAPTIVE_COLD_COVERAGE_ACTIVE_WAITING_SOFT_CAP = 3
+DANGER_ADAPTIVE_COLD_COVERAGE_NETWORK_CALLS_HIGH = 4
+DANGER_ADAPTIVE_COLD_COVERAGE_REST_FETCHED_MS_HIGH = 120_000
+DANGER_ADAPTIVE_COLD_COVERAGE_PENDING_GAPS_HIGH = 3
+DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO = DANGER_ADAPTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO
 DANGER_INACTIVE_COLD_COVERAGE_SOURCE = "DANGER_default_precise_cold_coverage_subminute"
 EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE = "explicit_precise_cold_coverage"
 COLD_COVERAGE_GATED_OFF_SOURCE = "precise_cold_coverage_gated_off"
@@ -1393,6 +1405,17 @@ class LiveSymbolBatchSelection:
     inactive_cold_coverage_health_threshold_pct: float
     inactive_cold_coverage_active_blocked: bool
     inactive_cold_coverage_position_blocked: bool
+    inactive_cold_coverage_active_due_count: int
+    inactive_cold_coverage_active_waiting_count: int
+    inactive_cold_coverage_adaptive_score: float
+    inactive_cold_coverage_health_factor: float
+    inactive_cold_coverage_speed_factor: float
+    inactive_cold_coverage_active_factor: float
+    inactive_cold_coverage_load_factor: float
+    inactive_cold_coverage_pressure_ewma: float
+    inactive_cold_coverage_cycle_seconds_ewma: float
+    inactive_cold_coverage_base_slots: int
+    inactive_cold_coverage_max_slots: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -2300,6 +2323,14 @@ class AnomalyMicroLiveRunner:
         self._current_inactive_cold_coverage_gate_reason = ""
         self._current_inactive_cold_coverage_health_pct = 0.0
         self._current_inactive_cold_coverage_health_threshold_pct = DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO * 100.0
+        self._current_inactive_cold_coverage_adaptive_score = 0.0
+        self._current_inactive_cold_coverage_health_factor = 0.0
+        self._current_inactive_cold_coverage_speed_factor = 0.0
+        self._current_inactive_cold_coverage_active_factor = 0.0
+        self._current_inactive_cold_coverage_load_factor = 0.0
+        self._current_inactive_cold_coverage_pressure_ewma = 0.0
+        self._current_inactive_cold_coverage_cycle_seconds_ewma = DANGER_ADAPTIVE_COLD_COVERAGE_SLOW_CYCLE_SECONDS
+        self._cold_coverage_pressure_ewma = 0.0
         self._cycle_precise_scan_symbols = 0
         self._cycle_inactive_visit_symbols = 0
         self._cycle_deferred_inactive_subminute_pairs = 0
@@ -2447,6 +2478,8 @@ class AnomalyMicroLiveRunner:
                 )
                 ws_healthy, ws_health_reason = self._is_ws_healthy_for_cycle(ticker_stats, ws_aggtrade_stats)
                 ws_health_pct = self._record_ws_health_sample(healthy=ws_healthy)
+                self._record_scheduler_cycle_seconds(cycle_seconds)
+                self._record_cold_coverage_pressure_sample()
                 self.artifacts.append_event(
                     "live_cycle_summary",
                     "__live__",
@@ -2530,6 +2563,27 @@ class AnomalyMicroLiveRunner:
                         ),
                         "inactive_cold_coverage_health_threshold_pct": round(
                             self._current_inactive_cold_coverage_health_threshold_pct, 3
+                        ),
+                        "inactive_cold_coverage_adaptive_score": round(
+                            self._current_inactive_cold_coverage_adaptive_score, 4
+                        ),
+                        "inactive_cold_coverage_health_factor": round(
+                            self._current_inactive_cold_coverage_health_factor, 4
+                        ),
+                        "inactive_cold_coverage_speed_factor": round(
+                            self._current_inactive_cold_coverage_speed_factor, 4
+                        ),
+                        "inactive_cold_coverage_active_factor": round(
+                            self._current_inactive_cold_coverage_active_factor, 4
+                        ),
+                        "inactive_cold_coverage_load_factor": round(
+                            self._current_inactive_cold_coverage_load_factor, 4
+                        ),
+                        "inactive_cold_coverage_pressure_ewma": round(
+                            self._current_inactive_cold_coverage_pressure_ewma, 4
+                        ),
+                        "inactive_cold_coverage_cycle_seconds_ewma": round(
+                            self._current_inactive_cold_coverage_cycle_seconds_ewma, 3
                         ),
                         "orphan_orders_cancelled": orphan_cancelled,
                     },
@@ -3184,6 +3238,13 @@ class AnomalyMicroLiveRunner:
         self._current_inactive_cold_coverage_gate_reason = selection.inactive_cold_coverage_gate_reason
         self._current_inactive_cold_coverage_health_pct = selection.inactive_cold_coverage_health_pct
         self._current_inactive_cold_coverage_health_threshold_pct = selection.inactive_cold_coverage_health_threshold_pct
+        self._current_inactive_cold_coverage_adaptive_score = selection.inactive_cold_coverage_adaptive_score
+        self._current_inactive_cold_coverage_health_factor = selection.inactive_cold_coverage_health_factor
+        self._current_inactive_cold_coverage_speed_factor = selection.inactive_cold_coverage_speed_factor
+        self._current_inactive_cold_coverage_active_factor = selection.inactive_cold_coverage_active_factor
+        self._current_inactive_cold_coverage_load_factor = selection.inactive_cold_coverage_load_factor
+        self._current_inactive_cold_coverage_pressure_ewma = selection.inactive_cold_coverage_pressure_ewma
+        self._current_inactive_cold_coverage_cycle_seconds_ewma = selection.inactive_cold_coverage_cycle_seconds_ewma
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
@@ -3228,7 +3289,18 @@ class AnomalyMicroLiveRunner:
                 ),
                 "inactive_cold_coverage_active_blocked": bool(selection.inactive_cold_coverage_active_blocked),
                 "inactive_cold_coverage_position_blocked": bool(selection.inactive_cold_coverage_position_blocked),
-                "inactive_subminute_scan_policy": "DANGER_default_precise_cold_coverage_idle_health_gated",
+                "inactive_cold_coverage_active_due_count": selection.inactive_cold_coverage_active_due_count,
+                "inactive_cold_coverage_active_waiting_count": selection.inactive_cold_coverage_active_waiting_count,
+                "inactive_cold_coverage_adaptive_score": round(selection.inactive_cold_coverage_adaptive_score, 4),
+                "inactive_cold_coverage_health_factor": round(selection.inactive_cold_coverage_health_factor, 4),
+                "inactive_cold_coverage_speed_factor": round(selection.inactive_cold_coverage_speed_factor, 4),
+                "inactive_cold_coverage_active_factor": round(selection.inactive_cold_coverage_active_factor, 4),
+                "inactive_cold_coverage_load_factor": round(selection.inactive_cold_coverage_load_factor, 4),
+                "inactive_cold_coverage_pressure_ewma": round(selection.inactive_cold_coverage_pressure_ewma, 4),
+                "inactive_cold_coverage_cycle_seconds_ewma": round(selection.inactive_cold_coverage_cycle_seconds_ewma, 3),
+                "inactive_cold_coverage_base_slots": selection.inactive_cold_coverage_base_slots,
+                "inactive_cold_coverage_max_slots": selection.inactive_cold_coverage_max_slots,
+                "inactive_subminute_scan_policy": "DANGER_adaptive_precise_cold_coverage_health_latency_pressure_gated",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
                 "scan_hot_timeframes_per_symbol": bool(self.config.scan_hot_timeframes_per_symbol),
                 "symbol_batch_size": self.config.symbol_batch_size,
@@ -3406,6 +3478,136 @@ class AnomalyMicroLiveRunner:
             return 0.0
         return self._ws_health_healthy_seconds / self._ws_health_observed_seconds
 
+    def _record_scheduler_cycle_seconds(self, cycle_seconds: float) -> None:
+        if not math.isfinite(cycle_seconds) or cycle_seconds < 0.0:
+            return
+        alpha = DANGER_ADAPTIVE_COLD_COVERAGE_CYCLE_EWMA_ALPHA
+        if not math.isfinite(self._scheduler_cycle_seconds_ewma):
+            self._scheduler_cycle_seconds_ewma = cycle_seconds
+            return
+        self._scheduler_cycle_seconds_ewma = (
+            alpha * cycle_seconds + (1.0 - alpha) * self._scheduler_cycle_seconds_ewma
+        )
+
+    def _record_cold_coverage_pressure_sample(self) -> None:
+        network_pressure = self._linear_ramp(
+            float(self._cycle_aggtrade_network_calls),
+            0.0,
+            float(DANGER_ADAPTIVE_COLD_COVERAGE_NETWORK_CALLS_HIGH),
+        )
+        fetched_ms_pressure = self._linear_ramp(
+            float(self._cycle_aggtrade_rest_fetched_ms),
+            0.0,
+            float(DANGER_ADAPTIVE_COLD_COVERAGE_REST_FETCHED_MS_HIGH),
+        )
+        pending_count = int(self._cycle_ws_aggtrade_coverage_pending) + int(self._cycle_aggtrade_gap_prefetch_pending)
+        pending_pressure = self._linear_ramp(
+            float(pending_count),
+            0.0,
+            float(DANGER_ADAPTIVE_COLD_COVERAGE_PENDING_GAPS_HIGH),
+        )
+        pressure = max(0.0, min(1.0, max(network_pressure, fetched_ms_pressure, pending_pressure)))
+        alpha = DANGER_ADAPTIVE_COLD_COVERAGE_PRESSURE_EWMA_ALPHA
+        if not math.isfinite(self._cold_coverage_pressure_ewma):
+            self._cold_coverage_pressure_ewma = pressure
+            return
+        self._cold_coverage_pressure_ewma = (
+            alpha * pressure + (1.0 - alpha) * self._cold_coverage_pressure_ewma
+        )
+
+    @staticmethod
+    def _linear_ramp(value: float, low: float, high: float) -> float:
+        if not math.isfinite(value):
+            return 0.0
+        if high <= low:
+            return 1.0 if value >= high else 0.0
+        if value <= low:
+            return 0.0
+        if value >= high:
+            return 1.0
+        return (value - low) / (high - low)
+
+    def _adaptive_cold_coverage_slots(
+        self,
+        *,
+        base_slots: int,
+        inactive_slots_source: str,
+        health_ratio: float,
+        active_due_count: int,
+        active_waiting_count: int,
+        position_blocked: bool,
+    ) -> tuple[int, str, str, float, float, float, float, float, float, float, int]:
+        base_slots = max(0, int(base_slots))
+        cycle_seconds_ewma = max(0.0, float(self._scheduler_cycle_seconds_ewma))
+        pressure_ewma = max(0.0, min(1.0, float(self._cold_coverage_pressure_ewma)))
+        if not self._inactive_slots_are_precise_cold_coverage(inactive_slots_source) or base_slots <= 0:
+            return base_slots, inactive_slots_source, "", 0.0, 0.0, 0.0, 0.0, 0.0, pressure_ewma, cycle_seconds_ewma, base_slots
+        max_slots = max(0, DANGER_ADAPTIVE_COLD_COVERAGE_MAX_SLOTS_PER_CYCLE)
+        if self.config.inactive_scan_slots_per_cycle is not None:
+            # Explicit operator value remains DANGER cold coverage but is treated as a hard cap.
+            max_slots = min(max_slots, base_slots)
+        if max_slots <= 0:
+            return 0, COLD_COVERAGE_GATED_OFF_SOURCE, "configured_zero", 0.0, 0.0, 0.0, 0.0, 0.0, pressure_ewma, cycle_seconds_ewma, max_slots
+        if position_blocked:
+            return 0, COLD_COVERAGE_GATED_OFF_SOURCE, "open_or_opening_position_present", 0.0, 0.0, 0.0, 0.0, 0.0, pressure_ewma, cycle_seconds_ewma, max_slots
+        if active_due_count > 0:
+            return 0, COLD_COVERAGE_GATED_OFF_SOURCE, "active_due_symbols_present", 0.0, 0.0, 0.0, 0.0, 0.0, pressure_ewma, cycle_seconds_ewma, max_slots
+        health_factor = self._linear_ramp(
+            health_ratio,
+            DANGER_ADAPTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO,
+            DANGER_ADAPTIVE_COLD_COVERAGE_FULL_WS_HEALTH_RATIO,
+        )
+        speed_factor = 1.0 - self._linear_ramp(
+            cycle_seconds_ewma,
+            DANGER_ADAPTIVE_COLD_COVERAGE_FAST_CYCLE_SECONDS,
+            DANGER_ADAPTIVE_COLD_COVERAGE_SLOW_CYCLE_SECONDS,
+        )
+        active_factor = 1.0 - self._linear_ramp(
+            float(active_waiting_count),
+            0.0,
+            float(DANGER_ADAPTIVE_COLD_COVERAGE_ACTIVE_WAITING_SOFT_CAP),
+        )
+        load_factor = 1.0 - pressure_ewma
+        adaptive_score = max(0.0, min(1.0, health_factor * speed_factor * active_factor * load_factor))
+        if adaptive_score < DANGER_ADAPTIVE_COLD_COVERAGE_MIN_SCORE:
+            reason = "adaptive_score_below_threshold"
+            if health_factor <= 0.0:
+                reason = "ws_health_below_adaptive_min"
+            elif speed_factor <= 0.0:
+                reason = "heartbeat_too_slow"
+            elif active_factor <= 0.0:
+                reason = "active_waiting_soft_cap_reached"
+            elif load_factor <= 0.0:
+                reason = "rest_or_cache_pressure_high"
+            return (
+                0,
+                COLD_COVERAGE_GATED_OFF_SOURCE,
+                reason,
+                adaptive_score,
+                health_factor,
+                speed_factor,
+                active_factor,
+                load_factor,
+                pressure_ewma,
+                cycle_seconds_ewma,
+                max_slots,
+            )
+        slots = max(1, int(math.ceil(float(max_slots) * adaptive_score)))
+        slots = min(max_slots, slots)
+        return (
+            slots,
+            inactive_slots_source,
+            "",
+            adaptive_score,
+            health_factor,
+            speed_factor,
+            active_factor,
+            load_factor,
+            pressure_ewma,
+            cycle_seconds_ewma,
+            max_slots,
+        )
+
     def _default_inactive_scan_slots(self) -> tuple[int, str]:
         if self.config.inactive_scan_slots_per_cycle is not None:
             return max(0, int(self.config.inactive_scan_slots_per_cycle)), EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE
@@ -3439,7 +3641,7 @@ class AnomalyMicroLiveRunner:
         base_inactive_slots, inactive_slots_source = self._default_inactive_scan_slots()
         cold_coverage_health_ratio = self._current_ws_health_ratio()
         cold_coverage_gate_reason = ""
-        active_blocked = bool(active_due or active_waiting)
+        active_blocked = bool(active_due)
         with self._state_lock:
             position_blocked = bool(self._open_positions or self._opening_symbols)
         precise_budget_remaining_after_radar = None
@@ -3450,23 +3652,41 @@ class AnomalyMicroLiveRunner:
             )
         if self.config.inactive_scan_slots_per_cycle is None and inactive_slots_source == "legacy_symbol_batch_size":
             inactive_slots = max(0, base_inactive_slots - len(active_due))
+            cold_coverage_adaptive_score = 0.0
+            cold_coverage_health_factor = 0.0
+            cold_coverage_speed_factor = 0.0
+            cold_coverage_active_factor = 0.0
+            cold_coverage_load_factor = 0.0
+            cold_coverage_pressure_ewma = self._cold_coverage_pressure_ewma
+            cold_coverage_cycle_seconds_ewma = self._scheduler_cycle_seconds_ewma
+            cold_coverage_max_slots = max(0, inactive_slots)
         else:
-            inactive_slots = base_inactive_slots
-        if self._inactive_slots_are_precise_cold_coverage(inactive_slots_source) and inactive_slots > 0:
-            if cold_coverage_health_ratio <= DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO:
-                inactive_slots = 0
-                inactive_slots_source = COLD_COVERAGE_GATED_OFF_SOURCE
-                cold_coverage_gate_reason = "ws_health_below_95pct"
-            elif active_blocked:
-                inactive_slots = 0
-                inactive_slots_source = COLD_COVERAGE_GATED_OFF_SOURCE
-                cold_coverage_gate_reason = "active_symbols_present"
-            elif position_blocked:
-                inactive_slots = 0
-                inactive_slots_source = COLD_COVERAGE_GATED_OFF_SOURCE
-                cold_coverage_gate_reason = "open_or_opening_position_present"
+            (
+                inactive_slots,
+                inactive_slots_source,
+                cold_coverage_gate_reason,
+                cold_coverage_adaptive_score,
+                cold_coverage_health_factor,
+                cold_coverage_speed_factor,
+                cold_coverage_active_factor,
+                cold_coverage_load_factor,
+                cold_coverage_pressure_ewma,
+                cold_coverage_cycle_seconds_ewma,
+                cold_coverage_max_slots,
+            ) = self._adaptive_cold_coverage_slots(
+                base_slots=base_inactive_slots,
+                inactive_slots_source=inactive_slots_source,
+                health_ratio=cold_coverage_health_ratio,
+                active_due_count=len(active_due),
+                active_waiting_count=len(active_waiting),
+                position_blocked=position_blocked,
+            )
         if self._inactive_slots_are_precise_cold_coverage(inactive_slots_source) and precise_budget_remaining_after_radar is not None:
+            inactive_slots_before_budget = inactive_slots
             inactive_slots = min(inactive_slots, precise_budget_remaining_after_radar)
+            if inactive_slots_before_budget > 0 and inactive_slots <= 0:
+                inactive_slots_source = COLD_COVERAGE_GATED_OFF_SOURCE
+                cold_coverage_gate_reason = "precise_scan_budget_exhausted"
         inactive: list[str] = []
         attempts = 0
         while len(inactive) < inactive_slots and attempts < len(symbols):
@@ -3549,6 +3769,17 @@ class AnomalyMicroLiveRunner:
             inactive_cold_coverage_health_threshold_pct=DANGER_INACTIVE_COLD_COVERAGE_MIN_WS_HEALTH_RATIO * 100.0,
             inactive_cold_coverage_active_blocked=active_blocked,
             inactive_cold_coverage_position_blocked=position_blocked,
+            inactive_cold_coverage_active_due_count=len(active_due),
+            inactive_cold_coverage_active_waiting_count=len(active_waiting),
+            inactive_cold_coverage_adaptive_score=cold_coverage_adaptive_score,
+            inactive_cold_coverage_health_factor=cold_coverage_health_factor,
+            inactive_cold_coverage_speed_factor=cold_coverage_speed_factor,
+            inactive_cold_coverage_active_factor=cold_coverage_active_factor,
+            inactive_cold_coverage_load_factor=cold_coverage_load_factor,
+            inactive_cold_coverage_pressure_ewma=cold_coverage_pressure_ewma,
+            inactive_cold_coverage_cycle_seconds_ewma=cold_coverage_cycle_seconds_ewma,
+            inactive_cold_coverage_base_slots=max(0, int(base_inactive_slots)),
+            inactive_cold_coverage_max_slots=max(0, int(cold_coverage_max_slots)),
         )
 
     def _active_symbol_batch(self, *, now_ms: int) -> tuple[list[str], list[str]]:
