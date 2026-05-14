@@ -2197,6 +2197,7 @@ class AnomalyMicroLiveRunner:
         )
         self._open_positions: dict[str, LivePosition] = {}
         self._opening_symbols: set[str] = set()
+        self._order_reconcile_symbols_by_key: dict[str, str] = {}
         self._recent_stops: dict[str, list[float]] = {}
         self._active_symbols: dict[str, LiveActiveSymbol] = {}
         self._active_symbols_seen: set[str] = set()
@@ -2496,8 +2497,19 @@ class AnomalyMicroLiveRunner:
                 self._network_degraded = False
                 time.sleep(self.config.scan_sleep_seconds)
             except KeyboardInterrupt:
-                orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle, force=True)
-                self._flush_live_ohlcv_cache_if_due(force=True, reason="keyboard_interrupt")
+                reconcile_symbols = self._start_graceful_shutdown(reason="keyboard_interrupt", cycle=cycle, symbols=symbols)
+                try:
+                    orphan_cancelled = self._reconcile_orphan_orders(reconcile_symbols, cycle=cycle, force=True)
+                    self._flush_live_ohlcv_cache_if_due(force=True, reason="keyboard_interrupt")
+                except KeyboardInterrupt:
+                    self.artifacts.append_event(
+                        "live_shutdown_forced",
+                        "__live__",
+                        {"reason": "second_keyboard_interrupt", "cycle": cycle},
+                    )
+                    self.logger("graceful shutdown прерван повторным Ctrl+C")
+                    self._close_live_sources()
+                    return 130
                 suffix = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
                 self.logger(f"остановлено пользователем{suffix}")
                 self._close_live_sources()
@@ -2548,12 +2560,70 @@ class AnomalyMicroLiveRunner:
                 )
                 self._close_live_sources()
                 return 4
-        orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle, force=True)
+        reconcile_symbols = self._forced_orphan_reconcile_symbols(symbols)
+        orphan_cancelled = self._reconcile_orphan_orders(reconcile_symbols, cycle=cycle, force=True)
         self._flush_live_ohlcv_cache_if_due(force=True, reason="max_cycles")
         suffix = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
         self.logger(f"достигнут лимит циклов{suffix}")
         self._close_live_sources()
         return 0
+
+    def _track_order_reconcile_symbol(self, symbol: str, *, reason: str) -> None:
+        symbol_key = _position_symbol_key(symbol)
+        with self._state_lock:
+            already_tracked = symbol_key in self._order_reconcile_symbols_by_key
+            self._order_reconcile_symbols_by_key[symbol_key] = symbol
+        if not already_tracked:
+            self.artifacts.append_event(
+                "order_reconcile_symbol_tracked",
+                symbol,
+                {"symbol_key": symbol_key, "reason": reason},
+            )
+
+    def _forced_orphan_reconcile_symbols(self, symbols: list[str]) -> list[str]:
+        by_key: dict[str, str] = {}
+        with self._state_lock:
+            by_key.update(self._order_reconcile_symbols_by_key)
+            for position in self._open_positions.values():
+                by_key.setdefault(_position_symbol_key(position.signal.symbol), position.signal.symbol)
+            for active in self._active_symbols.values():
+                if active.reason in {"opening_position", "position_already_active"}:
+                    by_key.setdefault(_position_symbol_key(active.symbol), active.symbol)
+        if not by_key:
+            return []
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for symbol in symbols:
+            symbol_key = _position_symbol_key(symbol)
+            if symbol_key in by_key and symbol_key not in seen:
+                ordered.append(symbol)
+                seen.add(symbol_key)
+        for symbol_key, symbol in by_key.items():
+            if symbol_key not in seen:
+                ordered.append(symbol)
+                seen.add(symbol_key)
+        return ordered
+
+    def _start_graceful_shutdown(self, *, reason: str, cycle: int, symbols: list[str]) -> list[str]:
+        reconcile_symbols = self._forced_orphan_reconcile_symbols(symbols)
+        self.logger(
+            f"получен сигнал остановки · graceful shutdown · "
+            f"reason={reason} · reconcile_symbols={len(reconcile_symbols)}"
+        )
+        self.artifacts.append_event(
+            "live_shutdown_started",
+            "__live__",
+            {
+                "reason": reason,
+                "cycle": cycle,
+                "orphan_reconcile_scope": "run_trade_symbols_only",
+                "orphan_reconcile_symbols": len(reconcile_symbols),
+                "tracked_trade_symbols": len(self._order_reconcile_symbols_by_key),
+                "open_positions": len(self._open_positions),
+                "opening_symbols": len(self._opening_symbols),
+            },
+        )
+        return reconcile_symbols
 
     def _close_live_sources(self) -> None:
         if self._live_sources_closed:
@@ -2929,6 +2999,7 @@ class AnomalyMicroLiveRunner:
             reduce_only=True,
             client_order_id=client_order_id,
         )
+        self._track_order_reconcile_symbol(symbol, reason=reason)
         post_amount = float(self.exchange.fetch_symbol_position_amount(symbol))
         if not math.isfinite(post_amount) or abs(post_amount) > max(amount * self.config.max_position_amount_slippage_ratio, 1e-12):
             self.artifacts.append_event(
@@ -5504,6 +5575,7 @@ class AnomalyMicroLiveRunner:
                 reduce_only=False,
                 client_order_id=entry_client_order_id,
             )
+            self._track_order_reconcile_symbol(signal.symbol, reason="entry_order_filled")
             post_position_amount = float(self.exchange.fetch_symbol_position_amount(signal.symbol))
             position_delta_amount = post_position_amount - pre_position_amount
             if not math.isfinite(post_position_amount) or not math.isfinite(position_delta_amount):
@@ -7122,13 +7194,19 @@ class AnomalyMicroLiveRunner:
         return all_rows
 
     def _reconcile_orphan_orders(self, symbols: list[str], *, cycle: int, force: bool = False) -> int:
-        if not symbols:
-            return 0
         if not force and cycle != 1 and cycle % self.config.order_reconcile_interval_cycles != 0:
+            return 0
+        max_checks = len(symbols) if force else min(self.config.order_reconcile_batch_size, len(symbols))
+        if force:
+            self.artifacts.append_event(
+                "orphan_order_reconcile_started",
+                "__live__",
+                {"scope": "run_trade_symbols_only", "symbols_to_check": max_checks, "cycle": cycle},
+            )
+        if not symbols:
             return 0
         checked_symbols: set[str] = set()
         cancelled_total = 0
-        max_checks = len(symbols) if force else min(self.config.order_reconcile_batch_size, len(symbols))
         for _ in range(max_checks):
             symbol = symbols[self._order_reconcile_cursor % len(symbols)]
             self._order_reconcile_cursor += 1
@@ -7334,6 +7412,7 @@ class AnomalyMicroLiveRunner:
                 reduce_only=True,
                 client_order_id=client_order_id,
             )
+            self._track_order_reconcile_symbol(symbol, reason="unprotected_entry_reduce_only_exit")
         except Exception as exc:
             self.artifacts.append_event(
                 "unprotected_entry_reduce_only_exit_failed",

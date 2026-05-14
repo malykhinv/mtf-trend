@@ -1129,3 +1129,14 @@ Status: PROPOSED. Commit: UNKNOWN.
 P190 targets the main remaining execution reliability gap: ambiguous state-changing create_order retries and pre-stop exposure cleanup.
 Normal successful order placement adds no extra REST calls. Reconciliation only runs after an ambiguous transport/order-mutation failure. Validation/exchange errors remain hard failures, not network fallbacks. The next reliability gaps to reach 10/10 are startup recovery for existing exchange positions/local ledger, explicit account-mode preflight, and optional exchange-native TP protection if TP1 miss risk becomes material.
 ```
+
+---
+
+## 2026-05-14 - P206 shutdown reconcile scope
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+Ctrl+C shutdown should no longer look frozen before cleanup starts. The first interrupt records live_shutdown_started and logs the bounded forced-reconcile scope. Forced orphan-order reconciliation on shutdown/max-cycles is scoped to symbols with exchange order activity during the current live run, plus currently open/opening active symbols, instead of fetching open orders for every symbol in the live universe. This changes shutdown/runtime behavior only; signal selection, category logic, order entry, fills, stops, and exits are unchanged.
+Next validation: run live, stop with one Ctrl+C, and verify live_events.csv contains live_shutdown_started and orphan_order_reconcile_started with symbols_to_check equal to the number of run-trade symbols, not the whole universe.
+```

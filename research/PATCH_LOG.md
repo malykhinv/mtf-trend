@@ -2609,3 +2609,45 @@ Risk:
 ```text
 Low/medium. Live category eligibility can increase where the only previous blocker was missing subminute 72h history. This is intentional because prior-fast-fade is historical symbol context, not a requirement for 72h of executable subminute entry cache. It does not make discovery tradable in live and does not change order/fill/stop logic.
 ```
+
+## 2026-05-14 - P206 proposed: bounded shutdown reconcile and visible graceful stop
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Make Ctrl+C shutdown observable immediately and avoid a forced full-universe open-order reconcile on exit.
+```
+
+Changes:
+
+```text
+- Ctrl+C now writes live_shutdown_started and logs the beginning of graceful shutdown before reconcile/flush/close work starts.
+- Forced orphan-order reconciliation on Ctrl+C/max-cycles now checks only symbols that had exchange order activity in the current run, plus currently open/opening active symbols.
+- Symbols are tracked after startup close orders, live entry fills, and emergency unprotected-entry reduce-only exits.
+- Forced reconcile writes orphan_order_reconcile_started with the bounded scope size.
+- A second Ctrl+C during cleanup writes live_shutdown_forced and exits with code 130 after closing live sources.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools constants.py main.py
+```
+
+Expected smoke readout:
+
+```text
+On the first Ctrl+C, console immediately prints graceful shutdown with reconcile_symbols=N and live_events.csv contains live_shutdown_started. If no orders were placed in this run, forced orphan reconcile checks zero symbols instead of the whole universe. If one symbol had a live entry, forced reconcile checks that symbol only.
+```
