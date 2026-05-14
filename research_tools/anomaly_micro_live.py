@@ -217,6 +217,10 @@ class LivePumpCategory:
     min_next_taker_buy_quote_share: float | None = None
     max_start_taker_buy_quote_share_delta: float | None = None
     max_price_retention: float | None = None
+    min_flow_hold_count: int | None = None
+    min_start_lower_wick_to_range: float | None = None
+    max_start_upper_wick_to_range: float | None = None
+    max_prior_fast_fade_count_72h: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,6 +256,20 @@ class LiveMarkBasisResult:
     reason: str | None = None
     timestamp_ms: int | None = None
     age_ms: int | None = None
+
+
+LIVE_CATEGORY_CONTRACT = "live_category_overlay_v3_prior_fast_fade_cache_tail_ignored"
+LIVE_DEFAULT_PUMP_CATEGORY_IDS: tuple[str, ...] = (
+    "runner_oi_confirmed",
+    "runner_flow",
+    "runner_reclaim",
+    "runner_balanced",
+)
+LIVE_TIMEFRAME_CATEGORY_PRIORITY: dict[tuple[str, str], tuple[str, ...]] = {
+    ("5m", "30s"): ("runner_flow", "runner_oi_confirmed", "runner_reclaim", "runner_balanced"),
+    ("1m", "15s"): ("runner_oi_confirmed", "runner_flow", "runner_reclaim", "runner_balanced"),
+    ("1m", "5s"): ("runner_oi_confirmed", "runner_flow", "runner_balanced", "runner_reclaim"),
+}
 
 
 class LiveTickerSnapshotSource(Protocol):
@@ -1028,7 +1046,7 @@ SUPPORTED_LIVE_PUMP_CATEGORIES: dict[str, LivePumpCategory] = {
     "runner_oi_confirmed": LivePumpCategory(
         category_id="runner_oi_confirmed",
         label="runner OI confirmed",
-        priority=1,
+        priority=10,
         min_oi_change_pct_3x5m=0.003,
         min_mark_close_vs_decision_close_basis=0.003,
         max_start_quote_ratio=1000.0,
@@ -1036,16 +1054,56 @@ SUPPORTED_LIVE_PUMP_CATEGORIES: dict[str, LivePumpCategory] = {
         max_start_quote_ratio_per_abs_return=20_000.0,
         max_start_trade_ratio_per_abs_return=3_000.0,
         max_start_taker_buy_quote_share_delta=0.25,
+        max_prior_fast_fade_count_72h=0,
+    ),
+    "runner_flow": LivePumpCategory(
+        category_id="runner_flow",
+        label="runner flow",
+        priority=20,
+        min_mark_close_vs_decision_close_basis=0.001,
+        max_start_quote_ratio=1000.0,
+        max_start_trade_ratio=250.0,
+        max_start_quote_ratio_per_abs_return=20_000.0,
+        max_start_trade_ratio_per_abs_return=3_000.0,
+        max_start_taker_buy_quote_share_delta=0.25,
+        min_flow_hold_count=1,
+        max_prior_fast_fade_count_72h=0,
+    ),
+    "runner_reclaim": LivePumpCategory(
+        category_id="runner_reclaim",
+        label="runner reclaim",
+        priority=30,
+        min_mark_close_vs_decision_close_basis=0.001,
+        max_start_quote_ratio=1000.0,
+        max_start_trade_ratio=250.0,
+        max_start_quote_ratio_per_abs_return=20_000.0,
+        max_start_trade_ratio_per_abs_return=3_000.0,
+        max_start_taker_buy_quote_share_delta=0.25,
+        min_start_lower_wick_to_range=0.0,
+        max_start_upper_wick_to_range=0.20,
+        max_prior_fast_fade_count_72h=0,
+    ),
+    "runner_balanced": LivePumpCategory(
+        category_id="runner_balanced",
+        label="runner balanced",
+        priority=40,
+        min_mark_close_vs_decision_close_basis=0.001,
+        max_start_quote_ratio=1000.0,
+        max_start_trade_ratio=250.0,
+        max_start_quote_ratio_per_abs_return=20_000.0,
+        max_start_trade_ratio_per_abs_return=3_000.0,
+        max_start_taker_buy_quote_share_delta=0.25,
+        max_prior_fast_fade_count_72h=0,
     ),
     "balanced_market": LivePumpCategory(
         category_id="balanced_market",
         label="balanced market",
-        priority=2,
+        priority=90,
     ),
     "mild_market": LivePumpCategory(
         category_id="mild_market",
         label="mild market",
-        priority=3,
+        priority=100,
         max_start_quote_ratio=120.0,
         max_start_trade_ratio=60.0,
         max_start_avg_trade_quote_size_ratio=10.0,
@@ -1108,7 +1166,7 @@ class LiveAnomalyConfig:
     confirm_real_orders: bool
     cache_dir: Path | None = None
     timeframe_pairs: tuple[tuple[Timeframe, Timeframe], ...] = ANOMALY_LIVE_TIMEFRAME_PAIRS
-    pump_categories: tuple[str, ...] = ("runner_oi_confirmed",)
+    pump_categories: tuple[str, ...] = LIVE_DEFAULT_PUMP_CATEGORY_IDS
     baseline_candles: int = 60
     confirmation_candles: int = 4
     min_quote_ratio_start: float = 5.0
@@ -2095,6 +2153,8 @@ class AnomalyMicroLiveRunner:
             else None
         )
         self._pump_categories = _resolve_live_pump_categories(config.pump_categories)
+        self._pump_categories_by_id = {category.category_id: category for category in self._pump_categories}
+        self._prior_fast_fade_cache: dict[tuple[str, str, str, int], dict[str, object]] = {}
         self.artifacts = LiveArtifactWriter(
             config.results_dir / "live_anomaly_runs" / datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         )
@@ -3471,6 +3531,206 @@ class AnomalyMicroLiveRunner:
         else:
             self._cycle_inactive_visit_symbols += 1
 
+    def _categories_for_timeframe(
+        self,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+    ) -> tuple[LivePumpCategory, ...]:
+        priority = LIVE_TIMEFRAME_CATEGORY_PRIORITY.get((levels_timeframe.value, entry_timeframe.value))
+        if priority is None:
+            return self._pump_categories
+        ordered: list[LivePumpCategory] = []
+        seen: set[str] = set()
+        for category_id in priority:
+            category = self._pump_categories_by_id.get(category_id)
+            if category is not None:
+                ordered.append(category)
+                seen.add(category_id)
+        ordered.extend(category for category in self._pump_categories if category.category_id not in seen)
+        return tuple(ordered)
+
+    def _load_cached_window_allow_trailing_gap(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> tuple[pd.DataFrame, str, int | None]:
+        storage = self._ohlcv_cache_storage
+        if storage is None:
+            return pd.DataFrame(), "cache_storage_unavailable", None
+        timeframe_ms = int(timeframe.to_milliseconds())
+        if timeframe_ms <= 0:
+            return pd.DataFrame(), "invalid_timeframe", None
+        expected_start_ms = (int(start_timestamp_ms) // timeframe_ms) * timeframe_ms
+        expected_end_ms = (int(end_timestamp_ms) // timeframe_ms) * timeframe_ms
+        if expected_end_ms < expected_start_ms:
+            return pd.DataFrame(), "invalid_window", None
+        result = storage.load_window_result(
+            symbol,
+            timeframe,
+            start_timestamp_ms=expected_start_ms,
+            end_timestamp_ms=expected_end_ms,
+        )
+        frame = _prepare_cached_ohlcv_frame(result.frame)
+        if frame.empty:
+            status = getattr(result, "status", "empty") or "empty"
+            reason = getattr(result, "reason", "cache_window_empty") or "cache_window_empty"
+            return pd.DataFrame(), f"{status}:{reason}", None
+        timestamps = frame["timestamp"].astype("int64")
+        window = frame.loc[(timestamps >= expected_start_ms) & (timestamps <= expected_end_ms)].copy()
+        if window.empty:
+            return pd.DataFrame(), "cache_window_empty", None
+        window.sort_values("timestamp", inplace=True)
+        window.reset_index(drop=True, inplace=True)
+        min_cached_ms = int(window["timestamp"].iloc[0])
+        max_cached_ms = int(window["timestamp"].iloc[-1])
+        if min_cached_ms > expected_start_ms:
+            return pd.DataFrame(), f"cache_start_gap:{min_cached_ms - expected_start_ms}", None
+        effective_end_ms = min(max_cached_ms, expected_end_ms)
+        if effective_end_ms < expected_start_ms:
+            return pd.DataFrame(), "cache_before_window", None
+        missing_ranges = _missing_ohlcv_ranges(
+            window,
+            start_timestamp_ms=expected_start_ms,
+            end_timestamp_ms=effective_end_ms,
+            timeframe_ms=timeframe_ms,
+        )
+        if missing_ranges:
+            return pd.DataFrame(), f"cache_gap:{len(missing_ranges)}", None
+        effective_window = window.loc[window["timestamp"].astype("int64") <= effective_end_ms].copy()
+        if effective_window.empty:
+            return pd.DataFrame(), "cache_window_empty", None
+        return effective_window.sort_values("timestamp").reset_index(drop=True), "ok", effective_end_ms
+
+    def _live_prior_fast_fade_72h(
+        self,
+        symbol: str,
+        *,
+        decision_timestamp_ms: int,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+    ) -> dict[str, object]:
+        decision_ts = int(decision_timestamp_ms)
+        cache_key = (symbol, levels_timeframe.value, entry_timeframe.value, decision_ts)
+        cached = self._prior_fast_fade_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        setup_ms = int(levels_timeframe.to_milliseconds())
+        entry_ms = int(entry_timeframe.to_milliseconds())
+        maturity_ms = max(240, 60) * entry_ms
+        history_start_ms = decision_ts - 3 * 86_400_000
+        setup_start_ms = history_start_ms - int(self.config.baseline_candles) * setup_ms
+        setup_frame, setup_status, setup_cache_end_ms = self._load_cached_window_allow_trailing_gap(
+            symbol,
+            levels_timeframe,
+            start_timestamp_ms=setup_start_ms,
+            end_timestamp_ms=decision_ts,
+        )
+        entry_frame, entry_status, entry_cache_end_ms = self._load_cached_window_allow_trailing_gap(
+            symbol,
+            entry_timeframe,
+            start_timestamp_ms=history_start_ms,
+            end_timestamp_ms=decision_ts,
+        )
+        if setup_status != "ok" or entry_status != "ok" or setup_cache_end_ms is None or entry_cache_end_ms is None:
+            result = {
+                "status": "unavailable",
+                "reason": f"setup={setup_status};entry={entry_status}",
+                "coverage_policy": "cache_contiguous_from_72h_start_ignore_trailing_gap",
+                "prior_fast_fade_count_72h": None,
+                "prior_spike_count_72h": None,
+                "history_start_timestamp_ms": history_start_ms,
+                "setup_cache_end_timestamp_ms": setup_cache_end_ms if setup_cache_end_ms is not None else "",
+                "entry_cache_end_timestamp_ms": entry_cache_end_ms if entry_cache_end_ms is not None else "",
+                "ignored_tail_ms": "",
+            }
+            self._prior_fast_fade_cache[cache_key] = result
+            return result
+        effective_cache_end_ms = min(int(setup_cache_end_ms), int(entry_cache_end_ms), decision_ts)
+        if effective_cache_end_ms <= history_start_ms:
+            result = {
+                "status": "unavailable",
+                "reason": "cache_effective_end_before_history_start",
+                "coverage_policy": "cache_contiguous_from_72h_start_ignore_trailing_gap",
+                "prior_fast_fade_count_72h": None,
+                "prior_spike_count_72h": None,
+                "history_start_timestamp_ms": history_start_ms,
+                "setup_cache_end_timestamp_ms": int(setup_cache_end_ms),
+                "entry_cache_end_timestamp_ms": int(entry_cache_end_ms),
+                "effective_cache_end_timestamp_ms": effective_cache_end_ms,
+                "ignored_tail_ms": max(0, decision_ts - effective_cache_end_ms),
+            }
+            self._prior_fast_fade_cache[cache_key] = result
+            return result
+        try:
+            from research_tools.anomaly_continuation_lab import AnomalyLabConfig
+            from research_tools.anomaly_strategy_backtest import AnomalyBacktestConfig, _collect_symbol_pair_rows
+
+            lab_config = AnomalyLabConfig(
+                cache_dir=self.config.cache_dir or Path("."),
+                output_dir=self.config.results_dir,
+                timeframe=levels_timeframe.value,
+                days=3,
+                end_timestamp_ms=effective_cache_end_ms,
+                baseline_candles=int(self.config.baseline_candles),
+                confirmation_candles=int(self.config.confirmation_candles),
+                min_quote_ratio_start=float(self.config.min_quote_ratio_start),
+                min_trade_ratio_start=float(self.config.min_trade_ratio_start),
+            )
+            backtest_config = AnomalyBacktestConfig(
+                lab_config=lab_config,
+                setup_timeframe=levels_timeframe.value,
+                entry_timeframe=entry_timeframe.value,
+                feature_contract="htf_setup_ltf_entry_v1",
+            )
+            rows = _collect_symbol_pair_rows(
+                symbol=symbol,
+                setup_frame=setup_frame,
+                entry_frame=entry_frame,
+                config=backtest_config,
+                entry_flow_source="live_cache_prior_fast_fade_filter",
+            )
+        except Exception as exc:
+            result = {
+                "status": "unavailable",
+                "reason": f"compute_error:{type(exc).__name__}:{str(exc)[:160]}",
+                "coverage_policy": "cache_contiguous_from_72h_start_ignore_trailing_gap",
+                "prior_fast_fade_count_72h": None,
+                "prior_spike_count_72h": None,
+                "history_start_timestamp_ms": history_start_ms,
+                "setup_cache_end_timestamp_ms": int(setup_cache_end_ms),
+                "entry_cache_end_timestamp_ms": int(entry_cache_end_ms),
+                "effective_cache_end_timestamp_ms": effective_cache_end_ms,
+                "ignored_tail_ms": max(0, decision_ts - effective_cache_end_ms),
+            }
+            self._prior_fast_fade_cache[cache_key] = result
+            return result
+        mature_cutoff = decision_ts - maturity_ms
+        prior_rows = [
+            row
+            for row in rows
+            if history_start_ms <= int(row.get("decision_timestamp_ms", 0)) < effective_cache_end_ms
+            and int(row.get("decision_timestamp_ms", 0)) <= mature_cutoff
+        ]
+        fast_fades = [row for row in prior_rows if str(row.get("outcome_label", "")) == "fast_fade"]
+        result = {
+            "status": "ok",
+            "reason": "ok",
+            "coverage_policy": "cache_contiguous_from_72h_start_ignore_trailing_gap",
+            "prior_fast_fade_count_72h": int(len(fast_fades)),
+            "prior_spike_count_72h": int(len(prior_rows)),
+            "history_start_timestamp_ms": history_start_ms,
+            "setup_cache_end_timestamp_ms": int(setup_cache_end_ms),
+            "entry_cache_end_timestamp_ms": int(entry_cache_end_ms),
+            "effective_cache_end_timestamp_ms": effective_cache_end_ms,
+            "ignored_tail_ms": max(0, decision_ts - effective_cache_end_ms),
+            "ignored_tail_entry_candles": max(0, (decision_ts - effective_cache_end_ms) // entry_ms),
+        }
+        self._prior_fast_fade_cache[cache_key] = result
+        return result
+
     def _scan_batch(self, symbols: list[str]) -> list[LiveSignal]:
         for symbol in symbols:
             self._count_symbol_scan_mode(symbol)
@@ -4150,6 +4410,15 @@ class AnomalyMicroLiveRunner:
         verticality_score = float(verticality["start_verticality_score"])
         activation_price = start_open + max(0.0, start_close - start_open) * 0.50
         hold_count = int((entry_segment["close"].astype(float) >= activation_price).sum())
+        flow_hold_count = int(
+            (
+                pd.to_numeric(entry_segment["quote_volume"], errors="coerce").ge(max(0.35 * start_quote, 3.0 * baseline_quote))
+                & pd.to_numeric(entry_segment["number_of_trades"], errors="coerce").ge(max(0.35 * start_trades, 3.0 * baseline_trades))
+            ).sum()
+        )
+        start_range = start_high - start_low
+        start_lower_wick_to_range = _safe_divide(min(start_open, start_close) - start_low, start_range)
+        start_upper_wick_to_range = _safe_divide(start_high - max(start_open, start_close), start_range)
         setup_with_current = pd.concat([baseline, pd.DataFrame([setup_row.to_dict()])], ignore_index=True)
         ema20 = setup_with_current["close"].astype(float).ewm(span=20, adjust=False).mean()
         decision_ema20 = float(ema20.iloc[-1])
@@ -4204,6 +4473,8 @@ class AnomalyMicroLiveRunner:
         next_taker_share = float("nan")
         start_taker_share_delta_loaded = False
         start_taker_share_delta = float("nan")
+        prior_fast_fade_loaded = False
+        prior_fast_fade_result: dict[str, object] | None = None
 
         def record_category_reject(
             category: LivePumpCategory,
@@ -4219,7 +4490,31 @@ class AnomalyMicroLiveRunner:
                 emit=emit_diagnostics,
             )
 
-        for category in self._pump_categories:
+        for category in self._categories_for_timeframe(levels_timeframe, entry_timeframe):
+            max_prior_fast_fade = _category_value(category, self.config, "max_prior_fast_fade_count_72h")
+            if max_prior_fast_fade is not None:
+                if not prior_fast_fade_loaded:
+                    prior_fast_fade_result = self._live_prior_fast_fade_72h(
+                        symbol,
+                        decision_timestamp_ms=int(decision["timestamp"]),
+                        levels_timeframe=levels_timeframe,
+                        entry_timeframe=entry_timeframe,
+                    )
+                    prior_fast_fade_loaded = True
+                assert prior_fast_fade_result is not None
+                prior_fast_fade_count = prior_fast_fade_result.get("prior_fast_fade_count_72h")
+                prior_fast_fade_details = {
+                    **prior_fast_fade_result,
+                    "max_prior_fast_fade_count_72h": int(max_prior_fast_fade),
+                    "decision_timestamp_ms": int(decision["timestamp"]),
+                }
+                if prior_fast_fade_result.get("status") != "ok" or prior_fast_fade_count is None:
+                    category_rejections.append(record_category_reject(category, symbol, "reject_prior_fast_fade_filter_unavailable", prior_fast_fade_details))
+                    continue
+                if int(prior_fast_fade_count) > int(max_prior_fast_fade):
+                    category_rejections.append(record_category_reject(category, symbol, "reject_prior_fast_fade_72h", prior_fast_fade_details))
+                    continue
+
             min_mark_basis = _category_value(category, self.config, "min_mark_close_vs_decision_close_basis")
             if min_mark_basis is not None:
                 if not mark_basis_loaded:
@@ -4290,6 +4585,20 @@ class AnomalyMicroLiveRunner:
             if max_prior_whipsaw is not None and prior_whipsaw > max_prior_whipsaw:
                 category_rejections.append(record_category_reject(category, symbol, "reject_prior_up_down_whipsaw", {"prior_up_down_whipsaw_to_impulse_range": prior_whipsaw, "max": max_prior_whipsaw, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
+            min_flow_hold_count = _category_value(category, self.config, "min_flow_hold_count")
+            if min_flow_hold_count is not None and flow_hold_count < int(min_flow_hold_count):
+                category_rejections.append(record_category_reject(category, symbol, "reject_low_flow_hold_count", {"flow_hold_count": flow_hold_count, "min": int(min_flow_hold_count), "decision_timestamp_ms": int(decision["timestamp"])}))
+                continue
+            min_lower_wick = _category_value(category, self.config, "min_start_lower_wick_to_range")
+            if min_lower_wick is not None:
+                if not math.isfinite(start_lower_wick_to_range) or start_lower_wick_to_range <= min_lower_wick:
+                    category_rejections.append(record_category_reject(category, symbol, "reject_low_start_lower_wick", {"start_lower_wick_to_range": _finite_or_none(start_lower_wick_to_range), "min": min_lower_wick, "decision_timestamp_ms": int(decision["timestamp"])}))
+                    continue
+            max_upper_wick = _category_value(category, self.config, "max_start_upper_wick_to_range")
+            if max_upper_wick is not None:
+                if not math.isfinite(start_upper_wick_to_range) or start_upper_wick_to_range > max_upper_wick:
+                    category_rejections.append(record_category_reject(category, symbol, "reject_high_start_upper_wick", {"start_upper_wick_to_range": _finite_or_none(start_upper_wick_to_range), "max": max_upper_wick, "decision_timestamp_ms": int(decision["timestamp"])}))
+                    continue
             if not math.isfinite(price_retention):
                 category_rejections.append(record_category_reject(category, symbol, "reject_invalid_price_retention", {"price_retention": _finite_or_none(price_retention), "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
@@ -4421,7 +4730,15 @@ class AnomalyMicroLiveRunner:
                     {
                         "category_id": category.category_id,
                         "category_label": category.label,
+                        "category_contract": LIVE_CATEGORY_CONTRACT,
                         "category_priority": category.priority,
+                        "prior_fast_fade_filter_status": prior_fast_fade_result.get("status") if prior_fast_fade_result is not None else "not_required",
+                        "prior_fast_fade_filter_reason": prior_fast_fade_result.get("reason") if prior_fast_fade_result is not None else "",
+                        "prior_fast_fade_count_72h": prior_fast_fade_result.get("prior_fast_fade_count_72h") if prior_fast_fade_result is not None else "",
+                        "prior_spike_count_72h": prior_fast_fade_result.get("prior_spike_count_72h") if prior_fast_fade_result is not None else "",
+                        "prior_fast_fade_filter_coverage_policy": prior_fast_fade_result.get("coverage_policy") if prior_fast_fade_result is not None else "",
+                        "prior_fast_fade_filter_effective_cache_end_timestamp_ms": prior_fast_fade_result.get("effective_cache_end_timestamp_ms") if prior_fast_fade_result is not None else "",
+                        "prior_fast_fade_filter_ignored_tail_ms": prior_fast_fade_result.get("ignored_tail_ms") if prior_fast_fade_result is not None else "",
                         "decision_timestamp_ms": int(decision["timestamp"]),
                         "prior_category_rejections": category_rejections,
                         "levels_tf": levels_timeframe.value,
@@ -4433,9 +4750,24 @@ class AnomalyMicroLiveRunner:
                         "raw_trade_ratio": _finite_or_none(raw_trade_ratio),
                         "quote_pace_ratio": _finite_or_none(quote_ratio),
                         "trade_pace_ratio": _finite_or_none(trade_ratio),
+                        "flow_hold_count_next_n_candles": flow_hold_count,
+                        "start_lower_wick_to_range": _finite_or_none(start_lower_wick_to_range),
+                        "start_upper_wick_to_range": _finite_or_none(start_upper_wick_to_range),
                         "base_tp1_price": _finite_or_none(base_tp1_price),
                         "tp1_price": _finite_or_none(tp1_price),
                         "tp1_round_step": _finite_or_none(tp1_round_step),
+                        "mark_close_vs_decision_close_basis": _finite_or_none(
+                            mark_basis.value if mark_basis is not None else None
+                        ),
+                        "mark_basis_status": mark_basis.reason if mark_basis is not None else "",
+                        "mark_timestamp_ms": mark_basis.timestamp_ms
+                        if mark_basis is not None and mark_basis.timestamp_ms is not None
+                        else "",
+                        "mark_age_ms": mark_basis.age_ms
+                        if mark_basis is not None and mark_basis.age_ms is not None
+                        else "",
+                        "oi_change_pct_3x5m": _finite_or_none(oi_change),
+                        "oi_status": oi_change_reason or ("ok" if oi_change is not None else ""),
                     },
                 )
             if emit_diagnostics and category_rejections:
@@ -4773,6 +5105,7 @@ class AnomalyMicroLiveRunner:
                 "position_id": position.position_id,
                 "category_id": signal.category_id,
                 "category_label": signal.category_label,
+                "category_contract": LIVE_CATEGORY_CONTRACT,
                 "category_priority": signal.category_priority,
                 "signal_entry_price": signal.entry_price,
                 "actual_entry_price": position.entry_price,
@@ -6632,7 +6965,7 @@ def _category_value(category: LivePumpCategory, config: LiveAnomalyConfig, field
     value = getattr(category, field_name)
     if value is not None:
         return value
-    return getattr(config, field_name)
+    return getattr(config, field_name, None)
 
 
 def _latest_closed_candle_start_ms(timeframe: Timeframe, *, now_ms: int) -> int:
@@ -6861,6 +7194,7 @@ def _format_open_message(position: LivePosition) -> str:
         f"Вход: {_format_price(entry_price)}\n\n"
         f"TP1: {_format_price(position.tp1_price)} {_format_percent(tp_pct)}\n"
         f"SL: {_format_price(position.stop_price)} {_format_percent(sl_pct)}\n\n"
+        f"Category: {_telegram_code(signal.category_id)} ({_telegram_escape(signal.category_label)})\n\n"
         f"Препятствия: {weaknesses}\n\n"
         f"{_telegram_signal_context(signal)}"
     )

@@ -80,6 +80,10 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "entry_trade_count_source",
     "levels_quote_volume_source",
     "entry_quote_volume_source",
+    "pump_category_id",
+    "pump_category_rank",
+    "pump_category_matches",
+    "pump_category_source",
     "feature_contract",
     "setup_timeframe",
     "entry_timeframe",
@@ -252,6 +256,14 @@ EXECUTION_GUARD_SKIP_REASONS = {
     "market_entry_rr_collapsed",
 }
 
+PUMP_CATEGORY_PROFILE_ORDER = (
+    "runner_oi_confirmed",
+    "runner_flow",
+    "runner_reclaim",
+    "runner_balanced",
+)
+PUMP_CATEGORY_DISCOVERY = "discovery"
+
 
 def _execution_model_label(config: AnomalyBacktestConfig) -> str:
     if config.entry_method == "market":
@@ -337,6 +349,9 @@ def _apply_red_flag_profile(config: AnomalyBacktestConfig) -> AnomalyBacktestCon
                 if config.min_mark_close_vs_decision_close_basis is None
                 else config.min_mark_close_vs_decision_close_basis
             ),
+            reject_stale_derivatives_context=True
+            if not config.reject_stale_derivatives_context
+            else config.reject_stale_derivatives_context,
             max_start_quote_ratio=(
                 1000.0 if config.max_start_quote_ratio is None else config.max_start_quote_ratio
             ),
@@ -401,6 +416,9 @@ def _apply_red_flag_profile(config: AnomalyBacktestConfig) -> AnomalyBacktestCon
                 if balanced.min_oi_change_pct_3x5m is None
                 else balanced.min_oi_change_pct_3x5m
             ),
+            require_oi_status_ok=True
+            if not balanced.require_oi_status_ok
+            else balanced.require_oi_status_ok,
             min_mark_close_vs_decision_close_basis=max(
                 0.003,
                 (
@@ -1129,6 +1147,57 @@ def build_anomaly_signals(
     return signals
 
 
+def annotate_pump_categories(
+    signals: pd.DataFrame,
+    candidates: pd.DataFrame,
+    *,
+    config: AnomalyBacktestConfig,
+) -> pd.DataFrame:
+    if signals.empty:
+        result = signals.copy()
+        for column in ("pump_category_id", "pump_category_rank", "pump_category_matches", "pump_category_source"):
+            if column not in result.columns:
+                result[column] = pd.Series(dtype="object")
+        return result
+    key_columns = ["symbol", "setup_timeframe", "entry_timeframe", "decision_timestamp_ms"]
+    if not set(key_columns).issubset(signals.columns) or not set(key_columns).issubset(candidates.columns):
+        raise ValueError(f"pump category annotation requires columns: {key_columns}")
+    result = signals.copy()
+    category_keys: dict[str, set[tuple[str, str, str, int]]] = {}
+    for category_id in PUMP_CATEGORY_PROFILE_ORDER:
+        category_config = replace(config, red_flag_profile=category_id)
+        category_signals = build_anomaly_signals(candidates, config=category_config)
+        keys: set[tuple[str, str, str, int]] = set()
+        if not category_signals.empty:
+            for row in category_signals.loc[:, key_columns].itertuples(index=False, name=None):
+                symbol, setup_tf, entry_tf, decision_ts = row
+                keys.add((str(symbol), str(setup_tf), str(entry_tf), int(decision_ts)))
+        category_keys[category_id] = keys
+
+    category_ranks = {category_id: rank for rank, category_id in enumerate(PUMP_CATEGORY_PROFILE_ORDER, start=1)}
+    discovery_rank = len(PUMP_CATEGORY_PROFILE_ORDER) + 1
+    selected_categories: list[str] = []
+    selected_ranks: list[int] = []
+    category_matches: list[str] = []
+    for row in result.loc[:, key_columns].itertuples(index=False, name=None):
+        key = (str(row[0]), str(row[1]), str(row[2]), int(row[3]))
+        matches = [category_id for category_id in PUMP_CATEGORY_PROFILE_ORDER if key in category_keys[category_id]]
+        if matches:
+            selected = matches[0]
+            selected_categories.append(selected)
+            selected_ranks.append(category_ranks[selected])
+            category_matches.append(",".join(matches))
+        else:
+            selected_categories.append(PUMP_CATEGORY_DISCOVERY)
+            selected_ranks.append(discovery_rank)
+            category_matches.append(PUMP_CATEGORY_DISCOVERY)
+    result["pump_category_id"] = selected_categories
+    result["pump_category_rank"] = selected_ranks
+    result["pump_category_matches"] = category_matches
+    result["pump_category_source"] = "backtest_profile_overlay_v1"
+    return result
+
+
 def _resolve_signal_entry(
     frame: pd.DataFrame,
     *,
@@ -1580,24 +1649,61 @@ def _collect_symbol_pair_rows(
     setup_timestamps = setup_frame["timestamp"].astype("int64").to_numpy()
     entry_timestamps = entry_frame["timestamp"].astype("int64").to_numpy()
     entry_max_timestamp = int(entry_timestamps[-1]) if len(entry_timestamps) else 0
-    last_selected_setup_idx = -10**9
+    baseline_quote_medians = (
+        pd.to_numeric(setup_frame["quote_volume"], errors="coerce")
+        .rolling(window=lab_config.baseline_candles, min_periods=lab_config.baseline_candles)
+        .median()
+        .shift(1)
+        .to_numpy()
+    )
+    baseline_trade_medians = (
+        pd.to_numeric(setup_frame["number_of_trades"], errors="coerce")
+        .rolling(window=lab_config.baseline_candles, min_periods=lab_config.baseline_candles)
+        .median()
+        .shift(1)
+        .to_numpy()
+    )
     max_forward = max(lab_config.forward_high_candles, lab_config.forward_low_candles)
     for setup_idx, setup_start in enumerate(setup_timestamps):
         setup_start = int(setup_start)
         if setup_idx < lab_config.baseline_candles:
             continue
-        if setup_idx - last_selected_setup_idx < lab_config.cooldown_candles:
+        baseline_quote_value = float(baseline_quote_medians[setup_idx])
+        baseline_trade_value = float(baseline_trade_medians[setup_idx])
+        if not np.isfinite(baseline_quote_value) or not np.isfinite(baseline_trade_value):
             continue
-        baseline = setup_frame.iloc[setup_idx - lab_config.baseline_candles : setup_idx].copy()
-        if baseline.empty:
+        if baseline_quote_value <= 0.0 or baseline_trade_value <= 0.0:
             continue
         entry_start_pos = int(np.searchsorted(entry_timestamps, setup_start, side="left"))
         entry_end_pos_exclusive = int(np.searchsorted(entry_timestamps, setup_start + setup_ms, side="left"))
         entry_segment_full = entry_frame.iloc[entry_start_pos:entry_end_pos_exclusive]
         if len(entry_segment_full) < lab_config.confirmation_candles:
             continue
-        selected_this_setup = False
+        entry_quote_cumsum = pd.to_numeric(entry_segment_full["quote_volume"], errors="coerce").fillna(0.0).cumsum().to_numpy()
+        entry_trade_cumsum = pd.to_numeric(entry_segment_full["number_of_trades"], errors="coerce").fillna(0.0).cumsum().to_numpy()
+        baseline_for_row: pd.DataFrame | None = None
         for entry_end_pos in range(lab_config.confirmation_candles - 1, len(entry_segment_full)):
+            start_quote = float(entry_quote_cumsum[entry_end_pos])
+            start_trades = float(entry_trade_cumsum[entry_end_pos])
+            setup_elapsed_fraction = min(1.0, (entry_end_pos + 1) * entry_ms / setup_ms)
+            elapsed_for_ratio = max(1e-9, setup_elapsed_fraction)
+            raw_start_quote_ratio = _safe_divide_value(start_quote, baseline_quote_value)
+            raw_start_trade_ratio = _safe_divide_value(start_trades, baseline_trade_value)
+            start_quote_ratio = _safe_divide_value(raw_start_quote_ratio, elapsed_for_ratio)
+            start_trade_ratio = _safe_divide_value(raw_start_trade_ratio, elapsed_for_ratio)
+            min_raw_quote_ratio = lab_config.min_quote_ratio_start * min(1.0, max(0.35, elapsed_for_ratio))
+            min_raw_trade_ratio = lab_config.min_trade_ratio_start * min(1.0, max(0.35, elapsed_for_ratio))
+            if (
+                not np.isfinite(start_quote_ratio)
+                or not np.isfinite(start_trade_ratio)
+                or not np.isfinite(raw_start_quote_ratio)
+                or not np.isfinite(raw_start_trade_ratio)
+                or start_quote_ratio < lab_config.min_quote_ratio_start
+                or start_trade_ratio < lab_config.min_trade_ratio_start
+                or raw_start_quote_ratio < min_raw_quote_ratio
+                or raw_start_trade_ratio < min_raw_trade_ratio
+            ):
+                continue
             entry_segment = entry_segment_full.iloc[: entry_end_pos + 1].copy()
             decision = entry_segment.iloc[-1]
             decision_ts = int(decision["timestamp"])
@@ -1606,6 +1712,10 @@ def _collect_symbol_pair_rows(
             forming_setup = _aggregate_ohlcv_to_candle(entry_segment, timestamp_ms=setup_start)
             if forming_setup is None:
                 continue
+            if baseline_for_row is None:
+                baseline_for_row = setup_frame.iloc[setup_idx - lab_config.baseline_candles : setup_idx].copy()
+                if baseline_for_row.empty:
+                    break
             row = _build_pair_candidate_row(
                 symbol=symbol,
                 setup_timeframe=setup_timeframe,
@@ -1613,7 +1723,7 @@ def _collect_symbol_pair_rows(
                 setup_ms=setup_ms,
                 entry_ms=entry_ms,
                 setup_idx=setup_idx,
-                baseline=baseline,
+                baseline=baseline_for_row,
                 setup_row=forming_setup,
                 entry_segment=entry_segment,
                 entry_frame=entry_frame,
@@ -1622,12 +1732,9 @@ def _collect_symbol_pair_rows(
             )
             if row is None:
                 continue
+            row["setup_decision_index"] = int(entry_end_pos)
+            row["candidate_collection_policy"] = "all_ltf_decisions_per_setup"
             rows.append(row)
-            last_selected_setup_idx = setup_idx
-            selected_this_setup = True
-            break
-        if selected_this_setup:
-            continue
     return rows
 
 
@@ -2209,6 +2316,45 @@ def summarize_trades_by_symbol(trades: pd.DataFrame) -> pd.DataFrame:
     )
     grouped.sort_values("sum_net_return", ascending=False, inplace=True)
     return grouped
+
+
+def summarize_trades_by_pump_category(trades: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "pump_category_id",
+        "closed_trades",
+        "win_rate",
+        "avg_net_return",
+        "median_net_return",
+        "sum_net_return",
+        "avg_gross_r",
+        "tp1_hit_rate",
+        "avg_mfe_pct",
+        "avg_mae_pct",
+    ]
+    if trades.empty or "status" not in trades.columns or "pump_category_id" not in trades.columns:
+        return pd.DataFrame(columns=columns)
+    closed = trades.loc[trades["status"].eq("closed")].copy()
+    if closed.empty:
+        return pd.DataFrame(columns=columns)
+    closed["pump_category_id"] = closed["pump_category_id"].replace("", PUMP_CATEGORY_DISCOVERY).fillna(PUMP_CATEGORY_DISCOVERY)
+    grouped = (
+        closed.assign(win=closed["net_return"].astype(float) > 0)
+        .groupby("pump_category_id")
+        .agg(
+            closed_trades=("pump_category_id", "size"),
+            win_rate=("win", "mean"),
+            avg_net_return=("net_return", "mean"),
+            median_net_return=("net_return", "median"),
+            sum_net_return=("net_return", "sum"),
+            avg_gross_r=("gross_r", "mean"),
+            tp1_hit_rate=("tp1_hit", "mean"),
+            avg_mfe_pct=("mfe_pct", "mean"),
+            avg_mae_pct=("mae_pct", "mean"),
+        )
+        .reset_index()
+    )
+    grouped.sort_values(["sum_net_return", "closed_trades"], ascending=[False, False], inplace=True)
+    return grouped[columns]
 
 
 def _parse_grid_values(raw: str, *, cast: type[float] | type[int]) -> list[float] | list[int]:
@@ -3462,6 +3608,7 @@ def run_anomaly_strategy_backtest(
         signals = build_anomaly_signals(candidates, config=config)
     else:
         red_flag_universe = build_anomaly_signals(candidates, config=pre_context_config)
+    signals = annotate_pump_categories(signals, candidates, config=config)
     end_ms = config.lab_config.end_timestamp_ms
     if end_ms is None:
         end_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
@@ -3497,6 +3644,7 @@ def run_anomaly_strategy_backtest(
             (output_dir / "anomaly_profitability_summary.csv", summary),
             (output_dir / "anomaly_skip_reasons.csv", skip_reasons),
             (output_dir / "anomaly_profitability_by_symbol.csv", summarize_trades_by_symbol(trades)),
+            (output_dir / "anomaly_profitability_by_category.csv", summarize_trades_by_pump_category(trades)),
         ],
         progress_label="anomaly artifacts: trade files",
     )

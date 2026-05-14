@@ -989,3 +989,69 @@ Backfill ranges, including empty REST responses, extend coverage so the same his
 Command-level KeyboardInterrupt now calls runner.shutdown(reason=command_keyboard_interrupt) before the common wrapper prints the human stop message.
 Next validation: run 10-30 minutes live and compare ws_aggtrade_frame_read.status covered/partial/stale/not_subscribed, aggtrade_network_calls, ws_aggtrade_backfill_reads, signal_scan_seconds, live_ohlcv_cache_gap, signal_scan_empty_ohlcv.
 ```
+
+## 2026-05-14 - Backtest/live parity risk from uploaded ZIP
+
+Status: ANALYZED. Commit: UNKNOWN.
+
+```text
+Code parity is not yet proven. Live and backtest duplicate the forming-setup signal path.
+Main suspected correctness issue is backtest-side: first raw candidate inside an HTF setup consumes that setup/cooldown before later OI/mark/category/entry filters run, while live can still accept a later LTF decision in the same setup.
+runner_oi_confirmed needs strict as-of freshness parity for OI and mark basis; live rejects stale context, backtest must not accept stale context under the same production profile.
+Next step should be a parity harness/report over the exact latest live window after 2d cache warmup, not a generic PnL comparison.
+```
+
+## 2026-05-14 - P196 applied locally: stricter backtest/live parity
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+Backtest forming HTF from LTF collection now keeps all valid LTF decision candidates inside a setup instead of consuming the setup on the first raw pump-flow candidate.
+runner_balanced now rejects stale derivatives context when mark basis is part of the profile; runner_oi_confirmed now forces oi_status=ok.
+Live category_selected diagnostics now include selected OI-change and mark-basis value/status/age so live/backtest parity can compare accepted rows, not only rejects.
+Expected impact: more candidate rows, potentially more late-in-setup signals, and stricter rejection of stale OI/mark context. This should make the backtest less cosmetically optimized and closer to live.
+Next validation: run a 2d cache-backed parity sample after the current live run and compare live window decision/reject/select rows before treating PnL as meaningful.
+```
+
+## 2026-05-14 - P197 applied locally: broad category statistics
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+Current confirmed live-candidate category remains runner_oi_confirmed only.
+Backtest now supports broad discovery while tagging each signal/trade by the strongest matching profile: runner_oi_confirmed, runner_flow, runner_reclaim, runner_balanced, or discovery.
+The new anomaly_profitability_by_category.csv artifact is intended to find candidate categories without suppressing broad trades.
+Next validation should inspect category counts and expectancy after the 2d parity run; do not promote a category to live until it survives wider-period robustness checks.
+```
+
+## 2026-05-14 - P198 applied locally: backtest candidate speed prescreen
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+The 30d broad run became slow because P196 correctly evaluates all LTF decision candles inside each forming setup, especially 1m/5s.
+P198 adds rolling baseline medians and a cheap cumulative quote/trade flow prescreen before expensive row construction. It uses the same thresholds as the row builder and should only skip rows that would have returned None.
+This is a speed optimization, not a fallback or strategy change. Remaining larger speedups should come from vectorized event detection and/or parallel symbol collection after parity is validated.
+```
+
+## 2026-05-14 - P199 applied locally: live category expansion
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+Live now defaults to runner_oi_confirmed, runner_flow, runner_reclaim, and runner_balanced; discovery remains research-only and is not traded.
+Category priority is TF-specific based on the 30d broad category table.
+Artifacts include category_contract=live_category_overlay_v1_no_prior_fast_fade to make the current known gap explicit: live does not yet enforce the backtest 72h prior_fast_fade exclusion.
+Next validation: short shadow/live run and inspect category_selected / position_opened category ids, per-TF selected category mix, and whether expanded categories increase low-quality entries.
+```
+
+## 2026-05-14 - P200 proposed: live prior_fast_fade parity filter
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+```text
+Live now applies max_prior_fast_fade_count_72h for runner_oi_confirmed, runner_flow, runner_reclaim, and runner_balanced instead of merely documenting the gap.
+The filter is computed from local cached candidate history: the 72h lookback start and internal candles must be covered, but the trailing cache lag before the live decision is ignored and exposed as ignored_tail_ms / effective_cache_end_timestamp_ms.
+Unavailable filter data rejects the category with reject_prior_fast_fade_filter_unavailable; positive prior fast-fade history rejects with reject_prior_fast_fade_72h.
+Next validation: short shadow/live run and inspect category_rejected/category_selected payloads for prior_fast_fade_count_72h, ignored_tail_ms, effective_cache_end_timestamp_ms, and whether serial fast-fade symbols disappear without making all categories unavailable.
+```

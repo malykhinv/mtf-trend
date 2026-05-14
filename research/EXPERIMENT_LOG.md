@@ -1695,6 +1695,81 @@ Repeat a 10-30 minute live health run. Expected improvement: ws_aggtrade_frame_r
 
 ---
 
+## 2026-05-14 - Backtest/live parity review from uploaded code ZIP
+
+Input:
+
+```text
+Source: .zip, inspected as code only.
+Scope: anomaly live vs anomaly backtest parity for runner_oi_confirmed and forming HTF from LTF entry sets.
+```
+
+Findings:
+
+```text
+Backtest and live both use the same default TF sets and broadly similar forming-setup formulas, but the signal builders are duplicated, so parity is not structurally guaranteed.
+Highest-confidence parity bug is in backtest candidate collection: _collect_symbol_pair_rows appends the first raw candidate in a setup bucket, sets cooldown, and stops scanning later LTF decision candles even if later category/OI/mark/entry filters reject that first candidate. Live can continue to evaluate later closed LTF decisions inside the same forming HTF setup.
+runner_oi_confirmed also needs explicit freshness parity: live OI and mark basis fetches reject stale context at decision time, while backtest profile relies on optional require_oi_status_ok / reject_stale_derivatives_context flags unless forced by profile/context path.
+Regular all-candle backtest is not enough to validate live parity because live discovery is ticker-radar/active-symbol scheduled. A parity experiment should compare the exact live-scanned 30m window against cached candle reconstruction and live event decisions/rejections.
+```
+
+Next experiment:
+
+```text
+After the current 30m live run, backfill/materialize 1s-derived cache for the exact live end timestamp plus a 2d warmup. Then run the normal 2d anomaly lab only as context, and separately slice the exact live window to compare: scanned symbol/TF decisions, category rejects, selected categories, mark/OI status, entry drift/RR, and live scheduler lag. Do not interpret the 2d run as profitability evidence.
+```
+
+Action P196:
+
+```text
+Applied local code changes before the parity experiment: backtest now collects all LTF decision candidates inside a forming HTF setup, and runner_oi_confirmed requires oi_status=ok plus fresh derivatives/mark context through the profile.
+Live category_selected rows now carry accepted OI/mark context status and values, which are required for exact accepted-signal parity checks.
+The next parity run must expect higher candidate volume; this is intended because raw candidates no longer hide later valid decisions.
+```
+
+Action P197:
+
+```text
+Added broad backtest category overlay. The run should keep the broad signal stream, then analyze anomaly_profitability_by_category.csv for runner_oi_confirmed, runner_flow, runner_reclaim, runner_balanced, and discovery.
+This is category discovery, not live promotion. A category needs enough trades and period robustness before live trading.
+```
+
+Action P198:
+
+```text
+Added cheap cumulative quote/trade flow prescreen to broad forming-setup collection after the 30d run showed multi-hour ETA.
+Expected effect: fewer expensive row-builder calls with identical flow gate semantics. Validate by comparing a small fixed-window candidate set before/after if exact parity proof is needed.
+```
+
+Review 30d broad run after P196-P198:
+
+```text
+Input: .output/results/anomaly_lab, completed all TF sets 5m/30s, 1m/15s, 1m/5s.
+Run is broad discovery, not runner_oi_confirmed-only.
+Main artifact caveat: requested_end is around 2026-05-14 08:09-08:16 UTC, while subminute cache max is around 06:04-06:05 UTC; symbols_covering_end=0 for all TF sets. This means the final ~2h of requested window is not covered, although historical trades before cache max remain analyzable.
+OI health is good for candidate rows: ok share roughly 97.8%-98.8%. Category overlay accepted rows for runner_oi_confirmed/runner_flow/runner_reclaim/runner_balanced mostly have oi_status=ok and mark_status=ok.
+Broad discovery is profitable but weak as a live category: 1m/5s discovery median is slightly negative and 5m/30s/1m/15s discovery has weaker expectancy than category buckets.
+Best category candidates: runner_oi_confirmed is strongest by robustness across TFs; runner_flow looks promising but trade counts are lower; runner_reclaim is mixed; runner_balanced is too small on 5m/30s and 1m/15s, better on 1m/5s but still needs wider validation.
+```
+
+Action P199:
+
+```text
+Enabled profitable research categories for test live: runner_oi_confirmed, runner_flow, runner_reclaim, runner_balanced.
+Added TF-specific live priority and explicit live_category_overlay_v1_no_prior_fast_fade contract in artifacts.
+Next experiment should be a short live/shadow run measuring category mix and live-vs-backtest parity before treating expanded live as production-ready.
+```
+
+Action P200:
+
+```text
+Live prior_fast_fade_72h is now an active category filter, not just a contract caveat.
+The implementation uses local cached candidate history and allows only trailing cache lag to be ignored; start/internal cache gaps reject the category.
+Artifacts must be checked for reject_prior_fast_fade_filter_unavailable, reject_prior_fast_fade_72h, prior_fast_fade_count_72h, effective_cache_end_timestamp_ms, and ignored_tail_ms before treating expanded live categories as parity-ready.
+```
+
+---
+
 ## 2026-05-13 - Short WS live artifact audit and P185
 
 Input:

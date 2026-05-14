@@ -453,3 +453,31 @@ Current live ticker radar source defaults to Binance USD-M futures `!ticker@arr`
 Current live subminute tape source defaults to Binance USD-M futures `@aggTrade` WebSocket for active and ticker-radar watch symbols. REST `aggTrades` is allowed only as explicit missing-range backfill when WS rows do not honestly cover the requested interval or an aggregate trade id gap is detected. Those backfills must be visible in `ws_aggtrade_frame_read`; they are not a silent fallback and should be treated as a data-health signal.
 
 For live WS aggTrade coverage, a connected active subscription is treated as covering quiet no-trade intervals; the source does not require a trade at both edges of every requested window. Pre-subscription history and detected aggregate trade id gaps remain uncovered until explicit backfill covers them.
+
+Backtest/live parity rule:
+
+```text
+For forming HTF from LTF entry sets, backtest candidate collection must evaluate every closed LTF decision candle inside the active HTF setup after the confirmation minimum.
+The first raw pump-flow candidate must not consume the whole setup before OI, mark-basis, category, and execution filters run.
+runner_oi_confirmed requires fresh OI and fresh derivatives/mark context as part of the profile; accepting stale context is not an allowed optional mode for this production-style category.
+```
+
+Backtest pump-category overlay:
+
+```text
+The broad backtest pass is the discovery layer. It should not be confused with a production entry category.
+Each broad signal/trade is tagged with the strongest profile it also satisfies: runner_oi_confirmed, runner_flow, runner_reclaim, runner_balanced, or discovery.
+Only runner_oi_confirmed is currently the live-entry candidate category. Other tags are research buckets until they show stable, non-overfit edge across enough trades and periods.
+```
+
+Live category policy:
+
+```text
+Test live may scan the profitable research categories runner_oi_confirmed, runner_flow, runner_reclaim, and runner_balanced.
+Discovery is never a live-entry category.
+Category priority is TF-specific:
+- 5m/30s: runner_flow, runner_oi_confirmed, runner_reclaim, runner_balanced
+- 1m/15s: runner_oi_confirmed, runner_flow, runner_reclaim, runner_balanced
+- 1m/5s: runner_oi_confirmed, runner_flow, runner_balanced, runner_reclaim
+Live category contract is live_category_overlay_v3_prior_fast_fade_cache_tail_ignored: live enforces the backtest 72h prior_fast_fade exclusion from local cached candidate history. The cache must cover the 72h lookback start and must not have internal gaps; only the trailing cache lag between latest cached candle and live decision time is ignored and written to artifacts as ignored_tail_ms. If the filter cannot be computed from cache, the category is rejected.
+```

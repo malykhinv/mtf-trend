@@ -1441,7 +1441,13 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             cache_dir=config.backtest.cache_dir,
             pump_categories=tuple(
                 item.strip()
-                for item in str(getattr(args, "pump_categories", "runner_oi_confirmed")).split(",")
+                for item in str(
+                    getattr(
+                        args,
+                        "pump_categories",
+                        "runner_oi_confirmed,runner_flow,runner_reclaim,runner_balanced",
+                    )
+                ).split(",")
                 if item.strip()
             ),
             baseline_candles=int(getattr(args, "baseline_candles", 60)),

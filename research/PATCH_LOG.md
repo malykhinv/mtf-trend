@@ -2183,3 +2183,132 @@ Validation to run after apply:
 - `python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py`
 - `python -m compileall data/exchanges research_tools cli constants.py main.py`
 - Small live smoke: expect `ticker_radar_startup_seeded.seeded_count` close to universe size, no startup burst of `ticker_radar_missing_fields`, and console heartbeat like `live · ... · аномалии 0 · ...`; during the first seed-backed cycle `ticker_radar_snapshot.source_status=primary_seeded_rest`, then normal WS cycles should return to `primary` once ticker messages arrive.
+
+
+## P196 - proposed - strict backtest/live parity for forming setup decisions
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- Uploaded ZIP review found that backtest and live use duplicated forming-setup paths.
+- The highest-confidence mismatch was backtest-side: the first raw candidate inside an HTF setup consumed that setup/cooldown before later OI/mark/category/execution filters ran.
+- Live can keep evaluating later closed LTF decision candles in the same HTF setup, so the backtest could miss valid later runner_oi_confirmed entries.
+
+Changes:
+- `research_tools/anomaly_strategy_backtest.py` now collects every valid LTF decision candidate inside a forming HTF setup instead of stopping after the first raw pump-flow candidate.
+- `research_tools/anomaly_micro_live.py` now writes selected category OI-change and mark-basis status/value/age into `category_selected`, not only into reject rows.
+- Candidate rows now include `setup_decision_index` and `candidate_collection_policy=all_ltf_decisions_per_setup` for auditability.
+- `runner_balanced` now rejects stale derivatives context when it requires mark basis, matching live's fresh mark-basis fetch.
+- `runner_oi_confirmed` now forces `require_oi_status_ok=True` in addition to OI-change and mark-basis thresholds.
+
+Risk:
+Medium. Candidate counts can rise materially, especially on 1m/5s. This is expected and more honest; execution overlap is still resolved in trade simulation. The next run must inspect candidate/signal/trade counts and runtime.
+
+Validation:
+```
+python -m py_compile research_tools/anomaly_strategy_backtest.py research_tools/anomaly_micro_live.py
+python -m compileall research_tools cli constants.py main.py
+```
+
+
+## P197 - proposed - broad backtest category overlay
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- The only currently live-candidate category is `runner_oi_confirmed`.
+- Backtest should still run broad discovery signals so potentially profitable categories are not hidden by a single strict production profile.
+- Category statistics need to be separated by bucket instead of inferred from separate narrowed runs.
+
+Changes:
+- Add `pump_category_id`, `pump_category_rank`, `pump_category_matches`, and `pump_category_source` to signal/trade context columns.
+- Add a backtest overlay classifier that tags broad signals with the strongest matching profile in this order: `runner_oi_confirmed`, `runner_flow`, `runner_reclaim`, `runner_balanced`, then `discovery`.
+- Add `anomaly_profitability_by_category.csv` with closed-trade stats per category.
+
+Risk:
+Medium. Category overlay runs several profile filters over the same candidate table, so signal-filter time increases. This is deliberate and keeps the primary trade stream broad.
+
+Validation:
+```
+python -m py_compile research_tools/anomaly_strategy_backtest.py
+python -m compileall research_tools cli constants.py main.py
+```
+
+
+## P198 - proposed - cheap flow prescreen for broad forming-setup backtest
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- After P196, 30d all-symbol/all-TF backtest became very slow because forming HTF from LTF collection evaluates every closed LTF decision candle inside every setup.
+- The expensive row builder was being called even for decision candles that would immediately fail the same raw/paced quote/trade flow thresholds.
+
+Changes:
+- Add rolling setup baseline medians and an in-loop cumulative LTF quote/trade prescreen in `_collect_symbol_pair_rows`.
+- The prescreen uses the same baseline medians, elapsed fraction, raw ratio thresholds, and pace thresholds as `_build_pair_candidate_row`.
+- Only decision candles that can pass the existing flow gate proceed to baseline slicing, aggregation, feature construction, future labels, and category overlay.
+
+Risk:
+Low/medium. The prescreen must remain mathematically identical to the row-builder flow gate. It should reduce work without changing accepted candidates.
+
+Validation:
+```
+python -m py_compile research_tools/anomaly_strategy_backtest.py
+python -m compileall research_tools cli constants.py main.py
+```
+
+
+## P199 - proposed - enable profitable live categories with TF priorities
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- The 30d broad run showed profitable buckets beyond `runner_oi_confirmed`, especially `runner_flow`.
+- Live should test these categories explicitly while preserving category attribution in Telegram and artifacts.
+
+Changes:
+- Add live-supported `runner_flow`, `runner_reclaim`, and `runner_balanced` categories alongside `runner_oi_confirmed`.
+- Default live `--pump-categories` is now `runner_oi_confirmed,runner_flow,runner_reclaim,runner_balanced`.
+- Add TF-specific category priority:
+  - `5m/30s`: `runner_flow`, `runner_oi_confirmed`, `runner_reclaim`, `runner_balanced`
+  - `1m/15s`: `runner_oi_confirmed`, `runner_flow`, `runner_reclaim`, `runner_balanced`
+  - `1m/5s`: `runner_oi_confirmed`, `runner_flow`, `runner_balanced`, `runner_reclaim`
+- Add flow-hold and reclaim wick checks to live category filtering.
+- Emit `category_contract=live_category_overlay_v1_no_prior_fast_fade`, category id/label, OI/mark values, flow hold, and wick metrics in selected-category artifacts.
+
+Risk:
+Medium. Live category contract is explicit because live does not yet enforce the backtest 72h prior_fast_fade exclusion. This is not a fallback, but a known contract gap that must be measured in shadow/live parity.
+
+Validation:
+```
+python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py
+python -m compileall research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+```
+
+## P200 - proposed - enforce live prior_fast_fade with trailing cache lag ignored
+
+Status: PROPOSED. Commit: UNKNOWN.
+
+Context:
+- The expanded live categories inherit the backtest `max_prior_fast_fade_count_72h=0` exclusion.
+- The first live implementation only added a cache-based calculator and still used a strict window ending at the live decision timestamp, which would reject most live candidates when the OHLCV cache lags by minutes or hours.
+- Ignoring the whole filter would admit serial fast-fade symbols; requiring full tail coverage would make the filter practically unusable in live.
+
+Changes:
+- Replace strict cache-window loading for this filter with contiguous-from-start loading that allows only a trailing cache lag.
+- Keep start-of-window and internal cache gaps blocking; these produce `reject_prior_fast_fade_filter_unavailable`.
+- Actually apply `max_prior_fast_fade_count_72h` inside live category selection before mark/OI work.
+- Emit `reject_prior_fast_fade_72h` when cached mature prior candidates contain too many fast fades.
+- Add prior-fast-fade status/count/coverage/tail metadata to `category_selected` and category rejection payloads.
+- Bump `category_contract` to `live_category_overlay_v3_prior_fast_fade_cache_tail_ignored`.
+
+Risk:
+Medium. The live filter can be slightly less strict than a perfectly up-to-date backtest during cache lag because the trailing unavailable interval is ignored. This is intentional and visible; it is not a silent fallback. Start coverage and internal gaps remain hard rejects.
+
+Validation:
+```
+python -m py_compile research_tools/anomaly_micro_live.py cli/parser.py cli/commands.py
+python -m compileall data/exchanges research_tools cli constants.py main.py launcher.py
+python main.py run-anomaly-live --help
+```

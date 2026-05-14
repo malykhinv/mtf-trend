@@ -182,8 +182,11 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--max-cycles", type=_positive_int_for("--max-cycles"), default=None)
     anomaly_live.add_argument(
         "--pump-categories",
-        default="runner_oi_confirmed",
-        help="Comma-separated live pump categories, tried by priority. Supported: runner_oi_confirmed,balanced_market,mild_market",
+        default="runner_oi_confirmed,runner_flow,runner_reclaim,runner_balanced",
+        help=(
+            "Comma-separated live pump categories, tried by TF-specific priority. "
+            "Supported: runner_oi_confirmed,runner_flow,runner_reclaim,runner_balanced,balanced_market,mild_market"
+        ),
     )
     anomaly_live.add_argument("--baseline-candles", type=_positive_int_for("--baseline-candles"), default=60)
     anomaly_live.add_argument("--confirmation-candles", type=_positive_int_for("--confirmation-candles"), default=4)
