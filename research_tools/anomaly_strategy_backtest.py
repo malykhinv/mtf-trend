@@ -263,6 +263,18 @@ PUMP_CATEGORY_PROFILE_ORDER = (
     "runner_balanced",
 )
 PUMP_CATEGORY_DISCOVERY = "discovery"
+PUMP_CATEGORY_TIMEFRAME_PRIORITY: dict[tuple[str, str], tuple[str, ...]] = {
+    ("5m", "30s"): ("runner_flow", "runner_oi_confirmed", "runner_reclaim", "runner_balanced"),
+    ("1m", "15s"): ("runner_oi_confirmed", "runner_flow", "runner_reclaim", "runner_balanced"),
+    ("1m", "5s"): ("runner_oi_confirmed", "runner_flow", "runner_balanced", "runner_reclaim"),
+}
+
+
+def _category_priority_for_timeframe(setup_timeframe: object, entry_timeframe: object) -> tuple[str, ...]:
+    priority = PUMP_CATEGORY_TIMEFRAME_PRIORITY.get((str(setup_timeframe), str(entry_timeframe)))
+    if priority is not None:
+        return priority
+    return PUMP_CATEGORY_PROFILE_ORDER
 
 
 def _execution_model_label(config: AnomalyBacktestConfig) -> str:
@@ -1174,14 +1186,17 @@ def annotate_pump_categories(
                 keys.add((str(symbol), str(setup_tf), str(entry_tf), int(decision_ts)))
         category_keys[category_id] = keys
 
-    category_ranks = {category_id: rank for rank, category_id in enumerate(PUMP_CATEGORY_PROFILE_ORDER, start=1)}
-    discovery_rank = len(PUMP_CATEGORY_PROFILE_ORDER) + 1
     selected_categories: list[str] = []
     selected_ranks: list[int] = []
     category_matches: list[str] = []
     for row in result.loc[:, key_columns].itertuples(index=False, name=None):
-        key = (str(row[0]), str(row[1]), str(row[2]), int(row[3]))
-        matches = [category_id for category_id in PUMP_CATEGORY_PROFILE_ORDER if key in category_keys[category_id]]
+        setup_tf = str(row[1])
+        entry_tf = str(row[2])
+        priority = _category_priority_for_timeframe(setup_tf, entry_tf)
+        category_ranks = {category_id: rank for rank, category_id in enumerate(priority, start=1)}
+        discovery_rank = len(priority) + 1
+        key = (str(row[0]), setup_tf, entry_tf, int(row[3]))
+        matches = [category_id for category_id in priority if key in category_keys[category_id]]
         if matches:
             selected = matches[0]
             selected_categories.append(selected)
@@ -1194,7 +1209,7 @@ def annotate_pump_categories(
     result["pump_category_id"] = selected_categories
     result["pump_category_rank"] = selected_ranks
     result["pump_category_matches"] = category_matches
-    result["pump_category_source"] = "backtest_profile_overlay_v1"
+    result["pump_category_source"] = "backtest_live_priority_overlay_v1_discovery_fallback"
     return result
 
 

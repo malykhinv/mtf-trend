@@ -2559,3 +2559,53 @@ Expected smoke readout:
 ```text
 live_events.csv contains live_account_preflight_ok before ticker startup. If the account is in hedge mode, startup stops with live_account_preflight_failed. If a live-universe symbol has a pre-existing exchange position, startup emits startup_position_cleanup_started, startup_position_closed, startup_position_cleanup_finished, then starts only after the position is verified flat and orphan orders are cancelled.
 ```
+
+
+## 2026-05-14 - P205 proposed: live/backtest category parity and 72h prior-fast-fade context
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-14
+
+Files:
+
+```text
+research_tools/anomaly_strategy_backtest.py
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Make backtest category attribution match live TF priority while keeping discovery as backtest-only fallback, and stop live runner categories from being rejected just because 72h subminute entry cache is unavailable.
+```
+
+Changes:
+
+```text
+- Backtest category annotation now uses the same TF priority order as live: 5m/30s starts with runner_flow, 1m/15s starts with runner_oi_confirmed, and 1m/5s tries runner_balanced before runner_reclaim.
+- Backtest still falls back to discovery when no live category profile matches, so artifacts show whether a trade came from a confirmed live category or backtest-only discovery.
+- Live tradable categories remain unchanged; discovery is not added to live.
+- Live prior-fast-fade 72h filter now computes historical context from the levels timeframe and can fetch/fill that bounded OHLCV window, instead of requiring 72h of subminute entry timeframe aggTrade cache.
+- Category reject artifacts preserve the real reject reason in reason/category_reject_reason and move nested detail reason into coverage_reason/detail_reason, so prior-fast-fade coverage failures are no longer mislabeled.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools constants.py main.py
+```
+
+Expected smoke readout:
+
+```text
+Backtest anomaly_trades.csv / anomaly_signals.csv should contain pump_category_source=backtest_live_priority_overlay_v1_discovery_fallback and pump_category_id showing runner_* or discovery. Live category_rejected rows should keep reason=reject_prior_fast_fade_filter_unavailable when coverage is unavailable and include coverage_reason for the underlying context issue. With normal 1m/5m cache coverage, prior_fast_fade_filter_status should be ok instead of failing because 5s/15s/30s cache does not span 72h.
+```
+
+Risk:
+
+```text
+Low/medium. Live category eligibility can increase where the only previous blocker was missing subminute 72h history. This is intentional because prior-fast-fade is historical symbol context, not a requirement for 72h of executable subminute entry cache. It does not make discovery tradable in live and does not change order/fill/stop logic.
+```

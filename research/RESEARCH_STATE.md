@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192 proposed
-Last active patch: P192 live account preflight and close-only startup position cleanup
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205 proposed
+Last active patch: P205 live/backtest category parity and 72h prior-fast-fade context
 Updated: 2026-05-14
 ```
 
@@ -91,6 +91,7 @@ research_tools/hourly_levels.py
 23. P189 proposes live aggTrade REST gap prefetch planning: precise active/radar symbols coalesce due S30/S15/S5 entry WS coverage gaps per symbol before signal evaluation, populate the WS buffer once, and expose prefetch/backfill/pending counts in `live_cycle_summary`. No new flags are introduced; oversized gaps remain explicit coverage-pending, not stale-entry fallback.
 24. P190 proposes idempotent live order placement with deterministic client order ids and pre-stop exposure cleanup.
 25. P192 proposes live account-mode preflight plus close-only startup exchange-position cleanup: unsupported hedge mode blocks startup, and any pre-existing live-universe exchange position is reduce-only closed and verified flat before the live loop.
+26. P205 proposes live/backtest category parity cleanup: backtest category attribution now follows live TF priority with discovery fallback for artifacts, live does not add discovery as tradable category, and live prior-fast-fade 72h context uses levels-timeframe historical OHLCV instead of unavailable subminute entry cache.
 
 ---
 

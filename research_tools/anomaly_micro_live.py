@@ -262,7 +262,7 @@ class LiveMarkBasisResult:
     age_ms: int | None = None
 
 
-LIVE_CATEGORY_CONTRACT = "live_category_overlay_v3_prior_fast_fade_cache_tail_ignored"
+LIVE_CATEGORY_CONTRACT = "live_category_overlay_v4_prior_fast_fade_levels_context"
 LIVE_DEFAULT_PUMP_CATEGORY_IDS: tuple[str, ...] = (
     "runner_oi_confirmed",
     "runner_flow",
@@ -3872,9 +3872,10 @@ class AnomalyMicroLiveRunner:
         *,
         start_timestamp_ms: int,
         end_timestamp_ms: int,
+        fetch_missing: bool = False,
     ) -> tuple[pd.DataFrame, str, int | None]:
         storage = self._ohlcv_cache_storage
-        if storage is None:
+        if storage is None and not fetch_missing:
             return pd.DataFrame(), "cache_storage_unavailable", None
         timeframe_ms = int(timeframe.to_milliseconds())
         if timeframe_ms <= 0:
@@ -3883,17 +3884,33 @@ class AnomalyMicroLiveRunner:
         expected_end_ms = (int(end_timestamp_ms) // timeframe_ms) * timeframe_ms
         if expected_end_ms < expected_start_ms:
             return pd.DataFrame(), "invalid_window", None
-        result = storage.load_window_result(
-            symbol,
-            timeframe,
-            start_timestamp_ms=expected_start_ms,
-            end_timestamp_ms=expected_end_ms,
-        )
-        frame = _prepare_cached_ohlcv_frame(result.frame)
-        if frame.empty:
-            status = getattr(result, "status", "empty") or "empty"
-            reason = getattr(result, "reason", "cache_window_empty") or "cache_window_empty"
-            return pd.DataFrame(), f"{status}:{reason}", None
+        if fetch_missing:
+            try:
+                frame = _prepare_cached_ohlcv_frame(
+                    self._fetch_chart_frame(
+                        symbol,
+                        timeframe,
+                        start_timestamp_ms=expected_start_ms,
+                        end_timestamp_ms=expected_end_ms,
+                    )
+                )
+            except Exception as exc:
+                return pd.DataFrame(), f"fetch_failed:{type(exc).__name__}:{str(exc)[:120]}", None
+            if frame.empty:
+                return pd.DataFrame(), "fetch_empty", None
+        else:
+            assert storage is not None
+            result = storage.load_window_result(
+                symbol,
+                timeframe,
+                start_timestamp_ms=expected_start_ms,
+                end_timestamp_ms=expected_end_ms,
+            )
+            frame = _prepare_cached_ohlcv_frame(result.frame)
+            if frame.empty:
+                status = getattr(result, "status", "empty") or "empty"
+                reason = getattr(result, "reason", "cache_window_empty") or "cache_window_empty"
+                return pd.DataFrame(), f"{status}:{reason}", None
         timestamps = frame["timestamp"].astype("int64")
         window = frame.loc[(timestamps >= expected_start_ms) & (timestamps <= expected_end_ms)].copy()
         if window.empty:
@@ -3935,46 +3952,52 @@ class AnomalyMicroLiveRunner:
             return cached
         setup_ms = int(levels_timeframe.to_milliseconds())
         entry_ms = int(entry_timeframe.to_milliseconds())
+        context_timeframe = levels_timeframe
+        context_ms = setup_ms
         maturity_ms = max(240, 60) * entry_ms
         history_start_ms = decision_ts - 3 * 86_400_000
-        setup_start_ms = history_start_ms - int(self.config.baseline_candles) * setup_ms
-        setup_frame, setup_status, setup_cache_end_ms = self._load_cached_window_allow_trailing_gap(
+        context_start_ms = history_start_ms - int(self.config.baseline_candles) * context_ms
+        context_frame, context_status, context_cache_end_ms = self._load_cached_window_allow_trailing_gap(
             symbol,
-            levels_timeframe,
-            start_timestamp_ms=setup_start_ms,
+            context_timeframe,
+            start_timestamp_ms=context_start_ms,
             end_timestamp_ms=decision_ts,
+            fetch_missing=True,
         )
-        entry_frame, entry_status, entry_cache_end_ms = self._load_cached_window_allow_trailing_gap(
-            symbol,
-            entry_timeframe,
-            start_timestamp_ms=history_start_ms,
-            end_timestamp_ms=decision_ts,
-        )
-        if setup_status != "ok" or entry_status != "ok" or setup_cache_end_ms is None or entry_cache_end_ms is None:
+        if context_status != "ok" or context_cache_end_ms is None:
             result = {
                 "status": "unavailable",
-                "reason": f"setup={setup_status};entry={entry_status}",
-                "coverage_policy": "cache_contiguous_from_72h_start_ignore_trailing_gap",
+                "reason": f"context={context_status}",
+                "coverage_reason": context_status,
+                "coverage_policy": "levels_timeframe_context_fetch_missing_ignore_trailing_gap",
                 "prior_fast_fade_count_72h": None,
                 "prior_spike_count_72h": None,
                 "history_start_timestamp_ms": history_start_ms,
-                "setup_cache_end_timestamp_ms": setup_cache_end_ms if setup_cache_end_ms is not None else "",
-                "entry_cache_end_timestamp_ms": entry_cache_end_ms if entry_cache_end_ms is not None else "",
+                "context_timeframe": context_timeframe.value,
+                "context_start_timestamp_ms": context_start_ms,
+                "context_cache_end_timestamp_ms": context_cache_end_ms if context_cache_end_ms is not None else "",
+                "setup_cache_end_timestamp_ms": context_cache_end_ms if context_cache_end_ms is not None else "",
+                "entry_cache_end_timestamp_ms": context_cache_end_ms if context_cache_end_ms is not None else "",
+                "effective_cache_end_timestamp_ms": "",
                 "ignored_tail_ms": "",
             }
             self._prior_fast_fade_cache[cache_key] = result
             return result
-        effective_cache_end_ms = min(int(setup_cache_end_ms), int(entry_cache_end_ms), decision_ts)
+        effective_cache_end_ms = min(int(context_cache_end_ms), decision_ts)
         if effective_cache_end_ms <= history_start_ms:
             result = {
                 "status": "unavailable",
-                "reason": "cache_effective_end_before_history_start",
-                "coverage_policy": "cache_contiguous_from_72h_start_ignore_trailing_gap",
+                "reason": "context_cache_effective_end_before_history_start",
+                "coverage_reason": "context_cache_effective_end_before_history_start",
+                "coverage_policy": "levels_timeframe_context_fetch_missing_ignore_trailing_gap",
                 "prior_fast_fade_count_72h": None,
                 "prior_spike_count_72h": None,
                 "history_start_timestamp_ms": history_start_ms,
-                "setup_cache_end_timestamp_ms": int(setup_cache_end_ms),
-                "entry_cache_end_timestamp_ms": int(entry_cache_end_ms),
+                "context_timeframe": context_timeframe.value,
+                "context_start_timestamp_ms": context_start_ms,
+                "context_cache_end_timestamp_ms": int(context_cache_end_ms),
+                "setup_cache_end_timestamp_ms": int(context_cache_end_ms),
+                "entry_cache_end_timestamp_ms": int(context_cache_end_ms),
                 "effective_cache_end_timestamp_ms": effective_cache_end_ms,
                 "ignored_tail_ms": max(0, decision_ts - effective_cache_end_ms),
             }
@@ -3984,40 +4007,47 @@ class AnomalyMicroLiveRunner:
             from research_tools.anomaly_continuation_lab import AnomalyLabConfig
             from research_tools.anomaly_strategy_backtest import AnomalyBacktestConfig, _collect_symbol_pair_rows
 
+            forward_high_candles = max(1, math.ceil(60 * entry_ms / context_ms))
+            forward_low_candles = max(1, math.ceil(30 * entry_ms / context_ms))
             lab_config = AnomalyLabConfig(
                 cache_dir=self.config.cache_dir or Path("."),
                 output_dir=self.config.results_dir,
-                timeframe=levels_timeframe.value,
+                timeframe=context_timeframe.value,
                 days=3,
                 end_timestamp_ms=effective_cache_end_ms,
                 baseline_candles=int(self.config.baseline_candles),
                 confirmation_candles=int(self.config.confirmation_candles),
+                forward_high_candles=forward_high_candles,
+                forward_low_candles=forward_low_candles,
                 min_quote_ratio_start=float(self.config.min_quote_ratio_start),
                 min_trade_ratio_start=float(self.config.min_trade_ratio_start),
             )
             backtest_config = AnomalyBacktestConfig(
                 lab_config=lab_config,
-                setup_timeframe=levels_timeframe.value,
-                entry_timeframe=entry_timeframe.value,
-                feature_contract="htf_setup_ltf_entry_v1",
+                setup_timeframe=context_timeframe.value,
+                entry_timeframe=context_timeframe.value,
+                feature_contract="live_prior_fast_fade_levels_context_v1",
             )
             rows = _collect_symbol_pair_rows(
                 symbol=symbol,
-                setup_frame=setup_frame,
-                entry_frame=entry_frame,
+                setup_frame=context_frame,
+                entry_frame=context_frame,
                 config=backtest_config,
-                entry_flow_source="live_cache_prior_fast_fade_filter",
+                entry_flow_source="live_cache_prior_fast_fade_levels_context",
             )
         except Exception as exc:
             result = {
                 "status": "unavailable",
                 "reason": f"compute_error:{type(exc).__name__}:{str(exc)[:160]}",
-                "coverage_policy": "cache_contiguous_from_72h_start_ignore_trailing_gap",
+                "coverage_policy": "levels_timeframe_context_fetch_missing_ignore_trailing_gap",
                 "prior_fast_fade_count_72h": None,
                 "prior_spike_count_72h": None,
                 "history_start_timestamp_ms": history_start_ms,
-                "setup_cache_end_timestamp_ms": int(setup_cache_end_ms),
-                "entry_cache_end_timestamp_ms": int(entry_cache_end_ms),
+                "context_timeframe": context_timeframe.value,
+                "context_start_timestamp_ms": context_start_ms,
+                "context_cache_end_timestamp_ms": int(context_cache_end_ms),
+                "setup_cache_end_timestamp_ms": int(context_cache_end_ms),
+                "entry_cache_end_timestamp_ms": int(context_cache_end_ms),
                 "effective_cache_end_timestamp_ms": effective_cache_end_ms,
                 "ignored_tail_ms": max(0, decision_ts - effective_cache_end_ms),
             }
@@ -4034,15 +4064,20 @@ class AnomalyMicroLiveRunner:
         result = {
             "status": "ok",
             "reason": "ok",
-            "coverage_policy": "cache_contiguous_from_72h_start_ignore_trailing_gap",
+            "coverage_policy": "levels_timeframe_context_fetch_missing_ignore_trailing_gap",
             "prior_fast_fade_count_72h": int(len(fast_fades)),
             "prior_spike_count_72h": int(len(prior_rows)),
             "history_start_timestamp_ms": history_start_ms,
-            "setup_cache_end_timestamp_ms": int(setup_cache_end_ms),
-            "entry_cache_end_timestamp_ms": int(entry_cache_end_ms),
+            "context_timeframe": context_timeframe.value,
+            "context_start_timestamp_ms": context_start_ms,
+            "context_cache_end_timestamp_ms": int(context_cache_end_ms),
+            "setup_cache_end_timestamp_ms": int(context_cache_end_ms),
+            "entry_cache_end_timestamp_ms": int(context_cache_end_ms),
             "effective_cache_end_timestamp_ms": effective_cache_end_ms,
             "ignored_tail_ms": max(0, decision_ts - effective_cache_end_ms),
             "ignored_tail_entry_candles": max(0, (decision_ts - effective_cache_end_ms) // entry_ms),
+            "prior_fast_fade_context_forward_high_candles": forward_high_candles,
+            "prior_fast_fade_context_forward_low_candles": forward_low_candles,
         }
         self._prior_fast_fade_cache[cache_key] = result
         return result
@@ -5246,13 +5281,19 @@ class AnomalyMicroLiveRunner:
         details: dict[str, object],
         emit: bool = True,
     ) -> dict[str, object]:
+        detail_payload = dict(details)
+        detail_reason = detail_payload.pop("reason", None)
         payload: dict[str, object] = {
             "category_id": category.category_id,
             "category_label": category.label,
             "category_priority": category.priority,
             "reason": reason,
-            **details,
+            "category_reject_reason": reason,
+            **detail_payload,
         }
+        if detail_reason is not None:
+            payload.setdefault("coverage_reason", detail_reason)
+            payload["detail_reason"] = detail_reason
         if emit:
             self.artifacts.append_event("category_rejected", symbol, payload)
         return payload
