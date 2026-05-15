@@ -4068,3 +4068,47 @@ Risk:
 Low. Operator UI formatting only; no trading logic, artifacts, or filters change.
 ```
 
+
+## 2026-05-15 - P241 proposed: prioritize hot symbols in rolling context snapshot
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make the budgeted rolling symbol-context snapshot spend its limited time on symbols that can actually affect near-term live decisions, especially symbols blocked by retryable prior-fast-fade context dependency.
+```
+
+Changes:
+
+```text
+- Adds an in-memory TTL queue for symbol-context priority requests.
+- Marks symbols blocked by retryable category dependencies as priority context symbols.
+- Rolling context snapshot priority order is now open positions / active symbols, retryable dependency requests, ticker radar, warm watch, then round-robin universe coverage.
+- Adds `priority_reason_counts` to `symbol_context_snapshot_updated` events for auditability.
+- Keeps context snapshot cache-only during live cycles; no synchronous REST/precise fetch is introduced in the hot path.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# launcher.py is absent in the uploaded ZIP; include it locally if your checkout has it.
+```
+
+Risk:
+
+```text
+Low-to-medium. This changes context maintenance priority, not entry thresholds. Round-robin coverage still advances only for non-priority processed symbols, so hot-symbol retries should not starve context cursor accounting.
+```

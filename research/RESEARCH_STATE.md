@@ -1333,3 +1333,10 @@ After P239, unavailable prior-fast-fade context should be rare, but it must not 
 
 Next check: run a short live smoke and verify that `reject_prior_fast_fade_filter_unavailable` no longer dominates `category_rejected`; remaining unavailable context appears as retryable dependency until stale/expiry.
 
+
+## 2026-05-15 — P241 proposed
+
+Rolling symbol-context snapshots now prioritize symbols that can unblock near-term decisions: open/active symbols first, then retryable dependency requests, then ticker-radar/warm-watch symbols, then normal universe round-robin. This keeps live context maintenance cache-only but stops spending the tiny post-scan budget mostly on random inactive symbols while a hot symbol is waiting for prior-fast-fade context.
+
+Current commit: UNKNOWN.
+Next validation: after P239-P241, run a short live smoke and inspect `symbol_context_snapshot_updated.priority_reason_counts`, `signal_scan_retryable_dependency_blocked`, and whether repeated prior-fast-fade unavailable cases for the same hot symbols resolve before stale/expiry.

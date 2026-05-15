@@ -82,6 +82,7 @@ DEFAULT_LATENCY_SLA_MIN_DUE_SAMPLES = 1
 DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_CYCLE_SECONDS = 0.75
 DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MIN_COVERAGE_RATIO = 0.995
 DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_GAP_CANDLES = 2
+DEFAULT_SYMBOL_CONTEXT_PRIORITY_TTL_MS = 5 * 60_000
 DEFAULT_WARM_WATCH_AGGTRADE_TARGET_CAP = 40
 LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON = "latency_sla_due_scan_p95_above_threshold"
 DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE = "DANGER_local_memory_position_guard_no_pre_entry_exchange_position_fetch"
@@ -1819,6 +1820,7 @@ class LiveAnomalyConfig:
     symbol_context_startup_backfill_enabled: bool = True
     symbol_context_snapshot_min_coverage_ratio: float = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MIN_COVERAGE_RATIO
     symbol_context_snapshot_max_gap_candles: int = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_GAP_CANDLES
+    symbol_context_priority_ttl_ms: int = DEFAULT_SYMBOL_CONTEXT_PRIORITY_TTL_MS
     danger_ticker_flow_radar_enabled: bool = True
     danger_ticker_flow_radar_min_quote_volume_delta_usdt: float = DANGER_TICKER_FLOW_RADAR_MIN_QUOTE_VOLUME_DELTA_USDT
     danger_ticker_flow_radar_min_trade_count_delta: int = DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA
@@ -2236,6 +2238,16 @@ class LiveSymbolContextSnapshot:
             ) if self.prepump_spot_features else "",
             "compute_seconds": round(float(self.compute_seconds), 6),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class LiveSymbolContextPriorityRequest:
+    symbol: str
+    reason: str
+    first_seen_ms: int
+    last_seen_ms: int
+    expires_at_ms: int
+    hit_count: int = 1
 
 
 @dataclass(frozen=True, slots=True)
@@ -3821,6 +3833,7 @@ class AnomalyMicroLiveRunner:
         self._symbol_context_snapshots: dict[tuple[str, str, str], LiveSymbolContextSnapshot] = {}
         self._symbol_context_snapshot_cursor = 0
         self._symbol_context_snapshot_last_round_robin_symbols: tuple[str, ...] = ()
+        self._symbol_context_priority_requests: dict[str, LiveSymbolContextPriorityRequest] = {}
         self._symbol_context_universe_size = 0
         self._last_symbol_context_snapshot_at_ms = 0
         self._last_symbol_context_snapshot_status = "not_started"
@@ -4071,6 +4084,8 @@ class AnomalyMicroLiveRunner:
                 "symbol_context_snapshot_max_gap_candles": int(
                     self.config.symbol_context_snapshot_max_gap_candles
                 ),
+                "symbol_context_priority_ttl_ms": int(self.config.symbol_context_priority_ttl_ms),
+                "symbol_context_priority_policy": "open_active_retryable_dependency_radar_warm_then_round_robin",
                 "symbol_context_snapshot_file": self.artifacts.symbol_context_snapshot_path.name,
                 "danger_micro_cache_policy": "wider_ws_aggtrade_buffer_for_active_warm_watch_radar_and_current_cold_only_no_full_universe_subscription",
                 "symbol_batch_size_role": "legacy inactive scan cap, not WS market discovery",
@@ -8229,20 +8244,82 @@ class AnomalyMicroLiveRunner:
         full_refresh_ms = int(math.ceil(float(total) / float(per_cycle)) * interval_ms)
         return max(configured_ms, full_refresh_ms * 2)
 
-    def _symbol_context_snapshot_priority_symbols(self) -> tuple[str, ...]:
+    def _remember_symbol_context_priority(
+        self,
+        symbol: str,
+        *,
+        reason: str,
+        now_ms: int,
+        ttl_ms: int | None = None,
+    ) -> None:
+        symbol_key = _position_symbol_key(symbol)
+        if not symbol_key:
+            return
+        ttl = int(ttl_ms if ttl_ms is not None else self.config.symbol_context_priority_ttl_ms)
+        ttl = max(1, ttl)
+        expires_at_ms = int(now_ms) + ttl
+        with self._state_lock:
+            previous = self._symbol_context_priority_requests.get(symbol_key)
+            if previous is None:
+                self._symbol_context_priority_requests[symbol_key] = LiveSymbolContextPriorityRequest(
+                    symbol=symbol,
+                    reason=reason,
+                    first_seen_ms=int(now_ms),
+                    last_seen_ms=int(now_ms),
+                    expires_at_ms=expires_at_ms,
+                )
+                return
+            self._symbol_context_priority_requests[symbol_key] = LiveSymbolContextPriorityRequest(
+                symbol=symbol or previous.symbol,
+                reason=reason or previous.reason,
+                first_seen_ms=int(previous.first_seen_ms),
+                last_seen_ms=int(now_ms),
+                expires_at_ms=max(int(previous.expires_at_ms), expires_at_ms),
+                hit_count=int(previous.hit_count) + 1,
+            )
+
+    def _symbol_context_priority_requests_snapshot(self, *, now_ms: int) -> tuple[LiveSymbolContextPriorityRequest, ...]:
+        with self._state_lock:
+            expired = [
+                symbol_key
+                for symbol_key, request in self._symbol_context_priority_requests.items()
+                if int(request.expires_at_ms) <= int(now_ms)
+            ]
+            for symbol_key in expired:
+                self._symbol_context_priority_requests.pop(symbol_key, None)
+            return tuple(
+                sorted(
+                    self._symbol_context_priority_requests.values(),
+                    key=lambda request: (int(request.last_seen_ms), int(request.hit_count)),
+                    reverse=True,
+                )
+            )
+
+    def _symbol_context_snapshot_priority_symbols(self, *, now_ms: int) -> tuple[str, ...]:
         by_key: dict[str, str] = {}
         with self._state_lock:
             for position in self._open_positions.values():
                 by_key[_position_symbol_key(position.signal.symbol)] = position.signal.symbol
             for state in self._active_symbols.values():
                 by_key[_position_symbol_key(state.symbol)] = state.symbol
+        for request in self._symbol_context_priority_requests_snapshot(now_ms=now_ms):
+            by_key.setdefault(_position_symbol_key(request.symbol), request.symbol)
+        with self._state_lock:
             for watch in self._ticker_radar_watch.values():
-                by_key[_position_symbol_key(watch.symbol)] = watch.symbol
+                by_key.setdefault(_position_symbol_key(watch.symbol), watch.symbol)
             for warm_watch in self._warm_watch.values():
-                by_key[_position_symbol_key(warm_watch.symbol)] = warm_watch.symbol
+                by_key.setdefault(_position_symbol_key(warm_watch.symbol), warm_watch.symbol)
         return tuple(by_key.values())
 
-    def _next_symbol_context_snapshot_symbols(self, symbols: list[str], *, limit: int) -> tuple[str, ...]:
+    def _symbol_context_priority_reason_counts(self) -> dict[str, int]:
+        now_ms = int(time.time() * 1000)
+        counts: dict[str, int] = {}
+        for request in self._symbol_context_priority_requests_snapshot(now_ms=now_ms):
+            reason = request.reason or "unknown"
+            counts[reason] = counts.get(reason, 0) + 1
+        return counts
+
+    def _next_symbol_context_snapshot_symbols(self, symbols: list[str], *, limit: int, now_ms: int) -> tuple[str, ...]:
         unique_symbols = list(dict.fromkeys(symbols))
         self._symbol_context_snapshot_last_round_robin_symbols = ()
         if not unique_symbols or limit <= 0:
@@ -8250,7 +8327,7 @@ class AnomalyMicroLiveRunner:
         universe_by_key = {_position_symbol_key(symbol): symbol for symbol in unique_symbols}
         selected: list[str] = []
         selected_keys: set[str] = set()
-        for symbol in self._symbol_context_snapshot_priority_symbols():
+        for symbol in self._symbol_context_snapshot_priority_symbols(now_ms=now_ms):
             symbol_key = _position_symbol_key(symbol)
             universe_symbol = universe_by_key.get(symbol_key)
             if universe_symbol is None or symbol_key in selected_keys:
@@ -8355,6 +8432,7 @@ class AnomalyMicroLiveRunner:
         selected_symbols = self._next_symbol_context_snapshot_symbols(
             symbols,
             limit=int(self.config.symbol_context_snapshot_symbols_per_cycle),
+            now_ms=now_ms,
         )
         if not selected_symbols:
             self._last_symbol_context_snapshot_status = "empty_universe"
@@ -8421,6 +8499,7 @@ class AnomalyMicroLiveRunner:
                     len(selected_symbols) - len(self._symbol_context_snapshot_last_round_robin_symbols)
                 ),
                 "round_robin_symbols_count": int(len(self._symbol_context_snapshot_last_round_robin_symbols)),
+                "priority_reason_counts": self._symbol_context_priority_reason_counts(),
                 "skipped_symbols_count": int(skipped_count),
                 "skipped_symbols": list(selected_symbols[len(processed_symbols):]),
                 "timeframe_pairs": [
@@ -8434,7 +8513,7 @@ class AnomalyMicroLiveRunner:
                 "configured_fresh_ms": int(self.config.symbol_context_snapshot_fresh_ms),
                 "effective_fresh_ms": int(effective_fresh_ms),
                 "output_file": output_path.name,
-                "policy": "optional_budgeted_context_snapshot_after_critical_scan_path_no_sync_precise_scan_fetch",
+                "policy": "optional_budgeted_context_snapshot_prioritizes_open_active_retryable_radar_warm_symbols_no_sync_precise_scan_fetch",
             },
         )
         return LiveSymbolContextSnapshotCycleStats(
@@ -9403,6 +9482,12 @@ class AnomalyMicroLiveRunner:
                     }
                     for row in retryable_rows
                 ]
+                self._remember_symbol_context_priority(
+                    symbol,
+                    reason="retryable_dependency_blocked",
+                    now_ms=now_ms,
+                    ttl_ms=max(self.config.active_symbol_ttl_ms, self.config.max_signal_age_ms),
+                )
                 self.artifacts.append_event(
                     "signal_scan_retryable_dependency_blocked",
                     symbol,

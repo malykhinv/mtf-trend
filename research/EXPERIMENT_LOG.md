@@ -2029,3 +2029,15 @@ selected signals should still require an ok prior_fast_fade count before entry
 
 Do not loosen flow thresholds until closed-hour top-growth / missed-pump visibility is populated for the same run.
 
+
+## 2026-05-15 — P241 live context priority validation
+
+After applying P241, validate that rolling context snapshot budget is spent on near-term decision symbols before cold universe maintenance.
+
+Expected evidence:
+
+```text
+symbol_context_snapshot_updated.priority_reason_counts includes retryable_dependency_blocked when such cases exist
+same-symbol retryable prior_fast_fade blocks should either resolve to ok context or expire by stale/TTL, not disappear as category_rejected
+round_robin_symbols_count remains non-zero when no hot priority backlog exists
+```
