@@ -10,7 +10,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed
-Last active patch: P222 live synthetic bucket diagnostics and terminal ledger provenance
+Last active patch: P223 idle-only delayed replay audit for live anomalies
 Updated: 2026-05-15
 ```
 
@@ -95,6 +95,7 @@ research_tools/hourly_levels.py
 27. P219 fixes a real live crash from run `20260514_201044`: `_live_client_order_id()` used `re` without importing it, so the first real GWEI entry attempt stopped before order submission. Fatal internal/data-integrity errors now use synchronous Telegram delivery and emit `telegram_sync_send_failed` if Telegram itself fails.
 28. P220 fixes a live safety gap found during the last-15-commit review: an exception from entry order/fill resolution before `LivePosition` creation now tracks the symbol and immediately attempts reduce-only cleanup of any real unprotected exposure.
 29. P221 fixes a second post-entry runtime blocker found in the live health review: `append_position()` no longer references undefined scan-mode/guard locals and the live ledger schema now includes those diagnostics.
+30. P223 proposes an opt-in idle-only delayed replay auditor: live captures category_selected/category_rejected anomaly decisions into delayed_replay artifacts, then processes them only when live is idle, cache-only, with no orders or shared state mutation.
 
 ---
 
@@ -107,7 +108,7 @@ python -m compileall research_tools/anomaly_micro_live.py cli constants.py main.
 python main.py run-anomaly-live --help
 ```
 
-Expected readout: `_live_client_order_id()` no longer raises `NameError`; if entry order/fill resolution fails after exchange exposure appears, `unprotected_entry_reduce_only_exit_*` artifacts show cleanup attempt/result; if an entry opens, `live_positions.csv` writes `source_scan_mode`, `danger_cold_coverage_source`, and `entry_position_guard_source`; if a future programming error occurs, `live_internal_error` is recorded and the Telegram error path is synchronous. If Telegram delivery fails, `telegram_sync_send_failed` must appear in artifacts.
+Expected readout: `_live_client_order_id()` no longer raises `NameError`; if entry order/fill resolution fails after exchange exposure appears, `unprotected_entry_reduce_only_exit_*` artifacts show cleanup attempt/result; if an entry opens, `live_positions.csv` writes `source_scan_mode`, `danger_cold_coverage_source`, and `entry_position_guard_source`; if delayed replay is enabled, `delayed_replay/delayed_replay_queue.jsonl`, `delayed_replay_results.csv`, `delayed_replay_summary.csv`, and `live_status.json` prove that anomaly postmortem runs only after idle gate; if a future programming error occurs, `live_internal_error` is recorded and the Telegram error path is synchronous. If Telegram delivery fails, `telegram_sync_send_failed` must appear in artifacts.
 
 Latest next step after P167:
 

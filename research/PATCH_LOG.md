@@ -3319,3 +3319,54 @@ Risk:
 ```text
 Low. This is diagnostic/audit only. It does not change signal thresholds, order logic, position guard behavior, fills, stops, or exits.
 ```
+
+## 2026-05-15 - P223 proposed: idle-only delayed replay audit for live anomalies
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Capture every live category-level anomaly decision for delayed postmortem without stealing critical resources from live execution.
+```
+
+Changes:
+
+```text
+- Adds --delayed-replay-enabled and budget/idle/delay flags to run-anomaly-live.
+- Captures category_selected and category_rejected live anomaly decisions into delayed_replay/delayed_replay_queue.jsonl.
+- Processes queued cases only after the critical live cycle path and only when active symbols, opening symbols, and open positions are all zero for the configured idle window.
+- Uses cache/process-memory data only for delayed outcome checks; it does not fetch missing data, write orders, or mutate live state.
+- Writes delayed_replay_results.csv, delayed_replay_summary.csv, and live_status.json with the explicit contract delayed_replay_v1_live_event_frozen_decision_cache_only_idle.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep delayed-replay
+```
+
+Expected smoke readout:
+
+```text
+With --delayed-replay-enabled true, category_selected/category_rejected events enqueue delayed replay cases. While live has active/opening/open positions, delayed_replay_summary.csv says live_not_idle or idle_window_too_short. Once idle and the delay has elapsed, delayed_replay_results.csv records audit-only frozen-decision rows using cache-only outcome data or an explicit cache_only_* insufficiency status.
+```
+
+Risk:
+
+```text
+Low/medium. Trade logic and order execution are unchanged. The replay is intentionally cache-only and artifact-based, so it may report insufficient replay data instead of forcing REST/network work. It is not yet a full backtest recomputation; recompute_status says this explicitly to avoid fake would-enter claims.
+```

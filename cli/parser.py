@@ -398,6 +398,29 @@ def build_parser() -> argparse.ArgumentParser:
         default=10,
         help="Max skipped LTF candles replayed by missed-entry diagnostics; lower this when exchange context limits are tight.",
     )
+    anomaly_live.add_argument(
+        "--delayed-replay-enabled",
+        type=_str_to_bool,
+        default=False,
+        help=(
+            "Capture all live anomaly decisions and run a cache-only delayed replay auditor only when "
+            "live is idle. It never places orders and writes separate delayed_replay artifacts."
+        ),
+    )
+    anomaly_live.add_argument("--delayed-replay-delay-seconds", type=float, default=300.0)
+    anomaly_live.add_argument("--delayed-replay-min-idle-seconds", type=float, default=45.0)
+    anomaly_live.add_argument(
+        "--delayed-replay-max-cases-per-cycle",
+        type=_positive_int_for("--delayed-replay-max-cases-per-cycle"),
+        default=3,
+    )
+    anomaly_live.add_argument("--delayed-replay-max-cycle-seconds", type=float, default=1.5)
+    anomaly_live.add_argument(
+        "--delayed-replay-max-queue-size",
+        type=_positive_int_for("--delayed-replay-max-queue-size"),
+        default=2000,
+    )
+    anomaly_live.add_argument("--delayed-replay-outcome-lookahead-seconds", type=float, default=300.0)
     anomaly_live.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_live.add_argument("--trail-buffer-r", type=float, default=0.10)
 

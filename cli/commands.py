@@ -1575,6 +1575,15 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                 "live_ohlcv_cache_flush_max_symbol_timeframes",
                 4,
             ),
+            delayed_replay_enabled=_to_bool_flag(getattr(args, "delayed_replay_enabled", False), default=False),
+            delayed_replay_delay_seconds=float(getattr(args, "delayed_replay_delay_seconds", 300.0)),
+            delayed_replay_min_idle_seconds=float(getattr(args, "delayed_replay_min_idle_seconds", 45.0)),
+            delayed_replay_max_cases_per_cycle=int(getattr(args, "delayed_replay_max_cases_per_cycle", 3)),
+            delayed_replay_max_cycle_seconds=float(getattr(args, "delayed_replay_max_cycle_seconds", 1.5)),
+            delayed_replay_max_queue_size=int(getattr(args, "delayed_replay_max_queue_size", 2000)),
+            delayed_replay_outcome_lookahead_seconds=float(
+                getattr(args, "delayed_replay_outcome_lookahead_seconds", 300.0)
+            ),
             signal_scan_backfill_candles=int(getattr(args, "signal_scan_backfill_candles", 10)),
             max_cycles=getattr(args, "max_cycles", None),
             trail_lookback_candles=int(getattr(args, "trail_lookback_candles", 5)),

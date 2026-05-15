@@ -270,6 +270,61 @@ MISSED_PUMP_VISIBILITY_COLUMNS = (
     "visibility_events_before_period_end",
     "visibility_event_parse_error_count",
 )
+
+DELAYED_REPLAY_RESULTS_COLUMNS = (
+    "case_id",
+    "queued_at_utc",
+    "processed_at_utc",
+    "status",
+    "symbol",
+    "source_event",
+    "priority",
+    "live_decision_class",
+    "live_reason",
+    "levels_tf",
+    "entry_tf",
+    "decision_timestamp_ms",
+    "replay_not_before_ms",
+    "queued_delay_seconds",
+    "recompute_status",
+    "would_select_signal",
+    "would_enter_under_frozen_decision",
+    "mismatch_type",
+    "outcome_status",
+    "outcome_window_start_ms",
+    "outcome_window_end_ms",
+    "outcome_rows",
+    "outcome_high",
+    "outcome_low",
+    "outcome_close",
+    "signal_entry_price",
+    "signal_stop_price",
+    "signal_tp1_price",
+    "tp1_would_hit",
+    "stop_would_hit",
+    "first_hit",
+    "source_scan_mode",
+    "delayed_replay_contract",
+)
+DELAYED_REPLAY_SUMMARY_COLUMNS = (
+    "timestamp_utc",
+    "cycle",
+    "enabled",
+    "status",
+    "reason",
+    "pending_count",
+    "ready_count",
+    "processed_count",
+    "skipped_count",
+    "max_cases",
+    "max_seconds",
+    "active_symbol_count",
+    "open_positions",
+    "opening_symbols",
+    "idle_since_ms",
+    "duration_seconds",
+)
+DELAYED_REPLAY_CONTRACT = "delayed_replay_v1_live_event_frozen_decision_cache_only_idle"
 SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v2_cache_only_prior_fast_fade_prepump_spot"
 SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
     "snapshot_timestamp_utc",
@@ -529,6 +584,65 @@ class RestLiveTickerSnapshotSource:
 
     def fetch_snapshots(self, symbols: tuple[str, ...]) -> list[ExchangeTickerSnapshot]:
         return self.exchange.fetch_ticker_snapshots(symbols)
+
+
+def _json_safe_payload(value: object) -> object:
+    if isinstance(value, dict):
+        return {str(key): _json_safe_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe_payload(item) for item in value]
+    if isinstance(value, (str, bool)) or value is None:
+        return value
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else ""
+    return str(value)
+
+
+def _delayed_replay_case_id(
+    *,
+    source_event: str,
+    symbol: str,
+    levels_tf: str,
+    entry_tf: str,
+    decision_timestamp_ms: int,
+    live_reason: str,
+    category_id: str,
+) -> str:
+    raw = json.dumps(
+        {
+            "source_event": source_event,
+            "symbol": _position_symbol_key(symbol),
+            "levels_tf": levels_tf,
+            "entry_tf": entry_tf,
+            "decision_timestamp_ms": int(decision_timestamp_ms),
+            "live_reason": live_reason,
+            "category_id": category_id,
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _empty_delayed_replay_outcome(
+    status: str,
+    *,
+    outcome_window_start_ms: int | str = "",
+    outcome_window_end_ms: int | str = "",
+) -> dict[str, object]:
+    return {
+        "outcome_status": status,
+        "outcome_window_start_ms": outcome_window_start_ms,
+        "outcome_window_end_ms": outcome_window_end_ms,
+        "outcome_rows": 0,
+        "outcome_high": "",
+        "outcome_low": "",
+        "outcome_close": "",
+        "tp1_would_hit": "",
+        "stop_would_hit": "",
+        "first_hit": "",
+    }
 
 
 def _optional_float(value: object) -> float | None:
@@ -1548,6 +1662,13 @@ class LiveAnomalyConfig:
     live_ohlcv_cache_flush_interval_seconds: float = 30.0
     live_ohlcv_cache_max_buffer_rows: int = 50_000
     live_ohlcv_cache_flush_max_symbol_timeframes: int | None = DEFAULT_LIVE_OHLCV_CACHE_FLUSH_MAX_SYMBOL_TIMEFRAMES
+    delayed_replay_enabled: bool = False
+    delayed_replay_delay_seconds: float = 300.0
+    delayed_replay_min_idle_seconds: float = 45.0
+    delayed_replay_max_cases_per_cycle: int = 3
+    delayed_replay_max_cycle_seconds: float = 1.5
+    delayed_replay_max_queue_size: int = 2000
+    delayed_replay_outcome_lookahead_seconds: float = 300.0
     max_cycles: int | None = None
     stop_cooldown_hours: float = 12.0
     stop_limit_per_symbol: int = 2
@@ -2287,6 +2408,12 @@ class LiveArtifactWriter:
         self.top_growth_dir.mkdir(parents=True, exist_ok=True)
         self.top_growth_index_path = self.top_growth_dir / "top_growth_index.csv"
         self.missed_pump_visibility_path = self.top_growth_dir / "missed_pump_visibility.csv"
+        self.delayed_replay_dir = self.root / "delayed_replay"
+        self.delayed_replay_dir.mkdir(parents=True, exist_ok=True)
+        self.delayed_replay_queue_path = self.delayed_replay_dir / "delayed_replay_queue.jsonl"
+        self.delayed_replay_results_path = self.delayed_replay_dir / "delayed_replay_results.csv"
+        self.delayed_replay_summary_path = self.delayed_replay_dir / "delayed_replay_summary.csv"
+        self.live_status_path = self.root / "live_status.json"
         self.symbol_context_snapshot_path = self.root / "symbol_context_snapshot.csv"
         self._lock = threading.Lock()
         self._events_written = self._count_existing_csv_rows(self.events_path)
@@ -2294,6 +2421,8 @@ class LiveArtifactWriter:
         self._ensure_csv(self.events_path, ("timestamp_utc", "event", "symbol", "details_json"))
         self._ensure_csv(self.top_growth_index_path, TOP_GROWTH_INDEX_COLUMNS)
         self._ensure_csv(self.missed_pump_visibility_path, MISSED_PUMP_VISIBILITY_COLUMNS)
+        self._ensure_csv(self.delayed_replay_results_path, DELAYED_REPLAY_RESULTS_COLUMNS)
+        self._ensure_csv(self.delayed_replay_summary_path, DELAYED_REPLAY_SUMMARY_COLUMNS)
         self._ensure_csv(self.symbol_context_snapshot_path, SYMBOL_CONTEXT_SNAPSHOT_COLUMNS)
 
     @staticmethod
@@ -2403,6 +2532,32 @@ class LiveArtifactWriter:
             for row in rows:
                 writer.writerow(row)
         tmp_path.replace(path)
+
+    def append_delayed_replay_case(self, case: dict[str, object]) -> None:
+        try:
+            line = json.dumps(case, ensure_ascii=False, sort_keys=True, allow_nan=False)
+        except ValueError as exc:
+            raise LiveDataIntegrityError(f"Non-finite delayed replay case: case_id={case.get('case_id')} error={exc}") from exc
+        with self._lock, self.delayed_replay_queue_path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+    def append_delayed_replay_result(self, row: dict[str, object]) -> None:
+        with self._lock, self.delayed_replay_results_path.open("a", newline="", encoding="utf-8-sig") as handle:
+            csv.DictWriter(handle, fieldnames=list(DELAYED_REPLAY_RESULTS_COLUMNS), extrasaction="ignore").writerow(row)
+
+    def append_delayed_replay_summary(self, row: dict[str, object]) -> None:
+        with self._lock, self.delayed_replay_summary_path.open("a", newline="", encoding="utf-8-sig") as handle:
+            csv.DictWriter(handle, fieldnames=list(DELAYED_REPLAY_SUMMARY_COLUMNS), extrasaction="ignore").writerow(row)
+
+    def write_live_status(self, status: dict[str, object]) -> None:
+        try:
+            payload = json.dumps(status, ensure_ascii=False, sort_keys=True, indent=2, allow_nan=False)
+        except ValueError as exc:
+            raise LiveDataIntegrityError(f"Non-finite live status payload: {exc}") from exc
+        tmp_path = self.live_status_path.with_suffix(".json.tmp")
+        with self._lock:
+            tmp_path.write_text(payload + "\n", encoding="utf-8")
+            tmp_path.replace(self.live_status_path)
 
     def write_symbol_context_snapshot(
         self,
@@ -3178,6 +3333,12 @@ class AnomalyMicroLiveRunner:
         self._closed_notional_usdt_total = 0.0
         self._orphan_orders_cancelled_total = 0
         self._detected_anomalies_total = 0
+        self._delayed_replay_pending: dict[str, dict[str, object]] = {}
+        self._delayed_replay_completed: set[str] = set()
+        self._delayed_replay_enqueued_total = 0
+        self._delayed_replay_processed_total = 0
+        self._delayed_replay_skipped_total = 0
+        self._idle_since_ms: int | None = None
         self._state_lock = threading.RLock()
         self._inactive_cursor = 0
         self._order_reconcile_cursor = 0
@@ -3290,6 +3451,16 @@ class AnomalyMicroLiveRunner:
                     if self.config.live_ohlcv_cache_flush_max_symbol_timeframes is not None
                     else ""
                 ),
+                "delayed_replay_enabled": bool(self.config.delayed_replay_enabled),
+                "delayed_replay_contract": DELAYED_REPLAY_CONTRACT,
+                "delayed_replay_policy": "capture_all_live_anomalies_process_only_when_idle_cache_only_no_orders",
+                "delayed_replay_delay_seconds": float(self.config.delayed_replay_delay_seconds),
+                "delayed_replay_min_idle_seconds": float(self.config.delayed_replay_min_idle_seconds),
+                "delayed_replay_max_cases_per_cycle": int(self.config.delayed_replay_max_cases_per_cycle),
+                "delayed_replay_max_cycle_seconds": float(self.config.delayed_replay_max_cycle_seconds),
+                "delayed_replay_outcome_lookahead_seconds": float(self.config.delayed_replay_outcome_lookahead_seconds),
+                "delayed_replay_queue_file": str(self.artifacts.delayed_replay_queue_path.relative_to(self.artifacts.root)),
+                "delayed_replay_results_file": str(self.artifacts.delayed_replay_results_path.relative_to(self.artifacts.root)),
                 "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
                 "cache_provider": "parquet_tail_fetch_v1" if self._ohlcv_cache_storage is not None else "disabled",
                 "inactive_subminute_scan_policy": "DANGER_default_precise_cold_coverage_idle_health_gated",
@@ -3666,6 +3837,11 @@ class AnomalyMicroLiveRunner:
                         {"cycle": cycle, "cycle_seconds": cycle_seconds},
                     )
                 self._network_degraded = False
+                self._process_delayed_replay_if_idle(
+                    cycle=cycle,
+                    active_symbol_count=active_symbol_count,
+                    open_positions=open_positions,
+                )
                 time.sleep(self.config.scan_sleep_seconds)
             except KeyboardInterrupt:
                 reconcile_symbols = self._start_graceful_shutdown(reason="keyboard_interrupt", cycle=cycle, symbols=symbols)
@@ -4267,6 +4443,487 @@ class AnomalyMicroLiveRunner:
         if abs(notional_total) <= 1e-12:
             return 0.0
         return pnl_total / notional_total
+
+    def _opening_symbol_count(self) -> int:
+        with self._state_lock:
+            return len(self._opening_symbols)
+
+    def _delayed_replay_queue_size(self) -> int:
+        with self._state_lock:
+            return len(self._delayed_replay_pending)
+
+    def _capture_delayed_replay_case(
+        self,
+        *,
+        source_event: str,
+        symbol: str,
+        details: dict[str, object],
+        priority: int,
+        live_decision_class: str,
+        live_reason: str,
+    ) -> None:
+        if not self.config.delayed_replay_enabled:
+            return
+        decision_timestamp_ms = _optional_int(details.get("decision_timestamp_ms"))
+        if decision_timestamp_ms is None:
+            return
+        levels_tf = str(details.get("levels_tf") or "")
+        entry_tf = str(details.get("entry_tf") or "")
+        if not levels_tf or not entry_tf:
+            return
+        now_ms = int(time.time() * 1000)
+        replay_not_before_ms = max(
+            now_ms + int(float(self.config.delayed_replay_delay_seconds) * 1000),
+            int(decision_timestamp_ms) + int(float(self.config.delayed_replay_delay_seconds) * 1000),
+        )
+        case_id = _delayed_replay_case_id(
+            source_event=source_event,
+            symbol=symbol,
+            levels_tf=levels_tf,
+            entry_tf=entry_tf,
+            decision_timestamp_ms=int(decision_timestamp_ms),
+            live_reason=live_reason,
+            category_id=str(details.get("category_id") or ""),
+        )
+        signal_json = details.get("signal_json")
+        case: dict[str, object] = {
+            "case_id": case_id,
+            "queued_at_utc": datetime.now(UTC).isoformat(),
+            "queued_at_ms": now_ms,
+            "replay_not_before_ms": replay_not_before_ms,
+            "source_event": source_event,
+            "symbol": symbol,
+            "priority": int(priority),
+            "live_decision_class": live_decision_class,
+            "live_reason": live_reason,
+            "levels_tf": levels_tf,
+            "entry_tf": entry_tf,
+            "decision_timestamp_ms": int(decision_timestamp_ms),
+            "details": _json_safe_payload(details),
+            "signal_json": signal_json if isinstance(signal_json, str) else "",
+            "delayed_replay_contract": DELAYED_REPLAY_CONTRACT,
+        }
+        with self._state_lock:
+            if case_id in self._delayed_replay_pending or case_id in self._delayed_replay_completed:
+                return
+            if len(self._delayed_replay_pending) >= int(self.config.delayed_replay_max_queue_size):
+                self._delayed_replay_skipped_total += 1
+                self.artifacts.append_event(
+                    "delayed_replay_queue_full",
+                    symbol,
+                    {
+                        "case_id": case_id,
+                        "source_event": source_event,
+                        "priority": int(priority),
+                        "max_queue_size": int(self.config.delayed_replay_max_queue_size),
+                        "decision_timestamp_ms": int(decision_timestamp_ms),
+                    },
+                )
+                return
+            self._delayed_replay_pending[case_id] = case
+            self._delayed_replay_enqueued_total += 1
+        self.artifacts.append_delayed_replay_case(case)
+        self.artifacts.append_event(
+            "delayed_replay_case_queued",
+            symbol,
+            {
+                "case_id": case_id,
+                "source_event": source_event,
+                "priority": int(priority),
+                "live_decision_class": live_decision_class,
+                "live_reason": live_reason,
+                "levels_tf": levels_tf,
+                "entry_tf": entry_tf,
+                "decision_timestamp_ms": int(decision_timestamp_ms),
+                "replay_not_before_ms": replay_not_before_ms,
+                "queue_size": self._delayed_replay_queue_size(),
+                "contract": DELAYED_REPLAY_CONTRACT,
+            },
+        )
+
+    def _capture_delayed_replay_signal(self, signal: LiveSignal, *, source_scan_mode: str) -> None:
+        if not self.config.delayed_replay_enabled:
+            return
+        details = {
+            "category_id": signal.category_id,
+            "category_label": signal.category_label,
+            "category_priority": signal.category_priority,
+            "levels_tf": signal.levels_timeframe.value,
+            "entry_tf": signal.entry_timeframe.value,
+            "decision_timestamp_ms": int(signal.decision_timestamp_ms),
+            "start_timestamp_ms": int(signal.start_timestamp_ms),
+            "signal_entry_price": _finite_or_none(signal.entry_price),
+            "signal_stop_price": _finite_or_none(signal.stop_price),
+            "signal_tp1_price": _finite_or_none(signal.tp1_price),
+            "quote_ratio_start": _finite_or_none(signal.quote_ratio_start),
+            "trade_ratio_start": _finite_or_none(signal.trade_ratio_start),
+            "price_retention": _finite_or_none(signal.price_retention),
+            "hold_count": int(signal.hold_count),
+            "verticality_score": _finite_or_none(signal.verticality_score),
+            "source_scan_mode": source_scan_mode,
+            "signal_json": signal.to_json(),
+        }
+        self._capture_delayed_replay_case(
+            source_event="category_selected",
+            symbol=signal.symbol,
+            details=details,
+            priority=1,
+            live_decision_class="signal_selected",
+            live_reason="category_selected",
+        )
+
+    def _process_delayed_replay_if_idle(
+        self,
+        *,
+        cycle: int,
+        active_symbol_count: int,
+        open_positions: int,
+    ) -> None:
+        if not self.config.delayed_replay_enabled:
+            return
+        now_ms = int(time.time() * 1000)
+        opening_symbols = self._opening_symbol_count()
+        idle = active_symbol_count == 0 and open_positions == 0 and opening_symbols == 0
+        if idle:
+            if self._idle_since_ms is None:
+                self._idle_since_ms = now_ms
+        else:
+            self._idle_since_ms = None
+        idle_since_ms = self._idle_since_ms or ""
+        self.artifacts.write_live_status(
+            {
+                "timestamp_utc": datetime.now(UTC).isoformat(),
+                "timestamp_ms": now_ms,
+                "cycle": int(cycle),
+                "active_symbol_count": int(active_symbol_count),
+                "open_positions": int(open_positions),
+                "opening_symbols": int(opening_symbols),
+                "idle": bool(idle),
+                "idle_since_ms": idle_since_ms,
+                "delayed_replay_enabled": True,
+                "delayed_replay_pending_count": self._delayed_replay_queue_size(),
+                "delayed_replay_enqueued_total": int(self._delayed_replay_enqueued_total),
+                "delayed_replay_processed_total": int(self._delayed_replay_processed_total),
+                "delayed_replay_skipped_total": int(self._delayed_replay_skipped_total),
+                "contract": DELAYED_REPLAY_CONTRACT,
+            }
+        )
+        min_idle_ms = int(float(self.config.delayed_replay_min_idle_seconds) * 1000)
+        if not idle:
+            self._append_delayed_replay_summary(
+                cycle=cycle,
+                status="skipped",
+                reason="live_not_idle",
+                active_symbol_count=active_symbol_count,
+                open_positions=open_positions,
+                opening_symbols=opening_symbols,
+                idle_since_ms=idle_since_ms,
+                processed_count=0,
+                skipped_count=0,
+                duration_seconds=0.0,
+            )
+            return
+        if self._idle_since_ms is None or now_ms - int(self._idle_since_ms) < min_idle_ms:
+            self._append_delayed_replay_summary(
+                cycle=cycle,
+                status="skipped",
+                reason="idle_window_too_short",
+                active_symbol_count=active_symbol_count,
+                open_positions=open_positions,
+                opening_symbols=opening_symbols,
+                idle_since_ms=idle_since_ms,
+                processed_count=0,
+                skipped_count=0,
+                duration_seconds=0.0,
+            )
+            return
+        with self._state_lock:
+            ready_cases = [
+                case
+                for case in self._delayed_replay_pending.values()
+                if _optional_int(case.get("replay_not_before_ms")) is not None
+                and int(case["replay_not_before_ms"]) <= now_ms
+            ]
+        ready_cases.sort(key=lambda case: (int(case.get("priority") or 99), int(case.get("queued_at_ms") or 0)))
+        if not ready_cases:
+            self._append_delayed_replay_summary(
+                cycle=cycle,
+                status="idle_no_ready_cases",
+                reason="no_ready_cases",
+                active_symbol_count=active_symbol_count,
+                open_positions=open_positions,
+                opening_symbols=opening_symbols,
+                idle_since_ms=idle_since_ms,
+                processed_count=0,
+                skipped_count=0,
+                duration_seconds=0.0,
+            )
+            return
+        started = time.monotonic()
+        processed = 0
+        skipped = 0
+        max_cases = int(self.config.delayed_replay_max_cases_per_cycle)
+        max_seconds = float(self.config.delayed_replay_max_cycle_seconds)
+        for case in ready_cases[:max_cases]:
+            if time.monotonic() - started >= max_seconds:
+                break
+            case_id = str(case.get("case_id") or "")
+            try:
+                row = self._evaluate_delayed_replay_case(case, now_ms=now_ms)
+            except Exception as exc:
+                row = self._delayed_replay_error_row(case, now_ms=now_ms, exc=exc)
+            self.artifacts.append_delayed_replay_result(row)
+            with self._state_lock:
+                self._delayed_replay_pending.pop(case_id, None)
+                self._delayed_replay_completed.add(case_id)
+                self._delayed_replay_processed_total += 1
+            processed += 1
+        if len(ready_cases) > processed:
+            skipped = len(ready_cases) - processed
+        self._append_delayed_replay_summary(
+            cycle=cycle,
+            status="processed" if processed else "budget_exhausted",
+            reason="ok" if processed else "max_cycle_seconds_exhausted",
+            active_symbol_count=active_symbol_count,
+            open_positions=open_positions,
+            opening_symbols=opening_symbols,
+            idle_since_ms=idle_since_ms,
+            processed_count=processed,
+            skipped_count=skipped,
+            duration_seconds=time.monotonic() - started,
+        )
+
+    def _append_delayed_replay_summary(
+        self,
+        *,
+        cycle: int,
+        status: str,
+        reason: str,
+        active_symbol_count: int,
+        open_positions: int,
+        opening_symbols: int,
+        idle_since_ms: int | str,
+        processed_count: int,
+        skipped_count: int,
+        duration_seconds: float,
+    ) -> None:
+        with self._state_lock:
+            pending_count = len(self._delayed_replay_pending)
+            ready_count = sum(
+                1
+                for case in self._delayed_replay_pending.values()
+                if (_optional_int(case.get("replay_not_before_ms")) or 0) <= int(time.time() * 1000)
+            )
+        self.artifacts.append_delayed_replay_summary(
+            {
+                "timestamp_utc": datetime.now(UTC).isoformat(),
+                "cycle": int(cycle),
+                "enabled": bool(self.config.delayed_replay_enabled),
+                "status": status,
+                "reason": reason,
+                "pending_count": int(pending_count),
+                "ready_count": int(ready_count),
+                "processed_count": int(processed_count),
+                "skipped_count": int(skipped_count),
+                "max_cases": int(self.config.delayed_replay_max_cases_per_cycle),
+                "max_seconds": float(self.config.delayed_replay_max_cycle_seconds),
+                "active_symbol_count": int(active_symbol_count),
+                "open_positions": int(open_positions),
+                "opening_symbols": int(opening_symbols),
+                "idle_since_ms": idle_since_ms,
+                "duration_seconds": round(float(duration_seconds), 6),
+            }
+        )
+
+    def _evaluate_delayed_replay_case(self, case: dict[str, object], *, now_ms: int) -> dict[str, object]:
+        details = case.get("details") if isinstance(case.get("details"), dict) else {}
+        decision_ts = int(case.get("decision_timestamp_ms") or 0)
+        source_event = str(case.get("source_event") or "")
+        live_decision_class = str(case.get("live_decision_class") or "")
+        selected = live_decision_class == "signal_selected"
+        outcome = self._delayed_replay_outcome(case, now_ms=now_ms) if selected else {
+            "outcome_status": "not_applicable_non_selected_case",
+            "outcome_window_start_ms": "",
+            "outcome_window_end_ms": "",
+            "outcome_rows": 0,
+            "outcome_high": "",
+            "outcome_low": "",
+            "outcome_close": "",
+            "tp1_would_hit": "",
+            "stop_would_hit": "",
+            "first_hit": "",
+        }
+        return {
+            "case_id": str(case.get("case_id") or ""),
+            "queued_at_utc": str(case.get("queued_at_utc") or ""),
+            "processed_at_utc": datetime.now(UTC).isoformat(),
+            "status": "ok",
+            "symbol": str(case.get("symbol") or ""),
+            "source_event": source_event,
+            "priority": int(case.get("priority") or 99),
+            "live_decision_class": live_decision_class,
+            "live_reason": str(case.get("live_reason") or ""),
+            "levels_tf": str(case.get("levels_tf") or ""),
+            "entry_tf": str(case.get("entry_tf") or ""),
+            "decision_timestamp_ms": decision_ts,
+            "replay_not_before_ms": int(case.get("replay_not_before_ms") or 0),
+            "queued_delay_seconds": round((now_ms - int(case.get("queued_at_ms") or now_ms)) / 1000.0, 3),
+            "recompute_status": "not_recomputed_artifact_frozen_decision_snapshot",
+            "would_select_signal": bool(selected),
+            "would_enter_under_frozen_decision": bool(selected),
+            "mismatch_type": "live_selected_signal_audit_only" if selected else "live_rejected_or_non_entry_audit_only",
+            "signal_entry_price": _finite_or_none(details.get("signal_entry_price")),
+            "signal_stop_price": _finite_or_none(details.get("signal_stop_price")),
+            "signal_tp1_price": _finite_or_none(details.get("signal_tp1_price")),
+            "source_scan_mode": str(details.get("source_scan_mode") or ""),
+            "delayed_replay_contract": DELAYED_REPLAY_CONTRACT,
+            **outcome,
+        }
+
+    def _delayed_replay_error_row(self, case: dict[str, object], *, now_ms: int, exc: Exception) -> dict[str, object]:
+        return {
+            "case_id": str(case.get("case_id") or ""),
+            "queued_at_utc": str(case.get("queued_at_utc") or ""),
+            "processed_at_utc": datetime.now(UTC).isoformat(),
+            "status": "error",
+            "symbol": str(case.get("symbol") or ""),
+            "source_event": str(case.get("source_event") or ""),
+            "priority": int(case.get("priority") or 99),
+            "live_decision_class": str(case.get("live_decision_class") or ""),
+            "live_reason": str(case.get("live_reason") or ""),
+            "levels_tf": str(case.get("levels_tf") or ""),
+            "entry_tf": str(case.get("entry_tf") or ""),
+            "decision_timestamp_ms": int(case.get("decision_timestamp_ms") or 0),
+            "replay_not_before_ms": int(case.get("replay_not_before_ms") or 0),
+            "queued_delay_seconds": round((now_ms - int(case.get("queued_at_ms") or now_ms)) / 1000.0, 3),
+            "recompute_status": f"error:{type(exc).__name__}",
+            "would_select_signal": "",
+            "would_enter_under_frozen_decision": "",
+            "mismatch_type": "replay_error",
+            "outcome_status": str(exc)[:500],
+            "delayed_replay_contract": DELAYED_REPLAY_CONTRACT,
+        }
+
+    def _delayed_replay_outcome(self, case: dict[str, object], *, now_ms: int) -> dict[str, object]:
+        details = case.get("details") if isinstance(case.get("details"), dict) else {}
+        symbol = str(case.get("symbol") or "")
+        entry_tf_value = str(case.get("entry_tf") or "")
+        decision_ts = int(case.get("decision_timestamp_ms") or 0)
+        if not symbol or not entry_tf_value or decision_ts <= 0:
+            return _empty_delayed_replay_outcome("invalid_case_identity")
+        try:
+            entry_timeframe = Timeframe(entry_tf_value)
+        except ValueError:
+            return _empty_delayed_replay_outcome("invalid_entry_timeframe")
+        timeframe_ms = int(entry_timeframe.to_milliseconds())
+        lookahead_ms = int(float(self.config.delayed_replay_outcome_lookahead_seconds) * 1000)
+        outcome_start_ms = int(decision_ts) + timeframe_ms
+        outcome_end_ms = int(decision_ts) + max(timeframe_ms, lookahead_ms)
+        if now_ms < outcome_end_ms + timeframe_ms:
+            return _empty_delayed_replay_outcome(
+                "outcome_window_not_closed_yet",
+                outcome_window_start_ms=outcome_start_ms,
+                outcome_window_end_ms=outcome_end_ms,
+            )
+        frame, status = self._load_delayed_replay_cached_window(
+            symbol=symbol,
+            timeframe=entry_timeframe,
+            start_timestamp_ms=outcome_start_ms,
+            end_timestamp_ms=outcome_end_ms,
+        )
+        if frame.empty:
+            return _empty_delayed_replay_outcome(
+                status,
+                outcome_window_start_ms=outcome_start_ms,
+                outcome_window_end_ms=outcome_end_ms,
+            )
+        highs = pd.to_numeric(frame["high"], errors="coerce") if "high" in frame.columns else pd.Series(dtype="float64")
+        lows = pd.to_numeric(frame["low"], errors="coerce") if "low" in frame.columns else pd.Series(dtype="float64")
+        closes = pd.to_numeric(frame["close"], errors="coerce") if "close" in frame.columns else pd.Series(dtype="float64")
+        high = float(highs.max()) if not highs.empty else float("nan")
+        low = float(lows.min()) if not lows.empty else float("nan")
+        close = float(closes.iloc[-1]) if not closes.empty else float("nan")
+        tp1_price = _optional_float(details.get("signal_tp1_price"))
+        stop_price = _optional_float(details.get("signal_stop_price"))
+        tp1_hit = bool(tp1_price is not None and math.isfinite(high) and high >= tp1_price)
+        stop_hit = bool(stop_price is not None and math.isfinite(low) and low <= stop_price)
+        first_hit = ""
+        if tp1_hit or stop_hit:
+            for _, row in frame.sort_values("timestamp").iterrows():
+                row_high = _optional_float(row.get("high"))
+                row_low = _optional_float(row.get("low"))
+                hit_tp = tp1_price is not None and row_high is not None and row_high >= tp1_price
+                hit_stop = stop_price is not None and row_low is not None and row_low <= stop_price
+                if hit_tp and hit_stop:
+                    first_hit = "ambiguous_same_candle"
+                    break
+                if hit_tp:
+                    first_hit = "tp1"
+                    break
+                if hit_stop:
+                    first_hit = "stop"
+                    break
+        return {
+            "outcome_status": status,
+            "outcome_window_start_ms": outcome_start_ms,
+            "outcome_window_end_ms": outcome_end_ms,
+            "outcome_rows": int(len(frame)),
+            "outcome_high": _finite_or_none(high),
+            "outcome_low": _finite_or_none(low),
+            "outcome_close": _finite_or_none(close),
+            "tp1_would_hit": tp1_hit,
+            "stop_would_hit": stop_hit,
+            "first_hit": first_hit,
+        }
+
+    def _load_delayed_replay_cached_window(
+        self,
+        *,
+        symbol: str,
+        timeframe: Timeframe,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+    ) -> tuple[pd.DataFrame, str]:
+        timeframe_ms = int(timeframe.to_milliseconds())
+        expected_start_ms = (int(start_timestamp_ms) // timeframe_ms) * timeframe_ms
+        expected_end_ms = (int(end_timestamp_ms) // timeframe_ms) * timeframe_ms
+        symbol_key = _position_symbol_key(symbol)
+        memory_key = (symbol_key, timeframe.value)
+        frames: list[pd.DataFrame] = []
+        if memory_key in self._live_ohlcv_frame_cache:
+            frames.append(self._live_ohlcv_frame_cache[memory_key])
+        storage = self._ohlcv_cache_storage
+        storage_status = "storage_disabled"
+        if storage is not None:
+            load_result = storage.load_window_result(
+                symbol,
+                timeframe,
+                start_timestamp_ms=expected_start_ms,
+                end_timestamp_ms=expected_end_ms,
+            )
+            storage_status = f"storage_{load_result.status}:{load_result.reason}"
+            if load_result.frame is not None and not load_result.frame.empty:
+                frames.append(_prepare_cached_ohlcv_frame(load_result.frame))
+        if not frames:
+            return pd.DataFrame(), f"cache_only_no_data:{storage_status}"
+        frame = _concat_cached_ohlcv_frames(frames)
+        if frame.empty or "timestamp" not in frame.columns:
+            return pd.DataFrame(), f"cache_only_empty:{storage_status}"
+        window = frame.loc[
+            (frame["timestamp"].astype("int64") >= expected_start_ms)
+            & (frame["timestamp"].astype("int64") <= expected_end_ms)
+        ].copy()
+        if window.empty:
+            return pd.DataFrame(), f"cache_only_window_empty:{storage_status}"
+        remaining = _missing_ohlcv_ranges(
+            window,
+            start_timestamp_ms=expected_start_ms,
+            end_timestamp_ms=expected_end_ms,
+            timeframe_ms=timeframe_ms,
+        )
+        if remaining:
+            return window.sort_values("timestamp").reset_index(drop=True), f"cache_only_partial_gap:{len(remaining)}"
+        return window.sort_values("timestamp").reset_index(drop=True), "cache_only_ok"
 
     def _next_symbol_batch(self, symbols: list[str]) -> list[str]:
         selection = self._select_next_symbol_batch(symbols)
@@ -7781,11 +8438,19 @@ class AnomalyMicroLiveRunner:
             reason: str,
             details: dict[str, object],
         ) -> dict[str, object]:
+            enriched_details = {
+                "levels_tf": levels_timeframe.value,
+                "entry_tf": entry_timeframe.value,
+                "setup_source": setup_source,
+                "setup_elapsed_fraction": float(setup_elapsed_fraction),
+                "setup_closed_entry_candles": int(setup_closed_entry_candles),
+                **details,
+            }
             row = self._record_category_reject(
                 category,
                 symbol,
                 reason,
-                details,
+                enriched_details,
                 emit=emit_diagnostics,
             )
             if category_rejections_out is not None:
@@ -8074,6 +8739,10 @@ class AnomalyMicroLiveRunner:
                         "oi_status": oi_change_reason or ("ok" if oi_change is not None else ""),
                     },
                 )
+                self._capture_delayed_replay_signal(
+                    signal,
+                    source_scan_mode=self._batch_scan_mode_for_symbol(symbol),
+                )
             if emit_diagnostics and category_rejections:
                 rejected_ids = ",".join(str(row.get("category_id")) for row in category_rejections)
                 self.logger(
@@ -8106,6 +8775,14 @@ class AnomalyMicroLiveRunner:
             payload["detail_reason"] = detail_reason
         if emit:
             self.artifacts.append_event("category_rejected", symbol, payload)
+            self._capture_delayed_replay_case(
+                source_event="category_rejected",
+                symbol=symbol,
+                details=payload,
+                priority=3,
+                live_decision_class="category_rejected",
+                live_reason=reason,
+            )
         return payload
 
     def _fetch_live_oi_change(self, symbol: str, *, decision_timestamp_ms: int) -> LiveOiChangeResult:
@@ -10376,6 +11053,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "live_ohlcv_cache_max_buffer_rows": (config.live_ohlcv_cache_max_buffer_rows, 1),
         "live_aggtrade_rest_cache_ttl_ms": (config.live_aggtrade_rest_cache_ttl_ms, 1),
         "danger_ticker_flow_radar_min_trade_count_delta": (config.danger_ticker_flow_radar_min_trade_count_delta, 1),
+        "delayed_replay_max_cases_per_cycle": (config.delayed_replay_max_cases_per_cycle, 1),
+        "delayed_replay_max_queue_size": (config.delayed_replay_max_queue_size, 1),
     }
     for name, (value, minimum) in integer_minimums.items():
         if not isinstance(value, int) or value < minimum:
@@ -10456,6 +11135,10 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "symbol_context_snapshot_max_cycle_seconds": config.symbol_context_snapshot_max_cycle_seconds,
         "latency_sla_due_scan_p95_seconds": config.latency_sla_due_scan_p95_seconds,
         "prepump_warm_watch_min_abs_standardized_diff": config.prepump_warm_watch_min_abs_standardized_diff,
+        "delayed_replay_delay_seconds": config.delayed_replay_delay_seconds,
+        "delayed_replay_min_idle_seconds": config.delayed_replay_min_idle_seconds,
+        "delayed_replay_max_cycle_seconds": config.delayed_replay_max_cycle_seconds,
+        "delayed_replay_outcome_lookahead_seconds": config.delayed_replay_outcome_lookahead_seconds,
     }
     for name, value in required_positive.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=False)
