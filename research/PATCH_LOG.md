@@ -3840,3 +3840,48 @@ Risk:
 ```text
 Low. Console rendering only; no live execution or strategy behavior changes.
 ```
+
+
+## 2026-05-15 - P234 proposed: Russian grouped live status block
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Replace the four-letter technical live status block with a Russian operator block grouped by Connection, Market, Trading and Control semantics while keeping delayed replay backlog visible.
+```
+
+Changes:
+
+```text
+- Renders the live heartbeat as sections: Соединение, Рынок, Торговля, Контроль.
+- Uses fixed-width space-padded cells with title and value on the same line.
+- Shows live runtime as Время instead of only per-cycle seconds.
+- Renames Replay to Повтор and cold coverage to Покрытие.
+- Keeps delayed replay backlog visible as Повтор <pending>/<total> or Повтор Выкл.
+- Leaves trading, scan, delayed replay decision, Telegram and artifact logic unchanged.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep delayed-replay
+```
+
+Risk:
+
+```text
+Low. Console rendering only; no live execution or strategy behavior changes.
+```

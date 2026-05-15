@@ -3683,6 +3683,7 @@ class AnomalyMicroLiveRunner:
         self._live_ohlcv_write_buffer: dict[tuple[str, str, str], list[pd.DataFrame]] = {}
         self._live_ohlcv_pending_rows = 0
         self._last_live_ohlcv_cache_flush_at = time.monotonic()
+        self._run_started_monotonic = time.monotonic()
         self._live_sources_closed = False
 
     def shutdown(self, *, reason: str) -> None:
@@ -4088,6 +4089,7 @@ class AnomalyMicroLiveRunner:
                         guard_text = self._current_inactive_cold_coverage_gate_reason
                     self._status_logger.status(
                         _format_live_heartbeat(
+                            runtime_seconds=time.monotonic() - self._run_started_monotonic,
                             cycle_seconds=cycle_seconds,
                             connection_health_pct=ws_health_pct,
                             anomalies_total=detected_anomalies_total,
@@ -4099,6 +4101,7 @@ class AnomalyMicroLiveRunner:
                             connection_text=connection_text,
                             delayed_replay_enabled=bool(self.config.delayed_replay_enabled),
                             delayed_replay_pending=self._delayed_replay_queue_size(),
+                            delayed_replay_total=self._delayed_replay_enqueued_total,
                             idle=(
                                 active_symbol_count == 0
                                 and open_positions == 0
@@ -12896,11 +12899,56 @@ def _format_price(value: float) -> str:
     return f"{float(value):.6g}"
 
 
-def _status_cell(label: str, value: object, *, width: int = 14) -> str:
-    text = f"{label[:3].lower()} {str(value).strip() or '-'}"
+def _format_live_status_value(value: object) -> str:
+    text = str(value).strip() or "-"
+    lowered = text.lower()
+    if lowered == "ok":
+        return "Ok"
+    if lowered == "yes":
+        return "Да"
+    if lowered == "no":
+        return "Нет"
+    if lowered == "off":
+        return "Выкл"
+    if lowered.startswith("on") and lowered[2:].isdigit():
+        return f"Вкл {lowered[2:]}"
+    if lowered == "on":
+        return "Вкл"
+    if lowered.startswith("danger") and lowered[6:].isdigit():
+        return f"Опасно {lowered[6:]}"
+    if lowered.startswith("sc"):
+        return f"Score {text[2:]}"
+    if lowered == "rest":
+        return "REST"
+    if lowered == "seed":
+        return "Seed"
+    if lowered == "wait":
+        return "Wait"
+    return text[:1].upper() + text[1:] if text else "-"
+
+
+def _format_status_cell(label: str, value: object, *, width: int = 26) -> str:
+    text = f"{label} {_format_live_status_value(value)}"
     if len(text) > width:
         text = text[: max(0, width - 1)] + "~"
     return f"{text:<{width}}"
+
+
+def _format_status_line(*cells: str) -> str:
+    return "  ".join(cells).rstrip()
+
+
+def _format_live_runtime(seconds: float) -> str:
+    if not math.isfinite(seconds) or seconds < 0.0:
+        return "-"
+    total_seconds = int(seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours > 0:
+        return f"{hours}ч {minutes:02d}м {secs:02d}с"
+    if minutes > 0:
+        return f"{minutes}м {secs:02d}с"
+    return f"{secs}с"
 
 
 def _split_live_connection_status(connection_text: str) -> tuple[str, str]:
@@ -12940,12 +12988,9 @@ def _split_live_connection_status(connection_text: str) -> tuple[str, str]:
     return ticker_status, flow_status
 
 
-def _format_status_row(label: str, *cells: str) -> str:
-    return f"{label[:4].upper():<4}  " + "  ".join(cells)
-
-
 def _format_live_heartbeat(
     *,
+    runtime_seconds: float,
     cycle_seconds: float,
     connection_health_pct: float,
     anomalies_total: int,
@@ -12957,6 +13002,7 @@ def _format_live_heartbeat(
     connection_text: str,
     delayed_replay_enabled: bool,
     delayed_replay_pending: int,
+    delayed_replay_total: int,
     idle: bool,
     order_delta: int,
     real_orders: bool,
@@ -12964,43 +13010,45 @@ def _format_live_heartbeat(
     cold_age: str,
     guard_status: str,
 ) -> str:
+    del cycle_seconds, idle, real_orders, cold_age
     ticker_status, flow_status = _split_live_connection_status(connection_text)
-    replay_value = str(max(0, int(delayed_replay_pending))) if delayed_replay_enabled else "off"
+    if delayed_replay_enabled:
+        replay_pending = max(0, int(delayed_replay_pending))
+        replay_total = max(replay_pending, int(delayed_replay_total))
+        replay_value = f"{replay_pending}/{replay_total}"
+    else:
+        replay_value = "Выкл"
     order_value = str(int(order_delta)) if order_delta else "0"
     rows = [
-        _format_status_row(
-            "LIVE",
-            _status_cell("sec", f"{cycle_seconds:.1f}"),
-            _status_cell("pnl", _format_percent(pnl_pct, signed=False)),
-            _status_cell("mod", "real" if real_orders else "dry"),
+        "Соединение",
+        _format_status_line(
+            _format_status_cell("Стабильность", _format_percent(connection_health_pct, signed=False, precision=1)),
+            _format_status_cell("Тикер", ticker_status),
+            _format_status_cell("Поток", flow_status),
         ),
-        _format_status_row(
-            "FEED",
-            _status_cell("web", _format_percent(connection_health_pct, signed=False, precision=1)),
-            _status_cell("tck", ticker_status),
-            _status_cell("flw", flow_status),
+        "",
+        "Рынок",
+        _format_status_line(
+            _format_status_cell("Время", _format_live_runtime(runtime_seconds)),
+            _format_status_cell("События", anomalies_total),
+            _format_status_cell("PNL", _format_percent(pnl_pct, signed=False)),
         ),
-        _format_status_row(
-            "PUMP",
-            _status_cell("anl", anomalies_total),
-            _status_cell("act", f"{active_now}/{active_seen}"),
-            _status_cell("pos", f"{open_positions}/{closed_positions}"),
+        "",
+        "Торговля",
+        _format_status_line(
+            _format_status_cell("Активные", f"{active_now}/{active_seen}"),
+            _format_status_cell("Позиции", f"{open_positions}/{closed_positions}"),
+            _format_status_cell("Ордера", order_value),
         ),
-        _format_status_row(
-            "RPLY",
-            _status_cell("pnd", replay_value),
-            _status_cell("idl", "yes" if idle else "no"),
-            _status_cell("ord", order_value),
-        ),
-        _format_status_row(
-            "RISK",
-            _status_cell("cld", cold_status),
-            _status_cell("age", cold_age),
-            _status_cell("grd", guard_status),
+        "",
+        "Контроль",
+        _format_status_line(
+            _format_status_cell("Повтор", replay_value),
+            _format_status_cell("Покрытие", cold_status),
+            _format_status_cell("Защита", guard_status),
         ),
     ]
     return "\n" + "\n".join(rows)
-
 
 def _format_percent(value: float, *, signed: bool = False, precision: int = 1) -> str:
     if not math.isfinite(value):

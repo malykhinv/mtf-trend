@@ -1299,3 +1299,11 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Inline status clearing counts explicit newline rows and wrapped terminal rows to avoid duplicated-looking PowerShell output.
 - Current commit: UNKNOWN.
 - Next validation: run a short live/dry live in PowerShell and confirm the block redraws cleanly with one blank line before it.
+
+
+## P234 proposed state
+- Live heartbeat is now a Russian grouped operator block: `Соединение`, `Рынок`, `Торговля`, `Контроль`.
+- The block shows runtime, stability, ticker/flow state, anomaly events, active symbols, positions, orders, delayed replay backlog and coverage/guard state with fixed-width cells.
+- `Replay` is shown as `Повтор`; cold coverage is shown as `Покрытие`.
+- Current commit: UNKNOWN.
+- Next validation: run a short live/dry live in PowerShell and confirm the multiline block redraws cleanly and does not wrap/duplicate.
