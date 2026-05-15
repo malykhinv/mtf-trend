@@ -2012,3 +2012,20 @@ Conclusion:
 ```text
 Do not fill closed-hour top-growth artifacts with ticker-derived approximations. For operator awareness, track session top movers from live ticker snapshots with first-seen-in-session baselines and explicit source/status. For missed-pump audit, still run `run-anomaly-top-growth` against closed 1h candles and the live_events.csv from the run.
 ```
+---
+
+## 2026-05-15 — Next live validation after P239/P240
+
+Run a supervised live smoke after applying startup context backfill and retryable dependency handling.
+
+Expected artifact changes:
+
+```text
+category_rejected should contain final market/category failures only
+signal_scan_retryable_dependency_blocked should contain unavailable prior_fast_fade context, if any
+delayed_replay_queue should not be filled by dependency-blocked decisions
+selected signals should still require an ok prior_fast_fade count before entry
+```
+
+Do not loosen flow thresholds until closed-hour top-growth / missed-pump visibility is populated for the same run.
+

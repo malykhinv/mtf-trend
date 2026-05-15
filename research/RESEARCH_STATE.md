@@ -1325,3 +1325,11 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 ## 2026-05-15 — P239 proposed
 
 Live prior-fast-fade context must not depend only on a post-scan optional snapshot. P239 proposes default startup backfill + startup snapshot computation for 72h+baseline levels-timeframe context, with explicit tiny-gap tolerance (`min_coverage_ratio=0.995`, `max_gap_candles=2`) and no subminute context backfill. Commit: UNKNOWN.
+---
+
+## 2026-05-15 — P240 proposed
+
+After P239, unavailable prior-fast-fade context should be rare, but it must not be treated as a market/category rejection when it still happens. P240 keeps such decisions retryable: no `category_rejected` artifact and no delayed-replay final-reject case are emitted for retryable category dependencies; `signal_scan_retryable_dependency_blocked` carries the blocked categories and context reason.
+
+Next check: run a short live smoke and verify that `reject_prior_fast_fade_filter_unavailable` no longer dominates `category_rejected`; remaining unavailable context appears as retryable dependency until stale/expiry.
+

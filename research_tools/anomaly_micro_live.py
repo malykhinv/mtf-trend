@@ -847,26 +847,29 @@ def _ws_error_short_label(error: str | None) -> str:
     return "error" if text else ""
 
 
+def _is_retryable_category_rejection(row: dict[str, object]) -> bool:
+    reason = str(row.get("category_reject_reason") or row.get("reason") or "")
+    if reason == "reject_prior_fast_fade_filter_unavailable":
+        return True
+    if reason == "reject_mark_basis_below_min":
+        status = str(row.get("mark_basis_status") or "")
+        return bool(status and status != "ok" and status.startswith(("mark_context_", "no_mark_before_decision")))
+    if reason == "reject_oi":
+        status = str(row.get("oi_status") or "")
+        return bool(status and status != "below_threshold" and status.startswith("oi_"))
+    return False
+
+
+def _retryable_category_rejection_rows(category_rejections: list[dict[str, object]]) -> tuple[dict[str, object], ...]:
+    return tuple(row for row in category_rejections if _is_retryable_category_rejection(row))
+
+
 def _retryable_category_reasons(category_rejections: list[dict[str, object]]) -> tuple[str, ...]:
     retryable: list[str] = []
     seen: set[str] = set()
-    for row in category_rejections:
+    for row in _retryable_category_rejection_rows(category_rejections):
         reason = str(row.get("category_reject_reason") or row.get("reason") or "")
-        if reason == "reject_prior_fast_fade_filter_unavailable":
-            status_values = (
-                str(row.get("coverage_reason") or ""),
-                str(row.get("detail_reason") or ""),
-            )
-            is_retryable = any(value.startswith(RETRYABLE_CATEGORY_STATUS_PREFIXES) for value in status_values if value)
-        elif reason == "reject_mark_basis_below_min":
-            status = str(row.get("mark_basis_status") or "")
-            is_retryable = bool(status and status != "ok" and status.startswith(("mark_context_", "no_mark_before_decision")))
-        elif reason == "reject_oi":
-            status = str(row.get("oi_status") or "")
-            is_retryable = bool(status and status != "below_threshold" and status.startswith("oi_"))
-        else:
-            is_retryable = False
-        if is_retryable and reason not in seen:
+        if reason and reason not in seen:
             retryable.append(reason)
             seen.add(reason)
     return tuple(retryable)
@@ -9384,8 +9387,22 @@ class AnomalyMicroLiveRunner:
             category_rejections_out=category_rejections,
         )
         if signal is None:
+            retryable_rows = _retryable_category_rejection_rows(category_rejections)
             retryable_reasons = _retryable_category_reasons(category_rejections)
             if retryable_reasons:
+                blocked_category_ids = [str(row.get("category_id") or "") for row in retryable_rows if row.get("category_id")]
+                blocked_category_labels = [str(row.get("category_label") or "") for row in retryable_rows if row.get("category_label")]
+                retryable_details = [
+                    {
+                        "category_id": row.get("category_id", ""),
+                        "category_label": row.get("category_label", ""),
+                        "reason": row.get("category_reject_reason") or row.get("reason") or "",
+                        "status": row.get("status", ""),
+                        "detail_reason": row.get("detail_reason") or row.get("coverage_reason") or "",
+                        "coverage_policy": row.get("coverage_policy", ""),
+                    }
+                    for row in retryable_rows
+                ]
                 self.artifacts.append_event(
                     "signal_scan_retryable_dependency_blocked",
                     symbol,
@@ -9393,7 +9410,11 @@ class AnomalyMicroLiveRunner:
                         "levels_tf": levels_timeframe.value,
                         "entry_tf": entry_timeframe.value,
                         "decision_timestamp_ms": decision_ts,
+                        "retryable_dependency_count": int(len(retryable_rows)),
                         "retryable_reasons": list(retryable_reasons),
+                        "blocked_category_ids": blocked_category_ids,
+                        "blocked_category_labels": blocked_category_labels,
+                        "retryable_details": retryable_details,
                         "retry_policy": "do_not_consume_decision_until_stale_or_final_reject",
                         "category_contract": LIVE_CATEGORY_CONTRACT,
                     },
@@ -9805,6 +9826,8 @@ class AnomalyMicroLiveRunner:
             symbol: str,
             reason: str,
             details: dict[str, object],
+            *,
+            emit: bool = True,
         ) -> dict[str, object]:
             enriched_details = {
                 "levels_tf": levels_timeframe.value,
@@ -9819,7 +9842,7 @@ class AnomalyMicroLiveRunner:
                 symbol,
                 reason,
                 enriched_details,
-                emit=emit_diagnostics,
+                emit=bool(emit_diagnostics and emit),
             )
             if category_rejections_out is not None:
                 category_rejections_out.append(row)
@@ -9848,7 +9871,15 @@ class AnomalyMicroLiveRunner:
                     "decision_timestamp_ms": int(decision["timestamp"]),
                 }
                 if prior_fast_fade_result.get("status") != "ok" or prior_fast_fade_count is None:
-                    category_rejections.append(record_category_reject(category, symbol, "reject_prior_fast_fade_filter_unavailable", prior_fast_fade_details))
+                    category_rejections.append(
+                        record_category_reject(
+                            category,
+                            symbol,
+                            "reject_prior_fast_fade_filter_unavailable",
+                            prior_fast_fade_details,
+                            emit=False,
+                        )
+                    )
                     continue
                 if int(prior_fast_fade_count) > int(max_prior_fast_fade):
                     category_rejections.append(record_category_reject(category, symbol, "reject_prior_fast_fade_72h", prior_fast_fade_details))
@@ -10153,6 +10184,8 @@ class AnomalyMicroLiveRunner:
                 )
             return signal
         if emit_diagnostics and category_rejections:
+            if _retryable_category_rejection_rows(category_rejections):
+                return None
             reject_reasons = [
                 str(row.get("category_reject_reason") or row.get("reason") or "")
                 for row in category_rejections
