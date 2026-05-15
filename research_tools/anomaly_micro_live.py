@@ -20,7 +20,7 @@ import urllib.request
 from collections import deque
 from uuid import uuid4
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Callable, Protocol
 
@@ -180,6 +180,35 @@ ANIMAL_EMOJIS = (
 )
 SERVICE_WARNING_EMOJI = "⚠️"
 SERVICE_WORK_EMOJI = "🚧"
+LIVE_SESSION_TOP_LIMIT = 3
+LIVE_SESSION_TOP_ARTIFACT_INTERVAL_MS = 60_000
+LIVE_SESSION_BLOCKS_UTC = (
+    ("Азия", 0, 8),
+    ("Европа", 8, 16),
+    ("Америка", 16, 24),
+)
+LIVE_SESSION_TOP_GROWTH_COLUMNS = (
+    "snapshot_utc",
+    "session_label",
+    "session_start_utc",
+    "session_end_utc",
+    "rank",
+    "symbol",
+    "growth_pct",
+    "growth_fraction",
+    "baseline_price",
+    "last_price",
+    "baseline_timestamp_utc",
+    "last_timestamp_utc",
+    "last_price_source",
+    "ticker_source",
+    "ticker_source_status",
+    "ticker_source_reason",
+    "status",
+    "reason",
+    "symbols_tracked",
+    "symbols_with_positive_growth",
+)
 TOP_GROWTH_COLUMNS = (
     "snapshot_utc",
     "period_start_utc",
@@ -2310,6 +2339,139 @@ class LiveTickerRadarCycleStats:
     reason: str = ""
 
 
+@dataclass(slots=True)
+class LiveSessionTopSymbolState:
+    symbol: str
+    baseline_price: float
+    baseline_timestamp_ms: int
+    last_price: float
+    last_timestamp_ms: int
+    last_price_source: str
+
+
+class LiveSessionTopTracker:
+    def __init__(self, *, limit: int) -> None:
+        if limit < 1:
+            raise LiveStartupError(f"Некорректный live session top limit: {limit}")
+        self.limit = int(limit)
+        self._session_label = ""
+        self._session_start_ms = 0
+        self._session_end_ms = 0
+        self._states: dict[str, LiveSessionTopSymbolState] = {}
+        self._last_snapshot_ms = 0
+        self._last_source = ""
+        self._last_source_status = "not_started"
+        self._last_source_reason = "ticker_snapshots_not_received_yet"
+
+    def update_from_ticker_snapshots(
+        self,
+        snapshots: list[ExchangeTickerSnapshot],
+        *,
+        now_ms: int,
+        source: str,
+        source_status: str,
+        source_reason: str,
+    ) -> None:
+        session_label, session_start_ms, session_end_ms = _live_session_window_ms(now_ms)
+        if session_start_ms != self._session_start_ms:
+            self._states = {}
+            self._session_label = session_label
+            self._session_start_ms = session_start_ms
+            self._session_end_ms = session_end_ms
+        self._last_snapshot_ms = int(now_ms)
+        self._last_source = str(source or "")
+        self._last_source_status = str(source_status or "")
+        self._last_source_reason = str(source_reason or "")
+        for snapshot in snapshots:
+            if snapshot.status != "ok":
+                continue
+            price = _finite_or_none(snapshot.last_price)
+            if price is None or price <= 0.0:
+                continue
+            fetched_at_ms = int(snapshot.fetched_at_ms)
+            if fetched_at_ms < session_start_ms or fetched_at_ms > session_end_ms:
+                continue
+            symbol_key = _position_symbol_key(snapshot.symbol)
+            if not symbol_key:
+                continue
+            state = self._states.get(symbol_key)
+            if state is None:
+                self._states[symbol_key] = LiveSessionTopSymbolState(
+                    symbol=snapshot.symbol,
+                    baseline_price=price,
+                    baseline_timestamp_ms=fetched_at_ms,
+                    last_price=price,
+                    last_timestamp_ms=fetched_at_ms,
+                    last_price_source=snapshot.last_price_source,
+                )
+            else:
+                state.last_price = price
+                state.last_timestamp_ms = fetched_at_ms
+                state.last_price_source = snapshot.last_price_source
+
+    def snapshot(self, *, now_ms: int) -> dict[str, object]:
+        session_label, session_start_ms, session_end_ms = _live_session_window_ms(now_ms)
+        if session_start_ms != self._session_start_ms:
+            return {
+                "snapshot_timestamp_ms": int(now_ms),
+                "session_label": session_label,
+                "session_start_ms": session_start_ms,
+                "session_end_ms": session_end_ms,
+                "status": "not_started",
+                "reason": "ticker_snapshot_not_seen_for_current_session",
+                "source": self._last_source,
+                "source_status": self._last_source_status,
+                "source_reason": self._last_source_reason,
+                "symbols_tracked": 0,
+                "symbols_with_positive_growth": 0,
+                "items": [],
+            }
+        items: list[dict[str, object]] = []
+        for state in self._states.values():
+            growth_fraction = (state.last_price - state.baseline_price) / state.baseline_price
+            if growth_fraction <= 0.0:
+                continue
+            items.append(
+                {
+                    "symbol": state.symbol,
+                    "growth_pct": growth_fraction * 100.0,
+                    "growth_fraction": growth_fraction,
+                    "baseline_price": state.baseline_price,
+                    "last_price": state.last_price,
+                    "baseline_timestamp_ms": state.baseline_timestamp_ms,
+                    "last_timestamp_ms": state.last_timestamp_ms,
+                    "last_price_source": state.last_price_source,
+                }
+            )
+        items.sort(key=lambda item: float(item["growth_fraction"]), reverse=True)
+        ranked_items: list[dict[str, object]] = []
+        for rank, item in enumerate(items[: self.limit], start=1):
+            ranked_items.append({"rank": rank, **item})
+        if ranked_items:
+            status = "ok"
+            reason = "ok"
+        elif self._states:
+            status = "empty"
+            reason = "no_positive_growth_since_session_baseline"
+        else:
+            status = "empty"
+            reason = "no_usable_ticker_price_snapshots"
+        return {
+            "snapshot_timestamp_ms": int(now_ms),
+            "session_label": self._session_label or session_label,
+            "session_start_ms": self._session_start_ms or session_start_ms,
+            "session_end_ms": self._session_end_ms or session_end_ms,
+            "status": status,
+            "reason": reason,
+            "source": self._last_source,
+            "source_status": self._last_source_status,
+            "source_reason": self._last_source_reason,
+            "symbols_tracked": len(self._states),
+            "symbols_with_positive_growth": len(items),
+            "items": ranked_items,
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class LiveSymbolContextSnapshotCycleStats:
     enabled: bool
@@ -2702,6 +2864,7 @@ class LiveArtifactWriter:
         self.top_growth_dir.mkdir(parents=True, exist_ok=True)
         self.top_growth_index_path = self.top_growth_dir / "top_growth_index.csv"
         self.missed_pump_visibility_path = self.top_growth_dir / "missed_pump_visibility.csv"
+        self.session_top_growth_path = self.top_growth_dir / "session_top_growth.csv"
         self.delayed_replay_dir = self.root / "delayed_replay"
         self.delayed_replay_dir.mkdir(parents=True, exist_ok=True)
         self.delayed_replay_queue_path = self.delayed_replay_dir / "delayed_replay_queue.jsonl"
@@ -2715,6 +2878,7 @@ class LiveArtifactWriter:
         self._ensure_csv(self.events_path, ("timestamp_utc", "event", "symbol", "details_json"))
         self._ensure_csv(self.top_growth_index_path, TOP_GROWTH_INDEX_COLUMNS)
         self._ensure_csv(self.missed_pump_visibility_path, MISSED_PUMP_VISIBILITY_COLUMNS)
+        self._ensure_csv(self.session_top_growth_path, LIVE_SESSION_TOP_GROWTH_COLUMNS)
         self._ensure_csv(self.delayed_replay_results_path, DELAYED_REPLAY_RESULTS_COLUMNS)
         self._ensure_csv(self.delayed_replay_summary_path, DELAYED_REPLAY_SUMMARY_COLUMNS)
         self._ensure_csv(self.symbol_context_snapshot_path, SYMBOL_CONTEXT_SNAPSHOT_COLUMNS)
@@ -2852,6 +3016,60 @@ class LiveArtifactWriter:
         with self._lock:
             tmp_path.write_text(payload + "\n", encoding="utf-8")
             tmp_path.replace(self.live_status_path)
+
+    def append_session_top_growth_snapshot(self, snapshot: dict[str, object]) -> None:
+        items_raw = snapshot.get("items")
+        items = list(items_raw) if isinstance(items_raw, list) else []
+        symbols_tracked = int(snapshot.get("symbols_tracked") or 0)
+        positive_count = int(snapshot.get("symbols_with_positive_growth") or 0)
+        common = {
+            "snapshot_utc": _ms_to_iso_utc(int(snapshot.get("snapshot_timestamp_ms") or int(time.time() * 1000))),
+            "session_label": str(snapshot.get("session_label") or ""),
+            "session_start_utc": _ms_to_iso_utc(int(snapshot.get("session_start_ms") or 0)),
+            "session_end_utc": _ms_to_iso_utc(int(snapshot.get("session_end_ms") or 0)),
+            "ticker_source": str(snapshot.get("source") or ""),
+            "ticker_source_status": str(snapshot.get("source_status") or ""),
+            "ticker_source_reason": str(snapshot.get("source_reason") or ""),
+            "status": str(snapshot.get("status") or ""),
+            "reason": str(snapshot.get("reason") or ""),
+            "symbols_tracked": symbols_tracked,
+            "symbols_with_positive_growth": positive_count,
+        }
+        rows: list[dict[str, object]] = []
+        if items:
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                rows.append(
+                    {
+                        **common,
+                        "rank": item.get("rank", ""),
+                        "symbol": item.get("symbol", ""),
+                        "growth_pct": item.get("growth_pct", ""),
+                        "growth_fraction": item.get("growth_fraction", ""),
+                        "baseline_price": item.get("baseline_price", ""),
+                        "last_price": item.get("last_price", ""),
+                        "baseline_timestamp_utc": _ms_to_iso_utc(int(item.get("baseline_timestamp_ms") or 0)),
+                        "last_timestamp_utc": _ms_to_iso_utc(int(item.get("last_timestamp_ms") or 0)),
+                        "last_price_source": item.get("last_price_source", ""),
+                    }
+                )
+        else:
+            rows.append(
+                {
+                    **common,
+                    "rank": "",
+                    "symbol": "",
+                    "growth_pct": "",
+                    "growth_fraction": "",
+                    "baseline_price": "",
+                    "last_price": "",
+                    "baseline_timestamp_utc": "",
+                    "last_timestamp_utc": "",
+                    "last_price_source": "",
+                }
+            )
+        self._append_csv_rows(self.session_top_growth_path, LIVE_SESSION_TOP_GROWTH_COLUMNS, rows)
 
     def write_symbol_context_snapshot(
         self,
@@ -3620,6 +3838,8 @@ class AnomalyMicroLiveRunner:
         self._ticker_radar_trade_delta_history: dict[str, deque[float]] = {}
         self._last_ticker_radar_at_ms = 0
         self._last_ticker_radar_health_status = "unknown"
+        self._session_top_tracker = LiveSessionTopTracker(limit=LIVE_SESSION_TOP_LIMIT)
+        self._last_session_top_growth_artifact_at_ms = 0
         self._seen_decisions: set[tuple[str, str, str, int]] = set()
         self._last_signal_scan_closed_at: dict[tuple[str, str], int] = {}
         self._opened_positions_total = 0
@@ -4119,6 +4339,7 @@ class AnomalyMicroLiveRunner:
                         cold_status_text = "off"
                         cold_age_text = "-"
                         guard_text = self._current_inactive_cold_coverage_gate_reason
+                    session_top_snapshot = self._session_top_tracker.snapshot(now_ms=int(time.time() * 1000))
                     self._status_logger.status(
                         _format_live_heartbeat(
                             runtime_seconds=time.monotonic() - self._run_started_monotonic,
@@ -4144,6 +4365,7 @@ class AnomalyMicroLiveRunner:
                             cold_status=cold_status_text,
                             cold_age=cold_age_text,
                             guard_status=guard_text,
+                            session_top_snapshot=session_top_snapshot,
                         ),
                         highlight=open_positions > 0,
                     )
@@ -4499,6 +4721,14 @@ class AnomalyMicroLiveRunner:
                 f"source={self.ticker_snapshot_source.source_id}; error={type(exc).__name__}: {exc}"
             ) from exc
         missing_count = sum(1 for snapshot in snapshots if snapshot.status != "ok")
+        self._session_top_tracker.update_from_ticker_snapshots(
+            snapshots,
+            now_ms=now_ms,
+            source=source,
+            source_status=source_status,
+            source_reason=source_reason,
+        )
+        self._write_session_top_growth_artifact_if_due(now_ms=now_ms)
         if snapshots and missing_count == len(snapshots):
             self.artifacts.append_event(
                 "ticker_radar_startup_failed",
@@ -6663,6 +6893,13 @@ class AnomalyMicroLiveRunner:
             waiting.append(item.symbol)
         return waiting
 
+    def _write_session_top_growth_artifact_if_due(self, *, now_ms: int) -> None:
+        if now_ms - self._last_session_top_growth_artifact_at_ms < LIVE_SESSION_TOP_ARTIFACT_INTERVAL_MS:
+            return
+        snapshot = self._session_top_tracker.snapshot(now_ms=now_ms)
+        self.artifacts.append_session_top_growth_snapshot(snapshot)
+        self._last_session_top_growth_artifact_at_ms = int(now_ms)
+
     def _maybe_update_ticker_radar(self, symbols: list[str]) -> LiveTickerRadarCycleStats:
         configured_source = self.ticker_snapshot_source.source_id
         if not self.config.ticker_radar_enabled:
@@ -6709,6 +6946,14 @@ class AnomalyMicroLiveRunner:
                 reason=f"{type(exc).__name__}: {str(exc)[:240]}",
             )
         missing_count = sum(1 for snapshot in snapshots if snapshot.status != "ok")
+        self._session_top_tracker.update_from_ticker_snapshots(
+            snapshots,
+            now_ms=now_ms,
+            source=source,
+            source_status=source_status,
+            source_reason=source_reason,
+        )
+        self._write_session_top_growth_artifact_if_due(now_ms=now_ms)
         if snapshots and missing_count == len(snapshots):
             self.artifacts.append_event(
                 "ticker_radar_snapshot_all_missing",
@@ -13017,6 +13262,24 @@ def _format_live_runtime(seconds: float) -> str:
     return f"{secs}с"
 
 
+def _ms_to_iso_utc(timestamp_ms: int) -> str:
+    if int(timestamp_ms) <= 0:
+        return ""
+    return datetime.fromtimestamp(int(timestamp_ms) / 1000, UTC).isoformat()
+
+
+def _live_session_window_ms(timestamp_ms: int) -> tuple[str, int, int]:
+    moment = datetime.fromtimestamp(int(timestamp_ms) / 1000, UTC)
+    for label, start_hour, end_hour in LIVE_SESSION_BLOCKS_UTC:
+        if start_hour <= moment.hour < end_hour:
+            session_start = moment.replace(hour=start_hour, minute=0, second=0, microsecond=0)
+            session_end = moment.replace(hour=end_hour % 24, minute=0, second=0, microsecond=0)
+            if end_hour == 24:
+                session_end = session_start.replace(hour=0) + timedelta(days=1)
+            return label, int(session_start.timestamp() * 1000), int(session_end.timestamp() * 1000)
+    raise LiveDataIntegrityError(f"No live session block for UTC hour {moment.hour}")
+
+
 def _split_live_connection_status(connection_text: str) -> tuple[str, str]:
     text = " ".join(str(connection_text or "").replace("·", " ").split())
     lowered = text.lower()
@@ -13054,6 +13317,36 @@ def _split_live_connection_status(connection_text: str) -> tuple[str, str]:
     return ticker_status, flow_status
 
 
+def _format_session_top_block(session_top_snapshot: dict[str, object] | None) -> list[str]:
+    if not session_top_snapshot:
+        return []
+    label = str(session_top_snapshot.get("session_label") or "Топы")
+    items_raw = session_top_snapshot.get("items")
+    items = items_raw if isinstance(items_raw, list) else []
+    if items:
+        cells: list[str] = []
+        for item in items[:LIVE_SESSION_TOP_LIMIT]:
+            if not isinstance(item, dict):
+                continue
+            symbol = _compact_symbol(str(item.get("symbol") or ""))
+            growth = _finite_or_none(item.get("growth_fraction"))
+            if not symbol or growth is None:
+                continue
+            cells.append(f"{symbol} {_format_percent(growth, signed=False, precision=0)}")
+        if cells:
+            return ["", label, "    ".join(cells)]
+    reason = str(session_top_snapshot.get("reason") or "")
+    if reason == "no_positive_growth_since_session_baseline":
+        value = "нет роста"
+    elif reason == "ticker_snapshot_not_seen_for_current_session":
+        value = "нет данных"
+    elif reason == "no_usable_ticker_price_snapshots":
+        value = "нет цен"
+    else:
+        value = "нет данных"
+    return ["", label, value]
+
+
 def _format_live_heartbeat(
     *,
     runtime_seconds: float,
@@ -13075,6 +13368,7 @@ def _format_live_heartbeat(
     cold_status: str,
     cold_age: str,
     guard_status: str,
+    session_top_snapshot: dict[str, object] | None = None,
 ) -> str:
     del cycle_seconds, idle, real_orders, cold_age
     ticker_status, flow_status = _split_live_connection_status(connection_text)
@@ -13114,6 +13408,7 @@ def _format_live_heartbeat(
             _format_status_cell("Защита", guard_status),
         ),
     ]
+    rows.extend(_format_session_top_block(session_top_snapshot))
     return "\n" + "\n".join(rows)
 
 def _format_percent(value: float, *, signed: bool = False, precision: int = 1) -> str:

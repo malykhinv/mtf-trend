@@ -3980,3 +3980,47 @@ Risk:
 ```text
 Low-to-medium. Console/artifact/Telegram alert path only; no trading decisions change. During a network outage the code retries Telegram enqueue every 60 seconds, but TelegramDispatcher cooldown still prevents repeated successful sends with the same key.
 ```
+
+## 2026-05-15 - P237 proposed: live session top-growth status from ticker snapshots
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Show the operator current session top movers in the live heartbeat without spending extra REST/OHLCV budget or faking closed-hour top-growth artifacts.
+```
+
+Changes:
+
+```text
+- Tracks session top growth from the already-required ticker snapshots only.
+- Uses the first usable ticker price seen inside the current UTC session as the baseline; if live starts mid-session, the baseline is explicitly the first available live price, not a reconstructed/fallback session open.
+- Adds `top_growth/session_top_growth.csv` with one-minute evidence snapshots, including status/reason rows when no usable top exists.
+- Extends the human heartbeat with a final session block such as `Азия` / `ALCH 74%    MEW 48%    HBAR 42%`.
+- Leaves closed-hour `top_growth_index.csv` and `missed_pump_visibility.csv` semantics unchanged; those still require the standalone `run-anomaly-top-growth` command against closed 1h candles.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# launcher.py is absent in the uploaded ZIP; include it locally if your checkout has it.
+```
+
+Risk:
+
+```text
+Low-to-medium. Operator UI and artifacts only. The numbers are session-live ticker growth, not closed-hour OHLCV top-growth, and are labeled by source/status instead of being used as trading signals.
+```

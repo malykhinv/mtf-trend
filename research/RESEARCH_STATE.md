@@ -10,7 +10,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P236 live network error visibility and Telegram retry
+Last active patch: P237 live session top-growth status from ticker snapshots
 Updated: 2026-05-15
 ```
 
@@ -72,7 +72,7 @@ research_tools/hourly_levels.py
 4. The 2026-05-11 NVDA micro-live position is audit-invalid for edge/PnL: stale signal execution mixed signal close with later live order timing.
 5. P156 fixes the Linux `main.py` startup blocker by importing `ctypes.windll` only on Windows.
 6. Historical local artifacts may contain stale compiled files; they are ignored by git and should be deleted locally.
-7. Top-growth snapshots are now exported only by standalone `run-anomaly-top-growth`; live trading loop must not spend REST/API budget on top-growth side work.
+7. Closed-hour top-growth snapshots are exported only by standalone `run-anomaly-top-growth`; live trading loop must not spend REST/API budget on universe-wide closed-hour top-growth side work. P237 adds live session top-growth status from already-required ticker snapshots only, with explicit `session_top_growth.csv` evidence and no OHLCV/REST fallback.
 8. Active symbols whose latest closed levels candle was already scanned are now kept visible as `active_waiting_*` in batch artifacts and should not consume OHLCV scan slots until a new closed candle exists.
 9. Ticker radar is scheduling-only: it can add bounded extra watch scans, but cannot remove symbols from round-robin, cannot open trades, and cannot replace closed-kline flow evidence.
 10. Operator commands now live in root `COMMANDS.md`; the shared command baseline is 30 days via `DEFAULT_COMMANDS_BASE_DAYS`.

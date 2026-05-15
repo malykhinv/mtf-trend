@@ -1998,3 +1998,17 @@ Commit: UNKNOWN
 ```text
 Experiment: after a 30d P212 runner/fader prepump artifact is available, enable prepump_warm_watch_scoring in dry live using runner_fader_prepump_feature_separation.csv as the profile. Measure only scheduler impact: warm_watch_marked/updated/promoted ordering, later top_growth overlap, flow_radar false positives, and latency. Do not treat the score as an entry filter until walk-forward evidence shows stable separation outside the training period.
 ```
+
+## 2026-05-15 - P237 proposed live session top-growth status
+
+Input:
+
+```text
+The 5h live run created empty closed-hour top-growth/missed-pump files because live trading does not run standalone universe-wide top-growth collection.
+```
+
+Conclusion:
+
+```text
+Do not fill closed-hour top-growth artifacts with ticker-derived approximations. For operator awareness, track session top movers from live ticker snapshots with first-seen-in-session baselines and explicit source/status. For missed-pump audit, still run `run-anomaly-top-growth` against closed 1h candles and the live_events.csv from the run.
+```
