@@ -57,6 +57,89 @@ no hidden fallback for core evidence
 
 ---
 
+## 2026-05-15 — P219 live GWEI crash audit
+
+Input:
+
+```text
+Run artifact: .output/results/live_anomaly_runs/20260514_201044
+Command: .venv/Scripts/python.exe main.py run-anomaly-live --confirm-real-orders
+Observed stop: NameError: name 're' is not defined
+```
+
+Result:
+
+```text
+The run selected GWEI/USDT:USDT as runner_reclaim on 5m/30s after runner_flow and runner_oi_confirmed rejected.
+It reached the real-entry path and emitted danger_local_entry_position_guard_used, then crashed before order submission while building the deterministic entry client order id.
+Root cause: _live_client_order_id() used re.sub() but anomaly_micro_live.py did not import re.
+Telegram did not alert because live_internal_error used the async queue immediately before shutdown; no telegram_* event was recorded in live_events.csv.
+P219 imports re and uses synchronous Telegram delivery for fatal live_internal_error/live_data_integrity_error, with telegram_sync_send_failed artifact on delivery failure.
+```
+
+Next:
+
+```text
+Run compileall and a short live smoke. Expected: no re NameError on entry-client-id generation; any future fatal internal error produces a Telegram message or telegram_sync_send_failed artifact.
+```
+
+---
+
+## 2026-05-15 — Last-15-commit live correctness review
+
+Input:
+
+```text
+Scope: git log -15 from bb99a459..91765081 plus current local P219
+Focus: run-anomaly-live startup/preflight, WS ticker/aggTrade, warm-watch, cold coverage, cache, order placement, stop protection, Telegram/artifacts
+```
+
+Result:
+
+```text
+compileall passed and run-anomaly-live --help works.
+P219 fixed the observed GWEI pre-order NameError.
+One additional live-safety gap was found: if market entry submission was accepted but fill resolution raised before LivePosition/stop creation, live could exit without local position tracking or immediate reduce-only cleanup.
+P220 now tracks the symbol before entry submission and calls _close_unprotected_entry_exposure() on any entry order/fill exception.
+No PnL/edge conclusion is made from this review; it is an operational correctness audit only.
+```
+
+Next:
+
+```text
+Run a fake-exchange/synthetic entry-fill-failure smoke: create_market_order_with_fill raises after fetch_symbol_position_amount returns >0, and live must emit unprotected_entry_reduce_only_exit_filled or a hard unprotected_entry_* failure artifact.
+```
+
+---
+
+## 2026-05-15 — Live data/processing/threading/accelerator health review
+
+Input:
+
+```text
+Run artifact: .output/results/live_anomaly_runs/20260514_201044
+Scope: data source labels, OHLCV/aggTrade cache processing, thread boundaries, warm-watch/cold-coverage/context accelerators
+```
+
+Result:
+
+```text
+Data health was mostly explicit: subminute precise scans used WS aggTrade coverage with quote_volume, number_of_trades and taker_buy_quote_volume derived from exchange aggTrade rows; ticker radar used Binance all-ticker quoteVolume/trade-count deltas and does not synthesize quote volume from base volume.
+Run 20260514_201044 had 758 ws_aggtrade_frame_read events, all covered/connected with no missing WS coverage, and 1308 live_ohlcv_cache_read events; 17 cache reads still emitted explicit live_ohlcv_cache_gap instead of silent no-signal evidence.
+Processing health is partially limited by optional context throughput: symbol_context_snapshot was mostly partial/skipped under latency SLA, which produced temporary reject_prior_fast_fade_filter_unavailable for GWEI until a cache-only snapshot became available.
+Threading health: artifact writes are locked, WS sources use locks, and position monitors use direct exchange OHLCV rather than shared live OHLCV cache. No cache race was found on the monitor path.
+P221 was required because append_position had a real post-entry writer crash: scan-mode/guard fields were referenced from undefined writer locals and missing from the live ledger schema.
+Accelerators are directionally justified as scheduling/latency tools, not evidence substitutes: warm-watch and ticker radar cannot open trades directly; cold coverage is DANGER idle/audit work and was gated by WS health/latency; context snapshot remains optional but can delay category selection when missing.
+```
+
+Next:
+
+```text
+Run a short supervised WS-live smoke after P219-P221 and verify no post-entry crash: live_positions.csv must include scan-mode/guard fields, live_events.csv must show position_opened or explicit reject/unprotected_entry_* handling, and Telegram fatal path must be synchronous on any internal error.
+```
+
+---
+
 ## 2026-05-11 — NVDA micro-live execution audit
 
 Input:

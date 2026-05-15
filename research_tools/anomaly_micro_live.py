@@ -10,6 +10,7 @@ import json
 import math
 import os
 import queue
+import re
 import sys
 import threading
 import time
@@ -325,6 +326,9 @@ LIVE_LEDGER_COLUMNS = (
     "entry_order_submitted_at_ms",
     "entry_order_status",
     "stop_price",
+    "source_scan_mode",
+    "danger_cold_coverage_source",
+    "entry_position_guard_source",
     "tp1_price",
     "amount",
     "entry_filled_amount",
@@ -2006,6 +2010,9 @@ class LivePosition:
     entry_fill_timestamp_ms: int
     entry_order_submitted_at_ms: int
     entry_order_status: str
+    source_scan_mode: str
+    danger_cold_coverage_source: bool
+    entry_position_guard_source: str
     entry_filled_amount: float
     entry_cost_usdt: float | None
     entry_fee_usdt: float | None
@@ -2095,6 +2102,33 @@ class TelegramDispatcher:
 
     def send_sync(self, *, channel: str, text: str, reply_to_message_id: int | None = None) -> int | None:
         return self._send_message(channel=channel, text=text, reply_to_message_id=reply_to_message_id)
+
+    def send_critical_sync(
+        self,
+        *,
+        channel: str,
+        key: str,
+        text: str,
+        symbol: str = "__telegram__",
+        reply_to_message_id: int | None = None,
+    ) -> int | None:
+        try:
+            return self._send_message(channel=channel, text=text, reply_to_message_id=reply_to_message_id)
+        except Exception as exc:
+            self._logger(f"telegram: critical message not sent, reason: {exc}")
+            self._append_event(
+                "telegram_sync_send_failed",
+                symbol,
+                {
+                    "channel": channel,
+                    "key": key,
+                    "reply_to_message_id": reply_to_message_id or "",
+                    "error_type": type(exc).__name__,
+                    "error": str(exc)[:1000],
+                    "text_preview": text[:240],
+                },
+            )
+            return None
 
     def edit_sync(self, *, channel: str, message_id: int, text: str) -> int | None:
         return self._edit_message(channel=channel, message_id=message_id, text=text)
@@ -2442,13 +2476,9 @@ class LiveArtifactWriter:
                     "entry_order_submitted_at_ms": position.entry_order_submitted_at_ms,
                     "entry_order_status": position.entry_order_status,
                     "stop_price": position.stop_price,
-                "source_scan_mode": source_scan_mode,
-                "danger_cold_coverage_source": source_scan_mode == "precise_DANGER_cold_coverage",
-                "entry_position_guard_source": (
-                    DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE
-                    if self.config.danger_local_entry_position_guard_enabled
-                    else "pre_entry_exchange_position_fetch"
-                ),
+                    "source_scan_mode": position.source_scan_mode,
+                    "danger_cold_coverage_source": position.danger_cold_coverage_source,
+                    "entry_position_guard_source": position.entry_position_guard_source,
                     "tp1_price": position.tp1_price,
                     "amount": position.amount,
                     "entry_filled_amount": position.entry_filled_amount,
@@ -3655,7 +3685,7 @@ class AnomalyMicroLiveRunner:
             except LiveDataIntegrityError as exc:
                 self._flush_live_ohlcv_cache_if_due(force=True, reason="data_integrity_error")
                 self.logger(f"остановлено из-за ошибки целостности live-данных: {exc}")
-                self.telegram.send(
+                self.telegram.send_critical_sync(
                     channel="events",
                     key="live_data_integrity_error",
                     text=f"{SERVICE_WARNING_EMOJI} <b>Ошибка</b>\n\n{_telegram_code(str(exc)[:600])}",
@@ -3691,7 +3721,7 @@ class AnomalyMicroLiveRunner:
                     "__live__",
                     {"exception_type": type(exc).__name__, "exception_message": str(exc)[:1000]},
                 )
-                self.telegram.send(
+                self.telegram.send_critical_sync(
                     channel="events",
                     key="live_internal_error",
                     text=f"{SERVICE_WARNING_EMOJI} <b>Ошибка</b>\n\n{_telegram_code(type(exc).__name__ + ': ' + str(exc)[:500])}",
@@ -8265,13 +8295,23 @@ class AnomalyMicroLiveRunner:
                 signal.decision_timestamp_ms,
                 entry_order_submitted_at_ms,
             )
-            fill = self.exchange.create_market_order_with_fill(
-                signal.symbol,
-                "buy",
-                amount_requested,
-                reduce_only=False,
-                client_order_id=entry_client_order_id,
-            )
+            self._track_order_reconcile_symbol(signal.symbol, reason="entry_order_submitted")
+            try:
+                fill = self.exchange.create_market_order_with_fill(
+                    signal.symbol,
+                    "buy",
+                    amount_requested,
+                    reduce_only=False,
+                    client_order_id=entry_client_order_id,
+                )
+            except Exception as exc:
+                self._close_unprotected_entry_exposure(
+                    signal.symbol,
+                    amount=amount_requested,
+                    position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{entry_client_order_id}",
+                    reason=f"entry_order_or_fill_failed:{type(exc).__name__}",
+                )
+                raise
             self._track_order_reconcile_symbol(signal.symbol, reason="entry_order_filled")
             post_position_amount = float(self.exchange.fetch_symbol_position_amount(signal.symbol))
             if self.config.danger_local_entry_position_guard_enabled:
@@ -8413,6 +8453,13 @@ class AnomalyMicroLiveRunner:
                 entry_fill_timestamp_ms=int(fill.timestamp_ms),
                 entry_order_submitted_at_ms=entry_order_submitted_at_ms,
                 entry_order_status=fill.status,
+                source_scan_mode=source_scan_mode,
+                danger_cold_coverage_source=source_scan_mode == "precise_DANGER_cold_coverage",
+                entry_position_guard_source=(
+                    DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE
+                    if self.config.danger_local_entry_position_guard_enabled
+                    else "pre_entry_exchange_position_fetch"
+                ),
                 entry_filled_amount=float(fill.filled_amount),
                 entry_cost_usdt=fill.cost,
                 entry_fee_usdt=fill.fee_cost,

@@ -14,6 +14,9 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P209 | DANGER adaptive cold coverage controller | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-performance | Scale default/explicit precise cold coverage by WS health, scheduler heartbeat EWMA, active-waiting load and REST/cache pressure; hard-off for positions and active-due symbols. | `python -m compileall data/exchanges research_tools constants.py main.py` |
 | P213 | Warm-watch scheduler gate | APPLIED locally / UNKNOWN commit | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-scheduler | Insert warm-watch between cheap ticker/flow radar and precise scan; subscribe warm symbols to micro-cache but promote to precise only after continuing flow and non-chase/non-fade checks. | `python -m compileall data/exchanges research_tools cli constants.py main.py` |
 | P218 | Budget optional context and warm micro-cache | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance | Move symbol context snapshot maintenance after the critical scan path, SLA/budget it, use effective freshness based on universe throughput, and cap warm-watch aggTrade targets without capping active/radar. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-anomaly-live --help | grep -E "warm-watch-aggtrade|symbol-context-snapshot-max"` |
+| P219 | Fix live order-id NameError and fatal Telegram alert | APPLIED locally / UNKNOWN commit | `research_tools/anomaly_micro_live.py`, `research/*` | bugfix/live-reliability | Import `re` for deterministic live client order ids and send fatal live/internal-integrity errors synchronously to Telegram, recording `telegram_sync_send_failed` if delivery itself fails. | `python -m compileall research_tools/anomaly_micro_live.py cli constants.py main.py`; live smoke with one cycle or synthetic `_live_client_order_id` call. |
+| P220 | Protect unresolved entry-order failures | APPLIED locally / UNKNOWN commit | `research_tools/anomaly_micro_live.py`, `research/*` | bugfix/live-safety | Track the symbol before market entry submission and close any actual unprotected exchange exposure if entry order/fill resolution raises before a `LivePosition` and stop are created. | `python -m compileall research_tools/anomaly_micro_live.py cli constants.py main.py`; synthetic fill-resolution failure should emit `unprotected_entry_reduce_only_exit_filled`. |
+| P221 | Fix live ledger scan-mode fields | APPLIED locally / UNKNOWN commit | `research_tools/anomaly_micro_live.py`, `research/*` | bugfix/live-reliability | Store `source_scan_mode`, cold-coverage marker and entry-position guard source on `LivePosition` and include them in `live_positions.csv` schema instead of referencing undefined writer locals after an entry opens. | `python -m compileall research_tools/anomaly_micro_live.py cli constants.py main.py`; synthetic `LiveArtifactWriter.append_position()` smoke. |
 | P130 | Strict live fills and executable market entry | PROPOSED | `data/exchanges/*`, `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `cli/*`, `research/*` | bugfix | Stop executing stale live signals; require exchange fill fields; separate signal price from actual fill; compute live PnL/BE/TP from actual fill; make market backtest enter on execution candle. | `python -m compileall data/exchanges research_tools cli constants.py main.py` |
 | P131 | Live blocked-order Telegram alerts | PROPOSED | `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `research/*` | bugfix | Send Telegram event alerts when a selected live signal is blocked as stale/non-executable; make entry-price drift guard absolute in live and market backtest. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; synthetic stale/drift smoke. |
 | P137 | Repair 1h overhead level scanner wiring | PROPOSED | `research_tools/hourly_levels.py`, `cli/*`, `research/*` | diagnostics | Restore the non-empty scanner module and register `run-hourly-levels`; detect bounce-validated 1h overhead levels and export metrics/charts. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-hourly-levels --source-timeframe 5m --days 45`. |
@@ -35,6 +38,87 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 | P169 | Fix live cache candle boundary reads | PROPOSED | `data/storage/parquet_storage.py`, `research_tools/anomaly_micro_live.py`, `research/*` | bugfix/live-performance | Read only requested parquet windows, fetch subminute missing ranges through the full final candle, pass aggTrades endTime on paged requests, and exclude non-closed cached candles from live decision frames. | `python -m compileall data/storage/parquet_storage.py research_tools/anomaly_micro_live.py`; `python main.py run-anomaly-live --help`. |
 | P170 | Buffer live OHLCV cache writes | PROPOSED | `research_tools/anomaly_micro_live.py`, `cli/*`, `research/*` | live-performance/data-quality | Buffer live-fetched OHLCV rows in memory, flush parquet writes by interval/row cap or on shutdown/error, and emit buffered/flushed/failed artifacts instead of rewriting parquet during every fetch. | `python -m compileall data/exchanges data/storage research_tools cli constants.py main.py`; `python main.py run-anomaly-live --help`. |
 | P181 | Number live batches within full symbol cycles | PROPOSED | `research_tools/anomaly_micro_live.py`, `research/*` | live-operator-ux | Show operator status as `cycle batch/full-cycle` so batch ticks are not confused with full universe passes. | `python -m compileall data/exchanges research_tools cli constants.py main.py`; `python main.py run-anomaly-live --help`. |
+
+## P219 — Fix live order-id NameError and fatal Telegram alert
+
+Status: APPLIED locally / UNKNOWN commit
+Date: 2026-05-15
+Commit: UNKNOWN
+
+### Reason
+
+The real `run-anomaly-live --confirm-real-orders` run `20260514_201044` selected GWEI as `runner_reclaim` and reached the live entry path, then crashed before order submission with `NameError: name 're' is not defined` in `_live_client_order_id()`. The fatal error Telegram notification was queued asynchronously and the process shut down immediately, so no Telegram failure/success artifact appeared and the operator did not receive an alert.
+
+### Change
+
+- Add the missing `re` import used by deterministic live client order id generation.
+- Add `TelegramDispatcher.send_critical_sync()` for fatal live/data-integrity errors.
+- Record `telegram_sync_send_failed` if the synchronous critical Telegram send fails.
+- Use the synchronous path for `live_internal_error` and `live_data_integrity_error`.
+
+### Validation
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py cli constants.py main.py
+python main.py run-anomaly-live --help
+```
+
+### Risk
+
+Low. This is an import/runtime reliability fix and a fatal-error notification path. Signal filters, category selection, order sizing, stop/TP math, and position monitoring are unchanged.
+
+## P220 — Protect unresolved entry-order failures
+
+Status: APPLIED locally / UNKNOWN commit
+Date: 2026-05-15
+Commit: UNKNOWN
+
+### Reason
+
+Reviewing the last 15 live commits found a safety gap in the real entry path. If Binance accepted a market entry but `create_market_order_with_fill()` raised while resolving the fill, live had not yet created `LivePosition`, had not placed the initial stop, and had not tracked the symbol for forced reconcile. A generic internal-error exit could therefore leave real exposure outside the local position ledger.
+
+### Change
+
+- Track the symbol for order reconciliation before submitting the market entry.
+- Wrap entry order/fill resolution.
+- On any exception, call `_close_unprotected_entry_exposure()` with the requested entry amount and a deterministic unresolved entry id before re-raising.
+
+### Validation
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py cli constants.py main.py
+# synthetic: create_market_order_with_fill raises after exchange position appears -> reduce-only close is attempted
+```
+
+### Risk
+
+Low-to-medium. This only changes failure handling after an entry order/fill exception. In the normal filled path, sizing, signal selection, stop/TP math, and position monitoring are unchanged.
+
+## P221 — Fix live ledger scan-mode fields
+
+Status: APPLIED locally / UNKNOWN commit
+Date: 2026-05-15
+Commit: UNKNOWN
+
+### Reason
+
+The live health review found a second real entry-path crash after P219. `LiveArtifactWriter.append_position()` attempted to write `source_scan_mode`, `danger_cold_coverage_source`, and `entry_position_guard_source`, but those values were neither in `LIVE_LEDGER_COLUMNS` nor available as locals inside the writer. A successful entry that got past order id creation, fill validation, and stop creation could therefore fail while appending `live_positions.csv`.
+
+### Change
+
+- Add the three scan/guard diagnostic fields to the live ledger schema.
+- Persist those fields on `LivePosition` when the entry is opened.
+- Make `append_position()` read the diagnostics from `position` instead of undefined writer locals.
+
+### Validation
+
+```bash
+python -m compileall research_tools/anomaly_micro_live.py cli constants.py main.py
+```
+
+### Risk
+
+Low. This changes only live ledger diagnostics and prevents a post-entry writer crash. Order selection, sizing, fill validation, stop creation, TP and monitor logic are unchanged.
 
 ## P129 — Purge retired strategy history from active memory
 

@@ -79,6 +79,7 @@ Live execution contract:
 signal_entry_price/time != actual_fill_price/time
 actual fill must come from exchange order/trade payloads
 no candle/ticker-derived synthetic fill for ledger/PnL
+live ledger must write scan/guard provenance (`source_scan_mode`, `danger_cold_coverage_source`, `entry_position_guard_source`) from the opened position object
 no stale signal order after freshness window
 no order if TP1 is already reached or RR collapsed at live price
 BE/TP/PnL are computed from actual fill, not signal close
@@ -329,9 +330,12 @@ Live audit truth must not depend on console output or Telegram delivery. Importa
 ```text
 network_degraded / network_recovered
 telegram_async_send_failed
+telegram_sync_send_failed
 telegram_photo_send_failed
 telegram_open_chart_failed / telegram_open_chart_missing_id / telegram_open_text_fallback / telegram_open_text_missing_id
 telegram_close_photo_sent / telegram_close_photo_failed / telegram_close_photo_missing_id / telegram_close_text_fallback
+unprotected_entry_position_read_failed / unprotected_entry_position_amount_invalid / unprotected_entry_no_exchange_exposure
+unprotected_entry_reduce_only_exit_failed / unprotected_entry_reduce_only_exit_filled
 reject_stop_cooldown
 ```
 

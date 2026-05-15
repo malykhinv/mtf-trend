@@ -9,9 +9,9 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed
-Last active patch: P218 budget optional context and warm micro-cache
-Updated: 2026-05-14
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit
+Last active patch: P221 live ledger scan-mode field fix
+Updated: 2026-05-15
 ```
 
 The project direction is anomaly-first: anomaly nature/category research, anomaly continuation backtests, and strict REST-only micro-live validation.
@@ -92,19 +92,22 @@ research_tools/hourly_levels.py
 24. P190 proposes idempotent live order placement with deterministic client order ids and pre-stop exposure cleanup.
 25. P192 proposes live account-mode preflight plus close-only startup exchange-position cleanup: unsupported hedge mode blocks startup, and any pre-existing live-universe exchange position is reduce-only closed and verified flat before the live loop.
 26. P205 proposes live/backtest category parity cleanup: backtest category attribution now follows live TF priority with discovery fallback for artifacts, live does not add discovery as tradable category, and live prior-fast-fade 72h context uses levels-timeframe historical OHLCV instead of unavailable subminute entry cache.
+27. P219 fixes a real live crash from run `20260514_201044`: `_live_client_order_id()` used `re` without importing it, so the first real GWEI entry attempt stopped before order submission. Fatal internal/data-integrity errors now use synchronous Telegram delivery and emit `telegram_sync_send_failed` if Telegram itself fails.
+28. P220 fixes a live safety gap found during the last-15-commit review: an exception from entry order/fill resolution before `LivePosition` creation now tracks the symbol and immediately attempts reduce-only cleanup of any real unprotected exposure.
+29. P221 fixes a second post-entry runtime blocker found in the live health review: `append_position()` no longer references undefined scan-mode/guard locals and the live ledger schema now includes those diagnostics.
 
 ---
 
 ## 6. Next best step
 
-Apply P189/P190/P192 on top of the uploaded ZIP, then run a short WS-live smoke and inspect `live_events.csv`:
+After P219/P220/P221, run a short WS-live smoke and inspect `live_events.csv` plus `live_positions.csv`:
 
 ```bash
-python -m compileall data/exchanges research_tools cli constants.py main.py
+python -m compileall research_tools/anomaly_micro_live.py cli constants.py main.py
 python main.py run-anomaly-live --help
 ```
 
-Expected readout: startup still refuses blind ticker radar from P185; `live_cycle_summary.scheduler_cycle_seconds` is the decision heartbeat; ticker fields show source/status/ok/missing/promoted counts; all-missing required ticker radar becomes `network_degraded`; startup emits `live_account_preflight_ok`; pre-existing exchange positions emit `startup_position_closed` and must be verified flat before ticker startup; precise active/radar symbols emit `aggtrade_rest_gap_prefetch` when S30/S15/S5 WS gaps exist, then later frame reads should mostly be WS/cache hits; oversized gaps still become `coverage_pending`. If diagnostic cold coverage is needed, set `--inactive-scan-slots-per-cycle` explicitly.
+Expected readout: `_live_client_order_id()` no longer raises `NameError`; if entry order/fill resolution fails after exchange exposure appears, `unprotected_entry_reduce_only_exit_*` artifacts show cleanup attempt/result; if an entry opens, `live_positions.csv` writes `source_scan_mode`, `danger_cold_coverage_source`, and `entry_position_guard_source`; if a future programming error occurs, `live_internal_error` is recorded and the Telegram error path is synchronous. If Telegram delivery fails, `telegram_sync_send_failed` must appear in artifacts.
 
 Latest next step after P167:
 
