@@ -8924,7 +8924,18 @@ class AnomalyMicroLiveRunner:
         failed_symbol_timeframes = 0
         fetched_rows_total = 0
         failure_reasons: dict[str, int] = {}
+        symbols_total = int(len(symbols))
         for index, symbol in enumerate(symbols, start=1):
+            completed_symbols = int(index - 1)
+            elapsed_so_far = max(0.0, float(time.monotonic() - started_at))
+            eta_seconds: float | None = None
+            if completed_symbols > 0:
+                seconds_per_symbol = elapsed_so_far / float(completed_symbols)
+                eta_seconds = max(0.0, seconds_per_symbol * float(symbols_total - completed_symbols))
+            eta_text = _format_live_runtime(float(eta_seconds)) if eta_seconds is not None else "-"
+            self._status_logger.status(
+                f"контекст 72ч · кеш {index}/{symbols_total} · {_compact_symbol(symbol)} · ETA {eta_text}"
+            )
             for timeframe in context_timeframes:
                 context_start_ms, _history_start_ms, decision_ts = windows[timeframe.value]
                 try:
@@ -8950,11 +8961,6 @@ class AnomalyMicroLiveRunner:
                             "decision_timestamp_ms": int(decision_ts),
                         },
                     )
-            if index == 1 or index % 50 == 0 or index == len(symbols):
-                self.logger(
-                    f"контекст 72ч · кеш {index}/{len(symbols)} · "
-                    f"ok {fetched_symbol_timeframes} · ошибки {failed_symbol_timeframes}"
-                )
         flushed_rows = self._flush_live_ohlcv_cache_if_due(force=True, reason="symbol_context_startup_backfill")
         snapshot_ok = 0
         snapshot_failed = 0

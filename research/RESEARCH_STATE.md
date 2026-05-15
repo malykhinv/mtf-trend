@@ -1405,3 +1405,10 @@ Review after P245-P248 found one artifact-accounting issue in P247: active depen
 
 Current commit: UNKNOWN.
 Next validation: in the next live smoke, check that repeated dependency waits increase `dependency_retry_cooldown_skipped_count` / `dependency_retry_cooldown_skipped_cycle` rather than hiding under `skipped_not_due_count`.
+
+## 2026-05-15 — P250 proposed
+
+P250 changes only the operator display for default-on 72h startup context backfill. Instead of logging `контекст 72ч · кеш 1/535 · ok ... · ошибки ...` and then staying visually quiet until every 50 symbols, live now refreshes the status line for every symbol with the current symbol and ETA. Fetch failures still go to `live_events.csv`; the status line no longer shows misleading ok/error counters.
+
+Current commit: UNKNOWN.
+Next validation: start live with a cold/partial cache and verify the single startup line updates on every symbol as `контекст 72ч · кеш N/total · SYMBOL · ETA ...`.

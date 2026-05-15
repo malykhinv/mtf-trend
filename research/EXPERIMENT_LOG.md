@@ -2159,3 +2159,7 @@ skipped_not_due_count no longer absorbs dependency cooldown waits
 ```
 
 This does not change trading behavior; it only fixes diagnostic attribution from the P247 review.
+
+## 2026-05-15 — P250 startup backfill visibility smoke
+
+After applying P250, run live from a cold or partial OHLCV cache and verify that startup context backfill does not appear stuck: the console should rewrite one status line for every symbol with current symbol and ETA. This is UI/observability only; success criteria are status freshness and unchanged `symbol_context_startup_backfill_completed` artifact fields.

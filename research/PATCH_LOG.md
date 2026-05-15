@@ -4453,3 +4453,42 @@ Risk:
 ```text
 Low. The patch changes only per-symbol summary classification for an already-skipped cooldown scan. It does not change candidate selection, dependency retry timing, stale guards, or execution logic.
 ```
+
+## P250 - proposed - startup context backfill ETA status
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make the default-on 72h startup context backfill observable while it is running. The operator status line should refresh for every symbol with ETA instead of appearing stuck on the first progress message, and the status must not show misleading ok/error counters.
+```
+
+Changes:
+
+```text
+- Replaces the every-50-symbol startup backfill logger line with an inline status update for every symbol.
+- Shows current symbol and ETA based on completed-symbol throughput.
+- Removes ok/error counters from the operator status line; detailed fetch failures remain in live_events.csv and completion artifacts.
+- Adds no CLI flags and no trading-logic changes.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "startup-backfill-eta|context-backfill-progress"  # expected: no output
+```
+
+Risk:
+
+```text
+Low. Console/status output only. Backfill coverage, fetch behavior, failure events, cache flushing, snapshot computation, and execution guards are unchanged.
+```
