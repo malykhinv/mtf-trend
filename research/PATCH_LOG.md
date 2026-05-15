@@ -4159,3 +4159,49 @@ Risk:
 ```text
 Medium. This adds exchange OHLCV reads during live, but bounded incrementally by symbols_per_cycle/max_cycle_seconds and separated from trading decisions. It does not change entry filters or order logic.
 ```
+
+## 2026-05-15 - P243 proposed: make live top-growth always-on and latency-gated
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+cli/parser.py
+cli/commands.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Remove operator-facing live top-growth toggles/knobs and make the closed-hour audit run only under the existing live latency gate, with fixed conservative quotas when the live loop is not clearly idle.
+```
+
+Changes:
+
+```text
+- Removes the new `--live-top-growth-*` CLI flags and command plumbing from P242.
+- Keeps live closed-hour top-growth audit default-on with internal constants instead of runtime operator switches.
+- Skips top-growth processing when latency SLA blocks optional work.
+- Uses the normal quota only when latency SLA is OK; otherwise uses a conservative quota for low-evidence/insufficient-sample states.
+- Keeps closed-hour audit source strict: exchange 1h candles only, no ticker/session fallback.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "live-top-growth"  # expected: no output
+```
+
+Risk:
+
+```text
+Low-to-medium. This preserves P242 artifact visibility but prevents the audit from competing with delayed signal scans during latency pressure. It also removes new operator knobs, so quota changes now require code review instead of ad-hoc CLI changes.
+```

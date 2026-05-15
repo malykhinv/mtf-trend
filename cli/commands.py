@@ -1566,14 +1566,6 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             symbol_context_snapshot_max_gap_candles=int(
                 getattr(args, "symbol_context_snapshot_max_gap_candles", 2)
             ),
-            live_top_growth_enabled=_to_bool_flag(getattr(args, "live_top_growth_enabled", True), default=True),
-            live_top_growth_min_return_pct=float(getattr(args, "live_top_growth_min_return_pct", 0.10)),
-            live_top_growth_limit=int(getattr(args, "live_top_growth_limit", 5)),
-            live_top_growth_symbols_per_cycle=int(getattr(args, "live_top_growth_symbols_per_cycle", 8)),
-            live_top_growth_max_cycle_seconds=float(getattr(args, "live_top_growth_max_cycle_seconds", 1.5)),
-            live_top_growth_fetch_spacing_seconds=float(
-                getattr(args, "live_top_growth_fetch_spacing_seconds", 0.0)
-            ),
             max_signal_age_ms=int(getattr(args, "max_signal_age_ms", 60_000)),
             max_entry_price_drift_pct=float(getattr(args, "max_entry_price_drift_pct", 0.003)),
             min_executable_rr_to_signal_tp1=float(getattr(args, "min_executable_rr_to_signal_tp1", 0.75)),

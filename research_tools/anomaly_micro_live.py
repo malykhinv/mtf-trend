@@ -187,9 +187,10 @@ LIVE_SESSION_TOP_LIMIT = 3
 LIVE_SESSION_TOP_ARTIFACT_INTERVAL_MS = 60_000
 DEFAULT_LIVE_TOP_GROWTH_MIN_RETURN_PCT = 0.10
 DEFAULT_LIVE_TOP_GROWTH_LIMIT = 5
-DEFAULT_LIVE_TOP_GROWTH_SYMBOLS_PER_CYCLE = 8
-DEFAULT_LIVE_TOP_GROWTH_MAX_CYCLE_SECONDS = 1.5
-DEFAULT_LIVE_TOP_GROWTH_FETCH_SPACING_SECONDS = 0.0
+DEFAULT_LIVE_TOP_GROWTH_IDLE_SYMBOLS_PER_CYCLE = 8
+DEFAULT_LIVE_TOP_GROWTH_IDLE_MAX_CYCLE_SECONDS = 1.5
+DEFAULT_LIVE_TOP_GROWTH_CONSERVATIVE_SYMBOLS_PER_CYCLE = 2
+DEFAULT_LIVE_TOP_GROWTH_CONSERVATIVE_MAX_CYCLE_SECONDS = 0.5
 LIVE_SESSION_BLOCKS_UTC = (
     ("Азия", 0, 8),
     ("Европа", 8, 16),
@@ -1826,12 +1827,6 @@ class LiveAnomalyConfig:
     symbol_context_snapshot_min_coverage_ratio: float = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MIN_COVERAGE_RATIO
     symbol_context_snapshot_max_gap_candles: int = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_GAP_CANDLES
     symbol_context_priority_ttl_ms: int = DEFAULT_SYMBOL_CONTEXT_PRIORITY_TTL_MS
-    live_top_growth_enabled: bool = True
-    live_top_growth_min_return_pct: float = DEFAULT_LIVE_TOP_GROWTH_MIN_RETURN_PCT
-    live_top_growth_limit: int = DEFAULT_LIVE_TOP_GROWTH_LIMIT
-    live_top_growth_symbols_per_cycle: int = DEFAULT_LIVE_TOP_GROWTH_SYMBOLS_PER_CYCLE
-    live_top_growth_max_cycle_seconds: float = DEFAULT_LIVE_TOP_GROWTH_MAX_CYCLE_SECONDS
-    live_top_growth_fetch_spacing_seconds: float = DEFAULT_LIVE_TOP_GROWTH_FETCH_SPACING_SECONDS
     danger_ticker_flow_radar_enabled: bool = True
     danger_ticker_flow_radar_min_quote_volume_delta_usdt: float = DANGER_TICKER_FLOW_RADAR_MIN_QUOTE_VOLUME_DELTA_USDT
     danger_ticker_flow_radar_min_trade_count_delta: int = DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA
@@ -3830,35 +3825,6 @@ def _previous_closed_hour_start_ms(now_ms: int) -> int:
     return ((now_ms // HOUR_MS) - 1) * HOUR_MS
 
 
-def _validate_live_top_growth_config_values(config: LiveAnomalyConfig) -> None:
-    _require_finite_config_number(
-        "live_top_growth_min_return_pct",
-        config.live_top_growth_min_return_pct,
-        min_value=0.0,
-        allow_equal_min=False,
-    )
-    if int(config.live_top_growth_limit) < 1:
-        raise LiveStartupError(
-            f"Некорректный live top-growth config: limit должен быть >= 1, получено {config.live_top_growth_limit!r}"
-        )
-    if int(config.live_top_growth_symbols_per_cycle) < 1:
-        raise LiveStartupError(
-            "Некорректный live top-growth config: symbols_per_cycle должен быть >= 1, "
-            f"получено {config.live_top_growth_symbols_per_cycle!r}"
-        )
-    _require_finite_config_number(
-        "live_top_growth_max_cycle_seconds",
-        config.live_top_growth_max_cycle_seconds,
-        min_value=0.0,
-        allow_equal_min=True,
-    )
-    _require_finite_config_number(
-        "live_top_growth_fetch_spacing_seconds",
-        config.live_top_growth_fetch_spacing_seconds,
-        min_value=0.0,
-        allow_equal_min=True,
-    )
-
 
 def _validate_top_growth_config_values(config: TopGrowthSnapshotConfig) -> None:
     if config.limit < 1:
@@ -4167,13 +4133,13 @@ class AnomalyMicroLiveRunner:
                 "symbol_context_priority_ttl_ms": int(self.config.symbol_context_priority_ttl_ms),
                 "symbol_context_priority_policy": "open_active_retryable_dependency_radar_warm_then_round_robin",
                 "symbol_context_snapshot_file": self.artifacts.symbol_context_snapshot_path.name,
-                "live_top_growth_enabled": bool(self.config.live_top_growth_enabled),
-                "live_top_growth_policy": "incremental_closed_1h_exchange_candles_same_run_visibility_no_ticker_fallback",
-                "live_top_growth_min_return_pct": float(self.config.live_top_growth_min_return_pct),
-                "live_top_growth_limit": int(self.config.live_top_growth_limit),
-                "live_top_growth_symbols_per_cycle": int(self.config.live_top_growth_symbols_per_cycle),
-                "live_top_growth_max_cycle_seconds": float(self.config.live_top_growth_max_cycle_seconds),
-                "live_top_growth_fetch_spacing_seconds": float(self.config.live_top_growth_fetch_spacing_seconds),
+                "live_top_growth_policy": "always_on_latency_gated_incremental_closed_1h_exchange_candles_same_run_visibility_no_ticker_fallback",
+                "live_top_growth_min_return_pct": float(DEFAULT_LIVE_TOP_GROWTH_MIN_RETURN_PCT),
+                "live_top_growth_limit": int(DEFAULT_LIVE_TOP_GROWTH_LIMIT),
+                "live_top_growth_idle_symbols_per_cycle": int(DEFAULT_LIVE_TOP_GROWTH_IDLE_SYMBOLS_PER_CYCLE),
+                "live_top_growth_idle_max_cycle_seconds": float(DEFAULT_LIVE_TOP_GROWTH_IDLE_MAX_CYCLE_SECONDS),
+                "live_top_growth_conservative_symbols_per_cycle": int(DEFAULT_LIVE_TOP_GROWTH_CONSERVATIVE_SYMBOLS_PER_CYCLE),
+                "live_top_growth_conservative_max_cycle_seconds": float(DEFAULT_LIVE_TOP_GROWTH_CONSERVATIVE_MAX_CYCLE_SECONDS),
                 "live_top_growth_visibility_events_csv": str(self.artifacts.events_path),
                 "danger_micro_cache_policy": "wider_ws_aggtrade_buffer_for_active_warm_watch_radar_and_current_cold_only_no_full_universe_subscription",
                 "symbol_batch_size_role": "legacy inactive scan cap, not WS market discovery",
@@ -4237,7 +4203,7 @@ class AnomalyMicroLiveRunner:
                 )
                 context_snapshot_seconds = 0.0
                 top_growth_stats = LiveTopGrowthAuditCycleStats(
-                    enabled=bool(self.config.live_top_growth_enabled),
+                    enabled=True,
                     status="not_attempted",
                     reason="critical_scan_path_pending",
                 )
@@ -4339,7 +4305,6 @@ class AnomalyMicroLiveRunner:
                         "symbol_context_snapshot_effective_fresh_ms": int(context_snapshot_stats.effective_fresh_ms),
                         "symbol_context_snapshot_file": context_snapshot_stats.output_file,
                         "live_top_growth_seconds": round(top_growth_seconds, 3),
-                        "live_top_growth_enabled": bool(top_growth_stats.enabled),
                         "live_top_growth_status": top_growth_stats.status,
                         "live_top_growth_reason": top_growth_stats.reason,
                         "live_top_growth_period_start_ms": top_growth_stats.period_start_ms or "",
@@ -7033,10 +6998,20 @@ class AnomalyMicroLiveRunner:
         return waiting
 
     def _maybe_process_live_top_growth_audit(self, symbols: list[str]) -> LiveTopGrowthAuditCycleStats:
-        if not self.config.live_top_growth_enabled:
-            return LiveTopGrowthAuditCycleStats(enabled=False, status="disabled", reason="disabled_by_config")
-        _validate_live_top_growth_config_values(self.config)
         now_ms = int(time.time() * 1000)
+        latency_sla = self._current_latency_sla_backlog_status(now_ms=now_ms)
+        if not latency_sla.optional_scans_allowed:
+            return LiveTopGrowthAuditCycleStats(
+                enabled=True,
+                status="skipped_latency_sla",
+                reason=latency_sla.reason or LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON,
+            )
+        if latency_sla.status == "ok":
+            max_symbols = int(DEFAULT_LIVE_TOP_GROWTH_IDLE_SYMBOLS_PER_CYCLE)
+            max_seconds = float(DEFAULT_LIVE_TOP_GROWTH_IDLE_MAX_CYCLE_SECONDS)
+        else:
+            max_symbols = int(DEFAULT_LIVE_TOP_GROWTH_CONSERVATIVE_SYMBOLS_PER_CYCLE)
+            max_seconds = float(DEFAULT_LIVE_TOP_GROWTH_CONSERVATIVE_MAX_CYCLE_SECONDS)
         if self._live_top_growth_task is None:
             period_start_ms = self._next_live_top_growth_period_start_ms(now_ms=now_ms)
             if period_start_ms is None:
@@ -7058,8 +7033,10 @@ class AnomalyMicroLiveRunner:
                     "period_start_ms": int(period_start_ms),
                     "period_end_ms": int(period_end_ms),
                     "symbols_total": len(task_symbols),
-                    "threshold_pct": float(self.config.live_top_growth_min_return_pct) * 100.0,
-                    "limit": int(self.config.live_top_growth_limit),
+                    "threshold_pct": float(DEFAULT_LIVE_TOP_GROWTH_MIN_RETURN_PCT) * 100.0,
+                    "limit": int(DEFAULT_LIVE_TOP_GROWTH_LIMIT),
+                    "latency_sla_status": latency_sla.status,
+                    "latency_sla_reason": latency_sla.reason,
                     "source": "live_incremental_closed_1h_exchange_candle",
                     "visibility_events_csv": str(self.artifacts.events_path),
                 },
@@ -7067,9 +7044,8 @@ class AnomalyMicroLiveRunner:
         task = self._live_top_growth_task
         started = time.monotonic()
         processed = 0
-        max_symbols = max(1, int(self.config.live_top_growth_symbols_per_cycle))
-        max_seconds = max(0.0, float(self.config.live_top_growth_max_cycle_seconds))
-        spacing = float(self.config.live_top_growth_fetch_spacing_seconds)
+        max_symbols = max(1, int(max_symbols))
+        max_seconds = max(0.0, float(max_seconds))
         while task.cursor < len(task.symbols) and processed < max_symbols:
             if processed > 0 and max_seconds > 0.0 and time.monotonic() - started >= max_seconds:
                 break
@@ -7085,13 +7061,11 @@ class AnomalyMicroLiveRunner:
             task.status_rows.append(status_row)
             candidate = _top_growth_candidate_from_status_row(
                 status_row,
-                threshold_fraction=float(self.config.live_top_growth_min_return_pct),
+                threshold_fraction=float(DEFAULT_LIVE_TOP_GROWTH_MIN_RETURN_PCT),
             )
             if candidate is not None:
                 task.candidates.append(candidate)
             processed += 1
-            if math.isfinite(spacing) and spacing > 0.0 and task.cursor < len(task.symbols):
-                time.sleep(spacing)
         remaining = len(task.symbols) - task.cursor
         cycle_seconds = time.monotonic() - started
         if remaining > 0:
@@ -7107,7 +7081,7 @@ class AnomalyMicroLiveRunner:
                 top_count=len(task.candidates),
                 cycle_seconds=cycle_seconds,
             )
-        top_rows = _rank_top_growth_candidates(task.candidates, limit=int(self.config.live_top_growth_limit))
+        top_rows = _rank_top_growth_candidates(task.candidates, limit=int(DEFAULT_LIVE_TOP_GROWTH_LIMIT))
         visibility_rows = _build_missed_pump_visibility_rows(
             top_rows=top_rows,
             period_start_ms=task.period_start_ms,
@@ -7122,8 +7096,8 @@ class AnomalyMicroLiveRunner:
             status_rows=task.status_rows,
             visibility_rows=visibility_rows,
             symbols_total=len(task.symbols),
-            threshold_pct=float(self.config.live_top_growth_min_return_pct) * 100.0,
-            limit=int(self.config.live_top_growth_limit),
+            threshold_pct=float(DEFAULT_LIVE_TOP_GROWTH_MIN_RETURN_PCT) * 100.0,
+            limit=int(DEFAULT_LIVE_TOP_GROWTH_LIMIT),
         )
         ok_count = sum(1 for row in task.status_rows if row.get("status") == "ok")
         failed_count = len(task.status_rows) - ok_count
@@ -12891,8 +12865,6 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "symbol_context_snapshot_symbols_per_cycle": (config.symbol_context_snapshot_symbols_per_cycle, 1),
         "symbol_context_snapshot_fresh_ms": (config.symbol_context_snapshot_fresh_ms, 1),
         "symbol_context_snapshot_max_gap_candles": (config.symbol_context_snapshot_max_gap_candles, 0),
-        "live_top_growth_limit": (config.live_top_growth_limit, 1),
-        "live_top_growth_symbols_per_cycle": (config.live_top_growth_symbols_per_cycle, 1),
         "latency_sla_min_due_samples": (config.latency_sla_min_due_samples, 1),
         "live_ws_ticker_stale_ms": (config.live_ws_ticker_stale_ms, 1),
         "live_ws_aggtrade_stale_ms": (config.live_ws_aggtrade_stale_ms, 1),
@@ -12951,8 +12923,6 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
             "Некорректный live config: live_ohlcv_cache_flush_max_symbol_timeframes должен быть целым >= 1 или None, "
             f"получено {config.live_ohlcv_cache_flush_max_symbol_timeframes!r}"
         )
-    _validate_live_top_growth_config_values(config)
-
     if _live_config_has_subminute_entry_pairs(config):
         if not config.ticker_radar_enabled:
             raise LiveStartupError(

@@ -1348,3 +1348,10 @@ Live closed-hour top-growth/missed-pump visibility is no longer only a standalon
 
 Current commit: UNKNOWN.
 Next validation: run live across at least one UTC hour close; verify `top_growth_index.csv` gets a row, `top_growth_status_*.csv` contains all live-universe symbols, and `missed_pump_visibility*.csv` is populated when top movers cross the threshold.
+
+## 2026-05-15 — P243 proposed
+
+P242 needed one correction before live smoke: closed-hour top-growth should not add new CLI flags or run during latency pressure. P243 makes the audit always-on, fixed-policy and latency-gated: no `--live-top-growth-*` options, no ticker fallback, no processing while optional scans are blocked by SLA.
+
+Current commit: UNKNOWN.
+Next validation: run live across an hour close and verify `live_cycle_summary.live_top_growth_status=skipped_latency_sla` during pressure, then `processing/completed` only when optional work is allowed.

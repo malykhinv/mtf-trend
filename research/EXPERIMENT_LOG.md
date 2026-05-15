@@ -2057,3 +2057,17 @@ top_growth/missed_pump_visibility_YYYYMMDD_HH0000_UTC.csv uses the same run live
 ```
 
 Guardrail: do not use session_top_growth.csv as a missed-pump audit source; it is operator UI from ticker snapshots only.
+
+## 2026-05-15 — P243 live top-growth guardrail validation
+
+Goal: confirm closed-hour top-growth audit gives missed-pump visibility without becoming a hidden live-load source.
+
+Expected evidence:
+
+```text
+`python main.py run-anomaly-live --help` has no `live-top-growth` flags
+live_cycle_summary shows `skipped_latency_sla` instead of processing when latency SLA gates optional work
+when SLA is OK, live_top_growth processes bounded chunks and eventually writes top/status/visibility files
+```
+
+Do not tune top-growth thresholds from CLI during live. Treat changes to threshold/limit/quota as code-reviewed policy changes.
