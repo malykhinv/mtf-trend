@@ -2119,3 +2119,20 @@ delayed replay should not queue retryable dependency cases as final all_categori
 ```
 
 Compare against closed-hour top-growth/missed-pump artifacts before loosening any execution guard.
+
+
+## 2026-05-15 — P247 dependency retry cooldown validation
+
+Goal: verify that retryable data-dependency blocks stop creating repeated precise-scan load while still remaining auditable and bounded by stale timeout.
+
+Expected evidence:
+
+```text
+signal_scan_dependency_retry_scheduled appears after retryable dependency blocks
+dependency_retry_cooldown_active_count is visible in live_cycle_summary
+dependency_retry_cooldown_skipped_cycle increments under repeated dependency waits
+candidate_expired_dependency_timeout appears only when dependency stayed unavailable until stale timeout
+latency_sla_status=breached and warm_watch_precise_deferred_latency_sla decrease versus the previous overloaded run
+```
+
+Guardrail: do not convert unavailable dependencies into pass-by-default. If dependency timeouts dominate, fix the dependency producer/cache coverage; do not weaken execution safety.

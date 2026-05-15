@@ -4332,3 +4332,46 @@ Risk:
 ```text
 Medium. This intentionally increases discovery sensitivity and may create more selected candidates. It does not loosen stale/drift/RR/actual-risk/order safety. New live validation must compare category_selected, signal_scan_retryable_dependency_blocked, execution rejects, and closed-hour missed-pump visibility before any further parameter changes.
 ```
+
+
+## P247 - proposed - dependency retry cooldown
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Prevent retryable data-dependency blocks from immediately re-entering precise scan every cycle. A missing context/taker/mark/OI dependency should wait briefly for the dependency updater or expire by the existing stale guard, not create a self-sustaining backlog.
+```
+
+Changes:
+
+```text
+- Adds an internal retry cooldown for retryable dependency blocks, with no new CLI flags.
+- Schedules retryable dependency cases for a short cooldown bounded by the entry timeframe and stale timeout.
+- Skips active cooldowns in due-scan latency calculations so intentional dependency waits do not breach latency SLA.
+- Prioritizes cooldown symbols in rolling symbol_context_snapshot refresh.
+- Emits signal_scan_dependency_retry_scheduled and candidate_expired_dependency_timeout artifacts.
+- Adds dependency_retry_cooldown_* counters to live_cycle_summary and signal_symbol_scan_summary.
+- Keeps pass-by-default forbidden: dependency unavailable still blocks entry until it becomes checkable or the signal expires.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "dependency-retry|retry-cooldown|dependency-cooldown"  # expected: no output
+```
+
+Risk:
+
+```text
+Medium-low. Retryable dependency candidates are intentionally not rescanned every cycle, which reduces load but can delay a newly ready dependency by up to the internal cooldown. Stale timeout still prevents late entries, and artifacts show scheduled retries plus dependency timeouts.
+```

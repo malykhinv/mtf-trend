@@ -1381,3 +1381,12 @@ Unavailable taker-buy, mark-basis, and OI context are no longer final category r
 
 Current commit: UNKNOWN.
 Next validation: run a short live smoke and inspect that category_rejected is dominated by real market reasons, while `signal_scan_retryable_dependency_blocked` carries data-context issues without consuming decisions.
+
+
+## 2026-05-15 — P247 proposed
+
+P247 adds dependency retry cooldown on top of P245/P246. Retryable data-dependency blocks no longer re-enter precise scan every cycle while waiting for context/taker/mark/OI evidence. Cooldown symbols are prioritized by the context snapshot refresher, due-scan latency ignores intentional cooldown waits, and stale timeout emits `candidate_expired_dependency_timeout` instead of silently looping.
+
+No execution guards are loosened. No new CLI flags are introduced. Current commit: UNKNOWN.
+
+Next validation: run a short live smoke and inspect `signal_scan_dependency_retry_scheduled`, `candidate_expired_dependency_timeout`, `dependency_retry_cooldown_*`, `signal_scan_retryable_dependency_blocked`, `latency_sla_status`, and `warm_watch_precise_deferred_latency_sla`.

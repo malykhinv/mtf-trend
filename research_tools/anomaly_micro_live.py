@@ -105,6 +105,8 @@ ADAPTIVE_PRECISE_BUDGET_BREACHED_RADAR_SLOTS = 1
 ADAPTIVE_PRECISE_BUDGET_PRESSURE_RADAR_SLOTS = 2
 ADAPTIVE_PRECISE_BUDGET_ACTIVE_RADAR_SLOTS = 2
 ADAPTIVE_PRECISE_BUDGET_SLOW_CYCLE_RADAR_SLOTS = 3
+DEPENDENCY_RETRY_MIN_COOLDOWN_MS = 10_000
+DEPENDENCY_RETRY_MAX_COOLDOWN_MS = 30_000
 PREPUMP_WARM_WATCH_SCORING_CONTRACT = "prepump_warm_watch_scoring_v1_spot_feature_separation_midpoint"
 DEFAULT_PREPUMP_WARM_WATCH_MIN_ABS_STANDARDIZED_DIFF = 0.75
 DEFAULT_PREPUMP_WARM_WATCH_MIN_RUNNER_ROWS = 10
@@ -160,6 +162,8 @@ VISIBILITY_PRECISE_SCAN_EVENTS = frozenset(
         "reject_missing_signal_columns",
         "reject_setup_too_early",
         "signal_scan_retryable_dependency_blocked",
+        "signal_scan_dependency_retry_scheduled",
+        "candidate_expired_dependency_timeout",
         "category_selected",
         "category_rejected",
     }
@@ -2125,6 +2129,20 @@ def _live_signal_from_json(payload: object) -> LiveSignal | None:
 
 
 @dataclass(slots=True)
+class LiveDependencyRetryCooldown:
+    symbol: str
+    symbol_key: str
+    levels_timeframe: str
+    entry_timeframe: str
+    decision_timestamp_ms: int
+    blocked_at_ms: int
+    next_retry_at_ms: int
+    expires_at_ms: int
+    retry_reason: str
+    retryable_reasons: tuple[str, ...]
+
+
+@dataclass(slots=True)
 class LiveActiveSymbol:
     symbol: str
     reason: str
@@ -3988,6 +4006,7 @@ class AnomalyMicroLiveRunner:
         self._live_top_growth_completed_periods: set[int] = set()
         self._seen_decisions: set[tuple[str, str, str, int]] = set()
         self._last_signal_scan_closed_at: dict[tuple[str, str], int] = {}
+        self._dependency_retry_cooldowns: dict[tuple[str, str, str, int], LiveDependencyRetryCooldown] = {}
         self._opened_positions_total = 0
         self._closed_positions_total = 0
         self._closed_pnl_usdt_total = 0.0
@@ -4060,6 +4079,11 @@ class AnomalyMicroLiveRunner:
         self._cycle_cold_retryable_dependency_count = 0
         self._cycle_cold_signal_count = 0
         self._cycle_cold_order_attempt_count = 0
+        self._cycle_dependency_retry_cooldown_skipped = 0
+        self._cycle_dependency_retry_cooldown_expired = 0
+        self._cycle_dependency_retry_cooldown_skip_keys: set[tuple[str, str, str, int]] = set()
+        self._dependency_retry_cooldown_skipped_total = 0
+        self._dependency_retry_cooldown_expired_total = 0
         self._cold_scanned_symbols_total = 0
         self._cold_evaluated_timeframe_total = 0
         self._cold_retryable_dependency_total = 0
@@ -4147,6 +4171,9 @@ class AnomalyMicroLiveRunner:
                 "latency_sla_policy": "protect_active_and_radar_due_scan_latency_by_gating_optional_warm_and_cold",
                 "candidate_queue_pressure_policy": "drop_stale_or_weak_radar_warm_tail_under_latency_pressure_no_cli_knobs",
                 "adaptive_precise_budget_policy": "limit_radar_precise_slots_under_latency_or_queue_pressure_active_symbols_never_dropped",
+                "dependency_retry_cooldown_policy": "retryable_data_dependencies_are_not_rescanned_every_cycle_until_cooldown_or_stale_timeout",
+                "dependency_retry_min_cooldown_ms": int(DEPENDENCY_RETRY_MIN_COOLDOWN_MS),
+                "dependency_retry_max_cooldown_ms": int(DEPENDENCY_RETRY_MAX_COOLDOWN_MS),
                 "adaptive_precise_budget_breached_radar_slots": int(ADAPTIVE_PRECISE_BUDGET_BREACHED_RADAR_SLOTS),
                 "adaptive_precise_budget_pressure_radar_slots": int(ADAPTIVE_PRECISE_BUDGET_PRESSURE_RADAR_SLOTS),
                 "candidate_queue_pressure_min_keep": int(CANDIDATE_QUEUE_PRESSURE_MIN_KEEP),
@@ -4465,6 +4492,11 @@ class AnomalyMicroLiveRunner:
                         "cold_retryable_dependency_count_cycle": self._cycle_cold_retryable_dependency_count,
                         "cold_signal_count_cycle": self._cycle_cold_signal_count,
                         "cold_order_attempt_count_cycle": self._cycle_cold_order_attempt_count,
+                        "dependency_retry_cooldown_active_count": len(self._dependency_retry_cooldowns),
+                        "dependency_retry_cooldown_skipped_cycle": self._cycle_dependency_retry_cooldown_skipped,
+                        "dependency_retry_cooldown_expired_cycle": self._cycle_dependency_retry_cooldown_expired,
+                        "dependency_retry_cooldown_skipped_total": self._dependency_retry_cooldown_skipped_total,
+                        "dependency_retry_cooldown_expired_total": self._dependency_retry_cooldown_expired_total,
                         "cold_scanned_symbols_total": self._cold_scanned_symbols_total,
                         "cold_evaluated_timeframe_total": self._cold_evaluated_timeframe_total,
                         "cold_retryable_dependency_total": self._cold_retryable_dependency_total,
@@ -5211,6 +5243,9 @@ class AnomalyMicroLiveRunner:
         self._cycle_cold_retryable_dependency_count = 0
         self._cycle_cold_signal_count = 0
         self._cycle_cold_order_attempt_count = 0
+        self._cycle_dependency_retry_cooldown_skipped = 0
+        self._cycle_dependency_retry_cooldown_expired = 0
+        self._cycle_dependency_retry_cooldown_skip_keys = set()
 
     def _full_symbol_cycle_seconds(self, *, batch_seconds: float, batch_size: int, symbols_total: int) -> float:
         if self._last_symbol_universe_cycle_seconds is not None:
@@ -6741,7 +6776,10 @@ class AnomalyMicroLiveRunner:
             for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
                 closed_timestamp_ms = _latest_closed_candle_start_ms(entry_timeframe, now_ms=now_ms)
                 scan_key = (symbol_key, levels_timeframe.value, entry_timeframe.value)
+                dependency_key = (symbol_key, levels_timeframe.value, entry_timeframe.value, int(closed_timestamp_ms))
                 if self._last_signal_scan_closed_at.get(scan_key) == closed_timestamp_ms:
+                    continue
+                if self._dependency_retry_cooldown_active_locked(dependency_key, now_ms=now_ms):
                     continue
                 candle_close_ms = closed_timestamp_ms + int(entry_timeframe.to_milliseconds())
                 latencies.append(max(0.0, (int(now_ms) - candle_close_ms) / 1000.0))
@@ -7085,6 +7123,7 @@ class AnomalyMicroLiveRunner:
 
     def _select_next_symbol_batch(self, symbols: list[str]) -> LiveSymbolBatchSelection:
         now_ms = int(time.time() * 1000)
+        self._prune_dependency_retry_cooldowns(now_ms=now_ms)
         inactive_cursor_before = self._inactive_cursor
         batch_full_cycle = self._symbol_universe_cycle_index
         batch_in_full_cycle = self._symbol_universe_batch_index + 1
@@ -8485,14 +8524,205 @@ class AnomalyMicroLiveRunner:
                 },
             )
 
+    def _dependency_retry_cooldown_key(
+        self,
+        symbol: str,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+        decision_timestamp_ms: int,
+    ) -> tuple[str, str, str, int]:
+        return (
+            _position_symbol_key(symbol),
+            levels_timeframe.value,
+            entry_timeframe.value,
+            int(decision_timestamp_ms),
+        )
+
+    def _dependency_retry_cooldown_delay_ms(self, entry_timeframe: Timeframe) -> int:
+        timeframe_ms = max(1, int(entry_timeframe.to_milliseconds()))
+        return max(
+            int(DEPENDENCY_RETRY_MIN_COOLDOWN_MS),
+            min(int(DEPENDENCY_RETRY_MAX_COOLDOWN_MS), timeframe_ms),
+        )
+
+    def _dependency_retry_cooldown_active_locked(
+        self,
+        key: tuple[str, str, str, int],
+        *,
+        now_ms: int,
+    ) -> bool:
+        cooldown = self._dependency_retry_cooldowns.get(key)
+        return bool(
+            cooldown is not None
+            and int(now_ms) < int(cooldown.next_retry_at_ms)
+            and int(now_ms) <= int(cooldown.expires_at_ms)
+        )
+
+    def _note_dependency_retry_cooldown_skipped_locked(self, key: tuple[str, str, str, int]) -> None:
+        if key in self._cycle_dependency_retry_cooldown_skip_keys:
+            return
+        self._cycle_dependency_retry_cooldown_skip_keys.add(key)
+        self._cycle_dependency_retry_cooldown_skipped += 1
+        self._dependency_retry_cooldown_skipped_total += 1
+
+    def _emit_dependency_retry_expired_event(
+        self,
+        cooldown: LiveDependencyRetryCooldown,
+        *,
+        source: str,
+    ) -> None:
+        self._cycle_dependency_retry_cooldown_expired += 1
+        self._dependency_retry_cooldown_expired_total += 1
+        self.artifacts.append_event(
+            "candidate_expired_dependency_timeout",
+            cooldown.symbol,
+            {
+                "levels_tf": cooldown.levels_timeframe,
+                "entry_tf": cooldown.entry_timeframe,
+                "decision_timestamp_ms": int(cooldown.decision_timestamp_ms),
+                "retry_reason": cooldown.retry_reason,
+                "retryable_reasons": list(cooldown.retryable_reasons),
+                "blocked_at_ms": int(cooldown.blocked_at_ms),
+                "next_retry_at_ms": int(cooldown.next_retry_at_ms),
+                "expires_at_ms": int(cooldown.expires_at_ms),
+                "reason": "dependency_not_ready_before_signal_stale_timeout",
+                "source": source,
+            },
+        )
+
+    def _prune_dependency_retry_cooldowns(self, *, now_ms: int) -> None:
+        expired: list[LiveDependencyRetryCooldown] = []
+        with self._state_lock:
+            expired_keys = [
+                key
+                for key, cooldown in self._dependency_retry_cooldowns.items()
+                if int(now_ms) > int(cooldown.expires_at_ms)
+            ]
+            for key in expired_keys:
+                cooldown = self._dependency_retry_cooldowns.pop(key, None)
+                if cooldown is None:
+                    continue
+                scan_key = (cooldown.symbol_key, cooldown.levels_timeframe, cooldown.entry_timeframe)
+                current = self._last_signal_scan_closed_at.get(scan_key)
+                if current is None or int(current) <= int(cooldown.decision_timestamp_ms):
+                    self._last_signal_scan_closed_at[scan_key] = int(cooldown.decision_timestamp_ms)
+                expired.append(cooldown)
+        for cooldown in expired:
+            self._emit_dependency_retry_expired_event(cooldown, source="dependency_retry_cooldown_prune")
+
+    def _dependency_retry_cooldown_status(
+        self,
+        symbol: str,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+        *,
+        decision_timestamp_ms: int,
+        now_ms: int,
+    ) -> tuple[str, LiveDependencyRetryCooldown | None]:
+        key = self._dependency_retry_cooldown_key(
+            symbol,
+            levels_timeframe,
+            entry_timeframe,
+            int(decision_timestamp_ms),
+        )
+        scan_key = (_position_symbol_key(symbol), levels_timeframe.value, entry_timeframe.value)
+        with self._state_lock:
+            cooldown = self._dependency_retry_cooldowns.get(key)
+            if cooldown is None:
+                return "ready", None
+            if int(now_ms) > int(cooldown.expires_at_ms):
+                removed = self._dependency_retry_cooldowns.pop(key, None)
+                self._last_signal_scan_closed_at[scan_key] = int(decision_timestamp_ms)
+                return "expired", removed
+            if int(now_ms) < int(cooldown.next_retry_at_ms):
+                self._note_dependency_retry_cooldown_skipped_locked(key)
+                return "cooldown", cooldown
+            self._dependency_retry_cooldowns.pop(key, None)
+            return "ready", cooldown
+
+    def _register_dependency_retry_cooldown(
+        self,
+        symbol: str,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+        *,
+        decision_timestamp_ms: int | None,
+        now_ms: int,
+        retry_reason: str,
+        retryable_reasons: tuple[str, ...],
+    ) -> None:
+        if decision_timestamp_ms is None:
+            return
+        delay_ms = self._dependency_retry_cooldown_delay_ms(entry_timeframe)
+        key = self._dependency_retry_cooldown_key(
+            symbol,
+            levels_timeframe,
+            entry_timeframe,
+            int(decision_timestamp_ms),
+        )
+        expires_at_ms = int(decision_timestamp_ms) + int(self.config.max_signal_age_ms)
+        if int(now_ms) > expires_at_ms:
+            return
+        cooldown = LiveDependencyRetryCooldown(
+            symbol=symbol,
+            symbol_key=_position_symbol_key(symbol),
+            levels_timeframe=levels_timeframe.value,
+            entry_timeframe=entry_timeframe.value,
+            decision_timestamp_ms=int(decision_timestamp_ms),
+            blocked_at_ms=int(now_ms),
+            next_retry_at_ms=min(int(now_ms) + int(delay_ms), expires_at_ms),
+            expires_at_ms=expires_at_ms,
+            retry_reason=retry_reason,
+            retryable_reasons=tuple(retryable_reasons),
+        )
+        with self._state_lock:
+            previous = self._dependency_retry_cooldowns.get(key)
+            self._dependency_retry_cooldowns[key] = cooldown
+        if previous is None or previous.retryable_reasons != cooldown.retryable_reasons:
+            self.artifacts.append_event(
+                "signal_scan_dependency_retry_scheduled",
+                symbol,
+                {
+                    "levels_tf": levels_timeframe.value,
+                    "entry_tf": entry_timeframe.value,
+                    "decision_timestamp_ms": int(decision_timestamp_ms),
+                    "retry_reason": retry_reason,
+                    "retryable_reasons": list(retryable_reasons),
+                    "blocked_at_ms": int(now_ms),
+                    "next_retry_at_ms": int(cooldown.next_retry_at_ms),
+                    "expires_at_ms": int(cooldown.expires_at_ms),
+                    "cooldown_ms": int(delay_ms),
+                    "policy": "do_not_rescan_retryable_dependency_every_cycle_wait_for_context_or_stale_timeout",
+                },
+            )
+
+    def _clear_dependency_retry_cooldown(
+        self,
+        symbol: str,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+        *,
+        decision_timestamp_ms: int | None,
+    ) -> None:
+        if decision_timestamp_ms is None:
+            return
+        key = self._dependency_retry_cooldown_key(symbol, levels_timeframe, entry_timeframe, int(decision_timestamp_ms))
+        with self._state_lock:
+            self._dependency_retry_cooldowns.pop(key, None)
+
     def _signal_scan_due_for_symbol(self, symbol: str, *, now_ms: int) -> bool:
         symbol_key = _position_symbol_key(symbol)
         with self._state_lock:
             for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
                 closed_timestamp_ms = _latest_closed_candle_start_ms(entry_timeframe, now_ms=now_ms)
                 scan_key = (symbol_key, levels_timeframe.value, entry_timeframe.value)
-                if self._last_signal_scan_closed_at.get(scan_key) != closed_timestamp_ms:
-                    return True
+                dependency_key = (symbol_key, levels_timeframe.value, entry_timeframe.value, int(closed_timestamp_ms))
+                if self._last_signal_scan_closed_at.get(scan_key) == closed_timestamp_ms:
+                    continue
+                if self._dependency_retry_cooldown_active_locked(dependency_key, now_ms=now_ms):
+                    self._note_dependency_retry_cooldown_skipped_locked(dependency_key)
+                    continue
+                return True
         return False
 
     def _signal_scan_due_for_timeframe(
@@ -8505,8 +8735,15 @@ class AnomalyMicroLiveRunner:
     ) -> bool:
         symbol_key = _position_symbol_key(symbol)
         scan_key = (symbol_key, levels_timeframe.value, entry_timeframe.value)
+        dependency_key = (symbol_key, levels_timeframe.value, entry_timeframe.value, int(closed_timestamp_ms))
+        now_ms = int(time.time() * 1000)
         with self._state_lock:
-            return self._last_signal_scan_closed_at.get(scan_key) != int(closed_timestamp_ms)
+            if self._last_signal_scan_closed_at.get(scan_key) == int(closed_timestamp_ms):
+                return False
+            if self._dependency_retry_cooldown_active_locked(dependency_key, now_ms=now_ms):
+                self._note_dependency_retry_cooldown_skipped_locked(dependency_key)
+                return False
+            return True
 
     def _mark_signal_scan_closed_at(
         self,
@@ -8936,6 +9173,8 @@ class AnomalyMicroLiveRunner:
                 by_key[_position_symbol_key(position.signal.symbol)] = position.signal.symbol
             for state in self._active_symbols.values():
                 by_key[_position_symbol_key(state.symbol)] = state.symbol
+            for cooldown in self._dependency_retry_cooldowns.values():
+                by_key[cooldown.symbol_key] = cooldown.symbol
         for request in self._symbol_context_priority_requests_snapshot(now_ms=now_ms):
             by_key.setdefault(_position_symbol_key(request.symbol), request.symbol)
         with self._state_lock:
@@ -9700,6 +9939,8 @@ class AnomalyMicroLiveRunner:
             entry_ws_coverage_pending = 0
             skipped_not_due = 0
             skipped_inactive_subminute = 0
+            dependency_cooldown_skipped = 0
+            dependency_cooldown_expired = 0
             for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
                 levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
                 setup_lookback_ms = (self.config.baseline_candles + 5) * levels_timeframe_ms
@@ -9715,6 +9956,21 @@ class AnomalyMicroLiveRunner:
                     skipped_not_due += 1
                     continue
                 due_count += 1
+                cooldown_status, cooldown = self._dependency_retry_cooldown_status(
+                    symbol,
+                    levels_timeframe,
+                    entry_timeframe,
+                    decision_timestamp_ms=latest_closed_entry_ts,
+                    now_ms=now_ms,
+                )
+                if cooldown_status == "cooldown":
+                    dependency_cooldown_skipped += 1
+                    continue
+                if cooldown_status == "expired":
+                    dependency_cooldown_expired += 1
+                    if cooldown is not None:
+                        self._emit_dependency_retry_expired_event(cooldown, source="dependency_retry_cooldown_scan_gate")
+                    continue
                 if self._should_defer_inactive_subminute_pair(symbol, entry_timeframe):
                     skipped_inactive_subminute += 1
                     self._cycle_deferred_inactive_subminute_pairs += 1
@@ -9795,7 +10051,22 @@ class AnomalyMicroLiveRunner:
                 evaluated_count += 1
                 if scan_result.retryable_dependency:
                     retryable_dependency_count += 1
+                    self._register_dependency_retry_cooldown(
+                        symbol,
+                        levels_timeframe,
+                        entry_timeframe,
+                        decision_timestamp_ms=scan_result.decision_timestamp_ms,
+                        now_ms=now_ms,
+                        retry_reason=scan_result.retry_reason,
+                        retryable_reasons=scan_result.retryable_reasons,
+                    )
                 else:
+                    self._clear_dependency_retry_cooldown(
+                        symbol,
+                        levels_timeframe,
+                        entry_timeframe,
+                        decision_timestamp_ms=scan_result.decision_timestamp_ms,
+                    )
                     self._mark_signal_scan_closed_at(
                         symbol,
                         levels_timeframe,
@@ -9827,6 +10098,8 @@ class AnomalyMicroLiveRunner:
                     "evaluated_timeframe_count": evaluated_count,
                     "skipped_not_due_count": skipped_not_due,
                     "skipped_inactive_subminute_count": skipped_inactive_subminute,
+                    "dependency_retry_cooldown_skipped_count": dependency_cooldown_skipped,
+                    "dependency_retry_cooldown_expired_count": dependency_cooldown_expired,
                     "setup_fetch_count": setup_fetch_count,
                     "entry_fetch_count": entry_fetch_count,
                     "fetch_failure_count": fetch_failures,
@@ -9855,6 +10128,19 @@ class AnomalyMicroLiveRunner:
                     entry_timeframe,
                     closed_timestamp_ms=latest_closed_entry_ts,
                 ):
+                    continue
+                cooldown_status, cooldown = self._dependency_retry_cooldown_status(
+                    symbol,
+                    levels_timeframe,
+                    entry_timeframe,
+                    decision_timestamp_ms=latest_closed_entry_ts,
+                    now_ms=now_ms,
+                )
+                if cooldown_status == "cooldown":
+                    continue
+                if cooldown_status == "expired":
+                    if cooldown is not None:
+                        self._emit_dependency_retry_expired_event(cooldown, source="dependency_retry_cooldown_scan_gate")
                     continue
                 if self._should_defer_inactive_subminute_pair(symbol, entry_timeframe):
                     self._cycle_deferred_inactive_subminute_pairs += 1
@@ -9930,7 +10216,23 @@ class AnomalyMicroLiveRunner:
                     if scan_result.retryable_dependency:
                         self._cycle_cold_retryable_dependency_count += 1
                         self._cold_retryable_dependency_total += 1
-                if not scan_result.retryable_dependency:
+                if scan_result.retryable_dependency:
+                    self._register_dependency_retry_cooldown(
+                        symbol,
+                        levels_timeframe,
+                        entry_timeframe,
+                        decision_timestamp_ms=scan_result.decision_timestamp_ms,
+                        now_ms=now_ms,
+                        retry_reason=scan_result.retry_reason,
+                        retryable_reasons=scan_result.retryable_reasons,
+                    )
+                else:
+                    self._clear_dependency_retry_cooldown(
+                        symbol,
+                        levels_timeframe,
+                        entry_timeframe,
+                        decision_timestamp_ms=scan_result.decision_timestamp_ms,
+                    )
                     self._mark_signal_scan_closed_at(
                         symbol,
                         levels_timeframe,
