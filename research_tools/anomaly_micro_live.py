@@ -290,6 +290,8 @@ DELAYED_REPLAY_RESULTS_COLUMNS = (
     "recompute_status",
     "would_select_signal",
     "would_enter_under_frozen_decision",
+    "strict_recompute_signal",
+    "frozen_signal_snapshot_used",
     "mismatch_type",
     "recomputed_category_id",
     "recomputed_category_label",
@@ -298,6 +300,7 @@ DELAYED_REPLAY_RESULTS_COLUMNS = (
     "recomputed_tp1_price",
     "recompute_reject_reasons",
     "recompute_data_status",
+    "decision_data_end_timestamp_ms",
     "telegram_notified",
     "outcome_status",
     "outcome_window_start_ms",
@@ -312,6 +315,7 @@ DELAYED_REPLAY_RESULTS_COLUMNS = (
     "tp1_would_hit",
     "stop_would_hit",
     "first_hit",
+    "outcome_is_post_decision",
     "source_scan_mode",
     "delayed_replay_contract",
 )
@@ -333,7 +337,7 @@ DELAYED_REPLAY_SUMMARY_COLUMNS = (
     "idle_since_ms",
     "duration_seconds",
 )
-DELAYED_REPLAY_CONTRACT = "delayed_replay_v2_frozen_decision_recompute_cache_only_idle_tg"
+DELAYED_REPLAY_CONTRACT = "delayed_replay_v3_evidence_labeled_cache_only_idle_tg"
 SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v2_cache_only_prior_fast_fade_prepump_spot"
 SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
     "snapshot_timestamp_utc",
@@ -4881,9 +4885,11 @@ class AnomalyMicroLiveRunner:
         if not symbol or not levels_tf_value or not entry_tf_value or decision_ts <= 0:
             return {
                 "status": "invalid_case_identity",
+                "source": "invalid_case",
                 "signal": None,
                 "reject_reasons": (),
                 "data_status": "invalid_case_identity",
+                "decision_data_end_timestamp_ms": "",
             }
         try:
             levels_timeframe = Timeframe(levels_tf_value)
@@ -4891,9 +4897,11 @@ class AnomalyMicroLiveRunner:
         except ValueError:
             return {
                 "status": "invalid_timeframe",
+                "source": "invalid_case",
                 "signal": None,
                 "reject_reasons": (),
                 "data_status": "invalid_timeframe",
+                "decision_data_end_timestamp_ms": "",
             }
         levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
         entry_timeframe_ms = int(entry_timeframe.to_milliseconds())
@@ -4915,9 +4923,11 @@ class AnomalyMicroLiveRunner:
         if setup_frame.empty or entry_frame.empty:
             return {
                 "status": "insufficient_cached_ohlcv",
+                "source": "cache_only_frozen_decision_recompute",
                 "signal": None,
                 "reject_reasons": (),
                 "data_status": data_status,
+                "decision_data_end_timestamp_ms": int(decision_ts),
             }
         missing_setup_price = [column for column in REQUIRED_PRICE_COLUMNS if column not in setup_frame.columns]
         missing_setup_flow = [column for column in REQUIRED_FLOW_COLUMNS if column not in setup_frame.columns]
@@ -4927,9 +4937,11 @@ class AnomalyMicroLiveRunner:
         if missing_columns:
             return {
                 "status": "missing_columns",
+                "source": "cache_only_frozen_decision_recompute",
                 "signal": None,
                 "reject_reasons": tuple(f"missing:{column}" for column in missing_columns),
                 "data_status": data_status,
+                "decision_data_end_timestamp_ms": int(decision_ts),
             }
         setup_frame = setup_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
         entry_frame = entry_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
@@ -4943,9 +4955,11 @@ class AnomalyMicroLiveRunner:
         if len(setup_history) < self.config.baseline_candles or entry_segment.empty:
             return {
                 "status": "insufficient_replay_history",
+                "source": "cache_only_frozen_decision_recompute",
                 "signal": None,
                 "reject_reasons": (),
                 "data_status": data_status,
+                "decision_data_end_timestamp_ms": int(decision_ts),
             }
         seed_close = float(setup_history.iloc[-1]["close"])
         entry_segment = _fill_missing_ohlcv_buckets(
@@ -4958,18 +4972,22 @@ class AnomalyMicroLiveRunner:
         if len(entry_segment) < self.config.confirmation_candles:
             return {
                 "status": "setup_too_early",
+                "source": "cache_only_frozen_decision_recompute",
                 "signal": None,
                 "reject_reasons": ("reject_setup_too_early",),
                 "data_status": data_status,
+                "decision_data_end_timestamp_ms": int(decision_ts),
             }
         setup_elapsed_fraction = min(1.0, len(entry_segment) * entry_timeframe_ms / levels_timeframe_ms)
         forming_setup = _aggregate_frame_to_candle(entry_segment, timestamp_ms=int(setup_start_ts))
         if forming_setup is None:
             return {
                 "status": "forming_setup_unavailable",
+                "source": "cache_only_frozen_decision_recompute",
                 "signal": None,
                 "reject_reasons": (),
                 "data_status": data_status,
+                "decision_data_end_timestamp_ms": int(decision_ts),
             }
         category_rejections: list[dict[str, object]] = []
         signal = self._build_signal_from_components(
@@ -5005,6 +5023,7 @@ class AnomalyMicroLiveRunner:
                     "signal": frozen_signal,
                     "reject_reasons": reject_reasons,
                     "data_status": data_status,
+                    "decision_data_end_timestamp_ms": int(decision_ts),
                 }
         return {
             "status": "recomputed_signal" if signal is not None else "recomputed_no_signal",
@@ -5012,6 +5031,7 @@ class AnomalyMicroLiveRunner:
             "signal": signal,
             "reject_reasons": reject_reasons,
             "data_status": data_status,
+            "decision_data_end_timestamp_ms": int(decision_ts),
         }
 
     def _evaluate_delayed_replay_case(self, case: dict[str, object], *, now_ms: int) -> dict[str, object]:
@@ -5021,9 +5041,22 @@ class AnomalyMicroLiveRunner:
         live_decision_class = str(case.get("live_decision_class") or "")
         recompute = self._recompute_delayed_replay_signal(case)
         replay_signal = recompute.get("signal") if isinstance(recompute.get("signal"), LiveSignal) else None
+        recompute_source = str(recompute.get("source") or "")
+        strict_recompute_signal = bool(
+            replay_signal is not None
+            and recompute_source == "cache_only_frozen_decision_recompute"
+            and str(recompute.get("status") or "") == "recomputed_signal"
+        )
+        frozen_signal_snapshot_used = bool(replay_signal is not None and recompute_source == "frozen_live_signal_snapshot")
         would_select_signal = replay_signal is not None
         would_enter = bool(would_select_signal)
-        if would_enter and live_decision_class == "signal_selected":
+        if frozen_signal_snapshot_used and live_decision_class == "signal_selected":
+            mismatch_type = "live_selected_frozen_signal_snapshot"
+        elif frozen_signal_snapshot_used and live_decision_class == "execution_rejected":
+            mismatch_type = "live_execution_rejected_frozen_signal_snapshot"
+        elif frozen_signal_snapshot_used:
+            mismatch_type = "live_rejected_frozen_signal_snapshot"
+        elif would_enter and live_decision_class == "signal_selected":
             mismatch_type = "live_selected_recomputed_signal"
         elif would_enter and live_decision_class == "execution_rejected":
             mismatch_type = "live_execution_rejected_replay_would_enter"
@@ -5052,6 +5085,7 @@ class AnomalyMicroLiveRunner:
                 case=case,
                 mismatch_type=mismatch_type,
                 recompute_status=str(recompute.get("status") or ""),
+                recompute_source=recompute_source,
                 outcome=outcome,
             )
         return {
@@ -5073,6 +5107,8 @@ class AnomalyMicroLiveRunner:
             "recompute_source": str(recompute.get("source") or ""),
             "would_select_signal": bool(would_select_signal),
             "would_enter_under_frozen_decision": bool(would_enter),
+            "strict_recompute_signal": bool(strict_recompute_signal),
+            "frozen_signal_snapshot_used": bool(frozen_signal_snapshot_used),
             "mismatch_type": mismatch_type,
             "recomputed_category_id": replay_signal.category_id if replay_signal is not None else "",
             "recomputed_category_label": replay_signal.category_label if replay_signal is not None else "",
@@ -5081,6 +5117,7 @@ class AnomalyMicroLiveRunner:
             "recomputed_tp1_price": _finite_or_none(replay_signal.tp1_price if replay_signal is not None else None),
             "recompute_reject_reasons": ",".join(str(reason) for reason in recompute.get("reject_reasons", ()) if reason),
             "recompute_data_status": str(recompute.get("data_status") or ""),
+            "decision_data_end_timestamp_ms": recompute.get("decision_data_end_timestamp_ms") or "",
             "telegram_notified": bool(telegram_notified),
             "signal_entry_price": _finite_or_none(
                 replay_signal.entry_price if replay_signal is not None else details.get("signal_entry_price")
@@ -5091,6 +5128,7 @@ class AnomalyMicroLiveRunner:
             "signal_tp1_price": _finite_or_none(
                 replay_signal.tp1_price if replay_signal is not None else details.get("signal_tp1_price")
             ),
+            "outcome_is_post_decision": bool(outcome.get("outcome_window_start_ms") not in ("", None)),
             "source_scan_mode": str(details.get("source_scan_mode") or "delayed_replay_cache_only"),
             "delayed_replay_contract": DELAYED_REPLAY_CONTRACT,
             **outcome,
@@ -5116,8 +5154,12 @@ class AnomalyMicroLiveRunner:
             "recompute_source": "error",
             "would_select_signal": "",
             "would_enter_under_frozen_decision": "",
+            "strict_recompute_signal": "",
+            "frozen_signal_snapshot_used": "",
             "mismatch_type": "replay_error",
+            "decision_data_end_timestamp_ms": "",
             "outcome_status": str(exc)[:500],
+            "outcome_is_post_decision": "",
             "delayed_replay_contract": DELAYED_REPLAY_CONTRACT,
         }
 
@@ -5128,6 +5170,7 @@ class AnomalyMicroLiveRunner:
         case: dict[str, object],
         mismatch_type: str,
         recompute_status: str,
+        recompute_source: str,
         outcome: dict[str, object],
     ) -> bool:
         case_id = str(case.get("case_id") or "")
@@ -5141,6 +5184,7 @@ class AnomalyMicroLiveRunner:
                     live_reason=live_reason,
                     mismatch_type=mismatch_type,
                     recompute_status=recompute_status,
+                    recompute_source=recompute_source,
                     outcome=outcome,
                 ),
                 symbol=signal.symbol,
@@ -5153,6 +5197,7 @@ class AnomalyMicroLiveRunner:
                     "live_reason": live_reason,
                     "mismatch_type": mismatch_type,
                     "recompute_status": recompute_status,
+                    "recompute_source": recompute_source,
                     "decision_timestamp_ms": int(signal.decision_timestamp_ms),
                     "levels_tf": signal.levels_timeframe.value,
                     "entry_tf": signal.entry_timeframe.value,
@@ -11842,6 +11887,7 @@ def _format_delayed_replay_ignored_entry_message(
     live_reason: str,
     mismatch_type: str,
     recompute_status: str,
+    recompute_source: str,
     outcome: dict[str, object],
 ) -> str:
     tp_pct = _safe_divide(float(signal.tp1_price) - float(signal.entry_price), float(signal.entry_price))
@@ -11850,12 +11896,20 @@ def _format_delayed_replay_ignored_entry_message(
     outcome_line = ""
     if first_hit:
         outcome_line = f"\nПосле сигнала: {_telegram_code(first_hit)}\n"
+    snapshot_source = recompute_source == "frozen_live_signal_snapshot"
+    title = "Replay поднял frozen-сигнал" if snapshot_source else "Replay нашёл вход"
+    source_line = f"Source: {_telegram_code(recompute_source or 'unknown')}\n"
+    caveat_line = ""
+    if snapshot_source:
+        caveat_line = "Строгий пересчёт свечей не подтвердил вход: использован live snapshot, потому что replay не ходит за mark/OI.\n"
     return (
         f"{_symbol_emoji(signal.symbol)} "
-        f"<b>{_telegram_symbol_link(signal.symbol)} Replay нашёл вход</b>\n\n"
+        f"<b>{_telegram_symbol_link(signal.symbol)} {title}</b>\n\n"
         f"Live: {_telegram_code(live_reason or 'unknown')}\n"
         f"Replay: {_telegram_code(mismatch_type)}\n"
-        f"Status: {_telegram_code(recompute_status)}\n\n"
+        f"Status: {_telegram_code(recompute_status)}\n"
+        f"{source_line}"
+        f"{caveat_line}\n"
         f"Вход: {_format_price(signal.entry_price)}\n"
         f"TP1: {_format_price(signal.tp1_price)} {_format_percent(tp_pct)}\n"
         f"SL: {_format_price(signal.stop_price)} {_format_percent(sl_pct)}\n"

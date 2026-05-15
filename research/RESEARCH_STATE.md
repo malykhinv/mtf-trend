@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224 applied locally by user / UNKNOWN commit; P225 proposed
-Last active patch: P225 delayed replay frozen signal snapshot fallback
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225 applied locally by user / UNKNOWN commit; P226 proposed
+Last active patch: P226 label delayed replay evidence source
 Updated: 2026-05-15
 ```
 
@@ -96,7 +96,8 @@ research_tools/hourly_levels.py
 28. P220 fixes a live safety gap found during the last-15-commit review: an exception from entry order/fill resolution before `LivePosition` creation now tracks the symbol and immediately attempts reduce-only cleanup of any real unprotected exposure.
 29. P221 fixes a second post-entry runtime blocker found in the live health review: `append_position()` no longer references undefined scan-mode/guard locals and the live ledger schema now includes those diagnostics.
 30. P223/P224 add an opt-in idle-only delayed replay auditor: live captures category_selected/category_rejected/execution-rejected anomaly decisions into delayed_replay artifacts, processes them only when idle, recomputes frozen-decision signals from cache-only OHLCV, and can send TG when replay finds an ignored entry.
-31. P225 proposes a frozen LiveSignal snapshot fallback for execution-rejected runner signals when exact cache-only recomputation is blocked by intentionally disabled mark/OI exchange-context fetch; result rows must label this as recompute_source=frozen_live_signal_snapshot.
+31. P225 adds a frozen LiveSignal snapshot fallback for execution-rejected runner signals when exact cache-only recomputation is blocked by intentionally disabled mark/OI exchange-context fetch.
+32. P226 proposes evidence labeling for delayed replay: strict candle recompute and frozen live-signal snapshot are separated in result columns, mismatch labels, and Telegram wording so snapshot fallback is not presented as strict backtest-like proof.
 
 ---
 
@@ -109,7 +110,7 @@ python -m compileall research_tools/anomaly_micro_live.py cli constants.py main.
 python main.py run-anomaly-live --help
 ```
 
-Expected readout: `_live_client_order_id()` no longer raises `NameError`; if entry order/fill resolution fails after exchange exposure appears, `unprotected_entry_reduce_only_exit_*` artifacts show cleanup attempt/result; if an entry opens, `live_positions.csv` writes `source_scan_mode`, `danger_cold_coverage_source`, and `entry_position_guard_source`; if delayed replay is enabled, `delayed_replay/delayed_replay_queue.jsonl`, `delayed_replay_results.csv`, `delayed_replay_summary.csv`, and `live_status.json` prove that anomaly postmortem runs only after idle gate and label `recompute_source` honestly; if a future programming error occurs, `live_internal_error` is recorded and the Telegram error path is synchronous. If Telegram delivery fails, `telegram_sync_send_failed` must appear in artifacts.
+Expected readout: `_live_client_order_id()` no longer raises `NameError`; if entry order/fill resolution fails after exchange exposure appears, `unprotected_entry_reduce_only_exit_*` artifacts show cleanup attempt/result; if an entry opens, `live_positions.csv` writes `source_scan_mode`, `danger_cold_coverage_source`, and `entry_position_guard_source`; if delayed replay is enabled, `delayed_replay/delayed_replay_queue.jsonl`, `delayed_replay_results.csv`, `delayed_replay_summary.csv`, and `live_status.json` prove that anomaly postmortem runs only after idle gate and label `recompute_source`, `strict_recompute_signal`, and `frozen_signal_snapshot_used` honestly; if a future programming error occurs, `live_internal_error` is recorded and the Telegram error path is synchronous. If Telegram delivery fails, `telegram_sync_send_failed` must appear in artifacts.
 
 Latest next step after P167:
 
@@ -1244,3 +1245,11 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Replay does not fetch missing mark/OI context; unavailable exchange context is an explicit replay reject to avoid stealing live resources.
 - Current commit: UNKNOWN.
 - Next validation: run short dry live with `--delayed-replay-enabled true --delayed-replay-delay-seconds 60 --delayed-replay-min-idle-seconds 10`, then inspect `delayed_replay_results.csv`, `live_events.csv`, and Telegram events for any `*_replay_would_enter` mismatch.
+
+
+## P226 proposed state
+- Delayed replay decision recompute still uses only cached windows ending at decision_timestamp_ms; outcome windows start after decision and are labeled as post-decision.
+- Frozen live-signal snapshot fallback is not equivalent to strict backtest-like recompute. P226 separates evidence with strict_recompute_signal and frozen_signal_snapshot_used.
+- Telegram keeps the alert but uses different wording for snapshot fallback, with a caveat that strict candle recompute was blocked by disabled mark/OI fetch.
+- Current commit: UNKNOWN.
+- Next validation: short dry live with delayed replay enabled; inspect result rows where recompute_source=frozen_live_signal_snapshot and verify no *_replay_would_enter mismatch is emitted for those rows.
