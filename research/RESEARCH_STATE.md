@@ -1268,6 +1268,13 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Current commit: UNKNOWN.
 - Next validation: short dry live with delayed replay enabled; inspect `delayed_replay_results.csv` for both `recompute_status` and `recompute_source`.
 
+## P229 proposed state
+- Delayed replay now prefers immutable live decision snapshots over later cache reconstruction when the snapshot is available.
+- Snapshot replay captures baseline/setup/entry rows through `decision_timestamp_ms` plus frozen mark/OI/prior-fast-fade context, so replay can recompute without REST fetch and without depending on cache that became fuller after the live decision.
+- Cache-only delayed replay remains a fallback only for older/no-snapshot cases.
+- Current commit: UNKNOWN.
+- Next validation: short dry live with delayed replay enabled; inspect `delayed_replay_queue.jsonl` for `decision_snapshot_json`, then verify `delayed_replay_results.csv` rows show `recompute_source=immutable_live_decision_snapshot_recompute` and `decision_snapshot_status=ok`.
+
 
 ## P226 proposed state
 - Delayed replay decision recompute still uses only cached windows ending at decision_timestamp_ms; outcome windows start after decision and are labeled as post-decision.

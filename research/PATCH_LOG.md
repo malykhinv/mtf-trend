@@ -3607,6 +3607,56 @@ Risk:
 Low. Artifact schema/contract only; no live scan, order, fill, stop, or replay decision logic changes.
 ```
 
+## 2026-05-15 - P229 proposed: immutable delayed replay decision snapshot
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Make delayed replay recompute from the exact live decision inputs captured at signal/reject time when available, instead of relying first on later cache state.
+```
+
+Changes:
+
+```text
+- Upgrades delayed replay contract to delayed_replay_v6_immutable_decision_snapshot_idle_tg.
+- Captures an immutable live decision snapshot for delayed replay cases: baseline rows, setup row, entry rows through decision_timestamp_ms, and frozen mark/OI/prior-fast-fade context.
+- Stores the snapshot on queued delayed replay cases and remembers it in memory so later execution rejects for the same decision reuse the same snapshot.
+- Recomputes delayed replay from the immutable snapshot first; cache-only reconstruction remains a fallback when no snapshot exists.
+- Allows replay recompute to use frozen live mark/OI/prior-fast-fade context without REST/network fetch.
+- Adds decision_snapshot_status and decision_snapshot_source to delayed_replay_results.csv.
+- Removes the duplicate recompute_source column introduced by the previous schema patch.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep delayed-replay
+python - <<'PY'
+from research_tools.anomaly_micro_live import DELAYED_REPLAY_RESULTS_COLUMNS
+from collections import Counter
+assert not [k for k, v in Counter(DELAYED_REPLAY_RESULTS_COLUMNS).items() if v > 1]
+PY
+```
+
+Risk:
+
+```text
+Medium-low. Audit-only and delayed-replay-only; no live order/fill/stop logic changes. Queue rows become larger because they carry compact candle snapshots, but only when delayed replay is explicitly enabled.
+```
+
 
 ## 2026-05-15 - P226 proposed: label delayed replay evidence source
 

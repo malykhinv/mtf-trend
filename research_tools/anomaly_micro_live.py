@@ -276,7 +276,6 @@ DELAYED_REPLAY_RESULTS_COLUMNS = (
     "queued_at_utc",
     "processed_at_utc",
     "status",
-    "recompute_source",
     "symbol",
     "source_event",
     "priority",
@@ -289,6 +288,8 @@ DELAYED_REPLAY_RESULTS_COLUMNS = (
     "queued_delay_seconds",
     "recompute_status",
     "recompute_source",
+    "decision_snapshot_status",
+    "decision_snapshot_source",
     "would_select_signal",
     "would_enter_under_frozen_decision",
     "strict_replay_would_enter",
@@ -341,7 +342,8 @@ DELAYED_REPLAY_SUMMARY_COLUMNS = (
     "idle_since_ms",
     "duration_seconds",
 )
-DELAYED_REPLAY_CONTRACT = "delayed_replay_v5_result_source_visible_cache_only_idle_tg"
+DELAYED_REPLAY_CONTRACT = "delayed_replay_v6_immutable_decision_snapshot_idle_tg"
+DELAYED_REPLAY_DECISION_SNAPSHOT_CONTRACT = "delayed_replay_decision_snapshot_v1_live_inputs"
 SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v2_cache_only_prior_fast_fade_prepump_spot"
 SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
     "snapshot_timestamp_utc",
@@ -675,6 +677,125 @@ def _optional_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _delayed_replay_snapshot_columns(frame: pd.DataFrame) -> list[str]:
+    preferred = (
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "number_of_trades",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+    )
+    return [column for column in preferred if column in frame.columns]
+
+
+def _delayed_replay_frame_to_rows(frame: pd.DataFrame, *, max_rows: int) -> list[dict[str, object]]:
+    if frame.empty:
+        return []
+    columns = _delayed_replay_snapshot_columns(frame)
+    if not columns:
+        return []
+    prepared = frame.loc[:, columns].copy()
+    if "timestamp" in prepared.columns:
+        prepared = prepared.sort_values("timestamp").drop_duplicates("timestamp", keep="last")
+    prepared = prepared.tail(max(1, int(max_rows)))
+    return [dict(row) for row in _json_safe_payload(prepared.to_dict(orient="records"))]
+
+
+def _delayed_replay_series_to_row(row: pd.Series | dict[str, object]) -> dict[str, object]:
+    if isinstance(row, pd.Series):
+        raw = row.to_dict()
+    elif isinstance(row, dict):
+        raw = dict(row)
+    else:
+        return {}
+    columns = (
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "number_of_trades",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+    )
+    return dict(_json_safe_payload({column: raw[column] for column in columns if column in raw}))
+
+
+def _delayed_replay_rows_to_frame(rows: object) -> pd.DataFrame:
+    if not isinstance(rows, list) or not rows:
+        return pd.DataFrame()
+    records = [dict(row) for row in rows if isinstance(row, dict)]
+    if not records:
+        return pd.DataFrame()
+    frame = pd.DataFrame(records)
+    if "timestamp" in frame.columns:
+        frame["timestamp"] = pd.to_numeric(frame["timestamp"], errors="coerce").astype("Int64")
+        frame = frame.dropna(subset=["timestamp"]).copy()
+        if not frame.empty:
+            frame["timestamp"] = frame["timestamp"].astype("int64")
+            frame = frame.sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    for column in frame.columns:
+        if column != "timestamp":
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    return frame
+
+
+def _delayed_replay_snapshot_from_json(payload: object) -> dict[str, object] | None:
+    if not isinstance(payload, str) or not payload.strip():
+        return None
+    try:
+        raw = json.loads(payload)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+    if raw.get("contract") != DELAYED_REPLAY_DECISION_SNAPSHOT_CONTRACT:
+        return None
+    return raw
+
+
+def _frozen_mark_basis_from_context(context: object) -> LiveMarkBasisResult | None:
+    if not isinstance(context, dict):
+        return None
+    has_mark = any(key in context for key in ("mark_close_vs_decision_close_basis", "mark_basis_status", "mark_timestamp_ms", "mark_age_ms"))
+    if not has_mark:
+        return None
+    return LiveMarkBasisResult(
+        _optional_float(context.get("mark_close_vs_decision_close_basis")),
+        str(context.get("mark_basis_status") or "frozen_mark_basis_missing"),
+        timestamp_ms=_optional_int(context.get("mark_timestamp_ms")),
+        age_ms=_optional_int(context.get("mark_age_ms")),
+    )
+
+
+def _frozen_oi_change_from_context(context: object) -> LiveOiChangeResult | None:
+    if not isinstance(context, dict):
+        return None
+    has_oi = any(key in context for key in ("oi_change_pct_3x5m", "oi_status"))
+    if not has_oi:
+        return None
+    return LiveOiChangeResult(
+        _optional_float(context.get("oi_change_pct_3x5m")),
+        str(context.get("oi_status") or "frozen_oi_missing"),
+    )
+
+
+def _frozen_prior_fast_fade_from_context(context: object) -> dict[str, object] | None:
+    if not isinstance(context, dict):
+        return None
+    raw = context.get("prior_fast_fade_result")
+    if isinstance(raw, dict):
+        return dict(raw)
+    return None
 
 
 def _ws_error_short_label(error: str | None) -> str:
@@ -3448,6 +3569,7 @@ class AnomalyMicroLiveRunner:
         self._delayed_replay_enqueued_total = 0
         self._delayed_replay_processed_total = 0
         self._delayed_replay_skipped_total = 0
+        self._delayed_replay_decision_snapshots: dict[tuple[str, str, str, int], str] = {}
         self._idle_since_ms: int | None = None
         self._state_lock = threading.RLock()
         self._inactive_cursor = 0
@@ -4563,6 +4685,117 @@ class AnomalyMicroLiveRunner:
         with self._state_lock:
             return len(self._delayed_replay_pending)
 
+    def _delayed_replay_snapshot_key(
+        self,
+        *,
+        symbol: str,
+        levels_tf: str,
+        entry_tf: str,
+        decision_timestamp_ms: int,
+    ) -> tuple[str, str, str, int]:
+        return (
+            _position_symbol_key(symbol),
+            str(levels_tf),
+            str(entry_tf),
+            int(decision_timestamp_ms),
+        )
+
+    def _remember_delayed_replay_snapshot(
+        self,
+        *,
+        symbol: str,
+        levels_tf: str,
+        entry_tf: str,
+        decision_timestamp_ms: int,
+        decision_snapshot_json: str,
+    ) -> None:
+        if not decision_snapshot_json:
+            return
+        key = self._delayed_replay_snapshot_key(
+            symbol=symbol,
+            levels_tf=levels_tf,
+            entry_tf=entry_tf,
+            decision_timestamp_ms=decision_timestamp_ms,
+        )
+        with self._state_lock:
+            self._delayed_replay_decision_snapshots[key] = decision_snapshot_json
+            if len(self._delayed_replay_decision_snapshots) > max(1000, int(self.config.delayed_replay_max_queue_size) * 2):
+                ordered = list(self._delayed_replay_decision_snapshots.items())[-int(self.config.delayed_replay_max_queue_size) :]
+                self._delayed_replay_decision_snapshots = dict(ordered)
+
+    def _lookup_delayed_replay_snapshot(
+        self,
+        *,
+        symbol: str,
+        levels_tf: str,
+        entry_tf: str,
+        decision_timestamp_ms: int,
+    ) -> str:
+        key = self._delayed_replay_snapshot_key(
+            symbol=symbol,
+            levels_tf=levels_tf,
+            entry_tf=entry_tf,
+            decision_timestamp_ms=decision_timestamp_ms,
+        )
+        with self._state_lock:
+            value = self._delayed_replay_decision_snapshots.get(key)
+        return value if isinstance(value, str) else ""
+
+    def _build_delayed_replay_decision_snapshot(
+        self,
+        *,
+        symbol: str,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+        decision_timestamp_ms: int,
+        setup_start_timestamp_ms: int,
+        setup_history: pd.DataFrame,
+        setup_row: pd.Series,
+        entry_segment: pd.DataFrame,
+        setup_source: str,
+        setup_elapsed_fraction: float,
+        setup_closed_entry_candles: int,
+        mark_basis: LiveMarkBasisResult | None,
+        oi_change: float | None,
+        oi_status: str | None,
+        prior_fast_fade_result: dict[str, object] | None,
+    ) -> str:
+        if not self.config.delayed_replay_enabled:
+            return ""
+        frozen_context = {
+            "mark_close_vs_decision_close_basis": _optional_float(mark_basis.value) if mark_basis is not None else None,
+            "mark_basis_status": mark_basis.reason if mark_basis is not None else "not_loaded",
+            "mark_timestamp_ms": mark_basis.timestamp_ms if mark_basis is not None and mark_basis.timestamp_ms is not None else "",
+            "mark_age_ms": mark_basis.age_ms if mark_basis is not None and mark_basis.age_ms is not None else "",
+            "oi_change_pct_3x5m": _optional_float(oi_change),
+            "oi_status": oi_status or ("ok" if oi_change is not None else "not_loaded"),
+            "prior_fast_fade_result": prior_fast_fade_result or {},
+        }
+        payload = {
+            "contract": DELAYED_REPLAY_DECISION_SNAPSHOT_CONTRACT,
+            "source": "live_decision_in_memory",
+            "created_at_utc": datetime.now(UTC).isoformat(),
+            "created_at_ms": int(time.time() * 1000),
+            "symbol": symbol,
+            "levels_tf": levels_timeframe.value,
+            "entry_tf": entry_timeframe.value,
+            "decision_timestamp_ms": int(decision_timestamp_ms),
+            "setup_start_timestamp_ms": int(setup_start_timestamp_ms),
+            "setup_source": setup_source,
+            "setup_elapsed_fraction": float(setup_elapsed_fraction),
+            "setup_closed_entry_candles": int(setup_closed_entry_candles),
+            "baseline_candles": int(self.config.baseline_candles),
+            "confirmation_candles": int(self.config.confirmation_candles),
+            "baseline_rows": _delayed_replay_frame_to_rows(setup_history, max_rows=max(1, int(self.config.baseline_candles))),
+            "setup_row": _delayed_replay_series_to_row(setup_row),
+            "entry_rows": _delayed_replay_frame_to_rows(entry_segment, max_rows=max(1, int(setup_closed_entry_candles) + 5)),
+            "frozen_context": _json_safe_payload(frozen_context),
+        }
+        try:
+            return json.dumps(_json_safe_payload(payload), ensure_ascii=False, sort_keys=True, allow_nan=False)
+        except (TypeError, ValueError):
+            return ""
+
     def _capture_delayed_replay_case(
         self,
         *,
@@ -4597,6 +4830,24 @@ class AnomalyMicroLiveRunner:
             category_id=str(details.get("category_id") or ""),
         )
         signal_json = details.get("signal_json")
+        decision_snapshot_json = details.get("decision_snapshot_json")
+        if isinstance(decision_snapshot_json, str) and decision_snapshot_json:
+            self._remember_delayed_replay_snapshot(
+                symbol=symbol,
+                levels_tf=levels_tf,
+                entry_tf=entry_tf,
+                decision_timestamp_ms=int(decision_timestamp_ms),
+                decision_snapshot_json=decision_snapshot_json,
+            )
+        else:
+            decision_snapshot_json = self._lookup_delayed_replay_snapshot(
+                symbol=symbol,
+                levels_tf=levels_tf,
+                entry_tf=entry_tf,
+                decision_timestamp_ms=int(decision_timestamp_ms),
+            )
+        details_for_case = dict(details)
+        details_for_case.pop("decision_snapshot_json", None)
         case: dict[str, object] = {
             "case_id": case_id,
             "queued_at_utc": datetime.now(UTC).isoformat(),
@@ -4610,8 +4861,9 @@ class AnomalyMicroLiveRunner:
             "levels_tf": levels_tf,
             "entry_tf": entry_tf,
             "decision_timestamp_ms": int(decision_timestamp_ms),
-            "details": _json_safe_payload(details),
+            "details": _json_safe_payload(details_for_case),
             "signal_json": signal_json if isinstance(signal_json, str) else "",
+            "decision_snapshot_json": decision_snapshot_json if isinstance(decision_snapshot_json, str) else "",
             "delayed_replay_contract": DELAYED_REPLAY_CONTRACT,
         }
         with self._state_lock:
@@ -4648,11 +4900,18 @@ class AnomalyMicroLiveRunner:
                 "decision_timestamp_ms": int(decision_timestamp_ms),
                 "replay_not_before_ms": replay_not_before_ms,
                 "queue_size": self._delayed_replay_queue_size(),
+                "decision_snapshot_available": bool(decision_snapshot_json),
                 "contract": DELAYED_REPLAY_CONTRACT,
             },
         )
 
-    def _capture_delayed_replay_signal(self, signal: LiveSignal, *, source_scan_mode: str) -> None:
+    def _capture_delayed_replay_signal(
+        self,
+        signal: LiveSignal,
+        *,
+        source_scan_mode: str,
+        decision_snapshot_json: str = "",
+    ) -> None:
         if not self.config.delayed_replay_enabled:
             return
         details = {
@@ -4673,6 +4932,7 @@ class AnomalyMicroLiveRunner:
             "verticality_score": _finite_or_none(signal.verticality_score),
             "source_scan_mode": source_scan_mode,
             "signal_json": signal.to_json(),
+            "decision_snapshot_json": decision_snapshot_json,
         }
         self._capture_delayed_replay_case(
             source_event="category_selected",
@@ -4705,6 +4965,12 @@ class AnomalyMicroLiveRunner:
             "signal_tp1_price": _finite_or_none(signal.tp1_price),
             "source_scan_mode": self._batch_scan_mode_for_symbol(signal.symbol),
             "signal_json": signal.to_json(),
+            "decision_snapshot_json": self._lookup_delayed_replay_snapshot(
+                symbol=signal.symbol,
+                levels_tf=signal.levels_timeframe.value,
+                entry_tf=signal.entry_timeframe.value,
+                decision_timestamp_ms=int(signal.decision_timestamp_ms),
+            ),
             **details,
         }
         self._capture_delayed_replay_case(
@@ -4890,6 +5156,8 @@ class AnomalyMicroLiveRunner:
             return {
                 "status": "invalid_case_identity",
                 "source": "invalid_case",
+                "decision_snapshot_status": "not_available",
+                "decision_snapshot_source": "none",
                 "signal": None,
                 "reject_reasons": (),
                 "data_status": "invalid_case_identity",
@@ -4902,32 +5170,77 @@ class AnomalyMicroLiveRunner:
             return {
                 "status": "invalid_timeframe",
                 "source": "invalid_case",
+                "decision_snapshot_status": "not_available",
+                "decision_snapshot_source": "none",
                 "signal": None,
                 "reject_reasons": (),
                 "data_status": "invalid_timeframe",
                 "decision_data_end_timestamp_ms": "",
             }
+
         levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
         entry_timeframe_ms = int(entry_timeframe.to_milliseconds())
         setup_start_ts = (decision_ts // levels_timeframe_ms) * levels_timeframe_ms
-        setup_lookback_ms = (self.config.baseline_candles + 5) * levels_timeframe_ms
-        setup_frame, setup_status = self._load_delayed_replay_cached_window(
-            symbol=symbol,
-            timeframe=levels_timeframe,
-            start_timestamp_ms=setup_start_ts - setup_lookback_ms,
-            end_timestamp_ms=setup_start_ts - levels_timeframe_ms,
+        decision_snapshot = _delayed_replay_snapshot_from_json(
+            case.get("decision_snapshot_json") or details.get("decision_snapshot_json")
         )
-        entry_frame, entry_status = self._load_delayed_replay_cached_window(
-            symbol=symbol,
-            timeframe=entry_timeframe,
-            start_timestamp_ms=setup_start_ts,
-            end_timestamp_ms=decision_ts,
+        use_snapshot = False
+        decision_snapshot_status = "not_available"
+        decision_snapshot_source = "none"
+        frozen_context: dict[str, object] | None = None
+        if decision_snapshot is not None:
+            snapshot_symbol = str(decision_snapshot.get("symbol") or "")
+            snapshot_levels_tf = str(decision_snapshot.get("levels_tf") or "")
+            snapshot_entry_tf = str(decision_snapshot.get("entry_tf") or "")
+            snapshot_decision_ts = _optional_int(decision_snapshot.get("decision_timestamp_ms"))
+            if (
+                _position_symbol_key(snapshot_symbol) == _position_symbol_key(symbol)
+                and snapshot_levels_tf == levels_timeframe.value
+                and snapshot_entry_tf == entry_timeframe.value
+                and snapshot_decision_ts == int(decision_ts)
+            ):
+                use_snapshot = True
+                decision_snapshot_status = "ok"
+                decision_snapshot_source = str(decision_snapshot.get("source") or "live_decision_in_memory")
+                setup_frame = _delayed_replay_rows_to_frame(decision_snapshot.get("baseline_rows"))
+                setup_row_frame = _delayed_replay_rows_to_frame([decision_snapshot.get("setup_row")])
+                entry_frame = _delayed_replay_rows_to_frame(decision_snapshot.get("entry_rows"))
+                if setup_row_frame.empty:
+                    setup_status = "snapshot_setup_row_missing"
+                else:
+                    setup_status = "snapshot_baseline_rows"
+                entry_status = "snapshot_entry_rows"
+                frozen_raw_context = decision_snapshot.get("frozen_context")
+                frozen_context = dict(frozen_raw_context) if isinstance(frozen_raw_context, dict) else {}
+            else:
+                decision_snapshot_status = "identity_mismatch"
+                decision_snapshot_source = str(decision_snapshot.get("source") or "unknown")
+                use_snapshot = False
+        if not use_snapshot:
+            setup_lookback_ms = (self.config.baseline_candles + 5) * levels_timeframe_ms
+            setup_frame, setup_status = self._load_delayed_replay_cached_window(
+                symbol=symbol,
+                timeframe=levels_timeframe,
+                start_timestamp_ms=setup_start_ts - setup_lookback_ms,
+                end_timestamp_ms=setup_start_ts - levels_timeframe_ms,
+            )
+            setup_row_frame = pd.DataFrame()
+            entry_frame, entry_status = self._load_delayed_replay_cached_window(
+                symbol=symbol,
+                timeframe=entry_timeframe,
+                start_timestamp_ms=setup_start_ts,
+                end_timestamp_ms=decision_ts,
+            )
+        recompute_source = (
+            "immutable_live_decision_snapshot_recompute" if use_snapshot else "cache_only_frozen_decision_recompute"
         )
-        data_status = f"setup={setup_status};entry={entry_status}"
+        data_status = f"setup={setup_status};entry={entry_status};snapshot={decision_snapshot_status}"
         if setup_frame.empty or entry_frame.empty:
             return {
-                "status": "insufficient_cached_ohlcv",
-                "source": "cache_only_frozen_decision_recompute",
+                "status": "insufficient_cached_ohlcv" if not use_snapshot else "insufficient_decision_snapshot_ohlcv",
+                "source": recompute_source,
+                "decision_snapshot_status": decision_snapshot_status,
+                "decision_snapshot_source": decision_snapshot_source,
                 "signal": None,
                 "reject_reasons": (),
                 "data_status": data_status,
@@ -4941,7 +5254,9 @@ class AnomalyMicroLiveRunner:
         if missing_columns:
             return {
                 "status": "missing_columns",
-                "source": "cache_only_frozen_decision_recompute",
+                "source": recompute_source,
+                "decision_snapshot_status": decision_snapshot_status,
+                "decision_snapshot_source": decision_snapshot_source,
                 "signal": None,
                 "reject_reasons": tuple(f"missing:{column}" for column in missing_columns),
                 "data_status": data_status,
@@ -4952,6 +5267,21 @@ class AnomalyMicroLiveRunner:
         setup_history = setup_frame.loc[
             setup_frame["timestamp"].astype("int64") < int(setup_start_ts)
         ].tail(self.config.baseline_candles).copy()
+        if use_snapshot:
+            if setup_row_frame.empty:
+                return {
+                    "status": "snapshot_setup_row_missing",
+                    "source": recompute_source,
+                    "decision_snapshot_status": decision_snapshot_status,
+                    "decision_snapshot_source": decision_snapshot_source,
+                    "signal": None,
+                    "reject_reasons": (),
+                    "data_status": data_status,
+                    "decision_data_end_timestamp_ms": int(decision_ts),
+                }
+            forming_setup = setup_row_frame.iloc[-1]
+        else:
+            forming_setup = None
         entry_segment = entry_frame.loc[
             (entry_frame["timestamp"].astype("int64") >= int(setup_start_ts))
             & (entry_frame["timestamp"].astype("int64") <= int(decision_ts))
@@ -4959,7 +5289,9 @@ class AnomalyMicroLiveRunner:
         if len(setup_history) < self.config.baseline_candles or entry_segment.empty:
             return {
                 "status": "insufficient_replay_history",
-                "source": "cache_only_frozen_decision_recompute",
+                "source": recompute_source,
+                "decision_snapshot_status": decision_snapshot_status,
+                "decision_snapshot_source": decision_snapshot_source,
                 "signal": None,
                 "reject_reasons": (),
                 "data_status": data_status,
@@ -4976,18 +5308,23 @@ class AnomalyMicroLiveRunner:
         if len(entry_segment) < self.config.confirmation_candles:
             return {
                 "status": "setup_too_early",
-                "source": "cache_only_frozen_decision_recompute",
+                "source": recompute_source,
+                "decision_snapshot_status": decision_snapshot_status,
+                "decision_snapshot_source": decision_snapshot_source,
                 "signal": None,
                 "reject_reasons": ("reject_setup_too_early",),
                 "data_status": data_status,
                 "decision_data_end_timestamp_ms": int(decision_ts),
             }
         setup_elapsed_fraction = min(1.0, len(entry_segment) * entry_timeframe_ms / levels_timeframe_ms)
-        forming_setup = _aggregate_frame_to_candle(entry_segment, timestamp_ms=int(setup_start_ts))
+        if forming_setup is None:
+            forming_setup = _aggregate_frame_to_candle(entry_segment, timestamp_ms=int(setup_start_ts))
         if forming_setup is None:
             return {
                 "status": "forming_setup_unavailable",
-                "source": "cache_only_frozen_decision_recompute",
+                "source": recompute_source,
+                "decision_snapshot_status": decision_snapshot_status,
+                "decision_snapshot_source": decision_snapshot_source,
                 "signal": None,
                 "reject_reasons": (),
                 "data_status": data_status,
@@ -5002,12 +5339,13 @@ class AnomalyMicroLiveRunner:
             now_ms=decision_ts + entry_timeframe_ms,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
-            setup_source="delayed_replay_forming_htf_from_entry_tf",
+            setup_source="delayed_replay_immutable_live_snapshot" if use_snapshot else "delayed_replay_forming_htf_from_entry_tf",
             setup_elapsed_fraction=setup_elapsed_fraction,
             setup_closed_entry_candles=len(entry_segment),
             emit_diagnostics=False,
             category_rejections_out=category_rejections,
             allow_exchange_context_fetch=False,
+            frozen_exchange_context=frozen_context,
         )
         reject_reasons = tuple(
             str(row.get("category_reject_reason") or row.get("reason") or "")
@@ -5024,6 +5362,8 @@ class AnomalyMicroLiveRunner:
                 return {
                     "status": "frozen_live_signal_snapshot_exchange_context_unavailable",
                     "source": "frozen_live_signal_snapshot",
+                    "decision_snapshot_status": decision_snapshot_status,
+                    "decision_snapshot_source": decision_snapshot_source,
                     "signal": frozen_signal,
                     "reject_reasons": reject_reasons,
                     "data_status": data_status,
@@ -5031,7 +5371,9 @@ class AnomalyMicroLiveRunner:
                 }
         return {
             "status": "recomputed_signal" if signal is not None else "recomputed_no_signal",
-            "source": "cache_only_frozen_decision_recompute",
+            "source": recompute_source,
+            "decision_snapshot_status": decision_snapshot_status,
+            "decision_snapshot_source": decision_snapshot_source,
             "signal": signal,
             "reject_reasons": reject_reasons,
             "data_status": data_status,
@@ -5048,7 +5390,7 @@ class AnomalyMicroLiveRunner:
         recompute_source = str(recompute.get("source") or "")
         strict_recompute_signal = bool(
             replay_signal is not None
-            and recompute_source == "cache_only_frozen_decision_recompute"
+            and recompute_source in {"immutable_live_decision_snapshot_recompute", "cache_only_frozen_decision_recompute"}
             and str(recompute.get("status") or "") == "recomputed_signal"
         )
         frozen_signal_snapshot_used = bool(replay_signal is not None and recompute_source == "frozen_live_signal_snapshot")
@@ -5117,6 +5459,8 @@ class AnomalyMicroLiveRunner:
             "queued_delay_seconds": round((now_ms - int(case.get("queued_at_ms") or now_ms)) / 1000.0, 3),
             "recompute_status": str(recompute.get("status") or ""),
             "recompute_source": str(recompute.get("source") or ""),
+            "decision_snapshot_status": str(recompute.get("decision_snapshot_status") or ""),
+            "decision_snapshot_source": str(recompute.get("decision_snapshot_source") or ""),
             "would_select_signal": bool(would_select_signal),
             "would_enter_under_frozen_decision": bool(would_enter),
             "strict_replay_would_enter": bool(strict_replay_would_enter),
@@ -5167,6 +5511,8 @@ class AnomalyMicroLiveRunner:
             "queued_delay_seconds": round((now_ms - int(case.get("queued_at_ms") or now_ms)) / 1000.0, 3),
             "recompute_status": f"error:{type(exc).__name__}",
             "recompute_source": "error",
+            "decision_snapshot_status": "",
+            "decision_snapshot_source": "",
             "would_select_signal": "",
             "would_enter_under_frozen_decision": "",
             "strict_replay_would_enter": "",
@@ -8697,6 +9043,7 @@ class AnomalyMicroLiveRunner:
         emit_diagnostics: bool = True,
         category_rejections_out: list[dict[str, object]] | None = None,
         allow_exchange_context_fetch: bool = True,
+        frozen_exchange_context: dict[str, object] | None = None,
     ) -> LiveSignal | None:
         if baseline.empty or entry_segment.empty:
             return None
@@ -8899,12 +9246,16 @@ class AnomalyMicroLiveRunner:
             max_prior_fast_fade = _category_value(category, self.config, "max_prior_fast_fade_count_72h")
             if max_prior_fast_fade is not None:
                 if not prior_fast_fade_loaded:
-                    prior_fast_fade_result = self._live_prior_fast_fade_72h(
-                        symbol,
-                        decision_timestamp_ms=int(decision["timestamp"]),
-                        levels_timeframe=levels_timeframe,
-                        entry_timeframe=entry_timeframe,
-                    )
+                    frozen_prior_fast_fade = _frozen_prior_fast_fade_from_context(frozen_exchange_context)
+                    if frozen_prior_fast_fade is not None:
+                        prior_fast_fade_result = frozen_prior_fast_fade
+                    else:
+                        prior_fast_fade_result = self._live_prior_fast_fade_72h(
+                            symbol,
+                            decision_timestamp_ms=int(decision["timestamp"]),
+                            levels_timeframe=levels_timeframe,
+                            entry_timeframe=entry_timeframe,
+                        )
                     prior_fast_fade_loaded = True
                 assert prior_fast_fade_result is not None
                 prior_fast_fade_count = prior_fast_fade_result.get("prior_fast_fade_count_72h")
@@ -8923,15 +9274,17 @@ class AnomalyMicroLiveRunner:
             min_mark_basis = _category_value(category, self.config, "min_mark_close_vs_decision_close_basis")
             if min_mark_basis is not None:
                 if not mark_basis_loaded:
-                    mark_basis = (
-                        self._fetch_live_mark_basis(
+                    frozen_mark_basis = _frozen_mark_basis_from_context(frozen_exchange_context)
+                    if frozen_mark_basis is not None:
+                        mark_basis = frozen_mark_basis
+                    elif allow_exchange_context_fetch:
+                        mark_basis = self._fetch_live_mark_basis(
                             symbol,
                             decision_timestamp_ms=int(decision["timestamp"]),
                             decision_close=decision_close,
                         )
-                        if allow_exchange_context_fetch
-                        else LiveMarkBasisResult(None, "replay_exchange_context_fetch_disabled")
-                    )
+                    else:
+                        mark_basis = LiveMarkBasisResult(None, "replay_exchange_context_fetch_disabled")
                     mark_basis_loaded = True
                 basis_value = mark_basis.value if mark_basis is not None else None
                 if basis_value is None or not math.isfinite(basis_value) or basis_value < min_mark_basis:
@@ -9072,14 +9425,16 @@ class AnomalyMicroLiveRunner:
             min_oi_change = _category_value(category, self.config, "min_oi_change_pct_3x5m")
             if min_oi_change is not None:
                 if not oi_change_loaded:
-                    oi_result = (
-                        self._fetch_live_oi_change(
+                    frozen_oi_result = _frozen_oi_change_from_context(frozen_exchange_context)
+                    if frozen_oi_result is not None:
+                        oi_result = frozen_oi_result
+                    elif allow_exchange_context_fetch:
+                        oi_result = self._fetch_live_oi_change(
                             symbol,
                             decision_timestamp_ms=int(decision["timestamp"]),
                         )
-                        if allow_exchange_context_fetch
-                        else LiveOiChangeResult(None, "replay_exchange_context_fetch_disabled")
-                    )
+                    else:
+                        oi_result = LiveOiChangeResult(None, "replay_exchange_context_fetch_disabled")
                     oi_change = oi_result.value
                     oi_change_reason = oi_result.reason
                     oi_change_loaded = True
@@ -9185,9 +9540,27 @@ class AnomalyMicroLiveRunner:
                         "oi_status": oi_change_reason or ("ok" if oi_change is not None else ""),
                     },
                 )
+                decision_snapshot_json = self._build_delayed_replay_decision_snapshot(
+                    symbol=symbol,
+                    levels_timeframe=levels_timeframe,
+                    entry_timeframe=entry_timeframe,
+                    decision_timestamp_ms=int(decision["timestamp"]),
+                    setup_start_timestamp_ms=int(setup_row["timestamp"]),
+                    setup_history=baseline,
+                    setup_row=setup_row,
+                    entry_segment=entry_segment,
+                    setup_source=setup_source,
+                    setup_elapsed_fraction=float(setup_elapsed_fraction),
+                    setup_closed_entry_candles=int(setup_closed_entry_candles),
+                    mark_basis=mark_basis,
+                    oi_change=oi_change,
+                    oi_status=oi_change_reason or ("ok" if oi_change is not None else "not_loaded"),
+                    prior_fast_fade_result=prior_fast_fade_result,
+                )
                 self._capture_delayed_replay_signal(
                     signal,
                     source_scan_mode=self._batch_scan_mode_for_symbol(symbol),
+                    decision_snapshot_json=decision_snapshot_json,
                 )
             if emit_diagnostics and category_rejections:
                 rejected_ids = ",".join(str(row.get("category_id")) for row in category_rejections)
@@ -9207,6 +9580,23 @@ class AnomalyMicroLiveRunner:
             live_reason = "all_categories_rejected"
             if unique_reasons:
                 live_reason = f"all_categories_rejected:{'|'.join(unique_reasons[:3])}"
+            decision_snapshot_json = self._build_delayed_replay_decision_snapshot(
+                symbol=symbol,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                decision_timestamp_ms=int(decision["timestamp"]),
+                setup_start_timestamp_ms=int(setup_row["timestamp"]),
+                setup_history=baseline,
+                setup_row=setup_row,
+                entry_segment=entry_segment,
+                setup_source=setup_source,
+                setup_elapsed_fraction=float(setup_elapsed_fraction),
+                setup_closed_entry_candles=int(setup_closed_entry_candles),
+                mark_basis=mark_basis,
+                oi_change=oi_change,
+                oi_status=oi_change_reason or ("ok" if oi_change is not None else "not_loaded"),
+                prior_fast_fade_result=prior_fast_fade_result,
+            )
             self._capture_delayed_replay_case(
                 source_event="all_categories_rejected",
                 symbol=symbol,
@@ -9223,6 +9613,7 @@ class AnomalyMicroLiveRunner:
                     "category_reject_reasons": unique_reasons,
                     "category_rejections": category_rejections,
                     "source_scan_mode": self._batch_scan_mode_for_symbol(symbol),
+                    "decision_snapshot_json": decision_snapshot_json,
                 },
                 priority=3,
                 live_decision_class="all_categories_rejected",
