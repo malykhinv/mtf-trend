@@ -13317,24 +13317,32 @@ def _split_live_connection_status(connection_text: str) -> tuple[str, str]:
     return ticker_status, flow_status
 
 
+def _format_session_top_cell(text: str, *, width: int = 26) -> str:
+    cleaned = str(text).strip()
+    if len(cleaned) > width:
+        cleaned = cleaned[: max(0, width - 1)] + "~"
+    return f"{cleaned:<{width}}"
+
+
 def _format_session_top_block(session_top_snapshot: dict[str, object] | None) -> list[str]:
     if not session_top_snapshot:
         return []
     label = str(session_top_snapshot.get("session_label") or "Топы")
     items_raw = session_top_snapshot.get("items")
     items = items_raw if isinstance(items_raw, list) else []
-    if items:
-        cells: list[str] = []
-        for item in items[:LIVE_SESSION_TOP_LIMIT]:
-            if not isinstance(item, dict):
-                continue
-            symbol = _compact_symbol(str(item.get("symbol") or ""))
-            growth = _finite_or_none(item.get("growth_fraction"))
-            if not symbol or growth is None:
-                continue
-            cells.append(f"{symbol} {_format_percent(growth, signed=False, precision=0)}")
-        if cells:
-            return ["", label, "    ".join(cells)]
+    cells: list[str] = []
+    for item in items[:LIVE_SESSION_TOP_LIMIT]:
+        if not isinstance(item, dict):
+            continue
+        symbol = _compact_symbol(str(item.get("symbol") or ""))
+        growth = _finite_or_none(item.get("growth_fraction"))
+        if not symbol or growth is None:
+            continue
+        cells.append(_format_session_top_cell(f"{symbol} {_format_percent(growth, signed=False, precision=0)}"))
+    if cells:
+        while len(cells) < LIVE_SESSION_TOP_LIMIT:
+            cells.append(_format_session_top_cell(""))
+        return ["", label, _format_status_line(*cells[:LIVE_SESSION_TOP_LIMIT])]
     reason = str(session_top_snapshot.get("reason") or "")
     if reason == "no_positive_growth_since_session_baseline":
         value = "нет роста"
@@ -13344,7 +13352,7 @@ def _format_session_top_block(session_top_snapshot: dict[str, object] | None) ->
         value = "нет цен"
     else:
         value = "нет данных"
-    return ["", label, value]
+    return ["", label, _format_status_line(_format_session_top_cell(value), _format_session_top_cell(""), _format_session_top_cell(""))]
 
 
 def _format_live_heartbeat(

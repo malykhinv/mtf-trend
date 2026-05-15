@@ -4024,3 +4024,45 @@ Risk:
 ```text
 Low-to-medium. Operator UI and artifacts only. The numbers are session-live ticker growth, not closed-hour OHLCV top-growth, and are labeled by source/status instead of being used as trading signals.
 ```
+
+## 2026-05-15 - P238 proposed: align live session top-growth columns
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Keep the live heartbeat session-top row visually aligned with the three fixed-width operator status columns.
+```
+
+Changes:
+
+```text
+- Formats the live session top-growth row as three fixed-width cells instead of joining symbols with ad-hoc spacing.
+- Pads missing top cells without inventing extra symbols or fallback growth values.
+- Leaves session-top source semantics unchanged: ticker-snapshot baseline only, no OHLCV/REST fallback.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# launcher.py is absent in the uploaded ZIP; include it locally if your checkout has it.
+```
+
+Risk:
+
+```text
+Low. Operator UI formatting only; no trading logic, artifacts, or filters change.
+```
+
