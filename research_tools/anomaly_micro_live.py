@@ -13031,12 +13031,12 @@ def _format_live_heartbeat(
         _format_status_line(
             _format_status_cell("Время", _format_live_runtime(runtime_seconds)),
             _format_status_cell("События", anomalies_total),
-            _format_status_cell("PNL", _format_percent(pnl_pct, signed=False)),
+            _format_status_cell("Активные", f"{active_now}/{active_seen}"),
         ),
         "",
         "Торговля",
         _format_status_line(
-            _format_status_cell("Активные", f"{active_now}/{active_seen}"),
+            _format_status_cell("PNL", _format_percent(pnl_pct, signed=False)),
             _format_status_cell("Позиции", f"{open_positions}/{closed_positions}"),
             _format_status_cell("Ордера", order_value),
         ),

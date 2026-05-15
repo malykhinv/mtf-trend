@@ -3885,3 +3885,44 @@ Risk:
 ```text
 Low. Console rendering only; no live execution or strategy behavior changes.
 ```
+
+
+## 2026-05-15 - P235 proposed: regroup Russian live status metrics
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Move active-symbol load into the Market block and move PNL into the Trading block so the Russian live heartbeat grouping matches operator semantics.
+```
+
+Changes:
+
+```text
+- Market now renders: Время, События, Активные.
+- Trading now renders: PNL, Позиции, Ордера.
+- Leaves heartbeat clearing, delayed replay, Telegram, artifacts and trading logic unchanged.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low. Console rendering only; no live execution or strategy behavior changes.
+```

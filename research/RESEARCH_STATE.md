@@ -1307,3 +1307,10 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - `Replay` is shown as `Повтор`; cold coverage is shown as `Покрытие`.
 - Current commit: UNKNOWN.
 - Next validation: run a short live/dry live in PowerShell and confirm the multiline block redraws cleanly and does not wrap/duplicate.
+
+
+## P235 proposed state
+- Russian live heartbeat grouping is refined: `Рынок` shows runtime, anomaly events and active-symbol load; `Торговля` shows PNL, positions and orders.
+- This is console-output-only; delayed replay, Telegram, artifacts, scan and order logic are unchanged.
+- Current commit: UNKNOWN.
+- Next validation: run a short live/dry live in PowerShell and confirm the block redraws cleanly with the new grouping.
