@@ -36,6 +36,23 @@ def _positive_int_for(argument_name: str) -> Callable[[str], int]:
     return _validator
 
 
+def non_negative_int(value: str, argument_name: str = "value") -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{argument_name} must be >= 0") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"{argument_name} must be >= 0")
+    return parsed
+
+
+def _non_negative_int_for(argument_name: str) -> Callable[[str], int]:
+    def _validator(value: str) -> int:
+        return non_negative_int(value, argument_name=argument_name)
+
+    return _validator
+
+
 def _str_to_bool(value: str) -> bool:
     normalized = value.strip().lower()
     if normalized in {"1", "true", "yes", "y"}:
@@ -366,6 +383,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.75,
         help="Maximum optional wall-clock budget per live cycle for cache-only symbol context snapshot updates.",
+    )
+    anomaly_live.add_argument(
+        "--symbol-context-startup-backfill-enabled",
+        type=_str_to_bool,
+        default=True,
+        help="Backfill and compute 72h+baseline context cache before the live loop. Uses levels TFs only; no subminute entry TF backfill.",
+    )
+    anomaly_live.add_argument(
+        "--symbol-context-snapshot-min-coverage-ratio",
+        type=float,
+        default=0.995,
+        help="Minimum candle coverage for accepting tiny internal gaps in symbol context snapshots.",
+    )
+    anomaly_live.add_argument(
+        "--symbol-context-snapshot-max-gap-candles",
+        type=_non_negative_int_for("--symbol-context-snapshot-max-gap-candles"),
+        default=2,
+        help="Largest tolerated contiguous internal gap, in candles, for symbol context snapshots.",
     )
     anomaly_live.add_argument("--max-signal-age-ms", type=_positive_int_for("--max-signal-age-ms"), default=60_000)
     anomaly_live.add_argument("--max-entry-price-drift-pct", type=float, default=0.003)

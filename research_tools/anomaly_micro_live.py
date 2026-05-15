@@ -80,6 +80,8 @@ DANGER_ADAPTIVE_COLD_COVERAGE_PENDING_GAPS_HIGH = 3
 DEFAULT_LATENCY_SLA_DUE_SCAN_P95_SECONDS = 15.0
 DEFAULT_LATENCY_SLA_MIN_DUE_SAMPLES = 1
 DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_CYCLE_SECONDS = 0.75
+DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MIN_COVERAGE_RATIO = 0.995
+DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_GAP_CANDLES = 2
 DEFAULT_WARM_WATCH_AGGTRADE_TARGET_CAP = 40
 LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON = "latency_sla_due_scan_p95_above_threshold"
 DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE = "DANGER_local_memory_position_guard_no_pre_entry_exchange_position_fetch"
@@ -1811,6 +1813,9 @@ class LiveAnomalyConfig:
     symbol_context_snapshot_symbols_per_cycle: int = 20
     symbol_context_snapshot_fresh_ms: int = 15 * 60_000
     symbol_context_snapshot_max_cycle_seconds: float = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_CYCLE_SECONDS
+    symbol_context_startup_backfill_enabled: bool = True
+    symbol_context_snapshot_min_coverage_ratio: float = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MIN_COVERAGE_RATIO
+    symbol_context_snapshot_max_gap_candles: int = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_GAP_CANDLES
     danger_ticker_flow_radar_enabled: bool = True
     danger_ticker_flow_radar_min_quote_volume_delta_usdt: float = DANGER_TICKER_FLOW_RADAR_MIN_QUOTE_VOLUME_DELTA_USDT
     danger_ticker_flow_radar_min_trade_count_delta: int = DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA
@@ -4041,7 +4046,9 @@ class AnomalyMicroLiveRunner:
                 "prepump_warm_watch_policy": "score_only_for_warm_watch_priority_no_entry_filter_no_trade_veto",
                 "symbol_context_snapshot_enabled": bool(self.config.symbol_context_snapshot_enabled),
                 "symbol_context_snapshot_contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
-                "symbol_context_snapshot_policy": "cache_only_rolling_table_no_precise_scan_context_fetch",
+                "symbol_context_snapshot_policy": "startup_backfill_then_cache_only_rolling_table_no_precise_scan_context_fetch",
+                "symbol_context_startup_backfill_enabled": bool(self.config.symbol_context_startup_backfill_enabled),
+                "symbol_context_startup_backfill_policy": "default_on_levels_timeframes_only_no_subminute_entry_timeframes",
                 "symbol_context_snapshot_interval_seconds": float(
                     self.config.symbol_context_snapshot_interval_seconds
                 ),
@@ -4054,6 +4061,12 @@ class AnomalyMicroLiveRunner:
                 ),
                 "symbol_context_snapshot_max_cycle_seconds": float(
                     self.config.symbol_context_snapshot_max_cycle_seconds
+                ),
+                "symbol_context_snapshot_min_coverage_ratio": float(
+                    self.config.symbol_context_snapshot_min_coverage_ratio
+                ),
+                "symbol_context_snapshot_max_gap_candles": int(
+                    self.config.symbol_context_snapshot_max_gap_candles
                 ),
                 "symbol_context_snapshot_file": self.artifacts.symbol_context_snapshot_path.name,
                 "danger_micro_cache_policy": "wider_ws_aggtrade_buffer_for_active_warm_watch_radar_and_current_cold_only_no_full_universe_subscription",
@@ -4082,6 +4095,7 @@ class AnomalyMicroLiveRunner:
         if self.config.confirm_real_orders:
             self._validate_live_account_mode()
             self._close_startup_exchange_positions(symbols)
+        self._startup_backfill_symbol_context_cache(symbols)
         self._seed_startup_ticker_radar(symbols)
         try:
             self._validate_required_ticker_radar_source(symbols)
@@ -7916,6 +7930,186 @@ class AnomalyMicroLiveRunner:
         ordered.extend(category for category in self._pump_categories if category.category_id not in seen)
         return tuple(ordered)
 
+
+
+    def _symbol_context_snapshot_timeframes(self) -> tuple[Timeframe, ...]:
+        unique: dict[str, Timeframe] = {}
+        for levels_timeframe, _entry_timeframe in self.config.timeframe_pairs:
+            if int(levels_timeframe.to_milliseconds()) < int(Timeframe.M1.to_milliseconds()):
+                continue
+            unique.setdefault(levels_timeframe.value, levels_timeframe)
+        return tuple(unique.values())
+
+    def _symbol_context_window_bounds(
+        self,
+        timeframe: Timeframe,
+        *,
+        now_ms: int,
+        symbols_total: int | None = None,
+    ) -> tuple[int, int, int]:
+        timeframe_ms = int(timeframe.to_milliseconds())
+        decision_ts = _latest_closed_candle_start_ms(timeframe, now_ms=int(now_ms))
+        history_padding_ms = max(
+            int(self._effective_symbol_context_snapshot_fresh_ms(symbols_total=symbols_total)),
+            int(float(self.config.symbol_context_snapshot_interval_seconds) * 1000.0),
+        )
+        history_start_ms = int(decision_ts) - 3 * 86_400_000 - int(history_padding_ms)
+        context_start_ms = int(history_start_ms) - int(self.config.baseline_candles) * int(timeframe_ms)
+        return int(context_start_ms), int(history_start_ms), int(decision_ts)
+
+    def _startup_backfill_symbol_context_cache(self, symbols: list[str]) -> None:
+        if not self.config.symbol_context_snapshot_enabled:
+            return
+        if not self.config.symbol_context_startup_backfill_enabled:
+            self.artifacts.append_event(
+                "symbol_context_startup_backfill_skipped",
+                "__live__",
+                {
+                    "status": "disabled",
+                    "reason": "symbol_context_startup_backfill_disabled",
+                    "policy": "startup_context_backfill_is_default_on_levels_timeframes_only",
+                    "symbols_total": int(len(symbols)),
+                },
+            )
+            return
+        if self._ohlcv_cache_storage is None:
+            self.artifacts.append_event(
+                "symbol_context_startup_backfill_skipped",
+                "__live__",
+                {
+                    "status": "cache_storage_unavailable",
+                    "reason": "live_ohlcv_cache_required_for_startup_context_backfill",
+                    "policy": "no_fallback_to_subminute_or_synthetic_context",
+                    "symbols_total": int(len(symbols)),
+                },
+            )
+            return
+        context_timeframes = self._symbol_context_snapshot_timeframes()
+        if not context_timeframes:
+            self.artifacts.append_event(
+                "symbol_context_startup_backfill_skipped",
+                "__live__",
+                {
+                    "status": "empty_timeframes",
+                    "reason": "no_minute_or_higher_levels_timeframes",
+                    "policy": "no_subminute_context_backfill",
+                    "symbols_total": int(len(symbols)),
+                },
+            )
+            return
+        now_ms = int(time.time() * 1000)
+        windows = {
+            timeframe.value: self._symbol_context_window_bounds(
+                timeframe,
+                now_ms=now_ms,
+                symbols_total=len(symbols),
+            )
+            for timeframe in context_timeframes
+        }
+        self.artifacts.append_event(
+            "symbol_context_startup_backfill_started",
+            "__live__",
+            {
+                "status": "started",
+                "contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
+                "policy": "default_on_startup_backfill_levels_timeframes_only_no_subminute_entry_tfs",
+                "symbols_total": int(len(symbols)),
+                "context_timeframes": [timeframe.value for timeframe in context_timeframes],
+                "baseline_candles": int(self.config.baseline_candles),
+                "history_days": 3,
+                "effective_fresh_ms": int(self._effective_symbol_context_snapshot_fresh_ms(symbols_total=len(symbols))),
+                "windows": {
+                    timeframe_value: {
+                        "context_start_timestamp_ms": int(bounds[0]),
+                        "history_start_timestamp_ms": int(bounds[1]),
+                        "decision_timestamp_ms": int(bounds[2]),
+                    }
+                    for timeframe_value, bounds in windows.items()
+                },
+            },
+        )
+        started_at = time.monotonic()
+        fetched_symbol_timeframes = 0
+        failed_symbol_timeframes = 0
+        fetched_rows_total = 0
+        failure_reasons: dict[str, int] = {}
+        for index, symbol in enumerate(symbols, start=1):
+            for timeframe in context_timeframes:
+                context_start_ms, _history_start_ms, decision_ts = windows[timeframe.value]
+                try:
+                    frame = self._fetch_chart_frame(
+                        symbol,
+                        timeframe,
+                        start_timestamp_ms=int(context_start_ms),
+                        end_timestamp_ms=int(decision_ts),
+                    )
+                    fetched_rows_total += int(len(frame))
+                    fetched_symbol_timeframes += 1
+                except Exception as exc:
+                    failed_symbol_timeframes += 1
+                    reason = f"{type(exc).__name__}:{str(exc)[:160]}"
+                    failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+                    self.artifacts.append_event(
+                        "symbol_context_startup_backfill_failed",
+                        symbol,
+                        {
+                            "timeframe": timeframe.value,
+                            "reason": reason,
+                            "context_start_timestamp_ms": int(context_start_ms),
+                            "decision_timestamp_ms": int(decision_ts),
+                        },
+                    )
+            if index == 1 or index % 50 == 0 or index == len(symbols):
+                self.logger(
+                    f"контекст 72ч · кеш {index}/{len(symbols)} · "
+                    f"ok {fetched_symbol_timeframes} · ошибки {failed_symbol_timeframes}"
+                )
+        flushed_rows = self._flush_live_ohlcv_cache_if_due(force=True, reason="symbol_context_startup_backfill")
+        snapshot_ok = 0
+        snapshot_failed = 0
+        for symbol in symbols:
+            for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
+                if int(levels_timeframe.to_milliseconds()) < int(Timeframe.M1.to_milliseconds()):
+                    continue
+                snapshot = self._compute_symbol_context_snapshot(
+                    symbol,
+                    levels_timeframe=levels_timeframe,
+                    entry_timeframe=entry_timeframe,
+                    now_ms=now_ms,
+                )
+                self._symbol_context_snapshots[snapshot.key()] = snapshot
+                if snapshot.status == "ok":
+                    snapshot_ok += 1
+                else:
+                    snapshot_failed += 1
+        output_path = self.artifacts.write_symbol_context_snapshot(list(self._symbol_context_snapshots.values()))
+        self._last_symbol_context_snapshot_at_ms = int(time.time() * 1000)
+        status = "ok" if snapshot_failed == 0 else "partial" if snapshot_ok else "failed"
+        self._last_symbol_context_snapshot_status = status
+        elapsed_seconds = time.monotonic() - started_at
+        self.artifacts.append_event(
+            "symbol_context_startup_backfill_completed",
+            "__live__",
+            {
+                "status": status,
+                "contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
+                "policy": "default_on_startup_backfill_levels_timeframes_only_no_subminute_entry_tfs",
+                "symbols_total": int(len(symbols)),
+                "context_timeframes": [timeframe.value for timeframe in context_timeframes],
+                "fetched_symbol_timeframes": int(fetched_symbol_timeframes),
+                "failed_symbol_timeframes": int(failed_symbol_timeframes),
+                "fetched_rows_total": int(fetched_rows_total),
+                "flushed_rows": int(flushed_rows),
+                "snapshot_ok_count": int(snapshot_ok),
+                "snapshot_failed_count": int(snapshot_failed),
+                "failure_reasons": failure_reasons,
+                "elapsed_seconds": round(float(elapsed_seconds), 3),
+                "output_file": output_path.name,
+                "gap_tolerance_min_coverage_ratio": float(self.config.symbol_context_snapshot_min_coverage_ratio),
+                "gap_tolerance_max_gap_candles": int(self.config.symbol_context_snapshot_max_gap_candles),
+            },
+        )
+
     def _load_cached_window_allow_trailing_gap(
         self,
         symbol: str,
@@ -7982,10 +8176,36 @@ class AnomalyMicroLiveRunner:
             timeframe_ms=timeframe_ms,
         )
         if missing_ranges:
-            return pd.DataFrame(), f"cache_gap:{len(missing_ranges)}", None
+            missing_candles = sum(
+                ((int(end_ms) - int(start_ms)) // timeframe_ms) + 1
+                for start_ms, end_ms in missing_ranges
+            )
+            expected_candles = ((int(effective_end_ms) - int(expected_start_ms)) // timeframe_ms) + 1
+            present_candles = max(0, int(expected_candles) - int(missing_candles))
+            coverage_ratio = float(present_candles) / float(expected_candles) if expected_candles > 0 else 0.0
+            max_gap_candles = max(
+                ((int(end_ms) - int(start_ms)) // timeframe_ms) + 1
+                for start_ms, end_ms in missing_ranges
+            )
+            min_coverage_ratio = float(self.config.symbol_context_snapshot_min_coverage_ratio)
+            max_allowed_gap_candles = int(self.config.symbol_context_snapshot_max_gap_candles)
+            if coverage_ratio < min_coverage_ratio or max_gap_candles > max_allowed_gap_candles:
+                return pd.DataFrame(), (
+                    f"cache_gap:{len(missing_ranges)}:missing_candles={missing_candles}:"
+                    f"coverage={coverage_ratio:.6f}:max_gap_candles={max_gap_candles}"
+                ), None
         effective_window = window.loc[window["timestamp"].astype("int64") <= effective_end_ms].copy()
         if effective_window.empty:
             return pd.DataFrame(), "cache_window_empty", None
+        if missing_ranges:
+            return (
+                effective_window.sort_values("timestamp").reset_index(drop=True),
+                (
+                    f"ok_tolerated_gap:{len(missing_ranges)}:missing_candles={missing_candles}:"
+                    f"coverage={coverage_ratio:.6f}:max_gap_candles={max_gap_candles}"
+                ),
+                effective_end_ms,
+            )
         return effective_window.sort_values("timestamp").reset_index(drop=True), "ok", effective_end_ms
 
     def _symbol_context_snapshot_key(
@@ -8300,7 +8520,7 @@ class AnomalyMicroLiveRunner:
             end_timestamp_ms=decision_ts,
             fetch_missing=False,
         )
-        if context_status != "ok" or context_cache_end_ms is None:
+        if not context_status.startswith("ok") or context_cache_end_ms is None:
             return build_snapshot(
                 status="unavailable",
                 reason=f"context={context_status}",
@@ -8431,7 +8651,7 @@ class AnomalyMicroLiveRunner:
                     prior_fast_fade_timestamps.append(row_ts)
         return build_snapshot(
             status="ok",
-            reason="ok",
+            reason=context_status,
             context_cache_end_ms=int(context_cache_end_ms),
             effective_cache_end_ms=effective_cache_end_ms,
             ignored_tail_ms=ignored_tail_ms,
@@ -8464,7 +8684,7 @@ class AnomalyMicroLiveRunner:
         history_start_ms = decision_ts - 3 * 86_400_000
         context_start_ms = history_start_ms - int(self.config.baseline_candles) * setup_ms
         base_result: dict[str, object] = {
-            "coverage_policy": "cache_only_symbol_context_snapshot_no_precise_scan_fetch",
+            "coverage_policy": "startup_backfilled_cache_only_symbol_context_snapshot_no_precise_scan_fetch",
             "snapshot_contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
             "history_start_timestamp_ms": history_start_ms,
             "context_timeframe": levels_timeframe.value,
@@ -12303,6 +12523,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "prepump_warm_watch_max_features": (config.prepump_warm_watch_max_features, 1),
         "symbol_context_snapshot_symbols_per_cycle": (config.symbol_context_snapshot_symbols_per_cycle, 1),
         "symbol_context_snapshot_fresh_ms": (config.symbol_context_snapshot_fresh_ms, 1),
+        "symbol_context_snapshot_max_gap_candles": (config.symbol_context_snapshot_max_gap_candles, 0),
         "latency_sla_min_due_samples": (config.latency_sla_min_due_samples, 1),
         "live_ws_ticker_stale_ms": (config.live_ws_ticker_stale_ms, 1),
         "live_ws_aggtrade_stale_ms": (config.live_ws_aggtrade_stale_ms, 1),
@@ -12427,6 +12648,17 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
     }
     for name, value in required_non_negative.items():
         _require_finite_config_number(name, value, min_value=0.0, allow_equal_min=True)
+
+    _require_finite_config_number(
+        "symbol_context_snapshot_min_coverage_ratio",
+        config.symbol_context_snapshot_min_coverage_ratio,
+        min_value=0.0,
+        allow_equal_min=False,
+    )
+    if float(config.symbol_context_snapshot_min_coverage_ratio) > 1.0:
+        raise LiveStartupError(
+            "Некорректный live config: symbol_context_snapshot_min_coverage_ratio must be <= 1.0"
+        )
 
     optional_positive = {
         "max_start_quote_ratio": config.max_start_quote_ratio,

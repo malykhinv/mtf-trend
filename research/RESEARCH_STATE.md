@@ -1321,3 +1321,7 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - On recovery, live writes `network_recovered` with the original reason and sends a Telegram recovery note, so a DNS-wide outage that also blocks Telegram still leaves a later operator notification path.
 - Current commit: UNKNOWN.
 - Next validation: run a short live smoke with blocked DNS/API and confirm console separation, `network_degraded_telegram_alert_enqueued`, `telegram_async_send_failed` if Telegram is unreachable, and Telegram delivery/recovery notification once connectivity returns.
+
+## 2026-05-15 — P239 proposed
+
+Live prior-fast-fade context must not depend only on a post-scan optional snapshot. P239 proposes default startup backfill + startup snapshot computation for 72h+baseline levels-timeframe context, with explicit tiny-gap tolerance (`min_coverage_ratio=0.995`, `max_gap_candles=2`) and no subminute context backfill. Commit: UNKNOWN.

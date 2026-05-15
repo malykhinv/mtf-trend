@@ -1556,6 +1556,16 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             symbol_context_snapshot_max_cycle_seconds=float(
                 getattr(args, "symbol_context_snapshot_max_cycle_seconds", 0.75)
             ),
+            symbol_context_startup_backfill_enabled=_to_bool_flag(
+                getattr(args, "symbol_context_startup_backfill_enabled", True),
+                default=True,
+            ),
+            symbol_context_snapshot_min_coverage_ratio=float(
+                getattr(args, "symbol_context_snapshot_min_coverage_ratio", 0.995)
+            ),
+            symbol_context_snapshot_max_gap_candles=int(
+                getattr(args, "symbol_context_snapshot_max_gap_candles", 2)
+            ),
             max_signal_age_ms=int(getattr(args, "max_signal_age_ms", 60_000)),
             max_entry_price_drift_pct=float(getattr(args, "max_entry_price_drift_pct", 0.003)),
             min_executable_rr_to_signal_tp1=float(getattr(args, "min_executable_rr_to_signal_tp1", 0.75)),
