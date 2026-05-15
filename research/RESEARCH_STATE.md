@@ -1390,3 +1390,11 @@ P247 adds dependency retry cooldown on top of P245/P246. Retryable data-dependen
 No execution guards are loosened. No new CLI flags are introduced. Current commit: UNKNOWN.
 
 Next validation: run a short live smoke and inspect `signal_scan_dependency_retry_scheduled`, `candidate_expired_dependency_timeout`, `dependency_retry_cooldown_*`, `signal_scan_retryable_dependency_blocked`, `latency_sla_status`, and `warm_watch_precise_deferred_latency_sla`.
+
+
+## 2026-05-15 — P248 proposed
+
+P248 makes live initial-risk rejects explicit: `reject_entry_below_initial_stop` now records whether the computed stop came from EMA20, the structural low-based stop, or a tie, plus the stop-above-entry distance. It does not change stop calculation or allow any fallback stop substitution.
+
+Current commit: UNKNOWN.
+Next validation: run a live smoke and inspect `reject_entry_below_initial_stop` rows for `stop_source`, `risk_side`, `previous_stop`, `decision_ema20`, and `stop_above_entry_pct`.

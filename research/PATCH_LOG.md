@@ -4375,3 +4375,43 @@ Risk:
 ```text
 Medium-low. Retryable dependency candidates are intentionally not rescanned every cycle, which reduces load but can delay a newly ready dependency by up to the internal cooldown. Stale timeout still prevents late entries, and artifacts show scheduled retries plus dependency timeouts.
 ```
+
+
+## P248 - proposed - entry-below-stop diagnostics
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make invalid initial-risk live rejects diagnosable without changing stop logic. When the computed long stop is at/above entry, artifacts must show whether the active stop came from EMA20 or the structural low-based stop instead of emitting a generic invalid_initial_risk row.
+```
+
+Changes:
+
+```text
+- Replaces the generic live event reject_invalid_initial_risk with reject_entry_below_initial_stop.
+- Adds risk_side, stop_source, previous_stop, decision_ema20, and stop_above_entry_pct to event details.
+- Keeps the same safety behavior: the setup is rejected; no alternate stop is substituted.
+- Adds both old and new event names to precise-scan visibility so older/live mixed artifacts remain readable.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "entry-below-stop|initial-risk-diagnostics"  # expected: no output
+```
+
+Risk:
+
+```text
+Low. Artifact naming/details change only; trade selection, stop calculation, and execution guards are unchanged.
+```

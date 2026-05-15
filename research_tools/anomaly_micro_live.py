@@ -164,6 +164,8 @@ VISIBILITY_PRECISE_SCAN_EVENTS = frozenset(
         "signal_scan_retryable_dependency_blocked",
         "signal_scan_dependency_retry_scheduled",
         "candidate_expired_dependency_timeout",
+        "reject_entry_below_initial_stop",
+        "reject_invalid_initial_risk",
         "category_selected",
         "category_rejected",
     }
@@ -10800,14 +10802,46 @@ class AnomalyMicroLiveRunner:
         initial_risk_pct = _safe_divide(risk, entry_price)
         if not math.isfinite(risk) or risk <= 0.0:
             if emit_diagnostics:
-                self._clear_active_symbol(symbol, reason="invalid_initial_risk")
+                if math.isfinite(previous_stop) and math.isfinite(decision_ema20):
+                    if abs(previous_stop - decision_ema20) <= max(abs(entry_price) * 1e-12, 1e-12):
+                        stop_source = "structural_and_ema20_tie"
+                    elif decision_ema20 > previous_stop:
+                        stop_source = "ema20"
+                    else:
+                        stop_source = "structural"
+                elif math.isfinite(previous_stop):
+                    stop_source = "structural"
+                elif math.isfinite(decision_ema20):
+                    stop_source = "ema20"
+                else:
+                    stop_source = "non_finite"
+                risk_side = (
+                    "non_finite"
+                    if not math.isfinite(risk) or not math.isfinite(stop_price) or not math.isfinite(entry_price)
+                    else "stop_above_entry"
+                    if stop_price > entry_price
+                    else "zero_risk"
+                    if stop_price == entry_price
+                    else "unknown"
+                )
+                stop_above_entry_pct = (
+                    _safe_divide(stop_price - entry_price, entry_price)
+                    if math.isfinite(stop_price) and math.isfinite(entry_price) and entry_price != 0.0
+                    else float("nan")
+                )
+                self._clear_active_symbol(symbol, reason="entry_below_initial_stop")
                 self.artifacts.append_event(
-                    "reject_invalid_initial_risk",
+                    "reject_entry_below_initial_stop",
                     symbol,
                     {
                         "entry_price": _finite_or_none(entry_price),
                         "stop_price": _finite_or_none(stop_price),
                         "risk": _finite_or_none(risk),
+                        "risk_side": risk_side,
+                        "stop_source": stop_source,
+                        "previous_stop": _finite_or_none(previous_stop),
+                        "decision_ema20": _finite_or_none(decision_ema20),
+                        "stop_above_entry_pct": _finite_or_none(stop_above_entry_pct),
                         "decision_timestamp_ms": int(decision["timestamp"]),
                         "setup_source": setup_source,
                     },

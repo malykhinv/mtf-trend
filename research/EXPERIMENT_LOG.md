@@ -2136,3 +2136,12 @@ latency_sla_status=breached and warm_watch_precise_deferred_latency_sla decrease
 ```
 
 Guardrail: do not convert unavailable dependencies into pass-by-default. If dependency timeouts dominate, fix the dependency producer/cache coverage; do not weaken execution safety.
+
+
+## 2026-05-15 — P248 live initial-risk diagnostics
+
+Purpose: distinguish true setup deterioration from stop-anchor geometry when live rejects a candidate because initial long risk is non-positive.
+
+Expected artifact change: `reject_entry_below_initial_stop` replaces the generic `reject_invalid_initial_risk` live event and includes `stop_source`, `risk_side`, `previous_stop`, `decision_ema20`, and `stop_above_entry_pct`.
+
+Validation focus: after the next live run, count whether non-positive risk is mostly `ema20`, `structural`, or tie-driven. Do not change stop logic until this distribution is known.
