@@ -9955,7 +9955,21 @@ class AnomalyMicroLiveRunner:
                     entry_timeframe,
                     closed_timestamp_ms=latest_closed_entry_ts,
                 ):
-                    skipped_not_due += 1
+                    dependency_key = (
+                        _position_symbol_key(symbol),
+                        levels_timeframe.value,
+                        entry_timeframe.value,
+                        int(latest_closed_entry_ts),
+                    )
+                    with self._state_lock:
+                        cooldown_active = self._dependency_retry_cooldown_active_locked(
+                            dependency_key,
+                            now_ms=now_ms,
+                        )
+                    if cooldown_active:
+                        dependency_cooldown_skipped += 1
+                    else:
+                        skipped_not_due += 1
                     continue
                 due_count += 1
                 cooldown_status, cooldown = self._dependency_retry_cooldown_status(

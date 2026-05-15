@@ -4415,3 +4415,41 @@ Risk:
 ```text
 Low. Artifact naming/details change only; trade selection, stop calculation, and execution guards are unchanged.
 ```
+
+## P249 - proposed - dependency cooldown scan-summary accounting
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Fix the P247 accounting path where dependency-retry cooldown skips could be counted as generic skipped_not_due in per-symbol scan summaries. Cooldown waits must stay visible as dependency cooldown, not as ordinary not-due scheduling noise.
+```
+
+Changes:
+
+```text
+- When a timeframe scan is skipped because a dependency retry cooldown is active, signal_symbol_scan_summary increments dependency_retry_cooldown_skipped_count instead of skipped_not_due_count.
+- Keeps the cooldown gating behavior unchanged; this is artifact accounting only.
+- Adds no CLI flags and no trading-logic changes.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "candidate-queue|queue-pressure|adaptive-precise|precise-budget|dependency-retry|retry-cooldown|dependency-cooldown|entry-below-stop|initial-risk-diagnostics"  # expected: no output
+```
+
+Risk:
+
+```text
+Low. The patch changes only per-symbol summary classification for an already-skipped cooldown scan. It does not change candidate selection, dependency retry timing, stale guards, or execution logic.
+```

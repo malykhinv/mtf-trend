@@ -2145,3 +2145,17 @@ Purpose: distinguish true setup deterioration from stop-anchor geometry when liv
 Expected artifact change: `reject_entry_below_initial_stop` replaces the generic `reject_invalid_initial_risk` live event and includes `stop_source`, `risk_side`, `previous_stop`, `decision_ema20`, and `stop_above_entry_pct`.
 
 Validation focus: after the next live run, count whether non-positive risk is mostly `ema20`, `structural`, or tie-driven. Do not change stop logic until this distribution is known.
+
+## 2026-05-15 — P249 cooldown accounting validation
+
+Goal: verify that dependency retry cooldown is auditable at per-symbol scan-summary level.
+
+Expected evidence:
+
+```text
+signal_scan_dependency_retry_scheduled appears for retryable dependency blocks
+repeated scans during cooldown show dependency_retry_cooldown_skipped_count > 0
+skipped_not_due_count no longer absorbs dependency cooldown waits
+```
+
+This does not change trading behavior; it only fixes diagnostic attribution from the P247 review.

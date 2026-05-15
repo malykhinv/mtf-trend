@@ -1398,3 +1398,10 @@ P248 makes live initial-risk rejects explicit: `reject_entry_below_initial_stop`
 
 Current commit: UNKNOWN.
 Next validation: run a live smoke and inspect `reject_entry_below_initial_stop` rows for `stop_source`, `risk_side`, `previous_stop`, `decision_ema20`, and `stop_above_entry_pct`.
+
+## 2026-05-15 — P249 proposed
+
+Review after P245-P248 found one artifact-accounting issue in P247: active dependency retry cooldowns were skipped before the local scan-summary cooldown counter, so a cooldown wait could appear as generic `skipped_not_due_count`. P249 corrects the summary classification so cooldown pressure is measurable as `dependency_retry_cooldown_skipped_count`.
+
+Current commit: UNKNOWN.
+Next validation: in the next live smoke, check that repeated dependency waits increase `dependency_retry_cooldown_skipped_count` / `dependency_retry_cooldown_skipped_cycle` rather than hiding under `skipped_not_due_count`.
