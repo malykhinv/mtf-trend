@@ -290,8 +290,11 @@ DELAYED_REPLAY_RESULTS_COLUMNS = (
     "recompute_status",
     "would_select_signal",
     "would_enter_under_frozen_decision",
+    "strict_replay_would_enter",
+    "snapshot_signal_available",
     "strict_recompute_signal",
     "frozen_signal_snapshot_used",
+    "operator_alert_kind",
     "mismatch_type",
     "recomputed_category_id",
     "recomputed_category_label",
@@ -337,7 +340,7 @@ DELAYED_REPLAY_SUMMARY_COLUMNS = (
     "idle_since_ms",
     "duration_seconds",
 )
-DELAYED_REPLAY_CONTRACT = "delayed_replay_v3_evidence_labeled_cache_only_idle_tg"
+DELAYED_REPLAY_CONTRACT = "delayed_replay_v4_final_decision_evidence_labeled_cache_only_idle_tg"
 SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v2_cache_only_prior_fast_fade_prepump_spot"
 SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
     "snapshot_timestamp_utc",
@@ -3559,7 +3562,7 @@ class AnomalyMicroLiveRunner:
                 ),
                 "delayed_replay_enabled": bool(self.config.delayed_replay_enabled),
                 "delayed_replay_contract": DELAYED_REPLAY_CONTRACT,
-                "delayed_replay_policy": "capture_all_live_anomalies_process_only_when_idle_cache_only_no_orders",
+                "delayed_replay_policy": "capture_final_live_decisions_process_only_when_idle_cache_only_no_orders",
                 "delayed_replay_delay_seconds": float(self.config.delayed_replay_delay_seconds),
                 "delayed_replay_min_idle_seconds": float(self.config.delayed_replay_min_idle_seconds),
                 "delayed_replay_max_cases_per_cycle": int(self.config.delayed_replay_max_cases_per_cycle),
@@ -5049,23 +5052,31 @@ class AnomalyMicroLiveRunner:
         )
         frozen_signal_snapshot_used = bool(replay_signal is not None and recompute_source == "frozen_live_signal_snapshot")
         would_select_signal = replay_signal is not None
-        would_enter = bool(would_select_signal)
-        if frozen_signal_snapshot_used and live_decision_class == "signal_selected":
+        strict_replay_would_enter = bool(strict_recompute_signal)
+        snapshot_signal_available = bool(frozen_signal_snapshot_used)
+        would_enter = bool(strict_replay_would_enter)
+        if snapshot_signal_available and live_decision_class == "signal_selected":
             mismatch_type = "live_selected_frozen_signal_snapshot"
-        elif frozen_signal_snapshot_used and live_decision_class == "execution_rejected":
+        elif snapshot_signal_available and live_decision_class == "execution_rejected":
             mismatch_type = "live_execution_rejected_frozen_signal_snapshot"
-        elif frozen_signal_snapshot_used:
+        elif snapshot_signal_available:
             mismatch_type = "live_rejected_frozen_signal_snapshot"
-        elif would_enter and live_decision_class == "signal_selected":
+        elif strict_replay_would_enter and live_decision_class == "signal_selected":
             mismatch_type = "live_selected_recomputed_signal"
-        elif would_enter and live_decision_class == "execution_rejected":
+        elif strict_replay_would_enter and live_decision_class == "execution_rejected":
             mismatch_type = "live_execution_rejected_replay_would_enter"
-        elif would_enter:
+        elif strict_replay_would_enter:
             mismatch_type = "live_rejected_replay_would_enter"
         elif live_decision_class == "signal_selected":
             mismatch_type = "live_selected_replay_no_signal"
         else:
             mismatch_type = "live_rejected_replay_rejected"
+        operator_alert_kind = ""
+        if live_decision_class != "signal_selected":
+            if strict_replay_would_enter:
+                operator_alert_kind = "strict_replay_ignored_entry"
+            elif snapshot_signal_available:
+                operator_alert_kind = "frozen_signal_snapshot_only"
         outcome = self._delayed_replay_outcome(case, now_ms=now_ms, signal=replay_signal) if would_select_signal else {
             "outcome_status": "not_applicable_non_selected_case",
             "outcome_window_start_ms": "",
@@ -5079,7 +5090,7 @@ class AnomalyMicroLiveRunner:
             "first_hit": "",
         }
         telegram_notified = False
-        if would_enter and live_decision_class != "signal_selected" and self.config.delayed_replay_telegram_enabled:
+        if operator_alert_kind and replay_signal is not None and self.config.delayed_replay_telegram_enabled:
             telegram_notified = self._notify_delayed_replay_ignored_entry(
                 replay_signal,
                 case=case,
@@ -5107,8 +5118,11 @@ class AnomalyMicroLiveRunner:
             "recompute_source": str(recompute.get("source") or ""),
             "would_select_signal": bool(would_select_signal),
             "would_enter_under_frozen_decision": bool(would_enter),
+            "strict_replay_would_enter": bool(strict_replay_would_enter),
+            "snapshot_signal_available": bool(snapshot_signal_available),
             "strict_recompute_signal": bool(strict_recompute_signal),
             "frozen_signal_snapshot_used": bool(frozen_signal_snapshot_used),
+            "operator_alert_kind": operator_alert_kind,
             "mismatch_type": mismatch_type,
             "recomputed_category_id": replay_signal.category_id if replay_signal is not None else "",
             "recomputed_category_label": replay_signal.category_label if replay_signal is not None else "",
@@ -5154,8 +5168,11 @@ class AnomalyMicroLiveRunner:
             "recompute_source": "error",
             "would_select_signal": "",
             "would_enter_under_frozen_decision": "",
+            "strict_replay_would_enter": "",
+            "snapshot_signal_available": "",
             "strict_recompute_signal": "",
             "frozen_signal_snapshot_used": "",
+            "operator_alert_kind": "",
             "mismatch_type": "replay_error",
             "decision_data_end_timestamp_ms": "",
             "outcome_status": str(exc)[:500],
@@ -9178,6 +9195,38 @@ class AnomalyMicroLiveRunner:
                     f"сигнал {category.category_id} · раньше отвалилось {rejected_ids}"
                 )
             return signal
+        if emit_diagnostics and category_rejections:
+            reject_reasons = [
+                str(row.get("category_reject_reason") or row.get("reason") or "")
+                for row in category_rejections
+                if str(row.get("category_reject_reason") or row.get("reason") or "")
+            ]
+            unique_reasons = list(dict.fromkeys(reject_reasons))
+            rejected_category_ids = ",".join(str(row.get("category_id") or "") for row in category_rejections if row.get("category_id"))
+            live_reason = "all_categories_rejected"
+            if unique_reasons:
+                live_reason = f"all_categories_rejected:{'|'.join(unique_reasons[:3])}"
+            self._capture_delayed_replay_case(
+                source_event="all_categories_rejected",
+                symbol=symbol,
+                details={
+                    "levels_tf": levels_timeframe.value,
+                    "entry_tf": entry_timeframe.value,
+                    "decision_timestamp_ms": int(decision["timestamp"]),
+                    "start_timestamp_ms": int(setup_row["timestamp"]),
+                    "setup_source": setup_source,
+                    "setup_elapsed_fraction": float(setup_elapsed_fraction),
+                    "setup_closed_entry_candles": int(setup_closed_entry_candles),
+                    "rejected_category_count": int(len(category_rejections)),
+                    "rejected_category_ids": rejected_category_ids,
+                    "category_reject_reasons": unique_reasons,
+                    "category_rejections": category_rejections,
+                    "source_scan_mode": self._batch_scan_mode_for_symbol(symbol),
+                },
+                priority=3,
+                live_decision_class="all_categories_rejected",
+                live_reason=live_reason,
+            )
         return None
 
     def _record_category_reject(
@@ -9203,14 +9252,6 @@ class AnomalyMicroLiveRunner:
             payload["detail_reason"] = detail_reason
         if emit:
             self.artifacts.append_event("category_rejected", symbol, payload)
-            self._capture_delayed_replay_case(
-                source_event="category_rejected",
-                symbol=symbol,
-                details=payload,
-                priority=3,
-                live_decision_class="category_rejected",
-                live_reason=reason,
-            )
         return payload
 
     def _fetch_live_oi_change(self, symbol: str, *, decision_timestamp_ms: int) -> LiveOiChangeResult:
@@ -9296,10 +9337,21 @@ class AnomalyMicroLiveRunner:
                     decision_timestamp_ms=signal.decision_timestamp_ms,
                 )
                 self._mark_signal_decision_consumed(signal, reason="symbol_position_already_active")
+                reject_details = {
+                    "symbol_key": symbol_key,
+                    "levels_tf": signal.levels_timeframe.value,
+                    "entry_tf": signal.entry_timeframe.value,
+                    "decision_timestamp_ms": signal.decision_timestamp_ms,
+                }
                 self.artifacts.append_event(
                     "reject_symbol_position_already_active",
                     signal.symbol,
-                    {"symbol_key": symbol_key, "levels_tf": signal.levels_timeframe.value, "entry_tf": signal.entry_timeframe.value},
+                    reject_details,
+                )
+                self._capture_delayed_replay_execution_reject(
+                    signal,
+                    event="reject_symbol_position_already_active",
+                    details=reject_details,
                 )
                 return
             if len(self._open_positions) + len(self._opening_symbols) >= self.config.max_open_positions:
@@ -9307,17 +9359,23 @@ class AnomalyMicroLiveRunner:
             if self._symbol_in_stop_cooldown(signal.symbol):
                 self._clear_active_symbol(signal.symbol, reason="stop_cooldown")
                 self._mark_signal_decision_consumed(signal, reason="stop_cooldown")
+                reject_details = {
+                    "symbol_key": symbol_key,
+                    "levels_tf": signal.levels_timeframe.value,
+                    "entry_tf": signal.entry_timeframe.value,
+                    "decision_timestamp_ms": signal.decision_timestamp_ms,
+                    "stop_cooldown_hours": self.config.stop_cooldown_hours,
+                    "stop_limit_per_symbol": self.config.stop_limit_per_symbol,
+                }
                 self.artifacts.append_event(
                     "reject_stop_cooldown",
                     signal.symbol,
-                    {
-                        "symbol_key": symbol_key,
-                        "levels_tf": signal.levels_timeframe.value,
-                        "entry_tf": signal.entry_timeframe.value,
-                        "decision_timestamp_ms": signal.decision_timestamp_ms,
-                        "stop_cooldown_hours": self.config.stop_cooldown_hours,
-                        "stop_limit_per_symbol": self.config.stop_limit_per_symbol,
-                    },
+                    reject_details,
+                )
+                self._capture_delayed_replay_execution_reject(
+                    signal,
+                    event="reject_stop_cooldown",
+                    details=reject_details,
                 )
                 return
             if not reject_max_positions:
@@ -9732,13 +9790,25 @@ class AnomalyMicroLiveRunner:
             }
         )
         if details["signal_age_ms"] < 0:
-            self.artifacts.append_event("reject_signal_not_closed_yet", signal.symbol, details)
+            reject_details = {**details, "stage": "execution_guard"}
+            self.artifacts.append_event("reject_signal_not_closed_yet", signal.symbol, reject_details)
+            self._capture_delayed_replay_execution_reject(
+                signal,
+                event="reject_signal_not_closed_yet",
+                details=reject_details,
+            )
             return False
         if details["signal_age_ms"] > self.config.max_signal_age_ms:
             self._clear_active_symbol(signal.symbol, reason="stale_signal")
             self._mark_signal_decision_consumed(signal, reason="stale_signal")
-            self.artifacts.append_event("reject_stale_signal", signal.symbol, {**details, "stage": "execution_guard"})
-            self._notify_order_blocked(signal, event="reject_stale_signal", details=details)
+            reject_details = {**details, "stage": "execution_guard"}
+            self.artifacts.append_event("reject_stale_signal", signal.symbol, reject_details)
+            self._capture_delayed_replay_execution_reject(
+                signal,
+                event="reject_stale_signal",
+                details=reject_details,
+            )
+            self._notify_order_blocked(signal, event="reject_stale_signal", details=reject_details)
             return False
         return True
 

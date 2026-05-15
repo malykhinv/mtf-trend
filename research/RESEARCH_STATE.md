@@ -1254,6 +1254,14 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Current commit: UNKNOWN.
 - Next validation: short dry live with delayed replay enabled; inspect result rows where recompute_source=frozen_live_signal_snapshot and verify no *_replay_would_enter mismatch is emitted for those rows.
 
+## P227 proposed state
+- Delayed replay now queues final live decisions instead of every intermediate category-profile reject.
+- A no-signal anomaly is represented by one `all_categories_rejected` case after the category loop completes, so prior profile rejects inside a later selected signal cannot create false “live ignored entry” alerts.
+- Execution rejects now include duplicate/opening symbol, stop cooldown, not-yet-closed signal, and stale signal in the delayed replay queue.
+- Strict cache-only recompute and frozen live-signal snapshot evidence are separated in result columns and operator alert kind.
+- Current commit: UNKNOWN.
+- Next validation: short dry live with delayed replay enabled; inspect that `delayed_replay_queue.jsonl` has no raw `category_rejected` source cases and that TG alerts distinguish `strict_replay_ignored_entry` from `frozen_signal_snapshot_only`.
+
 
 ## P226 proposed state
 - Delayed replay decision recompute still uses only cached windows ending at decision_timestamp_ms; outcome windows start after decision and are labeled as post-decision.

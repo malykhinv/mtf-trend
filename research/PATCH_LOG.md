@@ -3522,6 +3522,50 @@ Risk:
 Low. Audit/artifact/Telegram wording only; live trading logic, order placement, fills, stops, and scan thresholds are unchanged.
 ```
 
+## 2026-05-15 - P227 proposed: delayed replay final-decision queue hardening
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Prevent delayed replay from treating intermediate category-profile rejects as ignored live entries, while keeping audit coverage for final no-signal decisions and important execution rejects.
+```
+
+Changes:
+
+```text
+- Upgrades delayed replay contract to delayed_replay_v4_final_decision_evidence_labeled_cache_only_idle_tg.
+- Stops enqueueing a delayed replay case from each intermediate category_rejected event.
+- Enqueues one final all_categories_rejected case only when the category loop ends without a selected signal.
+- Adds delayed replay capture for reject_symbol_position_already_active, reject_stop_cooldown, reject_signal_not_closed_yet, and reject_stale_signal.
+- Splits result semantics into strict_replay_would_enter, snapshot_signal_available, and operator_alert_kind; would_enter_under_frozen_decision is true only for strict cache-only candle recompute.
+- Keeps frozen live-signal snapshot alerts labeled separately as frozen_signal_snapshot_only instead of strict replay-found entries.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep delayed-replay
+```
+
+Risk:
+
+```text
+Low/medium. Audit-only; no order placement, live trading thresholds, fills, stops, or scanner selection are changed. The main behavior change is fewer false-positive replay queue cases from intermediate category-profile rejects.
+```
+
 
 ## 2026-05-15 - P226 proposed: label delayed replay evidence source
 
