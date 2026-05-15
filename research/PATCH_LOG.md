@@ -3926,3 +3926,57 @@ Risk:
 ```text
 Low. Console rendering only; no live execution or strategy behavior changes.
 ```
+
+## 2026-05-15 - P236 proposed: live network error visibility and Telegram retry
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+data/exchanges/ccxt_futures_client.py
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Make live network/API failures visible as real operator alerts instead of letting retry warnings stick to the inline status block, and keep Telegram alert attempts alive while network degradation persists.
+```
+
+Changes:
+
+```text
+- Adds a typed retry logger boundary to CcxtFuturesClient so live can route retry warnings through the live status logger without touching private client internals.
+- Adds highlighted live console alerts with a leading blank line for exchange retry exhaustion and network/API degraded state.
+- Replaces one-shot async Telegram network-degraded notification with periodic enqueue retry while degraded.
+- Records `network_degraded_telegram_alert_enqueued` artifacts for operator-audit visibility.
+- Sends a Telegram recovery note with the original degradation reason when connectivity returns.
+- Leaves trading, signal selection, order placement and position management logic unchanged.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python - <<'PY'
+from research_tools.anomaly_micro_live import _LiveRetryLogger, _LiveStatusLogger
+rows = []
+status = _LiveStatusLogger(rows.append)
+retry = _LiveRetryLogger(status)
+retry.warning('Источник не ответил на «%s». Попытка %s/%s.', 'x', 3, 3)
+status.alert('⚠️ сеть/API недоступны, жду восстановления.\nПричина: test')
+assert rows[0].startswith('\n⚠️ Источник не ответил')
+assert rows[1].startswith('\n⚠️ сеть/API недоступны')
+PY
+```
+
+Risk:
+
+```text
+Low-to-medium. Console/artifact/Telegram alert path only; no trading decisions change. During a network outage the code retries Telegram enqueue every 60 seconds, but TelegramDispatcher cooldown still prevents repeated successful sends with the same key.
+```

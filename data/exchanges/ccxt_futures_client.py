@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from math import isfinite
-from typing import Any, Callable, cast
+from typing import Any, Callable, Protocol, cast
 
 import pandas as pd
 
@@ -46,6 +46,14 @@ except ImportError:  # pragma: no cover
     ccxt = None
 
 
+class CcxtRetryLogger(Protocol):
+    def debug(self, message: str, *args: object) -> None:
+        ...
+
+    def warning(self, message: str, *args: object) -> None:
+        ...
+
+
 def _position_symbol_key_for_exchange(symbol: str) -> str:
     return str(symbol).replace("/", "").replace(":", "").upper()
 
@@ -66,7 +74,7 @@ class CcxtFuturesClient(ExchangeClient):
             raise RuntimeError("ccxt is required for CcxtFuturesClient")
 
         self.exchange = exchange
-        self._logger = logging.getLogger(self.__class__.__name__)
+        self._logger: CcxtRetryLogger = logging.getLogger(self.__class__.__name__)
         self._retry_attempts = retry_attempts
         self._retry_backoff_seconds = retry_backoff_seconds
         self._client: CcxtFuturesApi = self._build_client(
@@ -77,6 +85,10 @@ class CcxtFuturesClient(ExchangeClient):
             enable_rate_limit=enable_rate_limit,
         )
         self._markets_loaded = False
+
+    def set_retry_logger(self, logger: CcxtRetryLogger) -> None:
+        """Redirect retry diagnostics to a caller-owned logger."""
+        self._logger = logger
 
     # region Приватные
 

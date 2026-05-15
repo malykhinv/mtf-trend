@@ -63,6 +63,7 @@ DEFAULT_LIVE_WS_HEALTH_BOOTSTRAP_SECONDS = 180.0
 DEFAULT_LIVE_OHLCV_CACHE_FLUSH_MAX_SYMBOL_TIMEFRAMES = 4
 DEFAULT_LIVE_AGGTRADE_REST_CACHE_TTL_MS = 20 * 60_000
 DEFAULT_LIVE_AGGTRADE_REST_CACHE_PADDING_MS = 60_000
+NETWORK_DEGRADED_TELEGRAM_RETRY_SECONDS = 60.0
 DANGER_DEFAULT_INACTIVE_COLD_COVERAGE_SLOTS_PER_CYCLE = 5
 DANGER_ADAPTIVE_COLD_COVERAGE_MAX_SLOTS_PER_CYCLE = 10
 DANGER_ADAPTIVE_COLD_COVERAGE_MIN_SCORE = 0.30
@@ -2400,6 +2401,12 @@ class _LiveStatusLogger:
             self._finish_status_line_if_needed()
             self._logger(message)
 
+    def alert(self, message: str) -> None:
+        with self._lock:
+            self._finish_status_line_if_needed()
+            rendered = f"\033[1;31m{message}\033[0m" if self._inline_status_enabled else message
+            self._logger(f"\n{rendered}")
+
     def status(self, message: str, *, highlight: bool = False) -> None:
         with self._lock:
             if not self._inline_status_enabled:
@@ -2447,6 +2454,28 @@ class _LiveStatusLogger:
         for line in visible.split("\n"):
             rows += max(1, (len(line) - 1) // columns + 1) if line else 1
         return max(1, rows)
+
+
+class _LiveRetryLogger:
+    def __init__(self, status_logger: _LiveStatusLogger) -> None:
+        self._status_logger = status_logger
+
+    @staticmethod
+    def _format(message: str, args: tuple[object, ...]) -> str:
+        if not args:
+            return str(message)
+        try:
+            return str(message) % args
+        except Exception:
+            rendered_args = " ".join(str(arg) for arg in args)
+            return f"{message} {rendered_args}".strip()
+
+    def debug(self, message: str, *args: object) -> None:
+        return
+
+    def warning(self, message: str, *args: object) -> None:
+        text = self._format(message, args)
+        self._status_logger.alert(f"⚠️ {text}")
 
 
 class TelegramDispatcher:
@@ -3537,6 +3566,7 @@ class AnomalyMicroLiveRunner:
         self.exchange = exchange_client
         self._status_logger = _LiveStatusLogger(logger)
         self.logger = self._status_logger
+        self.exchange.set_retry_logger(_LiveRetryLogger(self._status_logger))
         if ticker_snapshot_source is not None:
             self.ticker_snapshot_source = ticker_snapshot_source
         elif config.live_ws_ticker_enabled:
@@ -3609,6 +3639,8 @@ class AnomalyMicroLiveRunner:
         self._inactive_cursor = 0
         self._order_reconcile_cursor = 0
         self._network_degraded = False
+        self._network_degraded_first_reason = ""
+        self._network_degraded_telegram_last_enqueue_at = 0.0
         self._current_cycle_aggtrade_cache: dict[str, list[AggTradeRawRange]] = {}
         self._aggtrade_raw_process_cache: dict[str, list[AggTradeRawRange]] = {}
         self._cycle_aggtrade_requests = 0
@@ -4116,12 +4148,7 @@ class AnomalyMicroLiveRunner:
                         highlight=open_positions > 0,
                     )
                 if self._network_degraded:
-                    self.artifacts.append_event(
-                        "network_recovered",
-                        "__live__",
-                        {"cycle": cycle, "cycle_seconds": cycle_seconds},
-                    )
-                self._network_degraded = False
+                    self._record_network_recovered(cycle=cycle, cycle_seconds=cycle_seconds)
                 self._process_delayed_replay_if_idle(
                     cycle=cycle,
                     active_symbol_count=active_symbol_count,
@@ -4157,24 +4184,7 @@ class AnomalyMicroLiveRunner:
                 self._close_live_sources()
                 return 3
             except ExchangeConnectivityError as exc:
-                if not self._network_degraded:
-                    self.logger(f"сеть/API недоступны, жду восстановления. Причина: {exc}")
-                    self.artifacts.append_event(
-                        "network_degraded",
-                        "__live__",
-                        {
-                            "cycle": cycle,
-                            "sleep_seconds": self.config.network_sleep_seconds,
-                            "exception_type": type(exc).__name__,
-                            "exception_message": str(exc)[:1000],
-                        },
-                    )
-                    self.telegram.send(
-                        channel="events",
-                        key="network_degraded",
-                        text=f"{SERVICE_WORK_EMOJI} <b>Пауза</b>\n\n{_telegram_code(str(exc)[:300])}",
-                    )
-                self._network_degraded = True
+                self._record_network_degraded(cycle=cycle, exc=exc)
                 time.sleep(self.config.network_sleep_seconds)
                 self._record_ws_health_sample(healthy=False)
             except Exception as exc:
@@ -4199,6 +4209,62 @@ class AnomalyMicroLiveRunner:
         self.logger(f"достигнут лимит циклов{suffix}")
         self._close_live_sources()
         return 0
+
+    def _record_network_degraded(self, *, cycle: int, exc: ExchangeConnectivityError) -> None:
+        reason = str(exc)
+        if not self._network_degraded:
+            self._network_degraded_first_reason = reason
+            self._status_logger.alert(f"⚠️ сеть/API недоступны, жду восстановления.\nПричина: {reason}")
+            self.artifacts.append_event(
+                "network_degraded",
+                "__live__",
+                {
+                    "cycle": cycle,
+                    "sleep_seconds": self.config.network_sleep_seconds,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": reason[:1000],
+                },
+            )
+        self._enqueue_network_degraded_telegram_alert(cycle=cycle, reason=reason)
+        self._network_degraded = True
+
+    def _enqueue_network_degraded_telegram_alert(self, *, cycle: int, reason: str) -> None:
+        now = time.monotonic()
+        if (
+            self._network_degraded_telegram_last_enqueue_at > 0.0
+            and now - self._network_degraded_telegram_last_enqueue_at < NETWORK_DEGRADED_TELEGRAM_RETRY_SECONDS
+        ):
+            return
+        self._network_degraded_telegram_last_enqueue_at = now
+        self.artifacts.append_event(
+            "network_degraded_telegram_alert_enqueued",
+            "__live__",
+            {"cycle": cycle, "retry_after_seconds": NETWORK_DEGRADED_TELEGRAM_RETRY_SECONDS},
+        )
+        self.telegram.send(
+            channel="events",
+            key="network_degraded",
+            text=f"{SERVICE_WARNING_EMOJI} <b>Сеть/API недоступны</b>\n\n{_telegram_code(reason[:600])}",
+        )
+
+    def _record_network_recovered(self, *, cycle: int, cycle_seconds: float) -> None:
+        first_reason = self._network_degraded_first_reason
+        self.artifacts.append_event(
+            "network_recovered",
+            "__live__",
+            {"cycle": cycle, "cycle_seconds": cycle_seconds, "first_degraded_reason": first_reason[:1000]},
+        )
+        self.telegram.send(
+            channel="events",
+            key="network_recovered",
+            text=(
+                f"✅ <b>Сеть/API восстановлены</b>\n\n"
+                f"Предыдущая причина: {_telegram_code(first_reason[:500] or 'unknown')}"
+            ),
+        )
+        self._network_degraded = False
+        self._network_degraded_first_reason = ""
+        self._network_degraded_telegram_last_enqueue_at = 0.0
 
     def _track_order_reconcile_symbol(self, symbol: str, *, reason: str) -> None:
         symbol_key = _position_symbol_key(symbol)

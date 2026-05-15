@@ -10,7 +10,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P230 delayed replay Telegram follows enablement
+Last active patch: P236 live network error visibility and Telegram retry
 Updated: 2026-05-15
 ```
 
@@ -1314,3 +1314,10 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - This is console-output-only; delayed replay, Telegram, artifacts, scan and order logic are unchanged.
 - Current commit: UNKNOWN.
 - Next validation: run a short live/dry live in PowerShell and confirm the block redraws cleanly with the new grouping.
+
+## P236 proposed state
+- Live retry warnings from the exchange client are routed through the live status logger, so they terminate the inline heartbeat before printing and appear as highlighted alert lines instead of being glued to the status block.
+- `ExchangeConnectivityError` handling now prints the network/API failure as a highlighted alert with a blank line before it, records the first degraded reason, and keeps retrying the Telegram degraded alert every 60 seconds while the outage persists.
+- On recovery, live writes `network_recovered` with the original reason and sends a Telegram recovery note, so a DNS-wide outage that also blocks Telegram still leaves a later operator notification path.
+- Current commit: UNKNOWN.
+- Next validation: run a short live smoke with blocked DNS/API and confirm console separation, `network_degraded_telegram_alert_enqueued`, `telegram_async_send_failed` if Telegram is unreachable, and Telegram delivery/recovery notification once connectivity returns.
