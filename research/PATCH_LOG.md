@@ -3320,9 +3320,9 @@ Risk:
 Low. This is diagnostic/audit only. It does not change signal thresholds, order logic, position guard behavior, fills, stops, or exits.
 ```
 
-## 2026-05-15 - P223 proposed: idle-only delayed replay audit for live anomalies
+## 2026-05-15 - P223 applied locally: idle-only delayed replay audit for live anomalies
 
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Commit: UNKNOWN
 Date: 2026-05-15
 
@@ -3371,9 +3371,9 @@ Risk:
 Low/medium. Trade logic and order execution are unchanged. The replay is intentionally cache-only and artifact-based, so it may report insufficient replay data instead of forcing REST/network work. It is not yet a full backtest recomputation; recompute_status says this explicitly to avoid fake would-enter claims.
 ```
 
-## 2026-05-15 - P224 proposed: frozen-decision delayed replay recompute and Telegram alert
+## 2026-05-15 - P224 applied locally: frozen-decision delayed replay recompute and Telegram alert
 
-Status: PROPOSED
+Status: APPLIED locally / UNKNOWN commit
 Commit: UNKNOWN
 Date: 2026-05-15
 
@@ -3422,3 +3422,52 @@ Risk:
 ```text
 Medium. This adds more replay computation, but only after the existing idle gate and within existing per-cycle budgets. It deliberately disables synchronous mark/OI exchange-context fetches during replay, so categories requiring unavailable derivatives context may produce explicit replay_exchange_context_fetch_disabled rejects instead of optimistic entries.
 ```
+
+## 2026-05-15 - P225 proposed: delayed replay frozen signal snapshot fallback
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Prevent delayed replay from silently missing execution-rejected runner signals when cache-only recomputation cannot refetch mark/OI exchange context.
+```
+
+Changes:
+
+```text
+- Adds a typed parser for the frozen `LiveSignal.to_json()` snapshot already stored in delayed replay cases.
+- Adds `recompute_source` to delayed replay results.
+- If cache-only recomputation reaches `replay_exchange_context_fetch_disabled` but the original live signal snapshot is present, records the signal as `frozen_live_signal_snapshot_exchange_context_unavailable` instead of `recomputed_no_signal`.
+- Keeps the no-network rule: replay still does not fetch mark/OI context and the result source explicitly says when a frozen live signal snapshot was used.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep delayed-replay
+```
+
+Expected smoke readout:
+
+```text
+For execution-rejected cases with a stored signal_json, delayed_replay_results.csv can now show recompute_status=frozen_live_signal_snapshot_exchange_context_unavailable and recompute_source=frozen_live_signal_snapshot instead of suppressing the case as replay_no_signal when mark/OI fetch is intentionally disabled. TG notification still fires only for live non-selected/non-opened cases where would_enter_under_frozen_decision=true.
+```
+
+Risk:
+
+```text
+Low/medium. This is audit-only and does not change live trading. It uses a frozen live signal snapshot only when exact cache-only recomputation is blocked by intentionally disabled exchange-context fetch, so the row remains honest about source.
+```
+

@@ -276,6 +276,7 @@ DELAYED_REPLAY_RESULTS_COLUMNS = (
     "queued_at_utc",
     "processed_at_utc",
     "status",
+    "recompute_source",
     "symbol",
     "source_event",
     "priority",
@@ -1826,6 +1827,98 @@ class LiveSignal:
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, sort_keys=True, allow_nan=False)
+
+
+def _live_signal_from_json(payload: object) -> LiveSignal | None:
+    if not isinstance(payload, str) or not payload.strip():
+        return None
+    try:
+        raw = json.loads(payload)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(raw, dict):
+        return None
+
+    def as_str_list(value: object) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if item is not None]
+
+    def as_dict_list(value: object) -> list[dict[str, object]]:
+        if not isinstance(value, list):
+            return []
+        return [dict(item) for item in value if isinstance(item, dict)]
+
+    try:
+        levels_timeframe = Timeframe(str(raw.get("levels_timeframe") or ""))
+        entry_timeframe = Timeframe(str(raw.get("entry_timeframe") or ""))
+    except ValueError:
+        return None
+
+    category_priority = _optional_int(raw.get("category_priority"))
+    decision_timestamp_ms = _optional_int(raw.get("decision_timestamp_ms"))
+    start_timestamp_ms = _optional_int(raw.get("start_timestamp_ms"))
+    entry_price = _optional_float(raw.get("entry_price"))
+    stop_price = _optional_float(raw.get("stop_price"))
+    tp1_price = _optional_float(raw.get("tp1_price"))
+    box_high = _optional_float(raw.get("box_high"))
+    initial_risk = _optional_float(raw.get("initial_risk"))
+    initial_risk_pct = _optional_float(raw.get("initial_risk_pct"))
+    quote_ratio_start = _optional_float(raw.get("quote_ratio_start"))
+    trade_ratio_start = _optional_float(raw.get("trade_ratio_start"))
+    price_retention = _optional_float(raw.get("price_retention"))
+    hold_count = _optional_int(raw.get("hold_count"))
+    verticality_score = _optional_float(raw.get("verticality_score"))
+    if (
+        category_priority is None
+        or decision_timestamp_ms is None
+        or start_timestamp_ms is None
+        or entry_price is None
+        or stop_price is None
+        or tp1_price is None
+        or box_high is None
+        or initial_risk is None
+        or initial_risk_pct is None
+        or quote_ratio_start is None
+        or trade_ratio_start is None
+        or price_retention is None
+        or hold_count is None
+        or verticality_score is None
+    ):
+        return None
+
+    return LiveSignal(
+        category_id=str(raw.get("category_id") or ""),
+        category_label=str(raw.get("category_label") or ""),
+        category_priority=int(category_priority),
+        symbol=str(raw.get("symbol") or ""),
+        levels_timeframe=levels_timeframe,
+        entry_timeframe=entry_timeframe,
+        setup_source=str(raw.get("setup_source") or ""),
+        setup_elapsed_fraction=float(_optional_float(raw.get("setup_elapsed_fraction")) or 0.0),
+        setup_closed_entry_candles=int(_optional_int(raw.get("setup_closed_entry_candles")) or 0),
+        decision_timestamp_ms=int(decision_timestamp_ms),
+        start_timestamp_ms=int(start_timestamp_ms),
+        session=str(raw.get("session") or ""),
+        entry_price=float(entry_price),
+        stop_price=float(stop_price),
+        tp1_price=float(tp1_price),
+        box_high=float(box_high),
+        initial_risk=float(initial_risk),
+        initial_risk_pct=float(initial_risk_pct),
+        quote_ratio_start=float(quote_ratio_start),
+        trade_ratio_start=float(trade_ratio_start),
+        price_retention=float(price_retention),
+        hold_count=int(hold_count),
+        verticality_score=float(verticality_score),
+        oi_change_pct_3x5m=_optional_float(raw.get("oi_change_pct_3x5m")),
+        previous_live_scan_closed_timestamp_ms=_optional_int(raw.get("previous_live_scan_closed_timestamp_ms")),
+        first_unscanned_decision_timestamp_ms=_optional_int(raw.get("first_unscanned_decision_timestamp_ms")),
+        live_scan_gap_ltf_candles=int(_optional_int(raw.get("live_scan_gap_ltf_candles")) or 0),
+        category_rejections=as_dict_list(raw.get("category_rejections")),
+        strengths=as_str_list(raw.get("strengths")),
+        weaknesses=as_str_list(raw.get("weaknesses")),
+    )
 
 
 @dataclass(slots=True)
@@ -4779,6 +4872,8 @@ class AnomalyMicroLiveRunner:
         )
 
     def _recompute_delayed_replay_signal(self, case: dict[str, object]) -> dict[str, object]:
+        details = case.get("details") if isinstance(case.get("details"), dict) else {}
+        frozen_signal = _live_signal_from_json(case.get("signal_json") or details.get("signal_json"))
         symbol = str(case.get("symbol") or "")
         levels_tf_value = str(case.get("levels_tf") or "")
         entry_tf_value = str(case.get("entry_tf") or "")
@@ -4897,8 +4992,23 @@ class AnomalyMicroLiveRunner:
             for row in category_rejections
             if str(row.get("category_reject_reason") or row.get("reason") or "")
         )
+        if signal is None and frozen_signal is not None:
+            context_disabled = any(
+                "replay_exchange_context_fetch_disabled" in str(value)
+                for row in category_rejections
+                for value in row.values()
+            )
+            if context_disabled:
+                return {
+                    "status": "frozen_live_signal_snapshot_exchange_context_unavailable",
+                    "source": "frozen_live_signal_snapshot",
+                    "signal": frozen_signal,
+                    "reject_reasons": reject_reasons,
+                    "data_status": data_status,
+                }
         return {
             "status": "recomputed_signal" if signal is not None else "recomputed_no_signal",
+            "source": "cache_only_frozen_decision_recompute",
             "signal": signal,
             "reject_reasons": reject_reasons,
             "data_status": data_status,
@@ -4960,6 +5070,7 @@ class AnomalyMicroLiveRunner:
             "replay_not_before_ms": int(case.get("replay_not_before_ms") or 0),
             "queued_delay_seconds": round((now_ms - int(case.get("queued_at_ms") or now_ms)) / 1000.0, 3),
             "recompute_status": str(recompute.get("status") or ""),
+            "recompute_source": str(recompute.get("source") or ""),
             "would_select_signal": bool(would_select_signal),
             "would_enter_under_frozen_decision": bool(would_enter),
             "mismatch_type": mismatch_type,
@@ -5002,6 +5113,7 @@ class AnomalyMicroLiveRunner:
             "replay_not_before_ms": int(case.get("replay_not_before_ms") or 0),
             "queued_delay_seconds": round((now_ms - int(case.get("queued_at_ms") or now_ms)) / 1000.0, 3),
             "recompute_status": f"error:{type(exc).__name__}",
+            "recompute_source": "error",
             "would_select_signal": "",
             "would_enter_under_frozen_decision": "",
             "mismatch_type": "replay_error",
