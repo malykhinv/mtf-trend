@@ -2071,3 +2071,19 @@ when SLA is OK, live_top_growth processes bounded chunks and eventually writes t
 ```
 
 Do not tune top-growth thresholds from CLI during live. Treat changes to threshold/limit/quota as code-reviewed policy changes.
+
+## 2026-05-15 — P244 discovery loosen/data-dependency validation
+
+Goal: verify that fewer situations are rejected for non-market reasons while execution safety stays strict.
+
+Expected evidence:
+
+```text
+run config shows min_quote_ratio_start=4.0 and min_trade_ratio_start=4.0
+run config shows max_entry_price_drift_pct=0.003
+category_rejected should contain reject_mark_basis_below_min/reject_oi_below_min only when values are actually computed and below threshold
+signal_scan_retryable_dependency_blocked should contain reject_mark_basis_unavailable, reject_oi_unavailable, and taker-buy missing/invalid cases
+delayed replay should not queue retryable dependency cases as final all_categories_rejected
+```
+
+Compare against closed-hour top-growth/missed-pump artifacts before loosening any execution guard.

@@ -208,15 +208,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomaly_live.add_argument("--baseline-candles", type=_positive_int_for("--baseline-candles"), default=60)
     anomaly_live.add_argument("--confirmation-candles", type=_positive_int_for("--confirmation-candles"), default=4)
-    anomaly_live.add_argument("--min-quote-ratio-start", type=float, default=5.0)
-    anomaly_live.add_argument("--min-trade-ratio-start", type=float, default=5.0)
-    anomaly_live.add_argument("--min-price-retention", type=float, default=0.70)
-    anomaly_live.add_argument("--min-verticality-score", type=float, default=0.25)
+    anomaly_live.add_argument("--min-quote-ratio-start", type=float, default=4.0)
+    anomaly_live.add_argument("--min-trade-ratio-start", type=float, default=4.0)
+    anomaly_live.add_argument("--min-price-retention", type=float, default=0.65)
+    anomaly_live.add_argument("--min-verticality-score", type=float, default=0.20)
     anomaly_live.add_argument("--min-hold-count", type=int, default=2)
     anomaly_live.add_argument("--min-oi-change-pct-3x5m", type=float, default=None)
     anomaly_live.add_argument("--max-initial-risk-pct", type=float, default=0.16)
     anomaly_live.add_argument("--stop-buffer-range-fraction", type=float, default=0.05)
-    anomaly_live.add_argument("--max-prior-up-down-whipsaw-to-impulse-range", type=float, default=0.60)
+    anomaly_live.add_argument("--max-prior-up-down-whipsaw-to-impulse-range", type=float, default=0.75)
     anomaly_live.add_argument("--position-notional-usdt", type=float, default=12.0)
     anomaly_live.add_argument("--max-open-positions", type=_positive_int_for("--max-open-positions"), default=3)
     anomaly_live.add_argument(
@@ -383,24 +383,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.75,
         help="Maximum optional wall-clock budget per live cycle for cache-only symbol context snapshot updates.",
-    )
-    anomaly_live.add_argument(
-        "--symbol-context-startup-backfill-enabled",
-        type=_str_to_bool,
-        default=True,
-        help="Backfill and compute 72h+baseline context cache before the live loop. Uses levels TFs only; no subminute entry TF backfill.",
-    )
-    anomaly_live.add_argument(
-        "--symbol-context-snapshot-min-coverage-ratio",
-        type=float,
-        default=0.995,
-        help="Minimum candle coverage for accepting tiny internal gaps in symbol context snapshots.",
-    )
-    anomaly_live.add_argument(
-        "--symbol-context-snapshot-max-gap-candles",
-        type=_non_negative_int_for("--symbol-context-snapshot-max-gap-candles"),
-        default=2,
-        help="Largest tolerated contiguous internal gap, in candles, for symbol context snapshots.",
     )
     anomaly_live.add_argument("--max-signal-age-ms", type=_positive_int_for("--max-signal-age-ms"), default=60_000)
     anomaly_live.add_argument("--max-entry-price-drift-pct", type=float, default=0.003)

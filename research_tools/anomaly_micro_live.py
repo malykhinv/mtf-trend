@@ -858,6 +858,18 @@ def _is_retryable_category_rejection(row: dict[str, object]) -> bool:
     reason = str(row.get("category_reject_reason") or row.get("reason") or "")
     if reason == "reject_prior_fast_fade_filter_unavailable":
         return True
+    if reason in {"reject_mark_basis_unavailable", "reject_oi_unavailable"}:
+        return True
+    if reason in {
+        "reject_missing_taker_buy_share",
+        "reject_invalid_taker_buy_share",
+        "reject_missing_start_taker_buy_delta",
+        "reject_invalid_start_taker_buy_delta",
+    }:
+        return True
+    # Backward-compatible classification for old rows that used final-reject wording for
+    # temporarily unavailable exchange context. New code emits *_unavailable without
+    # category_rejected side effects.
     if reason == "reject_mark_basis_below_min":
         status = str(row.get("mark_basis_status") or "")
         return bool(status and status != "ok" and status.startswith(("mark_context_", "no_mark_before_decision")))
@@ -1633,53 +1645,53 @@ SUPPORTED_LIVE_PUMP_CATEGORIES: dict[str, LivePumpCategory] = {
         category_id="runner_oi_confirmed",
         label="runner OI confirmed",
         priority=10,
-        min_oi_change_pct_3x5m=0.003,
-        min_mark_close_vs_decision_close_basis=0.003,
+        min_oi_change_pct_3x5m=0.002,
+        min_mark_close_vs_decision_close_basis=0.002,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=250.0,
         max_start_quote_ratio_per_abs_return=20_000.0,
         max_start_trade_ratio_per_abs_return=3_000.0,
-        max_start_taker_buy_quote_share_delta=0.25,
-        max_prior_fast_fade_count_72h=0,
+        max_start_taker_buy_quote_share_delta=0.35,
+        max_prior_fast_fade_count_72h=1,
     ),
     "runner_flow": LivePumpCategory(
         category_id="runner_flow",
         label="runner flow",
         priority=20,
-        min_mark_close_vs_decision_close_basis=0.001,
+        min_mark_close_vs_decision_close_basis=0.0005,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=250.0,
         max_start_quote_ratio_per_abs_return=20_000.0,
         max_start_trade_ratio_per_abs_return=3_000.0,
-        max_start_taker_buy_quote_share_delta=0.25,
+        max_start_taker_buy_quote_share_delta=0.35,
         min_flow_hold_count=1,
-        max_prior_fast_fade_count_72h=0,
+        max_prior_fast_fade_count_72h=1,
     ),
     "runner_reclaim": LivePumpCategory(
         category_id="runner_reclaim",
         label="runner reclaim",
         priority=30,
-        min_mark_close_vs_decision_close_basis=0.001,
+        min_mark_close_vs_decision_close_basis=0.0005,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=250.0,
         max_start_quote_ratio_per_abs_return=20_000.0,
         max_start_trade_ratio_per_abs_return=3_000.0,
-        max_start_taker_buy_quote_share_delta=0.25,
+        max_start_taker_buy_quote_share_delta=0.35,
         min_start_lower_wick_to_range=0.0,
         max_start_upper_wick_to_range=0.20,
-        max_prior_fast_fade_count_72h=0,
+        max_prior_fast_fade_count_72h=1,
     ),
     "runner_balanced": LivePumpCategory(
         category_id="runner_balanced",
         label="runner balanced",
         priority=40,
-        min_mark_close_vs_decision_close_basis=0.001,
+        min_mark_close_vs_decision_close_basis=0.0005,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=250.0,
         max_start_quote_ratio_per_abs_return=20_000.0,
         max_start_trade_ratio_per_abs_return=3_000.0,
-        max_start_taker_buy_quote_share_delta=0.25,
-        max_prior_fast_fade_count_72h=0,
+        max_start_taker_buy_quote_share_delta=0.35,
+        max_prior_fast_fade_count_72h=1,
     ),
     "balanced_market": LivePumpCategory(
         category_id="balanced_market",
@@ -1755,25 +1767,25 @@ class LiveAnomalyConfig:
     pump_categories: tuple[str, ...] = LIVE_DEFAULT_PUMP_CATEGORY_IDS
     baseline_candles: int = 60
     confirmation_candles: int = 4
-    min_quote_ratio_start: float = 5.0
-    min_trade_ratio_start: float = 5.0
-    max_start_quote_ratio: float | None = 80.0
-    max_start_trade_ratio: float | None = 40.0
-    max_start_avg_trade_quote_size_ratio: float | None = 7.0
+    min_quote_ratio_start: float = 4.0
+    min_trade_ratio_start: float = 4.0
+    max_start_quote_ratio: float | None = 100.0
+    max_start_trade_ratio: float | None = 55.0
+    max_start_avg_trade_quote_size_ratio: float | None = 9.0
     max_start_quote_ratio_per_abs_return: float | None = 15_000.0
     max_start_trade_ratio_per_abs_return: float | None = None
-    max_start_range_pct_ratio_to_baseline: float | None = 25.0
+    max_start_range_pct_ratio_to_baseline: float | None = 35.0
     min_next_taker_buy_quote_share: float | None = 0.48
     max_start_taker_buy_quote_share_delta: float | None = None
-    max_price_retention: float | None = 0.96
-    min_price_retention: float = 0.70
-    min_verticality_score: float = 0.25
+    max_price_retention: float | None = 0.98
+    min_price_retention: float = 0.65
+    min_verticality_score: float = 0.20
     min_hold_count: int = 2
     min_oi_change_pct_3x5m: float | None = None
     min_mark_close_vs_decision_close_basis: float | None = None
     max_initial_risk_pct: float = 0.16
     stop_buffer_range_fraction: float = 0.05
-    max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.60
+    max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.75
     position_notional_usdt: float = 12.0
     max_open_positions: int = 3
     exclude_default_high_cap_symbols: bool = True
@@ -1823,7 +1835,6 @@ class LiveAnomalyConfig:
     symbol_context_snapshot_symbols_per_cycle: int = 20
     symbol_context_snapshot_fresh_ms: int = 15 * 60_000
     symbol_context_snapshot_max_cycle_seconds: float = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_CYCLE_SECONDS
-    symbol_context_startup_backfill_enabled: bool = True
     symbol_context_snapshot_min_coverage_ratio: float = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MIN_COVERAGE_RATIO
     symbol_context_snapshot_max_gap_candles: int = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_GAP_CANDLES
     symbol_context_priority_ttl_ms: int = DEFAULT_SYMBOL_CONTEXT_PRIORITY_TTL_MS
@@ -4108,9 +4119,8 @@ class AnomalyMicroLiveRunner:
                 "prepump_warm_watch_policy": "score_only_for_warm_watch_priority_no_entry_filter_no_trade_veto",
                 "symbol_context_snapshot_enabled": bool(self.config.symbol_context_snapshot_enabled),
                 "symbol_context_snapshot_contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
-                "symbol_context_snapshot_policy": "startup_backfill_then_cache_only_rolling_table_no_precise_scan_context_fetch",
-                "symbol_context_startup_backfill_enabled": bool(self.config.symbol_context_startup_backfill_enabled),
-                "symbol_context_startup_backfill_policy": "default_on_levels_timeframes_only_no_subminute_entry_timeframes",
+                "symbol_context_snapshot_policy": "always_startup_backfill_then_cache_only_rolling_table_no_precise_scan_context_fetch",
+                "symbol_context_startup_backfill_policy": "always_on_levels_timeframes_only_no_subminute_entry_timeframes",
                 "symbol_context_snapshot_interval_seconds": float(
                     self.config.symbol_context_snapshot_interval_seconds
                 ),
@@ -8201,18 +8211,6 @@ class AnomalyMicroLiveRunner:
     def _startup_backfill_symbol_context_cache(self, symbols: list[str]) -> None:
         if not self.config.symbol_context_snapshot_enabled:
             return
-        if not self.config.symbol_context_startup_backfill_enabled:
-            self.artifacts.append_event(
-                "symbol_context_startup_backfill_skipped",
-                "__live__",
-                {
-                    "status": "disabled",
-                    "reason": "symbol_context_startup_backfill_disabled",
-                    "policy": "startup_context_backfill_is_default_on_levels_timeframes_only",
-                    "symbols_total": int(len(symbols)),
-                },
-            )
-            return
         if self._ohlcv_cache_storage is None:
             self.artifacts.append_event(
                 "symbol_context_startup_backfill_skipped",
@@ -9699,8 +9697,15 @@ class AnomalyMicroLiveRunner:
                         "category_id": row.get("category_id", ""),
                         "category_label": row.get("category_label", ""),
                         "reason": row.get("category_reject_reason") or row.get("reason") or "",
-                        "status": row.get("status", ""),
+                        "status": (
+                            row.get("status")
+                            or row.get("data_dependency_status")
+                            or row.get("mark_basis_status")
+                            or row.get("oi_status")
+                            or ""
+                        ),
                         "detail_reason": row.get("detail_reason") or row.get("coverage_reason") or "",
+                        "dependency_type": row.get("dependency_type", ""),
                         "coverage_policy": row.get("coverage_policy", ""),
                     }
                     for row in retryable_rows
@@ -10209,20 +10214,33 @@ class AnomalyMicroLiveRunner:
                         mark_basis = LiveMarkBasisResult(None, "replay_exchange_context_fetch_disabled")
                     mark_basis_loaded = True
                 basis_value = mark_basis.value if mark_basis is not None else None
-                if basis_value is None or not math.isfinite(basis_value) or basis_value < min_mark_basis:
+                mark_details = {
+                    "mark_close_vs_decision_close_basis": _finite_or_none(basis_value),
+                    "mark_basis_status": mark_basis.reason if mark_basis is not None else "not_loaded",
+                    "mark_timestamp_ms": mark_basis.timestamp_ms if mark_basis is not None and mark_basis.timestamp_ms is not None else "",
+                    "mark_age_ms": mark_basis.age_ms if mark_basis is not None and mark_basis.age_ms is not None else "",
+                    "min": min_mark_basis,
+                    "dependency_type": "mark_price_context",
+                    "decision_timestamp_ms": int(decision["timestamp"]),
+                }
+                if basis_value is None or not math.isfinite(basis_value):
+                    category_rejections.append(
+                        record_category_reject(
+                            category,
+                            symbol,
+                            "reject_mark_basis_unavailable",
+                            mark_details,
+                            emit=False,
+                        )
+                    )
+                    continue
+                if basis_value < min_mark_basis:
                     category_rejections.append(
                         record_category_reject(
                             category,
                             symbol,
                             "reject_mark_basis_below_min",
-                            {
-                                "mark_close_vs_decision_close_basis": _finite_or_none(basis_value),
-                                "mark_basis_status": mark_basis.reason if mark_basis is not None else "not_loaded",
-                                "mark_timestamp_ms": mark_basis.timestamp_ms if mark_basis is not None and mark_basis.timestamp_ms is not None else "",
-                                "mark_age_ms": mark_basis.age_ms if mark_basis is not None and mark_basis.age_ms is not None else "",
-                                "min": min_mark_basis,
-                                "decision_timestamp_ms": int(decision["timestamp"]),
-                            },
+                            mark_details,
                         )
                     )
                     continue
@@ -10296,7 +10314,7 @@ class AnomalyMicroLiveRunner:
             min_next_taker_share = _category_value(category, self.config, "min_next_taker_buy_quote_share")
             if min_next_taker_share is not None:
                 if "taker_buy_quote_volume" not in entry_segment.columns:
-                    category_rejections.append(record_category_reject(category, symbol, "reject_missing_taker_buy_share", {"required": min_next_taker_share, "decision_timestamp_ms": int(decision["timestamp"])}))
+                    category_rejections.append(record_category_reject(category, symbol, "reject_missing_taker_buy_share", {"required": min_next_taker_share, "dependency_type": "taker_buy_quote_volume", "data_dependency_status": "missing_column", "decision_timestamp_ms": int(decision["timestamp"])}, emit=False))
                     continue
                 if not next_taker_share_loaded:
                     taker_quote = pd.to_numeric(entry_segment["taker_buy_quote_volume"], errors="coerce")
@@ -10310,7 +10328,7 @@ class AnomalyMicroLiveRunner:
                         next_taker_share = float((taker_quote[valid_taker_share_rows] / quote_volume[valid_taker_share_rows]).mean())
                     next_taker_share_loaded = True
                 if not math.isfinite(next_taker_share):
-                    category_rejections.append(record_category_reject(category, symbol, "reject_invalid_taker_buy_share", {"share": _finite_or_none(next_taker_share), "valid_taker_share_rows": valid_taker_share_count, "total_taker_share_rows": total_taker_share_rows, "taker_share_contract": "mean_over_valid_quote_volume_rows", "decision_timestamp_ms": int(decision["timestamp"])}))
+                    category_rejections.append(record_category_reject(category, symbol, "reject_invalid_taker_buy_share", {"share": _finite_or_none(next_taker_share), "valid_taker_share_rows": valid_taker_share_count, "total_taker_share_rows": total_taker_share_rows, "taker_share_contract": "mean_over_valid_quote_volume_rows", "dependency_type": "taker_buy_quote_volume", "data_dependency_status": "no_valid_quote_volume_rows", "decision_timestamp_ms": int(decision["timestamp"])}, emit=False))
                     continue
                 if next_taker_share < min_next_taker_share:
                     category_rejections.append(record_category_reject(category, symbol, "reject_weak_next_taker_buy_share", {"share": next_taker_share, "min": min_next_taker_share, "valid_taker_share_rows": valid_taker_share_count, "total_taker_share_rows": total_taker_share_rows, "taker_share_contract": "mean_over_valid_quote_volume_rows", "decision_timestamp_ms": int(decision["timestamp"])}))
@@ -10318,7 +10336,7 @@ class AnomalyMicroLiveRunner:
             max_start_taker_delta = _category_value(category, self.config, "max_start_taker_buy_quote_share_delta")
             if max_start_taker_delta is not None:
                 if "taker_buy_quote_volume" not in entry_segment.columns or "taker_buy_quote_volume" not in baseline.columns:
-                    category_rejections.append(record_category_reject(category, symbol, "reject_missing_start_taker_buy_delta", {"required_max": max_start_taker_delta, "decision_timestamp_ms": int(decision["timestamp"])}))
+                    category_rejections.append(record_category_reject(category, symbol, "reject_missing_start_taker_buy_delta", {"required_max": max_start_taker_delta, "dependency_type": "taker_buy_quote_volume", "data_dependency_status": "missing_column", "decision_timestamp_ms": int(decision["timestamp"])}, emit=False))
                     continue
                 if not start_taker_share_delta_loaded:
                     start_quote_volume = float(pd.to_numeric(pd.Series([entry_segment.iloc[0]["quote_volume"]]), errors="coerce").iloc[0])
@@ -10330,7 +10348,7 @@ class AnomalyMicroLiveRunner:
                     start_taker_share_delta = start_share - baseline_share
                     start_taker_share_delta_loaded = True
                 if not math.isfinite(start_taker_share_delta):
-                    category_rejections.append(record_category_reject(category, symbol, "reject_invalid_start_taker_buy_delta", {"delta": _finite_or_none(start_taker_share_delta), "decision_timestamp_ms": int(decision["timestamp"])}))
+                    category_rejections.append(record_category_reject(category, symbol, "reject_invalid_start_taker_buy_delta", {"delta": _finite_or_none(start_taker_share_delta), "dependency_type": "taker_buy_quote_volume", "data_dependency_status": "invalid_start_or_baseline_share", "decision_timestamp_ms": int(decision["timestamp"])}, emit=False))
                     continue
                 if start_taker_share_delta > max_start_taker_delta:
                     category_rejections.append(record_category_reject(category, symbol, "reject_start_taker_buy_delta_above_max", {"delta": start_taker_share_delta, "max": max_start_taker_delta, "decision_timestamp_ms": int(decision["timestamp"])}))
@@ -10360,8 +10378,33 @@ class AnomalyMicroLiveRunner:
                     oi_change = oi_result.value
                     oi_change_reason = oi_result.reason
                     oi_change_loaded = True
-                if oi_change is None or not math.isfinite(oi_change) or oi_change <= min_oi_change:
-                    category_rejections.append(record_category_reject(category, symbol, "reject_oi", {"oi_change_pct_3x5m": _finite_or_none(oi_change), "oi_status": oi_change_reason or "below_threshold", "required_gt": min_oi_change, "decision_timestamp_ms": int(decision["timestamp"])}))
+                oi_details = {
+                    "oi_change_pct_3x5m": _finite_or_none(oi_change),
+                    "oi_status": oi_change_reason or ("ok" if oi_change is not None else "not_loaded"),
+                    "required_gt": min_oi_change,
+                    "dependency_type": "open_interest_context",
+                    "decision_timestamp_ms": int(decision["timestamp"]),
+                }
+                if oi_change is None or not math.isfinite(oi_change):
+                    category_rejections.append(
+                        record_category_reject(
+                            category,
+                            symbol,
+                            "reject_oi_unavailable",
+                            oi_details,
+                            emit=False,
+                        )
+                    )
+                    continue
+                if oi_change <= min_oi_change:
+                    category_rejections.append(
+                        record_category_reject(
+                            category,
+                            symbol,
+                            "reject_oi_below_min",
+                            oi_details,
+                        )
+                    )
                     continue
 
             strengths = [

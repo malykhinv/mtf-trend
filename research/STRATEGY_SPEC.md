@@ -519,3 +519,11 @@ Warm-watch promotion requires:
 
 Warm-watch symbols may be subscribed in the bounded WS aggTrade micro-cache target set, but there is still no full-universe micro-tape subscription and no trade entry from cheap radar alone.
 ```
+
+### Live discovery loosen policy after P244
+
+```text
+Live discovery sensitivity may be increased only on market-shape/category filters, not on execution safety. P244 lowers/loosens early-flow and shape gates to reduce false negatives while preserving stale-signal, live-price-drift, TP1-already-reached, RR, actual-risk, order/fill, and position-integrity guards.
+
+Missing or invalid context for taker-buy, mark basis, OI, or prior-fast-fade is not evidence that the market failed a filter. It is a retryable data dependency. The decision must not be consumed until the dependency resolves, receives a real final market reject, produces a selected category, or expires by stale guard.
+```

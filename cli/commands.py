@@ -1452,10 +1452,10 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             ),
             baseline_candles=int(getattr(args, "baseline_candles", 60)),
             confirmation_candles=int(getattr(args, "confirmation_candles", 4)),
-            min_quote_ratio_start=float(getattr(args, "min_quote_ratio_start", 5.0)),
-            min_trade_ratio_start=float(getattr(args, "min_trade_ratio_start", 5.0)),
-            min_price_retention=float(getattr(args, "min_price_retention", 0.70)),
-            min_verticality_score=float(getattr(args, "min_verticality_score", 0.25)),
+            min_quote_ratio_start=float(getattr(args, "min_quote_ratio_start", 4.0)),
+            min_trade_ratio_start=float(getattr(args, "min_trade_ratio_start", 4.0)),
+            min_price_retention=float(getattr(args, "min_price_retention", 0.65)),
+            min_verticality_score=float(getattr(args, "min_verticality_score", 0.20)),
             min_hold_count=int(getattr(args, "min_hold_count", 2)),
             min_oi_change_pct_3x5m=(
                 None
@@ -1555,16 +1555,6 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             symbol_context_snapshot_fresh_ms=int(getattr(args, "symbol_context_snapshot_fresh_ms", 900_000)),
             symbol_context_snapshot_max_cycle_seconds=float(
                 getattr(args, "symbol_context_snapshot_max_cycle_seconds", 0.75)
-            ),
-            symbol_context_startup_backfill_enabled=_to_bool_flag(
-                getattr(args, "symbol_context_startup_backfill_enabled", True),
-                default=True,
-            ),
-            symbol_context_snapshot_min_coverage_ratio=float(
-                getattr(args, "symbol_context_snapshot_min_coverage_ratio", 0.995)
-            ),
-            symbol_context_snapshot_max_gap_candles=int(
-                getattr(args, "symbol_context_snapshot_max_gap_candles", 2)
             ),
             max_signal_age_ms=int(getattr(args, "max_signal_age_ms", 60_000)),
             max_entry_price_drift_pct=float(getattr(args, "max_entry_price_drift_pct", 0.003)),

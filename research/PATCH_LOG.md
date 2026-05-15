@@ -4205,3 +4205,47 @@ Risk:
 ```text
 Low-to-medium. This preserves P242 artifact visibility but prevents the audit from competing with delayed signal scans during latency pressure. It also removes new operator knobs, so quota changes now require code review instead of ad-hoc CLI changes.
 ```
+
+## P244 - proposed - discovery live loosen + retryable data dependencies
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+cli/parser.py
+cli/commands.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+research/STRATEGY_SPEC.md
+```
+
+Intent:
+
+```text
+Reduce false live non-entries without weakening execution safety: loosen discovery-oriented market filters modestly, keep entry price drift unchanged, and classify unavailable taker-buy/mark/OI context as retryable data dependency instead of final market/category rejection.
+```
+
+Changes:
+
+```text
+- Live discovery defaults: start flow 5x -> 4x, min retention 70% -> 65%, verticality 0.25 -> 0.20, prior whipsaw cap 0.60 -> 0.75.
+- Runner categories: prior_fast_fade cap 0 -> 1, taker-buy delta cap 0.25 -> 0.35, mark/OI confirmation thresholds slightly loosened.
+- max_entry_price_drift_pct stays 0.003; late-entry safety is not loosened.
+- Missing/invalid taker-buy context, unavailable mark basis, and unavailable OI now become retryable dependency rows with emit=false for category_rejected.
+- Real computed mark/OI below threshold remain final market/category rejects.
+- Removes P239 operator-facing startup/gap-tolerance flags; startup context backfill is always-on policy, tiny-gap tolerance remains code-reviewed constants.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "symbol-context-startup|symbol-context-snapshot-min|symbol-context-snapshot-max-gap|live-top-growth"  # expected: no output
+```
+
+Risk:
+
+```text
+Medium. This intentionally increases discovery sensitivity and may create more selected candidates. It does not loosen stale/drift/RR/actual-risk/order safety. New live validation must compare category_selected, signal_scan_retryable_dependency_blocked, execution rejects, and closed-hour missed-pump visibility before any further parameter changes.
+```

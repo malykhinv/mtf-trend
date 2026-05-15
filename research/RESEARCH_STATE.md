@@ -1355,3 +1355,12 @@ P242 needed one correction before live smoke: closed-hour top-growth should not 
 
 Current commit: UNKNOWN.
 Next validation: run live across an hour close and verify `live_cycle_summary.live_top_growth_status=skipped_latency_sla` during pressure, then `processing/completed` only when optional work is allowed.
+
+## 2026-05-15 — P244 proposed
+
+P244 loosens only discovery/market-shape gates and data-dependency handling, not execution safety. Live defaults become less likely to reject borderline early pump candidates: start flow 4x/4x, retention 65%, verticality 0.20, prior whipsaw cap 0.75, runner prior-fast-fade cap 1, taker-buy delta cap 0.35, and slightly lower runner mark/OI thresholds. `max_entry_price_drift_pct` remains 0.003.
+
+Unavailable taker-buy, mark-basis, and OI context are no longer final category rejects; they are retryable dependencies until context appears or the decision becomes stale. P239 startup-context switches are removed from CLI/config plumbing so startup context backfill is default-on policy rather than an operator toggle.
+
+Current commit: UNKNOWN.
+Next validation: run a short live smoke and inspect that category_rejected is dominated by real market reasons, while `signal_scan_retryable_dependency_blocked` carries data-context issues without consuming decisions.
