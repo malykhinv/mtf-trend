@@ -3706,3 +3706,49 @@ Risk:
 ```text
 Low. Audit/artifact/Telegram wording only; live trading logic, order placement, fills, stops, and scan thresholds are unchanged.
 ```
+
+## 2026-05-15 - P230 proposed: delayed replay Telegram follows enablement
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Remove the separate delayed-replay Telegram switch. Delayed replay is an operator-audit mode: when it is enabled and finds a meaningful mismatch, the Telegram alert path should be part of that mode instead of controlled by a second flag.
+```
+
+Changes:
+
+```text
+- Removes --delayed-replay-telegram-enabled from run-anomaly-live.
+- Removes delayed_replay_telegram_enabled from MicroLiveConfig and CLI config construction.
+- Records delayed_replay_telegram_policy=enabled_with_delayed_replay in live config artifacts.
+- Sends delayed replay operator alerts whenever delayed replay is enabled and operator_alert_kind is produced.
+- Artifact writing remains independent from Telegram delivery; queue/results/summary are still written even if Telegram send fails.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep delayed-replay
+python main.py run-anomaly-live --help | grep delayed-replay-telegram && exit 1 || true
+```
+
+Risk:
+
+```text
+Low. Audit/TG-control contract only. Live trading, order placement, fills, stops, scan thresholds and delayed replay decision logic are unchanged.
+```

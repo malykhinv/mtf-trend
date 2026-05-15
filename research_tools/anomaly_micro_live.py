@@ -1807,7 +1807,6 @@ class LiveAnomalyConfig:
     delayed_replay_max_cycle_seconds: float = 1.5
     delayed_replay_max_queue_size: int = 2000
     delayed_replay_outcome_lookahead_seconds: float = 300.0
-    delayed_replay_telegram_enabled: bool = True
     max_cycles: int | None = None
     stop_cooldown_hours: float = 12.0
     stop_limit_per_symbol: int = 2
@@ -3691,7 +3690,7 @@ class AnomalyMicroLiveRunner:
                 "delayed_replay_max_cases_per_cycle": int(self.config.delayed_replay_max_cases_per_cycle),
                 "delayed_replay_max_cycle_seconds": float(self.config.delayed_replay_max_cycle_seconds),
                 "delayed_replay_outcome_lookahead_seconds": float(self.config.delayed_replay_outcome_lookahead_seconds),
-                "delayed_replay_telegram_enabled": bool(self.config.delayed_replay_telegram_enabled),
+                "delayed_replay_telegram_policy": "enabled_with_delayed_replay",
                 "delayed_replay_queue_file": str(self.artifacts.delayed_replay_queue_path.relative_to(self.artifacts.root)),
                 "delayed_replay_results_file": str(self.artifacts.delayed_replay_results_path.relative_to(self.artifacts.root)),
                 "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
@@ -5433,7 +5432,7 @@ class AnomalyMicroLiveRunner:
             "first_hit": "",
         }
         telegram_notified = False
-        if operator_alert_kind and replay_signal is not None and self.config.delayed_replay_telegram_enabled:
+        if operator_alert_kind and replay_signal is not None:
             telegram_notified = self._notify_delayed_replay_ignored_entry(
                 replay_signal,
                 case=case,

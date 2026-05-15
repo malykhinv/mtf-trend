@@ -9,8 +9,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 ```text
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
-Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225 applied locally by user / UNKNOWN commit; P226 proposed
-Last active patch: P226 label delayed replay evidence source
+Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
+Last active patch: P230 delayed replay Telegram follows enablement
 Updated: 2026-05-15
 ```
 
@@ -98,6 +98,7 @@ research_tools/hourly_levels.py
 30. P223/P224 add an opt-in idle-only delayed replay auditor: live captures category_selected/category_rejected/execution-rejected anomaly decisions into delayed_replay artifacts, processes them only when idle, recomputes frozen-decision signals from cache-only OHLCV, and can send TG when replay finds an ignored entry.
 31. P225 adds a frozen LiveSignal snapshot fallback for execution-rejected runner signals when exact cache-only recomputation is blocked by intentionally disabled mark/OI exchange-context fetch.
 32. P226 proposes evidence labeling for delayed replay: strict candle recompute and frozen live-signal snapshot are separated in result columns, mismatch labels, and Telegram wording so snapshot fallback is not presented as strict backtest-like proof.
+33. P227-P229 harden delayed replay final-decision capture and immutable decision snapshots; P230 proposes removing the separate Telegram switch so important replay alerts follow `--delayed-replay-enabled true`.
 
 ---
 

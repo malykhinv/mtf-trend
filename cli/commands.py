@@ -1584,10 +1584,6 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             delayed_replay_outcome_lookahead_seconds=float(
                 getattr(args, "delayed_replay_outcome_lookahead_seconds", 300.0)
             ),
-            delayed_replay_telegram_enabled=_to_bool_flag(
-                getattr(args, "delayed_replay_telegram_enabled", True),
-                default=True,
-            ),
             signal_scan_backfill_candles=int(getattr(args, "signal_scan_backfill_candles", 10)),
             max_cycles=getattr(args, "max_cycles", None),
             trail_lookback_candles=int(getattr(args, "trail_lookback_candles", 5)),
