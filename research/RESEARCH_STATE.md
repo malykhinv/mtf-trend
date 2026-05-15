@@ -1263,6 +1263,12 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Next validation: short dry live with delayed replay enabled; inspect that `delayed_replay_queue.jsonl` has no raw `category_rejected` source cases and that TG alerts distinguish `strict_replay_ignored_entry` from `frozen_signal_snapshot_only`.
 
 
+## P228 proposed state
+- Delayed replay result CSV now preserves `recompute_source`, so strict cache-only recompute rows and frozen live-signal snapshot rows can be separated without reading live_events.json details.
+- Current commit: UNKNOWN.
+- Next validation: short dry live with delayed replay enabled; inspect `delayed_replay_results.csv` for both `recompute_status` and `recompute_source`.
+
+
 ## P226 proposed state
 - Delayed replay decision recompute still uses only cached windows ending at decision_timestamp_ms; outcome windows start after decision and are labeled as post-decision.
 - Frozen live-signal snapshot fallback is not equivalent to strict backtest-like recompute. P226 separates evidence with strict_recompute_signal and frozen_signal_snapshot_used.

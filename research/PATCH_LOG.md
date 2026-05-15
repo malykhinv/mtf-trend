@@ -3567,6 +3567,47 @@ Low/medium. Audit-only; no order placement, live trading thresholds, fills, stop
 ```
 
 
+## 2026-05-15 - P228 proposed: delayed replay result source column
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Make delayed replay evidence source visible in the results CSV instead of computing it and then dropping it through csv extrasaction=ignore.
+```
+
+Changes:
+
+```text
+- Upgrades delayed replay contract to delayed_replay_v5_result_source_visible_cache_only_idle_tg.
+- Adds recompute_source to DELAYED_REPLAY_RESULTS_COLUMNS so strict cache-only recompute and frozen live-signal snapshot rows remain distinguishable in delayed_replay_results.csv.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep delayed-replay
+```
+
+Risk:
+
+```text
+Low. Artifact schema/contract only; no live scan, order, fill, stop, or replay decision logic changes.
+```
+
+
 ## 2026-05-15 - P226 proposed: label delayed replay evidence source
 
 Status: PROPOSED

@@ -288,6 +288,7 @@ DELAYED_REPLAY_RESULTS_COLUMNS = (
     "replay_not_before_ms",
     "queued_delay_seconds",
     "recompute_status",
+    "recompute_source",
     "would_select_signal",
     "would_enter_under_frozen_decision",
     "strict_replay_would_enter",
@@ -340,7 +341,7 @@ DELAYED_REPLAY_SUMMARY_COLUMNS = (
     "idle_since_ms",
     "duration_seconds",
 )
-DELAYED_REPLAY_CONTRACT = "delayed_replay_v4_final_decision_evidence_labeled_cache_only_idle_tg"
+DELAYED_REPLAY_CONTRACT = "delayed_replay_v5_result_source_visible_cache_only_idle_tg"
 SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v2_cache_only_prior_fast_fade_prepump_spot"
 SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
     "snapshot_timestamp_utc",
