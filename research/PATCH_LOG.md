@@ -3370,3 +3370,55 @@ Risk:
 ```text
 Low/medium. Trade logic and order execution are unchanged. The replay is intentionally cache-only and artifact-based, so it may report insufficient replay data instead of forcing REST/network work. It is not yet a full backtest recomputation; recompute_status says this explicitly to avoid fake would-enter claims.
 ```
+
+## 2026-05-15 - P224 proposed: frozen-decision delayed replay recompute and Telegram alert
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Make delayed replay answer whether the same frozen decision candle would produce an entry under the live/backtest-style signal builder, while keeping replay cache-only, idle-only, and visible to the operator when live did not open.
+```
+
+Changes:
+
+```text
+- Upgrades delayed replay contract to delayed_replay_v2_frozen_decision_recompute_cache_only_idle_tg.
+- Adds --delayed-replay-telegram-enabled true/false to run-anomaly-live.
+- Recomputes each queued case from cached closed OHLCV windows up to the original decision timestamp, without using future candles and without fetching missing exchange context.
+- Captures execution guard rejects such as stale/drift/TP1-reached/RR-collapsed/max-positions as replay cases, not only category selected/rejected cases.
+- Writes recompute_status, would_select_signal, would_enter_under_frozen_decision, recomputed prices/category, reject reasons, data status, mismatch_type, and telegram_notified to delayed_replay_results.csv.
+- Sends an events-channel Telegram message when replay recomputes an entry for a case where live did not open/select the entry.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py launcher.py
+python main.py run-anomaly-live --help | grep delayed-replay
+```
+
+Expected smoke readout:
+
+```text
+With --delayed-replay-enabled true, replay rows no longer say not_recomputed_artifact_frozen_decision_snapshot. They show recomputed_signal/recomputed_no_signal or an explicit cache-only insufficiency status. If a live rejected/execution-rejected case recomputes to an entry, delayed_replay_results.csv has mismatch_type live_rejected_replay_would_enter or live_execution_rejected_replay_would_enter and a Telegram events message says Replay found the entry.
+```
+
+Risk:
+
+```text
+Medium. This adds more replay computation, but only after the existing idle gate and within existing per-cycle budgets. It deliberately disables synchronous mark/OI exchange-context fetches during replay, so categories requiring unavailable derivatives context may produce explicit replay_exchange_context_fetch_disabled rejects instead of optimistic entries.
+```

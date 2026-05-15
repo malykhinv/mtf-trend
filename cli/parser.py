@@ -421,6 +421,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=2000,
     )
     anomaly_live.add_argument("--delayed-replay-outcome-lookahead-seconds", type=float, default=300.0)
+    anomaly_live.add_argument(
+        "--delayed-replay-telegram-enabled",
+        type=_str_to_bool,
+        default=True,
+        help="Send an events-channel Telegram alert when delayed replay recomputes an entry that live did not open.",
+    )
     anomaly_live.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_live.add_argument("--trail-buffer-r", type=float, default=0.10)
 

@@ -1235,3 +1235,11 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Warm-watch aggTrade micro-cache subscriptions are capped by score/recency; active, opening, current batch, and promoted radar targets remain uncapped by this warm cap.
 - Current commit: UNKNOWN.
 - Next validation: short dry live and inspect `symbol_context_snapshot_skipped`, `symbol_context_snapshot_updated`, `ws_aggtrade_subscription_target`, and `live_cycle_summary` for budget/SLA/cap fields before changing scan budgets.
+
+## P224 proposed state
+- Delayed replay now performs cache-only frozen-decision recomputation instead of only artifact outcome auditing.
+- It captures category selected/rejected decisions plus execution rejects and reports whether the frozen decision would select/enter under the signal builder.
+- It still cannot see symbols/windows that live never scanned; those remain a separate scheduler/top-growth visibility problem.
+- Replay does not fetch missing mark/OI context; unavailable exchange context is an explicit replay reject to avoid stealing live resources.
+- Current commit: UNKNOWN.
+- Next validation: run short dry live with `--delayed-replay-enabled true --delayed-replay-delay-seconds 60 --delayed-replay-min-idle-seconds 10`, then inspect `delayed_replay_results.csv`, `live_events.csv`, and Telegram events for any `*_replay_would_enter` mismatch.

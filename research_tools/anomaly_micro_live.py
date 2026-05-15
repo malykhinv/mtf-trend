@@ -290,6 +290,14 @@ DELAYED_REPLAY_RESULTS_COLUMNS = (
     "would_select_signal",
     "would_enter_under_frozen_decision",
     "mismatch_type",
+    "recomputed_category_id",
+    "recomputed_category_label",
+    "recomputed_entry_price",
+    "recomputed_stop_price",
+    "recomputed_tp1_price",
+    "recompute_reject_reasons",
+    "recompute_data_status",
+    "telegram_notified",
     "outcome_status",
     "outcome_window_start_ms",
     "outcome_window_end_ms",
@@ -324,7 +332,7 @@ DELAYED_REPLAY_SUMMARY_COLUMNS = (
     "idle_since_ms",
     "duration_seconds",
 )
-DELAYED_REPLAY_CONTRACT = "delayed_replay_v1_live_event_frozen_decision_cache_only_idle"
+DELAYED_REPLAY_CONTRACT = "delayed_replay_v2_frozen_decision_recompute_cache_only_idle_tg"
 SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v2_cache_only_prior_fast_fade_prepump_spot"
 SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
     "snapshot_timestamp_utc",
@@ -1669,6 +1677,7 @@ class LiveAnomalyConfig:
     delayed_replay_max_cycle_seconds: float = 1.5
     delayed_replay_max_queue_size: int = 2000
     delayed_replay_outcome_lookahead_seconds: float = 300.0
+    delayed_replay_telegram_enabled: bool = True
     max_cycles: int | None = None
     stop_cooldown_hours: float = 12.0
     stop_limit_per_symbol: int = 2
@@ -3459,6 +3468,7 @@ class AnomalyMicroLiveRunner:
                 "delayed_replay_max_cases_per_cycle": int(self.config.delayed_replay_max_cases_per_cycle),
                 "delayed_replay_max_cycle_seconds": float(self.config.delayed_replay_max_cycle_seconds),
                 "delayed_replay_outcome_lookahead_seconds": float(self.config.delayed_replay_outcome_lookahead_seconds),
+                "delayed_replay_telegram_enabled": bool(self.config.delayed_replay_telegram_enabled),
                 "delayed_replay_queue_file": str(self.artifacts.delayed_replay_queue_path.relative_to(self.artifacts.root)),
                 "delayed_replay_results_file": str(self.artifacts.delayed_replay_results_path.relative_to(self.artifacts.root)),
                 "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
@@ -4572,6 +4582,39 @@ class AnomalyMicroLiveRunner:
             live_reason="category_selected",
         )
 
+    def _capture_delayed_replay_execution_reject(
+        self,
+        signal: LiveSignal,
+        *,
+        event: str,
+        details: dict[str, object],
+    ) -> None:
+        if not self.config.delayed_replay_enabled:
+            return
+        replay_details = {
+            "category_id": signal.category_id,
+            "category_label": signal.category_label,
+            "category_priority": signal.category_priority,
+            "levels_tf": signal.levels_timeframe.value,
+            "entry_tf": signal.entry_timeframe.value,
+            "decision_timestamp_ms": int(signal.decision_timestamp_ms),
+            "start_timestamp_ms": int(signal.start_timestamp_ms),
+            "signal_entry_price": _finite_or_none(signal.entry_price),
+            "signal_stop_price": _finite_or_none(signal.stop_price),
+            "signal_tp1_price": _finite_or_none(signal.tp1_price),
+            "source_scan_mode": self._batch_scan_mode_for_symbol(signal.symbol),
+            "signal_json": signal.to_json(),
+            **details,
+        }
+        self._capture_delayed_replay_case(
+            source_event=event,
+            symbol=signal.symbol,
+            details=replay_details,
+            priority=1,
+            live_decision_class="execution_rejected",
+            live_reason=event,
+        )
+
     def _process_delayed_replay_if_idle(
         self,
         *,
@@ -4735,13 +4778,152 @@ class AnomalyMicroLiveRunner:
             }
         )
 
+    def _recompute_delayed_replay_signal(self, case: dict[str, object]) -> dict[str, object]:
+        symbol = str(case.get("symbol") or "")
+        levels_tf_value = str(case.get("levels_tf") or "")
+        entry_tf_value = str(case.get("entry_tf") or "")
+        decision_ts = int(case.get("decision_timestamp_ms") or 0)
+        if not symbol or not levels_tf_value or not entry_tf_value or decision_ts <= 0:
+            return {
+                "status": "invalid_case_identity",
+                "signal": None,
+                "reject_reasons": (),
+                "data_status": "invalid_case_identity",
+            }
+        try:
+            levels_timeframe = Timeframe(levels_tf_value)
+            entry_timeframe = Timeframe(entry_tf_value)
+        except ValueError:
+            return {
+                "status": "invalid_timeframe",
+                "signal": None,
+                "reject_reasons": (),
+                "data_status": "invalid_timeframe",
+            }
+        levels_timeframe_ms = int(levels_timeframe.to_milliseconds())
+        entry_timeframe_ms = int(entry_timeframe.to_milliseconds())
+        setup_start_ts = (decision_ts // levels_timeframe_ms) * levels_timeframe_ms
+        setup_lookback_ms = (self.config.baseline_candles + 5) * levels_timeframe_ms
+        setup_frame, setup_status = self._load_delayed_replay_cached_window(
+            symbol=symbol,
+            timeframe=levels_timeframe,
+            start_timestamp_ms=setup_start_ts - setup_lookback_ms,
+            end_timestamp_ms=setup_start_ts - levels_timeframe_ms,
+        )
+        entry_frame, entry_status = self._load_delayed_replay_cached_window(
+            symbol=symbol,
+            timeframe=entry_timeframe,
+            start_timestamp_ms=setup_start_ts,
+            end_timestamp_ms=decision_ts,
+        )
+        data_status = f"setup={setup_status};entry={entry_status}"
+        if setup_frame.empty or entry_frame.empty:
+            return {
+                "status": "insufficient_cached_ohlcv",
+                "signal": None,
+                "reject_reasons": (),
+                "data_status": data_status,
+            }
+        missing_setup_price = [column for column in REQUIRED_PRICE_COLUMNS if column not in setup_frame.columns]
+        missing_setup_flow = [column for column in REQUIRED_FLOW_COLUMNS if column not in setup_frame.columns]
+        missing_entry_price = [column for column in REQUIRED_PRICE_COLUMNS if column not in entry_frame.columns]
+        missing_entry_flow = [column for column in REQUIRED_FLOW_COLUMNS if column not in entry_frame.columns]
+        missing_columns = missing_setup_price + missing_setup_flow + missing_entry_price + missing_entry_flow
+        if missing_columns:
+            return {
+                "status": "missing_columns",
+                "signal": None,
+                "reject_reasons": tuple(f"missing:{column}" for column in missing_columns),
+                "data_status": data_status,
+            }
+        setup_frame = setup_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+        entry_frame = entry_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+        setup_history = setup_frame.loc[
+            setup_frame["timestamp"].astype("int64") < int(setup_start_ts)
+        ].tail(self.config.baseline_candles).copy()
+        entry_segment = entry_frame.loc[
+            (entry_frame["timestamp"].astype("int64") >= int(setup_start_ts))
+            & (entry_frame["timestamp"].astype("int64") <= int(decision_ts))
+        ].copy()
+        if len(setup_history) < self.config.baseline_candles or entry_segment.empty:
+            return {
+                "status": "insufficient_replay_history",
+                "signal": None,
+                "reject_reasons": (),
+                "data_status": data_status,
+            }
+        seed_close = float(setup_history.iloc[-1]["close"])
+        entry_segment = _fill_missing_ohlcv_buckets(
+            entry_segment,
+            start_timestamp_ms=int(setup_start_ts),
+            end_timestamp_ms=int(decision_ts),
+            timeframe_ms=entry_timeframe_ms,
+            seed_close=seed_close,
+        )
+        if len(entry_segment) < self.config.confirmation_candles:
+            return {
+                "status": "setup_too_early",
+                "signal": None,
+                "reject_reasons": ("reject_setup_too_early",),
+                "data_status": data_status,
+            }
+        setup_elapsed_fraction = min(1.0, len(entry_segment) * entry_timeframe_ms / levels_timeframe_ms)
+        forming_setup = _aggregate_frame_to_candle(entry_segment, timestamp_ms=int(setup_start_ts))
+        if forming_setup is None:
+            return {
+                "status": "forming_setup_unavailable",
+                "signal": None,
+                "reject_reasons": (),
+                "data_status": data_status,
+            }
+        category_rejections: list[dict[str, object]] = []
+        signal = self._build_signal_from_components(
+            symbol=symbol,
+            baseline=setup_history,
+            setup_row=forming_setup,
+            entry_segment=entry_segment,
+            now_ms=decision_ts + entry_timeframe_ms,
+            levels_timeframe=levels_timeframe,
+            entry_timeframe=entry_timeframe,
+            setup_source="delayed_replay_forming_htf_from_entry_tf",
+            setup_elapsed_fraction=setup_elapsed_fraction,
+            setup_closed_entry_candles=len(entry_segment),
+            emit_diagnostics=False,
+            category_rejections_out=category_rejections,
+            allow_exchange_context_fetch=False,
+        )
+        reject_reasons = tuple(
+            str(row.get("category_reject_reason") or row.get("reason") or "")
+            for row in category_rejections
+            if str(row.get("category_reject_reason") or row.get("reason") or "")
+        )
+        return {
+            "status": "recomputed_signal" if signal is not None else "recomputed_no_signal",
+            "signal": signal,
+            "reject_reasons": reject_reasons,
+            "data_status": data_status,
+        }
+
     def _evaluate_delayed_replay_case(self, case: dict[str, object], *, now_ms: int) -> dict[str, object]:
         details = case.get("details") if isinstance(case.get("details"), dict) else {}
         decision_ts = int(case.get("decision_timestamp_ms") or 0)
         source_event = str(case.get("source_event") or "")
         live_decision_class = str(case.get("live_decision_class") or "")
-        selected = live_decision_class == "signal_selected"
-        outcome = self._delayed_replay_outcome(case, now_ms=now_ms) if selected else {
+        recompute = self._recompute_delayed_replay_signal(case)
+        replay_signal = recompute.get("signal") if isinstance(recompute.get("signal"), LiveSignal) else None
+        would_select_signal = replay_signal is not None
+        would_enter = bool(would_select_signal)
+        if would_enter and live_decision_class == "signal_selected":
+            mismatch_type = "live_selected_recomputed_signal"
+        elif would_enter and live_decision_class == "execution_rejected":
+            mismatch_type = "live_execution_rejected_replay_would_enter"
+        elif would_enter:
+            mismatch_type = "live_rejected_replay_would_enter"
+        elif live_decision_class == "signal_selected":
+            mismatch_type = "live_selected_replay_no_signal"
+        else:
+            mismatch_type = "live_rejected_replay_rejected"
+        outcome = self._delayed_replay_outcome(case, now_ms=now_ms, signal=replay_signal) if would_select_signal else {
             "outcome_status": "not_applicable_non_selected_case",
             "outcome_window_start_ms": "",
             "outcome_window_end_ms": "",
@@ -4753,6 +4935,15 @@ class AnomalyMicroLiveRunner:
             "stop_would_hit": "",
             "first_hit": "",
         }
+        telegram_notified = False
+        if would_enter and live_decision_class != "signal_selected" and self.config.delayed_replay_telegram_enabled:
+            telegram_notified = self._notify_delayed_replay_ignored_entry(
+                replay_signal,
+                case=case,
+                mismatch_type=mismatch_type,
+                recompute_status=str(recompute.get("status") or ""),
+                outcome=outcome,
+            )
         return {
             "case_id": str(case.get("case_id") or ""),
             "queued_at_utc": str(case.get("queued_at_utc") or ""),
@@ -4768,14 +4959,28 @@ class AnomalyMicroLiveRunner:
             "decision_timestamp_ms": decision_ts,
             "replay_not_before_ms": int(case.get("replay_not_before_ms") or 0),
             "queued_delay_seconds": round((now_ms - int(case.get("queued_at_ms") or now_ms)) / 1000.0, 3),
-            "recompute_status": "not_recomputed_artifact_frozen_decision_snapshot",
-            "would_select_signal": bool(selected),
-            "would_enter_under_frozen_decision": bool(selected),
-            "mismatch_type": "live_selected_signal_audit_only" if selected else "live_rejected_or_non_entry_audit_only",
-            "signal_entry_price": _finite_or_none(details.get("signal_entry_price")),
-            "signal_stop_price": _finite_or_none(details.get("signal_stop_price")),
-            "signal_tp1_price": _finite_or_none(details.get("signal_tp1_price")),
-            "source_scan_mode": str(details.get("source_scan_mode") or ""),
+            "recompute_status": str(recompute.get("status") or ""),
+            "would_select_signal": bool(would_select_signal),
+            "would_enter_under_frozen_decision": bool(would_enter),
+            "mismatch_type": mismatch_type,
+            "recomputed_category_id": replay_signal.category_id if replay_signal is not None else "",
+            "recomputed_category_label": replay_signal.category_label if replay_signal is not None else "",
+            "recomputed_entry_price": _finite_or_none(replay_signal.entry_price if replay_signal is not None else None),
+            "recomputed_stop_price": _finite_or_none(replay_signal.stop_price if replay_signal is not None else None),
+            "recomputed_tp1_price": _finite_or_none(replay_signal.tp1_price if replay_signal is not None else None),
+            "recompute_reject_reasons": ",".join(str(reason) for reason in recompute.get("reject_reasons", ()) if reason),
+            "recompute_data_status": str(recompute.get("data_status") or ""),
+            "telegram_notified": bool(telegram_notified),
+            "signal_entry_price": _finite_or_none(
+                replay_signal.entry_price if replay_signal is not None else details.get("signal_entry_price")
+            ),
+            "signal_stop_price": _finite_or_none(
+                replay_signal.stop_price if replay_signal is not None else details.get("signal_stop_price")
+            ),
+            "signal_tp1_price": _finite_or_none(
+                replay_signal.tp1_price if replay_signal is not None else details.get("signal_tp1_price")
+            ),
+            "source_scan_mode": str(details.get("source_scan_mode") or "delayed_replay_cache_only"),
             "delayed_replay_contract": DELAYED_REPLAY_CONTRACT,
             **outcome,
         }
@@ -4804,7 +5009,64 @@ class AnomalyMicroLiveRunner:
             "delayed_replay_contract": DELAYED_REPLAY_CONTRACT,
         }
 
-    def _delayed_replay_outcome(self, case: dict[str, object], *, now_ms: int) -> dict[str, object]:
+    def _notify_delayed_replay_ignored_entry(
+        self,
+        signal: LiveSignal,
+        *,
+        case: dict[str, object],
+        mismatch_type: str,
+        recompute_status: str,
+        outcome: dict[str, object],
+    ) -> bool:
+        case_id = str(case.get("case_id") or "")
+        live_reason = str(case.get("live_reason") or "")
+        try:
+            self.telegram.send(
+                channel="events",
+                key=f"delayed_replay_ignored_entry:{case_id}",
+                text=_format_delayed_replay_ignored_entry_message(
+                    signal,
+                    live_reason=live_reason,
+                    mismatch_type=mismatch_type,
+                    recompute_status=recompute_status,
+                    outcome=outcome,
+                ),
+                symbol=signal.symbol,
+            )
+            self.artifacts.append_event(
+                "delayed_replay_ignored_entry_notified",
+                signal.symbol,
+                {
+                    "case_id": case_id,
+                    "live_reason": live_reason,
+                    "mismatch_type": mismatch_type,
+                    "recompute_status": recompute_status,
+                    "decision_timestamp_ms": int(signal.decision_timestamp_ms),
+                    "levels_tf": signal.levels_timeframe.value,
+                    "entry_tf": signal.entry_timeframe.value,
+                },
+            )
+            return True
+        except Exception as exc:
+            self.artifacts.append_event(
+                "telegram_delayed_replay_ignored_entry_enqueue_failed",
+                signal.symbol,
+                {
+                    "case_id": case_id,
+                    "live_reason": live_reason,
+                    "mismatch_type": mismatch_type,
+                    "reason": str(exc),
+                },
+            )
+            return False
+
+    def _delayed_replay_outcome(
+        self,
+        case: dict[str, object],
+        *,
+        now_ms: int,
+        signal: LiveSignal | None = None,
+    ) -> dict[str, object]:
         details = case.get("details") if isinstance(case.get("details"), dict) else {}
         symbol = str(case.get("symbol") or "")
         entry_tf_value = str(case.get("entry_tf") or "")
@@ -4843,8 +5105,8 @@ class AnomalyMicroLiveRunner:
         high = float(highs.max()) if not highs.empty else float("nan")
         low = float(lows.min()) if not lows.empty else float("nan")
         close = float(closes.iloc[-1]) if not closes.empty else float("nan")
-        tp1_price = _optional_float(details.get("signal_tp1_price"))
-        stop_price = _optional_float(details.get("signal_stop_price"))
+        tp1_price = float(signal.tp1_price) if signal is not None else _optional_float(details.get("signal_tp1_price"))
+        stop_price = float(signal.stop_price) if signal is not None else _optional_float(details.get("signal_stop_price"))
         tp1_hit = bool(tp1_price is not None and math.isfinite(high) and high >= tp1_price)
         stop_hit = bool(stop_price is not None and math.isfinite(low) and low <= stop_price)
         first_hit = ""
@@ -8259,6 +8521,7 @@ class AnomalyMicroLiveRunner:
         setup_closed_entry_candles: int,
         emit_diagnostics: bool = True,
         category_rejections_out: list[dict[str, object]] | None = None,
+        allow_exchange_context_fetch: bool = True,
     ) -> LiveSignal | None:
         if baseline.empty or entry_segment.empty:
             return None
@@ -8485,10 +8748,14 @@ class AnomalyMicroLiveRunner:
             min_mark_basis = _category_value(category, self.config, "min_mark_close_vs_decision_close_basis")
             if min_mark_basis is not None:
                 if not mark_basis_loaded:
-                    mark_basis = self._fetch_live_mark_basis(
-                        symbol,
-                        decision_timestamp_ms=int(decision["timestamp"]),
-                        decision_close=decision_close,
+                    mark_basis = (
+                        self._fetch_live_mark_basis(
+                            symbol,
+                            decision_timestamp_ms=int(decision["timestamp"]),
+                            decision_close=decision_close,
+                        )
+                        if allow_exchange_context_fetch
+                        else LiveMarkBasisResult(None, "replay_exchange_context_fetch_disabled")
                     )
                     mark_basis_loaded = True
                 basis_value = mark_basis.value if mark_basis is not None else None
@@ -8630,9 +8897,13 @@ class AnomalyMicroLiveRunner:
             min_oi_change = _category_value(category, self.config, "min_oi_change_pct_3x5m")
             if min_oi_change is not None:
                 if not oi_change_loaded:
-                    oi_result = self._fetch_live_oi_change(
-                        symbol,
-                        decision_timestamp_ms=int(decision["timestamp"]),
+                    oi_result = (
+                        self._fetch_live_oi_change(
+                            symbol,
+                            decision_timestamp_ms=int(decision["timestamp"]),
+                        )
+                        if allow_exchange_context_fetch
+                        else LiveOiChangeResult(None, "replay_exchange_context_fetch_disabled")
                     )
                     oi_change = oi_result.value
                     oi_change_reason = oi_result.reason
@@ -8915,6 +9186,17 @@ class AnomalyMicroLiveRunner:
                 "reject_max_positions",
                 signal.symbol,
                 {
+                    "max": self.config.max_open_positions,
+                    "levels_tf": signal.levels_timeframe.value,
+                    "entry_tf": signal.entry_timeframe.value,
+                    "decision_timestamp_ms": signal.decision_timestamp_ms,
+                    "retry_until_stale": True,
+                },
+            )
+            self._capture_delayed_replay_execution_reject(
+                signal,
+                event="reject_max_positions",
+                details={
                     "max": self.config.max_open_positions,
                     "levels_tf": signal.levels_timeframe.value,
                     "entry_tf": signal.entry_timeframe.value,
@@ -9355,6 +9637,7 @@ class AnomalyMicroLiveRunner:
         self._clear_active_symbol(signal.symbol, reason=event)
         self._mark_signal_decision_consumed(signal, reason=event)
         self.artifacts.append_event(event, signal.symbol, details)
+        self._capture_delayed_replay_execution_reject(signal, event=event, details=details)
         self._notify_order_blocked(signal, event=event, details=details)
         return False
 
@@ -11437,6 +11720,34 @@ def _format_order_blocked_message(signal: LiveSignal, *, event: str, details: di
         f"{_symbol_emoji(signal.symbol)} "
         f"<b>{_telegram_symbol_link(signal.symbol)} Позиция не открыта</b>\n\n"
         f"{_telegram_escape(reason)}\n\n"
+        f"{_telegram_signal_context(signal)}"
+    )
+
+
+def _format_delayed_replay_ignored_entry_message(
+    signal: LiveSignal,
+    *,
+    live_reason: str,
+    mismatch_type: str,
+    recompute_status: str,
+    outcome: dict[str, object],
+) -> str:
+    tp_pct = _safe_divide(float(signal.tp1_price) - float(signal.entry_price), float(signal.entry_price))
+    sl_pct = _safe_divide(float(signal.entry_price) - float(signal.stop_price), float(signal.entry_price))
+    first_hit = str(outcome.get("first_hit") or "")
+    outcome_line = ""
+    if first_hit:
+        outcome_line = f"\nПосле сигнала: {_telegram_code(first_hit)}\n"
+    return (
+        f"{_symbol_emoji(signal.symbol)} "
+        f"<b>{_telegram_symbol_link(signal.symbol)} Replay нашёл вход</b>\n\n"
+        f"Live: {_telegram_code(live_reason or 'unknown')}\n"
+        f"Replay: {_telegram_code(mismatch_type)}\n"
+        f"Status: {_telegram_code(recompute_status)}\n\n"
+        f"Вход: {_format_price(signal.entry_price)}\n"
+        f"TP1: {_format_price(signal.tp1_price)} {_format_percent(tp_pct)}\n"
+        f"SL: {_format_price(signal.stop_price)} {_format_percent(sl_pct)}\n"
+        f"{outcome_line}\n"
         f"{_telegram_signal_context(signal)}"
     )
 
