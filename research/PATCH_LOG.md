@@ -4024,6 +4024,48 @@ Risk:
 Medium. This intentionally discards low-priority backlog under pressure, which should reduce false SLA breaches but can drop a weak candidate before precise scan. The event trail is explicit, and top-growth/missed-pump visibility can audit whether dropped candidates later became top movers.
 ```
 
+## P246 - proposed - adaptive precise scan budget
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Prevent live from spending the same precise-scan capacity during normal and overloaded states. Under backlog, active symbols keep priority and radar precise scans are reduced to the freshest/highest-score tail instead of expanding stale due-scan latency.
+```
+
+Changes:
+
+```text
+- Adds an internal adaptive precise-scan budget with no new CLI flags.
+- Active/opening symbols are never dropped by the adaptive cap.
+- Under latency SLA breach, radar precise scans are limited to the top 1 candidate for the cycle.
+- Under queue pressure or active-symbol pressure, radar precise scans are limited to the top 2 candidates for the cycle.
+- Under runtime/cache pressure, radar precise scans are limited to the top 3 candidates for the cycle.
+- Adds adaptive_precise_budget_* fields to symbol_batch_selected and live_cycle_summary.
+- Keeps execution safety, discovery filters, order/fill/stop logic and REST fetch behavior unchanged.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "adaptive-precise|precise-budget"  # expected: no output
+```
+
+Risk:
+
+```text
+Medium. This intentionally scans fewer radar candidates per cycle during pressure. The tradeoff is deliberate: fresher top candidates are preferable to scanning a wider stale queue. New artifact fields make the cap auditable.
+```
+
 ## 2026-05-15 - P237 proposed: live session top-growth status from ticker snapshots
 
 Status: PROPOSED

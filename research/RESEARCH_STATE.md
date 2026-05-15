@@ -1331,6 +1331,14 @@ No execution safety was loosened: stale, drift, RR, actual-risk, position, fill 
 Current commit: UNKNOWN.
 Next validation: run a short live smoke and inspect `candidate_queue_*` fields in `live_cycle_summary` / `symbol_batch_selected`, plus `candidate_dropped_latency_pressure`, `candidate_expired_backlog_stale`, `warm_watch_precise_deferred_latency_sla`, and `latency_sla_status` counts.
 
+## 2026-05-15 — P246 proposed
+
+P246 adds an internal adaptive precise-scan budget on top of P245. During latency/backlog/runtime pressure, active/opening symbols keep priority and radar precise scans are capped to the strongest fresh candidates instead of scanning a wider stale queue.
+
+No execution guards are loosened. No new CLI flags are introduced. Current commit: UNKNOWN.
+
+Next validation: run a short live smoke and compare `adaptive_precise_budget_status`, `adaptive_precise_budget_radar_slots`, `latency_sla_status`, `warm_watch_precise_deferred_latency_sla`, and `candidate_queue_*` versus the previous 5h run.
+
 ## 2026-05-15 — P239 proposed
 
 Live prior-fast-fade context must not depend only on a post-scan optional snapshot. P239 proposes default startup backfill + startup snapshot computation for 72h+baseline levels-timeframe context, with explicit tiny-gap tolerance (`min_coverage_ratio=0.995`, `max_gap_candles=2`) and no subminute context backfill. Commit: UNKNOWN.

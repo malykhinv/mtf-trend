@@ -101,6 +101,10 @@ CANDIDATE_QUEUE_PRESSURE_MIN_KEEP = 12
 CANDIDATE_QUEUE_PRESSURE_MAX_RADAR = 24
 CANDIDATE_QUEUE_PRESSURE_MAX_WARM = 24
 CANDIDATE_QUEUE_PRESSURE_BACKLOG_STALE_FACTOR = 2.0
+ADAPTIVE_PRECISE_BUDGET_BREACHED_RADAR_SLOTS = 1
+ADAPTIVE_PRECISE_BUDGET_PRESSURE_RADAR_SLOTS = 2
+ADAPTIVE_PRECISE_BUDGET_ACTIVE_RADAR_SLOTS = 2
+ADAPTIVE_PRECISE_BUDGET_SLOW_CYCLE_RADAR_SLOTS = 3
 PREPUMP_WARM_WATCH_SCORING_CONTRACT = "prepump_warm_watch_scoring_v1_spot_feature_separation_midpoint"
 DEFAULT_PREPUMP_WARM_WATCH_MIN_ABS_STANDARDIZED_DIFF = 0.75
 DEFAULT_PREPUMP_WARM_WATCH_MIN_RUNNER_ROWS = 10
@@ -2329,6 +2333,19 @@ class LiveCandidateQueuePressureStats:
 
 
 @dataclass(frozen=True, slots=True)
+class LiveAdaptivePreciseBudget:
+    status: str = "not_evaluated"
+    reason: str = ""
+    limit: int | None = None
+    radar_slots: int | None = None
+    active_due_count: int = 0
+    active_waiting_count: int = 0
+    manual_cap: int | None = None
+    cycle_seconds_ewma: float = 0.0
+    pressure_ewma: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
 class LiveSymbolBatchSelection:
     scheduler_source: str
     active_due: tuple[str, ...]
@@ -2354,6 +2371,13 @@ class LiveSymbolBatchSelection:
     candidate_queue_dropped_pressure_count: int
     candidate_queue_expired_backlog_stale_count: int
     candidate_queue_top_score: float | None
+    adaptive_precise_budget_status: str
+    adaptive_precise_budget_reason: str
+    adaptive_precise_budget_limit: int | None
+    adaptive_precise_budget_radar_slots: int | None
+    adaptive_precise_budget_active_due_count: int
+    adaptive_precise_budget_active_waiting_count: int
+    adaptive_precise_budget_manual_cap: int | None
     inactive: tuple[str, ...]
     batch: tuple[str, ...]
     scan_modes: dict[str, str]
@@ -4023,6 +4047,10 @@ class AnomalyMicroLiveRunner:
         self._current_latency_sla_threshold_seconds = float(config.latency_sla_due_scan_p95_seconds)
         self._current_latency_sla_min_due_samples = int(config.latency_sla_min_due_samples)
         self._current_latency_sla_reason = "not_started"
+        self._current_adaptive_precise_budget_status = "not_started"
+        self._current_adaptive_precise_budget_reason = "not_started"
+        self._current_adaptive_precise_budget_limit: int | None = None
+        self._current_adaptive_precise_budget_radar_slots: int | None = None
         self._cold_coverage_pressure_ewma = 0.0
         self._scheduler_cycle_seconds_ewma = DANGER_ADAPTIVE_COLD_COVERAGE_SLOW_CYCLE_SECONDS
         self._cycle_precise_scan_symbols = 0
@@ -4118,6 +4146,9 @@ class AnomalyMicroLiveRunner:
                 "latency_sla_controller_enabled": bool(self.config.latency_sla_controller_enabled),
                 "latency_sla_policy": "protect_active_and_radar_due_scan_latency_by_gating_optional_warm_and_cold",
                 "candidate_queue_pressure_policy": "drop_stale_or_weak_radar_warm_tail_under_latency_pressure_no_cli_knobs",
+                "adaptive_precise_budget_policy": "limit_radar_precise_slots_under_latency_or_queue_pressure_active_symbols_never_dropped",
+                "adaptive_precise_budget_breached_radar_slots": int(ADAPTIVE_PRECISE_BUDGET_BREACHED_RADAR_SLOTS),
+                "adaptive_precise_budget_pressure_radar_slots": int(ADAPTIVE_PRECISE_BUDGET_PRESSURE_RADAR_SLOTS),
                 "candidate_queue_pressure_min_keep": int(CANDIDATE_QUEUE_PRESSURE_MIN_KEEP),
                 "candidate_queue_pressure_max_radar": int(CANDIDATE_QUEUE_PRESSURE_MAX_RADAR),
                 "candidate_queue_pressure_max_warm": int(CANDIDATE_QUEUE_PRESSURE_MAX_WARM),
@@ -4360,6 +4391,18 @@ class AnomalyMicroLiveRunner:
                         "candidate_queue_top_score": (
                             round(float(selection.candidate_queue_top_score), 6)
                             if selection.candidate_queue_top_score is not None
+                            else ""
+                        ),
+                        "adaptive_precise_budget_status": selection.adaptive_precise_budget_status,
+                        "adaptive_precise_budget_reason": selection.adaptive_precise_budget_reason,
+                        "adaptive_precise_budget_limit": (
+                            selection.adaptive_precise_budget_limit
+                            if selection.adaptive_precise_budget_limit is not None
+                            else ""
+                        ),
+                        "adaptive_precise_budget_radar_slots": (
+                            selection.adaptive_precise_budget_radar_slots
+                            if selection.adaptive_precise_budget_radar_slots is not None
                             else ""
                         ),
                         "symbol_context_snapshot_seconds": round(context_snapshot_seconds, 3),
@@ -6256,6 +6299,10 @@ class AnomalyMicroLiveRunner:
         self._current_latency_sla_threshold_seconds = selection.latency_sla_threshold_seconds
         self._current_latency_sla_min_due_samples = selection.latency_sla_min_due_samples
         self._current_latency_sla_reason = selection.latency_sla_reason
+        self._current_adaptive_precise_budget_status = selection.adaptive_precise_budget_status
+        self._current_adaptive_precise_budget_reason = selection.adaptive_precise_budget_reason
+        self._current_adaptive_precise_budget_limit = selection.adaptive_precise_budget_limit
+        self._current_adaptive_precise_budget_radar_slots = selection.adaptive_precise_budget_radar_slots
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
@@ -6299,6 +6346,23 @@ class AnomalyMicroLiveRunner:
                 "candidate_queue_top_score": (
                     round(float(selection.candidate_queue_top_score), 6)
                     if selection.candidate_queue_top_score is not None
+                    else ""
+                ),
+                "adaptive_precise_budget_status": selection.adaptive_precise_budget_status,
+                "adaptive_precise_budget_reason": selection.adaptive_precise_budget_reason,
+                "adaptive_precise_budget_limit": (
+                    selection.adaptive_precise_budget_limit
+                    if selection.adaptive_precise_budget_limit is not None
+                    else ""
+                ),
+                "adaptive_precise_budget_radar_slots": (
+                    selection.adaptive_precise_budget_radar_slots
+                    if selection.adaptive_precise_budget_radar_slots is not None
+                    else ""
+                ),
+                "adaptive_precise_budget_manual_cap": (
+                    selection.adaptive_precise_budget_manual_cap
+                    if selection.adaptive_precise_budget_manual_cap is not None
                     else ""
                 ),
                 "max_precise_scan_symbols_per_cycle": (
@@ -6939,6 +7003,86 @@ class AnomalyMicroLiveRunner:
             top_score=top_score,
         )
 
+    def _adaptive_precise_scan_budget(
+        self,
+        *,
+        active_due_count: int,
+        active_waiting_count: int,
+        latency_sla: LiveLatencySlaStatus,
+        queue_pressure: LiveCandidateQueuePressureStats,
+    ) -> LiveAdaptivePreciseBudget:
+        """Return a reviewed precise-scan cap for this cycle.
+
+        Active/opening symbols are never dropped by this cap. The cap only limits radar/cold precise
+        scans when backlog or runtime pressure says that scanning every candidate would make signals stale.
+        """
+        manual_cap = self.config.max_precise_scan_symbols_per_cycle
+        manual_limit = int(manual_cap) if manual_cap is not None else None
+        cycle_seconds_ewma = max(0.0, float(self._scheduler_cycle_seconds_ewma))
+        pressure_ewma = max(0.0, min(1.0, float(self._cold_coverage_pressure_ewma)))
+        radar_batch_limit = max(0, int(self.config.ticker_radar_watch_batch_size))
+        if radar_batch_limit <= 0:
+            limit = manual_limit
+            return LiveAdaptivePreciseBudget(
+                status="radar_disabled",
+                reason="ticker_radar_watch_batch_size_zero",
+                limit=limit,
+                radar_slots=0,
+                active_due_count=int(active_due_count),
+                active_waiting_count=int(active_waiting_count),
+                manual_cap=manual_limit,
+                cycle_seconds_ewma=cycle_seconds_ewma,
+                pressure_ewma=pressure_ewma,
+            )
+
+        radar_slots: int | None = None
+        reason = "normal_no_adaptive_cap"
+        status = "uncapped"
+        if not latency_sla.optional_scans_allowed:
+            radar_slots = min(radar_batch_limit, ADAPTIVE_PRECISE_BUDGET_BREACHED_RADAR_SLOTS)
+            reason = latency_sla.reason or LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON
+            status = "breached"
+        elif queue_pressure.status in {"trimmed", "pressure_no_drop"}:
+            radar_slots = min(radar_batch_limit, ADAPTIVE_PRECISE_BUDGET_PRESSURE_RADAR_SLOTS)
+            reason = queue_pressure.reason or "candidate_queue_pressure"
+            status = "queue_pressure"
+        elif active_due_count > 0 or active_waiting_count > 0:
+            radar_slots = min(radar_batch_limit, ADAPTIVE_PRECISE_BUDGET_ACTIVE_RADAR_SLOTS)
+            reason = "active_symbols_need_priority"
+            status = "active_priority"
+        elif cycle_seconds_ewma > DANGER_ADAPTIVE_COLD_COVERAGE_SLOW_CYCLE_SECONDS or pressure_ewma >= 0.75:
+            radar_slots = min(radar_batch_limit, ADAPTIVE_PRECISE_BUDGET_SLOW_CYCLE_RADAR_SLOTS)
+            reason = "scheduler_or_rest_pressure_high"
+            status = "runtime_pressure"
+
+        adaptive_limit = None if radar_slots is None else int(active_due_count) + max(0, int(radar_slots))
+        if manual_limit is None:
+            limit = adaptive_limit
+        elif adaptive_limit is None:
+            limit = max(int(active_due_count), int(manual_limit))
+            if active_due_count > manual_limit:
+                reason = f"active_due_over_manual_cap:{manual_limit}"
+                status = "manual_active_priority"
+        else:
+            # Keep a reviewed operator cap as a hard upper bound, but never use it to drop active symbols.
+            limit = min(manual_limit, adaptive_limit)
+            limit = max(int(active_due_count), int(limit))
+            radar_slots = max(0, int(limit) - int(active_due_count))
+            if limit < adaptive_limit:
+                reason = f"manual_cap:{manual_limit};{reason}"
+                status = f"manual_{status}"
+        return LiveAdaptivePreciseBudget(
+            status=status,
+            reason=reason,
+            limit=limit,
+            radar_slots=radar_slots,
+            active_due_count=int(active_due_count),
+            active_waiting_count=int(active_waiting_count),
+            manual_cap=manual_limit,
+            cycle_seconds_ewma=cycle_seconds_ewma,
+            pressure_ewma=pressure_ewma,
+        )
+
     def _select_next_symbol_batch(self, symbols: list[str]) -> LiveSymbolBatchSelection:
         now_ms = int(time.time() * 1000)
         inactive_cursor_before = self._inactive_cursor
@@ -6954,9 +7098,15 @@ class AnomalyMicroLiveRunner:
             active_keys=active_keys,
             latency_sla=pre_pressure_sla,
         )
+        precise_budget = self._adaptive_precise_scan_budget(
+            active_due_count=len(active_due),
+            active_waiting_count=len(active_waiting),
+            latency_sla=pre_pressure_sla,
+            queue_pressure=queue_pressure,
+        )
         precise_budget_remaining = None
-        if self.config.max_precise_scan_symbols_per_cycle is not None:
-            precise_budget_remaining = max(0, int(self.config.max_precise_scan_symbols_per_cycle) - len(active_due))
+        if precise_budget.limit is not None:
+            precise_budget_remaining = max(0, int(precise_budget.limit) - len(active_due))
         radar_due, radar_waiting = self._ticker_radar_batch(
             now_ms=now_ms,
             excluded_keys=active_keys,
@@ -6981,10 +7131,10 @@ class AnomalyMicroLiveRunner:
         with self._state_lock:
             position_blocked = bool(self._open_positions or self._opening_symbols)
         precise_budget_remaining_after_radar = None
-        if self.config.max_precise_scan_symbols_per_cycle is not None:
+        if precise_budget.limit is not None:
             precise_budget_remaining_after_radar = max(
                 0,
-                int(self.config.max_precise_scan_symbols_per_cycle) - len(active_due) - len(radar_due),
+                int(precise_budget.limit) - len(active_due) - len(radar_due),
             )
         if self.config.inactive_scan_slots_per_cycle is None and inactive_slots_source == "legacy_symbol_batch_size":
             inactive_slots = max(0, base_inactive_slots - len(active_due))
@@ -7114,6 +7264,13 @@ class AnomalyMicroLiveRunner:
             candidate_queue_dropped_pressure_count=queue_pressure.dropped_pressure_count,
             candidate_queue_expired_backlog_stale_count=queue_pressure.expired_backlog_stale_count,
             candidate_queue_top_score=queue_pressure.top_score,
+            adaptive_precise_budget_status=precise_budget.status,
+            adaptive_precise_budget_reason=precise_budget.reason,
+            adaptive_precise_budget_limit=precise_budget.limit,
+            adaptive_precise_budget_radar_slots=precise_budget.radar_slots,
+            adaptive_precise_budget_active_due_count=precise_budget.active_due_count,
+            adaptive_precise_budget_active_waiting_count=precise_budget.active_waiting_count,
+            adaptive_precise_budget_manual_cap=precise_budget.manual_cap,
             inactive=tuple(inactive),
             batch=tuple(batch),
             scan_modes=batch_scan_modes,

@@ -2015,6 +2015,22 @@ closed-hour missed_pump_visibility can show if a dropped/expired candidate later
 
 Guardrail: do not tune stale/drift/RR or order safety based on this patch. If top movers are being dropped, adjust queue scoring/priority, not execution guards.
 
+## 2026-05-15 — P246 adaptive precise budget validation
+
+Goal: verify that the live loop spends precise-scan capacity on the freshest strongest candidates under pressure, instead of widening the stale backlog.
+
+Expected evidence:
+
+```text
+adaptive_precise_budget_status is uncapped during normal load and breached/queue_pressure/active_priority only when justified
+adaptive_precise_budget_radar_slots drops to 1-3 under pressure
+latency_sla_status=breached share decreases or becomes tied to high-priority active/radar candidates
+warm_watch_precise_deferred_latency_sla decreases versus the previous 5h run
+missed_pump_visibility shows whether capped-out radar candidates later became top movers
+```
+
+Guardrail: do not tune stale/drift/RR/actual-risk guards from this run. If top movers were consistently outside the adaptive cap, improve radar scoring/freshness priority before increasing scan width.
+
 ## 2026-05-15 - P237 proposed live session top-growth status
 
 Input:
