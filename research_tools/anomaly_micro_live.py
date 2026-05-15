@@ -185,6 +185,11 @@ SERVICE_WARNING_EMOJI = "⚠️"
 SERVICE_WORK_EMOJI = "🚧"
 LIVE_SESSION_TOP_LIMIT = 3
 LIVE_SESSION_TOP_ARTIFACT_INTERVAL_MS = 60_000
+DEFAULT_LIVE_TOP_GROWTH_MIN_RETURN_PCT = 0.10
+DEFAULT_LIVE_TOP_GROWTH_LIMIT = 5
+DEFAULT_LIVE_TOP_GROWTH_SYMBOLS_PER_CYCLE = 8
+DEFAULT_LIVE_TOP_GROWTH_MAX_CYCLE_SECONDS = 1.5
+DEFAULT_LIVE_TOP_GROWTH_FETCH_SPACING_SECONDS = 0.0
 LIVE_SESSION_BLOCKS_UTC = (
     ("Азия", 0, 8),
     ("Европа", 8, 16),
@@ -1821,6 +1826,12 @@ class LiveAnomalyConfig:
     symbol_context_snapshot_min_coverage_ratio: float = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MIN_COVERAGE_RATIO
     symbol_context_snapshot_max_gap_candles: int = DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_GAP_CANDLES
     symbol_context_priority_ttl_ms: int = DEFAULT_SYMBOL_CONTEXT_PRIORITY_TTL_MS
+    live_top_growth_enabled: bool = True
+    live_top_growth_min_return_pct: float = DEFAULT_LIVE_TOP_GROWTH_MIN_RETURN_PCT
+    live_top_growth_limit: int = DEFAULT_LIVE_TOP_GROWTH_LIMIT
+    live_top_growth_symbols_per_cycle: int = DEFAULT_LIVE_TOP_GROWTH_SYMBOLS_PER_CYCLE
+    live_top_growth_max_cycle_seconds: float = DEFAULT_LIVE_TOP_GROWTH_MAX_CYCLE_SECONDS
+    live_top_growth_fetch_spacing_seconds: float = DEFAULT_LIVE_TOP_GROWTH_FETCH_SPACING_SECONDS
     danger_ticker_flow_radar_enabled: bool = True
     danger_ticker_flow_radar_min_quote_volume_delta_usdt: float = DANGER_TICKER_FLOW_RADAR_MIN_QUOTE_VOLUME_DELTA_USDT
     danger_ticker_flow_radar_min_trade_count_delta: int = DANGER_TICKER_FLOW_RADAR_MIN_TRADE_COUNT_DELTA
@@ -3296,6 +3307,31 @@ class LiveVisibilityEvent:
     details: dict[str, object]
 
 
+@dataclass(slots=True)
+class LiveTopGrowthAuditTask:
+    period_start_ms: int
+    period_end_ms: int
+    snapshot_utc: str
+    symbols: tuple[str, ...]
+    cursor: int = 0
+    status_rows: list[dict[str, object]] = field(default_factory=list)
+    candidates: list[dict[str, object]] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class LiveTopGrowthAuditCycleStats:
+    enabled: bool
+    status: str
+    reason: str
+    period_start_ms: int | None = None
+    period_end_ms: int | None = None
+    processed_count: int = 0
+    remaining_count: int = 0
+    symbols_total: int = 0
+    top_count: int = 0
+    cycle_seconds: float = 0.0
+
+
 class TopGrowthSnapshotRunner:
     def __init__(
         self,
@@ -3401,7 +3437,6 @@ def _collect_top_growth_snapshot(
     limit: int,
     fetch_spacing_seconds: float,
 ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    threshold_pct = threshold_fraction * 100.0
     candidates: list[dict[str, object]] = []
     status_rows: list[dict[str, object]] = []
     for symbol in symbols:
@@ -3413,29 +3448,43 @@ def _collect_top_growth_snapshot(
             snapshot_utc=snapshot_utc,
         )
         status_rows.append(status_row)
-        if status_row.get("status") == "ok":
-            growth_fraction = _row_float_or_none(status_row, "growth_fraction")
-            if growth_fraction is not None and growth_fraction >= threshold_fraction:
-                candidates.append(
-                    {
-                        "symbol": symbol,
-                        "growth_pct": status_row.get("growth_pct", ""),
-                        "growth_fraction": status_row.get("growth_fraction", ""),
-                        "open": status_row.get("open", ""),
-                        "close": status_row.get("close", ""),
-                        "high": status_row.get("high", ""),
-                        "low": status_row.get("low", ""),
-                        "quote_volume": status_row.get("quote_volume", ""),
-                        "number_of_trades": status_row.get("number_of_trades", ""),
-                        "taker_buy_quote_volume": status_row.get("taker_buy_quote_volume", ""),
-                        "threshold_pct": threshold_pct,
-                        "timeframe": Timeframe.H1.value,
-                        "source": "exchange_1h_closed_candle",
-                    }
-                )
+        candidate = _top_growth_candidate_from_status_row(status_row, threshold_fraction=threshold_fraction)
+        if candidate is not None:
+            candidates.append(candidate)
         spacing = float(fetch_spacing_seconds)
         if math.isfinite(spacing) and spacing > 0.0:
             time.sleep(spacing)
+    return _rank_top_growth_candidates(candidates, limit=limit), status_rows
+
+
+def _top_growth_candidate_from_status_row(
+    status_row: dict[str, object],
+    *,
+    threshold_fraction: float,
+) -> dict[str, object] | None:
+    if status_row.get("status") != "ok":
+        return None
+    growth_fraction = _row_float_or_none(status_row, "growth_fraction")
+    if growth_fraction is None or growth_fraction < threshold_fraction:
+        return None
+    return {
+        "symbol": status_row.get("symbol", ""),
+        "growth_pct": status_row.get("growth_pct", ""),
+        "growth_fraction": status_row.get("growth_fraction", ""),
+        "open": status_row.get("open", ""),
+        "close": status_row.get("close", ""),
+        "high": status_row.get("high", ""),
+        "low": status_row.get("low", ""),
+        "quote_volume": status_row.get("quote_volume", ""),
+        "number_of_trades": status_row.get("number_of_trades", ""),
+        "taker_buy_quote_volume": status_row.get("taker_buy_quote_volume", ""),
+        "threshold_pct": float(threshold_fraction) * 100.0,
+        "timeframe": Timeframe.H1.value,
+        "source": "exchange_1h_closed_candle",
+    }
+
+
+def _rank_top_growth_candidates(candidates: list[dict[str, object]], *, limit: int) -> list[dict[str, object]]:
     candidates.sort(
         key=lambda row: (
             _row_float_or_none(row, "growth_fraction") or -math.inf,
@@ -3444,11 +3493,9 @@ def _collect_top_growth_snapshot(
         reverse=True,
     )
     top_rows: list[dict[str, object]] = []
-    for rank, row in enumerate(candidates[:limit], start=1):
-        growth_fraction = _row_float_or_none(row, "growth_fraction")
-        top_rows.append({"rank": rank, "growth_multiple": (1.0 + growth_fraction) if growth_fraction is not None else "", **row})
-    return top_rows, status_rows
-
+    for rank, row in enumerate(candidates[: max(1, int(limit))], start=1):
+        top_rows.append({"rank": rank, **row})
+    return top_rows
 
 
 def _build_missed_pump_visibility_rows(
@@ -3783,6 +3830,36 @@ def _previous_closed_hour_start_ms(now_ms: int) -> int:
     return ((now_ms // HOUR_MS) - 1) * HOUR_MS
 
 
+def _validate_live_top_growth_config_values(config: LiveAnomalyConfig) -> None:
+    _require_finite_config_number(
+        "live_top_growth_min_return_pct",
+        config.live_top_growth_min_return_pct,
+        min_value=0.0,
+        allow_equal_min=False,
+    )
+    if int(config.live_top_growth_limit) < 1:
+        raise LiveStartupError(
+            f"Некорректный live top-growth config: limit должен быть >= 1, получено {config.live_top_growth_limit!r}"
+        )
+    if int(config.live_top_growth_symbols_per_cycle) < 1:
+        raise LiveStartupError(
+            "Некорректный live top-growth config: symbols_per_cycle должен быть >= 1, "
+            f"получено {config.live_top_growth_symbols_per_cycle!r}"
+        )
+    _require_finite_config_number(
+        "live_top_growth_max_cycle_seconds",
+        config.live_top_growth_max_cycle_seconds,
+        min_value=0.0,
+        allow_equal_min=True,
+    )
+    _require_finite_config_number(
+        "live_top_growth_fetch_spacing_seconds",
+        config.live_top_growth_fetch_spacing_seconds,
+        min_value=0.0,
+        allow_equal_min=True,
+    )
+
+
 def _validate_top_growth_config_values(config: TopGrowthSnapshotConfig) -> None:
     if config.limit < 1:
         raise LiveStartupError(f"Некорректный top-growth config: limit должен быть >= 1, получено {config.limit!r}")
@@ -3861,6 +3938,9 @@ class AnomalyMicroLiveRunner:
         self._last_ticker_radar_health_status = "unknown"
         self._session_top_tracker = LiveSessionTopTracker(limit=LIVE_SESSION_TOP_LIMIT)
         self._last_session_top_growth_artifact_at_ms = 0
+        self._run_started_wall_ms = int(time.time() * 1000)
+        self._live_top_growth_task: LiveTopGrowthAuditTask | None = None
+        self._live_top_growth_completed_periods: set[int] = set()
         self._seen_decisions: set[tuple[str, str, str, int]] = set()
         self._last_signal_scan_closed_at: dict[tuple[str, str], int] = {}
         self._opened_positions_total = 0
@@ -4087,6 +4167,14 @@ class AnomalyMicroLiveRunner:
                 "symbol_context_priority_ttl_ms": int(self.config.symbol_context_priority_ttl_ms),
                 "symbol_context_priority_policy": "open_active_retryable_dependency_radar_warm_then_round_robin",
                 "symbol_context_snapshot_file": self.artifacts.symbol_context_snapshot_path.name,
+                "live_top_growth_enabled": bool(self.config.live_top_growth_enabled),
+                "live_top_growth_policy": "incremental_closed_1h_exchange_candles_same_run_visibility_no_ticker_fallback",
+                "live_top_growth_min_return_pct": float(self.config.live_top_growth_min_return_pct),
+                "live_top_growth_limit": int(self.config.live_top_growth_limit),
+                "live_top_growth_symbols_per_cycle": int(self.config.live_top_growth_symbols_per_cycle),
+                "live_top_growth_max_cycle_seconds": float(self.config.live_top_growth_max_cycle_seconds),
+                "live_top_growth_fetch_spacing_seconds": float(self.config.live_top_growth_fetch_spacing_seconds),
+                "live_top_growth_visibility_events_csv": str(self.artifacts.events_path),
                 "danger_micro_cache_policy": "wider_ws_aggtrade_buffer_for_active_warm_watch_radar_and_current_cold_only_no_full_universe_subscription",
                 "symbol_batch_size_role": "legacy inactive scan cap, not WS market discovery",
                 "subminute_entry_pairs_present": bool(_live_config_has_subminute_entry_pairs(self.config)),
@@ -4148,6 +4236,12 @@ class AnomalyMicroLiveRunner:
                     output_file=self.artifacts.symbol_context_snapshot_path.name,
                 )
                 context_snapshot_seconds = 0.0
+                top_growth_stats = LiveTopGrowthAuditCycleStats(
+                    enabled=bool(self.config.live_top_growth_enabled),
+                    status="not_attempted",
+                    reason="critical_scan_path_pending",
+                )
+                top_growth_seconds = 0.0
                 batch_select_started = time.monotonic()
                 batch = self._next_symbol_batch(symbols)
                 batch_select_seconds = time.monotonic() - batch_select_started
@@ -4170,6 +4264,9 @@ class AnomalyMicroLiveRunner:
                 context_snapshot_started = time.monotonic()
                 context_snapshot_stats = self._maybe_update_symbol_context_snapshots(symbols)
                 context_snapshot_seconds = time.monotonic() - context_snapshot_started
+                top_growth_started = time.monotonic()
+                top_growth_stats = self._maybe_process_live_top_growth_audit(symbols)
+                top_growth_seconds = time.monotonic() - top_growth_started
                 cycle_seconds = time.monotonic() - cycle_started
                 opened_total, open_positions, closed_total, orphan_total = self._live_counts()
                 active_symbol_count = self._active_live_symbol_count()
@@ -4241,6 +4338,16 @@ class AnomalyMicroLiveRunner:
                         ),
                         "symbol_context_snapshot_effective_fresh_ms": int(context_snapshot_stats.effective_fresh_ms),
                         "symbol_context_snapshot_file": context_snapshot_stats.output_file,
+                        "live_top_growth_seconds": round(top_growth_seconds, 3),
+                        "live_top_growth_enabled": bool(top_growth_stats.enabled),
+                        "live_top_growth_status": top_growth_stats.status,
+                        "live_top_growth_reason": top_growth_stats.reason,
+                        "live_top_growth_period_start_ms": top_growth_stats.period_start_ms or "",
+                        "live_top_growth_period_end_ms": top_growth_stats.period_end_ms or "",
+                        "live_top_growth_processed_count": int(top_growth_stats.processed_count),
+                        "live_top_growth_remaining_count": int(top_growth_stats.remaining_count),
+                        "live_top_growth_symbols_total": int(top_growth_stats.symbols_total),
+                        "live_top_growth_top_count": int(top_growth_stats.top_count),
                         "danger_flow_radar_promoted_count": ticker_stats.danger_flow_radar_promoted_count,
                         "danger_flow_radar_candidate_count": ticker_stats.danger_flow_radar_candidate_count,
                         "detected_anomalies_total": detected_anomalies_total,
@@ -6924,6 +7031,148 @@ class AnomalyMicroLiveRunner:
                 continue
             waiting.append(item.symbol)
         return waiting
+
+    def _maybe_process_live_top_growth_audit(self, symbols: list[str]) -> LiveTopGrowthAuditCycleStats:
+        if not self.config.live_top_growth_enabled:
+            return LiveTopGrowthAuditCycleStats(enabled=False, status="disabled", reason="disabled_by_config")
+        _validate_live_top_growth_config_values(self.config)
+        now_ms = int(time.time() * 1000)
+        if self._live_top_growth_task is None:
+            period_start_ms = self._next_live_top_growth_period_start_ms(now_ms=now_ms)
+            if period_start_ms is None:
+                return LiveTopGrowthAuditCycleStats(enabled=True, status="idle", reason="no_closed_period_due")
+            period_end_ms = period_start_ms + HOUR_MS
+            task_symbols = tuple(symbols)
+            if not task_symbols:
+                return LiveTopGrowthAuditCycleStats(enabled=True, status="skipped", reason="empty_symbol_universe")
+            self._live_top_growth_task = LiveTopGrowthAuditTask(
+                period_start_ms=period_start_ms,
+                period_end_ms=period_end_ms,
+                snapshot_utc=datetime.now(UTC).isoformat(),
+                symbols=task_symbols,
+            )
+            self.artifacts.append_event(
+                "live_top_growth_audit_started",
+                "__top_growth__",
+                {
+                    "period_start_ms": int(period_start_ms),
+                    "period_end_ms": int(period_end_ms),
+                    "symbols_total": len(task_symbols),
+                    "threshold_pct": float(self.config.live_top_growth_min_return_pct) * 100.0,
+                    "limit": int(self.config.live_top_growth_limit),
+                    "source": "live_incremental_closed_1h_exchange_candle",
+                    "visibility_events_csv": str(self.artifacts.events_path),
+                },
+            )
+        task = self._live_top_growth_task
+        started = time.monotonic()
+        processed = 0
+        max_symbols = max(1, int(self.config.live_top_growth_symbols_per_cycle))
+        max_seconds = max(0.0, float(self.config.live_top_growth_max_cycle_seconds))
+        spacing = float(self.config.live_top_growth_fetch_spacing_seconds)
+        while task.cursor < len(task.symbols) and processed < max_symbols:
+            if processed > 0 and max_seconds > 0.0 and time.monotonic() - started >= max_seconds:
+                break
+            symbol = task.symbols[task.cursor]
+            task.cursor += 1
+            status_row = _load_top_growth_symbol_row(
+                exchange=self.exchange,
+                symbol=symbol,
+                period_start_ms=task.period_start_ms,
+                period_end_ms=task.period_end_ms,
+                snapshot_utc=task.snapshot_utc,
+            )
+            task.status_rows.append(status_row)
+            candidate = _top_growth_candidate_from_status_row(
+                status_row,
+                threshold_fraction=float(self.config.live_top_growth_min_return_pct),
+            )
+            if candidate is not None:
+                task.candidates.append(candidate)
+            processed += 1
+            if math.isfinite(spacing) and spacing > 0.0 and task.cursor < len(task.symbols):
+                time.sleep(spacing)
+        remaining = len(task.symbols) - task.cursor
+        cycle_seconds = time.monotonic() - started
+        if remaining > 0:
+            return LiveTopGrowthAuditCycleStats(
+                enabled=True,
+                status="processing",
+                reason="symbols_remaining",
+                period_start_ms=task.period_start_ms,
+                period_end_ms=task.period_end_ms,
+                processed_count=processed,
+                remaining_count=remaining,
+                symbols_total=len(task.symbols),
+                top_count=len(task.candidates),
+                cycle_seconds=cycle_seconds,
+            )
+        top_rows = _rank_top_growth_candidates(task.candidates, limit=int(self.config.live_top_growth_limit))
+        visibility_rows = _build_missed_pump_visibility_rows(
+            top_rows=top_rows,
+            period_start_ms=task.period_start_ms,
+            period_end_ms=task.period_end_ms,
+            visibility_events_csv=self.artifacts.events_path,
+        )
+        top_path, status_path, visibility_path = self.artifacts.write_top_growth_snapshot(
+            period_start_ms=task.period_start_ms,
+            period_end_ms=task.period_end_ms,
+            snapshot_utc=task.snapshot_utc,
+            top_rows=top_rows,
+            status_rows=task.status_rows,
+            visibility_rows=visibility_rows,
+            symbols_total=len(task.symbols),
+            threshold_pct=float(self.config.live_top_growth_min_return_pct) * 100.0,
+            limit=int(self.config.live_top_growth_limit),
+        )
+        ok_count = sum(1 for row in task.status_rows if row.get("status") == "ok")
+        failed_count = len(task.status_rows) - ok_count
+        self.artifacts.append_event(
+            "live_top_growth_audit_saved",
+            "__top_growth__",
+            {
+                "period_start_ms": int(task.period_start_ms),
+                "period_end_ms": int(task.period_end_ms),
+                "top_count": len(top_rows),
+                "symbols_total": len(task.symbols),
+                "ok_count": ok_count,
+                "failed_count": failed_count,
+                "top_file": str(top_path.relative_to(self.artifacts.root)),
+                "status_file": str(status_path.relative_to(self.artifacts.root)),
+                "visibility_file": str(visibility_path.relative_to(self.artifacts.root)),
+                "visibility_events_csv": str(self.artifacts.events_path),
+                "source": "live_incremental_closed_1h_exchange_candle",
+            },
+        )
+        completed_start = task.period_start_ms
+        self._live_top_growth_completed_periods.add(completed_start)
+        self._live_top_growth_task = None
+        return LiveTopGrowthAuditCycleStats(
+            enabled=True,
+            status="completed",
+            reason="snapshot_saved",
+            period_start_ms=completed_start,
+            period_end_ms=completed_start + HOUR_MS,
+            processed_count=processed,
+            remaining_count=0,
+            symbols_total=len(task.symbols),
+            top_count=len(top_rows),
+            cycle_seconds=cycle_seconds,
+        )
+
+    def _next_live_top_growth_period_start_ms(self, *, now_ms: int) -> int | None:
+        latest_closed_start_ms = _previous_closed_hour_start_ms(now_ms)
+        first_period_start_ms = (int(self._run_started_wall_ms) // HOUR_MS) * HOUR_MS
+        period_start_ms = first_period_start_ms
+        while period_start_ms <= latest_closed_start_ms:
+            period_end_ms = period_start_ms + HOUR_MS
+            if (
+                period_end_ms > int(self._run_started_wall_ms)
+                and period_start_ms not in self._live_top_growth_completed_periods
+            ):
+                return int(period_start_ms)
+            period_start_ms += HOUR_MS
+        return None
 
     def _write_session_top_growth_artifact_if_due(self, *, now_ms: int) -> None:
         if now_ms - self._last_session_top_growth_artifact_at_ms < LIVE_SESSION_TOP_ARTIFACT_INTERVAL_MS:
@@ -12642,6 +12891,8 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "symbol_context_snapshot_symbols_per_cycle": (config.symbol_context_snapshot_symbols_per_cycle, 1),
         "symbol_context_snapshot_fresh_ms": (config.symbol_context_snapshot_fresh_ms, 1),
         "symbol_context_snapshot_max_gap_candles": (config.symbol_context_snapshot_max_gap_candles, 0),
+        "live_top_growth_limit": (config.live_top_growth_limit, 1),
+        "live_top_growth_symbols_per_cycle": (config.live_top_growth_symbols_per_cycle, 1),
         "latency_sla_min_due_samples": (config.latency_sla_min_due_samples, 1),
         "live_ws_ticker_stale_ms": (config.live_ws_ticker_stale_ms, 1),
         "live_ws_aggtrade_stale_ms": (config.live_ws_aggtrade_stale_ms, 1),
@@ -12700,6 +12951,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
             "Некорректный live config: live_ohlcv_cache_flush_max_symbol_timeframes должен быть целым >= 1 или None, "
             f"получено {config.live_ohlcv_cache_flush_max_symbol_timeframes!r}"
         )
+    _validate_live_top_growth_config_values(config)
 
     if _live_config_has_subminute_entry_pairs(config):
         if not config.ticker_radar_enabled:

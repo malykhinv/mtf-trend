@@ -10,7 +10,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P238 align live session top-growth columns
+Last active patch: P242 incremental live closed-hour top-growth visibility
 Updated: 2026-05-15
 ```
 
@@ -72,7 +72,7 @@ research_tools/hourly_levels.py
 4. The 2026-05-11 NVDA micro-live position is audit-invalid for edge/PnL: stale signal execution mixed signal close with later live order timing.
 5. P156 fixes the Linux `main.py` startup blocker by importing `ctypes.windll` only on Windows.
 6. Historical local artifacts may contain stale compiled files; they are ignored by git and should be deleted locally.
-7. Closed-hour top-growth snapshots are exported only by standalone `run-anomaly-top-growth`; live trading loop must not spend REST/API budget on universe-wide closed-hour top-growth side work. P237 adds live session top-growth status from already-required ticker snapshots only, with explicit `session_top_growth.csv` evidence and no OHLCV/REST fallback. P238 only aligns that live session-top row into the same fixed three-column operator layout.
+7. Closed-hour top-growth snapshots are now populated by default inside live through P242 incremental closed-1h exchange-candle audit. The live loop processes a bounded number of symbols per cycle and writes `top_growth_index.csv`, per-hour top/status files, and `missed_pump_visibility*.csv` from the same run's `live_events.csv`. P237/P238 session-top heartbeat remains ticker-snapshot operator UI only and is not used as a closed-hour audit fallback.
 8. Active symbols whose latest closed levels candle was already scanned are now kept visible as `active_waiting_*` in batch artifacts and should not consume OHLCV scan slots until a new closed candle exists.
 9. Ticker radar is scheduling-only: it can add bounded extra watch scans, but cannot remove symbols from round-robin, cannot open trades, and cannot replace closed-kline flow evidence.
 10. Operator commands now live in root `COMMANDS.md`; the shared command baseline is 30 days via `DEFAULT_COMMANDS_BASE_DAYS`.
@@ -1340,3 +1340,11 @@ Rolling symbol-context snapshots now prioritize symbols that can unblock near-te
 
 Current commit: UNKNOWN.
 Next validation: after P239-P241, run a short live smoke and inspect `symbol_context_snapshot_updated.priority_reason_counts`, `signal_scan_retryable_dependency_blocked`, and whether repeated prior-fast-fade unavailable cases for the same hot symbols resolve before stale/expiry.
+
+
+## 2026-05-15 — P242 proposed
+
+Live closed-hour top-growth/missed-pump visibility is no longer only a standalone post-run command. P242 proposes a default-on incremental live audit that scans closed 1h exchange candles in bounded per-cycle chunks and writes top/status/visibility artifacts into the current run directory using the same `live_events.csv` as visibility evidence.
+
+Current commit: UNKNOWN.
+Next validation: run live across at least one UTC hour close; verify `top_growth_index.csv` gets a row, `top_growth_status_*.csv` contains all live-universe symbols, and `missed_pump_visibility*.csv` is populated when top movers cross the threshold.

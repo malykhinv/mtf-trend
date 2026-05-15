@@ -2041,3 +2041,19 @@ symbol_context_snapshot_updated.priority_reason_counts includes retryable_depend
 same-symbol retryable prior_fast_fade blocks should either resolve to ok context or expire by stale/TTL, not disappear as category_rejected
 round_robin_symbols_count remains non-zero when no hot priority backlog exists
 ```
+
+
+## 2026-05-15 — P242 live closed-hour top-growth visibility validation
+
+Goal: verify that live produces closed-hour missed-pump evidence without running the standalone command and without using ticker-derived approximations.
+
+Expected evidence:
+
+```text
+live_cycle_summary.live_top_growth_status transitions idle -> processing -> completed
+top_growth/top_growth_index.csv gets one row per audited closed hour
+top_growth/top_growth_status_YYYYMMDD_HH0000_UTC.csv has status/reason for every live-universe symbol
+top_growth/missed_pump_visibility_YYYYMMDD_HH0000_UTC.csv uses the same run live_events.csv as visibility_source
+```
+
+Guardrail: do not use session_top_growth.csv as a missed-pump audit source; it is operator UI from ticker snapshots only.

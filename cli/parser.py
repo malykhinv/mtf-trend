@@ -402,6 +402,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=2,
         help="Largest tolerated contiguous internal gap, in candles, for symbol context snapshots.",
     )
+    anomaly_live.add_argument(
+        "--live-top-growth-enabled",
+        type=_str_to_bool,
+        default=True,
+        help="Incrementally write closed-hour top_growth/missed-pump artifacts inside the live run.",
+    )
+    anomaly_live.add_argument("--live-top-growth-min-return-pct", type=float, default=0.10)
+    anomaly_live.add_argument("--live-top-growth-limit", type=_positive_int_for("--live-top-growth-limit"), default=5)
+    anomaly_live.add_argument(
+        "--live-top-growth-symbols-per-cycle",
+        type=_positive_int_for("--live-top-growth-symbols-per-cycle"),
+        default=8,
+        help="Maximum number of symbols to fetch per live cycle for closed-hour top-growth audit.",
+    )
+    anomaly_live.add_argument("--live-top-growth-max-cycle-seconds", type=float, default=1.5)
+    anomaly_live.add_argument("--live-top-growth-fetch-spacing-seconds", type=float, default=0.0)
     anomaly_live.add_argument("--max-signal-age-ms", type=_positive_int_for("--max-signal-age-ms"), default=60_000)
     anomaly_live.add_argument("--max-entry-price-drift-pct", type=float, default=0.003)
     anomaly_live.add_argument("--min-executable-rr-to-signal-tp1", type=float, default=0.75)

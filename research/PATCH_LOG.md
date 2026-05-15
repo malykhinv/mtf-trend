@@ -4112,3 +4112,50 @@ Risk:
 ```text
 Low-to-medium. This changes context maintenance priority, not entry thresholds. Round-robin coverage still advances only for non-priority processed symbols, so hot-symbol retries should not starve context cursor accounting.
 ```
+
+## 2026-05-15 - P242 proposed: incremental live closed-hour top-growth visibility
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+cli/parser.py
+cli/commands.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make live runs populate closed-hour top_growth_index.csv and missed_pump_visibility artifacts without ticker-derived approximations and without blocking the hot scan path with a full-universe one-shot REST sweep.
+```
+
+Changes:
+
+```text
+- Adds default-on incremental live top-growth audit for closed 1h exchange candles.
+- Processes only a bounded number of symbols per live cycle and writes the same top/status/visibility files as the standalone top-growth command when the hour scan completes.
+- Uses live_events.csv from the same run as the visibility source.
+- Keeps session-top heartbeat separate from closed-hour top-growth research artifacts; no ticker fallback is used for closed-hour audit.
+- Adds CLI controls for enabling/disabling live top-growth audit, threshold, limit, per-cycle symbol budget, max cycle budget, and fetch spacing.
+- Adds live_cycle_summary fields for the current top-growth audit status/progress.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "live-top-growth"
+```
+
+Risk:
+
+```text
+Medium. This adds exchange OHLCV reads during live, but bounded incrementally by symbols_per_cycle/max_cycle_seconds and separated from trading decisions. It does not change entry filters or order logic.
+```
