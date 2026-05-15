@@ -3521,3 +3521,53 @@ Risk:
 ```text
 Low. Audit/artifact/Telegram wording only; live trading logic, order placement, fills, stops, and scan thresholds are unchanged.
 ```
+
+
+## 2026-05-15 - P226 proposed: label delayed replay evidence source
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Prevent delayed replay from overstating frozen live-signal snapshot fallback as a strict backtest-like recomputation, and make post-decision outcome data explicit.
+```
+
+Changes:
+
+```text
+- Upgrades delayed replay contract to delayed_replay_v3_evidence_labeled_cache_only_idle_tg.
+- Adds strict_recompute_signal and frozen_signal_snapshot_used result columns so recomputed candle evidence and live snapshot evidence are separated.
+- Splits mismatch labels: frozen snapshot cases now use *_frozen_signal_snapshot instead of *_replay_would_enter.
+- Adds decision_data_end_timestamp_ms and outcome_is_post_decision to make the no-lookahead boundary visible in artifacts.
+- Changes Telegram wording for snapshot fallback from "Replay found entry" to "Replay raised frozen signal" and includes the recompute source/caveat.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep delayed-replay
+```
+
+Expected smoke readout:
+
+```text
+Strict cache-only candle recompute entries have strict_recompute_signal=true and mismatch_type *_replay_would_enter. Frozen snapshot fallback entries have frozen_signal_snapshot_used=true, strict_recompute_signal=false, and mismatch_type *_frozen_signal_snapshot; Telegram does not call them strict replay-found entries.
+```
+
+Risk:
+
+```text
+Low. Audit/artifact/Telegram wording only; live trading logic, order placement, fills, stops, and scan thresholds are unchanged.
+```

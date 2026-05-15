@@ -1253,3 +1253,11 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Telegram keeps the alert but uses different wording for snapshot fallback, with a caveat that strict candle recompute was blocked by disabled mark/OI fetch.
 - Current commit: UNKNOWN.
 - Next validation: short dry live with delayed replay enabled; inspect result rows where recompute_source=frozen_live_signal_snapshot and verify no *_replay_would_enter mismatch is emitted for those rows.
+
+
+## P226 proposed state
+- Delayed replay decision recompute still uses only cached windows ending at decision_timestamp_ms; outcome windows start after decision and are labeled as post-decision.
+- Frozen live-signal snapshot fallback is not equivalent to strict backtest-like recompute. P226 separates evidence with strict_recompute_signal and frozen_signal_snapshot_used.
+- Telegram keeps the alert but uses different wording for snapshot fallback, with a caveat that strict candle recompute was blocked by disabled mark/OI fetch.
+- Current commit: UNKNOWN.
+- Next validation: short dry live with delayed replay enabled; inspect result rows where recompute_source=frozen_live_signal_snapshot and verify no *_replay_would_enter mismatch is emitted for those rows.
