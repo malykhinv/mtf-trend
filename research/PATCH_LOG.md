@@ -3320,6 +3320,49 @@ Risk:
 Low. This is diagnostic/audit only. It does not change signal thresholds, order logic, position guard behavior, fills, stops, or exits.
 ```
 
+## 2026-05-15 - P231 proposed: clear wrapped live heartbeat rows
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Fix duplicated/concatenated live heartbeat output in narrow terminals where the inline status line wraps across multiple physical rows.
+```
+
+Changes:
+
+```text
+- Tracks how many terminal rows the last inline live status occupied.
+- Clears every occupied row before drawing the next heartbeat instead of clearing only the current row.
+- Keeps normal log messages ordered by finishing the open status line before printing them.
+- Does not change live scan, delayed replay, order, Telegram, or artifact logic.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep delayed-replay
+```
+
+Risk:
+
+```text
+Low. Console-output-only change. It fixes terminal rendering when status messages exceed the terminal width; trading and audit data paths are unchanged.
+```
+
+
 ## 2026-05-15 - P223 applied locally: idle-only delayed replay audit for live anomalies
 
 Status: APPLIED locally / UNKNOWN commit

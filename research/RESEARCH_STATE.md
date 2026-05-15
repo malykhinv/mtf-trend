@@ -1239,6 +1239,14 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Current commit: UNKNOWN.
 - Next validation: short dry live and inspect `symbol_context_snapshot_skipped`, `symbol_context_snapshot_updated`, `ws_aggtrade_subscription_target`, and `live_cycle_summary` for budget/SLA/cap fields before changing scan budgets.
 
+## P231 proposed state
+- Live heartbeat duplication was traced to inline status rendering: long heartbeat strings can wrap in PowerShell/narrow terminals, while the logger cleared only the current physical row.
+- The status logger now tracks rendered row count and clears all rows occupied by the previous heartbeat before drawing the next one.
+- This is console-output-only; live trading, delayed replay, Telegram, artifacts, and scan logic are unchanged.
+- Current commit: UNKNOWN.
+- Next validation: run a short live/dry live in the same PowerShell terminal and confirm the heartbeat line is replaced instead of concatenated.
+
+
 ## P224 proposed state
 - Delayed replay now performs cache-only frozen-decision recomputation instead of only artifact outcome auditing.
 - It captures category selected/rejected decisions plus execution rejects and reports whether the frozen decision would select/enter under the signal builder.

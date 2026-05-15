@@ -11,6 +11,7 @@ import math
 import os
 import queue
 import re
+import shutil
 import sys
 import threading
 import time
@@ -2381,11 +2382,14 @@ class LivePosition:
 class _LiveStatusLogger:
     """Console logger for live heartbeat/status messages."""
 
+    _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
     def __init__(self, logger: Callable[[str], None]) -> None:
         self._logger = logger
         self._inline_status_enabled = logger is print and sys.stdout.isatty()
         self._lock = threading.RLock()
         self._status_line_open = False
+        self._status_line_rows = 0
 
     @property
     def inline_status_enabled(self) -> bool:
@@ -2402,8 +2406,11 @@ class _LiveStatusLogger:
                 self._logger(message)
                 return
             rendered = f"\033[1;33m{message}\033[0m" if highlight else message
-            sys.stdout.write(f"\r\033[2K{rendered}")
+            terminal_columns = self._terminal_columns()
+            self._clear_status_line_if_needed()
+            sys.stdout.write(rendered)
             sys.stdout.flush()
+            self._status_line_rows = self._rendered_rows(rendered, terminal_columns)
             self._status_line_open = True
 
     def _finish_status_line_if_needed(self) -> None:
@@ -2412,6 +2419,30 @@ class _LiveStatusLogger:
         sys.stdout.write("\n")
         sys.stdout.flush()
         self._status_line_open = False
+        self._status_line_rows = 0
+
+    def _clear_status_line_if_needed(self) -> None:
+        if not self._status_line_open:
+            sys.stdout.write("\r\033[2K")
+            return
+        rows = max(1, self._status_line_rows)
+        sys.stdout.write("\r\033[2K")
+        for _ in range(rows - 1):
+            sys.stdout.write("\033[1A\r\033[2K")
+        sys.stdout.write("\r")
+        self._status_line_open = False
+        self._status_line_rows = 0
+
+    @staticmethod
+    def _terminal_columns() -> int:
+        return max(20, shutil.get_terminal_size(fallback=(120, 20)).columns)
+
+    @classmethod
+    def _rendered_rows(cls, rendered: str, terminal_columns: int) -> int:
+        visible = cls._ANSI_RE.sub("", rendered)
+        if not visible:
+            return 1
+        return max(1, (len(visible) - 1) // max(1, terminal_columns) + 1)
 
 
 class TelegramDispatcher:
