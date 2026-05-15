@@ -3795,3 +3795,48 @@ Risk:
 ```text
 Low. Audit/TG-control contract only. Live trading, order placement, fills, stops, scan thresholds and delayed replay decision logic are unchanged.
 ```
+
+
+## 2026-05-15 - P233 proposed: fixed-width live status block
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Replace the long inline live heartbeat with a fixed-width operator status block that keeps replay backlog visible without wrapping into duplicated-looking terminal lines.
+```
+
+Changes:
+
+```text
+- Renders live heartbeat as a five-line fixed-width block: LIVE, FEED, PUMP, RPLY, RISK.
+- Uses four-character main labels and three-character field labels.
+- Adds a blank line before the block for visual separation.
+- Keeps delayed replay backlog visible as RPLY/pnd, with off when replay is disabled.
+- Updates inline status clearing to count explicit newline rows as well as terminal wrapping.
+- Leaves trading, delayed replay decisions, Telegram and artifact logic unchanged.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep delayed-replay
+```
+
+Risk:
+
+```text
+Low. Console rendering only; no live execution or strategy behavior changes.
+```

@@ -2442,7 +2442,11 @@ class _LiveStatusLogger:
         visible = cls._ANSI_RE.sub("", rendered)
         if not visible:
             return 1
-        return max(1, (len(visible) - 1) // max(1, terminal_columns) + 1)
+        columns = max(1, terminal_columns)
+        rows = 0
+        for line in visible.split("\n"):
+            rows += max(1, (len(line) - 1) // columns + 1) if line else 1
+        return max(1, rows)
 
 
 class TelegramDispatcher:
@@ -4065,19 +4069,23 @@ class AnomalyMicroLiveRunner:
                         ws_healthy=ws_healthy,
                         ws_health_reason=ws_health_reason,
                     )
-                    coverage_text = ""
+                    cold_status_text = "off"
+                    cold_age_text = "-"
+                    guard_text = "ok"
                     if self._current_inactive_scan_slots > 0 and self._inactive_slots_are_precise_cold_coverage(
                         self._current_inactive_scan_slots_source
                     ):
-                        danger_prefix = "DANGER " if self._current_inactive_scan_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE else ""
-                        coverage_text = (
-                            f" · {danger_prefix}cold {self._current_inactive_scan_slots} "
-                            f"score {self._current_inactive_cold_coverage_adaptive_score:.2f} "
-                            f"~{full_cycle_seconds:.0f}s"
+                        cold_status_text = (
+                            f"DANGER{self._current_inactive_scan_slots}"
+                            if self._current_inactive_scan_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE
+                            else f"on{self._current_inactive_scan_slots}"
                         )
+                        cold_age_text = f"~{full_cycle_seconds:.0f}s"
+                        guard_text = f"sc{self._current_inactive_cold_coverage_adaptive_score:.2f}"
                     elif self._current_inactive_cold_coverage_gate_reason:
-                        coverage_text = f" · cold off {self._current_inactive_cold_coverage_gate_reason}"
-                    orphan_text = f" · ордера -{orphan_cancelled}" if orphan_cancelled else ""
+                        cold_status_text = "off"
+                        cold_age_text = "-"
+                        guard_text = self._current_inactive_cold_coverage_gate_reason
                     self._status_logger.status(
                         _format_live_heartbeat(
                             cycle_seconds=cycle_seconds,
@@ -4089,7 +4097,18 @@ class AnomalyMicroLiveRunner:
                             closed_positions=closed_total,
                             pnl_pct=closed_pnl_pct,
                             connection_text=connection_text,
-                            suffix=f"{coverage_text}{orphan_text}",
+                            delayed_replay_enabled=bool(self.config.delayed_replay_enabled),
+                            delayed_replay_pending=self._delayed_replay_queue_size(),
+                            idle=(
+                                active_symbol_count == 0
+                                and open_positions == 0
+                                and self._opening_symbol_count() == 0
+                            ),
+                            order_delta=-int(orphan_cancelled) if orphan_cancelled else 0,
+                            real_orders=bool(self.config.confirm_real_orders),
+                            cold_status=cold_status_text,
+                            cold_age=cold_age_text,
+                            guard_status=guard_text,
                         ),
                         highlight=open_positions > 0,
                     )
@@ -12877,6 +12896,54 @@ def _format_price(value: float) -> str:
     return f"{float(value):.6g}"
 
 
+def _status_cell(label: str, value: object, *, width: int = 14) -> str:
+    text = f"{label[:3].lower()} {str(value).strip() or '-'}"
+    if len(text) > width:
+        text = text[: max(0, width - 1)] + "~"
+    return f"{text:<{width}}"
+
+
+def _split_live_connection_status(connection_text: str) -> tuple[str, str]:
+    text = " ".join(str(connection_text or "").replace("·", " ").split())
+    lowered = text.lower()
+    ticker_status = "-"
+    flow_status = "-"
+    if "ticker ok" in lowered:
+        ticker_status = "ok"
+    elif "ticker seed" in lowered:
+        ticker_status = "seed"
+    elif "ticker rest" in lowered:
+        ticker_status = "REST"
+    elif "ticker нет" in lowered:
+        ticker_status = "нет"
+    elif lowered.startswith("ticker "):
+        ticker_status = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else "-"
+    elif lowered.startswith("flow "):
+        ticker_status = "ok"
+    elif text:
+        ticker_status = text
+
+    if "flow ok" in lowered:
+        flow_status = "ok"
+    elif "flow pending" in lowered:
+        flow_status = "wait"
+    elif "flow rest" in lowered:
+        flow_status = "REST"
+    elif "flow нет" in lowered:
+        flow_status = "нет"
+    elif "flow подписка" in lowered:
+        flow_status = "sub"
+    elif "flow gap rest" in lowered:
+        flow_status = "gapREST"
+    elif lowered.startswith("flow "):
+        flow_status = text.split(maxsplit=1)[1] if len(text.split(maxsplit=1)) > 1 else "-"
+    return ticker_status, flow_status
+
+
+def _format_status_row(label: str, *cells: str) -> str:
+    return f"{label[:4].upper():<4}  " + "  ".join(cells)
+
+
 def _format_live_heartbeat(
     *,
     cycle_seconds: float,
@@ -12888,23 +12955,51 @@ def _format_live_heartbeat(
     closed_positions: int,
     pnl_pct: float,
     connection_text: str,
-    suffix: str = "",
+    delayed_replay_enabled: bool,
+    delayed_replay_pending: int,
+    idle: bool,
+    order_delta: int,
+    real_orders: bool,
+    cold_status: str,
+    cold_age: str,
+    guard_status: str,
 ) -> str:
-    compact_width = 9
-    anomaly_text = f"anl {anomalies_total}"
-    active_text = f"act {active_now}/{active_seen}"
-    position_text = f"pos {open_positions}/{closed_positions}"
-    pnl_text = f"pnl {_format_percent(pnl_pct, signed=False)}"
-    connection_status_text = connection_text.strip() or "status n/a"
-    return (
-        f"{f'{cycle_seconds:.1f}s':>{compact_width}} · "
-        f"{_format_percent(connection_health_pct, signed=False, precision=1):>{compact_width}} · "
-        f"{anomaly_text:>{compact_width}} · "
-        f"{active_text:>{compact_width}} · "
-        f"{position_text:>{compact_width}} · "
-        f"{pnl_text:>{compact_width}} · "
-        f"{connection_status_text}{suffix}"
-    )
+    ticker_status, flow_status = _split_live_connection_status(connection_text)
+    replay_value = str(max(0, int(delayed_replay_pending))) if delayed_replay_enabled else "off"
+    order_value = str(int(order_delta)) if order_delta else "0"
+    rows = [
+        _format_status_row(
+            "LIVE",
+            _status_cell("sec", f"{cycle_seconds:.1f}"),
+            _status_cell("pnl", _format_percent(pnl_pct, signed=False)),
+            _status_cell("mod", "real" if real_orders else "dry"),
+        ),
+        _format_status_row(
+            "FEED",
+            _status_cell("web", _format_percent(connection_health_pct, signed=False, precision=1)),
+            _status_cell("tck", ticker_status),
+            _status_cell("flw", flow_status),
+        ),
+        _format_status_row(
+            "PUMP",
+            _status_cell("anl", anomalies_total),
+            _status_cell("act", f"{active_now}/{active_seen}"),
+            _status_cell("pos", f"{open_positions}/{closed_positions}"),
+        ),
+        _format_status_row(
+            "RPLY",
+            _status_cell("pnd", replay_value),
+            _status_cell("idl", "yes" if idle else "no"),
+            _status_cell("ord", order_value),
+        ),
+        _format_status_row(
+            "RISK",
+            _status_cell("cld", cold_status),
+            _status_cell("age", cold_age),
+            _status_cell("grd", guard_status),
+        ),
+    ]
+    return "\n" + "\n".join(rows)
 
 
 def _format_percent(value: float, *, signed: bool = False, precision: int = 1) -> str:

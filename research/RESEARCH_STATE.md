@@ -1291,3 +1291,11 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Telegram keeps the alert but uses different wording for snapshot fallback, with a caveat that strict candle recompute was blocked by disabled mark/OI fetch.
 - Current commit: UNKNOWN.
 - Next validation: short dry live with delayed replay enabled; inspect result rows where recompute_source=frozen_live_signal_snapshot and verify no *_replay_would_enter mismatch is emitted for those rows.
+
+
+## P233 proposed state
+- Live heartbeat is now a fixed-width five-line operator block with rows `LIVE`, `FEED`, `PUMP`, `RPLY`, and `RISK`.
+- Delayed replay backlog is shown as `RPLY pnd <n>` or `RPLY pnd off` without changing replay logic.
+- Inline status clearing counts explicit newline rows and wrapped terminal rows to avoid duplicated-looking PowerShell output.
+- Current commit: UNKNOWN.
+- Next validation: run a short live/dry live in PowerShell and confirm the block redraws cleanly with one blank line before it.
