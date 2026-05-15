@@ -3983,6 +3983,47 @@ Risk:
 Low-to-medium. Console/artifact/Telegram alert path only; no trading decisions change. During a network outage the code retries Telegram enqueue every 60 seconds, but TelegramDispatcher cooldown still prevents repeated successful sends with the same key.
 ```
 
+## P245 - proposed - live candidate queue pressure controller
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Stop old/weak radar and warm-watch candidates from keeping latency SLA permanently breached. The live loop should keep the strongest fresh candidates, expire stale backlog, and record explicit pressure/drop events instead of deferring the same tail forever.
+```
+
+Changes:
+
+```text
+- Adds an internal candidate queue pressure controller with no CLI flags.
+- Under latency pressure or oversized radar/warm queues, keeps the strongest candidates and trims stale/weak tail.
+- Emits candidate_dropped_latency_pressure and candidate_expired_backlog_stale events with source, score, flow fields, and latency SLA payload.
+- Adds candidate_queue_* counters to symbol_batch_selected and live_cycle_summary.
+- Treats candidate drop/expiry events as visibility evidence for closed-hour missed-pump audit.
+- Does not loosen stale/drift/RR/actual-risk/order safety and does not add REST work to the scan path.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "candidate-queue|queue-pressure|live-top-growth|symbol-context-startup"  # expected: no output
+```
+
+Risk:
+
+```text
+Medium. This intentionally discards low-priority backlog under pressure, which should reduce false SLA breaches but can drop a weak candidate before precise scan. The event trail is explicit, and top-growth/missed-pump visibility can audit whether dropped candidates later became top movers.
+```
+
 ## 2026-05-15 - P237 proposed: live session top-growth status from ticker snapshots
 
 Status: PROPOSED

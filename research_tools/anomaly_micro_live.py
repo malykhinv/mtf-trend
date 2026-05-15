@@ -97,6 +97,10 @@ DEFAULT_WARM_WATCH_TTL_MS = 10 * 60_000
 DEFAULT_WARM_WATCH_MIN_OBSERVATIONS_FOR_PRECISE = 2
 DEFAULT_WARM_WATCH_MIN_PRICE_DELTA_PCT = -0.001
 DEFAULT_WARM_WATCH_MAX_PRICE_DELTA_PCT = 0.012
+CANDIDATE_QUEUE_PRESSURE_MIN_KEEP = 12
+CANDIDATE_QUEUE_PRESSURE_MAX_RADAR = 24
+CANDIDATE_QUEUE_PRESSURE_MAX_WARM = 24
+CANDIDATE_QUEUE_PRESSURE_BACKLOG_STALE_FACTOR = 2.0
 PREPUMP_WARM_WATCH_SCORING_CONTRACT = "prepump_warm_watch_scoring_v1_spot_feature_separation_midpoint"
 DEFAULT_PREPUMP_WARM_WATCH_MIN_ABS_STANDARDIZED_DIFF = 0.75
 DEFAULT_PREPUMP_WARM_WATCH_MIN_RUNNER_ROWS = 10
@@ -120,7 +124,14 @@ RETRYABLE_CATEGORY_STATUS_PREFIXES = (
     "missing_",
 )
 VISIBILITY_RADAR_EVENTS = frozenset(
-    {"ticker_radar_promoted", "warm_watch_marked", "warm_watch_updated", "warm_watch_precise_promoted"}
+    {
+        "ticker_radar_promoted",
+        "warm_watch_marked",
+        "warm_watch_updated",
+        "warm_watch_precise_promoted",
+        "candidate_dropped_latency_pressure",
+        "candidate_expired_backlog_stale",
+    }
 )
 VISIBILITY_WARM_WATCH_EVENTS = frozenset(
     {
@@ -131,6 +142,8 @@ VISIBILITY_WARM_WATCH_EVENTS = frozenset(
         "warm_watch_rejected",
         "warm_watch_expired",
         "warm_watch_cleared",
+        "candidate_dropped_latency_pressure",
+        "candidate_expired_backlog_stale",
     }
 )
 VISIBILITY_PRECISE_SCAN_EVENTS = frozenset(
@@ -2302,6 +2315,20 @@ class LiveLatencySlaStatus:
 
 
 @dataclass(frozen=True, slots=True)
+class LiveCandidateQueuePressureStats:
+    status: str = "not_evaluated"
+    reason: str = ""
+    radar_total_before: int = 0
+    radar_total_after: int = 0
+    warm_total_before: int = 0
+    warm_total_after: int = 0
+    actionable_sample_count: int = 0
+    dropped_pressure_count: int = 0
+    expired_backlog_stale_count: int = 0
+    top_score: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class LiveSymbolBatchSelection:
     scheduler_source: str
     active_due: tuple[str, ...]
@@ -2317,6 +2344,16 @@ class LiveSymbolBatchSelection:
     latency_sla_threshold_seconds: float
     latency_sla_min_due_samples: int
     latency_sla_reason: str
+    candidate_queue_status: str
+    candidate_queue_reason: str
+    candidate_queue_radar_total_before: int
+    candidate_queue_radar_total_after: int
+    candidate_queue_warm_total_before: int
+    candidate_queue_warm_total_after: int
+    candidate_queue_actionable_sample_count: int
+    candidate_queue_dropped_pressure_count: int
+    candidate_queue_expired_backlog_stale_count: int
+    candidate_queue_top_score: float | None
     inactive: tuple[str, ...]
     batch: tuple[str, ...]
     scan_modes: dict[str, str]
@@ -3679,7 +3716,14 @@ def _is_visibility_radar_event(event: LiveVisibilityEvent) -> bool:
 
 
 def _is_visibility_flow_radar_event(event: LiveVisibilityEvent) -> bool:
-    if event.event not in {"ticker_radar_promoted", "warm_watch_marked", "warm_watch_updated", "warm_watch_precise_promoted"}:
+    if event.event not in {
+        "ticker_radar_promoted",
+        "warm_watch_marked",
+        "warm_watch_updated",
+        "warm_watch_precise_promoted",
+        "candidate_dropped_latency_pressure",
+        "candidate_expired_backlog_stale",
+    }:
         return False
     return str(event.details.get("promotion_source") or "") == DANGER_CHEAP_FLOW_RADAR_SOURCE
 
@@ -4073,6 +4117,10 @@ class AnomalyMicroLiveRunner:
                 "inactive_cold_coverage_requires_no_active_or_position": True,
                 "latency_sla_controller_enabled": bool(self.config.latency_sla_controller_enabled),
                 "latency_sla_policy": "protect_active_and_radar_due_scan_latency_by_gating_optional_warm_and_cold",
+                "candidate_queue_pressure_policy": "drop_stale_or_weak_radar_warm_tail_under_latency_pressure_no_cli_knobs",
+                "candidate_queue_pressure_min_keep": int(CANDIDATE_QUEUE_PRESSURE_MIN_KEEP),
+                "candidate_queue_pressure_max_radar": int(CANDIDATE_QUEUE_PRESSURE_MAX_RADAR),
+                "candidate_queue_pressure_max_warm": int(CANDIDATE_QUEUE_PRESSURE_MAX_WARM),
                 "latency_sla_due_scan_p95_seconds": float(self.config.latency_sla_due_scan_p95_seconds),
                 "latency_sla_min_due_samples": int(self.config.latency_sla_min_due_samples),
                 "danger_local_entry_position_guard_enabled": bool(self.config.danger_local_entry_position_guard_enabled),
@@ -4300,6 +4348,20 @@ class AnomalyMicroLiveRunner:
                         "latency_sla_threshold_seconds": float(self._current_latency_sla_threshold_seconds),
                         "latency_sla_min_due_samples": int(self._current_latency_sla_min_due_samples),
                         "latency_sla_reason": self._current_latency_sla_reason,
+                        "candidate_queue_status": selection.candidate_queue_status,
+                        "candidate_queue_reason": selection.candidate_queue_reason,
+                        "candidate_queue_radar_total_before": selection.candidate_queue_radar_total_before,
+                        "candidate_queue_radar_total_after": selection.candidate_queue_radar_total_after,
+                        "candidate_queue_warm_total_before": selection.candidate_queue_warm_total_before,
+                        "candidate_queue_warm_total_after": selection.candidate_queue_warm_total_after,
+                        "candidate_queue_actionable_sample_count": selection.candidate_queue_actionable_sample_count,
+                        "candidate_queue_dropped_pressure_count": selection.candidate_queue_dropped_pressure_count,
+                        "candidate_queue_expired_backlog_stale_count": selection.candidate_queue_expired_backlog_stale_count,
+                        "candidate_queue_top_score": (
+                            round(float(selection.candidate_queue_top_score), 6)
+                            if selection.candidate_queue_top_score is not None
+                            else ""
+                        ),
                         "symbol_context_snapshot_seconds": round(context_snapshot_seconds, 3),
                         "symbol_context_snapshot_enabled": bool(context_snapshot_stats.enabled),
                         "symbol_context_snapshot_attempted": bool(context_snapshot_stats.attempted),
@@ -6225,6 +6287,20 @@ class AnomalyMicroLiveRunner:
                 "latency_sla_threshold_seconds": float(selection.latency_sla_threshold_seconds),
                 "latency_sla_min_due_samples": int(selection.latency_sla_min_due_samples),
                 "latency_sla_reason": selection.latency_sla_reason,
+                "candidate_queue_status": selection.candidate_queue_status,
+                "candidate_queue_reason": selection.candidate_queue_reason,
+                "candidate_queue_radar_total_before": selection.candidate_queue_radar_total_before,
+                "candidate_queue_radar_total_after": selection.candidate_queue_radar_total_after,
+                "candidate_queue_warm_total_before": selection.candidate_queue_warm_total_before,
+                "candidate_queue_warm_total_after": selection.candidate_queue_warm_total_after,
+                "candidate_queue_actionable_sample_count": selection.candidate_queue_actionable_sample_count,
+                "candidate_queue_dropped_pressure_count": selection.candidate_queue_dropped_pressure_count,
+                "candidate_queue_expired_backlog_stale_count": selection.candidate_queue_expired_backlog_stale_count,
+                "candidate_queue_top_score": (
+                    round(float(selection.candidate_queue_top_score), 6)
+                    if selection.candidate_queue_top_score is not None
+                    else ""
+                ),
                 "max_precise_scan_symbols_per_cycle": (
                     self.config.max_precise_scan_symbols_per_cycle
                     if self.config.max_precise_scan_symbols_per_cycle is not None
@@ -6699,6 +6775,170 @@ class AnomalyMicroLiveRunner:
     def _inactive_slots_are_precise_cold_coverage(source: str) -> bool:
         return source in {DANGER_INACTIVE_COLD_COVERAGE_SOURCE, EXPLICIT_INACTIVE_COLD_COVERAGE_SOURCE}
 
+    def _max_due_signal_scan_latency_seconds(self, symbol: str, *, now_ms: int) -> float:
+        latencies = self._due_signal_scan_latency_seconds(symbol, now_ms=now_ms)
+        return max(latencies) if latencies else 0.0
+
+    def _control_candidate_queue_pressure(
+        self,
+        *,
+        now_ms: int,
+        active_keys: set[str],
+        latency_sla: LiveLatencySlaStatus,
+    ) -> LiveCandidateQueuePressureStats:
+        with self._state_lock:
+            radar_items = list(self._ticker_radar_watch.values())
+            warm_items = list(self._warm_watch.values())
+            opening_keys = set(self._opening_symbols)
+        radar_before = len(radar_items)
+        warm_before = len(warm_items)
+        if not radar_items and not warm_items:
+            return LiveCandidateQueuePressureStats(status="empty", reason="no_radar_or_warm_candidates")
+
+        ranked: list[tuple[float, int, str, str]] = []
+        for item in radar_items:
+            ranked.append((float(item.score), int(item.updated_at_ms), "radar", _position_symbol_key(item.symbol)))
+        for item in warm_items:
+            ranked.append((float(item.score), int(item.updated_at_ms), "warm", _position_symbol_key(item.symbol)))
+        ranked.sort(reverse=True)
+        top_score = ranked[0][0] if ranked else None
+        actionable_sample_count = sum(
+            1
+            for _, _, _, symbol_key in ranked
+            if symbol_key not in active_keys
+            and symbol_key not in opening_keys
+            and not self._symbol_in_stop_cooldown(symbol_key)
+        )
+
+        pressure = (
+            not latency_sla.optional_scans_allowed
+            or radar_before > CANDIDATE_QUEUE_PRESSURE_MAX_RADAR
+            or warm_before > CANDIDATE_QUEUE_PRESSURE_MAX_WARM
+        )
+        if not pressure:
+            return LiveCandidateQueuePressureStats(
+                status="ok",
+                reason="within_queue_pressure_limits",
+                radar_total_before=radar_before,
+                radar_total_after=radar_before,
+                warm_total_before=warm_before,
+                warm_total_after=warm_before,
+                actionable_sample_count=actionable_sample_count,
+                top_score=top_score,
+            )
+
+        keep_keys = {symbol_key for _, _, _, symbol_key in ranked[: max(1, CANDIDATE_QUEUE_PRESSURE_MIN_KEEP)]}
+        stale_latency_seconds = max(
+            float(self.config.max_signal_age_ms) / 1000.0,
+            float(self.config.latency_sla_due_scan_p95_seconds) * CANDIDATE_QUEUE_PRESSURE_BACKLOG_STALE_FACTOR,
+        )
+        radar_drop: list[tuple[LiveTickerRadarWatch, str, str]] = []
+        warm_drop: list[tuple[LiveWarmWatch, str, str]] = []
+
+        def should_drop(kind: str, symbol: str, symbol_key: str, rank_index: int) -> tuple[bool, str, str]:
+            if symbol_key in active_keys or symbol_key in opening_keys or self._symbol_in_stop_cooldown(symbol):
+                return False, "", ""
+            if symbol_key in keep_keys:
+                return False, "", ""
+            max_due_latency = self._max_due_signal_scan_latency_seconds(symbol, now_ms=now_ms)
+            if max_due_latency > stale_latency_seconds:
+                return True, "candidate_expired_backlog_stale", (
+                    f"due_scan_latency_seconds>{stale_latency_seconds:.3f}"
+                )
+            if kind == "radar" and rank_index >= CANDIDATE_QUEUE_PRESSURE_MAX_RADAR:
+                return True, "candidate_dropped_latency_pressure", "radar_queue_over_pressure_cap"
+            if kind == "warm" and rank_index >= CANDIDATE_QUEUE_PRESSURE_MAX_WARM:
+                return True, "candidate_dropped_latency_pressure", "warm_queue_over_pressure_cap"
+            return False, "", ""
+
+        radar_ranked = sorted(radar_items, key=lambda item: (float(item.score), int(item.updated_at_ms), item.symbol), reverse=True)
+        warm_ranked = sorted(warm_items, key=lambda item: (float(item.score), int(item.updated_at_ms), item.symbol), reverse=True)
+        for index, item in enumerate(radar_ranked):
+            key = _position_symbol_key(item.symbol)
+            drop, event_name, reason = should_drop("radar", item.symbol, key, index)
+            if drop:
+                radar_drop.append((item, event_name, reason))
+        for index, item in enumerate(warm_ranked):
+            key = _position_symbol_key(item.symbol)
+            drop, event_name, reason = should_drop("warm", item.symbol, key, index)
+            if drop:
+                warm_drop.append((item, event_name, reason))
+
+        with self._state_lock:
+            for item, _, _ in radar_drop:
+                self._ticker_radar_watch.pop(_position_symbol_key(item.symbol), None)
+            for item, _, _ in warm_drop:
+                self._warm_watch.pop(_position_symbol_key(item.symbol), None)
+            radar_after = len(self._ticker_radar_watch)
+            warm_after = len(self._warm_watch)
+
+        dropped_pressure = 0
+        expired_backlog_stale = 0
+        for item, event_name, reason in radar_drop:
+            if event_name == "candidate_expired_backlog_stale":
+                expired_backlog_stale += 1
+            else:
+                dropped_pressure += 1
+            self.artifacts.append_event(
+                event_name,
+                item.symbol,
+                {
+                    "candidate_source": "ticker_radar",
+                    "reason": reason,
+                    "score": item.score,
+                    "updated_at_ms": item.updated_at_ms,
+                    "expires_at_ms": item.expires_at_ms,
+                    "price_delta_pct": item.price_delta_pct,
+                    "quote_volume_delta": item.quote_volume_delta,
+                    "quote_volume_delta_ratio": item.quote_volume_delta_ratio if item.quote_volume_delta_ratio is not None else "",
+                    "trade_count_delta": item.trade_count_delta if item.trade_count_delta is not None else "",
+                    "trade_count_delta_ratio": item.trade_count_delta_ratio if item.trade_count_delta_ratio is not None else "",
+                    "promotion_source": item.promotion_source,
+                    **latency_sla.event_payload(),
+                },
+            )
+        for item, event_name, reason in warm_drop:
+            if event_name == "candidate_expired_backlog_stale":
+                expired_backlog_stale += 1
+            else:
+                dropped_pressure += 1
+            self.artifacts.append_event(
+                event_name,
+                item.symbol,
+                {
+                    "candidate_source": "warm_watch",
+                    "reason": reason,
+                    "score": item.score,
+                    "observations": item.observations,
+                    "first_seen_ms": item.first_seen_ms,
+                    "updated_at_ms": item.updated_at_ms,
+                    "expires_at_ms": item.expires_at_ms,
+                    "age_ms": max(0, int(now_ms) - int(item.first_seen_ms)),
+                    "price_delta_pct": item.price_delta_pct,
+                    "quote_volume_delta": item.quote_volume_delta,
+                    "quote_volume_delta_ratio": item.quote_volume_delta_ratio if item.quote_volume_delta_ratio is not None else "",
+                    "trade_count_delta": item.trade_count_delta if item.trade_count_delta is not None else "",
+                    "trade_count_delta_ratio": item.trade_count_delta_ratio if item.trade_count_delta_ratio is not None else "",
+                    "promotion_source": item.promotion_source,
+                    **latency_sla.event_payload(),
+                },
+            )
+
+        status = "trimmed" if dropped_pressure or expired_backlog_stale else "pressure_no_drop"
+        reason = latency_sla.reason if not latency_sla.optional_scans_allowed else "queue_size_pressure"
+        return LiveCandidateQueuePressureStats(
+            status=status,
+            reason=reason,
+            radar_total_before=radar_before,
+            radar_total_after=radar_after,
+            warm_total_before=warm_before,
+            warm_total_after=warm_after,
+            actionable_sample_count=actionable_sample_count,
+            dropped_pressure_count=dropped_pressure,
+            expired_backlog_stale_count=expired_backlog_stale,
+            top_score=top_score,
+        )
+
     def _select_next_symbol_batch(self, symbols: list[str]) -> LiveSymbolBatchSelection:
         now_ms = int(time.time() * 1000)
         inactive_cursor_before = self._inactive_cursor
@@ -6708,6 +6948,12 @@ class AnomalyMicroLiveRunner:
         self._current_symbol_universe_batch_index = batch_in_full_cycle
         active_due, active_waiting = self._active_symbol_batch(now_ms=now_ms)
         active_keys = {_position_symbol_key(symbol) for symbol in [*active_due, *active_waiting]}
+        pre_pressure_sla = self._current_latency_sla_backlog_status(now_ms=now_ms)
+        queue_pressure = self._control_candidate_queue_pressure(
+            now_ms=now_ms,
+            active_keys=active_keys,
+            latency_sla=pre_pressure_sla,
+        )
         precise_budget_remaining = None
         if self.config.max_precise_scan_symbols_per_cycle is not None:
             precise_budget_remaining = max(0, int(self.config.max_precise_scan_symbols_per_cycle) - len(active_due))
@@ -6858,6 +7104,16 @@ class AnomalyMicroLiveRunner:
             latency_sla_threshold_seconds=latency_sla.threshold_seconds,
             latency_sla_min_due_samples=latency_sla.min_due_samples,
             latency_sla_reason=latency_sla.reason,
+            candidate_queue_status=queue_pressure.status,
+            candidate_queue_reason=queue_pressure.reason,
+            candidate_queue_radar_total_before=queue_pressure.radar_total_before,
+            candidate_queue_radar_total_after=queue_pressure.radar_total_after,
+            candidate_queue_warm_total_before=queue_pressure.warm_total_before,
+            candidate_queue_warm_total_after=queue_pressure.warm_total_after,
+            candidate_queue_actionable_sample_count=queue_pressure.actionable_sample_count,
+            candidate_queue_dropped_pressure_count=queue_pressure.dropped_pressure_count,
+            candidate_queue_expired_backlog_stale_count=queue_pressure.expired_backlog_stale_count,
+            candidate_queue_top_score=queue_pressure.top_score,
             inactive=tuple(inactive),
             batch=tuple(batch),
             scan_modes=batch_scan_modes,

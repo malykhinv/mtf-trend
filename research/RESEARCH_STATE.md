@@ -1322,6 +1322,15 @@ P210 keeps discovery improvements explicit and measurable. Live entry now uses l
 - Current commit: UNKNOWN.
 - Next validation: run a short live smoke with blocked DNS/API and confirm console separation, `network_degraded_telegram_alert_enqueued`, `telegram_async_send_failed` if Telegram is unreachable, and Telegram delivery/recovery notification once connectivity returns.
 
+## 2026-05-15 — P245 proposed
+
+P245 addresses the live backlog loop directly: radar/warm-watch candidates are no longer allowed to accumulate indefinitely and keep latency SLA breached. When the queue is under pressure, live keeps the strongest candidates, expires stale backlog, and drops weak tail with explicit `candidate_dropped_latency_pressure` / `candidate_expired_backlog_stale` events.
+
+No execution safety was loosened: stale, drift, RR, actual-risk, position, fill and stop guards are unchanged. No new CLI flags were added; queue limits are code-reviewed policy constants.
+
+Current commit: UNKNOWN.
+Next validation: run a short live smoke and inspect `candidate_queue_*` fields in `live_cycle_summary` / `symbol_batch_selected`, plus `candidate_dropped_latency_pressure`, `candidate_expired_backlog_stale`, `warm_watch_precise_deferred_latency_sla`, and `latency_sla_status` counts.
+
 ## 2026-05-15 — P239 proposed
 
 Live prior-fast-fade context must not depend only on a post-scan optional snapshot. P239 proposes default startup backfill + startup snapshot computation for 72h+baseline levels-timeframe context, with explicit tiny-gap tolerance (`min_coverage_ratio=0.995`, `max_gap_candles=2`) and no subminute context backfill. Commit: UNKNOWN.

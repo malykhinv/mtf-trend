@@ -1999,6 +1999,22 @@ Commit: UNKNOWN
 Experiment: after a 30d P212 runner/fader prepump artifact is available, enable prepump_warm_watch_scoring in dry live using runner_fader_prepump_feature_separation.csv as the profile. Measure only scheduler impact: warm_watch_marked/updated/promoted ordering, later top_growth overlap, flow_radar false positives, and latency. Do not treat the score as an entry filter until walk-forward evidence shows stable separation outside the training period.
 ```
 
+## 2026-05-15 — P245 candidate queue pressure validation
+
+Goal: verify that latency pressure is reduced by removing stale/weak radar/warm-watch backlog instead of repeatedly deferring it.
+
+Expected evidence:
+
+```text
+live_cycle_summary.candidate_queue_status is ok/trimmed/pressure_no_drop, not absent
+candidate_queue_dropped_pressure_count and candidate_queue_expired_backlog_stale_count are non-zero only during queue pressure
+warm_watch_precise_deferred_latency_sla decreases versus the previous 5h live run
+latency_sla_status=breached share decreases or becomes explained by active/high-score candidates
+closed-hour missed_pump_visibility can show if a dropped/expired candidate later became a top mover
+```
+
+Guardrail: do not tune stale/drift/RR or order safety based on this patch. If top movers are being dropped, adjust queue scoring/priority, not execution guards.
+
 ## 2026-05-15 - P237 proposed live session top-growth status
 
 Input:
