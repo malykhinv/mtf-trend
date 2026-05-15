@@ -3272,3 +3272,50 @@ Risk:
 ```text
 Low/medium. Optional context snapshots may refresh more slowly under load by design, but the artifact now states this directly. Active/radar scans and order logic are unchanged. Warm-watch micro-cache breadth is bounded, so a very noisy radar can delay flow detail for lower-score warm symbols.
 ```
+
+## 2026-05-15 - P222 proposed: live synthetic bucket diagnostics and terminal ledger provenance
+
+Status: PROPOSED
+Commit: UNKNOWN
+Date: 2026-05-15
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Keep the existing closed-candle entry aggregation behavior, but make synthetic zero-bucket repair visible in artifacts and preserve scan/guard provenance on terminal ledger rows.
+```
+
+Changes:
+
+```text
+- Adds synthetic missing OHLCV bucket counting before `_fill_missing_ohlcv_buckets()` fills entry segments.
+- Emits `entry_segment_synthetic_ohlcv_buckets` when a live forming-setup scan uses one or more synthetic zero buckets.
+- Adds synthetic bucket count to missed-entry replay probe diagnostics when a prior missed signal is found.
+- Writes `source_scan_mode`, `danger_cold_coverage_source`, and `entry_position_guard_source` to closed/exit-unresolved live ledger rows, not only open rows.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Expected smoke readout:
+
+```text
+If an entry segment has missing closed buckets, live_events.csv contains `entry_segment_synthetic_ohlcv_buckets` with synthetic_bucket_count and entry_segment_bucket_count. Closed or exit-unresolved live_positions.csv rows keep the same source_scan_mode / guard provenance as the open row.
+```
+
+Risk:
+
+```text
+Low. This is diagnostic/audit only. It does not change signal thresholds, order logic, position guard behavior, fills, stops, or exits.
+```

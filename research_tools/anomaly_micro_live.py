@@ -2563,6 +2563,9 @@ class LiveArtifactWriter:
                     "entry_order_submitted_at_ms": position.entry_order_submitted_at_ms,
                     "entry_order_status": position.entry_order_status,
                     "stop_price": position.stop_price,
+                    "source_scan_mode": position.source_scan_mode,
+                    "danger_cold_coverage_source": position.danger_cold_coverage_source,
+                    "entry_position_guard_source": position.entry_position_guard_source,
                     "tp1_price": position.tp1_price,
                     "amount": position.amount,
                     "entry_filled_amount": position.entry_filled_amount,
@@ -7272,6 +7275,12 @@ class AnomalyMicroLiveRunner:
         if len(setup_history) < self.config.baseline_candles or entry_segment.empty:
             return no_signal()
         seed_close = float(setup_history.iloc[-1]["close"])
+        synthetic_bucket_count = _count_missing_ohlcv_buckets(
+            entry_segment,
+            start_timestamp_ms=int(setup_start_ts),
+            end_timestamp_ms=int(latest_closed_entry_ts),
+            timeframe_ms=entry_timeframe_ms,
+        )
         entry_segment = _fill_missing_ohlcv_buckets(
             entry_segment,
             start_timestamp_ms=int(setup_start_ts),
@@ -7279,6 +7288,20 @@ class AnomalyMicroLiveRunner:
             timeframe_ms=entry_timeframe_ms,
             seed_close=seed_close,
         )
+        if synthetic_bucket_count > 0:
+            self.artifacts.append_event(
+                "entry_segment_synthetic_ohlcv_buckets",
+                symbol,
+                {
+                    "levels_tf": levels_timeframe.value,
+                    "entry_tf": entry_timeframe.value,
+                    "setup_start_timestamp_ms": int(setup_start_ts),
+                    "latest_closed_entry_timestamp_ms": int(latest_closed_entry_ts),
+                    "synthetic_bucket_count": int(synthetic_bucket_count),
+                    "entry_segment_bucket_count": int(len(entry_segment)),
+                    "source": "fill_missing_ohlcv_buckets",
+                },
+            )
         if len(entry_segment) < self.config.confirmation_candles:
             self.artifacts.append_event(
                 "reject_setup_too_early",
@@ -7491,6 +7514,12 @@ class AnomalyMicroLiveRunner:
             if entry_segment.empty:
                 continue
             seed_close = float(setup_history.iloc[-1]["close"])
+            synthetic_bucket_count = _count_missing_ohlcv_buckets(
+                entry_segment,
+                start_timestamp_ms=setup_start_ts,
+                end_timestamp_ms=int(candidate_ts),
+                timeframe_ms=entry_timeframe_ms,
+            )
             entry_segment = _fill_missing_ohlcv_buckets(
                 entry_segment,
                 start_timestamp_ms=setup_start_ts,
@@ -7533,6 +7562,7 @@ class AnomalyMicroLiveRunner:
                 "candidate_decision_count_total": len(all_candidate_timestamps),
                 "probed_decision_count": len(candidate_timestamps),
                 "probe_max_candles": max_probe,
+                "synthetic_ohlcv_bucket_count": int(synthetic_bucket_count),
                 "probe_truncated": bool(probe_truncated),
                 "unprobed_newer_decision_count": max(0, len(all_candidate_timestamps) - len(candidate_timestamps)),
                 "category_id": signal.category_id,
@@ -10998,6 +11028,29 @@ def _fill_missing_ohlcv_buckets(
             merged[volume_column] = 0.0
         merged[volume_column] = pd.to_numeric(merged[volume_column], errors="coerce").fillna(0.0)
     return merged.reset_index(drop=True)
+
+
+def _count_missing_ohlcv_buckets(
+    frame: pd.DataFrame,
+    *,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+    timeframe_ms: int,
+) -> int:
+    if timeframe_ms <= 0 or end_timestamp_ms < start_timestamp_ms or "timestamp" not in frame.columns:
+        return 0
+    expected = set(range(int(start_timestamp_ms), int(end_timestamp_ms) + int(timeframe_ms), int(timeframe_ms)))
+    if not expected:
+        return 0
+    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce").dropna()
+    if timestamps.empty:
+        return len(expected)
+    present = {
+        int(timestamp)
+        for timestamp in timestamps.astype("int64")
+        if int(start_timestamp_ms) <= int(timestamp) <= int(end_timestamp_ms)
+    }
+    return len(expected.difference(present))
 
 
 def _aggregate_frame_to_candle(frame: pd.DataFrame, *, timestamp_ms: int) -> pd.Series | None:
