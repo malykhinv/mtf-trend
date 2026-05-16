@@ -34,7 +34,7 @@ from data.exchanges.ccxt_types import (
     ExchangeTickerSnapshot,
 )
 from domain.abstract.exchange_client import ExchangeClient
-from domain.exceptions import ExchangeConnectivityError
+from domain.exceptions import ExchangeConnectivityError, ExchangeOrderNotFound
 from domain.enums.exchange import Exchange
 from domain.enums.liquidity_quality_state import LiquidityQualityState
 from domain.enums.timeframe import Timeframe
@@ -150,6 +150,22 @@ class CcxtFuturesClient(ExchangeClient):
             raise ExchangeConnectivityError(
                 f"Exchange retry exhausted: operation={operation} symbol={symbol} endpoint={endpoint} attempts={self._retry_attempts} cause={exc}"
             ) from exc
+
+
+    @staticmethod
+    def _is_exchange_order_not_found_exception(exc: Exception) -> bool:
+        """Return true when the exchange explicitly says the order does not exist.
+
+        Binance USD-M returns code -2013 for unresolved order lookups. This is a
+        deterministic lookup result, not a transport failure, so live stop
+        verification must not retry/report it as connectivity.
+        """
+        message = str(exc).lower()
+        return "-2013" in message and "order" in message and ("does not exist" in message or "not exist" in message)
+
+    @classmethod
+    def _should_retry_order_lookup(cls, exc: Exception) -> bool:
+        return not cls._is_exchange_order_not_found_exception(exc)
 
     @staticmethod
     def _is_non_retriable_binance_oi_error(exc: Exception) -> bool:
@@ -479,14 +495,23 @@ class CcxtFuturesClient(ExchangeClient):
         """Fetches an exchange order by explicit client order id; unresolved lookup is a hard error."""
         self._ensure_markets_loaded()
         raw_client = cast(Any, self._client)
-        payload = self._retry_exchange_call(
-            operation="ccxt_fetch_order_by_client_order_id",
-            symbol=symbol,
-            endpoint="fetch_order",
-            call=raw_client.fetch_order,
-            args=(None, symbol),
-            params=self._fetch_order_client_id_param(client_order_id),
-        )
+        try:
+            payload = self._retry_exchange_call(
+                operation="ccxt_fetch_order_by_client_order_id",
+                symbol=symbol,
+                endpoint="fetch_order",
+                call=raw_client.fetch_order,
+                args=(None, symbol),
+                should_retry=self._should_retry_order_lookup,
+                params=self._fetch_order_client_id_param(client_order_id),
+            )
+        except Exception as exc:
+            if self._is_exchange_order_not_found_exception(exc):
+                normalized_client_order_id = self._normalize_client_order_id(client_order_id)
+                raise ExchangeOrderNotFound(
+                    f"order not found: symbol={symbol} client_order_id={normalized_client_order_id} cause={exc}"
+                ) from exc
+            raise
         if not isinstance(payload, dict):
             raise RuntimeError("fetch_order by client order id returned invalid payload")
         return dict(payload)

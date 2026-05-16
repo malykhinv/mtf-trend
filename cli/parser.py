@@ -449,6 +449,39 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_live.add_argument("--trail-buffer-r", type=float, default=0.10)
 
+    live_order_smoke = subparsers.add_parser(
+        "run-live-order-smoke",
+        help="Place one minimal real Binance USD-M order, verify stop visibility, then cleanup reduce-only",
+    )
+    live_order_smoke.add_argument("--symbol", required=True, help="Single futures symbol, e.g. EDEN/USDT:USDT")
+    live_order_smoke.add_argument(
+        "--confirm-real-order-smoke",
+        action="store_true",
+        help="Required explicit guard: this command places real Binance futures orders.",
+    )
+    live_order_smoke.add_argument("--notional-usdt", type=float, default=12.0)
+    live_order_smoke.add_argument(
+        "--max-notional-usdt",
+        type=float,
+        default=25.0,
+        help="Hard guard against fat-finger notional. Command aborts when --notional-usdt is above this value.",
+    )
+    live_order_smoke.add_argument(
+        "--stop-distance-pct",
+        type=float,
+        default=0.05,
+        help="Stop distance from entry fill as a fraction. Default 0.05 means 5%% below entry for the long smoke.",
+    )
+    live_order_smoke.add_argument("--verification-attempts", type=_positive_int_for("--verification-attempts"), default=5)
+    live_order_smoke.add_argument("--verification-sleep-seconds", type=float, default=0.5)
+    live_order_smoke.add_argument(
+        "--leave-protected-position-open",
+        action="store_true",
+        help="After stop verification, leave the protected position open instead of cancelling stop and closing reduce-only.",
+    )
+    live_order_smoke.add_argument("--output-dir", default=None)
+
+
     top_growth = subparsers.add_parser(
         "run-anomaly-top-growth",
         help="Export standalone closed-hour top-growth artifacts without running live trading",
@@ -520,6 +553,7 @@ def resolve_handler(command_name: str) -> Handler:
         "materialize-anomaly-subminute-cache": commands.materialize_anomaly_subminute_cache,
         "backfill-anomaly-aggtrade-cache": commands.backfill_anomaly_aggtrade_cache,
         "run-anomaly-live": commands.run_anomaly_live,
+        "run-live-order-smoke": commands.run_live_order_smoke,
         "run-anomaly-top-growth": commands.run_anomaly_top_growth,
         "run-hourly-levels": commands.run_hourly_levels,
         "check-quality": commands.check_quality,

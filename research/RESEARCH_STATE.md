@@ -1499,10 +1499,20 @@ Next validation: run a short live smoke and count `discrete_signal_snapshot_entr
 ## 2026-05-16 — P267 proposed
 
 ```text
-Current patch status: P267 PROPOSED, commit UNKNOWN.
+Current patch status: P267 APPLIED locally / UNKNOWN commit.
 P267 is a data-quality/parity patch only. It does not change discovery selection, runner thresholds, stop-order handling, or PnL logic.
 Delayed replay snapshots must preserve `synthetic_ohlcv_bucket` so replay does not turn synthetic no-trade buckets into real flow evidence.
 Live/replay setup confirmation must require enough real entry buckets; synthetic filled buckets may maintain time/price continuity but must not satisfy confirmation count.
 Backtest context parity now reports OI cache/load/asof freshness separately from mark-price context so SYS-like disagreements can be traced to cache coverage/staleness instead of a generic context failure.
 P263 lifecycle tests are referenced in research memory but `tests/` is absent from the current uploaded ZIP; treat P263 validation as not present in this ZIP unless tests are supplied separately.
+```
+
+## 2026-05-16 — P268 proposed
+
+```text
+Current patch status: P268 PROPOSED, commit UNKNOWN.
+P268 adds a real Binance USD-M order lifecycle smoke command. It is not a strategy signal and does not weaken live execution safety.
+The command requires `--confirm-real-order-smoke`, refuses non-flat symbols or pre-existing open orders, opens one minimal market long, verifies the reduce-only STOP_MARKET via open orders/clientOrderId lookup, then cancels the stop and closes reduce-only by default.
+Binance `-2013 Order does not exist` is now classified as `ExchangeOrderNotFound`, not as connectivity retry exhaustion, so stop visibility diagnostics can distinguish “order absent” from network/API failure.
+Artifacts: `live_order_smoke_events.csv` and `live_order_smoke_summary.json` under the selected output directory.
 ```

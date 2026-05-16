@@ -2297,3 +2297,34 @@ python -m compileall -q data/exchanges research_tools cli constants.py main.py
 ```
 
 Guardrail: discovery remains unchanged and separate; do not judge discovery edge from this patch.
+
+## 2026-05-16 — P268 real-order smoke validation
+
+Goal: verify the real Binance USD-M order boundary used by live trading, not the fake exchange lifecycle tests.
+
+Expected command:
+
+```powershell
+.venv\Scripts\python.exe main.py run-live-order-smoke --symbol <SYMBOL/USDT:USDT> --notional-usdt 12 --max-notional-usdt 25 --stop-distance-pct 0.05 --confirm-real-order-smoke
+```
+
+Expected evidence:
+
+```text
+entry_fill_verified
+stop_created
+stop_verified
+stop_cancelled
+cleanup_reduce_only_fill_verified
+final_exchange_snapshot with exchange_position_amount=0 and smoke_open_orders_seen=0
+```
+
+Failure interpretation:
+
+```text
+ExchangeOrderNotFound during stop lookup means Binance answered that the stop order is absent.
+ExchangeConnectivityError means transport/API retry exhaustion.
+Any failed smoke must preserve artifacts and attempt reduce-only cleanup.
+```
+
+Guardrail: do not use this command as a strategy entry. It is an exchange-boundary smoke only.

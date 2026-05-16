@@ -1612,6 +1612,36 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
     return _run_with_logging("run-anomaly-live", config, _run)
 
 
+def run_live_order_smoke(config: AppConfig, args: argparse.Namespace) -> int:
+    """Run one minimal real Binance order lifecycle smoke."""
+
+    def _run() -> int:
+        from research_tools.live_order_smoke import LiveOrderSmokeConfig, LiveOrderSmokeRunner
+
+        _, exchange_client, _ = _build_fetch_stack(config)
+        output_arg = getattr(args, "output_dir", None)
+        if output_arg:
+            output_dir = Path(output_arg)
+        else:
+            run_id = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+            output_dir = config.backtest.results_dir / "live_order_smoke" / run_id
+        smoke_config = LiveOrderSmokeConfig(
+            symbol=str(getattr(args, "symbol")),
+            notional_usdt=float(getattr(args, "notional_usdt", 12.0)),
+            max_notional_usdt=float(getattr(args, "max_notional_usdt", 25.0)),
+            stop_distance_pct=float(getattr(args, "stop_distance_pct", 0.05)),
+            output_dir=output_dir,
+            confirm_real_order_smoke=bool(getattr(args, "confirm_real_order_smoke", False)),
+            leave_protected_position_open=bool(getattr(args, "leave_protected_position_open", False)),
+            verification_attempts=int(getattr(args, "verification_attempts", 5)),
+            verification_sleep_seconds=float(getattr(args, "verification_sleep_seconds", 0.5)),
+        )
+        print(f"smoke: artifacts {output_dir}", flush=True)
+        return LiveOrderSmokeRunner(config=smoke_config, exchange_client=exchange_client).run()
+
+    return _run_with_logging("run-live-order-smoke", config, _run)
+
+
 def run_anomaly_top_growth(config: AppConfig, args: argparse.Namespace) -> int:
     """Exports standalone closed-hour top-growth artifacts."""
 
