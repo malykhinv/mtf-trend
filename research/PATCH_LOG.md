@@ -4392,6 +4392,19 @@ python main.py run-anomaly-live --help | grep -E "heartbeat|data-status|пуль
 
 Risk: low. Display and live_cycle_summary diagnostics only. The new status label must not be used as a trading condition.
 
+## 2026-05-16 — P255 proposed
+
+Startup 72h context preparation now ends with an explicit readiness verdict before the first live cycle. The verdict counts fully ready symbols, partial symbols, unavailable symbols, ready snapshots, tolerated-gap snapshots, missing snapshots, and top unavailable reasons. Real-orders live is refused when ready symbol/snapshot ratios are below internal reviewed thresholds, rather than starting with a mostly blind prior-fast-fade context. No CLI flags are added, and retryable dependency remains only a residual safety path.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "startup-readiness|readiness-threshold|context-ready"  # expected: no output
+```
+
+Risk: medium-low. The patch can intentionally stop real-orders startup when context coverage is poor. Trading filters and execution guards are unchanged.
+
 
 ## P247 - proposed - dependency retry cooldown
 

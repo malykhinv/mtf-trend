@@ -2135,6 +2135,10 @@ Expected operator heartbeat shape:
 
 If data is degraded, `Данные` should briefly show the actual source of degradation, for example `Тикер REST`, `Поток REST`, `Поток gapREST`, `Поток ждёт`, `Поток подписка`, `Кеш REST`, or `Кеш gap`. These are visibility labels only; no fallback is hidden as `Ok`.
 
+## 2026-05-16 — Startup context readiness validation
+
+Next live run after P255 should confirm that startup prints a readiness line after 72h context snapshot generation, writes `symbol_context_startup_readiness`, and refuses real-orders startup if ready symbol/snapshot ratios are below threshold. Evaluate this before reading PnL or signal counts.
+
 
 ## 2026-05-15 — P247 dependency retry cooldown validation
 

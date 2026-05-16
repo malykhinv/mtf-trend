@@ -83,6 +83,8 @@ DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_CYCLE_SECONDS = 0.75
 DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MIN_COVERAGE_RATIO = 0.995
 DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_GAP_CANDLES = 2
 DEFAULT_SYMBOL_CONTEXT_PRIORITY_TTL_MS = 5 * 60_000
+STARTUP_SYMBOL_CONTEXT_MIN_READY_SYMBOL_RATIO = 0.95
+STARTUP_SYMBOL_CONTEXT_MIN_READY_SNAPSHOT_RATIO = 0.95
 DEFAULT_WARM_WATCH_AGGTRADE_TARGET_CAP = 40
 LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON = "latency_sla_due_scan_p95_above_threshold"
 DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE = "DANGER_local_memory_position_guard_no_pre_entry_exchange_position_fetch"
@@ -4247,6 +4249,11 @@ class AnomalyMicroLiveRunner:
                 "symbol_context_snapshot_contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
                 "symbol_context_snapshot_policy": "always_startup_backfill_then_cache_only_rolling_table_no_precise_scan_context_fetch",
                 "symbol_context_startup_backfill_policy": "always_on_levels_timeframes_only_no_subminute_entry_timeframes",
+                "symbol_context_startup_readiness_policy": (
+                    "real_orders_refuse_startup_when_ready_symbol_or_snapshot_ratio_below_internal_threshold"
+                ),
+                "symbol_context_startup_min_ready_symbol_ratio": float(STARTUP_SYMBOL_CONTEXT_MIN_READY_SYMBOL_RATIO),
+                "symbol_context_startup_min_ready_snapshot_ratio": float(STARTUP_SYMBOL_CONTEXT_MIN_READY_SNAPSHOT_RATIO),
                 "symbol_context_snapshot_interval_seconds": float(
                     self.config.symbol_context_snapshot_interval_seconds
                 ),
@@ -4304,6 +4311,7 @@ class AnomalyMicroLiveRunner:
             self._validate_live_account_mode()
             self._close_startup_exchange_positions(symbols)
         self._startup_backfill_symbol_context_cache(symbols)
+        self._validate_startup_symbol_context_readiness(symbols)
         self._seed_startup_ticker_radar(symbols)
         try:
             self._validate_required_ticker_radar_source(symbols)
@@ -8956,6 +8964,155 @@ class AnomalyMicroLiveRunner:
 
     def _startup_status(self, stage: str, message: str) -> None:
         self._status_logger.status(f"{stage} · {self._startup_status_time()} · {message}")
+
+    def _startup_symbol_context_expected_keys(self, symbol: str) -> tuple[tuple[str, str, str], ...]:
+        keys: list[tuple[str, str, str]] = []
+        for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
+            if int(levels_timeframe.to_milliseconds()) < int(Timeframe.M1.to_milliseconds()):
+                continue
+            keys.append(self._symbol_context_snapshot_key(symbol, levels_timeframe, entry_timeframe))
+        return tuple(keys)
+
+    def _startup_symbol_context_readiness_summary(self, symbols: list[str]) -> dict[str, object]:
+        expected_keys_by_symbol = {
+            _position_symbol_key(symbol): self._startup_symbol_context_expected_keys(symbol)
+            for symbol in symbols
+        }
+        symbols_total = int(len(symbols))
+        expected_snapshot_count = sum(len(keys) for keys in expected_keys_by_symbol.values())
+        ready_symbols = 0
+        partial_symbols = 0
+        unavailable_symbols = 0
+        missing_symbols = 0
+        ready_snapshots = 0
+        tolerated_gap_snapshots = 0
+        unavailable_snapshots = 0
+        missing_snapshots = 0
+        baseline_not_ok_snapshots = 0
+        reason_counts: dict[str, int] = {}
+        unavailable_symbol_examples: list[str] = []
+
+        for symbol in symbols:
+            symbol_key = _position_symbol_key(symbol)
+            keys = expected_keys_by_symbol.get(symbol_key, ())
+            if not keys:
+                missing_symbols += 1
+                if len(unavailable_symbol_examples) < 12:
+                    unavailable_symbol_examples.append(symbol)
+                continue
+            symbol_ready = 0
+            symbol_missing = 0
+            for key in keys:
+                snapshot = self._symbol_context_snapshots.get(key)
+                if snapshot is None:
+                    missing_snapshots += 1
+                    symbol_missing += 1
+                    reason_counts["missing_snapshot"] = reason_counts.get("missing_snapshot", 0) + 1
+                    continue
+                status = str(snapshot.status or "")
+                baseline_status = str(snapshot.baseline_status or "")
+                reason = str(snapshot.reason or "")
+                if status == "ok" and baseline_status == "ok":
+                    ready_snapshots += 1
+                    symbol_ready += 1
+                    if reason.startswith("ok_tolerated_gap"):
+                        tolerated_gap_snapshots += 1
+                    continue
+                unavailable_snapshots += 1
+                if baseline_status and baseline_status != "ok":
+                    baseline_not_ok_snapshots += 1
+                    reason_key = f"baseline={baseline_status}"
+                elif status != "ok":
+                    reason_key = f"status={status}:{reason}"
+                else:
+                    reason_key = f"reason={reason or 'unknown'}"
+                reason_counts[reason_key] = reason_counts.get(reason_key, 0) + 1
+            if symbol_ready == len(keys):
+                ready_symbols += 1
+            elif symbol_ready > 0:
+                partial_symbols += 1
+                if len(unavailable_symbol_examples) < 12:
+                    unavailable_symbol_examples.append(symbol)
+            else:
+                unavailable_symbols += 1
+                if symbol_missing == len(keys):
+                    missing_symbols += 1
+                if len(unavailable_symbol_examples) < 12:
+                    unavailable_symbol_examples.append(symbol)
+
+        ready_symbol_ratio = float(ready_symbols) / float(symbols_total) if symbols_total else 0.0
+        ready_snapshot_ratio = (
+            float(ready_snapshots) / float(expected_snapshot_count) if expected_snapshot_count else 0.0
+        )
+        top_reasons = dict(sorted(reason_counts.items(), key=lambda item: (-item[1], item[0]))[:12])
+        return {
+            "symbols_total": symbols_total,
+            "expected_snapshot_count": int(expected_snapshot_count),
+            "ready_symbols": int(ready_symbols),
+            "partial_symbols": int(partial_symbols),
+            "unavailable_symbols": int(unavailable_symbols),
+            "missing_symbols": int(missing_symbols),
+            "ready_snapshots": int(ready_snapshots),
+            "tolerated_gap_snapshots": int(tolerated_gap_snapshots),
+            "unavailable_snapshots": int(unavailable_snapshots),
+            "missing_snapshots": int(missing_snapshots),
+            "baseline_not_ok_snapshots": int(baseline_not_ok_snapshots),
+            "ready_symbol_ratio": float(ready_symbol_ratio),
+            "ready_snapshot_ratio": float(ready_snapshot_ratio),
+            "min_ready_symbol_ratio": float(STARTUP_SYMBOL_CONTEXT_MIN_READY_SYMBOL_RATIO),
+            "min_ready_snapshot_ratio": float(STARTUP_SYMBOL_CONTEXT_MIN_READY_SNAPSHOT_RATIO),
+            "top_unavailable_reasons": top_reasons,
+            "unavailable_symbol_examples": unavailable_symbol_examples,
+        }
+
+    def _validate_startup_symbol_context_readiness(self, symbols: list[str]) -> None:
+        summary = self._startup_symbol_context_readiness_summary(symbols)
+        ready_symbols = int(summary["ready_symbols"])
+        symbols_total = int(summary["symbols_total"])
+        partial_symbols = int(summary["partial_symbols"])
+        unavailable_symbols = int(summary["unavailable_symbols"])
+        ready_snapshots = int(summary["ready_snapshots"])
+        expected_snapshot_count = int(summary["expected_snapshot_count"])
+        ready_symbol_ratio = float(summary["ready_symbol_ratio"])
+        ready_snapshot_ratio = float(summary["ready_snapshot_ratio"])
+        startup_ready = (
+            symbols_total > 0
+            and expected_snapshot_count > 0
+            and ready_symbol_ratio >= float(STARTUP_SYMBOL_CONTEXT_MIN_READY_SYMBOL_RATIO)
+            and ready_snapshot_ratio >= float(STARTUP_SYMBOL_CONTEXT_MIN_READY_SNAPSHOT_RATIO)
+        )
+        status = "ready" if startup_ready else "not_ready"
+        self._startup_status(
+            "подготовка",
+            (
+                f"готово {ready_symbols}/{symbols_total} · partial {partial_symbols} · "
+                f"unavailable {unavailable_symbols} · snapshots {ready_snapshots}/{expected_snapshot_count}"
+            ),
+        )
+        payload = {
+            "status": status,
+            "contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
+            "policy": "real_orders_refuse_startup_when_context_readiness_below_internal_threshold_no_pass_by_default",
+            "confirm_real_orders": bool(self.config.confirm_real_orders),
+            **summary,
+        }
+        self.artifacts.append_event("symbol_context_startup_readiness", "__live__", payload)
+        if not startup_ready and self.config.confirm_real_orders:
+            self._status_logger.finish_status()
+            self.artifacts.append_event(
+                "live_startup_refused",
+                "__live__",
+                {
+                    "reason": "symbol_context_startup_readiness_below_threshold",
+                    **payload,
+                },
+            )
+            raise LiveStartupError(
+                "72ч контекст не готов для real-orders live: "
+                f"symbols {ready_symbols}/{symbols_total} "
+                f"({ready_symbol_ratio:.1%}), snapshots {ready_snapshots}/{expected_snapshot_count} "
+                f"({ready_snapshot_ratio:.1%})"
+            )
 
     def _startup_backfill_symbol_context_cache(self, symbols: list[str]) -> None:
         if not self.config.symbol_context_snapshot_enabled:
