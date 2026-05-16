@@ -13,6 +13,7 @@ import csv
 import json
 import math
 import time
+from decimal import Decimal, InvalidOperation
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -501,10 +502,12 @@ class LiveOrderSmokeRunner:
         stop_price = _order_float_field(order, "stopPrice")
         if stop_price is None:
             raise RuntimeError(f"stopPrice missing: order_id={order_id} source={source}")
-        price_delta_ratio = abs(stop_price - expected_stop_price) / expected_stop_price if expected_stop_price > 0.0 else float("inf")
-        if not math.isfinite(price_delta_ratio) or price_delta_ratio > 1e-4:
+        if not _price_matches_exchange_precision(stop_price, expected_stop_price):
+            price_delta = abs(stop_price - expected_stop_price)
+            price_tolerance = _exchange_price_precision_tolerance(stop_price)
             raise RuntimeError(
-                f"stopPrice mismatch: order_id={order_id} stopPrice={stop_price} expected={expected_stop_price} source={source}"
+                f"stopPrice mismatch: order_id={order_id} stopPrice={stop_price} expected={expected_stop_price} "
+                f"delta={price_delta} exchange_precision_tolerance={price_tolerance} source={source}"
             )
 
     def _cleanup_after_success(self) -> None:
@@ -712,6 +715,35 @@ def _order_float_field(order: dict[str, object], *keys: str) -> float | None:
                 return parsed
     return None
 
+
+
+def _exchange_price_precision_tolerance(value: float) -> float:
+    """Return one displayed price unit for an exchange-normalized price.
+
+    Binance algo-order payloads return `triggerPrice` already normalized to symbol
+    price precision. Comparing it to the raw float we asked for must tolerate
+    that one-tick/one-decimal-unit normalization, otherwise a valid order such
+    as 0.035643999999999995 -> 0.03564 is incorrectly rejected.
+    """
+    try:
+        decimal_value = Decimal(str(value)).normalize()
+    except (InvalidOperation, ValueError):
+        return float("nan")
+    exponent = decimal_value.as_tuple().exponent
+    if exponent >= 0:
+        return 1.0
+    return float(Decimal(1).scaleb(exponent))
+
+
+def _price_matches_exchange_precision(actual: float, expected: float, *, max_relative_ratio: float = 1e-4) -> bool:
+    if not math.isfinite(actual) or not math.isfinite(expected) or expected <= 0.0:
+        return False
+    delta = abs(actual - expected)
+    relative_ratio = delta / expected
+    if math.isfinite(relative_ratio) and relative_ratio <= max_relative_ratio:
+        return True
+    precision_tolerance = _exchange_price_precision_tolerance(actual)
+    return math.isfinite(precision_tolerance) and delta <= precision_tolerance + 1e-12
 
 def _order_bool_field(order: dict[str, object], key: str) -> bool | None:
     value = order.get(key)

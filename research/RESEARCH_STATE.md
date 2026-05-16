@@ -1533,3 +1533,11 @@ P270 extends the existing real-order smoke with an optional management lifecycle
 The old quick smoke remains unchanged unless `--replacement-stop-distance-pct` is supplied.
 Next validation: run the management smoke at minimal notional and inspect `live_order_smoke_events.csv` for `stop_replacement_verified`, `old_still_open=false`, `new_still_open=true` before close, and final `smoke_algo_open_orders_seen=0`.
 ```
+## 2026-05-16 — P271 proposed
+
+```text
+Current patch status: P271 PROPOSED, commit UNKNOWN.
+The first P270 management smoke failed before replacement because stop verification compared the raw requested floating stop price to Binance's normalized algo trigger price strictly enough to reject one valid price-precision truncation: 0.035643999999999995 -> 0.03564.
+P271 keeps strict stop verification but compares trigger price with exchange-normalized precision tolerance instead of treating one displayed price unit as integrity failure.
+Next validation: rerun the same management smoke and require `stop_verified`, `stop_replacement_verified`, old stop removed, replacement stop present until close, then final flat/no ordinary or algo orders.
+```

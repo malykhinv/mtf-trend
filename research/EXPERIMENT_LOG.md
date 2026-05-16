@@ -2379,3 +2379,20 @@ final_exchange_snapshot with exchange_position_amount=0, smoke_open_orders_seen=
 ```
 
 Guardrail: this smoke is an exchange-boundary validation command, not a strategy entry. It must refuse replacement distances that are not closer than the initial stop distance.
+## 2026-05-16 — P271 exchange-normalized stop trigger precision
+
+Observed from real management smoke `20260516_200655`:
+
+```text
+initial stop was created and visible through Binance algo open orders, but verification failed on raw float vs exchange-normalized trigger price:
+expected=0.035643999999999995
+actual=0.03564
+```
+
+Interpretation:
+
+```text
+This is not a missing stop and not a management-state failure. It is an overly strict price comparison against a Binance-normalized trigger price.
+```
+
+Next validation after P271: rerun the same management smoke command and inspect `live_order_smoke_events.csv` for both initial and replacement stop verification plus final `smoke_algo_open_orders_seen=0`.

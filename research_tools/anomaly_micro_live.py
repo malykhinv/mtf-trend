@@ -18,6 +18,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections import deque
+from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -14523,11 +14524,13 @@ class AnomalyMicroLiveRunner:
                 symbol=symbol,
             )
         stop_price = _order_float_field(order, "stopPrice")
-        price_delta_ratio = _safe_divide(abs(stop_price - expected_stop_price), expected_stop_price) if stop_price is not None else float("nan")
-        if stop_price is None or not math.isfinite(price_delta_ratio) or price_delta_ratio > 1e-4:
+        if stop_price is None or not _price_matches_exchange_precision(stop_price, expected_stop_price):
+            price_delta = abs(stop_price - expected_stop_price) if stop_price is not None else float("nan")
+            price_tolerance = _exchange_price_precision_tolerance(stop_price) if stop_price is not None else float("nan")
             raise LiveDataIntegrityError(
                 f"stop order stopPrice not verified: symbol={symbol} position_id={position_id} order_id={order_id} "
-                f"stopPrice={stop_price!r} expected={expected_stop_price} source={order_source}",
+                f"stopPrice={stop_price!r} expected={expected_stop_price} delta={price_delta} "
+                f"exchange_precision_tolerance={price_tolerance} source={order_source}",
                 symbol=symbol,
             )
 
@@ -15280,6 +15283,29 @@ def _order_float_field(order: dict[str, object], *keys: str) -> float | None:
                 return parsed
     return None
 
+
+
+def _exchange_price_precision_tolerance(value: float) -> float:
+    """Return one displayed price unit for an exchange-normalized price."""
+    try:
+        decimal_value = Decimal(str(value)).normalize()
+    except (InvalidOperation, ValueError):
+        return float("nan")
+    exponent = decimal_value.as_tuple().exponent
+    if exponent >= 0:
+        return 1.0
+    return float(Decimal(1).scaleb(exponent))
+
+
+def _price_matches_exchange_precision(actual: float, expected: float, *, max_relative_ratio: float = 1e-4) -> bool:
+    if not math.isfinite(actual) or not math.isfinite(expected) or expected <= 0.0:
+        return False
+    delta = abs(actual - expected)
+    relative_ratio = _safe_divide(delta, expected)
+    if math.isfinite(relative_ratio) and relative_ratio <= max_relative_ratio:
+        return True
+    precision_tolerance = _exchange_price_precision_tolerance(actual)
+    return math.isfinite(precision_tolerance) and delta <= precision_tolerance + 1e-12
 
 def _order_bool_field(order: dict[str, object], key: str) -> bool | None:
     value = order.get(key)
