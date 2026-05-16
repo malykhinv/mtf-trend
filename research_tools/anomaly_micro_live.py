@@ -8965,6 +8965,17 @@ class AnomalyMicroLiveRunner:
     def _startup_status(self, stage: str, message: str) -> None:
         self._status_logger.status(f"{stage} · {self._startup_status_time()} · {message}")
 
+    def _startup_eta_text(self, *, started_at: float, completed: int, total: int) -> str:
+        if total <= 0:
+            return "0с"
+        completed = max(0, min(int(completed), int(total)))
+        if completed <= 0:
+            return "-"
+        elapsed_seconds = max(0.0, float(time.monotonic() - started_at))
+        seconds_per_unit = elapsed_seconds / float(completed)
+        eta_seconds = max(0.0, seconds_per_unit * float(int(total) - completed))
+        return _format_live_runtime(float(eta_seconds))
+
     def _startup_symbol_context_expected_keys(self, symbol: str) -> tuple[tuple[str, str, str], ...]:
         keys: list[tuple[str, str, str]] = []
         for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
@@ -9086,7 +9097,7 @@ class AnomalyMicroLiveRunner:
             "подготовка",
             (
                 f"готово {ready_symbols}/{symbols_total} · partial {partial_symbols} · "
-                f"unavailable {unavailable_symbols} · snapshots {ready_snapshots}/{expected_snapshot_count}"
+                f"unavailable {unavailable_symbols} · snapshots {ready_snapshots}/{expected_snapshot_count} · ETA 0с"
             ),
         )
         payload = {
@@ -9180,13 +9191,7 @@ class AnomalyMicroLiveRunner:
         failure_reasons: dict[str, int] = {}
         symbols_total = int(len(symbols))
         for index, symbol in enumerate(symbols, start=1):
-            completed_symbols = int(index - 1)
-            elapsed_so_far = max(0.0, float(time.monotonic() - started_at))
-            eta_seconds: float | None = None
-            if completed_symbols > 0:
-                seconds_per_symbol = elapsed_so_far / float(completed_symbols)
-                eta_seconds = max(0.0, seconds_per_symbol * float(symbols_total - completed_symbols))
-            eta_text = _format_live_runtime(float(eta_seconds)) if eta_seconds is not None else "-"
+            eta_text = self._startup_eta_text(started_at=started_at, completed=int(index - 1), total=symbols_total)
             self._startup_status(
                 "контекст 72ч",
                 f"кеш {index}/{symbols_total} · {_compact_symbol(symbol)} · ETA {eta_text}",
@@ -9217,15 +9222,38 @@ class AnomalyMicroLiveRunner:
                         },
                     )
         self._status_logger.finish_status()
-        self._startup_status("контекст 72ч", "запись кеша")
-        flushed_rows = self._flush_live_ohlcv_cache_if_due(force=True, reason="symbol_context_startup_backfill")
+        flush_items_total = int(len(self._live_ohlcv_write_buffer))
+        flush_started_at = time.monotonic()
+        if flush_items_total <= 0:
+            self._startup_status("контекст 72ч", "запись кеша 0/0 · ETA 0с")
+
+        def _cache_flush_progress(symbol: str, timeframe_value: str, index: int, total: int) -> None:
+            eta_text = self._startup_eta_text(started_at=flush_started_at, completed=int(index - 1), total=int(total))
+            self._startup_status(
+                "контекст 72ч",
+                f"запись кеша {index}/{total} · {_compact_symbol(symbol)} {timeframe_value} · ETA {eta_text}",
+            )
+
+        flushed_rows = self._flush_live_ohlcv_cache_if_due(
+            force=True,
+            reason="symbol_context_startup_backfill",
+            progress_callback=_cache_flush_progress,
+        )
+        if flush_items_total > 0:
+            self._startup_status("контекст 72ч", f"запись кеша {flush_items_total}/{flush_items_total} · ETA 0с")
         snapshot_ok = 0
         snapshot_failed = 0
         snapshot_total = int(len(symbols))
+        snapshot_started_at = time.monotonic()
         for snapshot_index, symbol in enumerate(symbols, start=1):
+            eta_text = self._startup_eta_text(
+                started_at=snapshot_started_at,
+                completed=int(snapshot_index - 1),
+                total=snapshot_total,
+            )
             self._startup_status(
                 "контекст 72ч",
-                f"снимок {snapshot_index}/{snapshot_total} · {_compact_symbol(symbol)}",
+                f"снимок {snapshot_index}/{snapshot_total} · {_compact_symbol(symbol)} · ETA {eta_text}",
             )
             for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
                 if int(levels_timeframe.to_milliseconds()) < int(Timeframe.M1.to_milliseconds()):
@@ -9241,8 +9269,11 @@ class AnomalyMicroLiveRunner:
                     snapshot_ok += 1
                 else:
                     snapshot_failed += 1
-        self._startup_status("контекст 72ч", "запись snapshot")
+        if snapshot_total > 0:
+            self._startup_status("контекст 72ч", f"снимок {snapshot_total}/{snapshot_total} · ETA 0с")
+        self._startup_status("контекст 72ч", "запись snapshot · ETA -")
         output_path = self.artifacts.write_symbol_context_snapshot(list(self._symbol_context_snapshots.values()))
+        self._startup_status("контекст 72ч", "запись snapshot · ETA 0с")
         self._status_logger.finish_status()
         self._last_symbol_context_snapshot_at_ms = int(time.time() * 1000)
         status = "ok" if snapshot_failed == 0 else "partial" if snapshot_ok else "failed"
@@ -12973,7 +13004,13 @@ class AnomalyMicroLiveRunner:
         )
         return buffered_rows
 
-    def _flush_live_ohlcv_cache_if_due(self, *, force: bool = False, reason: str) -> int:
+    def _flush_live_ohlcv_cache_if_due(
+        self,
+        *,
+        force: bool = False,
+        reason: str,
+        progress_callback: Callable[[str, str, int, int], None] | None = None,
+    ) -> int:
         storage = self._ohlcv_cache_storage
         if storage is None or not self._live_ohlcv_write_buffer:
             return 0
@@ -12999,7 +13036,10 @@ class AnomalyMicroLiveRunner:
         for key, frames in deferred_items:
             remaining[key] = frames
             remaining_rows += int(sum(len(frame) for frame in frames))
-        for (_symbol_key, symbol, timeframe_value), frames in selected_items:
+        selected_total = int(len(selected_items))
+        for selected_index, ((_symbol_key, symbol, timeframe_value), frames) in enumerate(selected_items, start=1):
+            if progress_callback is not None:
+                progress_callback(str(symbol), str(timeframe_value), int(selected_index), selected_total)
             try:
                 timeframe = Timeframe(timeframe_value)
                 combined = _concat_cached_ohlcv_frames(frames)

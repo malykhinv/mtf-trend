@@ -1393,6 +1393,10 @@ Next validation: restart live and verify startup status updates as `контек
 
 Observed live startup can sit silently after `контекст 72ч · кеш 535/535` because the main heartbeat starts only after startup cache flush, symbol-context snapshot computation/write, ticker radar seed/validation, and entry into the first live loop. P253 proposes status-only instrumentation for those startup stages. Current commit: UNKNOWN.
 
+## 2026-05-16 — P256 proposed startup visibility note
+
+The startup `контекст 72ч · запись кеша` stage was observed to look stalled after the 72h fetch loop completed. P256 keeps the blocking healthy-start policy, but reports forced cache flush progress per symbol/timeframe with ETA and adds ETA to startup snapshot computation/readiness status. Current commit: UNKNOWN. Next validation: restart live and confirm `запись кеша N/total · SYMBOL TF · ETA ...` updates during the formerly silent flush stage.
+
 
 ## 2026-05-15 — P247 proposed
 

@@ -4405,6 +4405,19 @@ python main.py run-anomaly-live --help | grep -E "startup-readiness|readiness-th
 
 Risk: medium-low. The patch can intentionally stop real-orders startup when context coverage is poor. Trading filters and execution guards are unchanged.
 
+## 2026-05-16 — P256 proposed
+
+Startup 72h context preparation progress is made fully observable for the heavy post-backfill stages. The forced cache flush now reports per symbol/timeframe progress with local clock time and ETA instead of one silent `запись кеша` line. Symbol-context snapshot computation also reports ETA per symbol, and final snapshot/readiness lines finish with explicit ETA status. This is operator-visibility only: cache write policy, context readiness thresholds, trading filters, and execution guards are unchanged.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "startup-cache-flush-eta|context-snapshot-eta"  # expected: no output
+```
+
+Risk: low. Display and progress callback only. The flush still writes through the same storage path; the callback must not be used as trading state.
+
 
 ## P247 - proposed - dependency retry cooldown
 
