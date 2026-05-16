@@ -32,6 +32,8 @@ class LiveOrderSmokeConfig:
     output_dir: Path
     confirm_real_order_smoke: bool
     leave_protected_position_open: bool = False
+    replacement_stop_distance_pct: float | None = None
+    close_position_before_stop_cancel: bool = False
     verification_attempts: int = 5
     verification_sleep_seconds: float = 0.5
     max_position_amount_slippage_ratio: float = 0.05
@@ -43,9 +45,11 @@ class LiveOrderSmokeResult:
     symbol: str
     entry_order_id: str | None
     stop_order_id: str | None
+    replacement_stop_order_id: str | None
     entry_fill_price: float | None
     entry_filled_amount: float | None
     stop_price: float | None
+    replacement_stop_price: float | None
     cleanup_close_order_id: str | None
     output_dir: str
 
@@ -64,7 +68,9 @@ class LiveOrderSmokeRunner:
         self._entry_order_id: str | None = None
         self._entry_fill: ExchangeOrderFill | None = None
         self._stop_order_id: str | None = None
+        self._replacement_stop_order_id: str | None = None
         self._stop_price: float | None = None
+        self._replacement_stop_price: float | None = None
         self._cleanup_close_order_id: str | None = None
         self._write_header_if_needed()
 
@@ -96,6 +102,22 @@ class LiveOrderSmokeRunner:
             self._event("preflight_failed", status="aborted", reason="invalid stop_distance_pct", stop_distance_pct=self.config.stop_distance_pct)
             self._write_summary(status="aborted_invalid_stop_distance")
             return 2
+        if self.config.replacement_stop_distance_pct is not None:
+            replacement_distance = float(self.config.replacement_stop_distance_pct)
+            if (
+                not math.isfinite(replacement_distance)
+                or replacement_distance <= 0.0
+                or replacement_distance >= self.config.stop_distance_pct
+            ):
+                self._event(
+                    "preflight_failed",
+                    status="aborted",
+                    reason="invalid replacement_stop_distance_pct",
+                    stop_distance_pct=self.config.stop_distance_pct,
+                    replacement_stop_distance_pct=self.config.replacement_stop_distance_pct,
+                )
+                self._write_summary(status="aborted_invalid_replacement_stop_distance")
+                return 2
 
         status = "failed"
         code = 1
@@ -103,6 +125,8 @@ class LiveOrderSmokeRunner:
             self._preflight_zero_position_and_no_orders()
             self._open_market_entry()
             self._create_and_verify_stop()
+            if self.config.replacement_stop_distance_pct is not None:
+                self._replace_stop_closer()
             if self.config.leave_protected_position_open:
                 status = "protected_position_left_open"
                 code = 0
@@ -115,7 +139,10 @@ class LiveOrderSmokeRunner:
             self._cleanup_after_success()
             status = "ok"
             code = 0
-            print("smoke: ok · entry, stop verification, cancel, reduce-only cleanup completed", flush=True)
+            if self.config.replacement_stop_distance_pct is not None:
+                print("smoke: ok · entry, stop replacement, close, cancel, final cleanup completed", flush=True)
+            else:
+                print("smoke: ok · entry, stop verification, cancel, reduce-only cleanup completed", flush=True)
             return code
         except Exception as exc:
             self._event("smoke_failed", status="error", error_type=type(exc).__name__, error=str(exc))
@@ -252,6 +279,113 @@ class LiveOrderSmokeRunner:
             algo_open_orders_seen=verified["algo_open_orders_seen"],
         )
 
+    def _replace_stop_closer(self) -> None:
+        if self._entry_fill is None:
+            raise RuntimeError("entry fill missing before stop replacement")
+        if self.config.replacement_stop_distance_pct is None:
+            return
+        old_stop_order_id = str(self._stop_order_id or "").strip()
+        if not old_stop_order_id:
+            raise RuntimeError("initial stop order missing before replacement")
+        position_amount = self.exchange.fetch_symbol_position_amount(self.config.symbol)
+        if position_amount <= 0.0:
+            raise RuntimeError(f"cannot replace stop without positive exchange position: amount={position_amount}")
+        replacement_distance = float(self.config.replacement_stop_distance_pct)
+        replacement_stop_price = self._entry_fill.average_price * (1.0 - replacement_distance)
+        replacement_client_id = f"{self._client_id_prefix}_r"
+        self._replacement_stop_price = replacement_stop_price
+        self._event(
+            "stop_replacement_submit",
+            status="started",
+            side="sell",
+            amount=position_amount,
+            old_order_id=old_stop_order_id,
+            stop_price=replacement_stop_price,
+            replacement_stop_distance_pct=replacement_distance,
+            client_order_id=replacement_client_id,
+        )
+        replacement_order = self.exchange.create_stop_market_order(
+            self.config.symbol,
+            "sell",
+            position_amount,
+            replacement_stop_price,
+            client_order_id=replacement_client_id,
+        )
+        replacement_order_id = _resolve_order_id(replacement_order)
+        if not replacement_order_id:
+            raise RuntimeError(f"replacement stop create returned no order id: payload_keys={sorted(replacement_order)}")
+        self._replacement_stop_order_id = replacement_order_id
+        self._event(
+            "stop_replacement_created",
+            status="ok",
+            old_order_id=old_stop_order_id,
+            new_order_id=replacement_order_id,
+            client_order_id=replacement_client_id,
+            raw_status=_order_text_field(replacement_order, "status") or "",
+            raw_type=_order_text_field(replacement_order, "type") or "",
+        )
+        verified = self._verify_stop_order(
+            order_id=replacement_order_id,
+            client_order_id=replacement_client_id,
+            expected_amount=position_amount,
+            expected_stop_price=replacement_stop_price,
+        )
+        self._event(
+            "stop_replacement_verified",
+            status="ok",
+            old_order_id=old_stop_order_id,
+            new_order_id=replacement_order_id,
+            source=verified["source"],
+            verification_attempt=verified["attempt"],
+            open_orders_seen=verified["open_orders_seen"],
+            algo_open_orders_seen=verified["algo_open_orders_seen"],
+        )
+        cancel_error = ""
+        try:
+            payload = self.exchange.cancel_stop_order(self.config.symbol, old_stop_order_id)
+        except Exception as exc:  # noqa: BLE001 - old stop must disappear after replacement; this is checked below.
+            cancel_error = f"{type(exc).__name__}: {exc}"
+            self._event(
+                "old_stop_cancel_after_replacement_failed",
+                status="error",
+                old_order_id=old_stop_order_id,
+                new_order_id=replacement_order_id,
+                error=cancel_error,
+            )
+        else:
+            self._event(
+                "old_stop_cancelled_after_replacement",
+                status="ok",
+                old_order_id=old_stop_order_id,
+                new_order_id=replacement_order_id,
+                raw_status=_order_text_field(payload, "status") or "",
+            )
+        open_stop_orders = self.exchange.fetch_open_stop_orders(self.config.symbol)
+        old_still_open = any(_order_matches_order_id(row, old_stop_order_id) for row in open_stop_orders)
+        new_still_open = any(_order_matches_order_id(row, replacement_order_id) for row in open_stop_orders)
+        self._event(
+            "stop_replacement_post_cancel_snapshot",
+            status="ok",
+            old_order_id=old_stop_order_id,
+            new_order_id=replacement_order_id,
+            old_still_open=old_still_open,
+            new_still_open=new_still_open,
+            algo_open_orders_seen=len(open_stop_orders),
+            cancel_error=cancel_error,
+        )
+        if old_still_open:
+            raise RuntimeError(
+                f"old stop remains open after replacement: symbol={self.config.symbol} "
+                f"old_order_id={old_stop_order_id} new_order_id={replacement_order_id} cancel_error={cancel_error or 'none'}"
+            )
+        if not new_still_open:
+            raise RuntimeError(
+                f"replacement stop not open after old stop cancellation: symbol={self.config.symbol} "
+                f"old_order_id={old_stop_order_id} new_order_id={replacement_order_id}"
+            )
+        self._stop_order_id = replacement_order_id
+        self._stop_price = replacement_stop_price
+
     def _verify_stop_order(
         self,
         *,
@@ -374,9 +508,16 @@ class LiveOrderSmokeRunner:
             )
 
     def _cleanup_after_success(self) -> None:
-        self._cancel_known_stop_order()
-        self._close_current_position_reduce_only(reason="success_cleanup")
+        if self.config.close_position_before_stop_cancel:
+            self._close_current_position_reduce_only(reason="success_cleanup_close_before_stop_cancel")
+            stop_cancelled = self._cancel_known_stop_order()
+        else:
+            stop_cancelled = self._cancel_known_stop_order()
+            self._close_current_position_reduce_only(reason="success_cleanup")
+        self._cancel_smoke_open_orders()
         self._assert_final_flat_and_no_smoke_orders()
+        if not stop_cancelled:
+            raise RuntimeError(f"known stop cancel failed during success cleanup: symbol={self.config.symbol} order_id={self._stop_order_id}")
 
     def _emergency_cleanup(self) -> None:
         self._cancel_known_stop_order()
@@ -384,20 +525,21 @@ class LiveOrderSmokeRunner:
         self._close_current_position_reduce_only(reason="emergency_cleanup")
         self._assert_final_flat_and_no_smoke_orders()
 
-    def _cancel_known_stop_order(self) -> None:
+    def _cancel_known_stop_order(self) -> bool:
         if not self._stop_order_id:
-            return
+            return True
         try:
             payload = self.exchange.cancel_stop_order(self.config.symbol, self._stop_order_id)
         except Exception as exc:  # noqa: BLE001 - cancel failure is recorded and cleanup continues to position close.
             self._event("stop_cancel_failed", status="error", order_id=self._stop_order_id, error_type=type(exc).__name__, error=str(exc))
-            return
+            return False
         self._event(
             "stop_cancelled",
             status="ok",
             order_id=self._stop_order_id,
             raw_status=_order_text_field(payload, "status") or "",
         )
+        return True
 
     def _cancel_smoke_open_orders(self) -> None:
         open_orders = self.exchange.fetch_open_orders(self.config.symbol)
@@ -513,9 +655,11 @@ class LiveOrderSmokeRunner:
             symbol=self.config.symbol,
             entry_order_id=self._entry_order_id,
             stop_order_id=self._stop_order_id,
+            replacement_stop_order_id=self._replacement_stop_order_id,
             entry_fill_price=self._entry_fill.average_price if self._entry_fill else None,
             entry_filled_amount=self._entry_fill.filled_amount if self._entry_fill else None,
             stop_price=self._stop_price,
+            replacement_stop_price=self._replacement_stop_price,
             cleanup_close_order_id=self._cleanup_close_order_id,
             output_dir=str(self.output_dir),
         )

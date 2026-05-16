@@ -2353,3 +2353,29 @@ Failure interpretation:
 If open_algo_orders_seen > 0 at final snapshot, cleanup is still incomplete.
 If stop creation succeeds but openAlgoOrders cannot see it, capture raw smoke artifacts; do not fall back to trusting create response.
 ```
+
+## 2026-05-16 — P270 real position management smoke
+
+Goal: exercise the real Binance protected-position management path after P269 proved initial algo stop visibility.
+
+Expected command after applying P270:
+
+```powershell
+.venv\Scripts\python.exe main.py run-live-order-smoke --symbol EDEN/USDT:USDT --notional-usdt 12 --max-notional-usdt 25 --stop-distance-pct 0.05 --replacement-stop-distance-pct 0.025 --close-position-before-stop-cancel --confirm-real-order-smoke
+```
+
+Expected evidence:
+
+```text
+entry_fill_verified
+stop_verified with source=open_algo_orders_* or algo_client_order_id_lookup
+stop_replacement_created
+stop_replacement_verified with source=open_algo_orders_* or algo_client_order_id_lookup
+old_stop_cancelled_after_replacement
+stop_replacement_post_cancel_snapshot with old_still_open=false and new_still_open=true
+cleanup_reduce_only_fill_verified
+stop_cancelled for the replacement stop
+final_exchange_snapshot with exchange_position_amount=0, smoke_open_orders_seen=0, smoke_algo_open_orders_seen=0
+```
+
+Guardrail: this smoke is an exchange-boundary validation command, not a strategy entry. It must refuse replacement distances that are not closer than the initial stop distance.

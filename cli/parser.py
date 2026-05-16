@@ -475,6 +475,23 @@ def build_parser() -> argparse.ArgumentParser:
     live_order_smoke.add_argument("--verification-attempts", type=_positive_int_for("--verification-attempts"), default=5)
     live_order_smoke.add_argument("--verification-sleep-seconds", type=float, default=0.5)
     live_order_smoke.add_argument(
+        "--replacement-stop-distance-pct",
+        type=float,
+        default=None,
+        help=(
+            "Optional management-smoke step: create a new closer stop before cleanup. "
+            "Must be greater than 0 and lower than --stop-distance-pct."
+        ),
+    )
+    live_order_smoke.add_argument(
+        "--close-position-before-stop-cancel",
+        action="store_true",
+        help=(
+            "For management smoke, close the position reduce-only while the verified stop is still open, "
+            "then cancel remaining stop/orders and assert final flat/no orders."
+        ),
+    )
+    live_order_smoke.add_argument(
         "--leave-protected-position-open",
         action="store_true",
         help="After stop verification, leave the protected position open instead of cancelling stop and closing reduce-only.",

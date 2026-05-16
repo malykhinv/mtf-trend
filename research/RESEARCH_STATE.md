@@ -1519,8 +1519,17 @@ Artifacts: `live_order_smoke_events.csv` and `live_order_smoke_summary.json` und
 ## 2026-05-16 — P269 proposed
 
 ```text
-Current patch status: P269 PROPOSED, commit UNKNOWN.
+Current patch status: P269 APPLIED locally / UNKNOWN commit.
 The real Binance smoke showed a UI-visible protective stop that ordinary `fetch_open_orders`/`fetch_order`/`cancel_order` could not see or cancel.
 Treat Binance protective stops as conditional/algo orders: create through `fapiPrivatePostAlgoOrder`, verify through `fapiPrivateGetOpenAlgoOrders`, and cancel through `fapiPrivateDeleteAlgoOrder`. Ordinary order lookup remains only a legacy secondary path.
 After P269, the next real-order smoke must prove: `stop_verified.source` is `open_algo_orders_*` or `algo_client_order_id_lookup`, `stop_cancelled` succeeds, and final snapshot has both `smoke_open_orders_seen=0` and `smoke_algo_open_orders_seen=0`.
+```
+
+## 2026-05-16 — P270 proposed
+
+```text
+Current patch status: P270 PROPOSED, commit UNKNOWN.
+P270 extends the existing real-order smoke with an optional management lifecycle instead of adding strategy behavior: initial algo stop -> closer replacement algo stop -> old stop cancel verification -> reduce-only close while replacement stop remains active -> replacement stop cancel -> final ordinary/algo order sweep.
+The old quick smoke remains unchanged unless `--replacement-stop-distance-pct` is supplied.
+Next validation: run the management smoke at minimal notional and inspect `live_order_smoke_events.csv` for `stop_replacement_verified`, `old_still_open=false`, `new_still_open=true` before close, and final `smoke_algo_open_orders_seen=0`.
 ```

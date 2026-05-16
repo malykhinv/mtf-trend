@@ -1633,6 +1633,12 @@ def run_live_order_smoke(config: AppConfig, args: argparse.Namespace) -> int:
             output_dir=output_dir,
             confirm_real_order_smoke=bool(getattr(args, "confirm_real_order_smoke", False)),
             leave_protected_position_open=bool(getattr(args, "leave_protected_position_open", False)),
+            replacement_stop_distance_pct=(
+                None
+                if getattr(args, "replacement_stop_distance_pct", None) is None
+                else float(getattr(args, "replacement_stop_distance_pct"))
+            ),
+            close_position_before_stop_cancel=bool(getattr(args, "close_position_before_stop_cancel", False)),
             verification_attempts=int(getattr(args, "verification_attempts", 5)),
             verification_sleep_seconds=float(getattr(args, "verification_sleep_seconds", 0.5)),
         )
