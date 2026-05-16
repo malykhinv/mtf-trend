@@ -2700,6 +2700,10 @@ class _LiveStatusLogger:
             self._status_line_rows = self._rendered_rows(rendered, terminal_columns)
             self._status_line_open = True
 
+    def finish_status(self) -> None:
+        with self._lock:
+            self._finish_status_line_if_needed()
+
     def _finish_status_line_if_needed(self) -> None:
         if not self._inline_status_enabled or not self._status_line_open:
             return
@@ -4973,13 +4977,14 @@ class AnomalyMicroLiveRunner:
                 "subminute live discovery requires a working ticker radar source before the first cycle; "
                 f"source={self.ticker_snapshot_source.source_id}; error={type(exc).__name__}: {exc}"
             ) from exc
+        now_ms = int(time.time() * 1000)
         missing_count = sum(1 for snapshot in snapshots if snapshot.status != "ok")
         self._session_top_tracker.update_from_ticker_snapshots(
             snapshots,
             now_ms=now_ms,
             source=source,
             source_status=source_status,
-            source_reason=source_reason,
+            source_reason=reason,
         )
         self._write_session_top_growth_artifact_if_due(now_ms=now_ms)
         if snapshots and missing_count == len(snapshots):
@@ -8961,6 +8966,7 @@ class AnomalyMicroLiveRunner:
                             "decision_timestamp_ms": int(decision_ts),
                         },
                     )
+        self._status_logger.finish_status()
         flushed_rows = self._flush_live_ohlcv_cache_if_due(force=True, reason="symbol_context_startup_backfill")
         snapshot_ok = 0
         snapshot_failed = 0
