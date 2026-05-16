@@ -2210,6 +2210,21 @@ Next:
 Apply P264, rerun the same 2d/live-window backtest, then compare anomaly_trades.csv by pump_category_family and category_selected vs selected_terminal_outcome in live_events.csv.
 ```
 
+## 2026-05-16 — P266 backtest parity artifact validation
+
+Goal: verify that the next backtest can explain live/backtest mismatches before reading PnL.
+
+Expected evidence:
+
+```text
+anomaly_trades.csv skipped rows contain pump_category_id, pump_category_family, pump_category_source, and pump_category_contract.
+anomaly_context_parity_report.csv exists and contains pre_context_intent, in_pre_context_universe, final_pump_category_id, final_pump_category_family, trade_status, trade_skip_reason, mark/oi status, and context_parity_status.
+Execution guard skips such as tp1_already_reached_before_market_entry can be grouped by live_priority vs discovery.
+Rows that remain outside the pre-context universe are explicitly `not_requested_pre_context_filtered`, not confused with exchange/cache failure.
+```
+
+Guardrail: discovery remains enabled as a separate fallback family for research; do not blend discovery PnL into live-priority PnL.
+
 ## 2026-05-16 — Discrete signal missed observability
 
 Goal: measure how often live receives a valid discrete signal snapshot but rejects the actual order because the current executable price already made the setup unsafe.

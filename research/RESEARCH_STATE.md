@@ -1480,6 +1480,15 @@ Discovery remains allowed only as an explicit backtest fallback and must be sepa
 Delayed replay must preserve the original live setup_source from immutable snapshots to avoid changing forming-HTF pace ratios during replay.
 ```
 
+## 2026-05-16 — Proposed parity state after P266
+
+```text
+Current patch status: P266 PROPOSED, commit UNKNOWN.
+P266 keeps discovery as the backtest fallback but makes skipped rows carry the same category metadata as closed rows.
+Backtest derivatives context fetching is widened before final category checks so runner candidates are not excluded from mark/OI enrichment simply because mark/OI was not loaded yet.
+`anomaly_context_parity_report.csv` becomes the first artifact to inspect when a live-selected timestamp is missing from backtest, has `outside_pre_context_signal_universe`, or loses category metadata on an execution guard skip.
+```
+
 ## 2026-05-16 — P265 proposed
 
 P265 adds live observability for discrete signal misses. If the signal snapshot itself was executable, but the current live executable price fails the execution guard (`TP1 already reached`, price drift, invalid risk, wide risk, or collapsed RR), live still rejects the order but records `discrete_signal_snapshot_entry_missed` and sends a specific Telegram message.

@@ -291,6 +291,65 @@ def _execution_model_label(config: AnomalyBacktestConfig) -> str:
     return config.entry_method
 
 
+def _strip_derivative_context_requirements(config: AnomalyBacktestConfig) -> AnomalyBacktestConfig:
+    """Return a wider pre-context config used only to decide which rows need market context.
+
+    The real category decision is still made after enrichment. This helper avoids
+    a circular dependency where runner rows need mark/OI context to qualify, but
+    are excluded from the fetch universe before that context exists.
+    """
+
+    return replace(
+        config,
+        min_oi_change_pct_3x5m=None,
+        require_oi_status_ok=False,
+        min_mark_close_vs_decision_close_basis=None,
+        reject_oi_down_mark_discount=False,
+        reject_stale_derivatives_context=False,
+    )
+
+
+def _signal_key_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    key_columns = ["symbol", "setup_timeframe", "entry_timeframe", "decision_timestamp_ms"]
+    if frame.empty or not set(key_columns).issubset(frame.columns):
+        return pd.DataFrame(columns=key_columns)
+    keys = frame.loc[:, key_columns].copy()
+    keys.dropna(subset=["symbol", "decision_timestamp_ms"], inplace=True)
+    keys["symbol"] = keys["symbol"].astype(str)
+    keys["setup_timeframe"] = keys["setup_timeframe"].astype(str)
+    keys["entry_timeframe"] = keys["entry_timeframe"].astype(str)
+    keys["decision_timestamp_ms"] = keys["decision_timestamp_ms"].astype("int64")
+    keys.drop_duplicates(key_columns, inplace=True)
+    return keys.reset_index(drop=True)
+
+
+def _attach_signal_context(result: dict[str, object], signal: pd.Series) -> dict[str, object]:
+    for column in TRADE_SIGNAL_CONTEXT_COLUMNS:
+        result[column] = signal.get(column, "")
+    return result
+
+
+def _skipped_signal_result(
+    signal: pd.Series,
+    *,
+    skip_reason: str,
+    config: AnomalyBacktestConfig,
+    **extra: object,
+) -> dict[str, object]:
+    decision_ts = int(signal["decision_timestamp_ms"])
+    result: dict[str, object] = {
+        "symbol": str(signal["symbol"]),
+        "decision_timestamp_ms": decision_ts,
+        "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
+        "status": "skipped",
+        "skip_reason": str(skip_reason),
+        "entry_method": config.entry_method,
+        "execution_model": _execution_model_label(config),
+    }
+    result.update(extra)
+    return _attach_signal_context(result, signal)
+
+
 def _apply_red_flag_profile(config: AnomalyBacktestConfig) -> AnomalyBacktestConfig:
     profile = str(config.red_flag_profile or "none").strip().lower()
     if profile == "none":
@@ -2028,49 +2087,60 @@ def simulate_long_signal(
         config=config,
     )
     if not np.isfinite(entry_price):
-        return {
-            "symbol": symbol,
-            "decision_timestamp_ms": decision_ts,
-            "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
-            "status": "skipped",
-            "skip_reason": entry_skip_reason or "entry_trigger_not_reached",
-            "entry_method": config.entry_method,
-            "execution_model": execution_model,
-        }
+        return _skipped_signal_result(
+            signal,
+            skip_reason=entry_skip_reason or "entry_trigger_not_reached",
+            config=config,
+            entry_timestamp_ms=entry_ts,
+            entry_timestamp_utc=_timestamp_to_utc(entry_ts),
+            initial_stop=initial_stop,
+            box_range=box_range,
+            box_high=box_high,
+        )
     if not np.isfinite(initial_risk) or initial_risk <= 0.0:
-        return {
-            "symbol": symbol,
-            "decision_timestamp_ms": decision_ts,
-            "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
-            "status": "skipped",
-            "skip_reason": "invalid_initial_risk",
-            "entry_method": config.entry_method,
-            "execution_model": execution_model,
-        }
+        return _skipped_signal_result(
+            signal,
+            skip_reason="invalid_initial_risk",
+            config=config,
+            entry_timestamp_ms=entry_ts,
+            entry_timestamp_utc=_timestamp_to_utc(entry_ts),
+            entry_price=entry_price,
+            initial_stop=initial_stop,
+            initial_risk=initial_risk,
+            box_range=box_range,
+            box_high=box_high,
+        )
     initial_risk_pct = initial_risk / entry_price
     if initial_risk_pct > config.max_initial_risk_pct:
-        return {
-            "symbol": symbol,
-            "decision_timestamp_ms": decision_ts,
-            "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
-            "status": "skipped",
-            "skip_reason": "initial_risk_too_wide",
-            "initial_risk_pct": initial_risk_pct,
-            "entry_method": config.entry_method,
-            "execution_model": execution_model,
-        }
+        return _skipped_signal_result(
+            signal,
+            skip_reason="initial_risk_too_wide",
+            config=config,
+            entry_timestamp_ms=entry_ts,
+            entry_timestamp_utc=_timestamp_to_utc(entry_ts),
+            entry_price=entry_price,
+            initial_stop=initial_stop,
+            initial_risk=initial_risk,
+            initial_risk_pct=initial_risk_pct,
+            box_range=box_range,
+            box_high=box_high,
+        )
 
     future = frame.loc[frame["timestamp"] > entry_ts].head(config.max_hold_candles).copy()
     if future.empty:
-        return {
-            "symbol": symbol,
-            "decision_timestamp_ms": decision_ts,
-            "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
-            "status": "skipped",
-            "skip_reason": "no_future_candles",
-            "entry_method": config.entry_method,
-            "execution_model": execution_model,
-        }
+        return _skipped_signal_result(
+            signal,
+            skip_reason="no_future_candles",
+            config=config,
+            entry_timestamp_ms=entry_ts,
+            entry_timestamp_utc=_timestamp_to_utc(entry_ts),
+            entry_price=entry_price,
+            initial_stop=initial_stop,
+            initial_risk=initial_risk,
+            initial_risk_pct=initial_risk_pct,
+            box_range=box_range,
+            box_high=box_high,
+        )
 
     base_tp1_price = entry_price + config.tp1_r * initial_risk
     tp1_price, tp1_round_step = _round_up_tp1_to_market_number(
@@ -2603,6 +2673,182 @@ def _signal_universe_from_signal_sets(
     universe.reset_index(drop=True, inplace=True)
     return universe
 
+
+
+
+def _build_pre_context_signal_universe(candidates: pd.DataFrame, config: AnomalyBacktestConfig) -> pd.DataFrame:
+    """Build the widest honest universe that needs derivatives context before final category checks."""
+
+    frames: list[pd.DataFrame] = []
+    base_pre_context_config = _strip_derivative_context_requirements(config)
+    base_signals = build_anomaly_signals(candidates, config=base_pre_context_config)
+    if not base_signals.empty:
+        base_keys = _signal_key_frame(base_signals)
+        if not base_keys.empty:
+            base_keys["pre_context_intent"] = PUMP_CATEGORY_DISCOVERY
+            frames.append(base_keys)
+    for category_id in PUMP_CATEGORY_PROFILE_ORDER:
+        category_config = _apply_red_flag_profile(replace(config, red_flag_profile=category_id))
+        category_pre_context_config = _strip_derivative_context_requirements(category_config)
+        category_signals = build_anomaly_signals(candidates, config=category_pre_context_config)
+        if category_signals.empty:
+            continue
+        keys = _signal_key_frame(category_signals)
+        if keys.empty:
+            continue
+        keys["pre_context_intent"] = str(category_id)
+        frames.append(keys)
+    if not frames:
+        return pd.DataFrame(
+            columns=[
+                "symbol",
+                "setup_timeframe",
+                "entry_timeframe",
+                "decision_timestamp_ms",
+                "pre_context_intent",
+            ]
+        )
+    union = pd.concat(frames, ignore_index=True)
+    key_columns = ["symbol", "setup_timeframe", "entry_timeframe", "decision_timestamp_ms"]
+    union = (
+        union.groupby(key_columns, as_index=False)["pre_context_intent"]
+        .agg(lambda values: ",".join(dict.fromkeys(str(value) for value in values if str(value))))
+    )
+    union.sort_values(key_columns, inplace=True)
+    union.reset_index(drop=True, inplace=True)
+    return union
+
+
+def build_context_parity_report(
+    candidates: pd.DataFrame,
+    *,
+    pre_context_universe: pd.DataFrame,
+    signals: pd.DataFrame,
+    trades: pd.DataFrame,
+) -> pd.DataFrame:
+    columns = [
+        "symbol",
+        "setup_timeframe",
+        "entry_timeframe",
+        "decision_timestamp_ms",
+        "decision_timestamp_utc",
+        "in_pre_context_universe",
+        "pre_context_intent",
+        "is_final_signal",
+        "final_pump_category_id",
+        "final_pump_category_family",
+        "trade_status",
+        "trade_skip_reason",
+        "trade_execution_guard",
+        "context_fetch_status",
+        "mark_status",
+        "mark_timestamp_ms",
+        "mark_timestamp_utc",
+        "mark_age_ms",
+        "mark_close_vs_decision_close_basis",
+        "oi_status",
+        "oi_timestamp_ms",
+        "oi_timestamp_utc",
+        "oi_age_ms",
+        "oi_change_pct_3x5m",
+        "context_parity_status",
+    ]
+    key_columns = ["symbol", "setup_timeframe", "entry_timeframe", "decision_timestamp_ms"]
+    if candidates.empty or not set(key_columns).issubset(candidates.columns):
+        return pd.DataFrame(columns=columns)
+
+    report = candidates.copy()
+    report["symbol"] = report["symbol"].astype(str)
+    report["setup_timeframe"] = report["setup_timeframe"].astype(str)
+    report["entry_timeframe"] = report["entry_timeframe"].astype(str)
+    report["decision_timestamp_ms"] = pd.to_numeric(report["decision_timestamp_ms"], errors="coerce").astype("Int64")
+    report.dropna(subset=["symbol", "decision_timestamp_ms"], inplace=True)
+    report["decision_timestamp_ms"] = report["decision_timestamp_ms"].astype("int64")
+
+    if not pre_context_universe.empty:
+        context_keys = pre_context_universe.loc[:, key_columns + ["pre_context_intent"]].drop_duplicates(key_columns).copy()
+        context_keys["in_pre_context_universe"] = True
+        report = report.merge(context_keys, on=key_columns, how="left")
+    else:
+        report["pre_context_intent"] = ""
+        report["in_pre_context_universe"] = False
+    report["in_pre_context_universe"] = report["in_pre_context_universe"].fillna(False).astype(bool)
+    report["pre_context_intent"] = report["pre_context_intent"].fillna("")
+
+    if not signals.empty and set(key_columns).issubset(signals.columns):
+        signal_columns = [
+            *key_columns,
+            "pump_category_id",
+            "pump_category_family",
+        ]
+        available_signal_columns = [column for column in signal_columns if column in signals.columns]
+        signal_keys = signals.loc[:, available_signal_columns].drop_duplicates(key_columns).copy()
+        signal_keys.rename(
+            columns={
+                "pump_category_id": "final_pump_category_id",
+                "pump_category_family": "final_pump_category_family",
+            },
+            inplace=True,
+        )
+        signal_keys["is_final_signal"] = True
+        report = report.merge(signal_keys, on=key_columns, how="left")
+    else:
+        report["is_final_signal"] = False
+        report["final_pump_category_id"] = ""
+        report["final_pump_category_family"] = ""
+    report["is_final_signal"] = report["is_final_signal"].fillna(False).astype(bool)
+    for column in ("final_pump_category_id", "final_pump_category_family"):
+        if column not in report.columns:
+            report[column] = ""
+        report[column] = report[column].fillna("")
+
+    if not trades.empty and set(key_columns).issubset(trades.columns):
+        trade_columns = [*key_columns, "status", "skip_reason"]
+        available_trade_columns = [column for column in trade_columns if column in trades.columns]
+        trade_keys = trades.loc[:, available_trade_columns].copy()
+        trade_keys.sort_values(key_columns, inplace=True)
+        trade_keys.drop_duplicates(key_columns, keep="last", inplace=True)
+        trade_keys.rename(columns={"status": "trade_status", "skip_reason": "trade_skip_reason"}, inplace=True)
+        report = report.merge(trade_keys, on=key_columns, how="left")
+    else:
+        report["trade_status"] = ""
+        report["trade_skip_reason"] = ""
+    for column in ("trade_status", "trade_skip_reason"):
+        if column not in report.columns:
+            report[column] = ""
+        report[column] = report[column].fillna("")
+    report["trade_execution_guard"] = report["trade_skip_reason"].astype(str).isin(EXECUTION_GUARD_SKIP_REASONS)
+
+    mark_status = report.get("mark_status", pd.Series("", index=report.index)).astype(str)
+    oi_status = report.get("oi_status", pd.Series("", index=report.index)).astype(str)
+    report["context_fetch_status"] = np.where(
+        report["in_pre_context_universe"],
+        "requested",
+        "not_requested_pre_context_filtered",
+    )
+    report["context_parity_status"] = "ok"
+    report.loc[~report["in_pre_context_universe"], "context_parity_status"] = "not_in_pre_context_universe"
+    report.loc[
+        report["in_pre_context_universe"] & (mark_status.ne("ok") | oi_status.ne("ok")),
+        "context_parity_status",
+    ] = "requested_context_missing_or_bad"
+    report.loc[
+        report["is_final_signal"] & ~report["in_pre_context_universe"],
+        "context_parity_status",
+    ] = "final_signal_missing_pre_context_request"
+    report.loc[
+        report["trade_execution_guard"] & report["final_pump_category_family"].eq(""),
+        "context_parity_status",
+    ] = "execution_guard_missing_category_metadata"
+
+    for column in columns:
+        if column not in report.columns:
+            report[column] = ""
+    result = report.loc[:, columns].copy()
+    result.drop_duplicates(key_columns, inplace=True)
+    result.sort_values(key_columns, inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result
 
 def _fetch_derivatives_context_for_signal_universe(
     signal_universe: pd.DataFrame,
@@ -3666,6 +3912,7 @@ def run_anomaly_strategy_backtest(
         config=pre_context_config if derivatives_context_fetcher is not None else config,
     )
     grid_signal_sets: list[tuple[AnomalyBacktestConfig, pd.DataFrame]] | None = None
+    pre_context_universe = _build_pre_context_signal_universe(candidates, config)
     if derivatives_context_fetcher is not None:
         if run_entry_grid:
             grid_variants = _iter_entry_grid_configs(
@@ -3677,12 +3924,12 @@ def run_anomaly_strategy_backtest(
                 exit_rules=grid_exit_rules,
             )
             grid_signal_sets = _build_entry_grid_signal_sets(candidates, grid_variants)
-            context_signals = _signal_universe_from_signal_sets(grid_signal_sets)
+            grid_context_signals = _signal_universe_from_signal_sets(grid_signal_sets)
+            context_signals = pd.concat([pre_context_universe, grid_context_signals], ignore_index=True, sort=False)
+            if not context_signals.empty:
+                context_signals.drop_duplicates(["symbol", "decision_timestamp_ms"], inplace=True)
         else:
-            if {"symbol", "decision_timestamp_ms"}.issubset(signals.columns):
-                context_signals = signals.loc[:, ["symbol", "decision_timestamp_ms"]].copy()
-            else:
-                context_signals = pd.DataFrame(columns=["symbol", "decision_timestamp_ms"])
+            context_signals = pre_context_universe.copy()
         context_fetch_status = _fetch_derivatives_context_for_signal_universe(
             context_signals,
             derivatives_context_fetcher=derivatives_context_fetcher,
@@ -3730,6 +3977,12 @@ def run_anomaly_strategy_backtest(
     trades = simulate_anomaly_trades(signals, config=config, progress_label="anomaly trades")
     summary = summarize_trades(trades)
     skip_reasons = summarize_trade_skip_reasons(trades)
+    context_parity_report = build_context_parity_report(
+        candidates,
+        pre_context_universe=pre_context_universe,
+        signals=signals,
+        trades=trades,
+    )
     _write_artifact_frames(
         [
             (output_dir / "anomaly_trades.csv", trades),
@@ -3738,6 +3991,7 @@ def run_anomaly_strategy_backtest(
             (output_dir / "anomaly_profitability_by_symbol.csv", summarize_trades_by_symbol(trades)),
             (output_dir / "anomaly_profitability_by_category.csv", summarize_trades_by_pump_category(trades)),
             (output_dir / "anomaly_profitability_by_category_family.csv", summarize_trades_by_pump_category_family(trades)),
+            (output_dir / "anomaly_context_parity_report.csv", context_parity_report),
         ],
         progress_label="anomaly artifacts: trade files",
     )
