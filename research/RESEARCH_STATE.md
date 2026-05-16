@@ -1389,6 +1389,10 @@ P252 fixes a runtime `NameError: selection is not defined` in `live_cycle_summar
 Current commit: UNKNOWN.
 Next validation: restart live and verify startup status updates as `контекст 72ч · HH:MM:SS · кеш N/total · SYMBOL · ETA ...`, then confirm the first `live_cycle_summary` writes without NameError.
 
+## 2026-05-16 — P253 proposed startup visibility note
+
+Observed live startup can sit silently after `контекст 72ч · кеш 535/535` because the main heartbeat starts only after startup cache flush, symbol-context snapshot computation/write, ticker radar seed/validation, and entry into the first live loop. P253 proposes status-only instrumentation for those startup stages. Current commit: UNKNOWN.
+
 
 ## 2026-05-15 — P247 proposed
 

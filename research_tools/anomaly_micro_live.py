@@ -4306,6 +4306,8 @@ class AnomalyMicroLiveRunner:
         except LiveStartupError:
             self._close_live_sources()
             raise
+        self._startup_status("live", "запуск циклов")
+        self._status_logger.finish_status()
         self.telegram.send(
             channel="events",
             key="live_started",
@@ -4918,6 +4920,7 @@ class AnomalyMicroLiveRunner:
         if not callable(seed_consumer):
             return
         seed_source = RestLiveTickerSnapshotSource(self.exchange)
+        self._startup_status("тикеры", f"стартовый снимок · {len(symbols)} символов")
         try:
             snapshots = seed_source.fetch_snapshots(tuple(symbols))
             seed_result = seed_consumer(snapshots)
@@ -4934,7 +4937,9 @@ class AnomalyMicroLiveRunner:
                     "policy": "continue_with_primary_ws_or_explicit_degraded_fallback",
                 },
             )
+            self._status_logger.finish_status()
             return
+        self._status_logger.finish_status()
         self.artifacts.append_event(
             "ticker_radar_startup_seeded",
             "__live__",
@@ -4953,6 +4958,7 @@ class AnomalyMicroLiveRunner:
     def _validate_required_ticker_radar_source(self, symbols: list[str]) -> None:
         if not self._ticker_radar_required_for_subminute_gate():
             return
+        self._startup_status("тикеры", f"проверка радара · {len(symbols)} символов")
         try:
             snapshots, source, source_status, reason = self._fetch_ticker_radar_snapshots(symbols, stage="startup")
         except ExchangeConnectivityError as exc:
@@ -4967,6 +4973,7 @@ class AnomalyMicroLiveRunner:
                     "policy": "startup_refuse_without_any_working_ticker_radar_source",
                 },
             )
+            self._status_logger.finish_status()
             raise LiveStartupError(
                 "subminute live discovery requires a working ticker radar source before the first cycle; "
                 f"error={type(exc).__name__}: {exc}"
@@ -4983,6 +4990,7 @@ class AnomalyMicroLiveRunner:
                     "policy": "startup_refuse_without_required_ticker_radar",
                 },
             )
+            self._status_logger.finish_status()
             raise LiveStartupError(
                 "subminute live discovery requires a working ticker radar source before the first cycle; "
                 f"source={self.ticker_snapshot_source.source_id}; error={type(exc).__name__}: {exc}"
@@ -5010,6 +5018,7 @@ class AnomalyMicroLiveRunner:
                     "reason": "all_ticker_snapshots_missing",
                 },
             )
+            self._status_logger.finish_status()
             raise LiveStartupError(
                 "subminute live discovery requires ticker radar snapshots with price and quote_volume; "
                 f"source={source}; all {len(snapshots)} snapshots are missing"
@@ -5027,6 +5036,7 @@ class AnomalyMicroLiveRunner:
                 "policy": "required_for_inactive_subminute_gate",
             },
         )
+        self._status_logger.finish_status()
 
     def _filter_live_symbol_universe(self, symbols: list[str], *, explicit_symbols: bool) -> list[str]:
         if explicit_symbols or not self.config.exclude_default_high_cap_symbols:
@@ -8885,6 +8895,12 @@ class AnomalyMicroLiveRunner:
         context_start_ms = int(history_start_ms) - int(self.config.baseline_candles) * int(timeframe_ms)
         return int(context_start_ms), int(history_start_ms), int(decision_ts)
 
+    def _startup_status_time(self) -> str:
+        return datetime.now().strftime("%H:%M:%S")
+
+    def _startup_status(self, stage: str, message: str) -> None:
+        self._status_logger.status(f"{stage} · {self._startup_status_time()} · {message}")
+
     def _startup_backfill_symbol_context_cache(self, symbols: list[str]) -> None:
         if not self.config.symbol_context_snapshot_enabled:
             return
@@ -8958,10 +8974,9 @@ class AnomalyMicroLiveRunner:
                 seconds_per_symbol = elapsed_so_far / float(completed_symbols)
                 eta_seconds = max(0.0, seconds_per_symbol * float(symbols_total - completed_symbols))
             eta_text = _format_live_runtime(float(eta_seconds)) if eta_seconds is not None else "-"
-            current_time_text = datetime.now().strftime("%H:%M:%S")
-            self._status_logger.status(
-                f"контекст 72ч · {current_time_text} · кеш {index}/{symbols_total} · "
-                f"{_compact_symbol(symbol)} · ETA {eta_text}"
+            self._startup_status(
+                "контекст 72ч",
+                f"кеш {index}/{symbols_total} · {_compact_symbol(symbol)} · ETA {eta_text}",
             )
             for timeframe in context_timeframes:
                 context_start_ms, _history_start_ms, decision_ts = windows[timeframe.value]
@@ -8989,10 +9004,16 @@ class AnomalyMicroLiveRunner:
                         },
                     )
         self._status_logger.finish_status()
+        self._startup_status("контекст 72ч", "запись кеша")
         flushed_rows = self._flush_live_ohlcv_cache_if_due(force=True, reason="symbol_context_startup_backfill")
         snapshot_ok = 0
         snapshot_failed = 0
-        for symbol in symbols:
+        snapshot_total = int(len(symbols))
+        for snapshot_index, symbol in enumerate(symbols, start=1):
+            self._startup_status(
+                "контекст 72ч",
+                f"снимок {snapshot_index}/{snapshot_total} · {_compact_symbol(symbol)}",
+            )
             for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
                 if int(levels_timeframe.to_milliseconds()) < int(Timeframe.M1.to_milliseconds()):
                     continue
@@ -9007,7 +9028,9 @@ class AnomalyMicroLiveRunner:
                     snapshot_ok += 1
                 else:
                     snapshot_failed += 1
+        self._startup_status("контекст 72ч", "запись snapshot")
         output_path = self.artifacts.write_symbol_context_snapshot(list(self._symbol_context_snapshots.values()))
+        self._status_logger.finish_status()
         self._last_symbol_context_snapshot_at_ms = int(time.time() * 1000)
         status = "ok" if snapshot_failed == 0 else "partial" if snapshot_ok else "failed"
         self._last_symbol_context_snapshot_status = status

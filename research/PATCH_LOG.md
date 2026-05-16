@@ -4372,6 +4372,13 @@ Risk:
 Low. This fixes event-summary accounting and operator display only. Candidate selection, precise-scan budget, dependency cooldown, backfill, cache writes, and execution guards are unchanged.
 ```
 
+## 2026-05-16 — P253 proposed
+
+Startup after the 72h context backfill had silent stages before the first live heartbeat: forced cache flush, startup snapshot computation/writing, ticker radar seed/validation, and entering the first live cycle. P253 adds inline status updates with the current clock time for these stages so the operator can see where startup is spending time. It changes display/status only; backfill, cache, ticker source policy, selection, and trading logic are unchanged.
+
+Current commit: UNKNOWN.
+Next validation: restart live and confirm startup progresses through `контекст 72ч · запись кеша`, `контекст 72ч · снимок N/total`, `контекст 72ч · запись snapshot`, `тикеры · стартовый снимок`, `тикеры · проверка радара`, then the normal live heartbeat appears after the first cycle summary.
+
 
 ## P247 - proposed - dependency retry cooldown
 
