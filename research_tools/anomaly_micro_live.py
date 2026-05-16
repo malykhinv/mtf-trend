@@ -85,6 +85,11 @@ DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_GAP_CANDLES = 2
 DEFAULT_SYMBOL_CONTEXT_PRIORITY_TTL_MS = 5 * 60_000
 STARTUP_SYMBOL_CONTEXT_MIN_READY_SYMBOL_RATIO = 0.95
 STARTUP_SYMBOL_CONTEXT_MIN_READY_SNAPSHOT_RATIO = 0.95
+STARTUP_CONTEXT_BACKFILL_FLUSH_SYMBOL_TIMEFRAMES = 16
+LIVE_CONTEXT_REPREPARE_MIN_INTERVAL_SECONDS = 6 * 60 * 60
+LIVE_CONTEXT_REPREPARE_SNAPSHOT_STALE_SECONDS = 90 * 60
+LIVE_CONTEXT_REPREPARE_MIN_RUNTIME_SECONDS = 60 * 60
+LIVE_CONTEXT_REPREPARE_DEFER_LOG_INTERVAL_SECONDS = 10 * 60
 DEFAULT_WARM_WATCH_AGGTRADE_TARGET_CAP = 40
 LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON = "latency_sla_due_scan_p95_above_threshold"
 DANGER_LOCAL_ENTRY_POSITION_GUARD_SOURCE = "DANGER_local_memory_position_guard_no_pre_entry_exchange_position_fetch"
@@ -3985,6 +3990,9 @@ class AnomalyMicroLiveRunner:
         self._symbol_context_universe_size = 0
         self._last_symbol_context_snapshot_at_ms = 0
         self._last_symbol_context_snapshot_status = "not_started"
+        self._last_context_reprepare_at_monotonic = 0.0
+        self._last_context_reprepare_deferred_at_monotonic = 0.0
+        self._context_reprepare_total = 0
         self.artifacts = LiveArtifactWriter(
             config.results_dir / "live_anomaly_runs" / datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         )
@@ -4668,6 +4676,7 @@ class AnomalyMicroLiveRunner:
                     active_symbol_count=active_symbol_count,
                     open_positions=open_positions,
                 )
+                self._maybe_reprepare_symbol_context_if_safe(symbols, cycle=cycle)
                 time.sleep(self.config.scan_sleep_seconds)
             except KeyboardInterrupt:
                 reconcile_symbols = self._start_graceful_shutdown(reason="keyboard_interrupt", cycle=cycle, symbols=symbols)
@@ -9076,7 +9085,14 @@ class AnomalyMicroLiveRunner:
             "unavailable_symbol_examples": unavailable_symbol_examples,
         }
 
-    def _validate_startup_symbol_context_readiness(self, symbols: list[str]) -> None:
+    def _validate_startup_symbol_context_readiness(
+        self,
+        symbols: list[str],
+        *,
+        stage: str = "подготовка",
+        policy_context: str = "startup",
+        refuse_real_orders: bool = True,
+    ) -> bool:
         summary = self._startup_symbol_context_readiness_summary(symbols)
         ready_symbols = int(summary["ready_symbols"])
         symbols_total = int(summary["symbols_total"])
@@ -9094,7 +9110,7 @@ class AnomalyMicroLiveRunner:
         )
         status = "ready" if startup_ready else "not_ready"
         self._startup_status(
-            "подготовка",
+            stage,
             (
                 f"готово {ready_symbols}/{symbols_total} · partial {partial_symbols} · "
                 f"unavailable {unavailable_symbols} · snapshots {ready_snapshots}/{expected_snapshot_count} · ETA 0с"
@@ -9104,11 +9120,12 @@ class AnomalyMicroLiveRunner:
             "status": status,
             "contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
             "policy": "real_orders_refuse_startup_when_context_readiness_below_internal_threshold_no_pass_by_default",
+            "policy_context": policy_context,
             "confirm_real_orders": bool(self.config.confirm_real_orders),
             **summary,
         }
         self.artifacts.append_event("symbol_context_startup_readiness", "__live__", payload)
-        if not startup_ready and self.config.confirm_real_orders:
+        if not startup_ready and self.config.confirm_real_orders and refuse_real_orders:
             self._status_logger.finish_status()
             self.artifacts.append_event(
                 "live_startup_refused",
@@ -9124,8 +9141,158 @@ class AnomalyMicroLiveRunner:
                 f"({ready_symbol_ratio:.1%}), snapshots {ready_snapshots}/{expected_snapshot_count} "
                 f"({ready_snapshot_ratio:.1%})"
             )
+        return bool(startup_ready)
 
-    def _startup_backfill_symbol_context_cache(self, symbols: list[str]) -> None:
+    def _symbol_context_reprepare_need(self, symbols: list[str]) -> tuple[bool, str, dict[str, object]]:
+        summary = self._startup_symbol_context_readiness_summary(symbols)
+        now_ms = int(time.time() * 1000)
+        snapshot_age_seconds: float | None = None
+        if self._last_symbol_context_snapshot_at_ms > 0:
+            snapshot_age_seconds = max(
+                0.0,
+                float(now_ms - int(self._last_symbol_context_snapshot_at_ms)) / 1000.0,
+            )
+        reasons: list[str] = []
+        if float(summary["ready_symbol_ratio"]) < float(STARTUP_SYMBOL_CONTEXT_MIN_READY_SYMBOL_RATIO):
+            reasons.append("ready_symbol_ratio_below_threshold")
+        if float(summary["ready_snapshot_ratio"]) < float(STARTUP_SYMBOL_CONTEXT_MIN_READY_SNAPSHOT_RATIO):
+            reasons.append("ready_snapshot_ratio_below_threshold")
+        if snapshot_age_seconds is None:
+            reasons.append("snapshot_never_completed")
+        elif snapshot_age_seconds >= float(LIVE_CONTEXT_REPREPARE_SNAPSHOT_STALE_SECONDS):
+            reasons.append("snapshot_stale")
+        if self._last_symbol_context_snapshot_status in {"failed", "cache_storage_unavailable", "empty_universe"}:
+            reasons.append(f"snapshot_status={self._last_symbol_context_snapshot_status}")
+        payload: dict[str, object] = {
+            "snapshot_age_seconds": (
+                round(float(snapshot_age_seconds), 3) if snapshot_age_seconds is not None else ""
+            ),
+            "snapshot_stale_threshold_seconds": int(LIVE_CONTEXT_REPREPARE_SNAPSHOT_STALE_SECONDS),
+            "last_symbol_context_snapshot_status": self._last_symbol_context_snapshot_status,
+            **summary,
+        }
+        if not reasons:
+            return False, "context_healthy", payload
+        return True, "+".join(reasons), payload
+
+    def _live_context_reprepare_safety_payload(self) -> tuple[bool, dict[str, object]]:
+        _opened_total, open_positions, _closed_total, orphan_cancelled_total = self._live_counts()
+        active_symbols = self._active_live_symbol_count()
+        opening_symbols = self._opening_symbol_count()
+        with self._state_lock:
+            tracked_order_symbols = len(self._order_reconcile_symbols_by_key)
+        safe = (
+            active_symbols == 0
+            and open_positions == 0
+            and opening_symbols == 0
+            and tracked_order_symbols == 0
+        )
+        payload = {
+            "safe": bool(safe),
+            "active_symbols": int(active_symbols),
+            "open_positions": int(open_positions),
+            "opening_symbols": int(opening_symbols),
+            "tracked_order_symbols": int(tracked_order_symbols),
+            "orphan_orders_cancelled_total": int(orphan_cancelled_total),
+        }
+        return bool(safe), payload
+
+    def _maybe_reprepare_symbol_context_if_safe(self, symbols: list[str], *, cycle: int) -> None:
+        now_monotonic = time.monotonic()
+        runtime_seconds = max(0.0, now_monotonic - self._run_started_monotonic)
+        if runtime_seconds < float(LIVE_CONTEXT_REPREPARE_MIN_RUNTIME_SECONDS):
+            return
+        if (
+            self._last_context_reprepare_at_monotonic > 0.0
+            and now_monotonic - self._last_context_reprepare_at_monotonic
+            < float(LIVE_CONTEXT_REPREPARE_MIN_INTERVAL_SECONDS)
+        ):
+            return
+        needed, reason, readiness_payload = self._symbol_context_reprepare_need(symbols)
+        if not needed:
+            return
+        safe, safety_payload = self._live_context_reprepare_safety_payload()
+        if not safe:
+            if (
+                self._last_context_reprepare_deferred_at_monotonic <= 0.0
+                or now_monotonic - self._last_context_reprepare_deferred_at_monotonic
+                >= float(LIVE_CONTEXT_REPREPARE_DEFER_LOG_INTERVAL_SECONDS)
+            ):
+                self._last_context_reprepare_deferred_at_monotonic = now_monotonic
+                self.artifacts.append_event(
+                    "live_context_reprepare_deferred",
+                    "__live__",
+                    {
+                        "cycle": int(cycle),
+                        "reason": reason,
+                        "policy": "defer_until_zero_active_zero_positions_zero_opening_zero_tracked_orders",
+                        **safety_payload,
+                        **readiness_payload,
+                    },
+                )
+                self._startup_status(
+                    "переподготовка",
+                    (
+                        f"отложена · {reason} · активные {safety_payload['active_symbols']} · "
+                        f"позиции {safety_payload['open_positions']} · ETA -"
+                    ),
+                )
+            return
+        self._last_context_reprepare_at_monotonic = now_monotonic
+        self._context_reprepare_total += 1
+        self.artifacts.append_event(
+            "live_context_reprepare_started",
+            "__live__",
+            {
+                "cycle": int(cycle),
+                "reason": reason,
+                "reprepare_total": int(self._context_reprepare_total),
+                "policy": "state_based_only_when_zero_active_zero_positions_zero_opening_zero_tracked_orders_no_scheduled_restart",
+                **safety_payload,
+                **readiness_payload,
+            },
+        )
+        self._startup_status("переподготовка", f"старт · {reason} · ETA -")
+        self._startup_backfill_symbol_context_cache(symbols, phase="live_reprepare")
+        ready = self._validate_startup_symbol_context_readiness(
+            symbols,
+            stage="переподготовка",
+            policy_context="live_reprepare",
+            refuse_real_orders=False,
+        )
+        final_payload = self._startup_symbol_context_readiness_summary(symbols)
+        status = "ready" if ready else "not_ready"
+        self.artifacts.append_event(
+            "live_context_reprepare_completed",
+            "__live__",
+            {
+                "cycle": int(cycle),
+                "status": status,
+                "reason": reason,
+                "reprepare_total": int(self._context_reprepare_total),
+                "confirm_real_orders": bool(self.config.confirm_real_orders),
+                **final_payload,
+            },
+        )
+        self._startup_status("переподготовка", f"{status} · ETA 0с")
+        self._status_logger.finish_status()
+        if not ready and self.config.confirm_real_orders:
+            self.artifacts.append_event(
+                "live_context_reprepare_refused_continue",
+                "__live__",
+                {
+                    "cycle": int(cycle),
+                    "reason": "symbol_context_readiness_still_below_threshold_after_safe_reprepare",
+                    **final_payload,
+                },
+            )
+            raise LiveDataIntegrityError(
+                "72ч контекст остался неготовым после безопасной переподготовки; "
+                "real-orders live остановлен без активных символов/позиций"
+            )
+
+    def _startup_backfill_symbol_context_cache(self, symbols: list[str], *, phase: str = "startup") -> None:
+        status_stage = "контекст 72ч" if phase == "startup" else "переподготовка 72ч"
         if not self.config.symbol_context_snapshot_enabled:
             return
         if self._ohlcv_cache_storage is None:
@@ -9134,6 +9301,7 @@ class AnomalyMicroLiveRunner:
                 "__live__",
                 {
                     "status": "cache_storage_unavailable",
+                    "phase": phase,
                     "reason": "live_ohlcv_cache_required_for_startup_context_backfill",
                     "policy": "no_fallback_to_subminute_or_synthetic_context",
                     "symbols_total": int(len(symbols)),
@@ -9147,6 +9315,7 @@ class AnomalyMicroLiveRunner:
                 "__live__",
                 {
                     "status": "empty_timeframes",
+                    "phase": phase,
                     "reason": "no_minute_or_higher_levels_timeframes",
                     "policy": "no_subminute_context_backfill",
                     "symbols_total": int(len(symbols)),
@@ -9167,6 +9336,7 @@ class AnomalyMicroLiveRunner:
             "__live__",
             {
                 "status": "started",
+                "phase": phase,
                 "contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
                 "policy": "default_on_startup_backfill_levels_timeframes_only_no_subminute_entry_tfs",
                 "symbols_total": int(len(symbols)),
@@ -9188,12 +9358,27 @@ class AnomalyMicroLiveRunner:
         fetched_symbol_timeframes = 0
         failed_symbol_timeframes = 0
         fetched_rows_total = 0
+        incremental_flushed_rows_total = 0
+        incremental_flush_count = 0
         failure_reasons: dict[str, int] = {}
         symbols_total = int(len(symbols))
+        chunk_flush_started_at = started_at
+
+        def _chunk_cache_flush_progress(symbol: str, timeframe_value: str, index: int, total: int) -> None:
+            eta_text = self._startup_eta_text(
+                started_at=chunk_flush_started_at,
+                completed=int(index - 1),
+                total=int(total),
+            )
+            self._startup_status(
+                status_stage,
+                f"запись кеша {index}/{total} · {_compact_symbol(symbol)} {timeframe_value} · ETA {eta_text}",
+            )
+
         for index, symbol in enumerate(symbols, start=1):
             eta_text = self._startup_eta_text(started_at=started_at, completed=int(index - 1), total=symbols_total)
             self._startup_status(
-                "контекст 72ч",
+                status_stage,
                 f"кеш {index}/{symbols_total} · {_compact_symbol(symbol)} · ETA {eta_text}",
             )
             for timeframe in context_timeframes:
@@ -9215,32 +9400,51 @@ class AnomalyMicroLiveRunner:
                         "symbol_context_startup_backfill_failed",
                         symbol,
                         {
+                            "phase": phase,
                             "timeframe": timeframe.value,
                             "reason": reason,
                             "context_start_timestamp_ms": int(context_start_ms),
                             "decision_timestamp_ms": int(decision_ts),
                         },
                     )
+            if (
+                self._live_ohlcv_write_buffer
+                and (
+                    len(self._live_ohlcv_write_buffer) >= STARTUP_CONTEXT_BACKFILL_FLUSH_SYMBOL_TIMEFRAMES
+                    or self._live_ohlcv_pending_rows >= int(self.config.live_ohlcv_cache_max_buffer_rows)
+                )
+            ):
+                chunk_flush_started_at = time.monotonic()
+                chunk_flushed_rows = self._flush_live_ohlcv_cache_if_due(
+                    force=True,
+                    reason=f"symbol_context_{phase}_backfill_chunk",
+                    progress_callback=_chunk_cache_flush_progress,
+                    max_symbol_timeframes_override=STARTUP_CONTEXT_BACKFILL_FLUSH_SYMBOL_TIMEFRAMES,
+                )
+                if chunk_flushed_rows > 0:
+                    incremental_flush_count += 1
+                    incremental_flushed_rows_total += int(chunk_flushed_rows)
         self._status_logger.finish_status()
         flush_items_total = int(len(self._live_ohlcv_write_buffer))
         flush_started_at = time.monotonic()
         if flush_items_total <= 0:
-            self._startup_status("контекст 72ч", "запись кеша 0/0 · ETA 0с")
+            self._startup_status(status_stage, "запись кеша 0/0 · ETA 0с")
 
         def _cache_flush_progress(symbol: str, timeframe_value: str, index: int, total: int) -> None:
             eta_text = self._startup_eta_text(started_at=flush_started_at, completed=int(index - 1), total=int(total))
             self._startup_status(
-                "контекст 72ч",
+                status_stage,
                 f"запись кеша {index}/{total} · {_compact_symbol(symbol)} {timeframe_value} · ETA {eta_text}",
             )
 
-        flushed_rows = self._flush_live_ohlcv_cache_if_due(
+        final_flushed_rows = self._flush_live_ohlcv_cache_if_due(
             force=True,
-            reason="symbol_context_startup_backfill",
+            reason=f"symbol_context_{phase}_backfill_final",
             progress_callback=_cache_flush_progress,
         )
+        flushed_rows = int(incremental_flushed_rows_total) + int(final_flushed_rows)
         if flush_items_total > 0:
-            self._startup_status("контекст 72ч", f"запись кеша {flush_items_total}/{flush_items_total} · ETA 0с")
+            self._startup_status(status_stage, f"запись кеша {flush_items_total}/{flush_items_total} · ETA 0с")
         snapshot_ok = 0
         snapshot_failed = 0
         snapshot_total = int(len(symbols))
@@ -9252,7 +9456,7 @@ class AnomalyMicroLiveRunner:
                 total=snapshot_total,
             )
             self._startup_status(
-                "контекст 72ч",
+                status_stage,
                 f"снимок {snapshot_index}/{snapshot_total} · {_compact_symbol(symbol)} · ETA {eta_text}",
             )
             for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
@@ -9270,10 +9474,10 @@ class AnomalyMicroLiveRunner:
                 else:
                     snapshot_failed += 1
         if snapshot_total > 0:
-            self._startup_status("контекст 72ч", f"снимок {snapshot_total}/{snapshot_total} · ETA 0с")
-        self._startup_status("контекст 72ч", "запись snapshot · ETA -")
+            self._startup_status(status_stage, f"снимок {snapshot_total}/{snapshot_total} · ETA 0с")
+        self._startup_status(status_stage, "запись snapshot · ETA -")
         output_path = self.artifacts.write_symbol_context_snapshot(list(self._symbol_context_snapshots.values()))
-        self._startup_status("контекст 72ч", "запись snapshot · ETA 0с")
+        self._startup_status(status_stage, "запись snapshot · ETA 0с")
         self._status_logger.finish_status()
         self._last_symbol_context_snapshot_at_ms = int(time.time() * 1000)
         status = "ok" if snapshot_failed == 0 else "partial" if snapshot_ok else "failed"
@@ -9284,6 +9488,7 @@ class AnomalyMicroLiveRunner:
             "__live__",
             {
                 "status": status,
+                "phase": phase,
                 "contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
                 "policy": "default_on_startup_backfill_levels_timeframes_only_no_subminute_entry_tfs",
                 "symbols_total": int(len(symbols)),
@@ -9292,6 +9497,9 @@ class AnomalyMicroLiveRunner:
                 "failed_symbol_timeframes": int(failed_symbol_timeframes),
                 "fetched_rows_total": int(fetched_rows_total),
                 "flushed_rows": int(flushed_rows),
+                "incremental_flushed_rows": int(incremental_flushed_rows_total),
+                "incremental_flush_count": int(incremental_flush_count),
+                "final_flushed_rows": int(final_flushed_rows),
                 "snapshot_ok_count": int(snapshot_ok),
                 "snapshot_failed_count": int(snapshot_failed),
                 "failure_reasons": failure_reasons,
@@ -13010,6 +13218,7 @@ class AnomalyMicroLiveRunner:
         force: bool = False,
         reason: str,
         progress_callback: Callable[[str, str, int, int], None] | None = None,
+        max_symbol_timeframes_override: int | None = None,
     ) -> int:
         storage = self._ohlcv_cache_storage
         if storage is None or not self._live_ohlcv_write_buffer:
@@ -13029,7 +13238,10 @@ class AnomalyMicroLiveRunner:
         remaining: dict[tuple[str, str, str], list[pd.DataFrame]] = {}
         remaining_rows = 0
         failed_symbol_timeframes = 0
-        flush_limit = None if force else self.config.live_ohlcv_cache_flush_max_symbol_timeframes
+        if max_symbol_timeframes_override is not None:
+            flush_limit = max(1, int(max_symbol_timeframes_override))
+        else:
+            flush_limit = None if force else self.config.live_ohlcv_cache_flush_max_symbol_timeframes
         items = list(pending_items.items())
         selected_items = items if flush_limit is None else items[: max(0, int(flush_limit))]
         deferred_items = items[len(selected_items) :]
@@ -13088,6 +13300,9 @@ class AnomalyMicroLiveRunner:
                 "flushed_symbol_timeframes": int(len(selected_items)),
                 "deferred_symbol_timeframes": int(len(deferred_items)),
                 "flush_max_symbol_timeframes": flush_limit if flush_limit is not None else "",
+                "flush_max_symbol_timeframes_override": (
+                    int(max_symbol_timeframes_override) if max_symbol_timeframes_override is not None else ""
+                ),
             },
         )
         return flushed_rows_total

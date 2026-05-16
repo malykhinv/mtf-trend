@@ -4418,6 +4418,21 @@ python main.py run-anomaly-live --help | grep -E "startup-cache-flush-eta|contex
 
 Risk: low. Display and progress callback only. The flush still writes through the same storage path; the callback must not be used as trading state.
 
+## 2026-05-16 — P257 proposed
+
+Startup/reprepare context preparation no longer accumulates the whole 72h OHLCV write buffer and then performs one heavy final cache flush. During the 72h backfill loop it now flushes cache writes in bounded symbol/timeframe chunks, with the same inline `HH:MM:SS + ETA` progress format as the rest of preparation. The final flush remains as a safety drain for any remaining buffered rows.
+
+Live context reprepare is state-based, not scheduled. It only starts when symbol-context readiness is degraded or stale and the runner is safe: zero active symbols, zero open positions, zero opening symbols, and zero tracked order-reconcile symbols. If unsafe, it writes `live_context_reprepare_deferred`; if safe, it writes explicit `live_context_reprepare_started/completed` events and terminal progress. If real-orders context is still below readiness thresholds after a safe reprepare, live stops safely with a data-integrity error instead of continuing with blind context.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "reprepare|переподготов|context-reprepare|startup-flush-chunk"  # expected: no output
+```
+
+Risk: medium. Cache writes now happen in smaller chunks during startup/reprepare, reducing the final silent flush, but this changes write timing. It does not change trading filters, signal construction, order/fill/stop logic, or CLI flags.
+
 
 ## P247 - proposed - dependency retry cooldown
 

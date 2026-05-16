@@ -10,7 +10,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P255 proposed startup context readiness verdict
+Last active patch: P257 proposed chunked context cache flush and safe context reprepare
 Updated: 2026-05-16
 ```
 
@@ -1396,6 +1396,15 @@ Observed live startup can sit silently after `контекст 72ч · кеш 53
 ## 2026-05-16 — P256 proposed startup visibility note
 
 The startup `контекст 72ч · запись кеша` stage was observed to look stalled after the 72h fetch loop completed. P256 keeps the blocking healthy-start policy, but reports forced cache flush progress per symbol/timeframe with ETA and adds ETA to startup snapshot computation/readiness status. Current commit: UNKNOWN. Next validation: restart live and confirm `запись кеша N/total · SYMBOL TF · ETA ...` updates during the formerly silent flush stage.
+
+
+## 2026-05-16 — P257 proposed state
+
+- 72h context preparation keeps the healthy-start policy but flushes OHLCV cache writes in bounded chunks during backfill instead of accumulating one large final write.
+- Live context reprepare is state-based and safe-gated: it can run only with zero active symbols, zero open positions, zero opening symbols, and zero tracked order-reconcile symbols. Unsafe cases are deferred with explicit artifacts.
+- If real-orders context remains below readiness thresholds after a safe reprepare, live stops safely rather than continuing with degraded context.
+- Current commit: UNKNOWN.
+- Next validation: restart live and verify startup `запись кеша` appears in small chunks during backfill; during a long run, inspect `live_context_reprepare_deferred/started/completed` events only when context readiness degrades.
 
 
 ## 2026-05-15 — P247 proposed
