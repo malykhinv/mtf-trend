@@ -2183,6 +2183,33 @@ This does not change trading behavior; it only fixes diagnostic attribution from
 
 After applying P250, run live from a cold or partial OHLCV cache and verify that startup context backfill does not appear stuck: the console should rewrite one status line for every symbol with current symbol and ETA. This is UI/observability only; success criteria are status freshness and unchanged `symbol_context_startup_backfill_completed` artifact fields.
 
+---
+
+## 2026-05-16 — Live/backtest parity audit from live.zip + bt.zip
+
+Input:
+
+```text
+Live run: run-anomaly-live --confirm-real-orders --delayed-replay-enabled true --danger-continue-after-order-position-errors
+Backtest run: latest 2d anomaly backtest artifacts
+```
+
+Findings:
+
+```text
+The old 2d backtest is not live-parity-valid for runner categories: live and backtest had separate runner thresholds, and trades were not clearly separable between live-priority categories and discovery fallback.
+Backtest candidate errors were caused locally by materialized entry-cache metadata columns existing but containing no non-null aggregation_source_timeframe/aggregation_version values; this is not an exchange fetch failure.
+Delayed replay divergence on selected live signals was caused by replay recomputing immutable live snapshots under setup_source=delayed_replay_immutable_live_snapshot, which disabled the forming_htf pace normalization used by the original live decision.
+Synthetic OHLCV buckets in live represent missing no-trade buckets from aggTrade-derived subminute frames; they must be explicit row/data-quality provenance and must not count as real flow/hold evidence.
+Derivatives context source of truth for a live decision is the frozen live decision context; historical backtest may use cache context, but mismatches must be treated as context/data parity issues, not as proof that live or backtest was right.
+```
+
+Next:
+
+```text
+Apply P264, rerun the same 2d/live-window backtest, then compare anomaly_trades.csv by pump_category_family and category_selected vs selected_terminal_outcome in live_events.csv.
+```
+
 
 ---
 

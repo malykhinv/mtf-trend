@@ -527,3 +527,14 @@ Live discovery sensitivity may be increased only on market-shape/category filter
 
 Missing or invalid context for taker-buy, mark basis, OI, or prior-fast-fade is not evidence that the market failed a filter. It is a retryable data dependency. The decision must not be consumed until the dependency resolves, receives a real final market reject, produces a selected category, or expires by stale guard.
 ```
+
+---
+
+## 7. Shared runner category contract
+
+```text
+Live-priority runner categories are a shared contract, not separate live/backtest constants.
+Backtest selection order: try shared live-priority categories in the same timeframe-specific priority order as live; if none match and the base discovery signal still matches, enter as discovery.
+Every backtest trade must carry pump_category_id, pump_category_family, pump_category_is_live_rule, pump_category_contract and pump_category_source so live-rule trades and discovery fallback trades can be separated without inference.
+Synthetic live OHLCV buckets are explicit data provenance. They may preserve elapsed no-trade time, but they are not real flow/hold evidence.
+```

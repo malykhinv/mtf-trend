@@ -33,6 +33,13 @@ from domain.exceptions import ExchangeConnectivityError
 from domain.enums.timeframe import Timeframe
 from research_tools.anomaly_continuation_lab import compute_start_verticality_metrics
 from research_tools.anomaly_config import ANOMALY_LIVE_TIMEFRAME_PAIRS
+from research_tools.anomaly_category_contract import (
+    CATEGORY_CONTRACT_ID as LIVE_CATEGORY_CONTRACT,
+    DEFAULT_PUMP_CATEGORY_IDS as LIVE_DEFAULT_PUMP_CATEGORY_IDS,
+    PumpCategoryContract as LivePumpCategory,
+    SUPPORTED_PUMP_CATEGORIES as SUPPORTED_LIVE_PUMP_CATEGORIES,
+    TIMEFRAME_CATEGORY_PRIORITY as LIVE_TIMEFRAME_CATEGORY_PRIORITY,
+)
 from research_tools.runner_fader_prepump_context import (
     DEFAULT_PREPUMP_CONTEXT_WINDOWS,
     compute_spot_prepump_window_features,
@@ -601,77 +608,6 @@ class TelegramConfig:
     events_chat_id: str
     positions_bot_token: str
     positions_chat_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class LivePumpCategory:
-    category_id: str
-    label: str
-    priority: int
-    min_oi_change_pct_3x5m: float | None = None
-    min_mark_close_vs_decision_close_basis: float | None = None
-    max_start_quote_ratio: float | None = None
-    max_start_trade_ratio: float | None = None
-    max_start_avg_trade_quote_size_ratio: float | None = None
-    max_start_quote_ratio_per_abs_return: float | None = None
-    max_start_trade_ratio_per_abs_return: float | None = None
-    max_start_range_pct_ratio_to_baseline: float | None = None
-    min_next_taker_buy_quote_share: float | None = None
-    max_start_taker_buy_quote_share_delta: float | None = None
-    max_price_retention: float | None = None
-    min_flow_hold_count: int | None = None
-    min_start_lower_wick_to_range: float | None = None
-    max_start_upper_wick_to_range: float | None = None
-    max_prior_fast_fade_count_72h: int | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class AggTradeRawRange:
-    start_timestamp_ms: int
-    end_timestamp_ms: int
-    rows: tuple[dict[str, object], ...]
-
-
-@dataclass(frozen=True, slots=True)
-class WsAggTradeReadResult:
-    rows: tuple[dict[str, object], ...]
-    missing_ranges: tuple[tuple[int, int], ...]
-    status: str
-    reason: str | None
-    subscribed: bool
-    connection_status: str
-    last_error: str | None
-    last_trade_timestamp_ms: int | None
-    last_receive_at_ms: int | None
-    buffer_row_count: int
-
-
-@dataclass(frozen=True, slots=True)
-class LiveOiChangeResult:
-    value: float | None
-    reason: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class LiveMarkBasisResult:
-    value: float | None
-    reason: str | None = None
-    timestamp_ms: int | None = None
-    age_ms: int | None = None
-
-
-LIVE_CATEGORY_CONTRACT = "live_category_overlay_v5_retryable_dependencies_cold_coverage"
-LIVE_DEFAULT_PUMP_CATEGORY_IDS: tuple[str, ...] = (
-    "runner_oi_confirmed",
-    "runner_flow",
-    "runner_reclaim",
-    "runner_balanced",
-)
-LIVE_TIMEFRAME_CATEGORY_PRIORITY: dict[tuple[str, str], tuple[str, ...]] = {
-    ("5m", "30s"): ("runner_flow", "runner_oi_confirmed", "runner_reclaim", "runner_balanced"),
-    ("1m", "15s"): ("runner_oi_confirmed", "runner_flow", "runner_reclaim", "runner_balanced"),
-    ("1m", "5s"): ("runner_oi_confirmed", "runner_flow", "runner_balanced", "runner_reclaim"),
-}
 
 
 class LiveTickerSnapshotSource(Protocol):
@@ -1689,78 +1625,6 @@ class BinanceWsAggTradeBuffer:
             self._connection_status = status
             self._last_error = error
 
-
-SUPPORTED_LIVE_PUMP_CATEGORIES: dict[str, LivePumpCategory] = {
-    "runner_oi_confirmed": LivePumpCategory(
-        category_id="runner_oi_confirmed",
-        label="runner OI confirmed",
-        priority=10,
-        min_oi_change_pct_3x5m=0.002,
-        min_mark_close_vs_decision_close_basis=0.002,
-        max_start_quote_ratio=1000.0,
-        max_start_trade_ratio=250.0,
-        max_start_quote_ratio_per_abs_return=20_000.0,
-        max_start_trade_ratio_per_abs_return=3_000.0,
-        max_start_taker_buy_quote_share_delta=0.35,
-        max_prior_fast_fade_count_72h=1,
-    ),
-    "runner_flow": LivePumpCategory(
-        category_id="runner_flow",
-        label="runner flow",
-        priority=20,
-        min_mark_close_vs_decision_close_basis=0.0005,
-        max_start_quote_ratio=1000.0,
-        max_start_trade_ratio=250.0,
-        max_start_quote_ratio_per_abs_return=20_000.0,
-        max_start_trade_ratio_per_abs_return=3_000.0,
-        max_start_taker_buy_quote_share_delta=0.35,
-        min_flow_hold_count=1,
-        max_prior_fast_fade_count_72h=1,
-    ),
-    "runner_reclaim": LivePumpCategory(
-        category_id="runner_reclaim",
-        label="runner reclaim",
-        priority=30,
-        min_mark_close_vs_decision_close_basis=0.0005,
-        max_start_quote_ratio=1000.0,
-        max_start_trade_ratio=250.0,
-        max_start_quote_ratio_per_abs_return=20_000.0,
-        max_start_trade_ratio_per_abs_return=3_000.0,
-        max_start_taker_buy_quote_share_delta=0.35,
-        min_start_lower_wick_to_range=0.0,
-        max_start_upper_wick_to_range=0.20,
-        max_prior_fast_fade_count_72h=1,
-    ),
-    "runner_balanced": LivePumpCategory(
-        category_id="runner_balanced",
-        label="runner balanced",
-        priority=40,
-        min_mark_close_vs_decision_close_basis=0.0005,
-        max_start_quote_ratio=1000.0,
-        max_start_trade_ratio=250.0,
-        max_start_quote_ratio_per_abs_return=20_000.0,
-        max_start_trade_ratio_per_abs_return=3_000.0,
-        max_start_taker_buy_quote_share_delta=0.35,
-        max_prior_fast_fade_count_72h=1,
-    ),
-    "balanced_market": LivePumpCategory(
-        category_id="balanced_market",
-        label="balanced market",
-        priority=90,
-    ),
-    "mild_market": LivePumpCategory(
-        category_id="mild_market",
-        label="mild market",
-        priority=100,
-        max_start_quote_ratio=120.0,
-        max_start_trade_ratio=60.0,
-        max_start_avg_trade_quote_size_ratio=10.0,
-        max_start_quote_ratio_per_abs_return=30_000.0,
-        max_start_range_pct_ratio_to_baseline=35.0,
-        min_next_taker_buy_quote_share=0.46,
-        max_price_retention=0.98,
-    ),
-}
 
 LIVE_DEFAULT_EXCLUDED_HIGH_CAP_BASES: frozenset[str] = frozenset(
     {
@@ -6178,7 +6042,11 @@ class AnomalyMicroLiveRunner:
             now_ms=decision_ts + entry_timeframe_ms,
             levels_timeframe=levels_timeframe,
             entry_timeframe=entry_timeframe,
-            setup_source="delayed_replay_immutable_live_snapshot" if use_snapshot else "delayed_replay_forming_htf_from_entry_tf",
+            setup_source=(
+                str(decision_snapshot.get("setup_source") or "forming_htf_from_entry_tf")
+                if use_snapshot and decision_snapshot is not None
+                else "delayed_replay_forming_htf_from_entry_tf"
+            ),
             setup_elapsed_fraction=setup_elapsed_fraction,
             setup_closed_entry_candles=len(entry_segment),
             emit_diagnostics=False,
@@ -11107,6 +10975,7 @@ class AnomalyMicroLiveRunner:
                     "latest_closed_entry_timestamp_ms": int(latest_closed_entry_ts),
                     "synthetic_bucket_count": int(synthetic_bucket_count),
                     "entry_segment_bucket_count": int(len(entry_segment)),
+                    "real_entry_segment_bucket_count": int(len(_real_ohlcv_buckets(entry_segment))),
                     "source": "fill_missing_ohlcv_buckets",
                 },
             )
@@ -11544,14 +11413,16 @@ class AnomalyMicroLiveRunner:
         prior_whipsaw = _prior_up_down_whipsaw_to_impulse_range(baseline, impulse_range=impulse_range)
         decision_close = float(decision["close"])
         price_retention = _safe_divide(decision_close - start_open, segment_high - start_open)
-        verticality = compute_start_verticality_metrics(entry_segment)
+        real_entry_segment = _real_ohlcv_buckets(entry_segment)
+        metric_entry_segment = real_entry_segment if not real_entry_segment.empty else entry_segment
+        verticality = compute_start_verticality_metrics(metric_entry_segment)
         verticality_score = float(verticality["start_verticality_score"])
         activation_price = start_open + max(0.0, start_close - start_open) * 0.50
-        hold_count = int((entry_segment["close"].astype(float) >= activation_price).sum())
+        hold_count = int((metric_entry_segment["close"].astype(float) >= activation_price).sum())
         flow_hold_count = int(
             (
-                pd.to_numeric(entry_segment["quote_volume"], errors="coerce").ge(max(0.35 * start_quote, 3.0 * baseline_quote))
-                & pd.to_numeric(entry_segment["number_of_trades"], errors="coerce").ge(max(0.35 * start_trades, 3.0 * baseline_trades))
+                pd.to_numeric(metric_entry_segment["quote_volume"], errors="coerce").ge(max(0.35 * start_quote, 3.0 * baseline_quote))
+                & pd.to_numeric(metric_entry_segment["number_of_trades"], errors="coerce").ge(max(0.35 * start_trades, 3.0 * baseline_trades))
             ).sum()
         )
         start_range = start_high - start_low
@@ -12226,6 +12097,12 @@ class AnomalyMicroLiveRunner:
                     event="reject_symbol_position_already_active",
                     details=reject_details,
                 )
+                self._append_selected_terminal_outcome(
+                    signal,
+                    outcome="execution_rejected",
+                    terminal_event="reject_symbol_position_already_active",
+                    details=reject_details,
+                )
                 return
             if len(self._open_positions) + len(self._opening_symbols) >= self.config.max_open_positions:
                 reject_max_positions = True
@@ -12248,6 +12125,12 @@ class AnomalyMicroLiveRunner:
                 self._capture_delayed_replay_execution_reject(
                     signal,
                     event="reject_stop_cooldown",
+                    details=reject_details,
+                )
+                self._append_selected_terminal_outcome(
+                    signal,
+                    outcome="execution_rejected",
+                    terminal_event="reject_stop_cooldown",
                     details=reject_details,
                 )
                 return
@@ -12281,16 +12164,23 @@ class AnomalyMicroLiveRunner:
                     "retry_until_stale": True,
                 },
             )
+            reject_details = {
+                "max": self.config.max_open_positions,
+                "levels_tf": signal.levels_timeframe.value,
+                "entry_tf": signal.entry_timeframe.value,
+                "decision_timestamp_ms": signal.decision_timestamp_ms,
+                "retry_until_stale": True,
+            }
             self._capture_delayed_replay_execution_reject(
                 signal,
                 event="reject_max_positions",
-                details={
-                    "max": self.config.max_open_positions,
-                    "levels_tf": signal.levels_timeframe.value,
-                    "entry_tf": signal.entry_timeframe.value,
-                    "decision_timestamp_ms": signal.decision_timestamp_ms,
-                    "retry_until_stale": True,
-                },
+                details=reject_details,
+            )
+            self._append_selected_terminal_outcome(
+                signal,
+                outcome="waiting_for_capacity",
+                terminal_event="reject_max_positions",
+                details=reject_details,
             )
             return
         order_flow_started = False
@@ -12315,19 +12205,33 @@ class AnomalyMicroLiveRunner:
                 if not math.isfinite(pre_position_amount):
                     self._clear_active_symbol(signal.symbol, reason="invalid_existing_exchange_position")
                     self._mark_signal_decision_consumed(signal, reason="invalid_existing_exchange_position")
+                    reject_details = {"exchange_position_amount": _finite_or_none(pre_position_amount)}
                     self.artifacts.append_event(
                         "reject_invalid_existing_exchange_position",
                         signal.symbol,
-                        {"exchange_position_amount": _finite_or_none(pre_position_amount)},
+                        reject_details,
+                    )
+                    self._append_selected_terminal_outcome(
+                        signal,
+                        outcome="execution_rejected",
+                        terminal_event="reject_invalid_existing_exchange_position",
+                        details=reject_details,
                     )
                     return
                 if abs(pre_position_amount) > 0.0:
                     self._clear_active_symbol(signal.symbol, reason="existing_exchange_position")
                     self._mark_signal_decision_consumed(signal, reason="existing_exchange_position")
+                    reject_details = {"exchange_position_amount": pre_position_amount}
                     self.artifacts.append_event(
                         "reject_existing_exchange_position",
                         signal.symbol,
-                        {"exchange_position_amount": pre_position_amount},
+                        reject_details,
+                    )
+                    self._append_selected_terminal_outcome(
+                        signal,
+                        outcome="execution_rejected",
+                        terminal_event="reject_existing_exchange_position",
+                        details=reject_details,
                     )
                     return
             live_price = float(self.exchange.fetch_last_price(signal.symbol))
@@ -12336,32 +12240,74 @@ class AnomalyMicroLiveRunner:
             try:
                 balance = float(self.exchange.fetch_usdt_free_balance())
             except (TypeError, ValueError) as exc:
-                self.artifacts.append_event("reject_invalid_free_balance", signal.symbol, {"free_usdt": None, "reason": str(exc)})
+                reject_details = {"free_usdt": None, "reason": str(exc)}
+                self.artifacts.append_event("reject_invalid_free_balance", signal.symbol, reject_details)
+                self._append_selected_terminal_outcome(
+                    signal,
+                    outcome="execution_rejected",
+                    terminal_event="reject_invalid_free_balance",
+                    details=reject_details,
+                )
                 return
             if not math.isfinite(balance):
-                self.artifacts.append_event("reject_invalid_free_balance", signal.symbol, {"free_usdt": None})
+                reject_details = {"free_usdt": None}
+                self.artifacts.append_event("reject_invalid_free_balance", signal.symbol, reject_details)
+                self._append_selected_terminal_outcome(
+                    signal,
+                    outcome="execution_rejected",
+                    terminal_event="reject_invalid_free_balance",
+                    details=reject_details,
+                )
                 return
             if balance <= 0.0:
-                self.artifacts.append_event("reject_no_free_balance", signal.symbol, {"free_usdt": balance})
+                reject_details = {"free_usdt": balance}
+                self.artifacts.append_event("reject_no_free_balance", signal.symbol, reject_details)
+                self._append_selected_terminal_outcome(
+                    signal,
+                    outcome="execution_rejected",
+                    terminal_event="reject_no_free_balance",
+                    details=reject_details,
+                )
                 return
             notional = self.config.position_notional_usdt
             if not math.isfinite(notional) or notional <= 0.0:
                 self._mark_signal_decision_consumed(signal, reason="invalid_position_notional")
-                self.artifacts.append_event("reject_invalid_position_notional", signal.symbol, {"position_notional": _finite_or_none(notional)})
+                reject_details = {"position_notional": _finite_or_none(notional)}
+                self.artifacts.append_event("reject_invalid_position_notional", signal.symbol, reject_details)
+                self._append_selected_terminal_outcome(
+                    signal,
+                    outcome="execution_rejected",
+                    terminal_event="reject_invalid_position_notional",
+                    details=reject_details,
+                )
                 return
             if balance < notional:
+                reject_details = {"free_usdt": balance, "position_notional": notional}
                 self.artifacts.append_event(
                     "reject_insufficient_margin_for_fixed_notional",
                     signal.symbol,
-                    {"free_usdt": balance, "position_notional": notional},
+                    reject_details,
+                )
+                self._append_selected_terminal_outcome(
+                    signal,
+                    outcome="execution_rejected",
+                    terminal_event="reject_insufficient_margin_for_fixed_notional",
+                    details=reject_details,
                 )
                 return
             amount_requested = notional / live_price
             if not math.isfinite(amount_requested) or amount_requested <= 0.0:
+                reject_details = {"live_price": _finite_or_none(live_price), "position_notional": _finite_or_none(notional)}
                 self.artifacts.append_event(
                     "reject_invalid_order_amount",
                     signal.symbol,
-                    {"live_price": _finite_or_none(live_price), "position_notional": _finite_or_none(notional)},
+                    reject_details,
+                )
+                self._append_selected_terminal_outcome(
+                    signal,
+                    outcome="execution_rejected",
+                    terminal_event="reject_invalid_order_amount",
+                    details=reject_details,
                 )
                 return
             entry_order_submitted_at_ms = int(time.time() * 1000)
@@ -12553,14 +12499,26 @@ class AnomalyMicroLiveRunner:
                 self._opened_positions_total += 1
                 self._active_symbols.pop(symbol_key, None)
             self._mark_signal_decision_consumed(signal, reason="position_opened")
-        except LiveOrderPositionIntegrityError:
+        except LiveOrderPositionIntegrityError as exc:
             with self._state_lock:
                 self._opening_symbols.discard(symbol_key)
+            self._append_selected_terminal_outcome(
+                signal,
+                outcome="order_position_integrity_error",
+                terminal_event="live_order_position_integrity_error",
+                details={"error_type": type(exc).__name__, "reason": str(exc)},
+            )
             raise
         except Exception as exc:
             with self._state_lock:
                 self._opening_symbols.discard(symbol_key)
             if order_flow_started:
+                self._append_selected_terminal_outcome(
+                    signal,
+                    outcome="order_position_integrity_error",
+                    terminal_event="order_position_flow_failed",
+                    details={"error_type": type(exc).__name__, "reason": str(exc)},
+                )
                 raise LiveOrderPositionIntegrityError(
                     f"order/position flow failed: symbol={signal.symbol} {type(exc).__name__}: {exc}",
                     symbol=signal.symbol,
@@ -12570,6 +12528,12 @@ class AnomalyMicroLiveRunner:
             with self._state_lock:
                 self._opening_symbols.discard(symbol_key)
         self.artifacts.append_position(position)
+        self._append_selected_terminal_outcome(
+            signal,
+            outcome="position_opened",
+            terminal_event="position_opened",
+            details={"position_id": position.position_id, "entry_order_id": position.entry_order_id, "stop_order_id": position.stop_order_id},
+        )
         self.artifacts.append_event(
             "position_opened",
             signal.symbol,
@@ -12681,6 +12645,12 @@ class AnomalyMicroLiveRunner:
                 event="reject_signal_not_closed_yet",
                 details=reject_details,
             )
+            self._append_selected_terminal_outcome(
+                signal,
+                outcome="execution_rejected",
+                terminal_event="reject_signal_not_closed_yet",
+                details=reject_details,
+            )
             return False
         if details["signal_age_ms"] > self.config.max_signal_age_ms:
             self._clear_active_symbol(signal.symbol, reason="stale_signal")
@@ -12690,6 +12660,12 @@ class AnomalyMicroLiveRunner:
             self._capture_delayed_replay_execution_reject(
                 signal,
                 event="reject_stale_signal",
+                details=reject_details,
+            )
+            self._append_selected_terminal_outcome(
+                signal,
+                outcome="execution_rejected",
+                terminal_event="reject_stale_signal",
                 details=reject_details,
             )
             self._notify_order_blocked(signal, event="reject_stale_signal", details=reject_details)
@@ -12744,10 +12720,42 @@ class AnomalyMicroLiveRunner:
             )
         return True
 
+    def _append_selected_terminal_outcome(
+        self,
+        signal: LiveSignal,
+        *,
+        outcome: str,
+        terminal_event: str,
+        details: dict[str, object] | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "outcome": outcome,
+            "terminal_event": terminal_event,
+            "category_id": signal.category_id,
+            "category_label": signal.category_label,
+            "category_contract": LIVE_CATEGORY_CONTRACT,
+            "category_priority": signal.category_priority,
+            "levels_tf": signal.levels_timeframe.value,
+            "entry_tf": signal.entry_timeframe.value,
+            "decision_timestamp_ms": int(signal.decision_timestamp_ms),
+            "signal_entry_price": _finite_or_none(signal.entry_price),
+            "signal_stop_price": _finite_or_none(signal.stop_price),
+            "signal_tp1_price": _finite_or_none(signal.tp1_price),
+        }
+        if details:
+            payload["terminal_details"] = _json_safe_payload(details)
+        self.artifacts.append_event("selected_terminal_outcome", signal.symbol, payload)
+
     def _reject_live_order(self, signal: LiveSignal, *, event: str, details: dict[str, object]) -> bool:
         self._clear_active_symbol(signal.symbol, reason=event)
         self._mark_signal_decision_consumed(signal, reason=event)
         self.artifacts.append_event(event, signal.symbol, details)
+        self._append_selected_terminal_outcome(
+            signal,
+            outcome="execution_rejected",
+            terminal_event=event,
+            details=details,
+        )
         self._capture_delayed_replay_execution_reject(signal, event=event, details=details)
         self._notify_order_blocked(signal, event=event, details=details)
         return False
@@ -15308,11 +15316,17 @@ def _fill_missing_ohlcv_buckets(
     seed_close: float,
 ) -> pd.DataFrame:
     if timeframe_ms <= 0 or end_timestamp_ms < start_timestamp_ms:
-        return frame.copy()
+        result = frame.copy()
+        if "synthetic_ohlcv_bucket" not in result.columns:
+            result["synthetic_ohlcv_bucket"] = False
+        return result
+    source = frame.copy()
+    source["synthetic_ohlcv_bucket"] = False
     full_index = pd.DataFrame(
         {"timestamp": list(range(int(start_timestamp_ms), int(end_timestamp_ms) + int(timeframe_ms), int(timeframe_ms)))}
     )
-    merged = full_index.merge(frame.copy(), on="timestamp", how="left")
+    merged = full_index.merge(source, on="timestamp", how="left")
+    merged["synthetic_ohlcv_bucket"] = merged["synthetic_ohlcv_bucket"].fillna(True).astype(bool)
     merged["close"] = pd.to_numeric(merged["close"], errors="coerce").ffill().fillna(float(seed_close))
     for price_column in ("open", "high", "low"):
         merged[price_column] = pd.to_numeric(merged[price_column], errors="coerce").fillna(merged["close"])
@@ -15321,6 +15335,13 @@ def _fill_missing_ohlcv_buckets(
             merged[volume_column] = 0.0
         merged[volume_column] = pd.to_numeric(merged[volume_column], errors="coerce").fillna(0.0)
     return merged.reset_index(drop=True)
+
+
+def _real_ohlcv_buckets(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or "synthetic_ohlcv_bucket" not in frame.columns:
+        return frame
+    synthetic = frame["synthetic_ohlcv_bucket"].fillna(False).astype(bool)
+    return frame.loc[~synthetic].copy()
 
 
 def _count_missing_ohlcv_buckets(

@@ -17,6 +17,16 @@ from urllib.parse import quote
 import numpy as np
 import pandas as pd
 
+from research_tools.anomaly_category_contract import (
+    CATEGORY_CONTRACT_ID as PUMP_CATEGORY_CONTRACT,
+    DEFAULT_PUMP_CATEGORY_IDS as PUMP_CATEGORY_PROFILE_ORDER,
+    PUMP_CATEGORY_DISCOVERY,
+    PUMP_CATEGORY_FAMILY_DISCOVERY,
+    PUMP_CATEGORY_FAMILY_LIVE,
+    backtest_profile_overrides,
+    priority_for_timeframe,
+)
+
 from research_tools.charting import (
     CHART_ANOMALY,
     CHART_DOWN,
@@ -91,6 +101,9 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "pump_category_id",
     "pump_category_rank",
     "pump_category_matches",
+    "pump_category_family",
+    "pump_category_is_live_rule",
+    "pump_category_contract",
     "pump_category_source",
     "feature_contract",
     "setup_timeframe",
@@ -268,25 +281,8 @@ EXECUTION_GUARD_SKIP_REASONS = {
     "market_entry_rr_collapsed",
 }
 
-PUMP_CATEGORY_PROFILE_ORDER = (
-    "runner_oi_confirmed",
-    "runner_flow",
-    "runner_reclaim",
-    "runner_balanced",
-)
-PUMP_CATEGORY_DISCOVERY = "discovery"
-PUMP_CATEGORY_TIMEFRAME_PRIORITY: dict[tuple[str, str], tuple[str, ...]] = {
-    ("5m", "30s"): ("runner_flow", "runner_oi_confirmed", "runner_reclaim", "runner_balanced"),
-    ("1m", "15s"): ("runner_oi_confirmed", "runner_flow", "runner_reclaim", "runner_balanced"),
-    ("1m", "5s"): ("runner_oi_confirmed", "runner_flow", "runner_balanced", "runner_reclaim"),
-}
-
-
 def _category_priority_for_timeframe(setup_timeframe: object, entry_timeframe: object) -> tuple[str, ...]:
-    priority = PUMP_CATEGORY_TIMEFRAME_PRIORITY.get((str(setup_timeframe), str(entry_timeframe)))
-    if priority is not None:
-        return priority
-    return PUMP_CATEGORY_PROFILE_ORDER
+    return priority_for_timeframe(setup_timeframe, entry_timeframe)
 
 
 def _execution_model_label(config: AnomalyBacktestConfig) -> str:
@@ -365,93 +361,8 @@ def _apply_red_flag_profile(config: AnomalyBacktestConfig) -> AnomalyBacktestCon
                 else config.max_start_trade_ratio_per_abs_return
             ),
         )
-    if profile == "runner_balanced":
-        return replace(
-            config,
-            min_mark_close_vs_decision_close_basis=(
-                0.001
-                if config.min_mark_close_vs_decision_close_basis is None
-                else config.min_mark_close_vs_decision_close_basis
-            ),
-            reject_stale_derivatives_context=True
-            if not config.reject_stale_derivatives_context
-            else config.reject_stale_derivatives_context,
-            max_start_quote_ratio=(
-                1000.0 if config.max_start_quote_ratio is None else config.max_start_quote_ratio
-            ),
-            max_start_trade_ratio=(
-                250.0 if config.max_start_trade_ratio is None else config.max_start_trade_ratio
-            ),
-            max_start_quote_ratio_per_abs_return=(
-                20_000.0
-                if config.max_start_quote_ratio_per_abs_return is None
-                else config.max_start_quote_ratio_per_abs_return
-            ),
-            max_start_trade_ratio_per_abs_return=(
-                3_000.0
-                if config.max_start_trade_ratio_per_abs_return is None
-                else config.max_start_trade_ratio_per_abs_return
-            ),
-            max_start_taker_buy_quote_share_delta=(
-                0.25
-                if config.max_start_taker_buy_quote_share_delta is None
-                else config.max_start_taker_buy_quote_share_delta
-            ),
-            max_prior_fast_fade_count_72h=(
-                0
-                if config.max_prior_fast_fade_count_72h is None
-                else config.max_prior_fast_fade_count_72h
-            ),
-        )
-    if profile == "runner_reclaim":
-        balanced = _apply_red_flag_profile(replace(config, red_flag_profile="runner_balanced"))
-        return replace(
-            balanced,
-            red_flag_profile=config.red_flag_profile,
-            min_start_lower_wick_to_range=(
-                0.0
-                if balanced.min_start_lower_wick_to_range is None
-                else balanced.min_start_lower_wick_to_range
-            ),
-            max_start_upper_wick_to_range=(
-                0.20
-                if balanced.max_start_upper_wick_to_range is None
-                else balanced.max_start_upper_wick_to_range
-            ),
-        )
-    if profile == "runner_flow":
-        balanced = _apply_red_flag_profile(replace(config, red_flag_profile="runner_balanced"))
-        return replace(
-            balanced,
-            red_flag_profile=config.red_flag_profile,
-            min_flow_hold_count=(
-                1
-                if balanced.min_flow_hold_count is None
-                else balanced.min_flow_hold_count
-            ),
-        )
-    if profile == "runner_oi_confirmed":
-        balanced = _apply_red_flag_profile(replace(config, red_flag_profile="runner_balanced"))
-        return replace(
-            balanced,
-            red_flag_profile=config.red_flag_profile,
-            min_oi_change_pct_3x5m=(
-                0.003
-                if balanced.min_oi_change_pct_3x5m is None
-                else balanced.min_oi_change_pct_3x5m
-            ),
-            require_oi_status_ok=True
-            if not balanced.require_oi_status_ok
-            else balanced.require_oi_status_ok,
-            min_mark_close_vs_decision_close_basis=max(
-                0.003,
-                (
-                    0.003
-                    if balanced.min_mark_close_vs_decision_close_basis is None
-                    else balanced.min_mark_close_vs_decision_close_basis
-                ),
-            ),
-        )
+    if profile in PUMP_CATEGORY_PROFILE_ORDER:
+        return replace(config, **backtest_profile_overrides(profile))
     raise ValueError(f"unsupported red_flag_profile: {config.red_flag_profile}")
 
 
@@ -863,18 +774,26 @@ def _aggregate_frame_to_timeframe(frame: pd.DataFrame, *, timeframe_ms: int) -> 
     return aggregated
 
 
+def _first_non_empty_string(frame: pd.DataFrame, column: str) -> str:
+    if frame.empty or column not in frame.columns:
+        return ""
+    values = frame[column].dropna().astype(str).str.strip()
+    values = values.loc[values.ne("")]
+    return str(values.iloc[0]) if not values.empty else ""
+
+
 def _materialized_entry_flow_source(frame: pd.DataFrame, *, entry_timeframe: str) -> str:
     if "aggregation_source_timeframe" not in frame.columns:
         return "cached_ohlcv"
-    source = str(frame["aggregation_source_timeframe"].dropna().iloc[0]) if not frame.empty else ""
-    version = (
-        str(frame["aggregation_version"].dropna().iloc[0])
-        if "aggregation_version" in frame.columns and not frame.empty
-        else ""
-    )
+    source = _first_non_empty_string(frame, "aggregation_source_timeframe")
+    version = _first_non_empty_string(frame, "aggregation_version")
+    if not source:
+        return "cached_ohlcv_missing_aggregation_metadata"
     if source == "1s" and version == _MATERIALIZED_SUBMINUTE_CACHE_VERSION:
         return f"cached_1s_aggregated_to_{entry_timeframe}"
-    return "cached_ohlcv"
+    if source == "1s" and not version:
+        return f"cached_1s_aggregated_to_{entry_timeframe}_missing_version"
+    return f"cached_{source}_materialized_to_{entry_timeframe}_unknown_version"
 
 
 def materialize_subminute_entry_caches(
@@ -1258,9 +1177,18 @@ def annotate_pump_categories(
     *,
     config: AnomalyBacktestConfig,
 ) -> pd.DataFrame:
+    category_columns = (
+        "pump_category_id",
+        "pump_category_rank",
+        "pump_category_matches",
+        "pump_category_family",
+        "pump_category_is_live_rule",
+        "pump_category_contract",
+        "pump_category_source",
+    )
     if signals.empty:
         result = signals.copy()
-        for column in ("pump_category_id", "pump_category_rank", "pump_category_matches", "pump_category_source"):
+        for column in category_columns:
             if column not in result.columns:
                 result[column] = pd.Series(dtype="object")
         return result
@@ -1282,6 +1210,9 @@ def annotate_pump_categories(
     selected_categories: list[str] = []
     selected_ranks: list[int] = []
     category_matches: list[str] = []
+    category_families: list[str] = []
+    category_is_live_rule: list[bool] = []
+    category_sources: list[str] = []
     for row in result.loc[:, key_columns].itertuples(index=False, name=None):
         setup_tf = str(row[1])
         entry_tf = str(row[2])
@@ -1295,14 +1226,23 @@ def annotate_pump_categories(
             selected_categories.append(selected)
             selected_ranks.append(category_ranks[selected])
             category_matches.append(",".join(matches))
+            category_families.append(PUMP_CATEGORY_FAMILY_LIVE)
+            category_is_live_rule.append(True)
+            category_sources.append(f"{PUMP_CATEGORY_CONTRACT}:live_priority")
         else:
             selected_categories.append(PUMP_CATEGORY_DISCOVERY)
             selected_ranks.append(discovery_rank)
             category_matches.append(PUMP_CATEGORY_DISCOVERY)
+            category_families.append(PUMP_CATEGORY_FAMILY_DISCOVERY)
+            category_is_live_rule.append(False)
+            category_sources.append(f"{PUMP_CATEGORY_CONTRACT}:discovery_fallback")
     result["pump_category_id"] = selected_categories
     result["pump_category_rank"] = selected_ranks
     result["pump_category_matches"] = category_matches
-    result["pump_category_source"] = "backtest_live_priority_overlay_v1_discovery_fallback"
+    result["pump_category_family"] = category_families
+    result["pump_category_is_live_rule"] = category_is_live_rule
+    result["pump_category_contract"] = PUMP_CATEGORY_CONTRACT
+    result["pump_category_source"] = category_sources
     return result
 
 
@@ -2307,17 +2247,20 @@ def simulate_anomaly_trades(
         symbol = str(signal["symbol"])
         entry_ts = int(signal["decision_timestamp_ms"])
         if entry_ts <= last_exit_by_symbol.get(symbol, -1):
-            rows.append(
-                {
-                    "symbol": symbol,
-                    "entry_timestamp_ms": entry_ts,
-                    "entry_timestamp_utc": _timestamp_to_utc(entry_ts),
-                    "status": "skipped",
-                    "skip_reason": "overlapping_signal",
-                    "entry_method": config.entry_method,
-                    "execution_model": _execution_model_label(config),
-                }
-            )
+            skipped_row = {
+                "symbol": symbol,
+                "entry_timestamp_ms": entry_ts,
+                "entry_timestamp_utc": _timestamp_to_utc(entry_ts),
+                "decision_timestamp_ms": entry_ts,
+                "decision_timestamp_utc": _timestamp_to_utc(entry_ts),
+                "status": "skipped",
+                "skip_reason": "overlapping_signal",
+                "entry_method": config.entry_method,
+                "execution_model": _execution_model_label(config),
+            }
+            for column in TRADE_SIGNAL_CONTEXT_COLUMNS:
+                skipped_row[column] = signal.get(column, "")
+            rows.append(skipped_row)
             continue
         frame = frame_cache.get(symbol)
         if frame is None:
@@ -2464,6 +2407,47 @@ def summarize_trades_by_pump_category(trades: pd.DataFrame) -> pd.DataFrame:
     grouped.sort_values(["sum_net_return", "closed_trades"], ascending=[False, False], inplace=True)
     return grouped[columns]
 
+
+
+def summarize_trades_by_pump_category_family(trades: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "pump_category_family",
+        "closed_trades",
+        "win_rate",
+        "avg_net_return",
+        "median_net_return",
+        "sum_net_return",
+        "avg_gross_r",
+        "tp1_hit_rate",
+        "avg_mfe_pct",
+        "avg_mae_pct",
+    ]
+    if trades.empty or "status" not in trades.columns or "pump_category_family" not in trades.columns:
+        return pd.DataFrame(columns=columns)
+    closed = trades.loc[trades["status"].eq("closed")].copy()
+    if closed.empty:
+        return pd.DataFrame(columns=columns)
+    closed["pump_category_family"] = (
+        closed["pump_category_family"].replace("", PUMP_CATEGORY_FAMILY_DISCOVERY).fillna(PUMP_CATEGORY_FAMILY_DISCOVERY)
+    )
+    grouped = (
+        closed.assign(win=closed["net_return"].astype(float) > 0)
+        .groupby("pump_category_family")
+        .agg(
+            closed_trades=("pump_category_family", "size"),
+            win_rate=("win", "mean"),
+            avg_net_return=("net_return", "mean"),
+            median_net_return=("net_return", "median"),
+            sum_net_return=("net_return", "sum"),
+            avg_gross_r=("gross_r", "mean"),
+            tp1_hit_rate=("tp1_hit", "mean"),
+            avg_mfe_pct=("mfe_pct", "mean"),
+            avg_mae_pct=("mae_pct", "mean"),
+        )
+        .reset_index()
+    )
+    grouped.sort_values(["sum_net_return", "closed_trades"], ascending=[False, False], inplace=True)
+    return grouped[columns]
 
 def _parse_grid_values(raw: str, *, cast: type[float] | type[int]) -> list[float] | list[int]:
     values = [item.strip() for item in raw.split(",") if item.strip()]
@@ -2719,7 +2703,7 @@ def _enrich_derivatives_context_for_signal_universe(
         return candidates
 
     result = candidates.copy()
-    defaults = _context_default_columns("not_in_context_universe")
+    defaults = _context_default_columns("outside_pre_context_signal_universe")
     if signal_universe.empty:
         defaults = _context_default_columns("no_context_universe")
         return _attach_default_context_columns(result, defaults)
@@ -3753,6 +3737,7 @@ def run_anomaly_strategy_backtest(
             (output_dir / "anomaly_skip_reasons.csv", skip_reasons),
             (output_dir / "anomaly_profitability_by_symbol.csv", summarize_trades_by_symbol(trades)),
             (output_dir / "anomaly_profitability_by_category.csv", summarize_trades_by_pump_category(trades)),
+            (output_dir / "anomaly_profitability_by_category_family.csv", summarize_trades_by_pump_category_family(trades)),
         ],
         progress_label="anomaly artifacts: trade files",
     )

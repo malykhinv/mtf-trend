@@ -1467,3 +1467,15 @@ P262 adds an explicit dangerous diagnostic flag `--danger-continue-after-order-p
 Current GitHub head checked before patch: c0b5dfd970dabc5383cd6f493a688f41e29ba517.
 Current patch status: PROPOSED / not applied.
 Next validation: run one strict synthetic stop/order failure and one danger-mode synthetic failure to verify strict halt vs Telegram+continue behavior.
+
+---
+
+## 2026-05-16 — Proposed parity state after P264
+
+```text
+Current patch status: P264 PROPOSED, commit UNKNOWN.
+Backtest PnL before P264 is not live-category parity-valid because runner category thresholds were duplicated and different from live.
+After P264, runner category thresholds/priority must come from research_tools/anomaly_category_contract.py in both live and backtest.
+Discovery remains allowed only as an explicit backtest fallback and must be separable through pump_category_family=discovery vs live_priority.
+Delayed replay must preserve the original live setup_source from immutable snapshots to avoid changing forming-HTF pace ratios during replay.
+```
