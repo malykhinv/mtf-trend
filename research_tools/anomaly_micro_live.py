@@ -4076,6 +4076,16 @@ class AnomalyMicroLiveRunner:
         self._current_adaptive_precise_budget_reason = "not_started"
         self._current_adaptive_precise_budget_limit: int | None = None
         self._current_adaptive_precise_budget_radar_slots: int | None = None
+        self._current_candidate_queue_status = "not_started"
+        self._current_candidate_queue_reason = "not_started"
+        self._current_candidate_queue_radar_total_before = 0
+        self._current_candidate_queue_radar_total_after = 0
+        self._current_candidate_queue_warm_total_before = 0
+        self._current_candidate_queue_warm_total_after = 0
+        self._current_candidate_queue_actionable_sample_count = 0
+        self._current_candidate_queue_dropped_pressure_count = 0
+        self._current_candidate_queue_expired_backlog_stale_count = 0
+        self._current_candidate_queue_top_score: float | None = None
         self._cold_coverage_pressure_ewma = 0.0
         self._scheduler_cycle_seconds_ewma = DANGER_ADAPTIVE_COLD_COVERAGE_SLOW_CYCLE_SECONDS
         self._cycle_precise_scan_symbols = 0
@@ -4412,30 +4422,30 @@ class AnomalyMicroLiveRunner:
                         "latency_sla_threshold_seconds": float(self._current_latency_sla_threshold_seconds),
                         "latency_sla_min_due_samples": int(self._current_latency_sla_min_due_samples),
                         "latency_sla_reason": self._current_latency_sla_reason,
-                        "candidate_queue_status": selection.candidate_queue_status,
-                        "candidate_queue_reason": selection.candidate_queue_reason,
-                        "candidate_queue_radar_total_before": selection.candidate_queue_radar_total_before,
-                        "candidate_queue_radar_total_after": selection.candidate_queue_radar_total_after,
-                        "candidate_queue_warm_total_before": selection.candidate_queue_warm_total_before,
-                        "candidate_queue_warm_total_after": selection.candidate_queue_warm_total_after,
-                        "candidate_queue_actionable_sample_count": selection.candidate_queue_actionable_sample_count,
-                        "candidate_queue_dropped_pressure_count": selection.candidate_queue_dropped_pressure_count,
-                        "candidate_queue_expired_backlog_stale_count": selection.candidate_queue_expired_backlog_stale_count,
+                        "candidate_queue_status": self._current_candidate_queue_status,
+                        "candidate_queue_reason": self._current_candidate_queue_reason,
+                        "candidate_queue_radar_total_before": self._current_candidate_queue_radar_total_before,
+                        "candidate_queue_radar_total_after": self._current_candidate_queue_radar_total_after,
+                        "candidate_queue_warm_total_before": self._current_candidate_queue_warm_total_before,
+                        "candidate_queue_warm_total_after": self._current_candidate_queue_warm_total_after,
+                        "candidate_queue_actionable_sample_count": self._current_candidate_queue_actionable_sample_count,
+                        "candidate_queue_dropped_pressure_count": self._current_candidate_queue_dropped_pressure_count,
+                        "candidate_queue_expired_backlog_stale_count": self._current_candidate_queue_expired_backlog_stale_count,
                         "candidate_queue_top_score": (
-                            round(float(selection.candidate_queue_top_score), 6)
-                            if selection.candidate_queue_top_score is not None
+                            round(float(self._current_candidate_queue_top_score), 6)
+                            if self._current_candidate_queue_top_score is not None
                             else ""
                         ),
-                        "adaptive_precise_budget_status": selection.adaptive_precise_budget_status,
-                        "adaptive_precise_budget_reason": selection.adaptive_precise_budget_reason,
+                        "adaptive_precise_budget_status": self._current_adaptive_precise_budget_status,
+                        "adaptive_precise_budget_reason": self._current_adaptive_precise_budget_reason,
                         "adaptive_precise_budget_limit": (
-                            selection.adaptive_precise_budget_limit
-                            if selection.adaptive_precise_budget_limit is not None
+                            self._current_adaptive_precise_budget_limit
+                            if self._current_adaptive_precise_budget_limit is not None
                             else ""
                         ),
                         "adaptive_precise_budget_radar_slots": (
-                            selection.adaptive_precise_budget_radar_slots
-                            if selection.adaptive_precise_budget_radar_slots is not None
+                            self._current_adaptive_precise_budget_radar_slots
+                            if self._current_adaptive_precise_budget_radar_slots is not None
                             else ""
                         ),
                         "symbol_context_snapshot_seconds": round(context_snapshot_seconds, 3),
@@ -6345,6 +6355,16 @@ class AnomalyMicroLiveRunner:
         self._current_adaptive_precise_budget_reason = selection.adaptive_precise_budget_reason
         self._current_adaptive_precise_budget_limit = selection.adaptive_precise_budget_limit
         self._current_adaptive_precise_budget_radar_slots = selection.adaptive_precise_budget_radar_slots
+        self._current_candidate_queue_status = selection.candidate_queue_status
+        self._current_candidate_queue_reason = selection.candidate_queue_reason
+        self._current_candidate_queue_radar_total_before = selection.candidate_queue_radar_total_before
+        self._current_candidate_queue_radar_total_after = selection.candidate_queue_radar_total_after
+        self._current_candidate_queue_warm_total_before = selection.candidate_queue_warm_total_before
+        self._current_candidate_queue_warm_total_after = selection.candidate_queue_warm_total_after
+        self._current_candidate_queue_actionable_sample_count = selection.candidate_queue_actionable_sample_count
+        self._current_candidate_queue_dropped_pressure_count = selection.candidate_queue_dropped_pressure_count
+        self._current_candidate_queue_expired_backlog_stale_count = selection.candidate_queue_expired_backlog_stale_count
+        self._current_candidate_queue_top_score = selection.candidate_queue_top_score
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
@@ -8938,8 +8958,10 @@ class AnomalyMicroLiveRunner:
                 seconds_per_symbol = elapsed_so_far / float(completed_symbols)
                 eta_seconds = max(0.0, seconds_per_symbol * float(symbols_total - completed_symbols))
             eta_text = _format_live_runtime(float(eta_seconds)) if eta_seconds is not None else "-"
+            current_time_text = datetime.now().strftime("%H:%M:%S")
             self._status_logger.status(
-                f"контекст 72ч · кеш {index}/{symbols_total} · {_compact_symbol(symbol)} · ETA {eta_text}"
+                f"контекст 72ч · {current_time_text} · кеш {index}/{symbols_total} · "
+                f"{_compact_symbol(symbol)} · ETA {eta_text}"
             )
             for timeframe in context_timeframes:
                 context_start_ms, _history_start_ms, decision_ts = windows[timeframe.value]

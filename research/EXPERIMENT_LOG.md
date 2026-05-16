@@ -2120,6 +2120,10 @@ delayed replay should not queue retryable dependency cases as final all_categori
 
 Compare against closed-hour top-growth/missed-pump artifacts before loosening any execution guard.
 
+## 2026-05-16 — P252 startup/live smoke
+
+After P252, rerun live with the same command that previously failed after startup context backfill. Expected result: no `NameError: selection is not defined`; the first live cycle should append `live_cycle_summary` with candidate queue fields populated from runner state. The startup backfill status line should include current local time on every per-symbol refresh.
+
 
 ## 2026-05-15 — P247 dependency retry cooldown validation
 

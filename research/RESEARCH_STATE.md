@@ -1382,6 +1382,13 @@ Unavailable taker-buy, mark-basis, and OI context are no longer final category r
 Current commit: UNKNOWN.
 Next validation: run a short live smoke and inspect that category_rejected is dominated by real market reasons, while `signal_scan_retryable_dependency_blocked` carries data-context issues without consuming decisions.
 
+## 2026-05-16 — P252 proposed
+
+P252 fixes a runtime `NameError: selection is not defined` in `live_cycle_summary`: P245/P246 wrote candidate queue/adaptive precise fields using the local `selection` variable after the batch-selection scope had ended. The patch stores those values on runner state when the batch is selected and uses the state fields in cycle summary. It also adds current local `HH:MM:SS` to the inline `контекст 72ч` startup backfill status line.
+
+Current commit: UNKNOWN.
+Next validation: restart live and verify startup status updates as `контекст 72ч · HH:MM:SS · кеш N/total · SYMBOL · ETA ...`, then confirm the first `live_cycle_summary` writes without NameError.
+
 
 ## 2026-05-15 — P247 proposed
 

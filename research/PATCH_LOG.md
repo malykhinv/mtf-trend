@@ -4333,6 +4333,45 @@ Risk:
 Medium. This intentionally increases discovery sensitivity and may create more selected candidates. It does not loosen stale/drift/RR/actual-risk/order safety. New live validation must compare category_selected, signal_scan_retryable_dependency_blocked, execution rejects, and closed-hour missed-pump visibility before any further parameter changes.
 ```
 
+## P252 - proposed - fix live cycle selection accounting and timestamp startup backfill status
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Fix the runtime NameError caused by live_cycle_summary referencing the local symbol-batch selection outside its scope, and make the startup 72h context backfill status line show the current local clock time on every symbol update.
+```
+
+Changes:
+
+```text
+- Stores candidate-queue pressure fields from the latest symbol batch selection on runner state, like existing latency/adaptive budget fields.
+- Reads those runner-state fields in live_cycle_summary instead of the out-of-scope selection variable.
+- Adds HH:MM:SS to the inline 72h context backfill status line.
+- Adds no CLI flags and no trading-logic changes.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "candidate-queue|queue-pressure|startup-backfill-time"  # expected: no output
+```
+
+Risk:
+
+```text
+Low. This fixes event-summary accounting and operator display only. Candidate selection, precise-scan budget, dependency cooldown, backfill, cache writes, and execution guards are unchanged.
+```
+
 
 ## P247 - proposed - dependency retry cooldown
 
