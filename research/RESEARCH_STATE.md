@@ -1528,7 +1528,7 @@ After P269, the next real-order smoke must prove: `stop_verified.source` is `ope
 ## 2026-05-16 — P270 proposed
 
 ```text
-Current patch status: P270 PROPOSED, commit UNKNOWN.
+Current patch status: P270 APPLIED locally / UNKNOWN commit.
 P270 extends the existing real-order smoke with an optional management lifecycle instead of adding strategy behavior: initial algo stop -> closer replacement algo stop -> old stop cancel verification -> reduce-only close while replacement stop remains active -> replacement stop cancel -> final ordinary/algo order sweep.
 The old quick smoke remains unchanged unless `--replacement-stop-distance-pct` is supplied.
 Next validation: run the management smoke at minimal notional and inspect `live_order_smoke_events.csv` for `stop_replacement_verified`, `old_still_open=false`, `new_still_open=true` before close, and final `smoke_algo_open_orders_seen=0`.
@@ -1536,8 +1536,17 @@ Next validation: run the management smoke at minimal notional and inspect `live_
 ## 2026-05-16 — P271 proposed
 
 ```text
-Current patch status: P271 PROPOSED, commit UNKNOWN.
+Current patch status: P271 APPLIED locally / UNKNOWN commit.
 The first P270 management smoke failed before replacement because stop verification compared the raw requested floating stop price to Binance's normalized algo trigger price strictly enough to reject one valid price-precision truncation: 0.035643999999999995 -> 0.03564.
 P271 keeps strict stop verification but compares trigger price with exchange-normalized precision tolerance instead of treating one displayed price unit as integrity failure.
 Next validation: rerun the same management smoke and require `stop_verified`, `stop_replacement_verified`, old stop removed, replacement stop present until close, then final flat/no ordinary or algo orders.
+```
+
+## 2026-05-16 — P272 proposed
+
+```text
+Current patch status: P272 PROPOSED, commit UNKNOWN.
+P271 management smoke passed the real Binance lifecycle, but the smoke summary artifact reused `_stop_order_id` after replacement and therefore reported the replacement id as `stop_order_id`.
+P272 is artifact-only: `stop_order_id` remains the initial protective stop id, `replacement_stop_order_id` remains the replacement id, and `active_stop_order_id` records the last/current managed stop. No order placement, verification, cancellation, or strategy behavior changes.
+Next validation: rerun compile/unit/help checks, then on the next management smoke confirm the summary ids match the event stream.
 ```

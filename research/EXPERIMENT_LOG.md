@@ -2396,3 +2396,25 @@ This is not a missing stop and not a management-state failure. It is an overly s
 ```
 
 Next validation after P271: rerun the same management smoke command and inspect `live_order_smoke_events.csv` for both initial and replacement stop verification plus final `smoke_algo_open_orders_seen=0`.
+
+## 2026-05-16 — P272 smoke summary stop-id provenance
+
+Observed from successful management smoke `20260516_201316`:
+
+```text
+Events correctly record the initial stop id and replacement stop id, but `live_order_smoke_summary.json` reports `stop_order_id` as the replacement id after `_stop_order_id` is updated to the active replacement stop.
+```
+
+Interpretation:
+
+```text
+This is an artifact-only provenance bug. The real position management lifecycle passed: initial stop verified, replacement stop verified, old stop cancelled, position closed reduce-only, replacement stop cancelled, final ordinary/algo orders zero.
+```
+
+Expected after P272:
+
+```text
+summary.stop_order_id = initial stop id
+summary.active_stop_order_id = currently active/last managed stop id
+summary.replacement_stop_order_id = replacement stop id when replacement mode is used
+```

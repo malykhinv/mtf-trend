@@ -46,6 +46,7 @@ class LiveOrderSmokeResult:
     symbol: str
     entry_order_id: str | None
     stop_order_id: str | None
+    active_stop_order_id: str | None
     replacement_stop_order_id: str | None
     entry_fill_price: float | None
     entry_filled_amount: float | None
@@ -68,6 +69,7 @@ class LiveOrderSmokeRunner:
         self._client_id_prefix = self._build_client_id_prefix(config.symbol)
         self._entry_order_id: str | None = None
         self._entry_fill: ExchangeOrderFill | None = None
+        self._initial_stop_order_id: str | None = None
         self._stop_order_id: str | None = None
         self._replacement_stop_order_id: str | None = None
         self._stop_price: float | None = None
@@ -255,6 +257,7 @@ class LiveOrderSmokeRunner:
         stop_order_id = _resolve_order_id(stop_order)
         if not stop_order_id:
             raise RuntimeError(f"stop create returned no order id: payload_keys={sorted(stop_order)}")
+        self._initial_stop_order_id = stop_order_id
         self._stop_order_id = stop_order_id
         self._event(
             "stop_created",
@@ -657,7 +660,8 @@ class LiveOrderSmokeRunner:
             status=status,
             symbol=self.config.symbol,
             entry_order_id=self._entry_order_id,
-            stop_order_id=self._stop_order_id,
+            stop_order_id=self._initial_stop_order_id or self._stop_order_id,
+            active_stop_order_id=self._stop_order_id,
             replacement_stop_order_id=self._replacement_stop_order_id,
             entry_fill_price=self._entry_fill.average_price if self._entry_fill else None,
             entry_filled_amount=self._entry_fill.filled_amount if self._entry_fill else None,
