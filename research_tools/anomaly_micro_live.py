@@ -221,16 +221,27 @@ DEFAULT_LIVE_TOP_GROWTH_IDLE_SYMBOLS_PER_CYCLE = 8
 DEFAULT_LIVE_TOP_GROWTH_IDLE_MAX_CYCLE_SECONDS = 1.5
 DEFAULT_LIVE_TOP_GROWTH_CONSERVATIVE_SYMBOLS_PER_CYCLE = 2
 DEFAULT_LIVE_TOP_GROWTH_CONSERVATIVE_MAX_CYCLE_SECONDS = 0.5
-LIVE_SESSION_BLOCKS_UTC = (
-    ("Азия", 0, 8),
-    ("Европа", 8, 16),
-    ("Америка", 16, 24),
+LIVE_SESSION_TOP_ROLLING_WINDOW_MS = 6 * 60 * 60 * 1000
+LIVE_CRYPTO_SESSION_WINDOWS_UTC = (
+    (0, 7 * 60, "Азия", "core", "Азия", ""),
+    (7 * 60, 9 * 60, "Азия → Европа", "transition", "Азия", "Европа"),
+    (9 * 60, 13 * 60, "Европа", "core", "Европа", ""),
+    (13 * 60, 16 * 60, "Европа + Америка", "overlap", "Европа", "Америка"),
+    (16 * 60, 21 * 60, "Америка", "core", "Америка", ""),
+    (21 * 60, 24 * 60, "Америка → Азия", "transition", "Америка", "Азия"),
 )
 LIVE_SESSION_TOP_GROWTH_COLUMNS = (
     "snapshot_utc",
     "session_label",
+    "session_phase",
+    "session_primary",
+    "session_secondary",
     "session_start_utc",
     "session_end_utc",
+    "top_window_label",
+    "top_window_start_utc",
+    "top_window_end_utc",
+    "top_window_hours",
     "rank",
     "symbol",
     "growth_pct",
@@ -2467,11 +2478,16 @@ class LiveTickerRadarCycleStats:
 @dataclass(slots=True)
 class LiveSessionTopSymbolState:
     symbol: str
-    baseline_price: float
-    baseline_timestamp_ms: int
-    last_price: float
-    last_timestamp_ms: int
-    last_price_source: str
+    price_points: deque[tuple[int, float, str]] = field(default_factory=deque)
+
+
+def _prune_session_top_points(
+    points: deque[tuple[int, float, str]],
+    *,
+    cutoff_ms: int,
+) -> None:
+    while points and int(points[0][0]) < int(cutoff_ms):
+        points.popleft()
 
 
 class LiveSessionTopTracker:
@@ -2479,9 +2495,6 @@ class LiveSessionTopTracker:
         if limit < 1:
             raise LiveStartupError(f"Некорректный live session top limit: {limit}")
         self.limit = int(limit)
-        self._session_label = ""
-        self._session_start_ms = 0
-        self._session_end_ms = 0
         self._states: dict[str, LiveSessionTopSymbolState] = {}
         self._last_snapshot_ms = 0
         self._last_source = ""
@@ -2497,16 +2510,17 @@ class LiveSessionTopTracker:
         source_status: str,
         source_reason: str,
     ) -> None:
-        session_label, session_start_ms, session_end_ms = _live_session_window_ms(now_ms)
-        if session_start_ms != self._session_start_ms:
-            self._states = {}
-            self._session_label = session_label
-            self._session_start_ms = session_start_ms
-            self._session_end_ms = session_end_ms
-        self._last_snapshot_ms = int(now_ms)
+        now_ms = int(now_ms)
+        cutoff_ms = now_ms - int(LIVE_SESSION_TOP_ROLLING_WINDOW_MS)
+        self._last_snapshot_ms = now_ms
         self._last_source = str(source or "")
         self._last_source_status = str(source_status or "")
         self._last_source_reason = str(source_reason or "")
+        for state in list(self._states.values()):
+            _prune_session_top_points(state.price_points, cutoff_ms=cutoff_ms)
+        for symbol_key, state in list(self._states.items()):
+            if not state.price_points:
+                self._states.pop(symbol_key, None)
         for snapshot in snapshots:
             if snapshot.status != "ok":
                 continue
@@ -2514,46 +2528,40 @@ class LiveSessionTopTracker:
             if price is None or price <= 0.0:
                 continue
             fetched_at_ms = int(snapshot.fetched_at_ms)
-            if fetched_at_ms < session_start_ms or fetched_at_ms > session_end_ms:
+            if fetched_at_ms < cutoff_ms or fetched_at_ms > now_ms + 60_000:
                 continue
             symbol_key = _position_symbol_key(snapshot.symbol)
             if not symbol_key:
                 continue
             state = self._states.get(symbol_key)
             if state is None:
-                self._states[symbol_key] = LiveSessionTopSymbolState(
-                    symbol=snapshot.symbol,
-                    baseline_price=price,
-                    baseline_timestamp_ms=fetched_at_ms,
-                    last_price=price,
-                    last_timestamp_ms=fetched_at_ms,
-                    last_price_source=snapshot.last_price_source,
-                )
+                state = LiveSessionTopSymbolState(symbol=snapshot.symbol)
+                self._states[symbol_key] = state
+            if state.price_points and int(state.price_points[-1][0]) == fetched_at_ms:
+                state.price_points[-1] = (fetched_at_ms, float(price), str(snapshot.last_price_source or ""))
+            elif not state.price_points or fetched_at_ms > int(state.price_points[-1][0]):
+                state.price_points.append((fetched_at_ms, float(price), str(snapshot.last_price_source or "")))
             else:
-                state.last_price = price
-                state.last_timestamp_ms = fetched_at_ms
-                state.last_price_source = snapshot.last_price_source
+                state.price_points.append((fetched_at_ms, float(price), str(snapshot.last_price_source or "")))
+                state.price_points = deque(sorted(state.price_points, key=lambda row: int(row[0])))
+            _prune_session_top_points(state.price_points, cutoff_ms=cutoff_ms)
 
     def snapshot(self, *, now_ms: int) -> dict[str, object]:
-        session_label, session_start_ms, session_end_ms = _live_session_window_ms(now_ms)
-        if session_start_ms != self._session_start_ms:
-            return {
-                "snapshot_timestamp_ms": int(now_ms),
-                "session_label": session_label,
-                "session_start_ms": session_start_ms,
-                "session_end_ms": session_end_ms,
-                "status": "not_started",
-                "reason": "ticker_snapshot_not_seen_for_current_session",
-                "source": self._last_source,
-                "source_status": self._last_source_status,
-                "source_reason": self._last_source_reason,
-                "symbols_tracked": 0,
-                "symbols_with_positive_growth": 0,
-                "items": [],
-            }
+        now_ms = int(now_ms)
+        session = _live_crypto_session_context_ms(now_ms)
+        cutoff_ms = now_ms - int(LIVE_SESSION_TOP_ROLLING_WINDOW_MS)
         items: list[dict[str, object]] = []
-        for state in self._states.values():
-            growth_fraction = (state.last_price - state.baseline_price) / state.baseline_price
+        symbols_tracked = 0
+        for state in list(self._states.values()):
+            _prune_session_top_points(state.price_points, cutoff_ms=cutoff_ms)
+            if not state.price_points:
+                continue
+            symbols_tracked += 1
+            baseline_ts, baseline_price, _baseline_source = state.price_points[0]
+            last_ts, last_price, last_source = state.price_points[-1]
+            if baseline_price <= 0.0:
+                continue
+            growth_fraction = (last_price - baseline_price) / baseline_price
             if growth_fraction <= 0.0:
                 continue
             items.append(
@@ -2561,11 +2569,11 @@ class LiveSessionTopTracker:
                     "symbol": state.symbol,
                     "growth_pct": growth_fraction * 100.0,
                     "growth_fraction": growth_fraction,
-                    "baseline_price": state.baseline_price,
-                    "last_price": state.last_price,
-                    "baseline_timestamp_ms": state.baseline_timestamp_ms,
-                    "last_timestamp_ms": state.last_timestamp_ms,
-                    "last_price_source": state.last_price_source,
+                    "baseline_price": baseline_price,
+                    "last_price": last_price,
+                    "baseline_timestamp_ms": int(baseline_ts),
+                    "last_timestamp_ms": int(last_ts),
+                    "last_price_source": last_source,
                 }
             )
         items.sort(key=lambda item: float(item["growth_fraction"]), reverse=True)
@@ -2575,23 +2583,30 @@ class LiveSessionTopTracker:
         if ranked_items:
             status = "ok"
             reason = "ok"
-        elif self._states:
+        elif symbols_tracked:
             status = "empty"
-            reason = "no_positive_growth_since_session_baseline"
+            reason = "no_positive_growth_in_rolling_6h"
         else:
             status = "empty"
-            reason = "no_usable_ticker_price_snapshots"
+            reason = "no_usable_ticker_price_snapshots_in_rolling_6h"
         return {
-            "snapshot_timestamp_ms": int(now_ms),
-            "session_label": self._session_label or session_label,
-            "session_start_ms": self._session_start_ms or session_start_ms,
-            "session_end_ms": self._session_end_ms or session_end_ms,
+            "snapshot_timestamp_ms": now_ms,
+            "session_label": session["label"],
+            "session_phase": session["phase"],
+            "session_primary": session["primary"],
+            "session_secondary": session["secondary"],
+            "session_start_ms": session["start_ms"],
+            "session_end_ms": session["end_ms"],
+            "top_window_label": "последние 6ч",
+            "top_window_start_ms": cutoff_ms,
+            "top_window_end_ms": now_ms,
+            "top_window_hours": 6.0,
             "status": status,
             "reason": reason,
             "source": self._last_source,
             "source_status": self._last_source_status,
             "source_reason": self._last_source_reason,
-            "symbols_tracked": len(self._states),
+            "symbols_tracked": symbols_tracked,
             "symbols_with_positive_growth": len(items),
             "items": ranked_items,
         }
@@ -2698,9 +2713,9 @@ class _LiveStatusLogger:
                 rendered = f"\033[1;31m{message}\033[0m"
                 self._logger(rendered)
                 return
-            self._finish_status_line_if_needed()
+            self._clear_status_line_if_needed()
             rendered = f"\033[1;31m{message}\033[0m" if self._inline_status_enabled else message
-            self._logger(f"\n{rendered}")
+            self._logger(rendered)
 
     def status(self, message: str, *, highlight: bool = False) -> None:
         with self._lock:
@@ -2717,7 +2732,7 @@ class _LiveStatusLogger:
 
     def finish_status(self) -> None:
         with self._lock:
-            self._finish_status_line_if_needed()
+            self._clear_status_line_if_needed()
 
     def _finish_status_line_if_needed(self) -> None:
         if not self._inline_status_enabled or not self._status_line_open:
@@ -3162,8 +3177,15 @@ class LiveArtifactWriter:
         common = {
             "snapshot_utc": _ms_to_iso_utc(int(snapshot.get("snapshot_timestamp_ms") or int(time.time() * 1000))),
             "session_label": str(snapshot.get("session_label") or ""),
+            "session_phase": str(snapshot.get("session_phase") or ""),
+            "session_primary": str(snapshot.get("session_primary") or ""),
+            "session_secondary": str(snapshot.get("session_secondary") or ""),
             "session_start_utc": _ms_to_iso_utc(int(snapshot.get("session_start_ms") or 0)),
             "session_end_utc": _ms_to_iso_utc(int(snapshot.get("session_end_ms") or 0)),
+            "top_window_label": str(snapshot.get("top_window_label") or ""),
+            "top_window_start_utc": _ms_to_iso_utc(int(snapshot.get("top_window_start_ms") or 0)),
+            "top_window_end_utc": _ms_to_iso_utc(int(snapshot.get("top_window_end_ms") or 0)),
+            "top_window_hours": snapshot.get("top_window_hours", ""),
             "ticker_source": str(snapshot.get("source") or ""),
             "ticker_source_status": str(snapshot.get("source_status") or ""),
             "ticker_source_reason": str(snapshot.get("source_reason") or ""),
@@ -4335,6 +4357,7 @@ class AnomalyMicroLiveRunner:
         except LiveStartupError:
             self._close_live_sources()
             raise
+        self._run_started_monotonic = time.monotonic()
         self._startup_status("live", "запуск циклов")
         self._live_loop_started_monotonic = time.monotonic()
         self._status_logger.finish_status()
@@ -4417,6 +4440,7 @@ class AnomalyMicroLiveRunner:
                     aggtrade_stats=ws_aggtrade_stats,
                     ws_health_reason=ws_health_reason,
                 )
+                session_top_snapshot = self._session_top_tracker.snapshot(now_ms=int(time.time() * 1000))
                 self.artifacts.append_event(
                     "live_cycle_summary",
                     "__live__",
@@ -4509,6 +4533,14 @@ class AnomalyMicroLiveRunner:
                         "live_top_growth_remaining_count": int(top_growth_stats.remaining_count),
                         "live_top_growth_symbols_total": int(top_growth_stats.symbols_total),
                         "live_top_growth_top_count": int(top_growth_stats.top_count),
+                        "session_top_label": str(session_top_snapshot.get("session_label") or ""),
+                        "session_top_phase": str(session_top_snapshot.get("session_phase") or ""),
+                        "session_top_primary": str(session_top_snapshot.get("session_primary") or ""),
+                        "session_top_secondary": str(session_top_snapshot.get("session_secondary") or ""),
+                        "session_top_window_label": str(session_top_snapshot.get("top_window_label") or ""),
+                        "session_top_window_hours": session_top_snapshot.get("top_window_hours", ""),
+                        "session_top_symbols_tracked": int(session_top_snapshot.get("symbols_tracked") or 0),
+                        "session_top_symbols_with_positive_growth": int(session_top_snapshot.get("symbols_with_positive_growth") or 0),
                         "danger_flow_radar_promoted_count": ticker_stats.danger_flow_radar_promoted_count,
                         "danger_flow_radar_candidate_count": ticker_stats.danger_flow_radar_candidate_count,
                         "detected_anomalies_total": detected_anomalies_total,
@@ -4648,7 +4680,6 @@ class AnomalyMicroLiveRunner:
                         cold_status_text = "off"
                         cold_age_text = "-"
                         guard_text = self._current_inactive_cold_coverage_gate_reason
-                    session_top_snapshot = self._session_top_tracker.snapshot(now_ms=int(time.time() * 1000))
                     self._status_logger.status(
                         _format_live_heartbeat(
                             runtime_seconds=(
@@ -14042,14 +14073,46 @@ class AnomalyMicroLiveRunner:
         position_id: str,
         reason: str,
     ) -> None:
-        open_orders = self.exchange.fetch_open_orders(symbol)
-        order = next(
-            (row for row in open_orders if isinstance(row, dict) and str(row.get("id") or "").strip() == order_id),
-            None,
-        )
+        open_orders: list[dict[str, object]] = []
+        order: dict[str, object] | None = None
+        verification_attempts = 5
+        for attempt in range(1, verification_attempts + 1):
+            open_orders = self.exchange.fetch_open_orders(symbol)
+            order = next(
+                (row for row in open_orders if isinstance(row, dict) and str(row.get("id") or "").strip() == order_id),
+                None,
+            )
+            if order is not None:
+                if attempt > 1:
+                    self.artifacts.append_event(
+                        "position_stop_order_visibility_delayed",
+                        symbol,
+                        {
+                            "position_id": position_id,
+                            "order_id": order_id,
+                            "reason": reason,
+                            "verification_attempt": attempt,
+                            "open_orders_seen": len(open_orders),
+                        },
+                    )
+                break
+            if attempt < verification_attempts:
+                self.artifacts.append_event(
+                    "position_stop_order_visibility_retry",
+                    symbol,
+                    {
+                        "position_id": position_id,
+                        "order_id": order_id,
+                        "reason": reason,
+                        "verification_attempt": attempt,
+                        "open_orders_seen": len(open_orders),
+                    },
+                )
+                time.sleep(0.5)
         if order is None:
             raise LiveDataIntegrityError(
-                f"stop order not visible in open orders: position_id={position_id} order_id={order_id} reason={reason}"
+                f"stop order not visible in open orders after {verification_attempts} checks: "
+                f"position_id={position_id} order_id={order_id} reason={reason} open_orders_seen={len(open_orders)}"
             )
         side = _order_text_field(order, "side")
         if side is None or side.lower() != expected_side.lower():
@@ -15265,16 +15328,28 @@ def _ms_to_iso_utc(timestamp_ms: int) -> str:
     return datetime.fromtimestamp(int(timestamp_ms) / 1000, UTC).isoformat()
 
 
-def _live_session_window_ms(timestamp_ms: int) -> tuple[str, int, int]:
+def _live_crypto_session_context_ms(timestamp_ms: int) -> dict[str, object]:
     moment = datetime.fromtimestamp(int(timestamp_ms) / 1000, UTC)
-    for label, start_hour, end_hour in LIVE_SESSION_BLOCKS_UTC:
-        if start_hour <= moment.hour < end_hour:
-            session_start = moment.replace(hour=start_hour, minute=0, second=0, microsecond=0)
-            session_end = moment.replace(hour=end_hour % 24, minute=0, second=0, microsecond=0)
-            if end_hour == 24:
-                session_end = session_start.replace(hour=0) + timedelta(days=1)
-            return label, int(session_start.timestamp() * 1000), int(session_end.timestamp() * 1000)
-    raise LiveDataIntegrityError(f"No live session block for UTC hour {moment.hour}")
+    minute_of_day = moment.hour * 60 + moment.minute
+    day_start = moment.replace(hour=0, minute=0, second=0, microsecond=0)
+    for start_minute, end_minute, label, phase, primary, secondary in LIVE_CRYPTO_SESSION_WINDOWS_UTC:
+        if int(start_minute) <= minute_of_day < int(end_minute):
+            start_dt = day_start + timedelta(minutes=int(start_minute))
+            end_dt = day_start + timedelta(minutes=int(end_minute))
+            return {
+                "label": label,
+                "phase": phase,
+                "primary": primary,
+                "secondary": secondary,
+                "start_ms": int(start_dt.timestamp() * 1000),
+                "end_ms": int(end_dt.timestamp() * 1000),
+            }
+    raise LiveDataIntegrityError(f"No crypto session window for UTC minute {minute_of_day}")
+
+
+def _live_session_window_ms(timestamp_ms: int) -> tuple[str, int, int]:
+    session = _live_crypto_session_context_ms(timestamp_ms)
+    return str(session["label"]), int(session["start_ms"]), int(session["end_ms"])
 
 
 def _split_live_connection_status(connection_text: str) -> tuple[str, str]:
@@ -15324,7 +15399,17 @@ def _format_session_top_cell(text: str, *, width: int = 26) -> str:
 def _format_session_top_block(session_top_snapshot: dict[str, object] | None) -> list[str]:
     if not session_top_snapshot:
         return []
-    label = str(session_top_snapshot.get("session_label") or "Топы")
+    label_base = str(session_top_snapshot.get("session_label") or "Топы")
+    window_label = str(session_top_snapshot.get("top_window_label") or "")
+    phase = str(session_top_snapshot.get("session_phase") or "")
+    if window_label:
+        label = f"{label_base} · {window_label}"
+    else:
+        label = label_base
+    if phase == "overlap" and "+" not in label:
+        label = f"{label} · наложение"
+    elif phase == "transition" and "→" not in label:
+        label = f"{label} · переход"
     items_raw = session_top_snapshot.get("items")
     items = items_raw if isinstance(items_raw, list) else []
     cells: list[str] = []
@@ -15341,9 +15426,9 @@ def _format_session_top_block(session_top_snapshot: dict[str, object] | None) ->
             cells.append(_format_session_top_cell(""))
         return ["", label, _format_status_line(*cells[:LIVE_SESSION_TOP_LIMIT])]
     reason = str(session_top_snapshot.get("reason") or "")
-    if reason == "no_positive_growth_since_session_baseline":
+    if reason in {"no_positive_growth_since_session_baseline", "no_positive_growth_in_rolling_6h"}:
         value = "нет роста"
-    elif reason == "ticker_snapshot_not_seen_for_current_session":
+    elif reason in {"ticker_snapshot_not_seen_for_current_session", "no_usable_ticker_price_snapshots_in_rolling_6h"}:
         value = "нет данных"
     elif reason == "no_usable_ticker_price_snapshots":
         value = "нет цен"
