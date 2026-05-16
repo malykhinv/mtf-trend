@@ -14231,22 +14231,30 @@ class AnomalyMicroLiveRunner:
         return cancelled_total
 
     def _cancel_orphan_orders_for_symbol(self, symbol: str, *, symbol_key: str) -> int:
-        orders = self.exchange.fetch_open_orders(symbol)
-        order_ids = [_resolve_order_id(order) for order in orders]
-        order_ids = [order_id for order_id in order_ids if order_id]
-        if not order_ids:
+        ordinary_orders = self.exchange.fetch_open_orders(symbol)
+        stop_orders = self.exchange.fetch_open_stop_orders(symbol)
+        ordinary_order_ids = [_resolve_order_id(order) for order in ordinary_orders]
+        ordinary_order_ids = [order_id for order_id in ordinary_order_ids if order_id]
+        stop_order_ids = [_resolve_order_id(order) for order in stop_orders]
+        stop_order_ids = [order_id for order_id in stop_order_ids if order_id]
+        if not ordinary_order_ids and not stop_order_ids:
             return 0
         actual_amount = abs(self.exchange.fetch_symbol_position_amount(symbol))
         if actual_amount > 0.0:
             self.artifacts.append_event(
                 "orphan_order_reconcile_kept_with_position",
                 symbol,
-                {"symbol_key": symbol_key, "open_orders": len(order_ids), "exchange_position_amount": actual_amount},
+                {
+                    "symbol_key": symbol_key,
+                    "ordinary_open_orders": len(ordinary_order_ids),
+                    "conditional_stop_orders": len(stop_order_ids),
+                    "exchange_position_amount": actual_amount,
+                },
             )
             return 0
         cancelled = 0
         failed = 0
-        for order_id in order_ids:
+        for order_id in ordinary_order_ids:
             try:
                 self.exchange.cancel_order(symbol, order_id)
                 cancelled += 1
@@ -14255,12 +14263,39 @@ class AnomalyMicroLiveRunner:
                 self.artifacts.append_event(
                     "orphan_order_cancel_failed",
                     symbol,
-                    {"symbol_key": symbol_key, "order_id": order_id, "reason": f"{type(exc).__name__}: {exc}"},
+                    {
+                        "symbol_key": symbol_key,
+                        "order_id": order_id,
+                        "order_source": "ordinary_open_orders",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+        for order_id in stop_order_ids:
+            try:
+                self.exchange.cancel_stop_order(symbol, order_id)
+                cancelled += 1
+            except Exception as exc:
+                failed += 1
+                self.artifacts.append_event(
+                    "orphan_order_cancel_failed",
+                    symbol,
+                    {
+                        "symbol_key": symbol_key,
+                        "order_id": order_id,
+                        "order_source": "conditional_stop_orders",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    },
                 )
         self.artifacts.append_event(
             "orphan_orders_reconciled",
             symbol,
-            {"symbol_key": symbol_key, "seen": len(order_ids), "cancelled": cancelled, "failed": failed},
+            {
+                "symbol_key": symbol_key,
+                "ordinary_seen": len(ordinary_order_ids),
+                "conditional_stop_seen": len(stop_order_ids),
+                "cancelled": cancelled,
+                "failed": failed,
+            },
         )
         return cancelled
 
@@ -14324,42 +14359,43 @@ class AnomalyMicroLiveRunner:
         position_id: str,
         reason: str,
     ) -> None:
-        open_orders: list[dict[str, object]] = []
+        ordinary_open_orders: list[dict[str, object]] = []
+        conditional_stop_orders: list[dict[str, object]] = []
         order: dict[str, object] | None = None
         order_source = ""
         client_lookup_error = ""
         verification_attempts = 5
         for attempt in range(1, verification_attempts + 1):
-            open_orders = self.exchange.fetch_open_orders(symbol)
+            conditional_stop_orders = self.exchange.fetch_open_stop_orders(symbol)
             order = next(
-                (row for row in open_orders if isinstance(row, dict) and _order_matches_order_id(row, order_id)),
+                (row for row in conditional_stop_orders if isinstance(row, dict) and _order_matches_order_id(row, order_id)),
                 None,
             )
             if order is not None:
-                order_source = "open_orders_order_id"
+                order_source = "open_algo_orders_order_id"
             else:
                 order = next(
                     (
                         row
-                        for row in open_orders
+                        for row in conditional_stop_orders
                         if isinstance(row, dict) and _order_matches_client_order_id(row, expected_client_order_id)
                     ),
                     None,
                 )
                 if order is not None:
-                    order_source = "open_orders_client_order_id"
+                    order_source = "open_algo_orders_client_order_id"
             if order is None:
                 try:
-                    fetched_order = self.exchange.fetch_order_by_client_order_id(symbol, expected_client_order_id)
+                    fetched_stop_order = self.exchange.fetch_stop_order_by_client_order_id(symbol, expected_client_order_id)
                 except Exception as exc:
                     client_lookup_error = f"{type(exc).__name__}: {exc}"
                 else:
-                    if _order_matches_order_id(fetched_order, order_id) or _order_matches_client_order_id(
-                        fetched_order,
+                    if _order_matches_order_id(fetched_stop_order, order_id) or _order_matches_client_order_id(
+                        fetched_stop_order,
                         expected_client_order_id,
                     ):
-                        order = fetched_order
-                        order_source = "client_order_id_lookup"
+                        order = fetched_stop_order
+                        order_source = "algo_client_order_id_lookup"
                         self.artifacts.append_event(
                             "position_stop_order_client_lookup_confirmed",
                             symbol,
@@ -14369,10 +14405,43 @@ class AnomalyMicroLiveRunner:
                                 "client_order_id": expected_client_order_id,
                                 "reason": reason,
                                 "verification_attempt": attempt,
-                                "open_orders_seen": len(open_orders),
+                                "conditional_stop_orders_seen": len(conditional_stop_orders),
                                 "order_status": _order_text_field(order, "status") or "",
+                                "order_source": order_source,
                             },
                         )
+            if order is None:
+                ordinary_open_orders = self.exchange.fetch_open_orders(symbol)
+                order = next(
+                    (row for row in ordinary_open_orders if isinstance(row, dict) and _order_matches_order_id(row, order_id)),
+                    None,
+                )
+                if order is not None:
+                    order_source = "legacy_open_orders_order_id"
+                else:
+                    order = next(
+                        (
+                            row
+                            for row in ordinary_open_orders
+                            if isinstance(row, dict) and _order_matches_client_order_id(row, expected_client_order_id)
+                        ),
+                        None,
+                    )
+                    if order is not None:
+                        order_source = "legacy_open_orders_client_order_id"
+                if order is None:
+                    try:
+                        fetched_order = self.exchange.fetch_order_by_client_order_id(symbol, expected_client_order_id)
+                    except Exception as exc:
+                        if not client_lookup_error:
+                            client_lookup_error = f"{type(exc).__name__}: {exc}"
+                    else:
+                        if _order_matches_order_id(fetched_order, order_id) or _order_matches_client_order_id(
+                            fetched_order,
+                            expected_client_order_id,
+                        ):
+                            order = fetched_order
+                            order_source = "legacy_client_order_id_lookup"
             if order is not None:
                 if attempt > 1:
                     self.artifacts.append_event(
@@ -14384,7 +14453,8 @@ class AnomalyMicroLiveRunner:
                             "client_order_id": expected_client_order_id,
                             "reason": reason,
                             "verification_attempt": attempt,
-                            "open_orders_seen": len(open_orders),
+                            "ordinary_open_orders_seen": len(ordinary_open_orders),
+                            "conditional_stop_orders_seen": len(conditional_stop_orders),
                             "order_source": order_source,
                         },
                     )
@@ -14399,16 +14469,19 @@ class AnomalyMicroLiveRunner:
                         "client_order_id": expected_client_order_id,
                         "reason": reason,
                         "verification_attempt": attempt,
-                        "open_orders_seen": len(open_orders),
+                        "ordinary_open_orders_seen": len(ordinary_open_orders),
+                        "conditional_stop_orders_seen": len(conditional_stop_orders),
                         "client_lookup_error": client_lookup_error,
                     },
                 )
                 time.sleep(0.5)
         if order is None:
             raise LiveDataIntegrityError(
-                f"stop order not visible in open orders after {verification_attempts} checks: "
+                f"stop order not visible in conditional/open orders after {verification_attempts} checks: "
                 f"symbol={symbol} position_id={position_id} order_id={order_id} "
-                f"client_order_id={expected_client_order_id} reason={reason} open_orders_seen={len(open_orders)} "
+                f"client_order_id={expected_client_order_id} reason={reason} "
+                f"ordinary_open_orders_seen={len(ordinary_open_orders)} "
+                f"conditional_stop_orders_seen={len(conditional_stop_orders)} "
                 f"client_lookup_error={client_lookup_error or 'none'}",
                 symbol=symbol,
             )
@@ -14568,11 +14641,11 @@ class AnomalyMicroLiveRunner:
         cancel_error: str | None = None
         if old_stop_order_id:
             try:
-                self.exchange.cancel_order(position.signal.symbol, old_stop_order_id)
+                self.exchange.cancel_stop_order(position.signal.symbol, old_stop_order_id)
             except Exception as exc:
                 cancel_error = f"{type(exc).__name__}: {exc}"
-        open_orders = self.exchange.fetch_open_orders(position.signal.symbol)
-        open_order_ids = {str(order.get("id") or "").strip() for order in open_orders if isinstance(order, dict)}
+        open_stop_orders = self.exchange.fetch_open_stop_orders(position.signal.symbol)
+        open_order_ids = {str(order.get("id") or "").strip() for order in open_stop_orders if isinstance(order, dict)}
         if cancel_error is not None and old_stop_order_id in open_order_ids:
             raise LiveDataIntegrityError(
                 f"old stop cancel failed and old order remains open: position_id={position.position_id} "
@@ -14599,7 +14672,7 @@ class AnomalyMicroLiveRunner:
         if not order_id:
             return
         try:
-            self.exchange.cancel_order(position.signal.symbol, order_id)
+            self.exchange.cancel_stop_order(position.signal.symbol, order_id)
         except Exception as exc:
             self.artifacts.append_event(
                 "position_stop_order_cancel_failed",
@@ -15174,7 +15247,7 @@ def _order_matches_client_order_id(order: dict[str, object], client_order_id: st
     if not expected:
         return False
     info = _order_info(order)
-    for key in ("clientOrderId", "client_order_id", "origClientOrderId", "newClientOrderId"):
+    for key in ("clientOrderId", "client_order_id", "origClientOrderId", "newClientOrderId", "clientAlgoId"):
         for source in (order, info):
             value = source.get(key)
             if value is not None and str(value).strip() == expected:
@@ -15187,7 +15260,7 @@ def _order_terminal_status(order: dict[str, object]) -> str | None:
     if status is None:
         return None
     normalized = status.strip().lower()
-    if normalized in {"closed", "canceled", "cancelled", "expired", "rejected"}:
+    if normalized in {"closed", "canceled", "cancelled", "expired", "rejected", "triggered", "finished"}:
         return status
     return None
 
@@ -15311,7 +15384,7 @@ def _resolve_order_id(order: dict[str, object]) -> str | None:
     if value is None:
         info = order.get("info")
         if isinstance(info, dict):
-            value = info.get("orderId") or info.get("clientOrderId")
+            value = info.get("algoId") or info.get("orderId") or info.get("clientAlgoId") or info.get("clientOrderId")
     if value is None:
         return None
     order_id = str(value).strip()

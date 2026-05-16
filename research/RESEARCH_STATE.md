@@ -1510,9 +1510,17 @@ P263 lifecycle tests are referenced in research memory but `tests/` is absent fr
 ## 2026-05-16 — P268 proposed
 
 ```text
-Current patch status: P268 PROPOSED, commit UNKNOWN.
+Current patch status: P268 APPLIED locally / UNKNOWN commit.
 P268 adds a real Binance USD-M order lifecycle smoke command. It is not a strategy signal and does not weaken live execution safety.
 The command requires `--confirm-real-order-smoke`, refuses non-flat symbols or pre-existing open orders, opens one minimal market long, verifies the reduce-only STOP_MARKET via open orders/clientOrderId lookup, then cancels the stop and closes reduce-only by default.
 Binance `-2013 Order does not exist` is now classified as `ExchangeOrderNotFound`, not as connectivity retry exhaustion, so stop visibility diagnostics can distinguish “order absent” from network/API failure.
 Artifacts: `live_order_smoke_events.csv` and `live_order_smoke_summary.json` under the selected output directory.
+```
+## 2026-05-16 — P269 proposed
+
+```text
+Current patch status: P269 PROPOSED, commit UNKNOWN.
+The real Binance smoke showed a UI-visible protective stop that ordinary `fetch_open_orders`/`fetch_order`/`cancel_order` could not see or cancel.
+Treat Binance protective stops as conditional/algo orders: create through `fapiPrivatePostAlgoOrder`, verify through `fapiPrivateGetOpenAlgoOrders`, and cancel through `fapiPrivateDeleteAlgoOrder`. Ordinary order lookup remains only a legacy secondary path.
+After P269, the next real-order smoke must prove: `stop_verified.source` is `open_algo_orders_*` or `algo_client_order_id_lookup`, `stop_cancelled` succeeds, and final snapshot has both `smoke_open_orders_seen=0` and `smoke_algo_open_orders_seen=0`.
 ```

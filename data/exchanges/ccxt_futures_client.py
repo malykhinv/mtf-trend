@@ -791,6 +791,132 @@ class CcxtFuturesClient(ExchangeClient):
                 return parsed
         return None
 
+
+    def _require_binance_raw_endpoint(self, endpoint: str) -> Callable[..., object]:
+        if self.exchange != Exchange.BINANCE:
+            raise NotImplementedError("Binance conditional stop order boundary is implemented only for Binance USD-M futures")
+        raw_client = cast(Any, self._client)
+        call = getattr(raw_client, endpoint, None)
+        if not callable(call):
+            raise RuntimeError(
+                f"ccxt client does not expose required Binance conditional-order endpoint: {endpoint}. "
+                "Upgrade ccxt or disable real-order live trading until the endpoint is available."
+            )
+        return cast(Callable[..., object], call)
+
+    def _create_algo_client_id_param(self, client_order_id: str) -> dict[str, object]:
+        normalized = self._normalize_client_order_id(client_order_id)
+        if self.exchange == Exchange.BINANCE:
+            return {"clientAlgoId": normalized}
+        raise NotImplementedError("conditional stop client ids are implemented only for Binance futures")
+
+    @staticmethod
+    def _normalize_binance_algo_order(payload: dict[str, object]) -> dict[str, object]:
+        """Normalize Binance USD-M conditional/algo order payloads to the live order contract.
+
+        Binance exposes UI-visible TP/SL/STOP orders through the algo-order API.  These
+        rows do not look like ordinary CCXT orders, so live verification must normalize
+        algoId/clientAlgoId/orderType/triggerPrice instead of pretending they are absent.
+        """
+        info = dict(payload)
+        order: dict[str, object] = {"info": info, "source": "binance_algo_order"}
+        algo_id = payload.get("algoId", payload.get("orderId"))
+        if algo_id is not None and str(algo_id).strip():
+            order["id"] = str(algo_id).strip()
+        client_algo_id = payload.get("clientAlgoId", payload.get("clientOrderId"))
+        if client_algo_id is not None and str(client_algo_id).strip():
+            order["clientOrderId"] = str(client_algo_id).strip()
+        order_type = payload.get("orderType", payload.get("type"))
+        if order_type is not None and str(order_type).strip():
+            order["type"] = str(order_type).strip()
+        side = payload.get("side")
+        if side is not None and str(side).strip():
+            order["side"] = str(side).strip().lower()
+        status = payload.get("algoStatus", payload.get("status"))
+        if status is not None and str(status).strip():
+            order["status"] = str(status).strip().lower()
+        amount = CcxtFuturesClient._first_finite_float(payload.get("quantity"), payload.get("origQty"), payload.get("amount"))
+        if amount is not None:
+            order["amount"] = amount
+        stop_price = CcxtFuturesClient._first_finite_float(payload.get("triggerPrice"), payload.get("stopPrice"))
+        if stop_price is not None:
+            order["stopPrice"] = stop_price
+        reduce_only = payload.get("reduceOnly")
+        if isinstance(reduce_only, str):
+            normalized_reduce_only = reduce_only.strip().lower()
+            if normalized_reduce_only in {"true", "1", "yes"}:
+                order["reduceOnly"] = True
+            elif normalized_reduce_only in {"false", "0", "no"}:
+                order["reduceOnly"] = False
+        elif isinstance(reduce_only, bool):
+            order["reduceOnly"] = reduce_only
+        elif isinstance(reduce_only, (int, float)) and isfinite(float(reduce_only)):
+            order["reduceOnly"] = bool(reduce_only)
+        working_type = payload.get("workingType")
+        if working_type is not None and str(working_type).strip():
+            order["workingType"] = str(working_type).strip()
+        return order
+
+    def _fetch_open_binance_algo_orders_raw(self, symbol: str) -> list[dict[str, object]]:
+        self._ensure_markets_loaded()
+        endpoint = "fapiPrivateGetOpenAlgoOrders"
+        call = self._require_binance_raw_endpoint(endpoint)
+        payload = self._retry_exchange_call(
+            operation="binance_fetch_open_algo_orders",
+            symbol=symbol,
+            endpoint=endpoint,
+            call=call,
+            params={"symbol": self.get_market_id(symbol)},
+        )
+        if not isinstance(payload, list):
+            raise RuntimeError(f"{endpoint} returned invalid payload")
+        return [dict(row) for row in payload if isinstance(row, dict)]
+
+    def fetch_open_stop_orders(self, symbol: str) -> list[dict[str, object]]:
+        """Returns open Binance conditional/algo stop orders for a symbol.
+
+        This is the primary live stop visibility path for Binance. Ordinary
+        fetch_open_orders does not reliably include UI-visible conditional stops.
+        """
+        rows = self._fetch_open_binance_algo_orders_raw(symbol)
+        return [self._normalize_binance_algo_order(row) for row in rows]
+
+    def fetch_stop_order_by_client_order_id(self, symbol: str, client_order_id: str) -> dict[str, object]:
+        normalized_client_order_id = self._normalize_client_order_id(client_order_id)
+        for order in self.fetch_open_stop_orders(symbol):
+            info = order.get("info")
+            info_client_id = info.get("clientAlgoId") if isinstance(info, dict) else None
+            order_client_id = order.get("clientOrderId")
+            if str(order_client_id or "").strip() == normalized_client_order_id or str(info_client_id or "").strip() == normalized_client_order_id:
+                return dict(order)
+        raise ExchangeOrderNotFound(
+            f"conditional stop order not found: symbol={symbol} client_algo_id={normalized_client_order_id}"
+        )
+
+    def cancel_stop_order(self, symbol: str, order_id: str) -> dict[str, object]:
+        """Cancels a Binance conditional/algo stop order by algoId or clientAlgoId."""
+        self._ensure_markets_loaded()
+        endpoint = "fapiPrivateDeleteAlgoOrder"
+        call = self._require_binance_raw_endpoint(endpoint)
+        raw_id = str(order_id).strip()
+        if not raw_id:
+            raise ValueError("order_id is required for conditional stop cancellation")
+        params: dict[str, object] = {"symbol": self.get_market_id(symbol)}
+        if raw_id.isdigit():
+            params["algoId"] = raw_id
+        else:
+            params["clientAlgoId"] = self._normalize_client_order_id(raw_id)
+        payload = self._retry_exchange_call(
+            operation="binance_cancel_algo_order",
+            symbol=symbol,
+            endpoint=endpoint,
+            call=call,
+            params=params,
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{endpoint} returned invalid payload")
+        return self._normalize_binance_algo_order(dict(payload))
+
     def create_stop_market_order(
         self,
         symbol: str,
@@ -800,20 +926,40 @@ class CcxtFuturesClient(ExchangeClient):
         *,
         client_order_id: str,
     ) -> dict[str, object]:
-        """Places one reduce-only STOP_MARKET order with deterministic client id."""
+        """Places one reduce-only Binance conditional STOP_MARKET order with deterministic client id.
+
+        Binance UI-visible TP/SL/STOP orders are verified/cancelled through the
+        algo-order API. Creating the stop through the same boundary avoids the
+        legacy mismatch where an order is visible in Binance Conditional UI but
+        invisible to ordinary fetch_open_orders/fetch_order/cancel_order.
+        """
         self._ensure_markets_loaded()
         raw_client = cast(Any, self._client)
         precise_amount = raw_client.amount_to_precision(symbol, amount)
         precise_stop = raw_client.price_to_precision(symbol, stop_price)
-        return self._create_order_once_or_reconcile(
+        endpoint = "fapiPrivatePostAlgoOrder"
+        call = self._require_binance_raw_endpoint(endpoint)
+        params: dict[str, object] = {
+            "symbol": self.get_market_id(symbol),
+            "side": str(side).upper(),
+            "type": "STOP_MARKET",
+            "algoType": "CONDITIONAL",
+            "quantity": precise_amount,
+            "triggerPrice": precise_stop,
+            "reduceOnly": "true",
+            "workingType": "MARK_PRICE",
+        }
+        params.update(self._create_algo_client_id_param(client_order_id))
+        payload = self._retry_exchange_call(
+            operation="binance_create_algo_stop_market_order",
             symbol=symbol,
-            order_type="STOP_MARKET",
-            side=side,
-            amount=precise_amount,
-            client_order_id=client_order_id,
-            params={"stopPrice": precise_stop, "reduceOnly": True, "workingType": "MARK_PRICE"},
-            operation="ccxt_create_stop_market_order",
+            endpoint=endpoint,
+            call=call,
+            params=params,
         )
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{endpoint} returned invalid payload")
+        return self._normalize_binance_algo_order(dict(payload))
 
     def cancel_order(self, symbol: str, order_id: str) -> dict[str, object]:
         """Cancels an exchange order by id."""

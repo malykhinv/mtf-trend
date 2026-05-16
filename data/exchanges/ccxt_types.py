@@ -102,6 +102,18 @@ class CcxtFuturesApi(Protocol):
         """Описывает загрузку открытых ордеров по символу."""
         ...
 
+    def fetch_open_stop_orders(self, symbol: str) -> list[dict[str, object]]:
+        """Describes loading currently open conditional/algo stop orders for a symbol."""
+        ...
+
+    def fetch_stop_order_by_client_order_id(self, symbol: str, client_order_id: str) -> dict[str, object]:
+        """Describes loading an open conditional/algo stop order by client id."""
+        ...
+
+    def cancel_stop_order(self, symbol: str, order_id: str) -> dict[str, object]:
+        """Describes cancelling a conditional/algo stop order by id."""
+        ...
+
     def fetch_order_by_client_order_id(self, symbol: str, client_order_id: str) -> dict[str, object]:
         """Описывает загрузку ордера по clientOrderId для проверки live-защитных ордеров."""
         ...

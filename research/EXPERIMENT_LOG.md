@@ -2328,3 +2328,28 @@ Any failed smoke must preserve artifacts and attempt reduce-only cleanup.
 ```
 
 Guardrail: do not use this command as a strategy entry. It is an exchange-boundary smoke only.
+## 2026-05-16 — P269 Binance conditional stop smoke follow-up
+
+Goal: validate that live protective stops are managed through the same Binance conditional/algo boundary where the UI-visible stop actually exists.
+
+Expected command after applying P269:
+
+```powershell
+.venv\Scripts\python.exe main.py run-live-order-smoke --symbol EDEN/USDT:USDT --notional-usdt 12 --max-notional-usdt 25 --stop-distance-pct 0.05 --confirm-real-order-smoke
+```
+
+Expected evidence:
+
+```text
+stop_created with a Binance algo id/clientAlgoId-normalized id
+stop_verified.source = open_algo_orders_order_id OR open_algo_orders_client_order_id OR algo_client_order_id_lookup
+stop_cancelled succeeds through cancel_stop_order/algoOrder
+final_exchange_snapshot: exchange_position_amount=0, smoke_open_orders_seen=0, smoke_algo_open_orders_seen=0
+```
+
+Failure interpretation:
+
+```text
+If open_algo_orders_seen > 0 at final snapshot, cleanup is still incomplete.
+If stop creation succeeds but openAlgoOrders cannot see it, capture raw smoke artifacts; do not fall back to trusting create response.
+```

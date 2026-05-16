@@ -206,6 +206,7 @@ class FakeExchange:
             "id": order_id,
             "clientOrderId": client_order_id or "",
             "clientOrderID": client_order_id or "",
+            "clientAlgoId": client_order_id or "",
             "side": side,
             "type": "STOP_MARKET",
             "status": "open",
@@ -214,7 +215,9 @@ class FakeExchange:
             "origQty": str(float(amount)),
             "stopPrice": str(float(stop_price)),
             "info": {
+                "algoId": order_id,
                 "orderId": order_id,
+                "clientAlgoId": client_order_id or "",
                 "clientOrderId": client_order_id or "",
                 "side": side.upper(),
                 "type": "STOP_MARKET",
@@ -231,19 +234,32 @@ class FakeExchange:
 
     def fetch_open_orders(self, symbol: str) -> list[dict[str, object]]:
         self._assert_symbol(symbol)
+        return []
+
+    def fetch_open_stop_orders(self, symbol: str) -> list[dict[str, object]]:
+        self._assert_symbol(symbol)
         return [dict(order) for order in self.stop_orders]
+
+    def fetch_stop_order_by_client_order_id(self, symbol: str, client_order_id: str) -> dict[str, object]:
+        self._assert_symbol(symbol)
+        for order in self.stop_orders:
+            if order.get("clientOrderId") == client_order_id or order.get("clientAlgoId") == client_order_id:
+                return dict(order)
+        raise RuntimeError("Order does not exist")
 
     def fetch_order_by_client_order_id(self, symbol: str, client_order_id: str) -> dict[str, object]:
         self._assert_symbol(symbol)
-        for order in self.stop_orders:
-            if order.get("clientOrderId") == client_order_id:
-                return dict(order)
-        raise RuntimeError("Order does not exist")
+        raise RuntimeError("ordinary order lookup should not see conditional stop orders")
+
+    def cancel_stop_order(self, symbol: str, order_id: str) -> dict[str, object]:
+        self._assert_symbol(symbol)
+        self.cancelled_orders.append(order_id)
+        self.stop_orders = [order for order in self.stop_orders if str(order.get("id")) != str(order_id)]
+        return {"id": order_id, "status": "canceled"}
 
     def cancel_order(self, symbol: str, order_id: str) -> dict[str, object]:
         self._assert_symbol(symbol)
         self.cancelled_orders.append(order_id)
-        self.stop_orders = [order for order in self.stop_orders if str(order.get("id")) != str(order_id)]
         return {"id": order_id, "status": "canceled"}
 
     def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, start_timestamp_ms: int, end_timestamp_ms: int) -> pd.DataFrame:

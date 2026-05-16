@@ -145,18 +145,21 @@ class LiveOrderSmokeRunner:
     def _preflight_zero_position_and_no_orders(self) -> None:
         position_amount = self.exchange.fetch_symbol_position_amount(self.config.symbol)
         open_orders = self.exchange.fetch_open_orders(self.config.symbol)
+        stop_orders = self.exchange.fetch_open_stop_orders(self.config.symbol)
         self._event(
             "preflight_snapshot",
             status="ok",
             exchange_position_amount=position_amount,
             open_orders_seen=len(open_orders),
+            algo_open_orders_seen=len(stop_orders),
         )
         if abs(position_amount) > 0.0:
             raise RuntimeError(f"preflight position is not flat: symbol={self.config.symbol} amount={position_amount}")
-        if open_orders:
-            order_ids = [_resolve_order_id(row) for row in open_orders if isinstance(row, dict)]
+        if open_orders or stop_orders:
+            order_ids = [_resolve_order_id(row) for row in [*open_orders, *stop_orders] if isinstance(row, dict)]
             raise RuntimeError(
-                f"preflight open orders exist: symbol={self.config.symbol} open_orders={len(open_orders)} order_ids={order_ids}"
+                f"preflight open orders exist: symbol={self.config.symbol} "
+                f"ordinary_open_orders={len(open_orders)} algo_open_orders={len(stop_orders)} order_ids={order_ids}"
             )
 
     def _open_market_entry(self) -> None:
@@ -246,6 +249,7 @@ class LiveOrderSmokeRunner:
             source=verified["source"],
             verification_attempt=verified["attempt"],
             open_orders_seen=verified["open_orders_seen"],
+            algo_open_orders_seen=verified["algo_open_orders_seen"],
         )
 
     def _verify_stop_order(
@@ -257,24 +261,46 @@ class LiveOrderSmokeRunner:
         expected_stop_price: float,
     ) -> dict[str, object]:
         last_lookup_error = ""
+        ordinary_open_orders: list[dict[str, object]] = []
+        conditional_stop_orders: list[dict[str, object]] = []
         for attempt in range(1, self.config.verification_attempts + 1):
-            open_orders = self.exchange.fetch_open_orders(self.config.symbol)
-            order = next((row for row in open_orders if _order_matches_order_id(row, order_id)), None)
-            source = "open_orders_order_id" if order is not None else ""
+            conditional_stop_orders = self.exchange.fetch_open_stop_orders(self.config.symbol)
+            order = next((row for row in conditional_stop_orders if _order_matches_order_id(row, order_id)), None)
+            source = "open_algo_orders_order_id" if order is not None else ""
             if order is None:
-                order = next((row for row in open_orders if _order_matches_client_order_id(row, client_order_id)), None)
-                source = "open_orders_client_order_id" if order is not None else ""
+                order = next((row for row in conditional_stop_orders if _order_matches_client_order_id(row, client_order_id)), None)
+                source = "open_algo_orders_client_order_id" if order is not None else ""
             if order is None:
                 try:
-                    fetched = self.exchange.fetch_order_by_client_order_id(self.config.symbol, client_order_id)
+                    fetched_stop = self.exchange.fetch_stop_order_by_client_order_id(self.config.symbol, client_order_id)
                 except ExchangeOrderNotFound as exc:
                     last_lookup_error = f"ExchangeOrderNotFound: {exc}"
                 except Exception as exc:  # noqa: BLE001 - exact class is recorded for exchange-boundary diagnosis.
                     last_lookup_error = f"{type(exc).__name__}: {exc}"
                 else:
-                    if _order_matches_order_id(fetched, order_id) or _order_matches_client_order_id(fetched, client_order_id):
-                        order = fetched
-                        source = "client_order_id_lookup"
+                    if _order_matches_order_id(fetched_stop, order_id) or _order_matches_client_order_id(fetched_stop, client_order_id):
+                        order = fetched_stop
+                        source = "algo_client_order_id_lookup"
+            if order is None:
+                ordinary_open_orders = self.exchange.fetch_open_orders(self.config.symbol)
+                order = next((row for row in ordinary_open_orders if _order_matches_order_id(row, order_id)), None)
+                source = "legacy_open_orders_order_id" if order is not None else ""
+                if order is None:
+                    order = next((row for row in ordinary_open_orders if _order_matches_client_order_id(row, client_order_id)), None)
+                    source = "legacy_open_orders_client_order_id" if order is not None else ""
+                if order is None:
+                    try:
+                        fetched = self.exchange.fetch_order_by_client_order_id(self.config.symbol, client_order_id)
+                    except ExchangeOrderNotFound as exc:
+                        if not last_lookup_error:
+                            last_lookup_error = f"ExchangeOrderNotFound: {exc}"
+                    except Exception as exc:  # noqa: BLE001 - exact class is recorded for exchange-boundary diagnosis.
+                        if not last_lookup_error:
+                            last_lookup_error = f"{type(exc).__name__}: {exc}"
+                    else:
+                        if _order_matches_order_id(fetched, order_id) or _order_matches_client_order_id(fetched, client_order_id):
+                            order = fetched
+                            source = "legacy_client_order_id_lookup"
             if order is not None:
                 self._assert_verified_stop_order(
                     order,
@@ -283,14 +309,20 @@ class LiveOrderSmokeRunner:
                     expected_amount=expected_amount,
                     expected_stop_price=expected_stop_price,
                 )
-                return {"source": source, "attempt": attempt, "open_orders_seen": len(open_orders)}
+                return {
+                    "source": source,
+                    "attempt": attempt,
+                    "open_orders_seen": len(ordinary_open_orders),
+                    "algo_open_orders_seen": len(conditional_stop_orders),
+                }
             self._event(
                 "stop_visibility_retry",
                 status="retry",
                 order_id=order_id,
                 client_order_id=client_order_id,
                 verification_attempt=attempt,
-                open_orders_seen=len(open_orders),
+                ordinary_open_orders_seen=len(ordinary_open_orders),
+                algo_open_orders_seen=len(conditional_stop_orders),
                 client_lookup_error=last_lookup_error,
             )
             if attempt < self.config.verification_attempts:
@@ -298,6 +330,8 @@ class LiveOrderSmokeRunner:
         raise RuntimeError(
             f"stop order not visible after {self.config.verification_attempts} checks: "
             f"symbol={self.config.symbol} order_id={order_id} client_order_id={client_order_id} "
+            f"ordinary_open_orders_seen={len(ordinary_open_orders)} "
+            f"algo_open_orders_seen={len(conditional_stop_orders)} "
             f"client_lookup_error={last_lookup_error or 'none'}"
         )
 
@@ -354,7 +388,7 @@ class LiveOrderSmokeRunner:
         if not self._stop_order_id:
             return
         try:
-            payload = self.exchange.cancel_order(self.config.symbol, self._stop_order_id)
+            payload = self.exchange.cancel_stop_order(self.config.symbol, self._stop_order_id)
         except Exception as exc:  # noqa: BLE001 - cancel failure is recorded and cleanup continues to position close.
             self._event("stop_cancel_failed", status="error", order_id=self._stop_order_id, error_type=type(exc).__name__, error=str(exc))
             return
@@ -367,6 +401,7 @@ class LiveOrderSmokeRunner:
 
     def _cancel_smoke_open_orders(self) -> None:
         open_orders = self.exchange.fetch_open_orders(self.config.symbol)
+        stop_orders = self.exchange.fetch_open_stop_orders(self.config.symbol)
         cancelled = 0
         for order in open_orders:
             if not _order_has_client_prefix(order, self._client_id_prefix):
@@ -377,11 +412,30 @@ class LiveOrderSmokeRunner:
             try:
                 self.exchange.cancel_order(self.config.symbol, order_id)
             except Exception as exc:  # noqa: BLE001
-                self._event("smoke_open_order_cancel_failed", status="error", order_id=order_id, error_type=type(exc).__name__, error=str(exc))
+                self._event("smoke_open_order_cancel_failed", status="error", order_id=order_id, order_source="ordinary", error_type=type(exc).__name__, error=str(exc))
             else:
                 cancelled += 1
-                self._event("smoke_open_order_cancelled", status="ok", order_id=order_id)
-        self._event("smoke_open_order_cancel_sweep", status="ok", cancelled=cancelled, open_orders_seen=len(open_orders))
+                self._event("smoke_open_order_cancelled", status="ok", order_id=order_id, order_source="ordinary")
+        for order in stop_orders:
+            if not _order_has_client_prefix(order, self._client_id_prefix):
+                continue
+            order_id = _resolve_order_id(order)
+            if not order_id:
+                continue
+            try:
+                self.exchange.cancel_stop_order(self.config.symbol, order_id)
+            except Exception as exc:  # noqa: BLE001
+                self._event("smoke_open_order_cancel_failed", status="error", order_id=order_id, order_source="conditional_stop", error_type=type(exc).__name__, error=str(exc))
+            else:
+                cancelled += 1
+                self._event("smoke_open_order_cancelled", status="ok", order_id=order_id, order_source="conditional_stop")
+        self._event(
+            "smoke_open_order_cancel_sweep",
+            status="ok",
+            cancelled=cancelled,
+            ordinary_open_orders_seen=len(open_orders),
+            algo_open_orders_seen=len(stop_orders),
+        )
 
     def _close_current_position_reduce_only(self, *, reason: str) -> None:
         position_amount = self.exchange.fetch_symbol_position_amount(self.config.symbol)
@@ -412,19 +466,23 @@ class LiveOrderSmokeRunner:
     def _assert_final_flat_and_no_smoke_orders(self) -> None:
         position_amount = self.exchange.fetch_symbol_position_amount(self.config.symbol)
         open_orders = self.exchange.fetch_open_orders(self.config.symbol)
+        stop_orders = self.exchange.fetch_open_stop_orders(self.config.symbol)
         smoke_open_orders = [order for order in open_orders if _order_has_client_prefix(order, self._client_id_prefix)]
+        smoke_stop_orders = [order for order in stop_orders if _order_has_client_prefix(order, self._client_id_prefix)]
         self._event(
             "final_exchange_snapshot",
             status="ok",
             exchange_position_amount=position_amount,
             open_orders_seen=len(open_orders),
+            algo_open_orders_seen=len(stop_orders),
             smoke_open_orders_seen=len(smoke_open_orders),
+            smoke_algo_open_orders_seen=len(smoke_stop_orders),
         )
         if abs(position_amount) > 0.0:
             raise RuntimeError(f"final position is not flat: symbol={self.config.symbol} amount={position_amount}")
-        if smoke_open_orders:
-            order_ids = [_resolve_order_id(order) for order in smoke_open_orders]
-            raise RuntimeError(f"smoke open orders remain: symbol={self.config.symbol} order_ids={order_ids}")
+        if smoke_open_orders or smoke_stop_orders:
+            order_ids = [_resolve_order_id(order) for order in [*smoke_open_orders, *smoke_stop_orders]]
+            raise RuntimeError(f"smoke open/conditional orders remain: symbol={self.config.symbol} order_ids={order_ids}")
 
     def _event(self, event: str, *, status: str, **details: object) -> None:
         payload = {
@@ -474,7 +532,7 @@ def _resolve_order_id(order: dict[str, object]) -> str | None:
     value = order.get("id")
     if value is None:
         info = _order_info(order)
-        value = info.get("orderId")
+        value = info.get("algoId") or info.get("orderId") or info.get("clientAlgoId")
     if value is None:
         return None
     order_id = str(value).strip()
@@ -537,7 +595,7 @@ def _order_matches_client_order_id(order: dict[str, object], client_order_id: st
     if not expected:
         return False
     info = _order_info(order)
-    for key in ("clientOrderId", "client_order_id", "origClientOrderId", "newClientOrderId"):
+    for key in ("clientOrderId", "client_order_id", "origClientOrderId", "newClientOrderId", "clientAlgoId"):
         for source in (order, info):
             value = source.get(key)
             if value is not None and str(value).strip() == expected:
@@ -547,7 +605,7 @@ def _order_matches_client_order_id(order: dict[str, object], client_order_id: st
 
 def _order_has_client_prefix(order: dict[str, object], client_id_prefix: str) -> bool:
     info = _order_info(order)
-    for key in ("clientOrderId", "client_order_id", "origClientOrderId", "newClientOrderId"):
+    for key in ("clientOrderId", "client_order_id", "origClientOrderId", "newClientOrderId", "clientAlgoId"):
         for source in (order, info):
             value = source.get(key)
             if value is not None and str(value).strip().startswith(client_id_prefix):
@@ -560,6 +618,6 @@ def _order_terminal_status(order: dict[str, object]) -> str | None:
     if status is None:
         return None
     normalized = status.strip().lower()
-    if normalized in {"closed", "canceled", "cancelled", "expired", "rejected"}:
+    if normalized in {"closed", "canceled", "cancelled", "expired", "rejected", "triggered", "finished"}:
         return status
     return None
