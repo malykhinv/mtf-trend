@@ -4612,3 +4612,47 @@ P259 adjusts only the operator heartbeat display. The connection block now shows
 
 Current commit: UNKNOWN.
 Next validation: run live until the first warning/retry message and verify the old heartbeat is cleared before the alert, then the next heartbeat renders once.
+
+## 2026-05-16 — P261 proposed — stop verification exchange lookup and critical halt TG
+
+Files:
+
+```text
+data/exchanges/ccxt_types.py
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Make initial/replacement stop protection verification strict against Binance/CCXT eventual consistency: a created stop is not trusted from the create response alone, and live halt messages must explicitly show the affected symbol.
+```
+
+Changes:
+
+```text
+- Keeps the 5 x 0.5s stop visibility verification loop.
+- Matches open orders by exchange order id and clientOrderId.
+- If open orders do not show the stop, verifies through the typed exchange boundary `fetch_order_by_client_order_id`.
+- Rejects terminal stop statuses and still validates side/type/reduceOnly/amount/stopPrice.
+- Adds `symbol` to stop integrity exceptions, terminal log, live_events.csv and synchronous Telegram halt message.
+- Adds the client-order lookup method to the CCXT protocol contract.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+# synthetic smoke: fetch_open_orders empty for first 1-4 checks then stop visible -> position_stop_order_visibility_delayed
+# synthetic smoke: fetch_open_orders empty but fetch_order_by_client_order_id returns NEW/STOP_MARKET/reduceOnly -> position_stop_order_client_lookup_confirmed
+# synthetic smoke: stop unresolved after 5 checks -> live_data_integrity_error with symbol and Telegram Live остановлен message
+```
+
+Risk:
+
+```text
+Medium-low. Touches live stop verification and halt reporting only. It does not change signal selection, entry guards, order sizing, TP/SL math or PnL. A stop that cannot be confirmed by open orders or clientOrderId lookup still halts live.
+```

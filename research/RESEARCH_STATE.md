@@ -1451,3 +1451,11 @@ P259 adjusts only the operator heartbeat display. The connection block now shows
 
 Current commit: UNKNOWN.
 Next validation: run live until the first warning/retry message and verify the old heartbeat is cleared before the alert, then the next heartbeat renders once.
+
+## 2026-05-16 — P261 proposed
+
+P261 tightens live stop verification after the SKYAI stop visibility halt. Stops are still not trusted from the create response: verification checks open orders by order id/clientOrderId, then uses the typed exchange clientOrderId lookup before declaring the stop confirmed. Stop integrity failures now carry the affected symbol into terminal log, `live_data_integrity_error` artifact row, and synchronous Telegram halt notification.
+
+Current GitHub head checked before patch: f518942f18b953a4eecc8cb2e89992d237df62b4.
+Current patch status: PROPOSED / not applied.
+Next validation: run a synthetic stop-verification smoke for delayed open-orders visibility, clientOrderId-only lookup confirmation, and unresolved stop halt.

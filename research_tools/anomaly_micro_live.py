@@ -513,6 +513,11 @@ class LiveStartupError(RuntimeError):
 class LiveDataIntegrityError(RuntimeError):
     """Live artifact/data integrity failure that must not be hidden as a network issue."""
 
+    def __init__(self, message: str, *, symbol: str | None = None) -> None:
+        super().__init__(message)
+        normalized_symbol = str(symbol).strip() if symbol is not None else ""
+        self.symbol = normalized_symbol or None
+
 
 class LiveWsAggTradeCoveragePending(RuntimeError):
     """Raised when strict WS aggTrade coverage is insufficient for subminute signal evaluation."""
@@ -4742,11 +4747,25 @@ class AnomalyMicroLiveRunner:
                 return 0
             except LiveDataIntegrityError as exc:
                 self._flush_live_ohlcv_cache_if_due(force=True, reason="data_integrity_error")
-                self.logger(f"остановлено из-за ошибки целостности live-данных: {exc}")
+                error_symbol = exc.symbol
+                event_symbol = error_symbol or "__live__"
+                self.artifacts.append_event(
+                    "live_data_integrity_error",
+                    event_symbol,
+                    {
+                        "cycle": cycle,
+                        "symbol": error_symbol or "",
+                        "exception_type": type(exc).__name__,
+                        "exception_message": str(exc)[:1000],
+                    },
+                )
+                symbol_prefix = f"{error_symbol}: " if error_symbol else ""
+                self.logger(f"остановлено из-за ошибки целостности live-данных: {symbol_prefix}{exc}")
                 self.telegram.send_critical_sync(
                     channel="events",
                     key="live_data_integrity_error",
-                    text=f"{SERVICE_WARNING_EMOJI} <b>Ошибка</b>\n\n{_telegram_code(str(exc)[:600])}",
+                    symbol=event_symbol,
+                    text=_format_live_data_integrity_halt_message(symbol=error_symbol, reason=str(exc)),
                 )
                 self._close_live_sources()
                 return 3
@@ -14042,6 +14061,7 @@ class AnomalyMicroLiveRunner:
         self._verify_open_stop_order(
             symbol,
             order_id=stop_order_id,
+            expected_client_order_id=stop_client_order_id,
             expected_side="sell",
             expected_amount=amount,
             expected_stop_price=stop_price,
@@ -14067,6 +14087,7 @@ class AnomalyMicroLiveRunner:
         symbol: str,
         *,
         order_id: str,
+        expected_client_order_id: str,
         expected_side: str,
         expected_amount: float,
         expected_stop_price: float,
@@ -14075,13 +14096,53 @@ class AnomalyMicroLiveRunner:
     ) -> None:
         open_orders: list[dict[str, object]] = []
         order: dict[str, object] | None = None
+        order_source = ""
+        client_lookup_error = ""
         verification_attempts = 5
         for attempt in range(1, verification_attempts + 1):
             open_orders = self.exchange.fetch_open_orders(symbol)
             order = next(
-                (row for row in open_orders if isinstance(row, dict) and str(row.get("id") or "").strip() == order_id),
+                (row for row in open_orders if isinstance(row, dict) and _order_matches_order_id(row, order_id)),
                 None,
             )
+            if order is not None:
+                order_source = "open_orders_order_id"
+            else:
+                order = next(
+                    (
+                        row
+                        for row in open_orders
+                        if isinstance(row, dict) and _order_matches_client_order_id(row, expected_client_order_id)
+                    ),
+                    None,
+                )
+                if order is not None:
+                    order_source = "open_orders_client_order_id"
+            if order is None:
+                try:
+                    fetched_order = self.exchange.fetch_order_by_client_order_id(symbol, expected_client_order_id)
+                except Exception as exc:
+                    client_lookup_error = f"{type(exc).__name__}: {exc}"
+                else:
+                    if _order_matches_order_id(fetched_order, order_id) or _order_matches_client_order_id(
+                        fetched_order,
+                        expected_client_order_id,
+                    ):
+                        order = fetched_order
+                        order_source = "client_order_id_lookup"
+                        self.artifacts.append_event(
+                            "position_stop_order_client_lookup_confirmed",
+                            symbol,
+                            {
+                                "position_id": position_id,
+                                "order_id": order_id,
+                                "client_order_id": expected_client_order_id,
+                                "reason": reason,
+                                "verification_attempt": attempt,
+                                "open_orders_seen": len(open_orders),
+                                "order_status": _order_text_field(order, "status") or "",
+                            },
+                        )
             if order is not None:
                 if attempt > 1:
                     self.artifacts.append_event(
@@ -14090,9 +14151,11 @@ class AnomalyMicroLiveRunner:
                         {
                             "position_id": position_id,
                             "order_id": order_id,
+                            "client_order_id": expected_client_order_id,
                             "reason": reason,
                             "verification_attempt": attempt,
                             "open_orders_seen": len(open_orders),
+                            "order_source": order_source,
                         },
                     )
                 break
@@ -14103,46 +14166,66 @@ class AnomalyMicroLiveRunner:
                     {
                         "position_id": position_id,
                         "order_id": order_id,
+                        "client_order_id": expected_client_order_id,
                         "reason": reason,
                         "verification_attempt": attempt,
                         "open_orders_seen": len(open_orders),
+                        "client_lookup_error": client_lookup_error,
                     },
                 )
                 time.sleep(0.5)
         if order is None:
             raise LiveDataIntegrityError(
                 f"stop order not visible in open orders after {verification_attempts} checks: "
-                f"position_id={position_id} order_id={order_id} reason={reason} open_orders_seen={len(open_orders)}"
+                f"symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"client_order_id={expected_client_order_id} reason={reason} open_orders_seen={len(open_orders)} "
+                f"client_lookup_error={client_lookup_error or 'none'}",
+                symbol=symbol,
+            )
+        terminal_status = _order_terminal_status(order)
+        if terminal_status is not None:
+            raise LiveDataIntegrityError(
+                f"stop order is terminal after verification: symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"client_order_id={expected_client_order_id} status={terminal_status!r} source={order_source}",
+                symbol=symbol,
             )
         side = _order_text_field(order, "side")
         if side is None or side.lower() != expected_side.lower():
             raise LiveDataIntegrityError(
-                f"stop order side not verified: position_id={position_id} order_id={order_id} side={side!r} expected={expected_side}"
+                f"stop order side not verified: symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"side={side!r} expected={expected_side} source={order_source}",
+                symbol=symbol,
             )
         order_type = _order_text_field(order, "type")
         if order_type is None or "stop" not in order_type.lower():
             raise LiveDataIntegrityError(
-                f"stop order type not verified: position_id={position_id} order_id={order_id} type={order_type!r}"
+                f"stop order type not verified: symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"type={order_type!r} source={order_source}",
+                symbol=symbol,
             )
         reduce_only = _order_bool_field(order, "reduceOnly")
         if reduce_only is not True:
             raise LiveDataIntegrityError(
-                f"stop order reduceOnly not verified: position_id={position_id} order_id={order_id} reduceOnly={reduce_only!r}"
+                f"stop order reduceOnly not verified: symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"reduceOnly={reduce_only!r} source={order_source}",
+                symbol=symbol,
             )
         amount = _order_float_field(order, "amount", "origQty")
         amount_delta = abs(amount - expected_amount) if amount is not None else float("nan")
         amount_delta_ratio = _safe_divide(amount_delta, expected_amount) if amount is not None else float("nan")
         if amount is None or not math.isfinite(amount_delta_ratio) or amount_delta_ratio > self.config.max_position_amount_slippage_ratio:
             raise LiveDataIntegrityError(
-                f"stop order amount not verified: position_id={position_id} order_id={order_id} "
-                f"amount={amount!r} expected={expected_amount}"
+                f"stop order amount not verified: symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"amount={amount!r} expected={expected_amount} source={order_source}",
+                symbol=symbol,
             )
         stop_price = _order_float_field(order, "stopPrice")
         price_delta_ratio = _safe_divide(abs(stop_price - expected_stop_price), expected_stop_price) if stop_price is not None else float("nan")
         if stop_price is None or not math.isfinite(price_delta_ratio) or price_delta_ratio > 1e-4:
             raise LiveDataIntegrityError(
-                f"stop order stopPrice not verified: position_id={position_id} order_id={order_id} "
-                f"stopPrice={stop_price!r} expected={expected_stop_price}"
+                f"stop order stopPrice not verified: symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"stopPrice={stop_price!r} expected={expected_stop_price} source={order_source}",
+                symbol=symbol,
             )
 
     def _close_unprotected_entry_exposure(
@@ -14803,6 +14886,15 @@ def _format_position_integrity_error_message(position: LivePosition, *, reason: 
         f"ID: {_telegram_code(position.position_id)}"
     )
 
+
+def _format_live_data_integrity_halt_message(*, symbol: str | None, reason: str) -> str:
+    if symbol:
+        title = f"{_symbol_emoji(symbol)} <b>{_telegram_symbol_link(symbol)} Live остановлен</b>"
+    else:
+        title = f"{SERVICE_WARNING_EMOJI} <b>Live остановлен</b>"
+    return f"{title}\n\n{_telegram_code(reason[:600])}"
+
+
 def _order_info(order: dict[str, object]) -> dict[str, object]:
     info = order.get("info")
     return info if isinstance(info, dict) else {}
@@ -14815,6 +14907,33 @@ def _order_text_field(order: dict[str, object], key: str) -> str | None:
     if value is None or value == "":
         return None
     return str(value)
+
+
+def _order_matches_order_id(order: dict[str, object], order_id: str) -> bool:
+    return (_resolve_order_id(order) or "") == str(order_id).strip()
+
+
+def _order_matches_client_order_id(order: dict[str, object], client_order_id: str) -> bool:
+    expected = str(client_order_id).strip()
+    if not expected:
+        return False
+    info = _order_info(order)
+    for key in ("clientOrderId", "client_order_id", "origClientOrderId", "newClientOrderId"):
+        for source in (order, info):
+            value = source.get(key)
+            if value is not None and str(value).strip() == expected:
+                return True
+    return False
+
+
+def _order_terminal_status(order: dict[str, object]) -> str | None:
+    status = _order_text_field(order, "status")
+    if status is None:
+        return None
+    normalized = status.strip().lower()
+    if normalized in {"closed", "canceled", "cancelled", "expired", "rejected"}:
+        return status
+    return None
 
 
 def _order_float_field(order: dict[str, object], *keys: str) -> float | None:
