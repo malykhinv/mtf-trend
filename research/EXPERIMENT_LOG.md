@@ -2273,3 +2273,27 @@ Next:
 ```text
 Run these tests against the local tree. If they pass, add narrower tests around CCXT/Binance stop-order payload normalization and `-2013 Order does not exist` classification before changing live stop verification code.
 ```
+
+
+## 2026-05-16 — P267 replay/context honesty validation
+
+Goal: verify that live/replay/backtest artifacts preserve data provenance instead of silently treating filled gaps or stale OI as healthy evidence.
+
+Expected evidence after applying P267:
+
+```text
+delayed replay decision snapshots include `synthetic_ohlcv_bucket` in entry_rows when live filled missing OHLCV buckets.
+`reject_insufficient_real_entry_buckets` appears when total entry buckets are enough only because synthetic rows were inserted.
+`anomaly_context_parity_report.csv` includes OI cache/load/asof fields: oi_cache_status, oi_fetch_or_load_status, oi_cache_min/max timestamps, oi_asof_timestamp, oi_age_ms.
+Context mismatches involving OI can be classified as stale/unavailable cache rather than mixed with mark-price context failures.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# Then rerun the same short backtest and inspect anomaly_context_parity_report.csv columns/statuses.
+# Then run a short live/delayed replay smoke and inspect delayed_replay_queue.jsonl entry_rows for synthetic_ohlcv_bucket.
+```
+
+Guardrail: discovery remains unchanged and separate; do not judge discovery edge from this patch.

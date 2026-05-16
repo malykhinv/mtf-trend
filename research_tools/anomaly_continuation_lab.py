@@ -658,8 +658,16 @@ def _empty_oi_columns() -> dict[str, object]:
     values: dict[str, object] = {
         "oi_timeframe": OI_TIMEFRAME,
         "oi_status": "not_checked",
+        "oi_cache_status": "not_checked",
+        "oi_fetch_or_load_status": "not_checked",
+        "oi_cache_min_timestamp_ms": np.nan,
+        "oi_cache_min_timestamp_utc": "",
+        "oi_cache_max_timestamp_ms": np.nan,
+        "oi_cache_max_timestamp_utc": "",
         "oi_timestamp_ms": np.nan,
         "oi_timestamp_utc": "",
+        "oi_asof_timestamp_ms": np.nan,
+        "oi_asof_timestamp_utc": "",
         "oi_age_ms": np.nan,
         "oi_open_interest": np.nan,
     }
@@ -697,13 +705,25 @@ def _enrich_symbol_oi(candidates: pd.DataFrame, oi_frame: pd.DataFrame | None, s
         for _ in range(len(candidates)):
             values = _empty_oi_columns()
             values["oi_status"] = status
+            values["oi_cache_status"] = status
+            values["oi_fetch_or_load_status"] = status
             rows.append(values)
         return rows
 
     oi_ts = oi_frame["timestamp"].astype(np.int64).to_numpy()
     oi_values = oi_frame["open_interest"].astype(float).to_numpy()
+    cache_min_ts = int(oi_ts[0]) if len(oi_ts) else None
+    cache_max_ts = int(oi_ts[-1]) if len(oi_ts) else None
     for _, candidate in candidates.iterrows():
         values = _empty_oi_columns()
+        values["oi_cache_status"] = status
+        values["oi_fetch_or_load_status"] = status
+        if cache_min_ts is not None:
+            values["oi_cache_min_timestamp_ms"] = cache_min_ts
+            values["oi_cache_min_timestamp_utc"] = _timestamp_to_utc(cache_min_ts)
+        if cache_max_ts is not None:
+            values["oi_cache_max_timestamp_ms"] = cache_max_ts
+            values["oi_cache_max_timestamp_utc"] = _timestamp_to_utc(cache_max_ts)
         decision_ts = candidate.get("decision_timestamp_ms")
         if pd.isna(decision_ts):
             values["oi_status"] = "missing_decision_timestamp"
@@ -721,6 +741,8 @@ def _enrich_symbol_oi(candidates: pd.DataFrame, oi_frame: pd.DataFrame | None, s
         values["oi_status"] = "stale_asof" if age_ms > OI_EXPECTED_INTERVAL_MS else "ok"
         values["oi_timestamp_ms"] = current_ts
         values["oi_timestamp_utc"] = _timestamp_to_utc(current_ts)
+        values["oi_asof_timestamp_ms"] = current_ts
+        values["oi_asof_timestamp_utc"] = _timestamp_to_utc(current_ts)
         values["oi_age_ms"] = int(age_ms)
         values["oi_open_interest"] = float(oi_values[oi_idx])
         for bars in OI_LOOKBACK_BARS:
@@ -810,6 +832,10 @@ def build_oi_context_status(candidates: pd.DataFrame) -> pd.DataFrame:
                 }
             ]
         )
+    candidates = candidates.copy()
+    for column in ("oi_cache_min_timestamp_ms", "oi_cache_max_timestamp_ms"):
+        if column not in candidates.columns:
+            candidates[column] = np.nan
     status = (
         candidates.groupby(["oi_timeframe", "oi_status"], dropna=False)
         .agg(
@@ -817,6 +843,8 @@ def build_oi_context_status(candidates: pd.DataFrame) -> pd.DataFrame:
             symbols=("symbol", "nunique"),
             min_oi_age_ms=("oi_age_ms", "min"),
             max_oi_age_ms=("oi_age_ms", "max"),
+            min_oi_cache_timestamp_ms=("oi_cache_min_timestamp_ms", "min"),
+            max_oi_cache_timestamp_ms=("oi_cache_max_timestamp_ms", "max"),
         )
         .reset_index()
     )

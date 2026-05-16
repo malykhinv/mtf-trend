@@ -718,6 +718,7 @@ def _delayed_replay_snapshot_columns(frame: pd.DataFrame) -> list[str]:
         "number_of_trades",
         "taker_buy_volume",
         "taker_buy_quote_volume",
+        "synthetic_ohlcv_bucket",
     )
     return [column for column in preferred if column in frame.columns]
 
@@ -753,6 +754,7 @@ def _delayed_replay_series_to_row(row: pd.Series | dict[str, object]) -> dict[st
         "number_of_trades",
         "taker_buy_volume",
         "taker_buy_quote_volume",
+        "synthetic_ohlcv_bucket",
     )
     return dict(_json_safe_payload({column: raw[column] for column in columns if column in raw}))
 
@@ -771,8 +773,16 @@ def _delayed_replay_rows_to_frame(rows: object) -> pd.DataFrame:
             frame["timestamp"] = frame["timestamp"].astype("int64")
             frame = frame.sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
     for column in frame.columns:
-        if column != "timestamp":
-            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        if column == "timestamp":
+            continue
+        if column == "synthetic_ohlcv_bucket":
+            frame[column] = frame[column].map(
+                lambda value: bool(value)
+                if isinstance(value, bool)
+                else str(value).strip().lower() in {"1", "true", "yes", "y"}
+            )
+            continue
+        frame[column] = pd.to_numeric(frame[column], errors="coerce")
     return frame
 
 
@@ -5497,7 +5507,7 @@ class AnomalyMicroLiveRunner:
             "confirmation_candles": int(self.config.confirmation_candles),
             "baseline_rows": _delayed_replay_frame_to_rows(setup_history, max_rows=max(1, int(self.config.baseline_candles))),
             "setup_row": _delayed_replay_series_to_row(setup_row),
-            "entry_rows": _delayed_replay_frame_to_rows(entry_segment, max_rows=max(1, int(setup_closed_entry_candles) + 5)),
+            "entry_rows": _delayed_replay_frame_to_rows(entry_segment, max_rows=max(1, len(entry_segment))),
             "frozen_context": _json_safe_payload(frozen_context),
         }
         try:
@@ -6014,16 +6024,23 @@ class AnomalyMicroLiveRunner:
             timeframe_ms=entry_timeframe_ms,
             seed_close=seed_close,
         )
-        if len(entry_segment) < self.config.confirmation_candles:
+        real_entry_segment = _real_ohlcv_buckets(entry_segment)
+        if len(real_entry_segment) < self.config.confirmation_candles:
+            insufficient_real_only = len(entry_segment) >= self.config.confirmation_candles
             return {
-                "status": "setup_too_early",
+                "status": "insufficient_real_entry_buckets" if insufficient_real_only else "setup_too_early",
                 "source": recompute_source,
                 "decision_snapshot_status": decision_snapshot_status,
                 "decision_snapshot_source": decision_snapshot_source,
                 "signal": None,
-                "reject_reasons": ("reject_setup_too_early",),
+                "reject_reasons": (
+                    "reject_insufficient_real_entry_buckets" if insufficient_real_only else "reject_setup_too_early",
+                ),
                 "data_status": data_status,
                 "decision_data_end_timestamp_ms": int(decision_ts),
+                "real_entry_segment_bucket_count": int(len(real_entry_segment)),
+                "entry_segment_bucket_count": int(len(entry_segment)),
+                "min_closed_entry_candles": int(self.config.confirmation_candles),
             }
         setup_elapsed_fraction = min(1.0, len(entry_segment) * entry_timeframe_ms / levels_timeframe_ms)
         if forming_setup is None:
@@ -6054,7 +6071,7 @@ class AnomalyMicroLiveRunner:
                 else "delayed_replay_forming_htf_from_entry_tf"
             ),
             setup_elapsed_fraction=setup_elapsed_fraction,
-            setup_closed_entry_candles=len(entry_segment),
+            setup_closed_entry_candles=len(real_entry_segment),
             emit_diagnostics=False,
             category_rejections_out=category_rejections,
             allow_exchange_context_fetch=False,
@@ -10985,16 +11002,21 @@ class AnomalyMicroLiveRunner:
                     "source": "fill_missing_ohlcv_buckets",
                 },
             )
-        if len(entry_segment) < self.config.confirmation_candles:
+        real_entry_segment = _real_ohlcv_buckets(entry_segment)
+        if len(real_entry_segment) < self.config.confirmation_candles:
+            insufficient_real_only = len(entry_segment) >= self.config.confirmation_candles
             self.artifacts.append_event(
-                "reject_setup_too_early",
+                "reject_insufficient_real_entry_buckets" if insufficient_real_only else "reject_setup_too_early",
                 symbol,
                 {
                     "levels_tf": levels_timeframe.value,
                     "entry_tf": entry_timeframe.value,
                     "setup_start_timestamp_ms": int(setup_start_ts),
                     "closed_entry_candles": int(len(entry_segment)),
+                    "real_closed_entry_candles": int(len(real_entry_segment)),
                     "min_closed_entry_candles": int(self.config.confirmation_candles),
+                    "synthetic_bucket_count": int(synthetic_bucket_count),
+                    "source": "synthetic_buckets_do_not_count_as_confirmation" if insufficient_real_only else "setup_too_early",
                 },
             )
             return no_signal()
@@ -11039,7 +11061,7 @@ class AnomalyMicroLiveRunner:
             entry_timeframe=entry_timeframe,
             setup_source="forming_htf_from_entry_tf",
             setup_elapsed_fraction=setup_elapsed_fraction,
-            setup_closed_entry_candles=len(entry_segment),
+            setup_closed_entry_candles=len(real_entry_segment),
             emit_diagnostics=True,
             category_rejections_out=category_rejections,
         )
@@ -11241,7 +11263,8 @@ class AnomalyMicroLiveRunner:
                 timeframe_ms=entry_timeframe_ms,
                 seed_close=seed_close,
             )
-            if len(entry_segment) < self.config.confirmation_candles:
+            real_entry_segment = _real_ohlcv_buckets(entry_segment)
+            if len(real_entry_segment) < self.config.confirmation_candles:
                 continue
             forming_setup = _aggregate_frame_to_candle(entry_segment, timestamp_ms=setup_start_ts)
             if forming_setup is None:
@@ -11257,7 +11280,7 @@ class AnomalyMicroLiveRunner:
                 entry_timeframe=entry_timeframe,
                 setup_source="forming_htf_from_entry_tf_replay_probe",
                 setup_elapsed_fraction=setup_elapsed_fraction,
-                setup_closed_entry_candles=len(entry_segment),
+                setup_closed_entry_candles=len(real_entry_segment),
                 emit_diagnostics=False,
             )
             if signal is None:
@@ -15409,7 +15432,10 @@ def _fill_missing_ohlcv_buckets(
             result["synthetic_ohlcv_bucket"] = False
         return result
     source = frame.copy()
-    source["synthetic_ohlcv_bucket"] = False
+    if "synthetic_ohlcv_bucket" not in source.columns:
+        source["synthetic_ohlcv_bucket"] = False
+    else:
+        source["synthetic_ohlcv_bucket"] = source["synthetic_ohlcv_bucket"].fillna(False).astype(bool)
     full_index = pd.DataFrame(
         {"timestamp": list(range(int(start_timestamp_ms), int(end_timestamp_ms) + int(timeframe_ms), int(timeframe_ms)))}
     )

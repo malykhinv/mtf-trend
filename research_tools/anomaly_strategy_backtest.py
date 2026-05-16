@@ -83,7 +83,7 @@ _HOUR_MS = 3_600_000
 _DAY_MS = 86_400_000
 _TRADE_CHART_CONTEXT_DAYS = 4
 _MATERIALIZED_SUBMINUTE_CACHE_VERSION = "p165_1s_ohlcv_to_subminute_v1"
-_BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_frame", "stale_asof"}
+_BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_column", "missing_timestamp", "missing_frame", "empty_oi", "stale_asof"}
 _TRADE_CHART_FLOW_PROVENANCE = {
     "trade_count_proxy_used": False,
     "levels_trade_count_source": "cached_ohlcv.number_of_trades",
@@ -184,8 +184,16 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "post_start_pullback_fraction_of_box",
     "oi_timeframe",
     "oi_status",
+    "oi_cache_status",
+    "oi_fetch_or_load_status",
+    "oi_cache_min_timestamp_ms",
+    "oi_cache_min_timestamp_utc",
+    "oi_cache_max_timestamp_ms",
+    "oi_cache_max_timestamp_utc",
     "oi_timestamp_ms",
     "oi_timestamp_utc",
+    "oi_asof_timestamp_ms",
+    "oi_asof_timestamp_utc",
     "oi_age_ms",
     "oi_open_interest",
     "oi_change_1x5m",
@@ -2747,8 +2755,16 @@ def build_context_parity_report(
         "mark_age_ms",
         "mark_close_vs_decision_close_basis",
         "oi_status",
+        "oi_cache_status",
+        "oi_fetch_or_load_status",
+        "oi_cache_min_timestamp_ms",
+        "oi_cache_min_timestamp_utc",
+        "oi_cache_max_timestamp_ms",
+        "oi_cache_max_timestamp_utc",
         "oi_timestamp_ms",
         "oi_timestamp_utc",
+        "oi_asof_timestamp_ms",
+        "oi_asof_timestamp_utc",
         "oi_age_ms",
         "oi_change_pct_3x5m",
         "context_parity_status",
@@ -2821,6 +2837,8 @@ def build_context_parity_report(
 
     mark_status = report.get("mark_status", pd.Series("", index=report.index)).astype(str)
     oi_status = report.get("oi_status", pd.Series("", index=report.index)).astype(str)
+    oi_cache_status = report.get("oi_cache_status", pd.Series("", index=report.index)).astype(str)
+    oi_fetch_or_load_status = report.get("oi_fetch_or_load_status", pd.Series("", index=report.index)).astype(str)
     report["context_fetch_status"] = np.where(
         report["in_pre_context_universe"],
         "requested",
@@ -2829,9 +2847,23 @@ def build_context_parity_report(
     report["context_parity_status"] = "ok"
     report.loc[~report["in_pre_context_universe"], "context_parity_status"] = "not_in_pre_context_universe"
     report.loc[
-        report["in_pre_context_universe"] & (mark_status.ne("ok") | oi_status.ne("ok")),
+        report["in_pre_context_universe"]
+        & (
+            mark_status.ne("ok")
+            | oi_status.ne("ok")
+            | oi_cache_status.isin(_BAD_CONTEXT_STATUSES)
+            | oi_fetch_or_load_status.isin(_BAD_CONTEXT_STATUSES)
+        ),
         "context_parity_status",
     ] = "requested_context_missing_or_bad"
+    report.loc[
+        report["in_pre_context_universe"] & oi_cache_status.ne("") & oi_cache_status.ne("ok"),
+        "context_parity_status",
+    ] = "oi_cache_unavailable"
+    report.loc[
+        report["in_pre_context_universe"] & oi_status.eq("stale_asof"),
+        "context_parity_status",
+    ] = "oi_context_stale_asof"
     report.loc[
         report["is_final_signal"] & ~report["in_pre_context_universe"],
         "context_parity_status",

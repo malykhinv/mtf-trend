@@ -10,7 +10,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P263 proposed live order lifecycle unit tests
+Last active patch: P267 proposed replay synthetic provenance and OI cache freshness
 Updated: 2026-05-16
 ```
 
@@ -1473,7 +1473,7 @@ Next validation: run one strict synthetic stop/order failure and one danger-mode
 ## 2026-05-16 — Proposed parity state after P264
 
 ```text
-Current patch status: P264 PROPOSED, commit UNKNOWN.
+Current patch status: P264 APPLIED locally / UNKNOWN commit.
 Backtest PnL before P264 is not live-category parity-valid because runner category thresholds were duplicated and different from live.
 After P264, runner category thresholds/priority must come from research_tools/anomaly_category_contract.py in both live and backtest.
 Discovery remains allowed only as an explicit backtest fallback and must be separable through pump_category_family=discovery vs live_priority.
@@ -1483,7 +1483,7 @@ Delayed replay must preserve the original live setup_source from immutable snaps
 ## 2026-05-16 — Proposed parity state after P266
 
 ```text
-Current patch status: P266 PROPOSED, commit UNKNOWN.
+Current patch status: P266 APPLIED locally / UNKNOWN commit.
 P266 keeps discovery as the backtest fallback but makes skipped rows carry the same category metadata as closed rows.
 Backtest derivatives context fetching is widened before final category checks so runner candidates are not excluded from mark/OI enrichment simply because mark/OI was not loaded yet.
 `anomaly_context_parity_report.csv` becomes the first artifact to inspect when a live-selected timestamp is missing from backtest, has `outside_pre_context_signal_universe`, or loses category metadata on an execution guard skip.
@@ -1493,5 +1493,16 @@ Backtest derivatives context fetching is widened before final category checks so
 
 P265 adds live observability for discrete signal misses. If the signal snapshot itself was executable, but the current live executable price fails the execution guard (`TP1 already reached`, price drift, invalid risk, wide risk, or collapsed RR), live still rejects the order but records `discrete_signal_snapshot_entry_missed` and sends a specific Telegram message.
 
-Current patch status: PROPOSED, commit UNKNOWN.
+Current patch status: APPLIED locally / UNKNOWN commit.
 Next validation: run a short live smoke and count `discrete_signal_snapshot_entry_missed` versus normal execution rejects. If this dominates, evaluate lower-latency partial-candle/event-driven research separately; do not open by stale snapshot price.
+
+## 2026-05-16 — P267 proposed
+
+```text
+Current patch status: P267 PROPOSED, commit UNKNOWN.
+P267 is a data-quality/parity patch only. It does not change discovery selection, runner thresholds, stop-order handling, or PnL logic.
+Delayed replay snapshots must preserve `synthetic_ohlcv_bucket` so replay does not turn synthetic no-trade buckets into real flow evidence.
+Live/replay setup confirmation must require enough real entry buckets; synthetic filled buckets may maintain time/price continuity but must not satisfy confirmation count.
+Backtest context parity now reports OI cache/load/asof freshness separately from mark-price context so SYS-like disagreements can be traced to cache coverage/staleness instead of a generic context failure.
+P263 lifecycle tests are referenced in research memory but `tests/` is absent from the current uploaded ZIP; treat P263 validation as not present in this ZIP unless tests are supplied separately.
+```
