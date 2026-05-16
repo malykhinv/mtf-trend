@@ -4050,6 +4050,10 @@ class AnomalyMicroLiveRunner:
         self._cycle_aggtrade_gap_prefetch_backfill_ranges = 0
         self._cycle_aggtrade_gap_prefetch_rows = 0
         self._cycle_aggtrade_gap_prefetch_pending = 0
+        self._cycle_ohlcv_cache_filled_reads = 0
+        self._cycle_ohlcv_cache_fetched_rows = 0
+        self._cycle_ohlcv_cache_gap_reads = 0
+        self._cycle_ohlcv_cache_remaining_gap_count = 0
         self._current_batch_symbol_scan_mode: dict[str, str] = {}
         self._current_scheduler_source = "uninitialized"
         self._current_inactive_scan_slots = 0
@@ -4382,11 +4386,17 @@ class AnomalyMicroLiveRunner:
                 ws_health_pct = self._record_ws_health_sample(healthy=ws_healthy)
                 self._record_scheduler_cycle_seconds(cycle_seconds)
                 self._record_cold_coverage_pressure_sample()
+                data_status_text = self._live_data_status_text(
+                    ticker_stats=ticker_stats,
+                    aggtrade_stats=ws_aggtrade_stats,
+                    ws_health_reason=ws_health_reason,
+                )
                 self.artifacts.append_event(
                     "live_cycle_summary",
                     "__live__",
                     {
                         "cycle": cycle,
+                        "data_status": data_status_text,
                         "scheduler_cycle_seconds": round(cycle_seconds, 3),
                         "batch_in_full_cycle": self._current_symbol_universe_batch_index,
                         "full_symbol_cycle": self._current_symbol_universe_cycle_index,
@@ -4534,6 +4544,10 @@ class AnomalyMicroLiveRunner:
                         "aggtrade_gap_prefetch_backfill_ranges": self._cycle_aggtrade_gap_prefetch_backfill_ranges,
                         "aggtrade_gap_prefetch_rows": self._cycle_aggtrade_gap_prefetch_rows,
                         "aggtrade_gap_prefetch_pending": self._cycle_aggtrade_gap_prefetch_pending,
+                        "ohlcv_cache_filled_reads": self._cycle_ohlcv_cache_filled_reads,
+                        "ohlcv_cache_fetched_rows": self._cycle_ohlcv_cache_fetched_rows,
+                        "ohlcv_cache_gap_reads": self._cycle_ohlcv_cache_gap_reads,
+                        "ohlcv_cache_remaining_gap_count": self._cycle_ohlcv_cache_remaining_gap_count,
                         "ws_aggtrade_backfill_reads": self._cycle_ws_aggtrade_backfill_reads,
                         "ws_aggtrade_backfilled_rows": self._cycle_ws_aggtrade_backfilled_rows,
                         "ws_aggtrade_not_connected_backfill_reads": self._cycle_ws_aggtrade_not_connected_backfill_reads,
@@ -4621,6 +4635,7 @@ class AnomalyMicroLiveRunner:
                             closed_positions=closed_total,
                             pnl_pct=closed_pnl_pct,
                             connection_text=connection_text,
+                            data_status_text=data_status_text,
                             delayed_replay_enabled=bool(self.config.delayed_replay_enabled),
                             delayed_replay_pending=self._delayed_replay_queue_size(),
                             delayed_replay_total=self._delayed_replay_enqueued_total,
@@ -5260,6 +5275,10 @@ class AnomalyMicroLiveRunner:
         self._cycle_aggtrade_gap_prefetch_backfill_ranges = 0
         self._cycle_aggtrade_gap_prefetch_rows = 0
         self._cycle_aggtrade_gap_prefetch_pending = 0
+        self._cycle_ohlcv_cache_filled_reads = 0
+        self._cycle_ohlcv_cache_fetched_rows = 0
+        self._cycle_ohlcv_cache_gap_reads = 0
+        self._cycle_ohlcv_cache_remaining_gap_count = 0
         self._current_batch_symbol_scan_mode = {}
         self._cycle_precise_scan_symbols = 0
         self._cycle_inactive_visit_symbols = 0
@@ -6650,6 +6669,43 @@ class AnomalyMicroLiveRunner:
             if self._cycle_ws_aggtrade_coverage_pending > 0:
                 return "flow pending"
         return ws_health_reason.replace("_", " ")
+
+    def _live_data_status_text(
+        self,
+        *,
+        ticker_stats: LiveTickerRadarCycleStats,
+        aggtrade_stats: LiveWsAggTradeSubscriptionStats,
+        ws_health_reason: str,
+    ) -> str:
+        if ticker_stats.status == "failed":
+            label = _ws_error_short_label(ticker_stats.reason)
+            return "Тикер нет" + (f"/{label}" if label else "")
+        if ticker_stats.status in {"degraded_rest_fallback", "primary_seeded_rest"}:
+            return "Тикер REST"
+        if ws_health_reason.startswith("ticker_") and ws_health_reason != "ticker_primary_no_flow_targets":
+            reason = ws_health_reason.removeprefix("ticker_").replace("_", " ")
+            return f"Тикер {reason}"[:26]
+        if aggtrade_stats.enabled and aggtrade_stats.target_count > 0:
+            connection_status = (aggtrade_stats.connection_status or "").lower()
+            if connection_status != "connected":
+                if self._cycle_ws_aggtrade_not_connected_backfill_reads > 0:
+                    return "Поток REST"
+                if self._cycle_ws_aggtrade_coverage_pending > 0:
+                    return "Поток ждёт"
+                label = _ws_error_short_label(aggtrade_stats.last_error)
+                return "Поток нет" + (f"/{label}" if label else "")
+            subscribed_count = _optional_int(aggtrade_stats.subscribed_count)
+            if subscribed_count is None or subscribed_count < aggtrade_stats.target_count:
+                return "Поток подписка"
+            if self._cycle_ws_aggtrade_coverage_pending > 0:
+                return "Поток ждёт"
+            if self._cycle_ws_aggtrade_backfill_reads > 0 or self._cycle_aggtrade_gap_prefetch_backfill_ranges > 0:
+                return "Поток gapREST"
+        if self._cycle_ohlcv_cache_remaining_gap_count > 0:
+            return "Кеш gap"
+        if self._cycle_ohlcv_cache_filled_reads > 0 or self._cycle_ohlcv_cache_fetched_rows > 0:
+            return "Кеш REST"
+        return "ok"
 
     def _ticker_health_status(self, *, status: str, source: str) -> str:
         if status == "ok" and source == "binance_ws_all_ticker":
@@ -12974,8 +13030,13 @@ class AnomalyMicroLiveRunner:
             timeframe_ms=timeframe_ms,
         )
         cache_status = "hit" if not missing_ranges else "filled"
+        if missing_ranges and fetched_rows > 0:
+            self._cycle_ohlcv_cache_filled_reads += 1
+            self._cycle_ohlcv_cache_fetched_rows += int(fetched_rows)
         if remaining_ranges:
             cache_status = "gap"
+            self._cycle_ohlcv_cache_gap_reads += 1
+            self._cycle_ohlcv_cache_remaining_gap_count += int(len(remaining_ranges))
             self.artifacts.append_event(
                 "live_ohlcv_cache_gap",
                 symbol,
@@ -14697,6 +14758,14 @@ def _format_live_runtime(seconds: float) -> str:
     return f"{secs}с"
 
 
+def _format_live_pulse(seconds: float) -> str:
+    if not math.isfinite(seconds) or seconds < 0.0:
+        return "-"
+    if seconds >= 60.0:
+        return _format_live_runtime(seconds)
+    return f"{float(seconds):.1f}с"
+
+
 def _ms_to_iso_utc(timestamp_ms: int) -> str:
     if int(timestamp_ms) <= 0:
         return ""
@@ -14802,6 +14871,7 @@ def _format_live_heartbeat(
     closed_positions: int,
     pnl_pct: float,
     connection_text: str,
+    data_status_text: str,
     delayed_replay_enabled: bool,
     delayed_replay_pending: int,
     delayed_replay_total: int,
@@ -14813,8 +14883,7 @@ def _format_live_heartbeat(
     guard_status: str,
     session_top_snapshot: dict[str, object] | None = None,
 ) -> str:
-    del cycle_seconds, idle, real_orders, cold_age
-    ticker_status, flow_status = _split_live_connection_status(connection_text)
+    del idle, real_orders, cold_age, connection_text
     if delayed_replay_enabled:
         replay_pending = max(0, int(delayed_replay_pending))
         replay_total = max(replay_pending, int(delayed_replay_total))
@@ -14825,14 +14894,14 @@ def _format_live_heartbeat(
     rows = [
         "Соединение",
         _format_status_line(
-            _format_status_cell("Стабильность", _format_percent(connection_health_pct, signed=False, precision=1)),
-            _format_status_cell("Тикер", ticker_status),
-            _format_status_cell("Поток", flow_status),
+            _format_status_cell("Время", _format_live_runtime(runtime_seconds)),
+            _format_status_cell("Пульс", _format_live_pulse(cycle_seconds)),
+            _format_status_cell("Данные", data_status_text),
         ),
         "",
         "Рынок",
         _format_status_line(
-            _format_status_cell("Время", _format_live_runtime(runtime_seconds)),
+            _format_status_cell("Стабильность", _format_percent(connection_health_pct, signed=False, precision=1)),
             _format_status_cell("События", anomalies_total),
             _format_status_cell("Активные", f"{active_now}/{active_seen}"),
         ),

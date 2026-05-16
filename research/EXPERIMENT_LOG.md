@@ -2124,6 +2124,17 @@ Compare against closed-hour top-growth/missed-pump artifacts before loosening an
 
 After P252, rerun live with the same command that previously failed after startup context backfill. Expected result: no `NameError: selection is not defined`; the first live cycle should append `live_cycle_summary` with candidate queue fields populated from runner state. The startup backfill status line should include current local time on every per-symbol refresh.
 
+## 2026-05-16 — P254 live heartbeat status validation
+
+Expected operator heartbeat shape:
+
+```text
+Соединение
+Время 6ч 32м 14с          Пульс 5.2с                 Данные Ok
+```
+
+If data is degraded, `Данные` should briefly show the actual source of degradation, for example `Тикер REST`, `Поток REST`, `Поток gapREST`, `Поток ждёт`, `Поток подписка`, `Кеш REST`, or `Кеш gap`. These are visibility labels only; no fallback is hidden as `Ok`.
+
 
 ## 2026-05-15 — P247 dependency retry cooldown validation
 

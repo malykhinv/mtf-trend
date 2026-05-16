@@ -4379,6 +4379,19 @@ Startup after the 72h context backfill had silent stages before the first live h
 Current commit: UNKNOWN.
 Next validation: restart live and confirm startup progresses through `контекст 72ч · запись кеша`, `контекст 72ч · снимок N/total`, `контекст 72ч · запись snapshot`, `тикеры · стартовый снимок`, `тикеры · проверка радара`, then the normal live heartbeat appears after the first cycle summary.
 
+## 2026-05-16 — P254 proposed
+
+Live heartbeat operator UI now shows the connection group as `Время / Пульс / Данные`. `Пульс` is the last scheduler-cycle duration. `Данные` is a compact health label derived from real data-path evidence: ticker REST fallback, aggTrade REST gap backfill, subscription/coverage wait, cache REST fill, or remaining cache gaps. No trading logic, retry policy, or execution guard is changed.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "heartbeat|data-status|пульс"  # expected: no output
+```
+
+Risk: low. Display and live_cycle_summary diagnostics only. The new status label must not be used as a trading condition.
+
 
 ## P247 - proposed - dependency retry cooldown
 
