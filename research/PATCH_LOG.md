@@ -4433,6 +4433,19 @@ python main.py run-anomaly-live --help | grep -E "reprepare|переподгот
 
 Risk: medium. Cache writes now happen in smaller chunks during startup/reprepare, reducing the final silent flush, but this changes write timing. It does not change trading filters, signal construction, order/fill/stop logic, or CLI flags.
 
+## 2026-05-16 — P258 proposed
+
+Mandatory 72h context preparation now sends concise Telegram events when the mandatory 72h preparation/reprepare starts and when the readiness verdict is known. The messages follow the existing events-channel style and do not change preparation policy, readiness thresholds, cache writes, trading filters, or execution guards.
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help | grep -E "context-preparation-telegram"  # expected: no output
+```
+
+Risk: low. Notification-only patch. Telegram failures remain non-blocking and are already recorded through the dispatcher error path.
+
 
 ## P247 - proposed - dependency retry cooldown
 

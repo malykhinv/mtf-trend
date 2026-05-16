@@ -8974,6 +8974,58 @@ class AnomalyMicroLiveRunner:
     def _startup_status(self, stage: str, message: str) -> None:
         self._status_logger.status(f"{stage} · {self._startup_status_time()} · {message}")
 
+    def _context_preparation_telegram_title(self, *, policy_context: str) -> str:
+        if policy_context == "live_reprepare":
+            return "Контекст 72ч: переподготовка"
+        return "Контекст 72ч: подготовка"
+
+    def _send_context_preparation_started_telegram(
+        self,
+        *,
+        phase: str,
+        symbols_total: int,
+        context_timeframes: tuple[Timeframe, ...],
+    ) -> None:
+        timeframe_label = ", ".join(timeframe.value for timeframe in context_timeframes) or "-"
+        self.telegram.send(
+            channel="events",
+            key=f"context_preparation_started:{phase}",
+            text=(
+                f"{SERVICE_WORK_EMOJI} <b>{self._context_preparation_telegram_title(policy_context=phase)} включена</b>\n\n"
+                f"контекст 72ч · {symbols_total} символов · TF {_telegram_code(timeframe_label)}"
+            ),
+        )
+
+    def _send_context_preparation_finished_telegram(
+        self,
+        *,
+        policy_context: str,
+        startup_ready: bool,
+        ready_symbols: int,
+        symbols_total: int,
+        partial_symbols: int,
+        unavailable_symbols: int,
+        ready_snapshots: int,
+        expected_snapshot_count: int,
+        refuse_real_orders: bool,
+    ) -> None:
+        if startup_ready:
+            title = "Контекст 72ч готов"
+            emoji = "✅"
+        else:
+            title = "Контекст 72ч не готов"
+            emoji = SERVICE_WARNING_EMOJI
+        refusal_note = "\nreal-orders не стартует" if (not startup_ready and self.config.confirm_real_orders and refuse_real_orders) else ""
+        self.telegram.send(
+            channel="events",
+            key=f"context_preparation_finished:{policy_context}:{'ready' if startup_ready else 'not_ready'}",
+            text=(
+                f"{emoji} <b>{title}</b>\n\n"
+                f"готово {ready_symbols}/{symbols_total} · partial {partial_symbols} · unavailable {unavailable_symbols}\n"
+                f"snapshots {ready_snapshots}/{expected_snapshot_count}{refusal_note}"
+            ),
+        )
+
     def _startup_eta_text(self, *, started_at: float, completed: int, total: int) -> str:
         if total <= 0:
             return "0с"
@@ -9125,6 +9177,17 @@ class AnomalyMicroLiveRunner:
             **summary,
         }
         self.artifacts.append_event("symbol_context_startup_readiness", "__live__", payload)
+        self._send_context_preparation_finished_telegram(
+            policy_context=policy_context,
+            startup_ready=bool(startup_ready),
+            ready_symbols=ready_symbols,
+            symbols_total=symbols_total,
+            partial_symbols=partial_symbols,
+            unavailable_symbols=unavailable_symbols,
+            ready_snapshots=ready_snapshots,
+            expected_snapshot_count=expected_snapshot_count,
+            refuse_real_orders=bool(refuse_real_orders),
+        )
         if not startup_ready and self.config.confirm_real_orders and refuse_real_orders:
             self._status_logger.finish_status()
             self.artifacts.append_event(
@@ -9353,6 +9416,11 @@ class AnomalyMicroLiveRunner:
                     for timeframe_value, bounds in windows.items()
                 },
             },
+        )
+        self._send_context_preparation_started_telegram(
+            phase=phase,
+            symbols_total=int(len(symbols)),
+            context_timeframes=context_timeframes,
         )
         started_at = time.monotonic()
         fetched_symbol_timeframes = 0

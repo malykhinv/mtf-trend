@@ -1436,3 +1436,11 @@ P250 changes only the operator display for default-on 72h startup context backfi
 
 Current commit: UNKNOWN.
 Next validation: start live with a cold/partial cache and verify the single startup line updates on every symbol as `контекст 72ч · кеш N/total · SYMBOL · ETA ...`.
+
+
+## 2026-05-16 — P258 proposed state
+
+- Mandatory 72h context preparation/reprepare now has Telegram start and finish notifications in addition to terminal/artifact events.
+- Notifications are events-channel only and do not affect readiness decisions, cache writes, trading filters, or live execution safety.
+- Current commit: UNKNOWN.
+- Next validation: restart live and confirm Telegram shows `Контекст 72ч: подготовка включена` before the 72h context phase and `Контекст 72ч готов` or `Контекст 72ч не готов` after the readiness verdict.
