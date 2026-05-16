@@ -4613,7 +4613,7 @@ P259 adjusts only the operator heartbeat display. The connection block now shows
 Current commit: UNKNOWN.
 Next validation: run live until the first warning/retry message and verify the old heartbeat is cleared before the alert, then the next heartbeat renders once.
 
-## 2026-05-16 — P261 proposed — stop verification exchange lookup and critical halt TG
+## 2026-05-16 — P261 applied — c0b5dfd970da — stop verification exchange lookup and critical halt TG
 
 Files:
 
@@ -4654,5 +4654,49 @@ python main.py run-anomaly-live --help
 Risk:
 
 ```text
-Medium-low. Touches live stop verification and halt reporting only. It does not change signal selection, entry guards, order sizing, TP/SL math or PnL. A stop that cannot be confirmed by open orders or clientOrderId lookup still halts live.
+Medium-low. Touches live stop verification and halt reporting only. It does not change signal selection, entry guards, order sizing, TP/SL math or PnL. A stop that cannot be confirmed by open orders or clientOrderId lookup still halts live unless P262 danger continue mode is explicitly enabled.
+```
+
+## 2026-05-16 — P262 proposed — danger continue after order/position errors
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Allow long data-collection live runs to continue after order/position integrity failures only when the operator explicitly enables a dangerous diagnostic mode.
+```
+
+Changes:
+
+```text
+- Adds `--danger-continue-after-order-position-errors`, default false.
+- Keeps strict halt behavior by default.
+- Classifies order/position flow failures with `LiveOrderPositionIntegrityError`.
+- In danger mode, writes `live_order_position_integrity_error`, sends synchronous Telegram, flushes live cache when inside the loop, and continues startup/live execution.
+- Records the selected policy in the live config artifact event.
+- Applies the same danger policy to startup exchange-position cleanup failures.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live --help
+# strict smoke: without flag, injected stop verification failure returns code 3.
+# danger smoke: with flag, injected stop/order/position failure writes live_order_position_integrity_error, sends TG, and continues to the next cycle.
+```
+
+Risk:
+
+```text
+High when enabled. The flag intentionally keeps live running after order/position integrity failures, including startup exchange-position cleanup failures, so it is for data collection / diagnostics, not normal protected trading. Default behavior remains strict.
 ```

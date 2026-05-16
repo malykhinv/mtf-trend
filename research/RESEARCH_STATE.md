@@ -1456,6 +1456,14 @@ Next validation: run live until the first warning/retry message and verify the o
 
 P261 tightens live stop verification after the SKYAI stop visibility halt. Stops are still not trusted from the create response: verification checks open orders by order id/clientOrderId, then uses the typed exchange clientOrderId lookup before declaring the stop confirmed. Stop integrity failures now carry the affected symbol into terminal log, `live_data_integrity_error` artifact row, and synchronous Telegram halt notification.
 
-Current GitHub head checked before patch: f518942f18b953a4eecc8cb2e89992d237df62b4.
-Current patch status: PROPOSED / not applied.
+Current GitHub head checked before patch: c0b5dfd970dabc5383cd6f493a688f41e29ba517.
+Current patch status: APPLIED in GitHub head c0b5dfd970dabc5383cd6f493a688f41e29ba517.
 Next validation: run a synthetic stop-verification smoke for delayed open-orders visibility, clientOrderId-only lookup confirmation, and unresolved stop halt.
+
+## 2026-05-16 — P262 proposed
+
+P262 adds an explicit dangerous diagnostic flag `--danger-continue-after-order-position-errors`. Default live behavior remains strict. With the flag enabled, order/position integrity failures are written to `live_order_position_integrity_error`, reported synchronously to Telegram, live cache is flushed when inside the loop, and startup/live execution continues instead of returning code 3 where possible.
+
+Current GitHub head checked before patch: c0b5dfd970dabc5383cd6f493a688f41e29ba517.
+Current patch status: PROPOSED / not applied.
+Next validation: run one strict synthetic stop/order failure and one danger-mode synthetic failure to verify strict halt vs Telegram+continue behavior.

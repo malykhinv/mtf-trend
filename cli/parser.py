@@ -197,6 +197,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomaly_live.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT:USDT")
     anomaly_live.add_argument("--confirm-real-orders", action="store_true", help="Required guard for real orders")
+    anomaly_live.add_argument(
+        "--danger-continue-after-order-position-errors",
+        action="store_true",
+        help=(
+            "Do not stop live after order/position integrity failures. "
+            "The failure is still written to live_events.csv and sent to Telegram. Dangerous real-orders mode."
+        ),
+    )
     anomaly_live.add_argument("--max-cycles", type=_positive_int_for("--max-cycles"), default=None)
     anomaly_live.add_argument(
         "--pump-categories",

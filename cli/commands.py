@@ -1438,6 +1438,9 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
             results_dir=config.backtest.results_dir,
             symbols=tuple(getattr(args, "symbols", None) or ()),
             confirm_real_orders=bool(getattr(args, "confirm_real_orders", False)),
+            danger_continue_after_order_position_errors=bool(
+                getattr(args, "danger_continue_after_order_position_errors", False)
+            ),
             cache_dir=config.backtest.cache_dir,
             pump_categories=tuple(
                 item.strip()

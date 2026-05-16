@@ -519,6 +519,10 @@ class LiveDataIntegrityError(RuntimeError):
         self.symbol = normalized_symbol or None
 
 
+class LiveOrderPositionIntegrityError(LiveDataIntegrityError):
+    """Order/position integrity failure. Strict by default; explicit danger mode may keep live running."""
+
+
 class LiveWsAggTradeCoveragePending(RuntimeError):
     """Raised when strict WS aggTrade coverage is insufficient for subminute signal evaluation."""
 
@@ -1899,6 +1903,7 @@ class LiveAnomalyConfig:
     max_monitor_empty_ohlcv_cycles: int = 3
     scan_sleep_seconds: float = 2.0
     network_sleep_seconds: float = 30.0
+    danger_continue_after_order_position_errors: bool = False
     live_ohlcv_cache_enabled: bool = True
     live_ohlcv_cache_write_enabled: bool = True
     live_ohlcv_cache_flush_interval_seconds: float = 30.0
@@ -4210,6 +4215,14 @@ class AnomalyMicroLiveRunner:
                     if self.config.live_ohlcv_cache_flush_max_symbol_timeframes is not None
                     else ""
                 ),
+                "danger_continue_after_order_position_errors": bool(
+                    self.config.danger_continue_after_order_position_errors
+                ),
+                "order_position_integrity_policy": (
+                    "telegram_and_continue"
+                    if self.config.danger_continue_after_order_position_errors
+                    else "telegram_and_halt"
+                ),
                 "delayed_replay_enabled": bool(self.config.delayed_replay_enabled),
                 "delayed_replay_contract": DELAYED_REPLAY_CONTRACT,
                 "delayed_replay_policy": "capture_final_live_decisions_process_only_when_idle_cache_only_no_orders",
@@ -4745,6 +4758,49 @@ class AnomalyMicroLiveRunner:
                 self.logger(f"остановлено пользователем{suffix}")
                 self._close_live_sources()
                 return 0
+            except LiveOrderPositionIntegrityError as exc:
+                self._flush_live_ohlcv_cache_if_due(force=True, reason="order_position_integrity_error")
+                error_symbol = exc.symbol
+                event_symbol = error_symbol or "__live__"
+                continue_enabled = bool(self.config.danger_continue_after_order_position_errors)
+                self.artifacts.append_event(
+                    "live_order_position_integrity_error",
+                    event_symbol,
+                    {
+                        "cycle": cycle,
+                        "symbol": error_symbol or "",
+                        "exception_type": type(exc).__name__,
+                        "exception_message": str(exc)[:1000],
+                        "continue_after_error": continue_enabled,
+                    },
+                )
+                symbol_prefix = f"{error_symbol}: " if error_symbol else ""
+                if continue_enabled:
+                    self.logger(f"продолжаю после ошибки ордера/позиции: {symbol_prefix}{exc}")
+                    self.telegram.send_critical_sync(
+                        channel="events",
+                        key=f"live_order_position_integrity_error:{cycle}:{event_symbol}",
+                        symbol=event_symbol,
+                        text=_format_live_order_position_integrity_message(
+                            symbol=error_symbol,
+                            reason=str(exc),
+                            continue_enabled=True,
+                        ),
+                    )
+                    continue
+                self.logger(f"остановлено из-за ошибки ордера/позиции: {symbol_prefix}{exc}")
+                self.telegram.send_critical_sync(
+                    channel="events",
+                    key="live_order_position_integrity_error",
+                    symbol=event_symbol,
+                    text=_format_live_order_position_integrity_message(
+                        symbol=error_symbol,
+                        reason=str(exc),
+                        continue_enabled=False,
+                    ),
+                )
+                self._close_live_sources()
+                return 3
             except LiveDataIntegrityError as exc:
                 self._flush_live_ohlcv_cache_if_due(force=True, reason="data_integrity_error")
                 error_symbol = exc.symbol
@@ -5231,11 +5287,35 @@ class AnomalyMicroLiveRunner:
         try:
             snapshots = self.exchange.fetch_position_snapshots(tuple(symbols))
         except Exception as exc:
+            reason = f"Startup exchange-position cleanup failed before live loop: {type(exc).__name__}: {exc}"
             self.artifacts.append_event(
                 "startup_position_cleanup_failed",
                 "__live__",
                 {"stage": "fetch_positions", "reason": f"{type(exc).__name__}: {exc}"},
             )
+            if self.config.danger_continue_after_order_position_errors:
+                self.artifacts.append_event(
+                    "live_order_position_integrity_error",
+                    "__live__",
+                    {
+                        "stage": "startup_fetch_positions",
+                        "symbol": "",
+                        "exception_type": type(exc).__name__,
+                        "exception_message": str(exc)[:1000],
+                        "continue_after_error": True,
+                    },
+                )
+                self.logger(f"продолжаю после startup ошибки позиций: {reason}")
+                self.telegram.send_critical_sync(
+                    channel="events",
+                    key="startup_order_position_integrity_error:fetch_positions",
+                    text=_format_live_order_position_integrity_message(
+                        symbol=None,
+                        reason=reason,
+                        continue_enabled=True,
+                    ),
+                )
+                return
             raise LiveStartupError("Startup exchange-position cleanup failed before live loop") from exc
         nonzero_snapshots = [snapshot for snapshot in snapshots if abs(float(snapshot.signed_amount)) > 0.0]
         self.artifacts.append_event(
@@ -5272,6 +5352,37 @@ class AnomalyMicroLiveRunner:
                         "reason": f"{type(exc).__name__}: {exc}",
                     },
                 )
+                if self.config.danger_continue_after_order_position_errors:
+                    reason = (
+                        f"Startup exchange position could not be closed: symbol={symbol} "
+                        f"amount={signed_amount} {type(exc).__name__}: {exc}"
+                    )
+                    self.artifacts.append_event(
+                        "live_order_position_integrity_error",
+                        symbol,
+                        {
+                            "stage": "startup_close_position",
+                            "symbol": symbol,
+                            "exchange_position_amount": signed_amount,
+                            "exchange_position_side": snapshot.side,
+                            "source": snapshot.source,
+                            "exception_type": type(exc).__name__,
+                            "exception_message": str(exc)[:1000],
+                            "continue_after_error": True,
+                        },
+                    )
+                    self.logger(f"продолжаю после startup ошибки позиции: {symbol}: {reason}")
+                    self.telegram.send_critical_sync(
+                        channel="events",
+                        key=f"startup_order_position_integrity_error:{symbol}",
+                        symbol=symbol,
+                        text=_format_live_order_position_integrity_message(
+                            symbol=symbol,
+                            reason=reason,
+                            continue_enabled=True,
+                        ),
+                    )
+                    continue
                 raise LiveStartupError(
                     f"Startup exchange position could not be closed: symbol={symbol} amount={signed_amount}"
                 ) from exc
@@ -12182,6 +12293,7 @@ class AnomalyMicroLiveRunner:
                 },
             )
             return
+        order_flow_started = False
         try:
             if not self._validate_signal_freshness(signal):
                 return
@@ -12253,6 +12365,7 @@ class AnomalyMicroLiveRunner:
                 )
                 return
             entry_order_submitted_at_ms = int(time.time() * 1000)
+            order_flow_started = True
             entry_client_order_id = _live_client_order_id(
                 "entry",
                 signal.symbol,
@@ -12440,9 +12553,18 @@ class AnomalyMicroLiveRunner:
                 self._opened_positions_total += 1
                 self._active_symbols.pop(symbol_key, None)
             self._mark_signal_decision_consumed(signal, reason="position_opened")
-        except Exception:
+        except LiveOrderPositionIntegrityError:
             with self._state_lock:
                 self._opening_symbols.discard(symbol_key)
+            raise
+        except Exception as exc:
+            with self._state_lock:
+                self._opening_symbols.discard(symbol_key)
+            if order_flow_started:
+                raise LiveOrderPositionIntegrityError(
+                    f"order/position flow failed: symbol={signal.symbol} {type(exc).__name__}: {exc}",
+                    symbol=signal.symbol,
+                ) from exc
             raise
         finally:
             with self._state_lock:
@@ -14893,6 +15015,21 @@ def _format_live_data_integrity_halt_message(*, symbol: str | None, reason: str)
     else:
         title = f"{SERVICE_WARNING_EMOJI} <b>Live остановлен</b>"
     return f"{title}\n\n{_telegram_code(reason[:600])}"
+
+
+def _format_live_order_position_integrity_message(
+    *,
+    symbol: str | None,
+    reason: str,
+    continue_enabled: bool,
+) -> str:
+    status = "Live продолжает работу" if continue_enabled else "Live остановлен"
+    if symbol:
+        title = f"{_symbol_emoji(symbol)} <b>{_telegram_symbol_link(symbol)} {status}</b>"
+    else:
+        title = f"{SERVICE_WARNING_EMOJI} <b>{status}</b>"
+    mode_line = "Режим: DANGER continue-after-order-position-errors" if continue_enabled else "Режим: strict"
+    return f"{title}\n\n<b>Проблема ордера/позиции</b>\n{_telegram_code(reason[:600])}\n\n{mode_line}"
 
 
 def _order_info(order: dict[str, object]) -> dict[str, object]:
