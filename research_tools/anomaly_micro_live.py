@@ -2685,11 +2685,19 @@ class _LiveStatusLogger:
 
     def __call__(self, message: str) -> None:
         with self._lock:
-            self._finish_status_line_if_needed()
+            if self._inline_status_enabled and self._status_line_open:
+                self._clear_status_line_if_needed()
+            else:
+                self._finish_status_line_if_needed()
             self._logger(message)
 
     def alert(self, message: str) -> None:
         with self._lock:
+            if self._inline_status_enabled and self._status_line_open:
+                self._clear_status_line_if_needed()
+                rendered = f"\033[1;31m{message}\033[0m"
+                self._logger(rendered)
+                return
             self._finish_status_line_if_needed()
             rendered = f"\033[1;31m{message}\033[0m" if self._inline_status_enabled else message
             self._logger(f"\n{rendered}")
@@ -4140,6 +4148,7 @@ class AnomalyMicroLiveRunner:
         self._live_ohlcv_pending_rows = 0
         self._last_live_ohlcv_cache_flush_at = time.monotonic()
         self._run_started_monotonic = time.monotonic()
+        self._live_loop_started_monotonic: float | None = None
         self._live_sources_closed = False
 
     def shutdown(self, *, reason: str) -> None:
@@ -4327,6 +4336,7 @@ class AnomalyMicroLiveRunner:
             self._close_live_sources()
             raise
         self._startup_status("live", "запуск циклов")
+        self._live_loop_started_monotonic = time.monotonic()
         self._status_logger.finish_status()
         self.telegram.send(
             channel="events",
@@ -4641,7 +4651,10 @@ class AnomalyMicroLiveRunner:
                     session_top_snapshot = self._session_top_tracker.snapshot(now_ms=int(time.time() * 1000))
                     self._status_logger.status(
                         _format_live_heartbeat(
-                            runtime_seconds=time.monotonic() - self._run_started_monotonic,
+                            runtime_seconds=(
+                                time.monotonic()
+                                - (self._live_loop_started_monotonic or self._run_started_monotonic)
+                            ),
                             cycle_seconds=cycle_seconds,
                             connection_health_pct=ws_health_pct,
                             anomalies_total=detected_anomalies_total,
@@ -15322,7 +15335,7 @@ def _format_session_top_block(session_top_snapshot: dict[str, object] | None) ->
         growth = _finite_or_none(item.get("growth_fraction"))
         if not symbol or growth is None:
             continue
-        cells.append(_format_session_top_cell(f"{symbol} {_format_percent(growth, signed=False, precision=0)}"))
+        cells.append(_format_session_top_cell(f"{symbol} {_format_percent(growth, signed=False, precision=1)}"))
     if cells:
         while len(cells) < LIVE_SESSION_TOP_LIMIT:
             cells.append(_format_session_top_cell(""))
@@ -15374,14 +15387,14 @@ def _format_live_heartbeat(
     rows = [
         "Соединение",
         _format_status_line(
-            _format_status_cell("Время", _format_live_runtime(runtime_seconds)),
+            _format_status_cell("Стабильность", _format_percent(connection_health_pct, signed=False, precision=1)),
             _format_status_cell("Пульс", _format_live_pulse(cycle_seconds)),
             _format_status_cell("Данные", data_status_text),
         ),
         "",
         "Рынок",
         _format_status_line(
-            _format_status_cell("Стабильность", _format_percent(connection_health_pct, signed=False, precision=1)),
+            _format_status_cell("Время", _format_live_runtime(runtime_seconds)),
             _format_status_cell("События", anomalies_total),
             _format_status_cell("Активные", f"{active_now}/{active_seen}"),
         ),

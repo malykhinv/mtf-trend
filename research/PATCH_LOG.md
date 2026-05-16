@@ -4605,3 +4605,10 @@ Risk:
 ```text
 Low. Console/status output only. Backfill coverage, fetch behavior, failure events, cache flushing, snapshot computation, and execution guards are unchanged.
 ```
+
+## 2026-05-16 — P259 proposed
+
+P259 adjusts only the operator heartbeat display. The connection block now shows stability, pulse, and data health; runtime moved back to the market block and is counted from live-loop start after mandatory 72h context preparation, not from process startup. Session top movers are rendered to 0.1%. The live status logger now clears the previous multi-line heartbeat before warnings/ordinary log messages, so an error does not leave a stale grid above the alert.
+
+Current commit: UNKNOWN.
+Next validation: run live until the first warning/retry message and verify the old heartbeat is cleared before the alert, then the next heartbeat renders once.
