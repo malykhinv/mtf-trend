@@ -2210,6 +2210,21 @@ Next:
 Apply P264, rerun the same 2d/live-window backtest, then compare anomaly_trades.csv by pump_category_family and category_selected vs selected_terminal_outcome in live_events.csv.
 ```
 
+## 2026-05-16 — Discrete signal missed observability
+
+Goal: measure how often live receives a valid discrete signal snapshot but rejects the actual order because the current executable price already made the setup unsafe.
+
+Expected evidence:
+
+```text
+discrete_signal_snapshot_entry_missed appears before the matching execution reject
+selected_terminal_outcome remains execution_rejected
+Telegram says: "вход пропущен" and names the current reject reason
+No orders are submitted from this diagnostic event
+```
+
+Decision rule: if these events are frequent and concentrated on 5s/15s entry TFs, consider a separate event-driven/partial-candle experiment. Do not weaken executable price guards in the current live path.
+
 
 ---
 

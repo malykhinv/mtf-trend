@@ -1479,3 +1479,10 @@ After P264, runner category thresholds/priority must come from research_tools/an
 Discovery remains allowed only as an explicit backtest fallback and must be separable through pump_category_family=discovery vs live_priority.
 Delayed replay must preserve the original live setup_source from immutable snapshots to avoid changing forming-HTF pace ratios during replay.
 ```
+
+## 2026-05-16 — P265 proposed
+
+P265 adds live observability for discrete signal misses. If the signal snapshot itself was executable, but the current live executable price fails the execution guard (`TP1 already reached`, price drift, invalid risk, wide risk, or collapsed RR), live still rejects the order but records `discrete_signal_snapshot_entry_missed` and sends a specific Telegram message.
+
+Current patch status: PROPOSED, commit UNKNOWN.
+Next validation: run a short live smoke and count `discrete_signal_snapshot_entry_missed` versus normal execution rejects. If this dominates, evaluate lower-latency partial-candle/event-driven research separately; do not open by stale snapshot price.

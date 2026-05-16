@@ -204,6 +204,7 @@ VISIBILITY_EXECUTION_REJECT_EVENTS = frozenset(
         "reject_actual_risk_too_wide_at_live_price",
         "reject_entry_price_drift",
         "reject_rr_collapsed",
+        "discrete_signal_snapshot_entry_missed",
     }
 )
 ANIMAL_EMOJIS = (
@@ -1763,6 +1764,7 @@ class LiveAnomalyConfig:
     max_signal_age_ms: int = 60_000
     max_entry_price_drift_pct: float = 0.003
     min_executable_rr_to_signal_tp1: float = 0.75
+    discrete_signal_missed_telegram_enabled: bool = True
     max_position_amount_slippage_ratio: float = 0.05
     max_monitor_empty_ohlcv_cycles: int = 3
     scan_sleep_seconds: float = 2.0
@@ -4096,6 +4098,10 @@ class AnomalyMicroLiveRunner:
                 "delayed_replay_max_cycle_seconds": float(self.config.delayed_replay_max_cycle_seconds),
                 "delayed_replay_outcome_lookahead_seconds": float(self.config.delayed_replay_outcome_lookahead_seconds),
                 "delayed_replay_telegram_policy": "enabled_with_delayed_replay",
+                "discrete_signal_missed_telegram_enabled": bool(self.config.discrete_signal_missed_telegram_enabled),
+                "discrete_signal_missed_policy": (
+                    "reject_current_live_price_but_record_when_signal_snapshot_was_executable"
+                ),
                 "delayed_replay_queue_file": str(self.artifacts.delayed_replay_queue_path.relative_to(self.artifacts.root)),
                 "delayed_replay_results_file": str(self.artifacts.delayed_replay_results_path.relative_to(self.artifacts.root)),
                 "cache_dir": str(self.config.cache_dir) if self.config.cache_dir is not None else "",
@@ -12674,13 +12680,57 @@ class AnomalyMicroLiveRunner:
 
     def _validate_signal_executable(self, signal: LiveSignal, *, live_price: float) -> bool:
         now_ms = int(time.time() * 1000)
-        signed_drift_pct = _safe_divide(live_price - signal.entry_price, signal.entry_price)
+        details = self._entry_execution_guard_details(
+            signal,
+            executable_price=live_price,
+            observed_timestamp_ms=now_ms,
+        )
+        snapshot_details = self._entry_execution_guard_details(
+            signal,
+            executable_price=float(signal.entry_price),
+            observed_timestamp_ms=int(signal.decision_timestamp_ms),
+        )
+        snapshot_would_enter = self._entry_execution_guard_reject_event(snapshot_details) is None
+        reject_event = self._entry_execution_guard_reject_event(details)
+        if reject_event is None:
+            return True
+        reject_details = details
+        if reject_event == "reject_actual_risk_too_wide_at_live_price":
+            reject_details = {**details, "max_initial_risk_pct": self.config.max_initial_risk_pct}
+        elif reject_event == "reject_entry_price_drift":
+            reject_details = {**details, "max_entry_price_drift_pct": self.config.max_entry_price_drift_pct}
+        elif reject_event == "reject_rr_collapsed":
+            reject_details = {**details, "min_executable_rr_to_signal_tp1": self.config.min_executable_rr_to_signal_tp1}
+        if snapshot_would_enter:
+            reject_details = {
+                **reject_details,
+                "discrete_snapshot_would_enter": True,
+                "discrete_snapshot_entry_price": _finite_or_none(signal.entry_price),
+                "discrete_snapshot_actual_risk_pct": snapshot_details.get("actual_risk_pct"),
+                "discrete_snapshot_rr_to_signal_tp1": snapshot_details.get("rr_to_signal_tp1"),
+            }
+            self._record_discrete_snapshot_entry_missed(
+                signal,
+                reject_event=reject_event,
+                details=reject_details,
+            )
+        return self._reject_live_order(signal, event=reject_event, details=reject_details)
+
+    def _entry_execution_guard_details(
+        self,
+        signal: LiveSignal,
+        *,
+        executable_price: float,
+        observed_timestamp_ms: int,
+    ) -> dict[str, object]:
+        signed_drift_pct = _safe_divide(executable_price - signal.entry_price, signal.entry_price)
         abs_drift_pct = abs(signed_drift_pct) if math.isfinite(signed_drift_pct) else float("nan")
-        actual_risk = live_price - signal.stop_price
-        actual_risk_pct = _safe_divide(actual_risk, live_price)
-        rr_to_signal_tp1 = _safe_divide(signal.tp1_price - live_price, actual_risk)
-        details = {
-            "live_price": _finite_or_none(live_price),
+        actual_risk = executable_price - signal.stop_price
+        actual_risk_pct = _safe_divide(actual_risk, executable_price)
+        rr_to_signal_tp1 = _safe_divide(signal.tp1_price - executable_price, actual_risk)
+        return {
+            "live_price": _finite_or_none(executable_price),
+            "executable_price": _finite_or_none(executable_price),
             "signal_entry_price": _finite_or_none(signal.entry_price),
             "signal_tp1_price": _finite_or_none(signal.tp1_price),
             "stop_price": _finite_or_none(signal.stop_price),
@@ -12689,36 +12739,61 @@ class AnomalyMicroLiveRunner:
             "actual_risk_pct": _finite_or_none(actual_risk_pct),
             "rr_to_signal_tp1": _finite_or_none(rr_to_signal_tp1),
             "decision_timestamp_ms": signal.decision_timestamp_ms,
+            "observed_timestamp_ms": int(observed_timestamp_ms),
             "previous_live_scan_closed_timestamp_ms": signal.previous_live_scan_closed_timestamp_ms or "",
             "first_unscanned_decision_timestamp_ms": signal.first_unscanned_decision_timestamp_ms or "",
             "live_scan_gap_ltf_candles": signal.live_scan_gap_ltf_candles,
-            **_entry_lag_details(signal, observed_timestamp_ms=now_ms),
+            **_entry_lag_details(signal, observed_timestamp_ms=observed_timestamp_ms),
         }
-        if not math.isfinite(live_price) or live_price <= 0.0:
-            return self._reject_live_order(signal, event="reject_invalid_live_price", details=details)
-        if live_price >= signal.tp1_price:
-            return self._reject_live_order(signal, event="reject_tp1_already_reached", details=details)
-        if not math.isfinite(actual_risk) or actual_risk <= 0.0:
-            return self._reject_live_order(signal, event="reject_invalid_actual_risk_at_live_price", details=details)
-        if not math.isfinite(actual_risk_pct) or actual_risk_pct > self.config.max_initial_risk_pct:
-            return self._reject_live_order(
-                signal,
-                event="reject_actual_risk_too_wide_at_live_price",
-                details={**details, "max_initial_risk_pct": self.config.max_initial_risk_pct},
-            )
-        if not math.isfinite(abs_drift_pct) or abs_drift_pct > self.config.max_entry_price_drift_pct:
-            return self._reject_live_order(
-                signal,
-                event="reject_entry_price_drift",
-                details={**details, "max_entry_price_drift_pct": self.config.max_entry_price_drift_pct},
-            )
-        if not math.isfinite(rr_to_signal_tp1) or rr_to_signal_tp1 < self.config.min_executable_rr_to_signal_tp1:
-            return self._reject_live_order(
-                signal,
-                event="reject_rr_collapsed",
-                details={**details, "min_executable_rr_to_signal_tp1": self.config.min_executable_rr_to_signal_tp1},
-            )
-        return True
+
+    def _entry_execution_guard_reject_event(self, details: dict[str, object]) -> str | None:
+        live_price = _finite_or_none(details.get("live_price"))
+        signal_tp1_price = _finite_or_none(details.get("signal_tp1_price"))
+        actual_risk_pct = _finite_or_none(details.get("actual_risk_pct"))
+        abs_drift_pct = _finite_or_none(details.get("abs_drift_pct"))
+        rr_to_signal_tp1 = _finite_or_none(details.get("rr_to_signal_tp1"))
+        if live_price is None or live_price <= 0.0:
+            return "reject_invalid_live_price"
+        if signal_tp1_price is not None and live_price >= signal_tp1_price:
+            return "reject_tp1_already_reached"
+        if actual_risk_pct is None or actual_risk_pct <= 0.0:
+            return "reject_invalid_actual_risk_at_live_price"
+        if actual_risk_pct > self.config.max_initial_risk_pct:
+            return "reject_actual_risk_too_wide_at_live_price"
+        if abs_drift_pct is None or abs_drift_pct > self.config.max_entry_price_drift_pct:
+            return "reject_entry_price_drift"
+        if rr_to_signal_tp1 is None or rr_to_signal_tp1 < self.config.min_executable_rr_to_signal_tp1:
+            return "reject_rr_collapsed"
+        return None
+
+    def _record_discrete_snapshot_entry_missed(
+        self,
+        signal: LiveSignal,
+        *,
+        reject_event: str,
+        details: dict[str, object],
+    ) -> None:
+        payload = {
+            "reject_event": reject_event,
+            "category_id": signal.category_id,
+            "category_label": signal.category_label,
+            "category_contract": LIVE_CATEGORY_CONTRACT,
+            "levels_tf": signal.levels_timeframe.value,
+            "entry_tf": signal.entry_timeframe.value,
+            "decision_timestamp_ms": int(signal.decision_timestamp_ms),
+            "signal_entry_price": _finite_or_none(signal.entry_price),
+            "live_price": details.get("live_price"),
+            "signal_tp1_price": _finite_or_none(signal.tp1_price),
+            "stop_price": _finite_or_none(signal.stop_price),
+            "drift_pct": details.get("drift_pct"),
+            "abs_drift_pct": details.get("abs_drift_pct"),
+            "actual_risk_pct": details.get("actual_risk_pct"),
+            "rr_to_signal_tp1": details.get("rr_to_signal_tp1"),
+            "entry_lag_ms": details.get("entry_lag_ms", ""),
+            "entry_lag_ltf_candles": details.get("entry_lag_ltf_candles", ""),
+            "live_scan_gap_ltf_candles": signal.live_scan_gap_ltf_candles,
+        }
+        self.artifacts.append_event("discrete_signal_snapshot_entry_missed", signal.symbol, payload)
 
     def _append_selected_terminal_outcome(
         self,
@@ -12761,6 +12836,8 @@ class AnomalyMicroLiveRunner:
         return False
 
     def _notify_order_blocked(self, signal: LiveSignal, *, event: str, details: dict[str, object]) -> None:
+        if bool(details.get("discrete_snapshot_would_enter")) and not self.config.discrete_signal_missed_telegram_enabled:
+            return
         try:
             self.telegram.send(
                 channel="events",
@@ -14963,6 +15040,17 @@ BLOCKED_ORDER_REASON_LABELS = {
 
 def _format_order_blocked_message(signal: LiveSignal, *, event: str, details: dict[str, object]) -> str:
     reason = BLOCKED_ORDER_REASON_LABELS.get(event, event)
+    if bool(details.get("discrete_snapshot_would_enter")):
+        live_price = _finite_or_none(details.get("live_price"))
+        live_line = f"Текущая цена: {_telegram_code(_format_price(live_price))}\n" if live_price is not None else ""
+        return (
+            f"{_symbol_emoji(signal.symbol)} "
+            f"<b>{_telegram_symbol_link(signal.symbol)} вход пропущен</b>\n\n"
+            f"Свечной сигнал был, но сейчас вход уже не исполним.\n"
+            f"Причина: {_telegram_code(reason)}\n"
+            f"{live_line}\n"
+            f"{_telegram_signal_context(signal)}"
+        )
     return (
         f"{_symbol_emoji(signal.symbol)} "
         f"<b>{_telegram_symbol_link(signal.symbol)} Позиция не открыта</b>\n\n"
