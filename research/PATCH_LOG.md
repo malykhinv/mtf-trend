@@ -4700,3 +4700,43 @@ Risk:
 ```text
 High when enabled. The flag intentionally keeps live running after order/position integrity failures, including startup exchange-position cleanup failures, so it is for data collection / diagnostics, not normal protected trading. Default behavior remains strict.
 ```
+
+## 2026-05-16 — P263 proposed — live order lifecycle unit tests
+
+Files:
+
+```text
+tests/test_live_order_lifecycle.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Add deterministic unit coverage for the live real-order lifecycle without changing trading logic: entry order, exchange position delta, initial stop verification, unprotected exposure cleanup, stop exit handling, and TP1 -> BE stop replacement.
+```
+
+Changes:
+
+```text
+- Adds a fake exchange that exercises the same `_maybe_open_position()` and `_monitor_position()` live paths used by real orders.
+- Covers successful entry with verified initial STOP_MARKET reduce-only order and ledger/event artifacts.
+- Covers the observed live failure class: entry filled, initial stop never visible, then reduce-only cleanup and `LiveOrderPositionIntegrityError`.
+- Covers monitor stop-exit finalization with verified stop fill.
+- Covers TP1 partial reduce-only fill, stop replacement to break-even, old-stop cancel, then verified stop close.
+```
+
+Validation:
+
+```bash
+python -m unittest tests.test_live_order_lifecycle -v
+python -m compileall -q data/exchanges research_tools cli constants.py main.py tests/test_live_order_lifecycle.py
+```
+
+Risk:
+
+```text
+Low. Test-only patch. It does not change live trading logic, exchange client behavior, signal selection, sizing, TP/SL math, Telegram formatting, or artifacts outside test execution.
+```

@@ -10,7 +10,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P257 proposed chunked context cache flush and safe context reprepare
+Last active patch: P263 proposed live order lifecycle unit tests
 Updated: 2026-05-16
 ```
 
@@ -104,14 +104,14 @@ research_tools/hourly_levels.py
 
 ## 6. Next best step
 
-After P219/P220/P221, run a short WS-live smoke and inspect `live_events.csv` plus `live_positions.csv`:
+After the 2026-05-16 stop-visibility live run, do not tune entry filters first. Run the P263 fake-exchange lifecycle tests, then add narrower CCXT/Binance stop payload and order-not-found tests before changing live stop verification code.
 
 ```bash
-python -m compileall research_tools/anomaly_micro_live.py cli constants.py main.py
-python main.py run-anomaly-live --help
+python -m unittest tests.test_live_order_lifecycle -v
+python -m compileall -q data/exchanges research_tools cli constants.py main.py tests/test_live_order_lifecycle.py
 ```
 
-Expected readout: `_live_client_order_id()` no longer raises `NameError`; if entry order/fill resolution fails after exchange exposure appears, `unprotected_entry_reduce_only_exit_*` artifacts show cleanup attempt/result; if an entry opens, `live_positions.csv` writes `source_scan_mode`, `danger_cold_coverage_source`, and `entry_position_guard_source`; if delayed replay is enabled, `delayed_replay/delayed_replay_queue.jsonl`, `delayed_replay_results.csv`, `delayed_replay_summary.csv`, and `live_status.json` prove that anomaly postmortem runs only after idle gate and label `recompute_source`, `strict_recompute_signal`, and `frozen_signal_snapshot_used` honestly; if a future programming error occurs, `live_internal_error` is recorded and the Telegram error path is synchronous. If Telegram delivery fails, `telegram_sync_send_failed` must appear in artifacts.
+Expected readout: all four lifecycle tests pass. They must prove: successful entry writes `position_stop_order_verified` + `position_opened`; invisible initial stop raises `LiveOrderPositionIntegrityError` and writes `unprotected_entry_reduce_only_exit_filled`; monitor stop exit writes `stop_exit_filled` + `position_closed`; TP1 path writes `tp1_partial_exit_filled`, replaces stop to BE, cancels old stop, then closes on verified stop fill.
 
 Latest next step after P167:
 

@@ -2182,3 +2182,37 @@ This does not change trading behavior; it only fixes diagnostic attribution from
 ## 2026-05-15 — P250 startup backfill visibility smoke
 
 After applying P250, run live from a cold or partial OHLCV cache and verify that startup context backfill does not appear stuck: the console should rewrite one status line for every symbol with current symbol and ETA. This is UI/observability only; success criteria are status freshness and unchanged `symbol_context_startup_backfill_completed` artifact fields.
+
+
+---
+
+## 2026-05-16 — P263 live order lifecycle unit-test harness
+
+Input:
+
+```text
+Run artifact: live.zip / 20260516 real-order diagnostic run
+Problem: selected signals reached entry, but every attempted position failed initial stop visibility and was closed as unprotected exposure.
+```
+
+Result:
+
+```text
+P263 proposes deterministic unit tests around the actual live private lifecycle paths rather than isolated helper tests.
+The fake exchange drives `_maybe_open_position()` through entry fill, exchange position delta, stop creation/verification, artifact ledger writing, and no-monitor-thread open handling.
+It also reproduces the stop-not-visible failure mode from the live run and asserts reduce-only cleanup plus `LiveOrderPositionIntegrityError`.
+Monitor coverage includes verified stop exit and TP1 partial exit followed by BE stop replacement, old-stop cancel, and verified stop close.
+```
+
+Validation:
+
+```bash
+python -m unittest tests.test_live_order_lifecycle -v
+python -m compileall -q data/exchanges research_tools cli constants.py main.py tests/test_live_order_lifecycle.py
+```
+
+Next:
+
+```text
+Run these tests against the local tree. If they pass, add narrower tests around CCXT/Binance stop-order payload normalization and `-2013 Order does not exist` classification before changing live stop verification code.
+```
