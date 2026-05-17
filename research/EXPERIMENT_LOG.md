@@ -2606,3 +2606,25 @@ Live readout:
 ```text
 For the 12 USDT live run, judge only real fills: selected category, context parity/dependency status, exchange entry fill, TP1 limit fill, stop updates, closed PnL, and orphan-order cleanup. Do not annualize the backtest sum as account return.
 ```
+
+## 2026-05-17 - P280 startup context stale-tail validation
+
+Question:
+
+```text
+The 72h startup context can take long enough that the first live decisions see a 15-30m trailing context gap.
+```
+
+Decision:
+
+```text
+Do not accept stale prior-spike/prior-fast-fade context after startup. Treat the stale tail as retryable dependency and let the rolling symbol-context snapshot priority queue refresh active/radar/retryable symbols.
+```
+
+Expected live evidence:
+
+```text
+If startup took too long, early blocked rows can show reason=symbol_context_snapshot_tail_stale with ignored_tail_ms > symbol_context_snapshot_fresh_ms.
+Those rows should be signal_scan_retryable_dependency_blocked, not final all-categories rejects.
+Subsequent symbol_context_snapshot_updated rows should include retryable_dependency_blocked in priority_reason_counts before the symbol can be selected.
+```

@@ -4969,3 +4969,36 @@ Risk:
 ```text
 Medium. Frequency will drop versus v5 and some valid winners can be filtered. The change is intentional for minimum-size live collection: prefer fewer cleaner trades over broad discovery-like exposure. Do not interpret old discovery/backtest totals as account-return promises.
 ```
+
+## 2026-05-17 - P280 applied locally - stale startup context tail guard
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Prevent the first live cycles after a slow 72h startup backfill from accepting prior-spike / prior-fast-fade category evidence with a stale trailing context gap.
+If the snapshot effective cache end is older than the signal decision by more than symbol_context_snapshot_fresh_ms, live returns symbol_context_snapshot_tail_stale as retryable dependency instead of treating the old 72h snapshot as usable.
+The new P279 prior-spike unavailable reason is also retryable, so affected symbols are prioritized by the rolling symbol-context refresher instead of being consumed as final rejects.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py tests\test_anomaly_continuation_lab.py tests\test_live_order_lifecycle.py
+```
+
+Risk:
+
+```text
+Low/medium. Very slow startup can cause early candidates to wait for context refresh instead of trading immediately. This is intentional: stale prior-spike/fade context should block as a retryable dependency, not pass by default.
+```

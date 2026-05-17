@@ -50,6 +50,16 @@ Expected effect: fewer live trades, higher median/avg quality if the 30d anomaly
 Next validation: run real live at position_notional_usdt=12 and inspect category_rejected distributions, selected categories, context dependency timeouts, actual exchange fills, TP1 limit fills, and closed-trade PnL.
 ```
 
+## 2026-05-17 - P280 startup context freshness state
+
+```text
+Current patch status: P280 APPLIED locally / UNKNOWN commit.
+Slow 72h startup context backfill can leave the first live cycles with a trailing context gap. This does not stale the actual signal OHLCV or exchange order path, but it can stale prior_spike/prior_fast_fade category evidence.
+P280 makes that gap explicit: if decision_timestamp_ms is more than symbol_context_snapshot_fresh_ms after the snapshot effective_cache_end_timestamp_ms, live reports symbol_context_snapshot_tail_stale and blocks the category as a retryable dependency.
+This is the cheap/safe fix before live collection: do not run a second full 72h startup pass; let priority rolling context refresh catch up active/radar/retryable symbols.
+Next validation: after live startup, inspect signal_scan_retryable_dependency_blocked for symbol_context_snapshot_tail_stale, then confirm symbol_context_snapshot_updated priority_reason_counts includes retryable_dependency_blocked and later selected signals have fresh prior context.
+```
+
 ## 2026-05-17 - P276 applied locally
 
 ```text

@@ -892,7 +892,7 @@ def _ws_error_short_label(error: str | None) -> str:
 
 def _is_retryable_category_rejection(row: dict[str, object]) -> bool:
     reason = str(row.get("category_reject_reason") or row.get("reason") or "")
-    if reason == "reject_prior_fast_fade_filter_unavailable":
+    if reason in {"reject_prior_fast_fade_filter_unavailable", "reject_prior_spike_filter_unavailable"}:
         return True
     if reason in {"reject_mark_basis_unavailable", "reject_oi_unavailable"}:
         return True
@@ -10433,6 +10433,19 @@ class AnomalyMicroLiveRunner:
             }
             self._prior_fast_fade_cache[cache_key] = result
             return result
+        stale_tail_ms = max(0, int(decision_ts) - int(snapshot.effective_cache_end_timestamp_ms))
+        max_tail_ms = int(self.config.symbol_context_snapshot_fresh_ms)
+        if stale_tail_ms > max_tail_ms:
+            return {
+                **snapshot_details,
+                "status": "unavailable",
+                "reason": "symbol_context_snapshot_tail_stale",
+                "prior_fast_fade_count_72h": None,
+                "prior_spike_count_72h": None,
+                "effective_cache_end_timestamp_ms": int(snapshot.effective_cache_end_timestamp_ms),
+                "ignored_tail_ms": int(stale_tail_ms),
+                "max_ignored_tail_ms": int(max_tail_ms),
+            }
         if int(snapshot.history_start_timestamp_ms) > history_start_ms:
             result = {
                 **snapshot_details,
