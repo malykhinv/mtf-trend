@@ -10,8 +10,19 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P267 proposed replay synthetic provenance and OI cache freshness
-Updated: 2026-05-16
+Last active patch: P276 applied locally TP1-failure stop cleanup and lifecycle parity tests
+Updated: 2026-05-17
+```
+
+## 2026-05-17 - P276 applied locally
+
+```text
+Current patch status: P276 APPLIED locally / UNKNOWN commit.
+Live safety audit found one real TP1-limit transition risk: after a verified entry and initial stop, failure to create/verify the exchange-side TP1 limit closed exposure reduce-only but did not cancel the already-created initial stop.
+P276 cancels that initial stop after successful reduce-only cleanup and records either position_initial_stop_cancelled_after_tp1_failure or position_initial_stop_cancel_after_tp1_failure_failed.
+Lifecycle tests now match the current live contract: verified stop + verified TP1 limit on open, TP1 fill reconciliation from exchange order fill, BE stop replacement, and stop/TP1 cleanup.
+Live/backtest parity remains not exact for exits: backtest still models TP1 by candle high, while live requires an exchange-side reduce-only limit fill. Treat backtest TP1 as optimistic until a parity report compares live order-fill outcomes against candle outcomes.
+Next validation: run the real minimal live-order smoke after P274/P276 and require final ordinary/algo open orders = 0; then run a short strategy live smoke and inspect position_tp1_limit_order_verified, tp1_limit_exit_filled, position_tp1_limit_order_cancelled, and the new TP1-failure cleanup event absence/presence.
 ```
 
 The project direction is anomaly-first: anomaly nature/category research, anomaly continuation backtests, and strict REST-only micro-live validation.

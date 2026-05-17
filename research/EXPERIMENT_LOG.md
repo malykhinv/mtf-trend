@@ -2438,3 +2438,32 @@ tp1_limit_exit_filled only after exchange fill can be reconciled
 position_tp1_limit_order_cancelled when a position exits before TP1
 final ordinary/algo open orders = 0 after cleanup
 ```
+
+## 2026-05-17 - P276 live lifecycle unit validation
+
+Input:
+
+```text
+Request: check live for errors, especially position management, and check backtest/live parity.
+Scope: code audit of current live order path, position monitor, TP1/stop lifecycle, and anomaly backtest exit model; unit lifecycle smoke via tests.test_live_order_lifecycle.
+```
+
+Finding:
+
+```text
+Real live bug found: after entry + initial stop verification, TP1 limit creation/verification failure closed exchange exposure reduce-only but did not cancel the already-created initial stop. This could leave an orphan conditional stop after cleanup.
+Parity gap remains: live TP1 is exchange-side reduce-only limit fill; backtest TP1 is candle-high simulation. Backtest TP1 outcomes are optimistic until compared against live order-fill artifacts.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
+.venv\Scripts\python.exe -m compileall -q data/exchanges research_tools cli constants.py main.py tests/test_live_order_lifecycle.py
+```
+
+Result:
+
+```text
+5/5 lifecycle tests passed after updating the fake exchange contract and adding TP1-failure orphan-stop regression coverage.
+```

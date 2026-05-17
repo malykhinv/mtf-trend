@@ -119,11 +119,16 @@ class FakeExchange:
         self.free_balance = 1_000.0
         self.position_amount = 0.0
         self.stop_visible = True
+        self.limit_visible = True
+        self.fail_limit_order = False
         self.stop_orders: list[dict[str, object]] = []
+        self.open_orders: list[dict[str, object]] = []
         self.cancelled_orders: list[str] = []
         self.created_market_orders: list[dict[str, object]] = []
+        self.created_limit_orders: list[dict[str, object]] = []
         self.created_stop_orders: list[dict[str, object]] = []
         self.market_order_sequence = 1
+        self.limit_order_sequence = 1
         self.stop_order_sequence = 1
         self.position_amount_reads: deque[float] = deque()
         self.ohlcv_frames: deque[pd.DataFrame] = deque()
@@ -139,6 +144,13 @@ class FakeExchange:
 
     def fetch_usdt_free_balance(self) -> float:
         return self.free_balance
+
+    def get_market_id(self, symbol: str) -> str:
+        self._assert_symbol(symbol)
+        return "TESTUSDT"
+
+    def market_id(self, symbol: str) -> str:
+        return self.get_market_id(symbol)
 
     def fetch_symbol_position_amount(self, symbol: str) -> float:
         self._assert_symbol(symbol)
@@ -232,9 +244,40 @@ class FakeExchange:
             self.stop_orders.append(order)
         return dict(order)
 
+    def create_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        price: float,
+        *,
+        reduce_only: bool,
+        client_order_id: str | None = None,
+    ) -> dict[str, object]:
+        self._assert_symbol(symbol)
+        if self.fail_limit_order:
+            raise RuntimeError("injected limit order failure")
+        order_id = f"limit-{self.limit_order_sequence}"
+        self.limit_order_sequence += 1
+        order = {
+            "id": order_id,
+            "clientOrderId": client_order_id or "",
+            "side": side,
+            "type": "LIMIT",
+            "status": "open",
+            "reduceOnly": reduce_only,
+            "amount": float(amount),
+            "origQty": str(float(amount)),
+            "price": str(float(price)),
+        }
+        self.created_limit_orders.append(order)
+        if self.limit_visible:
+            self.open_orders.append(order)
+        return dict(order)
+
     def fetch_open_orders(self, symbol: str) -> list[dict[str, object]]:
         self._assert_symbol(symbol)
-        return []
+        return [dict(order) for order in self.open_orders]
 
     def fetch_open_stop_orders(self, symbol: str) -> list[dict[str, object]]:
         self._assert_symbol(symbol)
@@ -249,7 +292,10 @@ class FakeExchange:
 
     def fetch_order_by_client_order_id(self, symbol: str, client_order_id: str) -> dict[str, object]:
         self._assert_symbol(symbol)
-        raise RuntimeError("ordinary order lookup should not see conditional stop orders")
+        for order in self.open_orders:
+            if order.get("clientOrderId") == client_order_id:
+                return dict(order)
+        raise RuntimeError("Order does not exist")
 
     def cancel_stop_order(self, symbol: str, order_id: str) -> dict[str, object]:
         self._assert_symbol(symbol)
@@ -260,6 +306,7 @@ class FakeExchange:
     def cancel_order(self, symbol: str, order_id: str) -> dict[str, object]:
         self._assert_symbol(symbol)
         self.cancelled_orders.append(order_id)
+        self.open_orders = [order for order in self.open_orders if str(order.get("id")) != str(order_id)]
         return {"id": order_id, "status": "canceled"}
 
     def fetch_ohlcv(self, symbol: str, timeframe: Timeframe, start_timestamp_ms: int, end_timestamp_ms: int) -> pd.DataFrame:
@@ -271,6 +318,18 @@ class FakeExchange:
     def fetch_order_fill(self, symbol: str, order_id: str) -> ExchangeOrderFill:
         self._assert_symbol(symbol)
         price = self.stop_fill_price
+        for order in self.created_limit_orders:
+            if str(order.get("id")) == str(order_id):
+                return ExchangeOrderFill(
+                    order_id=order_id,
+                    status="closed",
+                    timestamp_ms=1_800_000_001_000,
+                    average_price=float(order["price"]),
+                    filled_amount=float(order["amount"]),
+                    cost=float(order["price"]) * float(order["amount"]),
+                    fee_cost=0.0,
+                    fee_currency="USDT",
+                )
         if price is None:
             for order in self.created_stop_orders:
                 if str(order.get("id")) == str(order_id):
@@ -363,6 +422,14 @@ def make_runner(results_dir: Path, exchange: FakeExchange, *, danger_local_guard
     runner.telegram = FakeTelegram()  # type: ignore[assignment]
     runner._render_open_chart = lambda _position: None  # type: ignore[method-assign]
     runner._render_close_chart = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    runner._fetch_chart_frame = (  # type: ignore[method-assign]
+        lambda symbol, timeframe, start_timestamp_ms, end_timestamp_ms: exchange.fetch_ohlcv(
+            symbol,
+            timeframe,
+            start_timestamp_ms,
+            end_timestamp_ms,
+        )
+    )
     return runner
 
 
@@ -417,18 +484,24 @@ class LiveOrderLifecycleTests(unittest.TestCase):
             position = runner._open_positions[symbol_key]
             self.assertEqual(position.entry_order_id, "market-1")
             self.assertEqual(position.stop_order_id, "stop-1")
+            self.assertEqual(position.tp1_order_id, "limit-1")
             self.assertAlmostEqual(position.entry_price, 100.0)
             self.assertAlmostEqual(position.stop_price, 95.0)
+            self.assertAlmostEqual(position.tp1_price, 106.0)
             self.assertAlmostEqual(position.position_delta_amount, 1.0)
             self.assertEqual(exchange.created_market_orders[0]["side"], "buy")
             self.assertFalse(exchange.created_market_orders[0]["reduce_only"])
             self.assertEqual(exchange.created_stop_orders[0]["side"], "sell")
             self.assertEqual(exchange.created_stop_orders[0]["type"], "STOP_MARKET")
             self.assertTrue(exchange.created_stop_orders[0]["reduceOnly"])
+            self.assertEqual(exchange.created_limit_orders[0]["side"], "sell")
+            self.assertEqual(exchange.created_limit_orders[0]["type"], "LIMIT")
+            self.assertTrue(exchange.created_limit_orders[0]["reduceOnly"])
 
             events = read_events(root)
             event_names = [row["event"] for row in events]
             self.assertIn("position_stop_order_verified", event_names)
+            self.assertIn("position_tp1_limit_order_verified", event_names)
             self.assertIn("position_opened", event_names)
             ledger_rows = read_ledger_rows(root)
             self.assertEqual(len(ledger_rows), 1)
@@ -460,6 +533,32 @@ class LiveOrderLifecycleTests(unittest.TestCase):
             self.assertIn("unprotected_entry_reduce_only_exit_filled", event_names)
             self.assertNotIn("position_opened", event_names)
 
+    def test_tp1_limit_failure_after_initial_stop_closes_exposure_and_cancels_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            exchange = FakeExchange()
+            exchange.fail_limit_order = True
+            runner = make_runner(root, exchange)
+            signal = make_signal(now_ms=int(pd.Timestamp.utcnow().timestamp() * 1000))
+
+            with self.assertRaises(LiveOrderPositionIntegrityError):
+                runner._maybe_open_position(signal)
+
+            self.assertAlmostEqual(exchange.position_amount, 0.0)
+            self.assertEqual(len(exchange.created_market_orders), 2)
+            self.assertEqual(exchange.created_market_orders[1]["side"], "sell")
+            self.assertTrue(exchange.created_market_orders[1]["reduce_only"])
+            self.assertIn("stop-1", exchange.cancelled_orders)
+            self.assertEqual(exchange.stop_orders, [])
+            self.assertEqual(runner._open_positions, {})
+
+            events = read_events(root)
+            event_names = [row["event"] for row in events]
+            self.assertIn("position_stop_order_verified", event_names)
+            self.assertIn("unprotected_entry_reduce_only_exit_filled", event_names)
+            self.assertIn("position_initial_stop_cancelled_after_tp1_failure", event_names)
+            self.assertNotIn("position_opened", event_names)
+
     def test_monitor_records_verified_stop_fill_and_closes_position(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -468,12 +567,14 @@ class LiveOrderLifecycleTests(unittest.TestCase):
             signal = make_signal(now_ms=int(pd.Timestamp.utcnow().timestamp() * 1000))
             position = make_live_position(signal=signal, amount=1.0)
             runner._open_positions[_position_symbol_key(signal.symbol)] = position
+            exchange.open_orders.append(make_limit_order(position))
             exchange.position_amount_reads = deque([1.0, 0.0])
             exchange.ohlcv_frames.append(one_row_ohlcv(high=101.0, low=94.5, close=96.0))
             exchange.stop_fill_price = 94.8
 
             with patch("research_tools.anomaly_micro_live.time.sleep", lambda _seconds: None):
-                runner._monitor_position(position)
+                with patch("research_tools.anomaly_micro_live.time.time", lambda: 1_800_000_100.0):
+                    runner._monitor_position(position)
 
             self.assertEqual(runner._open_positions, {})
             self.assertEqual(runner._closed_positions_total, 1)
@@ -494,6 +595,9 @@ class LiveOrderLifecycleTests(unittest.TestCase):
             position = make_live_position(signal=signal, amount=1.0)
             runner._open_positions[_position_symbol_key(signal.symbol)] = position
             exchange.position_amount = 1.0
+            tp1_order = make_limit_order(position)
+            exchange.created_limit_orders.append(tp1_order)
+            exchange.open_orders.append(tp1_order)
             exchange.stop_orders.append(
                 {
                     "id": position.stop_order_id,
@@ -512,7 +616,8 @@ class LiveOrderLifecycleTests(unittest.TestCase):
             exchange.stop_fill_price = 100.0
 
             with patch("research_tools.anomaly_micro_live.time.sleep", lambda _seconds: None):
-                runner._monitor_position(position)
+                with patch("research_tools.anomaly_micro_live.time.time", lambda: 1_800_000_100.0):
+                    runner._monitor_position(position)
 
             self.assertEqual(runner._open_positions, {})
             self.assertTrue(position.tp1_done)
@@ -523,7 +628,7 @@ class LiveOrderLifecycleTests(unittest.TestCase):
 
             events = read_events(root)
             event_names = [row["event"] for row in events]
-            self.assertIn("tp1_partial_exit_filled", event_names)
+            self.assertIn("tp1_limit_exit_filled", event_names)
             self.assertIn("position_stop_order_replaced", event_names)
             self.assertIn("tp1_and_stop_to_be", event_names)
             self.assertIn("stop_exit_filled", event_names)
@@ -544,6 +649,9 @@ def make_live_position(*, signal: LiveSignal, amount: float) -> LivePosition:
         entry_price=100.0,
         stop_price=95.0,
         tp1_price=110.0,
+        tp1_order_id="limit-live-1",
+        tp1_client_order_id="limit-live-client-1",
+        tp1_order_amount=amount * 0.5,
         initial_risk=5.0,
         first_executable_entry_timestamp_ms=signal.decision_timestamp_ms,
         entry_lag_ms=5_000,
@@ -569,6 +677,20 @@ def make_live_position(*, signal: LiveSignal, amount: float) -> LivePosition:
         remaining_amount=amount,
         current_stop_price=95.0,
     )
+
+
+def make_limit_order(position: LivePosition) -> dict[str, object]:
+    return {
+        "id": position.tp1_order_id,
+        "clientOrderId": position.tp1_client_order_id,
+        "side": "sell",
+        "type": "LIMIT",
+        "status": "open",
+        "reduceOnly": True,
+        "amount": float(position.tp1_order_amount),
+        "origQty": str(float(position.tp1_order_amount)),
+        "price": str(float(position.tp1_price)),
+    }
 
 
 if __name__ == "__main__":

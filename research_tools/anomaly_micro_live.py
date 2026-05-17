@@ -12561,6 +12561,30 @@ class AnomalyMicroLiveRunner:
                     position_id=position_id,
                     reason=f"tp1_limit_order_failed:{type(exc).__name__}",
                 )
+                try:
+                    cancel_payload = self.exchange.cancel_stop_order(signal.symbol, stop_order_id)
+                except Exception as cancel_exc:
+                    self.artifacts.append_event(
+                        "position_initial_stop_cancel_after_tp1_failure_failed",
+                        signal.symbol,
+                        {
+                            "position_id": position_id,
+                            "stop_order_id": stop_order_id,
+                            "reason": f"tp1_limit_order_failed:{type(exc).__name__}",
+                            "error": f"{type(cancel_exc).__name__}: {cancel_exc}",
+                        },
+                    )
+                else:
+                    self.artifacts.append_event(
+                        "position_initial_stop_cancelled_after_tp1_failure",
+                        signal.symbol,
+                        {
+                            "position_id": position_id,
+                            "stop_order_id": stop_order_id,
+                            "reason": f"tp1_limit_order_failed:{type(exc).__name__}",
+                            "cancel_status": _order_text_field(cancel_payload, "status") or "",
+                        },
+                    )
                 raise
             opened_at_ms = int(fill.timestamp_ms)
             position = LivePosition(

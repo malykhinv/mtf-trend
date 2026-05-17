@@ -4837,3 +4837,35 @@ Risk:
 ```text
 Low. Console-output lifecycle only. It does not change trading logic, Telegram, exchange orders, artifacts, or signal selection. In non-interactive output, status blocks remain plain periodic logs because in-place terminal repaint is not available.
 ```
+
+## 2026-05-17 - P276 applied locally - TP1-failure stop cleanup and lifecycle parity tests
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+tests/test_live_order_lifecycle.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Fix the live order-flow failure path introduced by exchange-side TP1 limits. If entry and initial stop are verified but TP1 limit creation/verification fails, live now closes the exchange exposure reduce-only and then cancels the already-created initial stop instead of leaving an orphan conditional stop after cleanup.
+Update the fake-exchange lifecycle tests to match the current live contract: entry requires verified stop + verified TP1 limit; monitor reconciles TP1 from exchange fill, not candle high; stop/TP1 cleanup is asserted.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
+.venv\Scripts\python.exe -m compileall -q data/exchanges research_tools cli constants.py main.py tests/test_live_order_lifecycle.py
+```
+
+Risk:
+
+```text
+Low/medium. Patch touches only the TP1-order failure cleanup path after a verified initial stop. Normal signal selection, entry guards, stop math, TP1 math, position sizing, and successful position management are unchanged. The new behavior reduces orphan-order risk after a failed TP1 limit setup.
+```
