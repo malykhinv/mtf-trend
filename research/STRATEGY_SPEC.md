@@ -541,6 +541,16 @@ Synthetic live OHLCV buckets are explicit data provenance. They may preserve ela
 P279 v6 contract is intentionally live-first: it reduces frequency to favor positive mark-basis, meaningful impulse range, non-tiny initial risk, lower prior whipsaw/spike history, and less poor trade-effort-per-return. P281 v7 adds a minimum absolute baseline liquidity floor of 300k USDT/day proxy so tiny symbols cannot qualify only through inflated relative flow ratios. It should be judged on live statistics and strict-parity backtests, not on blended discovery PnL.
 ```
 
+### Live universe liquidity gate after P282
+
+```text
+The default live exchange universe is prefiltered before startup context/scanning by Binance REST 24h ticker quoteVolume >= 300k USDT.
+The filter refreshes every 12h by default so symbols can enter later when current liquidity appears.
+Explicit --symbols bypass this universe gate.
+If the ticker source fails or the filter would produce an empty universe, live keeps the previous universe and writes a live_symbol_universe_liquidity_filter artifact event.
+This is only a universe-cost/data-quality gate. The trade decision still needs the shared PNO category contract, including P281 min_baseline_quote_daily_proxy from closed-kline baseline data.
+```
+
 ### Live position management after P274
 
 ```text

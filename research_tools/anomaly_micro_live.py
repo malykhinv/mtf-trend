@@ -1756,6 +1756,9 @@ class LiveAnomalyConfig:
     position_notional_usdt: float = 12.0
     max_open_positions: int = 3
     exclude_default_high_cap_symbols: bool = True
+    live_universe_liquidity_filter_enabled: bool = True
+    live_universe_min_quote_volume_24h: float = 300_000.0
+    live_universe_refresh_interval_seconds: float = 12 * 60 * 60
     symbol_batch_size: int = 20
     inactive_scan_slots_per_cycle: int | None = None
     scan_hot_timeframes_per_symbol: bool = True
@@ -4115,6 +4118,7 @@ class AnomalyMicroLiveRunner:
         self._symbol_universe_batch_index = 0
         self._current_symbol_universe_cycle_index = 1
         self._current_symbol_universe_batch_index = 1
+        self._last_live_universe_liquidity_refresh_at_ms = 0
         self._ohlcv_cache_storage = (
             ParquetStorage(base_dir=config.cache_dir)
             if config.live_ohlcv_cache_enabled and config.cache_dir is not None
@@ -4135,8 +4139,15 @@ class AnomalyMicroLiveRunner:
     def run(self) -> int:
         self._validate_startup()
         explicit_symbols = bool(self.config.symbols)
-        symbols = list(self.config.symbols) if explicit_symbols else self.exchange.list_usdt_swap_symbols()
-        symbols = self._filter_live_symbol_universe(symbols, explicit_symbols=explicit_symbols)
+        base_symbols = list(self.config.symbols) if explicit_symbols else self.exchange.list_usdt_swap_symbols()
+        base_symbols = self._filter_live_symbol_universe(base_symbols, explicit_symbols=explicit_symbols)
+        symbols = self._refresh_live_liquidity_universe(
+            base_symbols,
+            current_symbols=base_symbols,
+            explicit_symbols=explicit_symbols,
+            stage="startup",
+            force=True,
+        )
         if not symbols:
             raise LiveStartupError("Нет символов для live-обхода")
         self._symbol_context_universe_size = len(symbols)
@@ -4311,6 +4322,10 @@ class AnomalyMicroLiveRunner:
                 "live_aggtrade_rest_cache_padding_ms": int(self.config.live_aggtrade_rest_cache_padding_ms),
                 "exclude_default_high_cap_symbols": bool(self.config.exclude_default_high_cap_symbols),
                 "excluded_high_cap_bases": sorted(LIVE_DEFAULT_EXCLUDED_HIGH_CAP_BASES),
+                "live_universe_liquidity_filter_enabled": bool(self.config.live_universe_liquidity_filter_enabled),
+                "live_universe_min_quote_volume_24h": float(self.config.live_universe_min_quote_volume_24h),
+                "live_universe_refresh_interval_seconds": float(self.config.live_universe_refresh_interval_seconds),
+                "live_universe_liquidity_filter_policy": "ticker_24h_quote_volume_startup_and_periodic_refresh_explicit_symbols_bypass",
             },
         )
         if self.config.confirm_real_orders:
@@ -4346,6 +4361,14 @@ class AnomalyMicroLiveRunner:
                 ticker_started = time.monotonic()
                 ticker_stats = self._maybe_update_ticker_radar(symbols)
                 ticker_seconds = time.monotonic() - ticker_started
+                symbols = self._refresh_live_liquidity_universe(
+                    base_symbols,
+                    current_symbols=symbols,
+                    explicit_symbols=explicit_symbols,
+                    stage="cycle",
+                    force=False,
+                )
+                self._symbol_context_universe_size = len(symbols)
                 context_snapshot_stats = LiveSymbolContextSnapshotCycleStats(
                     enabled=bool(self.config.symbol_context_snapshot_enabled),
                     attempted=False,
@@ -5176,6 +5199,141 @@ class AnomalyMicroLiveRunner:
             },
         )
         return kept
+
+    def _refresh_live_liquidity_universe(
+        self,
+        base_symbols: list[str],
+        *,
+        current_symbols: list[str],
+        explicit_symbols: bool,
+        stage: str,
+        force: bool,
+    ) -> list[str]:
+        if explicit_symbols or not self.config.live_universe_liquidity_filter_enabled:
+            if force:
+                self.artifacts.append_event(
+                    "live_symbol_universe_liquidity_filter",
+                    "__live__",
+                    {
+                        "stage": stage,
+                        "status": "disabled",
+                        "reason": "explicit_symbols" if explicit_symbols else "liquidity_filter_disabled",
+                        "input_count": int(len(base_symbols)),
+                        "output_count": int(len(current_symbols)),
+                        "min_quote_volume_24h": float(self.config.live_universe_min_quote_volume_24h),
+                    },
+                )
+            return list(current_symbols)
+        now_ms = int(time.time() * 1000)
+        interval_ms = max(1, int(float(self.config.live_universe_refresh_interval_seconds) * 1000.0))
+        if not force and self._last_live_universe_liquidity_refresh_at_ms:
+            if now_ms - int(self._last_live_universe_liquidity_refresh_at_ms) < interval_ms:
+                return list(current_symbols)
+        if not base_symbols:
+            return []
+        min_quote = float(self.config.live_universe_min_quote_volume_24h)
+        try:
+            liquidity_source = RestLiveTickerSnapshotSource(self.exchange)
+            snapshots = liquidity_source.fetch_snapshots(tuple(base_symbols))
+            source = liquidity_source.source_id
+            source_status = "ok"
+            reason = ""
+        except Exception as exc:
+            self.artifacts.append_event(
+                "live_symbol_universe_liquidity_filter",
+                "__live__",
+                {
+                    "stage": stage,
+                    "status": "refresh_failed_keep_previous",
+                    "source": "rest_fetch_tickers",
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc)[:500],
+                    "input_count": int(len(base_symbols)),
+                    "previous_count": int(len(current_symbols)),
+                    "min_quote_volume_24h": min_quote,
+                    "policy": "do_not_empty_live_universe_when_ticker_liquidity_source_fails",
+                },
+            )
+            return list(current_symbols)
+        self._last_live_universe_liquidity_refresh_at_ms = now_ms
+        base_by_key = {_position_symbol_key(symbol): symbol for symbol in base_symbols}
+        eligible: list[tuple[float, str]] = []
+        excluded: list[dict[str, object]] = []
+        missing_count = 0
+        for snapshot in snapshots:
+            symbol = base_by_key.get(_position_symbol_key(snapshot.symbol), snapshot.symbol)
+            quote_volume = _finite_or_none(snapshot.quote_volume_24h)
+            if snapshot.status != "ok" or quote_volume is None:
+                missing_count += 1
+                excluded.append(
+                    {
+                        "symbol": symbol,
+                        "quote_volume_24h": "",
+                        "status": snapshot.status,
+                        "reason": snapshot.reason or "ticker_snapshot_missing",
+                    }
+                )
+                continue
+            if quote_volume >= min_quote:
+                eligible.append((quote_volume, symbol))
+            else:
+                excluded.append(
+                    {
+                        "symbol": symbol,
+                        "quote_volume_24h": quote_volume,
+                        "status": snapshot.status,
+                        "reason": "quote_volume_24h_below_min",
+                    }
+                )
+        eligible_symbols = [symbol for _, symbol in sorted(eligible, key=lambda item: (item[0], item[1]), reverse=True)]
+        if not eligible_symbols:
+            self.artifacts.append_event(
+                "live_symbol_universe_liquidity_filter",
+                "__live__",
+                {
+                    "stage": stage,
+                    "status": "empty_keep_previous",
+                    "source": source,
+                    "source_status": source_status,
+                    "source_reason": reason,
+                    "input_count": int(len(base_symbols)),
+                    "previous_count": int(len(current_symbols)),
+                    "min_quote_volume_24h": min_quote,
+                    "missing_count": int(missing_count),
+                    "excluded_count": int(len(excluded)),
+                    "policy": "do_not_empty_live_universe_when_filter_result_is_empty",
+                },
+            )
+            return list(current_symbols)
+        previous_keys = {_position_symbol_key(symbol) for symbol in current_symbols}
+        eligible_keys = {_position_symbol_key(symbol) for symbol in eligible_symbols}
+        added = [symbol for symbol in eligible_symbols if _position_symbol_key(symbol) not in previous_keys]
+        removed = [symbol for symbol in current_symbols if _position_symbol_key(symbol) not in eligible_keys]
+        self.artifacts.append_event(
+            "live_symbol_universe_liquidity_filter",
+            "__live__",
+            {
+                "stage": stage,
+                "status": "ok",
+                "source": source,
+                "source_status": source_status,
+                "source_reason": reason,
+                "input_count": int(len(base_symbols)),
+                "previous_count": int(len(current_symbols)),
+                "output_count": int(len(eligible_symbols)),
+                "added_count": int(len(added)),
+                "removed_count": int(len(removed)),
+                "missing_count": int(missing_count),
+                "excluded_count": int(len(excluded)),
+                "min_quote_volume_24h": min_quote,
+                "refresh_interval_seconds": float(self.config.live_universe_refresh_interval_seconds),
+                "added_symbols": added[:100],
+                "removed_symbols": removed[:100],
+                "excluded_sample": excluded[:100],
+                "policy": "cheap_24h_ticker_liquidity_filter_refresh_does_not_touch_explicit_symbols",
+            },
+        )
+        return eligible_symbols
 
     def _validate_startup(self) -> None:
         if not self.config.confirm_real_orders:
@@ -15293,6 +15451,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "ticker_radar_min_quote_volume_delta_ratio": config.ticker_radar_min_quote_volume_delta_ratio,
         "danger_ticker_flow_radar_min_quote_volume_delta_usdt": config.danger_ticker_flow_radar_min_quote_volume_delta_usdt,
         "danger_ticker_flow_radar_min_trade_count_delta_ratio": config.danger_ticker_flow_radar_min_trade_count_delta_ratio,
+        "live_universe_refresh_interval_seconds": config.live_universe_refresh_interval_seconds,
         "symbol_context_snapshot_interval_seconds": config.symbol_context_snapshot_interval_seconds,
         "symbol_context_snapshot_max_cycle_seconds": config.symbol_context_snapshot_max_cycle_seconds,
         "latency_sla_due_scan_p95_seconds": config.latency_sla_due_scan_p95_seconds,
@@ -15317,6 +15476,7 @@ def _validate_live_config_values(config: LiveAnomalyConfig) -> None:
         "ticker_radar_min_price_delta_pct": config.ticker_radar_min_price_delta_pct,
         "ticker_radar_min_quote_volume_delta_usdt": config.ticker_radar_min_quote_volume_delta_usdt,
         "live_ohlcv_cache_flush_interval_seconds": config.live_ohlcv_cache_flush_interval_seconds,
+        "live_universe_min_quote_volume_24h": config.live_universe_min_quote_volume_24h,
         "danger_ticker_flow_radar_max_price_delta_pct": config.danger_ticker_flow_radar_max_price_delta_pct,
         "warm_watch_max_price_delta_pct": config.warm_watch_max_price_delta_pct,
         "prepump_warm_watch_score_weight": config.prepump_warm_watch_score_weight,

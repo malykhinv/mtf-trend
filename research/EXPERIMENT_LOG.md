@@ -2665,3 +2665,26 @@ This is a post-filter approximation on existing anomaly_trades.csv, not a full r
 Combined P281 default live: n=163, WR=81.60%, net PnL sum=+396.38%, avg=+2.43%, median=+1.81%.
 Interpret net PnL sum as summed trade returns, not account return.
 ```
+
+## 2026-05-17 - P282 live universe liquidity policy
+
+Question:
+
+```text
+Can live immediately discard low-liquidity coins, while still letting coins enter later if liquidity arrives?
+```
+
+Decision:
+
+```text
+Yes. Use a cheap universe gate on the implicit exchange symbol list: REST 24h ticker quoteVolume >= 300k USDT at startup, then refresh every 12h by default.
+This should reduce 72h context and scan load before trading starts. It must not replace category-level baseline liquidity, because a current 24h ticker can include the pump itself while P281 uses pre-pump closed-kline baseline.
+```
+
+Expected live evidence:
+
+```text
+live_symbol_universe_liquidity_filter should show startup output_count, removed_symbols, excluded_sample, and later cycle added_symbols/removed_symbols.
+If Binance ticker fetch fails, status must be refresh_failed_keep_previous.
+If the threshold is too high, frequency loss should appear as lower output_count before signal selection, not as worse category rejection.
+```

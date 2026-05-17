@@ -5039,3 +5039,40 @@ Risk:
 ```text
 Low/medium. This can filter some early microcap runners. The threshold is intentionally 300k, not 1m, because the 300k-1m bucket still had positive live-priority expectancy in the current artifact.
 ```
+
+## 2026-05-17 - P282 applied locally - live liquidity universe filter
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+cli/parser.py
+cli/commands.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+research/STRATEGY_SPEC.md
+```
+
+Intent:
+
+```text
+Avoid spending startup context and live scan budget on symbols with too little current market liquidity, while still allowing symbols to enter later if liquidity arrives.
+Default live startup and 12h refresh use Binance REST 24h ticker quoteVolume >= 300k USDT for the implicit exchange universe.
+Explicit --symbols bypass this filter. Source failures or empty filter results keep the previous universe instead of emptying live trading.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py tests\test_anomaly_continuation_lab.py tests\test_live_order_lifecycle.py
+.venv\Scripts\python.exe main.py run-anomaly-live --help | Select-String -Pattern "live-universe"
+```
+
+Risk:
+
+```text
+Low/medium. A fresh liquidity arrival can be missed until the next refresh interval. The default 12h interval is a conservative cost/freshness tradeoff; shorten it only if live artifacts show missed symbols that already had enough quoteVolume.
+```

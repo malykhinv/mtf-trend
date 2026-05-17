@@ -1478,6 +1478,14 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                 getattr(args, "exclude_default_high_cap_symbols", True),
                 default=True,
             ),
+            live_universe_liquidity_filter_enabled=_to_bool_flag(
+                getattr(args, "live_universe_liquidity_filter_enabled", True),
+                default=True,
+            ),
+            live_universe_min_quote_volume_24h=float(getattr(args, "live_universe_min_quote_volume_24h", 300_000.0)),
+            live_universe_refresh_interval_seconds=float(
+                getattr(args, "live_universe_refresh_interval_seconds", 12 * 60 * 60)
+            ),
             symbol_batch_size=int(getattr(args, "symbol_batch_size", 20)),
             inactive_scan_slots_per_cycle=getattr(args, "inactive_scan_slots_per_cycle", None),
             scan_hot_timeframes_per_symbol=_to_bool_flag(

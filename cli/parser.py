@@ -233,6 +233,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Exclude a static high-cap major list from default exchange universe; explicit --symbols are not filtered.",
     )
+    anomaly_live.add_argument("--live-universe-liquidity-filter-enabled", type=_str_to_bool, default=True)
+    anomaly_live.add_argument("--live-universe-min-quote-volume-24h", type=float, default=300_000.0)
+    anomaly_live.add_argument("--live-universe-refresh-interval-seconds", type=float, default=12 * 60 * 60)
     anomaly_live.add_argument("--symbol-batch-size", type=_positive_int_for("--symbol-batch-size"), default=20)
     anomaly_live.add_argument(
         "--inactive-scan-slots-per-cycle",
