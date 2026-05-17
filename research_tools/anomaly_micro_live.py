@@ -612,6 +612,41 @@ class TelegramConfig:
     positions_chat_id: str
 
 
+@dataclass(frozen=True, slots=True)
+class AggTradeRawRange:
+    start_timestamp_ms: int
+    end_timestamp_ms: int
+    rows: tuple[dict[str, object], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class WsAggTradeReadResult:
+    rows: tuple[dict[str, object], ...]
+    missing_ranges: tuple[tuple[int, int], ...]
+    status: str
+    reason: str | None
+    subscribed: bool
+    connection_status: str
+    last_error: str | None
+    last_trade_timestamp_ms: int | None
+    last_receive_at_ms: int | None
+    buffer_row_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class LiveOiChangeResult:
+    value: float | None
+    reason: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class LiveMarkBasisResult:
+    value: float | None
+    reason: str | None = None
+    timestamp_ms: int | None = None
+    age_ms: int | None = None
+
+
 class LiveTickerSnapshotSource(Protocol):
     @property
     def source_id(self) -> str:

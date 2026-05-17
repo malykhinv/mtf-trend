@@ -4700,6 +4700,25 @@ Risk:
 ```text
 High when enabled. The flag intentionally keeps live running after order/position integrity failures, including startup exchange-position cleanup failures, so it is for data collection / diagnostics, not normal protected trading. Default behavior remains strict.
 ```
+
+## 2026-05-17 — P273 proposed — restore live helper dataclasses after category extraction
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Fix `NameError: name 'WsAggTradeReadResult' is not defined` in live by restoring non-category helper dataclasses used by WS aggTrade, OI, mark-basis, and raw aggTrade cache paths. These containers are separate from the shared pump category contract.
+```
+
+Validation:
+
+```bash
 | P264 | Share live/backtest category contract and parity labels | APPLIED locally / UNKNOWN commit | `research_tools/anomaly_category_contract.py`, `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `research/*` | parity/data-quality | Move runner category thresholds/priority into one shared contract used by live and backtest; keep discovery as explicit backtest fallback; add live-vs-discovery category family artifacts; stop materialized-cache metadata gaps from crashing candidate collection; preserve original forming setup source in delayed replay; add selected terminal outcome events; mark synthetic OHLCV buckets explicitly. | `python -m compileall -q data/exchanges research_tools cli constants.py main.py` |
 | P266 | Add backtest context parity artifacts and skipped category metadata | APPLIED locally / UNKNOWN commit | `research_tools/anomaly_strategy_backtest.py`, `research/*` | parity/diagnostics | Preserve pump category metadata on every skipped trade row, including execution-guard rejects; widen the derivatives pre-context universe with live-priority category intents before final mark/OI checks; add `anomaly_context_parity_report.csv` so context request/coverage/final-signal/trade outcome can be audited without mixing discovery with live-priority rules. | `python -m compileall -q data/exchanges research_tools cli constants.py main.py` |
 
