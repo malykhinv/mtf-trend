@@ -1559,3 +1559,11 @@ Position management now treats TP1 as an exchange-side reduce-only limit order, 
 The live monitor uses the signal entry timeframe for structural trailing and treats the pre-first-closed-LTF-candle interval as waiting, not data integrity failure.
 Next validation must be a minimal real-order lifecycle smoke that verifies: stop order visible, TP1 limit order visible, TP1 cancel/cleanup works when position exits before TP1, and no ordinary/algo orphan orders remain.
 ```
+
+## 2026-05-17 — P275 proposed
+
+```text
+Current patch status: P275 PROPOSED, commit UNKNOWN.
+The live terminal heartbeat should behave as one pinned multi-section status grid. When any ordinary log or alert appears, the runner clears the grid, prints the message, and immediately repaints the latest grid so the operator view always ends with the current heartbeat. This is display-only and does not affect live execution, artifacts, orders, or Telegram.
+Next validation: run a short live session in an interactive PowerShell terminal and confirm one self-updating grid containing Соединение/Рынок/Торговля/Контроль stays at the bottom after startup logs and any warning/error lines.
+```

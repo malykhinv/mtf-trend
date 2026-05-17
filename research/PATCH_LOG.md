@@ -4809,3 +4809,31 @@ Risk:
 ```text
 Medium/high until real-order smoke confirms Binance accepts and exposes the new reduce-only limit TP order through ordinary open orders and that TP fill reconciliation moves the stop to BE without leaving orphan TP/stop orders.
 ```
+
+## 2026-05-17 — P275 proposed — pin live heartbeat grid as terminal tail
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix the terminal live heartbeat lifecycle. The multi-section grid is now a single cached status block: status updates replace the previous grid in place, ordinary logs and red alerts first erase the grid, print the event/error, then repaint the latest grid so the heartbeat is always the last terminal element. The heartbeat no longer starts with a leading blank line, which keeps row counting and clearing aligned for the full multi-section block.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low. Console-output lifecycle only. It does not change trading logic, Telegram, exchange orders, artifacts, or signal selection. In non-interactive output, status blocks remain plain periodic logs because in-place terminal repaint is not available.
+```

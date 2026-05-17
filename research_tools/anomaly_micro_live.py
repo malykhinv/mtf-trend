@@ -2613,7 +2613,7 @@ class LivePosition:
 
 
 class _LiveStatusLogger:
-    """Console logger for live heartbeat/status messages."""
+    """Console logger that keeps one live status grid pinned as the last terminal block."""
 
     _ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 
@@ -2623,6 +2623,8 @@ class _LiveStatusLogger:
         self._lock = threading.RLock()
         self._status_line_open = False
         self._status_line_rows = 0
+        self._last_status_message: str | None = None
+        self._last_status_highlight = False
 
     @property
     def inline_status_enabled(self) -> bool:
@@ -2630,39 +2632,54 @@ class _LiveStatusLogger:
 
     def __call__(self, message: str) -> None:
         with self._lock:
-            if self._inline_status_enabled and self._status_line_open:
+            repaint_status = self._should_repaint_status_after_log()
+            if self._inline_status_enabled:
                 self._clear_status_line_if_needed()
             else:
                 self._finish_status_line_if_needed()
             self._logger(message)
+            if repaint_status:
+                self._paint_status(str(self._last_status_message), highlight=self._last_status_highlight)
 
     def alert(self, message: str) -> None:
         with self._lock:
-            if self._inline_status_enabled and self._status_line_open:
+            repaint_status = self._should_repaint_status_after_log()
+            if self._inline_status_enabled:
                 self._clear_status_line_if_needed()
-                rendered = f"\033[1;31m{message}\033[0m"
-                self._logger(rendered)
-                return
-            self._clear_status_line_if_needed()
             rendered = f"\033[1;31m{message}\033[0m" if self._inline_status_enabled else message
             self._logger(rendered)
+            if repaint_status:
+                self._paint_status(str(self._last_status_message), highlight=self._last_status_highlight)
 
     def status(self, message: str, *, highlight: bool = False) -> None:
         with self._lock:
+            self._last_status_message = str(message)
+            self._last_status_highlight = bool(highlight)
             if not self._inline_status_enabled:
                 self._logger(message)
                 return
-            rendered = f"\033[1;33m{message}\033[0m" if highlight else message
-            terminal_columns = self._terminal_columns()
-            self._clear_status_line_if_needed()
-            sys.stdout.write(rendered)
-            sys.stdout.flush()
-            self._status_line_rows = self._rendered_rows(rendered, terminal_columns)
-            self._status_line_open = True
+            self._paint_status(self._last_status_message, highlight=self._last_status_highlight)
 
     def finish_status(self) -> None:
         with self._lock:
-            self._clear_status_line_if_needed()
+            self._last_status_message = None
+            self._last_status_highlight = False
+            if self._inline_status_enabled:
+                self._clear_status_line_if_needed()
+            else:
+                self._finish_status_line_if_needed()
+
+    def _should_repaint_status_after_log(self) -> bool:
+        return self._inline_status_enabled and self._last_status_message is not None
+
+    def _paint_status(self, message: str, *, highlight: bool) -> None:
+        rendered = f"\033[1;33m{message}\033[0m" if highlight else message
+        terminal_columns = self._terminal_columns()
+        self._clear_status_line_if_needed()
+        sys.stdout.write(rendered)
+        sys.stdout.flush()
+        self._status_line_rows = self._rendered_rows(rendered, terminal_columns)
+        self._status_line_open = True
 
     def _finish_status_line_if_needed(self) -> None:
         if not self._inline_status_enabled or not self._status_line_open:
@@ -2674,7 +2691,6 @@ class _LiveStatusLogger:
 
     def _clear_status_line_if_needed(self) -> None:
         if not self._status_line_open:
-            sys.stdout.write("\r\033[2K")
             return
         rows = max(1, self._status_line_rows)
         sys.stdout.write("\r\033[2K")
@@ -16365,7 +16381,7 @@ def _format_live_heartbeat(
         ),
     ]
     rows.extend(_format_session_top_block(session_top_snapshot))
-    return "\n" + "\n".join(rows)
+    return "\n".join(rows)
 
 def _format_percent(value: float, *, signed: bool = False, precision: int = 1) -> str:
     if not math.isfinite(value):
