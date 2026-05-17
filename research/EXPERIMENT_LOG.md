@@ -2654,3 +2654,14 @@ Add a soft absolute-liquidity floor to the shared live/backtest runner contract:
 Do not set 1m as the floor yet because 300k-1m still had positive live-priority expectancy and useful frequency.
 Keep trade-effort-per-return caps from P279; they address the stronger exhaustion/fake-flow signal.
 ```
+
+P281 post-filter readout on current 30d artifacts:
+
+```text
+This is a post-filter approximation on existing anomaly_trades.csv, not a full rerun.
+1m/15s P281 default live: n=68, WR=83.82%, net PnL sum=+189.79%, avg=+2.79%, median=+1.81%.
+1m/5s P281 default live: n=42, WR=85.71%, net PnL sum=+64.52%, avg=+1.54%, median=+1.75%.
+5m/30s P281 default live: n=53, WR=75.47%, net PnL sum=+142.08%, avg=+2.68%, median=+1.86%.
+Combined P281 default live: n=163, WR=81.60%, net PnL sum=+396.38%, avg=+2.43%, median=+1.81%.
+Interpret net PnL sum as summed trade returns, not account return.
+```
