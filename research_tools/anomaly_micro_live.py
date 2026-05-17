@@ -17,6 +17,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+import warnings
 from collections import deque
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
@@ -2631,6 +2632,8 @@ class _LiveStatusLogger:
         self._status_line_rows = 0
         self._last_status_message: str | None = None
         self._last_status_highlight = False
+        self._warning_hook_installed = False
+        self._previous_showwarning: Callable[..., object] | None = None
 
     @property
     def inline_status_enabled(self) -> bool:
@@ -2675,6 +2678,40 @@ class _LiveStatusLogger:
             else:
                 self._finish_status_line_if_needed()
 
+    def install_warning_hook(self) -> None:
+        with self._lock:
+            if self._warning_hook_installed:
+                return
+            self._previous_showwarning = warnings.showwarning
+            warnings.showwarning = self._showwarning
+            self._warning_hook_installed = True
+
+    def restore_warning_hook(self) -> None:
+        with self._lock:
+            if not self._warning_hook_installed:
+                return
+            if self._previous_showwarning is not None:
+                warnings.showwarning = self._previous_showwarning
+            self._previous_showwarning = None
+            self._warning_hook_installed = False
+
+    def _showwarning(
+        self,
+        message: Warning | str,
+        category: type[Warning],
+        filename: str,
+        lineno: int,
+        file: object | None = None,
+        line: str | None = None,
+    ) -> None:
+        if file is not None:
+            previous = self._previous_showwarning
+            if callable(previous):
+                previous(message, category, filename, lineno, file=file, line=line)
+                return
+        location = f"{Path(filename).name}:{lineno}" if filename else f"line {lineno}"
+        self.alert(f"{category.__name__}: {message} ({location})")
+
     def _should_repaint_status_after_log(self) -> bool:
         return self._inline_status_enabled and self._last_status_message is not None
 
@@ -2699,10 +2736,10 @@ class _LiveStatusLogger:
         if not self._status_line_open:
             return
         rows = max(1, self._status_line_rows)
-        sys.stdout.write("\r\033[2K")
-        for _ in range(rows - 1):
-            sys.stdout.write("\033[1A\r\033[2K")
         sys.stdout.write("\r")
+        for _ in range(rows - 1):
+            sys.stdout.write("\033[1A")
+        sys.stdout.write("\r\033[J")
         self._status_line_open = False
         self._status_line_rows = 0
 
@@ -4339,6 +4376,7 @@ class AnomalyMicroLiveRunner:
         except LiveStartupError:
             self._close_live_sources()
             raise
+        self._status_logger.install_warning_hook()
         self._run_started_monotonic = time.monotonic()
         self._startup_status("live", "запуск циклов")
         self._live_loop_started_monotonic = time.monotonic()
@@ -4938,6 +4976,7 @@ class AnomalyMicroLiveRunner:
         return reconcile_symbols
 
     def _close_live_sources(self) -> None:
+        self._status_logger.restore_warning_hook()
         if self._live_sources_closed:
             return
         self._live_sources_closed = True
@@ -16174,12 +16213,12 @@ def _fill_missing_ohlcv_buckets(
     if "synthetic_ohlcv_bucket" not in source.columns:
         source["synthetic_ohlcv_bucket"] = False
     else:
-        source["synthetic_ohlcv_bucket"] = source["synthetic_ohlcv_bucket"].fillna(False).astype(bool)
+        source["synthetic_ohlcv_bucket"] = source["synthetic_ohlcv_bucket"].astype("boolean").fillna(False).astype(bool)
     full_index = pd.DataFrame(
         {"timestamp": list(range(int(start_timestamp_ms), int(end_timestamp_ms) + int(timeframe_ms), int(timeframe_ms)))}
     )
     merged = full_index.merge(source, on="timestamp", how="left")
-    merged["synthetic_ohlcv_bucket"] = merged["synthetic_ohlcv_bucket"].fillna(True).astype(bool)
+    merged["synthetic_ohlcv_bucket"] = merged["synthetic_ohlcv_bucket"].astype("boolean").fillna(True).astype(bool)
     merged["close"] = pd.to_numeric(merged["close"], errors="coerce").ffill().fillna(float(seed_close))
     for price_column in ("open", "high", "low"):
         merged[price_column] = pd.to_numeric(merged[price_column], errors="coerce").fillna(merged["close"])
@@ -16193,7 +16232,7 @@ def _fill_missing_ohlcv_buckets(
 def _real_ohlcv_buckets(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty or "synthetic_ohlcv_bucket" not in frame.columns:
         return frame
-    synthetic = frame["synthetic_ohlcv_bucket"].fillna(False).astype(bool)
+    synthetic = frame["synthetic_ohlcv_bucket"].astype("boolean").fillna(False).astype(bool)
     return frame.loc[~synthetic].copy()
 
 

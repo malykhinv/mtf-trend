@@ -10,7 +10,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P282 applied locally live liquidity universe filter
+Last active patch: P283 applied locally live terminal grid repaint fix
 Updated: 2026-05-17
 ```
 
@@ -81,6 +81,15 @@ The default startup/refresh gate is Binance 24h ticker quoteVolume >= 300k USDT,
 If the ticker request fails or the filter would empty the live universe, live keeps the previous universe and writes live_symbol_universe_liquidity_filter with refresh_failed_keep_previous or empty_keep_previous.
 This is a scan/context cost and data-quality guard, not a substitute for the P281 category-level min_baseline_quote_daily_proxy filter.
 Next validation: start live with position_notional_usdt=12 and inspect live_symbol_universe_liquidity_filter output_count/removed_symbols before judging signal frequency.
+```
+
+## 2026-05-17 - P283 live terminal grid state
+
+```text
+Current patch status: P283 APPLIED locally / UNKNOWN commit.
+The live status grid must be a single pinned terminal block: ordinary logs/warnings clear the current grid, print the message, then repaint the latest grid as the last output.
+P283 routes Python warnings through the status logger during the live loop, clears multi-line status blocks with ANSI clear-from-top-to-bottom, and removes the pandas synthetic_ohlcv_bucket FutureWarning source.
+Next validation: run live in PowerShell and confirm live_symbol_universe/status updates do not leave duplicate Соединение/Рынок blocks and warning lines appear above the repainted grid.
 ```
 
 ## 2026-05-17 - P276 applied locally

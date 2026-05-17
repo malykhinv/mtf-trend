@@ -5076,3 +5076,36 @@ Risk:
 ```text
 Low/medium. A fresh liquidity arrival can be missed until the next refresh interval. The default 12h interval is a conservative cost/freshness tradeoff; shorten it only if live artifacts show missed symbols that already had enough quoteVolume.
 ```
+
+## 2026-05-17 - P283 applied locally - live terminal grid repaint
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Keep the live terminal status grid as one pinned block and make any warning/log line appear above the latest grid.
+Python warnings are now routed through _LiveStatusLogger while the live loop is running, so warnings clear/repaint the grid instead of writing into the last grid row via stderr.
+Multi-line grid clearing now moves to the top of the rendered block and clears downward, which is safer for wrapped terminal rows.
+The pandas synthetic_ohlcv_bucket fill warning source was removed by using nullable boolean conversion before fillna.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py tests\test_anomaly_continuation_lab.py tests\test_live_order_lifecycle.py
+```
+
+Risk:
+
+```text
+Low. This is terminal display and warning routing only. It does not change signal selection, order placement, or artifacts except fewer stderr warnings in the operator terminal.
+```
