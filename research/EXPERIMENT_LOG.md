@@ -2418,3 +2418,23 @@ summary.stop_order_id = initial stop id
 summary.active_stop_order_id = currently active/last managed stop id
 summary.replacement_stop_order_id = replacement stop id when replacement mode is used
 ```
+
+## 2026-05-17 — P274 TP1 limit / LTF monitor validation
+
+Expected smoke after applying P274:
+
+```powershell
+.venv\Scripts\python.exe main.py run-live-order-smoke --symbol <LIQUID_SYMBOL>/USDT:USDT --notional-usdt 12 --max-notional-usdt 25 --stop-distance-pct 0.05 --confirm-real-order-smoke
+```
+
+Additional evidence required from the next strategy live smoke:
+
+```text
+position_stop_order_verified
+position_tp1_limit_order_verified
+position_monitor_waiting_first_candle before the first closed entry-timeframe candle when applicable
+no TP1 market close created from candle high
+tp1_limit_exit_filled only after exchange fill can be reconciled
+position_tp1_limit_order_cancelled when a position exits before TP1
+final ordinary/algo open orders = 0 after cleanup
+```

@@ -29,5 +29,18 @@ class ExchangeClient(ABC):
     ) -> pd.DataFrame:
         """Метод."""
     @abstractmethod
+    def create_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        price: float,
+        *,
+        reduce_only: bool,
+        client_order_id: str,
+    ) -> dict[str, object]:
+        """Создаёт лимитный ордер."""
+
+    @abstractmethod
     def get_futures_symbols(self) -> list[str]:
         """Метод."""

@@ -542,6 +542,7 @@ class CcxtFuturesClient(ExchangeClient):
         order_type: str,
         side: str,
         amount: str,
+        price: str | None = None,
         client_order_id: str,
         params: dict[str, object],
         operation: str,
@@ -551,7 +552,7 @@ class CcxtFuturesClient(ExchangeClient):
         order_params = dict(params)
         order_params.update(self._create_order_client_id_param(client_order_id))
         try:
-            payload = raw_client.create_order(symbol, order_type, side, amount, params=order_params)
+            payload = raw_client.create_order(symbol, order_type, side, amount, price=price, params=order_params)
         except Exception as create_exc:
             if not self._is_ambiguous_order_mutation_exception(create_exc):
                 raise
@@ -589,6 +590,32 @@ class CcxtFuturesClient(ExchangeClient):
             client_order_id=client_order_id,
             params={"reduceOnly": reduce_only},
             operation="ccxt_create_market_order",
+        )
+
+    def create_limit_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        price: float,
+        *,
+        reduce_only: bool,
+        client_order_id: str,
+    ) -> dict[str, object]:
+        """Places one limit order with deterministic client id and reconciles ambiguous transport failure."""
+        self._ensure_markets_loaded()
+        raw_client = cast(Any, self._client)
+        precise_amount = raw_client.amount_to_precision(symbol, amount)
+        precise_price = raw_client.price_to_precision(symbol, price)
+        return self._create_order_once_or_reconcile(
+            symbol=symbol,
+            order_type="limit",
+            side=side,
+            amount=precise_amount,
+            price=precise_price,
+            client_order_id=client_order_id,
+            params={"reduceOnly": reduce_only},
+            operation="ccxt_create_limit_order",
         )
 
     def create_market_order_with_fill(

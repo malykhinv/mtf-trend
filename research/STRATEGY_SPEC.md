@@ -538,3 +538,11 @@ Backtest selection order: try shared live-priority categories in the same timefr
 Every backtest trade must carry pump_category_id, pump_category_family, pump_category_is_live_rule, pump_category_contract and pump_category_source so live-rule trades and discovery fallback trades can be separated without inference.
 Synthetic live OHLCV buckets are explicit data provenance. They may preserve elapsed no-trade time, but they are not real flow/hold evidence.
 ```
+
+### Live position management after P274
+
+```text
+TP1 in live is an exchange-side reduce-only limit sell for the planned partial size. Live must not infer a TP1 hit from candle high and then submit a market close at a later price.
+After confirmed TP1 fill, the remaining protective stop moves to breakeven and structural trailing uses closed candles from the signal entry timeframe, not a hardcoded 1m frame.
+Before the first closed post-fill entry-timeframe candle exists, the monitor is waiting for structural context; this is not an OHLCV integrity error while the exchange stop and TP1 orders are already placed.
+```

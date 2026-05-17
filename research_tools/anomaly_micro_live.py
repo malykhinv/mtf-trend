@@ -494,6 +494,9 @@ LIVE_LEDGER_COLUMNS = (
     "danger_cold_coverage_source",
     "entry_position_guard_source",
     "tp1_price",
+    "tp1_order_id",
+    "tp1_client_order_id",
+    "tp1_order_amount",
     "amount",
     "entry_filled_amount",
     "entry_cost_usdt",
@@ -2574,6 +2577,9 @@ class LivePosition:
     entry_price: float
     stop_price: float
     tp1_price: float
+    tp1_order_id: str
+    tp1_client_order_id: str
+    tp1_order_amount: float
     initial_risk: float
     first_executable_entry_timestamp_ms: int
     entry_lag_ms: int
@@ -2602,6 +2608,8 @@ class LivePosition:
     tp1_done: bool = False
     current_stop_price: float = 0.0
     realized_pnl_usdt: float = 0.0
+    tp1_recorded_filled_amount: float = 0.0
+    tp1_recorded_realized_pnl_usdt: float = 0.0
 
 
 class _LiveStatusLogger:
@@ -3228,6 +3236,9 @@ class LiveArtifactWriter:
                     "danger_cold_coverage_source": position.danger_cold_coverage_source,
                     "entry_position_guard_source": position.entry_position_guard_source,
                     "tp1_price": position.tp1_price,
+                    "tp1_order_id": position.tp1_order_id,
+                    "tp1_client_order_id": position.tp1_client_order_id,
+                    "tp1_order_amount": position.tp1_order_amount,
                     "amount": position.amount,
                     "entry_filled_amount": position.entry_filled_amount,
                     "entry_cost_usdt": position.entry_cost_usdt if position.entry_cost_usdt is not None else "",
@@ -3315,6 +3326,9 @@ class LiveArtifactWriter:
                     "danger_cold_coverage_source": position.danger_cold_coverage_source,
                     "entry_position_guard_source": position.entry_position_guard_source,
                     "tp1_price": position.tp1_price,
+                    "tp1_order_id": position.tp1_order_id,
+                    "tp1_client_order_id": position.tp1_client_order_id,
+                    "tp1_order_amount": position.tp1_order_amount,
                     "amount": position.amount,
                     "entry_filled_amount": position.entry_filled_amount,
                     "entry_cost_usdt": position.entry_cost_usdt if position.entry_cost_usdt is not None else "",
@@ -12516,6 +12530,22 @@ class AnomalyMicroLiveRunner:
                     reason=f"initial_stop_failed:{type(exc).__name__}",
                 )
                 raise
+            tp1_order_amount = max(position_delta_amount * 0.5, 0.0)
+            try:
+                tp1_order_id, tp1_client_order_id, tp1_order_amount = self._create_verified_tp1_limit_order(
+                    signal.symbol,
+                    amount=tp1_order_amount,
+                    tp1_price=actual_tp1_price,
+                    position_id=position_id,
+                )
+            except Exception as exc:
+                self._close_unprotected_entry_exposure(
+                    signal.symbol,
+                    amount=position_delta_amount,
+                    position_id=position_id,
+                    reason=f"tp1_limit_order_failed:{type(exc).__name__}",
+                )
+                raise
             opened_at_ms = int(fill.timestamp_ms)
             position = LivePosition(
                 position_id=position_id,
@@ -12530,6 +12560,9 @@ class AnomalyMicroLiveRunner:
                 entry_price=actual_entry_price,
                 stop_price=actual_stop_price,
                 tp1_price=actual_tp1_price,
+                tp1_order_id=tp1_order_id,
+                tp1_client_order_id=tp1_client_order_id,
+                tp1_order_amount=tp1_order_amount,
                 initial_risk=actual_initial_risk,
                 first_executable_entry_timestamp_ms=int(entry_fill_lag["first_executable_entry_timestamp_ms"]),
                 entry_lag_ms=int(entry_fill_lag["entry_lag_ms"]),
@@ -12627,6 +12660,9 @@ class AnomalyMicroLiveRunner:
                 "base_tp1_price": _finite_or_none(actual_base_tp1_price),
                 "tp1_price": position.tp1_price,
                 "tp1_round_step": _finite_or_none(actual_tp1_round_step),
+                "tp1_order_id": position.tp1_order_id,
+                "tp1_client_order_id": position.tp1_client_order_id,
+                "tp1_order_amount": position.tp1_order_amount,
                 "stop_price": position.stop_price,
             },
         )
@@ -12645,6 +12681,12 @@ class AnomalyMicroLiveRunner:
                             "telegram_open_chart_missing_id",
                             signal.symbol,
                             {"position_id": position.position_id, "chart_path": str(open_chart_path)},
+                        )
+                    else:
+                        self.artifacts.append_event(
+                            "telegram_open_photo_sent",
+                            signal.symbol,
+                            {"position_id": position.position_id, "message_id": position.telegram_open_message_id, "chart_path": str(open_chart_path)},
                         )
                 except Exception as exc:
                     self.artifacts.append_event(
@@ -12671,6 +12713,12 @@ class AnomalyMicroLiveRunner:
                         "telegram_open_text_missing_id",
                         signal.symbol,
                         {"position_id": position.position_id},
+                    )
+                else:
+                    self.artifacts.append_event(
+                        "telegram_open_text_sent",
+                        signal.symbol,
+                        {"position_id": position.position_id, "message_id": position.telegram_open_message_id},
                     )
         except Exception as exc:
             self.artifacts.append_event("telegram_open_failed", signal.symbol, {"position_id": position.position_id, "reason": str(exc)})
@@ -12991,14 +13039,299 @@ class AnomalyMicroLiveRunner:
             },
         )
 
+    def _create_verified_tp1_limit_order(
+        self,
+        symbol: str,
+        *,
+        amount: float,
+        tp1_price: float,
+        position_id: str,
+    ) -> tuple[str, str, float]:
+        if not math.isfinite(amount) or amount <= 0.0:
+            raise LiveDataIntegrityError(f"invalid TP1 limit order amount: position_id={position_id} amount={amount}")
+        if not math.isfinite(tp1_price) or tp1_price <= 0.0:
+            raise LiveDataIntegrityError(f"invalid TP1 limit order price: position_id={position_id} tp1_price={tp1_price}")
+        tp1_client_order_id = _live_client_order_id("tp1", symbol, position_id)
+        tp1_order = self.exchange.create_limit_order(
+            symbol,
+            "sell",
+            amount,
+            tp1_price,
+            reduce_only=True,
+            client_order_id=tp1_client_order_id,
+        )
+        tp1_order_id = _resolve_order_id(tp1_order) or ""
+        if not tp1_order_id:
+            raise LiveDataIntegrityError(f"TP1 limit order returned no id: position_id={position_id} symbol={symbol}")
+        self._verify_open_tp1_limit_order(
+            symbol,
+            order_id=tp1_order_id,
+            expected_client_order_id=tp1_client_order_id,
+            expected_side="sell",
+            expected_amount=amount,
+            expected_price=tp1_price,
+            position_id=position_id,
+        )
+        self.artifacts.append_event(
+            "position_tp1_limit_order_verified",
+            symbol,
+            {
+                "position_id": position_id,
+                "order_id": tp1_order_id,
+                "client_order_id": tp1_client_order_id,
+                "tp1_price": tp1_price,
+                "amount": amount,
+            },
+        )
+        return tp1_order_id, tp1_client_order_id, float(amount)
+
+    def _verify_open_tp1_limit_order(
+        self,
+        symbol: str,
+        *,
+        order_id: str,
+        expected_client_order_id: str,
+        expected_side: str,
+        expected_amount: float,
+        expected_price: float,
+        position_id: str,
+    ) -> None:
+        open_orders: list[dict[str, object]] = []
+        order: dict[str, object] | None = None
+        order_source = ""
+        client_lookup_error = ""
+        verification_attempts = 5
+        for attempt in range(1, verification_attempts + 1):
+            open_orders = self.exchange.fetch_open_orders(symbol)
+            order = next(
+                (row for row in open_orders if isinstance(row, dict) and _order_matches_order_id(row, order_id)),
+                None,
+            )
+            if order is not None:
+                order_source = "open_orders_order_id"
+            else:
+                order = next(
+                    (
+                        row
+                        for row in open_orders
+                        if isinstance(row, dict) and _order_matches_client_order_id(row, expected_client_order_id)
+                    ),
+                    None,
+                )
+                if order is not None:
+                    order_source = "open_orders_client_order_id"
+            if order is None:
+                try:
+                    fetched_order = self.exchange.fetch_order_by_client_order_id(symbol, expected_client_order_id)
+                except Exception as exc:
+                    client_lookup_error = f"{type(exc).__name__}: {exc}"
+                else:
+                    if _order_matches_order_id(fetched_order, order_id) or _order_matches_client_order_id(
+                        fetched_order,
+                        expected_client_order_id,
+                    ):
+                        order = fetched_order
+                        order_source = "client_order_id_lookup"
+            if order is not None:
+                if attempt > 1:
+                    self.artifacts.append_event(
+                        "position_tp1_limit_order_visibility_delayed",
+                        symbol,
+                        {
+                            "position_id": position_id,
+                            "order_id": order_id,
+                            "client_order_id": expected_client_order_id,
+                            "verification_attempt": attempt,
+                            "open_orders_seen": len(open_orders),
+                            "order_source": order_source,
+                        },
+                    )
+                break
+            if attempt < verification_attempts:
+                self.artifacts.append_event(
+                    "position_tp1_limit_order_visibility_retry",
+                    symbol,
+                    {
+                        "position_id": position_id,
+                        "order_id": order_id,
+                        "client_order_id": expected_client_order_id,
+                        "verification_attempt": attempt,
+                        "open_orders_seen": len(open_orders),
+                        "client_lookup_error": client_lookup_error,
+                    },
+                )
+                time.sleep(0.5)
+        if order is None:
+            raise LiveDataIntegrityError(
+                f"TP1 limit order not visible in open orders after {verification_attempts} checks: "
+                f"symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"client_order_id={expected_client_order_id} open_orders_seen={len(open_orders)} "
+                f"client_lookup_error={client_lookup_error or 'none'}",
+                symbol=symbol,
+            )
+        terminal_status = _order_terminal_status(order)
+        if terminal_status is not None:
+            raise LiveDataIntegrityError(
+                f"TP1 limit order is terminal after verification: symbol={symbol} position_id={position_id} "
+                f"order_id={order_id} client_order_id={expected_client_order_id} status={terminal_status!r} source={order_source}",
+                symbol=symbol,
+            )
+        side = _order_text_field(order, "side")
+        if side is None or side.lower() != expected_side.lower():
+            raise LiveDataIntegrityError(
+                f"TP1 limit order side not verified: symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"side={side!r} expected={expected_side} source={order_source}",
+                symbol=symbol,
+            )
+        order_type = _order_text_field(order, "type")
+        if order_type is None or "limit" not in order_type.lower():
+            raise LiveDataIntegrityError(
+                f"TP1 limit order type not verified: symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"type={order_type!r} source={order_source}",
+                symbol=symbol,
+            )
+        reduce_only = _order_bool_field(order, "reduceOnly")
+        if reduce_only is not True:
+            raise LiveDataIntegrityError(
+                f"TP1 limit order reduceOnly not verified: symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"reduceOnly={reduce_only!r} source={order_source}",
+                symbol=symbol,
+            )
+        amount = _order_float_field(order, "amount", "origQty")
+        amount_delta = abs(amount - expected_amount) if amount is not None else float("nan")
+        amount_delta_ratio = _safe_divide(amount_delta, expected_amount) if amount is not None else float("nan")
+        if amount is None or not math.isfinite(amount_delta_ratio) or amount_delta_ratio > self.config.max_position_amount_slippage_ratio:
+            raise LiveDataIntegrityError(
+                f"TP1 limit order amount not verified: symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"amount={amount!r} expected={expected_amount} source={order_source}",
+                symbol=symbol,
+            )
+        price = _order_float_field(order, "price")
+        if price is None or not _price_matches_exchange_precision(price, expected_price):
+            price_delta = abs(price - expected_price) if price is not None else float("nan")
+            price_tolerance = _exchange_price_precision_tolerance(price) if price is not None else float("nan")
+            raise LiveDataIntegrityError(
+                f"TP1 limit order price not verified: symbol={symbol} position_id={position_id} order_id={order_id} "
+                f"price={price!r} expected={expected_price} delta={price_delta} "
+                f"exchange_precision_tolerance={price_tolerance} source={order_source}",
+                symbol=symbol,
+            )
+
+    def _is_open_tp1_limit_order_visible(self, position: LivePosition) -> bool:
+        order_id = str(position.tp1_order_id or "").strip()
+        client_order_id = str(position.tp1_client_order_id or "").strip()
+        if not order_id and not client_order_id:
+            return False
+        open_orders = self.exchange.fetch_open_orders(position.signal.symbol)
+        return any(
+            isinstance(row, dict)
+            and (
+                (order_id and _order_matches_order_id(row, order_id))
+                or (client_order_id and _order_matches_client_order_id(row, client_order_id))
+            )
+            for row in open_orders
+        )
+
+    def _sync_position_tp1_limit_order(self, position: LivePosition, *, actual_amount: float) -> float:
+        if position.tp1_done or not str(position.tp1_order_id or "").strip():
+            return actual_amount
+        amount_drop = max(float(position.remaining_amount) - float(actual_amount), 0.0)
+        progress_threshold = max(float(position.tp1_order_amount) * self.config.max_position_amount_slippage_ratio, 1e-12)
+        try:
+            tp1_visible = self._is_open_tp1_limit_order_visible(position)
+        except ExchangeConnectivityError:
+            raise
+        except Exception:
+            tp1_visible = False
+        if tp1_visible and amount_drop <= progress_threshold:
+            return actual_amount
+        try:
+            tp1_fill = self.exchange.fetch_order_fill(position.signal.symbol, position.tp1_order_id)
+        except ExchangeConnectivityError:
+            raise
+        except Exception as exc:
+            if tp1_visible and amount_drop <= progress_threshold:
+                return actual_amount
+            raise LiveDataIntegrityError(
+                f"TP1 limit order fill unresolved: position_id={position.position_id} order_id={position.tp1_order_id} "
+                f"visible={tp1_visible} amount_drop={amount_drop} error={type(exc).__name__}: {exc}",
+                symbol=position.signal.symbol,
+            ) from exc
+        filled_amount = float(tp1_fill.filled_amount)
+        if not math.isfinite(filled_amount) or filled_amount <= 0.0 or not math.isfinite(float(tp1_fill.average_price)):
+            raise LiveDataIntegrityError(
+                f"TP1 limit fill invalid: position_id={position.position_id} order_id={tp1_fill.order_id}",
+                symbol=position.signal.symbol,
+            )
+        if filled_amount <= position.tp1_recorded_filled_amount + progress_threshold:
+            return actual_amount
+        overfill_ratio = _safe_divide(filled_amount - float(position.tp1_order_amount), max(float(position.tp1_order_amount), 1e-12))
+        if math.isfinite(overfill_ratio) and overfill_ratio > self.config.max_position_amount_slippage_ratio:
+            raise LiveDataIntegrityError(
+                f"TP1 limit overfilled: position_id={position.position_id} order_id={tp1_fill.order_id} "
+                f"filled={filled_amount} expected={position.tp1_order_amount}",
+                symbol=position.signal.symbol,
+            )
+        cumulative_realized_pnl = filled_amount * (float(tp1_fill.average_price) - float(position.entry_price))
+        realized_delta = cumulative_realized_pnl - float(position.tp1_recorded_realized_pnl_usdt)
+        position.realized_pnl_usdt += realized_delta
+        filled_delta = filled_amount - float(position.tp1_recorded_filled_amount)
+        position.tp1_recorded_filled_amount = filled_amount
+        position.tp1_recorded_realized_pnl_usdt = cumulative_realized_pnl
+        actual_after_tp1 = abs(self.exchange.fetch_symbol_position_amount(position.signal.symbol))
+        expected_remaining_amount = max(float(position.amount) - filled_amount, 0.0)
+        position.remaining_amount = min(actual_after_tp1, expected_remaining_amount)
+        self.artifacts.append_event(
+            "tp1_limit_exit_filled",
+            position.signal.symbol,
+            {
+                "position_id": position.position_id,
+                "order_id": tp1_fill.order_id,
+                "client_order_id": position.tp1_client_order_id,
+                "status": tp1_fill.status,
+                "fill_timestamp_ms": tp1_fill.timestamp_ms,
+                "fill_price": tp1_fill.average_price,
+                "filled_amount": filled_amount,
+                "filled_delta": filled_delta,
+                "target_amount": position.tp1_order_amount,
+                "exchange_position_amount_after_tp1": actual_after_tp1,
+                "expected_remaining_amount": expected_remaining_amount,
+                "cost": tp1_fill.cost,
+                "fee_cost": tp1_fill.fee_cost,
+                "realized_pnl_usdt": position.realized_pnl_usdt,
+            },
+        )
+        completion_threshold = max(float(position.tp1_order_amount) * self.config.max_position_amount_slippage_ratio, 1e-12)
+        if filled_amount + completion_threshold >= float(position.tp1_order_amount):
+            position.tp1_done = True
+            if position.remaining_amount <= 0.0:
+                return actual_after_tp1
+            self._replace_position_stop_order(
+                position,
+                amount=position.remaining_amount,
+                stop_price=position.entry_price,
+                reason="tp1_be",
+            )
+            self.artifacts.append_event("tp1_and_stop_to_be", position.signal.symbol, {"position_id": position.position_id})
+            self._send_or_edit_stop_message(
+                position,
+                stop_price=position.entry_price,
+                reason="tp1_be",
+                text=_format_stop_move_message(position, stop_price=position.entry_price, label="BE"),
+            )
+        return actual_after_tp1
+
     def _monitor_position(self, position: LivePosition) -> None:
         signal = position.signal
         last_stop_price = position.stop_price
         empty_ohlcv_cycles = 0
+        waiting_first_candle_logged = False
+        monitor_timeframe = signal.entry_timeframe
+        monitor_timeframe_ms = int(monitor_timeframe.to_milliseconds())
+        first_monitor_candle_start_ms = _next_candle_start_ms(position.entry_fill_timestamp_ms, monitor_timeframe)
         while True:
             try:
                 actual_amount = abs(self.exchange.fetch_symbol_position_amount(signal.symbol))
-                managed_amount = min(actual_amount, max(position.remaining_amount, 0.0))
                 if actual_amount <= 0.0:
                     self.artifacts.append_event(
                         "position_closed_externally_unverified_exit_price",
@@ -13021,119 +13354,79 @@ class AnomalyMicroLiveRunner:
                         record_stop_cooldown=False,
                     )
                     return
+                actual_amount = self._sync_position_tp1_limit_order(position, actual_amount=actual_amount)
+                if position.tp1_done and math.isfinite(float(position.current_stop_price)):
+                    last_stop_price = max(last_stop_price, float(position.current_stop_price))
+                if actual_amount <= 0.0:
+                    self._finalize_position(
+                        position,
+                        reason="TP1 limit закрыл позицию полностью",
+                        pnl_price=position.tp1_price,
+                        exit_amount=0.0,
+                    )
+                    return
+                managed_amount = min(actual_amount, max(position.remaining_amount, 0.0))
                 if managed_amount <= 0.0:
                     raise LiveDataIntegrityError(f"managed position amount is zero while exchange position is open: {position.position_id}")
                 now_ms = int(time.time() * 1000)
-                frame = self.exchange.fetch_ohlcv(
+                latest_closed_candle_start_ms = _latest_closed_candle_start_ms(monitor_timeframe, now_ms=now_ms)
+                if latest_closed_candle_start_ms < first_monitor_candle_start_ms:
+                    if not waiting_first_candle_logged:
+                        self.artifacts.append_event(
+                            "position_monitor_waiting_first_candle",
+                            signal.symbol,
+                            {
+                                "position_id": position.position_id,
+                                "timeframe": monitor_timeframe.value,
+                                "entry_fill_timestamp_ms": position.entry_fill_timestamp_ms,
+                                "first_monitor_candle_start_ms": first_monitor_candle_start_ms,
+                                "latest_closed_candle_start_ms": latest_closed_candle_start_ms,
+                                "time_until_first_candle_close_ms": max(
+                                    0,
+                                    first_monitor_candle_start_ms + monitor_timeframe_ms - now_ms,
+                                ),
+                            },
+                        )
+                        waiting_first_candle_logged = True
+                    time.sleep(15.0)
+                    continue
+                frame = self._fetch_chart_frame(
                     signal.symbol,
-                    Timeframe.M1,
-                    position.entry_fill_timestamp_ms,
-                    now_ms,
+                    monitor_timeframe,
+                    start_timestamp_ms=first_monitor_candle_start_ms,
+                    end_timestamp_ms=now_ms,
                 )
+                if not frame.empty and "timestamp" in frame.columns:
+                    frame = frame.copy()
+                    frame["timestamp"] = pd.to_numeric(frame["timestamp"], errors="coerce")
+                    frame = frame.loc[
+                        frame["timestamp"].notna()
+                        & (frame["timestamp"].astype("int64") >= int(first_monitor_candle_start_ms))
+                        & (frame["timestamp"].astype("int64") <= int(latest_closed_candle_start_ms))
+                    ].copy()
                 if frame.empty:
                     empty_ohlcv_cycles += 1
                     details = {
                         "position_id": position.position_id,
+                        "timeframe": monitor_timeframe.value,
                         "empty_ohlcv_cycles": empty_ohlcv_cycles,
                         "max_empty_ohlcv_cycles": self.config.max_monitor_empty_ohlcv_cycles,
-                        "from_timestamp_ms": position.entry_fill_timestamp_ms,
+                        "from_timestamp_ms": first_monitor_candle_start_ms,
                         "to_timestamp_ms": now_ms,
+                        "latest_closed_candle_start_ms": latest_closed_candle_start_ms,
                     }
                     self.artifacts.append_event("position_monitor_empty_ohlcv", signal.symbol, details)
                     if empty_ohlcv_cycles >= self.config.max_monitor_empty_ohlcv_cycles:
                         raise LiveDataIntegrityError(
-                            f"monitor OHLCV empty for {empty_ohlcv_cycles} consecutive cycles: position_id={position.position_id}"
+                            f"monitor {monitor_timeframe.value} OHLCV empty for {empty_ohlcv_cycles} consecutive cycles: "
+                            f"position_id={position.position_id}"
                         )
                     time.sleep(15.0)
                     continue
                 empty_ohlcv_cycles = 0
                 latest = frame.sort_values("timestamp").iloc[-1]
-                latest_high = float(latest["high"])
                 latest_low = float(latest["low"])
                 latest_close = float(latest["close"])
-                if not position.tp1_done and latest_high >= position.tp1_price:
-                    previous_remaining_amount = max(position.remaining_amount, 0.0)
-                    close_amount = max(min(managed_amount, previous_remaining_amount) * 0.5, 0.0)
-                    tp1_fill = None
-                    if close_amount > 0.0:
-                        tp1_client_order_id = _live_client_order_id(
-                            "tp1",
-                            signal.symbol,
-                            position.position_id,
-                            int(time.time() * 1000),
-                        )
-                        tp1_fill = self.exchange.create_market_order_with_fill(
-                            signal.symbol,
-                            "sell",
-                            close_amount,
-                            reduce_only=True,
-                            client_order_id=tp1_client_order_id,
-                        )
-                        if tp1_fill.filled_amount <= 0.0 or not math.isfinite(tp1_fill.average_price):
-                            raise LiveDataIntegrityError(
-                                f"TP1 reduce-only fill invalid: position_id={position.position_id} order_id={tp1_fill.order_id}"
-                            )
-                        position.realized_pnl_usdt += tp1_fill.filled_amount * (tp1_fill.average_price - position.entry_price)
-                        self.artifacts.append_event(
-                            "tp1_partial_exit_filled",
-                            signal.symbol,
-                            {
-                                "position_id": position.position_id,
-                                "order_id": tp1_fill.order_id,
-                                "client_order_id": tp1_client_order_id,
-                                "status": tp1_fill.status,
-                                "fill_timestamp_ms": tp1_fill.timestamp_ms,
-                                "fill_price": tp1_fill.average_price,
-                                "filled_amount": tp1_fill.filled_amount,
-                                "requested_amount": close_amount,
-                                "cost": tp1_fill.cost,
-                                "fee_cost": tp1_fill.fee_cost,
-                                "realized_pnl_usdt": position.realized_pnl_usdt,
-                            },
-                        )
-                    time.sleep(2.0)
-                    actual_after_tp1 = abs(self.exchange.fetch_symbol_position_amount(signal.symbol))
-                    position.tp1_done = True
-                    filled_close_amount = tp1_fill.filled_amount if tp1_fill is not None else close_amount
-                    expected_remaining_amount = max(previous_remaining_amount - filled_close_amount, 0.0)
-                    position.remaining_amount = min(actual_after_tp1, expected_remaining_amount)
-                    if position.remaining_amount <= 0.0:
-                        unresolved_threshold = previous_remaining_amount * self.config.max_position_amount_slippage_ratio
-                        if expected_remaining_amount > max(unresolved_threshold, 1e-12):
-                            unresolved_details = {
-                                "position_id": position.position_id,
-                                "previous_remaining_amount": previous_remaining_amount,
-                                "tp1_filled_amount": filled_close_amount,
-                                "expected_remaining_amount": expected_remaining_amount,
-                                "exchange_position_amount_after_tp1": actual_after_tp1,
-                                "realized_pnl_usdt": position.realized_pnl_usdt,
-                            }
-                            self.artifacts.append_event("tp1_remaining_exit_unresolved", signal.symbol, unresolved_details)
-                            self._finalize_unresolved_position_exit(
-                                position,
-                                reason="TP1 fill подтверждён, но остаток позиции исчез без exit fill",
-                                source_event="tp1_remaining_exit_unresolved",
-                                details=unresolved_details,
-                                cancel_stop_order=True,
-                                record_stop_cooldown=False,
-                            )
-                            return
-                        self._finalize_position(position, reason="TP1 закрыл позицию полностью", pnl_price=position.tp1_price, exit_amount=0.0)
-                        return
-                    self._replace_position_stop_order(
-                        position,
-                        amount=position.remaining_amount,
-                        stop_price=position.entry_price,
-                        reason="tp1_be",
-                    )
-                    last_stop_price = position.entry_price
-                    self.artifacts.append_event("tp1_and_stop_to_be", signal.symbol, {"position_id": position.position_id})
-                    self._send_or_edit_stop_message(
-                        position,
-                        stop_price=position.entry_price,
-                        reason="tp1_be",
-                        text=_format_stop_move_message(position, stop_price=position.entry_price, label="BE"),
-                    )
                 if position.tp1_done:
                     latest_ts = int(latest["timestamp"])
                     prior = frame.loc[frame["timestamp"].astype(int) < latest_ts].tail(self.config.trail_lookback_candles)
@@ -13261,6 +13554,7 @@ class AnomalyMicroLiveRunner:
                 self._recent_stops.setdefault(symbol_key, []).append(time.time())
         if cancel_stop_order:
             self._cancel_position_stop_order(position, reason=reason)
+        self._cancel_position_tp1_order(position, reason=reason)
         event_details = {
             "position_id": position.position_id,
             "reason": reason,
@@ -13302,6 +13596,7 @@ class AnomalyMicroLiveRunner:
             with self._state_lock:
                 self._closed_pnl_usdt_total += float(pnl_usdt)
                 self._closed_notional_usdt_total += float(position.notional_usdt)
+        self._cancel_position_tp1_order(position, reason=reason)
         if reason.startswith("стоп"):
             with self._state_lock:
                 self._recent_stops.setdefault(symbol_key, []).append(time.time())
@@ -14705,6 +15000,27 @@ class AnomalyMicroLiveRunner:
             },
         )
 
+    def _cancel_position_tp1_order(self, position: LivePosition, *, reason: str) -> None:
+        if position.tp1_done:
+            return
+        order_id = str(position.tp1_order_id or "").strip()
+        if not order_id:
+            return
+        try:
+            self.exchange.cancel_order(position.signal.symbol, order_id)
+        except Exception as exc:
+            self.artifacts.append_event(
+                "position_tp1_limit_order_cancel_failed",
+                position.signal.symbol,
+                {"position_id": position.position_id, "order_id": order_id, "reason": reason, "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return
+        self.artifacts.append_event(
+            "position_tp1_limit_order_cancelled",
+            position.signal.symbol,
+            {"position_id": position.position_id, "order_id": order_id, "reason": reason},
+        )
+
     def _cancel_position_stop_order(self, position: LivePosition, *, reason: str) -> None:
         order_id = str(position.stop_order_id or "").strip()
         if not order_id:
@@ -15028,6 +15344,13 @@ def _latest_closed_candle_start_ms(timeframe: Timeframe, *, now_ms: int) -> int:
     if timeframe_ms <= 0:
         raise ValueError(f"invalid timeframe milliseconds: {timeframe.value}")
     return ((int(now_ms) - timeframe_ms) // timeframe_ms) * timeframe_ms
+
+
+def _next_candle_start_ms(timestamp_ms: int, timeframe: Timeframe) -> int:
+    timeframe_ms = int(timeframe.to_milliseconds())
+    if timeframe_ms <= 0:
+        raise ValueError(f"invalid timeframe milliseconds: {timeframe.value}")
+    return ((int(timestamp_ms) + timeframe_ms - 1) // timeframe_ms) * timeframe_ms
 
 
 def _empty_cached_ohlcv_frame() -> pd.DataFrame:
@@ -15362,18 +15685,24 @@ def _order_bool_field(order: dict[str, object], key: str) -> bool | None:
 def _format_open_message(position: LivePosition) -> str:
     signal = position.signal
     entry_price = float(position.entry_price)
+    signal_entry_price = float(signal.entry_price)
+    entry_drift_pct = _safe_divide(entry_price - signal_entry_price, signal_entry_price)
     tp_pct = _safe_divide(float(position.tp1_price) - entry_price, entry_price)
     sl_pct = _safe_divide(entry_price - float(position.stop_price), entry_price)
-    weaknesses = _format_weaknesses(signal.weaknesses)
+    sl_reference_text = _format_price(position.stop_price)
+    price_decimals = _price_decimal_places(sl_reference_text)
+    tp_text = _format_price_fixed_decimals(position.tp1_price, price_decimals)
+    sl_text = _format_price_fixed_decimals(position.stop_price, price_decimals)
+    compact_symbol = _telegram_escape(_compact_symbol(signal.symbol))
+    coinglass_url = _telegram_escape(_coinglass_url(signal.symbol))
     return (
-        f"{_symbol_emoji(signal.symbol)} <b>{_telegram_symbol_link(signal.symbol)} LONG</b>\n\n"
+        f"{_symbol_emoji(signal.symbol)} <b>{compact_symbol}</b> ({coinglass_url}) <b>LONG</b>\n\n"
         f"Сигнал: {_format_price(signal.entry_price)}\n\n"
-        f"Вход: {_format_price(entry_price)}\n\n"
-        f"TP1: {_format_price(position.tp1_price)} {_format_percent(tp_pct)}\n"
-        f"SL: {_format_price(position.stop_price)} {_format_percent(sl_pct)}\n\n"
-        f"Category: {_telegram_code(signal.category_id)} ({_telegram_escape(signal.category_label)})\n\n"
-        f"Препятствия: {weaknesses}\n\n"
-        f"{_telegram_signal_context(signal)}"
+        f"Вход: {_format_percent(entry_drift_pct, signed=True)}\n\n"
+        f"TP: {tp_text} {_format_percent(tp_pct)}\n"
+        f"SL: {sl_text} {_format_percent(sl_pct)}\n\n"
+        f"{_telegram_escape(signal.levels_timeframe.value)}/{_telegram_escape(signal.entry_timeframe.value)} · "
+        f"{_telegram_escape(signal.category_label)} · {_telegram_escape(signal.session)}"
     )
 
 
@@ -15785,6 +16114,18 @@ def _format_stop_zone(position: LivePosition, *, stop_price: float, fallback_lab
 
 def _format_price(value: float) -> str:
     return f"{float(value):.6g}"
+
+
+def _price_decimal_places(formatted_price: str) -> int:
+    text = str(formatted_price).strip()
+    if "." not in text:
+        return 0
+    return len(text.rsplit(".", 1)[1])
+
+
+def _format_price_fixed_decimals(value: float, decimals: int) -> str:
+    safe_decimals = max(0, min(int(decimals), 12))
+    return f"{float(value):.{safe_decimals}f}"
 
 
 def _format_live_status_value(value: object) -> str:

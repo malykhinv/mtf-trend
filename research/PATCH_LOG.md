@@ -4772,3 +4772,40 @@ Low. Test-only patch. It does not change live trading logic, exchange client beh
 | P271 | Tolerate exchange-normalized stop trigger precision | APPLIED locally / UNKNOWN commit | `research_tools/live_order_smoke.py`, `research_tools/anomaly_micro_live.py`, `research/*` | live safety/exchange-boundary | Treat Binance algo `triggerPrice`/`stopPrice` as exchange-normalized to tick/price precision when verifying protective stops, so a valid rounded price such as `0.035643999999999995 -> 0.03564` does not fail stop verification. Still rejects missing, non-finite, or more-than-one-displayed-price-unit mismatches. | `python -m compileall -q data/exchanges research_tools cli constants.py main.py tests/test_live_order_lifecycle.py`; `python -m unittest tests.test_live_order_lifecycle -v`; `python main.py run-live-order-smoke --help` |
 
 | P272 | Preserve initial and active stop ids in smoke summary | PROPOSED | `research_tools/live_order_smoke.py`, `research/*` | live safety/artifacts | Keep the initial protective stop id in `stop_order_id` after a replacement, add `active_stop_order_id` for the currently managed stop, and keep `replacement_stop_order_id` separate so `live_order_smoke_summary.json` no longer overwrites the initial stop with the replacement id. Trading logic and exchange calls are unchanged. | `python -m compileall -q data/exchanges research_tools cli constants.py main.py tests/test_live_order_lifecycle.py`; `python -m unittest tests.test_live_order_lifecycle -v`; `python main.py run-live-order-smoke --help` |
+
+## 2026-05-17 — P274 proposed — exchange-side TP1 limit and LTF position monitor
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+data/exchanges/ccxt_futures_client.py
+domain/abstract/exchange_client.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make live position management exchange-side for TP1 and LTF-consistent for structural trailing.
+On entry, create and verify a reduce-only TP1 limit sell for half the position after the verified stop exists.
+The monitor no longer triggers TP1 from candle high; it only reconciles the TP1 order fill and moves the remaining stop to BE after confirmed TP1 fill.
+Structural trail now reads the signal entry timeframe, including 30s/15s/5s aggTrade-derived frames, instead of hardcoded 1m.
+Before the first closed post-fill LTF candle, empty OHLCV is recorded as position_monitor_waiting_first_candle, not an integrity error.
+Telegram open message is shortened to signal price, signed entry drift, TP/SL with matching decimals, and compact TF/category/session context.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium/high until real-order smoke confirms Binance accepts and exposes the new reduce-only limit TP order through ordinary open orders and that TP fill reconciliation moves the stop to BE without leaving orphan TP/stop orders.
+```

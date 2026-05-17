@@ -1550,3 +1550,12 @@ P271 management smoke passed the real Binance lifecycle, but the smoke summary a
 P272 is artifact-only: `stop_order_id` remains the initial protective stop id, `replacement_stop_order_id` remains the replacement id, and `active_stop_order_id` records the last/current managed stop. No order placement, verification, cancellation, or strategy behavior changes.
 Next validation: rerun compile/unit/help checks, then on the next management smoke confirm the summary ids match the event stream.
 ```
+
+## 2026-05-17 — P274 proposed
+
+```text
+Current patch status: P274 PROPOSED, commit UNKNOWN.
+Position management now treats TP1 as an exchange-side reduce-only limit order, not a candle-high-triggered market close.
+The live monitor uses the signal entry timeframe for structural trailing and treats the pre-first-closed-LTF-candle interval as waiting, not data integrity failure.
+Next validation must be a minimal real-order lifecycle smoke that verifies: stop order visible, TP1 limit order visible, TP1 cancel/cleanup works when position exits before TP1, and no ordinary/algo orphan orders remain.
+```
