@@ -304,6 +304,7 @@ def test_pre_context_universe_does_not_require_missing_mark_basis_column() -> No
                 "decision_timestamp_ms": 180_000,
                 "start_quote_ratio": 5.0,
                 "start_trade_ratio": 5.0,
+                "baseline_quote_volume_median": 2_000.0,
                 "start_avg_trade_quote_size_ratio": 1.0,
                 "start_quote_ratio_per_abs_return": 1_000.0,
                 "start_range_pct_ratio_to_baseline": 6.0,

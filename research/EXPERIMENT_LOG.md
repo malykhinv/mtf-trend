@@ -2628,3 +2628,29 @@ If startup took too long, early blocked rows can show reason=symbol_context_snap
 Those rows should be signal_scan_retryable_dependency_blocked, not final all-categories rejects.
 Subsequent symbol_context_snapshot_updated rows should include retryable_dependency_blocked in priority_reason_counts before the symbol can be selected.
 ```
+
+## 2026-05-17 - P281 pre-pump liquidity review
+
+Question:
+
+```text
+Can high start flow ratios be fake on very illiquid coins, e.g. a 3k USDT/day coin where one small print makes x100 momentary volume?
+```
+
+Findings from current anomaly_lab:
+
+```text
+All closed trades: baseline trade-count is mildly positive for return (Spearman +0.074) and win flag (+0.103). Baseline quote-volume is weaker but still positive.
+Live-priority trades: absolute pre-pump activity matters more. baseline_trade_daily_proxy Spearman +0.182, pre_1h_trade_count_sum +0.236, pre_1h_quote_volume_sum +0.188.
+Very thin pre_1h quote volume is weak: in live-priority, 30k-100k pre_1h quote volume averaged about +0.54%, while 1m-10m averaged about +1.94%.
+For baseline daily quote proxy, live-priority 100k-300k averaged about +0.49%, 300k-1m about +0.88%, 1m-10m about +1.46%, and >10m about +1.51%.
+The worst ratio artifact is not high ratio alone; it is high trade/quote effort per unit of price movement. start_trade_ratio_per_abs_return remains strongly negative, especially in broad discovery.
+```
+
+Decision:
+
+```text
+Add a soft absolute-liquidity floor to the shared live/backtest runner contract: min_baseline_quote_daily_proxy >= 300k USDT/day proxy.
+Do not set 1m as the floor yet because 300k-1m still had positive live-priority expectancy and useful frequency.
+Keep trade-effort-per-return caps from P279; they address the stronger exhaustion/fake-flow signal.
+```

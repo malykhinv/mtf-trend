@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-CATEGORY_CONTRACT_ID = "shared_pump_category_contract_v1_live_overlay_v6"
+CATEGORY_CONTRACT_ID = "shared_pump_category_contract_v1_live_overlay_v7"
 PUMP_CATEGORY_DISCOVERY = "discovery"
 PUMP_CATEGORY_FAMILY_LIVE = "live_priority"
 PUMP_CATEGORY_FAMILY_DISCOVERY = "discovery"
@@ -25,6 +25,7 @@ class PumpCategoryContract:
     min_mark_close_vs_decision_close_basis: float | None = None
     max_start_quote_ratio: float | None = None
     max_start_trade_ratio: float | None = None
+    min_baseline_quote_daily_proxy: float | None = None
     max_start_avg_trade_quote_size_ratio: float | None = None
     max_start_quote_ratio_per_abs_return: float | None = None
     max_start_trade_ratio_per_abs_return: float | None = None
@@ -64,6 +65,7 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         min_mark_close_vs_decision_close_basis=0.002,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=250.0,
+        min_baseline_quote_daily_proxy=300_000.0,
         max_start_quote_ratio_per_abs_return=20_000.0,
         max_start_trade_ratio_per_abs_return=3_000.0,
         min_start_range_pct_ratio_to_baseline=6.0,
@@ -80,6 +82,7 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         min_mark_close_vs_decision_close_basis=0.0005,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=250.0,
+        min_baseline_quote_daily_proxy=300_000.0,
         max_start_quote_ratio_per_abs_return=20_000.0,
         max_start_trade_ratio_per_abs_return=1_800.0,
         min_start_range_pct_ratio_to_baseline=8.0,
@@ -97,6 +100,7 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         min_mark_close_vs_decision_close_basis=0.0005,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=10.0,
+        min_baseline_quote_daily_proxy=300_000.0,
         max_start_quote_ratio_per_abs_return=20_000.0,
         max_start_trade_ratio_per_abs_return=3_000.0,
         max_start_range_pct_ratio_to_baseline=10.5,
@@ -114,6 +118,7 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         min_mark_close_vs_decision_close_basis=0.002,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=250.0,
+        min_baseline_quote_daily_proxy=300_000.0,
         max_start_quote_ratio_per_abs_return=20_000.0,
         max_start_trade_ratio_per_abs_return=1_500.0,
         min_start_range_pct_ratio_to_baseline=5.0,
@@ -160,6 +165,7 @@ def backtest_profile_overrides(category_id: str) -> dict[str, object]:
         "min_mark_close_vs_decision_close_basis": category.min_mark_close_vs_decision_close_basis,
         "max_start_quote_ratio": category.max_start_quote_ratio,
         "max_start_trade_ratio": category.max_start_trade_ratio,
+        "min_baseline_quote_daily_proxy": category.min_baseline_quote_daily_proxy,
         "max_start_avg_trade_quote_size_ratio": category.max_start_avg_trade_quote_size_ratio,
         "max_start_quote_ratio_per_abs_return": category.max_start_quote_ratio_per_abs_return,
         "max_start_trade_ratio_per_abs_return": category.max_start_trade_ratio_per_abs_return,

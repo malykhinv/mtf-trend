@@ -241,6 +241,7 @@ class AnomalyBacktestConfig:
     exhaustion_profile: str = "none"
     max_start_quote_ratio: float | None = None
     max_start_trade_ratio: float | None = None
+    min_baseline_quote_daily_proxy: float | None = None
     max_start_avg_trade_quote_size_ratio: float | None = None
     max_start_quote_ratio_per_abs_return: float | None = None
     min_start_range_pct_ratio_to_baseline: float | None = None
@@ -498,6 +499,13 @@ def _red_flag_violation_masks(signals: pd.DataFrame, *, config: AnomalyBacktestC
     if config.max_start_trade_ratio is not None:
         trade_ratio = pd.to_numeric(signals["start_trade_ratio"], errors="coerce")
         masks["start_trade_ratio_above_max"] = trade_ratio.gt(config.max_start_trade_ratio) | trade_ratio.isna()
+    if config.min_baseline_quote_daily_proxy is not None:
+        setup_minutes = signals["setup_timeframe"].astype(str).map({"1m": 1.0, "5m": 5.0})
+        baseline_quote = pd.to_numeric(signals["baseline_quote_volume_median"], errors="coerce")
+        daily_proxy = baseline_quote * (1440.0 / setup_minutes)
+        masks["baseline_quote_daily_proxy_below_min"] = (
+            daily_proxy.lt(config.min_baseline_quote_daily_proxy) | daily_proxy.isna()
+        )
     if config.min_flow_hold_count is not None:
         flow_hold = pd.to_numeric(signals["flow_hold_count_next_n_candles"], errors="coerce")
         masks["flow_hold_count_below_min"] = flow_hold.lt(config.min_flow_hold_count) | flow_hold.isna()
@@ -1144,6 +1152,7 @@ def build_anomaly_signals(
     optional_filter_columns = {
         "max_start_quote_ratio": "start_quote_ratio",
         "max_start_trade_ratio": "start_trade_ratio",
+        "min_baseline_quote_daily_proxy": "baseline_quote_volume_median",
         "max_start_avg_trade_quote_size_ratio": "start_avg_trade_quote_size_ratio",
         "max_start_quote_ratio_per_abs_return": "start_quote_ratio_per_abs_return",
         "min_start_range_pct_ratio_to_baseline": "start_range_pct_ratio_to_baseline",
@@ -1206,6 +1215,10 @@ def build_anomaly_signals(
         mask &= signals["start_quote_ratio"].astype(float).le(config.max_start_quote_ratio)
     if config.max_start_trade_ratio is not None:
         mask &= signals["start_trade_ratio"].astype(float).le(config.max_start_trade_ratio)
+    if config.min_baseline_quote_daily_proxy is not None:
+        setup_minutes = signals["setup_timeframe"].astype(str).map({"1m": 1.0, "5m": 5.0})
+        baseline_quote_daily_proxy = signals["baseline_quote_volume_median"].astype(float) * (1440.0 / setup_minutes)
+        mask &= baseline_quote_daily_proxy.ge(config.min_baseline_quote_daily_proxy).fillna(False)
     if config.max_start_avg_trade_quote_size_ratio is not None:
         mask &= signals["start_avg_trade_quote_size_ratio"].astype(float).le(config.max_start_avg_trade_quote_size_ratio)
     if config.max_start_quote_ratio_per_abs_return is not None:

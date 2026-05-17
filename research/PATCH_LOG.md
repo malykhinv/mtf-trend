@@ -5002,3 +5002,40 @@ Risk:
 ```text
 Low/medium. Very slow startup can cause early candidates to wait for context refresh instead of trading immediately. This is intentional: stale prior-spike/fade context should block as a retryable dependency, not pass by default.
 ```
+
+## 2026-05-17 - P281 applied locally - baseline liquidity floor
+
+Files:
+
+```text
+research_tools/anomaly_category_contract.py
+research_tools/anomaly_strategy_backtest.py
+research_tools/anomaly_micro_live.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+research/STRATEGY_SPEC.md
+```
+
+Intent:
+
+```text
+Prevent tiny baseline liquidity from passing live runner categories only because a small print creates a large relative flow ratio.
+shared_pump_category_contract_v1_live_overlay_v7 adds min_baseline_quote_daily_proxy=300k USDT/day proxy to runner categories.
+Backtest and live compute the same proxy from baseline_quote_volume_median and setup timeframe.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py tests\test_anomaly_continuation_lab.py tests\test_live_order_lifecycle.py
+```
+
+Risk:
+
+```text
+Low/medium. This can filter some early microcap runners. The threshold is intentionally 300k, not 1m, because the 300k-1m bucket still had positive live-priority expectancy in the current artifact.
+```

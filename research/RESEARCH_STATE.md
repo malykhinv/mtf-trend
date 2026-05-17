@@ -60,6 +60,18 @@ This is the cheap/safe fix before live collection: do not run a second full 72h 
 Next validation: after live startup, inspect signal_scan_retryable_dependency_blocked for symbol_context_snapshot_tail_stale, then confirm symbol_context_snapshot_updated priority_reason_counts includes retryable_dependency_blocked and later selected signals have fresh prior context.
 ```
 
+## 2026-05-17 - P281 baseline liquidity state
+
+```text
+Current patch status: P281 APPLIED locally / UNKNOWN commit.
+Current anomaly_lab review supports an absolute-liquidity floor: live-priority returns improve with higher baseline trade-count / pre_1h trade-count / pre_1h quote-volume, while extremely thin pre-volume buckets are weak.
+The bot should not rely on relative start_quote_ratio/start_trade_ratio alone because one print on a low-volume symbol can create a fake x100 flow ratio.
+Category contract id: shared_pump_category_contract_v1_live_overlay_v7.
+Runner categories now require min_baseline_quote_daily_proxy=300k USDT/day proxy, computed from baseline_quote_volume_median and setup timeframe in both live and backtest.
+Do not raise the floor to 1m yet: 300k-1m baseline daily proxy still showed positive live-priority expectancy and useful frequency.
+Next validation: in live_events.csv, monitor reject_low_baseline_quote_daily_proxy counts and compare selected trades' baseline_quote_daily_proxy distribution against closed PnL.
+```
+
 ## 2026-05-17 - P276 applied locally
 
 ```text

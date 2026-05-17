@@ -1735,6 +1735,7 @@ class LiveAnomalyConfig:
     min_trade_ratio_start: float = 4.0
     max_start_quote_ratio: float | None = 100.0
     max_start_trade_ratio: float | None = 55.0
+    min_baseline_quote_daily_proxy: float | None = None
     max_start_avg_trade_quote_size_ratio: float | None = 9.0
     max_start_quote_ratio_per_abs_return: float | None = 15_000.0
     max_start_trade_ratio_per_abs_return: float | None = None
@@ -11747,6 +11748,16 @@ class AnomalyMicroLiveRunner:
             if max_start_trade_ratio is not None and trade_ratio > max_start_trade_ratio:
                 category_rejections.append(record_category_reject(category, symbol, "reject_exhausted_trade_ratio", {"trade_ratio": trade_ratio, "max": max_start_trade_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
+            min_baseline_daily_quote = _category_value(category, self.config, "min_baseline_quote_daily_proxy")
+            if min_baseline_daily_quote is not None:
+                setup_minutes = _safe_divide(float(levels_timeframe.to_milliseconds()), 60_000.0)
+                baseline_quote_daily_proxy = baseline_quote * _safe_divide(1440.0, setup_minutes)
+                if not math.isfinite(baseline_quote_daily_proxy):
+                    category_rejections.append(record_category_reject(category, symbol, "reject_invalid_baseline_quote_daily_proxy", {"baseline_quote_volume_median": _finite_or_none(baseline_quote), "decision_timestamp_ms": int(decision["timestamp"])}))
+                    continue
+                if baseline_quote_daily_proxy < min_baseline_daily_quote:
+                    category_rejections.append(record_category_reject(category, symbol, "reject_low_baseline_quote_daily_proxy", {"baseline_quote_daily_proxy": baseline_quote_daily_proxy, "min": min_baseline_daily_quote, "baseline_quote_volume_median": baseline_quote, "decision_timestamp_ms": int(decision["timestamp"])}))
+                    continue
             max_avg_trade_ratio = _category_value(category, self.config, "max_start_avg_trade_quote_size_ratio")
             if max_avg_trade_ratio is not None and not math.isfinite(start_avg_trade_ratio):
                 category_rejections.append(record_category_reject(category, symbol, "reject_invalid_avg_trade_quote_size_ratio", {"ratio": _finite_or_none(start_avg_trade_ratio), "decision_timestamp_ms": int(decision["timestamp"])}))

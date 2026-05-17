@@ -538,7 +538,7 @@ Live-priority runner categories are a shared contract, not separate live/backtes
 Backtest selection order: try shared live-priority categories in the same timeframe-specific priority order as live; if none match and the base discovery signal still matches, enter as discovery.
 Every backtest trade must carry pump_category_id, pump_category_family, pump_category_is_live_rule, pump_category_contract and pump_category_source so live-rule trades and discovery fallback trades can be separated without inference.
 Synthetic live OHLCV buckets are explicit data provenance. They may preserve elapsed no-trade time, but they are not real flow/hold evidence.
-P279 v6 contract is intentionally live-first: it reduces frequency to favor positive mark-basis, meaningful impulse range, non-tiny initial risk, lower prior whipsaw/spike history, and less poor trade-effort-per-return. It should be judged on live statistics and strict-parity backtests, not on blended discovery PnL.
+P279 v6 contract is intentionally live-first: it reduces frequency to favor positive mark-basis, meaningful impulse range, non-tiny initial risk, lower prior whipsaw/spike history, and less poor trade-effort-per-return. P281 v7 adds a minimum absolute baseline liquidity floor of 300k USDT/day proxy so tiny symbols cannot qualify only through inflated relative flow ratios. It should be judged on live statistics and strict-parity backtests, not on blended discovery PnL.
 ```
 
 ### Live position management after P274
