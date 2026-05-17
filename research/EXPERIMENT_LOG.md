@@ -2499,3 +2499,79 @@ Validation:
 .venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
 .venv\Scripts\python.exe -m compileall -q data/exchanges research_tools cli constants.py main.py tests/test_anomaly_continuation_lab.py tests/test_live_order_lifecycle.py
 ```
+
+## 2026-05-17 - anomaly_lab category/session review
+
+Input:
+
+```text
+Artifact root: .output/results/anomaly_lab
+Pairs: 1m/5s, 1m/15s, 5m/30s
+Period: recent 30d artifact window
+Exit model: conservative_limit_proxy present in anomaly_trades.csv
+```
+
+Data quality:
+
+```text
+Trade-count evidence is real, not proxy: candidate rows report trade_count_proxy_used=false.
+Levels trade-count source is cached_ohlcv.number_of_trades.
+Entry trade-count source is mostly cached_1s_aggregated_to_5s/15s/30s.number_of_trades, with small cached_ohlcv fallback.
+Context parity is not perfectly clean: live-priority closed trades include ok rows plus some requested_context_missing_or_bad / oi_context_stale_asof rows. Strict live-parity reads must filter context_parity_status=ok before claiming edge.
+```
+
+Result:
+
+```text
+All closed trades: n=2436, winrate=52.3%, avg_trade=+0.400%, median=+0.085%, top5 dependency=4.1%.
+Live-priority categories: n=490, winrate=72.9%, avg_trade=+1.302%, median=+0.839%, positive-day share=91.7%, worst day=-3.8%, top5 dependency=10.5%.
+Discovery fallback: n=1946, winrate=47.1%, avg_trade=+0.173%, median=-0.101%, worst day=-43.0%. Discovery is a research pool, not live-ready.
+runner_oi_confirmed: n=147, winrate=76.2%, avg_trade=+1.860%, median=+1.347%.
+runner_flow: n=147, winrate=73.5%, avg_trade=+1.476%, median=+1.217%.
+runner_balanced: n=143, winrate=75.5%, avg_trade=+1.028%, median=+0.529%, strong daily stability but higher top-tail dependency.
+runner_reclaim: n=53, winrate=54.7%, avg_trade=+0.014%; not live-ready.
+```
+
+Metric read:
+
+```text
+Best decision-time separator is mark_close_vs_decision_close_basis. Positive/high basis strongly separates winners; worst quintile is negative expectancy and best quintile is high winrate/high avg trade.
+Helpful but weaker: initial_risk_pct not too small, start_range_pct_ratio_to_baseline high, setup_elapsed_fraction later/more formed, start_verticality_score moderate/high.
+Fade/exhaustion markers: high start_trade_ratio_per_abs_return, high start_quote_ratio_per_abs_return, high prior_spike_count_72h, prior_up_down_whipsaw_to_impulse_range, and late entry_delay_candles.
+Do not use outcome columns such as MFE/MAE/gross_return as filters; they are post-entry labels only.
+```
+
+Runner/fader discovery read:
+
+```text
+Runners are united by pre-pump expansion: stronger 30m/1h/2h pre price range/return, positive mark-close pct change, and on 1m/5s rising trade-count/quote-volume slope.
+Faders are united by weak pre-return/range or late heavy flow without comparable price continuation, especially on 5m/30s where large late quote/trade size looks more like exhaustion.
+Absolute mark price differences must not become filters because symbol price scale contaminates them; use pct/ratio features only.
+```
+
+Session read:
+
+```text
+Asia 00-07 UTC and EU 07-13 UTC are cleaner than US 13-21 UTC and late 21-24 UTC.
+runner_oi_confirmed is strongest in EU/Asia, acceptable but weaker in US, and too sparse/weak late.
+runner_flow is good in Asia/EU, weaker in US.
+runner_balanced is best in EU, acceptable in Asia/US, too sparse late.
+runner_reclaim is negative in US and weak overall.
+```
+
+Tuning implication:
+
+```text
+Do not hard-optimize from this single 30d run. Small candidate hardening is justified only as a next grid/ablation:
+runner_oi_confirmed: require positive mark basis and avoid tiny initial risk; test start_range_pct_ratio_to_baseline / setup_elapsed_fraction soft gates.
+runner_flow: require positive mark basis, stronger impulse range, and cap prior whipsaw.
+runner_balanced: convert to quiet-runner profile with positive mark basis, non-tiny range, cap trades-per-return and prior spike count.
+runner_reclaim: disable from live or keep shadow-only until EU/Asia anti-exhaustion gates prove edge out of sample.
+Discovery: keep separate; do not blend discovery PnL into live-priority metrics.
+```
+
+Next:
+
+```text
+Run a strict parity ablation on the same artifacts: filter context_parity_status=ok, split by category/session/TF, and test only decision-time gates above. Promote no threshold until it improves avg trade, median, positive-day share, and top-trade dependence simultaneously.
+```

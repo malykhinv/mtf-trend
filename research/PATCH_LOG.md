@@ -4902,3 +4902,31 @@ Risk:
 ```text
 Medium for reported historical metrics. TP1 hit-rate, winrate, and expectancy can drop because old candle-high TP1 fills were optimistic. Signal selection and live order handling are unchanged.
 ```
+
+## 2026-05-17 - P278 local research memory update - anomaly_lab review
+
+Files:
+
+```text
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Record the detailed anomaly_lab category/session/metric review in compact project memory. This is analysis-only and does not change signal selection, live execution, backtest logic, configs, or tests.
+```
+
+Validation:
+
+```text
+No code validation required. Reviewed current .output/results/anomaly_lab artifacts and updated research memory only.
+```
+
+Risk:
+
+```text
+Low. The only risk is overinterpreting a single 30d artifact; the recorded next step explicitly requires strict context_parity_status=ok ablation before threshold changes.
+```

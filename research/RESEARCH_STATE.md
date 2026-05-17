@@ -25,6 +25,19 @@ Expect TP1 hit-rate, winrate, and expectancy to drop versus old candle-high back
 Next validation: rerun the failed anomaly-lab command and inspect `anomaly_trades.csv` for `tp1_fill_model`, `tp1_fill_status`, and lower/changed TP1 hit distribution.
 ```
 
+## 2026-05-17 - anomaly_lab review state
+
+```text
+Current artifact review: .output/results/anomaly_lab, pairs 1m/5s + 1m/15s + 5m/30s.
+TP1 conservative fields are present in trades, so this artifact is after P277 or equivalent.
+Data quality is usable: trade_count_proxy_used=false, real number_of_trades and quote_volume sources are present. Context parity is still not perfectly strict; live-priority rows include some requested_context_missing_or_bad and oi_context_stale_asof, so final live-edge claims should use context_parity_status=ok.
+Live-priority categories are meaningfully better than discovery: n=490, WR 72.9%, avg +1.30%, median +0.84%, positive-day share 91.7%. Discovery remains broad/noisy: n=1946, WR 47.1%, avg +0.17%, median -0.10%, worst day -43%.
+runner_oi_confirmed and runner_flow are strongest. runner_balanced is stable but more top-tail dependent. runner_reclaim is not live-ready.
+Best decision-time hardening candidate is positive/high mark_close_vs_decision_close_basis, then minimum non-tiny initial risk, stronger start_range_pct_ratio_to_baseline, lower trades/quote per abs return, lower prior_spike_count_72h / prior whipsaw.
+Session effect matters: Asia/EU are cleaner; US is weaker and has worse day risk; late session is sparse/tail-dependent.
+Next best step: strict parity ablation on current artifacts with context_parity_status=ok and category/session/TF split before changing live category thresholds.
+```
+
 ## 2026-05-17 - P276 applied locally
 
 ```text
