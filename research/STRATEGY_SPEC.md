@@ -478,16 +478,17 @@ Each broad signal/trade is tagged with the strongest profile it also satisfies: 
 Only runner_oi_confirmed is currently the live-entry candidate category. Other tags are research buckets until they show stable, non-overfit edge across enough trades and periods.
 ```
 
-Live category policy:
+Live category policy after P279:
 
 ```text
-Test live may scan the profitable research categories runner_oi_confirmed, runner_flow, runner_reclaim, and runner_balanced.
+Test live may scan runner_oi_confirmed, runner_flow, and runner_balanced by default.
+runner_reclaim remains a supported explicit/shadow category, but is removed from the default live set because the current 30d anomaly_lab artifact showed near-zero average trade, weak session stability, and negative US-session behavior.
 Discovery is never a live-entry category.
 Category priority is TF-specific:
-- 5m/30s: runner_flow, runner_oi_confirmed, runner_reclaim, runner_balanced
-- 1m/15s: runner_oi_confirmed, runner_flow, runner_reclaim, runner_balanced
-- 1m/5s: runner_oi_confirmed, runner_flow, runner_balanced, runner_reclaim
-Live category contract is live_category_overlay_v5_retryable_dependencies_cold_coverage: live enforces the confirmed-category 72h prior_fast_fade exclusion from levels-timeframe historical context, not from 72h of subminute executable tape. The filter exists as a red-flag exclusion against repeated fast-fade pump setups. If prior-fast-fade, mark, or OI context is temporarily unavailable/stale, the decision is not consumed; live retries until the decision becomes stale or receives a final reject/selected category. Discovery remains backtest-only and is never a live-entry category.
+- 5m/30s: runner_flow, runner_oi_confirmed, runner_balanced
+- 1m/15s: runner_oi_confirmed, runner_flow, runner_balanced
+- 1m/5s: runner_oi_confirmed, runner_flow, runner_balanced
+Live category contract is shared_pump_category_contract_v1_live_overlay_v6: live/backtest both require category-specific mark-basis, minimum range expansion, minimum initial risk, prior-whipsaw cap, prior-spike cap, and prior-fast-fade exclusion where configured. If prior-spike/fast-fade, mark, or OI context is temporarily unavailable/stale, the decision is not consumed; live retries until the decision becomes stale or receives a final reject/selected category. Discovery remains backtest-only and is never a live-entry category.
 
 DANGER cold coverage policy: subminute ticker-radar live has a small default precise inactive-symbol budget of 5 symbols per cycle, labeled DANGER in code and artifacts, but it is idle/health gated. It may run only when cumulative WS health is strictly above 95% and there are no active symbols, no opening position, and no open position. When gated off, artifacts must show inactive_cold_coverage_gate_reason and no full-universe cold-cycle estimate should be displayed as active coverage. This improves parity/audit coverage but increases API/WS aggTrade pressure and is not a proven production edge. Set inactive_scan_slots_per_cycle=0 to disable cold coverage completely.
 ```
@@ -537,6 +538,7 @@ Live-priority runner categories are a shared contract, not separate live/backtes
 Backtest selection order: try shared live-priority categories in the same timeframe-specific priority order as live; if none match and the base discovery signal still matches, enter as discovery.
 Every backtest trade must carry pump_category_id, pump_category_family, pump_category_is_live_rule, pump_category_contract and pump_category_source so live-rule trades and discovery fallback trades can be separated without inference.
 Synthetic live OHLCV buckets are explicit data provenance. They may preserve elapsed no-trade time, but they are not real flow/hold evidence.
+P279 v6 contract is intentionally live-first: it reduces frequency to favor positive mark-basis, meaningful impulse range, non-tiny initial risk, lower prior whipsaw/spike history, and less poor trade-effort-per-return. It should be judged on live statistics and strict-parity backtests, not on blended discovery PnL.
 ```
 
 ### Live position management after P274

@@ -4930,3 +4930,42 @@ Risk:
 ```text
 Low. The only risk is overinterpreting a single 30d artifact; the recorded next step explicitly requires strict context_parity_status=ok ablation before threshold changes.
 ```
+
+## 2026-05-17 - P279 applied locally - live-first category hardening
+
+Files:
+
+```text
+research_tools/anomaly_category_contract.py
+research_tools/anomaly_strategy_backtest.py
+research_tools/anomaly_micro_live.py
+cli/parser.py
+cli/commands.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Harden the default live category contract before running real 12 USDT live collection.
+runner_reclaim is removed from the default live category set but remains supported for explicit/shadow runs.
+shared_pump_category_contract_v1_live_overlay_v6 adds category-specific minimum range expansion, minimum initial risk, prior-whipsaw cap, prior-spike cap, and tighter trade-effort-per-return gates where the anomaly_lab review showed cleaner runners.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py tests\test_anomaly_continuation_lab.py tests\test_live_order_lifecycle.py
+```
+
+Risk:
+
+```text
+Medium. Frequency will drop versus v5 and some valid winners can be filtered. The change is intentional for minimum-size live collection: prefer fewer cleaner trades over broad discovery-like exposure. Do not interpret old discovery/backtest totals as account-return promises.
+```

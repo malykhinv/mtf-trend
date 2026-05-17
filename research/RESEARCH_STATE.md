@@ -38,6 +38,18 @@ Session effect matters: Asia/EU are cleaner; US is weaker and has worse day risk
 Next best step: strict parity ablation on current artifacts with context_parity_status=ok and category/session/TF split before changing live category thresholds.
 ```
 
+## 2026-05-17 - P279 live-first category state
+
+```text
+Current patch status: P279 APPLIED locally / UNKNOWN commit.
+Default live categories are now runner_oi_confirmed, runner_flow, runner_balanced. runner_reclaim is still supported but no longer default because current artifact evidence was weak and session-sensitive.
+Category contract id: shared_pump_category_contract_v1_live_overlay_v6.
+New shared contract fields now enforced in both backtest and live: min_start_range_pct_ratio_to_baseline, min_initial_risk_pct, category max_initial_risk_pct, max_prior_up_down_whipsaw_to_impulse_range, max_prior_spike_count_72h.
+The hardening targets decision-time runner/fader separators: positive mark basis, meaningful range expansion, non-tiny initial risk, lower prior whipsaw/spike history, and lower poor trade-effort-per-return.
+Expected effect: fewer live trades, higher median/avg quality if the 30d anomaly_lab relationship survives live execution. Treat this as a live-statistics collection policy, not proof of hundreds of percent monthly account returns.
+Next validation: run real live at position_notional_usdt=12 and inspect category_rejected distributions, selected categories, context dependency timeouts, actual exchange fills, TP1 limit fills, and closed-trade PnL.
+```
+
 ## 2026-05-17 - P276 applied locally
 
 ```text

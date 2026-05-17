@@ -2575,3 +2575,34 @@ Next:
 ```text
 Run a strict parity ablation on the same artifacts: filter context_parity_status=ok, split by category/session/TF, and test only decision-time gates above. Promote no threshold until it improves avg trade, median, positive-day share, and top-trade dependence simultaneously.
 ```
+
+## 2026-05-17 - P279 live-first tuning decision
+
+Decision:
+
+```text
+Apply a conservative subset of the anomaly_lab tuning before minimum-size live collection.
+Default live categories become runner_oi_confirmed, runner_flow, runner_balanced.
+runner_reclaim is excluded from default live, not deleted.
+```
+
+Tuned contract:
+
+```text
+runner_oi_confirmed: mark basis >= 0.002, range expansion >= 6.0, initial risk >= 1.0%, prior whipsaw <= 0.60, prior spikes <= 30, prior fast fades <= 1.
+runner_flow: mark basis >= 0.0015, range expansion >= 8.0, initial risk >= 1.0%, trade-effort-per-return <= 1800, prior whipsaw <= 0.50, prior spikes <= 30, prior fast fades <= 1.
+runner_balanced: mark basis >= 0.002, range expansion >= 5.0, initial risk >= 0.8%, trade-effort-per-return <= 1500, prior whipsaw <= 0.60, prior spikes <= 20, prior fast fades <= 1.
+runner_reclaim explicit-only: start_trade_ratio <= 10, range expansion <= 10.5, initial risk <= 3.2%, prior spikes <= 5.
+```
+
+Artifact sanity check:
+
+```text
+On current closed anomaly_lab trades, this approximate tuned set keeps about 185 live-priority trades versus 490 before, with higher avg/median and lower discovery-like noise. This is not a deployable performance estimate because it is a single 30d artifact and not strict live-fill parity.
+```
+
+Live readout:
+
+```text
+For the 12 USDT live run, judge only real fills: selected category, context parity/dependency status, exchange entry fill, TP1 limit fill, stop updates, closed PnL, and orphan-order cleanup. Do not annualize the backtest sum as account return.
+```

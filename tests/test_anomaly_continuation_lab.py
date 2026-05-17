@@ -306,7 +306,7 @@ def test_pre_context_universe_does_not_require_missing_mark_basis_column() -> No
                 "start_trade_ratio": 5.0,
                 "start_avg_trade_quote_size_ratio": 1.0,
                 "start_quote_ratio_per_abs_return": 1_000.0,
-                "start_range_pct_ratio_to_baseline": 2.0,
+                "start_range_pct_ratio_to_baseline": 6.0,
                 "prior_up_down_whipsaw_to_impulse_range": 0.1,
                 "flow_hold_count_next_n_candles": 3,
                 "prior_spike_count_72h": 0,

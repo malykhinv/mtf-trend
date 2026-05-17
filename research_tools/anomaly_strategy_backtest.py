@@ -243,6 +243,7 @@ class AnomalyBacktestConfig:
     max_start_trade_ratio: float | None = None
     max_start_avg_trade_quote_size_ratio: float | None = None
     max_start_quote_ratio_per_abs_return: float | None = None
+    min_start_range_pct_ratio_to_baseline: float | None = None
     max_start_range_pct_ratio_to_baseline: float | None = None
     max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.60
     min_flow_hold_count: int | None = None
@@ -258,6 +259,7 @@ class AnomalyBacktestConfig:
     max_start_taker_buy_quote_share_delta: float | None = None
     max_next_taker_buy_quote_share_delta: float | None = None
     max_start_trade_ratio_per_abs_return: float | None = None
+    min_initial_risk_pct: float | None = None
     max_initial_risk_pct: float = 0.16
     entry_method: str = "market"
     pullback_box_fraction: float = 0.75
@@ -479,6 +481,11 @@ def _red_flag_violation_masks(signals: pd.DataFrame, *, config: AnomalyBacktestC
         trade_effort = pd.to_numeric(signals["start_trade_ratio_per_abs_return"], errors="coerce")
         masks["trade_effort_per_return_above_max"] = (
             trade_effort.gt(config.max_start_trade_ratio_per_abs_return) | trade_effort.isna()
+        )
+    if config.min_start_range_pct_ratio_to_baseline is not None:
+        range_ratio = pd.to_numeric(signals["start_range_pct_ratio_to_baseline"], errors="coerce")
+        masks["start_range_ratio_below_min"] = (
+            range_ratio.lt(config.min_start_range_pct_ratio_to_baseline) | range_ratio.isna()
         )
     if config.max_start_quote_ratio_per_abs_return is not None:
         quote_effort = pd.to_numeric(signals["start_quote_ratio_per_abs_return"], errors="coerce")
@@ -1139,6 +1146,7 @@ def build_anomaly_signals(
         "max_start_trade_ratio": "start_trade_ratio",
         "max_start_avg_trade_quote_size_ratio": "start_avg_trade_quote_size_ratio",
         "max_start_quote_ratio_per_abs_return": "start_quote_ratio_per_abs_return",
+        "min_start_range_pct_ratio_to_baseline": "start_range_pct_ratio_to_baseline",
         "max_start_range_pct_ratio_to_baseline": "start_range_pct_ratio_to_baseline",
         "max_prior_up_down_whipsaw_to_impulse_range": "prior_up_down_whipsaw_to_impulse_range",
         "min_flow_hold_count": "flow_hold_count_next_n_candles",
@@ -1186,6 +1194,8 @@ def build_anomaly_signals(
         & signals["initial_risk_pct_at_decision"].gt(0.0)
         & signals["initial_risk_pct_at_decision"].le(config.max_initial_risk_pct)
     )
+    if config.min_initial_risk_pct is not None:
+        mask &= signals["initial_risk_pct_at_decision"].ge(config.min_initial_risk_pct)
     if config.min_oi_change_pct_3x5m is not None:
         mask &= signals["oi_change_pct_3x5m"].astype(float).gt(config.min_oi_change_pct_3x5m)
     if config.require_oi_status_ok:
@@ -1201,6 +1211,10 @@ def build_anomaly_signals(
     if config.max_start_quote_ratio_per_abs_return is not None:
         mask &= signals["start_quote_ratio_per_abs_return"].astype(float).le(
             config.max_start_quote_ratio_per_abs_return
+        )
+    if config.min_start_range_pct_ratio_to_baseline is not None:
+        mask &= signals["start_range_pct_ratio_to_baseline"].astype(float).ge(
+            config.min_start_range_pct_ratio_to_baseline
         )
     if config.max_start_range_pct_ratio_to_baseline is not None:
         mask &= signals["start_range_pct_ratio_to_baseline"].astype(float).le(

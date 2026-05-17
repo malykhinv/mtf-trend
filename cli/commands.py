@@ -1448,7 +1448,7 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                     getattr(
                         args,
                         "pump_categories",
-                        "runner_oi_confirmed,runner_flow,runner_reclaim,runner_balanced",
+                        "runner_oi_confirmed,runner_flow,runner_balanced",
                     )
                 ).split(",")
                 if item.strip()

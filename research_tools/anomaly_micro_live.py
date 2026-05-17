@@ -1738,6 +1738,7 @@ class LiveAnomalyConfig:
     max_start_avg_trade_quote_size_ratio: float | None = 9.0
     max_start_quote_ratio_per_abs_return: float | None = 15_000.0
     max_start_trade_ratio_per_abs_return: float | None = None
+    min_start_range_pct_ratio_to_baseline: float | None = None
     max_start_range_pct_ratio_to_baseline: float | None = 35.0
     min_next_taker_buy_quote_share: float | None = 0.48
     max_start_taker_buy_quote_share_delta: float | None = None
@@ -1747,6 +1748,7 @@ class LiveAnomalyConfig:
     min_hold_count: int = 2
     min_oi_change_pct_3x5m: float | None = None
     min_mark_close_vs_decision_close_basis: float | None = None
+    min_initial_risk_pct: float | None = None
     max_initial_risk_pct: float = 0.16
     stop_buffer_range_fraction: float = 0.05
     max_prior_up_down_whipsaw_to_impulse_range: float | None = 0.75
@@ -11753,6 +11755,13 @@ class AnomalyMicroLiveRunner:
             if max_trade_per_return is not None and start_trade_ratio_per_abs_return > max_trade_per_return:
                 category_rejections.append(record_category_reject(category, symbol, "reject_poor_trade_effort_per_return", {"ratio": start_trade_ratio_per_abs_return, "max": max_trade_per_return, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
+            min_range_ratio = _category_value(category, self.config, "min_start_range_pct_ratio_to_baseline")
+            if min_range_ratio is not None and not math.isfinite(start_range_pct_ratio):
+                category_rejections.append(record_category_reject(category, symbol, "reject_invalid_range_expansion_ratio", {"ratio": _finite_or_none(start_range_pct_ratio), "decision_timestamp_ms": int(decision["timestamp"])}))
+                continue
+            if min_range_ratio is not None and start_range_pct_ratio < min_range_ratio:
+                category_rejections.append(record_category_reject(category, symbol, "reject_weak_range_expansion", {"ratio": start_range_pct_ratio, "min": min_range_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
+                continue
             max_range_ratio = _category_value(category, self.config, "max_start_range_pct_ratio_to_baseline")
             if max_range_ratio is not None and not math.isfinite(start_range_pct_ratio):
                 category_rejections.append(record_category_reject(category, symbol, "reject_invalid_range_expansion_ratio", {"ratio": _finite_or_none(start_range_pct_ratio), "decision_timestamp_ms": int(decision["timestamp"])}))
@@ -11760,13 +11769,48 @@ class AnomalyMicroLiveRunner:
             if max_range_ratio is not None and start_range_pct_ratio > max_range_ratio:
                 category_rejections.append(record_category_reject(category, symbol, "reject_extreme_range_expansion", {"ratio": start_range_pct_ratio, "max": max_range_ratio, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
-            max_prior_whipsaw = self.config.max_prior_up_down_whipsaw_to_impulse_range
+            max_prior_whipsaw = _category_value(category, self.config, "max_prior_up_down_whipsaw_to_impulse_range")
             if max_prior_whipsaw is not None and not math.isfinite(prior_whipsaw):
                 category_rejections.append(record_category_reject(category, symbol, "reject_invalid_prior_whipsaw", {"prior_up_down_whipsaw_to_impulse_range": _finite_or_none(prior_whipsaw), "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             if max_prior_whipsaw is not None and prior_whipsaw > max_prior_whipsaw:
                 category_rejections.append(record_category_reject(category, symbol, "reject_prior_up_down_whipsaw", {"prior_up_down_whipsaw_to_impulse_range": prior_whipsaw, "max": max_prior_whipsaw, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
+            max_prior_spikes = _category_value(category, self.config, "max_prior_spike_count_72h")
+            if max_prior_spikes is not None:
+                if not prior_fast_fade_loaded:
+                    frozen_prior_fast_fade = _frozen_prior_fast_fade_from_context(frozen_exchange_context)
+                    if frozen_prior_fast_fade is not None:
+                        prior_fast_fade_result = frozen_prior_fast_fade
+                    else:
+                        prior_fast_fade_result = self._live_prior_fast_fade_72h(
+                            symbol,
+                            decision_timestamp_ms=int(decision["timestamp"]),
+                            levels_timeframe=levels_timeframe,
+                            entry_timeframe=entry_timeframe,
+                        )
+                    prior_fast_fade_loaded = True
+                assert prior_fast_fade_result is not None
+                prior_spike_count = prior_fast_fade_result.get("prior_spike_count_72h")
+                prior_spike_details = {
+                    **prior_fast_fade_result,
+                    "max_prior_spike_count_72h": int(max_prior_spikes),
+                    "decision_timestamp_ms": int(decision["timestamp"]),
+                }
+                if prior_fast_fade_result.get("status") != "ok" or prior_spike_count is None:
+                    category_rejections.append(
+                        record_category_reject(
+                            category,
+                            symbol,
+                            "reject_prior_spike_filter_unavailable",
+                            prior_spike_details,
+                            emit=False,
+                        )
+                    )
+                    continue
+                if int(prior_spike_count) > int(max_prior_spikes):
+                    category_rejections.append(record_category_reject(category, symbol, "reject_prior_spike_72h", prior_spike_details))
+                    continue
             min_flow_hold_count = _category_value(category, self.config, "min_flow_hold_count")
             if min_flow_hold_count is not None and flow_hold_count < int(min_flow_hold_count):
                 category_rejections.append(record_category_reject(category, symbol, "reject_low_flow_hold_count", {"flow_hold_count": flow_hold_count, "min": int(min_flow_hold_count), "decision_timestamp_ms": int(decision["timestamp"])}))
@@ -11786,6 +11830,14 @@ class AnomalyMicroLiveRunner:
                 continue
             if price_retention < self.config.min_price_retention:
                 category_rejections.append(record_category_reject(category, symbol, "reject_low_price_retention", {"price_retention": price_retention, "min": self.config.min_price_retention, "decision_timestamp_ms": int(decision["timestamp"])}))
+                continue
+            min_initial_risk = _category_value(category, self.config, "min_initial_risk_pct")
+            if min_initial_risk is not None and initial_risk_pct < min_initial_risk:
+                category_rejections.append(record_category_reject(category, symbol, "reject_initial_risk_too_tight", {"initial_risk_pct": initial_risk_pct, "min": min_initial_risk, "decision_timestamp_ms": int(decision["timestamp"])}))
+                continue
+            max_initial_risk = _category_value(category, self.config, "max_initial_risk_pct")
+            if max_initial_risk is not None and initial_risk_pct > max_initial_risk:
+                category_rejections.append(record_category_reject(category, symbol, "reject_initial_risk_too_wide_for_category", {"initial_risk_pct": initial_risk_pct, "max": max_initial_risk, "decision_timestamp_ms": int(decision["timestamp"])}))
                 continue
             max_price_retention = _category_value(category, self.config, "max_price_retention")
             if max_price_retention is not None and price_retention > max_price_retention:
