@@ -4869,3 +4869,36 @@ Risk:
 ```text
 Low/medium. Patch touches only the TP1-order failure cleanup path after a verified initial stop. Normal signal selection, entry guards, stop math, TP1 math, position sizing, and successful position management are unchanged. The new behavior reduces orphan-order risk after a failed TP1 limit setup.
 ```
+
+## 2026-05-17 - P277 applied locally - conservative TP1 backtest and pre-context mark-basis fix
+
+Files:
+
+```text
+research_tools/anomaly_strategy_backtest.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Reduce optimistic TP1 bias in backtest/live parity by treating TP1 as a conservative exchange-limit proxy: TP1 fills only on candle trade-through (`high > tp1_price`), exact touch is labeled but not filled, and same-candle SL/TP1 conflict remains stop-first.
+Fix the anomaly-lab crash where pre-context signal universe construction reintroduced runner profile mark/OI requirements before context enrichment and raised `candidates missing required columns: ['mark_close_vs_decision_close_basis']`.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
+.venv\Scripts\python.exe -m compileall -q data/exchanges research_tools cli constants.py main.py tests/test_anomaly_continuation_lab.py tests/test_live_order_lifecycle.py
+```
+
+Risk:
+
+```text
+Medium for reported historical metrics. TP1 hit-rate, winrate, and expectancy can drop because old candle-high TP1 fills were optimistic. Signal selection and live order handling are unchanged.
+```

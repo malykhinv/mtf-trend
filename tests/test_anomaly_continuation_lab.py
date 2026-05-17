@@ -7,6 +7,7 @@ from research_tools.anomaly_continuation_lab import (
     enrich_candidates_with_open_interest,
 )
 from research_tools.anomaly_runner_review import RunnerTarget, build_runner_review, parse_runner_target
+from research_tools import anomaly_strategy_backtest
 from research_tools.anomaly_strategy_backtest import (
     AnomalyBacktestConfig,
     AnomalyLabConfig,
@@ -109,9 +110,11 @@ def test_anomaly_signal_filter_uses_decision_time_features() -> None:
                 "decision_box_low": 9.8,
                 "decision_box_high": 11.0,
                 "decision_box_range": 1.2,
+                "decision_ema20": 10.0,
                 "price_retention_next_n": 0.8,
                 "start_verticality_score": 0.4,
-                "hold_count_next_n_candles": 0,
+                "hold_count_next_n_candles": 2,
+                "prior_up_down_whipsaw_to_impulse_range": 0.1,
             },
             {
                 "symbol": "TEST/USDT:USDT",
@@ -121,9 +124,11 @@ def test_anomaly_signal_filter_uses_decision_time_features() -> None:
                 "decision_box_low": 9.8,
                 "decision_box_high": 10.2,
                 "decision_box_range": 0.4,
+                "decision_ema20": 9.9,
                 "price_retention_next_n": 0.4,
                 "start_verticality_score": 0.8,
                 "hold_count_next_n_candles": 4,
+                "prior_up_down_whipsaw_to_impulse_range": 0.1,
             },
         ]
     )
@@ -147,9 +152,11 @@ def test_anomaly_signal_filter_can_apply_anti_exhaustion_caps() -> None:
                 "decision_box_low": 9.8,
                 "decision_box_high": 11.0,
                 "decision_box_range": 1.2,
+                "decision_ema20": 10.0,
                 "price_retention_next_n": 0.85,
                 "start_verticality_score": 0.5,
                 "hold_count_next_n_candles": 2,
+                "prior_up_down_whipsaw_to_impulse_range": 0.1,
                 "oi_status": "ok",
                 "oi_change_pct_3x5m": 0.04,
                 "start_quote_ratio": 40.0,
@@ -167,9 +174,11 @@ def test_anomaly_signal_filter_can_apply_anti_exhaustion_caps() -> None:
                 "decision_box_low": 9.8,
                 "decision_box_high": 11.0,
                 "decision_box_range": 1.2,
+                "decision_ema20": 10.0,
                 "price_retention_next_n": 0.99,
                 "start_verticality_score": 0.5,
                 "hold_count_next_n_candles": 2,
+                "prior_up_down_whipsaw_to_impulse_range": 0.1,
                 "oi_status": "ok",
                 "oi_change_pct_3x5m": 0.04,
                 "start_quote_ratio": 180.0,
@@ -207,7 +216,7 @@ def test_simulate_long_signal_takes_tp1_and_trails_remaining() -> None:
         {
             "timestamp": [0, 60_000, 120_000, 180_000, 240_000, 300_000, 360_000, 420_000],
             "open": [10.0, 10.4, 10.8, 11.0, 11.2, 12.0, 12.2, 12.1],
-            "high": [10.6, 10.9, 11.2, 11.4, 12.1, 12.8, 12.4, 12.2],
+            "high": [10.6, 10.9, 11.2, 11.4, 12.1, 13.2, 12.4, 12.2],
             "low": [9.9, 10.3, 10.7, 10.9, 11.1, 11.8, 11.4, 10.9],
             "close": [10.5, 10.8, 11.0, 11.2, 12.0, 12.2, 12.0, 11.0],
         }
@@ -235,8 +244,93 @@ def test_simulate_long_signal_takes_tp1_and_trails_remaining() -> None:
 
     assert result["status"] == "closed"
     assert result["tp1_hit"] is True
+    assert result["tp1_fill_model"] == "conservative_limit_proxy"
+    assert result["tp1_fill_status"] == "filled_conservative_trade_through"
     assert result["exit_reason"] == "trailing_stop"
     assert result["gross_r"] > 0
+
+
+def test_simulate_long_signal_does_not_fill_tp1_on_exact_touch() -> None:
+    frame = pd.DataFrame(
+        {
+            "timestamp": [0, 60_000, 120_000, 180_000, 240_000, 300_000],
+            "open": [10.0, 10.4, 10.8, 11.0, 11.2, 11.2],
+            "high": [10.6, 10.9, 11.2, 11.4, 12.0, 13.0],
+            "low": [9.9, 10.3, 10.7, 10.9, 11.1, 11.0],
+            "close": [10.5, 10.8, 11.0, 11.2, 11.3, 11.1],
+        }
+    )
+    signal = pd.Series(
+        {
+            "symbol": "TEST/USDT:USDT",
+            "timestamp_ms": 0,
+            "decision_timestamp_ms": 180_000,
+            "decision_close": 11.2,
+            "outcome_label": "test",
+        }
+    )
+
+    result = simulate_long_signal(
+        frame,
+        signal,
+        config=AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(),
+            fee_rate=0.0,
+            max_hold_candles=2,
+        ),
+    )
+
+    assert result["status"] == "closed"
+    assert result["tp1_hit"] is False
+    assert result["tp1_fill_status"] == "touched_not_filled_conservative"
+
+
+def test_pre_context_universe_does_not_require_missing_mark_basis_column() -> None:
+    candidates = pd.DataFrame(
+        [
+            {
+                "symbol": "TEST/USDT:USDT",
+                "setup_timeframe": "5m",
+                "entry_timeframe": "30s",
+                "price_retention_next_n": 0.9,
+                "start_verticality_score": 0.5,
+                "hold_count_next_n_candles": 3,
+                "decision_close": 11.2,
+                "decision_box_low": 10.8,
+                "decision_box_high": 11.4,
+                "decision_box_range": 0.6,
+                "decision_ema20": 10.9,
+                "timestamp_ms": 0,
+                "decision_timestamp_ms": 180_000,
+                "start_quote_ratio": 5.0,
+                "start_trade_ratio": 5.0,
+                "start_avg_trade_quote_size_ratio": 1.0,
+                "start_quote_ratio_per_abs_return": 1_000.0,
+                "start_range_pct_ratio_to_baseline": 2.0,
+                "prior_up_down_whipsaw_to_impulse_range": 0.1,
+                "flow_hold_count_next_n_candles": 3,
+                "prior_spike_count_72h": 0,
+                "prior_fast_fade_count_72h": 0,
+                "start_lower_wick_to_range": 0.1,
+                "start_upper_wick_to_range": 0.1,
+                "next_n_taker_buy_quote_share_mean": 0.5,
+                "start_taker_buy_quote_share_delta": 0.0,
+                "next_n_taker_buy_quote_share_delta": 0.0,
+                "start_trade_ratio_per_abs_return": 100.0,
+            }
+        ]
+    )
+
+    result = anomaly_strategy_backtest._build_pre_context_signal_universe(
+        candidates,
+        AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(),
+            red_flag_profile="runner_oi_confirmed",
+        ),
+    )
+
+    assert not result.empty
+    assert result["pre_context_intent"].str.contains("runner_oi_confirmed").any()
 
 
 def test_simulate_long_signal_can_wait_for_structural_pullback_entry() -> None:

@@ -10,8 +10,19 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P276 applied locally TP1-failure stop cleanup and lifecycle parity tests
+Last active patch: P277 applied locally conservative TP1 backtest and pre-context mark-basis fix
 Updated: 2026-05-17
+```
+
+## 2026-05-17 - P277 applied locally
+
+```text
+Current patch status: P277 APPLIED locally / UNKNOWN commit.
+Backtest TP1 is no longer counted on a mere candle-high touch. `simulate_long_signal()` now labels `tp1_fill_model=conservative_limit_proxy`, requires trade-through (`high > tp1_price`) for TP1 fill, and records exact touches as `touched_not_filled_conservative`.
+Same-candle TP1/SL conflict remains conservative: stop is processed first and such cases are labeled `ambiguous_intrabar_stop_first`.
+The run crash `candidates missing required columns: ['mark_close_vs_decision_close_basis']` was not caused by P276; it was a pre-context universe bug. `_strip_derivative_context_requirements()` now also clears `red_flag_profile` after category overrides are already applied, so `build_anomaly_signals()` does not reintroduce mark/OI requirements before context enrichment.
+Expect TP1 hit-rate, winrate, and expectancy to drop versus old candle-high backtests. Treat that as improved honesty, not strategy deterioration by itself.
+Next validation: rerun the failed anomaly-lab command and inspect `anomaly_trades.csv` for `tp1_fill_model`, `tp1_fill_status`, and lower/changed TP1 hit distribution.
 ```
 
 ## 2026-05-17 - P276 applied locally

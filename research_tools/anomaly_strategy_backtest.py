@@ -309,6 +309,7 @@ def _strip_derivative_context_requirements(config: AnomalyBacktestConfig) -> Ano
 
     return replace(
         config,
+        red_flag_profile="none",
         min_oi_change_pct_3x5m=None,
         require_oi_status_ok=False,
         min_mark_close_vs_decision_close_basis=None,
@@ -2158,6 +2159,11 @@ def simulate_long_signal(
     )
     active_stop = initial_stop
     tp1_hit = False
+    tp1_fill_model = "conservative_limit_proxy"
+    tp1_fill_status = "not_hit"
+    tp1_fill_timestamp_ms = float("nan")
+    tp1_fill_price = float("nan")
+    intrabar_path_assumption = "stop_first_on_same_candle_conflict"
     remaining_fraction = 1.0
     realized_r = 0.0
     max_high = entry_price
@@ -2181,12 +2187,17 @@ def simulate_long_signal(
         max_high = max(max_high, high)
         min_low = min(min_low, low)
 
-        if low <= active_stop:
+        stop_hit = low <= active_stop
+        tp1_trade_through = high > tp1_price
+        tp1_touched = high >= tp1_price
+        if stop_hit:
             exit_reason = "stop_loss" if not tp1_hit else "trailing_stop"
             exit_ts = candle_ts
             exit_price = active_stop
             realized_r += remaining_fraction * ((exit_price - entry_price) / initial_risk)
             remaining_fraction = 0.0
+            if not tp1_hit and tp1_touched:
+                tp1_fill_status = "ambiguous_intrabar_stop_first"
             break
 
         if (
@@ -2202,12 +2213,17 @@ def simulate_long_signal(
             ema20_exit_triggered = True
             break
 
-        if not tp1_hit and high >= tp1_price:
+        if not tp1_hit and tp1_trade_through:
             tp1_hit = True
+            tp1_fill_status = "filled_conservative_trade_through"
+            tp1_fill_timestamp_ms = candle_ts
+            tp1_fill_price = tp1_price
             realized_r += config.tp1_fraction * config.tp1_r
             remaining_fraction = 1.0 - config.tp1_fraction
             if config.move_stop_to_breakeven_after_tp1:
                 active_stop = max(active_stop, entry_price)
+        elif not tp1_hit and tp1_touched:
+            tp1_fill_status = "touched_not_filled_conservative"
 
         if (
             config.exit_rule == "ema20_close"
@@ -2277,6 +2293,12 @@ def simulate_long_signal(
         "tp1_round_step": tp1_round_step,
         "tp1_target_model": "next_round_number_above_1r",
         "tp1_hit": tp1_hit,
+        "tp1_fill_model": tp1_fill_model,
+        "tp1_fill_status": tp1_fill_status,
+        "tp1_fill_timestamp_ms": tp1_fill_timestamp_ms,
+        "tp1_fill_timestamp_utc": _timestamp_to_utc(tp1_fill_timestamp_ms) if np.isfinite(tp1_fill_timestamp_ms) else "",
+        "tp1_fill_price": tp1_fill_price,
+        "intrabar_path_assumption": intrabar_path_assumption,
         "tp1_fraction": config.tp1_fraction,
         "trail_stop_final": trail_stop,
         "exit_rule": config.exit_rule,

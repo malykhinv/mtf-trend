@@ -2467,3 +2467,35 @@ Result:
 ```text
 5/5 lifecycle tests passed after updating the fake exchange contract and adding TP1-failure orphan-stop regression coverage.
 ```
+
+## 2026-05-17 - P277 conservative TP1 / pre-context crash validation
+
+Input:
+
+```text
+User reported anomaly-lab crash before the latest live-safety patches:
+ValueError: candidates missing required columns: ['mark_close_vs_decision_close_basis']
+User also asked to fix optimistic TP1 bias in backtest/live parity.
+```
+
+Finding:
+
+```text
+The crash is independent of P276. Pre-context universe construction stripped derivative requirements, but left `red_flag_profile` set; `build_anomaly_signals()` reapplied the profile and required mark-basis before derivatives context enrichment.
+Backtest TP1 was optimistic versus live because it counted candle high touching TP1 as fill, while live now needs exchange-side limit fill evidence.
+```
+
+Patch result:
+
+```text
+Pre-context config now clears red_flag_profile after category overrides are applied, preventing pre-enrichment mark/OI requirements from being reintroduced.
+Backtest TP1 fill model is conservative_limit_proxy: exact TP1 touch is not filled; trade-through is required; same-candle TP1/SL conflict is stop-first.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests/test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
+.venv\Scripts\python.exe -m compileall -q data/exchanges research_tools cli constants.py main.py tests/test_anomaly_continuation_lab.py tests/test_live_order_lifecycle.py
+```
