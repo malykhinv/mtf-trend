@@ -89,7 +89,7 @@ _PRIOR_CONTEXT_LIVE_LOOKBACK_MS = _PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS * _HOUR_MS
 _TRADE_CHART_CONTEXT_DAYS = 4
 _MATERIALIZED_SUBMINUTE_CACHE_VERSION = "p165_1s_ohlcv_to_subminute_v1"
 DEFAULT_LATENCY_EXTRA_MS = 10_000
-DEFAULT_LATENCY_GRID_MS = (0, 5_000, 7_000, 9_000, 12_000, 15_000)
+DEFAULT_LATENCY_GRID_MS = (0, 7_000, 10_000, 15_000)
 LATENCY_1S_BACKFILL_VERSION = "p294_latency_aggtrades_to_1s_v1"
 _BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_column", "missing_timestamp", "missing_frame", "empty_oi", "stale_asof"}
 _TRADE_CHART_FLOW_PROVENANCE = {
@@ -4246,6 +4246,7 @@ def run_anomaly_latency_grid(
     base_config: AnomalyBacktestConfig,
     *,
     latency_ms_values: Iterable[int],
+    primary_trades: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     frame_cache: dict[str, pd.DataFrame] = {}
@@ -4254,7 +4255,14 @@ def run_anomaly_latency_grid(
     next_progress_pct = 0
     for idx, latency_ms in enumerate(values, start=1):
         variant = replace(base_config, latency_enabled=True, latency_extra_ms=int(latency_ms))
-        trades = simulate_anomaly_trades(signals, config=variant, frame_cache=frame_cache)
+        if (
+            primary_trades is not None
+            and bool(base_config.latency_enabled)
+            and int(latency_ms) == int(base_config.latency_extra_ms)
+        ):
+            trades = primary_trades
+        else:
+            trades = simulate_anomaly_trades(signals, config=variant, frame_cache=frame_cache)
         summary = summarize_trades(trades)
         row = {
             "variant_id": idx - 1,
@@ -4446,6 +4454,7 @@ def run_anomaly_strategy_backtest(
             signals,
             config,
             latency_ms_values=latency_grid_ms,
+            primary_trades=trades,
         )
         _write_artifact_frames(
             [(output_dir / "anomaly_latency_grid_summary.csv", latency_grid)],

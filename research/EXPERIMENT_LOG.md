@@ -251,7 +251,7 @@ Follow-up implemented:
 
 ```text
 P294 adds opt-in anomaly-lab latency simulation behind one public flag: --latency true.
-The hidden defaults run a 10s 1s-cache execution delay and write a 0/5/7/9/12/15s latency grid. Missing 1s latency windows are backfilled from Binance aggTrades during backtest instead of becoming silent synthetic fills.
+The hidden defaults run a 10s 1s-cache execution delay and write a 0/7/10/15s latency grid, reusing the primary 10s run for that grid point. Missing 1s latency windows are backfilled from Binance aggTrades during backtest instead of becoming silent synthetic fills.
 This is required before changing live drift guards, because a latency grid can show whether the current backtest edge survives realistic live delay.
 ```
 
