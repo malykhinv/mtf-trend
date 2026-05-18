@@ -970,6 +970,8 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
         from research_tools.anomaly_strategy_backtest import (
             AnomalyBacktestConfig,
             AnomalyLabConfig,
+            DEFAULT_LATENCY_EXTRA_MS,
+            DEFAULT_LATENCY_GRID_MS,
             _parse_grid_values,
             _parse_grid_exit_rules,
             _parse_grid_profile_values,
@@ -1132,7 +1134,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 entry_timeout_candles=int(getattr(args, "entry_timeout_candles", 60)),
                 market_entry_latency_candles=int(getattr(args, "market_entry_latency_candles", 1)),
                 latency_enabled=bool(getattr(args, "latency", False)),
-                latency_extra_ms=max(0, int(getattr(args, "latency_ms", 10_000))),
+                latency_extra_ms=int(DEFAULT_LATENCY_EXTRA_MS),
                 max_market_entry_drift_pct=float(getattr(args, "max_market_entry_drift_pct", 0.003)),
                 min_market_rr_to_signal_tp1=float(getattr(args, "min_market_rr_to_signal_tp1", 0.70)),
                 tp1_r=float(args.tp1_r),
@@ -1179,11 +1181,8 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                     str(getattr(args, "grid_exhaustion_profiles", "none"))
                 ),
                 grid_exit_rules=_parse_grid_exit_rules(str(getattr(args, "grid_exit_rules", "structural_trail"))),
-                run_latency_grid=bool(getattr(args, "run_latency_grid", False)),
-                latency_grid_ms=_parse_grid_values(
-                    str(getattr(args, "latency_grid_ms", "0,5000,10000,15000,25000")),
-                    cast=int,
-                ),
+                run_latency_grid=bool(getattr(args, "latency", False)),
+                latency_grid_ms=DEFAULT_LATENCY_GRID_MS,
                 derivatives_context_fetcher=(
                     None if collection_mode == "reused_candidates" else derivatives_context_fetcher
                 ),

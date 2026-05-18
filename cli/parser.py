@@ -152,16 +152,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--latency",
         type=_str_to_bool,
         default=False,
-        help="Use 1s cache to simulate an extra live-like delay after the normal market entry candle.",
+        help="Run hidden 1s-cache live-latency execution stress test and write anomaly_latency_grid_summary.csv.",
     )
-    anomaly_lab.add_argument("--latency-ms", type=int, default=10_000)
-    anomaly_lab.add_argument(
-        "--run-latency-grid",
-        type=_str_to_bool,
-        default=False,
-        help="Write anomaly_latency_grid_summary.csv for multiple extra execution delays.",
-    )
-    anomaly_lab.add_argument("--latency-grid-ms", default="0,5000,10000,15000,25000")
     anomaly_lab.add_argument("--max-market-entry-drift-pct", type=float, default=0.003)
     anomaly_lab.add_argument("--min-market-rr-to-signal-tp1", type=float, default=0.70)
     anomaly_lab.add_argument("--tp1-r", type=float, default=0.75)

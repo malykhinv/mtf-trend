@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import re
 import time
@@ -12,6 +13,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Iterable
+import urllib.parse
+import urllib.request
 from urllib.parse import quote
 
 import numpy as np
@@ -85,6 +88,9 @@ _PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS = 24
 _PRIOR_CONTEXT_LIVE_LOOKBACK_MS = _PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS * _HOUR_MS
 _TRADE_CHART_CONTEXT_DAYS = 4
 _MATERIALIZED_SUBMINUTE_CACHE_VERSION = "p165_1s_ohlcv_to_subminute_v1"
+DEFAULT_LATENCY_EXTRA_MS = 10_000
+DEFAULT_LATENCY_GRID_MS = (0, 5_000, 10_000, 15_000, 25_000)
+LATENCY_1S_BACKFILL_VERSION = "p294_latency_aggtrades_to_1s_v1"
 _BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_column", "missing_timestamp", "missing_frame", "empty_oi", "stale_asof"}
 _TRADE_CHART_FLOW_PROVENANCE = {
     "trade_count_proxy_used": False,
@@ -269,7 +275,7 @@ class AnomalyBacktestConfig:
     entry_timeout_candles: int = 60
     market_entry_latency_candles: int = 1
     latency_enabled: bool = False
-    latency_extra_ms: int = 10_000
+    latency_extra_ms: int = DEFAULT_LATENCY_EXTRA_MS
     max_market_entry_drift_pct: float = 0.003
     min_market_rr_to_signal_tp1: float = 0.70
     stop_buffer_range_fraction: float = 0.05
@@ -826,15 +832,110 @@ def _cache_symbol_dir_name(symbol: str) -> str:
 
 def _read_symbol_frame(cache_dir: Path, symbol: str, timeframe: str) -> pd.DataFrame:
     path = cache_dir / _cache_symbol_dir_name(symbol) / timeframe / "data.parquet"
-    if not path.exists():
-        raise FileNotFoundError(path)
-    frame = pd.read_parquet(path)
+    try:
+        from data.storage.parquet_storage import ParquetStorage
+        from domain.enums.timeframe import Timeframe
+
+        load_result = ParquetStorage(cache_dir).load_result(symbol, Timeframe(str(timeframe)))
+        if not load_result.ok:
+            raise FileNotFoundError(path)
+        frame = load_result.frame
+    except ValueError:
+        if not path.exists():
+            raise FileNotFoundError(path)
+        frame = pd.read_parquet(path)
     frame.sort_values("timestamp", inplace=True)
     frame.drop_duplicates("timestamp", keep="last", inplace=True)
     frame.reset_index(drop=True, inplace=True)
     if "ema20" not in frame.columns and "close" in frame.columns:
         frame["ema20"] = frame["close"].astype(float).ewm(span=20, adjust=False).mean()
     return frame
+
+
+def _binance_futures_market_id(symbol: str) -> str:
+    compact = str(symbol).split(":")[0].replace("/", "")
+    return compact.upper()
+
+
+def _read_symbol_frame_optional(cache_dir: Path, symbol: str, timeframe: str) -> pd.DataFrame:
+    try:
+        return _read_symbol_frame(cache_dir, symbol, timeframe)
+    except FileNotFoundError:
+        return pd.DataFrame()
+
+
+def _ensure_latency_1s_cache(
+    cache_dir: Path,
+    symbol: str,
+    *,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+) -> pd.DataFrame:
+    frame = _read_symbol_frame_optional(cache_dir, symbol, "1s")
+    if not frame.empty and "timestamp" in frame.columns:
+        timestamps = pd.to_numeric(frame["timestamp"], errors="coerce")
+        covered = frame.loc[
+            timestamps.ge(int(start_timestamp_ms))
+            & timestamps.le(int(end_timestamp_ms))
+        ].copy()
+        if not covered.empty:
+            return frame
+
+    market_id = _binance_futures_market_id(symbol)
+    all_rows: list[dict[str, object]] = []
+    chunk_start = int(start_timestamp_ms)
+    endpoint = "https://fapi.binance.com/fapi/v1/aggTrades"
+    while chunk_start <= int(end_timestamp_ms):
+        chunk_end = min(int(end_timestamp_ms), chunk_start + 3_600_000 - 1)
+        cursor = int(chunk_start)
+        while cursor <= chunk_end:
+            params = urllib.parse.urlencode(
+                {
+                    "symbol": market_id,
+                    "startTime": int(cursor),
+                    "endTime": int(chunk_end),
+                    "limit": 1000,
+                }
+            )
+            with urllib.request.urlopen(f"{endpoint}?{params}", timeout=30) as response:
+                batch = json.loads(response.read().decode("utf-8"))
+            if not batch:
+                break
+            all_rows.extend(dict(row) for row in batch)
+            last_ts = int(batch[-1].get("T") or batch[-1].get("time") or cursor)
+            if last_ts < cursor or len(batch) < 1000:
+                break
+            cursor = last_ts + 1
+            time.sleep(0.02)
+        chunk_start = chunk_end + 1
+
+    if not all_rows:
+        return frame
+
+    from data.storage.parquet_storage import ParquetStorage
+    from domain.enums.timeframe import Timeframe
+    from research_tools.anomaly_micro_live import _aggregate_aggtrades_to_ohlcv_frame
+
+    fetched = _aggregate_aggtrades_to_ohlcv_frame(
+        pd.DataFrame(all_rows),
+        timeframe_ms=1000,
+        start_timestamp_ms=int(start_timestamp_ms),
+        end_timestamp_ms=int(end_timestamp_ms),
+    )
+    if fetched.empty:
+        return frame
+    fetched = fetched.copy()
+    fetched["aggregation_source"] = "binance_futures_aggTrades"
+    fetched["aggregation_target_timeframe"] = "1s"
+    fetched["aggregation_version"] = LATENCY_1S_BACKFILL_VERSION
+    ParquetStorage(cache_dir).save_incremental_delta(symbol, Timeframe.S1, fetched)
+    merged = pd.concat([frame, fetched], ignore_index=True, sort=False) if not frame.empty else fetched
+    merged.sort_values("timestamp", inplace=True)
+    merged.drop_duplicates("timestamp", keep="last", inplace=True)
+    merged.reset_index(drop=True, inplace=True)
+    if "ema20" not in merged.columns and "close" in merged.columns:
+        merged["ema20"] = merged["close"].astype(float).ewm(span=20, adjust=False).mean()
+    return merged
 
 
 def _aggregate_frame_to_timeframe(frame: pd.DataFrame, *, timeframe_ms: int) -> pd.DataFrame:
@@ -2452,6 +2553,20 @@ def simulate_anomaly_trades(
         frame_cache = {}
     execution_frame_cache: dict[str, pd.DataFrame] = {}
     ordered_signals = signals.sort_values(["decision_timestamp_ms", "symbol"])
+    latency_windows: dict[str, tuple[int, int]] = {}
+    if config.latency_enabled and not ordered_signals.empty:
+        entry_tf_ms = _timeframe_to_milliseconds(_effective_entry_timeframe(config))
+        tail_ms = (
+            int(config.market_entry_latency_candles) * entry_tf_ms
+            + int(config.latency_extra_ms)
+            + int(config.max_hold_candles) * entry_tf_ms
+            + 60_000
+        )
+        for symbol, group in ordered_signals.groupby("symbol"):
+            timestamps = pd.to_numeric(group["decision_timestamp_ms"], errors="coerce").dropna().astype("int64")
+            if timestamps.empty:
+                continue
+            latency_windows[str(symbol)] = (int(timestamps.min()), int(timestamps.max()) + int(tail_ms))
     progress_started_at = time.monotonic()
     next_progress_pct = 0
     total_signals = len(ordered_signals)
@@ -2490,7 +2605,13 @@ def simulate_anomaly_trades(
                 execution_frame = execution_frame_cache.get(symbol)
             if execution_frame is None:
                 try:
-                    execution_frame = _read_entry_simulation_frame(config.lab_config.cache_dir, symbol, "1s")
+                    window_start, window_end = latency_windows.get(symbol, (entry_ts, entry_ts))
+                    execution_frame = _ensure_latency_1s_cache(
+                        config.lab_config.cache_dir,
+                        symbol,
+                        start_timestamp_ms=int(window_start),
+                        end_timestamp_ms=int(window_end),
+                    )
                 except Exception:
                     execution_frame = pd.DataFrame()
                 execution_frame_cache[symbol] = execution_frame
@@ -4154,6 +4275,15 @@ def run_anomaly_latency_grid(
     return pd.DataFrame(rows)
 
 
+def _summary_metric(summary: pd.DataFrame, metric: str, default: object = 0) -> object:
+    if summary.empty or "metric" not in summary.columns or "value" not in summary.columns:
+        return default
+    rows = summary.loc[summary["metric"].astype(str).eq(str(metric)), "value"]
+    if rows.empty:
+        return default
+    return rows.iloc[0]
+
+
 def run_anomaly_strategy_backtest(
     config: AnomalyBacktestConfig,
     *,
@@ -4166,13 +4296,17 @@ def run_anomaly_strategy_backtest(
     grid_exhaustion_profiles: Iterable[str] = ("none",),
     grid_exit_rules: Iterable[str] = ("structural_trail",),
     run_latency_grid: bool = False,
-    latency_grid_ms: Iterable[int] = (0, 5_000, 10_000, 15_000, 25_000),
+    latency_grid_ms: Iterable[int] = DEFAULT_LATENCY_GRID_MS,
     derivatives_context_fetcher: object | None = None,
     render_charts: bool = True,
 ) -> Path:
+    total_started_at = time.monotonic()
+    timings: dict[str, float] = {}
     config = _apply_red_flag_profile(config)
+    run_latency_grid = bool(run_latency_grid or config.latency_enabled)
     output_dir = config.lab_config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    stage_started_at = time.monotonic()
     if precollected_candidates is not None:
         candidates = precollected_candidates.copy()
     elif _effective_entry_timeframe(config) != _effective_setup_timeframe(config):
@@ -4197,7 +4331,9 @@ def run_anomaly_strategy_backtest(
             candidates["setup_source"] = "closed_setup_tf"
             candidates["setup_elapsed_fraction"] = 1.0
             candidates["setup_closed_entry_candles"] = candidates.get("confirmation_candles", config.lab_config.confirmation_candles)
+    timings["candidates_seconds"] = time.monotonic() - stage_started_at
     print("anomaly signals: filtering", flush=True)
+    stage_started_at = time.monotonic()
     pre_context_config = replace(
         config,
         red_flag_profile="none",
@@ -4246,10 +4382,12 @@ def run_anomaly_strategy_backtest(
     else:
         red_flag_universe = build_anomaly_signals(candidates, config=pre_context_config)
     signals = annotate_pump_categories(signals, candidates, config=config)
+    timings["signals_context_seconds"] = time.monotonic() - stage_started_at
     end_ms = config.lab_config.end_timestamp_ms
     if end_ms is None:
         end_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
     start_ms = int((datetime.fromtimestamp(int(end_ms) / 1000, UTC) - pd.Timedelta(days=config.lab_config.days)).timestamp() * 1000)
+    stage_started_at = time.monotonic()
     _write_artifact_frames(
         [
             (output_dir / "anomaly_candidates.csv", candidates),
@@ -4271,8 +4409,11 @@ def run_anomaly_strategy_backtest(
         ],
         progress_label="anomaly artifacts: base files",
     )
+    timings["base_artifacts_seconds"] = time.monotonic() - stage_started_at
     print(f"anomaly trades: simulating {len(signals)} signals", flush=True)
+    stage_started_at = time.monotonic()
     trades = simulate_anomaly_trades(signals, config=config, progress_label="anomaly trades")
+    timings["trades_seconds"] = time.monotonic() - stage_started_at
     summary = summarize_trades(trades)
     skip_reasons = summarize_trade_skip_reasons(trades)
     context_parity_report = build_context_parity_report(
@@ -4281,6 +4422,7 @@ def run_anomaly_strategy_backtest(
         signals=signals,
         trades=trades,
     )
+    stage_started_at = time.monotonic()
     _write_artifact_frames(
         [
             (output_dir / "anomaly_trades.csv", trades),
@@ -4293,9 +4435,13 @@ def run_anomaly_strategy_backtest(
         ],
         progress_label="anomaly artifacts: trade files",
     )
+    timings["trade_artifacts_seconds"] = time.monotonic() - stage_started_at
+    stage_started_at = time.monotonic()
     _write_prepump_context_artifacts(config=config, output_dir=output_dir)
+    timings["prepump_context_artifacts_seconds"] = time.monotonic() - stage_started_at
     if run_latency_grid:
         print("anomaly latency grid: running variants", flush=True)
+        stage_started_at = time.monotonic()
         latency_grid = run_anomaly_latency_grid(
             signals,
             config,
@@ -4305,8 +4451,10 @@ def run_anomaly_strategy_backtest(
             [(output_dir / "anomaly_latency_grid_summary.csv", latency_grid)],
             progress_label="anomaly artifacts: latency grid files",
         )
+        timings["latency_grid_seconds"] = time.monotonic() - stage_started_at
     if run_entry_grid:
         print("anomaly entry grid: running variants", flush=True)
+        stage_started_at = time.monotonic()
         grid = run_anomaly_entry_grid(
             candidates,
             config,
@@ -4356,7 +4504,9 @@ def run_anomaly_strategy_backtest(
                     [(output_dir / "anomaly_trade_chart_status.csv", chart_status)],
                     progress_label="anomaly artifacts: chart status",
                 )
+        timings["entry_grid_seconds"] = time.monotonic() - stage_started_at
     elif not trades.empty:
+        stage_started_at = time.monotonic()
         health = build_edge_health_table(trades, label="primary")
         chart_status = (
             render_anomaly_trade_charts(
@@ -4374,6 +4524,7 @@ def run_anomaly_strategy_backtest(
             ],
             progress_label="anomaly artifacts: health chart status",
         )
+        timings["health_charts_seconds"] = time.monotonic() - stage_started_at
     run_config = {
         **asdict(config),
         "feature_contract": config.feature_contract,
@@ -4383,9 +4534,33 @@ def run_anomaly_strategy_backtest(
         "prior_context_lookback_hours": int(_PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS),
         "lab_config": asdict(config.lab_config),
     }
+    timings["total_seconds"] = time.monotonic() - total_started_at
+    timing_frame = pd.DataFrame(
+        [{"stage": key, "seconds": round(float(value), 3)} for key, value in timings.items()]
+    )
+    _write_artifact_frames(
+        [(output_dir / "anomaly_timing_summary.csv", timing_frame)],
+        progress_label="anomaly artifacts: timing summary",
+    )
     _write_artifact_frames(
         [(output_dir / "run_config.csv", pd.DataFrame([run_config]))],
         progress_label="anomaly artifacts: run config",
+    )
+    print(
+        "anomaly result: "
+        f"signals={len(signals)} "
+        f"closed={_summary_metric(summary, 'closed_trades')} "
+        f"skipped={_summary_metric(summary, 'skipped_trades')} "
+        f"avg_net={float(_summary_metric(summary, 'avg_net_return', 0.0)):.4%} "
+        f"sum_net={float(_summary_metric(summary, 'sum_net_return', 0.0)):.4%} "
+        f"win_rate={float(_summary_metric(summary, 'win_rate', 0.0)):.2%} "
+        f"execution={_execution_model_label(config)}",
+        flush=True,
+    )
+    print(
+        "anomaly timing: "
+        + " · ".join(f"{key}={float(value):.1f}s" for key, value in timings.items()),
+        flush=True,
     )
     return output_dir
 
@@ -4442,9 +4617,6 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--entry-timeout-candles", type=int, default=60)
     parser.add_argument("--market-entry-latency-candles", type=int, default=1)
     parser.add_argument("--latency", choices=["true", "false"], default="false")
-    parser.add_argument("--latency-ms", type=int, default=10_000)
-    parser.add_argument("--run-latency-grid", action="store_true")
-    parser.add_argument("--latency-grid-ms", default="0,5000,10000,15000,25000")
     parser.add_argument("--max-market-entry-drift-pct", type=float, default=0.003)
     parser.add_argument("--min-market-rr-to-signal-tp1", type=float, default=0.75)
     parser.add_argument("--tp1-r", type=float, default=1.0)
@@ -4523,7 +4695,7 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
         entry_timeout_candles=args.entry_timeout_candles,
         market_entry_latency_candles=args.market_entry_latency_candles,
         latency_enabled=str(args.latency).lower() == "true",
-        latency_extra_ms=max(0, int(args.latency_ms)),
+        latency_extra_ms=int(DEFAULT_LATENCY_EXTRA_MS),
         max_market_entry_drift_pct=args.max_market_entry_drift_pct,
         min_market_rr_to_signal_tp1=args.min_market_rr_to_signal_tp1,
         tp1_r=args.tp1_r,
@@ -4551,8 +4723,8 @@ def main(argv: list[str] | None = None) -> int:
         grid_pullback_fractions=_parse_grid_values(args.grid_pullback_fractions, cast=float),
         grid_exhaustion_profiles=_parse_grid_profile_values(args.grid_exhaustion_profiles),
         grid_exit_rules=_parse_grid_exit_rules(args.grid_exit_rules),
-        run_latency_grid=bool(args.run_latency_grid),
-        latency_grid_ms=_parse_grid_values(args.latency_grid_ms, cast=int),
+        run_latency_grid=str(args.latency).lower() == "true",
+        latency_grid_ms=DEFAULT_LATENCY_GRID_MS,
         render_charts=str(args.render_charts).lower() == "true",
     )
     print(f"wrote anomaly strategy artifacts to {output_dir}")

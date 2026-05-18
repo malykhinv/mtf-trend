@@ -23,10 +23,10 @@ Live cache speedups:
 1) startup/reprepare symbol-context backfill remains mandatory, but after the initial pass it now performs bounded catch-up passes to a target no fresher than max(15m, effective snapshot freshness). This closes the gap that can accumulate while the initial all-symbol pass is running, without skipping any symbols/TFs and without an infinite loop.
 2) all live OHLCV cache flushes now use delta parquet writes, not only symbol_context_* flushes. ParquetStorage reads already merge base+delta with timestamp dedupe, so this avoids repeated full-file rewrites in normal live cycles.
 Backtest latency:
-`run-anomaly-lab --latency true --latency-ms N` keeps the existing market entry candle model, then delays execution by N ms using 1s cache for the executable price and post-entry path.
-`--run-latency-grid true --latency-grid-ms 0,5000,10000,15000,25000` writes `anomaly_latency_grid_summary.csv` so latency sensitivity is visible before changing live guards.
-Risk: latency mode requires real 1s cache for honest results; missing 1s cache produces execution-guard skips, not synthetic fills.
-Validation: compileall passed for live/backtest/CLI; run-anomaly-lab --help shows latency flags; synthetic latency smoke entered at next-bar-open + 10s on 1s data.
+`run-anomaly-lab --latency true` keeps the existing market entry candle model, then internally runs a 10s 1s-cache execution delay plus the hidden 0/5/10/15/25s latency grid. The grid writes `anomaly_latency_grid_summary.csv` so latency sensitivity is visible before changing live guards.
+If 1s cache is missing for a latency symbol/window, the backtest now backfills the needed 1s window from Binance futures aggTrades during simulation and persists it as delta parquet. Missing/failed backfill still remains an execution skip; no synthetic fills are fabricated.
+The run now writes `anomaly_timing_summary.csv` and prints final market metrics plus per-stage timings.
+Validation: compileall passed for live/backtest/CLI; run-anomaly-lab --help shows only `--latency`; synthetic latency smoke entered at next-bar-open + 10s on 1s data.
 Next validation: run a targeted live-window anomaly-lab with `--run-latency-grid true` and compare closed_trades/avg_net_return/skip_reason:market_entry_price_drift across delay values.
 ```
 

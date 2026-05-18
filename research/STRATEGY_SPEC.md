@@ -94,8 +94,9 @@ Backtest execution latency contract:
 
 ```text
 default market entry remains next LTF candle open after the decision (`market_entry_latency_candles=1`)
-optional latency mode (`--latency true --latency-ms N`) delays that executable market entry by N milliseconds using 1s cache for price/path simulation
-latency mode must never fabricate 1s fills; missing 1s cache is an execution skip
+optional latency mode has one public flag: `--latency true`
+latency mode internally tests a 10s delayed executable price/path using 1s cache and writes a hidden 0/5/10/15/25s latency grid
+latency mode must never fabricate 1s fills; missing 1s cache should be backfilled from real aggTrades during backtest, and failed backfill remains an execution skip
 latency-grid artifacts are research stress tests, not a live trading rule by themselves
 ```
 
