@@ -72,6 +72,54 @@ Patch note:
 P289 aligns live/backtest context semantics after this review: live already used a 24h prior context window, but operator labels/artifact history text still said 72ч and backtest legacy *_72h fields still used a real 72h window. P289 makes those labels/artifacts/config readouts report 24h and makes backtest use the same 24h effective context window while keeping legacy column names.
 ```
 
+## 2026-05-18 - targeted anomaly-lab check for live run 20260517_200159
+
+Input:
+
+```text
+Artifact root: .output/results/anomaly_live_window_20260517_200159_targeted
+Command scope: 37 symbols selected from top-growth visibility, category rejects, retryable dependency blocks, weak-flow rejects, and delayed replay frequency.
+Window: --days 2 --end-timestamp-ms 1779079101988, covering the live run ending 2026-05-18 04:38Z.
+TF sets: default 5m/30s, 1m/15s, 1m/5s.
+Purpose: check the user's concern that an offline backtest over the period may find trades even though delayed replay found no strict live entry.
+```
+
+Result:
+
+```text
+The concern was valid: offline targeted backtest did find signals/trades in the live period.
+5m/30s: 20 signals, 6 closed trades, sum -5.64%, avg -0.94%, WR 50%, TP1 hit 50%.
+1m/15s: 6 signals, 6 closed trades, sum -4.38%, avg -0.73%, WR 33.3%, TP1 hit 33.3%.
+1m/5s: 56 signals, 10 closed trades, sum -6.80%, avg -0.68%, WR 20%, TP1 hit 30%; most other rows skipped as overlaps.
+Inside/post-startup live window: 60 signal rows, 16 closed non-overlap trades, sum -11.6%, avg -0.73%, WR 43.8%, TP1 hit 50%.
+All live-window signals/trades were pump_category_family=discovery and pump_category_id=discovery. There were zero live_priority trades.
+```
+
+Data quality:
+
+```text
+trade_count_proxy_used=false for all 60 live-window signals.
+levels_trade_count_source=cached_ohlcv.number_of_trades for all 60.
+entry_trade_count_source was cached_ohlcv_missing_aggregation_metadata.number_of_trades for 42 rows and cached_ohlcv.number_of_trades for 18 rows. This is real number_of_trades evidence, but the missing aggregation metadata means subminute provenance is not as clean as live WS aggTrade artifacts.
+Context parity was not clean for live-priority claims: all 60 discovery_only rows had context_parity_status=oi_context_stale_asof.
+```
+
+Live comparison:
+
+```text
+Many offline discovery decision timestamps had exact live events. Live commonly rejected them via category_rejected:reject_mark_basis_below_min or signal_scan_retryable_dependency_blocked -> candidate_expired_dependency_timeout with reject_prior_fast_fade_filter_unavailable.
+The parity report had strict_live_replay_enter=false for all 841 live-window parity rows: 60 discovery_only and 781 not_in_pre_context_universe.
+Therefore the offline backtest does not contradict the live no-trade result under the current live-priority contract. It shows hindsight/discovery opportunities that the production-style category contract rejects.
+```
+
+Conclusion:
+
+```text
+The previous shorthand "backtest would show nothing" was wrong.
+Correct statement: targeted backtest over the live period shows weak discovery trades, all non-live-priority, with negative summed returns and stale OI/context parity. Current live was not expected to open them.
+Next most valuable check, if desired, is not to loosen execution; it is a wider full-universe live-window lab or a strict live-priority ablation focused on mark-basis and prior-fast-fade dependency handling.
+```
+
 ## 2026-05-17 - latest 30d anomaly_lab readout
 
 ```text

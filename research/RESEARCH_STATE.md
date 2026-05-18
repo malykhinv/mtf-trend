@@ -30,6 +30,18 @@ Validation: compileall passed for live/backtest/CLI/tests; anomaly continuation 
 Next validation: the next short live should show context 24h in terminal/Telegram/status artifacts and symbol_context_startup_backfill_* prior_context_lookback_hours=24.
 ```
 
+## 2026-05-18 - targeted backtest correction for live run 20260517_200159
+
+```text
+Correction to prior wording: delayed replay showing strict_replay_would_enter=false does not mean an offline backtest over the period will find nothing.
+Targeted anomaly-lab over 37 live-relevant symbols for 2d ending 2026-05-18 04:38Z found 82 signals total and 60 signals inside/post-startup live window.
+Inside/post-startup live window: 60 trades rows, 16 closed non-overlap trades, all discovery family, 0 live_priority trades. Closed discovery results were weak: summed trade returns -11.6%, avg -0.73%, WR 43.8%, TP1 hit 50%.
+Strict parity report for the live window: live_priority_pass=false for all 841 rows, category_parity_class was discovery_only=60 and not_in_pre_context_universe=781; strict_live_replay_enter=false for all rows. The 60 discovery-only rows had context_parity_status=oi_context_stale_asof, so they are not clean live-priority evidence.
+Live saw many of the same timestamps but rejected them by the live category contract, mostly reject_mark_basis_below_min or retryable prior-fast-fade dependency timeout. This explains why live did not open although offline discovery backtest had hindsight trades.
+Conclusion: do not say "backtest shows nothing" for this period. Say "targeted backtest shows only weak discovery/hindsight trades, not current live-priority executable entries."
+Next validation if zero live trades persist: run a wider full-universe live-window lab or targeted strict live-priority ablation to test whether mark-basis/context dependency gates are too restrictive.
+```
+
 ## 2026-05-17 - P288 live exit rule update
 
 ```text
