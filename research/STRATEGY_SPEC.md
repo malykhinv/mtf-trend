@@ -463,7 +463,7 @@ entry_lag_ltf_candles = floor(entry_lag_ms / entry_tf_ms)
 entered_late_vs_first_executable = entry_lag_ltf_candles >= 1
 ```
 
-Lag diagnostics are not trade filters by themselves. They are used to decide whether live missed the early PNO execution window or whether a signal was still executable after drift/RR checks.
+Lag diagnostics are not trade filters by themselves. They are used to decide whether live missed the early anomaly execution window or whether a signal was still executable after drift/RR checks.
 
 Live scheduler scan-gap diagnostics:
 
@@ -487,7 +487,7 @@ max_precise_scan_symbols_per_cycle = optional cap for active + ticker-radar prec
 
 The precise cap must never drop active symbols. If active symbols use the whole budget, ticker-radar watch symbols wait and must be visible in artifacts.
 
-Live default universe excludes a static list of obvious high-cap majors because PNO targets early runner potential, not large-cap continuation. This filter is intentionally not a market-cap oracle and must be logged in artifacts. Explicit `--symbols` bypass the filter.
+Live default universe excludes a static list of obvious high-cap majors because the anomaly strategy targets early runner potential, not large-cap continuation. This filter is intentionally not a market-cap oracle and must be logged in artifacts. Explicit `--symbols` bypass the filter.
 
 Live cache and subminute data policy:
 
@@ -505,7 +505,7 @@ Reactive live migration rule:
 
 ```text
 Data ingestion and scheduling may become event-driven.
-PNO decision logic must stay synchronous over explicit OHLCV/context windows until shadow parity proves otherwise.
+Anomaly decision logic must stay synchronous over explicit OHLCV/context windows until shadow parity proves otherwise.
 ```
 
 Ticker radar ingestion is abstracted behind `LiveTickerSnapshotSource`. The current source is REST `fetch_tickers`; future WS ticker sources must publish the same normalized `ExchangeTickerSnapshot` contract and source id in diagnostics.
@@ -604,7 +604,7 @@ The default live exchange universe is prefiltered before startup context/scannin
 The filter refreshes every 12h by default so symbols can enter later when current liquidity appears.
 Explicit --symbols bypass this universe gate.
 If the ticker source fails or the filter would produce an empty universe, live keeps the previous universe and writes a live_symbol_universe_liquidity_filter artifact event.
-This is only a universe-cost/data-quality gate. The trade decision still needs the shared PNO category contract, including P281 min_baseline_quote_daily_proxy from closed-kline baseline data.
+This is only a universe-cost/data-quality gate. The trade decision still needs the shared anomaly category contract, including P281 min_baseline_quote_daily_proxy from closed-kline baseline data.
 ```
 
 ### Live position management after P274

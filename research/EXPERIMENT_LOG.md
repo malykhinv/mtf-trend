@@ -54,7 +54,7 @@ Top-growth / near-miss:
 
 ```text
 Nonempty missed-pump visibility covered FIDA, BAS, APR, and AIGENSYN. FIDA/APR/AIGENSYN were precise-scanned and primarily rejected by weak start flow / setup too early. BAS reached category rejection with reject_weak_range_expansion and also showed dependency timeouts plus invalid pump-leg-bottom TP1 risk in the precise reject summary.
-This run therefore shows missed movers, not missed executable PNO entries under the current live-priority contract.
+This run therefore shows missed movers, not missed executable anomaly entries under the current live-priority contract.
 ```
 
 Conclusion:

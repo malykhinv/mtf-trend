@@ -4,6 +4,7 @@ Compact active patch log for the anomaly-first source tree. Retired strategy his
 
 | ID | Title | Status | Files | Type | Purpose | Validation |
 | --- | --- | --- | --- | --- | --- | --- |
+| P295 | Reframe active anomaly docs away from legacy strategy wording | APPLIED locally / UNKNOWN commit | `research/*` | docs/research-memory | Remove misleading legacy strategy wording from active anomaly live/backtest project memory. Legacy `strategy/pno` code/tests remain untouched because removing that historical module is a separate high-risk cleanup. | Checked active research notes for stale legacy strategy phrases. |
 | P294 | Live cache catch-up and latency backtest grid | APPLIED locally / UNKNOWN commit | `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `cli/*`, `research/*` | live-performance/research-execution | Keep mandatory startup context backfill, add bounded catch-up to close accumulated freshness lag, write all live OHLCV flushes as delta parquet, and make `--latency true` run hidden 1s-cache 10s execution delay plus a cheaper 0/7/10/15s latency grid that reuses the primary 10s simulation. Missing 1s latency windows are backfilled from Binance aggTrades during backtest and timing/market summaries are printed at the end. | `.venv\\Scripts\\python.exe -m compileall -q research_tools\\anomaly_micro_live.py research_tools\\anomaly_strategy_backtest.py cli\\commands.py cli\\parser.py data\\storage\\parquet_storage.py`; `.venv\\Scripts\\python.exe main.py run-anomaly-lab --help`; synthetic latency smoke |
 | P289 | Review latest live run and align 24h context labels/parity | APPLIED locally / UNKNOWN commit | `research_tools/anomaly_micro_live.py`, `research_tools/anomaly_strategy_backtest.py`, `cli/parser.py`, `tests/*`, `research/*` | diagnostics/parity/live-ux | Record live run 20260517_200159 review; remove hardcoded `72ч` from live context startup/reprepare labels and artifact `history_days`; make backtest legacy `*_72h` category fields use the same 24h effective prior-context window as live while keeping column names compatible; update lifecycle tests for full TP1. | `.venv\\Scripts\\python.exe -m pytest tests\\test_anomaly_continuation_lab.py -q`; `.venv\\Scripts\\python.exe -m unittest tests.test_live_order_lifecycle -v`; `.venv\\Scripts\\python.exe -m compileall -q research_tools\\anomaly_micro_live.py research_tools\\anomaly_strategy_backtest.py research_tools\\anomaly_exit_portfolio_replay.py cli\\parser.py cli\\commands.py constants.py main.py tests\\test_anomaly_continuation_lab.py tests\\test_live_order_lifecycle.py` |
 | P290 | Correct live-window backtest interpretation | APPLIED locally / UNKNOWN commit | `research/*` | research-correction | Record targeted anomaly-lab over live run 20260517_200159 showing that offline backtest does find weak discovery trades, but zero live-priority entries. Correct the prior overstatement that backtest would show nothing. | Analysis-only; artifact root `.output\\results\\anomaly_live_window_20260517_200159_targeted` |
@@ -1726,7 +1727,7 @@ Commit: UNKNOWN
 
 ### Reason
 
-Reactive live should be introduced through narrow data-source seams, not by rewriting PNO decision logic. The first safe seam is ticker radar ingestion because it is scheduling-only and does not directly decide trades.
+Reactive live should be introduced through narrow data-source seams, not by rewriting anomaly decision logic. The first safe seam is ticker radar ingestion because it is scheduling-only and does not directly decide trades.
 
 ### Change
 
@@ -1755,7 +1756,7 @@ Commit: UNKNOWN
 
 ### Reason
 
-Reactive ingestion should change how symbols become scan candidates without changing PNO evaluation. The scheduler needs an explicit selection contract and scan-reason provenance before WS/event-driven sources are introduced.
+Reactive ingestion should change how symbols become scan candidates without changing anomaly evaluation. The scheduler needs an explicit selection contract and scan-reason provenance before WS/event-driven sources are introduced.
 
 ### Change
 

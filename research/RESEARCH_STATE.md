@@ -163,7 +163,7 @@ Main pre-signal rejects: reject_weak_start_flow=4251 and reject_setup_too_early=
 Real data path is mostly healthy: ws_aggtrade_frame_read covered=7516/7517, cache reads filled/hit dominate, and top-growth audit saw EDEN before/during the pump with radar/warm/precise scan active.
 Real issue: symbol_context_snapshot rolling updates are starved by latency SLA. Startup backfill took 2347s and was partial; after live start only 118 partial_budget updates happened while 759 snapshot cycles were skipped. This produced 344 retryable category dependency blocks and 338 dependency timeouts from symbol_context_snapshot_tail_stale.
 Do not loosen category thresholds first. Fix/validate context freshness throughput and delayed replay visibility first, then decide whether the strict start-flow contract is rejecting real EDEN-like continuation too early.
-P284 lets retryable/active/open symbols get a tiny priority context snapshot refresh even when optional snapshot work is gated by latency SLA. It does not loosen PNO category thresholds and does not make ticker/warm radar tradable by itself.
+P284 lets retryable/active/open symbols get a tiny priority context snapshot refresh even when optional snapshot work is gated by latency SLA. It does not loosen anomaly category thresholds and does not make ticker/warm radar tradable by itself.
 Next validation: rerun live with delayed replay enabled, then inspect symbol_context_snapshot_updated latency_sla_priority_override, category_selected, signal_scan_retryable_dependency_blocked, candidate_expired_dependency_timeout, and EDEN/top-growth visibility before touching trading filters.
 ```
 
@@ -1127,7 +1127,7 @@ Live's internal KeyboardInterrupt cleanup remains the preferred path when the in
 P181 reactive rollout status:
 
 ```text
-Reactive migration plan: keep PNO decision logic synchronous; make ingestion/scheduling event-driven through narrow data-source interfaces.
+Reactive migration plan: keep anomaly decision logic synchronous; make ingestion/scheduling event-driven through narrow data-source interfaces.
 Step 1 completed: ticker radar now reads through LiveTickerSnapshotSource. Default source is RestLiveTickerSnapshotSource, so behavior remains REST-backed.
 ticker_radar_snapshot and ticker_radar_failed now include source id. This is the first provenance hook for future WS ticker shadow/primary mode.
 Next step should be a LiveScheduler/scan-reason seam or WS ticker shadow source, not WS aggTrade trading data yet.
@@ -1138,7 +1138,7 @@ P182 reactive rollout status:
 ```text
 Step 2 completed: current live batch selection is now represented as LiveSymbolBatchSelection.
 Behavior remains rest_round_robin_scheduler with the same active/radar/inactive composition.
-symbol_batch_selected now includes scheduler_source and scan_reason_by_symbol, preparing for a future event-driven scheduler without changing PNO evaluation.
+symbol_batch_selected now includes scheduler_source and scan_reason_by_symbol, preparing for a future event-driven scheduler without changing anomaly evaluation.
 No symbols should be silently dropped by future scheduler modes; queued/waiting reasons must stay explicit.
 ```
 
@@ -1148,7 +1148,7 @@ P183 reactive rollout status:
 Step 3 completed: live ticker radar now defaults to Binance WS !ticker@arr through BinanceWsAllTickerSnapshotSource.
 No REST fallback is used while live_ws_ticker_enabled=true. If WS is not ready/stale/broken, ticker_radar_failed is emitted with source=binance_ws_all_ticker and radar promotions pause.
 REST ticker source remains available only through explicit --live-ws-ticker-enabled false.
-This changes scheduling/wake-up transport only; PNO signal logic, subminute candles, OI/mark, and order path remain unchanged.
+This changes scheduling/wake-up transport only; anomaly signal logic, subminute candles, OI/mark, and order path remain unchanged.
 Next live validation must inspect ticker_radar_failed, ticker_radar_snapshot source, radar promotion counts, and whether WS not-ready/stale causes unacceptable blind periods.
 ```
 
