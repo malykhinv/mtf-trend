@@ -715,6 +715,31 @@ def _timestamp_to_utc(timestamp_ms: int | float) -> str:
     return datetime.fromtimestamp(int(timestamp_ms) / 1000, UTC).isoformat()
 
 
+def _market_entry_reject_audit(
+    *,
+    entry_ts: int,
+    entry_price: float,
+    drift_pct: float,
+    abs_drift_pct: float,
+    actual_risk_at_signal_stop: float,
+    rr_to_signal_tp1: float,
+    signal_tp1_price: float,
+    config: AnomalyBacktestConfig,
+) -> dict[str, object]:
+    return {
+        "rejected_market_entry_timestamp_ms": int(entry_ts),
+        "rejected_market_entry_timestamp_utc": _timestamp_to_utc(entry_ts),
+        "rejected_market_entry_price": float(entry_price),
+        "market_entry_drift_pct": float(drift_pct),
+        "market_entry_abs_drift_pct": float(abs_drift_pct),
+        "max_market_entry_drift_pct": float(config.max_market_entry_drift_pct),
+        "market_entry_rr_after_latency": float(rr_to_signal_tp1),
+        "min_market_rr_to_signal_tp1": float(config.min_market_rr_to_signal_tp1),
+        "signal_tp1_price": float(signal_tp1_price),
+        "actual_market_risk_at_signal_stop": float(actual_risk_at_signal_stop),
+    }
+
+
 def _safe_float(value: object) -> float | None:
     try:
         resolved = float(value)
@@ -1475,13 +1500,13 @@ def _resolve_signal_entry(
     decision_close: float,
     config: AnomalyBacktestConfig,
     execution_frame: pd.DataFrame | None = None,
-) -> tuple[int, float, float, float, float, float, str]:
+) -> tuple[int, float, float, float, float, float, str, dict[str, object]]:
     box = frame.loc[
         (frame["timestamp"] >= anomaly_timestamp_ms)
         & (frame["timestamp"] <= decision_timestamp_ms)
     ]
     if box.empty:
-        return decision_timestamp_ms, float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), "empty_decision_box"
+        return decision_timestamp_ms, float("nan"), float("nan"), float("nan"), float("nan"), float("nan"), "empty_decision_box", {}
     box_low = float(box["low"].min())
     box_high = float(box["high"].max())
     box_range = max(box_high - box_low, 0.0)
@@ -1512,47 +1537,93 @@ def _resolve_signal_entry(
             raise ValueError("market_entry_latency_candles must be >= 1")
         future = frame.loc[frame["timestamp"] > decision_timestamp_ms].head(config.market_entry_latency_candles)
         if len(future) < config.market_entry_latency_candles:
-            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_market_execution_candle"
+            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_market_execution_candle", {}
         entry_row_source = future.iloc[-1]
         entry_ts = int(entry_row_source["timestamp"])
         entry_price = float(entry_row_source["open"])
         if config.latency_enabled:
             latency_frame = execution_frame if execution_frame is not None else pd.DataFrame()
             if latency_frame.empty or "timestamp" not in latency_frame.columns:
-                return entry_ts, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_latency_execution_frame"
+                return entry_ts, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_latency_execution_frame", {}
             target_ts = int(entry_ts) + max(0, int(config.latency_extra_ms))
             latency_rows = latency_frame.loc[pd.to_numeric(latency_frame["timestamp"], errors="coerce").ge(target_ts)]
             if latency_rows.empty:
-                return target_ts, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_latency_execution_candle"
+                return target_ts, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_latency_execution_candle", {}
             entry_row_source = latency_rows.iloc[0]
             entry_ts = int(entry_row_source["timestamp"])
             entry_price = float(entry_row_source["open"])
         if not np.isfinite(entry_price) or entry_price <= 0.0:
-            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "invalid_market_execution_price"
+            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "invalid_market_execution_price", {}
         drift_pct = _safe_divide_value(entry_price - decision_close, decision_close)
         abs_drift_pct = abs(drift_pct) if np.isfinite(drift_pct) else float("nan")
         actual_risk_at_signal_stop = entry_price - stop_at_decision
         rr_to_signal_tp1 = _safe_divide_value(signal_tp1_price - entry_price, actual_risk_at_signal_stop)
+        reject_audit = _market_entry_reject_audit(
+            entry_ts=entry_ts,
+            entry_price=entry_price,
+            drift_pct=drift_pct,
+            abs_drift_pct=abs_drift_pct,
+            actual_risk_at_signal_stop=actual_risk_at_signal_stop,
+            rr_to_signal_tp1=rr_to_signal_tp1,
+            signal_tp1_price=signal_tp1_price,
+            config=config,
+        )
         if entry_price >= signal_tp1_price:
-            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "tp1_already_reached_before_market_entry"
+            return (
+                entry_ts,
+                float("nan"),
+                stop_at_decision,
+                float("nan"),
+                box_range,
+                box_high,
+                "tp1_already_reached_before_market_entry",
+                reject_audit,
+            )
         if not np.isfinite(actual_risk_at_signal_stop) or actual_risk_at_signal_stop <= 0.0:
-            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "invalid_actual_market_risk"
+            return (
+                entry_ts,
+                float("nan"),
+                stop_at_decision,
+                float("nan"),
+                box_range,
+                box_high,
+                "invalid_actual_market_risk",
+                reject_audit,
+            )
         if not np.isfinite(abs_drift_pct) or abs_drift_pct > config.max_market_entry_drift_pct:
-            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "market_entry_price_drift"
+            return (
+                entry_ts,
+                float("nan"),
+                stop_at_decision,
+                float("nan"),
+                box_range,
+                box_high,
+                "market_entry_price_drift",
+                reject_audit,
+            )
         if not np.isfinite(rr_to_signal_tp1) or rr_to_signal_tp1 < config.min_market_rr_to_signal_tp1:
-            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "market_entry_rr_collapsed"
+            return (
+                entry_ts,
+                float("nan"),
+                stop_at_decision,
+                float("nan"),
+                box_range,
+                box_high,
+                "market_entry_rr_collapsed",
+                reject_audit,
+            )
         initial_stop = stop_at_decision
         initial_risk = entry_price - initial_stop
-        return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, ""
+        return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, "", {}
     else:
         future = frame.loc[frame["timestamp"] > decision_timestamp_ms].head(config.entry_timeout_candles)
         if future.empty:
-            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "entry_timeout_no_future_candles"
+            return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "entry_timeout_no_future_candles", {}
         if config.entry_method == "break_box_high":
             trigger = box_high
             hit = future.loc[future["high"].astype(float).ge(trigger)]
             if hit.empty:
-                return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "entry_trigger_not_reached"
+                return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "entry_trigger_not_reached", {}
             entry_ts = int(hit["timestamp"].iloc[0])
             entry_price = trigger
         elif config.entry_method == "pullback_box_fraction":
@@ -1563,13 +1634,13 @@ def _resolve_signal_entry(
                 low = float(row["low"])
                 high = float(row["high"])
                 if low <= stop_at_decision:
-                    return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "stop_touched_before_entry"
+                    return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "stop_touched_before_entry", {}
                 if low <= trigger <= high:
                     entry_ts = int(row["timestamp"])
                     entry_price = trigger
                     break
             if not np.isfinite(entry_price):
-                return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "entry_trigger_not_reached"
+                return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "entry_trigger_not_reached", {}
         else:
             raise ValueError(f"unsupported entry_method: {config.entry_method}")
 
@@ -1577,7 +1648,7 @@ def _resolve_signal_entry(
     entry_ema20 = _safe_float(entry_row["ema20"].iloc[0]) if not entry_row.empty and "ema20" in entry_row.columns else None
     initial_stop = max(previous_stop, entry_ema20) if entry_ema20 is not None else previous_stop
     initial_risk = entry_price - initial_stop
-    return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, ""
+    return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, "", {}
 
 
 
@@ -2260,7 +2331,16 @@ def simulate_long_signal(
     anomaly_ts = int(signal["timestamp_ms"])
     decision_ts = int(signal["decision_timestamp_ms"])
     decision_close = float(signal["decision_close"])
-    entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, entry_skip_reason = _resolve_signal_entry(
+    (
+        entry_ts,
+        entry_price,
+        initial_stop,
+        initial_risk,
+        box_range,
+        box_high,
+        entry_skip_reason,
+        entry_skip_audit,
+    ) = _resolve_signal_entry(
         frame,
         anomaly_timestamp_ms=anomaly_ts,
         decision_timestamp_ms=decision_ts,
@@ -2278,6 +2358,7 @@ def simulate_long_signal(
             initial_stop=initial_stop,
             box_range=box_range,
             box_high=box_high,
+            **entry_skip_audit,
         )
     if not np.isfinite(initial_risk) or initial_risk <= 0.0:
         return _skipped_signal_result(
