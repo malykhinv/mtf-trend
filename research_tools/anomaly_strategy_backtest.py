@@ -81,6 +81,8 @@ from research_tools.runner_fader_prepump_context import (
 
 _HOUR_MS = 3_600_000
 _DAY_MS = 86_400_000
+_PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS = 24
+_PRIOR_CONTEXT_LIVE_LOOKBACK_MS = _PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS * _HOUR_MS
 _TRADE_CHART_CONTEXT_DAYS = 4
 _MATERIALIZED_SUBMINUTE_CACHE_VERSION = "p165_1s_ohlcv_to_subminute_v1"
 _BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_column", "missing_timestamp", "missing_frame", "empty_oi", "stale_asof"}
@@ -267,10 +269,10 @@ class AnomalyBacktestConfig:
     entry_timeout_candles: int = 60
     market_entry_latency_candles: int = 1
     max_market_entry_drift_pct: float = 0.003
-    min_market_rr_to_signal_tp1: float = 0.75
+    min_market_rr_to_signal_tp1: float = 0.70
     stop_buffer_range_fraction: float = 0.05
-    tp1_r: float = 1.0
-    tp1_fraction: float = 0.50
+    tp1_r: float = 0.75
+    tp1_fraction: float = 1.0
     move_stop_to_breakeven_after_tp1: bool = True
     trail_lookback_candles: int = 5
     trail_buffer_r: float = 0.10
@@ -291,6 +293,12 @@ EXECUTION_GUARD_SKIP_REASONS = {
     "market_entry_price_drift",
     "market_entry_rr_collapsed",
 }
+TP1_TARGET_BASIS = "pump_leg_bottom"
+
+
+def _tp1_pump_leg_risk_from_values(*, entry_price: float, box_low: float) -> tuple[float, float]:
+    basis_price = float(box_low)
+    return basis_price, float(entry_price) - basis_price
 
 def _category_priority_for_timeframe(setup_timeframe: object, entry_timeframe: object) -> tuple[str, ...]:
     return priority_for_timeframe(setup_timeframe, entry_timeframe)
@@ -1079,22 +1087,29 @@ def enrich_candidates_with_recent_spike_context(
             decision_ts = int(timestamps[pos])
             prior_end = int(np.searchsorted(timestamps, decision_ts, side="left"))
             prior_start_24h = int(np.searchsorted(timestamps, decision_ts - _DAY_MS, side="left"))
-            prior_start_72h = int(np.searchsorted(timestamps, decision_ts - 3 * _DAY_MS, side="left"))
+            # Keep legacy *_72h column names for artifact compatibility, but use the
+            # current live prior-context window.
+            prior_start_context = int(
+                np.searchsorted(timestamps, decision_ts - _PRIOR_CONTEXT_LIVE_LOOKBACK_MS, side="left")
+            )
             mature_cutoff = decision_ts - maturity_ms
             mature_end = int(np.searchsorted(timestamps, mature_cutoff, side="right"))
             mature_24h_start = min(prior_start_24h, mature_end)
-            mature_72h_start = min(prior_start_72h, mature_end)
+            mature_context_start = min(prior_start_context, mature_end)
             mature_labels_24h = labels[mature_24h_start:mature_end]
-            mature_labels_72h = labels[mature_72h_start:mature_end]
+            mature_labels_context = labels[mature_context_start:mature_end]
             prior_count_24h = max(0, prior_end - prior_start_24h)
-            prior_count_72h = max(0, prior_end - prior_start_72h)
+            prior_count_context = max(0, prior_end - prior_start_context)
             result.at[row_index, "prior_spike_count_24h"] = prior_count_24h
-            result.at[row_index, "prior_spike_count_72h"] = prior_count_72h
+            result.at[row_index, "prior_spike_count_72h"] = prior_count_context
             result.at[row_index, "prior_fast_fade_count_24h"] = int((mature_labels_24h == "fast_fade").sum())
-            result.at[row_index, "prior_fast_fade_count_72h"] = int((mature_labels_72h == "fast_fade").sum())
+            result.at[row_index, "prior_fast_fade_count_72h"] = int((mature_labels_context == "fast_fade").sum())
             result.at[row_index, "prior_big_move_count_24h"] = int((mature_labels_24h == "big_move").sum())
-            result.at[row_index, "prior_big_move_count_72h"] = int((mature_labels_72h == "big_move").sum())
-            result.at[row_index, "prior_spike_density_72h"] = _safe_divide_value(prior_count_72h, 3.0)
+            result.at[row_index, "prior_big_move_count_72h"] = int((mature_labels_context == "big_move").sum())
+            result.at[row_index, "prior_spike_density_72h"] = _safe_divide_value(
+                prior_count_context,
+                max(1.0, float(_PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS) / 24.0),
+            )
             if prior_end > 0:
                 elapsed_ms = int(decision_ts - timestamps[prior_end - 1])
                 result.at[row_index, "time_since_prior_spike_ms"] = elapsed_ms
@@ -1367,11 +1382,17 @@ def _resolve_signal_entry(
     )
     stop_at_decision = max(previous_stop, decision_ema20) if decision_ema20 is not None else previous_stop
     signal_risk = decision_close - stop_at_decision
-    base_signal_tp1_price = decision_close + config.tp1_r * signal_risk if np.isfinite(signal_risk) else float("nan")
+    signal_tp1_basis_price, signal_tp1_risk = _tp1_pump_leg_risk_from_values(
+        entry_price=decision_close,
+        box_low=box_low,
+    )
+    base_signal_tp1_price = (
+        decision_close + config.tp1_r * signal_tp1_risk if np.isfinite(signal_tp1_risk) else float("nan")
+    )
     signal_tp1_price, _signal_tp1_round_step = _round_up_tp1_to_market_number(
         base_signal_tp1_price,
         reference_price=decision_close,
-        movement=max(signal_risk, box_range),
+        movement=max(signal_tp1_risk, box_range),
     )
 
     if config.entry_method == "market":
@@ -2178,11 +2199,33 @@ def simulate_long_signal(
             box_high=box_high,
         )
 
-    base_tp1_price = entry_price + config.tp1_r * initial_risk
+    box_low = _safe_float(signal.get("decision_box_low"))
+    if box_low is None:
+        box_low = initial_stop
+    tp1_basis_price, tp1_risk = _tp1_pump_leg_risk_from_values(
+        entry_price=entry_price,
+        box_low=box_low,
+    )
+    tp1_risk_pct = _safe_divide_value(tp1_risk, entry_price)
+    if not np.isfinite(tp1_risk) or tp1_risk <= 0.0:
+        return _skipped_signal_result(
+            signal,
+            skip_reason="invalid_tp1_target_basis_risk",
+            config=config,
+            entry_timestamp_ms=entry_ts,
+            entry_timestamp_utc=_timestamp_to_utc(entry_ts),
+            entry_price=entry_price,
+            initial_stop=initial_stop,
+            initial_risk=initial_risk,
+            initial_risk_pct=initial_risk_pct,
+            box_range=box_range,
+            box_high=box_high,
+        )
+    base_tp1_price = entry_price + config.tp1_r * tp1_risk
     tp1_price, tp1_round_step = _round_up_tp1_to_market_number(
         base_tp1_price,
         reference_price=entry_price,
-        movement=max(initial_risk, box_range),
+        movement=max(tp1_risk, box_range),
     )
     active_stop = initial_stop
     tp1_hit = False
@@ -2245,10 +2288,15 @@ def simulate_long_signal(
             tp1_fill_status = "filled_conservative_trade_through"
             tp1_fill_timestamp_ms = candle_ts
             tp1_fill_price = tp1_price
-            realized_r += config.tp1_fraction * config.tp1_r
+            realized_r += config.tp1_fraction * ((tp1_fill_price - entry_price) / initial_risk)
             remaining_fraction = 1.0 - config.tp1_fraction
             if config.move_stop_to_breakeven_after_tp1:
                 active_stop = max(active_stop, entry_price)
+            if remaining_fraction <= 0.0:
+                exit_reason = "tp1_full_exit"
+                exit_ts = candle_ts
+                exit_price = tp1_fill_price
+                break
         elif not tp1_hit and tp1_touched:
             tp1_fill_status = "touched_not_filled_conservative"
 
@@ -2318,7 +2366,12 @@ def simulate_long_signal(
         "base_tp1_price": base_tp1_price,
         "tp1_price": tp1_price,
         "tp1_round_step": tp1_round_step,
-        "tp1_target_model": "next_round_number_above_1r",
+        "tp1_target_basis": TP1_TARGET_BASIS,
+        "tp1_basis_price": tp1_basis_price,
+        "tp1_basis_risk": tp1_risk,
+        "tp1_basis_risk_pct": tp1_risk_pct,
+        "tp1_r": config.tp1_r,
+        "tp1_target_model": "next_round_number_above_0p75r_pump_leg_bottom",
         "tp1_hit": tp1_hit,
         "tp1_fill_model": tp1_fill_model,
         "tp1_fill_status": tp1_fill_status,
@@ -2794,6 +2847,12 @@ def build_context_parity_report(
         "is_final_signal",
         "final_pump_category_id",
         "final_pump_category_family",
+        "category_parity_class",
+        "live_priority_pass",
+        "discovery_only",
+        "live_priority_reject_reason",
+        "strict_live_replay_enter",
+        "strict_live_replay_enter_reason",
         "trade_status",
         "trade_skip_reason",
         "trade_execution_guard",
@@ -2921,6 +2980,82 @@ def build_context_parity_report(
         report["trade_execution_guard"] & report["final_pump_category_family"].eq(""),
         "context_parity_status",
     ] = "execution_guard_missing_category_metadata"
+
+    report["live_priority_pass"] = report["final_pump_category_family"].eq(PUMP_CATEGORY_FAMILY_LIVE)
+    report["discovery_only"] = (
+        report["is_final_signal"]
+        & report["final_pump_category_id"].replace("", PUMP_CATEGORY_DISCOVERY).eq(PUMP_CATEGORY_DISCOVERY)
+        & ~report["live_priority_pass"]
+    )
+    report["category_parity_class"] = "other_final_signal"
+    report.loc[~report["in_pre_context_universe"], "category_parity_class"] = "not_in_pre_context_universe"
+    report.loc[
+        report["in_pre_context_universe"] & ~report["is_final_signal"],
+        "category_parity_class",
+    ] = "pre_context_only_rejected"
+    report.loc[report["discovery_only"], "category_parity_class"] = "discovery_only"
+    report.loc[report["live_priority_pass"], "category_parity_class"] = "live_priority_pass"
+
+    report["live_priority_reject_reason"] = ""
+    report.loc[report["discovery_only"], "live_priority_reject_reason"] = (
+        "discovery_only_no_live_priority_category_match"
+    )
+    report.loc[
+        ~report["in_pre_context_universe"],
+        "live_priority_reject_reason",
+    ] = "not_in_pre_context_universe"
+    context_not_ok = report["context_parity_status"].astype(str).ne("ok")
+    report.loc[
+        report["in_pre_context_universe"] & context_not_ok & ~report["live_priority_pass"],
+        "live_priority_reject_reason",
+    ] = report.loc[
+        report["in_pre_context_universe"] & context_not_ok & ~report["live_priority_pass"],
+        "context_parity_status",
+    ].astype(str)
+    report.loc[
+        report["in_pre_context_universe"]
+        & ~context_not_ok
+        & ~report["is_final_signal"]
+        & ~report["live_priority_pass"],
+        "live_priority_reject_reason",
+    ] = "post_context_or_final_filter_reject"
+    report.loc[
+        report["in_pre_context_universe"]
+        & ~context_not_ok
+        & report["is_final_signal"]
+        & ~report["live_priority_pass"]
+        & report["live_priority_reject_reason"].eq(""),
+        "live_priority_reject_reason",
+    ] = "final_signal_not_live_priority_category"
+    report.loc[report["live_priority_pass"], "live_priority_reject_reason"] = ""
+
+    entered_trade_status = report["trade_status"].astype(str).isin({"open", "closed", "tp1_hit", "stopped", "breakeven"})
+    report["strict_live_replay_enter"] = (
+        report["live_priority_pass"]
+        & entered_trade_status
+        & report["trade_skip_reason"].astype(str).eq("")
+        & ~report["trade_execution_guard"]
+    )
+    report["strict_live_replay_enter_reason"] = ""
+    report.loc[report["strict_live_replay_enter"], "strict_live_replay_enter_reason"] = "entered"
+    report.loc[
+        report["live_priority_pass"] & ~report["strict_live_replay_enter"] & report["trade_skip_reason"].astype(str).ne(""),
+        "strict_live_replay_enter_reason",
+    ] = report.loc[
+        report["live_priority_pass"] & ~report["strict_live_replay_enter"] & report["trade_skip_reason"].astype(str).ne(""),
+        "trade_skip_reason",
+    ].astype(str)
+    report.loc[
+        report["live_priority_pass"]
+        & ~report["strict_live_replay_enter"]
+        & report["trade_skip_reason"].astype(str).eq("")
+        & report["strict_live_replay_enter_reason"].eq(""),
+        "strict_live_replay_enter_reason",
+    ] = "live_priority_signal_without_entered_trade"
+    report.loc[
+        ~report["live_priority_pass"],
+        "strict_live_replay_enter_reason",
+    ] = report.loc[~report["live_priority_pass"], "live_priority_reject_reason"].astype(str)
 
     for column in columns:
         if column not in report.columns:
@@ -3090,6 +3225,7 @@ def summarize_entry_grid_variant(
         "max_start_avg_trade_quote_size_ratio": config.max_start_avg_trade_quote_size_ratio,
         "max_start_quote_ratio_per_abs_return": config.max_start_quote_ratio_per_abs_return,
         "max_start_range_pct_ratio_to_baseline": config.max_start_range_pct_ratio_to_baseline,
+        "prior_context_lookback_hours": int(_PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS),
         "min_flow_hold_count": config.min_flow_hold_count,
         "max_prior_spike_count_72h": config.max_prior_spike_count_72h,
         "max_prior_fast_fade_count_72h": config.max_prior_fast_fade_count_72h,
@@ -4152,6 +4288,7 @@ def run_anomaly_strategy_backtest(
         "setup_timeframe": _effective_setup_timeframe(config),
         "entry_timeframe": _effective_entry_timeframe(config),
         "execution_model": _execution_model_label(config),
+        "prior_context_lookback_hours": int(_PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS),
         "lab_config": asdict(config.lab_config),
     }
     _write_artifact_frames(

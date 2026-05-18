@@ -6,6 +6,158 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+## 2026-05-18 - live artifact review 20260517_200159
+
+Input:
+
+```text
+Artifact: .output/results/live_anomaly_runs/20260517_200159
+Window: 2026-05-17 20:02:04Z..2026-05-18 04:38:21Z
+Universe: 529 symbols after live 24h ticker liquidity filter; 6 symbols excluded below 300k USDT 24h quote-volume.
+Configured pairs observed in scan summaries: 5m/30s, 1m/15s, 1m/5s
+Real orders: confirm-real-orders path was preflighted, danger_continue_after_order_position_errors=true, but no order attempt occurred.
+```
+
+Data quality:
+
+```text
+No live_internal_error, live_data_integrity_error, order failure, or halt event was found.
+Startup position cleanup closed 0 positions and account preflight passed.
+Startup context backfill completed with status=ok, 529 symbols, 1587 snapshots, ready_symbol_ratio=1.0 and ready_snapshot_ratio=1.0. A safe live_reprepare also completed ready.
+WS aggTrade path was active: ws_aggtrade_frame_read=23082 and entry_ws_aggtrade_pending_count summed to 0 in scan summaries.
+Trade-count/tape conclusions are usable for scanned rows because subminute evidence came through real aggTrade-derived frames, but no profitability conclusion is possible because trades=0.
+```
+
+Funnel:
+
+```text
+signal_symbol_scan_summary rows: 10425
+evaluated timeframe rows: 23082
+signal_count: 0
+category_selected: 0
+order_attempt: 0
+position_opened: 0
+live_positions.csv rows: 0
+Delayed replay: 758 processed cases, all live_decision_class=all_categories_rejected, recomputed_no_signal=758, strict_replay_would_enter=false for all rows.
+```
+
+Bottlenecks:
+
+```text
+Pre-signal precise rejects dominated: reject_weak_start_flow=13043 and reject_setup_too_early=8567.
+Other pre-category rejects: reject_insufficient_real_entry_buckets=66, reject_entry_below_initial_stop=170, reject_invalid_tp1_pump_leg_bottom_risk=23.
+Category stage had 2274 category_rejected rows, exactly 758 candidate decisions x 3 default runner categories. Main reason was reject_mark_basis_below_min=2062; weaker reasons were weak_range_expansion=54, poor_effort_per_return=47, poor_trade_effort_per_return=42, prior_up_down_whipsaw=34, large_print_signature=26.
+Retryable context dependency still exists: signal_scan_retryable_dependency_blocked=269 and candidate_expired_dependency_timeout=269, all with reject_prior_fast_fade_filter_unavailable; however this did not produce any delayed replay case that would have entered.
+```
+
+Top-growth / near-miss:
+
+```text
+Nonempty missed-pump visibility covered FIDA, BAS, APR, and AIGENSYN. FIDA/APR/AIGENSYN were precise-scanned and primarily rejected by weak start flow / setup too early. BAS reached category rejection with reject_weak_range_expansion and also showed dependency timeouts plus invalid pump-leg-bottom TP1 risk in the precise reject summary.
+This run therefore shows missed movers, not missed executable PNO entries under the current live-priority contract.
+```
+
+Conclusion:
+
+```text
+The absence of trades was not caused by exchange execution. The run never reached category_selected or order_attempt.
+Current live filters rejected candidates before execution: mostly weak/too-early pump flow, then negative/insufficient mark-basis at runner category selection.
+Delayed replay does not contradict live: it found no strict replay entry among 758 saved rejected decisions.
+Do not loosen filters from this single run. The next useful validation is to confirm that 24h context labels/parity are clean and then collect another live run; if zero trades persist, analyze whether mark-basis gates are too strict out of sample.
+```
+
+Patch note:
+
+```text
+P289 aligns live/backtest context semantics after this review: live already used a 24h prior context window, but operator labels/artifact history text still said 72ч and backtest legacy *_72h fields still used a real 72h window. P289 makes those labels/artifacts/config readouts report 24h and makes backtest use the same 24h effective context window while keeping legacy column names.
+```
+
+## 2026-05-17 - latest 30d anomaly_lab readout
+
+```text
+Artifact: .output/results/anomaly_lab, pairs 1m/5s, 1m/15s, 5m/30s.
+Category contract in closed trades: shared_pump_category_contract_v1_live_overlay_v8.
+Covered entries: 2026-04-17 15:40 UTC through 2026-05-17; cache coverage ends around 2026-05-17 15:35-15:36 UTC, so the final few requested hours are not fully covered.
+Trade-count quality is usable: trade_count_proxy_used=false for all 2363 closed trades; levels source is cached_ohlcv.number_of_trades, entry source is mostly cached_1s_aggregated_to_5s/15s/30s.number_of_trades.
+All TF variants combined: 2363 closed, WR 51.8%, avg +0.38%, median +0.07%, summed trade returns +900.8%, positive trade-day share 88.5%. This is a variant sum, not one deployable bot/account return.
+Live-priority subset: 218 closed, WR 73.9%, avg +1.61%, median +1.44%, summed trade returns +350.3%, PF 3.45, TP1 hit 67.9%, positive trade-day share 87.5%.
+Strict context-ok live-priority subset: 195 closed, WR 76.4%, avg +1.66%, median +1.51%, summed trade returns +324.0%, PF 3.71, TP1 hit 70.3%, positive trade-day share 91.7%.
+Discovery subset remains weaker: 2145 closed, WR 49.5%, avg +0.26%, median -0.01%, summed trade returns +550.4%, PF 1.46.
+Dynamics: April partial period 1349 trades / +522.1% summed trade returns / avg +0.39%; May partial period 1014 trades / +378.7% / avg +0.37%. Live-priority stayed positive in both months: April 122 / +212.7% / avg +1.74%; May 96 / +137.6% / avg +1.43%.
+Risk: live-priority still has top-tail dependence: top 5 trades are 23.1% of live-priority summed return, top 15 are 49.8%; context-ok top 15 are 52.2%. Combined TF rows can duplicate the same move across variants.
+Conclusion: live-priority edge looks materially better than discovery and broadly stable across the two partial months, but do not interpret summed returns as account return. Next honest check is a unified no-overlap portfolio replay across TF variants with context_parity_status=ok.
+```
+
+## 2026-05-17 - anomaly_lab fixed-R / tail illusion report
+
+```text
+Artifact written: .output/results/anomaly_lab/portfolio_illusion_report/README.md and fixed_r_tail_report.csv.
+Purpose: make the portfolio illusion visible by reporting live/discovery separately, TF/category slices, top-tail dependence, and fixed-R full-exit scenarios.
+Method: closed trades only. fixed 1R/2R/3R exits use saved initial_risk_pct and mfe_pct; if mfe_pct > R * initial_risk_pct, the full position exits at that R net of roundtrip fee, otherwise the current recorded exit is kept. This is a scenario approximation from saved trades, not a fresh intrabar exchange replay.
+Live-priority all TF: current runner sum +350.3%, avg +1.61%, PF 3.45, top15 share 49.8%, break-even top cut 60/218=27.5%.
+Live-priority fixed 1R full exit: sum +343.9%, avg +1.58%, PF 4.33, top15 share 33.0%, break-even top cut 91/218=41.7%.
+Live-priority fixed 2R full exit: sum +420.3%, avg +1.93%, PF 3.94, top15 share 42.4%, break-even top cut 70/218=32.1%.
+Live-priority fixed 3R full exit: sum +458.5%, avg +2.10%, PF 4.21, top15 share 50.4%, break-even top cut 66/218=30.3%.
+TF readout: 1m/15s benefits from 2R/3R versus 1R and current; 1m/5s is strongest at 2R; 5m/30s improves in sum with 1R/2R/3R but remains more tail-sensitive.
+Category readout: runner_flow improves strongly with fixed 1R/2R/3R; runner_oi_confirmed improves with 2R/3R; runner_balanced is hurt by fixed 1R but improves with 2R/3R.
+Duplicate-pressure lower-bound: live-priority has 30 rows in 15 exact symbol+entry-minute duplicate clusters across TF variants. Real no-overlap replay must use position lifetime, not only entry minute.
+Next validation: implement/run unified no-overlap portfolio replay with context_parity_status=ok and compare current runner vs fixed 1R/2R/3R exits.
+```
+
+## 2026-05-17 - anomaly_lab 0.5 TP1 + 0.5 2R scenario
+
+```text
+Artifact written: .output/results/anomaly_lab/portfolio_illusion_report/half_tp1_half_2r_report.csv.
+Method: closed trades only. Current trade return is treated as 0.5 TP1 + 0.5 runner. For TP1-hit trades, recover the current runner leg approximately, then replace that runner half with fixed 2R net if mfe_pct > 2 * initial_risk_pct; otherwise keep the current runner leg. Non-TP1 trades keep current exit. This is a scenario approximation, not fresh intrabar replay.
+Live-priority all TF: current +350.3%, avg +1.61%, PF 3.45, top15 share 49.8%, break-even top cut 60/218=27.5%.
+Live-priority 0.5 TP1 + 0.5 2R: +348.8%, avg +1.60%, PF 3.44, top15 share 43.4%, break-even top cut 65/218=29.8%.
+TF live-priority: 1m/15s drops from +171.3% to +154.4%; 1m/5s improves from +69.0% to +78.3%; 5m/30s improves from +110.0% to +116.1%.
+Category live-priority: runner_balanced drops from +100.3% to +88.7%; runner_flow improves from +120.6% to +126.3%; runner_oi_confirmed improves from +129.5% to +133.8%.
+Conclusion: 0.5 TP1 + 0.5 2R keeps total almost unchanged versus current runner while reducing top-tail dependence. It helps runner_flow and runner_oi_confirmed, hurts runner_balanced.
+```
+
+## 2026-05-17 - anomaly_lab exit scenario grid
+
+```text
+Artifact written: .output/results/anomaly_lab/portfolio_illusion_report/exit_scenario_grid_live_priority.csv and exit_scenario_selected_by_category.csv.
+Grid: live-priority closed trades only; TP1 fraction 0/25/50/75/100%, remainder target 1R/1.5R/2R/2.5R/3R/4R, fallback either current runner or BE after TP1.
+Best balance by sum and tail haircut was around fixed remainder 1.5R with current-runner fallback. All-TF live-priority current runner: sum +350.3%, avg +1.61%, PF 3.45, top15 share 49.8%, break-even top cut 60/218=27.5%.
+0% TP1 + 1.5R/current fallback: sum +372.5%, avg +1.71%, PF 3.59, top15 share 41.5%, break-even cut 65/218=29.8%.
+25% TP1 + 1.5R/current fallback: sum +365.8%, avg +1.68%, PF 3.56, top15 share 40.9%, break-even cut 66/218=30.3%.
+50% TP1 + 1.5R/current fallback: sum +359.0%, avg +1.65%, PF 3.51, top15 share 40.4%, break-even cut 68/218=31.2%.
+75% TP1 + 1.5R/current fallback: sum +352.3%, avg +1.62%, PF 3.46, top15 share 40.0%, break-even cut 68/218=31.2%.
+100% TP1/full 1R-style exit: sum +345.6%, avg +1.59%, PF 3.42, top15 share 39.6%, break-even cut 68/218=31.2%.
+BE-after-TP1 variants generally reduced total and did not improve tail enough; avoid as default based on this artifact.
+Interpretation: for a conservative live policy, 50-75% TP1 plus remainder target around 1.5R with current/live trailing fallback gives the cleanest tradeoff. 25% TP1 + 1.5R preserves more profit but leaves slightly more tail.
+Next validation: no-overlap portfolio replay of current runner, 25/50/75% TP1 + 1.5R remainder, and full TP1.
+```
+
+## 2026-05-17 - anomaly_lab strict no-overlap exit replay
+
+```text
+Command: .venv/Scripts/python.exe research_tools/anomaly_exit_portfolio_replay.py --lab-dir .output/results/anomaly_lab --families live_priority --context-parity ok --max-positions 1 --same-symbol-overlap reject --models current,tp1_25_rest_1p5r,tp1_50_rest_1p5r,full_tp1 --output-dir .output/results/anomaly_lab/portfolio_exit_replay
+Artifacts: portfolio_exit_replay_summary.csv, portfolio_exit_replay_trades.csv, portfolio_exit_replay_reviewed.csv, portfolio_exit_replay_daily.csv, portfolio_exit_replay_top_tail.csv.
+This is the first strict no-overlap portfolio replay: one concurrent position, same-symbol overlap rejected, context_parity_status=ok, deterministic non-hindsight ordering by entry timestamp/category rank/TF priority/symbol.
+Accepted trades: 105 for each model; skipped trades: 90 due to portfolio overlap rules.
+current: sum +187.8%, avg +1.79%, WR 76.2%, PF 4.34, top15 share 71.3%, break-even top cut 35/105=33.3%, max daily DD -1.01%.
+tp1_25_rest_1p5r: sum +188.8%, avg +1.80%, PF 4.35, top15 share 63.5%, break-even top cut 36/105=34.3%, max daily DD -0.97%.
+tp1_50_rest_1p5r: sum +189.4%, avg +1.80%, PF 4.36, top15 share 62.3%, break-even top cut 38/105=36.2%, max daily DD -1.01%.
+full_tp1: sum +190.7%, avg +1.82%, PF 4.39, top15 share 60.3%, break-even top cut 39/105=37.1%, max daily DD -1.83%.
+Initial conclusion: after strict no-overlap, full_tp1 is not worse; it is slightly better by sum/avg/PF and materially lower top-tail dependence, though daily drawdown is a bit worse on this artifact.
+```
+
+## 2026-05-17 - anomaly_lab wide no-overlap exit replay grid
+
+```text
+Artifacts: .output/results/anomaly_lab/portfolio_exit_replay_grid, portfolio_exit_replay_grid_mp2, portfolio_exit_replay_grid_mp3.
+Grid: current/full_tp1 plus TP1 fractions 0/25/50/75/100%, rest targets 1R/1.5R/2R/2.5R/3R/4R, with and without BE-after-TP1 fallback. Filters: live_priority, context_parity_status=ok, same-symbol-overlap=reject.
+max_positions=1: current 105 trades, sum +187.8%, top15 71.3%, break-even top cut 33.3%. Best balance with sum>=current is full_tp1: sum +190.7%, top15 60.3%, break-even cut 37.1%. Top-profit is 0% TP1/rest 4R: sum +195.1%, but top15 83.9% and break-even cut 21.9%, so it is too tail-heavy.
+max_positions=2: current 130 trades, sum +232.2%, top15 62.1%, break-even cut 35.4%. Best balance is around 75% TP1/rest 2.5R-4R: 75/rest4R sum +235.7%, top15 53.7%, break-even cut 38.5%; 75/rest2.5R sum +234.0%, top15 53.4%, break-even cut 38.5%.
+max_positions=3: current 137 trades, sum +248.6%, top15 59.1%, break-even cut 37.2%. Best balance is 75% TP1/rest4R: sum +253.2%, top15 51.1%, break-even cut 40.1%. Lowest-tail with sum>=current is full_tp1: sum +250.7%, top15 50.6%, break-even cut 39.4%.
+BE-after-TP1 variants do not dominate except the degenerate 100% TP1 case; BE fallback generally lowers return without enough tail benefit.
+Conclusion: strict one-position replay favors full_tp1 as the cleanest anti-tail rule. With 2-3 concurrent positions, 75% TP1 plus a 2.5R-4R rest target becomes the best compromise, preserving/upgrading return while materially reducing top-tail dependence.
+```
+
 ## Current experiment policy
 
 Do not claim edge from a single run. Every experiment should record:
@@ -26,6 +178,133 @@ known leakage/data-quality risks
 ```
 
 If real trade-count or quote-volume is missing, write that conclusions about anomaly nature are limited.
+
+---
+
+## 2026-05-17 - live artifact review 20260517_122732
+
+Input:
+
+```text
+Artifact: .output/results/live_anomaly_runs/20260517_122732/1.zip
+Window: 2026-05-17 12:27:34Z..15:36:11Z; effective live scan cycles start after context startup around 13:07Z
+Universe: 530 symbols after high-cap and 24h quote-volume liquidity filters
+Configured pairs observed in scan summaries: 5m/30s, 1m/15s, 1m/5s
+Real orders: enabled path appears preflighted, but no order attempt occurred
+```
+
+Result:
+
+```text
+No evidence of live crash: no internal/data-integrity/order errors, startup exchange-position cleanup found 0 nonzero positions, live_positions.csv is empty.
+Data path is usable for flow/tape diagnostics: ws_aggtrade_frame_read covered 7516/7517 requests; ticker radar and top-growth artifacts have real quote_volume, number_of_trades and taker_buy_quote_volume fields.
+Funnel: 3465 symbol scan summaries, 7517 evaluated timeframe rows, detected_anomalies_total=398, signal_count=0, category_selected=0, order_attempt_total=0, opened_total=0.
+Main rejections: reject_weak_start_flow=4251, reject_setup_too_early=2822, reject_insufficient_real_entry_buckets=14, reject_entry_below_initial_stop=9. Only 3 category_rejected rows were emitted, all for Q; none selected.
+Operational bottleneck: symbol_context_snapshot freshness. Startup context backfill was partial and took 2347.6s; rolling updates were skipped 759 times by latency SLA and only 118 partial-budget updates were emitted. 344 decisions were blocked as retryable dependency and 338 expired before context became fresh enough, usually symbol_context_snapshot_tail_stale / reject_prior_fast_fade_filter_unavailable.
+Top-growth miss check: EDEN was seen before and during the pump, radar/warm/precise scan all triggered, but no actionable signal/category was produced. Its flow repeatedly failed the strict start-flow contract, often because real trade-count expansion lagged quote-volume/price expansion.
+```
+
+Conclusion:
+
+```text
+This run does not prove the bot is broken at exchange execution; it proves it is not reaching execution.
+There is one fix-worthy live issue: context snapshot freshness cannot keep up under current latency/SLA settings, so otherwise interesting candidates can expire as dependency-not-ready.
+There is one strategy/research question, not a bugfix: the strict min start trade/quote pace contract may intentionally reject EDEN-like pumps; do not loosen it without delayed replay / offline counterfactual evidence.
+```
+
+Next:
+
+```text
+P284 applied locally after this review: priority retryable/active/open symbols can refresh cache-only context even when optional context snapshots are gated by latency SLA.
+Run the same live profile with delayed replay enabled; require lower retryable dependency timeouts before evaluating threshold changes.
+```
+
+---
+
+## 2026-05-17 - targeted cache refill and backtest for live window
+
+Input:
+
+```text
+Symbols: EDEN/USDT:USDT, Q/USDT:USDT, PTB/USDT:USDT
+Window end: 2026-05-17 15:36:00Z
+Cache refill: update-cache --days 4 --timeframes 1m 5m --with-derivatives-context
+AggTrade refill: backfill-anomaly-aggtrade-cache --days 1 --chunk-hours 2
+Subminute: materialize-anomaly-subminute-cache --timeframes 5s 15s 30s --overwrite true
+Lab pairs: 1m/5s, 1m/15s, 5m/30s
+Live-like start params: min_quote_ratio_start=4, min_trade_ratio_start=4, min_price_retention=0.65, min_verticality_score=0.20, confirmation_candles=4, max_initial_risk_pct=0.16, market entry latency=1 candle.
+```
+
+Data result:
+
+```text
+OHLCV/OI/derivatives update succeeded for all 3 symbols.
+aggTrade 1s historical backfill failed for EDEN and Q with Binance 400 Internal error: 1 on old fromId/endTime ranges; PTB succeeded.
+Subminute materialization was overwritten successfully. Entry cache now uses cached_1s_aggregated_to_{5s,15s,30s} sources for PTB signals, so PTB trade-count/quote-volume evidence is real aggregated aggTrade cache.
+Entry cache coverage still reports symbols_covering_end=0 because the requested end is 15:36:00Z while the last closed subminute candles are 15:35:55/15:35:45/15:35:30. This is expected boundary behavior, not evidence of a full-window gap.
+```
+
+Backtest result:
+
+```text
+Discovery fallback:
+- 1m/5s: PTB only, 26 signals, 4 closed non-overlap trades, 22 overlapping skips, avg net -0.68%, TP1 hit 0%.
+- 1m/15s: PTB only, 2 closed trades, avg net -0.68%, TP1 hit 50%.
+- 5m/30s: 0 trades.
+
+Live-priority category profiles on 1m/15s:
+- runner_oi_confirmed: 0 trades; candidate rejected by mark_basis_below_min.
+- runner_flow: 0 trades; no post-filter signal.
+- runner_balanced: 0 trades; candidate rejected by mark_basis_below_min.
+```
+
+Conclusion:
+
+```text
+Backtest can show discovery-fallback PTB trades in this window, but not live-priority runner trades. EDEN/Q did not produce backtest trades under this targeted run despite EDEN being the top-growth missed pump.
+The honest explanation for live no-trades is a combination of strict live-priority anomaly category gates, stale/late symbol_context_snapshot causing retryable dependency expiry, and weak/early start-flow rejects. It is not proven to be an exchange order-placement failure.
+```
+
+Next:
+
+```text
+Run live with P284 and delayed replay enabled, then compare live decisions against strict replay before changing category thresholds.
+```
+
+---
+
+## 2026-05-17 - prior fast-fade filter frequency on latest 30d run
+
+Input:
+
+```text
+Artifacts: .output/results/anomaly_lab/{1m_5s,1m_15s,5m_30s}/anomaly_candidates.csv
+Question: how often does the old prior fake-pump filter reject candidates, and what changes if live uses 24h lookback and allows 2 prior fast-fades?
+```
+
+Result:
+
+```text
+1m/5s: rows=134013, old prior_fast_fade_72h>1 = 31108 (23.2%), new prior_fast_fade_24h>2 = 21671 (16.2%), released by new policy = 9437 (30.3% of old rejects).
+1m/15s: rows=12141, old prior_fast_fade_72h>1 = 1858 (15.3%), new prior_fast_fade_24h>2 = 1114 (9.2%), released by new policy = 744 (40.0% of old rejects).
+5m/30s: rows=33446, old prior_fast_fade_72h>1 = 6727 (20.1%), new prior_fast_fade_24h>2 = 4145 (12.4%), released by new policy = 2582 (38.4% of old rejects).
+```
+
+Released-bucket quality:
+
+```text
+1m/5s released_new_pass: candidates=9437, fast_fade_share=14.6% vs old_pass 8.5%; closed trades=89, WR 56.2%, avg +0.335%, median +0.313%, TP1 53.9%. Old-pass trades: WR 48.8%, avg +0.247%, median -0.018%.
+1m/15s released_new_pass: candidates=744, fast_fade_share=32.5% vs old_pass 17.0%; closed trades=34, WR 61.8%, avg +1.038%, median +1.049%, TP1 64.7%. Old-pass trades: WR 56.0%, avg +0.553%, median +0.298%.
+5m/30s released_new_pass: candidates=2582, fast_fade_share=27.3% vs old_pass 24.3%; closed trades=33, WR 57.6%, avg +0.381%, median +0.721%, TP1 48.5%. Old-pass trades: WR 57.6%, avg +0.611%, median +0.571%.
+```
+
+Interpretation:
+
+```text
+The old 72h / max 1 prior fast-fade rule is a frequent filter, not an edge case. Moving to 24h / max 2 materially reduces this rejection source, but still keeps a meaningful fake-pump guard.
+The released bucket is riskier at candidate level, especially on 1m/15s, but the simulated closed trades are not worse on 1m/5s and 1m/15s; 5m/30s is weaker than old-pass but still positive in this artifact.
+This is not a final profitability proof because it is broad/discovery artifact analysis, not strict post-P285 live-priority parity. Next check must compare live-priority trades/expectancy after the new contract.
+```
 
 ---
 
@@ -2672,6 +2951,55 @@ Question:
 
 ```text
 Can live immediately discard low-liquidity coins, while still letting coins enter later if liquidity arrives?
+```
+
+## 2026-05-17 - pump-leg TP1 0.75R vs 1.0R no-overlap readout
+
+```text
+Question: if SL remains unchanged, what happens when full TP1 is set to entry + 1.0 * (entry - pump_leg_bottom), rounded up by the current market-number rules, instead of 0.75R from pump_leg_bottom?
+Artifact basis: .output/results/anomaly_lab/portfolio_exit_replay_stop_basis, live_priority, context_parity=ok, same-symbol overlap rejected.
+RR against current actual SL: 0.75R pump-leg TP has median RR 0.914, p25 0.784, p75 0.989, only 23.6% >= 1.0. 1.0R pump-leg TP has median RR 1.219, p25 1.045, p75 1.319, 79.5% >= 1.0.
+Max positions 1: full_box_0p75r sum +203.3%, WR 88.6%, PF 10.24, top15 share 46.7%, break-even top cut 63.8%; full_box_1p0r sum +205.4%, WR 80.0%, PF 5.64, top15 share 54.7%, break-even top cut 45.7%.
+Max positions 2: full_box_0p75r sum +240.5%, WR 90.0%, PF 10.03, top15 share 41.8%, break-even top cut 65.4%; full_box_1p0r sum +256.2%, WR 82.3%, PF 6.19, top15 share 47.7%, break-even top cut 48.5%.
+Max positions 3: full_box_0p75r sum +254.0%, WR 90.5%, PF 10.54, top15 share 39.6%, break-even top cut 66.4%; full_box_1p0r sum +271.9%, WR 82.5%, PF 6.36, top15 share 45.3%, break-even top cut 49.6%.
+Conclusion: 1.0R from pump_leg_bottom fixes most psychological RR<1 discomfort without raising the SL and slightly improves summed return in this artifact, but it materially lowers hit rate/PF and increases top-tail dependence versus 0.75R. It is still much safer than raising SL solely to force formal RR>=1.
+```
+
+## 2026-05-17 - LTF red-flag exit probe
+
+```text
+Question: what if there is no TP and the trade exits after entry when the latest LTF candle shows seller pressure?
+Artifact written: .output/results/anomaly_lab/portfolio_exit_replay_stop_basis/redflag_exit_probe.csv.
+Method: exploratory replay on no-overlap accepted live_priority/context-ok trades. Uses cached post-entry LTF OHLCV, initial SL first, otherwise exits at close of the first candle matching red-flag rule, else falls back to saved current exit. This is not yet live parity and ignores order-book/slippage.
+Rules tested: red candle; red close in lower half; red body >= 50% of range; red candle with taker_buy_quote_share < 45%; red lower-half candle with taker_buy_quote_share < 45%.
+Max positions 1: full_box_0p75r +203.3%, full_box_1p0r +205.4%. Best red-flag variant was red_body50 at +104.7%; red_lower_taker45 was +104.4%. Red-flag top15 share stayed very high: ~77-86%.
+Max positions 2: full_box_0p75r +240.5%, full_box_1p0r +256.2%. Best red-flag variant was red_body50 at +119.5%; red_lower_taker45 was +116.5%.
+Max positions 3: full_box_0p75r +254.0%, full_box_1p0r +271.9%. Best red-flag variant was red_body50 at +125.2%; red_lower_taker45 was +122.0%.
+Conclusion: pure no-TP red-flag exit is too early/noisy on this artifact. It roughly halves summed return versus full TP and does not solve top-tail dependence. Keep it as a possible runner-management research idea after TP, not as the primary exit.
+```
+
+## 2026-05-17 - no-TP exit strategy balance probe
+
+```text
+Artifact written: .output/results/anomaly_lab/portfolio_exit_replay_stop_basis/no_tp_exit_strategy_probe.csv.
+Method: no TP order, full position size, initial SL first, then post-entry cached LTF candle exits. Fallback is full position at the saved structural-trail exit price. This is exploratory and not exact live parity because saved structural exits were produced under the old TP1+runner model.
+Baselines, max positions 3: saved current partial +248.6%, WR 78.8%, top15 59.1%; full_at_saved_exit_no_tp +311.6%, WR 73.7%, top15 66.2%; full_box_0p75r +254.0%, WR 90.5%, top15 39.6%; full_box_1p0r +271.9%, WR 82.5%, top15 45.3%.
+Best no-TP profit candidates, max positions 3: giveback70_after100leg +306.1%, WR 77.4%, PF 6.38, top15 64.2%; close_below_ema9_after75leg +302.1%, WR 79.6%, PF 8.03, top15 61.6%; giveback70_after75leg +300.2%, WR 83.2%, PF 8.71, top15 61.7%.
+Best no-TP balance candidate, max positions 3: red_lower_taker45_after75leg +267.0%, WR 86.1%, PF 8.12, top15 44.9%, break-even top cut 54.7%. It is close to full_box_1p0r by sum and top-tail, with higher WR but lower sum.
+Conclusion: the strongest no-TP variants can beat fixed full TP on summed return, but they bring back heavy top-tail dependence around 62-66%. The only no-TP variant with a reasonable balance is red_lower_taker45_after75leg: arm only after price has reached +0.75 leg from entry, then exit on a red LTF candle closing in the lower half with taker-buy share < 45%. It is a research candidate, not a better default than fixed full TP yet.
+```
+
+## 2026-05-17 - no-TP trailing stop strategy probe
+
+```text
+Artifact written: .output/results/anomaly_lab/portfolio_exit_replay_stop_basis/no_tp_trailing_strategy_probe.csv.
+Method: no TP order, full position size, initial SL first, then dynamic LTF trailing stops after price reaches +0.75 or +1.0 pump leg. Tested EMA9/EMA20 stops, previous/last lows, swing2 low, chandelier ATR stops, giveback stops, and red-pressure exit. Trades are allowed to continue up to 8h after entry; remaining open probes close at last cached candle. This is exploratory replay, not exact live parity.
+Max positions 3 baselines: full_box_0p75r +254.0%, WR 90.5%, PF 10.54, top15 39.6%; full_box_1p0r +271.9%, WR 82.5%, PF 6.36, top15 45.3%; saved current partial +248.6%, WR 78.8%, PF 4.58, top15 59.1%.
+Profit leader: giveback70_after100leg +365.9%, WR 80.3%, PF 7.75, top15 75.5%. High profit but too tail-dependent.
+EMA20 after100leg: +332.8%, WR 75.2%, PF 6.58, top15 63.2%. Strong sum, still tail-heavy.
+Chandelier3ATR after100leg: +333.1%, WR 78.8%, PF 7.09, top15 59.2%. Better than EMA20 but still materially tail-dependent.
+Chandelier2ATR after100leg: +290.1%, WR 80.3%, PF 6.35, top15 50.7%. Best trailing-only balance among tested variants, but still less robust than fixed full TP.
+Conclusion: trailing-only can raise summed return, but the extra return mostly comes from reintroducing runner tail dependence. If a no-TP trailing variant is needed, the least bad candidate is arm at +1.0 leg then trail by peak - 2 ATR(14) on LTF candles. Current fixed full TP remains cleaner and more robust for live default.
 ```
 
 Decision:

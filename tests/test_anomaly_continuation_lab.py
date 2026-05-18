@@ -246,7 +246,7 @@ def test_simulate_long_signal_takes_tp1_and_trails_remaining() -> None:
     assert result["tp1_hit"] is True
     assert result["tp1_fill_model"] == "conservative_limit_proxy"
     assert result["tp1_fill_status"] == "filled_conservative_trade_through"
-    assert result["exit_reason"] == "trailing_stop"
+    assert result["exit_reason"] == "tp1_full_exit"
     assert result["gross_r"] > 0
 
 
@@ -255,7 +255,7 @@ def test_simulate_long_signal_does_not_fill_tp1_on_exact_touch() -> None:
         {
             "timestamp": [0, 60_000, 120_000, 180_000, 240_000, 300_000],
             "open": [10.0, 10.4, 10.8, 11.0, 11.2, 11.2],
-            "high": [10.6, 10.9, 11.2, 11.4, 12.0, 13.0],
+            "high": [10.6, 10.9, 11.2, 11.4, 12.0, 12.5],
             "low": [9.9, 10.3, 10.7, 10.9, 11.1, 11.0],
             "close": [10.5, 10.8, 11.0, 11.2, 11.3, 11.1],
         }

@@ -10,8 +10,95 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P283 applied locally live terminal grid repaint fix
-Updated: 2026-05-17
+Last active patch: P289 applied locally live-run review and 24h context label/parity cleanup
+Updated: 2026-05-18
+```
+
+## 2026-05-18 - P289 live run 20260517_200159 and context label/parity cleanup
+
+```text
+Current patch status: P289 APPLIED locally / UNKNOWN commit.
+Artifact reviewed: .output/results/live_anomaly_runs/20260517_200159.
+The run was operationally alive from 2026-05-17 20:02Z to 2026-05-18 04:38Z. No live_internal_error/data-integrity/order error event was found; startup preflight and position cleanup were OK; live_positions.csv stayed empty because no order path was reached.
+Funnel: 10425 signal_symbol_scan_summary rows, 23082 evaluated TFs, signal_count=0, category_selected=0, order_attempt=0, position_opened=0. Delayed replay processed 758 all-category-rejected cases and strict_replay_would_enter=false for all 758.
+Main pre-signal rejects: reject_weak_start_flow=13043, reject_setup_too_early=8567, reject_insufficient_real_entry_buckets=66, reject_entry_below_initial_stop=170, reject_invalid_tp1_pump_leg_bottom_risk=23.
+Main category bottleneck after candidates reached categories: 2274 category_rejected rows, dominated by reject_mark_basis_below_min=2062 across runner_oi_confirmed/runner_flow/runner_balanced. No category_selected happened.
+Data quality improved versus the prior live run: startup context readiness was 100% after backfill and after safe live reprepare, ws_aggtrade_frame_read was active, and top-growth visibility could attribute missed movers to concrete precise/category rejects.
+Residual issue: 269 retryable dependency blocks still expired on reject_prior_fast_fade_filter_unavailable, despite 320 symbol_context_snapshot_tail_refreshed events. Treat this as context freshness/contract observability to monitor, not proof of an executable missed trade.
+Logical cleanup: live prior context already uses SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS=24. P289 removes hardcoded 72ч labels/history_days from live startup/reprepare logs/artifacts and makes backtest legacy *_72h category fields use the same 24h effective window for live/backtest parity. Field names remain legacy-compatible.
+Validation: compileall passed for live/backtest/CLI/tests; anomaly continuation lab tests passed 13/13; live order lifecycle unittest passed 5/5 after updating full-TP1 expectations.
+Next validation: the next short live should show context 24h in terminal/Telegram/status artifacts and symbol_context_startup_backfill_* prior_context_lookback_hours=24.
+```
+
+## 2026-05-17 - P288 live exit rule update
+
+```text
+Current patch status: P288 APPLIED locally / UNKNOWN commit.
+TP1 is now a full-position target at entry + 0.75 * (entry - pump_leg_bottom). In backtest, pump_leg_bottom is decision_box_low. In live, pump_leg_bottom is the selected entry segment low.
+Initial SL remains max(pump_leg_bottom - stop_buffer_range_fraction * impulse_range, EMA20). This means TP1 risk basis is intentionally different from SL risk basis.
+Live actual-fill path recomputes TP1 from the actual exchange fill price and signal pump_leg_bottom, places the TP1 limit for 100% of the filled amount, and records tp1_target_basis/tp1_basis_risk/tp1_r/tp1_fraction in artifacts.
+Backtest defaults are tp1_r=0.75, tp1_fraction=1.0, min_market_rr_to_signal_tp1=0.70. Live constants are LIVE_TP1_R=0.75 and LIVE_TP1_FRACTION=1.0.
+Validation: compileall passed for anomaly backtest/live and CLI; defaults smoke confirmed backtest/live TP1 basis/r/fraction.
+Next validation: run a short live with tiny notional and require category_selected/position_opened artifacts to show tp1_target_basis=pump_leg_bottom, tp1_r=0.75, tp1_fraction=1.0, and tp1_order_amount equal to filled position amount.
+```
+
+## 2026-05-17 - P287 exit portfolio replay tool
+
+```text
+Current patch status: P287 APPLIED locally / UNKNOWN commit.
+Added research_tools/anomaly_exit_portfolio_replay.py, a standalone artifact-level no-overlap portfolio replay for saved anomaly_lab trades.
+The tool reads anomaly_trades.csv and anomaly_context_parity_report.csv from each TF run, filters family/context parity, enforces max concurrent positions and same-symbol overlap policy, and writes summary/trades/reviewed/daily/top-tail CSVs.
+Supported exit models include current, full_tp1, and generic tp1_<pct>_rest_<R>r with optional _be fallback.
+Validation run on latest anomaly_lab with live_priority, context_parity=ok, max_positions=1, models current,tp1_25_rest_1p5r,tp1_50_rest_1p5r,full_tp1 wrote .output/results/anomaly_lab/portfolio_exit_replay.
+Initial strict no-overlap readout: 105 accepted trades; current sum +187.8%, avg +1.79%; full_tp1 sum +190.7%, avg +1.82%, lower top15 share 60.3% versus current 71.3%, but slightly worse max daily drawdown.
+Next validation: compare max_positions=1/2/3 and review skipped/reviewed rows before promoting an exit rule.
+```
+
+## 2026-05-17 - P286 missed-pump/category parity diagnostics
+
+```text
+Current patch status: P286 APPLIED locally / UNKNOWN commit.
+Top-growth missed-pump visibility now records first/last precise-scan reject event, first/last reject reason, and top precise reject reason counts before falling back to generic precise_scanned_no_actionable_signal_or_untracked_reject.
+This should make live artifacts say whether a missed pump was rejected by weak start flow, setup too early, dependency timeout, empty/fetch data issue, or another precise-stage reject before category/execution.
+Backtest context parity report now includes category_parity_class, live_priority_pass, discovery_only, live_priority_reject_reason, strict_live_replay_enter, and strict_live_replay_enter_reason.
+This is diagnostics/parity only; it does not loosen category thresholds or change live order execution.
+Next validation: rerun a short live/top-growth audit and one anomaly-lab export, then group missed_pump_visibility.csv by not_scanned_reason/top_precise_reject_reasons and anomaly_context_parity_report.csv by category_parity_class/live_priority_reject_reason.
+```
+
+## 2026-05-17 - P285 active context suffix refresh
+
+```text
+Current patch status: P285 APPLIED locally / UNKNOWN commit.
+For active/open/retryable symbols, a stale prior-fake-pump context tail no longer immediately blocks category evaluation. Live now performs a targeted levels-TF OHLCV suffix refresh through the cache-backed fetch path, recomputes that symbol's context snapshot, and re-checks the category once.
+The prior fake-pump lookback used by live symbol_context_snapshot / _live_prior_fast_fade_72h is reduced from 72h to 24h. Schema names still contain 72h for compatibility, but live emits prior_context_lookback_hours=24 in the result payload.
+The shared live category contract is bumped to shared_pump_category_contract_v1_live_overlay_v8 and allows max_prior_fast_fade_count_72h=2 for runner_oi_confirmed, runner_flow, runner_reclaim, runner_balanced. This means up to 2 prior fast-fade/fake-pump events in the 24h lookback are accepted.
+30d broad candidate check on latest .output/results/anomaly_lab: old prior_fast_fade_72h>1 affected 23.2% of 1m/5s candidates, 15.3% of 1m/15s, 20.1% of 5m/30s. New 24h>2 would affect 16.2%, 9.2%, 12.4%. The new policy releases about 30.3%, 40.0%, 38.4% of old fast-fade rejects respectively.
+Next validation: run a short live and require symbol_context_snapshot_tail_refreshed events for active/retryable stale-tail cases, fewer candidate_expired_dependency_timeout rows, and no increase in exchange/order errors.
+```
+
+## 2026-05-17 - live run 20260517_122732 artifact review
+
+```text
+Current artifact review: .output/results/live_anomaly_runs/20260517_122732/1.zip.
+Current patch status: P284 APPLIED locally / UNKNOWN commit.
+Live process health looks operationally OK: no live_internal_error/live_data_integrity_error, account preflight OK, startup position cleanup found zero positions, live_positions.csv is empty because no order attempt happened.
+The bot did not open trades because no signal reached category_selected: 3465 signal_symbol_scan_summary rows, 7517 evaluated TFs, signal_count=0, category_selected=0, order_attempt_total=0.
+Main pre-signal rejects: reject_weak_start_flow=4251 and reject_setup_too_early=2822. These are mostly early/forming setup checks and weak real trade-count expansion versus the strict min_quote/min_trade pace=4 contract.
+Real data path is mostly healthy: ws_aggtrade_frame_read covered=7516/7517, cache reads filled/hit dominate, and top-growth audit saw EDEN before/during the pump with radar/warm/precise scan active.
+Real issue: symbol_context_snapshot rolling updates are starved by latency SLA. Startup backfill took 2347s and was partial; after live start only 118 partial_budget updates happened while 759 snapshot cycles were skipped. This produced 344 retryable category dependency blocks and 338 dependency timeouts from symbol_context_snapshot_tail_stale.
+Do not loosen category thresholds first. Fix/validate context freshness throughput and delayed replay visibility first, then decide whether the strict start-flow contract is rejecting real EDEN-like continuation too early.
+P284 lets retryable/active/open symbols get a tiny priority context snapshot refresh even when optional snapshot work is gated by latency SLA. It does not loosen PNO category thresholds and does not make ticker/warm radar tradable by itself.
+Next validation: rerun live with delayed replay enabled, then inspect symbol_context_snapshot_updated latency_sla_priority_override, category_selected, signal_scan_retryable_dependency_blocked, candidate_expired_dependency_timeout, and EDEN/top-growth visibility before touching trading filters.
+```
+
+## 2026-05-17 - targeted backtest check for live window
+
+```text
+Targeted cache refill: EDEN/Q/PTB OHLCV 1m/5m and derivatives context updated cleanly to 2026-05-17 15:36Z. Historical aggTrade REST backfill over a 24h window failed for EDEN and Q with Binance 400 Internal error: 1, while PTB succeeded. Existing/materialized subminute cache was then overwritten for 5s/15s/30s.
+Live-like anomaly-lab over EDEN/Q/PTB for 2026-05-16 15:36Z..2026-05-17 15:36Z found discovery-fallback trades only on PTB, not EDEN/Q.
+Discovery fallback results after subminute overwrite: 1m/5s produced 26 signals / 4 closed non-overlap trades, avg net -0.68%, TP1 hit 0%; 1m/15s produced 2 closed trades, avg net -0.68%, TP1 hit 50%; 5m/30s produced 0 trades.
+Live-priority category checks on 1m/15s produced 0 trades for runner_oi_confirmed, runner_flow, runner_balanced. runner_oi_confirmed/runner_balanced rejected the single post-filter candidate by mark_basis_below_min; runner_flow had no post-filter signal.
+Conclusion: a backtest can show hindsight discovery trades in this window, but current live category contract would not honestly open them. This supports fixing data/context freshness and category diagnostics before loosening live categories.
 ```
 
 ## 2026-05-17 - P277 applied locally

@@ -347,9 +347,16 @@ MISSED_PUMP_VISIBILITY_COLUMNS = (
     "first_flow_radar_seen_time",
     "first_warm_watch_time",
     "first_precise_scan_time",
+    "first_precise_reject_time",
+    "last_precise_reject_time",
     "first_category_reject_time",
     "first_execution_reject_time",
     "first_position_opened_time",
+    "first_precise_reject_event",
+    "first_precise_reject_reason",
+    "last_precise_reject_event",
+    "last_precise_reject_reason",
+    "top_precise_reject_reasons",
     "first_category_reject_reason",
     "first_execution_reject_event",
     "not_scanned_reason",
@@ -436,6 +443,12 @@ DELAYED_REPLAY_SUMMARY_COLUMNS = (
 DELAYED_REPLAY_CONTRACT = "delayed_replay_v6_immutable_decision_snapshot_idle_tg"
 DELAYED_REPLAY_DECISION_SNAPSHOT_CONTRACT = "delayed_replay_decision_snapshot_v1_live_inputs"
 SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v2_cache_only_prior_fast_fade_prepump_spot"
+SYMBOL_CONTEXT_PRIOR_LOOKBACK_MS = 24 * 60 * 60 * 1000
+SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS = 24
+SYMBOL_CONTEXT_PRIOR_LOOKBACK_LABEL = f"{SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS}h"
+LIVE_TP1_TARGET_BASIS = "pump_leg_bottom"
+LIVE_TP1_R = 0.75
+LIVE_TP1_FRACTION = 1.0
 SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
     "snapshot_timestamp_utc",
     "snapshot_timestamp_ms",
@@ -1819,7 +1832,7 @@ class LiveAnomalyConfig:
     signal_scan_backfill_candles: int = 10
     max_signal_age_ms: int = 60_000
     max_entry_price_drift_pct: float = 0.003
-    min_executable_rr_to_signal_tp1: float = 0.75
+    min_executable_rr_to_signal_tp1: float = 0.70
     discrete_signal_missed_telegram_enabled: bool = True
     max_position_amount_slippage_ratio: float = 0.05
     max_monitor_empty_ohlcv_cycles: int = 3
@@ -1968,7 +1981,12 @@ class LiveSignal:
     entry_price: float
     stop_price: float
     tp1_price: float
+    tp1_basis_price: float
+    tp1_basis_risk: float
+    tp1_r: float
+    tp1_fraction: float
     box_high: float
+    box_low: float
     initial_risk: float
     initial_risk_pct: float
     quote_ratio_start: float
@@ -2020,7 +2038,12 @@ def _live_signal_from_json(payload: object) -> LiveSignal | None:
     entry_price = _optional_float(raw.get("entry_price"))
     stop_price = _optional_float(raw.get("stop_price"))
     tp1_price = _optional_float(raw.get("tp1_price"))
+    tp1_basis_price = _optional_float(raw.get("tp1_basis_price"))
+    tp1_basis_risk = _optional_float(raw.get("tp1_basis_risk"))
+    tp1_r = _optional_float(raw.get("tp1_r"))
+    tp1_fraction = _optional_float(raw.get("tp1_fraction"))
     box_high = _optional_float(raw.get("box_high"))
+    box_low = _optional_float(raw.get("box_low"))
     initial_risk = _optional_float(raw.get("initial_risk"))
     initial_risk_pct = _optional_float(raw.get("initial_risk_pct"))
     quote_ratio_start = _optional_float(raw.get("quote_ratio_start"))
@@ -2028,6 +2051,16 @@ def _live_signal_from_json(payload: object) -> LiveSignal | None:
     price_retention = _optional_float(raw.get("price_retention"))
     hold_count = _optional_int(raw.get("hold_count"))
     verticality_score = _optional_float(raw.get("verticality_score"))
+    if tp1_basis_price is None and stop_price is not None:
+        tp1_basis_price = float(stop_price)
+    if tp1_basis_risk is None and entry_price is not None and tp1_basis_price is not None:
+        tp1_basis_risk = float(entry_price) - float(tp1_basis_price)
+    if tp1_r is None:
+        tp1_r = 1.0
+    if tp1_fraction is None:
+        tp1_fraction = 0.5
+    if box_low is None and stop_price is not None:
+        box_low = float(stop_price)
     if (
         category_priority is None
         or decision_timestamp_ms is None
@@ -2035,7 +2068,12 @@ def _live_signal_from_json(payload: object) -> LiveSignal | None:
         or entry_price is None
         or stop_price is None
         or tp1_price is None
+        or tp1_basis_price is None
+        or tp1_basis_risk is None
+        or tp1_r is None
+        or tp1_fraction is None
         or box_high is None
+        or box_low is None
         or initial_risk is None
         or initial_risk_pct is None
         or quote_ratio_start is None
@@ -2062,7 +2100,12 @@ def _live_signal_from_json(payload: object) -> LiveSignal | None:
         entry_price=float(entry_price),
         stop_price=float(stop_price),
         tp1_price=float(tp1_price),
+        tp1_basis_price=float(tp1_basis_price),
+        tp1_basis_risk=float(tp1_basis_risk),
+        tp1_r=float(tp1_r),
+        tp1_fraction=float(tp1_fraction),
         box_high=float(box_high),
+        box_low=float(box_low),
         initial_risk=float(initial_risk),
         initial_risk_pct=float(initial_risk_pct),
         quote_ratio_start=float(quote_ratio_start),
@@ -3653,6 +3696,11 @@ def _build_missed_pump_visibility_rows(
         flow_event = _first_visibility_event(events_to_period_end, _is_visibility_flow_radar_event)
         warm_event = _first_visibility_event(events_to_period_end, _is_visibility_warm_watch_event)
         precise_event = _first_visibility_event(events_to_period_end, _is_visibility_precise_scan_event)
+        precise_reject_events = [
+            event for event in events_to_period_end if _is_visibility_precise_reject_event(event)
+        ]
+        first_precise_reject_event = precise_reject_events[0] if precise_reject_events else None
+        last_precise_reject_event = precise_reject_events[-1] if precise_reject_events else None
         category_reject_event = _first_visibility_event(
             events_to_period_end,
             lambda event: event.event == "category_rejected",
@@ -3689,6 +3737,12 @@ def _build_missed_pump_visibility_rows(
             "first_flow_radar_seen_time": flow_event.timestamp_utc if flow_event is not None else "",
             "first_warm_watch_time": warm_event.timestamp_utc if warm_event is not None else "",
             "first_precise_scan_time": precise_event.timestamp_utc if precise_event is not None else "",
+            "first_precise_reject_time": (
+                first_precise_reject_event.timestamp_utc if first_precise_reject_event is not None else ""
+            ),
+            "last_precise_reject_time": (
+                last_precise_reject_event.timestamp_utc if last_precise_reject_event is not None else ""
+            ),
             "first_category_reject_time": (
                 category_reject_event.timestamp_utc if category_reject_event is not None else ""
             ),
@@ -3698,6 +3752,23 @@ def _build_missed_pump_visibility_rows(
             "first_position_opened_time": (
                 position_opened_event.timestamp_utc if position_opened_event is not None else ""
             ),
+            "first_precise_reject_event": (
+                first_precise_reject_event.event if first_precise_reject_event is not None else ""
+            ),
+            "first_precise_reject_reason": (
+                _visibility_reject_reason(first_precise_reject_event)
+                if first_precise_reject_event is not None
+                else ""
+            ),
+            "last_precise_reject_event": (
+                last_precise_reject_event.event if last_precise_reject_event is not None else ""
+            ),
+            "last_precise_reject_reason": (
+                _visibility_reject_reason(last_precise_reject_event)
+                if last_precise_reject_event is not None
+                else ""
+            ),
+            "top_precise_reject_reasons": _visibility_reject_reason_summary(precise_reject_events),
             "first_category_reject_reason": (
                 str(
                     category_reject_event.details.get("category_reject_reason")
@@ -3715,6 +3786,7 @@ def _build_missed_pump_visibility_rows(
                 radar_event=radar_event,
                 warm_event=warm_event,
                 precise_event=precise_event,
+                precise_reject_event=first_precise_reject_event,
                 category_reject_event=category_reject_event,
                 execution_reject_event=execution_reject_event,
                 position_opened_event=position_opened_event,
@@ -3826,6 +3898,58 @@ def _is_visibility_execution_reject_event(event: LiveVisibilityEvent) -> bool:
     return event.event in VISIBILITY_EXECUTION_REJECT_EVENTS
 
 
+def _is_visibility_precise_reject_event(event: LiveVisibilityEvent) -> bool:
+    if event.event == "category_rejected" or _is_visibility_execution_reject_event(event):
+        return False
+    if event.event.startswith("reject_"):
+        return True
+    return event.event in {
+        "signal_setup_fetch_failed",
+        "signal_entry_fetch_failed",
+        "signal_entry_ws_aggtrade_pending",
+        "signal_scan_empty_ohlcv",
+        "signal_scan_retryable_dependency_blocked",
+        "signal_scan_dependency_retry_scheduled",
+        "candidate_expired_dependency_timeout",
+    }
+
+
+def _visibility_reject_reason(event: LiveVisibilityEvent) -> str:
+    details = event.details
+    for key in (
+        "category_reject_reason",
+        "reason",
+        "retry_reason",
+        "retryable_reason",
+        "blocked_reason",
+        "dependency_reason",
+        "source",
+    ):
+        value = details.get(key)
+        if value not in (None, ""):
+            return str(value)
+    for key in ("retryable_reasons", "blocked_categories", "blocked_details"):
+        value = details.get(key)
+        if isinstance(value, (list, tuple)):
+            parts = [str(item) for item in value if str(item)]
+            if parts:
+                return "|".join(parts[:5])
+        if isinstance(value, dict) and value:
+            return "|".join(f"{str(name)}={str(reason)}" for name, reason in list(value.items())[:5])
+    return event.event
+
+
+def _visibility_reject_reason_summary(events: list[LiveVisibilityEvent]) -> str:
+    if not events:
+        return ""
+    counts: dict[str, int] = {}
+    for event in events:
+        key = f"{event.event}:{_visibility_reject_reason(event)}"
+        counts[key] = counts.get(key, 0) + 1
+    ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    return ";".join(f"{reason}={count}" for reason, count in ranked[:8])
+
+
 def _visibility_int(value: object) -> int:
     try:
         return int(value)  # type: ignore[arg-type]
@@ -3841,6 +3965,7 @@ def _missed_pump_not_scanned_reason(
     radar_event: LiveVisibilityEvent | None,
     warm_event: LiveVisibilityEvent | None,
     precise_event: LiveVisibilityEvent | None,
+    precise_reject_event: LiveVisibilityEvent | None,
     category_reject_event: LiveVisibilityEvent | None,
     execution_reject_event: LiveVisibilityEvent | None,
     position_opened_event: LiveVisibilityEvent | None,
@@ -3862,6 +3987,10 @@ def _missed_pump_not_scanned_reason(
         return f"execution_rejected:{execution_reject_event.event}"
     if position_opened_event is not None:
         return "position_opened"
+    if precise_reject_event is not None:
+        reason = _visibility_reject_reason(precise_reject_event)
+        suffix = f":{reason}" if reason and reason != precise_reject_event.event else ""
+        return f"precise_rejected:{precise_reject_event.event}{suffix}"
     return "precise_scanned_no_actionable_signal_or_untracked_reject"
 
 
@@ -9295,7 +9424,7 @@ class AnomalyMicroLiveRunner:
             int(self._effective_symbol_context_snapshot_fresh_ms(symbols_total=symbols_total)),
             int(float(self.config.symbol_context_snapshot_interval_seconds) * 1000.0),
         )
-        history_start_ms = int(decision_ts) - 3 * 86_400_000 - int(history_padding_ms)
+        history_start_ms = int(decision_ts) - SYMBOL_CONTEXT_PRIOR_LOOKBACK_MS - int(history_padding_ms)
         context_start_ms = int(history_start_ms) - int(self.config.baseline_candles) * int(timeframe_ms)
         return int(context_start_ms), int(history_start_ms), int(decision_ts)
 
@@ -9306,9 +9435,10 @@ class AnomalyMicroLiveRunner:
         self._status_logger.status(f"{stage} · {self._startup_status_time()} · {message}")
 
     def _context_preparation_telegram_title(self, *, policy_context: str) -> str:
+        label = SYMBOL_CONTEXT_PRIOR_LOOKBACK_LABEL
         if policy_context == "live_reprepare":
-            return "Контекст 72ч: переподготовка"
-        return "Контекст 72ч: подготовка"
+            return f"Контекст {label}: переподготовка"
+        return f"Контекст {label}: подготовка"
 
     def _send_context_preparation_started_telegram(
         self,
@@ -9318,12 +9448,13 @@ class AnomalyMicroLiveRunner:
         context_timeframes: tuple[Timeframe, ...],
     ) -> None:
         timeframe_label = ", ".join(timeframe.value for timeframe in context_timeframes) or "-"
+        context_label = SYMBOL_CONTEXT_PRIOR_LOOKBACK_LABEL
         self.telegram.send(
             channel="events",
             key=f"context_preparation_started:{phase}",
             text=(
                 f"{SERVICE_WORK_EMOJI} <b>{self._context_preparation_telegram_title(policy_context=phase)} включена</b>\n\n"
-                f"контекст 72ч · {symbols_total} символов · TF {_telegram_code(timeframe_label)}"
+                f"контекст {context_label} · {symbols_total} символов · TF {_telegram_code(timeframe_label)}"
             ),
         )
 
@@ -9341,10 +9472,10 @@ class AnomalyMicroLiveRunner:
         refuse_real_orders: bool,
     ) -> None:
         if startup_ready:
-            title = "Контекст 72ч готов"
+            title = f"Контекст {SYMBOL_CONTEXT_PRIOR_LOOKBACK_LABEL} готов"
             emoji = "✅"
         else:
-            title = "Контекст 72ч не готов"
+            title = f"Контекст {SYMBOL_CONTEXT_PRIOR_LOOKBACK_LABEL} не готов"
             emoji = SERVICE_WARNING_EMOJI
         refusal_note = "\nreal-orders не стартует" if (not startup_ready and self.config.confirm_real_orders and refuse_real_orders) else ""
         self.telegram.send(
@@ -9530,7 +9661,7 @@ class AnomalyMicroLiveRunner:
                 },
             )
             raise LiveStartupError(
-                "72ч контекст не готов для real-orders live: "
+                f"{SYMBOL_CONTEXT_PRIOR_LOOKBACK_LABEL} контекст не готов для real-orders live: "
                 f"symbols {ready_symbols}/{symbols_total} "
                 f"({ready_symbol_ratio:.1%}), snapshots {ready_snapshots}/{expected_snapshot_count} "
                 f"({ready_snapshot_ratio:.1%})"
@@ -9681,12 +9812,16 @@ class AnomalyMicroLiveRunner:
                 },
             )
             raise LiveDataIntegrityError(
-                "72ч контекст остался неготовым после безопасной переподготовки; "
+                f"{SYMBOL_CONTEXT_PRIOR_LOOKBACK_LABEL} контекст остался неготовым после безопасной переподготовки; "
                 "real-orders live остановлен без активных символов/позиций"
             )
 
     def _startup_backfill_symbol_context_cache(self, symbols: list[str], *, phase: str = "startup") -> None:
-        status_stage = "контекст 72ч" if phase == "startup" else "переподготовка 72ч"
+        status_stage = (
+            f"контекст {SYMBOL_CONTEXT_PRIOR_LOOKBACK_LABEL}"
+            if phase == "startup"
+            else f"переподготовка {SYMBOL_CONTEXT_PRIOR_LOOKBACK_LABEL}"
+        )
         if not self.config.symbol_context_snapshot_enabled:
             return
         if self._ohlcv_cache_storage is None:
@@ -9736,7 +9871,7 @@ class AnomalyMicroLiveRunner:
                 "symbols_total": int(len(symbols)),
                 "context_timeframes": [timeframe.value for timeframe in context_timeframes],
                 "baseline_candles": int(self.config.baseline_candles),
-                "history_days": 3,
+                "prior_context_lookback_hours": int(SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS),
                 "effective_fresh_ms": int(self._effective_symbol_context_snapshot_fresh_ms(symbols_total=len(symbols))),
                 "windows": {
                     timeframe_value: {
@@ -9904,6 +10039,7 @@ class AnomalyMicroLiveRunner:
                 "failure_reasons": failure_reasons,
                 "elapsed_seconds": round(float(elapsed_seconds), 3),
                 "output_file": output_path.name,
+                "prior_context_lookback_hours": int(SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS),
                 "gap_tolerance_min_coverage_ratio": float(self.config.symbol_context_snapshot_min_coverage_ratio),
                 "gap_tolerance_max_gap_candles": int(self.config.symbol_context_snapshot_max_gap_candles),
             },
@@ -10076,6 +10212,55 @@ class AnomalyMicroLiveRunner:
                 )
             )
 
+    def _symbol_context_latency_override_symbols(self, symbols: list[str], *, limit: int, now_ms: int) -> tuple[str, ...]:
+        if limit <= 0:
+            return ()
+        universe_by_key = {_position_symbol_key(symbol): symbol for symbol in symbols}
+        selected: list[str] = []
+        selected_keys: set[str] = set()
+
+        def add(symbol: str) -> None:
+            symbol_key = _position_symbol_key(symbol)
+            universe_symbol = universe_by_key.get(symbol_key)
+            if universe_symbol is None or symbol_key in selected_keys or len(selected) >= int(limit):
+                return
+            selected.append(universe_symbol)
+            selected_keys.add(symbol_key)
+
+        with self._state_lock:
+            for position in self._open_positions.values():
+                add(position.signal.symbol)
+            for state in self._active_symbols.values():
+                add(state.symbol)
+            for cooldown in self._dependency_retry_cooldowns.values():
+                add(cooldown.symbol)
+        for request in self._symbol_context_priority_requests_snapshot(now_ms=now_ms):
+            if request.reason != "retryable_dependency_blocked":
+                continue
+            add(request.symbol)
+        return tuple(selected)
+
+    def _symbol_context_tail_refresh_allowed(self, symbol: str, *, now_ms: int) -> bool:
+        symbol_key = _position_symbol_key(symbol)
+        if not symbol_key:
+            return False
+        with self._state_lock:
+            if any(_position_symbol_key(position.signal.symbol) == symbol_key for position in self._open_positions.values()):
+                return True
+            active = self._active_symbols.get(symbol_key)
+            if active is not None and int(active.expires_at_ms) > int(now_ms):
+                return True
+            cooldown_active = any(
+                cooldown.symbol_key == symbol_key and int(cooldown.next_retry_at_ms) >= int(now_ms)
+                for cooldown in self._dependency_retry_cooldowns.values()
+            )
+            if cooldown_active:
+                return True
+        return any(
+            _position_symbol_key(request.symbol) == symbol_key and request.reason == "retryable_dependency_blocked"
+            for request in self._symbol_context_priority_requests_snapshot(now_ms=now_ms)
+        )
+
     def _symbol_context_snapshot_priority_symbols(self, *, now_ms: int) -> tuple[str, ...]:
         by_key: dict[str, str] = {}
         with self._state_lock:
@@ -10172,7 +10357,15 @@ class AnomalyMicroLiveRunner:
             )
         now_ms = int(time.time() * 1000)
         latency_sla = self._current_latency_sla_backlog_status(now_ms=now_ms)
+        latency_priority_override = False
+        latency_override_symbols: tuple[str, ...] = ()
         if not latency_sla.optional_scans_allowed:
+            latency_override_symbols = self._symbol_context_latency_override_symbols(
+                symbols,
+                limit=min(3, int(self.config.symbol_context_snapshot_symbols_per_cycle)),
+                now_ms=now_ms,
+            )
+        if not latency_sla.optional_scans_allowed and not latency_override_symbols:
             self._last_symbol_context_snapshot_status = "skipped_latency_sla"
             self.artifacts.append_event(
                 "symbol_context_snapshot_skipped",
@@ -10199,6 +10392,8 @@ class AnomalyMicroLiveRunner:
                 effective_fresh_ms=effective_fresh_ms,
                 output_file=self.artifacts.symbol_context_snapshot_path.name,
             )
+        if latency_override_symbols:
+            latency_priority_override = True
         interval_ms = max(1, int(float(self.config.symbol_context_snapshot_interval_seconds) * 1000.0))
         if self._last_symbol_context_snapshot_at_ms and now_ms - self._last_symbol_context_snapshot_at_ms < interval_ms:
             return LiveSymbolContextSnapshotCycleStats(
@@ -10212,10 +10407,14 @@ class AnomalyMicroLiveRunner:
                 output_file=self.artifacts.symbol_context_snapshot_path.name,
             )
         self._last_symbol_context_snapshot_at_ms = now_ms
-        selected_symbols = self._next_symbol_context_snapshot_symbols(
-            symbols,
-            limit=int(self.config.symbol_context_snapshot_symbols_per_cycle),
-            now_ms=now_ms,
+        selected_symbols = (
+            latency_override_symbols
+            if latency_priority_override
+            else self._next_symbol_context_snapshot_symbols(
+                symbols,
+                limit=int(self.config.symbol_context_snapshot_symbols_per_cycle),
+                now_ms=now_ms,
+            )
         )
         if not selected_symbols:
             self._last_symbol_context_snapshot_status = "empty_universe"
@@ -10261,6 +10460,9 @@ class AnomalyMicroLiveRunner:
         if budget_exhausted:
             status = "partial_budget" if processed_symbols else "skipped_budget"
             reason = "cycle_budget_exhausted"
+        elif latency_priority_override:
+            status = "ok_latency_priority" if failed_count == 0 else "partial_latency_priority" if updated_count else "failed_latency_priority"
+            reason = "latency_sla_priority_context_refresh"
         else:
             status = "ok" if failed_count == 0 else "partial" if updated_count else "failed"
             reason = "ok" if failed_count == 0 else "some_snapshots_unavailable" if updated_count else "all_snapshots_unavailable"
@@ -10283,6 +10485,8 @@ class AnomalyMicroLiveRunner:
                 ),
                 "round_robin_symbols_count": int(len(self._symbol_context_snapshot_last_round_robin_symbols)),
                 "priority_reason_counts": self._symbol_context_priority_reason_counts(),
+                "latency_sla_priority_override": bool(latency_priority_override),
+                "latency_sla_reason": latency_sla.reason or "",
                 "skipped_symbols_count": int(skipped_count),
                 "skipped_symbols": list(selected_symbols[len(processed_symbols):]),
                 "timeframe_pairs": [
@@ -10321,6 +10525,8 @@ class AnomalyMicroLiveRunner:
         levels_timeframe: Timeframe,
         entry_timeframe: Timeframe,
         now_ms: int,
+        fetch_missing: bool = False,
+        refresh_reason: str = "",
     ) -> LiveSymbolContextSnapshot:
         started_at = time.monotonic()
         context_timeframe = levels_timeframe
@@ -10331,7 +10537,7 @@ class AnomalyMicroLiveRunner:
             int(self._effective_symbol_context_snapshot_fresh_ms()),
             int(float(self.config.symbol_context_snapshot_interval_seconds) * 1000.0),
         )
-        history_start_ms = decision_ts - 3 * 86_400_000 - history_padding_ms
+        history_start_ms = decision_ts - SYMBOL_CONTEXT_PRIOR_LOOKBACK_MS - history_padding_ms
         context_start_ms = history_start_ms - int(self.config.baseline_candles) * context_ms
 
         def build_snapshot(
@@ -10383,7 +10589,7 @@ class AnomalyMicroLiveRunner:
             context_timeframe,
             start_timestamp_ms=context_start_ms,
             end_timestamp_ms=decision_ts,
-            fetch_missing=False,
+            fetch_missing=fetch_missing,
         )
         if not context_status.startswith("ok") or context_cache_end_ms is None:
             return build_snapshot(
@@ -10466,7 +10672,7 @@ class AnomalyMicroLiveRunner:
                 cache_dir=self.config.cache_dir or Path("."),
                 output_dir=self.config.results_dir,
                 timeframe=context_timeframe.value,
-                days=3,
+                days=1,
                 end_timestamp_ms=effective_cache_end_ms,
                 baseline_candles=int(self.config.baseline_candles),
                 confirmation_candles=int(self.config.confirmation_candles),
@@ -10538,6 +10744,7 @@ class AnomalyMicroLiveRunner:
         decision_timestamp_ms: int,
         levels_timeframe: Timeframe,
         entry_timeframe: Timeframe,
+        allow_tail_refresh: bool = True,
     ) -> dict[str, object]:
         decision_ts = int(decision_timestamp_ms)
         cache_key = (symbol, levels_timeframe.value, entry_timeframe.value, decision_ts)
@@ -10546,11 +10753,12 @@ class AnomalyMicroLiveRunner:
             return cached
         setup_ms = int(levels_timeframe.to_milliseconds())
         entry_ms = int(entry_timeframe.to_milliseconds())
-        history_start_ms = decision_ts - 3 * 86_400_000
+        history_start_ms = decision_ts - SYMBOL_CONTEXT_PRIOR_LOOKBACK_MS
         context_start_ms = history_start_ms - int(self.config.baseline_candles) * setup_ms
         base_result: dict[str, object] = {
             "coverage_policy": "startup_backfilled_cache_only_symbol_context_snapshot_no_precise_scan_fetch",
             "snapshot_contract": SYMBOL_CONTEXT_SNAPSHOT_CONTRACT,
+            "prior_context_lookback_hours": int(SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS),
             "history_start_timestamp_ms": history_start_ms,
             "context_timeframe": levels_timeframe.value,
             "context_start_timestamp_ms": context_start_ms,
@@ -10634,6 +10842,48 @@ class AnomalyMicroLiveRunner:
         stale_tail_ms = max(0, int(decision_ts) - int(snapshot.effective_cache_end_timestamp_ms))
         max_tail_ms = int(self.config.symbol_context_snapshot_fresh_ms)
         if stale_tail_ms > max_tail_ms:
+            now_ms = int(time.time() * 1000)
+            if allow_tail_refresh and self._symbol_context_tail_refresh_allowed(symbol, now_ms=now_ms):
+                refreshed = self._compute_symbol_context_snapshot(
+                    symbol,
+                    levels_timeframe=levels_timeframe,
+                    entry_timeframe=entry_timeframe,
+                    now_ms=now_ms,
+                    fetch_missing=True,
+                    refresh_reason="tail_stale_active_retryable_suffix_refresh",
+                )
+                self._symbol_context_snapshots[refreshed.key()] = refreshed
+                self._prior_fast_fade_cache.pop(cache_key, None)
+                self.artifacts.append_event(
+                    "symbol_context_snapshot_tail_refreshed",
+                    symbol,
+                    {
+                        "levels_tf": levels_timeframe.value,
+                        "entry_tf": entry_timeframe.value,
+                        "decision_timestamp_ms": int(decision_ts),
+                        "previous_effective_cache_end_timestamp_ms": int(snapshot.effective_cache_end_timestamp_ms),
+                        "previous_ignored_tail_ms": int(stale_tail_ms),
+                        "max_ignored_tail_ms": int(max_tail_ms),
+                        "refresh_status": refreshed.status,
+                        "refresh_reason": refreshed.reason,
+                        "refresh_effective_cache_end_timestamp_ms": (
+                            int(refreshed.effective_cache_end_timestamp_ms)
+                            if refreshed.effective_cache_end_timestamp_ms is not None
+                            else ""
+                        ),
+                        "refresh_ignored_tail_ms": (
+                            int(refreshed.ignored_tail_ms) if refreshed.ignored_tail_ms is not None else ""
+                        ),
+                        "policy": "active_or_retryable_tail_stale_context_suffix_fetch_then_recheck_category",
+                    },
+                )
+                return self._live_prior_fast_fade_72h(
+                    symbol,
+                    decision_timestamp_ms=decision_timestamp_ms,
+                    levels_timeframe=levels_timeframe,
+                    entry_timeframe=entry_timeframe,
+                    allow_tail_refresh=False,
+                )
             return {
                 **snapshot_details,
                 "status": "unavailable",
@@ -11805,11 +12055,30 @@ class AnomalyMicroLiveRunner:
                     },
                 )
             return None
-        base_tp1_price = entry_price + risk
+        tp1_basis_price = segment_low
+        tp1_basis_risk = entry_price - tp1_basis_price
+        tp1_basis_risk_pct = _safe_divide(tp1_basis_risk, entry_price)
+        if not math.isfinite(tp1_basis_risk) or tp1_basis_risk <= 0.0:
+            if emit_diagnostics:
+                self._clear_active_symbol(symbol, reason="invalid_tp1_pump_leg_bottom_risk")
+                self.artifacts.append_event(
+                    "reject_invalid_tp1_pump_leg_bottom_risk",
+                    symbol,
+                    {
+                        "entry_price": _finite_or_none(entry_price),
+                        "tp1_basis_price": _finite_or_none(tp1_basis_price),
+                        "tp1_basis_risk": _finite_or_none(tp1_basis_risk),
+                        "tp1_target_basis": LIVE_TP1_TARGET_BASIS,
+                        "decision_timestamp_ms": int(decision["timestamp"]),
+                        "setup_source": setup_source,
+                    },
+                )
+            return None
+        base_tp1_price = entry_price + LIVE_TP1_R * tp1_basis_risk
         tp1_price, tp1_round_step = _round_up_tp1_to_market_number(
             base_tp1_price,
             reference_price=entry_price,
-            movement=max(risk, segment_high - segment_low),
+            movement=max(tp1_basis_risk, segment_high - segment_low),
         )
 
         category_rejections: list[dict[str, object]] = []
@@ -12188,7 +12457,12 @@ class AnomalyMicroLiveRunner:
                 entry_price=entry_price,
                 stop_price=stop_price,
                 tp1_price=tp1_price,
+                tp1_basis_price=tp1_basis_price,
+                tp1_basis_risk=tp1_basis_risk,
+                tp1_r=LIVE_TP1_R,
+                tp1_fraction=LIVE_TP1_FRACTION,
                 box_high=segment_high,
+                box_low=segment_low,
                 initial_risk=risk,
                 initial_risk_pct=initial_risk_pct,
                 quote_ratio_start=quote_ratio,
@@ -12244,6 +12518,12 @@ class AnomalyMicroLiveRunner:
                         "base_tp1_price": _finite_or_none(base_tp1_price),
                         "tp1_price": _finite_or_none(tp1_price),
                         "tp1_round_step": _finite_or_none(tp1_round_step),
+                        "tp1_target_basis": LIVE_TP1_TARGET_BASIS,
+                        "tp1_basis_price": _finite_or_none(tp1_basis_price),
+                        "tp1_basis_risk": _finite_or_none(tp1_basis_risk),
+                        "tp1_basis_risk_pct": _finite_or_none(tp1_basis_risk_pct),
+                        "tp1_r": LIVE_TP1_R,
+                        "tp1_fraction": LIVE_TP1_FRACTION,
                         "mark_close_vs_decision_close_basis": _finite_or_none(
                             mark_basis.value if mark_basis is not None else None
                         ),
@@ -12792,11 +13072,25 @@ class AnomalyMicroLiveRunner:
                     f"actual initial risk too wide after fill: symbol={signal.symbol} risk_pct={actual_initial_risk_pct} "
                     f"max={self.config.max_initial_risk_pct}"
                 )
-            actual_base_tp1_price = actual_entry_price + actual_initial_risk
+            actual_tp1_basis_price = float(signal.box_low)
+            actual_tp1_basis_risk = actual_entry_price - actual_tp1_basis_price
+            actual_tp1_basis_risk_pct = _safe_divide(actual_tp1_basis_risk, actual_entry_price)
+            if not math.isfinite(actual_tp1_basis_risk) or actual_tp1_basis_risk <= 0.0:
+                self._close_unprotected_entry_exposure(
+                    signal.symbol,
+                    amount=position_delta_amount,
+                    position_id=f"entry_unresolved_{signal.decision_timestamp_ms}_{fill.order_id}",
+                    reason="invalid_actual_tp1_pump_leg_bottom_risk_after_fill",
+                )
+                raise LiveDataIntegrityError(
+                    f"invalid actual TP1 pump-leg-bottom risk after fill: symbol={signal.symbol} "
+                    f"entry={actual_entry_price} basis={actual_tp1_basis_price}"
+                )
+            actual_base_tp1_price = actual_entry_price + LIVE_TP1_R * actual_tp1_basis_risk
             actual_tp1_price, actual_tp1_round_step = _round_up_tp1_to_market_number(
                 actual_base_tp1_price,
                 reference_price=actual_entry_price,
-                movement=max(actual_initial_risk, abs(float(signal.box_high) - actual_entry_price)),
+                movement=max(actual_tp1_basis_risk, abs(float(signal.box_high) - actual_entry_price)),
             )
             actual_notional = actual_entry_price * position_delta_amount
             actual_risk_usdt = position_delta_amount * actual_initial_risk
@@ -12819,7 +13113,7 @@ class AnomalyMicroLiveRunner:
                     reason=f"initial_stop_failed:{type(exc).__name__}",
                 )
                 raise
-            tp1_order_amount = max(position_delta_amount * 0.5, 0.0)
+            tp1_order_amount = max(position_delta_amount * LIVE_TP1_FRACTION, 0.0)
             try:
                 tp1_order_id, tp1_client_order_id, tp1_order_amount = self._create_verified_tp1_limit_order(
                     signal.symbol,
@@ -12973,6 +13267,12 @@ class AnomalyMicroLiveRunner:
                 "base_tp1_price": _finite_or_none(actual_base_tp1_price),
                 "tp1_price": position.tp1_price,
                 "tp1_round_step": _finite_or_none(actual_tp1_round_step),
+                "tp1_target_basis": LIVE_TP1_TARGET_BASIS,
+                "tp1_basis_price": _finite_or_none(actual_tp1_basis_price),
+                "tp1_basis_risk": _finite_or_none(actual_tp1_basis_risk),
+                "tp1_basis_risk_pct": _finite_or_none(actual_tp1_basis_risk_pct),
+                "tp1_r": LIVE_TP1_R,
+                "tp1_fraction": LIVE_TP1_FRACTION,
                 "tp1_order_id": position.tp1_order_id,
                 "tp1_client_order_id": position.tp1_client_order_id,
                 "tp1_order_amount": position.tp1_order_amount,

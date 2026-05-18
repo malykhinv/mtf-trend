@@ -49,6 +49,23 @@ late continuation
 
 Category labels are research contracts. They must be backed by observable features, not visual preference.
 
+Current live fake-pump context contract:
+
+```text
+lookback: 24h
+accepted prior fast-fade / fake-pump events: <= 2
+active/retryable stale-tail policy: fetch missing levels-TF OHLCV suffix, update cache/context snapshot, then re-check category once
+```
+
+The suffix refresh is data-quality plumbing, not a signal by itself. It only prevents an otherwise active/retryable candidate from expiring because the recent context tail was missing from cache.
+
+Compatibility note:
+
+```text
+Some artifact fields and CLI knobs still use legacy names such as prior_fast_fade_count_72h / max_prior_fast_fade_count_72h. For the current live-priority contract, their effective lookback is 24h and artifacts should expose prior_context_lookback_hours=24 where practical.
+Backtest/live parity must use the same effective 24h prior-context window when those legacy fields feed live-priority category decisions.
+```
+
 ---
 
 ## 4. Entry logic
@@ -83,6 +100,8 @@ live ledger must write scan/guard provenance (`source_scan_mode`, `danger_cold_c
 no stale signal order after freshness window
 no order if TP1 is already reached or RR collapsed at live price
 BE/TP/PnL are computed from actual fill, not signal close
+TP1 is a full-position limit at actual_entry + 0.75 * (actual_entry - pump_leg_bottom)
+initial SL remains max(pump_leg_bottom - structural buffer, EMA20), so TP1 risk basis and SL risk basis are deliberately separate
 ```
 
 Live scheduling contract:
@@ -109,6 +128,13 @@ remaining cache gaps must emit artifacts
 cache gaps are not valid zero-signal evidence
 WS ticker radar required for subminute live must be healthy before startup continues
 WS aggTrade missing coverage must be explicit; unbounded REST backfill is not a default live path
+```
+
+Diagnostics/parity contract:
+
+```text
+top-growth missed-pump audit must preserve concrete precise-stage reject events/reasons before using generic no-actionable-signal labels
+backtest context parity must split discovery_only, live_priority_pass, live_priority_reject_reason, and strict_live_replay_enter so discovery trades are not confused with honest live-priority entries
 ```
 
 
@@ -141,6 +167,14 @@ Live may create a setup before the HTF candle closes by aggregating already clos
 ## 5. Exit logic
 
 Current research exit families:
+
+```text
+default live-ready exit:
+- TP1 basis: pump_leg_bottom / decision_box_low
+- TP1 multiple: 0.75R from that basis
+- TP1 size: 100% of position
+- no runner by default
+```
 
 ```text
 structural_trail

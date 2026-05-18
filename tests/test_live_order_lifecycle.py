@@ -369,8 +369,13 @@ def make_signal(*, now_ms: int) -> LiveSignal:
         session="unit",
         entry_price=100.0,
         stop_price=95.0,
-        tp1_price=110.0,
+        tp1_price=104.0,
+        tp1_basis_price=95.0,
+        tp1_basis_risk=5.0,
+        tp1_r=0.75,
+        tp1_fraction=1.0,
         box_high=104.0,
+        box_low=95.0,
         initial_risk=5.0,
         initial_risk_pct=0.05,
         quote_ratio_start=5.0,
@@ -487,7 +492,7 @@ class LiveOrderLifecycleTests(unittest.TestCase):
             self.assertEqual(position.tp1_order_id, "limit-1")
             self.assertAlmostEqual(position.entry_price, 100.0)
             self.assertAlmostEqual(position.stop_price, 95.0)
-            self.assertAlmostEqual(position.tp1_price, 106.0)
+            self.assertAlmostEqual(position.tp1_price, 104.0)
             self.assertAlmostEqual(position.position_delta_amount, 1.0)
             self.assertEqual(exchange.created_market_orders[0]["side"], "buy")
             self.assertFalse(exchange.created_market_orders[0]["reduce_only"])
@@ -586,7 +591,7 @@ class LiveOrderLifecycleTests(unittest.TestCase):
             self.assertTrue(close_events)
             self.assertTrue(str(close_events[-1]["details"]["reason"]).startswith("стоп"))
 
-    def test_monitor_tp1_partial_exit_replaces_stop_to_break_even_then_closes_on_verified_stop(self) -> None:
+    def test_monitor_tp1_full_exit_closes_position(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             exchange = FakeExchange()
@@ -597,7 +602,6 @@ class LiveOrderLifecycleTests(unittest.TestCase):
             exchange.position_amount = 1.0
             tp1_order = make_limit_order(position)
             exchange.created_limit_orders.append(tp1_order)
-            exchange.open_orders.append(tp1_order)
             exchange.stop_orders.append(
                 {
                     "id": position.stop_order_id,
@@ -610,7 +614,7 @@ class LiveOrderLifecycleTests(unittest.TestCase):
                     "stopPrice": str(position.stop_price),
                 }
             )
-            exchange.position_amount_reads = deque([1.0, 0.5, 0.5, 0.0])
+            exchange.position_amount_reads = deque([1.0, 0.0])
             exchange.ohlcv_frames.append(one_row_ohlcv(high=110.2, low=100.2, close=106.0, timestamp=1_800_000_001_000))
             exchange.ohlcv_frames.append(one_row_ohlcv(high=101.0, low=99.5, close=100.1, timestamp=1_800_000_031_000))
             exchange.stop_fill_price = 100.0
@@ -621,17 +625,14 @@ class LiveOrderLifecycleTests(unittest.TestCase):
 
             self.assertEqual(runner._open_positions, {})
             self.assertTrue(position.tp1_done)
-            self.assertAlmostEqual(position.current_stop_price, position.entry_price)
             self.assertEqual(runner._closed_positions_total, 1)
-            self.assertGreaterEqual(len(exchange.created_stop_orders), 1)
-            self.assertIn("stop-live-1", exchange.cancelled_orders)
 
             events = read_events(root)
             event_names = [row["event"] for row in events]
             self.assertIn("tp1_limit_exit_filled", event_names)
-            self.assertIn("position_stop_order_replaced", event_names)
-            self.assertIn("tp1_and_stop_to_be", event_names)
-            self.assertIn("stop_exit_filled", event_names)
+            self.assertNotIn("position_stop_order_replaced", event_names)
+            self.assertNotIn("tp1_and_stop_to_be", event_names)
+            self.assertNotIn("stop_exit_filled", event_names)
             self.assertIn("position_closed", event_names)
 
 
@@ -648,10 +649,10 @@ def make_live_position(*, signal: LiveSignal, amount: float) -> LivePosition:
         opened_at_ms=1_800_000_000_000,
         entry_price=100.0,
         stop_price=95.0,
-        tp1_price=110.0,
+        tp1_price=104.0,
         tp1_order_id="limit-live-1",
         tp1_client_order_id="limit-live-client-1",
-        tp1_order_amount=amount * 0.5,
+        tp1_order_amount=amount,
         initial_risk=5.0,
         first_executable_entry_timestamp_ms=signal.decision_timestamp_ms,
         entry_lag_ms=5_000,

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-CATEGORY_CONTRACT_ID = "shared_pump_category_contract_v1_live_overlay_v7"
+CATEGORY_CONTRACT_ID = "shared_pump_category_contract_v1_live_overlay_v8"
 PUMP_CATEGORY_DISCOVERY = "discovery"
 PUMP_CATEGORY_FAMILY_LIVE = "live_priority"
 PUMP_CATEGORY_FAMILY_DISCOVERY = "discovery"
@@ -73,7 +73,7 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         max_prior_up_down_whipsaw_to_impulse_range=0.60,
         max_prior_spike_count_72h=30,
         max_start_taker_buy_quote_share_delta=0.35,
-        max_prior_fast_fade_count_72h=1,
+        max_prior_fast_fade_count_72h=2,
     ),
     "runner_flow": PumpCategoryContract(
         category_id="runner_flow",
@@ -91,7 +91,7 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         max_prior_spike_count_72h=30,
         max_start_taker_buy_quote_share_delta=0.35,
         min_flow_hold_count=1,
-        max_prior_fast_fade_count_72h=1,
+        max_prior_fast_fade_count_72h=2,
     ),
     "runner_reclaim": PumpCategoryContract(
         category_id="runner_reclaim",
@@ -109,7 +109,7 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         max_start_taker_buy_quote_share_delta=0.35,
         min_start_lower_wick_to_range=0.0,
         max_start_upper_wick_to_range=0.20,
-        max_prior_fast_fade_count_72h=1,
+        max_prior_fast_fade_count_72h=2,
     ),
     "runner_balanced": PumpCategoryContract(
         category_id="runner_balanced",
@@ -126,7 +126,7 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         max_prior_up_down_whipsaw_to_impulse_range=0.60,
         max_prior_spike_count_72h=20,
         max_start_taker_buy_quote_share_delta=0.35,
-        max_prior_fast_fade_count_72h=1,
+        max_prior_fast_fade_count_72h=2,
     ),
     "balanced_market": PumpCategoryContract(
         category_id="balanced_market",

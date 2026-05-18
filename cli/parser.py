@@ -149,9 +149,9 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--entry-timeout-candles", type=_positive_int_for("--entry-timeout-candles"), default=60)
     anomaly_lab.add_argument("--market-entry-latency-candles", type=_positive_int_for("--market-entry-latency-candles"), default=1)
     anomaly_lab.add_argument("--max-market-entry-drift-pct", type=float, default=0.003)
-    anomaly_lab.add_argument("--min-market-rr-to-signal-tp1", type=float, default=0.75)
-    anomaly_lab.add_argument("--tp1-r", type=float, default=1.0)
-    anomaly_lab.add_argument("--tp1-fraction", type=float, default=0.50)
+    anomaly_lab.add_argument("--min-market-rr-to-signal-tp1", type=float, default=0.70)
+    anomaly_lab.add_argument("--tp1-r", type=float, default=0.75)
+    anomaly_lab.add_argument("--tp1-fraction", type=float, default=1.0)
     anomaly_lab.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_lab.add_argument("--trail-buffer-r", type=float, default=0.10)
     anomaly_lab.add_argument(
@@ -374,7 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help=(
             "Maintain a cache-only rolling symbol_context_snapshot.csv and use it for prior-fast-fade "
-            "category context instead of fetching 72h context inside precise scan."
+            "category context instead of fetching prior context inside precise scan."
         ),
     )
     anomaly_live.add_argument("--symbol-context-snapshot-interval-seconds", type=float, default=60.0)
