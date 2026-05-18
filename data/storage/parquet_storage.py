@@ -53,6 +53,15 @@ class ParquetStorage:
     def _data_path(self, symbol: str, timeframe: Timeframe) -> Path:
         return self._base_dir / self.encode_symbol_for_path(symbol) / timeframe.value / "data.parquet"
 
+    def _delta_dir(self, symbol: str, timeframe: Timeframe) -> Path:
+        return self._data_path(symbol, timeframe).parent / "delta"
+
+    def _delta_paths(self, symbol: str, timeframe: Timeframe) -> list[Path]:
+        delta_dir = self._delta_dir(symbol, timeframe)
+        if not delta_dir.exists():
+            return []
+        return sorted(path for path in delta_dir.glob("*.parquet") if path.is_file())
+
     @staticmethod
     def _ensure_columns(data: pd.DataFrame) -> pd.DataFrame:
         if "timestamp" not in data.columns:
@@ -61,6 +70,64 @@ class ParquetStorage:
         prepared = data.copy()
         prepared = prepared.loc[prepared["timestamp"].notna()].copy()
         return prepared
+
+    def _load_delta_frame(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        *,
+        start_timestamp_ms: int | None = None,
+        end_timestamp_ms: int | None = None,
+    ) -> pd.DataFrame:
+        frames: list[pd.DataFrame] = []
+        filters = None
+        if start_timestamp_ms is not None and end_timestamp_ms is not None:
+            filters = [
+                ("timestamp", ">=", int(start_timestamp_ms)),
+                ("timestamp", "<=", int(end_timestamp_ms)),
+            ]
+        for path in self._delta_paths(symbol, timeframe):
+            try:
+                frame = pd.read_parquet(path, filters=filters)
+            except Exception:
+                try:
+                    frame = pd.read_parquet(path)
+                except Exception:
+                    continue
+                if start_timestamp_ms is not None and end_timestamp_ms is not None and "timestamp" in frame.columns:
+                    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce")
+                    frame = frame.loc[
+                        (timestamps >= int(start_timestamp_ms))
+                        & (timestamps <= int(end_timestamp_ms))
+                    ].copy()
+            if frame.empty:
+                continue
+            try:
+                frames.append(self._ensure_columns(frame))
+            except ValueError:
+                continue
+        if not frames:
+            return pd.DataFrame()
+        merged = pd.concat(frames, ignore_index=True, sort=False)
+        return (
+            self._ensure_columns(merged)
+            .drop_duplicates(subset=["timestamp"], keep="last")
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
+
+    def _merge_base_and_delta(self, base: pd.DataFrame, delta: pd.DataFrame) -> pd.DataFrame:
+        if base.empty:
+            return delta
+        if delta.empty:
+            return base
+        merged = pd.concat([base, delta], ignore_index=True, sort=False)
+        return (
+            self._ensure_columns(merged)
+            .drop_duplicates(subset=["timestamp"], keep="last")
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
 
     def _validate_written_cache(
         self,
@@ -101,6 +168,16 @@ class ParquetStorage:
     def load_result(self, symbol: str, timeframe: Timeframe) -> ParquetLoadResult:
         path = self._data_path(symbol, timeframe)
         if not path.exists():
+            delta = self._load_delta_frame(symbol, timeframe)
+            if not delta.empty:
+                return ParquetLoadResult(
+                    frame=delta,
+                    ok=True,
+                    status="ok",
+                    reason="parquet_delta_loaded",
+                    path=path,
+                    rows=int(len(delta)),
+                )
             return ParquetLoadResult(
                 frame=pd.DataFrame(),
                 ok=False,
@@ -118,7 +195,8 @@ class ParquetStorage:
                 reason=f"parquet_read_failed:{type(exc).__name__}",
                 path=path,
             )
-        if frame.empty:
+        delta = self._load_delta_frame(symbol, timeframe)
+        if frame.empty and delta.empty:
             return ParquetLoadResult(
                 frame=frame,
                 ok=False,
@@ -128,7 +206,7 @@ class ParquetStorage:
                 rows=0,
             )
         try:
-            prepared = self._ensure_columns(frame)
+            prepared = self._merge_base_and_delta(self._ensure_columns(frame), delta)
         except ValueError:
             return ParquetLoadResult(
                 frame=pd.DataFrame(),
@@ -143,7 +221,7 @@ class ParquetStorage:
             frame=prepared,
             ok=True,
             status="ok",
-            reason="parquet_loaded",
+            reason="parquet_loaded_with_delta" if not delta.empty else "parquet_loaded",
             path=path,
             rows=int(len(prepared)),
         )
@@ -160,6 +238,21 @@ class ParquetStorage:
     ) -> ParquetLoadResult:
         path = self._data_path(symbol, timeframe)
         if not path.exists():
+            delta = self._load_delta_frame(
+                symbol,
+                timeframe,
+                start_timestamp_ms=int(start_timestamp_ms),
+                end_timestamp_ms=int(end_timestamp_ms),
+            )
+            if not delta.empty:
+                return ParquetLoadResult(
+                    frame=delta,
+                    ok=True,
+                    status="ok",
+                    reason="parquet_delta_window_loaded",
+                    path=path,
+                    rows=int(len(delta)),
+                )
             return ParquetLoadResult(
                 frame=pd.DataFrame(),
                 ok=False,
@@ -184,7 +277,13 @@ class ParquetStorage:
                 (timestamps >= int(start_timestamp_ms))
                 & (timestamps <= int(end_timestamp_ms))
             ].copy()
-        if frame.empty:
+        delta = self._load_delta_frame(
+            symbol,
+            timeframe,
+            start_timestamp_ms=int(start_timestamp_ms),
+            end_timestamp_ms=int(end_timestamp_ms),
+        )
+        if frame.empty and delta.empty:
             return ParquetLoadResult(
                 frame=frame,
                 ok=False,
@@ -194,7 +293,7 @@ class ParquetStorage:
                 rows=0,
             )
         try:
-            prepared = self._ensure_columns(frame)
+            prepared = self._merge_base_and_delta(self._ensure_columns(frame), delta)
         except ValueError:
             return ParquetLoadResult(
                 frame=pd.DataFrame(),
@@ -209,7 +308,7 @@ class ParquetStorage:
             frame=prepared,
             ok=True,
             status="ok",
-            reason="parquet_window_loaded",
+            reason="parquet_window_loaded_with_delta" if not delta.empty else "parquet_window_loaded",
             path=path,
             rows=int(len(prepared)),
         )
@@ -324,3 +423,42 @@ class ParquetStorage:
                 gc.collect()
                 time.sleep(0.05 * (attempt + 1))
         return max(len(merged) - previous_count, 0)
+
+    def save_incremental_delta(self, symbol: str, timeframe: Timeframe, new_data: pd.DataFrame) -> int:
+        if new_data.empty:
+            return 0
+
+        incoming = (
+            self._ensure_columns(new_data)
+            .drop_duplicates(subset=["timestamp"], keep="last")
+            .sort_values("timestamp")
+            .reset_index(drop=True)
+        )
+        if incoming.empty:
+            return 0
+
+        delta_dir = self._delta_dir(symbol, timeframe)
+        delta_dir.mkdir(parents=True, exist_ok=True)
+        path = delta_dir / f"{time.time_ns()}.parquet"
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        incoming.to_parquet(tmp_path, index=False)
+
+        written = pd.read_parquet(tmp_path)
+        if "timestamp" not in written.columns:
+            raise ParquetCacheValidationError(
+                "Проверка delta parquet-кэша не прошла: "
+                f"symbol={symbol}, timeframe={timeframe.value}, path={tmp_path}, missing_column=timestamp"
+            )
+
+        incoming_ts = set(incoming["timestamp"].dropna().tolist())
+        written_ts = set(written["timestamp"].dropna().tolist())
+        missing = incoming_ts - written_ts
+        if missing:
+            raise ParquetCacheValidationError(
+                "Проверка delta parquet-кэша не прошла: "
+                f"symbol={symbol}, timeframe={timeframe.value}, path={tmp_path}, "
+                f"missing_written_batch_rows={sorted(list(missing))[:10]}"
+            )
+
+        tmp_path.replace(path)
+        return int(len(incoming))

@@ -9943,6 +9943,8 @@ class AnomalyMicroLiveRunner:
         failure_reasons: dict[str, int] = {}
         symbols_total = int(len(symbols))
         chunk_flush_started_at = started_at
+        fetch_phase_started_at = time.monotonic()
+        flush_seconds_total = 0.0
 
         def _chunk_cache_flush_progress(symbol: str, timeframe_value: str, index: int, total: int) -> None:
             eta_text = self._startup_eta_text(
@@ -10001,9 +10003,11 @@ class AnomalyMicroLiveRunner:
                     progress_callback=_chunk_cache_flush_progress,
                     max_symbol_timeframes_override=STARTUP_CONTEXT_BACKFILL_FLUSH_SYMBOL_TIMEFRAMES,
                 )
+                flush_seconds_total += max(0.0, time.monotonic() - chunk_flush_started_at)
                 if chunk_flushed_rows > 0:
                     incremental_flush_count += 1
                     incremental_flushed_rows_total += int(chunk_flushed_rows)
+        fetch_phase_seconds = max(0.0, time.monotonic() - fetch_phase_started_at)
         self._status_logger.finish_status()
         flush_items_total = int(len(self._live_ohlcv_write_buffer))
         flush_started_at = time.monotonic()
@@ -10022,6 +10026,8 @@ class AnomalyMicroLiveRunner:
             reason=f"symbol_context_{phase}_backfill_final",
             progress_callback=_cache_flush_progress,
         )
+        final_flush_seconds = max(0.0, time.monotonic() - flush_started_at)
+        flush_seconds_total += final_flush_seconds
         flushed_rows = int(incremental_flushed_rows_total) + int(final_flushed_rows)
         if flush_items_total > 0:
             self._startup_status(status_stage, f"запись кеша {flush_items_total}/{flush_items_total} · ETA 0с")
@@ -10053,10 +10059,13 @@ class AnomalyMicroLiveRunner:
                     snapshot_ok += 1
                 else:
                     snapshot_failed += 1
+        snapshot_seconds = max(0.0, time.monotonic() - snapshot_started_at)
         if snapshot_total > 0:
             self._startup_status(status_stage, f"снимок {snapshot_total}/{snapshot_total} · ETA 0с")
         self._startup_status(status_stage, "запись snapshot · ETA -")
+        snapshot_write_started_at = time.monotonic()
         output_path = self.artifacts.write_symbol_context_snapshot(list(self._symbol_context_snapshots.values()))
+        snapshot_write_seconds = max(0.0, time.monotonic() - snapshot_write_started_at)
         self._startup_status(status_stage, "запись snapshot · ETA 0с")
         self._status_logger.finish_status()
         self._last_symbol_context_snapshot_at_ms = int(time.time() * 1000)
@@ -10084,6 +10093,12 @@ class AnomalyMicroLiveRunner:
                 "snapshot_failed_count": int(snapshot_failed),
                 "failure_reasons": failure_reasons,
                 "elapsed_seconds": round(float(elapsed_seconds), 3),
+                "fetch_phase_seconds": round(float(fetch_phase_seconds), 3),
+                "flush_seconds": round(float(flush_seconds_total), 3),
+                "final_flush_seconds": round(float(final_flush_seconds), 3),
+                "snapshot_seconds": round(float(snapshot_seconds), 3),
+                "snapshot_write_seconds": round(float(snapshot_write_seconds), 3),
+                "cache_write_storage_mode": "delta",
                 "output_file": output_path.name,
                 "prior_context_lookback_hours": int(SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS),
                 "gap_tolerance_min_coverage_ratio": float(self.config.symbol_context_snapshot_min_coverage_ratio),
@@ -14616,7 +14631,15 @@ class AnomalyMicroLiveRunner:
             try:
                 timeframe = Timeframe(timeframe_value)
                 combined = _concat_cached_ohlcv_frames(frames)
-                added_rows = int(storage.save_incremental(symbol, timeframe, combined))
+                storage_mode = (
+                    "delta"
+                    if str(reason).startswith("symbol_context_")
+                    else "merged"
+                )
+                if storage_mode == "delta":
+                    added_rows = int(storage.save_incremental_delta(symbol, timeframe, combined))
+                else:
+                    added_rows = int(storage.save_incremental(symbol, timeframe, combined))
                 flushed_rows_total += int(len(combined))
                 self.artifacts.append_event(
                     "live_ohlcv_cache_flushed",
@@ -14624,6 +14647,7 @@ class AnomalyMicroLiveRunner:
                     {
                         "timeframe": timeframe.value,
                         "reason": reason,
+                        "storage_mode": storage_mode,
                         "input_rows": int(len(combined)),
                         "added_rows": added_rows,
                         "pending_rows_before_flush": pending_rows,

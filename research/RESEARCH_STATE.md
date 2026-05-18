@@ -10,8 +10,20 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P292 applied locally live heartbeat/session-top label cleanup
+Last active patch: P293 applied locally live context cache delta writes
 Updated: 2026-05-18
+```
+
+## 2026-05-18 - P293 live context cache delta writes
+
+```text
+Current patch status: P293 APPLIED locally / UNKNOWN commit.
+Question: why does live startup data collection take tens of minutes, and can it be fixed without skipping any required context/readiness work?
+Latest live artifacts show startup context backfill is the bottleneck: 533 symbols x 2 context TF = 1066 OHLCV windows, then 1599 snapshots. Runs 20260518_051811/070057/074930 spent about 30-31 minutes before ticker radar/live cycles. Ticker radar itself was sub-second after context readiness.
+The safe bottleneck is cache writing, not the context requirement: live tail updates were using ParquetStorage.save_incremental(), which reads the whole symbol/TF parquet, merges, sorts, validates, and rewrites the full file even when only a small tail was fetched. This repeats for 1000+ symbol/TF files.
+P293 adds a ParquetStorage delta layer. load/load_window transparently merge base data.parquet plus delta/*.parquet with timestamp dedupe, while live symbol_context_* cache flushes write small delta parquet files instead of rewriting base parquet. Offline canonical fetchers still use full save_incremental().
+Startup context readiness remains mandatory and unchanged. The patch changes cache storage mechanics and adds startup phase timings to symbol_context_startup_backfill_completed.
+Expected next validation: restart live and compare symbol_context_startup_backfill_completed elapsed_seconds/fetch_phase_seconds/flush_seconds/snapshot_seconds/cache_write_storage_mode=delta against prior ~1800s baseline.
 ```
 
 ## 2026-05-18 - P292 live heartbeat/session-top label cleanup

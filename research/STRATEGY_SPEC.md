@@ -124,6 +124,7 @@ subminute missing ranges must fetch through final candle end, not only final can
 decision frames must include closed candles only
 write fetched live rows with provenance/version
 live parquet writes may be buffered, but buffered/flushed/failed counts must be visible
+live startup/reprepare context cache tail writes may use delta parquet files if all ParquetStorage reads merge base+delta transparently and preserve timestamp dedupe
 remaining cache gaps must emit artifacts
 cache gaps are not valid zero-signal evidence
 empty setup/entry OHLCV in live is a retryable dependency, not a normal no_signal that may consume the LTF decision before cache fill catches up

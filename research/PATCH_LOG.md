@@ -5047,6 +5047,50 @@ Risk:
 Low/medium. This can filter some early microcap runners. The threshold is intentionally 300k, not 1m, because the 300k-1m bucket still had positive live-priority expectancy in the current artifact.
 ```
 
+## 2026-05-18 - P293 applied locally - live context cache delta writes
+
+Files:
+
+```text
+data/storage/parquet_storage.py
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+research/STRATEGY_SPEC.md
+```
+
+Intent:
+
+```text
+Keep mandatory live startup context collection/readiness intact, but remove the wasteful full parquet rewrite from live tail context updates.
+```
+
+Implementation:
+
+```text
+ParquetStorage now supports per-symbol/timeframe delta parquet files under delta/*.parquet.
+load() and load_window_result() transparently merge base data.parquet with delta files and dedupe by timestamp, so downstream code sees complete data.
+Live symbol_context_* cache flushes use save_incremental_delta() and emit storage_mode=delta in live_ohlcv_cache_flushed.
+symbol_context_startup_backfill_completed now records fetch_phase_seconds, flush_seconds, final_flush_seconds, snapshot_seconds, snapshot_write_seconds, and cache_write_storage_mode.
+Regular offline cache builders still call save_incremental() and retain canonical full-merge behavior.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m compileall -q data\storage\parquet_storage.py research_tools\anomaly_micro_live.py
+inline ParquetStorage smoke: base save_incremental + delta save_incremental_delta + load/load_window timestamp dedupe passed
+.venv\Scripts\python.exe -m pytest tests\test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
+```
+
+Risk:
+
+```text
+Medium. Reads now include delta files, so repeated live restarts can accumulate small delta parquet files until a canonical cache rebuild/compaction is run. This is still safer than skipping startup context; next live must verify startup elapsed_seconds drops and no context readiness degradation appears.
+```
+
 ## 2026-05-18 - P292 applied locally - live heartbeat/session-top label cleanup
 
 Files:

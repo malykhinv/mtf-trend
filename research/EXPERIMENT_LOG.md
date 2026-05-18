@@ -3001,6 +3001,19 @@ Question:
 Can live immediately discard low-liquidity coins, while still letting coins enter later if liquidity arrives?
 ```
 
+## 2026-05-18 - live startup context backfill bottleneck audit
+
+```text
+Question: why does live data collection before cycles take tens of minutes, and should it repeat until all symbols are current to now-15m?
+Artifacts: .output/results/live_anomaly_runs/20260518_051811, 20260518_070057, 20260518_074930.
+Observed startup context duration: about 1889s, 1858s, and 1806s respectively. The stage is symbol_context_startup_backfill_* before ticker_radar_startup_ready; ticker radar itself is sub-second after context readiness.
+Workload: 533 symbols, context_timeframes 5m and 1m, 1066 fetched symbol-timeframes, 1599 snapshots. Ready ratios were 100%, so the wait buys full context readiness.
+Main bottleneck: live context backfill writes small tail updates through ParquetStorage.save_incremental(), which reads/merges/sorts/rewrites the full parquet file per symbol/timeframe. This is wasteful for live tails and explains why even small added-row counts still cost roughly 30 minutes.
+Repeating the full stage until every coin reaches now-15m is not useful with the current sequential architecture: the pass itself takes longer than the target freshness margin, so the target moves forward while the pass runs. It may converge only if the pass becomes much faster.
+Decision: apply P293 delta writes for live context cache flushes. This preserves mandatory startup context/readiness and changes only cache write mechanics.
+Next validation: compare next live symbol_context_startup_backfill_completed elapsed_seconds and phase timings against the ~1800s baseline; inspect live_ohlcv_cache_flushed.storage_mode=delta.
+```
+
 ## 2026-05-18 - live run 20260518_070057 startup crash
 
 ```text
