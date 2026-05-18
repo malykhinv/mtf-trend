@@ -9,6 +9,7 @@ from collections.abc import Callable
 from config import AppConfig
 from constants import (
     DEFAULT_ANOMALY_LAB_DAYS,
+    DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT,
     DEFAULT_FETCH_DAYS,
     DEFAULT_HOURLY_LEVELS_DAYS,
     DEFAULT_MIN_VOLUME_USD,
@@ -154,7 +155,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Run hidden 1s-cache live-latency execution stress test and write anomaly_latency_grid_summary.csv.",
     )
-    anomaly_lab.add_argument("--max-market-entry-drift-pct", type=float, default=0.003)
+    anomaly_lab.add_argument(
+        "--max-market-entry-drift-pct",
+        type=float,
+        default=DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT,
+    )
     anomaly_lab.add_argument("--min-market-rr-to-signal-tp1", type=float, default=0.70)
     anomaly_lab.add_argument("--tp1-r", type=float, default=0.75)
     anomaly_lab.add_argument("--tp1-fraction", type=float, default=1.0)
@@ -402,7 +407,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum optional wall-clock budget per live cycle for cache-only symbol context snapshot updates.",
     )
     anomaly_live.add_argument("--max-signal-age-ms", type=_positive_int_for("--max-signal-age-ms"), default=60_000)
-    anomaly_live.add_argument("--max-entry-price-drift-pct", type=float, default=0.003)
+    anomaly_live.add_argument(
+        "--max-entry-price-drift-pct",
+        type=float,
+        default=DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT,
+    )
     anomaly_live.add_argument("--min-executable-rr-to-signal-tp1", type=float, default=0.75)
     anomaly_live.add_argument("--max-position-amount-slippage-ratio", type=float, default=0.05)
     anomaly_live.add_argument("--scan-sleep-seconds", type=float, default=2.0)

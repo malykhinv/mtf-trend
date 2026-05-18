@@ -254,7 +254,7 @@ signal age after candle close > max_signal_age_ms
 live price is invalid
 live price has already reached signal TP1
 actual live risk is invalid or too wide
-absolute live-price drift from signal entry > max_entry_price_drift_pct
+absolute live-price drift from signal entry > max_entry_price_drift_pct; default 0.004 = 0.4%
 RR from live price to signal TP1 < min_executable_rr_to_signal_tp1
 ```
 

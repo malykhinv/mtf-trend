@@ -10,8 +10,19 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P294 applied locally live startup/cache speedups and latency backtest grid
+Last active patch: P298 proposed executable entry drift guard 0.4%
 Updated: 2026-05-18
+```
+
+## 2026-05-18 - P298 executable entry drift guard 0.4%
+
+```text
+Current patch status: P298 PROPOSED / UNKNOWN commit.
+Question: raise the live executable entry drift guard from 0.3% to 0.4%.
+Change: introduce DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT = 0.004 and use it for live max_entry_price_drift_pct plus market/latency backtest max_market_entry_drift_pct. This keeps the execution model comparable instead of loosening live only.
+Queue/TTL note: active symbols expire by active_symbol_ttl_ms=60s, ticker radar watches by ticker_radar_watch_ttl_ms=120s, warm-watch entries by warm_watch_ttl_ms=10m, and pressure control can drop low-ranked/stale radar/warm candidates with explicit candidate_dropped_latency_pressure or candidate_expired_backlog_stale artifacts.
+Validation: compileall passed for data/exchanges, research_tools, cli, constants.py, main.py; parser smoke shows live/lab drift defaults = 0.004. Direct cli.commands import was not used as validation because this sandbox lacks pyarrow.
+Next validation: short live smoke; compare reject_entry_price_drift count and discrete_signal_snapshot_entry_missed outcomes against previous 0.003 baseline.
 ```
 
 ## 2026-05-18 - P297 noticed-symbol decision speed patch

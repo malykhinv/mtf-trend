@@ -20,6 +20,7 @@ from urllib.parse import quote
 import numpy as np
 import pandas as pd
 
+from constants import DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT
 from research_tools.anomaly_category_contract import (
     CATEGORY_CONTRACT_ID as PUMP_CATEGORY_CONTRACT,
     DEFAULT_PUMP_CATEGORY_IDS as PUMP_CATEGORY_PROFILE_ORDER,
@@ -276,7 +277,7 @@ class AnomalyBacktestConfig:
     market_entry_latency_candles: int = 1
     latency_enabled: bool = False
     latency_extra_ms: int = DEFAULT_LATENCY_EXTRA_MS
-    max_market_entry_drift_pct: float = 0.003
+    max_market_entry_drift_pct: float = DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT
     min_market_rr_to_signal_tp1: float = 0.70
     stop_buffer_range_fraction: float = 0.05
     tp1_r: float = 0.75
@@ -4626,7 +4627,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--entry-timeout-candles", type=int, default=60)
     parser.add_argument("--market-entry-latency-candles", type=int, default=1)
     parser.add_argument("--latency", choices=["true", "false"], default="false")
-    parser.add_argument("--max-market-entry-drift-pct", type=float, default=0.003)
+    parser.add_argument(
+        "--max-market-entry-drift-pct",
+        type=float,
+        default=DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT,
+    )
     parser.add_argument("--min-market-rr-to-signal-tp1", type=float, default=0.75)
     parser.add_argument("--tp1-r", type=float, default=1.0)
     parser.add_argument("--tp1-fraction", type=float, default=0.50)

@@ -28,6 +28,7 @@ from typing import Callable, Protocol
 
 import pandas as pd
 
+from constants import DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
 from data.exchanges.ccxt_types import ExchangeTickerSnapshot
 from data.storage.parquet_storage import ParquetStorage
@@ -1843,7 +1844,7 @@ class LiveAnomalyConfig:
     danger_local_entry_position_guard_enabled: bool = True
     signal_scan_backfill_candles: int = 10
     max_signal_age_ms: int = 60_000
-    max_entry_price_drift_pct: float = 0.003
+    max_entry_price_drift_pct: float = DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT
     min_executable_rr_to_signal_tp1: float = 0.70
     discrete_signal_missed_telegram_enabled: bool = True
     max_position_amount_slippage_ratio: float = 0.05

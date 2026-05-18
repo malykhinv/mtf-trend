@@ -19,6 +19,7 @@ import pandas as pd
 from config import AppConfig
 from constants import (
     DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
+    DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT,
     OI_STALE_MIN_OBSERVATIONS,
     OI_STALE_RATIO_THRESHOLD,
     QUALITY_OI_LEADING_GAPS_ISSUE,
@@ -1135,7 +1136,9 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 market_entry_latency_candles=int(getattr(args, "market_entry_latency_candles", 1)),
                 latency_enabled=bool(getattr(args, "latency", False)),
                 latency_extra_ms=int(DEFAULT_LATENCY_EXTRA_MS),
-                max_market_entry_drift_pct=float(getattr(args, "max_market_entry_drift_pct", 0.003)),
+                max_market_entry_drift_pct=float(
+                    getattr(args, "max_market_entry_drift_pct", DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT)
+                ),
                 min_market_rr_to_signal_tp1=float(getattr(args, "min_market_rr_to_signal_tp1", 0.70)),
                 tp1_r=float(args.tp1_r),
                 tp1_fraction=float(args.tp1_fraction),
@@ -1574,7 +1577,9 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                 getattr(args, "symbol_context_snapshot_max_cycle_seconds", 0.75)
             ),
             max_signal_age_ms=int(getattr(args, "max_signal_age_ms", 60_000)),
-            max_entry_price_drift_pct=float(getattr(args, "max_entry_price_drift_pct", 0.003)),
+            max_entry_price_drift_pct=float(
+                getattr(args, "max_entry_price_drift_pct", DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT)
+            ),
             min_executable_rr_to_signal_tp1=float(getattr(args, "min_executable_rr_to_signal_tp1", 0.70)),
             max_position_amount_slippage_ratio=float(getattr(args, "max_position_amount_slippage_ratio", 0.05)),
             scan_sleep_seconds=float(getattr(args, "scan_sleep_seconds", 2.0)),

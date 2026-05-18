@@ -10,6 +10,7 @@ SUPPORTED_TIMEFRAMES: tuple[Timeframe, ...] = cast(tuple[Timeframe, ...], tuple(
 DEFAULT_FETCH_TIMEFRAMES: tuple[Timeframe, ...] = (Timeframe.M5,)
 
 # Trading defaults
+DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT = 0.004
 DEFAULT_COMMISSION_RATE = 0.0004
 DEFAULT_SLIPPAGE = 0.0005
 DEFAULT_SPREAD = 0.0
