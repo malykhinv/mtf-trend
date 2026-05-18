@@ -90,6 +90,15 @@ timeout
 fees/slippage assumptions
 ```
 
+Backtest execution latency contract:
+
+```text
+default market entry remains next LTF candle open after the decision (`market_entry_latency_candles=1`)
+optional latency mode (`--latency true --latency-ms N`) delays that executable market entry by N milliseconds using 1s cache for price/path simulation
+latency mode must never fabricate 1s fills; missing 1s cache is an execution skip
+latency-grid artifacts are research stress tests, not a live trading rule by themselves
+```
+
 Live execution contract:
 
 ```text
@@ -124,7 +133,8 @@ subminute missing ranges must fetch through final candle end, not only final can
 decision frames must include closed candles only
 write fetched live rows with provenance/version
 live parquet writes may be buffered, but buffered/flushed/failed counts must be visible
-live startup/reprepare context cache tail writes may use delta parquet files if all ParquetStorage reads merge base+delta transparently and preserve timestamp dedupe
+live startup/reprepare context cache tail writes and normal live OHLCV flushes may use delta parquet files if all ParquetStorage reads merge base+delta transparently and preserve timestamp dedupe
+mandatory startup/reprepare context backfill may perform bounded catch-up passes to close freshness lag accumulated during a long all-symbol pass; this must not skip required symbols/timeframes
 remaining cache gaps must emit artifacts
 cache gaps are not valid zero-signal evidence
 empty setup/entry OHLCV in live is a retryable dependency, not a normal no_signal that may consume the LTF decision before cache fill catches up

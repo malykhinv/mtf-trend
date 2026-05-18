@@ -229,6 +229,33 @@ If real trade-count or quote-volume is missing, write that conclusions about ano
 
 ---
 
+## 2026-05-18 - TOWNS live miss and latency-model follow-up
+
+Input:
+
+```text
+Artifact: .output/results/live_anomaly_runs/20260518_090759
+Case: TOWNS/USDT:USDT category_selected at 2026-05-18T13:30:08Z, levels=1m, entry=15s, decision_timestamp_ms=1779110985000.
+```
+
+Result:
+
+```text
+Live selected runner_balanced, then blocked execution at 2026-05-18T13:30:10.188Z with reject_entry_price_drift.
+Signal entry was 0.003690; live executable price was 0.003673, a favorable -0.4607% drift, but the guard uses absolute drift with max 0.30%.
+The delay was 25.188s from decision candle and 10.188s after the first executable next 15s candle.
+Binance aggTrades show the hypothetical trade would have hit stop first at 2026-05-18T13:31:58.200Z before TP1. Backtest-style entry at 0.003690 would be about -2.75%; live accepted entry at 0.003673 would be about -2.30%.
+```
+
+Follow-up implemented:
+
+```text
+P294 adds opt-in anomaly-lab latency simulation using 1s cache: --latency true --latency-ms N and --run-latency-grid true --latency-grid-ms ...
+This is required before changing live drift guards, because a latency grid can show whether the current backtest edge survives realistic live delay.
+```
+
+---
+
 ## 2026-05-17 - live artifact review 20260517_122732
 
 Input:

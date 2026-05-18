@@ -268,6 +268,8 @@ class AnomalyBacktestConfig:
     pullback_box_fraction: float = 0.75
     entry_timeout_candles: int = 60
     market_entry_latency_candles: int = 1
+    latency_enabled: bool = False
+    latency_extra_ms: int = 10_000
     max_market_entry_drift_pct: float = 0.003
     min_market_rr_to_signal_tp1: float = 0.70
     stop_buffer_range_fraction: float = 0.05
@@ -287,6 +289,8 @@ class AnomalyBacktestConfig:
 
 EXECUTION_GUARD_SKIP_REASONS = {
     "no_market_execution_candle",
+    "no_latency_execution_frame",
+    "no_latency_execution_candle",
     "invalid_market_execution_price",
     "tp1_already_reached_before_market_entry",
     "invalid_actual_market_risk",
@@ -306,6 +310,11 @@ def _category_priority_for_timeframe(setup_timeframe: object, entry_timeframe: o
 
 def _execution_model_label(config: AnomalyBacktestConfig) -> str:
     if config.entry_method == "market":
+        if config.latency_enabled:
+            return (
+                f"next_bar_open_proxy_latency_{config.market_entry_latency_candles}"
+                f"_plus_1s_delay_{int(config.latency_extra_ms)}ms"
+            )
         return f"next_bar_open_proxy_latency_{config.market_entry_latency_candles}"
     return config.entry_method
 
@@ -1363,6 +1372,7 @@ def _resolve_signal_entry(
     decision_timestamp_ms: int,
     decision_close: float,
     config: AnomalyBacktestConfig,
+    execution_frame: pd.DataFrame | None = None,
 ) -> tuple[int, float, float, float, float, float, str]:
     box = frame.loc[
         (frame["timestamp"] >= anomaly_timestamp_ms)
@@ -1404,6 +1414,17 @@ def _resolve_signal_entry(
         entry_row_source = future.iloc[-1]
         entry_ts = int(entry_row_source["timestamp"])
         entry_price = float(entry_row_source["open"])
+        if config.latency_enabled:
+            latency_frame = execution_frame if execution_frame is not None else pd.DataFrame()
+            if latency_frame.empty or "timestamp" not in latency_frame.columns:
+                return entry_ts, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_latency_execution_frame"
+            target_ts = int(entry_ts) + max(0, int(config.latency_extra_ms))
+            latency_rows = latency_frame.loc[pd.to_numeric(latency_frame["timestamp"], errors="coerce").ge(target_ts)]
+            if latency_rows.empty:
+                return target_ts, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_latency_execution_candle"
+            entry_row_source = latency_rows.iloc[0]
+            entry_ts = int(entry_row_source["timestamp"])
+            entry_price = float(entry_row_source["open"])
         if not np.isfinite(entry_price) or entry_price <= 0.0:
             return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "invalid_market_execution_price"
         drift_pct = _safe_divide_value(entry_price - decision_close, decision_close)
@@ -2130,6 +2151,7 @@ def simulate_long_signal(
     signal: pd.Series,
     *,
     config: AnomalyBacktestConfig,
+    execution_frame: pd.DataFrame | None = None,
 ) -> dict[str, object]:
     symbol = str(signal["symbol"])
     execution_model = _execution_model_label(config)
@@ -2142,6 +2164,7 @@ def simulate_long_signal(
         decision_timestamp_ms=decision_ts,
         decision_close=decision_close,
         config=config,
+        execution_frame=execution_frame,
     )
     if not np.isfinite(entry_price):
         return _skipped_signal_result(
@@ -2183,7 +2206,13 @@ def simulate_long_signal(
             box_high=box_high,
         )
 
-    future = frame.loc[frame["timestamp"] > entry_ts].head(config.max_hold_candles).copy()
+    simulation_frame = execution_frame if config.latency_enabled and execution_frame is not None and not execution_frame.empty else frame
+    base_step_ms = int(infer_frame_step_ms(frame) or _timeframe_to_milliseconds(_effective_entry_timeframe(config)))
+    simulation_step_ms = int(infer_frame_step_ms(simulation_frame) or base_step_ms)
+    max_hold_rows = int(config.max_hold_candles)
+    if simulation_step_ms > 0 and base_step_ms > 0:
+        max_hold_rows = max(1, int(math.ceil(config.max_hold_candles * base_step_ms / simulation_step_ms)))
+    future = simulation_frame.loc[simulation_frame["timestamp"] > entry_ts].head(max_hold_rows).copy()
     if future.empty:
         return _skipped_signal_result(
             signal,
@@ -2325,9 +2354,9 @@ def simulate_long_signal(
             ema20_exit_armed_price = close
 
         if tp1_hit:
-            prior = frame.loc[
-                (frame["timestamp"] < candle_ts)
-                & (frame["timestamp"] >= entry_ts)
+            prior = simulation_frame.loc[
+                (simulation_frame["timestamp"] < candle_ts)
+                & (simulation_frame["timestamp"] >= entry_ts)
             ].tail(config.trail_lookback_candles)
             if not prior.empty:
                 structural_stop = float(prior["low"].min()) - config.trail_buffer_r * initial_risk
@@ -2357,6 +2386,8 @@ def simulate_long_signal(
         "pullback_box_fraction": config.pullback_box_fraction if config.entry_method == "pullback_box_fraction" else np.nan,
         "entry_delay_ms": int(entry_ts - decision_ts),
         "entry_delay_candles": _entry_delay_candles(frame, entry_timestamp_ms=entry_ts, decision_timestamp_ms=decision_ts),
+        "latency_enabled": bool(config.latency_enabled),
+        "latency_extra_ms": int(config.latency_extra_ms) if config.latency_enabled else 0,
         "entry_price": entry_price,
         "initial_stop": initial_stop,
         "initial_risk": initial_risk,
@@ -2419,6 +2450,7 @@ def simulate_anomaly_trades(
     last_exit_by_symbol: dict[str, int] = {}
     if frame_cache is None:
         frame_cache = {}
+    execution_frame_cache: dict[str, pd.DataFrame] = {}
     ordered_signals = signals.sort_values(["decision_timestamp_ms", "symbol"])
     progress_started_at = time.monotonic()
     next_progress_pct = 0
@@ -2450,7 +2482,20 @@ def simulate_anomaly_trades(
                 _effective_entry_timeframe(config),
             )
             frame_cache[symbol] = frame
-        result = simulate_long_signal(frame, signal, config=config)
+        execution_frame = None
+        if config.latency_enabled:
+            execution_cache_key = f"{symbol}::__latency_1s"
+            execution_frame = frame_cache.get(execution_cache_key)
+            if execution_frame is None:
+                execution_frame = execution_frame_cache.get(symbol)
+            if execution_frame is None:
+                try:
+                    execution_frame = _read_entry_simulation_frame(config.lab_config.cache_dir, symbol, "1s")
+                except Exception:
+                    execution_frame = pd.DataFrame()
+                execution_frame_cache[symbol] = execution_frame
+                frame_cache[execution_cache_key] = execution_frame
+        result = simulate_long_signal(frame, signal, config=config, execution_frame=execution_frame)
         rows.append(result)
         if result.get("status") == "closed" and "exit_timestamp_ms" in result:
             last_exit_by_symbol[symbol] = int(result["exit_timestamp_ms"])
@@ -4075,6 +4120,40 @@ def run_anomaly_entry_grid(
     return result
 
 
+def run_anomaly_latency_grid(
+    signals: pd.DataFrame,
+    base_config: AnomalyBacktestConfig,
+    *,
+    latency_ms_values: Iterable[int],
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    frame_cache: dict[str, pd.DataFrame] = {}
+    values = [max(0, int(value)) for value in latency_ms_values]
+    started_at = time.monotonic()
+    next_progress_pct = 0
+    for idx, latency_ms in enumerate(values, start=1):
+        variant = replace(base_config, latency_enabled=True, latency_extra_ms=int(latency_ms))
+        trades = simulate_anomaly_trades(signals, config=variant, frame_cache=frame_cache)
+        summary = summarize_trades(trades)
+        row = {
+            "variant_id": idx - 1,
+            "latency_extra_ms": int(latency_ms),
+            "execution_model": _execution_model_label(variant),
+            "signal_count": int(len(signals)),
+        }
+        if not summary.empty and {"metric", "value"}.issubset(summary.columns):
+            row.update({str(item["metric"]): item["value"] for _, item in summary.iterrows()})
+        rows.append(row)
+        next_progress_pct = _emit_progress_5pct(
+            label="anomaly latency grid",
+            done=idx,
+            total=len(values),
+            started_at=started_at,
+            next_progress_pct=next_progress_pct,
+        )
+    return pd.DataFrame(rows)
+
+
 def run_anomaly_strategy_backtest(
     config: AnomalyBacktestConfig,
     *,
@@ -4086,6 +4165,8 @@ def run_anomaly_strategy_backtest(
     grid_pullback_fractions: Iterable[float] = (0.65, 0.75, 0.85),
     grid_exhaustion_profiles: Iterable[str] = ("none",),
     grid_exit_rules: Iterable[str] = ("structural_trail",),
+    run_latency_grid: bool = False,
+    latency_grid_ms: Iterable[int] = (0, 5_000, 10_000, 15_000, 25_000),
     derivatives_context_fetcher: object | None = None,
     render_charts: bool = True,
 ) -> Path:
@@ -4213,6 +4294,17 @@ def run_anomaly_strategy_backtest(
         progress_label="anomaly artifacts: trade files",
     )
     _write_prepump_context_artifacts(config=config, output_dir=output_dir)
+    if run_latency_grid:
+        print("anomaly latency grid: running variants", flush=True)
+        latency_grid = run_anomaly_latency_grid(
+            signals,
+            config,
+            latency_ms_values=latency_grid_ms,
+        )
+        _write_artifact_frames(
+            [(output_dir / "anomaly_latency_grid_summary.csv", latency_grid)],
+            progress_label="anomaly artifacts: latency grid files",
+        )
     if run_entry_grid:
         print("anomaly entry grid: running variants", flush=True)
         grid = run_anomaly_entry_grid(
@@ -4349,6 +4441,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pullback-box-fraction", type=float, default=0.75)
     parser.add_argument("--entry-timeout-candles", type=int, default=60)
     parser.add_argument("--market-entry-latency-candles", type=int, default=1)
+    parser.add_argument("--latency", choices=["true", "false"], default="false")
+    parser.add_argument("--latency-ms", type=int, default=10_000)
+    parser.add_argument("--run-latency-grid", action="store_true")
+    parser.add_argument("--latency-grid-ms", default="0,5000,10000,15000,25000")
     parser.add_argument("--max-market-entry-drift-pct", type=float, default=0.003)
     parser.add_argument("--min-market-rr-to-signal-tp1", type=float, default=0.75)
     parser.add_argument("--tp1-r", type=float, default=1.0)
@@ -4426,6 +4522,8 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
         pullback_box_fraction=args.pullback_box_fraction,
         entry_timeout_candles=args.entry_timeout_candles,
         market_entry_latency_candles=args.market_entry_latency_candles,
+        latency_enabled=str(args.latency).lower() == "true",
+        latency_extra_ms=max(0, int(args.latency_ms)),
         max_market_entry_drift_pct=args.max_market_entry_drift_pct,
         min_market_rr_to_signal_tp1=args.min_market_rr_to_signal_tp1,
         tp1_r=args.tp1_r,
@@ -4453,6 +4551,8 @@ def main(argv: list[str] | None = None) -> int:
         grid_pullback_fractions=_parse_grid_values(args.grid_pullback_fractions, cast=float),
         grid_exhaustion_profiles=_parse_grid_profile_values(args.grid_exhaustion_profiles),
         grid_exit_rules=_parse_grid_exit_rules(args.grid_exit_rules),
+        run_latency_grid=bool(args.run_latency_grid),
+        latency_grid_ms=_parse_grid_values(args.latency_grid_ms, cast=int),
         render_charts=str(args.render_charts).lower() == "true",
     )
     print(f"wrote anomaly strategy artifacts to {output_dir}")

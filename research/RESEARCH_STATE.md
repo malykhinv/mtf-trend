@@ -10,8 +10,24 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P293 applied locally live context cache delta writes
+Last active patch: P294 applied locally live startup/cache speedups and latency backtest grid
 Updated: 2026-05-18
+```
+
+## 2026-05-18 - P294 live startup catch-up and latency backtest grid
+
+```text
+Current patch status: P294 APPLIED locally / UNKNOWN commit.
+Question: implement the safe speedups and add a backtest mode that can model live execution delay using 1s cache.
+Live cache speedups:
+1) startup/reprepare symbol-context backfill remains mandatory, but after the initial pass it now performs bounded catch-up passes to a target no fresher than max(15m, effective snapshot freshness). This closes the gap that can accumulate while the initial all-symbol pass is running, without skipping any symbols/TFs and without an infinite loop.
+2) all live OHLCV cache flushes now use delta parquet writes, not only symbol_context_* flushes. ParquetStorage reads already merge base+delta with timestamp dedupe, so this avoids repeated full-file rewrites in normal live cycles.
+Backtest latency:
+`run-anomaly-lab --latency true --latency-ms N` keeps the existing market entry candle model, then delays execution by N ms using 1s cache for the executable price and post-entry path.
+`--run-latency-grid true --latency-grid-ms 0,5000,10000,15000,25000` writes `anomaly_latency_grid_summary.csv` so latency sensitivity is visible before changing live guards.
+Risk: latency mode requires real 1s cache for honest results; missing 1s cache produces execution-guard skips, not synthetic fills.
+Validation: compileall passed for live/backtest/CLI; run-anomaly-lab --help shows latency flags; synthetic latency smoke entered at next-bar-open + 10s on 1s data.
+Next validation: run a targeted live-window anomaly-lab with `--run-latency-grid true` and compare closed_trades/avg_net_return/skip_reason:market_entry_price_drift across delay values.
 ```
 
 ## 2026-05-18 - P293 live context cache delta writes

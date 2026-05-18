@@ -95,6 +95,8 @@ DEFAULT_SYMBOL_CONTEXT_PRIORITY_TTL_MS = 5 * 60_000
 STARTUP_SYMBOL_CONTEXT_MIN_READY_SYMBOL_RATIO = 0.95
 STARTUP_SYMBOL_CONTEXT_MIN_READY_SNAPSHOT_RATIO = 0.95
 STARTUP_CONTEXT_BACKFILL_FLUSH_SYMBOL_TIMEFRAMES = 16
+STARTUP_CONTEXT_BACKFILL_CATCHUP_TARGET_LAG_MS = 15 * 60 * 1000
+STARTUP_CONTEXT_BACKFILL_CATCHUP_MAX_PASSES = 3
 LIVE_CONTEXT_REPREPARE_MIN_INTERVAL_SECONDS = 6 * 60 * 60
 LIVE_CONTEXT_REPREPARE_SNAPSHOT_STALE_SECONDS = 90 * 60
 LIVE_CONTEXT_REPREPARE_MIN_RUNTIME_SECONDS = 60 * 60
@@ -9940,11 +9942,18 @@ class AnomalyMicroLiveRunner:
         fetched_rows_total = 0
         incremental_flushed_rows_total = 0
         incremental_flush_count = 0
+        catchup_pass_count = 0
+        catchup_symbol_timeframes = 0
+        catchup_rows_total = 0
         failure_reasons: dict[str, int] = {}
         symbols_total = int(len(symbols))
         chunk_flush_started_at = started_at
         fetch_phase_started_at = time.monotonic()
         flush_seconds_total = 0.0
+        last_window_decisions = {
+            timeframe.value: int(windows[timeframe.value][2])
+            for timeframe in context_timeframes
+        }
 
         def _chunk_cache_flush_progress(symbol: str, timeframe_value: str, index: int, total: int) -> None:
             eta_text = self._startup_eta_text(
@@ -10007,7 +10016,88 @@ class AnomalyMicroLiveRunner:
                 if chunk_flushed_rows > 0:
                     incremental_flush_count += 1
                     incremental_flushed_rows_total += int(chunk_flushed_rows)
+        effective_fresh_ms = int(self._effective_symbol_context_snapshot_fresh_ms(symbols_total=len(symbols)))
+        catchup_target_lag_ms = max(int(STARTUP_CONTEXT_BACKFILL_CATCHUP_TARGET_LAG_MS), effective_fresh_ms)
+        while catchup_pass_count < int(STARTUP_CONTEXT_BACKFILL_CATCHUP_MAX_PASSES):
+            catchup_now_ms = int(time.time() * 1000) - int(catchup_target_lag_ms)
+            catchup_windows = {
+                timeframe.value: self._symbol_context_window_bounds(
+                    timeframe,
+                    now_ms=catchup_now_ms,
+                    symbols_total=len(symbols),
+                )
+                for timeframe in context_timeframes
+            }
+            advanced = any(
+                int(catchup_windows[timeframe.value][2]) > int(last_window_decisions.get(timeframe.value, 0))
+                for timeframe in context_timeframes
+            )
+            if not advanced:
+                break
+            catchup_pass_count += 1
+            catchup_started_at = time.monotonic()
+            for index, symbol in enumerate(symbols, start=1):
+                eta_text = self._startup_eta_text(
+                    started_at=catchup_started_at,
+                    completed=int(index - 1),
+                    total=symbols_total,
+                )
+                self._startup_status(
+                    status_stage,
+                    f"catchup {catchup_pass_count} {index}/{symbols_total} Â· {_compact_symbol(symbol)} Â· ETA {eta_text}",
+                )
+                for timeframe in context_timeframes:
+                    context_start_ms, _history_start_ms, decision_ts = catchup_windows[timeframe.value]
+                    try:
+                        frame = self._fetch_chart_frame(
+                            symbol,
+                            timeframe,
+                            start_timestamp_ms=int(context_start_ms),
+                            end_timestamp_ms=int(decision_ts),
+                        )
+                        rows = int(len(frame))
+                        fetched_rows_total += rows
+                        catchup_rows_total += rows
+                        fetched_symbol_timeframes += 1
+                        catchup_symbol_timeframes += 1
+                    except Exception as exc:
+                        failed_symbol_timeframes += 1
+                        reason = f"{type(exc).__name__}:{str(exc)[:160]}"
+                        failure_reasons[reason] = failure_reasons.get(reason, 0) + 1
+                        self.artifacts.append_event(
+                            "symbol_context_startup_backfill_failed",
+                            symbol,
+                            {
+                                "phase": phase,
+                                "timeframe": timeframe.value,
+                                "reason": reason,
+                                "context_start_timestamp_ms": int(context_start_ms),
+                                "decision_timestamp_ms": int(decision_ts),
+                                "status_prefix": f"catchup_{catchup_pass_count}",
+                            },
+                        )
+                if (
+                    self._live_ohlcv_write_buffer
+                    and (
+                        len(self._live_ohlcv_write_buffer) >= STARTUP_CONTEXT_BACKFILL_FLUSH_SYMBOL_TIMEFRAMES
+                        or self._live_ohlcv_pending_rows >= int(self.config.live_ohlcv_cache_max_buffer_rows)
+                    )
+                ):
+                    chunk_flush_started_at = time.monotonic()
+                    chunk_flushed_rows = self._flush_live_ohlcv_cache_if_due(
+                        force=True,
+                        reason=f"symbol_context_{phase}_backfill_chunk",
+                        progress_callback=_chunk_cache_flush_progress,
+                        max_symbol_timeframes_override=STARTUP_CONTEXT_BACKFILL_FLUSH_SYMBOL_TIMEFRAMES,
+                    )
+                    flush_seconds_total += max(0.0, time.monotonic() - chunk_flush_started_at)
+                    if chunk_flushed_rows > 0:
+                        incremental_flush_count += 1
+                        incremental_flushed_rows_total += int(chunk_flushed_rows)
+            for timeframe in context_timeframes:
+                last_window_decisions[timeframe.value] = int(catchup_windows[timeframe.value][2])
         fetch_phase_seconds = max(0.0, time.monotonic() - fetch_phase_started_at)
+        snapshot_now_ms = int(time.time() * 1000)
         self._status_logger.finish_status()
         flush_items_total = int(len(self._live_ohlcv_write_buffer))
         flush_started_at = time.monotonic()
@@ -10052,7 +10142,7 @@ class AnomalyMicroLiveRunner:
                     symbol,
                     levels_timeframe=levels_timeframe,
                     entry_timeframe=entry_timeframe,
-                    now_ms=now_ms,
+                    now_ms=snapshot_now_ms,
                 )
                 self._symbol_context_snapshots[snapshot.key()] = snapshot
                 if snapshot.status == "ok":
@@ -10088,6 +10178,12 @@ class AnomalyMicroLiveRunner:
                 "flushed_rows": int(flushed_rows),
                 "incremental_flushed_rows": int(incremental_flushed_rows_total),
                 "incremental_flush_count": int(incremental_flush_count),
+                "catchup_pass_count": int(catchup_pass_count),
+                "catchup_symbol_timeframes": int(catchup_symbol_timeframes),
+                "catchup_rows_total": int(catchup_rows_total),
+                "catchup_target_lag_ms": int(catchup_target_lag_ms),
+                "catchup_max_passes": int(STARTUP_CONTEXT_BACKFILL_CATCHUP_MAX_PASSES),
+                "snapshot_now_ms": int(snapshot_now_ms),
                 "final_flushed_rows": int(final_flushed_rows),
                 "snapshot_ok_count": int(snapshot_ok),
                 "snapshot_failed_count": int(snapshot_failed),
@@ -14631,11 +14727,7 @@ class AnomalyMicroLiveRunner:
             try:
                 timeframe = Timeframe(timeframe_value)
                 combined = _concat_cached_ohlcv_frames(frames)
-                storage_mode = (
-                    "delta"
-                    if str(reason).startswith("symbol_context_")
-                    else "merged"
-                )
+                storage_mode = "delta"
                 if storage_mode == "delta":
                     added_rows = int(storage.save_incremental_delta(symbol, timeframe, combined))
                 else:
