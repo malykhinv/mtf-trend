@@ -5047,6 +5047,42 @@ Risk:
 Low/medium. This can filter some early microcap runners. The threshold is intentionally 300k, not 1m, because the 300k-1m bucket still had positive live-priority expectancy in the current artifact.
 ```
 
+## 2026-05-18 - P292 applied locally - live heartbeat/session-top label cleanup
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Keep the session-scoped live metrics from P290, but restore the operator heartbeat wording and remove the extra visible session-top suffix from live output.
+```
+
+Implementation:
+
+```text
+Heartbeat label changed back from "WS сессия" to "Стабильность".
+The session metric window label is now empty, so session-top display/artifacts do not print "с начала сессии" while still using the same session baseline internally.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m compileall -q research_tools\anomaly_micro_live.py
+inline smoke: _format_live_heartbeat contains "Стабильность" and does not contain "WS сессия" or "с начала сессии".
+```
+
+Risk:
+
+```text
+Low. Display/label-only change; data windows, filters, and execution logic are unchanged.
+```
+
 ## 2026-05-18 - P291 applied locally - live session metric NameError fix
 
 Files:
@@ -5113,7 +5149,7 @@ Implementation:
 signal_scan_empty_ohlcv now returns retryable_dependency=True with reason ohlcv_data_unavailable and does not consume the decision timestamp as a normal no_signal.
 WS health samples are stored with wall-clock timestamps and ws_health_pct is computed from the session metric baseline. Cumulative observed/healthy seconds remain in separate artifact fields.
 Session top tracker prunes/baselines from the same session metric start: Asia+Europe from Asia start, Europe from Asia+Europe start, Europe+America from Europe start, America from Europe+America start, America+Asia from America start.
-Terminal heartbeat uses "WS сессия"; OHLCV cache fill/gap labels are "OHLCV REST"/"OHLCV gap".
+Terminal heartbeat stability value is session-scoped; OHLCV cache fill/gap labels are "OHLCV REST"/"OHLCV gap".
 ```
 
 Validation:

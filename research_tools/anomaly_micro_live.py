@@ -16899,7 +16899,7 @@ def _live_session_metric_window_ms(timestamp_ms: int) -> dict[str, object]:
     metric_start_dt = day_start + timedelta(minutes=metric_start_minute)
     session["metric_start_ms"] = int(metric_start_dt.timestamp() * 1000)
     session["metric_end_ms"] = int(session["end_ms"])
-    session["metric_window_label"] = "с начала сессии"
+    session["metric_window_label"] = ""
     return session
 
 
@@ -17036,7 +17036,7 @@ def _format_live_heartbeat(
     rows = [
         "Соединение",
         _format_status_line(
-            _format_status_cell("WS сессия", _format_percent(connection_health_pct, signed=False, precision=1)),
+            _format_status_cell("Стабильность", _format_percent(connection_health_pct, signed=False, precision=1)),
             _format_status_cell("Пульс", _format_live_pulse(cycle_seconds)),
             _format_status_cell("Данные", data_status_text),
         ),

@@ -10,8 +10,18 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P291 applied locally live session metric NameError fix and error newline cleanup
+Last active patch: P292 applied locally live heartbeat/session-top label cleanup
 Updated: 2026-05-18
+```
+
+## 2026-05-18 - P292 live heartbeat/session-top label cleanup
+
+```text
+Current patch status: P292 APPLIED locally / UNKNOWN commit.
+Operator-only cleanup after P290/P291: the heartbeat label is back to "Стабильность" while the value remains session-scoped, and the visible session-top label no longer prints "с начала сессии".
+The session metric window logic is unchanged; only the operator/artifact label string is hidden to keep the live log compact.
+Validation: compileall passed for research_tools/anomaly_micro_live.py; inline heartbeat smoke confirmed "Стабильность" is present and "WS сессия"/"с начала сессии" are absent.
+Next validation: restart live and confirm the heartbeat shows "Стабильность" and session-top rows do not append "с начала сессии".
 ```
 
 ## 2026-05-18 - P291 live session metric NameError fix
@@ -35,9 +45,9 @@ The latest live run had 0 category_selected/position_opened, but ws_aggtrade_fra
 Real skip risk found: empty setup/entry OHLCV returned normal no_signal and could mark the LTF decision closed before the cache filled. P290 makes this a retryable dependency with explicit setup_empty/entry_empty/retry_policy fields, so it does not consume the candle until data is available or the signal goes stale.
 Stability is now session-scoped instead of cumulative process-since-start. live_cycle_summary keeps ws_health_pct/ws_health_observed_seconds/ws_health_healthy_seconds for the current session metric window and adds cumulative fields separately.
 Session top growth no longer uses rolling 6h. It uses the same session metric baseline: Asia+Europe from Asia start, Europe from Asia+Europe start, Europe+America from Europe start, America from Europe+America start, America+Asia from America start.
-Operator label cleanup: heartbeat now shows "WS сессия"; OHLCV cache statuses are "OHLCV REST"/"OHLCV gap" to avoid confusing REST cache fills with flow degradation.
+Operator label cleanup: heartbeat stability value is session-scoped; OHLCV cache statuses are "OHLCV REST"/"OHLCV gap" to avoid confusing REST cache fills with flow degradation.
 Validation: compileall passed for research_tools/anomaly_micro_live.py. Broader tests pending in this turn.
-Next validation: next live run should show ws_health_scope=session_metric_window, top_window_label="с начала сессии", and no normal no_signal closeout for signal_scan_empty_ohlcv rows.
+Next validation: next live run should show ws_health_scope=session_metric_window and no normal no_signal closeout for signal_scan_empty_ohlcv rows.
 ```
 
 ## 2026-05-18 - P289 live run 20260517_200159 and context label/parity cleanup
