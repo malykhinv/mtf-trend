@@ -27,7 +27,7 @@ Backtest latency:
 If 1s cache is missing for a latency symbol/window, the backtest now backfills the needed 1s window from Binance futures aggTrades during simulation and persists it as delta parquet. Missing/failed backfill still remains an execution skip; no synthetic fills are fabricated.
 The run now writes `anomaly_timing_summary.csv` and prints final market metrics plus per-stage timings.
 Validation: compileall passed for live/backtest/CLI; run-anomaly-lab --help shows only `--latency`; synthetic latency smoke entered at next-bar-open + 10s on 1s data.
-Next validation: run a targeted live-window anomaly-lab with `--run-latency-grid true` and compare closed_trades/avg_net_return/skip_reason:market_entry_price_drift across delay values.
+Next validation: run a targeted live-window anomaly-lab with `--latency true` and compare `anomaly_latency_grid_summary.csv` closed_trades/avg_net_return/skip_reason:market_entry_price_drift across hidden delay values.
 ```
 
 ## 2026-05-18 - P293 live context cache delta writes
