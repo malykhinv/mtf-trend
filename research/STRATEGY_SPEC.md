@@ -128,6 +128,7 @@ ticker-radar promotion can add watch symbols but cannot itself open trades
 in subminute WS-live, cold coverage is an adaptive idle/audit scanner: it is hard-off for open/opening positions and active-due symbols, soft-reduced by active-waiting symbols, and scaled by WS health, scheduler heartbeat EWMA, and REST/cache pressure
 inactive_scan_slots_per_cycle=0 means active/radar-only scan and must be visible in artifacts
 operator heartbeat must report scheduler timing plus ticker/aggTrade health and cold coverage score/gate reason, not ambiguous batch/full-cycle timing
+operator heartbeat must expose potential-anomaly processing delay from live latency SLA samples (`Задержка p95`, `max`, radar/warm queue count) so missed entries can be tied to scheduler delay instead of guessed after the fact
 ```
 
 Live data-access contract:

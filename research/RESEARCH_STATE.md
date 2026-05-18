@@ -10,14 +10,25 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P299 proposed rejected market-entry audit fields
+Last active patch: P300 proposed live potential-anomaly latency grid
 Updated: 2026-05-18
+```
+
+## 2026-05-18 - P300 live potential-anomaly latency grid
+
+```text
+Current patch status: P300 PROPOSED / UNKNOWN commit.
+Question: make the live operator grid show how late potential anomaly candidates are being processed.
+Change: live heartbeat `Контроль` now has a second row with `Задержка p95`, `max`, and `Очередь`, using existing latency SLA due-scan p95/max samples and the current radar+warm queue count. `live_cycle_summary` also writes explicit `potential_anomaly_latency_p95_seconds`, `potential_anomaly_latency_max_seconds`, `potential_anomaly_latency_samples`, and `potential_anomaly_queue_count` aliases so the grid is auditable in CSV.
+Trading impact: none; scheduler, candidate TTL/drop policy, drift/RR/stale guards, order path, fills, stops, and Telegram behavior are unchanged.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; inline heartbeat smoke confirmed the new latency row renders.
+Next validation: run a short live smoke and compare terminal `Задержка p95/max/Очередь` with `live_cycle_summary.potential_anomaly_latency_*` and existing `latency_sla_*` fields.
 ```
 
 ## 2026-05-18 - P299 rejected market-entry audit fields
 
 ```text
-Current patch status: P299 PROPOSED / UNKNOWN commit.
+Current patch status: P299 APPLIED locally / UNKNOWN commit.
 Question: make backtest artifacts preserve the actual delayed market-entry price/timestamp and computed drift/RR for execution-guard rejections.
 Change: `_resolve_signal_entry` now returns a small reject-audit payload for delayed market-entry guards and `simulate_long_signal` writes it into skipped rows. The patch does not change signal selection, entry thresholds, fills, stops, PnL, or latency behavior.
 New skipped-row fields: rejected_market_entry_timestamp_ms, rejected_market_entry_timestamp_utc, rejected_market_entry_price, market_entry_drift_pct, market_entry_abs_drift_pct, max_market_entry_drift_pct, market_entry_rr_after_latency, min_market_rr_to_signal_tp1, signal_tp1_price, actual_market_risk_at_signal_stop.

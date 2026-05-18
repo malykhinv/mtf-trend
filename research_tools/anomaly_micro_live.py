@@ -4679,6 +4679,21 @@ class AnomalyMicroLiveRunner:
                             if self._current_candidate_queue_top_score is not None
                             else ""
                         ),
+                        "potential_anomaly_latency_p95_seconds": (
+                            round(float(self._current_latency_sla_due_scan_p95_seconds), 3)
+                            if self._current_latency_sla_due_scan_p95_seconds is not None
+                            else ""
+                        ),
+                        "potential_anomaly_latency_max_seconds": (
+                            round(float(self._current_latency_sla_due_scan_max_seconds), 3)
+                            if self._current_latency_sla_due_scan_max_seconds is not None
+                            else ""
+                        ),
+                        "potential_anomaly_latency_samples": int(self._current_latency_sla_due_scan_samples),
+                        "potential_anomaly_queue_count": int(
+                            self._current_candidate_queue_radar_total_after
+                            + self._current_candidate_queue_warm_total_after
+                        ),
                         "adaptive_precise_budget_status": self._current_adaptive_precise_budget_status,
                         "adaptive_precise_budget_reason": self._current_adaptive_precise_budget_reason,
                         "adaptive_precise_budget_limit": (
@@ -4896,6 +4911,12 @@ class AnomalyMicroLiveRunner:
                             cold_status=cold_status_text,
                             cold_age=cold_age_text,
                             guard_status=guard_text,
+                            latency_p95_seconds=self._current_latency_sla_due_scan_p95_seconds,
+                            latency_max_seconds=self._current_latency_sla_due_scan_max_seconds,
+                            potential_queue_count=(
+                                self._current_candidate_queue_radar_total_after
+                                + self._current_candidate_queue_warm_total_after
+                            ),
                             session_top_snapshot=session_top_snapshot,
                         ),
                         highlight=open_positions > 0,
@@ -17064,6 +17085,18 @@ def _format_live_pulse(seconds: float) -> str:
     return f"{float(seconds):.1f}с"
 
 
+def _format_latency_seconds(seconds: float | None) -> str:
+    if seconds is None:
+        return "-"
+    try:
+        value = float(seconds)
+    except (TypeError, ValueError):
+        return "-"
+    if not math.isfinite(value) or value < 0.0:
+        return "-"
+    return _format_live_pulse(value)
+
+
 def _ms_to_iso_utc(timestamp_ms: int) -> str:
     if int(timestamp_ms) <= 0:
         return ""
@@ -17228,6 +17261,9 @@ def _format_live_heartbeat(
     cold_status: str,
     cold_age: str,
     guard_status: str,
+    latency_p95_seconds: float | None = None,
+    latency_max_seconds: float | None = None,
+    potential_queue_count: int = 0,
     session_top_snapshot: dict[str, object] | None = None,
 ) -> str:
     del idle, real_orders, cold_age, connection_text
@@ -17265,6 +17301,11 @@ def _format_live_heartbeat(
             _format_status_cell("Повтор", replay_value),
             _format_status_cell("Покрытие", cold_status),
             _format_status_cell("Защита", guard_status),
+        ),
+        _format_status_line(
+            _format_status_cell("Задержка p95", _format_latency_seconds(latency_p95_seconds)),
+            _format_status_cell("max", _format_latency_seconds(latency_max_seconds)),
+            _format_status_cell("Очередь", int(potential_queue_count)),
         ),
     ]
     rows.extend(_format_session_top_block(session_top_snapshot))
