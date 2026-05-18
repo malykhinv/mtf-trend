@@ -14,6 +14,18 @@ Last active patch: P294 applied locally live startup/cache speedups and latency 
 Updated: 2026-05-18
 ```
 
+## 2026-05-18 - P297 noticed-symbol decision speed patch
+
+```text
+Current patch status: P297 APPLIED locally / UNKNOWN commit.
+Question: implement the decision-speed plan from live run 20260518_090759 for coins noticed by the bot, without changing drift guard semantics.
+Implemented fixed code policy with no new CLI flags: latency SLA threshold lowered from 15s to 12s; breached/pressure adaptive radar slots raised to 3; candidate pressure now keeps a smaller score-ranked queue (top keep 8, radar cap 18, warm cap 12); top-score warm symbols (score >= 8.0) can promote to the radar hot lane even while optional work is SLA-gated, with latency_sla_hot_lane_override artifacts.
+Added bounded hot waiting prefetch: after batch selection, up to 3 waiting radar/warm symbols prefetch due subminute entry gap debt and emit hot_waiting_prefetch_cycle plus aggtrade_rest_gap_prefetch with hot_waiting_* reason/scan_mode. This does not fabricate coverage; pending or over-budget gaps remain explicit.
+Active/opening symbols still have first priority and are never dropped by precise budget. Prescan stale decisions now emit reject_stale_decision_latency, separate from execution-guard reject_stale_signal.
+Validation: compileall passed for research_tools/anomaly_micro_live.py. Broader tests pending in this turn.
+Next validation: short live smoke; inspect symbol_batch_selected hot_waiting_prefetch_count, latency_sla_status, candidate_queue_* totals, radar->precise latency, reject_stale_decision_latency, and no hidden fallback in aggtrade_rest_gap_prefetch coverage_pending/backfilled rows.
+```
+
 ## 2026-05-18 - P294 live startup catch-up and latency backtest grid
 
 ```text

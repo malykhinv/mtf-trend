@@ -108,6 +108,7 @@ actual fill must come from exchange order/trade payloads
 no candle/ticker-derived synthetic fill for ledger/PnL
 live ledger must write scan/guard provenance (`source_scan_mode`, `danger_cold_coverage_source`, `entry_position_guard_source`) from the opened position object
 no stale signal order after freshness window
+prescan decisions that arrive after max_signal_age_ms must emit reject_stale_decision_latency, distinct from execution-guard reject_stale_signal
 no order if TP1 is already reached or RR collapsed at live price
 BE/TP/PnL are computed from actual fill, not signal close
 TP1 is a full-position limit at actual_entry + 0.75 * (actual_entry - pump_leg_bottom)
@@ -118,6 +119,10 @@ Live scheduling contract:
 
 ```text
 selected hot symbol -> scan all due configured TF sets -> then move to next symbol
+noticed radar symbols have a fixed hot-lane before warm bulk/cold coverage; active/opening symbols remain protected first
+warm watch is a bounded score-ranked queue, not an unbounded holding pen; low-rank overflow must be emitted as candidate_dropped_latency_pressure
+top-score warm symbols may promote into the hot lane even while optional work is SLA-gated, and this must be explicit in artifacts
+waiting hot symbols may prefetch due subminute entry gap debt, but only with explicit hot_waiting_prefetch_* artifacts/reasons
 cold universe discovery is explicit DANGER budget, not implicit heavy work
 ticker-radar promotion can add watch symbols but cannot itself open trades
 in subminute WS-live, cold coverage is an adaptive idle/audit scanner: it is hard-off for open/opening positions and active-due symbols, soft-reduced by active-waiting symbols, and scaled by WS health, scheduler heartbeat EWMA, and REST/cache pressure

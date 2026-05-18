@@ -86,7 +86,7 @@ DANGER_ADAPTIVE_COLD_COVERAGE_ACTIVE_WAITING_SOFT_CAP = 3
 DANGER_ADAPTIVE_COLD_COVERAGE_NETWORK_CALLS_HIGH = 4
 DANGER_ADAPTIVE_COLD_COVERAGE_REST_FETCHED_MS_HIGH = 120_000
 DANGER_ADAPTIVE_COLD_COVERAGE_PENDING_GAPS_HIGH = 3
-DEFAULT_LATENCY_SLA_DUE_SCAN_P95_SECONDS = 15.0
+DEFAULT_LATENCY_SLA_DUE_SCAN_P95_SECONDS = 12.0
 DEFAULT_LATENCY_SLA_MIN_DUE_SAMPLES = 1
 DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MAX_CYCLE_SECONDS = 0.75
 DEFAULT_SYMBOL_CONTEXT_SNAPSHOT_MIN_COVERAGE_RATIO = 0.995
@@ -115,14 +115,16 @@ DEFAULT_WARM_WATCH_TTL_MS = 10 * 60_000
 DEFAULT_WARM_WATCH_MIN_OBSERVATIONS_FOR_PRECISE = 2
 DEFAULT_WARM_WATCH_MIN_PRICE_DELTA_PCT = -0.001
 DEFAULT_WARM_WATCH_MAX_PRICE_DELTA_PCT = 0.012
-CANDIDATE_QUEUE_PRESSURE_MIN_KEEP = 12
-CANDIDATE_QUEUE_PRESSURE_MAX_RADAR = 24
-CANDIDATE_QUEUE_PRESSURE_MAX_WARM = 24
+CANDIDATE_QUEUE_PRESSURE_MIN_KEEP = 8
+CANDIDATE_QUEUE_PRESSURE_MAX_RADAR = 18
+CANDIDATE_QUEUE_PRESSURE_MAX_WARM = 12
 CANDIDATE_QUEUE_PRESSURE_BACKLOG_STALE_FACTOR = 2.0
-ADAPTIVE_PRECISE_BUDGET_BREACHED_RADAR_SLOTS = 1
-ADAPTIVE_PRECISE_BUDGET_PRESSURE_RADAR_SLOTS = 2
+ADAPTIVE_PRECISE_BUDGET_BREACHED_RADAR_SLOTS = 3
+ADAPTIVE_PRECISE_BUDGET_PRESSURE_RADAR_SLOTS = 3
 ADAPTIVE_PRECISE_BUDGET_ACTIVE_RADAR_SLOTS = 2
 ADAPTIVE_PRECISE_BUDGET_SLOW_CYCLE_RADAR_SLOTS = 3
+HOT_WAITING_PREFETCH_MAX_SYMBOLS = 3
+WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE = 8.0
 DEPENDENCY_RETRY_MIN_COOLDOWN_MS = 10_000
 DEPENDENCY_RETRY_MAX_COOLDOWN_MS = 30_000
 PREPUMP_WARM_WATCH_SCORING_CONTRACT = "prepump_warm_watch_scoring_v1_spot_feature_separation_midpoint"
@@ -182,6 +184,7 @@ VISIBILITY_PRECISE_SCAN_EVENTS = frozenset(
         "signal_scan_retryable_dependency_blocked",
         "signal_scan_dependency_retry_scheduled",
         "candidate_expired_dependency_timeout",
+        "reject_stale_decision_latency",
         "reject_entry_below_initial_stop",
         "reject_invalid_initial_risk",
         "category_selected",
@@ -4402,6 +4405,8 @@ class AnomalyMicroLiveRunner:
                 "candidate_queue_pressure_min_keep": int(CANDIDATE_QUEUE_PRESSURE_MIN_KEEP),
                 "candidate_queue_pressure_max_radar": int(CANDIDATE_QUEUE_PRESSURE_MAX_RADAR),
                 "candidate_queue_pressure_max_warm": int(CANDIDATE_QUEUE_PRESSURE_MAX_WARM),
+                "hot_waiting_prefetch_max_symbols": int(HOT_WAITING_PREFETCH_MAX_SYMBOLS),
+                "warm_watch_hot_lane_force_promote_score": float(WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE),
                 "latency_sla_due_scan_p95_seconds": float(self.config.latency_sla_due_scan_p95_seconds),
                 "latency_sla_min_due_samples": int(self.config.latency_sla_min_due_samples),
                 "danger_local_entry_position_guard_enabled": bool(self.config.danger_local_entry_position_guard_enabled),
@@ -6895,6 +6900,7 @@ class AnomalyMicroLiveRunner:
         self._current_candidate_queue_dropped_pressure_count = selection.candidate_queue_dropped_pressure_count
         self._current_candidate_queue_expired_backlog_stale_count = selection.candidate_queue_expired_backlog_stale_count
         self._current_candidate_queue_top_score = selection.candidate_queue_top_score
+        hot_prefetch = self._prefetch_hot_waiting_symbols(selection, now_ms=int(time.time() * 1000))
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
@@ -6910,6 +6916,10 @@ class AnomalyMicroLiveRunner:
                 "ticker_radar_waiting_symbols": list(selection.radar_waiting),
                 "warm_watch_waiting_count": len(selection.warm_watch_waiting),
                 "warm_watch_waiting_symbols": list(selection.warm_watch_waiting),
+                "hot_waiting_prefetch_symbols": list(hot_prefetch["symbols"]),
+                "hot_waiting_prefetch_count": int(hot_prefetch["count"]),
+                "hot_waiting_prefetch_limit": int(hot_prefetch["limit"]),
+                "hot_waiting_prefetch_policy": hot_prefetch["policy"],
                 "latency_sla_status": selection.latency_sla_status,
                 "latency_sla_optional_scans_allowed": bool(selection.latency_sla_optional_scans_allowed),
                 "latency_sla_due_scan_p95_seconds": (
@@ -7021,6 +7031,59 @@ class AnomalyMicroLiveRunner:
             },
         )
         return list(selection.batch)
+
+    def _prefetch_hot_waiting_symbols(
+        self,
+        selection: LiveSymbolBatchSelection,
+        *,
+        now_ms: int,
+    ) -> dict[str, object]:
+        if HOT_WAITING_PREFETCH_MAX_SYMBOLS <= 0 or self.aggtrade_source is None:
+            return {
+                "symbols": (),
+                "count": 0,
+                "limit": max(0, int(HOT_WAITING_PREFETCH_MAX_SYMBOLS)),
+                "policy": "disabled_or_no_aggtrade_source",
+            }
+        selected_keys = {_position_symbol_key(symbol) for symbol in selection.batch}
+        ordered: list[tuple[str, str]] = []
+        for symbol in selection.radar_waiting:
+            key = _position_symbol_key(symbol)
+            if key not in selected_keys:
+                ordered.append((symbol, "hot_waiting_radar_prefetch"))
+                selected_keys.add(key)
+        for symbol in selection.warm_watch_waiting:
+            key = _position_symbol_key(symbol)
+            if key not in selected_keys:
+                ordered.append((symbol, "hot_waiting_warm_prefetch"))
+                selected_keys.add(key)
+        selected = ordered[: max(0, int(HOT_WAITING_PREFETCH_MAX_SYMBOLS))]
+        for symbol, reason in selected:
+            self._prefetch_symbol_subminute_entry_gap_debt(
+                symbol,
+                now_ms=now_ms,
+                reason=reason,
+                scan_mode=reason,
+            )
+        if selected:
+            self.artifacts.append_event(
+                "hot_waiting_prefetch_cycle",
+                "__live__",
+                {
+                    "symbols": [symbol for symbol, _reason in selected],
+                    "reasons_by_symbol": {symbol: reason for symbol, reason in selected},
+                    "limit": int(HOT_WAITING_PREFETCH_MAX_SYMBOLS),
+                    "radar_waiting_count": len(selection.radar_waiting),
+                    "warm_watch_waiting_count": len(selection.warm_watch_waiting),
+                    "policy": "prefetch_due_subminute_entry_gap_debt_for_top_waiting_radar_then_warm_symbols",
+                },
+            )
+        return {
+            "symbols": tuple(symbol for symbol, _reason in selected),
+            "count": len(selected),
+            "limit": max(0, int(HOT_WAITING_PREFETCH_MAX_SYMBOLS)),
+            "policy": "prefetch_due_subminute_entry_gap_debt_for_top_waiting_radar_then_warm_symbols",
+        }
 
     def _update_ws_aggtrade_subscriptions(self, batch: list[str]) -> LiveWsAggTradeSubscriptionStats:
         if self.aggtrade_source is None:
@@ -8710,7 +8773,12 @@ class AnomalyMicroLiveRunner:
                 event_name = "warm_watch_updated"
             if observations >= min_observations:
                 latency_sla = self._current_latency_sla_backlog_status(now_ms=now_ms)
-                if not latency_sla.optional_scans_allowed:
+                force_hot_lane = (
+                    not latency_sla.optional_scans_allowed
+                    and math.isfinite(score)
+                    and score >= float(WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE)
+                )
+                if not latency_sla.optional_scans_allowed and not force_hot_lane:
                     self._warm_watch[symbol_key] = LiveWarmWatch(
                         symbol=symbol,
                         reason=radar_reason,
@@ -8759,8 +8827,14 @@ class AnomalyMicroLiveRunner:
                 else:
                     self._warm_watch.pop(symbol_key, None)
                     promote_payload = {
-                        "reason": WARM_WATCH_SOURCE,
+                        "reason": (
+                            "warm_watch_high_score_hot_lane"
+                            if force_hot_lane
+                            else WARM_WATCH_SOURCE
+                        ),
                         "radar_reason": radar_reason,
+                        "latency_sla_hot_lane_override": bool(force_hot_lane),
+                        "latency_sla_hot_lane_min_score": float(WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE),
                         "observations": observations,
                         "min_observations_for_precise": min_observations,
                         "first_seen_ms": first_seen_ms,
@@ -8775,6 +8849,7 @@ class AnomalyMicroLiveRunner:
                         "promotion_source": promotion_source,
                         "source": WARM_WATCH_SOURCE,
                         **prepump_payload,
+                        **(latency_sla.event_payload() if force_hot_lane else {}),
                     }
             else:
                 self._warm_watch[symbol_key] = LiveWarmWatch(
@@ -8824,7 +8899,7 @@ class AnomalyMicroLiveRunner:
             self._mark_ticker_radar_watch(
                 symbol,
                 now_ms=now_ms,
-                reason=WARM_WATCH_SOURCE,
+                reason=str(promote_payload.get("reason") or WARM_WATCH_SOURCE),
                 score=score,
                 price_delta_pct=price_delta_pct,
                 quote_volume_delta=quote_volume_delta,
@@ -11135,6 +11210,7 @@ class AnomalyMicroLiveRunner:
         *,
         now_ms: int,
         reason: str,
+        scan_mode: str | None = None,
     ) -> None:
         source = self.aggtrade_source
         if source is None:
@@ -11175,7 +11251,7 @@ class AnomalyMicroLiveRunner:
                 {
                     "status": "coverage_pending",
                     "reason": "missing_total_exceeds_backfill_budget",
-                    "scan_mode": self._batch_scan_mode_for_symbol(symbol),
+                    "scan_mode": scan_mode or self._batch_scan_mode_for_symbol(symbol),
                     "prefetch_reason": reason,
                     "source": source.source_id,
                     "requested_ranges": [f"{start}:{end}" for start, end in requested_ranges],
@@ -11221,7 +11297,7 @@ class AnomalyMicroLiveRunner:
             {
                 "status": "backfilled",
                 "reason": "coalesced_symbol_subminute_entry_debt",
-                "scan_mode": self._batch_scan_mode_for_symbol(symbol),
+                "scan_mode": scan_mode or self._batch_scan_mode_for_symbol(symbol),
                 "prefetch_reason": reason,
                 "source": source.source_id,
                 "requested_ranges": [f"{start}:{end}" for start, end in requested_ranges],
@@ -11248,7 +11324,12 @@ class AnomalyMicroLiveRunner:
             return self._scan_batch_by_symbol(symbols)
         now_ms = int(time.time() * 1000)
         for symbol in symbols:
-            self._prefetch_symbol_subminute_entry_gap_debt(symbol, now_ms=now_ms, reason="batch_by_timeframe")
+            self._prefetch_symbol_subminute_entry_gap_debt(
+                symbol,
+                now_ms=now_ms,
+                reason="batch_by_timeframe",
+                scan_mode=self._batch_scan_mode_for_symbol(symbol),
+            )
         return self._scan_batch_by_timeframe(symbols)
 
     def _scan_batch_by_symbol(self, symbols: list[str]) -> list[LiveSignal]:
@@ -11257,7 +11338,12 @@ class AnomalyMicroLiveRunner:
         setup_cache: dict[tuple[str, str, int], pd.DataFrame] = {}
         entry_cache: dict[tuple[str, str, int, int], pd.DataFrame] = {}
         for symbol in symbols:
-            self._prefetch_symbol_subminute_entry_gap_debt(symbol, now_ms=now_ms, reason="batch_by_symbol")
+            self._prefetch_symbol_subminute_entry_gap_debt(
+                symbol,
+                now_ms=now_ms,
+                reason="batch_by_symbol",
+                scan_mode=self._batch_scan_mode_for_symbol(symbol),
+            )
             started_at = time.monotonic()
             due_count = 0
             evaluated_count = 0
@@ -11735,7 +11821,7 @@ class AnomalyMicroLiveRunner:
             with self._state_lock:
                 self._seen_decisions.add(key)
             self.artifacts.append_event(
-                "reject_stale_signal",
+                "reject_stale_decision_latency",
                 symbol,
                 {
                     **freshness,
@@ -11743,6 +11829,7 @@ class AnomalyMicroLiveRunner:
                     "levels_tf": levels_timeframe.value,
                     "entry_tf": entry_timeframe.value,
                     "setup_source": "forming_htf_from_entry_tf",
+                    "reason": "decision_arrived_after_max_signal_age_before_signal_build",
                 },
             )
             return no_signal(decision_timestamp_ms=decision_ts)
@@ -16273,6 +16360,7 @@ def _live_scan_gap_details(
 
 BLOCKED_ORDER_REASON_LABELS = {
     "reject_stale_signal": "сигнал устарел",
+    "reject_stale_decision_latency": "решение устарело до построения сигнала",
     "reject_invalid_live_price": "live-price невалидный",
     "reject_tp1_already_reached": "TP1 уже достигнут",
     "reject_invalid_actual_risk_at_live_price": "риск от live-price невалидный",
