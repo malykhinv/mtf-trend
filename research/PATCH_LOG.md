@@ -5047,6 +5047,47 @@ Risk:
 Low/medium. This can filter some early microcap runners. The threshold is intentionally 300k, not 1m, because the 300k-1m bucket still had positive live-priority expectancy in the current artifact.
 ```
 
+## 2026-05-18 - P290 applied locally - live data-readiness retry and session metrics
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+research/STRATEGY_SPEC.md
+```
+
+Intent:
+
+```text
+Prevent live from skipping an otherwise valid LTF decision when setup/entry OHLCV is temporarily empty because cache fill has not caught up.
+Make live stability and top-growth display use the current session metric window instead of process-lifetime stability and rolling 6h growth.
+Clarify operator data labels so OHLCV REST cache fills are not read as aggTrade/flow degradation.
+```
+
+Implementation:
+
+```text
+signal_scan_empty_ohlcv now returns retryable_dependency=True with reason ohlcv_data_unavailable and does not consume the decision timestamp as a normal no_signal.
+WS health samples are stored with wall-clock timestamps and ws_health_pct is computed from the session metric baseline. Cumulative observed/healthy seconds remain in separate artifact fields.
+Session top tracker prunes/baselines from the same session metric start: Asia+Europe from Asia start, Europe from Asia+Europe start, Europe+America from Europe start, America from Europe+America start, America+Asia from America start.
+Terminal heartbeat uses "WS сессия"; OHLCV cache fill/gap labels are "OHLCV REST"/"OHLCV gap".
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m compileall -q research_tools\anomaly_micro_live.py
+```
+
+Risk:
+
+```text
+Low/medium. Trade thresholds and order path are unchanged, but retrying empty OHLCV can let a still-fresh setup be evaluated later instead of being silently skipped. Session-scoped health resets at session metric boundaries by design.
+```
+
 ## 2026-05-17 - P282 applied locally - live liquidity universe filter
 
 Files:

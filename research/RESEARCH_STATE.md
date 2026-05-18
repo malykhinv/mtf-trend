@@ -10,8 +10,22 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P289 applied locally live-run review and 24h context label/parity cleanup
+Last active patch: P290 applied locally live data-readiness retry and session-scoped live stability/top-growth metrics
 Updated: 2026-05-18
+```
+
+## 2026-05-18 - P290 live data-readiness retry and session metrics
+
+```text
+Current patch status: P290 APPLIED locally / UNKNOWN commit.
+Artifact reviewed: .output/results/live_anomaly_runs/20260518_051811.
+The latest live run had 0 category_selected/position_opened, but ws_aggtrade_frame_read was fully covered: 2872 reads, connection_status=connected, missing_range_count=0, backfilled_rows=0, ws_rows=result_rows=529476. The 99.9% stability plus "Кеш REST" was mostly a label/window issue: REST there meant OHLCV cache fill, not degraded aggTrade flow.
+Real skip risk found: empty setup/entry OHLCV returned normal no_signal and could mark the LTF decision closed before the cache filled. P290 makes this a retryable dependency with explicit setup_empty/entry_empty/retry_policy fields, so it does not consume the candle until data is available or the signal goes stale.
+Stability is now session-scoped instead of cumulative process-since-start. live_cycle_summary keeps ws_health_pct/ws_health_observed_seconds/ws_health_healthy_seconds for the current session metric window and adds cumulative fields separately.
+Session top growth no longer uses rolling 6h. It uses the same session metric baseline: Asia+Europe from Asia start, Europe from Asia+Europe start, Europe+America from Europe start, America from Europe+America start, America+Asia from America start.
+Operator label cleanup: heartbeat now shows "WS сессия"; OHLCV cache statuses are "OHLCV REST"/"OHLCV gap" to avoid confusing REST cache fills with flow degradation.
+Validation: compileall passed for research_tools/anomaly_micro_live.py. Broader tests pending in this turn.
+Next validation: next live run should show ws_health_scope=session_metric_window, top_window_label="с начала сессии", and no normal no_signal closeout for signal_scan_empty_ohlcv rows.
 ```
 
 ## 2026-05-18 - P289 live run 20260517_200159 and context label/parity cleanup

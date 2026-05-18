@@ -231,7 +231,6 @@ DEFAULT_LIVE_TOP_GROWTH_IDLE_SYMBOLS_PER_CYCLE = 8
 DEFAULT_LIVE_TOP_GROWTH_IDLE_MAX_CYCLE_SECONDS = 1.5
 DEFAULT_LIVE_TOP_GROWTH_CONSERVATIVE_SYMBOLS_PER_CYCLE = 2
 DEFAULT_LIVE_TOP_GROWTH_CONSERVATIVE_MAX_CYCLE_SECONDS = 0.5
-LIVE_SESSION_TOP_ROLLING_WINDOW_MS = 6 * 60 * 60 * 1000
 LIVE_CRYPTO_SESSION_WINDOWS_UTC = (
     (0, 7 * 60, "Азия", "core", "Азия", ""),
     (7 * 60, 9 * 60, "Азия → Европа", "transition", "Азия", "Европа"),
@@ -239,6 +238,14 @@ LIVE_CRYPTO_SESSION_WINDOWS_UTC = (
     (13 * 60, 16 * 60, "Европа + Америка", "overlap", "Европа", "Америка"),
     (16 * 60, 21 * 60, "Америка", "core", "Америка", ""),
     (21 * 60, 24 * 60, "Америка → Азия", "transition", "Америка", "Азия"),
+)
+LIVE_CRYPTO_SESSION_METRIC_START_MINUTES_UTC = (
+    (0, 7 * 60, 0),
+    (7 * 60, 9 * 60, 0),
+    (9 * 60, 13 * 60, 7 * 60),
+    (13 * 60, 16 * 60, 9 * 60),
+    (16 * 60, 21 * 60, 13 * 60),
+    (21 * 60, 24 * 60, 16 * 60),
 )
 LIVE_SESSION_TOP_GROWTH_COLUMNS = (
     "snapshot_utc",
@@ -2486,7 +2493,8 @@ class LiveSessionTopTracker:
         source_reason: str,
     ) -> None:
         now_ms = int(now_ms)
-        cutoff_ms = now_ms - int(LIVE_SESSION_TOP_ROLLING_WINDOW_MS)
+        session_window = _live_session_metric_window_ms(now_ms)
+        cutoff_ms = int(session_window["metric_start_ms"])
         self._last_snapshot_ms = now_ms
         self._last_source = str(source or "")
         self._last_source_status = str(source_status or "")
@@ -2523,8 +2531,8 @@ class LiveSessionTopTracker:
 
     def snapshot(self, *, now_ms: int) -> dict[str, object]:
         now_ms = int(now_ms)
-        session = _live_crypto_session_context_ms(now_ms)
-        cutoff_ms = now_ms - int(LIVE_SESSION_TOP_ROLLING_WINDOW_MS)
+        session = _live_session_metric_window_ms(now_ms)
+        cutoff_ms = int(session["metric_start_ms"])
         items: list[dict[str, object]] = []
         symbols_tracked = 0
         for state in list(self._states.values()):
@@ -2560,10 +2568,11 @@ class LiveSessionTopTracker:
             reason = "ok"
         elif symbols_tracked:
             status = "empty"
-            reason = "no_positive_growth_in_rolling_6h"
+            reason = "no_positive_growth_since_session_metric_baseline"
         else:
             status = "empty"
-            reason = "no_usable_ticker_price_snapshots_in_rolling_6h"
+            reason = "no_usable_ticker_price_snapshots_since_session_metric_start"
+        elapsed_hours = max(0.0, (now_ms - cutoff_ms) / float(_HOUR_MS))
         return {
             "snapshot_timestamp_ms": now_ms,
             "session_label": session["label"],
@@ -2572,10 +2581,10 @@ class LiveSessionTopTracker:
             "session_secondary": session["secondary"],
             "session_start_ms": session["start_ms"],
             "session_end_ms": session["end_ms"],
-            "top_window_label": "последние 6ч",
+            "top_window_label": session["metric_window_label"],
             "top_window_start_ms": cutoff_ms,
             "top_window_end_ms": now_ms,
-            "top_window_hours": 6.0,
+            "top_window_hours": round(elapsed_hours, 4),
             "status": status,
             "reason": reason,
             "source": self._last_source,
@@ -4277,6 +4286,12 @@ class AnomalyMicroLiveRunner:
         self._cycle_deferred_inactive_subminute_pairs = 0
         self._ws_health_observed_seconds = 0.0
         self._ws_health_healthy_seconds = 0.0
+        self._ws_health_session_samples: deque[tuple[int, float, bool]] = deque()
+        self._last_ws_session_health_observed_seconds = 0.0
+        self._last_ws_session_health_healthy_seconds = 0.0
+        self._last_ws_health_window_label = ""
+        self._last_ws_health_window_start_ms = 0
+        self._last_ws_health_window_end_ms = 0
         self._last_ws_health_sample_at = time.monotonic()
         self._symbol_universe_scan_started_at = time.monotonic()
         self._last_symbol_universe_cycle_seconds: float | None = None
@@ -4717,9 +4732,15 @@ class AnomalyMicroLiveRunner:
                         ),
                         "ws_healthy": bool(ws_healthy),
                         "ws_health_reason": ws_health_reason,
+                        "ws_health_scope": "session_metric_window",
+                        "ws_health_window_label": self._last_ws_health_window_label,
+                        "ws_health_window_start_ms": self._last_ws_health_window_start_ms,
+                        "ws_health_window_end_ms": self._last_ws_health_window_end_ms,
                         "ws_health_pct": round(ws_health_pct, 4),
-                        "ws_health_observed_seconds": round(self._ws_health_observed_seconds, 3),
-                        "ws_health_healthy_seconds": round(self._ws_health_healthy_seconds, 3),
+                        "ws_health_observed_seconds": round(self._last_ws_session_health_observed_seconds, 3),
+                        "ws_health_healthy_seconds": round(self._last_ws_session_health_healthy_seconds, 3),
+                        "ws_health_cumulative_observed_seconds": round(self._ws_health_observed_seconds, 3),
+                        "ws_health_cumulative_healthy_seconds": round(self._ws_health_healthy_seconds, 3),
                         "signal_scan_seconds": round(scan_seconds, 3),
                         "open_signal_seconds": round(open_seconds, 3),
                         "order_reconcile_seconds": round(reconcile_seconds, 3),
@@ -7179,9 +7200,9 @@ class AnomalyMicroLiveRunner:
             if self._cycle_ws_aggtrade_backfill_reads > 0 or self._cycle_aggtrade_gap_prefetch_backfill_ranges > 0:
                 return "Поток gapREST"
         if self._cycle_ohlcv_cache_remaining_gap_count > 0:
-            return "Кеш gap"
+            return "OHLCV gap"
         if self._cycle_ohlcv_cache_filled_reads > 0 or self._cycle_ohlcv_cache_fetched_rows > 0:
-            return "Кеш REST"
+            return "OHLCV REST"
         return "ok"
 
     def _ticker_health_status(self, *, status: str, source: str) -> str:
@@ -7195,17 +7216,41 @@ class AnomalyMicroLiveRunner:
         now = time.monotonic()
         sample_seconds = max(0.0, now - self._last_ws_health_sample_at)
         self._last_ws_health_sample_at = now
+        if self._ws_health_observed_seconds <= 0.0:
+            sample_seconds = min(sample_seconds, max(1.0, float(self.config.scan_sleep_seconds)))
         self._ws_health_observed_seconds += sample_seconds
         if healthy:
             self._ws_health_healthy_seconds += sample_seconds
-        if self._ws_health_observed_seconds <= 0.0:
-            return 0.0
-        return self._ws_health_healthy_seconds / self._ws_health_observed_seconds
+        now_ms = int(time.time() * 1000)
+        self._ws_health_session_samples.append((now_ms, sample_seconds, bool(healthy)))
+        prune_before_ms = now_ms - int(36 * _HOUR_MS)
+        while self._ws_health_session_samples and int(self._ws_health_session_samples[0][0]) < prune_before_ms:
+            self._ws_health_session_samples.popleft()
+        return self._update_ws_session_health_stats(now_ms=now_ms)
 
     def _current_ws_health_ratio(self) -> float:
-        if self._ws_health_observed_seconds <= 0.0:
+        return self._update_ws_session_health_stats(now_ms=int(time.time() * 1000))
+
+    def _update_ws_session_health_stats(self, *, now_ms: int) -> float:
+        window = _live_session_metric_window_ms(int(now_ms))
+        start_ms = int(window["metric_start_ms"])
+        observed_seconds = 0.0
+        healthy_seconds = 0.0
+        for sample_ts_ms, sample_seconds, healthy in self._ws_health_session_samples:
+            if int(sample_ts_ms) < start_ms:
+                continue
+            seconds = max(0.0, float(sample_seconds))
+            observed_seconds += seconds
+            if healthy:
+                healthy_seconds += seconds
+        self._last_ws_session_health_observed_seconds = observed_seconds
+        self._last_ws_session_health_healthy_seconds = healthy_seconds
+        self._last_ws_health_window_label = str(window["metric_window_label"])
+        self._last_ws_health_window_start_ms = start_ms
+        self._last_ws_health_window_end_ms = int(window["metric_end_ms"])
+        if observed_seconds <= 0.0:
             return 0.0
-        return self._ws_health_healthy_seconds / self._ws_health_observed_seconds
+        return healthy_seconds / observed_seconds
 
     def _record_scheduler_cycle_seconds(self, cycle_seconds: float) -> None:
         if not math.isfinite(cycle_seconds) or cycle_seconds < 0.0:
@@ -11462,6 +11507,8 @@ class AnomalyMicroLiveRunner:
             )
 
         if setup_frame.empty or entry_frame.empty:
+            setup_empty = bool(setup_frame.empty)
+            entry_empty = bool(entry_frame.empty)
             self.artifacts.append_event(
                 "signal_scan_empty_ohlcv",
                 symbol,
@@ -11470,9 +11517,17 @@ class AnomalyMicroLiveRunner:
                     "entry_tf": entry_timeframe.value,
                     "setup_start_timestamp_ms": int(setup_start_ts),
                     "reason": "empty_setup_or_entry_frame",
+                    "setup_empty": setup_empty,
+                    "entry_empty": entry_empty,
+                    "retry_policy": "do_not_consume_decision_until_data_available_or_stale",
                 },
             )
-            return no_signal()
+            return no_signal(
+                decision_timestamp_ms=int(latest_closed_entry_ts),
+                retryable_dependency=True,
+                retry_reason="ohlcv_data_unavailable",
+                retryable_reasons=("empty_setup_or_entry_frame",),
+            )
         missing_setup_price = [column for column in REQUIRED_PRICE_COLUMNS if column not in setup_frame.columns]
         missing_setup_flow = [column for column in REQUIRED_FLOW_COLUMNS if column not in setup_frame.columns]
         missing_entry_price = [column for column in REQUIRED_PRICE_COLUMNS if column not in entry_frame.columns]
@@ -16828,6 +16883,25 @@ def _live_crypto_session_context_ms(timestamp_ms: int) -> dict[str, object]:
     raise LiveDataIntegrityError(f"No crypto session window for UTC minute {minute_of_day}")
 
 
+def _live_session_metric_window_ms(timestamp_ms: int) -> dict[str, object]:
+    session = dict(_live_crypto_session_context_ms(timestamp_ms))
+    moment = datetime.fromtimestamp(int(timestamp_ms) / 1000, UTC)
+    minute_of_day = moment.hour * 60 + moment.minute
+    day_start = moment.replace(hour=0, minute=0, second=0, microsecond=0)
+    metric_start_minute: int | None = None
+    for start_minute, end_minute, metric_start in LIVE_CRYPTO_SESSION_METRIC_START_MINUTES_UTC:
+        if int(start_minute) <= minute_of_day < int(end_minute):
+            metric_start_minute = int(metric_start)
+            break
+    if metric_start_minute is None:
+        raise LiveDataIntegrityError(f"No crypto session metric window for UTC minute {minute_of_day}")
+    metric_start_dt = day_start + timedelta(minutes=metric_start_minute)
+    session["metric_start_ms"] = int(metric_start_dt.timestamp() * 1000)
+    session["metric_end_ms"] = int(session["end_ms"])
+    session["metric_window_label"] = "с начала сессии"
+    return session
+
+
 def _live_session_window_ms(timestamp_ms: int) -> tuple[str, int, int]:
     session = _live_crypto_session_context_ms(timestamp_ms)
     return str(session["label"]), int(session["start_ms"]), int(session["end_ms"])
@@ -16907,9 +16981,17 @@ def _format_session_top_block(session_top_snapshot: dict[str, object] | None) ->
             cells.append(_format_session_top_cell(""))
         return ["", label, _format_status_line(*cells[:LIVE_SESSION_TOP_LIMIT])]
     reason = str(session_top_snapshot.get("reason") or "")
-    if reason in {"no_positive_growth_since_session_baseline", "no_positive_growth_in_rolling_6h"}:
+    if reason in {
+        "no_positive_growth_since_session_baseline",
+        "no_positive_growth_in_rolling_6h",
+        "no_positive_growth_since_session_metric_baseline",
+    }:
         value = "нет роста"
-    elif reason in {"ticker_snapshot_not_seen_for_current_session", "no_usable_ticker_price_snapshots_in_rolling_6h"}:
+    elif reason in {
+        "ticker_snapshot_not_seen_for_current_session",
+        "no_usable_ticker_price_snapshots_in_rolling_6h",
+        "no_usable_ticker_price_snapshots_since_session_metric_start",
+    }:
         value = "нет данных"
     elif reason == "no_usable_ticker_price_snapshots":
         value = "нет цен"
@@ -16953,7 +17035,7 @@ def _format_live_heartbeat(
     rows = [
         "Соединение",
         _format_status_line(
-            _format_status_cell("Стабильность", _format_percent(connection_health_pct, signed=False, precision=1)),
+            _format_status_cell("WS сессия", _format_percent(connection_health_pct, signed=False, precision=1)),
             _format_status_cell("Пульс", _format_live_pulse(cycle_seconds)),
             _format_status_cell("Данные", data_status_text),
         ),

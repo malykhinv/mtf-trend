@@ -126,8 +126,18 @@ write fetched live rows with provenance/version
 live parquet writes may be buffered, but buffered/flushed/failed counts must be visible
 remaining cache gaps must emit artifacts
 cache gaps are not valid zero-signal evidence
+empty setup/entry OHLCV in live is a retryable dependency, not a normal no_signal that may consume the LTF decision before cache fill catches up
 WS ticker radar required for subminute live must be healthy before startup continues
 WS aggTrade missing coverage must be explicit; unbounded REST backfill is not a default live path
+```
+
+Live operator/session metric contract:
+
+```text
+WS stability shown in heartbeat/artifacts is scoped to the current session metric window, not process lifetime.
+Session top-growth baseline uses the same metric window, not a rolling 6h window.
+Asia+Europe starts at Asia start; Europe starts at Asia+Europe start; Europe+America starts at Europe start; America starts at Europe+America start; America+Asia starts at America start.
+OHLCV REST/cache-fill labels must not be interpreted as aggTrade flow degradation.
 ```
 
 Diagnostics/parity contract:

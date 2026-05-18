@@ -3001,6 +3001,19 @@ Question:
 Can live immediately discard low-liquidity coins, while still letting coins enter later if liquidity arrives?
 ```
 
+## 2026-05-18 - live run 20260518_051811 data-readiness/stability audit
+
+```text
+Question: can live miss trades because data is temporarily incomplete, and is the displayed stability percentage consistent with REST/cache messages?
+Artifact: .output/results/live_anomaly_runs/20260518_051811.
+Window: 2026-05-18 05:18:12Z to 2026-05-18 06:40:58Z, 26227 live_events rows, 0 category_selected, 0 position_opened.
+Flow quality: ws_aggtrade_frame_read was fully covered in this artifact: 2872 reads, connected, missing_range_count=0, backfilled_rows=0, result_rows=ws_rows=529476. Current evidence does not show aggTrade underfetch causing missed entries.
+Data-readiness risk: signal_scan_empty_ohlcv=15, signal_scan_retryable_dependency_blocked=13, candidate_expired_dependency_timeout=13, reject_insufficient_real_entry_buckets=3. Empty OHLCV was handled as normal no_signal in code before P290, so it could consume a candle before cache fill caught up.
+Stability interpretation: the old "Стабильность" percentage was cumulative from process start, while "Кеш REST" meant OHLCV cache fill/prefetch. Therefore 99.9% stability with REST text was not necessarily contradictory, but the display was misleading.
+Decision: apply P290. Keep trade/category filters unchanged; fix only retry semantics for empty OHLCV and session-scoped operator metrics.
+Next validation: run the next live and group signal_scan_empty_ohlcv by retry_policy plus live_cycle_summary by ws_health_scope/top_window_label.
+```
+
 ## 2026-05-17 - pump-leg TP1 0.75R vs 1.0R no-overlap readout
 
 ```text
