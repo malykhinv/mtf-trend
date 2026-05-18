@@ -1614,8 +1614,14 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
                 runner.shutdown(reason="command_keyboard_interrupt")
             raise
         except LiveStartupError as exc:
+            if runner is not None:
+                runner.shutdown(reason="command_live_startup_error")
             print(f"live: запуск остановлен: {exc}", flush=True)
             return 2
+        except Exception:
+            if runner is not None:
+                runner.shutdown(reason="command_exception")
+            raise
 
     return _run_with_logging("run-anomaly-live", config, _run)
 

@@ -10,8 +10,20 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P290 applied locally live data-readiness retry and session-scoped live stability/top-growth metrics
+Last active patch: P291 applied locally live session metric NameError fix and error newline cleanup
 Updated: 2026-05-18
+```
+
+## 2026-05-18 - P291 live session metric NameError fix
+
+```text
+Current patch status: P291 APPLIED locally / UNKNOWN commit.
+User live command failed during startup ticker radar validation at .output/results/live_anomaly_runs/20260518_070057 with NameError: _HOUR_MS is not defined.
+Root cause: P290 used _HOUR_MS in anomaly_micro_live.py, while this module defines HOUR_MS. The failure happened before live cycles started, inside session top artifact snapshot.
+Fix: replace _HOUR_MS with HOUR_MS in session top elapsed-hour and WS session sample pruning calculations.
+Operator output cleanup: runner.shutdown now finishes the live status line, and run-anomaly-live calls shutdown before LiveStartupError/generic exception propagation, so errors should print on a fresh line instead of appending to a status message.
+Validation: compileall passed for research_tools/anomaly_micro_live.py and cli/commands.py; anomaly continuation lab tests passed 13/13; live order lifecycle unittest passed 5/5; direct LiveSessionTopTracker snapshot smoke passed.
+Next validation: restart run-anomaly-live and confirm startup passes ticker radar validation and any future exception appears on a separate terminal line.
 ```
 
 ## 2026-05-18 - P290 live data-readiness retry and session metrics

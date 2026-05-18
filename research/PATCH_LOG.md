@@ -5047,6 +5047,46 @@ Risk:
 Low/medium. This can filter some early microcap runners. The threshold is intentionally 300k, not 1m, because the 300k-1m bucket still had positive live-priority expectancy in the current artifact.
 ```
 
+## 2026-05-18 - P291 applied locally - live session metric NameError fix
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+cli/commands.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Fix startup crash introduced by P290 session metrics and make live command errors print on a fresh terminal line.
+```
+
+Implementation:
+
+```text
+Replaced two accidental _HOUR_MS references with the module-local HOUR_MS constant.
+runner.shutdown now finishes any active live status line before cache/source cleanup.
+run-anomaly-live now calls runner.shutdown before LiveStartupError and generic exception exits, so the CLI exception logger starts after the status row is closed.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m compileall -q research_tools\anomaly_micro_live.py cli\commands.py
+.venv\Scripts\python.exe -m pytest tests\test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m unittest tests.test_live_order_lifecycle -v
+```
+
+Risk:
+
+```text
+Low. This is a constant-name bug fix and terminal cleanup path; trading logic is unchanged.
+```
+
 ## 2026-05-18 - P290 applied locally - live data-readiness retry and session metrics
 
 Files:

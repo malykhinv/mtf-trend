@@ -3001,6 +3001,18 @@ Question:
 Can live immediately discard low-liquidity coins, while still letting coins enter later if liquidity arrives?
 ```
 
+## 2026-05-18 - live run 20260518_070057 startup crash
+
+```text
+Question: did P290 break live startup?
+Artifact directory: .output/results/live_anomaly_runs/20260518_070057.
+Observed failure: run-anomaly-live crashed at 09:32 local during startup ticker radar validation with NameError: _HOUR_MS is not defined.
+Root cause: session top snapshot used _HOUR_MS, but anomaly_micro_live.py defines HOUR_MS.
+Decision: apply P291. This is a code bug, not evidence about strategy/filter quality.
+Validation after fix: direct LiveSessionTopTracker snapshot smoke passed; broader compile/tests passed.
+Next validation: restart the same live command and confirm no startup NameError.
+```
+
 ## 2026-05-18 - live run 20260518_051811 data-readiness/stability audit
 
 ```text

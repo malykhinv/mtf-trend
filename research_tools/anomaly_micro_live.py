@@ -2572,7 +2572,7 @@ class LiveSessionTopTracker:
         else:
             status = "empty"
             reason = "no_usable_ticker_price_snapshots_since_session_metric_start"
-        elapsed_hours = max(0.0, (now_ms - cutoff_ms) / float(_HOUR_MS))
+        elapsed_hours = max(0.0, (now_ms - cutoff_ms) / float(HOUR_MS))
         return {
             "snapshot_timestamp_ms": now_ms,
             "session_label": session["label"],
@@ -4314,6 +4314,7 @@ class AnomalyMicroLiveRunner:
         self._live_sources_closed = False
 
     def shutdown(self, *, reason: str) -> None:
+        self._status_logger.finish_status()
         self._flush_live_ohlcv_cache_if_due(force=True, reason=reason)
         self._close_live_sources()
 
@@ -7223,7 +7224,7 @@ class AnomalyMicroLiveRunner:
             self._ws_health_healthy_seconds += sample_seconds
         now_ms = int(time.time() * 1000)
         self._ws_health_session_samples.append((now_ms, sample_seconds, bool(healthy)))
-        prune_before_ms = now_ms - int(36 * _HOUR_MS)
+        prune_before_ms = now_ms - int(36 * HOUR_MS)
         while self._ws_health_session_samples and int(self._ws_health_session_samples[0][0]) < prune_before_ms:
             self._ws_health_session_samples.popleft()
         return self._update_ws_session_health_stats(now_ms=now_ms)
