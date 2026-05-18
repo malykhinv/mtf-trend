@@ -6,6 +6,16 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+## 2026-05-18 - live decision-speed review 20260518_090759
+
+```text
+Artifact reviewed: .output/results/live_anomaly_runs/20260518_090759/live_events.csv.
+The run noticed 489 symbols through warm/radar/active paths. Active symbols were fast after promotion: active->next precise scan p50 0.293s, p95 1.178s. The bottleneck is before active selection: warm/radar backlog and latency SLA. 54.7% of cycles had latency_sla_status=breached; due-scan p95 p50 was 17.384s and p95 28.512s versus a 15s threshold. The queue had warm_total_before p50 25 / p95 38, 11802 warm_queue_over_pressure_cap drops, and 1570 warm_watch_precise_deferred_latency_sla rows.
+Precise scan itself is usually cheap: signal_symbol_scan_summary duration p50 281ms, p95 1031ms, p99 1578ms, but batch_seconds p95 was 17.86s because selection/backlog/rest/cache pressure serializes noticed candidates. Radar->next precise scan p50 was 20.77s, p95 3334s; warm->next precise scan p50 was 1743s, p95 8079s, so warm watch is mostly an overloaded holding pen, not a timely decision path.
+Data-dependency misses still exist: 143 signal_scan_empty_ohlcv and 143 ohlcv_data_unavailable expiries; 190 category_dependency_unavailable expiries from reject_prior_fast_fade_filter_unavailable. The only selected signal was TOWNS 1m/15s runner_balanced; it reached category_selected, then execution rejected by price drift with entry_lag_ms=10188, drift=-0.4607%, RR improved to 1.51, and live_scan_gap_ltf_candles=0.
+Plan direction: prioritize noticed symbols with a small hot-lane, make warm->precise promotion much stricter or score-ranked, keep active symbols protected, prefetch/cache entry frames for hot symbols, and split favorable vs adverse drift so fast execution work is not wasted by an absolute drift guard.
+```
+
 ## 2026-05-18 - live artifact review 20260517_200159
 
 Input:
