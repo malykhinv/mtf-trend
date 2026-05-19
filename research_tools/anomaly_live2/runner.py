@@ -17,6 +17,7 @@ from .market_data.ticker_ws import Live2TickerWsSource
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
 from .position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorConfig
 from .state import SymbolStateStore
+from .telegram import Live2TelegramConfig, Live2TelegramDispatcher
 
 
 class AnomalyLive2Runner:
@@ -29,10 +30,22 @@ class AnomalyLive2Runner:
     fill recovery, and strict initial-stop visibility verification.
     """
 
-    def __init__(self, config: AnomalyLive2Config, *, exchange_client: Live2ExecutionExchange | None = None) -> None:
+    def __init__(
+        self,
+        config: AnomalyLive2Config,
+        *,
+        exchange_client: Live2ExecutionExchange | None = None,
+        telegram_config: Live2TelegramConfig | None = None,
+    ) -> None:
         self.config = config
         self.started_at_utc = utc_now_iso()
         self.state_store = SymbolStateStore(config.symbols)
+        if telegram_config is None:
+            raise ValueError("telegram_config is required for run-anomaly-live2")
+        self.telegram = Live2TelegramDispatcher(
+            telegram_config,
+            logger=lambda message: print(message, flush=True),
+        )
         self.readiness = Live2Readiness(
             artifact_writer_ready=True,
             decision_latency_ready=True,
@@ -108,6 +121,7 @@ class AnomalyLive2Runner:
             queue_max_size=self.config.artifact_writer_queue_max_size,
         )
         try:
+            self.telegram.set_event_writer(writer.write_event)
             self._write_startup_events(writer)
             execution_preflight = self.execution_engine.preflight()
             self.readiness.exchange_boundary_ready = execution_preflight.ready
@@ -201,6 +215,11 @@ class AnomalyLive2Runner:
                 execution_status=self._execution_status(),
                 runtime_gate_status=runtime_gate_status,
             )
+            self.telegram.send_startup(
+                output_dir=self.config.output_dir,
+                universe_size=len(self.universe_selection.selected_symbols),
+                runtime_generation=self.config.runtime_generation,
+            )
             print(
                 f"live2 · старт · артефакты {self.config.output_dir} · "
                 f"universe {len(self.universe_selection.selected_symbols)} · "
@@ -213,6 +232,7 @@ class AnomalyLive2Runner:
                 supervisor_result = self.position_supervisor.run_cycle(self.state_store)
                 for action in supervisor_result.actions:
                     writer.write_event(action.as_event())
+                    self.telegram.notify_supervisor_action(action)
                 deadline_result = self.deadline_engine.run_cycle()
                 self._last_decision_cycle_elapsed_ms = int((time.perf_counter() - cycle_started) * 1000)
                 self._decision_loop_max_elapsed_ms = max(
@@ -221,6 +241,7 @@ class AnomalyLive2Runner:
                 )
                 for decision in deadline_result.decisions:
                     writer.write_event(decision.as_event())
+                    self.telegram.notify_decision(decision)
 
                 market_data_status = self._market_data_status()
                 self._refresh_runtime_gates(
@@ -297,12 +318,36 @@ class AnomalyLive2Runner:
                 execution_status=self._execution_status(),
                 runtime_gate_status=self._runtime_gate_status(),
             )
+            self.telegram.send(
+                channel="events",
+                key="live2_stopped_keyboard_interrupt",
+                text="⚠️ <b>Live2 остановлен</b>\n\n<code>keyboard_interrupt</code>",
+                symbol="__telegram__",
+            )
             print("live2 · остановлено пользователем", flush=True)
             return 130
+        except Exception as exc:
+            self.shutdown(reason="runner_exception")
+            self.telegram.send_critical_sync(
+                channel="events",
+                key="live2_runner_exception",
+                text=f"⚠️ <b>Live2 остановлен</b>\n\n<code>{type(exc).__name__}: {str(exc)[:500]}</code>",
+                symbol="__telegram__",
+            )
+            writer.write_event(
+                Live2Event(
+                    event_type="live2_internal_error",
+                    component=Live2Component.RUNNER,
+                    severity=Live2Severity.ERROR,
+                    message=f"{type(exc).__name__}: {exc}",
+                )
+            )
+            raise
         finally:
             if self.aggtrade_source is not None:
                 self.aggtrade_source.close()
             self.ticker_source.close()
+            self.telegram.close()
             writer.close()
         return 0
 
@@ -346,6 +391,8 @@ class AnomalyLive2Runner:
             "market_data_status": str(market_data_status.get("status", "")),
         }
         if snapshot != self._last_runtime_gate_snapshot:
+            previous_allowed = bool(self._last_runtime_gate_snapshot.get("new_entries_allowed")) if self._last_runtime_gate_snapshot else False
+            current_allowed = self.readiness.new_entries_allowed
             self._last_runtime_gate_snapshot = dict(snapshot)
             writer.write_event(
                 Live2Event(
@@ -355,6 +402,11 @@ class AnomalyLive2Runner:
                     message=str(runtime_gate_status["reason"]),
                     data=runtime_gate_status,
                 )
+            )
+            self.telegram.notify_runtime_gate_update(
+                runtime_gate_status,
+                previous_allowed=previous_allowed,
+                current_allowed=current_allowed,
             )
 
     def _market_data_gate_ready(self, market_data_status: dict[str, object]) -> bool:

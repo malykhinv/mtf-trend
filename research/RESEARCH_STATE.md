@@ -1,5 +1,13 @@
 # Anomaly Research State
 
+## 2026-05-19 - P324 live2 Telegram operator safety messages
+
+```text
+Status: PROPOSED / UNKNOWN commit.
+Live2 now has its own Telegram operator notifier. The command requires the same TELEGRAM_* env contract as live1, sends startup/status degradation messages to the events channel, sends verified entry / TP1-BE / final-close messages to positions, and sends strict critical alerts for position/order integrity errors. Symbol names are rendered as Coinglass links. Telegram remains notification-only; live2_events.csv/live2_status.json remain source of truth.
+Next: smoke run live2 with tiny universe and verify telegram_message_sent/telegram_*_failed events plus actual rendered messages before adding restart/open-order reconciliation.
+```
+
 ## 2026-05-19 - P320 live2 fast decision loop gates
 
 ```text
@@ -26,7 +34,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P320 proposed live2 fast decision loop gates
+Last active patch: P324 proposed live2 Telegram operator safety messages
 Updated: 2026-05-19
 ```
 

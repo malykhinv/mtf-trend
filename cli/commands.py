@@ -1641,7 +1641,11 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
     """Run the generation-0 anomaly live2 runtime skeleton."""
 
     def _run() -> int:
-        from research_tools.anomaly_live2 import AnomalyLive2Config, AnomalyLive2Runner
+        from research_tools.anomaly_live2 import (
+            AnomalyLive2Config,
+            AnomalyLive2Runner,
+            build_live2_telegram_config_from_env,
+        )
 
         output_arg = getattr(args, "output_dir", None)
         if output_arg:
@@ -1661,6 +1665,7 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
                 universe_min_trade_count_24h=int(getattr(args, "universe_min_trade_count_24h", 1)),
             ),
             exchange_client=exchange_client,
+            telegram_config=build_live2_telegram_config_from_env(),
         )
         return runner.run()
 

@@ -14,6 +14,13 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+## 2026-05-19 - P324 live2 operator-message smoke plan
+
+```text
+P324 proposed: live2 operator notifications are added without changing signal, guard, execution, stop, TP, or sizing logic. Acceptance: startup sends one events message; verified entry messages show the linked Coinglass symbol name; TP1/BE and final close messages are sent from supervisor actions; integrity errors use strict critical wording; live2_events.csv records telegram_message_sent or telegram_*_failed. Telegram is not source of truth.
+Remaining patches: restart/open-order reconciliation; exact stop-trigger fill reconstruction; deeper performance/shard stress hardening.
+```
+
 ## 2026-05-19 - live2 architecture patch stack
 
 ```text
