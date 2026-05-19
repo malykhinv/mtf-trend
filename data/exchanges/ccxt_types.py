@@ -39,6 +39,22 @@ class ExchangePositionSnapshot:
     source: str
 
 
+
+
+@dataclass(frozen=True, slots=True)
+class ExchangeOpenInterestSnapshot:
+    """Normalized current open-interest snapshot for live execution guards."""
+
+    symbol: str
+    exchange_symbol: str
+    fetched_at_ms: int
+    timestamp_ms: int | None
+    open_interest: float | None
+    source: str
+    status: str
+    reason: str | None = None
+
+
 @dataclass(frozen=True, slots=True)
 class ExchangeTickerSnapshot:
     """Normalized ticker snapshot for live scheduling priority only.

@@ -31,7 +31,7 @@ import pandas as pd
 
 from constants import DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT
 from data.exchanges.ccxt_futures_client import CcxtFuturesClient
-from data.exchanges.ccxt_types import ExchangeTickerSnapshot
+from data.exchanges.ccxt_types import ExchangeOpenInterestSnapshot, ExchangeTickerSnapshot
 from data.storage.parquet_storage import ParquetStorage
 from domain.exceptions import ExchangeConnectivityError
 from domain.enums.timeframe import Timeframe
@@ -465,6 +465,10 @@ SYMBOL_CONTEXT_PRIOR_LOOKBACK_LABEL = f"{SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS}h"
 LIVE_TP1_TARGET_BASIS = "pump_leg_bottom"
 LIVE_TP1_R = 0.75
 LIVE_TP1_FRACTION = 1.0
+LIVE_CURRENT_OI_SHORT_COVER_DROP_PCT = -0.0015
+LIVE_CURRENT_OI_MIN_PRICE_MOVE_PCT = 0.0010
+LIVE_CURRENT_OI_REFERENCE_LOOKBACK_MS = 20 * 60_000
+LIVE_CURRENT_OI_REFERENCE_MAX_AGE_MS = 10 * 60_000
 SYMBOL_CONTEXT_SNAPSHOT_COLUMNS = (
     "snapshot_timestamp_utc",
     "snapshot_timestamp_ms",
@@ -13082,6 +13086,142 @@ class AnomalyMicroLiveRunner:
             return LiveOiChangeResult(None, "oi_invalid_change")
         return LiveOiChangeResult(value)
 
+    def _fetch_current_open_interest_snapshot(self, symbol: str) -> ExchangeOpenInterestSnapshot:
+        return self.exchange.fetch_current_open_interest(symbol)
+
+    def _fetch_live_current_oi_reference(
+        self,
+        symbol: str,
+        *,
+        now_ms: int,
+    ) -> tuple[float | None, int | None, str | None]:
+        start_ms = int(now_ms) - int(LIVE_CURRENT_OI_REFERENCE_LOOKBACK_MS)
+        frame = self.exchange.fetch_open_interest(symbol, Timeframe.M5, start_ms, int(now_ms))
+        if frame.empty:
+            return None, None, "oi_reference_frame_empty"
+        if "open_interest" not in frame.columns:
+            return None, None, "oi_reference_column_missing"
+        frame = frame.sort_values("timestamp").dropna(subset=["timestamp", "open_interest"]).reset_index(drop=True)
+        if frame.empty:
+            return None, None, "oi_reference_no_valid_rows"
+        latest_ts = int(frame.iloc[-1]["timestamp"])
+        age_ms = int(now_ms) - latest_ts
+        if age_ms > int(LIVE_CURRENT_OI_REFERENCE_MAX_AGE_MS):
+            return None, latest_ts, "oi_reference_stale"
+        reference = float(frame.iloc[-1]["open_interest"])
+        if not math.isfinite(reference) or reference <= 0.0:
+            return None, latest_ts, "oi_reference_invalid"
+        return reference, latest_ts, None
+
+    def _validate_live_current_oi_guard(
+        self,
+        signal: LiveSignal,
+        *,
+        live_price: float,
+    ) -> bool:
+        now_ms = int(time.time() * 1000)
+        base_payload: dict[str, object] = {
+            "decision_timestamp_ms": int(signal.decision_timestamp_ms),
+            "category_id": signal.category_id,
+            "category_label": signal.category_label,
+            "levels_tf": signal.levels_timeframe.value,
+            "entry_tf": signal.entry_timeframe.value,
+            "live_price": _finite_or_none(live_price),
+            "signal_entry_price": _finite_or_none(signal.entry_price),
+            "min_price_move_pct": float(LIVE_CURRENT_OI_MIN_PRICE_MOVE_PCT),
+            "short_cover_drop_pct": float(LIVE_CURRENT_OI_SHORT_COVER_DROP_PCT),
+            "reference_lookback_ms": int(LIVE_CURRENT_OI_REFERENCE_LOOKBACK_MS),
+            "reference_max_age_ms": int(LIVE_CURRENT_OI_REFERENCE_MAX_AGE_MS),
+        }
+        price_move_pct = _safe_divide(float(live_price) - float(signal.entry_price), float(signal.entry_price))
+        try:
+            current = self._fetch_current_open_interest_snapshot(signal.symbol)
+        except Exception as exc:
+            return self._reject_live_order(
+                signal,
+                event="reject_live_current_oi_unavailable",
+                details={
+                    **base_payload,
+                    "price_move_pct": _finite_or_none(price_move_pct),
+                    "guard_status": "current_oi_fetch_failed",
+                    "error_type": type(exc).__name__,
+                    "reason": str(exc),
+                },
+            )
+
+        current_payload = {
+            **base_payload,
+            "price_move_pct": _finite_or_none(price_move_pct),
+            "current_oi_status": current.status,
+            "current_oi_reason": current.reason or "",
+            "current_oi_source": current.source,
+            "current_oi_exchange_symbol": current.exchange_symbol,
+            "current_oi_fetched_at_ms": int(current.fetched_at_ms),
+            "current_oi_timestamp_ms": int(current.timestamp_ms) if current.timestamp_ms is not None else "",
+            "current_open_interest": _finite_or_none(current.open_interest),
+        }
+        if current.status != "ok" or current.open_interest is None or not math.isfinite(float(current.open_interest)):
+            return self._reject_live_order(
+                signal,
+                event="reject_live_current_oi_unavailable",
+                details={**current_payload, "guard_status": "current_oi_invalid"},
+            )
+
+        try:
+            reference_oi, reference_ts, reference_reason = self._fetch_live_current_oi_reference(signal.symbol, now_ms=now_ms)
+        except Exception as exc:
+            return self._reject_live_order(
+                signal,
+                event="reject_live_current_oi_unavailable",
+                details={
+                    **current_payload,
+                    "guard_status": "oi_reference_fetch_failed",
+                    "error_type": type(exc).__name__,
+                    "reason": str(exc),
+                },
+            )
+        guard_payload = {
+            **current_payload,
+            "reference_open_interest": _finite_or_none(reference_oi),
+            "reference_oi_timestamp_ms": int(reference_ts) if reference_ts is not None else "",
+            "reference_oi_age_ms": int(now_ms - reference_ts) if reference_ts is not None else "",
+            "reference_oi_reason": reference_reason or "",
+        }
+        if reference_oi is None:
+            return self._reject_live_order(
+                signal,
+                event="reject_live_current_oi_unavailable",
+                details={**guard_payload, "guard_status": "oi_reference_unavailable"},
+            )
+
+        current_oi = float(current.open_interest)
+        oi_change_pct = _safe_divide(current_oi - float(reference_oi), float(reference_oi))
+        guard_payload = {**guard_payload, "current_oi_change_pct_vs_reference": _finite_or_none(oi_change_pct)}
+        price_is_up = math.isfinite(price_move_pct) and price_move_pct >= float(LIVE_CURRENT_OI_MIN_PRICE_MOVE_PCT)
+        oi_dropped = math.isfinite(oi_change_pct) and oi_change_pct <= float(LIVE_CURRENT_OI_SHORT_COVER_DROP_PCT)
+        if price_is_up and oi_dropped:
+            return self._reject_live_order(
+                signal,
+                event="reject_live_current_oi_short_cover",
+                details={
+                    **guard_payload,
+                    "guard_status": "short_cover_risk",
+                    "price_is_up": True,
+                    "oi_dropped": True,
+                },
+            )
+        self.artifacts.append_event(
+            "live_current_oi_guard_checked",
+            signal.symbol,
+            {
+                **guard_payload,
+                "guard_status": "ok",
+                "price_is_up": bool(price_is_up),
+                "oi_dropped": bool(oi_dropped),
+            },
+        )
+        return True
+
     def _fetch_live_mark_basis(
         self,
         symbol: str,
@@ -13297,6 +13437,8 @@ class AnomalyMicroLiveRunner:
                     return
             live_price = float(self.exchange.fetch_last_price(signal.symbol))
             if not self._validate_signal_executable(signal, live_price=live_price):
+                return
+            if not self._validate_live_current_oi_guard(signal, live_price=live_price):
                 return
             try:
                 balance = float(self.exchange.fetch_usdt_free_balance())

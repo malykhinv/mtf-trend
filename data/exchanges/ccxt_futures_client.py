@@ -29,6 +29,7 @@ from data.exchanges.ccxt_types import (
     CcxtFuturesApi,
     CcxtOpenInterestApi,
     ExchangeLiveAccountPreflight,
+    ExchangeOpenInterestSnapshot,
     ExchangeOrderFill,
     ExchangePositionSnapshot,
     ExchangeTickerSnapshot,
@@ -278,6 +279,66 @@ class CcxtFuturesClient(ExchangeClient):
         """Returns exchange-specific market id for a normalized CCXT symbol."""
         self._ensure_markets_loaded()
         return str(self._client.market_id(symbol))
+
+    def fetch_current_open_interest(self, symbol: str) -> ExchangeOpenInterestSnapshot:
+        """Fetch Binance USD-M current open interest for one symbol.
+
+        This is intentionally a narrow exchange boundary for live execution guards.
+        Strategy/live code must not call private CCXT raw endpoints directly.
+        """
+        fetched_at_ms = int(time.time() * 1000)
+        market_id = self.get_market_id(symbol)
+        endpoint = "fapiPublicGetOpenInterest"
+        call = self._require_binance_raw_endpoint(endpoint)
+        payload = self._retry_exchange_call(
+            operation="binance_fetch_current_open_interest",
+            symbol=symbol,
+            endpoint=endpoint,
+            call=call,
+            params={"symbol": market_id},
+        )
+        if not isinstance(payload, dict):
+            return ExchangeOpenInterestSnapshot(
+                symbol=symbol,
+                exchange_symbol=market_id,
+                fetched_at_ms=fetched_at_ms,
+                timestamp_ms=None,
+                open_interest=None,
+                source=endpoint,
+                status="invalid_payload",
+                reason=f"payload_type={type(payload).__name__}",
+            )
+        raw_open_interest = payload.get("openInterest")
+        try:
+            open_interest = float(cast(Any, raw_open_interest))
+        except (TypeError, ValueError):
+            open_interest = float("nan")
+        raw_timestamp = payload.get("time")
+        timestamp_ms: int | None
+        try:
+            timestamp_ms = int(float(cast(Any, raw_timestamp))) if raw_timestamp not in (None, "") else None
+        except (TypeError, ValueError):
+            timestamp_ms = None
+        if not isfinite(open_interest) or open_interest <= 0.0:
+            return ExchangeOpenInterestSnapshot(
+                symbol=symbol,
+                exchange_symbol=str(payload.get("symbol") or market_id),
+                fetched_at_ms=fetched_at_ms,
+                timestamp_ms=timestamp_ms,
+                open_interest=None,
+                source=endpoint,
+                status="invalid_open_interest",
+                reason=f"openInterest={raw_open_interest!r}",
+            )
+        return ExchangeOpenInterestSnapshot(
+            symbol=symbol,
+            exchange_symbol=str(payload.get("symbol") or market_id),
+            fetched_at_ms=fetched_at_ms,
+            timestamp_ms=timestamp_ms,
+            open_interest=open_interest,
+            source=endpoint,
+            status="ok",
+        )
 
     def list_usdt_swap_symbols(self) -> list[str]:
         """Returns active USDT-settled swap symbols from the loaded exchange markets."""
@@ -821,12 +882,12 @@ class CcxtFuturesClient(ExchangeClient):
 
     def _require_binance_raw_endpoint(self, endpoint: str) -> Callable[..., object]:
         if self.exchange != Exchange.BINANCE:
-            raise NotImplementedError("Binance conditional stop order boundary is implemented only for Binance USD-M futures")
+            raise NotImplementedError("Binance raw endpoint boundary is implemented only for Binance USD-M futures")
         raw_client = cast(Any, self._client)
         call = getattr(raw_client, endpoint, None)
         if not callable(call):
             raise RuntimeError(
-                f"ccxt client does not expose required Binance conditional-order endpoint: {endpoint}. "
+                f"ccxt client does not expose required Binance raw endpoint: {endpoint}. "
                 "Upgrade ccxt or disable real-order live trading until the endpoint is available."
             )
         return cast(Callable[..., object], call)

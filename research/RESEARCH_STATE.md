@@ -1875,3 +1875,9 @@ Current patch status: P275 PROPOSED, commit UNKNOWN.
 The live terminal heartbeat should behave as one pinned multi-section status grid. When any ordinary log or alert appears, the runner clears the grid, prints the message, and immediately repaints the latest grid so the operator view always ends with the current heartbeat. This is display-only and does not affect live execution, artifacts, orders, or Telegram.
 Next validation: run a short live session in an interactive PowerShell terminal and confirm one self-updating grid containing Соединение/Рынок/Торговля/Контроль stays at the bottom after startup logs and any warning/error lines.
 ```
+
+## 2026-05-19 live OI guard follow-up
+
+- Current head: UNKNOWN (ZIP snapshot, no git metadata).
+- BAS live entry showed runner_flow can accept taker-buy/price spikes while OI context is weak/negative.
+- Next patch status: P302 mandatory live current-OI short-cover guard proposed, no runtime flags.

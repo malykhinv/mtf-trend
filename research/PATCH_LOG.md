@@ -5285,3 +5285,10 @@ Risk:
 ```text
 Low. This is terminal display and warning routing only. It does not change signal selection, order placement, or artifacts except fewer stderr warnings in the operator terminal.
 ```
+
+## P302 live current OI guard no flags refresh - PROPOSED
+
+- Status: PROPOSED / commit UNKNOWN.
+- Adds a mandatory live-only current-OI short-cover guard before market entry.
+- Blocks real entries when live price is up but Binance current OI is down vs recent 5m OI reference, or when current OI cannot be fetched.
+- Keeps the exchange raw endpoint behind `CcxtFuturesClient.fetch_current_open_interest()`; no CLI flags.
