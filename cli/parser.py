@@ -472,6 +472,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run deadline-driven anomaly live2 runtime",
     )
     anomaly_live2.add_argument("--symbols", nargs="*", default=None, help="Optional explicit futures symbols, e.g. BTC/USDT:USDT")
+    anomaly_live2.add_argument("--universe-max-symbols", type=_positive_int_for("--universe-max-symbols"), default=240)
+    anomaly_live2.add_argument("--universe-min-quote-volume-24h", type=float, default=300_000.0)
+    anomaly_live2.add_argument("--universe-min-trade-count-24h", type=_positive_int_for("--universe-min-trade-count-24h"), default=1)
     anomaly_live2.add_argument("--output-dir", default=None, help="Optional artifact output directory")
 
     live_order_smoke = subparsers.add_parser(

@@ -10,8 +10,19 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P313 proposed live2 aggTrade WS candle rings
+Last active patch: P314 proposed live2 ticker-selected startup universe
 Updated: 2026-05-19
+```
+
+## 2026-05-19 - P314 live2 ticker-selected startup universe
+
+```text
+Current patch status: P314 PROPOSED / UNKNOWN commit.
+Question: remove the manual `--symbols` dependency from live2 market-data startup without adding REST discovery or hot-path fallback.
+Change: `run-anomaly-live2` now starts all-ticker WS first, selects a startup universe from already-received ticker state when explicit symbols are absent, marks `universe_selected/rank/reason` in `live2_symbol_state.csv`, and then starts aggTrade shards for the selected symbols. Default auto universe is top USDT futures by 24h quote volume/trade count, capped at 240 symbols with a 300k USDT minimum 24h quote-volume. Explicit symbols still bypass liquidity pruning.
+Trading impact: no signal thresholds, categories, order placement, fills, stops, TP, BE, or PnL logic changed. New entries remain disabled because SignalEngine/ExecutionEngine are still TODO. This patch only improves live2 market-data startup speed/reliability and removes manual-symbol-only aggTrade coverage.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic selector smoke confirmed top-liquidity selection and symbol-state universe marking.
+Next validation: apply P314 after P313 and run `.venv\Scripts\python.exe main.py run-anomaly-live2`; check `universe_selected`, aggTrade shard count, `live2_status.json.market_data_status.universe`, and no hot REST fields.
 ```
 
 ## 2026-05-19 - P310 prior fake-pump quarantine

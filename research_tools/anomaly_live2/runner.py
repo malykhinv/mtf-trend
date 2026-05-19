@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import Any
 
 from .artifacts import Live2ArtifactWriter
 from .clock import utc_now_iso
@@ -10,6 +11,7 @@ from .config import AnomalyLive2Config
 from .contracts import Live2Component, Live2Event, Live2Readiness, Live2Severity
 from .market_data.aggtrade_ws import Live2AggTradeWsSource
 from .market_data.ticker_ws import Live2TickerWsSource
+from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
 from .state import SymbolStateStore
 
 
@@ -18,7 +20,7 @@ class AnomalyLive2Runner:
 
     This command is intentionally named as a real live runtime, not a shadow or
     dry-run mode. V0 installs the process/artifact/readiness skeleton and starts
-    real ticker + explicit-symbol aggTrade WS ingestion. Signal evaluation and
+    real ticker + auto-selected aggTrade WS ingestion. Signal evaluation and
     order placement remain explicit TODO gates, so new entries stay forbidden.
     """
 
@@ -40,13 +42,8 @@ class AnomalyLive2Runner:
             stale_ms=config.ticker_stale_ms,
             startup_wait_seconds=config.ticker_startup_wait_seconds,
         )
-        self.aggtrade_source = Live2AggTradeWsSource(
-            state_store=self.state_store,
-            symbols=config.symbols,
-            stale_ms=config.aggtrade_stale_ms,
-            startup_wait_seconds=config.aggtrade_startup_wait_seconds,
-            max_streams_per_connection=config.aggtrade_max_streams_per_connection,
-        )
+        self.aggtrade_source: Live2AggTradeWsSource | None = None
+        self.universe_selection: Live2UniverseSelection | None = None
         self._shutdown_requested = False
 
     def run(self) -> int:
@@ -54,9 +51,44 @@ class AnomalyLive2Runner:
         try:
             self._write_startup_events(writer)
             self.ticker_source.start()
-            self.aggtrade_source.start()
             ticker_ready = self.ticker_source.wait_until_ready()
-            aggtrade_ready = self.aggtrade_source.wait_until_ready()
+            self.universe_selection = self._select_universe()
+            self.state_store.apply_universe_selection(
+                selected_rank_by_symbol=self.universe_selection.rank_by_symbol(),
+                selected_at_ms=self.universe_selection.selected_at_ms,
+                mode=self.universe_selection.mode,
+            )
+            writer.write_event(
+                Live2Event(
+                    event_type="universe_selected",
+                    component=Live2Component.MARKET_DATA,
+                    severity=Live2Severity.INFO if self.universe_selection.selected_symbols else Live2Severity.ERROR,
+                    message="live2 startup universe selected from ticker state",
+                    data=self.universe_selection.as_dict(),
+                )
+            )
+            aggtrade_ready = False
+            if self.universe_selection.selected_symbols:
+                self.aggtrade_source = Live2AggTradeWsSource(
+                    state_store=self.state_store,
+                    symbols=self.universe_selection.selected_symbols,
+                    stale_ms=self.config.aggtrade_stale_ms,
+                    startup_wait_seconds=self.config.aggtrade_startup_wait_seconds,
+                    max_streams_per_connection=self.config.aggtrade_max_streams_per_connection,
+                )
+                self._write_aggtrade_starting_event(writer)
+                self.aggtrade_source.start()
+                aggtrade_ready = self.aggtrade_source.wait_until_ready()
+            else:
+                writer.write_event(
+                    Live2Event(
+                        event_type="aggtrade_ws_not_started",
+                        component=Live2Component.MARKET_DATA,
+                        severity=Live2Severity.ERROR,
+                        message="aggTrade WS not started because startup universe is empty",
+                        data=self._universe_status(),
+                    )
+                )
             market_data_status = self._market_data_status()
             writer.write_event(
                 Live2Event(
@@ -83,11 +115,12 @@ class AnomalyLive2Runner:
                 readiness=self.readiness,
                 state_store=self.state_store,
                 status="running",
-                reason="generation_0_ticker_and_aggtrade_ws_started",
+                reason="generation_0_ticker_universe_and_aggtrade_ws_started",
                 market_data_status=market_data_status,
             )
             print(
                 f"live2 · старт · артефакты {self.config.output_dir} · "
+                f"universe {len(self.universe_selection.selected_symbols)} · "
                 "ticker+aggTrade WS включены · signal/execution TODO · новые входы запрещены",
                 flush=True,
             )
@@ -142,7 +175,8 @@ class AnomalyLive2Runner:
             print("live2 · остановлено пользователем", flush=True)
             return 130
         finally:
-            self.aggtrade_source.close()
+            if self.aggtrade_source is not None:
+                self.aggtrade_source.close()
             self.ticker_source.close()
             writer.close()
         return 0
@@ -150,13 +184,24 @@ class AnomalyLive2Runner:
     def shutdown(self, *, reason: str) -> None:
         self._shutdown_requested = True
 
+    def _select_universe(self) -> Live2UniverseSelection:
+        selector = Live2UniverseSelector(
+            state_store=self.state_store,
+            explicit_symbols=self.config.symbols,
+            max_symbols=self.config.universe_max_symbols,
+            min_quote_volume_24h=self.config.universe_min_quote_volume_24h,
+            min_trade_count_24h=self.config.universe_min_trade_count_24h,
+        )
+        return selector.select()
+
     def _market_data_status(self) -> dict[str, object]:
         ticker_status = self.ticker_source.status().as_dict(stale_ms=self.config.ticker_stale_ms)
-        aggtrade_status = self.aggtrade_source.status().as_dict(stale_ms=self.config.aggtrade_stale_ms)
+        aggtrade_status = self._aggtrade_status()
         stream_coverage_ready = bool(ticker_status.get("ready")) and bool(aggtrade_status.get("ready"))
-        if not self.config.symbols:
-            status = "partial_ticker_only"
-            reason = "aggtrade_requires_explicit_symbols_until_live2_universe_manager_exists"
+        selected_symbols = 0 if self.universe_selection is None else len(self.universe_selection.selected_symbols)
+        if selected_symbols <= 0:
+            status = "no_startup_universe"
+            reason = "startup_ticker_universe_selection_empty"
         elif stream_coverage_ready:
             status = "stream_coverage_ready_signal_todo"
             reason = "ticker_and_aggtrade_ws_ready_but_signal_execution_not_implemented"
@@ -168,9 +213,35 @@ class AnomalyLive2Runner:
             "reason": reason,
             "ticker_ws": ticker_status,
             "aggtrade_ws": aggtrade_status,
+            "universe": self._universe_status(),
             "stream_coverage_ready": stream_coverage_ready,
             "market_data_ready_for_entries": False,
         }
+
+    def _aggtrade_status(self) -> dict[str, object]:
+        if self.aggtrade_source is None:
+            return {
+                "source_status": "not_started",
+                "ready": False,
+                "shards_total": 0,
+                "shards_connected": 0,
+                "symbols_total": 0,
+                "streams_total": 0,
+                "max_streams_per_connection": self.config.aggtrade_max_streams_per_connection,
+                "reason": "startup_universe_not_selected_or_empty",
+            }
+        return self.aggtrade_source.status().as_dict(stale_ms=self.config.aggtrade_stale_ms)
+
+    def _universe_status(self) -> dict[str, Any]:
+        if self.universe_selection is None:
+            return {
+                "mode": "not_selected",
+                "selected_symbols": 0,
+                "max_symbols": self.config.universe_max_symbols,
+                "min_quote_volume_24h": self.config.universe_min_quote_volume_24h,
+                "min_trade_count_24h": self.config.universe_min_trade_count_24h,
+            }
+        return self.universe_selection.as_dict()
 
     def _write_startup_events(self, writer: Live2ArtifactWriter) -> None:
         writer.write_event(
@@ -182,6 +253,9 @@ class AnomalyLive2Runner:
                     "runtime_generation": self.config.runtime_generation,
                     "symbols_total": len(self.state_store),
                     "new_entries_allowed": self.readiness.new_entries_allowed,
+                    "universe_max_symbols": self.config.universe_max_symbols,
+                    "universe_min_quote_volume_24h": self.config.universe_min_quote_volume_24h,
+                    "universe_min_trade_count_24h": self.config.universe_min_trade_count_24h,
                 },
             )
         )
@@ -196,26 +270,7 @@ class AnomalyLive2Runner:
                     "accept_all_symbols": not bool(self.config.symbols),
                     "stale_ms": self.config.ticker_stale_ms,
                     "startup_wait_seconds": self.config.ticker_startup_wait_seconds,
-                },
-            )
-        )
-        writer.write_event(
-            Live2Event(
-                event_type="aggtrade_ws_starting",
-                component=Live2Component.MARKET_DATA,
-                severity=Live2Severity.INFO if self.config.symbols else Live2Severity.WARNING,
-                message=(
-                    "starting Binance futures aggTrade WS shards"
-                    if self.config.symbols
-                    else "aggTrade WS needs explicit symbols until live2 universe manager exists"
-                ),
-                data={
-                    "source": Live2AggTradeWsSource.source_id,
-                    "symbols_filter_count": len(self.config.symbols),
-                    "max_streams_per_connection": self.config.aggtrade_max_streams_per_connection,
-                    "stale_ms": self.config.aggtrade_stale_ms,
-                    "startup_wait_seconds": self.config.aggtrade_startup_wait_seconds,
-                    "hot_rest_backfill": False,
+                    "universe_source": "explicit_symbols" if self.config.symbols else "ticker_ws_state_top_liquidity",
                 },
             )
         )
@@ -233,5 +288,25 @@ class AnomalyLive2Runner:
                 component=Live2Component.EXECUTION,
                 severity=Live2Severity.WARNING,
                 message="real order placement is intentionally not implemented in generation 0",
+            )
+        )
+
+    def _write_aggtrade_starting_event(self, writer: Live2ArtifactWriter) -> None:
+        selected_symbols = 0 if self.universe_selection is None else len(self.universe_selection.selected_symbols)
+        writer.write_event(
+            Live2Event(
+                event_type="aggtrade_ws_starting",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO if selected_symbols else Live2Severity.ERROR,
+                message="starting Binance futures aggTrade WS shards",
+                data={
+                    "source": Live2AggTradeWsSource.source_id,
+                    "symbols_filter_count": selected_symbols,
+                    "max_streams_per_connection": self.config.aggtrade_max_streams_per_connection,
+                    "stale_ms": self.config.aggtrade_stale_ms,
+                    "startup_wait_seconds": self.config.aggtrade_startup_wait_seconds,
+                    "hot_rest_backfill": False,
+                    "universe": self._universe_status(),
+                },
             )
         )

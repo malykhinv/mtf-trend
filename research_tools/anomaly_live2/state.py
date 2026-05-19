@@ -42,6 +42,9 @@ class SymbolState:
     decision_deadline_ms: int | None = None
     last_decision_bucket_ms: int | None = None
     last_verdict: str = "not_evaluated"
+    universe_selected: bool = False
+    universe_rank: int | None = None
+    universe_reason: str = "not_selected"
     ticker_market_id: str = ""
     ticker_first_seen_ms: int | None = None
     ticker_last_seen_ms: int | None = None
@@ -90,6 +93,19 @@ class SymbolState:
         self.updated_ms = effective_now
         if self.dirty_since_ms is None:
             self.dirty_since_ms = effective_now
+
+    def set_universe_selection(
+        self,
+        *,
+        selected: bool,
+        rank: int | None,
+        reason: str,
+        selected_at_ms: int,
+    ) -> None:
+        self.universe_selected = selected
+        self.universe_rank = rank
+        self.universe_reason = reason
+        self.updated_ms = max(self.updated_ms, selected_at_ms)
 
     def update_ticker(
         self,
@@ -160,6 +176,9 @@ class SymbolState:
             "decision_deadline_ms": self.decision_deadline_ms,
             "last_decision_bucket_ms": self.last_decision_bucket_ms,
             "last_verdict": self.last_verdict,
+            "universe_selected": self.universe_selected,
+            "universe_rank": self.universe_rank,
+            "universe_reason": self.universe_reason,
             "ticker_market_id": self.ticker_market_id,
             "ticker_first_seen_ms": self.ticker_first_seen_ms,
             "ticker_last_seen_ms": self.ticker_last_seen_ms,
@@ -223,6 +242,31 @@ class SymbolStateStore:
                 state = SymbolState(symbol=normalized)
                 self._states[normalized] = state
             return state
+
+    def apply_universe_selection(
+        self,
+        *,
+        selected_rank_by_symbol: dict[str, int],
+        selected_at_ms: int,
+        mode: str,
+    ) -> None:
+        with self._lock:
+            for state in self._states.values():
+                rank = selected_rank_by_symbol.get(state.symbol)
+                if rank is None:
+                    state.set_universe_selection(
+                        selected=False,
+                        rank=None,
+                        reason=f"not_selected_by_{mode}",
+                        selected_at_ms=selected_at_ms,
+                    )
+                else:
+                    state.set_universe_selection(
+                        selected=True,
+                        rank=rank,
+                        reason=f"selected_by_{mode}",
+                        selected_at_ms=selected_at_ms,
+                    )
 
     def update_ticker(
         self,

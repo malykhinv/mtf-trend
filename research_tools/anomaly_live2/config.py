@@ -18,6 +18,9 @@ class AnomalyLive2Config:
     aggtrade_stale_ms: int = 5_000
     aggtrade_startup_wait_seconds: float = 10.0
     aggtrade_max_streams_per_connection: int = 150
+    universe_max_symbols: int = 240
+    universe_min_quote_volume_24h: float = 300_000.0
+    universe_min_trade_count_24h: int = 1
     runtime_generation: str = "live2_v0"
 
     def __post_init__(self) -> None:
@@ -33,3 +36,9 @@ class AnomalyLive2Config:
             raise ValueError("aggtrade_startup_wait_seconds must be >= 0")
         if self.aggtrade_max_streams_per_connection <= 0:
             raise ValueError("aggtrade_max_streams_per_connection must be > 0")
+        if self.universe_max_symbols <= 0:
+            raise ValueError("universe_max_symbols must be > 0")
+        if self.universe_min_quote_volume_24h < 0:
+            raise ValueError("universe_min_quote_volume_24h must be >= 0")
+        if self.universe_min_trade_count_24h < 0:
+            raise ValueError("universe_min_trade_count_24h must be >= 0")

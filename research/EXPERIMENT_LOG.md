@@ -6,6 +6,13 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+## 2026-05-19 - live2 architecture patch stack
+
+```text
+P314 proposed: live2 no longer requires explicit symbols for aggTrade startup. It uses ticker WS state as a startup universe source and opens aggTrade shards for the selected liquid USDT futures. This is still market-data only: no signal verdicts and no orders. Acceptance for next run: universe selected >0, aggTrade shards connected for selected universe, `candidate_dropped_latency_pressure` is not a live2 concept, and no REST/gap backfill appears in live2 market-data status.
+Remaining patches: DeadlineEngine/actionable verdicts, SignalEngine adapter, executable entry guards, real ExecutionEngine, PositionSupervisor, bounded async ArtifactWriter.
+```
+
 
 ## 2026-05-19 - live latency plan after BAS and post-P301 smoke
 
