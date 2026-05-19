@@ -2039,6 +2039,15 @@ New entries remain forbidden: execution, exchange position precheck, actual fill
 Next validation: run `run-anomaly-live2` after P311-P317 and inspect `deadline_decision` events. If any stream signal becomes selected, entry guard fields must show either `accepted` or a concrete `rejected_entry_guard` reason; no late/drifted/TP-touched signal may proceed toward execution.
 ```
 
+## 2026-05-19 — P318 proposed
+
+```text
+Current patch status: P318 PROPOSED, commit UNKNOWN.
+Live2 now has a strict execution boundary connected after entry-guard acceptance. Startup performs Binance/account preflight through the typed exchange client; accepted signals perform pre-entry `fetch_symbol_position_amount` before any future order placement can exist. Existing exchange positions are rejected explicitly; flat symbols end at `rejected_execution_order_placement_not_implemented` until verified fill and verified stop are implemented.
+New entries remain forbidden: no market order, no actual fill, no stop order, no TP/BE position supervisor. `new_entries_allowed=false` remains mandatory.
+Next validation: run `run-anomaly-live2` after P311-P318 and inspect `execution_preflight`, `deadline_decision.execution_*`, and `live2_status.json.execution_status`. There must be no order attempts; accepted guard decisions must never proceed without exchange position precheck.
+```
+
 ## 2026-05-19 — P316 proposed
 
 ```text

@@ -3262,6 +3262,15 @@ Not accepted yet: no real exchange order placement, no pre-position exchange che
 Next experiment after P317: implement real ExecutionEngine boundary with pre-entry exchange position check, order submit, actual fill verification, stop submit, and stop visibility verification.
 ```
 
+## 2026-05-19 - P318 live2 execution-boundary acceptance plan
+
+```text
+Purpose: install the strict exchange boundary that must exist before any live2 real order placement.
+Acceptance for P318: after P311-P317 are applied, `run-anomaly-live2` performs startup `fetch_live_account_preflight`, exposes execution readiness in `live2_status.json`, and for any selected signal with accepted entry guard calls `fetch_symbol_position_amount` before returning an execution verdict. Existing exchange positions must produce `rejected_existing_exchange_position`; flat symbols must produce `rejected_execution_order_placement_not_implemented` until actual fill and verified stop placement are added.
+Not accepted yet: no order submit, no actual fill verification, no stop visibility verification, no TP/BE position supervision, and no profitability claim. `new_entries_allowed=false` remains mandatory.
+Next experiment after P318: implement a real order lifecycle atomically: pre-position check -> market order submit with client id -> actual fill verification -> initial stop submit -> stop visibility verification -> protected position state.
+```
+
 ## 2026-05-19 - P316 live2 signal-adapter acceptance plan
 
 ```text

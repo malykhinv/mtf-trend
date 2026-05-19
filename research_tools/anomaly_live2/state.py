@@ -60,6 +60,10 @@ class SymbolState:
     last_entry_guard_live_price: float | None = None
     last_entry_guard_price_drift_pct: float | None = None
     last_entry_guard_rr_to_tp1: float | None = None
+    last_execution_verdict: str = ""
+    last_execution_reason: str = ""
+    last_execution_pre_position_amount: float | None = None
+    last_execution_order_placement_status: str = ""
     universe_selected: bool = False
     universe_rank: int | None = None
     universe_reason: str = "not_selected"
@@ -212,6 +216,10 @@ class SymbolState:
             "last_entry_guard_live_price": self.last_entry_guard_live_price,
             "last_entry_guard_price_drift_pct": self.last_entry_guard_price_drift_pct,
             "last_entry_guard_rr_to_tp1": self.last_entry_guard_rr_to_tp1,
+            "last_execution_verdict": self.last_execution_verdict,
+            "last_execution_reason": self.last_execution_reason,
+            "last_execution_pre_position_amount": self.last_execution_pre_position_amount,
+            "last_execution_order_placement_status": self.last_execution_order_placement_status,
             "universe_selected": self.universe_selected,
             "universe_rank": self.universe_rank,
             "universe_reason": self.universe_reason,

@@ -71,6 +71,7 @@ class Live2ArtifactWriter:
         reason: str = "",
         market_data_status: dict[str, Any] | None = None,
         decision_status: dict[str, Any] | None = None,
+        execution_status: dict[str, Any] | None = None,
     ) -> None:
         payload: dict[str, Any] = {
             "runtime_generation": runtime_generation,
@@ -85,7 +86,7 @@ class Live2ArtifactWriter:
             "aggtrade_status_counts": state_store.aggtrade_counts(),
             "candle_coverage_counts": state_store.candle_coverage_counts(),
             "readiness": readiness.as_dict(),
-            "execution_status": "todo_not_implemented",
+            "execution_status": execution_status or {"status": "todo_not_implemented"},
             "market_data_status": market_data_status or {"status": "todo_not_implemented"},
             "signal_status": "deadline_engine_active_stream_signal_adapter",
             "decision_status": decision_status or {"status": "todo_not_implemented"},

@@ -1651,6 +1651,7 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
             output_dir = config.backtest.results_dir / "live2_anomaly_runs" / run_id
         symbols_arg = getattr(args, "symbols", None)
         symbols = tuple(str(symbol).strip() for symbol in (symbols_arg or ()) if str(symbol).strip())
+        _, exchange_client, _ = _build_fetch_stack(config)
         runner = AnomalyLive2Runner(
             AnomalyLive2Config(
                 output_dir=output_dir,
@@ -1658,7 +1659,8 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
                 universe_max_symbols=int(getattr(args, "universe_max_symbols", 240)),
                 universe_min_quote_volume_24h=float(getattr(args, "universe_min_quote_volume_24h", 300_000.0)),
                 universe_min_trade_count_24h=int(getattr(args, "universe_min_trade_count_24h", 1)),
-            )
+            ),
+            exchange_client=exchange_client,
         )
         return runner.run()
 

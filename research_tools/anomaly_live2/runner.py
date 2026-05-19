@@ -11,6 +11,7 @@ from .config import AnomalyLive2Config
 from .contracts import Live2Component, Live2Event, Live2Readiness, Live2Severity
 from .deadline import Live2DeadlineEngine, Live2DeadlineEngineConfig
 from .entry_guard import Live2EntryGuardConfig, Live2EntryGuardEngine
+from .execution import Live2ExecutionConfig, Live2ExecutionEngine, Live2ExecutionExchange
 from .market_data.aggtrade_ws import Live2AggTradeWsSource
 from .market_data.ticker_ws import Live2TickerWsSource
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
@@ -27,7 +28,7 @@ class AnomalyLive2Runner:
     forbidden until execution and safety guards are implemented.
     """
 
-    def __init__(self, config: AnomalyLive2Config) -> None:
+    def __init__(self, config: AnomalyLive2Config, *, exchange_client: Live2ExecutionExchange | None = None) -> None:
         self.config = config
         self.started_at_utc = utc_now_iso()
         self.state_store = SymbolStateStore(config.symbols)
@@ -46,6 +47,10 @@ class AnomalyLive2Runner:
             startup_wait_seconds=config.ticker_startup_wait_seconds,
         )
         self.aggtrade_source: Live2AggTradeWsSource | None = None
+        self.execution_engine = Live2ExecutionEngine(
+            exchange_client=exchange_client,
+            config=Live2ExecutionConfig(),
+        )
         self.universe_selection: Live2UniverseSelection | None = None
         self.deadline_engine = Live2DeadlineEngine(
             state_store=self.state_store,
@@ -64,6 +69,7 @@ class AnomalyLive2Runner:
                     min_rr_to_tp1=config.entry_guard_min_rr_to_tp1,
                 )
             ),
+            execution_engine=self.execution_engine,
         )
         self._shutdown_requested = False
 
@@ -71,6 +77,17 @@ class AnomalyLive2Runner:
         writer = Live2ArtifactWriter(self.config.output_dir)
         try:
             self._write_startup_events(writer)
+            execution_preflight = self.execution_engine.preflight()
+            self.readiness.exchange_boundary_ready = execution_preflight.ready
+            writer.write_event(
+                Live2Event(
+                    event_type="execution_preflight",
+                    component=Live2Component.EXECUTION,
+                    severity=Live2Severity.INFO if execution_preflight.ready else Live2Severity.ERROR,
+                    message=execution_preflight.reason,
+                    data=execution_preflight.as_dict(),
+                )
+            )
             self.ticker_source.start()
             ticker_ready = self.ticker_source.wait_until_ready()
             self.universe_selection = self._select_universe()
@@ -139,11 +156,12 @@ class AnomalyLive2Runner:
                 reason="generation_0_ticker_universe_and_aggtrade_ws_started",
                 market_data_status=market_data_status,
                 decision_status=self.deadline_engine.status(),
+                execution_status=self.execution_engine.status(),
             )
             print(
                 f"live2 · старт · артефакты {self.config.output_dir} · "
                 f"universe {len(self.universe_selection.selected_symbols)} · "
-                "ticker+aggTrade WS включены · stream signal adapter включен · execution TODO · новые входы запрещены",
+                "ticker+aggTrade WS включены · stream signal adapter включен · execution boundary включен · новые входы запрещены",
                 flush=True,
             )
             while not self._shutdown_requested:
@@ -166,7 +184,7 @@ class AnomalyLive2Runner:
                             "decision_status": self.deadline_engine.status(),
                             "deadline_cycle": deadline_result.as_dict(),
                             "new_entries_allowed": self.readiness.new_entries_allowed,
-                            "execution_status": "todo_not_implemented",
+                            "execution_status": self.execution_engine.status(),
                         },
                     )
                 )
@@ -180,6 +198,7 @@ class AnomalyLive2Runner:
                     reason="generation_0_market_data_ws_alive",
                     market_data_status=market_data_status,
                     decision_status=self.deadline_engine.status(),
+                    execution_status=self.execution_engine.status(),
                 )
         except KeyboardInterrupt:
             self.shutdown(reason="keyboard_interrupt")
@@ -200,6 +219,7 @@ class AnomalyLive2Runner:
                 reason="keyboard_interrupt",
                 market_data_status=self._market_data_status(),
                 decision_status=self.deadline_engine.status(),
+                execution_status=self.execution_engine.status(),
             )
             print("live2 · остановлено пользователем", flush=True)
             return 130
@@ -233,7 +253,7 @@ class AnomalyLive2Runner:
             reason = "startup_ticker_universe_selection_empty"
         elif stream_coverage_ready:
             status = "stream_coverage_ready_signal_adapter_active"
-            reason = "ticker_and_aggtrade_ws_ready_signal_adapter_active_execution_not_implemented"
+            reason = "ticker_and_aggtrade_ws_ready_signal_adapter_active_execution_boundary_active"
         else:
             status = "stream_coverage_not_ready"
             reason = "ticker_or_aggtrade_ws_not_ready"
@@ -287,6 +307,7 @@ class AnomalyLive2Runner:
                     "universe_min_trade_count_24h": self.config.universe_min_trade_count_24h,
                     "decision_timeframe_ms": self.config.decision_timeframe_ms,
                     "decision_deadline_ms": self.config.decision_deadline_ms,
+                    "execution_order_placement": "not_implemented_until_verified_fill_and_stop_path_exists",
                 },
             )
         )
@@ -315,10 +336,10 @@ class AnomalyLive2Runner:
         )
         writer.write_event(
             Live2Event(
-                event_type="execution_engine_todo",
+                event_type="execution_engine_started",
                 component=Live2Component.EXECUTION,
                 severity=Live2Severity.WARNING,
-                message="real order placement is intentionally not implemented in generation 0",
+                message="execution boundary checks exchange preflight and pre-entry position; order placement waits for verified-fill/stop path",
             )
         )
 

@@ -5460,6 +5460,40 @@ Risk:
 Medium. This still does not place real orders and `new_entries_allowed=false` remains mandatory. The guard only makes selected-signal verdicts safer and more auditable before P318 execution. P317 also includes the missing live2 `signal.py` module required by the P316 deadline import so the P311-P317 stack imports cleanly.
 ```
 
+## 2026-05-19 - P318 proposed - live2 strict execution boundary
+
+Files:
+
+```text
+cli/commands.py
+research_tools/anomaly_live2/execution.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/state.py
+research_tools/anomaly_live2/artifacts.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Add the first live2 execution boundary after accepted entry guards. The boundary performs real exchange account preflight at startup and pre-entry exchange position checks for accepted selected signals. It rejects non-flat symbols and still blocks order placement as `rejected_execution_order_placement_not_implemented` until the verified-fill plus verified-stop path exists. No candle/ticker/local fallback is used for position state.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium. This patch introduces exchange reads into the post-guard path and startup preflight, but it deliberately does not place orders. `new_entries_allowed=false` remains because actual order submit, actual fill verification, verified stop placement, and position supervision are not implemented yet.
+```
+
 ## 2026-05-19 - P316 proposed - live2 stream signal adapter
 
 Files:
