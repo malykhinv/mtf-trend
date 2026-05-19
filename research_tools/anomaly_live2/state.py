@@ -102,13 +102,9 @@ class SymbolState:
     candle_coverage_status: str = "not_ready"
     candle_gap_count: int = 0
     candle_out_of_order_count: int = 0
-    candle_book: Live2CandleBook = field(
-        default_factory=lambda: Live2CandleBook(
-            timeframes_ms=LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS,
-            max_closed_candles=LIVE2_DEFAULT_MAX_CLOSED_CANDLES,
-        ),
-        repr=False,
-    )
+    candle_timeframes_ms: tuple[int, ...] = LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS
+    max_closed_candles: int = LIVE2_DEFAULT_MAX_CLOSED_CANDLES
+    candle_book: Live2CandleBook = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         now_ms = utc_now_ms()
@@ -116,6 +112,12 @@ class SymbolState:
             self.created_ms = now_ms
         if self.updated_ms <= 0:
             self.updated_ms = now_ms
+        if self.max_closed_candles <= 0:
+            raise ValueError("max_closed_candles must be > 0")
+        self.candle_book = Live2CandleBook(
+            timeframes_ms=self.candle_timeframes_ms,
+            max_closed_candles=self.max_closed_candles,
+        )
 
     def mark_dirty(self, *, now_ms: int | None = None) -> None:
         effective_now = utc_now_ms() if now_ms is None else now_ms
@@ -265,6 +267,7 @@ class SymbolState:
             "candle_coverage_status": self.candle_coverage_status,
             "candle_gap_count": self.candle_gap_count,
             "candle_out_of_order_count": self.candle_out_of_order_count,
+            "max_closed_candles": self.max_closed_candles,
         }
         row.update(self.candle_book.coverage_summary())
         return row
@@ -273,11 +276,23 @@ class SymbolState:
 class SymbolStateStore:
     """Container with exactly one state record per symbol."""
 
-    def __init__(self, symbols: tuple[str, ...]) -> None:
+    def __init__(
+        self,
+        symbols: tuple[str, ...],
+        *,
+        candle_timeframes_ms: tuple[int, ...] = LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS,
+        max_closed_candles: int = LIVE2_DEFAULT_MAX_CLOSED_CANDLES,
+    ) -> None:
         unique_symbols = tuple(dict.fromkeys(symbol.strip() for symbol in symbols if symbol.strip()))
+        self.candle_timeframes_ms = tuple(int(value) for value in candle_timeframes_ms)
+        self.max_closed_candles = int(max_closed_candles)
         self._lock = threading.RLock()
         self._states: dict[str, SymbolState] = {
-            symbol: SymbolState(symbol=symbol)
+            symbol: SymbolState(
+                symbol=symbol,
+                candle_timeframes_ms=self.candle_timeframes_ms,
+                max_closed_candles=self.max_closed_candles,
+            )
             for symbol in unique_symbols
         }
 
@@ -297,7 +312,11 @@ class SymbolStateStore:
         with self._lock:
             state = self._states.get(normalized)
             if state is None:
-                state = SymbolState(symbol=normalized)
+                state = SymbolState(
+                    symbol=normalized,
+                    candle_timeframes_ms=self.candle_timeframes_ms,
+                    max_closed_candles=self.max_closed_candles,
+                )
                 self._states[normalized] = state
             return state
 
@@ -358,6 +377,15 @@ class SymbolStateStore:
         with self._lock:
             state = self.get_or_create(trade.symbol)
             state.update_aggtrade(trade, received_at_ms=received_at_ms)
+
+
+    def update_aggtrade_many(self, trades: tuple[Live2AggTradeEvent, ...], *, received_at_ms: int) -> None:
+        if not trades:
+            return
+        with self._lock:
+            for trade in trades:
+                state = self.get_or_create(trade.symbol)
+                state.update_aggtrade(trade, received_at_ms=received_at_ms)
 
     def snapshot(self) -> tuple[SymbolState, ...]:
         with self._lock:

@@ -15,6 +15,11 @@ from .execution import Live2ExecutionConfig, Live2ExecutionEngine, Live2Executio
 from .market_data.aggtrade_ws import Live2AggTradeWsSource
 from .market_data.ticker_ws import Live2TickerWsSource
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
+from .market_data.warmup import (
+    Live2StartupAggTradeWarmup,
+    Live2StartupWarmupConfig,
+    Live2StartupWarmupResult,
+)
 from .position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorConfig
 from .state import SymbolStateStore
 from .status_grid import format_live2_status_grid
@@ -40,7 +45,10 @@ class AnomalyLive2Runner:
     ) -> None:
         self.config = config
         self.started_at_utc = utc_now_iso()
-        self.state_store = SymbolStateStore(config.symbols)
+        self.state_store = SymbolStateStore(
+            config.symbols,
+            max_closed_candles=config.max_closed_candles_per_timeframe,
+        )
         if telegram_config is None:
             raise ValueError("telegram_config is required for run-anomaly-live2")
         self.telegram = Live2TelegramDispatcher(
@@ -60,6 +68,8 @@ class AnomalyLive2Runner:
             symbols=config.symbols,
             stale_ms=config.ticker_stale_ms,
             startup_wait_seconds=config.ticker_startup_wait_seconds,
+            reconnect_initial_delay_seconds=config.ws_reconnect_initial_delay_seconds,
+            reconnect_max_delay_seconds=config.ws_reconnect_max_delay_seconds,
         )
         self.aggtrade_source: Live2AggTradeWsSource | None = None
         self.execution_engine = Live2ExecutionEngine(
@@ -83,6 +93,7 @@ class AnomalyLive2Runner:
             ),
         )
         self.universe_selection: Live2UniverseSelection | None = None
+        self.startup_warmup_result: Live2StartupWarmupResult | None = None
         self.deadline_engine = Live2DeadlineEngine(
             state_store=self.state_store,
             config=Live2DeadlineEngineConfig(
@@ -157,12 +168,15 @@ class AnomalyLive2Runner:
             )
             aggtrade_ready = False
             if self.universe_selection.selected_symbols:
+                self.startup_warmup_result = self._run_startup_aggtrade_warmup(writer)
                 self.aggtrade_source = Live2AggTradeWsSource(
                     state_store=self.state_store,
                     symbols=self.universe_selection.selected_symbols,
                     stale_ms=self.config.aggtrade_stale_ms,
                     startup_wait_seconds=self.config.aggtrade_startup_wait_seconds,
                     max_streams_per_connection=self.config.aggtrade_max_streams_per_connection,
+                    reconnect_initial_delay_seconds=self.config.ws_reconnect_initial_delay_seconds,
+                    reconnect_max_delay_seconds=self.config.ws_reconnect_max_delay_seconds,
                 )
                 self._write_aggtrade_starting_event(writer)
                 self.aggtrade_source.start()
@@ -527,6 +541,7 @@ class AnomalyLive2Runner:
             "market_data_recovery_windows": self.config.market_data_recovery_windows,
             "readiness": self.readiness.as_dict(),
             "position_supervisor_status": self.position_supervisor.status(),
+            "startup_warmup": None if self.startup_warmup_result is None else self.startup_warmup_result.as_dict(),
         }
 
     def _execution_status(self) -> dict[str, object]:
@@ -581,6 +596,7 @@ class AnomalyLive2Runner:
             "market_data_clean_windows": self._market_data_clean_windows,
             "market_data_degraded_windows": self._market_data_degraded_windows,
             "market_data_recovery_windows": self.config.market_data_recovery_windows,
+            "startup_warmup": None if self.startup_warmup_result is None else self.startup_warmup_result.as_dict(),
         }
 
     def _ws_health_status(
@@ -661,7 +677,12 @@ class AnomalyLive2Runner:
                     "decision_timeframe_ms": self.config.decision_timeframe_ms,
                     "decision_deadline_ms": self.config.decision_deadline_ms,
                     "market_data_recovery_windows": self.config.market_data_recovery_windows,
-                    "execution_order_placement": "not_implemented_until_verified_fill_and_stop_path_exists",
+                    "startup_warmup_lookback_minutes": self.config.startup_warmup_lookback_minutes,
+                    "startup_warmup_max_trades_per_symbol": self.config.startup_warmup_max_trades_per_symbol,
+                    "max_closed_candles_per_timeframe": self.config.max_closed_candles_per_timeframe,
+                    "ws_reconnect_initial_delay_seconds": self.config.ws_reconnect_initial_delay_seconds,
+                    "ws_reconnect_max_delay_seconds": self.config.ws_reconnect_max_delay_seconds,
+                    "execution_order_placement": "verified_fill_and_initial_stop_lifecycle_enabled",
                 },
             )
         )
@@ -697,6 +718,39 @@ class AnomalyLive2Runner:
             )
         )
 
+
+    def _run_startup_aggtrade_warmup(self, writer: Live2ArtifactWriter) -> Live2StartupWarmupResult:
+        selected_symbols = () if self.universe_selection is None else self.universe_selection.selected_symbols
+        writer.write_event(
+            Live2Event(
+                event_type="startup_aggtrade_warmup_starting",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO,
+                message="hydrating live2 in-memory candle rings from startup-only Binance aggTrades REST",
+                data={
+                    "symbols_requested": len(selected_symbols),
+                    "lookback_minutes": self.config.startup_warmup_lookback_minutes,
+                    "max_trades_per_symbol": self.config.startup_warmup_max_trades_per_symbol,
+                    "hot_path_available": False,
+                    "source": "binance_futures_aggTrades_startup_rest",
+                },
+            )
+        )
+        result = Live2StartupAggTradeWarmup(
+            state_store=self.state_store,
+            exchange_client=self.execution_engine.exchange_client,
+            config=Live2StartupWarmupConfig(
+                enabled=True,
+                lookback_minutes=self.config.startup_warmup_lookback_minutes,
+                max_symbols=min(self.config.universe_max_symbols, len(selected_symbols)) if selected_symbols else 1,
+                max_trades_per_symbol=self.config.startup_warmup_max_trades_per_symbol,
+                request_sleep_seconds=self.config.startup_warmup_request_sleep_seconds,
+                error_limit=self.config.startup_warmup_error_limit,
+            ),
+        ).run(selected_symbols)
+        writer.write_event(result.as_event())
+        return result
+
     def _write_aggtrade_starting_event(self, writer: Live2ArtifactWriter) -> None:
         selected_symbols = 0 if self.universe_selection is None else len(self.universe_selection.selected_symbols)
         writer.write_event(
@@ -712,6 +766,7 @@ class AnomalyLive2Runner:
                     "stale_ms": self.config.aggtrade_stale_ms,
                     "startup_wait_seconds": self.config.aggtrade_startup_wait_seconds,
                     "hot_rest_backfill": False,
+                    "startup_rest_warmup": None if self.startup_warmup_result is None else self.startup_warmup_result.as_dict(),
                     "universe": self._universe_status(),
                 },
             )

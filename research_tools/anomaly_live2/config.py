@@ -22,6 +22,13 @@ class AnomalyLive2Config:
     aggtrade_stale_ms: int = 5_000
     aggtrade_startup_wait_seconds: float = 10.0
     aggtrade_max_streams_per_connection: int = 150
+    ws_reconnect_initial_delay_seconds: float = 1.0
+    ws_reconnect_max_delay_seconds: float = 60.0
+    startup_warmup_lookback_minutes: int = 15
+    startup_warmup_max_trades_per_symbol: int = 1000
+    startup_warmup_request_sleep_seconds: float = 0.03
+    startup_warmup_error_limit: int = 20
+    max_closed_candles_per_timeframe: int = 360
     universe_max_symbols: int = 240
     universe_min_quote_volume_24h: float = 300_000.0
     universe_min_trade_count_24h: int = 1
@@ -66,6 +73,20 @@ class AnomalyLive2Config:
             raise ValueError("aggtrade_startup_wait_seconds must be >= 0")
         if self.aggtrade_max_streams_per_connection <= 0:
             raise ValueError("aggtrade_max_streams_per_connection must be > 0")
+        if self.ws_reconnect_initial_delay_seconds <= 0:
+            raise ValueError("ws_reconnect_initial_delay_seconds must be > 0")
+        if self.ws_reconnect_max_delay_seconds < self.ws_reconnect_initial_delay_seconds:
+            raise ValueError("ws_reconnect_max_delay_seconds must be >= ws_reconnect_initial_delay_seconds")
+        if self.startup_warmup_lookback_minutes <= 0:
+            raise ValueError("startup_warmup_lookback_minutes must be > 0")
+        if not 1 <= self.startup_warmup_max_trades_per_symbol <= 1000:
+            raise ValueError("startup_warmup_max_trades_per_symbol must be in [1, 1000]")
+        if self.startup_warmup_request_sleep_seconds < 0:
+            raise ValueError("startup_warmup_request_sleep_seconds must be >= 0")
+        if self.startup_warmup_error_limit <= 0:
+            raise ValueError("startup_warmup_error_limit must be > 0")
+        if self.max_closed_candles_per_timeframe <= 0:
+            raise ValueError("max_closed_candles_per_timeframe must be > 0")
         if self.universe_max_symbols <= 0:
             raise ValueError("universe_max_symbols must be > 0")
         if self.universe_min_quote_volume_24h < 0:

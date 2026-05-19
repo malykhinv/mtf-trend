@@ -5643,6 +5643,43 @@ Risk:
 Low. This patch changes operator output only. It does not change strategy thresholds, market-data ingestion, runtime gates, order placement, fill accounting, stops, or position supervision.
 ```
 
+## 2026-05-19 - P327 proposed - live2 startup warmup and WS backoff
+
+Files:
+
+```text
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/state.py
+research_tools/anomaly_live2/status_grid.py
+research_tools/anomaly_live2/market_data/backoff.py
+research_tools/anomaly_live2/market_data/ticker_ws.py
+research_tools/anomaly_live2/market_data/aggtrade_ws.py
+research_tools/anomaly_live2/market_data/warmup.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Fix two live2 startup/runtime gaps found after P326: WebSocket reconnects had fixed tight retry sleeps, and live2 had no startup warm-up for in-memory aggTrade candle rings. Add bounded exponential WS reconnect backoff with jitter, explicit watchdog stale restarts for ticker/aggTrade sources, startup-only Binance aggTrades REST warm-up before aggTrade WS starts, and configurable bounded candle ring depth. Warm-up is explicitly not available from signal/decision hot path.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live2 --help
+```
+
+Risk:
+
+```text
+Medium. Startup now makes bounded REST aggTrades requests for the selected universe before aggTrade WS starts, so first readiness can be slower but decisions start with real recent candles. During prolonged WS outage, reconnect pressure is lower and safer for Binance/IP throttling. Trading logic, thresholds, fill accounting, stops, and position supervisor behavior are not changed.
+```
+
 ## 2026-05-19 - P316 proposed - live2 stream signal adapter
 
 Files:

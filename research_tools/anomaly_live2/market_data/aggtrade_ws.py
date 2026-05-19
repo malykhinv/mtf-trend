@@ -12,6 +12,7 @@ from urllib.parse import quote
 
 from ..clock import utc_now_ms
 from ..state import SymbolStateStore
+from .backoff import Live2ReconnectBackoff
 from .candles import Live2AggTradeEvent
 from .common import optional_float, optional_int, symbol_to_market_id
 
@@ -45,6 +46,8 @@ class Live2AggTradeWsShardStatus:
     reconnect_attempts: int
     disconnect_count: int
     thread_alive: bool
+    backoff_attempt: int
+    last_backoff_delay_seconds: float
 
     def is_connected(self, *, stale_ms: int) -> bool:
         if self.connection_status != "connected":
@@ -70,6 +73,8 @@ class Live2AggTradeWsShardStatus:
             "reconnect_attempts": self.reconnect_attempts,
             "disconnect_count": self.disconnect_count,
             "thread_alive": self.thread_alive,
+            "backoff_attempt": self.backoff_attempt,
+            "last_backoff_delay_seconds": self.last_backoff_delay_seconds,
             "connected": self.is_connected(stale_ms=stale_ms),
             "stale_ms": stale_ms,
         }
@@ -136,6 +141,8 @@ class Live2AggTradeWsSource:
         stale_ms: int,
         startup_wait_seconds: float,
         max_streams_per_connection: int,
+        reconnect_initial_delay_seconds: float = 1.0,
+        reconnect_max_delay_seconds: float = 60.0,
     ) -> None:
         self.state_store = state_store
         self.symbols = tuple(dict.fromkeys(symbol.strip() for symbol in symbols if symbol.strip()))
@@ -154,6 +161,8 @@ class Live2AggTradeWsSource:
                 state_store=self.state_store,
                 source_id=self.source_id,
                 ready_callback=self._mark_ready_if_all_connected,
+                reconnect_initial_delay_seconds=float(reconnect_initial_delay_seconds),
+                reconnect_max_delay_seconds=float(reconnect_max_delay_seconds),
             )
             for index, market_ids in enumerate(_chunked(tuple(self._market_id_to_symbol), self.max_streams_per_connection))
         )
@@ -217,6 +226,8 @@ class _Live2AggTradeWsShard:
         state_store: SymbolStateStore,
         source_id: str,
         ready_callback: Callable[[], None],
+        reconnect_initial_delay_seconds: float = 1.0,
+        reconnect_max_delay_seconds: float = 60.0,
     ) -> None:
         self.shard_id = int(shard_id)
         self.market_ids = tuple(market_ids)
@@ -224,6 +235,11 @@ class _Live2AggTradeWsShard:
         self.state_store = state_store
         self.source_id = source_id
         self.ready_callback = ready_callback
+        self._backoff = Live2ReconnectBackoff(
+            initial_seconds=float(reconnect_initial_delay_seconds),
+            max_seconds=float(reconnect_max_delay_seconds),
+        )
+        self._last_backoff_delay_seconds = 0.0
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._connection_status = "starting"
@@ -270,6 +286,8 @@ class _Live2AggTradeWsShard:
                 reconnect_attempts=self._reconnect_attempts,
                 disconnect_count=self._disconnect_count,
                 thread_alive=self._thread.is_alive(),
+                backoff_attempt=self._backoff.attempt,
+                last_backoff_delay_seconds=self._last_backoff_delay_seconds,
             )
 
     def _run_thread(self) -> None:
@@ -290,7 +308,8 @@ class _Live2AggTradeWsShard:
                 except Exception:
                     pass
             if not self._stop_event.is_set():
-                time.sleep(2.0)
+                delay = self._next_backoff_delay()
+                self._stop_event.wait(timeout=delay)
 
     async def _run_ws_loop(self) -> None:
         import aiohttp
@@ -303,11 +322,17 @@ class _Live2AggTradeWsShard:
         async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             async with session.ws_connect(url, heartbeat=20, max_msg_size=8 * 1024 * 1024) as ws:
                 self._set_status("connected", None)
+                self._reset_backoff()
                 self.ready_callback()
-                async for message in ws:
-                    if self._stop_event.is_set():
-                        await ws.close()
-                        return
+                while not self._stop_event.is_set():
+                    try:
+                        message = await ws.receive(timeout=max(1.0, self.stale_ms / 1000.0))
+                    except TimeoutError:
+                        if self._watchdog_stale():
+                            self._set_status("watchdog_stale", "aggtrade_ws_watchdog_stale", count_disconnect=True)
+                            await ws.close()
+                            return
+                        continue
                     if message.type == aiohttp.WSMsgType.TEXT:
                         self._handle_ws_payload(message.data)
                     elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
@@ -369,6 +394,23 @@ class _Live2AggTradeWsShard:
             buyer_is_maker=buyer_is_maker,
             source=self.source_id,
         )
+
+    def _watchdog_stale(self) -> bool:
+        with self._lock:
+            if self._last_message_at_ms is None:
+                return True
+            return max(0, utc_now_ms() - int(self._last_message_at_ms)) > self.stale_ms
+
+    def _next_backoff_delay(self) -> float:
+        delay = self._backoff.next_delay_seconds()
+        with self._lock:
+            self._last_backoff_delay_seconds = float(delay)
+        return delay
+
+    def _reset_backoff(self) -> None:
+        self._backoff.reset()
+        with self._lock:
+            self._last_backoff_delay_seconds = 0.0
 
     def _record_connect_attempt(self) -> None:
         with self._lock:

@@ -3327,6 +3327,14 @@ Acceptance for P326: after P311-P326 are applied, heartbeat output must print a 
 Next validation: run live2 for 60-120 seconds and confirm the grid matches live2_status.json values while not increasing decision-loop overrun count.
 ```
 
+## 2026-05-19 - P327 live2 warmup/backoff acceptance plan
+
+```text
+Purpose: remove cold-start blindness and reconnect hammering before broader live2 smoke tests.
+Acceptance for P327: after P311-P327 are applied, startup must emit startup_aggtrade_warmup_starting/completed events, live2_status.json must expose startup_warmup details, SymbolState rings must remain bounded by max_closed_candles_per_timeframe, and ticker/aggTrade WS status must expose backoff_attempt/last_backoff_delay_seconds. Simulated stale/no-message WS receive must set watchdog_stale and reconnect through exponential backoff rather than a fixed tight retry loop.
+Not accepted yet: restart/open-order reconciliation and exact stop-trigger fill reconstruction. Next live2 smoke should verify warm-up completes without decision hot-path REST and that no entries are allowed during WS stale/reconnect coverage.
+```
+
 ## 2026-05-19 - P316 live2 signal-adapter acceptance plan
 
 ```text

@@ -2112,6 +2112,12 @@ Current commit: UNKNOWN.
 
 P326 proposed after P325. Live2 gets a v1-style terminal grid log so the operator can see connection/market/trading/control health without opening JSON/CSV. This is UI-only; artifacts remain source of truth and trading behavior is unchanged.
 
+## 2026-05-19 - P327 live2 warmup/backoff state
+
+Current commit: UNKNOWN.
+
+P327 proposed after P326. Live2 now has startup-only aggTrade REST warm-up into bounded in-memory candle rings and exponential reconnect backoff/watchdog restarts for ticker/aggTrade WebSockets. This does not reintroduce hot REST fallback: signal decisions still use only already-hydrated stream state and must reject/degrade when coverage is stale.
+
 ## 2026-05-19 — P316 proposed
 
 ```text

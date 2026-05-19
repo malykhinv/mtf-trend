@@ -29,6 +29,7 @@ def format_live2_status_grid(
 
     ws_health = _dict(market_data_status.get("ws_health"))
     universe = _dict(market_data_status.get("universe"))
+    startup_warmup = _dict(market_data_status.get("startup_warmup"))
     readiness = _dict(runtime_gate_status.get("readiness"))
     supervisor_status = _dict(execution_status.get("position_supervisor"))
 
@@ -50,6 +51,8 @@ def format_live2_status_grid(
         data_status = "Reconnect"
 
     selected_symbols = _int(universe.get("selected_symbols"))
+    warmed_symbols = _int(startup_warmup.get("symbols_warmed"))
+    warmup_requested = _int(startup_warmup.get("symbols_requested"))
     ready_candles = _int(candle_counts.get("ready"))
     total_symbols = max(_sum_counts(state_counts), selected_symbols, ready_candles)
     watched_symbols = _int(state_counts.get("watching")) + _int(state_counts.get("actionable"))
@@ -116,8 +119,8 @@ def format_live2_status_grid(
         ),
         _format_status_line(
             _format_status_cell("Активные", f"{actionable_symbols}/{watched_symbols}"),
+            _format_status_cell("Прогрев", f"{warmed_symbols}/{warmup_requested}" if warmup_requested else "-"),
             _format_status_cell("Решения", total_decisions),
-            _format_status_cell("Выбрано", selected_count),
         ),
         "",
         "Торговля",
