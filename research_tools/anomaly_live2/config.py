@@ -30,7 +30,7 @@ class AnomalyLive2Config:
     startup_warmup_error_limit: int = 20
     max_closed_candles_per_timeframe: int = 360
     universe_max_symbols: int = 600
-    universe_min_quote_volume_24h: float = 0.0
+    universe_min_quote_volume_24h: float = 30_000.0
     universe_min_trade_count_24h: int = 0
     decision_timeframe_ms: int = 5_000
     decision_deadline_ms: int = 750

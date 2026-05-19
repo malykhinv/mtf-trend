@@ -2124,6 +2124,13 @@ Current commit: UNKNOWN.
 
 P328 proposed after P327. Live2 no longer stays silent during startup: the terminal shows stage progress for preflight, ticker, universe selection, warm-up, and aggTrade WS before the first heartbeat grid. The heartbeat grid is now rendered through a v1-style repaintable console logger instead of printing a new block every heartbeat. Runtime gate flips remain in artifacts/grid, but Telegram no longer sends “new entries enabled/disabled” messages. Default auto-universe is broadened to max 600 symbols with no 24h quote/trade-count minimum, because the previous 300k quote-volume filter could shrink live2 to roughly 100-150 symbols while v1 covered 500+.
 
+
+## 2026-05-19 - P329 live2 universe floor state
+
+Current commit: UNKNOWN.
+
+P329 proposed after P328. Live2 default auto-universe now uses `universe_min_quote_volume_24h=30_000` instead of `0`. This filters dead/dust symbols while preserving broad 500+ style coverage. Trading logic, real-order lifecycle, stop/TP handling, Telegram behavior, and runtime gates are unchanged.
+
 ## 2026-05-19 — P316 proposed
 
 ```text

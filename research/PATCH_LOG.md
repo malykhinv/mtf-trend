@@ -5716,6 +5716,38 @@ Risk:
 Low-to-medium. Operator output and startup defaults change. Broader default universe increases WS/warm-up load, but this matches the intended v1-like broad coverage and remains controlled by --universe-max-symbols. Trading logic, fills, stops, TP/BE, and position supervision are unchanged.
 ```
 
+
+## 2026-05-19 - P329 proposed - live2 universe quote-volume floor
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_live2/config.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Set the default live2 auto-universe 24h quote-volume floor to 30,000 USDT instead of 0. This keeps broad coverage closer to v1 while filtering completely inactive or dust symbols, without changing the maximum universe size, signal logic, execution, stops, TP/BE, or runtime gates.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live2 --help
+```
+
+Risk:
+
+```text
+Low. The startup universe becomes slightly narrower than P328 when many symbols have extremely low 24h quote volume, but should remain far broader than the old 300k floor. Users can still override with --universe-min-quote-volume-24h.
+```
+
 ## 2026-05-19 - P316 proposed - live2 stream signal adapter
 
 Files:
