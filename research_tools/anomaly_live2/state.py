@@ -42,6 +42,12 @@ class SymbolState:
     decision_deadline_ms: int | None = None
     last_decision_bucket_ms: int | None = None
     last_verdict: str = "not_evaluated"
+    last_verdict_reason: str = ""
+    last_decision_latency_ms: int | None = None
+    decision_count: int = 0
+    rejected_decision_count: int = 0
+    data_not_ready_decision_count: int = 0
+    deadline_missed_count: int = 0
     universe_selected: bool = False
     universe_rank: int | None = None
     universe_reason: str = "not_selected"
@@ -176,6 +182,12 @@ class SymbolState:
             "decision_deadline_ms": self.decision_deadline_ms,
             "last_decision_bucket_ms": self.last_decision_bucket_ms,
             "last_verdict": self.last_verdict,
+            "last_verdict_reason": self.last_verdict_reason,
+            "last_decision_latency_ms": self.last_decision_latency_ms,
+            "decision_count": self.decision_count,
+            "rejected_decision_count": self.rejected_decision_count,
+            "data_not_ready_decision_count": self.data_not_ready_decision_count,
+            "deadline_missed_count": self.deadline_missed_count,
             "universe_selected": self.universe_selected,
             "universe_rank": self.universe_rank,
             "universe_reason": self.universe_reason,

@@ -10,8 +10,19 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P314 proposed live2 ticker-selected startup universe
+Last active patch: P315 proposed live2 deadline verdict engine
 Updated: 2026-05-19
+```
+
+## 2026-05-19 - P315 live2 deadline verdict engine
+
+```text
+Current patch status: P315 PROPOSED / UNKNOWN commit.
+Question: add the next live2 layer after ticker-selected aggTrade universe, prioritizing speed/reliability and proving candidates cannot disappear into a queue.
+Change: add `Live2DeadlineEngine`, which reads already-built in-memory 5s candle rings, treats threshold-crossing closed buckets as diagnostic actionable buckets, and gives each processed actionable bucket an explicit verdict before/after the configured deadline. Generation 0 still has no real SignalEngine, so successful on-time actionable buckets end as `rejected_signal_engine_todo`; degraded buckets become `data_not_ready`; late buckets become `deadline_missed`. Decision counters, verdict reasons, and latency are written to `live2_status.json`, `live2_events.csv`, and `live2_symbol_state.csv`.
+Trading impact: no real orders, signal thresholds/categories, execution guards, fills, stops, TP, BE, or live1 behavior are changed. New entries remain disabled because SignalEngine/ExecutionEngine are still TODO.
+Validation: P311->P314 were applied first, then P315 applied on top; `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic deadline-cycle smoke confirmed one actionable 5s bucket gets a bounded-time `rejected_signal_engine_todo` verdict and state counters update.
+Next validation: run `.venv\Scripts\python.exe main.py run-anomaly-live2` for 60-120 seconds and check `deadline_decision` events, `decision_status.last_cycle`, no candidate-drop fields, and no hot REST/backfill fields.
 ```
 
 ## 2026-05-19 - P314 live2 ticker-selected startup universe

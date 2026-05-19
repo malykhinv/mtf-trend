@@ -70,6 +70,7 @@ class Live2ArtifactWriter:
         status: str,
         reason: str = "",
         market_data_status: dict[str, Any] | None = None,
+        decision_status: dict[str, Any] | None = None,
     ) -> None:
         payload: dict[str, Any] = {
             "runtime_generation": runtime_generation,
@@ -86,7 +87,8 @@ class Live2ArtifactWriter:
             "readiness": readiness.as_dict(),
             "execution_status": "todo_not_implemented",
             "market_data_status": market_data_status or {"status": "todo_not_implemented"},
-            "signal_status": "todo_not_implemented",
+            "signal_status": "deadline_engine_active_signal_todo",
+            "decision_status": decision_status or {"status": "todo_not_implemented"},
         }
         self.status_path.write_text(
             json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
@@ -105,6 +107,12 @@ class Live2ArtifactWriter:
             "decision_deadline_ms",
             "last_decision_bucket_ms",
             "last_verdict",
+            "last_verdict_reason",
+            "last_decision_latency_ms",
+            "decision_count",
+            "rejected_decision_count",
+            "data_not_ready_decision_count",
+            "deadline_missed_count",
             "ticker_market_id",
             "ticker_first_seen_ms",
             "ticker_last_seen_ms",

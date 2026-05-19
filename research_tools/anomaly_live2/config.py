@@ -21,6 +21,11 @@ class AnomalyLive2Config:
     universe_max_symbols: int = 240
     universe_min_quote_volume_24h: float = 300_000.0
     universe_min_trade_count_24h: int = 1
+    decision_timeframe_ms: int = 5_000
+    decision_deadline_ms: int = 750
+    actionable_min_quote_volume: float = 2_500.0
+    actionable_min_trade_count: int = 20
+    actionable_min_abs_return_pct: float = 0.003
     runtime_generation: str = "live2_v0"
 
     def __post_init__(self) -> None:
@@ -42,3 +47,13 @@ class AnomalyLive2Config:
             raise ValueError("universe_min_quote_volume_24h must be >= 0")
         if self.universe_min_trade_count_24h < 0:
             raise ValueError("universe_min_trade_count_24h must be >= 0")
+        if self.decision_timeframe_ms <= 0:
+            raise ValueError("decision_timeframe_ms must be > 0")
+        if self.decision_deadline_ms <= 0:
+            raise ValueError("decision_deadline_ms must be > 0")
+        if self.actionable_min_quote_volume < 0:
+            raise ValueError("actionable_min_quote_volume must be >= 0")
+        if self.actionable_min_trade_count < 0:
+            raise ValueError("actionable_min_trade_count must be >= 0")
+        if self.actionable_min_abs_return_pct < 0:
+            raise ValueError("actionable_min_abs_return_pct must be >= 0")

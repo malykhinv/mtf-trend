@@ -9,6 +9,7 @@ from .artifacts import Live2ArtifactWriter
 from .clock import utc_now_iso
 from .config import AnomalyLive2Config
 from .contracts import Live2Component, Live2Event, Live2Readiness, Live2Severity
+from .deadline import Live2DeadlineEngine, Live2DeadlineEngineConfig
 from .market_data.aggtrade_ws import Live2AggTradeWsSource
 from .market_data.ticker_ws import Live2TickerWsSource
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
@@ -44,6 +45,17 @@ class AnomalyLive2Runner:
         )
         self.aggtrade_source: Live2AggTradeWsSource | None = None
         self.universe_selection: Live2UniverseSelection | None = None
+        self.deadline_engine = Live2DeadlineEngine(
+            state_store=self.state_store,
+            config=Live2DeadlineEngineConfig(
+                timeframe_ms=config.decision_timeframe_ms,
+                decision_deadline_ms=config.decision_deadline_ms,
+                actionable_min_quote_volume=config.actionable_min_quote_volume,
+                actionable_min_trade_count=config.actionable_min_trade_count,
+                actionable_min_abs_return_pct=config.actionable_min_abs_return_pct,
+                stale_trade_ms=config.aggtrade_stale_ms,
+            ),
+        )
         self._shutdown_requested = False
 
     def run(self) -> int:
@@ -117,6 +129,7 @@ class AnomalyLive2Runner:
                 status="running",
                 reason="generation_0_ticker_universe_and_aggtrade_ws_started",
                 market_data_status=market_data_status,
+                decision_status=self.deadline_engine.status(),
             )
             print(
                 f"live2 · старт · артефакты {self.config.output_dir} · "
@@ -126,6 +139,9 @@ class AnomalyLive2Runner:
             )
             while not self._shutdown_requested:
                 time.sleep(self.config.heartbeat_interval_seconds)
+                deadline_result = self.deadline_engine.run_cycle()
+                for decision in deadline_result.decisions:
+                    writer.write_event(decision.as_event())
                 market_data_status = self._market_data_status()
                 writer.write_event(
                     Live2Event(
@@ -138,6 +154,8 @@ class AnomalyLive2Runner:
                             "aggtrade_status_counts": self.state_store.aggtrade_counts(),
                             "candle_coverage_counts": self.state_store.candle_coverage_counts(),
                             "market_data_status": market_data_status,
+                            "decision_status": self.deadline_engine.status(),
+                            "deadline_cycle": deadline_result.as_dict(),
                             "new_entries_allowed": self.readiness.new_entries_allowed,
                             "execution_status": "todo_not_implemented",
                         },
@@ -152,6 +170,7 @@ class AnomalyLive2Runner:
                     status="running",
                     reason="generation_0_market_data_ws_alive",
                     market_data_status=market_data_status,
+                    decision_status=self.deadline_engine.status(),
                 )
         except KeyboardInterrupt:
             self.shutdown(reason="keyboard_interrupt")
@@ -171,6 +190,7 @@ class AnomalyLive2Runner:
                 status="stopped",
                 reason="keyboard_interrupt",
                 market_data_status=self._market_data_status(),
+                decision_status=self.deadline_engine.status(),
             )
             print("live2 · остановлено пользователем", flush=True)
             return 130
@@ -256,6 +276,8 @@ class AnomalyLive2Runner:
                     "universe_max_symbols": self.config.universe_max_symbols,
                     "universe_min_quote_volume_24h": self.config.universe_min_quote_volume_24h,
                     "universe_min_trade_count_24h": self.config.universe_min_trade_count_24h,
+                    "decision_timeframe_ms": self.config.decision_timeframe_ms,
+                    "decision_deadline_ms": self.config.decision_deadline_ms,
                 },
             )
         )
@@ -276,10 +298,10 @@ class AnomalyLive2Runner:
         )
         writer.write_event(
             Live2Event(
-                event_type="signal_engine_todo",
+                event_type="deadline_engine_started_signal_todo",
                 component=Live2Component.SIGNAL,
                 severity=Live2Severity.WARNING,
-                message="deadline signal evaluation is not implemented in generation 0",
+                message="deadline engine is active; real signal evaluation is not implemented in generation 0",
             )
         )
         writer.write_event(

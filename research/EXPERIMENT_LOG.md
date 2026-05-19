@@ -3233,3 +3233,13 @@ Acceptance for P313: with explicit symbols, `run-anomaly-live2` starts combined 
 Not accepted yet: no executable signal, no strategy edge, no deadline-engine proof, no real order safety. Market-data is still not enough to enable entries.
 Next experiment after P313: add the deadline engine and deterministic internal stress events to prove every actionable state ends in selected/rejected/data_not_ready/deadline_missed/no_capacity/expired without candidate queues or pressure drops.
 ```
+
+
+## 2026-05-19 - P315 live2 deadline-engine acceptance plan
+
+```text
+Purpose: prove live2 can end actionable market-data states with explicit verdicts instead of warm/radar queues or pressure drops.
+Acceptance for P315: after P311-P314 are applied, `run-anomaly-live2` runs a DeadlineEngine over in-memory 5s candle rings, emits `deadline_decision` events for diagnostic actionable buckets, and updates per-symbol decision counters/verdict latency. Since real SignalEngine is still TODO, on-time actionable buckets must be rejected as `rejected_signal_engine_todo`, not selected or traded. Late buckets must be `deadline_missed`; degraded coverage must be `data_not_ready`.
+Not accepted yet: no real strategy signal, no entry guard, no order placement, no fill/stop safety, and no edge/profitability claim.
+Next experiment after P315: adapt current strategy/category signal logic into a pure `SignalEngine.evaluate(SymbolState)` contract that performs no network/disk IO and produces selected/rejected reasons from the same deadline cycle.
+```
