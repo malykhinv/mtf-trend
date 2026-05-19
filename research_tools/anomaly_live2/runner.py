@@ -17,6 +17,7 @@ from .market_data.ticker_ws import Live2TickerWsSource
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
 from .position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorConfig
 from .state import SymbolStateStore
+from .status_grid import format_live2_status_grid
 from .telegram import Live2TelegramConfig, Live2TelegramDispatcher
 
 
@@ -114,6 +115,7 @@ class AnomalyLive2Runner:
         self._last_market_data_coverage_snapshot: dict[str, object] | None = None
         self._last_runtime_gate_reason = "startup"
         self._last_decision_cycle_elapsed_ms = 0
+        self._started_monotonic = time.perf_counter()
 
     def run(self) -> int:
         writer = Live2ArtifactWriter(
@@ -277,6 +279,9 @@ class AnomalyLive2Runner:
                             },
                         )
                     )
+                    decision_status = self.deadline_engine.status()
+                    execution_status = self._execution_status()
+                    artifact_writer_status = writer.status().as_dict()
                     writer.write_symbol_state(self.state_store)
                     writer.write_status(
                         runtime_generation=self.config.runtime_generation,
@@ -286,9 +291,25 @@ class AnomalyLive2Runner:
                         status="running",
                         reason="generation_0_fast_decision_loop_alive",
                         market_data_status=market_data_status,
-                        decision_status=self.deadline_engine.status(),
-                        execution_status=self._execution_status(),
+                        decision_status=decision_status,
+                        execution_status=execution_status,
                         runtime_gate_status=runtime_gate_status,
+                    )
+                    print(
+                        format_live2_status_grid(
+                            runtime_seconds=time.perf_counter() - self._started_monotonic,
+                            cycle_seconds=max(0.0, self._last_decision_cycle_elapsed_ms / 1000.0),
+                            state_counts=self.state_store.counts_by_status(),
+                            ticker_counts=self.state_store.ticker_counts(),
+                            aggtrade_counts=self.state_store.aggtrade_counts(),
+                            candle_counts=self.state_store.candle_coverage_counts(),
+                            market_data_status=market_data_status,
+                            decision_status=decision_status,
+                            execution_status=execution_status,
+                            runtime_gate_status=runtime_gate_status,
+                            artifact_writer_status=artifact_writer_status,
+                        ),
+                        flush=True,
                     )
 
                 elapsed = time.perf_counter() - cycle_started

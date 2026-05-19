@@ -2106,6 +2106,12 @@ Current commit: UNKNOWN.
 
 P325 proposed after patch-stack audit. Main finding: P311-P324 compile, but run-anomaly-live2 had startup/import and safety-contract issues that should be fixed before real smoke.
 
+## 2026-05-19 - P326 live2 grid-log state
+
+Current commit: UNKNOWN.
+
+P326 proposed after P325. Live2 gets a v1-style terminal grid log so the operator can see connection/market/trading/control health without opening JSON/CSV. This is UI-only; artifacts remain source of truth and trading behavior is unchanged.
+
 ## 2026-05-19 — P316 proposed
 
 ```text

@@ -3319,6 +3319,14 @@ Acceptance for P323: after P311-P323 are applied, `run-anomaly-live2` must expos
 Not accepted yet: Telegram critical alerts, restart reconciliation, exact stop-fill reconstruction, and load/stress validation across a broad universe. P324 should add operator Telegram safety messages or restart/order reconciliation depending on the next live2 smoke result.
 ```
 
+## 2026-05-19 - P326 live2 grid-log acceptance plan
+
+```text
+Purpose: make run-anomaly-live2 operator-visible during smoke tests without changing trading logic.
+Acceptance for P326: after P311-P326 are applied, heartbeat output must print a compact v1-style grid with sections Соединение, Рынок, Торговля, Контроль. The grid must show stream/shard health, universe/candle coverage, decision/deadline counters, protected positions, TP1/final close counters, runtime gate reason, artifact-writer queue, and integrity risk count. It must not be the source of truth; CSV/JSON artifacts remain authoritative.
+Next validation: run live2 for 60-120 seconds and confirm the grid matches live2_status.json values while not increasing decision-loop overrun count.
+```
+
 ## 2026-05-19 - P316 live2 signal-adapter acceptance plan
 
 ```text

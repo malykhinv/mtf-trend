@@ -5609,6 +5609,40 @@ Status: PROPOSED.
 - Keeps cumulative candle gap/out-of-order counters as diagnostics instead of permanently blocking future real aggTrade buckets.
 - Makes post-fill integrity result serialization safe for malformed/missing fill fields.
 
+## 2026-05-19 - P326 proposed - live2 v1-style grid log
+
+Files:
+
+```text
+research_tools/anomaly_live2/status_grid.py
+research_tools/anomaly_live2/runner.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Add a compact terminal operator grid for run-anomaly-live2 in the same practical style as v1: Соединение / Рынок / Торговля / Контроль sections, fixed-width cells, quality marks, runtime gates, WS shard health, deadline misses, artifact-writer queue, positions, TP1/final-close counters, and integrity-risk counter. The grid is console UI only; live2_events.csv and live2_status.json remain the source of truth.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python - <<'PY'
+from research_tools.anomaly_live2.status_grid import format_live2_status_grid
+print(format_live2_status_grid(...))
+PY
+```
+
+Risk:
+
+```text
+Low. This patch changes operator output only. It does not change strategy thresholds, market-data ingestion, runtime gates, order placement, fill accounting, stops, or position supervision.
+```
+
 ## 2026-05-19 - P316 proposed - live2 stream signal adapter
 
 Files:
