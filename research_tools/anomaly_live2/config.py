@@ -13,6 +13,9 @@ class AnomalyLive2Config:
     output_dir: Path
     symbols: tuple[str, ...] = ()
     heartbeat_interval_seconds: float = 5.0
+    decision_loop_interval_seconds: float = 0.1
+    decision_latency_degraded_windows: int = 2
+    decision_latency_recovery_windows: int = 3
     ticker_stale_ms: int = 5_000
     ticker_startup_wait_seconds: float = 10.0
     aggtrade_stale_ms: int = 5_000
@@ -35,6 +38,12 @@ class AnomalyLive2Config:
     def __post_init__(self) -> None:
         if self.heartbeat_interval_seconds <= 0:
             raise ValueError("heartbeat_interval_seconds must be > 0")
+        if self.decision_loop_interval_seconds <= 0:
+            raise ValueError("decision_loop_interval_seconds must be > 0")
+        if self.decision_latency_degraded_windows <= 0:
+            raise ValueError("decision_latency_degraded_windows must be > 0")
+        if self.decision_latency_recovery_windows <= 0:
+            raise ValueError("decision_latency_recovery_windows must be > 0")
         if self.ticker_stale_ms <= 0:
             raise ValueError("ticker_stale_ms must be > 0")
         if self.ticker_startup_wait_seconds < 0:

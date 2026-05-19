@@ -9,7 +9,7 @@ from .artifacts import Live2ArtifactWriter
 from .clock import utc_now_iso
 from .config import AnomalyLive2Config
 from .contracts import Live2Component, Live2Event, Live2Readiness, Live2Severity
-from .deadline import Live2DeadlineEngine, Live2DeadlineEngineConfig
+from .deadline import Live2DeadlineCycleResult, Live2DeadlineEngine, Live2DeadlineEngineConfig
 from .entry_guard import Live2EntryGuardConfig, Live2EntryGuardEngine
 from .execution import Live2ExecutionConfig, Live2ExecutionEngine, Live2ExecutionExchange
 from .market_data.aggtrade_ws import Live2AggTradeWsSource
@@ -72,6 +72,11 @@ class AnomalyLive2Runner:
             execution_engine=self.execution_engine,
         )
         self._shutdown_requested = False
+        self._decision_latency_degraded_windows = 0
+        self._decision_latency_clean_windows = 0
+        self._last_runtime_gate_snapshot: dict[str, object] | None = None
+        self._last_runtime_gate_reason = "startup"
+        self._last_decision_cycle_elapsed_ms = 0
 
     def run(self) -> int:
         writer = Live2ArtifactWriter(
@@ -132,6 +137,13 @@ class AnomalyLive2Runner:
                 )
             self._refresh_artifact_writer_readiness(writer)
             market_data_status = self._market_data_status()
+            self._refresh_runtime_gates(
+                writer=writer,
+                market_data_status=market_data_status,
+                deadline_result=Live2DeadlineCycleResult(),
+                decision_cycle_elapsed_ms=0,
+            )
+            runtime_gate_status = self._runtime_gate_status()
             writer.write_event(
                 Live2Event(
                     event_type="ticker_ws_startup_status",
@@ -161,6 +173,7 @@ class AnomalyLive2Runner:
                 market_data_status=market_data_status,
                 decision_status=self.deadline_engine.status(),
                 execution_status=self.execution_engine.status(),
+                runtime_gate_status=runtime_gate_status,
             )
             print(
                 f"live2 · старт · артефакты {self.config.output_dir} · "
@@ -168,44 +181,65 @@ class AnomalyLive2Runner:
                 "ticker+aggTrade WS включены · stream signal adapter включен · execution boundary включен · новые входы запрещены",
                 flush=True,
             )
+            last_heartbeat_at = 0.0
             while not self._shutdown_requested:
-                time.sleep(self.config.heartbeat_interval_seconds)
+                cycle_started = time.perf_counter()
                 deadline_result = self.deadline_engine.run_cycle()
+                self._last_decision_cycle_elapsed_ms = int((time.perf_counter() - cycle_started) * 1000)
                 for decision in deadline_result.decisions:
                     writer.write_event(decision.as_event())
-                self._refresh_artifact_writer_readiness(writer)
+
                 market_data_status = self._market_data_status()
-                writer.write_event(
-                    Live2Event(
-                        event_type="live2_heartbeat",
-                        component=Live2Component.RUNNER,
-                        message="generation_0_market_data_ws_alive",
-                        data={
-                            "symbols_total": len(self.state_store),
-                            "ticker_status_counts": self.state_store.ticker_counts(),
-                            "aggtrade_status_counts": self.state_store.aggtrade_counts(),
-                            "candle_coverage_counts": self.state_store.candle_coverage_counts(),
-                            "market_data_status": market_data_status,
-                            "decision_status": self.deadline_engine.status(),
-                            "deadline_cycle": deadline_result.as_dict(),
-                            "new_entries_allowed": self.readiness.new_entries_allowed,
-                            "execution_status": self.execution_engine.status(),
-                            "artifact_writer_status": writer.status().as_dict(),
-                        },
-                    )
-                )
-                writer.write_symbol_state(self.state_store)
-                writer.write_status(
-                    runtime_generation=self.config.runtime_generation,
-                    started_at_utc=self.started_at_utc,
-                    readiness=self.readiness,
-                    state_store=self.state_store,
-                    status="running",
-                    reason="generation_0_market_data_ws_alive",
+                self._refresh_runtime_gates(
+                    writer=writer,
                     market_data_status=market_data_status,
-                    decision_status=self.deadline_engine.status(),
-                    execution_status=self.execution_engine.status(),
+                    deadline_result=deadline_result,
+                    decision_cycle_elapsed_ms=self._last_decision_cycle_elapsed_ms,
                 )
+
+                now_monotonic = time.monotonic()
+                if now_monotonic - last_heartbeat_at >= self.config.heartbeat_interval_seconds:
+                    last_heartbeat_at = now_monotonic
+                    runtime_gate_status = self._runtime_gate_status()
+                    writer.write_event(
+                        Live2Event(
+                            event_type="live2_heartbeat",
+                            component=Live2Component.RUNNER,
+                            message="generation_0_fast_decision_loop_alive",
+                            data={
+                                "symbols_total": len(self.state_store),
+                                "ticker_status_counts": self.state_store.ticker_counts(),
+                                "aggtrade_status_counts": self.state_store.aggtrade_counts(),
+                                "candle_coverage_counts": self.state_store.candle_coverage_counts(),
+                                "market_data_status": market_data_status,
+                                "decision_status": self.deadline_engine.status(),
+                                "deadline_cycle": deadline_result.as_dict(),
+                                "decision_cycle_elapsed_ms": self._last_decision_cycle_elapsed_ms,
+                                "runtime_gate_status": runtime_gate_status,
+                                "new_entries_allowed": self.readiness.new_entries_allowed,
+                                "execution_status": self.execution_engine.status(),
+                                "artifact_writer_status": writer.status().as_dict(),
+                            },
+                        )
+                    )
+                    writer.write_symbol_state(self.state_store)
+                    writer.write_status(
+                        runtime_generation=self.config.runtime_generation,
+                        started_at_utc=self.started_at_utc,
+                        readiness=self.readiness,
+                        state_store=self.state_store,
+                        status="running",
+                        reason="generation_0_fast_decision_loop_alive",
+                        market_data_status=market_data_status,
+                        decision_status=self.deadline_engine.status(),
+                        execution_status=self.execution_engine.status(),
+                        runtime_gate_status=runtime_gate_status,
+                    )
+
+                elapsed = time.perf_counter() - cycle_started
+                sleep_seconds = self.config.decision_loop_interval_seconds - elapsed
+                if sleep_seconds > 0:
+                    time.sleep(sleep_seconds)
         except KeyboardInterrupt:
             self.shutdown(reason="keyboard_interrupt")
             self._refresh_artifact_writer_readiness(writer)
@@ -227,6 +261,7 @@ class AnomalyLive2Runner:
                 market_data_status=self._market_data_status(),
                 decision_status=self.deadline_engine.status(),
                 execution_status=self.execution_engine.status(),
+                runtime_gate_status=self._runtime_gate_status(),
             )
             print("live2 · остановлено пользователем", flush=True)
             return 130
@@ -244,6 +279,92 @@ class AnomalyLive2Runner:
     def _refresh_artifact_writer_readiness(self, writer: Live2ArtifactWriter) -> None:
         status = writer.status()
         self.readiness.artifact_writer_ready = status.ready
+
+    def _refresh_runtime_gates(
+        self,
+        *,
+        writer: Live2ArtifactWriter,
+        market_data_status: dict[str, object],
+        deadline_result: Live2DeadlineCycleResult,
+        decision_cycle_elapsed_ms: int,
+    ) -> None:
+        self._refresh_artifact_writer_readiness(writer)
+        self.readiness.market_data_ready = bool(market_data_status.get("stream_coverage_ready"))
+        self.readiness.decision_latency_ready = self._decision_latency_gate_ready(
+            deadline_result=deadline_result,
+            decision_cycle_elapsed_ms=decision_cycle_elapsed_ms,
+        )
+        runtime_gate_status = self._runtime_gate_status()
+        snapshot = {
+            "market_data_ready": self.readiness.market_data_ready,
+            "decision_latency_ready": self.readiness.decision_latency_ready,
+            "artifact_writer_ready": self.readiness.artifact_writer_ready,
+            "exchange_boundary_ready": self.readiness.exchange_boundary_ready,
+            "position_supervisor_ready": self.readiness.position_supervisor_ready,
+            "execution_ready": self.readiness.execution_ready,
+            "new_entries_allowed": self.readiness.new_entries_allowed,
+            "reason": runtime_gate_status["reason"],
+        }
+        if snapshot != self._last_runtime_gate_snapshot:
+            self._last_runtime_gate_snapshot = dict(snapshot)
+            writer.write_event(
+                Live2Event(
+                    event_type="runtime_gate_update",
+                    component=Live2Component.RUNNER,
+                    severity=Live2Severity.INFO if self.readiness.new_entries_allowed else Live2Severity.WARNING,
+                    message=str(runtime_gate_status["reason"]),
+                    data=runtime_gate_status,
+                )
+            )
+
+    def _decision_latency_gate_ready(
+        self,
+        *,
+        deadline_result: Live2DeadlineCycleResult,
+        decision_cycle_elapsed_ms: int,
+    ) -> bool:
+        loop_budget_ms = max(1, int(self.config.decision_loop_interval_seconds * 1000))
+        degraded = (
+            deadline_result.deadline_missed_count > 0
+            or deadline_result.max_latency_ms > self.config.decision_deadline_ms
+            or decision_cycle_elapsed_ms > loop_budget_ms
+        )
+        if degraded:
+            self._decision_latency_degraded_windows += 1
+            self._decision_latency_clean_windows = 0
+        else:
+            self._decision_latency_clean_windows += 1
+            if self._decision_latency_clean_windows >= self.config.decision_latency_recovery_windows:
+                self._decision_latency_degraded_windows = 0
+        return self._decision_latency_degraded_windows < self.config.decision_latency_degraded_windows
+
+    def _runtime_gate_status(self) -> dict[str, object]:
+        reasons: list[str] = []
+        if not self.readiness.artifact_writer_ready:
+            reasons.append("artifact_writer_not_ready")
+        if not self.readiness.market_data_ready:
+            reasons.append("stream_coverage_not_ready")
+        if not self.readiness.decision_latency_ready:
+            reasons.append("decision_latency_degraded")
+        if not self.readiness.exchange_boundary_ready:
+            reasons.append("exchange_boundary_not_ready")
+        if not self.readiness.position_supervisor_ready:
+            reasons.append("position_supervisor_not_ready")
+        if not self.readiness.execution_ready:
+            reasons.append("execution_not_ready")
+        reason = "+".join(reasons) if reasons else "all_gates_ready"
+        self._last_runtime_gate_reason = reason
+        return {
+            "status": "ready" if self.readiness.new_entries_allowed else "no_new_entries",
+            "reason": reason,
+            "decision_loop_interval_seconds": self.config.decision_loop_interval_seconds,
+            "decision_cycle_elapsed_ms": self._last_decision_cycle_elapsed_ms,
+            "decision_latency_degraded_windows": self._decision_latency_degraded_windows,
+            "decision_latency_clean_windows": self._decision_latency_clean_windows,
+            "decision_latency_degraded_limit": self.config.decision_latency_degraded_windows,
+            "decision_latency_recovery_windows": self.config.decision_latency_recovery_windows,
+            "readiness": self.readiness.as_dict(),
+        }
 
     def _select_universe(self) -> Live2UniverseSelection:
         selector = Live2UniverseSelector(

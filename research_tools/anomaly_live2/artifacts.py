@@ -127,6 +127,7 @@ class Live2ArtifactWriter:
         market_data_status: dict[str, Any] | None = None,
         decision_status: dict[str, Any] | None = None,
         execution_status: dict[str, Any] | None = None,
+        runtime_gate_status: dict[str, Any] | None = None,
     ) -> None:
         artifact_writer_status = self.status().as_dict()
         payload: dict[str, Any] = {
@@ -147,6 +148,7 @@ class Live2ArtifactWriter:
             "signal_status": "deadline_engine_active_stream_signal_adapter",
             "decision_status": decision_status or {"status": "todo_not_implemented"},
             "artifact_writer_status": artifact_writer_status,
+            "runtime_gate_status": runtime_gate_status or {"status": "not_evaluated"},
         }
         self._enqueue(_ArtifactJob(kind="status", payload=payload))
 

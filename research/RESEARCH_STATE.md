@@ -1,5 +1,13 @@
 # Anomaly Research State
 
+## 2026-05-19 - P320 live2 fast decision loop gates
+
+```text
+Status: PROPOSED / UNKNOWN commit.
+Live2 deadline decisions now run on a dedicated fast loop (`decision_loop_interval_seconds`, default 0.1s) instead of waiting for the 5s heartbeat. Heartbeat/status/symbol-state writes remain periodic through the async artifact writer. Runtime gates now expose stream coverage readiness, decision-latency degradation/recovery, artifact-writer readiness, exchange boundary readiness, and the exact no-new-entries reason.
+Next: implement verified real order lifecycle only after live2 proves low deadline misses and stable runtime gates under a short smoke run.
+```
+
 ## 2026-05-19 - P319 live2 bounded async artifact writer
 
 ```text
@@ -18,7 +26,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P315 proposed live2 deadline verdict engine
+Last active patch: P320 proposed live2 fast decision loop gates
 Updated: 2026-05-19
 ```
 

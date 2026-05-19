@@ -3279,6 +3279,15 @@ Not accepted yet: no order submit, no actual fill verification, no stop visibili
 Next experiment after P318: implement a real order lifecycle atomically: pre-position check -> market order submit with client id -> actual fill verification -> initial stop submit -> stop visibility verification -> protected position state.
 ```
 
+## 2026-05-19 - P320 live2 fast decision-loop acceptance plan
+
+```text
+Purpose: remove the hidden latency bug where DeadlineEngine decisions were only evaluated on the 5s heartbeat cadence.
+Acceptance for P320: after P311-P319 are applied, `run-anomaly-live2` must run deadline cycles every `decision_loop_interval_seconds` (default 100ms), while heartbeat/status/symbol-state artifacts stay on the slower heartbeat cadence. `live2_status.json.runtime_gate_status` and `runtime_gate_update` events must show market-data readiness, decision-latency health, artifact-writer health, and exact no-new-entries reasons. Decision-latency readiness must degrade after repeated deadline misses or loop-budget overruns and recover only after clean windows.
+Not accepted yet: no real order placement, no verified fill/stop path, no TP/BE position supervision, and no edge/profitability claim.
+Next experiment after P320: short live2 smoke for 60-120 seconds; check that `deadline_cycle.max_latency_ms` is not tied to heartbeat cadence, heartbeat events arrive every ~5s, and runtime gates explain why entries remain disabled.
+```
+
 ## 2026-05-19 - P316 live2 signal-adapter acceptance plan
 
 ```text
