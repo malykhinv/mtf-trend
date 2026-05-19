@@ -4947,7 +4947,7 @@ class AnomalyMicroLiveRunner:
                                 and open_positions == 0
                                 and self._opening_symbol_count() == 0
                             ),
-                            order_delta=-int(orphan_cancelled) if orphan_cancelled else 0,
+                            protective_order_count=self._protective_order_count(),
                             real_orders=bool(self.config.confirm_real_orders),
                             cold_status=cold_status_text,
                             cold_age=cold_age_text,
@@ -13524,6 +13524,23 @@ class AnomalyMicroLiveRunner:
                 entry_order_submitted_at_ms,
             )
             self._track_order_reconcile_symbol(signal.symbol, reason="entry_order_submitted")
+            self.artifacts.append_event(
+                "entry_order_submit_started",
+                signal.symbol,
+                {
+                    "client_order_id": entry_client_order_id,
+                    "submitted_at_ms": entry_order_submitted_at_ms,
+                    "side": "buy",
+                    "requested_amount": amount_requested,
+                    "requested_notional_usdt": notional,
+                    "live_price": live_price,
+                    "signal_entry_price": signal.entry_price,
+                    "decision_timestamp_ms": signal.decision_timestamp_ms,
+                    "levels_tf": signal.levels_timeframe.value,
+                    "entry_tf": signal.entry_timeframe.value,
+                    **_entry_lag_details(signal, observed_timestamp_ms=entry_order_submitted_at_ms),
+                },
+            )
             try:
                 fill = self.exchange.create_market_order_with_fill(
                     signal.symbol,
@@ -13541,6 +13558,22 @@ class AnomalyMicroLiveRunner:
                 )
                 raise
             self._track_order_reconcile_symbol(signal.symbol, reason="entry_order_filled")
+            self.artifacts.append_event(
+                "entry_fill_verified",
+                signal.symbol,
+                {
+                    "client_order_id": entry_client_order_id,
+                    "order_id": fill.order_id,
+                    "status": fill.status,
+                    "fill_timestamp_ms": fill.timestamp_ms,
+                    "fill_price": fill.average_price,
+                    "filled_amount": fill.filled_amount,
+                    "cost": fill.cost,
+                    "fee_cost": fill.fee_cost,
+                    "entry_order_submitted_at_ms": entry_order_submitted_at_ms,
+                    **_entry_lag_details(signal, observed_timestamp_ms=int(fill.timestamp_ms)),
+                },
+            )
             post_position_amount = float(self.exchange.fetch_symbol_position_amount(signal.symbol))
             if self.config.danger_local_entry_position_guard_enabled:
                 position_delta_amount = float(fill.filled_amount)
@@ -14489,6 +14522,137 @@ class AnomalyMicroLiveRunner:
             )
         return actual_after_tp1
 
+    def _try_finalize_external_zero_position_from_exchange_fill(
+        self,
+        position: LivePosition,
+        *,
+        source_event: str,
+    ) -> bool:
+        """Recover terminal exchange fill before declaring a flat position unresolved.
+
+        A position can become flat between monitor ticks because the exchange-side TP1/stop
+        order already executed. In that case the monitor sees amount=0 before it reaches
+        the candle low/TP1 sync branch. Do not guess from candles or stop price here: only
+        finalize if the exchange returns a real fill for one of our known reduce-only orders.
+        """
+        symbol = position.signal.symbol
+        attempts: list[dict[str, object]] = []
+        progress_threshold = max(float(position.amount) * self.config.max_position_amount_slippage_ratio, 1e-12)
+
+        tp1_order_id = str(position.tp1_order_id or "").strip()
+        if tp1_order_id and not position.tp1_done:
+            try:
+                tp1_fill = self.exchange.fetch_order_fill(symbol, tp1_order_id)
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "order_role": "tp1_limit",
+                        "order_id": tp1_order_id,
+                        "status": "fetch_failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+            else:
+                filled_delta = max(float(tp1_fill.filled_amount) - float(position.tp1_recorded_filled_amount), 0.0)
+                attempts.append(
+                    {
+                        "order_role": "tp1_limit",
+                        "order_id": tp1_order_id,
+                        "status": tp1_fill.status,
+                        "fill_timestamp_ms": tp1_fill.timestamp_ms,
+                        "fill_price": tp1_fill.average_price,
+                        "filled_amount": tp1_fill.filled_amount,
+                        "filled_delta": filled_delta,
+                    }
+                )
+                if filled_delta > progress_threshold and math.isfinite(float(tp1_fill.average_price)):
+                    position.tp1_done = True
+                    self.artifacts.append_event(
+                        "position_external_exit_fill_recovered",
+                        symbol,
+                        {
+                            "position_id": position.position_id,
+                            "source_event": source_event,
+                            "order_role": "tp1_limit",
+                            "order_id": tp1_fill.order_id,
+                            "status": tp1_fill.status,
+                            "fill_timestamp_ms": tp1_fill.timestamp_ms,
+                            "fill_price": tp1_fill.average_price,
+                            "filled_amount": tp1_fill.filled_amount,
+                            "filled_delta": filled_delta,
+                            "cost": tp1_fill.cost,
+                            "fee_cost": tp1_fill.fee_cost,
+                        },
+                    )
+                    self._finalize_position(
+                        position,
+                        reason="TP1 limit закрыл позицию на бирже",
+                        pnl_price=float(tp1_fill.average_price),
+                        exit_amount=filled_delta,
+                    )
+                    return True
+
+        stop_order_id = str(position.stop_order_id or "").strip()
+        if stop_order_id:
+            try:
+                stop_fill = self.exchange.fetch_order_fill(symbol, stop_order_id)
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "order_role": "stop_market",
+                        "order_id": stop_order_id,
+                        "status": "fetch_failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+            else:
+                filled_amount = float(stop_fill.filled_amount)
+                attempts.append(
+                    {
+                        "order_role": "stop_market",
+                        "order_id": stop_order_id,
+                        "status": stop_fill.status,
+                        "fill_timestamp_ms": stop_fill.timestamp_ms,
+                        "fill_price": stop_fill.average_price,
+                        "filled_amount": filled_amount,
+                    }
+                )
+                if filled_amount > progress_threshold and math.isfinite(float(stop_fill.average_price)):
+                    self.artifacts.append_event(
+                        "position_external_exit_fill_recovered",
+                        symbol,
+                        {
+                            "position_id": position.position_id,
+                            "source_event": source_event,
+                            "order_role": "stop_market",
+                            "order_id": stop_fill.order_id,
+                            "status": stop_fill.status,
+                            "fill_timestamp_ms": stop_fill.timestamp_ms,
+                            "fill_price": stop_fill.average_price,
+                            "filled_amount": filled_amount,
+                            "cost": stop_fill.cost,
+                            "fee_cost": stop_fill.fee_cost,
+                        },
+                    )
+                    self._finalize_position(
+                        position,
+                        reason="стоп исполнен на бирже",
+                        pnl_price=float(stop_fill.average_price),
+                        exit_amount=min(filled_amount, max(float(position.remaining_amount), 0.0)),
+                    )
+                    return True
+
+        self.artifacts.append_event(
+            "position_external_exit_fill_recovery_failed",
+            symbol,
+            {
+                "position_id": position.position_id,
+                "source_event": source_event,
+                "attempts": attempts,
+            },
+        )
+        return False
+
     def _monitor_position(self, position: LivePosition) -> None:
         signal = position.signal
         last_stop_price = position.stop_price
@@ -14501,8 +14665,9 @@ class AnomalyMicroLiveRunner:
             try:
                 actual_amount = abs(self.exchange.fetch_symbol_position_amount(signal.symbol))
                 if actual_amount <= 0.0:
+                    source_event = "position_closed_externally_unverified_exit_price"
                     self.artifacts.append_event(
-                        "position_closed_externally_unverified_exit_price",
+                        source_event,
                         signal.symbol,
                         {
                             "position_id": position.position_id,
@@ -14510,10 +14675,12 @@ class AnomalyMicroLiveRunner:
                             "reason": "exchange_position_amount_zero_before_monitor_decision",
                         },
                     )
+                    if self._try_finalize_external_zero_position_from_exchange_fill(position, source_event=source_event):
+                        return
                     self._finalize_unresolved_position_exit(
                         position,
                         reason="позиция закрыта на бирже, но exit fill не восстановлен",
-                        source_event="position_closed_externally_unverified_exit_price",
+                        source_event=source_event,
                         details={
                             "exchange_position_amount": actual_amount,
                             "last_known_stop_price": position.current_stop_price,
@@ -16288,6 +16455,16 @@ class AnomalyMicroLiveRunner:
                 self._orphan_orders_cancelled_total,
             )
 
+    def _protective_order_count(self) -> int:
+        """Cheap operator UI count of locally tracked exchange protection orders."""
+        with self._state_lock:
+            count = 0
+            for position in self._open_positions.values():
+                if str(position.stop_order_id or "").strip():
+                    count += 1
+                if not position.tp1_done and str(position.tp1_order_id or "").strip():
+                    count += 1
+            return count
 
 
 def _live_config_has_subminute_entry_pairs(config: LiveAnomalyConfig) -> bool:
@@ -17593,7 +17770,7 @@ def _format_live_heartbeat(
     delayed_replay_pending: int,
     delayed_replay_total: int,
     idle: bool,
-    order_delta: int,
+    protective_order_count: int,
     real_orders: bool,
     cold_status: str,
     cold_age: str,
@@ -17610,7 +17787,7 @@ def _format_live_heartbeat(
         replay_value = f"{replay_pending}/{replay_total}"
     else:
         replay_value = "Выкл"
-    order_value = str(int(order_delta)) if order_delta else "0"
+    order_value = str(max(0, int(protective_order_count)))
     rows = [
         "Соединение",
         _format_status_line(

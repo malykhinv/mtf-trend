@@ -5286,6 +5286,36 @@ Risk:
 Low. This is terminal display and warning routing only. It does not change signal selection, order placement, or artifacts except fewer stderr warnings in the operator terminal.
 ```
 
+## 2026-05-19 - P303 proposed - recover external position exits and order UI count
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+If the exchange position is already flat when the monitor wakes up, try to recover the terminal TP1/stop exchange fill by known order id before writing exit_unresolved. Do not infer PnL from candles or stop price.
+Add explicit entry_order_submit_started and entry_fill_verified audit events, because order submit/fill timing was only indirectly visible through position_opened.
+Make the terminal heartbeat Orders cell show the cheap local count of verified protective order ids for open positions instead of orphan-order cancel delta.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low/medium. The patch does not change signal selection or entry/exit order placement. It can turn future external-flat exits from unresolved into closed only when the exchange returns a real fill for the known TP1 or stop order. Binance algo stop fill recovery may still stay unresolved if the exchange endpoint does not expose a fill by algo id; that is safer than synthetic PnL.
+```
+
 ## P302 live current OI guard no flags refresh - PROPOSED
 
 - Status: PROPOSED / commit UNKNOWN.

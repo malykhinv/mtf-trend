@@ -1876,6 +1876,15 @@ The live terminal heartbeat should behave as one pinned multi-section status gri
 Next validation: run a short live session in an interactive PowerShell terminal and confirm one self-updating grid containing Соединение/Рынок/Торговля/Контроль stays at the bottom after startup logs and any warning/error lines.
 ```
 
+## 2026-05-19 — P303 proposed
+
+```text
+Current patch status: P303 PROPOSED, commit UNKNOWN.
+The 20260519_064747 live run closed BAS with exchange position amount zero but wrote exit_unresolved because the monitor finalized unresolved before trying known TP1/stop order fill recovery. P303 keeps the strict no-synthetic-PnL rule but attempts exchange-fill recovery first.
+Operator heartbeat Orders previously displayed orphan cancel delta, not active protection order count; P303 changes it to a cheap local protective-order count.
+Next validation: run a short real-order live/smoke and require entry_order_submit_started -> entry_fill_verified -> stop/TP verified, and if position becomes flat externally, either position_external_exit_fill_recovered -> position_closed or a detailed position_external_exit_fill_recovery_failed -> position_exit_unresolved.
+```
+
 ## 2026-05-19 live OI guard follow-up
 
 - Current head: UNKNOWN (ZIP snapshot, no git metadata).
