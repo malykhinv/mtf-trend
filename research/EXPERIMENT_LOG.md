@@ -3149,3 +3149,11 @@ live_symbol_universe_liquidity_filter should show startup output_count, removed_
 If Binance ticker fetch fails, status must be refresh_failed_keep_previous.
 If the threshold is too high, frequency loss should appear as lower output_count before signal selection, not as worse category rejection.
 ```
+
+## 2026-05-19 - live latency follow-up plan after 20260519_084702
+
+```text
+Artifact: 20260519_084702 live run, before P304 immediate lane.
+Observation: batch selection is already cheap, but hot queues stay populated and repeated scans of symbols such as XAG/ZEC/HYPE/XAU consume scan time with weak-flow/mark-basis rejects. Optional top-growth/context/cache work still runs in cycles with hot queue.
+Decision: P305 should be validated as a scheduling/load patch after P304, not as an entry-logic change. Expected improvement is lower signal_scan_seconds tail and fewer repeated scans of the same rejected symbols. It should not block immediate danger-flow candidates.
+```

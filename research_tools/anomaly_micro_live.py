@@ -135,6 +135,13 @@ DANGER_FLOW_IMMEDIATE_MIN_PRICE_DELTA_PCT = 0.002
 DANGER_FLOW_IMMEDIATE_MIN_QUOTE_VOLUME_DELTA_RATIO = 100.0
 DANGER_FLOW_IMMEDIATE_MIN_TRADE_COUNT_DELTA_RATIO = 30.0
 DANGER_FLOW_IMMEDIATE_RESERVED_PRECISE_SLOTS = 2
+REJECT_COOLDOWN_REASONS = frozenset({"reject_weak_start_flow", "reject_mark_basis_below_min"})
+REJECT_COOLDOWN_CONSECUTIVE_REJECTS = 4
+REJECT_COOLDOWN_MS = 45_000
+REJECT_COOLDOWN_RESET_MS = 120_000
+REJECT_COOLDOWN_MAX_TRACKED_SYMBOLS = 2048
+STRICT_IDLE_OPTIONAL_WORK_SKIP_POLICY = "skip_optional_work_when_hot_queue_or_position_work_exists_v1"
+LIVE_OHLCV_CACHE_FLUSH_HOT_QUEUE_EMERGENCY_MULTIPLIER = 3
 DEPENDENCY_RETRY_MIN_COOLDOWN_MS = 10_000
 DEPENDENCY_RETRY_MAX_COOLDOWN_MS = 30_000
 PREPUMP_WARM_WATCH_SCORING_CONTRACT = "prepump_warm_watch_scoring_v1_spot_feature_separation_midpoint"
@@ -2222,6 +2229,19 @@ class LiveWarmWatch:
     prepump_warm_watch_top_features: tuple[str, ...] = ()
 
 
+@dataclass(slots=True)
+class LiveRejectCooldownState:
+    symbol: str
+    reason: str
+    consecutive_reject_count: int
+    updated_at_ms: int
+    expires_at_ms: int = 0
+    last_decision_timestamp_ms: int = 0
+    levels_tf: str = ""
+    entry_tf: str = ""
+    scan_mode: str = ""
+
+
 def _symbol_context_csv_float(value: float | None) -> float | str:
     if value is None:
         return ""
@@ -4196,6 +4216,7 @@ class AnomalyMicroLiveRunner:
         self._active_symbols_seen: set[str] = set()
         self._warm_watch: dict[str, LiveWarmWatch] = {}
         self._ticker_radar_watch: dict[str, LiveTickerRadarWatch] = {}
+        self._reject_cooldowns: dict[str, LiveRejectCooldownState] = {}
         self._ticker_radar_snapshots: dict[str, ExchangeTickerSnapshot] = {}
         self._ticker_radar_quote_delta_history: dict[str, deque[float]] = {}
         self._ticker_radar_trade_delta_history: dict[str, deque[float]] = {}
@@ -4307,6 +4328,9 @@ class AnomalyMicroLiveRunner:
         self._cycle_dependency_retry_cooldown_skipped = 0
         self._cycle_dependency_retry_cooldown_expired = 0
         self._cycle_dependency_retry_cooldown_skip_keys: set[tuple[str, str, str, int]] = set()
+        self._cycle_reject_cooldown_skipped = 0
+        self._cycle_reject_cooldown_skip_keys: set[str] = set()
+        self._reject_cooldown_skipped_total = 0
         self._dependency_retry_cooldown_skipped_total = 0
         self._dependency_retry_cooldown_expired_total = 0
         self._cold_scanned_symbols_total = 0
@@ -4435,6 +4459,11 @@ class AnomalyMicroLiveRunner:
                 "hot_waiting_prefetch_max_symbols": int(HOT_WAITING_PREFETCH_MAX_SYMBOLS),
                 "hot_waiting_prefetch_idle_queue_max": int(HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX),
                 "hot_path_idle_optional_work_policy": HOT_PATH_IDLE_OPTIONAL_WORK_POLICY,
+                "strict_idle_optional_work_skip_policy": STRICT_IDLE_OPTIONAL_WORK_SKIP_POLICY,
+                "reject_cooldown_reasons": sorted(REJECT_COOLDOWN_REASONS),
+                "reject_cooldown_consecutive_rejects": int(REJECT_COOLDOWN_CONSECUTIVE_REJECTS),
+                "reject_cooldown_ms": int(REJECT_COOLDOWN_MS),
+                "reject_cooldown_reset_ms": int(REJECT_COOLDOWN_RESET_MS),
                 "warm_watch_hot_lane_force_promote_score": float(WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE),
                 "danger_flow_immediate_source": DANGER_FLOW_IMMEDIATE_SOURCE,
                 "danger_flow_immediate_min_score": float(DANGER_FLOW_IMMEDIATE_MIN_SCORE),
@@ -4643,14 +4672,58 @@ class AnomalyMicroLiveRunner:
                 reconcile_started = time.monotonic()
                 orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle)
                 reconcile_seconds = time.monotonic() - reconcile_started
+                optional_blocked, optional_block_reason, optional_block_details = self._strict_idle_optional_work_block()
                 flush_started = time.monotonic()
-                self._flush_live_ohlcv_cache_if_due(reason="cycle")
+                cache_flush_status = "not_attempted"
+                cache_flush_reason = "not_attempted"
+                cache_flush_pending_rows_before = int(self._live_ohlcv_pending_rows)
+                if optional_blocked:
+                    emergency_threshold = self._live_ohlcv_cache_hot_queue_emergency_rows()
+                    if self._live_ohlcv_pending_rows >= emergency_threshold > 0:
+                        self._flush_live_ohlcv_cache_if_due(
+                            reason="cycle_emergency_hot_path",
+                            max_symbol_timeframes_override=1,
+                        )
+                        cache_flush_status = "emergency_hot_path_limited"
+                        cache_flush_reason = f"pending_rows>={emergency_threshold};{optional_block_reason}"
+                    else:
+                        cache_flush_status = "skipped_hot_path"
+                        cache_flush_reason = optional_block_reason
+                        if self._live_ohlcv_pending_rows > 0:
+                            self.artifacts.append_event(
+                                "live_ohlcv_cache_flush_deferred",
+                                "__live__",
+                                {
+                                    "reason": optional_block_reason,
+                                    "policy": STRICT_IDLE_OPTIONAL_WORK_SKIP_POLICY,
+                                    "pending_rows": int(self._live_ohlcv_pending_rows),
+                                    "emergency_pending_rows_threshold": int(emergency_threshold),
+                                    **optional_block_details,
+                                },
+                            )
+                else:
+                    flushed_rows = self._flush_live_ohlcv_cache_if_due(reason="cycle")
+                    cache_flush_status = "flushed" if flushed_rows else "idle_no_flush_due"
+                    cache_flush_reason = "ok_idle_optional_work"
                 cache_flush_seconds = time.monotonic() - flush_started
                 context_snapshot_started = time.monotonic()
-                context_snapshot_stats = self._maybe_update_symbol_context_snapshots(symbols)
+                if optional_blocked:
+                    context_snapshot_stats = self._symbol_context_snapshot_skipped_hot_path_stats(
+                        symbols,
+                        reason=optional_block_reason,
+                        details=optional_block_details,
+                    )
+                else:
+                    context_snapshot_stats = self._maybe_update_symbol_context_snapshots(symbols)
                 context_snapshot_seconds = time.monotonic() - context_snapshot_started
                 top_growth_started = time.monotonic()
-                top_growth_stats = self._maybe_process_live_top_growth_audit(symbols)
+                if optional_blocked:
+                    top_growth_stats = self._live_top_growth_skipped_hot_path_stats(
+                        reason=optional_block_reason,
+                        details=optional_block_details,
+                    )
+                else:
+                    top_growth_stats = self._maybe_process_live_top_growth_audit(symbols)
                 top_growth_seconds = time.monotonic() - top_growth_started
                 cycle_seconds = time.monotonic() - cycle_started
                 opened_total, open_positions, closed_total, orphan_total = self._live_counts()
@@ -4832,6 +4905,12 @@ class AnomalyMicroLiveRunner:
                         "order_reconcile_scope": self._current_order_reconcile_scope,
                         "order_reconcile_checked_symbols": int(self._current_order_reconcile_checked_symbols),
                         "cache_flush_seconds": round(cache_flush_seconds, 3),
+                        "cache_flush_status": cache_flush_status,
+                        "cache_flush_reason": cache_flush_reason,
+                        "cache_flush_pending_rows_before": int(cache_flush_pending_rows_before),
+                        "strict_idle_optional_work_blocked": bool(optional_blocked),
+                        "strict_idle_optional_work_reason": optional_block_reason,
+                        "strict_idle_optional_work_policy": STRICT_IDLE_OPTIONAL_WORK_SKIP_POLICY,
                         "full_symbol_cycle_seconds": round(full_cycle_seconds, 3),
                         "opened_total": opened_total,
                         "open_positions": open_positions,
@@ -4848,6 +4927,10 @@ class AnomalyMicroLiveRunner:
                         "dependency_retry_cooldown_expired_cycle": self._cycle_dependency_retry_cooldown_expired,
                         "dependency_retry_cooldown_skipped_total": self._dependency_retry_cooldown_skipped_total,
                         "dependency_retry_cooldown_expired_total": self._dependency_retry_cooldown_expired_total,
+                        "reject_cooldown_active_count": len(self._reject_cooldowns),
+                        "reject_cooldown_skipped_cycle": self._cycle_reject_cooldown_skipped,
+                        "reject_cooldown_skipped_total": self._reject_cooldown_skipped_total,
+                        "reject_cooldown_policy": "cooldown_repeated_weak_flow_or_mark_basis_rejects_bypass_immediate_danger_flow",
                         "cold_scanned_symbols_total": self._cold_scanned_symbols_total,
                         "cold_evaluated_timeframe_total": self._cold_evaluated_timeframe_total,
                         "cold_retryable_dependency_total": self._cold_retryable_dependency_total,
@@ -5872,6 +5955,8 @@ class AnomalyMicroLiveRunner:
         self._cycle_dependency_retry_cooldown_skipped = 0
         self._cycle_dependency_retry_cooldown_expired = 0
         self._cycle_dependency_retry_cooldown_skip_keys = set()
+        self._cycle_reject_cooldown_skipped = 0
+        self._cycle_reject_cooldown_skip_keys = set()
 
     def _full_symbol_cycle_seconds(self, *, batch_seconds: float, batch_size: int, symbols_total: int) -> float:
         if self._last_symbol_universe_cycle_seconds is not None:
@@ -5908,6 +5993,78 @@ class AnomalyMicroLiveRunner:
     def _opening_symbol_count(self) -> int:
         with self._state_lock:
             return len(self._opening_symbols)
+
+    def _strict_idle_optional_work_block(self) -> tuple[bool, str, dict[str, object]]:
+        queue_count = int(self._current_candidate_queue_radar_total_after + self._current_candidate_queue_warm_total_after)
+        with self._state_lock:
+            open_positions = len(self._open_positions)
+            opening_symbols = len(self._opening_symbols)
+            active_symbols = len(self._active_symbols)
+        details: dict[str, object] = {
+            "candidate_queue_count": queue_count,
+            "candidate_queue_radar_total_after": int(self._current_candidate_queue_radar_total_after),
+            "candidate_queue_warm_total_after": int(self._current_candidate_queue_warm_total_after),
+            "open_positions": int(open_positions),
+            "opening_symbols": int(opening_symbols),
+            "active_symbols": int(active_symbols),
+        }
+        if queue_count > 0:
+            return True, "candidate_queue_not_empty", details
+        if opening_symbols > 0:
+            return True, "opening_symbol_in_progress", details
+        if open_positions > 0:
+            return True, "open_position_management_priority", details
+        if active_symbols > 0:
+            return True, "active_symbol_management_priority", details
+        return False, "idle", details
+
+    def _live_ohlcv_cache_hot_queue_emergency_rows(self) -> int:
+        base = max(1, int(self.config.live_ohlcv_cache_max_buffer_rows))
+        multiplier = max(1, int(LIVE_OHLCV_CACHE_FLUSH_HOT_QUEUE_EMERGENCY_MULTIPLIER))
+        return base * multiplier
+
+    def _symbol_context_snapshot_skipped_hot_path_stats(
+        self,
+        symbols: list[str],
+        *,
+        reason: str,
+        details: dict[str, object],
+    ) -> LiveSymbolContextSnapshotCycleStats:
+        effective_fresh_ms = self._effective_symbol_context_snapshot_fresh_ms(symbols_total=len(symbols))
+        cycle_budget_seconds = max(0.0, float(self.config.symbol_context_snapshot_max_cycle_seconds))
+        self._last_symbol_context_snapshot_status = "skipped_hot_path"
+        return LiveSymbolContextSnapshotCycleStats(
+            enabled=bool(self.config.symbol_context_snapshot_enabled),
+            attempted=False,
+            status="skipped_hot_path",
+            reason=reason,
+            symbols_total=len(symbols),
+            skipped_count=len(symbols),
+            cycle_budget_seconds=cycle_budget_seconds,
+            effective_fresh_ms=effective_fresh_ms,
+            output_file=self.artifacts.symbol_context_snapshot_path.name,
+        )
+
+    def _live_top_growth_skipped_hot_path_stats(
+        self,
+        *,
+        reason: str,
+        details: dict[str, object],
+    ) -> LiveTopGrowthAuditCycleStats:
+        task = self._live_top_growth_task
+        if task is None:
+            return LiveTopGrowthAuditCycleStats(enabled=True, status="skipped_hot_path", reason=reason)
+        return LiveTopGrowthAuditCycleStats(
+            enabled=True,
+            status="skipped_hot_path",
+            reason=reason,
+            period_start_ms=task.period_start_ms,
+            period_end_ms=task.period_end_ms,
+            processed_count=0,
+            remaining_count=max(0, len(task.symbols) - task.cursor),
+            symbols_total=len(task.symbols),
+            top_count=len(task.candidates),
+        )
 
     def _delayed_replay_queue_size(self) -> int:
         with self._state_lock:
@@ -8328,8 +8485,12 @@ class AnomalyMicroLiveRunner:
                 symbol_is_opening = symbol_key in self._opening_symbols
             if symbol_key in excluded_keys or symbol_is_opening or self._symbol_in_stop_cooldown(item.symbol):
                 continue
-            if self._signal_scan_due_for_symbol(item.symbol, now_ms=now_ms):
-                immediate_danger_flow = self._ticker_radar_watch_is_immediate_danger_flow(item)
+            immediate_danger_flow = self._ticker_radar_watch_is_immediate_danger_flow(item)
+            if self._signal_scan_due_for_symbol(
+                item.symbol,
+                now_ms=now_ms,
+                ignore_reject_cooldown=immediate_danger_flow,
+            ):
                 if immediate_danger_flow and immediate_due_count < immediate_reserved_slots:
                     due.append(item.symbol)
                     immediate_due_count += 1
@@ -9775,9 +9936,18 @@ class AnomalyMicroLiveRunner:
         with self._state_lock:
             self._dependency_retry_cooldowns.pop(key, None)
 
-    def _signal_scan_due_for_symbol(self, symbol: str, *, now_ms: int) -> bool:
+    def _signal_scan_due_for_symbol(
+        self,
+        symbol: str,
+        *,
+        now_ms: int,
+        ignore_reject_cooldown: bool = False,
+    ) -> bool:
         symbol_key = _position_symbol_key(symbol)
         with self._state_lock:
+            if not ignore_reject_cooldown and self._reject_cooldown_active_locked(symbol_key, now_ms=now_ms) is not None:
+                self._note_reject_cooldown_skipped_locked(symbol_key)
+                return False
             for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
                 closed_timestamp_ms = _latest_closed_candle_start_ms(entry_timeframe, now_ms=now_ms)
                 scan_key = (symbol_key, levels_timeframe.value, entry_timeframe.value)
@@ -9803,12 +9973,116 @@ class AnomalyMicroLiveRunner:
         dependency_key = (symbol_key, levels_timeframe.value, entry_timeframe.value, int(closed_timestamp_ms))
         now_ms = int(time.time() * 1000)
         with self._state_lock:
+            if (
+                not self._batch_scan_mode_for_symbol(symbol).startswith("precise_active")
+                and self._batch_scan_mode_for_symbol(symbol) != "precise_immediate_danger_flow"
+                and self._reject_cooldown_active_locked(symbol_key, now_ms=now_ms) is not None
+            ):
+                self._note_reject_cooldown_skipped_locked(symbol_key)
+                return False
             if self._last_signal_scan_closed_at.get(scan_key) == int(closed_timestamp_ms):
                 return False
             if self._dependency_retry_cooldown_active_locked(dependency_key, now_ms=now_ms):
                 self._note_dependency_retry_cooldown_skipped_locked(dependency_key)
                 return False
             return True
+
+    def _reject_cooldown_active_locked(self, symbol_key: str, *, now_ms: int) -> LiveRejectCooldownState | None:
+        state = self._reject_cooldowns.get(symbol_key)
+        if state is None:
+            return None
+        if int(state.expires_at_ms) > int(now_ms):
+            return state
+        if int(state.expires_at_ms) > 0 and int(now_ms) - int(state.updated_at_ms) > REJECT_COOLDOWN_RESET_MS:
+            self._reject_cooldowns.pop(symbol_key, None)
+            return None
+        return None
+
+    def _note_reject_cooldown_skipped_locked(self, symbol_key: str) -> None:
+        if symbol_key in self._cycle_reject_cooldown_skip_keys:
+            return
+        self._cycle_reject_cooldown_skip_keys.add(symbol_key)
+        self._cycle_reject_cooldown_skipped += 1
+        self._reject_cooldown_skipped_total += 1
+
+    def _clear_reject_cooldown(self, symbol: str, *, reason: str) -> None:
+        symbol_key = _position_symbol_key(symbol)
+        with self._state_lock:
+            removed = self._reject_cooldowns.pop(symbol_key, None)
+        if removed is not None:
+            self.artifacts.append_event(
+                "reject_cooldown_cleared",
+                symbol,
+                {
+                    "reason": reason,
+                    "previous_reject_reason": removed.reason,
+                    "previous_consecutive_reject_count": int(removed.consecutive_reject_count),
+                    "previous_expires_at_ms": int(removed.expires_at_ms),
+                    "policy": "clear_on_signal_or_immediate_danger_flow_rescan",
+                },
+            )
+
+    def _record_reject_cooldown_sample(
+        self,
+        symbol: str,
+        *,
+        reasons: tuple[str, ...],
+        decision_timestamp_ms: int,
+        levels_timeframe: Timeframe,
+        entry_timeframe: Timeframe,
+        now_ms: int,
+    ) -> None:
+        eligible_reasons = tuple(reason for reason in reasons if reason in REJECT_COOLDOWN_REASONS)
+        if not eligible_reasons:
+            return
+        scan_mode = self._batch_scan_mode_for_symbol(symbol)
+        if scan_mode == "precise_immediate_danger_flow":
+            self._clear_reject_cooldown(symbol, reason="immediate_danger_flow_reject_bypass")
+            return
+        symbol_key = _position_symbol_key(symbol)
+        primary_reason = eligible_reasons[0]
+        with self._state_lock:
+            previous = self._reject_cooldowns.get(symbol_key)
+            if previous is None or int(now_ms) - int(previous.updated_at_ms) > REJECT_COOLDOWN_RESET_MS:
+                count = 1
+            elif previous.reason == primary_reason:
+                count = int(previous.consecutive_reject_count) + 1
+            else:
+                count = 1
+            expires_at_ms = int(now_ms) + int(REJECT_COOLDOWN_MS) if count >= REJECT_COOLDOWN_CONSECUTIVE_REJECTS else 0
+            state = LiveRejectCooldownState(
+                symbol=symbol,
+                reason=primary_reason,
+                consecutive_reject_count=count,
+                updated_at_ms=int(now_ms),
+                expires_at_ms=expires_at_ms,
+                last_decision_timestamp_ms=int(decision_timestamp_ms),
+                levels_tf=levels_timeframe.value,
+                entry_tf=entry_timeframe.value,
+                scan_mode=scan_mode,
+            )
+            self._reject_cooldowns[symbol_key] = state
+            if len(self._reject_cooldowns) > REJECT_COOLDOWN_MAX_TRACKED_SYMBOLS:
+                ordered = sorted(self._reject_cooldowns.items(), key=lambda item: int(item[1].updated_at_ms))
+                for stale_key, _ in ordered[: max(1, len(ordered) - REJECT_COOLDOWN_MAX_TRACKED_SYMBOLS)]:
+                    self._reject_cooldowns.pop(stale_key, None)
+        if count == REJECT_COOLDOWN_CONSECUTIVE_REJECTS:
+            self.artifacts.append_event(
+                "reject_cooldown_started",
+                symbol,
+                {
+                    "reason": primary_reason,
+                    "eligible_reasons": list(eligible_reasons),
+                    "consecutive_reject_count": int(count),
+                    "cooldown_ms": int(REJECT_COOLDOWN_MS),
+                    "expires_at_ms": int(expires_at_ms),
+                    "decision_timestamp_ms": int(decision_timestamp_ms),
+                    "levels_tf": levels_timeframe.value,
+                    "entry_tf": entry_timeframe.value,
+                    "scan_mode": scan_mode,
+                    "policy": "cooldown_repeated_non_retryable_weak_flow_or_mark_basis_rejects",
+                },
+            )
 
     def _mark_signal_scan_closed_at(
         self,
@@ -12282,6 +12556,19 @@ class AnomalyMicroLiveRunner:
                 )
             with self._state_lock:
                 self._seen_decisions.add(key)
+            reject_reasons = tuple(
+                str(row.get("category_reject_reason") or row.get("reason") or "")
+                for row in category_rejections
+                if str(row.get("category_reject_reason") or row.get("reason") or "")
+            )
+            self._record_reject_cooldown_sample(
+                symbol,
+                reasons=reject_reasons,
+                decision_timestamp_ms=decision_ts,
+                levels_timeframe=levels_timeframe,
+                entry_timeframe=entry_timeframe,
+                now_ms=now_ms,
+            )
             return no_signal(decision_timestamp_ms=decision_ts)
         gap = _live_scan_gap_details(
             decision_timestamp_ms=decision_ts,
@@ -12291,6 +12578,7 @@ class AnomalyMicroLiveRunner:
         signal.previous_live_scan_closed_timestamp_ms = gap["previous_live_scan_closed_timestamp_ms"]
         signal.first_unscanned_decision_timestamp_ms = gap["first_unscanned_decision_timestamp_ms"]
         signal.live_scan_gap_ltf_candles = int(gap["live_scan_gap_ltf_candles"])
+        self._clear_reject_cooldown(symbol, reason="signal_selected")
         if signal.live_scan_gap_ltf_candles > 0:
             self._start_missed_entry_replay_probe(
                 symbol=symbol,
@@ -12585,6 +12873,17 @@ class AnomalyMicroLiveRunner:
                         "decision_timestamp_ms": int(decision["timestamp"]),
                         "setup_source": setup_source,
                     },
+                )
+            if category_rejections_out is not None:
+                category_rejections_out.append(
+                    {
+                        "reason": "reject_weak_start_flow",
+                        "category_reject_reason": "reject_weak_start_flow",
+                        "levels_tf": levels_timeframe.value,
+                        "entry_tf": entry_timeframe.value,
+                        "decision_timestamp_ms": int(decision["timestamp"]),
+                        "setup_source": setup_source,
+                    }
                 )
             return None
 

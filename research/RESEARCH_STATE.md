@@ -1896,6 +1896,15 @@ Operator heartbeat Orders previously displayed orphan cancel delta, not active p
 Next validation: run a short real-order live/smoke and require entry_order_submit_started -> entry_fill_verified -> stop/TP verified, and if position becomes flat externally, either position_external_exit_fill_recovered -> position_closed or a detailed position_external_exit_fill_recovery_failed -> position_exit_unresolved.
 ```
 
+## 2026-05-19 — P305 proposed
+
+```text
+Current patch status: P305 PROPOSED, commit UNKNOWN.
+P305 targets the post-P304 bottleneck seen in 20260519_084702: repeated scans of the same weak-flow/mark-basis rejects and optional top-growth/context/cache work running while hot candidates exist.
+It adds a hard hot-idle policy for optional work and a symbol-level reject cooldown after repeated weak-flow or mark-basis rejects. Immediate danger-flow precise scans bypass this cooldown so a fresh extreme spike is not suppressed.
+Next validation: run live after P304+P305 and require live_cycle_summary to show top_growth/context skipped_hot_path while queue>0, cache_flush skipped_hot_path except emergency, reject_cooldown_started/skipped metrics for repeated weak rejects, and no drop in immediate_danger_flow scan coverage.
+```
+
 ## 2026-05-19 live OI guard follow-up
 
 - Current head: UNKNOWN (ZIP snapshot, no git metadata).

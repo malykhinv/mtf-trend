@@ -5317,6 +5317,36 @@ Risk:
 Low/medium. The patch does not change signal selection or entry/exit order placement. It can turn future external-flat exits from unresolved into closed only when the exchange returns a real fill for the known TP1 or stop order. Binance algo stop fill recovery may still stay unresolved if the exchange endpoint does not expose a fill by algo id; that is safer than synthetic PnL.
 ```
 
+## 2026-05-19 - P305 proposed - strict hot-idle optional work and reject cooldown
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+After P304 immediate danger-flow promotion, keep the hot path clear by skipping top-growth audit, symbol-context snapshots, and normal cache flush while candidate queue/active/open/opening work exists. Cache flush may only run in a limited emergency mode when the buffer is too large.
+Add symbol-level reject cooldown for repeated non-retryable weak-flow / mark-basis rejections. Immediate danger-flow scans bypass the cooldown, and a selected signal clears it.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium. This changes live scheduling, not strategy thresholds. It can reduce repeated scan load, but may delay rechecking a symbol that improves gradually without a fresh immediate danger-flow event. Top-growth/context/cache work becomes more idle-only, so research artifacts may be delayed during sustained hot queues, not lost by design.
+```
+
 ## P302 live current OI guard no flags refresh - PROPOSED
 
 - Status: PROPOSED / commit UNKNOWN.
