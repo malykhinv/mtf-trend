@@ -87,7 +87,7 @@ class Live2ArtifactWriter:
             "readiness": readiness.as_dict(),
             "execution_status": "todo_not_implemented",
             "market_data_status": market_data_status or {"status": "todo_not_implemented"},
-            "signal_status": "deadline_engine_active_signal_todo",
+            "signal_status": "deadline_engine_active_stream_signal_adapter",
             "decision_status": decision_status or {"status": "todo_not_implemented"},
         }
         self.status_path.write_text(

@@ -48,6 +48,12 @@ class SymbolState:
     rejected_decision_count: int = 0
     data_not_ready_decision_count: int = 0
     deadline_missed_count: int = 0
+    selected_decision_count: int = 0
+    last_signal_category_id: str = ""
+    last_signal_category_rank: int | None = None
+    last_signal_entry_price: float | None = None
+    last_signal_initial_stop: float | None = None
+    last_signal_initial_risk_pct: float | None = None
     universe_selected: bool = False
     universe_rank: int | None = None
     universe_reason: str = "not_selected"
@@ -188,6 +194,12 @@ class SymbolState:
             "rejected_decision_count": self.rejected_decision_count,
             "data_not_ready_decision_count": self.data_not_ready_decision_count,
             "deadline_missed_count": self.deadline_missed_count,
+            "selected_decision_count": self.selected_decision_count,
+            "last_signal_category_id": self.last_signal_category_id,
+            "last_signal_category_rank": self.last_signal_category_rank,
+            "last_signal_entry_price": self.last_signal_entry_price,
+            "last_signal_initial_stop": self.last_signal_initial_stop,
+            "last_signal_initial_risk_pct": self.last_signal_initial_risk_pct,
             "universe_selected": self.universe_selected,
             "universe_rank": self.universe_rank,
             "universe_reason": self.universe_reason,

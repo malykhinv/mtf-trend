@@ -21,8 +21,9 @@ class AnomalyLive2Runner:
 
     This command is intentionally named as a real live runtime, not a shadow or
     dry-run mode. V0 installs the process/artifact/readiness skeleton and starts
-    real ticker + auto-selected aggTrade WS ingestion. Signal evaluation and
-    order placement remain explicit TODO gates, so new entries stay forbidden.
+    real ticker + auto-selected aggTrade WS ingestion plus a stream-only signal
+    adapter. Order placement remains an explicit TODO gate, so new entries stay
+    forbidden until execution and safety guards are implemented.
     """
 
     def __init__(self, config: AnomalyLive2Config) -> None:
@@ -134,7 +135,7 @@ class AnomalyLive2Runner:
             print(
                 f"live2 · старт · артефакты {self.config.output_dir} · "
                 f"universe {len(self.universe_selection.selected_symbols)} · "
-                "ticker+aggTrade WS включены · signal/execution TODO · новые входы запрещены",
+                "ticker+aggTrade WS включены · stream signal adapter включен · execution TODO · новые входы запрещены",
                 flush=True,
             )
             while not self._shutdown_requested:
@@ -223,8 +224,8 @@ class AnomalyLive2Runner:
             status = "no_startup_universe"
             reason = "startup_ticker_universe_selection_empty"
         elif stream_coverage_ready:
-            status = "stream_coverage_ready_signal_todo"
-            reason = "ticker_and_aggtrade_ws_ready_but_signal_execution_not_implemented"
+            status = "stream_coverage_ready_signal_adapter_active"
+            reason = "ticker_and_aggtrade_ws_ready_signal_adapter_active_execution_not_implemented"
         else:
             status = "stream_coverage_not_ready"
             reason = "ticker_or_aggtrade_ws_not_ready"
@@ -298,10 +299,10 @@ class AnomalyLive2Runner:
         )
         writer.write_event(
             Live2Event(
-                event_type="deadline_engine_started_signal_todo",
+                event_type="signal_engine_started",
                 component=Live2Component.SIGNAL,
-                severity=Live2Severity.WARNING,
-                message="deadline engine is active; real signal evaluation is not implemented in generation 0",
+                severity=Live2Severity.INFO,
+                message="deadline engine uses live2 stream signal adapter with shared pump category contract subset",
             )
         )
         writer.write_event(

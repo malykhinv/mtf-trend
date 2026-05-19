@@ -3243,3 +3243,12 @@ Acceptance for P315: after P311-P314 are applied, `run-anomaly-live2` runs a Dea
 Not accepted yet: no real strategy signal, no entry guard, no order placement, no fill/stop safety, and no edge/profitability claim.
 Next experiment after P315: adapt current strategy/category signal logic into a pure `SignalEngine.evaluate(SymbolState)` contract that performs no network/disk IO and produces selected/rejected reasons from the same deadline cycle.
 ```
+
+## 2026-05-19 - P316 live2 signal-adapter acceptance plan
+
+```text
+Purpose: connect live2 deadline decisions to a real, pure signal adapter without enabling orders.
+Acceptance for P316: after P311-P315 are applied, `run-anomaly-live2` emits `deadline_decision` events where on-time actionable 5s buckets are evaluated by `Live2SignalEngine`. The adapter must not do REST/cache/file IO, must use one SymbolState and in-memory candle rings, must include shared category contract metadata, and must explicitly reject unavailable derivative-context categories instead of masking them with fallback values.
+Not accepted yet: no executable entry guard, no real order placement, no actual fill, no verified stop, no TP/BE position supervision, and no profitability claim. `new_entries_allowed=false` remains mandatory.
+Next experiment after P316: add executable-entry guards for stale signal, live-price drift, TP1 already touched, and RR collapsed before any execution code can submit an order.
+```

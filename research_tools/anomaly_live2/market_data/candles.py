@@ -154,6 +154,9 @@ class Live2CandleRing:
     def latest_any(self) -> Live2Candle | None:
         return self.current or self.latest_closed()
 
+    def closed_snapshot(self) -> tuple[Live2Candle, ...]:
+        return tuple(self.closed)
+
 
 class Live2CandleBook:
     """Per-symbol candle rings for the live2 hot market-data path."""

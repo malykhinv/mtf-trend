@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from .clock import utc_now_ms
 from .contracts import Live2Component, Live2Event, Live2Severity
 from .market_data.candles import Live2Candle
+from .signal import Live2SignalDecision, Live2SignalEngine
 from .state import SymbolLive2Status, SymbolState, SymbolStateStore
 
 
@@ -57,6 +58,12 @@ class Live2DecisionRecord:
     quote_volume: float
     number_of_trades: int
     return_pct: float
+    category_id: str = ""
+    category_rank: int | None = None
+    signal_entry_price: float | None = None
+    initial_stop_at_decision: float | None = None
+    initial_risk_pct_at_decision: float | None = None
+    signal_features: dict[str, object] = field(default_factory=dict)
 
     def as_event(self) -> Live2Event:
         severity = Live2Severity.WARNING if self.verdict in {"deadline_missed", "data_not_ready"} else Live2Severity.INFO
@@ -77,6 +84,12 @@ class Live2DecisionRecord:
                 "quote_volume": self.quote_volume,
                 "number_of_trades": self.number_of_trades,
                 "return_pct": self.return_pct,
+                "category_id": self.category_id,
+                "category_rank": self.category_rank,
+                "signal_entry_price": self.signal_entry_price,
+                "initial_stop_at_decision": self.initial_stop_at_decision,
+                "initial_risk_pct_at_decision": self.initial_risk_pct_at_decision,
+                "signal_features": self.signal_features,
             },
         )
 
@@ -115,14 +128,22 @@ class Live2DeadlineEngine:
     and every actionable processed bucket receives a verdict immediately.
     """
 
-    def __init__(self, *, state_store: SymbolStateStore, config: Live2DeadlineEngineConfig) -> None:
+    def __init__(
+        self,
+        *,
+        state_store: SymbolStateStore,
+        config: Live2DeadlineEngineConfig,
+        signal_engine: Live2SignalEngine | None = None,
+    ) -> None:
         self.state_store = state_store
         self.config = config
+        self.signal_engine = signal_engine or Live2SignalEngine()
         self._last_cycle: Live2DeadlineCycleResult = Live2DeadlineCycleResult()
         self._total_decisions = 0
         self._total_deadline_missed = 0
         self._total_data_not_ready = 0
         self._total_rejected = 0
+        self._total_selected = 0
 
     def run_cycle(self, *, now_ms: int | None = None) -> Live2DeadlineCycleResult:
         effective_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
@@ -150,12 +171,13 @@ class Live2DeadlineEngine:
         self._total_deadline_missed += result.deadline_missed_count
         self._total_data_not_ready += result.data_not_ready_count
         self._total_rejected += result.rejected_count
+        self._total_selected += result.selected_count
         return result
 
     def status(self) -> dict[str, object]:
         return {
-            "status": "running_signal_todo",
-            "reason": "deadline_engine_active_but_signal_engine_not_implemented",
+            "status": "running_stream_signal_adapter",
+            "reason": "deadline_engine_active_with_live2_stream_signal_adapter",
             "timeframe_ms": self.config.timeframe_ms,
             "decision_deadline_ms": self.config.decision_deadline_ms,
             "actionable_min_quote_volume": self.config.actionable_min_quote_volume,
@@ -166,7 +188,8 @@ class Live2DeadlineEngine:
             "total_rejected": self._total_rejected,
             "total_data_not_ready": self._total_data_not_ready,
             "total_deadline_missed": self._total_deadline_missed,
-            "selected_count": 0,
+            "selected_count": self._total_selected,
+            "signal_engine": self.signal_engine.status(),
         }
 
     def _evaluate_state(self, state: SymbolState, *, now_ms: int) -> Live2DecisionRecord | None:
@@ -185,6 +208,7 @@ class Live2DeadlineEngine:
             return None
         deadline_ms = candle.close_time_ms + self.config.decision_deadline_ms
         latency_ms = now_ms - candle.close_time_ms
+        signal_decision: Live2SignalDecision | None = None
         if now_ms > deadline_ms:
             verdict = "deadline_missed"
             reason = "closed_bucket_was_not_evaluated_before_deadline"
@@ -195,8 +219,13 @@ class Live2DeadlineEngine:
             verdict = "data_not_ready"
             reason = "candle_coverage_has_gap_or_out_of_order_trade"
         else:
-            verdict = "rejected_signal_engine_todo"
-            reason = f"{actionable_reason}; real_signal_engine_not_implemented"
+            signal_decision = self.signal_engine.evaluate(
+                state=state,
+                candle=candle,
+                actionable_reason=actionable_reason,
+            )
+            verdict = signal_decision.verdict
+            reason = signal_decision.reason
         self._apply_verdict(
             state,
             candle=candle,
@@ -205,6 +234,7 @@ class Live2DeadlineEngine:
             latency_ms=latency_ms,
             verdict=verdict,
             reason=reason,
+            signal_decision=signal_decision,
         )
         return Live2DecisionRecord(
             symbol=state.symbol,
@@ -218,6 +248,12 @@ class Live2DeadlineEngine:
             quote_volume=candle.quote_volume,
             number_of_trades=candle.number_of_trades,
             return_pct=return_pct,
+            category_id="" if signal_decision is None else signal_decision.category_id,
+            category_rank=None if signal_decision is None else signal_decision.category_rank,
+            signal_entry_price=None if signal_decision is None else signal_decision.signal_entry_price,
+            initial_stop_at_decision=None if signal_decision is None else signal_decision.initial_stop_at_decision,
+            initial_risk_pct_at_decision=None if signal_decision is None else signal_decision.initial_risk_pct_at_decision,
+            signal_features={} if signal_decision is None else dict(signal_decision.features),
         )
 
     def _actionable_reason(self, *, candle: Live2Candle, return_pct: float) -> str | None:
@@ -250,6 +286,7 @@ class Live2DeadlineEngine:
         latency_ms: int,
         verdict: str,
         reason: str,
+        signal_decision: Live2SignalDecision | None = None,
     ) -> None:
         state.status = SymbolLive2Status.WATCHING
         state.actionable_since_ms = candle.close_time_ms
@@ -258,6 +295,18 @@ class Live2DeadlineEngine:
         state.last_verdict = verdict
         state.last_verdict_reason = reason
         state.last_decision_latency_ms = latency_ms
+        if signal_decision is not None:
+            state.last_signal_category_id = signal_decision.category_id
+            state.last_signal_category_rank = signal_decision.category_rank
+            state.last_signal_entry_price = signal_decision.signal_entry_price
+            state.last_signal_initial_stop = signal_decision.initial_stop_at_decision
+            state.last_signal_initial_risk_pct = signal_decision.initial_risk_pct_at_decision
+        else:
+            state.last_signal_category_id = ""
+            state.last_signal_category_rank = None
+            state.last_signal_entry_price = None
+            state.last_signal_initial_stop = None
+            state.last_signal_initial_risk_pct = None
         state.decision_count += 1
         if verdict == "deadline_missed":
             state.deadline_missed_count += 1
@@ -265,6 +314,8 @@ class Live2DeadlineEngine:
             state.data_not_ready_decision_count += 1
         elif verdict.startswith("rejected"):
             state.rejected_decision_count += 1
+        elif verdict == "selected":
+            state.selected_decision_count += 1
         state.updated_ms = now_ms
 
 
