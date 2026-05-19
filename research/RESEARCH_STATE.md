@@ -1,5 +1,13 @@
 # Anomaly Research State
 
+## 2026-05-19 - P319 live2 bounded async artifact writer
+
+```text
+Status: PROPOSED / UNKNOWN commit.
+Live2 audit writes now use a bounded background writer queue. Deadline/signal cycles enqueue audit jobs instead of doing blocking CSV/JSON disk writes on the hot path. Writer queue health, rejected enqueue count, and IO errors are exposed through live2_status/heartbeat data; artifact_writer_ready becomes false if the queue fills or the writer errors, which keeps new entries disabled rather than trading without safe audit.
+Next: runtime hardening for reconnect/coverage/latency degradation gates before enabling real order placement.
+```
+
 Compact project memory. Detailed rules live in Project Instructions.
 
 ---

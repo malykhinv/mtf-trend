@@ -4,20 +4,61 @@ from __future__ import annotations
 
 import csv
 import json
+import queue
+import threading
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .clock import utc_now_iso, utc_now_ms
 from .contracts import Live2Event, Live2Readiness
 from .state import SymbolStateStore
 
+ArtifactJobKind = Literal["event", "status", "symbol_state", "stop"]
+
+
+@dataclass(slots=True)
+class _ArtifactJob:
+    kind: ArtifactJobKind
+    payload: Any = None
+
+
+@dataclass(slots=True)
+class Live2ArtifactWriterStatus:
+    """Health snapshot for the bounded live2 artifact writer."""
+
+    ready: bool
+    queue_size: int
+    queue_max_size: int
+    enqueued_count: int
+    written_count: int
+    rejected_count: int
+    error_count: int
+    last_error: str
+    backpressure_active: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ready": self.ready,
+            "queue_size": self.queue_size,
+            "queue_max_size": self.queue_max_size,
+            "enqueued_count": self.enqueued_count,
+            "written_count": self.written_count,
+            "rejected_count": self.rejected_count,
+            "error_count": self.error_count,
+            "last_error": self.last_error,
+            "backpressure_active": self.backpressure_active,
+        }
+
 
 class Live2ArtifactWriter:
-    """Append-only audit writer for v0 live2 artifacts.
+    """Bounded asynchronous append-only audit writer for live2 artifacts.
 
-    V0 writes synchronously because there is no market-data hot path yet. Later
-    patches must move this behind a bounded writer queue before any real signal
-    or order path is enabled.
+    Signal/deadline code calls this writer synchronously, but disk IO is done on
+    a single background thread. The public methods never perform blocking CSV or
+    JSON writes on the caller path. If the bounded queue fills or the writer hits
+    an IO error, the writer becomes not-ready; the runner must then keep new
+    entries disabled rather than trade without reliable audit.
     """
 
     _EVENT_FIELDS = (
@@ -31,34 +72,48 @@ class Live2ArtifactWriter:
         "data_json",
     )
 
-    def __init__(self, output_dir: Path) -> None:
+    def __init__(self, output_dir: Path, *, queue_max_size: int = 8192) -> None:
+        if queue_max_size <= 0:
+            raise ValueError("queue_max_size must be > 0")
         self.output_dir = output_dir
         self.events_path = output_dir / "live2_events.csv"
         self.status_path = output_dir / "live2_status.json"
         self.symbol_state_path = output_dir / "live2_symbol_state.csv"
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+        self._queue: queue.Queue[_ArtifactJob] = queue.Queue(maxsize=queue_max_size)
+        self._queue_max_size = queue_max_size
+        self._lock = threading.Lock()
+        self._closed = False
+        self._ready = True
+        self._enqueued_count = 0
+        self._written_count = 0
+        self._rejected_count = 0
+        self._error_count = 0
+        self._last_error = ""
         self._events_file = self.events_path.open("w", encoding="utf-8-sig", newline="")
         self._events_writer = csv.DictWriter(self._events_file, fieldnames=self._EVENT_FIELDS)
         self._events_writer.writeheader()
         self._events_file.flush()
-        self._closed = False
+        self._worker = threading.Thread(
+            target=self._run_worker,
+            name="live2-artifact-writer",
+            daemon=True,
+        )
+        self._worker.start()
 
     def write_event(self, event: Live2Event) -> None:
-        if self._closed:
-            raise RuntimeError("live2 artifact writer is closed")
-        self._events_writer.writerow(
-            {
-                "timestamp_utc": event.timestamp_utc,
-                "timestamp_ms": event.timestamp_ms,
-                "component": event.component.value,
-                "event_type": event.event_type,
-                "severity": event.severity.value,
-                "symbol": event.symbol,
-                "message": event.message,
-                "data_json": json.dumps(event.data, ensure_ascii=False, sort_keys=True),
-            }
-        )
-        self._events_file.flush()
+        row = {
+            "timestamp_utc": event.timestamp_utc,
+            "timestamp_ms": event.timestamp_ms,
+            "component": event.component.value,
+            "event_type": event.event_type,
+            "severity": event.severity.value,
+            "symbol": event.symbol,
+            "message": event.message,
+            "data_json": json.dumps(event.data, ensure_ascii=False, sort_keys=True),
+        }
+        self._enqueue(_ArtifactJob(kind="event", payload=row))
 
     def write_status(
         self,
@@ -73,6 +128,7 @@ class Live2ArtifactWriter:
         decision_status: dict[str, Any] | None = None,
         execution_status: dict[str, Any] | None = None,
     ) -> None:
+        artifact_writer_status = self.status().as_dict()
         payload: dict[str, Any] = {
             "runtime_generation": runtime_generation,
             "status": status,
@@ -90,11 +146,9 @@ class Live2ArtifactWriter:
             "market_data_status": market_data_status or {"status": "todo_not_implemented"},
             "signal_status": "deadline_engine_active_stream_signal_adapter",
             "decision_status": decision_status or {"status": "todo_not_implemented"},
+            "artifact_writer_status": artifact_writer_status,
         }
-        self.status_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        self._enqueue(_ArtifactJob(kind="status", payload=payload))
 
     def write_symbol_state(self, state_store: SymbolStateStore) -> None:
         rows = [state.to_artifact_row() for state in state_store.snapshot()]
@@ -144,15 +198,97 @@ class Live2ArtifactWriter:
             "candle_out_of_order_count",
         ]
         extra_fieldnames = sorted({key for row in rows for key in row if key not in base_fieldnames})
-        fieldnames = [*base_fieldnames, *extra_fieldnames]
-        with self.symbol_state_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
-            writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
+        payload = {
+            "fieldnames": [*base_fieldnames, *extra_fieldnames],
+            "rows": rows,
+        }
+        self._enqueue(_ArtifactJob(kind="symbol_state", payload=payload))
+
+    def status(self) -> Live2ArtifactWriterStatus:
+        with self._lock:
+            ready = self._ready and not self._closed
+            return Live2ArtifactWriterStatus(
+                ready=ready,
+                queue_size=self._queue.qsize(),
+                queue_max_size=self._queue_max_size,
+                enqueued_count=self._enqueued_count,
+                written_count=self._written_count,
+                rejected_count=self._rejected_count,
+                error_count=self._error_count,
+                last_error=self._last_error,
+                backpressure_active=self._rejected_count > 0,
+            )
 
     def close(self) -> None:
-        if self._closed:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+        try:
+            self._queue.put(_ArtifactJob(kind="stop"), timeout=5.0)
+        except queue.Full:
+            self._mark_error("artifact writer close timed out because queue is full")
+        self._worker.join(timeout=10.0)
+        try:
+            self._events_file.flush()
+            self._events_file.close()
+        except OSError as exc:
+            self._mark_error(f"artifact writer close failed: {type(exc).__name__}: {exc}")
+
+    def _enqueue(self, job: _ArtifactJob) -> None:
+        with self._lock:
+            if self._closed:
+                self._ready = False
+                self._rejected_count += 1
+                self._last_error = "artifact writer is closed"
+                return
+        try:
+            self._queue.put_nowait(job)
+        except queue.Full:
+            with self._lock:
+                self._ready = False
+                self._rejected_count += 1
+                self._last_error = "artifact writer queue full"
             return
-        self._events_file.flush()
-        self._events_file.close()
-        self._closed = True
+        with self._lock:
+            self._enqueued_count += 1
+
+    def _run_worker(self) -> None:
+        while True:
+            job = self._queue.get()
+            try:
+                if job.kind == "stop":
+                    return
+                self._write_job(job)
+                with self._lock:
+                    self._written_count += 1
+            except Exception as exc:  # noqa: BLE001 - artifact writer must surface any IO/serialization failure.
+                self._mark_error(f"{type(exc).__name__}: {exc}")
+            finally:
+                self._queue.task_done()
+
+    def _write_job(self, job: _ArtifactJob) -> None:
+        if job.kind == "event":
+            self._events_writer.writerow(job.payload)
+            self._events_file.flush()
+            return
+        if job.kind == "status":
+            self.status_path.write_text(
+                json.dumps(job.payload, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            return
+        if job.kind == "symbol_state":
+            payload = job.payload
+            with self.symbol_state_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+                writer = csv.DictWriter(file_obj, fieldnames=payload["fieldnames"])
+                writer.writeheader()
+                writer.writerows(payload["rows"])
+            return
+        raise RuntimeError(f"unknown artifact writer job kind: {job.kind}")
+
+    def _mark_error(self, message: str) -> None:
+        with self._lock:
+            self._ready = False
+            self._error_count += 1
+            self._last_error = message

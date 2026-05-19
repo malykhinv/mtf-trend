@@ -74,7 +74,10 @@ class AnomalyLive2Runner:
         self._shutdown_requested = False
 
     def run(self) -> int:
-        writer = Live2ArtifactWriter(self.config.output_dir)
+        writer = Live2ArtifactWriter(
+            self.config.output_dir,
+            queue_max_size=self.config.artifact_writer_queue_max_size,
+        )
         try:
             self._write_startup_events(writer)
             execution_preflight = self.execution_engine.preflight()
@@ -127,6 +130,7 @@ class AnomalyLive2Runner:
                         data=self._universe_status(),
                     )
                 )
+            self._refresh_artifact_writer_readiness(writer)
             market_data_status = self._market_data_status()
             writer.write_event(
                 Live2Event(
@@ -169,6 +173,7 @@ class AnomalyLive2Runner:
                 deadline_result = self.deadline_engine.run_cycle()
                 for decision in deadline_result.decisions:
                     writer.write_event(decision.as_event())
+                self._refresh_artifact_writer_readiness(writer)
                 market_data_status = self._market_data_status()
                 writer.write_event(
                     Live2Event(
@@ -185,6 +190,7 @@ class AnomalyLive2Runner:
                             "deadline_cycle": deadline_result.as_dict(),
                             "new_entries_allowed": self.readiness.new_entries_allowed,
                             "execution_status": self.execution_engine.status(),
+                            "artifact_writer_status": writer.status().as_dict(),
                         },
                     )
                 )
@@ -202,6 +208,7 @@ class AnomalyLive2Runner:
                 )
         except KeyboardInterrupt:
             self.shutdown(reason="keyboard_interrupt")
+            self._refresh_artifact_writer_readiness(writer)
             writer.write_event(
                 Live2Event(
                     event_type="live2_stopping",
@@ -232,6 +239,11 @@ class AnomalyLive2Runner:
 
     def shutdown(self, *, reason: str) -> None:
         self._shutdown_requested = True
+
+
+    def _refresh_artifact_writer_readiness(self, writer: Live2ArtifactWriter) -> None:
+        status = writer.status()
+        self.readiness.artifact_writer_ready = status.ready
 
     def _select_universe(self) -> Live2UniverseSelection:
         selector = Live2UniverseSelector(

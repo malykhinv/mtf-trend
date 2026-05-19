@@ -1,3 +1,11 @@
+
+## 2026-05-19 - P319 live2 audit latency hardening
+
+```text
+Patch: P319 bounded async artifact writer.
+Purpose: remove blocking CSV/JSON writes from live2 deadline/signal loop while preserving audit as a safety gate.
+Acceptance in next live2 smoke: live2_status.json contains artifact_writer_status.ready=true, rejected_count=0, error_count=0, queue_size remains bounded, and heartbeat/deadline decisions continue while symbol-state/status files are written by the background writer. If rejected_count or error_count becomes non-zero, new entries must remain disabled through artifact_writer_ready=false.
+```
 # Anomaly Experiment Log
 
 Compact active experiment log for anomaly-first research.

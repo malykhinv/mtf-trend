@@ -29,6 +29,7 @@ class AnomalyLive2Config:
     entry_guard_max_signal_age_ms: int = 2_000
     entry_guard_max_price_drift_pct: float = 0.004
     entry_guard_min_rr_to_tp1: float = 0.95
+    artifact_writer_queue_max_size: int = 8192
     runtime_generation: str = "live2_v0"
 
     def __post_init__(self) -> None:
@@ -66,3 +67,5 @@ class AnomalyLive2Config:
             raise ValueError("entry_guard_max_price_drift_pct must be >= 0")
         if self.entry_guard_min_rr_to_tp1 <= 0:
             raise ValueError("entry_guard_min_rr_to_tp1 must be > 0")
+        if self.artifact_writer_queue_max_size <= 0:
+            raise ValueError("artifact_writer_queue_max_size must be > 0")
