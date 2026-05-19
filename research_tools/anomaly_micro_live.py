@@ -129,6 +129,12 @@ HOT_WAITING_PREFETCH_MAX_SYMBOLS = 3
 HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX = 4
 HOT_PATH_IDLE_OPTIONAL_WORK_POLICY = "critical_scan_first_idle_only_optional_work_v1"
 WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE = 8.0
+DANGER_FLOW_IMMEDIATE_SOURCE = "DANGER_immediate_flow_first_scan"
+DANGER_FLOW_IMMEDIATE_MIN_SCORE = 8.0
+DANGER_FLOW_IMMEDIATE_MIN_PRICE_DELTA_PCT = 0.002
+DANGER_FLOW_IMMEDIATE_MIN_QUOTE_VOLUME_DELTA_RATIO = 100.0
+DANGER_FLOW_IMMEDIATE_MIN_TRADE_COUNT_DELTA_RATIO = 30.0
+DANGER_FLOW_IMMEDIATE_RESERVED_PRECISE_SLOTS = 2
 DEPENDENCY_RETRY_MIN_COOLDOWN_MS = 10_000
 DEPENDENCY_RETRY_MAX_COOLDOWN_MS = 30_000
 PREPUMP_WARM_WATCH_SCORING_CONTRACT = "prepump_warm_watch_scoring_v1_spot_feature_separation_midpoint"
@@ -159,6 +165,7 @@ VISIBILITY_RADAR_EVENTS = frozenset(
         "warm_watch_marked",
         "warm_watch_updated",
         "warm_watch_precise_promoted",
+        "danger_flow_immediate_promoted",
         "candidate_dropped_latency_pressure",
         "candidate_expired_backlog_stale",
     }
@@ -168,6 +175,7 @@ VISIBILITY_WARM_WATCH_EVENTS = frozenset(
         "warm_watch_marked",
         "warm_watch_updated",
         "warm_watch_precise_promoted",
+        "danger_flow_immediate_promoted",
         "warm_watch_precise_deferred_latency_sla",
         "warm_watch_rejected",
         "warm_watch_expired",
@@ -2467,6 +2475,8 @@ class LiveTickerRadarCycleStats:
     warm_watch_deferred_count: int = 0
     danger_flow_radar_promoted_count: int = 0
     danger_flow_radar_candidate_count: int = 0
+    immediate_danger_flow_promoted_count: int = 0
+    immediate_danger_flow_candidate_count: int = 0
     reason: str = ""
 
 
@@ -4426,6 +4436,16 @@ class AnomalyMicroLiveRunner:
                 "hot_waiting_prefetch_idle_queue_max": int(HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX),
                 "hot_path_idle_optional_work_policy": HOT_PATH_IDLE_OPTIONAL_WORK_POLICY,
                 "warm_watch_hot_lane_force_promote_score": float(WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE),
+                "danger_flow_immediate_source": DANGER_FLOW_IMMEDIATE_SOURCE,
+                "danger_flow_immediate_min_score": float(DANGER_FLOW_IMMEDIATE_MIN_SCORE),
+                "danger_flow_immediate_min_price_delta_pct": float(DANGER_FLOW_IMMEDIATE_MIN_PRICE_DELTA_PCT),
+                "danger_flow_immediate_min_quote_volume_delta_ratio": float(
+                    DANGER_FLOW_IMMEDIATE_MIN_QUOTE_VOLUME_DELTA_RATIO
+                ),
+                "danger_flow_immediate_min_trade_count_delta_ratio": float(
+                    DANGER_FLOW_IMMEDIATE_MIN_TRADE_COUNT_DELTA_RATIO
+                ),
+                "danger_flow_immediate_reserved_precise_slots": int(DANGER_FLOW_IMMEDIATE_RESERVED_PRECISE_SLOTS),
                 "latency_sla_due_scan_p95_seconds": float(self.config.latency_sla_due_scan_p95_seconds),
                 "latency_sla_min_due_samples": int(self.config.latency_sla_min_due_samples),
                 "danger_local_entry_position_guard_enabled": bool(self.config.danger_local_entry_position_guard_enabled),
@@ -4770,6 +4790,8 @@ class AnomalyMicroLiveRunner:
                         "session_top_symbols_with_positive_growth": int(session_top_snapshot.get("symbols_with_positive_growth") or 0),
                         "danger_flow_radar_promoted_count": ticker_stats.danger_flow_radar_promoted_count,
                         "danger_flow_radar_candidate_count": ticker_stats.danger_flow_radar_candidate_count,
+                        "immediate_danger_flow_promoted_count": ticker_stats.immediate_danger_flow_promoted_count,
+                        "immediate_danger_flow_candidate_count": ticker_stats.immediate_danger_flow_candidate_count,
                         "detected_anomalies_total": detected_anomalies_total,
                         "batch_select_seconds": round(batch_select_seconds, 3),
                         "hot_waiting_prefetch_seconds": round(hot_waiting_prefetch_seconds, 3),
@@ -7718,16 +7740,18 @@ class AnomalyMicroLiveRunner:
         if not radar_items and not warm_items:
             return LiveCandidateQueuePressureStats(status="empty", reason="no_radar_or_warm_candidates")
 
-        ranked: list[tuple[float, int, str, str]] = []
+        ranked: list[tuple[int, float, int, str, str]] = []
         for item in radar_items:
-            ranked.append((float(item.score), int(item.updated_at_ms), "radar", _position_symbol_key(item.symbol)))
+            immediate_priority = 1 if self._ticker_radar_watch_is_immediate_danger_flow(item) else 0
+            ranked.append((immediate_priority, float(item.score), int(item.updated_at_ms), "radar", _position_symbol_key(item.symbol)))
         for item in warm_items:
-            ranked.append((float(item.score), int(item.updated_at_ms), "warm", _position_symbol_key(item.symbol)))
+            immediate_priority = 1 if self._warm_watch_is_immediate_danger_flow(item) else 0
+            ranked.append((immediate_priority, float(item.score), int(item.updated_at_ms), "warm", _position_symbol_key(item.symbol)))
         ranked.sort(reverse=True)
-        top_score = ranked[0][0] if ranked else None
+        top_score = ranked[0][1] if ranked else None
         actionable_sample_count = sum(
             1
-            for _, _, _, symbol_key in ranked
+            for _, _, _, _, symbol_key in ranked
             if symbol_key not in active_keys
             and symbol_key not in opening_keys
             and not self._symbol_in_stop_cooldown(symbol_key)
@@ -7750,7 +7774,7 @@ class AnomalyMicroLiveRunner:
                 top_score=top_score,
             )
 
-        keep_keys = {symbol_key for _, _, _, symbol_key in ranked[: max(1, CANDIDATE_QUEUE_PRESSURE_MIN_KEEP)]}
+        keep_keys = {symbol_key for _, _, _, _, symbol_key in ranked[: max(1, CANDIDATE_QUEUE_PRESSURE_MIN_KEEP)]}
         stale_latency_seconds = max(
             float(self.config.max_signal_age_ms) / 1000.0,
             float(self.config.latency_sla_due_scan_p95_seconds) * CANDIDATE_QUEUE_PRESSURE_BACKLOG_STALE_FACTOR,
@@ -7758,8 +7782,17 @@ class AnomalyMicroLiveRunner:
         radar_drop: list[tuple[LiveTickerRadarWatch, str, str]] = []
         warm_drop: list[tuple[LiveWarmWatch, str, str]] = []
 
-        def should_drop(kind: str, symbol: str, symbol_key: str, rank_index: int) -> tuple[bool, str, str]:
+        def should_drop(
+            kind: str,
+            symbol: str,
+            symbol_key: str,
+            rank_index: int,
+            *,
+            immediate_danger_flow: bool,
+        ) -> tuple[bool, str, str]:
             if symbol_key in active_keys or symbol_key in opening_keys or self._symbol_in_stop_cooldown(symbol):
+                return False, "", ""
+            if immediate_danger_flow:
                 return False, "", ""
             if symbol_key in keep_keys:
                 return False, "", ""
@@ -7774,16 +7807,46 @@ class AnomalyMicroLiveRunner:
                 return True, "candidate_dropped_latency_pressure", "warm_queue_over_pressure_cap"
             return False, "", ""
 
-        radar_ranked = sorted(radar_items, key=lambda item: (float(item.score), int(item.updated_at_ms), item.symbol), reverse=True)
-        warm_ranked = sorted(warm_items, key=lambda item: (float(item.score), int(item.updated_at_ms), item.symbol), reverse=True)
+        radar_ranked = sorted(
+            radar_items,
+            key=lambda item: (
+                self._ticker_radar_watch_is_immediate_danger_flow(item),
+                float(item.score),
+                int(item.updated_at_ms),
+                item.symbol,
+            ),
+            reverse=True,
+        )
+        warm_ranked = sorted(
+            warm_items,
+            key=lambda item: (
+                self._warm_watch_is_immediate_danger_flow(item),
+                float(item.score),
+                int(item.updated_at_ms),
+                item.symbol,
+            ),
+            reverse=True,
+        )
         for index, item in enumerate(radar_ranked):
             key = _position_symbol_key(item.symbol)
-            drop, event_name, reason = should_drop("radar", item.symbol, key, index)
+            drop, event_name, reason = should_drop(
+                "radar",
+                item.symbol,
+                key,
+                index,
+                immediate_danger_flow=self._ticker_radar_watch_is_immediate_danger_flow(item),
+            )
             if drop:
                 radar_drop.append((item, event_name, reason))
         for index, item in enumerate(warm_ranked):
             key = _position_symbol_key(item.symbol)
-            drop, event_name, reason = should_drop("warm", item.symbol, key, index)
+            drop, event_name, reason = should_drop(
+                "warm",
+                item.symbol,
+                key,
+                index,
+                immediate_danger_flow=self._warm_watch_is_immediate_danger_flow(item),
+            )
             if drop:
                 warm_drop.append((item, event_name, reason))
 
@@ -8080,7 +8143,14 @@ class AnomalyMicroLiveRunner:
         for symbol in active_due:
             batch_scan_modes[_position_symbol_key(symbol)] = "precise_active"
         for symbol in radar_due:
-            batch_scan_modes[_position_symbol_key(symbol)] = "precise_ticker_radar"
+            symbol_key = _position_symbol_key(symbol)
+            with self._state_lock:
+                watch_item = self._ticker_radar_watch.get(symbol_key)
+            batch_scan_modes[symbol_key] = (
+                "precise_immediate_danger_flow"
+                if watch_item is not None and self._ticker_radar_watch_is_immediate_danger_flow(watch_item)
+                else "precise_ticker_radar"
+            )
         inactive_scan_mode = (
             "precise_DANGER_cold_coverage"
             if inactive_slots_source == DANGER_INACTIVE_COLD_COVERAGE_SOURCE
@@ -8223,7 +8293,12 @@ class AnomalyMicroLiveRunner:
             expired = self._prune_ticker_radar_watch_locked(now_ms)
             watch_items = sorted(
                 self._ticker_radar_watch.values(),
-                key=lambda item: (item.score, item.updated_at_ms, item.symbol),
+                key=lambda item: (
+                    self._ticker_radar_watch_is_immediate_danger_flow(item),
+                    item.score,
+                    item.updated_at_ms,
+                    item.symbol,
+                ),
                 reverse=True,
             )
         for item in expired:
@@ -8244,6 +8319,9 @@ class AnomalyMicroLiveRunner:
             )
         due: list[str] = []
         waiting: list[str] = []
+        normal_due_count = 0
+        immediate_due_count = 0
+        immediate_reserved_slots = max(0, int(DANGER_FLOW_IMMEDIATE_RESERVED_PRECISE_SLOTS))
         for item in watch_items:
             symbol_key = _position_symbol_key(item.symbol)
             with self._state_lock:
@@ -8251,8 +8329,13 @@ class AnomalyMicroLiveRunner:
             if symbol_key in excluded_keys or symbol_is_opening or self._symbol_in_stop_cooldown(item.symbol):
                 continue
             if self._signal_scan_due_for_symbol(item.symbol, now_ms=now_ms):
-                if len(due) < due_limit:
+                immediate_danger_flow = self._ticker_radar_watch_is_immediate_danger_flow(item)
+                if immediate_danger_flow and immediate_due_count < immediate_reserved_slots:
                     due.append(item.symbol)
+                    immediate_due_count += 1
+                elif normal_due_count < due_limit:
+                    due.append(item.symbol)
+                    normal_due_count += 1
                 else:
                     waiting.append(item.symbol)
             else:
@@ -8264,7 +8347,12 @@ class AnomalyMicroLiveRunner:
             expired = self._prune_warm_watch_locked(now_ms)
             warm_items = sorted(
                 self._warm_watch.values(),
-                key=lambda item: (item.updated_at_ms, item.score, item.symbol),
+                key=lambda item: (
+                    self._warm_watch_is_immediate_danger_flow(item),
+                    item.updated_at_ms,
+                    item.score,
+                    item.symbol,
+                ),
                 reverse=True,
             )
         for item in expired:
@@ -8545,9 +8633,14 @@ class AnomalyMicroLiveRunner:
         danger_flow_candidate_count = sum(
             1 for promotion in promotions if promotion.get("promotion_source") == DANGER_CHEAP_FLOW_RADAR_SOURCE
         )
+        immediate_danger_flow_candidate_count = sum(
+            1 for promotion in promotions if self._promotion_is_immediate_danger_flow(promotion)
+        )
         danger_flow_promoted_count = 0
+        immediate_danger_flow_promoted_count = 0
         for promotion in radar_candidates:
             promotion_source = str(promotion.get("promotion_source") or "ticker_price_volume")
+            immediate_danger_flow = self._promotion_is_immediate_danger_flow(promotion)
             action = self._mark_or_promote_warm_watch(
                 promotion,
                 now_ms=now_ms,
@@ -8560,6 +8653,8 @@ class AnomalyMicroLiveRunner:
                 warm_watch_promoted_count += 1
                 if promotion_source == DANGER_CHEAP_FLOW_RADAR_SOURCE:
                     danger_flow_promoted_count += 1
+                if immediate_danger_flow:
+                    immediate_danger_flow_promoted_count += 1
             elif action == "rejected":
                 warm_watch_rejected_count += 1
             elif action == "deferred":
@@ -8582,6 +8677,9 @@ class AnomalyMicroLiveRunner:
                 "warm_watch_enabled": bool(self.config.warm_watch_enabled),
                 "danger_flow_radar_promoted_count": danger_flow_promoted_count,
                 "danger_flow_radar_candidate_count": danger_flow_candidate_count,
+                "immediate_danger_flow_promoted_count": immediate_danger_flow_promoted_count,
+                "immediate_danger_flow_candidate_count": immediate_danger_flow_candidate_count,
+                "danger_flow_immediate_source": DANGER_FLOW_IMMEDIATE_SOURCE,
                 "danger_flow_radar_enabled": bool(self.config.danger_ticker_flow_radar_enabled),
                 "interval_seconds": self.config.ticker_radar_interval_seconds,
                 "watch_batch_size": self.config.ticker_radar_watch_batch_size,
@@ -8618,6 +8716,8 @@ class AnomalyMicroLiveRunner:
             warm_watch_deferred_count=warm_watch_deferred_count,
             danger_flow_radar_promoted_count=danger_flow_promoted_count,
             danger_flow_radar_candidate_count=danger_flow_candidate_count,
+            immediate_danger_flow_promoted_count=immediate_danger_flow_promoted_count,
+            immediate_danger_flow_candidate_count=immediate_danger_flow_candidate_count,
             reason=source_reason,
         )
 
@@ -8708,6 +8808,81 @@ class AnomalyMicroLiveRunner:
             "prepump_warm_watch_top_features": top_features_value,
             "prepump_warm_watch_scoring_contract": PREPUMP_WARM_WATCH_SCORING_CONTRACT,
         }
+
+
+    def _is_immediate_danger_flow_metrics(
+        self,
+        *,
+        score: float,
+        price_delta_pct: float,
+        quote_volume_delta: float,
+        quote_volume_delta_ratio: float | None,
+        trade_count_delta: int | None,
+        trade_count_delta_ratio: float | None,
+    ) -> bool:
+        if trade_count_delta is None or trade_count_delta <= 0:
+            return False
+        if not math.isfinite(score) or not math.isfinite(price_delta_pct):
+            return False
+        if price_delta_pct < DANGER_FLOW_IMMEDIATE_MIN_PRICE_DELTA_PCT:
+            return False
+        if not math.isfinite(quote_volume_delta) or quote_volume_delta < float(
+            self.config.danger_ticker_flow_radar_min_quote_volume_delta_usdt
+        ):
+            return False
+        if trade_count_delta < int(self.config.danger_ticker_flow_radar_min_trade_count_delta):
+            return False
+        score_extreme = score >= DANGER_FLOW_IMMEDIATE_MIN_SCORE
+        quote_ratio_extreme = (
+            quote_volume_delta_ratio is not None
+            and math.isfinite(quote_volume_delta_ratio)
+            and quote_volume_delta_ratio >= DANGER_FLOW_IMMEDIATE_MIN_QUOTE_VOLUME_DELTA_RATIO
+        )
+        trade_ratio_extreme = (
+            trade_count_delta_ratio is not None
+            and math.isfinite(trade_count_delta_ratio)
+            and trade_count_delta_ratio >= DANGER_FLOW_IMMEDIATE_MIN_TRADE_COUNT_DELTA_RATIO
+        )
+        return bool(score_extreme or (quote_ratio_extreme and trade_ratio_extreme))
+
+    def _promotion_is_immediate_danger_flow(self, promotion: dict[str, object]) -> bool:
+        trade_count_delta_value = promotion.get("trade_count_delta")
+        return self._is_immediate_danger_flow_metrics(
+            score=float(promotion.get("score") or 0.0),
+            price_delta_pct=float(promotion.get("price_delta_pct") or float("nan")),
+            quote_volume_delta=float(promotion.get("quote_volume_delta") or 0.0),
+            quote_volume_delta_ratio=(
+                None
+                if promotion.get("quote_volume_delta_ratio") is None
+                else float(promotion.get("quote_volume_delta_ratio") or 0.0)
+            ),
+            trade_count_delta=(None if trade_count_delta_value is None else int(trade_count_delta_value)),
+            trade_count_delta_ratio=(
+                None
+                if promotion.get("trade_count_delta_ratio") is None
+                else float(promotion.get("trade_count_delta_ratio") or 0.0)
+            ),
+        )
+
+    def _ticker_radar_watch_is_immediate_danger_flow(self, item: LiveTickerRadarWatch) -> bool:
+        return self._is_immediate_danger_flow_metrics(
+            score=float(item.score),
+            price_delta_pct=float(item.price_delta_pct),
+            quote_volume_delta=float(item.quote_volume_delta),
+            quote_volume_delta_ratio=item.quote_volume_delta_ratio,
+            trade_count_delta=item.trade_count_delta,
+            trade_count_delta_ratio=item.trade_count_delta_ratio,
+        )
+
+    def _warm_watch_is_immediate_danger_flow(self, item: LiveWarmWatch) -> bool:
+        return self._is_immediate_danger_flow_metrics(
+            score=float(item.score),
+            price_delta_pct=float(item.price_delta_pct),
+            quote_volume_delta=float(item.quote_volume_delta),
+            quote_volume_delta_ratio=item.quote_volume_delta_ratio,
+            trade_count_delta=item.trade_count_delta,
+            trade_count_delta_ratio=item.trade_count_delta_ratio,
+        )
 
 
     def _evaluate_ticker_radar_snapshots(
@@ -8909,6 +9084,14 @@ class AnomalyMicroLiveRunner:
             )
             return "rejected"
         symbol_key = _position_symbol_key(symbol)
+        immediate_danger_flow = self._is_immediate_danger_flow_metrics(
+            score=score,
+            price_delta_pct=price_delta_pct,
+            quote_volume_delta=quote_volume_delta,
+            quote_volume_delta_ratio=quote_volume_delta_ratio,
+            trade_count_delta=trade_count_delta,
+            trade_count_delta_ratio=trade_count_delta_ratio,
+        )
         ttl_ms = max(1, int(self.config.warm_watch_ttl_ms))
         expires_at_ms = now_ms + ttl_ms
         min_observations = max(1, int(self.config.warm_watch_min_observations_for_precise))
@@ -8926,12 +9109,15 @@ class AnomalyMicroLiveRunner:
                 observations = current.observations + 1
                 previous_score = current.score
                 event_name = "warm_watch_updated"
-            if observations >= min_observations:
+            if immediate_danger_flow or observations >= min_observations:
                 latency_sla = self._current_latency_sla_backlog_status(now_ms=now_ms)
                 force_hot_lane = (
-                    not latency_sla.optional_scans_allowed
-                    and math.isfinite(score)
-                    and score >= float(WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE)
+                    immediate_danger_flow
+                    or (
+                        not latency_sla.optional_scans_allowed
+                        and math.isfinite(score)
+                        and score >= float(WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE)
+                    )
                 )
                 if not latency_sla.optional_scans_allowed and not force_hot_lane:
                     self._warm_watch[symbol_key] = LiveWarmWatch(
@@ -8983,11 +9169,30 @@ class AnomalyMicroLiveRunner:
                     self._warm_watch.pop(symbol_key, None)
                     promote_payload = {
                         "reason": (
-                            "warm_watch_high_score_hot_lane"
-                            if force_hot_lane
-                            else WARM_WATCH_SOURCE
+                            DANGER_FLOW_IMMEDIATE_SOURCE
+                            if immediate_danger_flow
+                            else (
+                                "warm_watch_high_score_hot_lane"
+                                if force_hot_lane
+                                else WARM_WATCH_SOURCE
+                            )
                         ),
                         "radar_reason": radar_reason,
+                        "immediate_danger_flow": bool(immediate_danger_flow),
+                        "immediate_danger_flow_source": DANGER_FLOW_IMMEDIATE_SOURCE if immediate_danger_flow else "",
+                        "immediate_danger_flow_reserved_precise_slots": int(
+                            DANGER_FLOW_IMMEDIATE_RESERVED_PRECISE_SLOTS
+                        ),
+                        "immediate_danger_flow_min_score": float(DANGER_FLOW_IMMEDIATE_MIN_SCORE),
+                        "immediate_danger_flow_min_price_delta_pct": float(
+                            DANGER_FLOW_IMMEDIATE_MIN_PRICE_DELTA_PCT
+                        ),
+                        "immediate_danger_flow_min_quote_volume_delta_ratio": float(
+                            DANGER_FLOW_IMMEDIATE_MIN_QUOTE_VOLUME_DELTA_RATIO
+                        ),
+                        "immediate_danger_flow_min_trade_count_delta_ratio": float(
+                            DANGER_FLOW_IMMEDIATE_MIN_TRADE_COUNT_DELTA_RATIO
+                        ),
                         "latency_sla_hot_lane_override": bool(force_hot_lane),
                         "latency_sla_hot_lane_min_score": float(WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE),
                         "observations": observations,
@@ -9050,6 +9255,8 @@ class AnomalyMicroLiveRunner:
                     **prepump_payload,
                 }
         if promote_payload is not None:
+            if immediate_danger_flow:
+                self.artifacts.append_event("danger_flow_immediate_promoted", symbol, promote_payload)
             self.artifacts.append_event("warm_watch_precise_promoted", symbol, promote_payload)
             self._mark_ticker_radar_watch(
                 symbol,
@@ -9195,6 +9402,14 @@ class AnomalyMicroLiveRunner:
             )
             if should_emit:
                 self._detected_anomalies_total += 1
+                immediate_danger_flow = self._is_immediate_danger_flow_metrics(
+                    score=score,
+                    price_delta_pct=price_delta_pct,
+                    quote_volume_delta=quote_volume_delta,
+                    quote_volume_delta_ratio=quote_volume_delta_ratio,
+                    trade_count_delta=trade_count_delta,
+                    trade_count_delta_ratio=trade_count_delta_ratio,
+                )
                 event_payload = {
                     "detected_anomaly_index": self._detected_anomalies_total,
                     "reason": reason,
@@ -9210,6 +9425,8 @@ class AnomalyMicroLiveRunner:
                     "promotion_source": promotion_source,
                     "source": promotion_source,
                     "danger_flow_radar": promotion_source == DANGER_CHEAP_FLOW_RADAR_SOURCE,
+                    "immediate_danger_flow": bool(immediate_danger_flow),
+                    "immediate_danger_flow_source": DANGER_FLOW_IMMEDIATE_SOURCE if immediate_danger_flow else "",
                     "prepump_warm_watch_scoring_status": prepump_warm_watch_score_status,
                     "prepump_warm_watch_scoring_reason": prepump_warm_watch_score_reason,
                     "prepump_warm_watch_score": (

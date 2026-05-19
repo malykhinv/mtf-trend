@@ -6,6 +6,15 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+
+## 2026-05-19 - live latency plan after BAS and post-P301 smoke
+
+```text
+Finding: after P301, batch selection/reconcile/prefetch are no longer the dominant hot-path cost. The remaining delay is cold/warm discovery: strong ticker/flow spikes can sit in warm/radar queues, wait for a second observation, or be dropped/deferred under pressure even though precise scan and order path are comparatively fast once selected.
+Decision: propose P304 as scheduler-only latency patch. Extreme real-flow candidates are not treated as ordinary warm symbols; they get immediate precise-lane promotion and reserved precise slots. This preserves signal/category/execution rules while reducing cold->precise delay.
+Acceptance: in the next live artifact, inspect `danger_flow_immediate_promoted`, `ticker_radar_promoted.immediate_danger_flow=true`, `symbol_batch_selected.scan_reason_by_symbol=precise_immediate_danger_flow`, and time to first `signal_symbol_scan_summary`. Target <1-2s from immediate promotion to precise scan when data dependencies are ready.
+```
+
 ## 2026-05-18 - live decision-speed review 20260518_090759
 
 ```text

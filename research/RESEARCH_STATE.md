@@ -10,8 +10,19 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P301 proposed live hot-path idle-only optional work
+Last active patch: P304 proposed immediate danger-flow precise lane
 Updated: 2026-05-19
+```
+
+## 2026-05-19 - P304 immediate danger-flow precise lane
+
+```text
+Current patch status: P304 PROPOSED / UNKNOWN commit.
+Question: cold symbols with extreme ticker/flow spikes wait in warm/radar queues, sometimes requiring a second observation or getting deferred/dropped under latency pressure.
+Change: extreme real-flow ticker candidates now bypass ordinary warm-watch observation/defer/drop policy: first observation promotes them to radar with `danger_flow_immediate_promoted`, up to two such symbols get reserved precise slots beyond the normal adaptive radar cap, and queue pressure refuses to drop them before first precise scan. The precise scan uses `precise_immediate_danger_flow` scan_mode for audit.
+Trading impact: no category thresholds, entry guard, drift/RR/stale guard, order placement, fill, stop, TP, or PnL logic changes. This only changes how fast an already-detected extreme-flow candidate reaches the existing precise signal path.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+Next validation: short live smoke; require `danger_flow_immediate_promoted` -> `symbol_batch_selected` scan mode `precise_immediate_danger_flow` -> `signal_symbol_scan_summary` latency under 1-2s for fresh extreme spikes, and no pressure drop before first scan.
 ```
 
 ## 2026-05-19 - P301 live hot-path idle-only optional work
