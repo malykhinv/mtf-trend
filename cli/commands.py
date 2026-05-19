@@ -37,7 +37,6 @@ from data.fetchers.derivatives_context_fetcher import DerivativesContextFetcher
 from data.fetchers.market_data_fetcher import MarketDataFetcher
 from data.fetchers.ohlcv_fetcher import OhlcvFetcher
 from data.fetchers.oi_fetcher import OiFetcher
-from data.liquidity.daily_volume_ranker import DailyVolumeRanker
 from data.quality.data_validator import DataValidator
 from data.quality.gap_detector import GapDetector
 from data.storage.parquet_storage import ParquetStorage
@@ -49,7 +48,6 @@ from domain.models.reporting.quality_symbol_stats import QualitySymbolStats
 from domain.models.reporting.symbol_fetch_result import SymbolFetchResult
 from utils.logger import get_logger
 from utils.symbols import normalize_symbol
-from vectorbt_runner import DataPreparer
 
 def _to_bool_flag(value: object, *, default: bool = False) -> bool:
     if value is None:
@@ -153,6 +151,8 @@ def _resolve_symbols(
     liquidity_quality_by_symbol: dict[str, dict[str, object]] = {}
     futures_symbol_map = _build_futures_symbol_map(futures_symbols_raw)
     exchange_symbols_normalized = sorted(futures_symbol_map)
+
+    from data.liquidity.daily_volume_ranker import DailyVolumeRanker
 
     ranker = DailyVolumeRanker(cache_dir=cache_dir)
     symbols_raw = [futures_symbol_map[symbol] for symbol in exchange_symbols_normalized]
@@ -847,6 +847,8 @@ def _save_quality_report(report: QualityReport, output_path: Path) -> None:
 
 def _check_quality_inner(config: AppConfig, args: argparse.Namespace) -> int:
     logger = get_logger("check-quality", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
+    from vectorbt_runner import DataPreparer
+
     preparer = DataPreparer(config.backtest.cache_dir)
     symbols = args.symbols or preparer.list_symbols(config.fetch.timeframe)
     if not symbols:

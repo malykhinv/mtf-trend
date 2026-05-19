@@ -290,6 +290,16 @@ class Live2ExecutionEngine:
                 checked_at_ms=checked_at_ms,
             )
             return self.preflight_result
+        if snapshot.hedge_mode_enabled:
+            self.preflight_result = Live2ExecutionPreflightResult(
+                status="not_ready",
+                reason="hedge_mode_not_supported_by_live2_execution_contract",
+                exchange=snapshot.exchange,
+                position_mode=snapshot.position_mode,
+                hedge_mode_enabled=snapshot.hedge_mode_enabled,
+                checked_at_ms=checked_at_ms,
+            )
+            return self.preflight_result
         self.preflight_result = Live2ExecutionPreflightResult(
             status="ready",
             reason="exchange_account_preflight_ok",
@@ -641,8 +651,8 @@ class Live2ExecutionEngine:
             exchange_boundary_status="halted",
             order_placement_status="entry_filled_unprotected",
             entry_order_id=fill.order_id,
-            entry_fill_price=float(fill.average_price) if isfinite(float(fill.average_price)) else None,
-            entry_filled_amount=float(fill.filled_amount) if isfinite(float(fill.filled_amount)) else None,
+            entry_fill_price=_finite_float_or_none(fill.average_price),
+            entry_filled_amount=_finite_float_or_none(fill.filled_amount),
             entry_fill_timestamp_ms=int(fill.timestamp_ms),
             stop_order_id=stop_order_id,
             stop_client_order_id=stop_client_order_id,
@@ -706,6 +716,14 @@ def _positive_finite(value: object) -> bool:
     except (TypeError, ValueError):
         return False
     return isfinite(parsed) and parsed > 0.0
+
+
+def _finite_float_or_none(value: object) -> float | None:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    return parsed if isfinite(parsed) else None
 
 
 def _extract_order_id(payload: dict[str, object]) -> str | None:

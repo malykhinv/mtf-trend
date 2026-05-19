@@ -2100,6 +2100,12 @@ Still not complete: Telegram critical/operator messages, restart/open-order reco
 Next validation: run `run-anomaly-live2 --symbols <one liquid symbol>` for 2-5 minutes, interrupt/reconnect network if possible, and inspect `market_data_coverage_update`, `runtime_gate_update`, `live2_status.json.market_data_status.ws_health`, and `runtime_gate_status.decision_loop_overrun_count`. Entries must remain disabled during stale/reconnect periods and recover only after clean windows.
 ```
 
+## 2026-05-19 - Live2 audit after P324
+
+Current commit: UNKNOWN.
+
+P325 proposed after patch-stack audit. Main finding: P311-P324 compile, but run-anomaly-live2 had startup/import and safety-contract issues that should be fixed before real smoke.
+
 ## 2026-05-19 — P316 proposed
 
 ```text

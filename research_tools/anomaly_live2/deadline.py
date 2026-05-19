@@ -271,10 +271,11 @@ class Live2DeadlineEngine:
         elif _is_trade_stale(candle=candle, now_ms=now_ms, stale_trade_ms=self.config.stale_trade_ms):
             verdict = "data_not_ready"
             reason = "latest_closed_bucket_trade_flow_is_stale"
-        elif state.candle_gap_count > 0 or state.candle_out_of_order_count > 0:
-            verdict = "data_not_ready"
-            reason = "candle_coverage_has_gap_or_out_of_order_trade"
         else:
+            # Cumulative gap/out-of-order counters are diagnostics, not a permanent
+            # hard rejection. Dormant symbols naturally have no-trade gaps between
+            # real aggTrade buckets; banning all future buckets after the first gap
+            # would make live2 blind to exactly the wake-up pattern it is meant to see.
             signal_decision = self.signal_engine.evaluate(
                 state=state,
                 candle=candle,

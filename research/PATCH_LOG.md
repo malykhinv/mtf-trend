@@ -5600,6 +5600,15 @@ Risk:
 Medium. This patch changes readiness gating and market-data status semantics but does not alter signal thresholds, order sizing, fill accounting, stops, or position supervision. The main operational effect is stricter no-new-entries during WS stale/reconnect/coverage transitions and a short clean-window delay before entries are allowed again after recovery.
 ```
 
+## 2026-05-19 - P325 live2 startup and coverage hardening
+
+Status: PROPOSED.
+
+- Lazy-loads heavy CLI dependencies so run-anomaly-live2 can resolve without pyarrow-only research imports.
+- Rejects Binance hedge mode in live2 execution preflight before any order path.
+- Keeps cumulative candle gap/out-of-order counters as diagnostics instead of permanently blocking future real aggTrade buckets.
+- Makes post-fill integrity result serialization safe for malformed/missing fill fields.
+
 ## 2026-05-19 - P316 proposed - live2 stream signal adapter
 
 Files:
