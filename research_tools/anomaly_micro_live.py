@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import bisect
 import csv
 import hashlib
 import html
@@ -125,6 +126,8 @@ ADAPTIVE_PRECISE_BUDGET_PRESSURE_RADAR_SLOTS = 3
 ADAPTIVE_PRECISE_BUDGET_ACTIVE_RADAR_SLOTS = 2
 ADAPTIVE_PRECISE_BUDGET_SLOW_CYCLE_RADAR_SLOTS = 3
 HOT_WAITING_PREFETCH_MAX_SYMBOLS = 3
+HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX = 4
+HOT_PATH_IDLE_OPTIONAL_WORK_POLICY = "critical_scan_first_idle_only_optional_work_v1"
 WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE = 8.0
 DEPENDENCY_RETRY_MIN_COOLDOWN_MS = 10_000
 DEPENDENCY_RETRY_MAX_COOLDOWN_MS = 30_000
@@ -4269,6 +4272,15 @@ class AnomalyMicroLiveRunner:
         self._current_candidate_queue_dropped_pressure_count = 0
         self._current_candidate_queue_expired_backlog_stale_count = 0
         self._current_candidate_queue_top_score: float | None = None
+        self._current_last_batch_selection: LiveSymbolBatchSelection | None = None
+        self._current_hot_waiting_prefetch_symbols: tuple[str, ...] = ()
+        self._current_hot_waiting_prefetch_count = 0
+        self._current_hot_waiting_prefetch_limit = max(0, int(HOT_WAITING_PREFETCH_MAX_SYMBOLS))
+        self._current_hot_waiting_prefetch_policy = "not_started"
+        self._current_order_reconcile_status = "not_started"
+        self._current_order_reconcile_reason = ""
+        self._current_order_reconcile_checked_symbols = 0
+        self._current_order_reconcile_scope = ""
         self._cold_coverage_pressure_ewma = 0.0
         self._scheduler_cycle_seconds_ewma = DANGER_ADAPTIVE_COLD_COVERAGE_SLOW_CYCLE_SECONDS
         self._cycle_precise_scan_symbols = 0
@@ -4407,6 +4419,8 @@ class AnomalyMicroLiveRunner:
                 "candidate_queue_pressure_max_radar": int(CANDIDATE_QUEUE_PRESSURE_MAX_RADAR),
                 "candidate_queue_pressure_max_warm": int(CANDIDATE_QUEUE_PRESSURE_MAX_WARM),
                 "hot_waiting_prefetch_max_symbols": int(HOT_WAITING_PREFETCH_MAX_SYMBOLS),
+                "hot_waiting_prefetch_idle_queue_max": int(HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX),
+                "hot_path_idle_optional_work_policy": HOT_PATH_IDLE_OPTIONAL_WORK_POLICY,
                 "warm_watch_hot_lane_force_promote_score": float(WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE),
                 "latency_sla_due_scan_p95_seconds": float(self.config.latency_sla_due_scan_p95_seconds),
                 "latency_sla_min_due_samples": int(self.config.latency_sla_min_due_samples),
@@ -4576,6 +4590,13 @@ class AnomalyMicroLiveRunner:
                     reason="critical_scan_path_pending",
                 )
                 top_growth_seconds = 0.0
+                hot_waiting_prefetch = {
+                    "symbols": (),
+                    "count": 0,
+                    "limit": max(0, int(HOT_WAITING_PREFETCH_MAX_SYMBOLS)),
+                    "policy": "not_started",
+                }
+                hot_waiting_prefetch_seconds = 0.0
                 batch_select_started = time.monotonic()
                 batch = self._next_symbol_batch(symbols)
                 batch_select_seconds = time.monotonic() - batch_select_started
@@ -4589,6 +4610,12 @@ class AnomalyMicroLiveRunner:
                 for signal in signals:
                     self._maybe_open_position(signal)
                 open_seconds = time.monotonic() - open_started
+                hot_prefetch_started = time.monotonic()
+                hot_waiting_prefetch = self._prefetch_hot_waiting_symbols_after_critical_scan(
+                    now_ms=int(time.time() * 1000),
+                    signals_count=len(signals),
+                )
+                hot_waiting_prefetch_seconds = time.monotonic() - hot_prefetch_started
                 reconcile_started = time.monotonic()
                 orphan_cancelled = self._reconcile_orphan_orders(symbols, cycle=cycle)
                 reconcile_seconds = time.monotonic() - reconcile_started
@@ -4741,6 +4768,12 @@ class AnomalyMicroLiveRunner:
                         "danger_flow_radar_candidate_count": ticker_stats.danger_flow_radar_candidate_count,
                         "detected_anomalies_total": detected_anomalies_total,
                         "batch_select_seconds": round(batch_select_seconds, 3),
+                        "hot_waiting_prefetch_seconds": round(hot_waiting_prefetch_seconds, 3),
+                        "hot_waiting_prefetch_count": int(hot_waiting_prefetch.get("count", 0) or 0),
+                        "hot_waiting_prefetch_symbols": list(hot_waiting_prefetch.get("symbols", ()) or ()),
+                        "hot_waiting_prefetch_policy": str(hot_waiting_prefetch.get("policy", "")),
+                        "hot_waiting_prefetch_idle_queue_max": int(HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX),
+                        "hot_path_idle_optional_work_policy": HOT_PATH_IDLE_OPTIONAL_WORK_POLICY,
                         "ws_aggtrade_subscription_seconds": round(ws_aggtrade_seconds, 3),
                         "ws_aggtrade_enabled": bool(ws_aggtrade_stats.enabled),
                         "ws_aggtrade_source": ws_aggtrade_stats.source,
@@ -4768,6 +4801,10 @@ class AnomalyMicroLiveRunner:
                         "signal_scan_seconds": round(scan_seconds, 3),
                         "open_signal_seconds": round(open_seconds, 3),
                         "order_reconcile_seconds": round(reconcile_seconds, 3),
+                        "order_reconcile_status": self._current_order_reconcile_status,
+                        "order_reconcile_reason": self._current_order_reconcile_reason,
+                        "order_reconcile_scope": self._current_order_reconcile_scope,
+                        "order_reconcile_checked_symbols": int(self._current_order_reconcile_checked_symbols),
                         "cache_flush_seconds": round(cache_flush_seconds, 3),
                         "full_symbol_cycle_seconds": round(full_cycle_seconds, 3),
                         "opened_total": opened_total,
@@ -6922,7 +6959,17 @@ class AnomalyMicroLiveRunner:
         self._current_candidate_queue_dropped_pressure_count = selection.candidate_queue_dropped_pressure_count
         self._current_candidate_queue_expired_backlog_stale_count = selection.candidate_queue_expired_backlog_stale_count
         self._current_candidate_queue_top_score = selection.candidate_queue_top_score
-        hot_prefetch = self._prefetch_hot_waiting_symbols(selection, now_ms=int(time.time() * 1000))
+        self._current_last_batch_selection = selection
+        hot_prefetch = {
+            "symbols": (),
+            "count": 0,
+            "limit": max(0, int(HOT_WAITING_PREFETCH_MAX_SYMBOLS)),
+            "policy": "deferred_until_after_critical_scan",
+        }
+        self._current_hot_waiting_prefetch_symbols = ()
+        self._current_hot_waiting_prefetch_count = 0
+        self._current_hot_waiting_prefetch_limit = max(0, int(HOT_WAITING_PREFETCH_MAX_SYMBOLS))
+        self._current_hot_waiting_prefetch_policy = "deferred_until_after_critical_scan"
         self.artifacts.append_event(
             "symbol_batch_selected",
             "__live__",
@@ -7053,6 +7100,73 @@ class AnomalyMicroLiveRunner:
             },
         )
         return list(selection.batch)
+
+    def _prefetch_hot_waiting_symbols_after_critical_scan(
+        self,
+        *,
+        now_ms: int,
+        signals_count: int,
+    ) -> dict[str, object]:
+        selection = self._current_last_batch_selection
+        if selection is None:
+            result = {
+                "symbols": (),
+                "count": 0,
+                "limit": max(0, int(HOT_WAITING_PREFETCH_MAX_SYMBOLS)),
+                "policy": "skipped_no_batch_selection",
+            }
+            self._set_current_hot_waiting_prefetch(result)
+            return result
+        queue_count = int(selection.candidate_queue_radar_total_after + selection.candidate_queue_warm_total_after)
+        with self._state_lock:
+            position_or_opening = bool(self._open_positions or self._opening_symbols)
+        skip_reason = ""
+        if signals_count > 0:
+            skip_reason = "signal_processed_order_path_has_priority"
+        elif position_or_opening:
+            skip_reason = "position_or_opening_has_priority"
+        elif selection.active_due or selection.radar_due:
+            skip_reason = "due_hot_scan_has_priority"
+        elif not selection.latency_sla_optional_scans_allowed:
+            skip_reason = selection.latency_sla_reason or LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON
+        elif queue_count > HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX:
+            skip_reason = f"candidate_queue_above_idle_prefetch_limit:{queue_count}>{HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX}"
+        if skip_reason:
+            result = {
+                "symbols": (),
+                "count": 0,
+                "limit": max(0, int(HOT_WAITING_PREFETCH_MAX_SYMBOLS)),
+                "policy": f"skipped_idle_only:{skip_reason}",
+            }
+            self._set_current_hot_waiting_prefetch(result)
+            if selection.radar_waiting or selection.warm_watch_waiting:
+                self.artifacts.append_event(
+                    "hot_waiting_prefetch_skipped",
+                    "__live__",
+                    {
+                        "reason": skip_reason,
+                        "policy": HOT_PATH_IDLE_OPTIONAL_WORK_POLICY,
+                        "signals_count": int(signals_count),
+                        "position_or_opening": bool(position_or_opening),
+                        "active_due_count": len(selection.active_due),
+                        "radar_due_count": len(selection.radar_due),
+                        "radar_waiting_count": len(selection.radar_waiting),
+                        "warm_watch_waiting_count": len(selection.warm_watch_waiting),
+                        "candidate_queue_count": queue_count,
+                        "idle_queue_max": int(HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX),
+                    },
+                )
+            return result
+        result = self._prefetch_hot_waiting_symbols(selection, now_ms=now_ms)
+        self._set_current_hot_waiting_prefetch(result)
+        return result
+
+    def _set_current_hot_waiting_prefetch(self, result: dict[str, object]) -> None:
+        symbols = result.get("symbols", ())
+        self._current_hot_waiting_prefetch_symbols = tuple(str(symbol) for symbol in (symbols or ()))
+        self._current_hot_waiting_prefetch_count = int(result.get("count", 0) or 0)
+        self._current_hot_waiting_prefetch_limit = int(result.get("limit", 0) or 0)
+        self._current_hot_waiting_prefetch_policy = str(result.get("policy", ""))
 
     def _prefetch_hot_waiting_symbols(
         self,
@@ -7923,6 +8037,21 @@ class AnomalyMicroLiveRunner:
             inactive_slots = 0
             inactive_slots_source = COLD_COVERAGE_GATED_OFF_SOURCE
             cold_coverage_gate_reason = latency_sla.reason or LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON
+        hot_candidates_present = bool(
+            active_due
+            or active_waiting
+            or radar_due
+            or radar_waiting
+            or warm_watch_waiting
+        )
+        if (
+            self._inactive_slots_are_precise_cold_coverage(inactive_slots_source)
+            and inactive_slots > 0
+            and hot_candidates_present
+        ):
+            inactive_slots = 0
+            inactive_slots_source = COLD_COVERAGE_GATED_OFF_SOURCE
+            cold_coverage_gate_reason = "hot_candidate_queue_not_empty"
         inactive: list[str] = []
         attempts = 0
         while len(inactive) < inactive_slots and attempts < len(symbols):
@@ -11174,22 +11303,30 @@ class AnomalyMicroLiveRunner:
             return result
         maturity_ms = max(240, 60) * entry_ms
         mature_cutoff = decision_ts - maturity_ms
-        prior_spikes = [
-            ts
-            for ts in snapshot.prior_spike_timestamps_ms
-            if history_start_ms <= int(ts) < visible_end_ms and int(ts) <= mature_cutoff
-        ]
-        prior_fast_fades = [
-            ts
-            for ts in snapshot.prior_fast_fade_timestamps_ms
-            if history_start_ms <= int(ts) < visible_end_ms and int(ts) <= mature_cutoff
-        ]
+        prior_event_end_ms = min(int(visible_end_ms) - 1, int(mature_cutoff))
+        if prior_event_end_ms < history_start_ms:
+            prior_spike_count = 0
+            prior_fast_fade_count = 0
+        else:
+            prior_spike_timestamps = snapshot.prior_spike_timestamps_ms
+            prior_fast_fade_timestamps = snapshot.prior_fast_fade_timestamps_ms
+            prior_spike_count = max(
+                0,
+                bisect.bisect_right(prior_spike_timestamps, prior_event_end_ms)
+                - bisect.bisect_left(prior_spike_timestamps, history_start_ms),
+            )
+            prior_fast_fade_count = max(
+                0,
+                bisect.bisect_right(prior_fast_fade_timestamps, prior_event_end_ms)
+                - bisect.bisect_left(prior_fast_fade_timestamps, history_start_ms),
+            )
         result = {
             **snapshot_details,
             "status": "ok",
             "reason": "ok",
-            "prior_fast_fade_count_72h": int(len(prior_fast_fades)),
-            "prior_spike_count_72h": int(len(prior_spikes)),
+            "prior_fast_fade_count_72h": int(prior_fast_fade_count),
+            "prior_spike_count_72h": int(prior_spike_count),
+            "prior_fast_fade_count_method": "snapshot_sorted_timestamp_bisect_exact",
             "effective_cache_end_timestamp_ms": int(visible_end_ms),
             "ignored_tail_ms": max(0, int(decision_ts) - int(visible_end_ms)),
             "ignored_tail_entry_candles": max(0, (int(decision_ts) - int(visible_end_ms)) // max(1, entry_ms)),
@@ -15418,18 +15555,73 @@ class AnomalyMicroLiveRunner:
                 break
         return all_rows
 
+    def _orphan_reconcile_hot_path_blocker(self) -> tuple[str | None, dict[str, object]]:
+        with self._state_lock:
+            open_positions = len(self._open_positions)
+            opening_symbols = len(self._opening_symbols)
+            active_symbols = len(self._active_symbols)
+            radar_symbols = len(self._ticker_radar_watch)
+            warm_symbols = len(self._warm_watch)
+        details: dict[str, object] = {
+            "open_positions": open_positions,
+            "opening_symbols": opening_symbols,
+            "active_symbols": active_symbols,
+            "ticker_radar_watch_symbols": radar_symbols,
+            "warm_watch_symbols": warm_symbols,
+            "latency_sla_status": self._current_latency_sla_status,
+            "candidate_queue_radar_total_after": self._current_candidate_queue_radar_total_after,
+            "candidate_queue_warm_total_after": self._current_candidate_queue_warm_total_after,
+            "policy": HOT_PATH_IDLE_OPTIONAL_WORK_POLICY,
+        }
+        if open_positions or opening_symbols:
+            return "position_or_opening_has_priority", details
+        if active_symbols:
+            return "active_symbols_have_priority", details
+        if radar_symbols or warm_symbols:
+            return "candidate_queue_not_empty", details
+        if not self._current_latency_sla_optional_scans_allowed:
+            return self._current_latency_sla_reason or LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON, details
+        return None, details
+
     def _reconcile_orphan_orders(self, symbols: list[str], *, cycle: int, force: bool = False) -> int:
+        self._current_order_reconcile_status = "not_due"
+        self._current_order_reconcile_reason = "interval_not_due"
+        self._current_order_reconcile_checked_symbols = 0
+        self._current_order_reconcile_scope = "idle_only"
         if not force and cycle != 1 and cycle % self.config.order_reconcile_interval_cycles != 0:
             return 0
+        if not symbols:
+            self._current_order_reconcile_status = "skipped"
+            self._current_order_reconcile_reason = "empty_symbol_universe"
+            return 0
+        if not force:
+            block_reason, block_details = self._orphan_reconcile_hot_path_blocker()
+            if block_reason is not None:
+                self._current_order_reconcile_status = "deferred_hot_path"
+                self._current_order_reconcile_reason = str(block_reason)
+                self._current_order_reconcile_scope = "idle_only_deferred"
+                self.artifacts.append_event(
+                    "orphan_order_reconcile_deferred_hot_path",
+                    "__live__",
+                    {
+                        **block_details,
+                        "reason": str(block_reason),
+                        "cycle": cycle,
+                        "configured_interval_cycles": int(self.config.order_reconcile_interval_cycles),
+                        "configured_batch_size": int(self.config.order_reconcile_batch_size),
+                    },
+                )
+                return 0
         max_checks = len(symbols) if force else min(self.config.order_reconcile_batch_size, len(symbols))
+        self._current_order_reconcile_status = "running"
+        self._current_order_reconcile_reason = "force" if force else "idle_periodic"
+        self._current_order_reconcile_scope = "run_trade_symbols_only" if force else "idle_periodic_untracked_symbols"
         if force:
             self.artifacts.append_event(
                 "orphan_order_reconcile_started",
                 "__live__",
                 {"scope": "run_trade_symbols_only", "symbols_to_check": max_checks, "cycle": cycle},
             )
-        if not symbols:
-            return 0
         checked_symbols: set[str] = set()
         cancelled_total = 0
         for _ in range(max_checks):
@@ -15450,6 +15642,9 @@ class AnomalyMicroLiveRunner:
                     symbol,
                     {"symbol_key": symbol_key, "reason": f"{type(exc).__name__}: {exc}"},
                 )
+        self._current_order_reconcile_checked_symbols = len(checked_symbols)
+        self._current_order_reconcile_status = "completed"
+        self._current_order_reconcile_reason = "ok"
         if cancelled_total:
             with self._state_lock:
                 self._orphan_orders_cancelled_total += cancelled_total

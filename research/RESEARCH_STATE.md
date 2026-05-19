@@ -10,8 +10,19 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P300 proposed live potential-anomaly latency grid
-Updated: 2026-05-18
+Last active patch: P301 proposed live hot-path idle-only optional work
+Updated: 2026-05-19
+```
+
+## 2026-05-19 - P301 live hot-path idle-only optional work
+
+```text
+Current patch status: P301 PROPOSED / UNKNOWN commit.
+Question: reduce live latency between suspicious anomaly detection and actionable precise decision without changing trading filters or order semantics.
+Change: critical live cycle now selects/scans/opens first. Bounded hot-waiting aggTrade prefetch is no longer executed inside batch selection; it runs only after critical scan/open and only when the loop is idle enough. Periodic orphan-order reconcile is deferred whenever positions/opening symbols/active symbols/radar/warm candidates or latency SLA pressure are present. Precise cold coverage is hard-gated whenever active/radar/warm candidates exist. Prior fast-fade/prior-spike counting now uses exact bisect over sorted snapshot timestamps instead of repeatedly scanning the whole timestamp list.
+Trading impact: no category thresholds, drift/RR/stale guards, fill handling, stop/TP placement, or TP/SL math changed. This is scheduler/optional-work latency hygiene only.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py` passed. The broader project standard command with `launcher.py` cannot run in this uploaded ZIP because `launcher.py` is absent.
+Next validation: short live smoke; require `batch_select_seconds p95 < 0.25s`, `order_reconcile_status=deferred_hot_path` when queues are non-empty, `hot_waiting_prefetch_policy` not blocking due hot scans, and `inactive_cold_coverage_gate_reason=hot_candidate_queue_not_empty` during active radar/warm pressure.
 ```
 
 ## 2026-05-18 - P300 live potential-anomaly latency grid
