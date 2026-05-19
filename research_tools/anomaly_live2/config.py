@@ -38,6 +38,10 @@ class AnomalyLive2Config:
     execution_stop_visibility_attempts: int = 5
     execution_stop_visibility_sleep_seconds: float = 0.5
     execution_max_position_amount_slippage_ratio: float = 0.05
+    position_supervisor_monitor_interval_ms: int = 1_000
+    position_supervisor_tp1_close_fraction: float = 0.5
+    position_supervisor_breakeven_stop_offset_pct: float = 0.0
+    position_supervisor_flat_position_abs_epsilon: float = 1e-12
     runtime_generation: str = "live2_v0"
 
     def __post_init__(self) -> None:
@@ -93,3 +97,11 @@ class AnomalyLive2Config:
             raise ValueError("execution_stop_visibility_sleep_seconds must be >= 0")
         if self.execution_max_position_amount_slippage_ratio < 0:
             raise ValueError("execution_max_position_amount_slippage_ratio must be >= 0")
+        if self.position_supervisor_monitor_interval_ms <= 0:
+            raise ValueError("position_supervisor_monitor_interval_ms must be > 0")
+        if not 0.0 < self.position_supervisor_tp1_close_fraction < 1.0:
+            raise ValueError("position_supervisor_tp1_close_fraction must be in (0, 1)")
+        if self.position_supervisor_breakeven_stop_offset_pct < 0:
+            raise ValueError("position_supervisor_breakeven_stop_offset_pct must be >= 0")
+        if self.position_supervisor_flat_position_abs_epsilon < 0:
+            raise ValueError("position_supervisor_flat_position_abs_epsilon must be >= 0")

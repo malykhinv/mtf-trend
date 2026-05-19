@@ -5529,6 +5529,44 @@ Risk:
 High. This is the first live2 patch that can place real orders when all runtime gates are ready and a selected signal passes entry guards. The patch intentionally caps generation-0 exposure to one protected position by default and uses a small fixed notional. TP1/BE/final-position supervision remains the next patch, so P321 must be tested on one explicit low-risk symbol/notional only after reviewing exchange credentials and artifacts.
 ```
 
+## 2026-05-19 - P322 proposed - live2 verified position supervisor
+
+Files:
+
+```text
+research_tools/anomaly_live2/execution.py
+research_tools/anomaly_live2/position_supervisor.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/config.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Add the first live2 PositionSupervisor for P321 protected positions. The supervisor checks exchange position amount, verifies the current stop remains visible, performs TP1 reduce-only partial close with verified actual fill, submits and verifies a breakeven replacement stop for the remaining position, cancels the old stop, and accepts final close only when the exchange position is flat. Any stop/position integrity failure halts further execution and attempts emergency reduce-only close.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Synthetic smoke:
+
+```text
+Fake exchange: verified entry -> protected position -> stream price reaches TP1 -> reduce-only TP1 fill -> BE stop verified -> old stop cancelled -> exchange position flat -> final close verified.
+```
+
+Risk:
+
+```text
+High. This patch supervises real live2 positions and can submit reduce-only TP1 exits, replacement stops, and emergency closes once P321 execution is enabled and all runtime gates are ready. It deliberately does not infer final fill prices from candles/tickers; final close is verified by exchange position flat until a dedicated stop-fill lookup is added.
+```
+
 ## 2026-05-19 - P316 proposed - live2 stream signal adapter
 
 Files:

@@ -71,6 +71,10 @@ class Live2ExecutionExchange(Protocol):
         """Return a visible open conditional stop order by client id."""
         ...
 
+    def cancel_stop_order(self, symbol: str, order_id: str) -> dict[str, object]:
+        """Cancel a conditional stop order by exchange order id."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class Live2ExecutionConfig:
@@ -125,7 +129,7 @@ class Live2ExecutionPreflightResult:
 
 @dataclass(frozen=True, slots=True)
 class Live2ProtectedPosition:
-    """Local registry row for a position whose initial stop is verified."""
+    """Local registry row for a position whose current stop is verified."""
 
     position_id: str
     symbol: str
@@ -141,7 +145,20 @@ class Live2ProtectedPosition:
     post_position_amount: float
     signal_entry_price: float
     initial_risk_pct: float
+    tp1_price: float
+    initial_amount: float
+    remaining_amount: float
+    tp1_close_fraction: float = 0.5
+    tp1_closed_amount: float = 0.0
+    tp1_fill_price: float | None = None
+    tp1_order_id: str = ""
+    tp1_client_order_id: str = ""
+    tp1_closed_at_ms: int | None = None
+    realized_pnl_usdt: float = 0.0
     status: str = "protected_initial_stop_verified"
+    closed_at_ms: int | None = None
+    close_reason: str = ""
+    last_supervised_ms: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -159,7 +176,20 @@ class Live2ProtectedPosition:
             "post_position_amount": self.post_position_amount,
             "signal_entry_price": self.signal_entry_price,
             "initial_risk_pct": self.initial_risk_pct,
+            "tp1_price": self.tp1_price,
+            "initial_amount": self.initial_amount,
+            "remaining_amount": self.remaining_amount,
+            "tp1_close_fraction": self.tp1_close_fraction,
+            "tp1_closed_amount": self.tp1_closed_amount,
+            "tp1_fill_price": self.tp1_fill_price,
+            "tp1_order_id": self.tp1_order_id,
+            "tp1_client_order_id": self.tp1_client_order_id,
+            "tp1_closed_at_ms": self.tp1_closed_at_ms,
+            "realized_pnl_usdt": self.realized_pnl_usdt,
             "status": self.status,
+            "closed_at_ms": self.closed_at_ms,
+            "close_reason": self.close_reason,
+            "last_supervised_ms": self.last_supervised_ms,
         }
 
 
@@ -474,6 +504,9 @@ class Live2ExecutionEngine:
             post_position_amount=post_position_amount,
             signal_entry_price=float(signal_entry_price),
             initial_risk_pct=actual_initial_risk_pct,
+            tp1_price=float(signal_decision.tp1_at_decision or 0.0),
+            initial_amount=position_delta_amount,
+            remaining_amount=position_delta_amount,
         )
         self._protected_positions[state.symbol] = protected_position
         self._total_positions_protected += 1
@@ -500,6 +533,34 @@ class Live2ExecutionEngine:
                 "protected_position": protected_position.as_dict(),
             },
         )
+
+
+    def protected_positions_snapshot(self) -> tuple[Live2ProtectedPosition, ...]:
+        return tuple(self._protected_positions.values())
+
+    def replace_protected_position(self, position: Live2ProtectedPosition) -> None:
+        if position.symbol not in self._protected_positions:
+            raise KeyError(f"protected position is not registered: {position.symbol}")
+        self._protected_positions[position.symbol] = position
+
+    def remove_protected_position(self, symbol: str) -> Live2ProtectedPosition | None:
+        return self._protected_positions.pop(symbol, None)
+
+    def halt_due_to_position_integrity(self, reason: str) -> None:
+        self._total_integrity_errors += 1
+        self._trading_halted_reason = f"position_integrity_error:{reason}"
+
+    def mark_exchange_error(self) -> None:
+        self._total_exchange_errors += 1
+
+    def attempt_emergency_close(self, symbol: str, amount: float | None) -> str:
+        return self._attempt_emergency_close(symbol, amount)
+
+    def verify_stop_visible(self, symbol: str, client_order_id: str) -> dict[str, object] | None:
+        return self._verify_stop_visible(symbol, client_order_id)
+
+    def make_client_order_id(self, *, prefix: str, symbol: str, timestamp_ms: int) -> str:
+        return self._client_order_id(prefix=prefix, symbol=symbol, timestamp_ms=timestamp_ms)
 
     def _fetch_pre_position(self, symbol: str, *, checked_at_ms: int) -> Live2ExecutionResult:
         assert self.exchange_client is not None

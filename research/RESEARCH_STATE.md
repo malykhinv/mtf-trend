@@ -2073,6 +2073,15 @@ Still not complete: TP1 partial close, BE stop move, stop replacement verificati
 Next validation: apply P311-P321, run compileall, then run `run-anomaly-live2 --symbols <one liquid symbol>` only with minimal account exposure and inspect `deadline_decision.execution_*`, `live2_status.json.execution_status.protected_positions`, and exchange UI for actual fill plus visible initial stop. Stop visibility failure must produce `position_integrity_error` and emergency close attempt.
 ```
 
+## 2026-05-19 — P322 proposed
+
+```text
+Current patch status: P322 PROPOSED, commit UNKNOWN.
+Live2 now has a verified PositionSupervisor for positions created by P321. It manages only registered protected positions with actual entry fill and visible current stop. It can perform TP1 reduce-only partial close from exchange fill, move the remaining stop to breakeven after verifying the new stop, cancel the old stop, and remove the position only after exchange position amount is flat.
+Still not complete: dedicated stop-trigger fill lookup, stale open-order reconciliation across restart, Telegram operator messages, and broader runtime/coverage hardening. Do not increase notional/universe until P322 has been smoke-tested against real exchange behavior.
+Next validation: run `run-anomaly-live2 --symbols <one liquid symbol>` with minimal notional, inspect `position_tp1_filled_be_stop_verified`, `position_final_close_verified`, and `position_integrity_error` events, and compare them with exchange UI/open conditional orders.
+```
+
 ## 2026-05-19 — P316 proposed
 
 ```text

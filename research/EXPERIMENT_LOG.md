@@ -3296,6 +3296,14 @@ Acceptance for P321: after P311-P320 are applied, any live2 order attempt must g
 Not accepted yet: TP1 partial exit, BE stop replacement, final close verification, stale open-order reconciliation, Telegram safety notifications, and full unattended live2 operation. P322 must implement position supervision before increasing universe/notional.
 ```
 
+## 2026-05-19 - P322 live2 position-supervisor acceptance plan
+
+```text
+Purpose: ensure a live2 position protected by P321 does not remain unmanaged after entry.
+Acceptance for P322: after P311-P322 are applied, a protected position must be visible in `execution_status.protected_positions`; when stream price reaches TP1, supervisor must submit a reduce-only TP1 close, record verified exchange fill, submit and verify a breakeven replacement stop, cancel the old stop, and keep the updated position in the registry. If exchange position becomes flat, supervisor must emit `position_final_close_verified` and remove the registry row. If the current stop is not visible while exchange exposure remains, supervisor must emit `position_integrity_error`, attempt emergency reduce-only close, and disable further execution.
+Not accepted yet: exact stop-trigger fill reconstruction, restart reconciliation, Telegram critical alerts, and full stress hardening under WS reconnects/CPU pressure. P323 should harden runtime coverage/reconnect/latency degradation before any broader live exposure.
+```
+
 ## 2026-05-19 - P316 live2 signal-adapter acceptance plan
 
 ```text

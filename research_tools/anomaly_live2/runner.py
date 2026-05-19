@@ -15,6 +15,7 @@ from .execution import Live2ExecutionConfig, Live2ExecutionEngine, Live2Executio
 from .market_data.aggtrade_ws import Live2AggTradeWsSource
 from .market_data.ticker_ws import Live2TickerWsSource
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
+from .position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorConfig
 from .state import SymbolStateStore
 
 
@@ -57,6 +58,16 @@ class AnomalyLive2Runner:
                 stop_visibility_sleep_seconds=config.execution_stop_visibility_sleep_seconds,
             ),
         )
+        self.position_supervisor = Live2PositionSupervisor(
+            exchange_client=exchange_client,
+            execution_engine=self.execution_engine,
+            config=Live2PositionSupervisorConfig(
+                monitor_interval_ms=config.position_supervisor_monitor_interval_ms,
+                tp1_close_fraction=config.position_supervisor_tp1_close_fraction,
+                breakeven_stop_offset_pct=config.position_supervisor_breakeven_stop_offset_pct,
+                flat_position_abs_epsilon=config.position_supervisor_flat_position_abs_epsilon,
+            ),
+        )
         self.universe_selection: Live2UniverseSelection | None = None
         self.deadline_engine = Live2DeadlineEngine(
             state_store=self.state_store,
@@ -95,7 +106,7 @@ class AnomalyLive2Runner:
             execution_preflight = self.execution_engine.preflight()
             self.readiness.exchange_boundary_ready = execution_preflight.ready
             self.readiness.execution_ready = self.execution_engine.ready
-            self.readiness.position_supervisor_ready = self.execution_engine.ready
+            self.readiness.position_supervisor_ready = self.position_supervisor.ready
             writer.write_event(
                 Live2Event(
                     event_type="execution_preflight",
@@ -181,7 +192,7 @@ class AnomalyLive2Runner:
                 reason="generation_0_ticker_universe_and_aggtrade_ws_started",
                 market_data_status=market_data_status,
                 decision_status=self.deadline_engine.status(),
-                execution_status=self.execution_engine.status(),
+                execution_status=self._execution_status(),
                 runtime_gate_status=runtime_gate_status,
             )
             print(
@@ -193,6 +204,9 @@ class AnomalyLive2Runner:
             last_heartbeat_at = 0.0
             while not self._shutdown_requested:
                 cycle_started = time.perf_counter()
+                supervisor_result = self.position_supervisor.run_cycle(self.state_store)
+                for action in supervisor_result.actions:
+                    writer.write_event(action.as_event())
                 deadline_result = self.deadline_engine.run_cycle()
                 self._last_decision_cycle_elapsed_ms = int((time.perf_counter() - cycle_started) * 1000)
                 for decision in deadline_result.decisions:
@@ -226,7 +240,8 @@ class AnomalyLive2Runner:
                                 "decision_cycle_elapsed_ms": self._last_decision_cycle_elapsed_ms,
                                 "runtime_gate_status": runtime_gate_status,
                                 "new_entries_allowed": self.readiness.new_entries_allowed,
-                                "execution_status": self.execution_engine.status(),
+                                "execution_status": self._execution_status(),
+                                "position_supervisor_cycle": supervisor_result.as_dict(),
                                 "artifact_writer_status": writer.status().as_dict(),
                             },
                         )
@@ -241,7 +256,7 @@ class AnomalyLive2Runner:
                         reason="generation_0_fast_decision_loop_alive",
                         market_data_status=market_data_status,
                         decision_status=self.deadline_engine.status(),
-                        execution_status=self.execution_engine.status(),
+                        execution_status=self._execution_status(),
                         runtime_gate_status=runtime_gate_status,
                     )
 
@@ -269,7 +284,7 @@ class AnomalyLive2Runner:
                 reason="keyboard_interrupt",
                 market_data_status=self._market_data_status(),
                 decision_status=self.deadline_engine.status(),
-                execution_status=self.execution_engine.status(),
+                execution_status=self._execution_status(),
                 runtime_gate_status=self._runtime_gate_status(),
             )
             print("live2 · остановлено пользователем", flush=True)
@@ -301,10 +316,7 @@ class AnomalyLive2Runner:
         self.readiness.market_data_ready = bool(market_data_status.get("stream_coverage_ready"))
         self.readiness.exchange_boundary_ready = self.execution_engine.preflight_result.ready
         self.readiness.execution_ready = self.execution_engine.ready
-        # P321 installs a minimal protected-position registry: entry is allowed only
-        # after verified actual fill and verified initial stop. Full TP/BE
-        # supervision is still the next patch, but there is no unprotected entry.
-        self.readiness.position_supervisor_ready = self.execution_engine.ready
+        self.readiness.position_supervisor_ready = self.position_supervisor.ready
         self.readiness.decision_latency_ready = self._decision_latency_gate_ready(
             deadline_result=deadline_result,
             decision_cycle_elapsed_ms=decision_cycle_elapsed_ms,
@@ -379,6 +391,13 @@ class AnomalyLive2Runner:
             "decision_latency_degraded_limit": self.config.decision_latency_degraded_windows,
             "decision_latency_recovery_windows": self.config.decision_latency_recovery_windows,
             "readiness": self.readiness.as_dict(),
+            "position_supervisor_status": self.position_supervisor.status(),
+        }
+
+    def _execution_status(self) -> dict[str, object]:
+        return {
+            **self.execution_engine.status(),
+            "position_supervisor": self.position_supervisor.status(),
         }
 
     def _select_universe(self) -> Live2UniverseSelection:
@@ -487,7 +506,7 @@ class AnomalyLive2Runner:
                 event_type="execution_engine_started",
                 component=Live2Component.EXECUTION,
                 severity=Live2Severity.WARNING,
-                message="execution boundary checks exchange preflight and pre-entry position; order placement waits for verified-fill/stop path",
+                message="execution boundary is protected by verified fill, verified initial stop, and live2 position supervisor",
             )
         )
 
