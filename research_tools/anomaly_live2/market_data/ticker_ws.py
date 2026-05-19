@@ -11,6 +11,7 @@ from typing import Any
 
 from ..clock import utc_now_ms
 from ..state import SymbolStateStore
+from .common import market_id_to_default_symbol, optional_float, optional_int, symbol_to_market_id
 
 BINANCE_FUTURES_ALL_TICKER_WS_URL = "wss://fstream.binance.com/market/ws/!ticker@arr"
 
@@ -20,36 +21,6 @@ def _aiohttp_ws_connector() -> object:
 
     return aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver(), ttl_dns_cache=300)
 
-
-def _optional_float(value: object) -> float | None:
-    if value is None or value == "":
-        return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if parsed != parsed or parsed in (float("inf"), float("-inf")):
-        return None
-    return parsed
-
-
-def _optional_int(value: object) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(float(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _symbol_to_market_id(symbol: str) -> str:
-    """Convert common CCXT futures symbols to Binance stream market ids."""
-
-    normalized = symbol.strip().upper()
-    if not normalized:
-        return ""
-    base_quote = normalized.split(":", 1)[0]
-    return base_quote.replace("/", "").replace("-", "").replace("_", "")
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,7 +131,7 @@ class Live2TickerWsSource:
         mapping: dict[str, str] = {}
         for symbol in symbols:
             cleaned = symbol.strip()
-            market_id = _symbol_to_market_id(cleaned)
+            market_id = symbol_to_market_id(cleaned)
             if cleaned and market_id:
                 mapping[market_id] = cleaned
         return mapping
@@ -242,15 +213,15 @@ class Live2TickerWsSource:
         if not market_id:
             return False
         if self._accept_all_symbols:
-            symbol = market_id
+            symbol = market_id_to_default_symbol(market_id)
         else:
             symbol = self._market_id_to_symbol.get(market_id)
             if symbol is None:
                 return False
-        last_price = _optional_float(row.get("c"))
-        quote_volume_24h = _optional_float(row.get("q"))
-        trade_count_24h = _optional_int(row.get("n"))
-        price_change_pct_24h = _optional_float(row.get("P"))
+        last_price = optional_float(row.get("c"))
+        quote_volume_24h = optional_float(row.get("q"))
+        trade_count_24h = optional_int(row.get("n"))
+        price_change_pct_24h = optional_float(row.get("P"))
         status = "ok" if last_price is not None and quote_volume_24h is not None else "missing_fields"
         reason = "" if status == "ok" else "ws_ticker_missing_last_or_quote_volume"
         self.state_store.update_ticker(

@@ -10,7 +10,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P312 proposed live2 all-ticker WS state ingestion
+Last active patch: P313 proposed live2 aggTrade WS candle rings
 Updated: 2026-05-19
 ```
 
@@ -1984,4 +1984,17 @@ Change: `run-anomaly-live2` now starts Binance futures `!ticker@arr` WS ingestio
 Trading impact: no real orders, signal decisions, category thresholds, execution guards, fills, stops, TP, BE, or live1 behavior are changed. `market_data_ready_for_entries=false` remains mandatory because aggTrade/candle coverage is still TODO; new entries remain forbidden.
 Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
 Next validation: run `python main.py run-anomaly-live2 --symbols BTC/USDT:USDT ETH/USDT:USDT` for 30-60 seconds and confirm `ticker_ws_startup_status`, `live2_heartbeat.market_data_status.ticker_ws.ready`, and `live2_symbol_state.csv` ticker fields update without any candidate queue/drop fields.
+```
+
+
+## 2026-05-19 - P313 live2 aggTrade WS candle rings
+
+```text
+Current patch status: P313 PROPOSED / UNKNOWN commit.
+Question: add the next live2 layer after all-ticker state ingestion, prioritizing speed and reliability.
+Change: `run-anomaly-live2` now starts Binance futures combined aggTrade WS shards for explicit `--symbols`, normalizes each trade, and mutates the same per-symbol `SymbolState` with real trade flow plus in-memory 5s/15s/30s/1m candle rings. Missing buckets are counted as gaps; they are not synthetic-filled. Artifacts expose aggTrade status counts, candle coverage counts, shard status, and candle summaries in `live2_symbol_state.csv`/`live2_status.json`.
+Trading impact: no real orders, signal decisions, category thresholds, execution guards, fills, stops, TP, BE, or live1 behavior are changed. `market_data_ready_for_entries=false` remains because signal/execution are still TODO; no entry is allowed.
+Important limitation: P313 does not invent a live2 universe manager. Until that exists, aggTrade coverage requires explicit `--symbols`; no-symbol mode remains ticker-only and writes an explicit reason.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+Next validation: run `python main.py run-anomaly-live2 --symbols BTC/USDT:USDT ETH/USDT:USDT` for 60-120 seconds and confirm aggTrade shard readiness, nonzero aggtrade_update_count, 5s/15s closed candle counts, and zero hot REST/backfill fields.
 ```

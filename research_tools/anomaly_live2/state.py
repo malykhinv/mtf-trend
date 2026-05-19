@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 from .clock import utc_now_ms
+from .market_data.candles import Live2AggTradeEvent, Live2CandleBook
+
+
+LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS = (5_000, 15_000, 30_000, 60_000)
+LIVE2_DEFAULT_MAX_CLOSED_CANDLES = 360
 
 
 class SymbolLive2Status(StrEnum):
@@ -23,8 +28,9 @@ class SymbolState:
     """Single mutable state record per symbol.
 
     Live2 deliberately keeps one state object per symbol instead of warm/radar
-    queues. Ticker updates mutate this record in place; later aggTrade/candle
-    patches will attach flow and bucket snapshots here.
+    queues. Ticker and aggTrade updates mutate this record in place. Candle
+    buckets are built only from real aggTrade events; missing buckets are gap
+    diagnostics, not synthetic flat candles.
     """
 
     symbol: str
@@ -47,6 +53,30 @@ class SymbolState:
     ticker_source: str = ""
     ticker_status: str = "not_seen"
     ticker_reason: str = ""
+    aggtrade_market_id: str = ""
+    aggtrade_first_seen_ms: int | None = None
+    aggtrade_last_seen_ms: int | None = None
+    aggtrade_last_trade_time_ms: int | None = None
+    aggtrade_update_count: int = 0
+    aggtrade_last_trade_id: int | None = None
+    aggtrade_last_price: float | None = None
+    aggtrade_last_quantity: float | None = None
+    aggtrade_quote_volume_total: float = 0.0
+    aggtrade_taker_buy_quote_volume_total: float = 0.0
+    aggtrade_trade_count_total: int = 0
+    aggtrade_source: str = ""
+    aggtrade_status: str = "not_seen"
+    aggtrade_reason: str = ""
+    candle_coverage_status: str = "not_ready"
+    candle_gap_count: int = 0
+    candle_out_of_order_count: int = 0
+    candle_book: Live2CandleBook = field(
+        default_factory=lambda: Live2CandleBook(
+            timeframes_ms=LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS,
+            max_closed_candles=LIVE2_DEFAULT_MAX_CLOSED_CANDLES,
+        ),
+        repr=False,
+    )
 
     def __post_init__(self) -> None:
         now_ms = utc_now_ms()
@@ -88,6 +118,79 @@ class SymbolState:
         self.ticker_status = status
         self.ticker_reason = reason
         self.mark_dirty(now_ms=fetched_at_ms)
+
+    def update_aggtrade(self, trade: Live2AggTradeEvent, *, received_at_ms: int) -> None:
+        self.updated_ms = received_at_ms
+        self.aggtrade_market_id = trade.market_id
+        if self.aggtrade_first_seen_ms is None:
+            self.aggtrade_first_seen_ms = received_at_ms
+        self.aggtrade_last_seen_ms = received_at_ms
+        self.aggtrade_last_trade_time_ms = trade.trade_time_ms
+        self.aggtrade_update_count += 1
+        self.aggtrade_last_trade_id = trade.aggregate_trade_id
+        self.aggtrade_last_price = trade.price
+        self.aggtrade_last_quantity = trade.quantity
+        self.aggtrade_quote_volume_total += trade.quote_quantity
+        self.aggtrade_taker_buy_quote_volume_total += trade.taker_buy_quote_quantity
+        self.aggtrade_trade_count_total += 1
+        self.aggtrade_source = trade.source
+        result = self.candle_book.add_trade(trade)
+        self.candle_gap_count = self.candle_book.total_gap_count()
+        self.candle_out_of_order_count = self.candle_book.total_out_of_order_count()
+        if result.out_of_order:
+            self.aggtrade_status = "out_of_order_trade_ignored"
+            self.aggtrade_reason = "aggtrade_trade_time_older_than_current_bucket"
+        elif self.candle_gap_count > 0:
+            self.aggtrade_status = "ok_with_gaps"
+            self.aggtrade_reason = "aggtrade_bucket_gap_detected_no_synthetic_fill"
+        else:
+            self.aggtrade_status = "ok"
+            self.aggtrade_reason = ""
+        self.candle_coverage_status = "ready" if self.aggtrade_update_count > 0 else "not_ready"
+        self.mark_dirty(now_ms=received_at_ms)
+
+    def to_artifact_row(self) -> dict[str, object]:
+        row: dict[str, object] = {
+            "symbol": self.symbol,
+            "status": self.status.value,
+            "created_ms": self.created_ms,
+            "updated_ms": self.updated_ms,
+            "dirty_since_ms": self.dirty_since_ms,
+            "actionable_since_ms": self.actionable_since_ms,
+            "decision_deadline_ms": self.decision_deadline_ms,
+            "last_decision_bucket_ms": self.last_decision_bucket_ms,
+            "last_verdict": self.last_verdict,
+            "ticker_market_id": self.ticker_market_id,
+            "ticker_first_seen_ms": self.ticker_first_seen_ms,
+            "ticker_last_seen_ms": self.ticker_last_seen_ms,
+            "ticker_update_count": self.ticker_update_count,
+            "ticker_last_price": self.ticker_last_price,
+            "ticker_quote_volume_24h": self.ticker_quote_volume_24h,
+            "ticker_trade_count_24h": self.ticker_trade_count_24h,
+            "ticker_price_change_pct_24h": self.ticker_price_change_pct_24h,
+            "ticker_source": self.ticker_source,
+            "ticker_status": self.ticker_status,
+            "ticker_reason": self.ticker_reason,
+            "aggtrade_market_id": self.aggtrade_market_id,
+            "aggtrade_first_seen_ms": self.aggtrade_first_seen_ms,
+            "aggtrade_last_seen_ms": self.aggtrade_last_seen_ms,
+            "aggtrade_last_trade_time_ms": self.aggtrade_last_trade_time_ms,
+            "aggtrade_update_count": self.aggtrade_update_count,
+            "aggtrade_last_trade_id": self.aggtrade_last_trade_id,
+            "aggtrade_last_price": self.aggtrade_last_price,
+            "aggtrade_last_quantity": self.aggtrade_last_quantity,
+            "aggtrade_quote_volume_total": self.aggtrade_quote_volume_total,
+            "aggtrade_taker_buy_quote_volume_total": self.aggtrade_taker_buy_quote_volume_total,
+            "aggtrade_trade_count_total": self.aggtrade_trade_count_total,
+            "aggtrade_source": self.aggtrade_source,
+            "aggtrade_status": self.aggtrade_status,
+            "aggtrade_reason": self.aggtrade_reason,
+            "candle_coverage_status": self.candle_coverage_status,
+            "candle_gap_count": self.candle_gap_count,
+            "candle_out_of_order_count": self.candle_out_of_order_count,
+        }
+        row.update(self.candle_book.coverage_summary())
+        return row
 
 
 class SymbolStateStore:
@@ -149,6 +252,11 @@ class SymbolStateStore:
                 reason=reason,
             )
 
+    def update_aggtrade(self, trade: Live2AggTradeEvent, *, received_at_ms: int) -> None:
+        with self._lock:
+            state = self.get_or_create(trade.symbol)
+            state.update_aggtrade(trade, received_at_ms=received_at_ms)
+
     def snapshot(self) -> tuple[SymbolState, ...]:
         with self._lock:
             return tuple(self._states.values())
@@ -165,5 +273,21 @@ class SymbolStateStore:
         with self._lock:
             for state in self._states.values():
                 key = state.ticker_status or "unknown"
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def aggtrade_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        with self._lock:
+            for state in self._states.values():
+                key = state.aggtrade_status or "unknown"
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def candle_coverage_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        with self._lock:
+            for state in self._states.values():
+                key = state.candle_coverage_status or "unknown"
                 counts[key] = counts.get(key, 0) + 1
         return counts

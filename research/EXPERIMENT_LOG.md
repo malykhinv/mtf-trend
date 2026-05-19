@@ -3216,3 +3216,13 @@ Acceptance for P312: `run-anomaly-live2` connects to Binance futures all-ticker 
 Not accepted yet: no statement about flow evidence, executable signals, latency edge, or profitability. Ticker data is discovery/priority context only; actual pump-flow decisions still require aggTrade/candle coverage in later patches.
 Next experiment after P312: add aggTrade WS shards and in-memory micro-candle ring buffers, then prove closed 5s/15s buckets are available without REST backfill in the signal hot path.
 ```
+
+
+## 2026-05-19 - P313 live2 aggTrade/candle-ring acceptance plan
+
+```text
+Purpose: validate that live2 can build subminute flow candles directly from Binance aggTrade WS without queues or hot REST repair.
+Acceptance for P313: with explicit symbols, `run-anomaly-live2` starts combined aggTrade shards, updates one SymbolState per symbol, increments aggtrade_update_count, writes candle coverage for 5s/15s/30s/1m, and records gaps/out-of-order trades as diagnostics rather than synthetic candles.
+Not accepted yet: no executable signal, no strategy edge, no deadline-engine proof, no real order safety. Market-data is still not enough to enable entries.
+Next experiment after P313: add the deadline engine and deterministic internal stress events to prove every actionable state ends in selected/rejected/data_not_ready/deadline_missed/no_capacity/expired without candidate queues or pressure drops.
+```

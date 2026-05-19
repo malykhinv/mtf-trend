@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +81,8 @@ class Live2ArtifactWriter:
             "symbols_total": len(state_store),
             "symbol_status_counts": state_store.counts_by_status(),
             "ticker_status_counts": state_store.ticker_counts(),
+            "aggtrade_status_counts": state_store.aggtrade_counts(),
+            "candle_coverage_counts": state_store.candle_coverage_counts(),
             "readiness": readiness.as_dict(),
             "execution_status": "todo_not_implemented",
             "market_data_status": market_data_status or {"status": "todo_not_implemented"},
@@ -93,12 +94,8 @@ class Live2ArtifactWriter:
         )
 
     def write_symbol_state(self, state_store: SymbolStateStore) -> None:
-        rows: list[dict[str, object]] = []
-        for state in state_store.snapshot():
-            row = asdict(state)
-            row["status"] = state.status.value
-            rows.append(row)
-        fieldnames = [
+        rows = [state.to_artifact_row() for state in state_store.snapshot()]
+        base_fieldnames = [
             "symbol",
             "status",
             "created_ms",
@@ -119,7 +116,26 @@ class Live2ArtifactWriter:
             "ticker_source",
             "ticker_status",
             "ticker_reason",
+            "aggtrade_market_id",
+            "aggtrade_first_seen_ms",
+            "aggtrade_last_seen_ms",
+            "aggtrade_last_trade_time_ms",
+            "aggtrade_update_count",
+            "aggtrade_last_trade_id",
+            "aggtrade_last_price",
+            "aggtrade_last_quantity",
+            "aggtrade_quote_volume_total",
+            "aggtrade_taker_buy_quote_volume_total",
+            "aggtrade_trade_count_total",
+            "aggtrade_source",
+            "aggtrade_status",
+            "aggtrade_reason",
+            "candle_coverage_status",
+            "candle_gap_count",
+            "candle_out_of_order_count",
         ]
+        extra_fieldnames = sorted({key for row in rows for key in row if key not in base_fieldnames})
+        fieldnames = [*base_fieldnames, *extra_fieldnames]
         with self.symbol_state_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
             writer = csv.DictWriter(file_obj, fieldnames=fieldnames)
             writer.writeheader()
