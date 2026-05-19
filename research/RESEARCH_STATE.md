@@ -14,6 +14,17 @@ Last active patch: P304 proposed immediate danger-flow precise lane
 Updated: 2026-05-19
 ```
 
+## 2026-05-19 - P307 live heartbeat quality marks
+
+```text
+Current patch status: P307 PROPOSED / UNKNOWN commit.
+Question: make the live operator grid show whether rapidly changing connection/latency/pulse/queue values are good, warning, or bad without changing live logic.
+Change: heartbeat values now include compact quality marks: `✓` good, `!` warning, `×` bad, `?` unavailable/unknown. Marks are added to stability, pulse, data source, guard status, rolling network windows, latency windows, queue, q5p95, and cycle p95.
+Trading impact: none. This is display-only; no scheduler, candidate, scan, guard, order, fill, stop, Telegram, or artifact semantics are changed.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+Next validation: live smoke; confirm the heartbeat remains compact and marks match operator thresholds during WS/gapREST changes.
+```
+
 ## 2026-05-19 - P304 immediate danger-flow precise lane
 
 ```text

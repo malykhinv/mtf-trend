@@ -18334,6 +18334,89 @@ def _format_status_line(*cells: str) -> str:
     return "  ".join(cells).rstrip()
 
 
+def _format_quality_mark(level: str) -> str:
+    if level == "good":
+        return "✓"
+    if level == "warn":
+        return "!"
+    if level == "bad":
+        return "×"
+    return "?"
+
+
+def _format_marked_quality_value(value: object, level: str) -> str:
+    return f"{_format_quality_mark(level)} {_format_live_status_value(value)}"
+
+
+def _quality_level_from_ratio(value: float | None, *, good_min: float, warn_min: float) -> str:
+    finite = _finite_or_none(value)
+    if finite is None:
+        return "unknown"
+    if finite >= good_min:
+        return "good"
+    if finite >= warn_min:
+        return "warn"
+    return "bad"
+
+
+def _quality_level_from_seconds(
+    value: float | None,
+    *,
+    good_max: float,
+    warn_max: float,
+) -> str:
+    finite = _finite_or_none(value)
+    if finite is None:
+        return "unknown"
+    if finite <= good_max:
+        return "good"
+    if finite <= warn_max:
+        return "warn"
+    return "bad"
+
+
+def _quality_level_from_count(value: int | float | None, *, good_max: int, warn_max: int) -> str:
+    finite = _finite_or_none(value)
+    if finite is None:
+        return "unknown"
+    if finite <= good_max:
+        return "good"
+    if finite <= warn_max:
+        return "warn"
+    return "bad"
+
+
+def _quality_level_for_data_status(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if not text or text in {"-", "n/a"}:
+        return "unknown"
+    compact = text.replace(" ", "")
+    if "gaprest" in compact or "gap_rest" in compact or "gap rest" in text:
+        return "warn"
+    if "ohlcv rest" in text or "rest" == text or text.endswith(" rest"):
+        return "bad"
+    if "поток" in text or "ws" in text or text == "ok":
+        return "good"
+    if "rest" in text:
+        return "warn"
+    return "unknown"
+
+
+def _quality_level_for_guard_status(value: object) -> str:
+    text = str(value or "").strip().lower()
+    if not text or text in {"-", "n/a"}:
+        return "unknown"
+    bad_tokens = ("halt", "critical", "error", "failed", "fail", "panic", "stop")
+    if any(token in text for token in bad_tokens):
+        return "bad"
+    warn_tokens = ("below", "degraded", "adapt", "ws_health", "warning", "warn")
+    if any(token in text for token in warn_tokens):
+        return "warn"
+    if "ok" in text or "guard ok" in text:
+        return "good"
+    return "unknown"
+
+
 def _format_live_runtime(seconds: float) -> str:
     if not math.isfinite(seconds) or seconds < 0.0:
         return "-"
@@ -18552,9 +18635,24 @@ def _format_live_heartbeat(
     rows = [
         "Соединение",
         _format_status_line(
-            _format_status_cell("Стабильность", _format_percent(connection_health_pct, signed=False, precision=1)),
-            _format_status_cell("Пульс", _format_live_pulse(cycle_seconds)),
-            _format_status_cell("Данные", data_status_text),
+            _format_status_cell(
+                "Стабильность",
+                _format_marked_quality_value(
+                    _format_percent(connection_health_pct, signed=False, precision=1),
+                    _quality_level_from_ratio(connection_health_pct, good_min=0.98, warn_min=0.95),
+                ),
+            ),
+            _format_status_cell(
+                "Пульс",
+                _format_marked_quality_value(
+                    _format_live_pulse(cycle_seconds),
+                    _quality_level_from_seconds(cycle_seconds, good_max=1.0, warn_max=2.0),
+                ),
+            ),
+            _format_status_cell(
+                "Данные",
+                _format_marked_quality_value(data_status_text, _quality_level_for_data_status(data_status_text)),
+            ),
         ),
         "",
         "Рынок",
@@ -18575,7 +18673,10 @@ def _format_live_heartbeat(
         _format_status_line(
             _format_status_cell("Повтор", replay_value),
             _format_status_cell("Покрытие", cold_status),
-            _format_status_cell("Защита", guard_status),
+            _format_status_cell(
+                "Защита",
+                _format_marked_quality_value(guard_status, _quality_level_for_guard_status(guard_status)),
+            ),
         ),
         _format_status_line(
             _format_status_cell("Сеть 1м", _format_quality_health(quality_1m)),
@@ -18588,7 +18689,13 @@ def _format_live_heartbeat(
             _format_status_cell("max5", _format_quality_latency_max(quality_5m, latency_max_seconds)),
         ),
         _format_status_line(
-            _format_status_cell("Очередь", int(potential_queue_count)),
+            _format_status_cell(
+                "Очередь",
+                _format_marked_quality_value(
+                    int(potential_queue_count),
+                    _quality_level_from_count(potential_queue_count, good_max=8, warn_max=15),
+                ),
+            ),
             _format_status_cell("q5p95", _format_quality_queue_p95(quality_5m)),
             _format_status_cell("Цикл5", _format_quality_cycle_p95(quality_5m, cycle_seconds)),
         ),
@@ -18598,35 +18705,53 @@ def _format_live_heartbeat(
 
 def _format_quality_health(stats: LiveQualityWindowStats | None) -> str:
     if stats is None or stats.ws_health_ratio is None or stats.sample_count <= 0:
-        return "n/a"
-    return _format_percent(float(stats.ws_health_ratio), signed=False, precision=1)
+        return _format_marked_quality_value("n/a", "unknown")
+    value = float(stats.ws_health_ratio)
+    return _format_marked_quality_value(
+        _format_percent(value, signed=False, precision=1),
+        _quality_level_from_ratio(value, good_min=0.98, warn_min=0.95),
+    )
 
 
 def _format_quality_latency_p95(stats: LiveQualityWindowStats | None, fallback: float | None) -> str:
     value = stats.latency_p95_seconds if stats is not None else None
     if value is None:
         value = fallback
-    return _format_latency_seconds(value)
+    return _format_marked_quality_value(
+        _format_latency_seconds(value),
+        _quality_level_from_seconds(value, good_max=2.0, warn_max=5.0),
+    )
 
 
 def _format_quality_latency_max(stats: LiveQualityWindowStats | None, fallback: float | None) -> str:
     value = stats.latency_max_seconds if stats is not None else None
     if value is None:
         value = fallback
-    return _format_latency_seconds(value)
+    return _format_marked_quality_value(
+        _format_latency_seconds(value),
+        _quality_level_from_seconds(value, good_max=5.0, warn_max=10.0),
+    )
 
 
 def _format_quality_queue_p95(stats: LiveQualityWindowStats | None) -> str:
     if stats is None or stats.queue_p95 is None:
-        return "n/a"
-    return str(int(round(float(stats.queue_p95))))
+        return _format_marked_quality_value("n/a", "unknown")
+    value = float(stats.queue_p95)
+    return _format_marked_quality_value(
+        str(int(round(value))),
+        _quality_level_from_count(value, good_max=8, warn_max=15),
+    )
 
 
 def _format_quality_cycle_p95(stats: LiveQualityWindowStats | None, fallback: float | None) -> str:
     value = stats.cycle_p95_seconds if stats is not None else None
     if value is None:
         value = fallback
-    return _format_live_pulse(float(value)) if value is not None else "n/a"
+    rendered = _format_live_pulse(float(value)) if value is not None else "n/a"
+    return _format_marked_quality_value(
+        rendered,
+        _quality_level_from_seconds(value, good_max=1.5, warn_max=3.0),
+    )
 
 
 def _format_percent(value: float, *, signed: bool = False, precision: int = 1) -> str:
