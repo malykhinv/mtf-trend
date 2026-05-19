@@ -3207,3 +3207,12 @@ Not accepted yet: no claim about latency improvement, signal coverage, profitabi
 Next experiment after P311: add ticker WS ingestion into `SymbolStateStore` and prove ticker events update a single per-symbol state record instead of creating candidate queues.
 ```
 
+
+## 2026-05-19 - P312 live2 ticker-ingestion acceptance plan
+
+```text
+Purpose: validate the first real market-data component of live2 without enabling signal or execution.
+Acceptance for P312: `run-anomaly-live2` connects to Binance futures all-ticker WS, updates one mutable SymbolState per symbol/market id, writes ticker_status_counts into `live2_status.json`, and records ticker rows in `live2_symbol_state.csv`. There must be no warm/radar queue, no candidate pressure drop, and no REST ticker fallback in this path.
+Not accepted yet: no statement about flow evidence, executable signals, latency edge, or profitability. Ticker data is discovery/priority context only; actual pump-flow decisions still require aggTrade/candle coverage in later patches.
+Next experiment after P312: add aggTrade WS shards and in-memory micro-candle ring buffers, then prove closed 5s/15s buckets are available without REST backfill in the signal hot path.
+```

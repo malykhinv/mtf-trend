@@ -70,6 +70,7 @@ class Live2ArtifactWriter:
         state_store: SymbolStateStore,
         status: str,
         reason: str = "",
+        market_data_status: dict[str, Any] | None = None,
     ) -> None:
         payload: dict[str, Any] = {
             "runtime_generation": runtime_generation,
@@ -80,9 +81,10 @@ class Live2ArtifactWriter:
             "updated_at_ms": utc_now_ms(),
             "symbols_total": len(state_store),
             "symbol_status_counts": state_store.counts_by_status(),
+            "ticker_status_counts": state_store.ticker_counts(),
             "readiness": readiness.as_dict(),
             "execution_status": "todo_not_implemented",
-            "market_data_status": "todo_not_implemented",
+            "market_data_status": market_data_status or {"status": "todo_not_implemented"},
             "signal_status": "todo_not_implemented",
         }
         self.status_path.write_text(
@@ -92,8 +94,7 @@ class Live2ArtifactWriter:
 
     def write_symbol_state(self, state_store: SymbolStateStore) -> None:
         rows: list[dict[str, object]] = []
-        for symbol in state_store.symbols:
-            state = state_store.get_or_create(symbol)
+        for state in state_store.snapshot():
             row = asdict(state)
             row["status"] = state.status.value
             rows.append(row)
@@ -107,6 +108,17 @@ class Live2ArtifactWriter:
             "decision_deadline_ms",
             "last_decision_bucket_ms",
             "last_verdict",
+            "ticker_market_id",
+            "ticker_first_seen_ms",
+            "ticker_last_seen_ms",
+            "ticker_update_count",
+            "ticker_last_price",
+            "ticker_quote_volume_24h",
+            "ticker_trade_count_24h",
+            "ticker_price_change_pct_24h",
+            "ticker_source",
+            "ticker_status",
+            "ticker_reason",
         ]
         with self.symbol_state_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
             writer = csv.DictWriter(file_obj, fieldnames=fieldnames)

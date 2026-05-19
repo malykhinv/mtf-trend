@@ -119,6 +119,7 @@ Live scheduling contract:
 
 ```text
 live2 contract starts as a separate `run-anomaly-live2` runtime, not a flag on live1; generation 0 may keep execution unimplemented, but must expose this as `todo_not_implemented` readiness gates and must keep `new_entries_allowed=false` until market-data, signal, exchange boundary, position supervisor, and execution gates are true
+live2 ticker WS is discovery/state context only: it may update one mutable SymbolState per symbol, but it must not create warm/radar queues, perform REST ticker fallback in the hot path, or act as sufficient pump-flow evidence without aggTrade/candle coverage
 selected hot symbol -> scan all due configured TF sets -> then move to next symbol
 noticed radar symbols have a fixed hot-lane before warm bulk/cold coverage; active/opening symbols remain protected first
 symbols that already exceed the 24h prior fake-pump / fast-fade threshold are quarantined before warm/radar hot-lane promotion until enough excess fast-fade timestamps age out of the 24h window; they remain visible to ticker/top-growth audit

@@ -8,6 +8,7 @@ from .artifacts import Live2ArtifactWriter
 from .clock import utc_now_iso
 from .config import AnomalyLive2Config
 from .contracts import Live2Component, Live2Event, Live2Readiness, Live2Severity
+from .market_data import Live2TickerWsSource
 from .state import SymbolStateStore
 
 
@@ -15,8 +16,9 @@ class AnomalyLive2Runner:
     """Generation-0 live2 runner.
 
     This command is intentionally named as a real live runtime, not a shadow or
-    dry-run mode. V0 only installs the process/artifact/readiness skeleton; real
-    market-data, signal evaluation, and order placement are explicit TODO gates.
+    dry-run mode. V0 installs the process/artifact/readiness skeleton and starts
+    real ticker WS ingestion. Signal evaluation and order placement remain
+    explicit TODO gates, so new entries stay forbidden.
     """
 
     def __init__(self, config: AnomalyLive2Config) -> None:
@@ -31,12 +33,30 @@ class AnomalyLive2Runner:
             position_supervisor_ready=False,
             execution_ready=False,
         )
+        self.ticker_source = Live2TickerWsSource(
+            state_store=self.state_store,
+            symbols=config.symbols,
+            stale_ms=config.ticker_stale_ms,
+            startup_wait_seconds=config.ticker_startup_wait_seconds,
+        )
         self._shutdown_requested = False
 
     def run(self) -> int:
         writer = Live2ArtifactWriter(self.config.output_dir)
         try:
             self._write_startup_events(writer)
+            self.ticker_source.start()
+            ticker_ready = self.ticker_source.wait_until_ready()
+            ticker_status = self._market_data_status()
+            writer.write_event(
+                Live2Event(
+                    event_type="ticker_ws_startup_status",
+                    component=Live2Component.MARKET_DATA,
+                    severity=Live2Severity.INFO if ticker_ready else Live2Severity.WARNING,
+                    message="ticker WS startup completed" if ticker_ready else "ticker WS startup wait ended without ready payload",
+                    data=ticker_status,
+                )
+            )
             writer.write_symbol_state(self.state_store)
             writer.write_status(
                 runtime_generation=self.config.runtime_generation,
@@ -44,34 +64,40 @@ class AnomalyLive2Runner:
                 readiness=self.readiness,
                 state_store=self.state_store,
                 status="running",
-                reason="generation_0_skeleton_started",
+                reason="generation_0_ticker_ws_started",
+                market_data_status=ticker_status,
             )
             print(
                 f"live2 · старт · артефакты {self.config.output_dir} · "
-                "market-data/signal/execution TODO · новые входы запрещены",
+                "ticker WS включён · aggTrade/signal/execution TODO · новые входы запрещены",
                 flush=True,
             )
             while not self._shutdown_requested:
                 time.sleep(self.config.heartbeat_interval_seconds)
+                ticker_status = self._market_data_status()
                 writer.write_event(
                     Live2Event(
                         event_type="live2_heartbeat",
                         component=Live2Component.RUNNER,
-                        message="generation_0_skeleton_alive",
+                        message="generation_0_ticker_ws_alive",
                         data={
                             "symbols_total": len(self.state_store),
+                            "ticker_status_counts": self.state_store.ticker_counts(),
+                            "market_data_status": ticker_status,
                             "new_entries_allowed": self.readiness.new_entries_allowed,
                             "execution_status": "todo_not_implemented",
                         },
                     )
                 )
+                writer.write_symbol_state(self.state_store)
                 writer.write_status(
                     runtime_generation=self.config.runtime_generation,
                     started_at_utc=self.started_at_utc,
                     readiness=self.readiness,
                     state_store=self.state_store,
                     status="running",
-                    reason="generation_0_skeleton_alive",
+                    reason="generation_0_ticker_ws_alive",
+                    market_data_status=ticker_status,
                 )
         except KeyboardInterrupt:
             self.shutdown(reason="keyboard_interrupt")
@@ -90,22 +116,34 @@ class AnomalyLive2Runner:
                 state_store=self.state_store,
                 status="stopped",
                 reason="keyboard_interrupt",
+                market_data_status=self._market_data_status(),
             )
             print("live2 · остановлено пользователем", flush=True)
             return 130
         finally:
+            self.ticker_source.close()
             writer.close()
         return 0
 
     def shutdown(self, *, reason: str) -> None:
         self._shutdown_requested = True
 
+    def _market_data_status(self) -> dict[str, object]:
+        ticker_status = self.ticker_source.status().as_dict(stale_ms=self.config.ticker_stale_ms)
+        return {
+            "status": "partial_ticker_only",
+            "reason": "aggtrade_candles_signal_coverage_not_implemented",
+            "ticker_ws": ticker_status,
+            "aggtrade_ws": {"status": "todo_not_implemented"},
+            "market_data_ready_for_entries": False,
+        }
+
     def _write_startup_events(self, writer: Live2ArtifactWriter) -> None:
         writer.write_event(
             Live2Event(
                 event_type="live2_started",
                 component=Live2Component.RUNNER,
-                message="deadline-driven live2 runtime skeleton started",
+                message="deadline-driven live2 runtime started",
                 data={
                     "runtime_generation": self.config.runtime_generation,
                     "symbols_total": len(self.state_store),
@@ -115,10 +153,24 @@ class AnomalyLive2Runner:
         )
         writer.write_event(
             Live2Event(
-                event_type="market_data_plane_todo",
+                event_type="ticker_ws_starting",
+                component=Live2Component.MARKET_DATA,
+                message="starting Binance futures all-ticker WS ingestion",
+                data={
+                    "source": Live2TickerWsSource.source_id,
+                    "symbols_filter_count": len(self.config.symbols),
+                    "accept_all_symbols": not bool(self.config.symbols),
+                    "stale_ms": self.config.ticker_stale_ms,
+                    "startup_wait_seconds": self.config.ticker_startup_wait_seconds,
+                },
+            )
+        )
+        writer.write_event(
+            Live2Event(
+                event_type="aggtrade_market_data_todo",
                 component=Live2Component.MARKET_DATA,
                 severity=Live2Severity.WARNING,
-                message="WS ticker/aggTrade ingestion is not implemented in generation 0",
+                message="aggTrade ingestion and candle coverage are not implemented in generation 0",
             )
         )
         writer.write_event(
