@@ -26,6 +26,9 @@ class AnomalyLive2Config:
     actionable_min_quote_volume: float = 2_500.0
     actionable_min_trade_count: int = 20
     actionable_min_abs_return_pct: float = 0.003
+    entry_guard_max_signal_age_ms: int = 2_000
+    entry_guard_max_price_drift_pct: float = 0.004
+    entry_guard_min_rr_to_tp1: float = 0.95
     runtime_generation: str = "live2_v0"
 
     def __post_init__(self) -> None:
@@ -57,3 +60,9 @@ class AnomalyLive2Config:
             raise ValueError("actionable_min_trade_count must be >= 0")
         if self.actionable_min_abs_return_pct < 0:
             raise ValueError("actionable_min_abs_return_pct must be >= 0")
+        if self.entry_guard_max_signal_age_ms <= 0:
+            raise ValueError("entry_guard_max_signal_age_ms must be > 0")
+        if self.entry_guard_max_price_drift_pct < 0:
+            raise ValueError("entry_guard_max_price_drift_pct must be >= 0")
+        if self.entry_guard_min_rr_to_tp1 <= 0:
+            raise ValueError("entry_guard_min_rr_to_tp1 must be > 0")

@@ -2030,6 +2030,15 @@ New entries remain forbidden: execution, executable-entry guards, exchange posit
 Next validation: run `run-anomaly-live2` after P311-P316 and inspect `deadline_decision` events. On strong buckets, verdicts should be `selected` only when stream baseline/category checks pass; otherwise `rejected_signal_contract`, `data_not_ready`, or `deadline_missed` must explain the reason.
 ```
 
+## 2026-05-19 — P317 proposed
+
+```text
+Current patch status: P317 PROPOSED, commit UNKNOWN.
+Live2 now has an executable-entry guard layer connected after stream signal selection. It rejects selected signals when the signal is stale, current stream price drift is too high, TP1 is already touched before execution, RR to TP1 collapsed, or live stream price/risk levels are unavailable. The guard is stream-only: no REST/cache/file IO and no order placement.
+New entries remain forbidden: execution, exchange position precheck, actual fill, verified stop, and position supervisor are still TODO. `new_entries_allowed=false` remains mandatory.
+Next validation: run `run-anomaly-live2` after P311-P317 and inspect `deadline_decision` events. If any stream signal becomes selected, entry guard fields must show either `accepted` or a concrete `rejected_entry_guard` reason; no late/drifted/TP-touched signal may proceed toward execution.
+```
+
 ## 2026-05-19 — P316 proposed
 
 ```text

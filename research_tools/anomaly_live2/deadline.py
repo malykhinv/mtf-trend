@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from .clock import utc_now_ms
 from .contracts import Live2Component, Live2Event, Live2Severity
 from .market_data.candles import Live2Candle
+from .entry_guard import Live2EntryGuardEngine, Live2EntryGuardResult
 from .signal import Live2SignalDecision, Live2SignalEngine
 from .state import SymbolLive2Status, SymbolState, SymbolStateStore
 
@@ -63,6 +64,13 @@ class Live2DecisionRecord:
     signal_entry_price: float | None = None
     initial_stop_at_decision: float | None = None
     initial_risk_pct_at_decision: float | None = None
+    tp1_at_decision: float | None = None
+    entry_guard_verdict: str = ""
+    entry_guard_reason: str = ""
+    entry_guard_live_price: float | None = None
+    entry_guard_signal_age_ms: int | None = None
+    entry_guard_price_drift_pct: float | None = None
+    entry_guard_rr_to_tp1: float | None = None
     signal_features: dict[str, object] = field(default_factory=dict)
 
     def as_event(self) -> Live2Event:
@@ -89,6 +97,13 @@ class Live2DecisionRecord:
                 "signal_entry_price": self.signal_entry_price,
                 "initial_stop_at_decision": self.initial_stop_at_decision,
                 "initial_risk_pct_at_decision": self.initial_risk_pct_at_decision,
+                "tp1_at_decision": self.tp1_at_decision,
+                "entry_guard_verdict": self.entry_guard_verdict,
+                "entry_guard_reason": self.entry_guard_reason,
+                "entry_guard_live_price": self.entry_guard_live_price,
+                "entry_guard_signal_age_ms": self.entry_guard_signal_age_ms,
+                "entry_guard_price_drift_pct": self.entry_guard_price_drift_pct,
+                "entry_guard_rr_to_tp1": self.entry_guard_rr_to_tp1,
                 "signal_features": self.signal_features,
             },
         )
@@ -134,10 +149,12 @@ class Live2DeadlineEngine:
         state_store: SymbolStateStore,
         config: Live2DeadlineEngineConfig,
         signal_engine: Live2SignalEngine | None = None,
+        entry_guard: Live2EntryGuardEngine | None = None,
     ) -> None:
         self.state_store = state_store
         self.config = config
         self.signal_engine = signal_engine or Live2SignalEngine()
+        self.entry_guard = entry_guard or Live2EntryGuardEngine()
         self._last_cycle: Live2DeadlineCycleResult = Live2DeadlineCycleResult()
         self._total_decisions = 0
         self._total_deadline_missed = 0
@@ -190,6 +207,7 @@ class Live2DeadlineEngine:
             "total_deadline_missed": self._total_deadline_missed,
             "selected_count": self._total_selected,
             "signal_engine": self.signal_engine.status(),
+            "entry_guard": self.entry_guard.status(),
         }
 
     def _evaluate_state(self, state: SymbolState, *, now_ms: int) -> Live2DecisionRecord | None:
@@ -209,6 +227,7 @@ class Live2DeadlineEngine:
         deadline_ms = candle.close_time_ms + self.config.decision_deadline_ms
         latency_ms = now_ms - candle.close_time_ms
         signal_decision: Live2SignalDecision | None = None
+        entry_guard_result: Live2EntryGuardResult | None = None
         if now_ms > deadline_ms:
             verdict = "deadline_missed"
             reason = "closed_bucket_was_not_evaluated_before_deadline"
@@ -226,6 +245,16 @@ class Live2DeadlineEngine:
             )
             verdict = signal_decision.verdict
             reason = signal_decision.reason
+            if signal_decision.verdict == "selected":
+                entry_guard_result = self.entry_guard.evaluate(
+                    state=state,
+                    signal_decision=signal_decision,
+                    signal_timestamp_ms=candle.close_time_ms,
+                    now_ms=now_ms,
+                )
+                if entry_guard_result.verdict != "accepted":
+                    verdict = entry_guard_result.verdict
+                    reason = entry_guard_result.reason
         self._apply_verdict(
             state,
             candle=candle,
@@ -235,6 +264,7 @@ class Live2DeadlineEngine:
             verdict=verdict,
             reason=reason,
             signal_decision=signal_decision,
+            entry_guard_result=entry_guard_result,
         )
         return Live2DecisionRecord(
             symbol=state.symbol,
@@ -253,6 +283,13 @@ class Live2DeadlineEngine:
             signal_entry_price=None if signal_decision is None else signal_decision.signal_entry_price,
             initial_stop_at_decision=None if signal_decision is None else signal_decision.initial_stop_at_decision,
             initial_risk_pct_at_decision=None if signal_decision is None else signal_decision.initial_risk_pct_at_decision,
+            tp1_at_decision=None if signal_decision is None else signal_decision.tp1_at_decision,
+            entry_guard_verdict="" if entry_guard_result is None else entry_guard_result.verdict,
+            entry_guard_reason="" if entry_guard_result is None else entry_guard_result.reason,
+            entry_guard_live_price=None if entry_guard_result is None else entry_guard_result.live_price,
+            entry_guard_signal_age_ms=None if entry_guard_result is None else entry_guard_result.signal_age_ms,
+            entry_guard_price_drift_pct=None if entry_guard_result is None else entry_guard_result.entry_price_drift_pct,
+            entry_guard_rr_to_tp1=None if entry_guard_result is None else entry_guard_result.rr_to_tp1_at_live_price,
             signal_features={} if signal_decision is None else dict(signal_decision.features),
         )
 
@@ -287,6 +324,7 @@ class Live2DeadlineEngine:
         verdict: str,
         reason: str,
         signal_decision: Live2SignalDecision | None = None,
+        entry_guard_result: Live2EntryGuardResult | None = None,
     ) -> None:
         state.status = SymbolLive2Status.WATCHING
         state.actionable_since_ms = candle.close_time_ms
@@ -301,12 +339,26 @@ class Live2DeadlineEngine:
             state.last_signal_entry_price = signal_decision.signal_entry_price
             state.last_signal_initial_stop = signal_decision.initial_stop_at_decision
             state.last_signal_initial_risk_pct = signal_decision.initial_risk_pct_at_decision
+            state.last_signal_tp1 = signal_decision.tp1_at_decision
         else:
             state.last_signal_category_id = ""
             state.last_signal_category_rank = None
             state.last_signal_entry_price = None
             state.last_signal_initial_stop = None
             state.last_signal_initial_risk_pct = None
+            state.last_signal_tp1 = None
+        if entry_guard_result is not None:
+            state.last_entry_guard_verdict = entry_guard_result.verdict
+            state.last_entry_guard_reason = entry_guard_result.reason
+            state.last_entry_guard_live_price = entry_guard_result.live_price
+            state.last_entry_guard_price_drift_pct = entry_guard_result.entry_price_drift_pct
+            state.last_entry_guard_rr_to_tp1 = entry_guard_result.rr_to_tp1_at_live_price
+        else:
+            state.last_entry_guard_verdict = ""
+            state.last_entry_guard_reason = ""
+            state.last_entry_guard_live_price = None
+            state.last_entry_guard_price_drift_pct = None
+            state.last_entry_guard_rr_to_tp1 = None
         state.decision_count += 1
         if verdict == "deadline_missed":
             state.deadline_missed_count += 1

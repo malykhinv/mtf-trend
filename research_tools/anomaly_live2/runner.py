@@ -10,6 +10,7 @@ from .clock import utc_now_iso
 from .config import AnomalyLive2Config
 from .contracts import Live2Component, Live2Event, Live2Readiness, Live2Severity
 from .deadline import Live2DeadlineEngine, Live2DeadlineEngineConfig
+from .entry_guard import Live2EntryGuardConfig, Live2EntryGuardEngine
 from .market_data.aggtrade_ws import Live2AggTradeWsSource
 from .market_data.ticker_ws import Live2TickerWsSource
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
@@ -55,6 +56,13 @@ class AnomalyLive2Runner:
                 actionable_min_trade_count=config.actionable_min_trade_count,
                 actionable_min_abs_return_pct=config.actionable_min_abs_return_pct,
                 stale_trade_ms=config.aggtrade_stale_ms,
+            ),
+            entry_guard=Live2EntryGuardEngine(
+                config=Live2EntryGuardConfig(
+                    max_signal_age_ms=config.entry_guard_max_signal_age_ms,
+                    max_entry_price_drift_pct=config.entry_guard_max_price_drift_pct,
+                    min_rr_to_tp1=config.entry_guard_min_rr_to_tp1,
+                )
             ),
         )
         self._shutdown_requested = False

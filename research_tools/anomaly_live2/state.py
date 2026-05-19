@@ -54,6 +54,12 @@ class SymbolState:
     last_signal_entry_price: float | None = None
     last_signal_initial_stop: float | None = None
     last_signal_initial_risk_pct: float | None = None
+    last_signal_tp1: float | None = None
+    last_entry_guard_verdict: str = ""
+    last_entry_guard_reason: str = ""
+    last_entry_guard_live_price: float | None = None
+    last_entry_guard_price_drift_pct: float | None = None
+    last_entry_guard_rr_to_tp1: float | None = None
     universe_selected: bool = False
     universe_rank: int | None = None
     universe_reason: str = "not_selected"
@@ -200,6 +206,12 @@ class SymbolState:
             "last_signal_entry_price": self.last_signal_entry_price,
             "last_signal_initial_stop": self.last_signal_initial_stop,
             "last_signal_initial_risk_pct": self.last_signal_initial_risk_pct,
+            "last_signal_tp1": self.last_signal_tp1,
+            "last_entry_guard_verdict": self.last_entry_guard_verdict,
+            "last_entry_guard_reason": self.last_entry_guard_reason,
+            "last_entry_guard_live_price": self.last_entry_guard_live_price,
+            "last_entry_guard_price_drift_pct": self.last_entry_guard_price_drift_pct,
+            "last_entry_guard_rr_to_tp1": self.last_entry_guard_rr_to_tp1,
             "universe_selected": self.universe_selected,
             "universe_rank": self.universe_rank,
             "universe_reason": self.universe_reason,

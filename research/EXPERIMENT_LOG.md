@@ -3253,6 +3253,15 @@ Not accepted yet: no executable entry guard, no real order placement, no actual 
 Next experiment after P316: add executable-entry guards for stale signal, live-price drift, TP1 already touched, and RR collapsed before any execution code can submit an order.
 ```
 
+## 2026-05-19 - P317 live2 entry-guard acceptance plan
+
+```text
+Purpose: prevent live2 from ever handing a stale, drifted, TP-touched, or RR-collapsed selected signal to future execution.
+Acceptance for P317: after P311-P316 are applied, `run-anomaly-live2` records entry-guard fields inside `deadline_decision` events whenever `Live2SignalEngine` selects a signal. The guard must use only stream state, reject stale signal age, excessive live price drift, TP1 already touched, RR collapsed, and missing live price/risk levels. It must not do REST/cache/file IO and must not place orders.
+Not accepted yet: no real exchange order placement, no pre-position exchange check, no actual fill, no verified stop, no TP/BE position supervision, and no profitability claim. `new_entries_allowed=false` remains mandatory.
+Next experiment after P317: implement real ExecutionEngine boundary with pre-entry exchange position check, order submit, actual fill verification, stop submit, and stop visibility verification.
+```
+
 ## 2026-05-19 - P316 live2 signal-adapter acceptance plan
 
 ```text
