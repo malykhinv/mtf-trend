@@ -5680,6 +5680,42 @@ Risk:
 Medium. Startup now makes bounded REST aggTrades requests for the selected universe before aggTrade WS starts, so first readiness can be slower but decisions start with real recent candles. During prolonged WS outage, reconnect pressure is lower and safer for Binance/IP throttling. Trading logic, thresholds, fill accounting, stops, and position supervisor behavior are not changed.
 ```
 
+## 2026-05-19 - P328 proposed - live2 startup visibility and operator log polish
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/console.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/telegram.py
+research_tools/anomaly_live2/market_data/warmup.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make run-anomaly-live2 visible during startup and stop noisy Telegram runtime-gate flips. Add a v1-style repaintable terminal status logger, show startup stages before the first heartbeat, show startup warm-up progress, default the auto universe to broad coverage (600 max, no 24h quote/trade-count minimum), and keep entries-enabled/disabled status only in the terminal grid/artifacts instead of Telegram.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live2 --help
+```
+
+Risk:
+
+```text
+Low-to-medium. Operator output and startup defaults change. Broader default universe increases WS/warm-up load, but this matches the intended v1-like broad coverage and remains controlled by --universe-max-symbols. Trading logic, fills, stops, TP/BE, and position supervision are unchanged.
+```
+
 ## 2026-05-19 - P316 proposed - live2 stream signal adapter
 
 Files:

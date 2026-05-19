@@ -8,6 +8,7 @@ from typing import Any
 from .artifacts import Live2ArtifactWriter
 from .clock import utc_now_iso
 from .config import AnomalyLive2Config
+from .console import Live2StatusLogger
 from .contracts import Live2Component, Live2Event, Live2Readiness, Live2Severity
 from .deadline import Live2DeadlineCycleResult, Live2DeadlineEngine, Live2DeadlineEngineConfig
 from .entry_guard import Live2EntryGuardConfig, Live2EntryGuardEngine
@@ -18,6 +19,7 @@ from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
 from .market_data.warmup import (
     Live2StartupAggTradeWarmup,
     Live2StartupWarmupConfig,
+    Live2StartupWarmupProgress,
     Live2StartupWarmupResult,
 )
 from .position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorConfig
@@ -44,6 +46,7 @@ class AnomalyLive2Runner:
         telegram_config: Live2TelegramConfig | None = None,
     ) -> None:
         self.config = config
+        self.status_logger = Live2StatusLogger(print)
         self.started_at_utc = utc_now_iso()
         self.state_store = SymbolStateStore(
             config.symbols,
@@ -53,7 +56,7 @@ class AnomalyLive2Runner:
             raise ValueError("telegram_config is required for run-anomaly-live2")
         self.telegram = Live2TelegramDispatcher(
             telegram_config,
-            logger=lambda message: print(message, flush=True),
+            logger=self.status_logger,
         )
         self.readiness = Live2Readiness(
             artifact_writer_ready=True,
@@ -134,8 +137,10 @@ class AnomalyLive2Runner:
             queue_max_size=self.config.artifact_writer_queue_max_size,
         )
         try:
+            self._set_startup_status("инициализация", "готовлю артефакты и preflight")
             self.telegram.set_event_writer(writer.write_event)
             self._write_startup_events(writer)
+            self._set_startup_status("preflight", "проверяю exchange/account")
             execution_preflight = self.execution_engine.preflight()
             self.readiness.exchange_boundary_ready = execution_preflight.ready
             self.readiness.execution_ready = self.execution_engine.ready
@@ -149,13 +154,21 @@ class AnomalyLive2Runner:
                     data=execution_preflight.as_dict(),
                 )
             )
+            self._set_startup_status("ticker", "подключаю !ticker@arr")
             self.ticker_source.start()
             ticker_ready = self.ticker_source.wait_until_ready()
+            self._set_startup_status("ticker", "ticker готов" if ticker_ready else "ticker пока не готов")
+            self._set_startup_status("вселенная", "выбираю universe из ticker snapshot")
             self.universe_selection = self._select_universe()
             self.state_store.apply_universe_selection(
                 selected_rank_by_symbol=self.universe_selection.rank_by_symbol(),
                 selected_at_ms=self.universe_selection.selected_at_ms,
                 mode=self.universe_selection.mode,
+            )
+            self._set_startup_status(
+                "вселенная",
+                f"выбрано {len(self.universe_selection.selected_symbols)}/{self.universe_selection.eligible_symbols} · "
+                f"cap {self.universe_selection.max_symbols}",
             )
             writer.write_event(
                 Live2Event(
@@ -169,6 +182,11 @@ class AnomalyLive2Runner:
             aggtrade_ready = False
             if self.universe_selection.selected_symbols:
                 self.startup_warmup_result = self._run_startup_aggtrade_warmup(writer)
+                self._set_startup_status(
+                    "прогрев",
+                    f"готово {self.startup_warmup_result.symbols_warmed}/{self.startup_warmup_result.symbols_requested} · "
+                    f"trades {self.startup_warmup_result.trades_loaded}",
+                )
                 self.aggtrade_source = Live2AggTradeWsSource(
                     state_store=self.state_store,
                     symbols=self.universe_selection.selected_symbols,
@@ -179,8 +197,10 @@ class AnomalyLive2Runner:
                     reconnect_max_delay_seconds=self.config.ws_reconnect_max_delay_seconds,
                 )
                 self._write_aggtrade_starting_event(writer)
+                self._set_startup_status("aggTrade", "запускаю WS shards")
                 self.aggtrade_source.start()
                 aggtrade_ready = self.aggtrade_source.wait_until_ready()
+                self._set_startup_status("aggTrade", "поток готов" if aggtrade_ready else "поток пока не готов")
             else:
                 writer.write_event(
                     Live2Event(
@@ -236,11 +256,10 @@ class AnomalyLive2Runner:
                 universe_size=len(self.universe_selection.selected_symbols),
                 runtime_generation=self.config.runtime_generation,
             )
-            print(
+            self.status_logger(
                 f"live2 · старт · артефакты {self.config.output_dir} · "
                 f"universe {len(self.universe_selection.selected_symbols)} · "
-                "ticker+aggTrade WS включены · stream signal adapter включен · verified entry+stop execution включен",
-                flush=True,
+                "ticker+aggTrade WS включены · stream signal adapter включен · verified entry+stop execution включен"
             )
             last_heartbeat_at = 0.0
             while not self._shutdown_requested:
@@ -309,7 +328,7 @@ class AnomalyLive2Runner:
                         execution_status=execution_status,
                         runtime_gate_status=runtime_gate_status,
                     )
-                    print(
+                    self.status_logger.status(
                         format_live2_status_grid(
                             runtime_seconds=time.perf_counter() - self._started_monotonic,
                             cycle_seconds=max(0.0, self._last_decision_cycle_elapsed_ms / 1000.0),
@@ -323,7 +342,6 @@ class AnomalyLive2Runner:
                             runtime_gate_status=runtime_gate_status,
                             artifact_writer_status=artifact_writer_status,
                         ),
-                        flush=True,
                     )
 
                 elapsed = time.perf_counter() - cycle_started
@@ -359,7 +377,8 @@ class AnomalyLive2Runner:
                 text="⚠️ <b>Live2 остановлен</b>\n\n<code>keyboard_interrupt</code>",
                 symbol="__telegram__",
             )
-            print("live2 · остановлено пользователем", flush=True)
+            self.status_logger.finish_status()
+            self.status_logger("live2 · остановлено пользователем")
             return 130
         except Exception as exc:
             self.shutdown(reason="runner_exception")
@@ -379,6 +398,7 @@ class AnomalyLive2Runner:
             )
             raise
         finally:
+            self.status_logger.finish_status()
             if self.aggtrade_source is not None:
                 self.aggtrade_source.close()
             self.ticker_source.close()
@@ -388,6 +408,35 @@ class AnomalyLive2Runner:
 
     def shutdown(self, *, reason: str) -> None:
         self._shutdown_requested = True
+
+
+    def _set_startup_status(self, stage: str, message: str) -> None:
+        self.status_logger.status(
+            "\n".join(
+                (
+                    "Live2",
+                    f"Этап {stage}",
+                    str(message),
+                    f"Артефакты {self.config.output_dir}",
+                )
+            )
+        )
+
+    def _set_warmup_progress_status(self, progress: Live2StartupWarmupProgress) -> None:
+        self.status_logger.status(
+            "\n".join(
+                (
+                    "Live2",
+                    "Этап прогрев",
+                    (
+                        f"{progress.current_index}/{progress.symbols_total} · "
+                        f"готово {progress.symbols_warmed} · ошибок {progress.symbols_failed} · "
+                        f"trades {progress.trades_loaded}"
+                    ),
+                    f"Символ {progress.symbol}",
+                )
+            )
+        )
 
 
     def _refresh_artifact_writer_readiness(self, writer: Live2ArtifactWriter) -> None:
@@ -747,7 +796,7 @@ class AnomalyLive2Runner:
                 request_sleep_seconds=self.config.startup_warmup_request_sleep_seconds,
                 error_limit=self.config.startup_warmup_error_limit,
             ),
-        ).run(selected_symbols)
+        ).run(selected_symbols, progress=self._set_warmup_progress_status)
         writer.write_event(result.as_event())
         return result
 

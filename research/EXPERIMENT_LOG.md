@@ -3335,6 +3335,14 @@ Acceptance for P327: after P311-P327 are applied, startup must emit startup_aggt
 Not accepted yet: restart/open-order reconciliation and exact stop-trigger fill reconstruction. Next live2 smoke should verify warm-up completes without decision hot-path REST and that no entries are allowed during WS stale/reconnect coverage.
 ```
 
+## 2026-05-19 - P328 live2 startup visibility acceptance plan
+
+```text
+Purpose: make live2 operator-visible from the first seconds of run-anomaly-live2 and keep the grid as a single repaintable status block.
+Acceptance for P328: after P311-P328 are applied, `run-anomaly-live2` should immediately print a preparation line, then update one startup status block through preflight/ticker/universe/warm-up/aggTrade stages. Once running, the grid should overwrite its previous block in an interactive terminal instead of appending heartbeat spam. Telegram must not emit entries-enabled/entries-disabled notifications; these states must remain visible in the grid, live2_events.csv, and live2_status.json. Default auto universe should be capped at 600 with zero liquidity/trade-count minimum unless the operator passes stricter CLI values.
+Next validation: run live2 for 2-5 minutes without legacy flags, confirm that universe size is close to the exchange USDT futures universe rather than ~115, and inspect `universe_selected` rejected counts to understand any remaining exclusions.
+```
+
 ## 2026-05-19 - P316 live2 signal-adapter acceptance plan
 
 ```text

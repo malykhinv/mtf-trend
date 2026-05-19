@@ -151,23 +151,9 @@ class Live2TelegramDispatcher:
             )
 
     def notify_runtime_gate_update(self, gate_status: dict[str, object], *, previous_allowed: bool, current_allowed: bool) -> None:
-        if previous_allowed == current_allowed:
-            return
-        if current_allowed:
-            text = (
-                f"✅ <b>Live2: новые входы разрешены</b>\n\n"
-                f"Причина: {telegram_code(str(gate_status.get('reason') or 'ready'))}\n"
-                "Режим: strict"
-            )
-            key = "live2_entries_enabled"
-        else:
-            text = (
-                f"{SERVICE_WARNING_EMOJI} <b>Live2: новые входы запрещены</b>\n\n"
-                f"Причина: {telegram_code(str(gate_status.get('reason') or 'unknown'))}\n"
-                "Режим: strict"
-            )
-            key = f"live2_entries_disabled_{gate_status.get('reason') or 'unknown'}"
-        self.send(channel="events", key=key, text=text, symbol="__telegram__")
+        # Runtime entry gates flap naturally during startup, reconnects, and warm-up.
+        # Keep this visible in the terminal grid and artifacts, but do not spam Telegram.
+        return
 
     def send(
         self,

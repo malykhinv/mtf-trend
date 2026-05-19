@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 from data.exchanges.ccxt_types import CcxtAggTradePayload
@@ -31,6 +32,28 @@ class Live2StartupAggTradeExchange(Protocol):
         params: dict[str, object],
     ) -> list[CcxtAggTradePayload]:
         ...
+
+
+@dataclass(frozen=True, slots=True)
+class Live2StartupWarmupProgress:
+    current_index: int
+    symbols_total: int
+    symbol: str
+    symbols_warmed: int
+    symbols_failed: int
+    trades_loaded: int
+    last_error: str = ""
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "current_index": self.current_index,
+            "symbols_total": self.symbols_total,
+            "symbol": self.symbol,
+            "symbols_warmed": self.symbols_warmed,
+            "symbols_failed": self.symbols_failed,
+            "trades_loaded": self.trades_loaded,
+            "last_error": self.last_error,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,7 +145,13 @@ class Live2StartupAggTradeWarmup:
         self.exchange_client = exchange_client
         self.config = config
 
-    def run(self, symbols: tuple[str, ...], *, now_ms: int | None = None) -> Live2StartupWarmupResult:
+    def run(
+        self,
+        symbols: tuple[str, ...],
+        *,
+        now_ms: int | None = None,
+        progress: Callable[[Live2StartupWarmupProgress], None] | None = None,
+    ) -> Live2StartupWarmupResult:
         started_at_ms = utc_now_ms()
         effective_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
         if not self.config.enabled:
@@ -160,7 +189,8 @@ class Live2StartupAggTradeWarmup:
         trades_loaded = 0
         symbols_warmed = 0
         errors: list[str] = []
-        for symbol in limited_symbols:
+        for index, symbol in enumerate(limited_symbols, start=1):
+            last_error = ""
             try:
                 rows = self.exchange_client.fetch_binance_agg_trades(
                     symbol=symbol,
@@ -172,7 +202,20 @@ class Live2StartupAggTradeWarmup:
                     },
                 )
             except Exception as exc:  # pragma: no cover - exchange boundary
-                errors.append(f"{symbol}:{type(exc).__name__}:{str(exc)[:160]}")
+                last_error = f"{type(exc).__name__}:{str(exc)[:160]}"
+                errors.append(f"{symbol}:{last_error}")
+                if progress is not None:
+                    progress(
+                        Live2StartupWarmupProgress(
+                            current_index=index,
+                            symbols_total=len(limited_symbols),
+                            symbol=symbol,
+                            symbols_warmed=symbols_warmed,
+                            symbols_failed=len(errors),
+                            trades_loaded=trades_loaded,
+                            last_error=last_error,
+                        )
+                    )
                 if len(errors) >= self.config.error_limit:
                     break
                 if self.config.request_sleep_seconds > 0:
@@ -184,6 +227,18 @@ class Live2StartupAggTradeWarmup:
                 self.state_store.update_aggtrade_many(trades, received_at_ms=started_at_ms)
                 trades_loaded += len(trades)
                 symbols_warmed += 1
+            if progress is not None and (index == 1 or index == len(limited_symbols) or index % 10 == 0 or last_error):
+                progress(
+                    Live2StartupWarmupProgress(
+                        current_index=index,
+                        symbols_total=len(limited_symbols),
+                        symbol=symbol,
+                        symbols_warmed=symbols_warmed,
+                        symbols_failed=len(errors),
+                        trades_loaded=trades_loaded,
+                        last_error=last_error,
+                    )
+                )
             if self.config.request_sleep_seconds > 0:
                 time.sleep(self.config.request_sleep_seconds)
         symbols_failed = len(errors)

@@ -2118,6 +2118,12 @@ Current commit: UNKNOWN.
 
 P327 proposed after P326. Live2 now has startup-only aggTrade REST warm-up into bounded in-memory candle rings and exponential reconnect backoff/watchdog restarts for ticker/aggTrade WebSockets. This does not reintroduce hot REST fallback: signal decisions still use only already-hydrated stream state and must reject/degrade when coverage is stale.
 
+## 2026-05-19 - P328 live2 startup/operator visibility state
+
+Current commit: UNKNOWN.
+
+P328 proposed after P327. Live2 no longer stays silent during startup: the terminal shows stage progress for preflight, ticker, universe selection, warm-up, and aggTrade WS before the first heartbeat grid. The heartbeat grid is now rendered through a v1-style repaintable console logger instead of printing a new block every heartbeat. Runtime gate flips remain in artifacts/grid, but Telegram no longer sends “new entries enabled/disabled” messages. Default auto-universe is broadened to max 600 symbols with no 24h quote/trade-count minimum, because the previous 300k quote-volume filter could shrink live2 to roughly 100-150 symbols while v1 covered 500+.
+
 ## 2026-05-19 — P316 proposed
 
 ```text
