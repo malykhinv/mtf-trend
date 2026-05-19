@@ -3288,6 +3288,14 @@ Not accepted yet: no real order placement, no verified fill/stop path, no TP/BE 
 Next experiment after P320: short live2 smoke for 60-120 seconds; check that `deadline_cycle.max_latency_ms` is not tied to heartbeat cadence, heartbeat events arrive every ~5s, and runtime gates explain why entries remain disabled.
 ```
 
+## 2026-05-19 - P321 live2 verified-entry acceptance plan
+
+```text
+Purpose: prove that live2 can move from accepted entry guard to a protected exchange position without fake fills or unverified stops.
+Acceptance for P321: after P311-P320 are applied, any live2 order attempt must go through pre-entry exchange position check, `create_market_order_with_fill`, post-entry exchange position delta verification, `create_stop_market_order`, and `fetch_stop_order_by_client_order_id` visibility verification. A successful execution must emit `deadline_decision` with verdict `selected`, entry fill fields, stop fields, and a protected position in `execution_status`. If stop visibility fails after an actual fill, live2 must emit `position_integrity_error`, attempt emergency reduce-only close, and keep new entries disabled.
+Not accepted yet: TP1 partial exit, BE stop replacement, final close verification, stale open-order reconciliation, Telegram safety notifications, and full unattended live2 operation. P322 must implement position supervision before increasing universe/notional.
+```
+
 ## 2026-05-19 - P316 live2 signal-adapter acceptance plan
 
 ```text

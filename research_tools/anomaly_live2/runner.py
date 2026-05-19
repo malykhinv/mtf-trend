@@ -24,8 +24,8 @@ class AnomalyLive2Runner:
     This command is intentionally named as a real live runtime, not a shadow or
     dry-run mode. V0 installs the process/artifact/readiness skeleton and starts
     real ticker + auto-selected aggTrade WS ingestion plus a stream-only signal
-    adapter. Order placement remains an explicit TODO gate, so new entries stay
-    forbidden until execution and safety guards are implemented.
+    adapter. P321 enables real entry execution only after runtime gates, actual
+    fill recovery, and strict initial-stop visibility verification.
     """
 
     def __init__(self, config: AnomalyLive2Config, *, exchange_client: Live2ExecutionExchange | None = None) -> None:
@@ -49,7 +49,13 @@ class AnomalyLive2Runner:
         self.aggtrade_source: Live2AggTradeWsSource | None = None
         self.execution_engine = Live2ExecutionEngine(
             exchange_client=exchange_client,
-            config=Live2ExecutionConfig(),
+            config=Live2ExecutionConfig(
+                order_notional_usdt=config.execution_order_notional_usdt,
+                max_open_positions=config.execution_max_open_positions,
+                max_position_amount_slippage_ratio=config.execution_max_position_amount_slippage_ratio,
+                stop_visibility_attempts=config.execution_stop_visibility_attempts,
+                stop_visibility_sleep_seconds=config.execution_stop_visibility_sleep_seconds,
+            ),
         )
         self.universe_selection: Live2UniverseSelection | None = None
         self.deadline_engine = Live2DeadlineEngine(
@@ -70,6 +76,7 @@ class AnomalyLive2Runner:
                 )
             ),
             execution_engine=self.execution_engine,
+            entries_allowed=lambda: self.readiness.new_entries_allowed,
         )
         self._shutdown_requested = False
         self._decision_latency_degraded_windows = 0
@@ -87,6 +94,8 @@ class AnomalyLive2Runner:
             self._write_startup_events(writer)
             execution_preflight = self.execution_engine.preflight()
             self.readiness.exchange_boundary_ready = execution_preflight.ready
+            self.readiness.execution_ready = self.execution_engine.ready
+            self.readiness.position_supervisor_ready = self.execution_engine.ready
             writer.write_event(
                 Live2Event(
                     event_type="execution_preflight",
@@ -178,7 +187,7 @@ class AnomalyLive2Runner:
             print(
                 f"live2 · старт · артефакты {self.config.output_dir} · "
                 f"universe {len(self.universe_selection.selected_symbols)} · "
-                "ticker+aggTrade WS включены · stream signal adapter включен · execution boundary включен · новые входы запрещены",
+                "ticker+aggTrade WS включены · stream signal adapter включен · verified entry+stop execution включен",
                 flush=True,
             )
             last_heartbeat_at = 0.0
@@ -290,6 +299,12 @@ class AnomalyLive2Runner:
     ) -> None:
         self._refresh_artifact_writer_readiness(writer)
         self.readiness.market_data_ready = bool(market_data_status.get("stream_coverage_ready"))
+        self.readiness.exchange_boundary_ready = self.execution_engine.preflight_result.ready
+        self.readiness.execution_ready = self.execution_engine.ready
+        # P321 installs a minimal protected-position registry: entry is allowed only
+        # after verified actual fill and verified initial stop. Full TP/BE
+        # supervision is still the next patch, but there is no unprotected entry.
+        self.readiness.position_supervisor_ready = self.execution_engine.ready
         self.readiness.decision_latency_ready = self._decision_latency_gate_ready(
             deadline_result=deadline_result,
             decision_cycle_elapsed_ms=decision_cycle_elapsed_ms,

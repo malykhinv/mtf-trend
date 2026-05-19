@@ -2064,6 +2064,15 @@ New entries remain forbidden: no market order, no actual fill, no stop order, no
 Next validation: run `run-anomaly-live2` after P311-P318 and inspect `execution_preflight`, `deadline_decision.execution_*`, and `live2_status.json.execution_status`. There must be no order attempts; accepted guard decisions must never proceed without exchange position precheck.
 ```
 
+## 2026-05-19 — P321 proposed
+
+```text
+Current patch status: P321 PROPOSED, commit UNKNOWN.
+Live2 now has the first verified real-order entry lifecycle. A selected stream signal with accepted entry guard may proceed only if runtime gates allow entries, exchange preflight is ready, symbol is flat on the exchange, and live2 protected-position capacity is available. Execution uses deterministic client ids, verifies actual market-order fill, checks exchange position delta, places a reduce-only initial stop, verifies the stop through the Binance stop/algo-order boundary, and records a protected local position. If a fill occurs but stop/position integrity fails, live2 attempts emergency reduce-only close and disables further entries.
+Still not complete: TP1 partial close, BE stop move, stop replacement verification, final close reconciliation, Telegram operator messages, and full position supervisor. Do not treat P321 as production-ready for unattended trading until P322 position supervision is implemented and smoke-tested.
+Next validation: apply P311-P321, run compileall, then run `run-anomaly-live2 --symbols <one liquid symbol>` only with minimal account exposure and inspect `deadline_decision.execution_*`, `live2_status.json.execution_status.protected_positions`, and exchange UI for actual fill plus visible initial stop. Stop visibility failure must produce `position_integrity_error` and emergency close attempt.
+```
+
 ## 2026-05-19 — P316 proposed
 
 ```text

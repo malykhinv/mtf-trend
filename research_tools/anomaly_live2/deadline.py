@@ -8,6 +8,7 @@ not run the real signal strategy yet, so actionable buckets end in an explicit
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .clock import utc_now_ms
@@ -76,10 +77,23 @@ class Live2DecisionRecord:
     execution_reason: str = ""
     execution_pre_position_amount: float | None = None
     execution_order_placement_status: str = ""
+    execution_position_id: str = ""
+    execution_entry_order_id: str = ""
+    execution_entry_fill_price: float | None = None
+    execution_entry_filled_amount: float | None = None
+    execution_stop_order_id: str = ""
+    execution_stop_price: float | None = None
+    execution_integrity_error: bool = False
+    execution_emergency_close_status: str = ""
     signal_features: dict[str, object] = field(default_factory=dict)
 
     def as_event(self) -> Live2Event:
-        severity = Live2Severity.WARNING if self.verdict in {"deadline_missed", "data_not_ready"} else Live2Severity.INFO
+        if self.verdict == "position_integrity_error" or self.execution_integrity_error:
+            severity = Live2Severity.ERROR
+        elif self.verdict in {"deadline_missed", "data_not_ready"}:
+            severity = Live2Severity.WARNING
+        else:
+            severity = Live2Severity.INFO
         return Live2Event(
             event_type="deadline_decision",
             component=Live2Component.SIGNAL,
@@ -113,6 +127,14 @@ class Live2DecisionRecord:
                 "execution_reason": self.execution_reason,
                 "execution_pre_position_amount": self.execution_pre_position_amount,
                 "execution_order_placement_status": self.execution_order_placement_status,
+                "execution_position_id": self.execution_position_id,
+                "execution_entry_order_id": self.execution_entry_order_id,
+                "execution_entry_fill_price": self.execution_entry_fill_price,
+                "execution_entry_filled_amount": self.execution_entry_filled_amount,
+                "execution_stop_order_id": self.execution_stop_order_id,
+                "execution_stop_price": self.execution_stop_price,
+                "execution_integrity_error": self.execution_integrity_error,
+                "execution_emergency_close_status": self.execution_emergency_close_status,
                 "signal_features": self.signal_features,
             },
         )
@@ -160,12 +182,14 @@ class Live2DeadlineEngine:
         signal_engine: Live2SignalEngine | None = None,
         entry_guard: Live2EntryGuardEngine | None = None,
         execution_engine: Live2ExecutionEngine | None = None,
+        entries_allowed: Callable[[], bool] | None = None,
     ) -> None:
         self.state_store = state_store
         self.config = config
         self.signal_engine = signal_engine or Live2SignalEngine()
         self.entry_guard = entry_guard or Live2EntryGuardEngine()
         self.execution_engine = execution_engine
+        self.entries_allowed = entries_allowed or (lambda: False)
         self._last_cycle: Live2DeadlineCycleResult = Live2DeadlineCycleResult()
         self._total_decisions = 0
         self._total_deadline_missed = 0
@@ -271,8 +295,15 @@ class Live2DeadlineEngine:
                 elif self.execution_engine is None:
                     verdict = "rejected_execution_engine_not_configured"
                     reason = "live2_execution_engine_missing"
+                elif not self.entries_allowed():
+                    verdict = "rejected_runtime_gates_not_ready"
+                    reason = "live2_runtime_gates_do_not_allow_new_entries"
                 else:
-                    execution_result = self.execution_engine.execute_selected(state=state)
+                    execution_result = self.execution_engine.execute_selected(
+                        state=state,
+                        signal_decision=signal_decision,
+                        entry_guard_result=entry_guard_result,
+                    )
                     verdict = execution_result.verdict
                     reason = execution_result.reason
         self._apply_verdict(
@@ -315,6 +346,14 @@ class Live2DeadlineEngine:
             execution_reason="" if execution_result is None else execution_result.reason,
             execution_pre_position_amount=None if execution_result is None else execution_result.pre_position_amount,
             execution_order_placement_status="" if execution_result is None else execution_result.order_placement_status,
+            execution_position_id="" if execution_result is None else execution_result.position_id,
+            execution_entry_order_id="" if execution_result is None else execution_result.entry_order_id,
+            execution_entry_fill_price=None if execution_result is None else execution_result.entry_fill_price,
+            execution_entry_filled_amount=None if execution_result is None else execution_result.entry_filled_amount,
+            execution_stop_order_id="" if execution_result is None else execution_result.stop_order_id,
+            execution_stop_price=None if execution_result is None else execution_result.stop_price,
+            execution_integrity_error=False if execution_result is None else execution_result.integrity_error,
+            execution_emergency_close_status="" if execution_result is None else execution_result.emergency_close_status,
             signal_features={} if signal_decision is None else dict(signal_decision.features),
         )
 
@@ -352,7 +391,10 @@ class Live2DeadlineEngine:
         entry_guard_result: Live2EntryGuardResult | None = None,
         execution_result: Live2ExecutionResult | None = None,
     ) -> None:
-        state.status = SymbolLive2Status.WATCHING
+        if execution_result is not None and execution_result.verdict == "selected":
+            state.status = SymbolLive2Status.IN_POSITION
+        else:
+            state.status = SymbolLive2Status.WATCHING
         state.actionable_since_ms = candle.close_time_ms
         state.decision_deadline_ms = deadline_ms
         state.last_decision_bucket_ms = candle.open_time_ms
@@ -390,11 +432,25 @@ class Live2DeadlineEngine:
             state.last_execution_reason = execution_result.reason
             state.last_execution_pre_position_amount = execution_result.pre_position_amount
             state.last_execution_order_placement_status = execution_result.order_placement_status
+            state.last_execution_position_id = execution_result.position_id
+            state.last_execution_entry_order_id = execution_result.entry_order_id
+            state.last_execution_entry_fill_price = execution_result.entry_fill_price
+            state.last_execution_entry_filled_amount = execution_result.entry_filled_amount
+            state.last_execution_stop_order_id = execution_result.stop_order_id
+            state.last_execution_stop_price = execution_result.stop_price
+            state.last_execution_integrity_error = execution_result.integrity_error
         else:
             state.last_execution_verdict = ""
             state.last_execution_reason = ""
             state.last_execution_pre_position_amount = None
             state.last_execution_order_placement_status = ""
+            state.last_execution_position_id = ""
+            state.last_execution_entry_order_id = ""
+            state.last_execution_entry_fill_price = None
+            state.last_execution_entry_filled_amount = None
+            state.last_execution_stop_order_id = ""
+            state.last_execution_stop_price = None
+            state.last_execution_integrity_error = False
         state.decision_count += 1
         if verdict == "deadline_missed":
             state.deadline_missed_count += 1

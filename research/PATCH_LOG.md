@@ -5496,6 +5496,39 @@ Risk:
 Medium. This patch introduces exchange reads into the post-guard path and startup preflight, but it deliberately does not place orders. `new_entries_allowed=false` remains because actual order submit, actual fill verification, verified stop placement, and position supervision are not implemented yet.
 ```
 
+## 2026-05-19 - P321 proposed - live2 verified entry and initial stop lifecycle
+
+Files:
+
+```text
+research_tools/anomaly_live2/execution.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/state.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Enable the first real-order live2 execution lifecycle after runtime gates and entry guards: pre-entry exchange position check, deterministic client-id market buy, actual fill recovery from exchange order/trades, post-entry exchange position delta verification, reduce-only initial stop submit, and strict stop visibility verification. If exposure exists and protection cannot be verified, live2 attempts emergency reduce-only close and halts further execution via an execution readiness gate.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+High. This is the first live2 patch that can place real orders when all runtime gates are ready and a selected signal passes entry guards. The patch intentionally caps generation-0 exposure to one protected position by default and uses a small fixed notional. TP1/BE/final-position supervision remains the next patch, so P321 must be tested on one explicit low-risk symbol/notional only after reviewing exchange credentials and artifacts.
+```
+
 ## 2026-05-19 - P316 proposed - live2 stream signal adapter
 
 Files:

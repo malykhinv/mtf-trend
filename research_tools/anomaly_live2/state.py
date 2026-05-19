@@ -64,6 +64,13 @@ class SymbolState:
     last_execution_reason: str = ""
     last_execution_pre_position_amount: float | None = None
     last_execution_order_placement_status: str = ""
+    last_execution_position_id: str = ""
+    last_execution_entry_order_id: str = ""
+    last_execution_entry_fill_price: float | None = None
+    last_execution_entry_filled_amount: float | None = None
+    last_execution_stop_order_id: str = ""
+    last_execution_stop_price: float | None = None
+    last_execution_integrity_error: bool = False
     universe_selected: bool = False
     universe_rank: int | None = None
     universe_reason: str = "not_selected"
@@ -220,6 +227,13 @@ class SymbolState:
             "last_execution_reason": self.last_execution_reason,
             "last_execution_pre_position_amount": self.last_execution_pre_position_amount,
             "last_execution_order_placement_status": self.last_execution_order_placement_status,
+            "last_execution_position_id": self.last_execution_position_id,
+            "last_execution_entry_order_id": self.last_execution_entry_order_id,
+            "last_execution_entry_fill_price": self.last_execution_entry_fill_price,
+            "last_execution_entry_filled_amount": self.last_execution_entry_filled_amount,
+            "last_execution_stop_order_id": self.last_execution_stop_order_id,
+            "last_execution_stop_price": self.last_execution_stop_price,
+            "last_execution_integrity_error": self.last_execution_integrity_error,
             "universe_selected": self.universe_selected,
             "universe_rank": self.universe_rank,
             "universe_reason": self.universe_reason,

@@ -1,28 +1,39 @@
-"""Strict execution boundary for anomaly live2.
+"""Strict verified execution boundary for anomaly live2.
 
-Generation 0 does not place orders yet. This boundary still performs the first
-real exchange safety checks that must exist before order placement can be
-enabled: account preflight and pre-entry position inspection. If the symbol is
-already open on the exchange, execution is rejected. If the symbol is flat, the
-result is an explicit `rejected_execution_order_placement_not_implemented` gate
-instead of a fake success.
+Live2 execution is intentionally exchange-first. A selected signal may proceed
+only through this contract:
+
+1. startup account preflight;
+2. pre-entry exchange position check;
+3. deterministic client id market order;
+4. actual fill recovered from exchange order/trades;
+5. post-entry exchange position delta check;
+6. reduce-only stop-market order;
+7. stop visibility verification through the stop/algo-order boundary.
+
+No candle/ticker price is used as a fill substitute. If exposure is created and
+protection cannot be verified, the engine attempts an emergency reduce-only
+market close and marks execution as unsafe for any further entries.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from math import isfinite
 from typing import Protocol, runtime_checkable
 
-from data.exchanges.ccxt_types import ExchangeLiveAccountPreflight
+from data.exchanges.ccxt_types import ExchangeLiveAccountPreflight, ExchangeOrderFill
 
 from .clock import utc_now_ms
+from .entry_guard import Live2EntryGuardResult
+from .signal import Live2SignalDecision
 from .state import SymbolState
 
 
 @runtime_checkable
 class Live2ExecutionExchange(Protocol):
-    """Typed exchange boundary required by live2 execution generation 0."""
+    """Typed exchange boundary required by live2 execution."""
 
     def fetch_live_account_preflight(self) -> ExchangeLiveAccountPreflight:
         """Return explicit account-mode snapshot for real-order live trading."""
@@ -32,16 +43,59 @@ class Live2ExecutionExchange(Protocol):
         """Return signed exchange position amount for one symbol."""
         ...
 
+    def create_market_order_with_fill(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        *,
+        reduce_only: bool,
+        client_order_id: str,
+    ) -> ExchangeOrderFill:
+        """Submit a market order and return verified actual fill fields."""
+        ...
+
+    def create_stop_market_order(
+        self,
+        symbol: str,
+        side: str,
+        amount: float,
+        stop_price: float,
+        *,
+        client_order_id: str,
+    ) -> dict[str, object]:
+        """Create a reduce-only stop-market order with deterministic client id."""
+        ...
+
+    def fetch_stop_order_by_client_order_id(self, symbol: str, client_order_id: str) -> dict[str, object]:
+        """Return a visible open conditional stop order by client id."""
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class Live2ExecutionConfig:
-    """Execution readiness contract for generation 0."""
+    """Strict execution contract for live2 real-order entries."""
 
     max_existing_position_abs_amount: float = 0.0
+    order_notional_usdt: float = 12.0
+    max_open_positions: int = 1
+    max_position_amount_slippage_ratio: float = 0.05
+    stop_visibility_attempts: int = 5
+    stop_visibility_sleep_seconds: float = 0.5
 
     def __post_init__(self) -> None:
         if self.max_existing_position_abs_amount < 0:
             raise ValueError("max_existing_position_abs_amount must be >= 0")
+        if self.order_notional_usdt <= 0:
+            raise ValueError("order_notional_usdt must be > 0")
+        if self.max_open_positions <= 0:
+            raise ValueError("max_open_positions must be > 0")
+        if self.max_position_amount_slippage_ratio < 0:
+            raise ValueError("max_position_amount_slippage_ratio must be >= 0")
+        if self.stop_visibility_attempts <= 0:
+            raise ValueError("stop_visibility_attempts must be > 0")
+        if self.stop_visibility_sleep_seconds < 0:
+            raise ValueError("stop_visibility_sleep_seconds must be >= 0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,13 +124,67 @@ class Live2ExecutionPreflightResult:
 
 
 @dataclass(frozen=True, slots=True)
+class Live2ProtectedPosition:
+    """Local registry row for a position whose initial stop is verified."""
+
+    position_id: str
+    symbol: str
+    opened_at_ms: int
+    entry_order_id: str
+    entry_client_order_id: str
+    entry_fill_price: float
+    amount: float
+    stop_price: float
+    stop_order_id: str
+    stop_client_order_id: str
+    pre_position_amount: float
+    post_position_amount: float
+    signal_entry_price: float
+    initial_risk_pct: float
+    status: str = "protected_initial_stop_verified"
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "position_id": self.position_id,
+            "symbol": self.symbol,
+            "opened_at_ms": self.opened_at_ms,
+            "entry_order_id": self.entry_order_id,
+            "entry_client_order_id": self.entry_client_order_id,
+            "entry_fill_price": self.entry_fill_price,
+            "amount": self.amount,
+            "stop_price": self.stop_price,
+            "stop_order_id": self.stop_order_id,
+            "stop_client_order_id": self.stop_client_order_id,
+            "pre_position_amount": self.pre_position_amount,
+            "post_position_amount": self.post_position_amount,
+            "signal_entry_price": self.signal_entry_price,
+            "initial_risk_pct": self.initial_risk_pct,
+            "status": self.status,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class Live2ExecutionResult:
     verdict: str
     reason: str
     checked_at_ms: int
     pre_position_amount: float | None = None
+    post_position_amount: float | None = None
+    position_delta_amount: float | None = None
     exchange_boundary_status: str = ""
     order_placement_status: str = "not_attempted"
+    entry_order_id: str = ""
+    entry_client_order_id: str = ""
+    entry_fill_price: float | None = None
+    entry_filled_amount: float | None = None
+    entry_fill_timestamp_ms: int | None = None
+    stop_order_id: str = ""
+    stop_client_order_id: str = ""
+    stop_price: float | None = None
+    position_id: str = ""
+    emergency_close_status: str = "not_attempted"
+    integrity_error: bool = False
+    details: dict[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -84,18 +192,27 @@ class Live2ExecutionResult:
             "reason": self.reason,
             "checked_at_ms": self.checked_at_ms,
             "pre_position_amount": self.pre_position_amount,
+            "post_position_amount": self.post_position_amount,
+            "position_delta_amount": self.position_delta_amount,
             "exchange_boundary_status": self.exchange_boundary_status,
             "order_placement_status": self.order_placement_status,
+            "entry_order_id": self.entry_order_id,
+            "entry_client_order_id": self.entry_client_order_id,
+            "entry_fill_price": self.entry_fill_price,
+            "entry_filled_amount": self.entry_filled_amount,
+            "entry_fill_timestamp_ms": self.entry_fill_timestamp_ms,
+            "stop_order_id": self.stop_order_id,
+            "stop_client_order_id": self.stop_client_order_id,
+            "stop_price": self.stop_price,
+            "position_id": self.position_id,
+            "emergency_close_status": self.emergency_close_status,
+            "integrity_error": self.integrity_error,
+            "details": self.details,
         }
 
 
 class Live2ExecutionEngine:
-    """Strict generation-0 execution boundary.
-
-    This class intentionally has no candle/ticker fallback and no local-memory
-    position assumption. Every selected signal must pass an exchange position
-    read before future order placement can be enabled.
-    """
+    """Strict verified real-order execution engine for live2 entries."""
 
     def __init__(
         self,
@@ -110,10 +227,19 @@ class Live2ExecutionEngine:
             reason="execution_preflight_not_checked",
             checked_at_ms=0,
         )
+        self._protected_positions: dict[str, Live2ProtectedPosition] = {}
+        self._trading_halted_reason = ""
         self._total_execute_calls = 0
         self._total_rejected_existing_position = 0
-        self._total_rejected_not_implemented = 0
+        self._total_rejected_capacity = 0
+        self._total_orders_submitted = 0
+        self._total_positions_protected = 0
+        self._total_integrity_errors = 0
         self._total_exchange_errors = 0
+
+    @property
+    def ready(self) -> bool:
+        return self.preflight_result.ready and not self._trading_halted_reason
 
     def preflight(self) -> Live2ExecutionPreflightResult:
         checked_at_ms = utc_now_ms()
@@ -144,9 +270,22 @@ class Live2ExecutionEngine:
         )
         return self.preflight_result
 
-    def execute_selected(self, *, state: SymbolState) -> Live2ExecutionResult:
+    def execute_selected(
+        self,
+        *,
+        state: SymbolState,
+        signal_decision: Live2SignalDecision,
+        entry_guard_result: Live2EntryGuardResult,
+    ) -> Live2ExecutionResult:
         self._total_execute_calls += 1
         checked_at_ms = utc_now_ms()
+        if self._trading_halted_reason:
+            return Live2ExecutionResult(
+                verdict="rejected_execution_halted",
+                reason=self._trading_halted_reason,
+                checked_at_ms=checked_at_ms,
+                exchange_boundary_status="halted",
+            )
         if not self.preflight_result.ready:
             self._total_exchange_errors += 1
             return Live2ExecutionResult(
@@ -163,8 +302,209 @@ class Live2ExecutionEngine:
                 checked_at_ms=checked_at_ms,
                 exchange_boundary_status="not_ready",
             )
+        if state.symbol in self._protected_positions:
+            self._total_rejected_existing_position += 1
+            return Live2ExecutionResult(
+                verdict="rejected_symbol_already_has_live2_position",
+                reason="symbol_already_in_live2_protected_position_registry",
+                checked_at_ms=checked_at_ms,
+                exchange_boundary_status="ready",
+            )
+        if len(self._protected_positions) >= self.config.max_open_positions:
+            self._total_rejected_capacity += 1
+            return Live2ExecutionResult(
+                verdict="rejected_execution_capacity_full",
+                reason="live2_max_open_positions_reached",
+                checked_at_ms=checked_at_ms,
+                exchange_boundary_status="ready",
+                details={"max_open_positions": self.config.max_open_positions},
+            )
+
+        precheck = self._fetch_pre_position(state.symbol, checked_at_ms=checked_at_ms)
+        if precheck.verdict != "pre_position_flat":
+            return precheck
+        pre_position_amount = float(precheck.pre_position_amount or 0.0)
+
+        live_price = entry_guard_result.live_price
+        stop_price = signal_decision.initial_stop_at_decision
+        signal_entry_price = signal_decision.signal_entry_price
+        if not _positive_finite(live_price) or not _positive_finite(stop_price) or not _positive_finite(signal_entry_price):
+            return Live2ExecutionResult(
+                verdict="rejected_execution_invalid_signal_prices",
+                reason="live_price_stop_or_signal_entry_is_missing_or_invalid",
+                checked_at_ms=checked_at_ms,
+                pre_position_amount=pre_position_amount,
+                exchange_boundary_status="ready",
+            )
+        amount = self.config.order_notional_usdt / float(live_price)
+        if not _positive_finite(amount):
+            return Live2ExecutionResult(
+                verdict="rejected_execution_invalid_order_amount",
+                reason="computed_order_amount_is_not_positive_finite",
+                checked_at_ms=checked_at_ms,
+                pre_position_amount=pre_position_amount,
+                exchange_boundary_status="ready",
+                details={"order_notional_usdt": self.config.order_notional_usdt, "live_price": live_price},
+            )
+
+        entry_client_order_id = self._client_order_id(prefix="l2e", symbol=state.symbol, timestamp_ms=checked_at_ms)
         try:
-            pre_position_amount = float(self.exchange_client.fetch_symbol_position_amount(state.symbol))
+            self._total_orders_submitted += 1
+            fill = self.exchange_client.create_market_order_with_fill(
+                state.symbol,
+                "buy",
+                amount,
+                reduce_only=False,
+                client_order_id=entry_client_order_id,
+            )
+        except Exception as exc:
+            self._total_exchange_errors += 1
+            return Live2ExecutionResult(
+                verdict="rejected_entry_order_failed",
+                reason=f"create_market_order_with_fill_failed:{type(exc).__name__}:{exc}",
+                checked_at_ms=checked_at_ms,
+                pre_position_amount=pre_position_amount,
+                exchange_boundary_status="ready",
+                order_placement_status="entry_order_failed",
+                entry_client_order_id=entry_client_order_id,
+            )
+
+        if not _positive_finite(fill.average_price) or not _positive_finite(fill.filled_amount):
+            return self._integrity_error_after_fill(
+                state=state,
+                reason="entry_fill_missing_positive_price_or_amount",
+                fill=fill,
+                pre_position_amount=pre_position_amount,
+                position_delta_amount=None,
+            )
+
+        try:
+            post_position_amount = float(self.exchange_client.fetch_symbol_position_amount(state.symbol))
+        except Exception as exc:
+            return self._integrity_error_after_fill(
+                state=state,
+                reason=f"post_entry_position_fetch_failed:{type(exc).__name__}:{exc}",
+                fill=fill,
+                pre_position_amount=pre_position_amount,
+                position_delta_amount=None,
+            )
+        position_delta_amount = post_position_amount - pre_position_amount
+        if not isfinite(post_position_amount) or not isfinite(position_delta_amount) or position_delta_amount <= 0.0:
+            return self._integrity_error_after_fill(
+                state=state,
+                reason="entry_fill_without_positive_exchange_position_delta",
+                fill=fill,
+                pre_position_amount=pre_position_amount,
+                position_delta_amount=position_delta_amount if isfinite(position_delta_amount) else None,
+                post_position_amount=post_position_amount if isfinite(post_position_amount) else None,
+            )
+        fill_delta_slippage = abs(position_delta_amount - fill.filled_amount) / max(fill.filled_amount, 1e-12)
+        if fill_delta_slippage > self.config.max_position_amount_slippage_ratio:
+            return self._integrity_error_after_fill(
+                state=state,
+                reason="entry_fill_position_amount_mismatch",
+                fill=fill,
+                pre_position_amount=pre_position_amount,
+                position_delta_amount=position_delta_amount,
+                post_position_amount=post_position_amount,
+                details={"fill_delta_slippage": fill_delta_slippage},
+            )
+
+        actual_initial_risk = float(fill.average_price) - float(stop_price)
+        actual_initial_risk_pct = actual_initial_risk / float(fill.average_price) if fill.average_price else 0.0
+        if not isfinite(actual_initial_risk) or actual_initial_risk <= 0.0 or not isfinite(actual_initial_risk_pct):
+            return self._integrity_error_after_fill(
+                state=state,
+                reason="invalid_actual_initial_risk_after_fill",
+                fill=fill,
+                pre_position_amount=pre_position_amount,
+                position_delta_amount=position_delta_amount,
+                post_position_amount=post_position_amount,
+                details={"stop_price": stop_price, "actual_initial_risk_pct": actual_initial_risk_pct},
+            )
+
+        position_id = self._position_id(state.symbol, checked_at_ms, fill.order_id)
+        stop_client_order_id = self._client_order_id(prefix="l2s", symbol=state.symbol, timestamp_ms=checked_at_ms)
+        try:
+            stop_payload = self.exchange_client.create_stop_market_order(
+                state.symbol,
+                "sell",
+                position_delta_amount,
+                float(stop_price),
+                client_order_id=stop_client_order_id,
+            )
+        except Exception as exc:
+            return self._integrity_error_after_fill(
+                state=state,
+                reason=f"initial_stop_submit_failed:{type(exc).__name__}:{exc}",
+                fill=fill,
+                pre_position_amount=pre_position_amount,
+                position_delta_amount=position_delta_amount,
+                post_position_amount=post_position_amount,
+                position_id=position_id,
+            )
+        stop_order_id = _extract_order_id(stop_payload) or stop_client_order_id
+        verified_stop = self._verify_stop_visible(state.symbol, stop_client_order_id)
+        if verified_stop is None:
+            return self._integrity_error_after_fill(
+                state=state,
+                reason="initial_stop_not_visible_after_submit",
+                fill=fill,
+                pre_position_amount=pre_position_amount,
+                position_delta_amount=position_delta_amount,
+                post_position_amount=post_position_amount,
+                position_id=position_id,
+                stop_order_id=stop_order_id,
+                stop_client_order_id=stop_client_order_id,
+                stop_price=float(stop_price),
+            )
+        stop_order_id = _extract_order_id(verified_stop) or stop_order_id
+        protected_position = Live2ProtectedPosition(
+            position_id=position_id,
+            symbol=state.symbol,
+            opened_at_ms=int(fill.timestamp_ms),
+            entry_order_id=fill.order_id,
+            entry_client_order_id=entry_client_order_id,
+            entry_fill_price=float(fill.average_price),
+            amount=position_delta_amount,
+            stop_price=float(stop_price),
+            stop_order_id=stop_order_id,
+            stop_client_order_id=stop_client_order_id,
+            pre_position_amount=pre_position_amount,
+            post_position_amount=post_position_amount,
+            signal_entry_price=float(signal_entry_price),
+            initial_risk_pct=actual_initial_risk_pct,
+        )
+        self._protected_positions[state.symbol] = protected_position
+        self._total_positions_protected += 1
+        return Live2ExecutionResult(
+            verdict="selected",
+            reason="entry_fill_and_initial_stop_verified",
+            checked_at_ms=checked_at_ms,
+            pre_position_amount=pre_position_amount,
+            post_position_amount=post_position_amount,
+            position_delta_amount=position_delta_amount,
+            exchange_boundary_status="ready",
+            order_placement_status="entry_filled_stop_verified",
+            entry_order_id=fill.order_id,
+            entry_client_order_id=entry_client_order_id,
+            entry_fill_price=float(fill.average_price),
+            entry_filled_amount=float(fill.filled_amount),
+            entry_fill_timestamp_ms=int(fill.timestamp_ms),
+            stop_order_id=stop_order_id,
+            stop_client_order_id=stop_client_order_id,
+            stop_price=float(stop_price),
+            position_id=position_id,
+            details={
+                "order_notional_usdt": self.config.order_notional_usdt,
+                "protected_position": protected_position.as_dict(),
+            },
+        )
+
+    def _fetch_pre_position(self, symbol: str, *, checked_at_ms: int) -> Live2ExecutionResult:
+        assert self.exchange_client is not None
+        try:
+            pre_position_amount = float(self.exchange_client.fetch_symbol_position_amount(symbol))
         except Exception as exc:
             self._total_exchange_errors += 1
             return Live2ExecutionResult(
@@ -191,24 +531,128 @@ class Live2ExecutionEngine:
                 pre_position_amount=pre_position_amount,
                 exchange_boundary_status="ready",
             )
-        self._total_rejected_not_implemented += 1
         return Live2ExecutionResult(
-            verdict="rejected_execution_order_placement_not_implemented",
-            reason="generation_0_verified_fill_and_stop_order_path_not_implemented",
+            verdict="pre_position_flat",
+            reason="pre_entry_exchange_position_amount_is_flat",
             checked_at_ms=checked_at_ms,
             pre_position_amount=pre_position_amount,
             exchange_boundary_status="ready",
-            order_placement_status="not_implemented",
         )
+
+    def _verify_stop_visible(self, symbol: str, client_order_id: str) -> dict[str, object] | None:
+        assert self.exchange_client is not None
+        for attempt in range(1, self.config.stop_visibility_attempts + 1):
+            try:
+                return self.exchange_client.fetch_stop_order_by_client_order_id(symbol, client_order_id)
+            except Exception:
+                if attempt >= self.config.stop_visibility_attempts:
+                    return None
+                if self.config.stop_visibility_sleep_seconds > 0:
+                    time.sleep(self.config.stop_visibility_sleep_seconds)
+        return None
+
+    def _integrity_error_after_fill(
+        self,
+        *,
+        state: SymbolState,
+        reason: str,
+        fill: ExchangeOrderFill,
+        pre_position_amount: float,
+        position_delta_amount: float | None,
+        post_position_amount: float | None = None,
+        position_id: str = "",
+        stop_order_id: str = "",
+        stop_client_order_id: str = "",
+        stop_price: float | None = None,
+        details: dict[str, object] | None = None,
+    ) -> Live2ExecutionResult:
+        self._total_integrity_errors += 1
+        self._trading_halted_reason = f"position_integrity_error:{reason}"
+        close_amount = position_delta_amount if _positive_finite(position_delta_amount) else fill.filled_amount
+        emergency_close_status = self._attempt_emergency_close(state.symbol, close_amount)
+        return Live2ExecutionResult(
+            verdict="position_integrity_error",
+            reason=reason,
+            checked_at_ms=utc_now_ms(),
+            pre_position_amount=pre_position_amount,
+            post_position_amount=post_position_amount,
+            position_delta_amount=position_delta_amount,
+            exchange_boundary_status="halted",
+            order_placement_status="entry_filled_unprotected",
+            entry_order_id=fill.order_id,
+            entry_fill_price=float(fill.average_price) if isfinite(float(fill.average_price)) else None,
+            entry_filled_amount=float(fill.filled_amount) if isfinite(float(fill.filled_amount)) else None,
+            entry_fill_timestamp_ms=int(fill.timestamp_ms),
+            stop_order_id=stop_order_id,
+            stop_client_order_id=stop_client_order_id,
+            stop_price=stop_price,
+            position_id=position_id,
+            emergency_close_status=emergency_close_status,
+            integrity_error=True,
+            details=details or {},
+        )
+
+    def _attempt_emergency_close(self, symbol: str, amount: float | None) -> str:
+        if self.exchange_client is None or not _positive_finite(amount):
+            return "not_attempted_invalid_amount_or_exchange"
+        try:
+            client_order_id = self._client_order_id(prefix="l2x", symbol=symbol, timestamp_ms=utc_now_ms())
+            self.exchange_client.create_market_order_with_fill(
+                symbol,
+                "sell",
+                float(amount),
+                reduce_only=True,
+                client_order_id=client_order_id,
+            )
+        except Exception as exc:
+            self._total_exchange_errors += 1
+            return f"failed:{type(exc).__name__}:{exc}"
+        return "submitted_and_fill_verified"
+
+    @staticmethod
+    def _client_order_id(*, prefix: str, symbol: str, timestamp_ms: int) -> str:
+        normalized_symbol = "".join(ch if ch.isalnum() else "_" for ch in symbol)
+        return f"{prefix}_{normalized_symbol}_{timestamp_ms}"
+
+    @staticmethod
+    def _position_id(symbol: str, timestamp_ms: int, order_id: str) -> str:
+        normalized_symbol = symbol.replace("/", "_").replace(":", "_")
+        return f"{normalized_symbol}_{timestamp_ms}_{order_id}"
 
     def status(self) -> dict[str, object]:
         return {
-            "status": "generation_0_execution_boundary_active",
-            "ready": self.preflight_result.ready,
+            "status": "ready" if self.ready else "not_ready",
+            "ready": self.ready,
             "preflight": self.preflight_result.as_dict(),
-            "order_placement_status": "not_implemented_until_verified_fill_and_stop_path_exists",
+            "order_placement_status": "verified_entry_and_initial_stop_enabled",
+            "trading_halted_reason": self._trading_halted_reason,
+            "max_open_positions": self.config.max_open_positions,
+            "open_protected_positions": len(self._protected_positions),
+            "protected_positions": [position.as_dict() for position in self._protected_positions.values()],
             "total_execute_calls": self._total_execute_calls,
             "total_rejected_existing_position": self._total_rejected_existing_position,
-            "total_rejected_not_implemented": self._total_rejected_not_implemented,
+            "total_rejected_capacity": self._total_rejected_capacity,
+            "total_orders_submitted": self._total_orders_submitted,
+            "total_positions_protected": self._total_positions_protected,
+            "total_integrity_errors": self._total_integrity_errors,
             "total_exchange_errors": self._total_exchange_errors,
         }
+
+
+def _positive_finite(value: object) -> bool:
+    try:
+        parsed = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return False
+    return isfinite(parsed) and parsed > 0.0
+
+
+def _extract_order_id(payload: dict[str, object]) -> str | None:
+    value = payload.get("id") or payload.get("orderId")
+    info = payload.get("info")
+    if value is None and isinstance(info, dict):
+        value = info.get("algoId") or info.get("orderId") or info.get("clientAlgoId")
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None

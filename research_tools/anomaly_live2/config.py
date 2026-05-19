@@ -33,6 +33,11 @@ class AnomalyLive2Config:
     entry_guard_max_price_drift_pct: float = 0.004
     entry_guard_min_rr_to_tp1: float = 0.95
     artifact_writer_queue_max_size: int = 8192
+    execution_order_notional_usdt: float = 12.0
+    execution_max_open_positions: int = 1
+    execution_stop_visibility_attempts: int = 5
+    execution_stop_visibility_sleep_seconds: float = 0.5
+    execution_max_position_amount_slippage_ratio: float = 0.05
     runtime_generation: str = "live2_v0"
 
     def __post_init__(self) -> None:
@@ -78,3 +83,13 @@ class AnomalyLive2Config:
             raise ValueError("entry_guard_min_rr_to_tp1 must be > 0")
         if self.artifact_writer_queue_max_size <= 0:
             raise ValueError("artifact_writer_queue_max_size must be > 0")
+        if self.execution_order_notional_usdt <= 0:
+            raise ValueError("execution_order_notional_usdt must be > 0")
+        if self.execution_max_open_positions <= 0:
+            raise ValueError("execution_max_open_positions must be > 0")
+        if self.execution_stop_visibility_attempts <= 0:
+            raise ValueError("execution_stop_visibility_attempts must be > 0")
+        if self.execution_stop_visibility_sleep_seconds < 0:
+            raise ValueError("execution_stop_visibility_sleep_seconds must be >= 0")
+        if self.execution_max_position_amount_slippage_ratio < 0:
+            raise ValueError("execution_max_position_amount_slippage_ratio must be >= 0")
