@@ -2029,3 +2029,12 @@ Live2 now has a stream-only SignalEngine adapter connected to the deadline engin
 New entries remain forbidden: execution, executable-entry guards, exchange position precheck, actual fill, verified stop, and position supervisor are still TODO.
 Next validation: run `run-anomaly-live2` after P311-P316 and inspect `deadline_decision` events. On strong buckets, verdicts should be `selected` only when stream baseline/category checks pass; otherwise `rejected_signal_contract`, `data_not_ready`, or `deadline_missed` must explain the reason.
 ```
+
+## 2026-05-19 — P316 proposed
+
+```text
+Current patch status: P316 PROPOSED, commit UNKNOWN.
+Live2 now has a stream-only SignalEngine adapter connected to the deadline engine. It uses in-memory aggTrade candles and the shared pump category contract subset available from live stream features, with no network/disk IO in evaluation. Categories requiring derivative/OI/mark context are rejected explicitly as unavailable in generation 0.
+New entries remain forbidden: execution, executable-entry guards, exchange position precheck, actual fill, verified stop, and position supervisor are still TODO.
+Next validation: run `run-anomaly-live2` after P311-P316 and inspect `deadline_decision` events. On strong buckets, verdicts should be `selected` only when stream baseline/category checks pass; otherwise `rejected_signal_contract`, `data_not_ready`, or `deadline_missed` must explain the reason.
+```

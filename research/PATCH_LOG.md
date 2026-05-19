@@ -5425,3 +5425,37 @@ Risk:
 ```text
 Medium. This adds the first live2 selected signal verdicts, but it still does not place orders and `new_entries_allowed=false` remains because entry guards and execution are not implemented. The adapter is intentionally conservative and not a full dataframe backtest clone: OI/mark/prior-fast-fade context is rejected as unavailable in live2 generation 0 rather than guessed.
 ```
+
+## 2026-05-19 - P316 proposed - live2 stream signal adapter
+
+Files:
+
+```text
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/state.py
+research_tools/anomaly_live2/market_data/candles.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/artifacts.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Replace the generation-0 `rejected_signal_engine_todo` endpoint with a pure hot-path SignalEngine adapter. The adapter evaluates only already-built live2 stream candles, maps available flow/price/baseline features to the shared pump category contract subset, and explicitly rejects categories requiring unavailable derivative context instead of silently falling back.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium. This adds the first live2 selected signal verdicts, but it still does not place orders and `new_entries_allowed=false` remains because entry guards and execution are not implemented. The adapter is intentionally conservative and not a full dataframe backtest clone: OI/mark/prior-fast-fade context is rejected as unavailable in live2 generation 0 rather than guessed.
+```

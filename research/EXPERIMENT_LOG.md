@@ -3252,3 +3252,12 @@ Acceptance for P316: after P311-P315 are applied, `run-anomaly-live2` emits `dea
 Not accepted yet: no executable entry guard, no real order placement, no actual fill, no verified stop, no TP/BE position supervision, and no profitability claim. `new_entries_allowed=false` remains mandatory.
 Next experiment after P316: add executable-entry guards for stale signal, live-price drift, TP1 already touched, and RR collapsed before any execution code can submit an order.
 ```
+
+## 2026-05-19 - P316 live2 signal-adapter acceptance plan
+
+```text
+Purpose: connect live2 deadline decisions to a real, pure signal adapter without enabling orders.
+Acceptance for P316: after P311-P315 are applied, `run-anomaly-live2` emits `deadline_decision` events where on-time actionable 5s buckets are evaluated by `Live2SignalEngine`. The adapter must not do REST/cache/file IO, must use one SymbolState and in-memory candle rings, must include shared category contract metadata, and must explicitly reject unavailable derivative-context categories instead of masking them with fallback values.
+Not accepted yet: no executable entry guard, no real order placement, no actual fill, no verified stop, no TP/BE position supervision, and no profitability claim. `new_entries_allowed=false` remains mandatory.
+Next experiment after P316: add executable-entry guards for stale signal, live-price drift, TP1 already touched, and RR collapsed before any execution code can submit an order.
+```
