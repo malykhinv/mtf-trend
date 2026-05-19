@@ -92,7 +92,13 @@ class AnomalyLive2Runner:
         self._shutdown_requested = False
         self._decision_latency_degraded_windows = 0
         self._decision_latency_clean_windows = 0
+        self._market_data_degraded_windows = 0
+        self._market_data_clean_windows = 0
+        self._market_data_ready_gate = False
+        self._decision_loop_overrun_count = 0
+        self._decision_loop_max_elapsed_ms = 0
         self._last_runtime_gate_snapshot: dict[str, object] | None = None
+        self._last_market_data_coverage_snapshot: dict[str, object] | None = None
         self._last_runtime_gate_reason = "startup"
         self._last_decision_cycle_elapsed_ms = 0
 
@@ -209,6 +215,10 @@ class AnomalyLive2Runner:
                     writer.write_event(action.as_event())
                 deadline_result = self.deadline_engine.run_cycle()
                 self._last_decision_cycle_elapsed_ms = int((time.perf_counter() - cycle_started) * 1000)
+                self._decision_loop_max_elapsed_ms = max(
+                    self._decision_loop_max_elapsed_ms,
+                    self._last_decision_cycle_elapsed_ms,
+                )
                 for decision in deadline_result.decisions:
                     writer.write_event(decision.as_event())
 
@@ -313,7 +323,8 @@ class AnomalyLive2Runner:
         decision_cycle_elapsed_ms: int,
     ) -> None:
         self._refresh_artifact_writer_readiness(writer)
-        self.readiness.market_data_ready = bool(market_data_status.get("stream_coverage_ready"))
+        self.readiness.market_data_ready = self._market_data_gate_ready(market_data_status)
+        self._write_market_data_coverage_update_if_changed(writer, market_data_status)
         self.readiness.exchange_boundary_ready = self.execution_engine.preflight_result.ready
         self.readiness.execution_ready = self.execution_engine.ready
         self.readiness.position_supervisor_ready = self.position_supervisor.ready
@@ -331,6 +342,8 @@ class AnomalyLive2Runner:
             "execution_ready": self.readiness.execution_ready,
             "new_entries_allowed": self.readiness.new_entries_allowed,
             "reason": runtime_gate_status["reason"],
+            "market_data_source_ready": bool(market_data_status.get("stream_coverage_ready")),
+            "market_data_status": str(market_data_status.get("status", "")),
         }
         if snapshot != self._last_runtime_gate_snapshot:
             self._last_runtime_gate_snapshot = dict(snapshot)
@@ -344,6 +357,47 @@ class AnomalyLive2Runner:
                 )
             )
 
+    def _market_data_gate_ready(self, market_data_status: dict[str, object]) -> bool:
+        source_ready = bool(market_data_status.get("stream_coverage_ready"))
+        if not source_ready:
+            self._market_data_degraded_windows += 1
+            self._market_data_clean_windows = 0
+            self._market_data_ready_gate = False
+            return False
+        self._market_data_clean_windows += 1
+        if self._market_data_clean_windows >= self.config.market_data_recovery_windows:
+            self._market_data_degraded_windows = 0
+            self._market_data_ready_gate = True
+        return self._market_data_ready_gate
+
+    def _write_market_data_coverage_update_if_changed(
+        self,
+        writer: Live2ArtifactWriter,
+        market_data_status: dict[str, object],
+    ) -> None:
+        ws_health = market_data_status.get("ws_health")
+        snapshot = {
+            "status": market_data_status.get("status"),
+            "reason": market_data_status.get("reason"),
+            "stream_coverage_ready": market_data_status.get("stream_coverage_ready"),
+            "market_data_gate_ready": self._market_data_ready_gate,
+            "market_data_clean_windows": self._market_data_clean_windows,
+            "market_data_degraded_windows": self._market_data_degraded_windows,
+            "ws_health": ws_health if isinstance(ws_health, dict) else {},
+        }
+        if snapshot == self._last_market_data_coverage_snapshot:
+            return
+        self._last_market_data_coverage_snapshot = dict(snapshot)
+        writer.write_event(
+            Live2Event(
+                event_type="market_data_coverage_update",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO if self._market_data_ready_gate else Live2Severity.WARNING,
+                message=str(market_data_status.get("reason", "")),
+                data=snapshot,
+            )
+        )
+
     def _decision_latency_gate_ready(
         self,
         *,
@@ -351,10 +405,13 @@ class AnomalyLive2Runner:
         decision_cycle_elapsed_ms: int,
     ) -> bool:
         loop_budget_ms = max(1, int(self.config.decision_loop_interval_seconds * 1000))
+        loop_overrun = decision_cycle_elapsed_ms > loop_budget_ms
+        if loop_overrun:
+            self._decision_loop_overrun_count += 1
         degraded = (
             deadline_result.deadline_missed_count > 0
             or deadline_result.max_latency_ms > self.config.decision_deadline_ms
-            or decision_cycle_elapsed_ms > loop_budget_ms
+            or loop_overrun
         )
         if degraded:
             self._decision_latency_degraded_windows += 1
@@ -390,6 +447,11 @@ class AnomalyLive2Runner:
             "decision_latency_clean_windows": self._decision_latency_clean_windows,
             "decision_latency_degraded_limit": self.config.decision_latency_degraded_windows,
             "decision_latency_recovery_windows": self.config.decision_latency_recovery_windows,
+            "decision_loop_overrun_count": self._decision_loop_overrun_count,
+            "decision_loop_max_elapsed_ms": self._decision_loop_max_elapsed_ms,
+            "market_data_degraded_windows": self._market_data_degraded_windows,
+            "market_data_clean_windows": self._market_data_clean_windows,
+            "market_data_recovery_windows": self.config.market_data_recovery_windows,
             "readiness": self.readiness.as_dict(),
             "position_supervisor_status": self.position_supervisor.status(),
         }
@@ -413,25 +475,76 @@ class AnomalyLive2Runner:
     def _market_data_status(self) -> dict[str, object]:
         ticker_status = self.ticker_source.status().as_dict(stale_ms=self.config.ticker_stale_ms)
         aggtrade_status = self._aggtrade_status()
-        stream_coverage_ready = bool(ticker_status.get("ready")) and bool(aggtrade_status.get("ready"))
+        ticker_ready = bool(ticker_status.get("ready"))
+        aggtrade_ready = bool(aggtrade_status.get("ready"))
+        stream_coverage_ready = ticker_ready and aggtrade_ready
         selected_symbols = 0 if self.universe_selection is None else len(self.universe_selection.selected_symbols)
+        ws_health = self._ws_health_status(ticker_status=ticker_status, aggtrade_status=aggtrade_status)
+        reasons: list[str] = []
         if selected_symbols <= 0:
-            status = "no_startup_universe"
-            reason = "startup_ticker_universe_selection_empty"
-        elif stream_coverage_ready:
+            reasons.append("startup_ticker_universe_selection_empty")
+        if not ticker_ready:
+            reasons.append("ticker_ws_not_ready")
+        if not aggtrade_ready:
+            reasons.append("aggtrade_ws_not_ready")
+        if stream_coverage_ready:
             status = "stream_coverage_ready_signal_adapter_active"
             reason = "ticker_and_aggtrade_ws_ready_signal_adapter_active_execution_boundary_active"
+        elif selected_symbols <= 0:
+            status = "no_startup_universe"
+            reason = "+".join(reasons)
         else:
             status = "stream_coverage_not_ready"
-            reason = "ticker_or_aggtrade_ws_not_ready"
+            reason = "+".join(reasons) if reasons else "stream_coverage_not_ready"
         return {
             "status": status,
             "reason": reason,
             "ticker_ws": ticker_status,
             "aggtrade_ws": aggtrade_status,
             "universe": self._universe_status(),
+            "ws_health": ws_health,
             "stream_coverage_ready": stream_coverage_ready,
-            "market_data_ready_for_entries": False,
+            "market_data_ready_for_entries": self._market_data_ready_gate,
+            "market_data_clean_windows": self._market_data_clean_windows,
+            "market_data_degraded_windows": self._market_data_degraded_windows,
+            "market_data_recovery_windows": self.config.market_data_recovery_windows,
+        }
+
+    def _ws_health_status(
+        self,
+        *,
+        ticker_status: dict[str, object],
+        aggtrade_status: dict[str, object],
+    ) -> dict[str, object]:
+        agg_shards = aggtrade_status.get("shards", [])
+        stale_shards = 0
+        disconnected_shards = 0
+        if isinstance(agg_shards, list):
+            for shard in agg_shards:
+                if not isinstance(shard, dict):
+                    continue
+                if not bool(shard.get("connected")):
+                    disconnected_shards += 1
+                age_ms = shard.get("last_message_age_ms")
+                if isinstance(age_ms, (int, float)) and age_ms > self.config.aggtrade_stale_ms:
+                    stale_shards += 1
+        ticker_reconnects = int(ticker_status.get("reconnect_attempts") or 0)
+        ticker_disconnects = int(ticker_status.get("disconnect_count") or 0)
+        agg_reconnects = int(aggtrade_status.get("reconnect_attempts") or 0)
+        agg_disconnects = int(aggtrade_status.get("disconnect_count") or 0)
+        payload_errors = int(ticker_status.get("payload_errors") or 0) + int(aggtrade_status.get("payload_errors") or 0)
+        return {
+            "ticker_ready": bool(ticker_status.get("ready")),
+            "aggtrade_ready": bool(aggtrade_status.get("ready")),
+            "ticker_connection_status": str(ticker_status.get("connection_status", "unknown")),
+            "aggtrade_source_status": str(aggtrade_status.get("source_status", "unknown")),
+            "shards_total": int(aggtrade_status.get("shards_total") or 0),
+            "shards_connected": int(aggtrade_status.get("shards_connected") or 0),
+            "shards_disconnected": disconnected_shards,
+            "shards_stale": stale_shards,
+            "reconnect_attempts": ticker_reconnects + agg_reconnects,
+            "disconnect_count": ticker_disconnects + agg_disconnects,
+            "payload_errors": payload_errors,
         }
 
     def _aggtrade_status(self) -> dict[str, object]:
@@ -474,6 +587,7 @@ class AnomalyLive2Runner:
                     "universe_min_trade_count_24h": self.config.universe_min_trade_count_24h,
                     "decision_timeframe_ms": self.config.decision_timeframe_ms,
                     "decision_deadline_ms": self.config.decision_deadline_ms,
+                    "market_data_recovery_windows": self.config.market_data_recovery_windows,
                     "execution_order_placement": "not_implemented_until_verified_fill_and_stop_path_exists",
                 },
             )

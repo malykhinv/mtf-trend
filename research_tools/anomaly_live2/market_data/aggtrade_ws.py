@@ -41,6 +41,10 @@ class Live2AggTradeWsShardStatus:
     rows_filtered: int
     payload_errors: int
     streams_count: int
+    connect_attempts: int
+    reconnect_attempts: int
+    disconnect_count: int
+    thread_alive: bool
 
     def is_connected(self, *, stale_ms: int) -> bool:
         if self.connection_status != "connected":
@@ -62,6 +66,10 @@ class Live2AggTradeWsShardStatus:
             "rows_filtered": self.rows_filtered,
             "payload_errors": self.payload_errors,
             "streams_count": self.streams_count,
+            "connect_attempts": self.connect_attempts,
+            "reconnect_attempts": self.reconnect_attempts,
+            "disconnect_count": self.disconnect_count,
+            "thread_alive": self.thread_alive,
             "connected": self.is_connected(stale_ms=stale_ms),
             "stale_ms": stale_ms,
         }
@@ -85,6 +93,9 @@ class Live2AggTradeWsStatus:
             (int(shard.last_message_at_ms) for shard in self.shard_statuses if shard.last_message_at_ms is not None),
             default=None,
         )
+        connect_attempts = sum(shard.connect_attempts for shard in self.shard_statuses)
+        reconnect_attempts = sum(shard.reconnect_attempts for shard in self.shard_statuses)
+        disconnect_count = sum(shard.disconnect_count for shard in self.shard_statuses)
         ready = bool(self.shard_statuses) and connected == len(self.shard_statuses)
         return {
             "source_status": self.source_status,
@@ -100,6 +111,9 @@ class Live2AggTradeWsStatus:
             "rows_applied": rows_applied,
             "rows_filtered": rows_filtered,
             "payload_errors": payload_errors,
+            "connect_attempts": connect_attempts,
+            "reconnect_attempts": reconnect_attempts,
+            "disconnect_count": disconnect_count,
             "shards": [shard.as_dict(stale_ms=stale_ms) for shard in self.shard_statuses],
             "stale_ms": stale_ms,
         }
@@ -219,6 +233,9 @@ class _Live2AggTradeWsShard:
         self._rows_applied = 0
         self._rows_filtered = 0
         self._payload_errors = 0
+        self._connect_attempts = 0
+        self._reconnect_attempts = 0
+        self._disconnect_count = 0
         self._thread = threading.Thread(
             target=self._run_thread,
             name=f"live2-binance-aggtrade-{self.shard_id}",
@@ -249,6 +266,10 @@ class _Live2AggTradeWsShard:
                 rows_filtered=self._rows_filtered,
                 payload_errors=self._payload_errors,
                 streams_count=len(self.market_ids),
+                connect_attempts=self._connect_attempts,
+                reconnect_attempts=self._reconnect_attempts,
+                disconnect_count=self._disconnect_count,
+                thread_alive=self._thread.is_alive(),
             )
 
     def _run_thread(self) -> None:
@@ -256,12 +277,13 @@ class _Live2AggTradeWsShard:
             self._set_status("no_streams", "empty_shard")
             return
         while not self._stop_event.is_set():
+            self._record_connect_attempt()
             loop = asyncio.new_event_loop()
             try:
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(self._run_ws_loop())
             except Exception as exc:  # pragma: no cover - network boundary
-                self._set_status("error", f"{type(exc).__name__}: {exc}")
+                self._set_status("error", f"{type(exc).__name__}: {exc}", count_disconnect=True)
             finally:
                 try:
                     loop.close()
@@ -289,10 +311,10 @@ class _Live2AggTradeWsShard:
                     if message.type == aiohttp.WSMsgType.TEXT:
                         self._handle_ws_payload(message.data)
                     elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
-                        self._set_status("closed", "ws_closed")
+                        self._set_status("closed", "ws_closed", count_disconnect=True)
                         return
                     elif message.type == aiohttp.WSMsgType.ERROR:
-                        self._set_status("error", f"ws_error:{ws.exception()}")
+                        self._set_status("error", f"ws_error:{ws.exception()}", count_disconnect=True)
                         return
 
     def _handle_ws_payload(self, raw: str) -> None:
@@ -348,10 +370,18 @@ class _Live2AggTradeWsShard:
             source=self.source_id,
         )
 
-    def _set_status(self, status: str, error: str | None) -> None:
+    def _record_connect_attempt(self) -> None:
+        with self._lock:
+            self._connect_attempts += 1
+            if self._connect_attempts > 1:
+                self._reconnect_attempts += 1
+
+    def _set_status(self, status: str, error: str | None, *, count_disconnect: bool = False) -> None:
         with self._lock:
             self._connection_status = status
             self._last_error = error
+            if count_disconnect:
+                self._disconnect_count += 1
 
     def _record_payload_error(self, error: str) -> None:
         with self._lock:

@@ -3304,6 +3304,14 @@ Acceptance for P322: after P311-P322 are applied, a protected position must be v
 Not accepted yet: exact stop-trigger fill reconstruction, restart reconciliation, Telegram critical alerts, and full stress hardening under WS reconnects/CPU pressure. P323 should harden runtime coverage/reconnect/latency degradation before any broader live exposure.
 ```
 
+## 2026-05-19 - P323 live2 runtime coverage hardening acceptance plan
+
+```text
+Purpose: make live2 operator/runtime behavior robust under WS reconnects, stale coverage, and CPU/decision-loop pressure before broadening real-order exposure.
+Acceptance for P323: after P311-P323 are applied, `run-anomaly-live2` must expose ticker and aggTrade connect/reconnect/disconnect counters, emit `market_data_coverage_update` on coverage/gate changes, keep `market_data_ready=false` immediately when ticker/aggTrade source coverage is stale or disconnected, and recover only after `market_data_recovery_windows` clean cycles. `runtime_gate_status` must expose decision-loop overrun count/max elapsed ms and market-data clean/degraded window counters.
+Not accepted yet: Telegram critical alerts, restart reconciliation, exact stop-fill reconstruction, and load/stress validation across a broad universe. P324 should add operator Telegram safety messages or restart/order reconciliation depending on the next live2 smoke result.
+```
+
 ## 2026-05-19 - P316 live2 signal-adapter acceptance plan
 
 ```text

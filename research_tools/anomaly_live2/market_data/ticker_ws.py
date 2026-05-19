@@ -35,6 +35,10 @@ class Live2TickerWsStatus:
     payload_errors: int
     tracked_symbols: int
     accept_all_symbols: bool
+    connect_attempts: int
+    reconnect_attempts: int
+    disconnect_count: int
+    thread_alive: bool
 
     def as_dict(self, *, stale_ms: int) -> dict[str, object]:
         now_ms = utc_now_ms()
@@ -52,6 +56,10 @@ class Live2TickerWsStatus:
             "payload_errors": self.payload_errors,
             "tracked_symbols": self.tracked_symbols,
             "accept_all_symbols": self.accept_all_symbols,
+            "connect_attempts": self.connect_attempts,
+            "reconnect_attempts": self.reconnect_attempts,
+            "disconnect_count": self.disconnect_count,
+            "thread_alive": self.thread_alive,
             "ready": ready,
             "stale_ms": stale_ms,
         }
@@ -91,6 +99,9 @@ class Live2TickerWsSource:
         self._rows_applied = 0
         self._rows_filtered = 0
         self._payload_errors = 0
+        self._connect_attempts = 0
+        self._reconnect_attempts = 0
+        self._disconnect_count = 0
         self._thread = threading.Thread(target=self._run_thread, name="live2-binance-all-ticker", daemon=True)
 
     def start(self) -> None:
@@ -124,6 +135,10 @@ class Live2TickerWsSource:
                 payload_errors=self._payload_errors,
                 tracked_symbols=len(self._market_id_to_symbol),
                 accept_all_symbols=self._accept_all_symbols,
+                connect_attempts=self._connect_attempts,
+                reconnect_attempts=self._reconnect_attempts,
+                disconnect_count=self._disconnect_count,
+                thread_alive=self._thread.is_alive(),
             )
 
     @staticmethod
@@ -138,12 +153,13 @@ class Live2TickerWsSource:
 
     def _run_thread(self) -> None:
         while not self._stop_event.is_set():
+            self._record_connect_attempt()
             loop = asyncio.new_event_loop()
             try:
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(self._run_ws_loop())
             except Exception as exc:  # pragma: no cover - network boundary
-                self._set_status("error", f"{type(exc).__name__}: {exc}")
+                self._set_status("error", f"{type(exc).__name__}: {exc}", count_disconnect=True)
             finally:
                 try:
                     loop.close()
@@ -168,10 +184,10 @@ class Live2TickerWsSource:
                     if message.type == aiohttp.WSMsgType.TEXT:
                         self._handle_ws_payload(message.data)
                     elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
-                        self._set_status("closed", "ws_closed")
+                        self._set_status("closed", "ws_closed", count_disconnect=True)
                         return
                     elif message.type == aiohttp.WSMsgType.ERROR:
-                        self._set_status("error", f"ws_error:{ws.exception()}")
+                        self._set_status("error", f"ws_error:{ws.exception()}", count_disconnect=True)
                         return
 
     def _handle_ws_payload(self, raw: str) -> None:
@@ -238,10 +254,18 @@ class Live2TickerWsSource:
         )
         return True
 
-    def _set_status(self, status: str, error: str | None) -> None:
+    def _record_connect_attempt(self) -> None:
+        with self._lock:
+            self._connect_attempts += 1
+            if self._connect_attempts > 1:
+                self._reconnect_attempts += 1
+
+    def _set_status(self, status: str, error: str | None, *, count_disconnect: bool = False) -> None:
         with self._lock:
             self._connection_status = status
             self._last_error = error
+            if count_disconnect:
+                self._disconnect_count += 1
 
     def _record_payload_error(self, error: str) -> None:
         with self._lock:

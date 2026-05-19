@@ -2082,6 +2082,16 @@ Still not complete: dedicated stop-trigger fill lookup, stale open-order reconci
 Next validation: run `run-anomaly-live2 --symbols <one liquid symbol>` with minimal notional, inspect `position_tp1_filled_be_stop_verified`, `position_final_close_verified`, and `position_integrity_error` events, and compare them with exchange UI/open conditional orders.
 ```
 
+## 2026-05-19 — P323 proposed
+
+```text
+Current patch status: P323 PROPOSED, commit UNKNOWN.
+Live2 runtime coverage is hardened around WS health and decision-loop pressure. Ticker and aggTrade sources now expose connect/reconnect/disconnect counters and thread liveness. The runner emits `market_data_coverage_update` when source/gate status changes, keeps market-data readiness false immediately on stale/disconnected coverage, and only re-enables the market-data gate after configured clean recovery windows. Runtime gate status now includes market-data clean/degraded windows and decision-loop overrun counters.
+Trading impact: no signal threshold, order sizing, fill, stop, TP1/BE, or live1 behavior is changed. New entries become stricter under WS reconnect/stale coverage and recover only after clean windows.
+Still not complete: Telegram critical/operator messages, restart/open-order reconciliation, exact stop-trigger fill reconstruction, and full stress/load validation.
+Next validation: run `run-anomaly-live2 --symbols <one liquid symbol>` for 2-5 minutes, interrupt/reconnect network if possible, and inspect `market_data_coverage_update`, `runtime_gate_update`, `live2_status.json.market_data_status.ws_health`, and `runtime_gate_status.decision_loop_overrun_count`. Entries must remain disabled during stale/reconnect periods and recover only after clean windows.
+```
+
 ## 2026-05-19 — P316 proposed
 
 ```text

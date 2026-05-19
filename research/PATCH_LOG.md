@@ -5567,6 +5567,38 @@ Risk:
 High. This patch supervises real live2 positions and can submit reduce-only TP1 exits, replacement stops, and emergency closes once P321 execution is enabled and all runtime gates are ready. It deliberately does not infer final fill prices from candles/tickers; final close is verified by exchange position flat until a dedicated stop-fill lookup is added.
 ```
 
+## 2026-05-19 - P323 proposed - live2 runtime coverage hardening
+
+Files:
+
+```text
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/market_data/ticker_ws.py
+research_tools/anomaly_live2/market_data/aggtrade_ws.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Harden live2 runtime readiness around WS coverage and loop pressure. Add ticker/aggTrade connect/reconnect/disconnect counters, market-data coverage update events, market-data readiness recovery hysteresis, and decision-loop overrun counters in runtime gate status. New entries remain blocked immediately on stale/disconnected coverage and recover only after clean market-data windows.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium. This patch changes readiness gating and market-data status semantics but does not alter signal thresholds, order sizing, fill accounting, stops, or position supervision. The main operational effect is stricter no-new-entries during WS stale/reconnect/coverage transitions and a short clean-window delay before entries are allowed again after recovery.
+```
+
 ## 2026-05-19 - P316 proposed - live2 stream signal adapter
 
 Files:
