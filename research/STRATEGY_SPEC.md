@@ -120,13 +120,16 @@ Live scheduling contract:
 ```text
 selected hot symbol -> scan all due configured TF sets -> then move to next symbol
 noticed radar symbols have a fixed hot-lane before warm bulk/cold coverage; active/opening symbols remain protected first
-warm watch is a bounded score-ranked queue, not an unbounded holding pen; low-rank overflow must be emitted as candidate_dropped_latency_pressure
+symbols that already exceed the 24h prior fake-pump / fast-fade threshold are quarantined before warm/radar hot-lane promotion until enough excess fast-fade timestamps age out of the 24h window; they remain visible to ticker/top-growth audit
+warm watch is a small bounded score-ranked queue, not an unbounded holding pen; low-rank overflow must be emitted as candidate_dropped_latency_pressure
 top-score warm symbols may promote into the hot lane even while optional work is SLA-gated, and this must be explicit in artifacts
 waiting hot symbols may prefetch due subminute entry gap debt, but only with explicit hot_waiting_prefetch_* artifacts/reasons
+after the critical scan/order path, top waiting immediate-danger or high-score radar/warm symbols may run bounded priority aggTrade prefetch even when the queue is not idle; selected signals and open/opening positions still take precedence
 cold universe discovery is explicit DANGER budget, not implicit heavy work
 ticker-radar promotion can add watch symbols but cannot itself open trades
 in subminute WS-live, cold coverage is an adaptive idle/audit scanner: it is hard-off for open/opening positions and active-due symbols, soft-reduced by active-waiting symbols, and scaled by WS health, scheduler heartbeat EWMA, and REST/cache pressure
 inactive_scan_slots_per_cycle=0 means active/radar-only scan and must be visible in artifacts
+live artifacts must expose class-specific candidate latency for active, immediate-danger, ticker-radar, and warm-watch queues; precise scan summaries must include origin first_seen/promote lag so <=5s claims are directly auditable
 operator heartbeat must report scheduler timing plus ticker/aggTrade health and cold coverage score/gate reason, not ambiguous batch/full-cycle timing
 operator heartbeat must expose potential-anomaly processing delay from live latency SLA samples (`Задержка p95`, `max`, radar/warm queue count) so missed entries can be tied to scheduler delay instead of guessed after the fact
 ```
@@ -143,6 +146,7 @@ live parquet writes may be buffered, but buffered/flushed/failed counts must be 
 live startup/reprepare context cache tail writes and normal live OHLCV flushes may use delta parquet files if all ParquetStorage reads merge base+delta transparently and preserve timestamp dedupe
 mandatory startup/reprepare context backfill may perform bounded catch-up passes to close freshness lag accumulated during a long all-symbol pass; this must not skip required symbols/timeframes
 remaining cache gaps must emit artifacts
+tiny open-tail aggTrade gaps may be ignored in prefetch-to-now only when they are below the explicit tiny-tail threshold and are reported as tail_gap_ignored; actual closed decision-frame reads remain strict
 cache gaps are not valid zero-signal evidence
 empty setup/entry OHLCV in live is a retryable dependency, not a normal no_signal that may consume the LTF decision before cache fill catches up
 WS ticker radar required for subminute live must be healthy before startup continues

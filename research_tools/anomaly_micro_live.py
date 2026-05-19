@@ -122,9 +122,9 @@ DEFAULT_WARM_WATCH_TTL_MS = 10 * 60_000
 DEFAULT_WARM_WATCH_MIN_OBSERVATIONS_FOR_PRECISE = 2
 DEFAULT_WARM_WATCH_MIN_PRICE_DELTA_PCT = -0.001
 DEFAULT_WARM_WATCH_MAX_PRICE_DELTA_PCT = 0.012
-CANDIDATE_QUEUE_PRESSURE_MIN_KEEP = 8
+CANDIDATE_QUEUE_PRESSURE_MIN_KEEP = 6
 CANDIDATE_QUEUE_PRESSURE_MAX_RADAR = 18
-CANDIDATE_QUEUE_PRESSURE_MAX_WARM = 12
+CANDIDATE_QUEUE_PRESSURE_MAX_WARM = 8
 CANDIDATE_QUEUE_PRESSURE_BACKLOG_STALE_FACTOR = 2.0
 ADAPTIVE_PRECISE_BUDGET_BREACHED_RADAR_SLOTS = 3
 ADAPTIVE_PRECISE_BUDGET_PRESSURE_RADAR_SLOTS = 3
@@ -132,6 +132,9 @@ ADAPTIVE_PRECISE_BUDGET_ACTIVE_RADAR_SLOTS = 2
 ADAPTIVE_PRECISE_BUDGET_SLOW_CYCLE_RADAR_SLOTS = 3
 HOT_WAITING_PREFETCH_MAX_SYMBOLS = 3
 HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX = 4
+HOT_WAITING_PRIORITY_PREFETCH_MAX_SYMBOLS = 2
+HOT_WAITING_PRIORITY_PREFETCH_MIN_SCORE = 8.0
+HOT_AGGTRADE_PREFETCH_TINY_TAIL_GAP_SKIP_MS = 250
 HOT_PATH_IDLE_OPTIONAL_WORK_POLICY = "critical_scan_first_idle_only_optional_work_v1"
 WARM_WATCH_HOT_LANE_FORCE_PROMOTE_SCORE = 8.0
 DANGER_FLOW_IMMEDIATE_SOURCE = "DANGER_immediate_flow_first_scan"
@@ -482,6 +485,8 @@ SYMBOL_CONTEXT_SNAPSHOT_CONTRACT = "symbol_context_snapshot_v2_cache_only_prior_
 SYMBOL_CONTEXT_PRIOR_LOOKBACK_MS = 24 * 60 * 60 * 1000
 SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS = 24
 SYMBOL_CONTEXT_PRIOR_LOOKBACK_LABEL = f"{SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS}h"
+PRIOR_FAKE_PUMP_QUARANTINE_MAX_FAST_FADES = 2
+PRIOR_FAKE_PUMP_QUARANTINE_RELEASE_GRACE_MS = 1
 LIVE_TP1_TARGET_BASIS = "pump_leg_bottom"
 LIVE_TP1_R = 0.75
 LIVE_TP1_FRACTION = 1.0
@@ -2187,6 +2192,20 @@ class LiveActiveSymbol:
 
 
 @dataclass(slots=True)
+class LivePriorFakePumpQuarantine:
+    symbol: str
+    reason: str
+    expires_at_ms: int
+    updated_at_ms: int
+    prior_fast_fade_count: int
+    max_prior_fast_fade_count: int
+    release_trigger_timestamp_ms: int
+    levels_timeframe: str
+    entry_timeframe: str
+    snapshot_timestamp_ms: int
+
+
+@dataclass(slots=True)
 class LiveTickerRadarWatch:
     symbol: str
     reason: str
@@ -2196,6 +2215,7 @@ class LiveTickerRadarWatch:
     price_delta_pct: float
     quote_volume_delta: float
     quote_volume_delta_ratio: float | None
+    first_seen_ms: int | None = None
     trade_count_delta: int | None = None
     trade_count_delta_ratio: float | None = None
     promotion_source: str = "ticker_price_volume"
@@ -2569,6 +2589,7 @@ class LiveTickerRadarCycleStats:
     warm_watch_promoted_count: int = 0
     warm_watch_rejected_count: int = 0
     warm_watch_deferred_count: int = 0
+    prior_fake_pump_quarantined_count: int = 0
     danger_flow_radar_promoted_count: int = 0
     danger_flow_radar_candidate_count: int = 0
     immediate_danger_flow_promoted_count: int = 0
@@ -4290,6 +4311,7 @@ class AnomalyMicroLiveRunner:
         self._recent_stops: dict[str, list[float]] = {}
         self._active_symbols: dict[str, LiveActiveSymbol] = {}
         self._active_symbols_seen: set[str] = set()
+        self._prior_fake_pump_quarantine: dict[str, LivePriorFakePumpQuarantine] = {}
         self._warm_watch: dict[str, LiveWarmWatch] = {}
         self._ticker_radar_watch: dict[str, LiveTickerRadarWatch] = {}
         self._reject_cooldowns: dict[str, LiveRejectCooldownState] = {}
@@ -4383,6 +4405,7 @@ class AnomalyMicroLiveRunner:
         self._current_candidate_queue_dropped_pressure_count = 0
         self._current_candidate_queue_expired_backlog_stale_count = 0
         self._current_candidate_queue_top_score: float | None = None
+        self._current_candidate_class_latency_payload: dict[str, object] = {}
         self._current_last_batch_selection: LiveSymbolBatchSelection | None = None
         self._current_hot_waiting_prefetch_symbols: tuple[str, ...] = ()
         self._current_hot_waiting_prefetch_count = 0
@@ -4525,6 +4548,11 @@ class AnomalyMicroLiveRunner:
                 "latency_sla_controller_enabled": bool(self.config.latency_sla_controller_enabled),
                 "latency_sla_policy": "protect_active_and_radar_due_scan_latency_by_gating_optional_warm_and_cold",
                 "candidate_queue_pressure_policy": "drop_stale_or_weak_radar_warm_tail_under_latency_pressure_no_cli_knobs",
+                "prior_fake_pump_quarantine_policy": (
+                    "pre_hot_lane_quarantine_from_startup_symbol_context_until_excess_24h_fast_fades_expire"
+                ),
+                "prior_fake_pump_quarantine_max_fast_fades": int(PRIOR_FAKE_PUMP_QUARANTINE_MAX_FAST_FADES),
+                "prior_fake_pump_quarantine_lookback_hours": int(SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS),
                 "adaptive_precise_budget_policy": "limit_radar_precise_slots_under_latency_or_queue_pressure_active_symbols_never_dropped",
                 "dependency_retry_cooldown_policy": "retryable_data_dependencies_are_not_rescanned_every_cycle_until_cooldown_or_stale_timeout",
                 "dependency_retry_min_cooldown_ms": int(DEPENDENCY_RETRY_MIN_COOLDOWN_MS),
@@ -4668,6 +4696,11 @@ class AnomalyMicroLiveRunner:
             self._close_startup_exchange_positions(symbols)
         self._startup_backfill_symbol_context_cache(symbols)
         self._validate_startup_symbol_context_readiness(symbols)
+        self._refresh_prior_fake_pump_quarantine(
+            symbols=symbols,
+            now_ms=int(time.time() * 1000),
+            source="startup_symbol_context",
+        )
         self._seed_startup_ticker_radar(symbols)
         try:
             self._validate_required_ticker_radar_source(symbols)
@@ -4888,6 +4921,10 @@ class AnomalyMicroLiveRunner:
                         "warm_watch_promoted_count": ticker_stats.warm_watch_promoted_count,
                         "warm_watch_rejected_count": ticker_stats.warm_watch_rejected_count,
                         "warm_watch_deferred_count": ticker_stats.warm_watch_deferred_count,
+                        "prior_fake_pump_quarantined_count": ticker_stats.prior_fake_pump_quarantined_count,
+                        "prior_fake_pump_quarantine_active_count": self._prior_fake_pump_quarantine_count(
+                            now_ms=quality_now_ms
+                        ),
                         "latency_sla_status": self._current_latency_sla_status,
                         "latency_sla_optional_scans_allowed": bool(self._current_latency_sla_optional_scans_allowed),
                         "latency_sla_due_scan_p95_seconds": (
@@ -4930,6 +4967,7 @@ class AnomalyMicroLiveRunner:
                         ),
                         "potential_anomaly_latency_samples": int(self._current_latency_sla_due_scan_samples),
                         "potential_anomaly_queue_count": potential_queue_count,
+                        **self._current_candidate_class_latency_payload,
                         **quality_payload,
                         "adaptive_precise_budget_status": self._current_adaptive_precise_budget_status,
                         "adaptive_precise_budget_reason": self._current_adaptive_precise_budget_reason,
@@ -7253,6 +7291,7 @@ class AnomalyMicroLiveRunner:
         self._current_candidate_queue_dropped_pressure_count = selection.candidate_queue_dropped_pressure_count
         self._current_candidate_queue_expired_backlog_stale_count = selection.candidate_queue_expired_backlog_stale_count
         self._current_candidate_queue_top_score = selection.candidate_queue_top_score
+        self._current_candidate_class_latency_payload = self._candidate_class_latency_payload(now_ms=int(time.time() * 1000))
         self._current_last_batch_selection = selection
         hot_prefetch = {
             "symbols": (),
@@ -7313,6 +7352,7 @@ class AnomalyMicroLiveRunner:
                     if selection.candidate_queue_top_score is not None
                     else ""
                 ),
+                **self._current_candidate_class_latency_payload,
                 "adaptive_precise_budget_status": selection.adaptive_precise_budget_status,
                 "adaptive_precise_budget_reason": selection.adaptive_precise_budget_reason,
                 "adaptive_precise_budget_limit": (
@@ -7419,13 +7459,16 @@ class AnomalyMicroLiveRunner:
             skip_reason = "signal_processed_order_path_has_priority"
         elif position_or_opening:
             skip_reason = "position_or_opening_has_priority"
-        elif selection.active_due or selection.radar_due:
-            skip_reason = "due_hot_scan_has_priority"
         elif not selection.latency_sla_optional_scans_allowed:
             skip_reason = selection.latency_sla_reason or LATENCY_SLA_OPTIONAL_SCANS_GATED_REASON
         elif queue_count > HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX:
             skip_reason = f"candidate_queue_above_idle_prefetch_limit:{queue_count}>{HOT_WAITING_PREFETCH_IDLE_QUEUE_MAX}"
         if skip_reason:
+            if skip_reason not in {"signal_processed_order_path_has_priority", "position_or_opening_has_priority"}:
+                priority_result = self._prefetch_priority_hot_waiting_symbols(selection, now_ms=now_ms)
+                if priority_result["count"]:
+                    self._set_current_hot_waiting_prefetch(priority_result)
+                    return priority_result
             result = {
                 "symbols": (),
                 "count": 0,
@@ -7454,6 +7497,86 @@ class AnomalyMicroLiveRunner:
         result = self._prefetch_hot_waiting_symbols(selection, now_ms=now_ms)
         self._set_current_hot_waiting_prefetch(result)
         return result
+
+    def _prefetch_priority_hot_waiting_symbols(
+        self,
+        selection: LiveSymbolBatchSelection,
+        *,
+        now_ms: int,
+    ) -> dict[str, object]:
+        if HOT_WAITING_PRIORITY_PREFETCH_MAX_SYMBOLS <= 0 or self.aggtrade_source is None:
+            return {
+                "symbols": (),
+                "count": 0,
+                "limit": max(0, int(HOT_WAITING_PRIORITY_PREFETCH_MAX_SYMBOLS)),
+                "policy": "priority_disabled_or_no_aggtrade_source",
+            }
+        selected_keys = {_position_symbol_key(symbol) for symbol in selection.batch}
+        candidates: list[tuple[int, float, int, str, str]] = []
+        with self._state_lock:
+            for symbol in selection.radar_waiting:
+                key = _position_symbol_key(symbol)
+                watch = self._ticker_radar_watch.get(key)
+                if watch is None or key in selected_keys:
+                    continue
+                immediate = self._ticker_radar_watch_is_immediate_danger_flow(watch)
+                score = float(watch.score)
+                if not immediate and score < float(HOT_WAITING_PRIORITY_PREFETCH_MIN_SCORE):
+                    continue
+                candidates.append((1 if immediate else 0, score, int(watch.updated_at_ms), symbol, "hot_waiting_priority_radar_prefetch"))
+                selected_keys.add(key)
+            for symbol in selection.warm_watch_waiting:
+                key = _position_symbol_key(symbol)
+                watch = self._warm_watch.get(key)
+                if watch is None or key in selected_keys:
+                    continue
+                immediate = self._warm_watch_is_immediate_danger_flow(watch)
+                score = float(watch.score)
+                if not immediate and score < float(HOT_WAITING_PRIORITY_PREFETCH_MIN_SCORE):
+                    continue
+                candidates.append((1 if immediate else 0, score, int(watch.updated_at_ms), symbol, "hot_waiting_priority_warm_prefetch"))
+                selected_keys.add(key)
+        candidates.sort(reverse=True)
+        selected = [
+            (symbol, reason)
+            for _immediate, _score, _updated_at_ms, symbol, reason in candidates[
+                : max(0, int(HOT_WAITING_PRIORITY_PREFETCH_MAX_SYMBOLS))
+            ]
+        ]
+        for symbol, reason in selected:
+            self._prefetch_symbol_subminute_entry_gap_debt(
+                symbol,
+                now_ms=now_ms,
+                reason=reason,
+                scan_mode=reason,
+            )
+        if selected:
+            self.artifacts.append_event(
+                "hot_waiting_priority_prefetch_cycle",
+                "__live__",
+                {
+                    "symbols": [symbol for symbol, _reason in selected],
+                    "reasons_by_symbol": {symbol: reason for symbol, reason in selected},
+                    "limit": int(HOT_WAITING_PRIORITY_PREFETCH_MAX_SYMBOLS),
+                    "min_score": float(HOT_WAITING_PRIORITY_PREFETCH_MIN_SCORE),
+                    "radar_waiting_count": len(selection.radar_waiting),
+                    "warm_watch_waiting_count": len(selection.warm_watch_waiting),
+                    "latency_sla_status": selection.latency_sla_status,
+                    "latency_sla_reason": selection.latency_sla_reason,
+                    "candidate_queue_count": int(
+                        selection.candidate_queue_radar_total_after + selection.candidate_queue_warm_total_after
+                    ),
+                    "policy": (
+                        "post_critical_scan_prefetch_top_immediate_or_high_score_waiting_symbols_even_when_not_idle"
+                    ),
+                },
+            )
+        return {
+            "symbols": tuple(symbol for symbol, _reason in selected),
+            "count": len(selected),
+            "limit": max(0, int(HOT_WAITING_PRIORITY_PREFETCH_MAX_SYMBOLS)),
+            "policy": "priority_prefetch_top_waiting_hot_symbols_after_critical_scan",
+        }
 
     def _set_current_hot_waiting_prefetch(self, result: dict[str, object]) -> None:
         symbols = result.get("symbols", ())
@@ -8025,6 +8148,108 @@ class AnomalyMicroLiveRunner:
                 latencies.append(max(0.0, (int(now_ms) - candle_close_ms) / 1000.0))
         return latencies
 
+    def _latency_class_summary_payload(
+        self,
+        class_name: str,
+        symbols: list[str] | tuple[str, ...],
+        *,
+        now_ms: int,
+    ) -> dict[str, object]:
+        latencies: list[float] = []
+        unique_symbols: dict[str, str] = {}
+        for symbol in symbols:
+            unique_symbols[_position_symbol_key(symbol)] = symbol
+        for symbol in unique_symbols.values():
+            latencies.extend(self._due_signal_scan_latency_seconds(symbol, now_ms=now_ms))
+        if not latencies:
+            return {
+                f"{class_name}_latency_samples": 0,
+                f"{class_name}_latency_p95_seconds": "",
+                f"{class_name}_latency_max_seconds": "",
+                f"{class_name}_symbol_count": len(unique_symbols),
+            }
+        return {
+            f"{class_name}_latency_samples": int(len(latencies)),
+            f"{class_name}_latency_p95_seconds": round(float(_percentile(latencies, 0.95)), 3),
+            f"{class_name}_latency_max_seconds": round(float(max(latencies)), 3),
+            f"{class_name}_symbol_count": len(unique_symbols),
+        }
+
+    def _candidate_class_latency_payload(self, *, now_ms: int) -> dict[str, object]:
+        with self._state_lock:
+            active_symbols = [
+                state.symbol
+                for state in self._active_symbols.values()
+            ]
+            for position in self._open_positions.values():
+                active_symbols.append(position.signal.symbol)
+            immediate_symbols: list[str] = []
+            radar_symbols: list[str] = []
+            warm_symbols: list[str] = []
+            for watch in self._ticker_radar_watch.values():
+                if self._ticker_radar_watch_is_immediate_danger_flow(watch):
+                    immediate_symbols.append(watch.symbol)
+                else:
+                    radar_symbols.append(watch.symbol)
+            for watch in self._warm_watch.values():
+                if self._warm_watch_is_immediate_danger_flow(watch):
+                    immediate_symbols.append(watch.symbol)
+                else:
+                    warm_symbols.append(watch.symbol)
+        payload: dict[str, object] = {}
+        payload.update(self._latency_class_summary_payload("active", active_symbols, now_ms=now_ms))
+        payload.update(self._latency_class_summary_payload("immediate_danger", immediate_symbols, now_ms=now_ms))
+        payload.update(self._latency_class_summary_payload("ticker_radar", radar_symbols, now_ms=now_ms))
+        payload.update(self._latency_class_summary_payload("warm_watch", warm_symbols, now_ms=now_ms))
+        return payload
+
+    def _scan_origin_latency_payload(self, symbol: str, *, now_ms: int, scan_mode: str) -> dict[str, object]:
+        symbol_key = _position_symbol_key(symbol)
+        origin = ""
+        origin_reason = ""
+        first_seen_ms: int | None = None
+        promoted_at_ms: int | None = None
+        score: float | None = None
+        immediate_danger_flow = False
+        with self._state_lock:
+            active = self._active_symbols.get(symbol_key)
+            radar = self._ticker_radar_watch.get(symbol_key)
+            warm = self._warm_watch.get(symbol_key)
+            if active is not None:
+                origin = "active_symbol"
+                origin_reason = active.reason
+                first_seen_ms = active.decision_timestamp_ms or active.updated_at_ms
+                promoted_at_ms = active.updated_at_ms
+            elif radar is not None:
+                origin = "ticker_radar"
+                origin_reason = radar.reason
+                first_seen_ms = radar.first_seen_ms or radar.updated_at_ms
+                promoted_at_ms = radar.updated_at_ms
+                score = radar.score
+                immediate_danger_flow = self._ticker_radar_watch_is_immediate_danger_flow(radar)
+            elif warm is not None:
+                origin = "warm_watch"
+                origin_reason = warm.reason
+                first_seen_ms = warm.first_seen_ms
+                promoted_at_ms = warm.updated_at_ms
+                score = warm.score
+                immediate_danger_flow = self._warm_watch_is_immediate_danger_flow(warm)
+        payload: dict[str, object] = {
+            "scan_origin": origin or scan_mode,
+            "scan_origin_reason": origin_reason,
+            "scan_origin_immediate_danger_flow": bool(immediate_danger_flow),
+            "scan_origin_score": round(float(score), 6) if score is not None else "",
+            "scan_origin_first_seen_ms": int(first_seen_ms) if first_seen_ms is not None else "",
+            "scan_origin_promoted_at_ms": int(promoted_at_ms) if promoted_at_ms is not None else "",
+            "scan_origin_first_seen_to_scan_ms": (
+                max(0, int(now_ms) - int(first_seen_ms)) if first_seen_ms is not None else ""
+            ),
+            "scan_origin_promote_to_scan_ms": (
+                max(0, int(now_ms) - int(promoted_at_ms)) if promoted_at_ms is not None else ""
+            ),
+        }
+        return payload
+
     def _adaptive_cold_coverage_slots(
         self,
         *,
@@ -8269,6 +8494,8 @@ class AnomalyMicroLiveRunner:
                     "candidate_source": "ticker_radar",
                     "reason": reason,
                     "score": item.score,
+                    "first_seen_ms": item.first_seen_ms if item.first_seen_ms is not None else "",
+                    "age_ms": max(0, int(now_ms) - int(item.first_seen_ms)) if item.first_seen_ms is not None else "",
                     "updated_at_ms": item.updated_at_ms,
                     "expires_at_ms": item.expires_at_ms,
                     "price_delta_pct": item.price_delta_pct,
@@ -8706,6 +8933,8 @@ class AnomalyMicroLiveRunner:
                     "reason": item.reason,
                     "score": item.score,
                     "expires_at_ms": item.expires_at_ms,
+                    "first_seen_ms": item.first_seen_ms if item.first_seen_ms is not None else "",
+                    "age_ms": max(0, int(now_ms) - int(item.first_seen_ms)) if item.first_seen_ms is not None else "",
                     "price_delta_pct": item.price_delta_pct,
                     "quote_volume_delta": item.quote_volume_delta,
                     "quote_volume_delta_ratio": item.quote_volume_delta_ratio if item.quote_volume_delta_ratio is not None else "",
@@ -8750,8 +8979,8 @@ class AnomalyMicroLiveRunner:
                 self._warm_watch.values(),
                 key=lambda item: (
                     self._warm_watch_is_immediate_danger_flow(item),
-                    item.updated_at_ms,
                     item.score,
+                    item.updated_at_ms,
                     item.symbol,
                 ),
                 reverse=True,
@@ -8942,6 +9171,205 @@ class AnomalyMicroLiveRunner:
         self.artifacts.append_session_top_growth_snapshot(snapshot)
         self._last_session_top_growth_artifact_at_ms = int(now_ms)
 
+    def _prior_fake_pump_quarantine_candidate(
+        self,
+        symbol: str,
+        *,
+        now_ms: int,
+    ) -> LivePriorFakePumpQuarantine | None:
+        threshold = int(PRIOR_FAKE_PUMP_QUARANTINE_MAX_FAST_FADES)
+        lookback_start_ms = int(now_ms) - int(SYMBOL_CONTEXT_PRIOR_LOOKBACK_MS)
+        best: LivePriorFakePumpQuarantine | None = None
+        for levels_timeframe, entry_timeframe in self.config.timeframe_pairs:
+            snapshot = self._symbol_context_snapshots.get(
+                self._symbol_context_snapshot_key(symbol, levels_timeframe, entry_timeframe)
+            )
+            if snapshot is None or snapshot.status != "ok":
+                continue
+            snapshot_age_ms = max(0, int(now_ms) - int(snapshot.snapshot_timestamp_ms))
+            if snapshot_age_ms > self._effective_symbol_context_snapshot_fresh_ms():
+                continue
+            timestamps = tuple(
+                int(ts)
+                for ts in snapshot.prior_fast_fade_timestamps_ms
+                if lookback_start_ms <= int(ts) <= int(now_ms)
+            )
+            count = len(timestamps)
+            if count <= threshold:
+                continue
+            excess_count = count - threshold
+            release_trigger_timestamp_ms = int(sorted(timestamps)[excess_count - 1])
+            expires_at_ms = (
+                int(release_trigger_timestamp_ms)
+                + int(SYMBOL_CONTEXT_PRIOR_LOOKBACK_MS)
+                + int(PRIOR_FAKE_PUMP_QUARANTINE_RELEASE_GRACE_MS)
+            )
+            candidate = LivePriorFakePumpQuarantine(
+                symbol=symbol,
+                reason="prior_fast_fade_count_above_24h_threshold",
+                expires_at_ms=int(expires_at_ms),
+                updated_at_ms=int(now_ms),
+                prior_fast_fade_count=int(count),
+                max_prior_fast_fade_count=int(threshold),
+                release_trigger_timestamp_ms=int(release_trigger_timestamp_ms),
+                levels_timeframe=levels_timeframe.value,
+                entry_timeframe=entry_timeframe.value,
+                snapshot_timestamp_ms=int(snapshot.snapshot_timestamp_ms),
+            )
+            if best is None or candidate.prior_fast_fade_count > best.prior_fast_fade_count or (
+                candidate.prior_fast_fade_count == best.prior_fast_fade_count
+                and candidate.expires_at_ms > best.expires_at_ms
+            ):
+                best = candidate
+        return best
+
+    def _refresh_prior_fake_pump_quarantine(
+        self,
+        *,
+        symbols: list[str],
+        now_ms: int,
+        source: str,
+    ) -> None:
+        symbol_keys = {_position_symbol_key(symbol): symbol for symbol in symbols}
+        added = 0
+        updated = 0
+        released = 0
+        with self._state_lock:
+            active_keys = {
+                *self._opening_symbols,
+                *self._open_positions.keys(),
+                *self._active_symbols.keys(),
+            }
+            expired_keys = [
+                key
+                for key, state in self._prior_fake_pump_quarantine.items()
+                if state.expires_at_ms <= int(now_ms) or key not in symbol_keys or key in active_keys
+            ]
+            expired_states = [self._prior_fake_pump_quarantine.pop(key) for key in expired_keys]
+        for state in expired_states:
+            released += 1
+            self.artifacts.append_event(
+                "prior_fake_pump_quarantine_released",
+                state.symbol,
+                {
+                    "reason": "expired_or_no_longer_applicable",
+                    "source": source,
+                    "expires_at_ms": int(state.expires_at_ms),
+                    "released_at_ms": int(now_ms),
+                    "prior_fast_fade_count_24h": int(state.prior_fast_fade_count),
+                    "max_prior_fast_fade_count_24h": int(state.max_prior_fast_fade_count),
+                    "release_trigger_timestamp_ms": int(state.release_trigger_timestamp_ms),
+                    "levels_tf": state.levels_timeframe,
+                    "entry_tf": state.entry_timeframe,
+                },
+            )
+        for symbol in symbols:
+            symbol_key = _position_symbol_key(symbol)
+            with self._state_lock:
+                if (
+                    symbol_key in self._opening_symbols
+                    or symbol_key in self._open_positions
+                    or symbol_key in self._active_symbols
+                ):
+                    continue
+            candidate = self._prior_fake_pump_quarantine_candidate(symbol, now_ms=now_ms)
+            if candidate is None:
+                with self._state_lock:
+                    previous = self._prior_fake_pump_quarantine.pop(symbol_key, None)
+                if previous is not None:
+                    released += 1
+                    self.artifacts.append_event(
+                        "prior_fake_pump_quarantine_released",
+                        previous.symbol,
+                        {
+                            "reason": "prior_fast_fade_count_back_within_threshold",
+                            "source": source,
+                            "expires_at_ms": int(previous.expires_at_ms),
+                            "released_at_ms": int(now_ms),
+                            "prior_fast_fade_count_24h": int(previous.prior_fast_fade_count),
+                            "max_prior_fast_fade_count_24h": int(previous.max_prior_fast_fade_count),
+                            "release_trigger_timestamp_ms": int(previous.release_trigger_timestamp_ms),
+                            "levels_tf": previous.levels_timeframe,
+                            "entry_tf": previous.entry_timeframe,
+                        },
+                    )
+                continue
+            with self._state_lock:
+                previous = self._prior_fake_pump_quarantine.get(symbol_key)
+                self._prior_fake_pump_quarantine[symbol_key] = candidate
+            if previous is None:
+                added += 1
+                event_name = "prior_fake_pump_quarantine_started"
+            elif (
+                previous.expires_at_ms != candidate.expires_at_ms
+                or previous.prior_fast_fade_count != candidate.prior_fast_fade_count
+                or previous.levels_timeframe != candidate.levels_timeframe
+                or previous.entry_timeframe != candidate.entry_timeframe
+            ):
+                updated += 1
+                event_name = "prior_fake_pump_quarantine_updated"
+            else:
+                continue
+            self.artifacts.append_event(
+                event_name,
+                symbol,
+                {
+                    "reason": candidate.reason,
+                    "source": source,
+                    "prior_fast_fade_count_24h": int(candidate.prior_fast_fade_count),
+                    "max_prior_fast_fade_count_24h": int(candidate.max_prior_fast_fade_count),
+                    "release_trigger_timestamp_ms": int(candidate.release_trigger_timestamp_ms),
+                    "expires_at_ms": int(candidate.expires_at_ms),
+                    "remaining_ms": max(0, int(candidate.expires_at_ms) - int(now_ms)),
+                    "levels_tf": candidate.levels_timeframe,
+                    "entry_tf": candidate.entry_timeframe,
+                    "snapshot_timestamp_ms": int(candidate.snapshot_timestamp_ms),
+                    "lookback_hours": int(SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS),
+                    "policy": "quarantine_until_excess_24h_fast_fade_timestamps_age_out",
+                },
+            )
+        active_count = self._prior_fake_pump_quarantine_count(now_ms=now_ms)
+        if added or updated or released:
+            self.artifacts.append_event(
+                "prior_fake_pump_quarantine_refresh",
+                "__live__",
+                {
+                    "source": source,
+                    "added_count": int(added),
+                    "updated_count": int(updated),
+                    "released_count": int(released),
+                    "active_count": int(active_count),
+                    "max_prior_fast_fade_count_24h": int(PRIOR_FAKE_PUMP_QUARANTINE_MAX_FAST_FADES),
+                    "lookback_hours": int(SYMBOL_CONTEXT_PRIOR_LOOKBACK_HOURS),
+                },
+            )
+
+    def _prior_fake_pump_quarantine_count(self, *, now_ms: int) -> int:
+        with self._state_lock:
+            expired = [
+                key for key, state in self._prior_fake_pump_quarantine.items()
+                if state.expires_at_ms <= int(now_ms)
+            ]
+            for key in expired:
+                self._prior_fake_pump_quarantine.pop(key, None)
+            return len(self._prior_fake_pump_quarantine)
+
+    def _prior_fake_pump_quarantine_for_symbol(
+        self,
+        symbol: str,
+        *,
+        now_ms: int,
+    ) -> LivePriorFakePumpQuarantine | None:
+        symbol_key = _position_symbol_key(symbol)
+        with self._state_lock:
+            state = self._prior_fake_pump_quarantine.get(symbol_key)
+            if state is None:
+                return None
+            if state.expires_at_ms <= int(now_ms):
+                self._prior_fake_pump_quarantine.pop(symbol_key, None)
+                return None
+            return state
+
     def _maybe_update_ticker_radar(self, symbols: list[str]) -> LiveTickerRadarCycleStats:
         configured_source = self.ticker_snapshot_source.source_id
         if not self.config.ticker_radar_enabled:
@@ -8963,6 +9391,11 @@ class AnomalyMicroLiveRunner:
                 reason="interval_not_elapsed",
             )
         self._last_ticker_radar_at_ms = now_ms
+        self._refresh_prior_fake_pump_quarantine(
+            symbols=symbols,
+            now_ms=now_ms,
+            source="ticker_radar_pre_promotion",
+        )
         try:
             snapshots, source, source_status, source_reason = self._fetch_ticker_radar_snapshots(symbols, stage="cycle")
         except Exception as exc:
@@ -9039,9 +9472,38 @@ class AnomalyMicroLiveRunner:
         )
         danger_flow_promoted_count = 0
         immediate_danger_flow_promoted_count = 0
+        quarantined_count = 0
         for promotion in radar_candidates:
             promotion_source = str(promotion.get("promotion_source") or "ticker_price_volume")
             immediate_danger_flow = self._promotion_is_immediate_danger_flow(promotion)
+            quarantine = self._prior_fake_pump_quarantine_for_symbol(str(promotion.get("symbol") or ""), now_ms=now_ms)
+            if quarantine is not None:
+                quarantined_count += 1
+                self.artifacts.append_event(
+                    "candidate_quarantined_prior_fake_pumps",
+                    quarantine.symbol,
+                    {
+                        "reason": quarantine.reason,
+                        "source": "ticker_radar_pre_warm_watch",
+                        "promotion_source": promotion_source,
+                        "score": promotion.get("score", ""),
+                        "price_delta_pct": promotion.get("price_delta_pct", ""),
+                        "quote_volume_delta": promotion.get("quote_volume_delta", ""),
+                        "quote_volume_delta_ratio": promotion.get("quote_volume_delta_ratio", ""),
+                        "trade_count_delta": promotion.get("trade_count_delta", ""),
+                        "trade_count_delta_ratio": promotion.get("trade_count_delta_ratio", ""),
+                        "prior_fast_fade_count_24h": int(quarantine.prior_fast_fade_count),
+                        "max_prior_fast_fade_count_24h": int(quarantine.max_prior_fast_fade_count),
+                        "release_trigger_timestamp_ms": int(quarantine.release_trigger_timestamp_ms),
+                        "expires_at_ms": int(quarantine.expires_at_ms),
+                        "remaining_ms": max(0, int(quarantine.expires_at_ms) - int(now_ms)),
+                        "levels_tf": quarantine.levels_timeframe,
+                        "entry_tf": quarantine.entry_timeframe,
+                        "snapshot_timestamp_ms": int(quarantine.snapshot_timestamp_ms),
+                        "policy": "blocked_before_warm_or_radar_hot_lane_until_excess_24h_fake_fades_expire",
+                    },
+                )
+                continue
             action = self._mark_or_promote_warm_watch(
                 promotion,
                 now_ms=now_ms,
@@ -9075,6 +9537,8 @@ class AnomalyMicroLiveRunner:
                 "warm_watch_promoted_count": warm_watch_promoted_count,
                 "warm_watch_rejected_count": warm_watch_rejected_count,
                 "warm_watch_deferred_count": warm_watch_deferred_count,
+                "prior_fake_pump_quarantined_count": quarantined_count,
+                "prior_fake_pump_quarantine_active_count": self._prior_fake_pump_quarantine_count(now_ms=now_ms),
                 "warm_watch_enabled": bool(self.config.warm_watch_enabled),
                 "danger_flow_radar_promoted_count": danger_flow_promoted_count,
                 "danger_flow_radar_candidate_count": danger_flow_candidate_count,
@@ -9115,6 +9579,7 @@ class AnomalyMicroLiveRunner:
             warm_watch_promoted_count=warm_watch_promoted_count,
             warm_watch_rejected_count=warm_watch_rejected_count,
             warm_watch_deferred_count=warm_watch_deferred_count,
+            prior_fake_pump_quarantined_count=quarantined_count,
             danger_flow_radar_promoted_count=danger_flow_promoted_count,
             danger_flow_radar_candidate_count=danger_flow_candidate_count,
             immediate_danger_flow_promoted_count=immediate_danger_flow_promoted_count,
@@ -9461,6 +9926,7 @@ class AnomalyMicroLiveRunner:
                 prepump_warm_watch_features_used=prepump_features_used,
                 prepump_warm_watch_features_missing=prepump_features_missing,
                 prepump_warm_watch_top_features=prepump_top_features,
+                first_seen_ms=int(promote_payload.get("first_seen_ms") or now_ms),
             )
             return "promoted"
         reject_reason = self._warm_watch_reject_reason(
@@ -9773,6 +10239,7 @@ class AnomalyMicroLiveRunner:
         prepump_warm_watch_features_used: int = 0,
         prepump_warm_watch_features_missing: int = 0,
         prepump_warm_watch_top_features: tuple[str, ...] = (),
+        first_seen_ms: int | None = None,
     ) -> None:
         expires_at_ms = now_ms + max(1, int(self.config.ticker_radar_watch_ttl_ms))
         symbol_key = _position_symbol_key(symbol)
@@ -9780,6 +10247,15 @@ class AnomalyMicroLiveRunner:
         with self._state_lock:
             current = self._ticker_radar_watch.get(symbol_key)
             should_emit = current is None or current.expires_at_ms < now_ms or score > current.score
+            watch_first_seen_ms = (
+                int(first_seen_ms)
+                if first_seen_ms is not None
+                else (
+                    int(current.first_seen_ms)
+                    if current is not None and current.first_seen_ms is not None
+                    else int(now_ms)
+                )
+            )
             self._ticker_radar_watch[symbol_key] = LiveTickerRadarWatch(
                 symbol=symbol,
                 reason=reason,
@@ -9789,6 +10265,7 @@ class AnomalyMicroLiveRunner:
                 price_delta_pct=price_delta_pct,
                 quote_volume_delta=quote_volume_delta,
                 quote_volume_delta_ratio=quote_volume_delta_ratio,
+                first_seen_ms=watch_first_seen_ms,
                 trade_count_delta=trade_count_delta,
                 trade_count_delta_ratio=trade_count_delta_ratio,
                 promotion_source=promotion_source,
@@ -9816,6 +10293,8 @@ class AnomalyMicroLiveRunner:
                     "reason": reason,
                     "expires_at_ms": expires_at_ms,
                     "ttl_ms": int(self.config.ticker_radar_watch_ttl_ms),
+                    "first_seen_ms": int(watch_first_seen_ms),
+                    "age_ms": max(0, int(now_ms) - int(watch_first_seen_ms)),
                     "score": score,
                     "base_score": base_score if base_score is not None else score,
                     "price_delta_pct": price_delta_pct,
@@ -9914,6 +10393,16 @@ class AnomalyMicroLiveRunner:
                     "watch_reason": cleared_radar_watch.reason,
                     "score": cleared_radar_watch.score,
                     "expires_at_ms": cleared_radar_watch.expires_at_ms,
+                    "first_seen_ms": (
+                        cleared_radar_watch.first_seen_ms
+                        if cleared_radar_watch.first_seen_ms is not None
+                        else ""
+                    ),
+                    "age_ms": (
+                        max(0, int(now_ms) - int(cleared_radar_watch.first_seen_ms))
+                        if cleared_radar_watch.first_seen_ms is not None
+                        else ""
+                    ),
                     "price_delta_pct": cleared_radar_watch.price_delta_pct,
                     "quote_volume_delta": cleared_radar_watch.quote_volume_delta,
                     "quote_volume_delta_ratio": (
@@ -12132,6 +12621,46 @@ class AnomalyMicroLiveRunner:
         missing_ranges = _merge_time_ranges(missing_ranges)
         if not missing_ranges:
             return
+        request_end_ms = max(end for _start, end in requested_ranges)
+        tiny_tail_gap_max_ms = max(0, int(HOT_AGGTRADE_PREFETCH_TINY_TAIL_GAP_SKIP_MS))
+        ignored_tail_ranges: list[tuple[int, int]] = []
+        if tiny_tail_gap_max_ms > 0:
+            fetchable_missing_ranges: list[tuple[int, int]] = []
+            tail_cutoff_ms = int(request_end_ms) - tiny_tail_gap_max_ms
+            for missing_start_ms, missing_end_ms in missing_ranges:
+                missing_duration_ms = max(0, int(missing_end_ms) - int(missing_start_ms) + 1)
+                if int(missing_end_ms) >= tail_cutoff_ms and missing_duration_ms <= tiny_tail_gap_max_ms:
+                    ignored_tail_ranges.append((int(missing_start_ms), int(missing_end_ms)))
+                else:
+                    fetchable_missing_ranges.append((int(missing_start_ms), int(missing_end_ms)))
+            missing_ranges = fetchable_missing_ranges
+        if not missing_ranges:
+            self.artifacts.append_event(
+                "aggtrade_rest_gap_prefetch",
+                symbol,
+                {
+                    "status": "tail_gap_ignored",
+                    "reason": "tiny_open_tail_gap_not_fetched_in_prefetch_path",
+                    "scan_mode": scan_mode or self._batch_scan_mode_for_symbol(symbol),
+                    "prefetch_reason": reason,
+                    "source": source.source_id,
+                    "requested_ranges": [f"{start}:{end}" for start, end in requested_ranges],
+                    "requested_range_count": int(len(requested_ranges)),
+                    "missing_ranges": [],
+                    "missing_range_count": 0,
+                    "ignored_tail_ranges": [f"{start}:{end}" for start, end in ignored_tail_ranges],
+                    "ignored_tail_range_count": int(len(ignored_tail_ranges)),
+                    "tiny_tail_gap_max_ms": int(tiny_tail_gap_max_ms),
+                    "backfill_max_ms": int(self.config.live_ws_aggtrade_max_backfill_ms),
+                    "ws_rows": int(ws_rows_total),
+                    "buffer_row_count_total": int(buffer_rows_total),
+                    "read_status_counts": read_status_counts,
+                    "connection_statuses": sorted(connection_statuses),
+                    "backfill_ranges": [],
+                    "backfilled_rows": 0,
+                },
+            )
+            return
         missing_total_ms = self._time_ranges_duration_ms(missing_ranges)
         max_backfill_ms = int(self.config.live_ws_aggtrade_max_backfill_ms)
         self._cycle_aggtrade_gap_prefetch_symbols += 1
@@ -12152,6 +12681,9 @@ class AnomalyMicroLiveRunner:
                     "requested_range_count": int(len(requested_ranges)),
                     "missing_ranges": [f"{start}:{end}" for start, end in missing_ranges],
                     "missing_range_count": int(len(missing_ranges)),
+                    "ignored_tail_ranges": [f"{start}:{end}" for start, end in ignored_tail_ranges],
+                    "ignored_tail_range_count": int(len(ignored_tail_ranges)),
+                    "tiny_tail_gap_max_ms": int(tiny_tail_gap_max_ms),
                     "missing_total_ms": int(missing_total_ms),
                     "backfill_max_ms": int(max_backfill_ms),
                     "ws_rows": int(ws_rows_total),
@@ -12164,7 +12696,6 @@ class AnomalyMicroLiveRunner:
             )
             return
         request_start_ms = min(start for start, _end in requested_ranges)
-        request_end_ms = max(end for _start, end in requested_ranges)
         self._cycle_aggtrade_requests += 1
         rows, backfill_ranges, fetched_rows_total, cache_missing_count = self._fetch_aggtrade_raw_ranges_cached(
             symbol,
@@ -12198,6 +12729,9 @@ class AnomalyMicroLiveRunner:
                 "requested_range_count": int(len(requested_ranges)),
                 "missing_ranges": [f"{start}:{end}" for start, end in missing_ranges],
                 "missing_range_count": int(len(missing_ranges)),
+                "ignored_tail_ranges": [f"{start}:{end}" for start, end in ignored_tail_ranges],
+                "ignored_tail_range_count": int(len(ignored_tail_ranges)),
+                "tiny_tail_gap_max_ms": int(tiny_tail_gap_max_ms),
                 "missing_total_ms": int(missing_total_ms),
                 "backfill_max_ms": int(max_backfill_ms),
                 "cache_missing_range_count": int(cache_missing_count),
@@ -12232,11 +12766,13 @@ class AnomalyMicroLiveRunner:
         setup_cache: dict[tuple[str, str, int], pd.DataFrame] = {}
         entry_cache: dict[tuple[str, str, int, int], pd.DataFrame] = {}
         for symbol in symbols:
+            scan_mode = self._batch_scan_mode_for_symbol(symbol)
+            scan_origin_payload = self._scan_origin_latency_payload(symbol, now_ms=now_ms, scan_mode=scan_mode)
             self._prefetch_symbol_subminute_entry_gap_debt(
                 symbol,
                 now_ms=now_ms,
                 reason="batch_by_symbol",
-                scan_mode=self._batch_scan_mode_for_symbol(symbol),
+                scan_mode=scan_mode,
             )
             started_at = time.monotonic()
             due_count = 0
@@ -12400,7 +12936,6 @@ class AnomalyMicroLiveRunner:
                 if scan_result.signal is not None:
                     signals.append(scan_result.signal)
                     signal_count += 1
-            scan_mode = self._batch_scan_mode_for_symbol(symbol)
             if scan_mode == "precise_DANGER_cold_coverage":
                 self._cycle_cold_due_timeframe_count += due_count
                 self._cycle_cold_evaluated_timeframe_count += evaluated_count
@@ -12415,6 +12950,7 @@ class AnomalyMicroLiveRunner:
                 {
                     "mode": "timeframes_per_symbol",
                     "scan_mode": scan_mode,
+                    **scan_origin_payload,
                     "danger_cold_coverage_scan": scan_mode == "precise_DANGER_cold_coverage",
                     "subminute_entry_scan_allowed": bool(self._subminute_entry_scan_allowed(symbol)),
                     "timeframe_pairs": [f"{levels.value}/{entry.value}" for levels, entry in self.config.timeframe_pairs],

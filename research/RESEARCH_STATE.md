@@ -10,8 +10,41 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P304 proposed immediate danger-flow precise lane
+Last active patch: P310 applied locally prior fake-pump quarantine
 Updated: 2026-05-19
+```
+
+## 2026-05-19 - P310 prior fake-pump quarantine
+
+```text
+Current patch status: P310 APPLIED locally / UNKNOWN commit.
+Question: prevent symbols that already exceeded the 24h prior fake-pump / fast-fade threshold from entering warm/radar hot lanes and creating latency before category rejection.
+Change: after startup symbol-context snapshots are ready, live pre-populates a scheduler quarantine for symbols with prior_fast_fade_count_24h > 2. Before each ticker-radar promotion cycle the quarantine is refreshed from current snapshots and checked before warm/radar enqueue. Quarantine expiry is not a fixed TTL: it is computed from the excess fast-fade timestamps, releasing when enough events age out of the 24h lookback (`oldest_excess_fast_fade_ts + 24h + 1ms`). Quarantined symbols remain in ticker/top-growth universe and are visible through artifacts.
+Trading impact: no signal thresholds, category math, executable-entry guards, order placement, fills, stops, TP, BE, or PnL logic changed. This can reduce hot-lane opportunities on symbols with repeated fake fades; it is intentional scheduler quarantine, not permanent universe removal.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+Next validation: next live smoke should show `prior_fake_pump_quarantine_started/refresh`, `candidate_quarantined_prior_fake_pumps`, lower warm/radar queue pressure, and no disappearance from top-growth/session ticker visibility.
+```
+
+## 2026-05-19 - P309 strict warm cap and class latency
+
+```text
+Current patch status: P309 APPLIED locally / UNKNOWN commit.
+Question: before the next live run, strengthen the post-startup delivery path without flags/fallbacks and make the <=5s latency claim directly auditable.
+Change: warm backlog pressure cap is reduced from 12 to 8 and the pressure keep floor from 8 to 6; warm waiting selection is score-first after immediate-danger priority. Live now writes per-class candidate latency fields for active, immediate_danger, ticker_radar, and warm_watch into symbol_batch_selected/live_cycle_summary. signal_symbol_scan_summary now includes scan_origin, origin score, immediate-danger flag, first_seen/promoted timestamps, first_seen_to_scan_ms, and promote_to_scan_ms.
+Trading impact: no signal thresholds, categories, executable-entry guards, order placement, fill, stop, TP, BE, or PnL logic changed. This only tightens scheduler backlog and improves latency auditability.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+Next validation: next live smoke should show warm_watch_symbol_count lower, class latency fields populated, and immediate_danger/ticker_radar first_seen/promote-to-scan distributions directly measurable from signal_symbol_scan_summary.
+```
+
+## 2026-05-19 - P308 hot-waiting priority prefetch
+
+```text
+Current patch status: P308 APPLIED locally / UNKNOWN commit.
+Question: post-startup live latency review of 20260519_112206 showed active and immediate-danger scans are fast, but hot waiting candidates often lack prepared subminute aggTrade coverage and fall back to REST during precise scan.
+Change: after the critical scan/order path, live may prefetch due subminute aggTrade gap debt for up to 2 top waiting radar/warm symbols that are immediate-danger flow or score >= 8.0, even when the queue is not idle or latency SLA is already breached. Signal/order/position work still blocks this optional prefetch. Prefetch now ignores tiny open-tail gaps <=250ms instead of making a REST call for them.
+Trading impact: no signal thresholds, categories, executable-entry guards, order placement, fill, stop, TP, BE, or PnL logic changed. This is scheduler/data-readiness only.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+Next validation: short live smoke; require `hot_waiting_priority_prefetch_cycle` events under queue pressure, lower `aggtrade_rest_gap_prefetch` inside hot scans, `tail_gap_ignored` for tiny open-tail gaps, and first_seen/promote->precise scan p95 closer to <=5s.
 ```
 
 ## 2026-05-19 - P307 live heartbeat quality marks

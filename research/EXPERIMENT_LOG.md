@@ -15,6 +15,27 @@ Decision: propose P304 as scheduler-only latency patch. Extreme real-flow candid
 Acceptance: in the next live artifact, inspect `danger_flow_immediate_promoted`, `ticker_radar_promoted.immediate_danger_flow=true`, `symbol_batch_selected.scan_reason_by_symbol=precise_immediate_danger_flow`, and time to first `signal_symbol_scan_summary`. Target <1-2s from immediate promotion to precise scan when data dependencies are ready.
 ```
 
+## 2026-05-19 - live latency/data review 20260519_112206 while running
+
+```text
+Artifact reviewed read-only while run was still active: .output/results/live_anomaly_runs/20260519_112206, post-startup window only. Startup context warm-up is intentionally excluded from the pump->entry latency budget.
+Data stability: ws_aggtrade_connection_status=connected for all reviewed live_cycle_summary rows, ws_health_pct p50 about 99.4%, and ws_aggtrade_frame_read rows were covered with no network backfill in the read path. OHLCV/aggTrade REST labels mostly mean cache/gap fill, not full flow outage.
+Latency: active_symbol_marked->next precise scan was good (p50 0.291s, p95 0.969s, max 1.220s). danger_flow_immediate_promoted->next precise scan was mostly within target (p50 1.604s, p95 4.397s, max 6.065s; 96.4% <=5s), but first_seen_ms->next scan still exceeded 5s for 4/28 immediate-danger cases because some waited for later observations or backlog.
+Main bottleneck: generic warm/radar holding remains overloaded. warm_watch_marked->next scan p50 was about 150s and p95 about 1167s for matched symbols; ticker_radar_promoted->scan p95 was 7.5s with two 34-35s outliers; warm_watch_precise_promoted->scan p95 was about 22s.
+Queue pressure: potential_anomaly_queue_count p50 18 / p95 22; candidate_queue_dropped_pressure_count p95 7 per cycle; latency_sla_status breached in 254/636 cycles. There were 902 candidate_dropped_latency_pressure and 42 warm_watch_precise_deferred_latency_sla rows.
+Wasted time: hot_waiting_prefetch was skipped in almost all cycles because the queue was not idle (`due_hot_scan_has_priority`, SLA breached, or queue_count > 4). As a result, subminute aggTrade gaps are often REST-backfilled inside the precise scan itself. aggtrade_rest_gap_prefetch ran 242 times; 154 had <=100ms missing, yet still made network backfill calls, while large first-scan gaps of ~270-318s also occurred for newly selected symbols.
+Execution funnel: no category_selected/order_attempt/position_opened in the reviewed window; delayed replay was mostly skipped because live was not idle. Category rejects were dominated by reject_mark_basis_below_min. This run is therefore latency/data-path evidence, not profitability evidence.
+Next direction: keep active/immediate-danger priority, but move data readiness earlier for hot waiting symbols. Subscribe/prefetch aggTrade for radar/immediate-danger symbols at mark/promote time under a strict small cap, and stop making REST calls for tiny tail gaps that are not needed for closed decision buckets. Target artifact acceptance: first_seen_ms->precise scan p95 <=5s, ticker_radar_promoted->scan p95 <=5s, potential_anomaly_queue_count p95 <8, and aggtrade_rest_gap_prefetch count sharply lower during hot scans.
+```
+
+Patch follow-up:
+
+```text
+P308 applied locally / UNKNOWN commit. It keeps critical scan/order priority, then allows bounded priority prefetch for up to 2 top waiting immediate-danger or score>=8 radar/warm symbols even under queue/SLA pressure. It also records tiny open-tail prefetch gaps as tail_gap_ignored instead of making REST calls. Acceptance remains artifact-based in the next live smoke: hot_waiting_priority_prefetch_cycle present, lower hot-scan REST gap backfills, and first_seen/promote->precise scan latency closer to <=5s.
+P309 applied locally / UNKNOWN commit. Warm backlog is tightened to a smaller score-first queue and live artifacts now expose active/immediate_danger/ticker_radar/warm_watch latency plus per-scan origin first_seen/promote lag. This makes the next live run's <=5s delivery claim directly auditable without external reconstruction.
+P310 applied locally / UNKNOWN commit. Symbols with prior_fast_fade_count_24h > 2 are quarantined from warm/radar hot lanes before they create backlog. Quarantine release is timestamp-derived from the excess fake-fade events aging out of the 24h window, not a fixed TTL. Ticker/top-growth visibility remains intact.
+```
+
 ## 2026-05-18 - live decision-speed review 20260518_090759
 
 ```text
