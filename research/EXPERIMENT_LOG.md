@@ -3197,3 +3197,13 @@ Reason: operator metrics were too jumpy during unstable internet; a single curre
 Change planned in P306: terminal heartbeat now shows rolling Сеть 1м/5м/15м, Лаг 1м/5м/max5, and queue/cycle 5m context. Artifacts get live_quality_window_summary every minute and quality_* fields in each live_cycle_summary.
 Expected evidence: use the rolling windows, not a single screen, to decide whether the run is suitable for latency conclusions. If 1m is bad but 5m/15m recover, it was a transient; if 5m/15m stay bad, the run is degraded.
 ```
+
+## 2026-05-19 - P311 live2 v0 skeleton acceptance plan
+
+```text
+Purpose: create the first separate live2 runtime without touching live1 trading behavior.
+Acceptance for P311: `run-anomaly-live2` starts, creates `.output/results/live2_anomaly_runs/<run_id>/`, writes `live2_events.csv`, `live2_status.json`, `live2_symbol_state.csv`, and keeps `new_entries_allowed=false` because market-data/signal/execution are explicit TODO gates.
+Not accepted yet: no claim about latency improvement, signal coverage, profitability, or order safety. Those require later WS ticker, aggTrade ring-buffer, deadline-engine, signal-adapter, and execution patches.
+Next experiment after P311: add ticker WS ingestion into `SymbolStateStore` and prove ticker events update a single per-symbol state record instead of creating candidate queues.
+```
+

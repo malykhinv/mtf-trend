@@ -467,6 +467,13 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=5)
     anomaly_live.add_argument("--trail-buffer-r", type=float, default=0.10)
 
+    anomaly_live2 = subparsers.add_parser(
+        "run-anomaly-live2",
+        help="Run deadline-driven anomaly live2 runtime",
+    )
+    anomaly_live2.add_argument("--symbols", nargs="*", default=None, help="Optional explicit futures symbols, e.g. BTC/USDT:USDT")
+    anomaly_live2.add_argument("--output-dir", default=None, help="Optional artifact output directory")
+
     live_order_smoke = subparsers.add_parser(
         "run-live-order-smoke",
         help="Place one minimal real Binance USD-M order, verify stop visibility, then cleanup reduce-only",
@@ -588,6 +595,7 @@ def resolve_handler(command_name: str) -> Handler:
         "materialize-anomaly-subminute-cache": commands.materialize_anomaly_subminute_cache,
         "backfill-anomaly-aggtrade-cache": commands.backfill_anomaly_aggtrade_cache,
         "run-anomaly-live": commands.run_anomaly_live,
+        "run-anomaly-live2": commands.run_anomaly_live2,
         "run-live-order-smoke": commands.run_live_order_smoke,
         "run-anomaly-top-growth": commands.run_anomaly_top_growth,
         "run-hourly-levels": commands.run_hourly_levels,

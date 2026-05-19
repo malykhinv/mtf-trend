@@ -1637,6 +1637,31 @@ def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
     return _run_with_logging("run-anomaly-live", config, _run)
 
 
+def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
+    """Run the generation-0 anomaly live2 runtime skeleton."""
+
+    def _run() -> int:
+        from research_tools.anomaly_live2 import AnomalyLive2Config, AnomalyLive2Runner
+
+        output_arg = getattr(args, "output_dir", None)
+        if output_arg:
+            output_dir = Path(output_arg)
+        else:
+            run_id = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+            output_dir = config.backtest.results_dir / "live2_anomaly_runs" / run_id
+        symbols_arg = getattr(args, "symbols", None)
+        symbols = tuple(str(symbol).strip() for symbol in (symbols_arg or ()) if str(symbol).strip())
+        runner = AnomalyLive2Runner(
+            AnomalyLive2Config(
+                output_dir=output_dir,
+                symbols=symbols,
+            )
+        )
+        return runner.run()
+
+    return _run_with_logging("run-anomaly-live2", config, _run)
+
+
 def run_live_order_smoke(config: AppConfig, args: argparse.Namespace) -> int:
     """Run one minimal real Binance order lifecycle smoke."""
 

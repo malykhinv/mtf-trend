@@ -10,7 +10,7 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P310 applied locally prior fake-pump quarantine
+Last active patch: P311 proposed live2 v0 runtime skeleton
 Updated: 2026-05-19
 ```
 
@@ -1962,3 +1962,15 @@ Next validation: run live for 20-30 minutes and inspect live_quality_window_summ
 - Current head: UNKNOWN (ZIP snapshot, no git metadata).
 - BAS live entry showed runner_flow can accept taker-buy/price spikes while OI context is weak/negative.
 - Next patch status: P302 mandatory live current-OI short-cover guard proposed, no runtime flags.
+
+## 2026-05-19 - P311 live2 v0 runtime skeleton
+
+```text
+Current patch status: P311 PROPOSED / UNKNOWN commit.
+Question: start a separate `run-anomaly-live2` runtime next to the existing live without copying the old monolith or adding shadow/dry-run semantics.
+Change: add `research_tools/anomaly_live2/` with typed config/contracts/state/artifact writer/runner, register CLI command `run-anomaly-live2`, and create isolated artifacts under `.output/results/live2_anomaly_runs/<run_id>/`. Generation 0 keeps market-data, signal, exchange boundary, position supervisor, and execution as explicit `todo_not_implemented` readiness gates; `new_entries_allowed=false`.
+Trading impact: no real orders, signal thresholds, category math, guard logic, existing live1 scheduler, fills, stops, TP, BE, or PnL are changed. This is the first live2 runtime shell only; the command name is real-live oriented, but order placement is intentionally not implemented yet.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+Next validation: run `python main.py run-anomaly-live2`, stop with Ctrl+C, and confirm `live2_events.csv`, `live2_status.json`, and `live2_symbol_state.csv` are created with TODO readiness gates and no order attempts.
+```
+
