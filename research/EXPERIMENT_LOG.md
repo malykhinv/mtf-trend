@@ -3157,3 +3157,11 @@ Artifact: 20260519_084702 live run, before P304 immediate lane.
 Observation: batch selection is already cheap, but hot queues stay populated and repeated scans of symbols such as XAG/ZEC/HYPE/XAU consume scan time with weak-flow/mark-basis rejects. Optional top-growth/context/cache work still runs in cycles with hot queue.
 Decision: P305 should be validated as a scheduling/load patch after P304, not as an entry-logic change. Expected improvement is lower signal_scan_seconds tail and fewer repeated scans of the same rejected symbols. It should not block immediate danger-flow candidates.
 ```
+
+## 2026-05-19 - live quality trend windows
+
+```text
+Reason: operator metrics were too jumpy during unstable internet; a single current p95/max did not distinguish transient spikes from sustained degradation.
+Change planned in P306: terminal heartbeat now shows rolling Сеть 1м/5м/15м, Лаг 1м/5м/max5, and queue/cycle 5m context. Artifacts get live_quality_window_summary every minute and quality_* fields in each live_cycle_summary.
+Expected evidence: use the rolling windows, not a single screen, to decide whether the run is suitable for latency conclusions. If 1m is bad but 5m/15m recover, it was a transient; if 5m/15m stay bad, the run is degraded.
+```

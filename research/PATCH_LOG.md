@@ -5347,6 +5347,35 @@ Risk:
 Medium. This changes live scheduling, not strategy thresholds. It can reduce repeated scan load, but may delay rechecking a symbol that improves gradually without a fresh immediate danger-flow event. Top-growth/context/cache work becomes more idle-only, so research artifacts may be delayed during sustained hot queues, not lost by design.
 ```
 
+## 2026-05-19 - P306 proposed - live quality trend windows
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make the live operator view stop depending on one jumpy point-in-time metric. Record rolling 1m/5m/15m/run quality windows for WS health, cycle pulse, due-scan latency, queue pressure, and REST/gapREST data status. Show these windows in the terminal heartbeat and append a live_quality_window_summary event every minute, while also adding the same quality_* fields to live_cycle_summary.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low. This is telemetry/display/artifact-only. It does not change signal selection, scan scheduling, order placement, fills, stops, exits, or guards. The heartbeat becomes longer by two rows, but the existing pinned-status renderer already supports multi-line grids.
+```
+
 ## P302 live current OI guard no flags refresh - PROPOSED
 
 - Status: PROPOSED / commit UNKNOWN.

@@ -71,6 +71,11 @@ BINANCE_FUTURES_COMBINED_WS_URL = "wss://fstream.binance.com/market/stream"
 DEFAULT_LIVE_WS_AGGTRADE_MAX_BACKFILL_MS = 360_000
 DEFAULT_LIVE_WS_AGGTRADE_BUFFER_MINUTES = 60
 DEFAULT_LIVE_WS_HEALTH_BOOTSTRAP_SECONDS = 180.0
+LIVE_QUALITY_WINDOW_SHORT_MS = 60_000
+LIVE_QUALITY_WINDOW_MEDIUM_MS = 5 * 60_000
+LIVE_QUALITY_WINDOW_LONG_MS = 15 * 60_000
+LIVE_QUALITY_SAMPLE_RETENTION_MS = 36 * HOUR_MS
+LIVE_QUALITY_WINDOW_EVENT_INTERVAL_MS = 60_000
 DEFAULT_LIVE_OHLCV_CACHE_FLUSH_MAX_SYMBOL_TIMEFRAMES = 4
 DEFAULT_LIVE_AGGTRADE_REST_CACHE_TTL_MS = 20 * 60_000
 DEFAULT_LIVE_AGGTRADE_REST_CACHE_PADDING_MS = 60_000
@@ -2394,6 +2399,77 @@ class LiveCandidateQueuePressureStats:
 
 
 @dataclass(frozen=True, slots=True)
+class LiveQualitySample:
+    timestamp_ms: int
+    cycle_seconds: float
+    ws_healthy: bool
+    data_status: str
+    latency_p95_seconds: float | None
+    latency_max_seconds: float | None
+    queue_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class LiveQualityWindowStats:
+    label: str
+    window_ms: int | None
+    sample_count: int
+    observed_seconds: float
+    ws_health_ratio: float | None
+    cycle_p95_seconds: float | None
+    cycle_max_seconds: float | None
+    latency_p95_seconds: float | None
+    latency_max_seconds: float | None
+    queue_p95: float | None
+    queue_max: int | None
+    degraded_cycle_count: int
+    gap_rest_cycle_count: int
+    rest_data_cycle_count: int
+    data_status_mode: str
+
+    def event_payload(self, prefix: str) -> dict[str, object]:
+        return {
+            f"{prefix}_sample_count": int(self.sample_count),
+            f"{prefix}_observed_seconds": round(float(self.observed_seconds), 3),
+            f"{prefix}_ws_health_pct": (
+                round(float(self.ws_health_ratio) * 100.0, 3)
+                if self.ws_health_ratio is not None
+                else ""
+            ),
+            f"{prefix}_cycle_p95_seconds": (
+                round(float(self.cycle_p95_seconds), 3)
+                if self.cycle_p95_seconds is not None
+                else ""
+            ),
+            f"{prefix}_cycle_max_seconds": (
+                round(float(self.cycle_max_seconds), 3)
+                if self.cycle_max_seconds is not None
+                else ""
+            ),
+            f"{prefix}_latency_p95_seconds": (
+                round(float(self.latency_p95_seconds), 3)
+                if self.latency_p95_seconds is not None
+                else ""
+            ),
+            f"{prefix}_latency_max_seconds": (
+                round(float(self.latency_max_seconds), 3)
+                if self.latency_max_seconds is not None
+                else ""
+            ),
+            f"{prefix}_queue_p95": (
+                round(float(self.queue_p95), 3)
+                if self.queue_p95 is not None
+                else ""
+            ),
+            f"{prefix}_queue_max": int(self.queue_max) if self.queue_max is not None else "",
+            f"{prefix}_degraded_cycle_count": int(self.degraded_cycle_count),
+            f"{prefix}_gap_rest_cycle_count": int(self.gap_rest_cycle_count),
+            f"{prefix}_rest_data_cycle_count": int(self.rest_data_cycle_count),
+            f"{prefix}_data_status_mode": self.data_status_mode,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class LiveAdaptivePreciseBudget:
     status: str = "not_evaluated"
     reason: str = ""
@@ -4349,6 +4425,8 @@ class AnomalyMicroLiveRunner:
         self._last_ws_health_window_start_ms = 0
         self._last_ws_health_window_end_ms = 0
         self._last_ws_health_sample_at = time.monotonic()
+        self._live_quality_samples: deque[LiveQualitySample] = deque()
+        self._last_live_quality_window_event_at_ms = 0
         self._symbol_universe_scan_started_at = time.monotonic()
         self._last_symbol_universe_cycle_seconds: float | None = None
         self._symbol_universe_cycle_index = 1
@@ -4745,7 +4823,44 @@ class AnomalyMicroLiveRunner:
                     aggtrade_stats=ws_aggtrade_stats,
                     ws_health_reason=ws_health_reason,
                 )
-                session_top_snapshot = self._session_top_tracker.snapshot(now_ms=int(time.time() * 1000))
+                quality_now_ms = int(time.time() * 1000)
+                potential_queue_count = int(
+                    self._current_candidate_queue_radar_total_after
+                    + self._current_candidate_queue_warm_total_after
+                )
+                quality_windows = self._record_live_quality_sample(
+                    now_ms=quality_now_ms,
+                    cycle_seconds=cycle_seconds,
+                    ws_healthy=ws_healthy,
+                    data_status=data_status_text,
+                    latency_p95_seconds=self._current_latency_sla_due_scan_p95_seconds,
+                    latency_max_seconds=self._current_latency_sla_due_scan_max_seconds,
+                    queue_count=potential_queue_count,
+                )
+                quality_payload = self._live_quality_event_payload(quality_windows)
+                if (
+                    self._last_live_quality_window_event_at_ms <= 0
+                    or quality_now_ms - self._last_live_quality_window_event_at_ms >= LIVE_QUALITY_WINDOW_EVENT_INTERVAL_MS
+                ):
+                    self._last_live_quality_window_event_at_ms = quality_now_ms
+                    self.artifacts.append_event(
+                        "live_quality_window_summary",
+                        "__live__",
+                        {
+                            "cycle": cycle,
+                            "runtime_seconds": round(
+                                time.monotonic()
+                                - (self._live_loop_started_monotonic or self._run_started_monotonic),
+                                3,
+                            ),
+                            "current_data_status": data_status_text,
+                            "current_ws_healthy": bool(ws_healthy),
+                            "current_ws_health_reason": ws_health_reason,
+                            "current_queue_count": potential_queue_count,
+                            **quality_payload,
+                        },
+                    )
+                session_top_snapshot = self._session_top_tracker.snapshot(now_ms=quality_now_ms)
                 self.artifacts.append_event(
                     "live_cycle_summary",
                     "__live__",
@@ -4814,10 +4929,8 @@ class AnomalyMicroLiveRunner:
                             else ""
                         ),
                         "potential_anomaly_latency_samples": int(self._current_latency_sla_due_scan_samples),
-                        "potential_anomaly_queue_count": int(
-                            self._current_candidate_queue_radar_total_after
-                            + self._current_candidate_queue_warm_total_after
-                        ),
+                        "potential_anomaly_queue_count": potential_queue_count,
+                        **quality_payload,
                         "adaptive_precise_budget_status": self._current_adaptive_precise_budget_status,
                         "adaptive_precise_budget_reason": self._current_adaptive_precise_budget_reason,
                         "adaptive_precise_budget_limit": (
@@ -5059,10 +5172,8 @@ class AnomalyMicroLiveRunner:
                             guard_status=guard_text,
                             latency_p95_seconds=self._current_latency_sla_due_scan_p95_seconds,
                             latency_max_seconds=self._current_latency_sla_due_scan_max_seconds,
-                            potential_queue_count=(
-                                self._current_candidate_queue_radar_total_after
-                                + self._current_candidate_queue_warm_total_after
-                            ),
+                            potential_queue_count=potential_queue_count,
+                            quality_windows=quality_windows,
                             session_top_snapshot=session_top_snapshot,
                         ),
                         highlight=open_positions > 0,
@@ -7481,6 +7592,135 @@ class AnomalyMicroLiveRunner:
         if self._cycle_ws_aggtrade_backfill_reads > 0:
             return "rest_backfill_degraded"
         return f"ws_{connection_status or 'unknown'}_no_entry_read"
+
+    def _record_live_quality_sample(
+        self,
+        *,
+        now_ms: int,
+        cycle_seconds: float,
+        ws_healthy: bool,
+        data_status: str,
+        latency_p95_seconds: float | None,
+        latency_max_seconds: float | None,
+        queue_count: int,
+    ) -> dict[str, LiveQualityWindowStats]:
+        self._live_quality_samples.append(
+            LiveQualitySample(
+                timestamp_ms=int(now_ms),
+                cycle_seconds=max(0.0, float(cycle_seconds)) if math.isfinite(float(cycle_seconds)) else 0.0,
+                ws_healthy=bool(ws_healthy),
+                data_status=str(data_status or ""),
+                latency_p95_seconds=_finite_or_none(latency_p95_seconds),
+                latency_max_seconds=_finite_or_none(latency_max_seconds),
+                queue_count=max(0, int(queue_count)),
+            )
+        )
+        prune_before_ms = int(now_ms) - int(LIVE_QUALITY_SAMPLE_RETENTION_MS)
+        while self._live_quality_samples and int(self._live_quality_samples[0].timestamp_ms) < prune_before_ms:
+            self._live_quality_samples.popleft()
+        return self._live_quality_window_stats(now_ms=int(now_ms))
+
+    def _live_quality_window_stats(self, *, now_ms: int) -> dict[str, LiveQualityWindowStats]:
+        return {
+            "1m": self._live_quality_window_stat(label="1m", now_ms=now_ms, window_ms=LIVE_QUALITY_WINDOW_SHORT_MS),
+            "5m": self._live_quality_window_stat(label="5m", now_ms=now_ms, window_ms=LIVE_QUALITY_WINDOW_MEDIUM_MS),
+            "15m": self._live_quality_window_stat(label="15m", now_ms=now_ms, window_ms=LIVE_QUALITY_WINDOW_LONG_MS),
+            "run": self._live_quality_window_stat(label="run", now_ms=now_ms, window_ms=None),
+        }
+
+    def _live_quality_window_stat(
+        self,
+        *,
+        label: str,
+        now_ms: int,
+        window_ms: int | None,
+    ) -> LiveQualityWindowStats:
+        start_ms = None if window_ms is None else int(now_ms) - int(window_ms)
+        samples = [
+            sample
+            for sample in self._live_quality_samples
+            if start_ms is None or int(sample.timestamp_ms) >= start_ms
+        ]
+        if not samples:
+            return LiveQualityWindowStats(
+                label=label,
+                window_ms=window_ms,
+                sample_count=0,
+                observed_seconds=0.0,
+                ws_health_ratio=None,
+                cycle_p95_seconds=None,
+                cycle_max_seconds=None,
+                latency_p95_seconds=None,
+                latency_max_seconds=None,
+                queue_p95=None,
+                queue_max=None,
+                degraded_cycle_count=0,
+                gap_rest_cycle_count=0,
+                rest_data_cycle_count=0,
+                data_status_mode="",
+            )
+        cycle_values = [sample.cycle_seconds for sample in samples]
+        latency_p95_values = [
+            float(sample.latency_p95_seconds)
+            for sample in samples
+            if sample.latency_p95_seconds is not None
+        ]
+        latency_max_values = [
+            float(sample.latency_max_seconds)
+            for sample in samples
+            if sample.latency_max_seconds is not None
+        ]
+        queue_values = [float(sample.queue_count) for sample in samples]
+        observed_seconds = sum(max(0.0, float(sample.cycle_seconds)) for sample in samples)
+        healthy_seconds = sum(max(0.0, float(sample.cycle_seconds)) for sample in samples if sample.ws_healthy)
+        if observed_seconds <= 0.0:
+            ws_health_ratio = sum(1.0 for sample in samples if sample.ws_healthy) / float(len(samples))
+        else:
+            ws_health_ratio = healthy_seconds / observed_seconds
+        data_counts: dict[str, int] = {}
+        degraded_count = 0
+        gap_rest_count = 0
+        rest_data_count = 0
+        for sample in samples:
+            status = sample.data_status or "unknown"
+            data_counts[status] = data_counts.get(status, 0) + 1
+            normalized = status.lower()
+            if "rest" in normalized or "gap" in normalized or "нет" in normalized or "жд" in normalized:
+                degraded_count += 1
+            if "gaprest" in normalized or "gap rest" in normalized:
+                gap_rest_count += 1
+            if "rest" in normalized:
+                rest_data_count += 1
+        data_status_mode = ""
+        if data_counts:
+            data_status_mode = sorted(data_counts.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        return LiveQualityWindowStats(
+            label=label,
+            window_ms=window_ms,
+            sample_count=len(samples),
+            observed_seconds=observed_seconds,
+            ws_health_ratio=ws_health_ratio,
+            cycle_p95_seconds=_finite_or_none(_percentile(cycle_values, 0.95)),
+            cycle_max_seconds=_finite_or_none(max(cycle_values) if cycle_values else None),
+            latency_p95_seconds=_finite_or_none(_percentile(latency_p95_values, 0.95)) if latency_p95_values else None,
+            latency_max_seconds=_finite_or_none(max(latency_max_values) if latency_max_values else None),
+            queue_p95=_finite_or_none(_percentile(queue_values, 0.95)) if queue_values else None,
+            queue_max=int(max(queue_values)) if queue_values else None,
+            degraded_cycle_count=degraded_count,
+            gap_rest_cycle_count=gap_rest_count,
+            rest_data_cycle_count=rest_data_count,
+            data_status_mode=data_status_mode,
+        )
+
+    @staticmethod
+    def _live_quality_event_payload(windows: dict[str, LiveQualityWindowStats]) -> dict[str, object]:
+        payload: dict[str, object] = {}
+        for key in ("1m", "5m", "15m", "run"):
+            stats = windows.get(key)
+            if stats is None:
+                continue
+            payload.update(stats.event_payload(f"quality_{key}"))
+        return payload
 
     def _is_ws_healthy_for_cycle(
         self,
@@ -18294,6 +18534,7 @@ def _format_live_heartbeat(
     latency_p95_seconds: float | None = None,
     latency_max_seconds: float | None = None,
     potential_queue_count: int = 0,
+    quality_windows: dict[str, LiveQualityWindowStats] | None = None,
     session_top_snapshot: dict[str, object] | None = None,
 ) -> str:
     del idle, real_orders, cold_age, connection_text
@@ -18304,6 +18545,10 @@ def _format_live_heartbeat(
     else:
         replay_value = "Выкл"
     order_value = str(max(0, int(protective_order_count)))
+    quality_windows = quality_windows or {}
+    quality_1m = quality_windows.get("1m")
+    quality_5m = quality_windows.get("5m")
+    quality_15m = quality_windows.get("15m")
     rows = [
         "Соединение",
         _format_status_line(
@@ -18333,13 +18578,56 @@ def _format_live_heartbeat(
             _format_status_cell("Защита", guard_status),
         ),
         _format_status_line(
-            _format_status_cell("Задержка p95", _format_latency_seconds(latency_p95_seconds)),
-            _format_status_cell("max", _format_latency_seconds(latency_max_seconds)),
+            _format_status_cell("Сеть 1м", _format_quality_health(quality_1m)),
+            _format_status_cell("5м", _format_quality_health(quality_5m)),
+            _format_status_cell("15м", _format_quality_health(quality_15m)),
+        ),
+        _format_status_line(
+            _format_status_cell("Лаг 1м", _format_quality_latency_p95(quality_1m, latency_p95_seconds)),
+            _format_status_cell("5м", _format_quality_latency_p95(quality_5m, latency_p95_seconds)),
+            _format_status_cell("max5", _format_quality_latency_max(quality_5m, latency_max_seconds)),
+        ),
+        _format_status_line(
             _format_status_cell("Очередь", int(potential_queue_count)),
+            _format_status_cell("q5p95", _format_quality_queue_p95(quality_5m)),
+            _format_status_cell("Цикл5", _format_quality_cycle_p95(quality_5m, cycle_seconds)),
         ),
     ]
     rows.extend(_format_session_top_block(session_top_snapshot))
     return "\n".join(rows)
+
+def _format_quality_health(stats: LiveQualityWindowStats | None) -> str:
+    if stats is None or stats.ws_health_ratio is None or stats.sample_count <= 0:
+        return "n/a"
+    return _format_percent(float(stats.ws_health_ratio), signed=False, precision=1)
+
+
+def _format_quality_latency_p95(stats: LiveQualityWindowStats | None, fallback: float | None) -> str:
+    value = stats.latency_p95_seconds if stats is not None else None
+    if value is None:
+        value = fallback
+    return _format_latency_seconds(value)
+
+
+def _format_quality_latency_max(stats: LiveQualityWindowStats | None, fallback: float | None) -> str:
+    value = stats.latency_max_seconds if stats is not None else None
+    if value is None:
+        value = fallback
+    return _format_latency_seconds(value)
+
+
+def _format_quality_queue_p95(stats: LiveQualityWindowStats | None) -> str:
+    if stats is None or stats.queue_p95 is None:
+        return "n/a"
+    return str(int(round(float(stats.queue_p95))))
+
+
+def _format_quality_cycle_p95(stats: LiveQualityWindowStats | None, fallback: float | None) -> str:
+    value = stats.cycle_p95_seconds if stats is not None else None
+    if value is None:
+        value = fallback
+    return _format_live_pulse(float(value)) if value is not None else "n/a"
+
 
 def _format_percent(value: float, *, signed: bool = False, precision: int = 1) -> str:
     if not math.isfinite(value):

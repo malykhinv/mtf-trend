@@ -1905,6 +1905,14 @@ It adds a hard hot-idle policy for optional work and a symbol-level reject coold
 Next validation: run live after P304+P305 and require live_cycle_summary to show top_growth/context skipped_hot_path while queue>0, cache_flush skipped_hot_path except emergency, reject_cooldown_started/skipped metrics for repeated weak rejects, and no drop in immediate_danger_flow scan coverage.
 ```
 
+## 2026-05-19 — P306 proposed
+
+```text
+Current patch status: P306 PROPOSED, commit UNKNOWN.
+Short live screens can show latency jumping from ~1s to ~19s because the heartbeat previously displayed a single current SLA sample/max without rolling context. P306 adds rolling 1m/5m/15m/run quality windows to the heartbeat and artifacts, so a bad spike can be separated from sustained network/queue degradation.
+Next validation: run live for 20-30 minutes and inspect live_quality_window_summary plus live_cycle_summary quality_* fields. A good run should have 5m/15m WS health stable >95-98%, 5m latency p95 near target, and isolated max spikes visible without making the whole run look broken.
+```
+
 ## 2026-05-19 live OI guard follow-up
 
 - Current head: UNKNOWN (ZIP snapshot, no git metadata).
