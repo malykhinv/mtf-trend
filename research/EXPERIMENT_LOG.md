@@ -36,6 +36,17 @@ P309 applied locally / UNKNOWN commit. Warm backlog is tightened to a smaller sc
 P310 applied locally / UNKNOWN commit. Symbols with prior_fast_fade_count_24h > 2 are quarantined from warm/radar hot lanes before they create backlog. Quarantine release is timestamp-derived from the excess fake-fade events aging out of the 24h window, not a fixed TTL. Ticker/top-growth visibility remains intact.
 ```
 
+## 2026-05-19 - live connection check 20260519_122440 while running
+
+```text
+Artifact reviewed read-only while run was still active: .output/results/live_anomaly_runs/20260519_122440.
+Connection verdict: not an exchange/websocket outage. In the latest 120 live_cycle_summary rows, ws_aggtrade_connection_status was connected in all rows and ws_health_pct stayed about 98.86-99.01%. No live_internal_error, live_data_integrity_error, or monitor_empty_ohlcv_escalation events were present.
+Problem: the live path is still too loaded for pump->entry <=5s. Recent potential_anomaly_queue_count was p50 13 / p95 15, warm queue p50 8 / p95 10, radar p50 5 / p95 6. The run accumulated 1450 candidate_dropped_latency_pressure and 68 warm_watch_precise_deferred_latency_sla events.
+Data path: recent cycles alternated between ok, OHLCV REST, and Поток gapREST. aggTrade WS reads continued, but there were 621 aggtrade_rest_gap_prefetch events; recent prefetch statuses were mostly tail_gap_ignored plus some backfilled. This is not a total data outage, but REST/gap dependency still appears in the hot path.
+Latency evidence after P309: recent signal scan duration itself was cheap (p50 about 78ms, p95 about 984ms), but origin-to-scan was not: first_seen_to_scan p50 about 33.6s / p95 about 110.7s and promote_to_scan p50 about 21.1s / p95 about 108.8s over the latest 800 scan summaries.
+Server implication: a closer/more stable VPS may reduce exchange RTT, local Wi-Fi/ISP jitter, and REST tail gaps, but it will not fix the dominant backlog by itself. The code/scheduler still needs to reduce hot-lane load or scan fewer waiting symbols for the <=5s requirement to be credible.
+```
+
 ## 2026-05-18 - live decision-speed review 20260518_090759
 
 ```text
