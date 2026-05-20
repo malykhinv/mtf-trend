@@ -6077,3 +6077,35 @@ Risk:
 ```text
 Low. This only fixes method-name usage on reconnect/error paths. It does not change endpoints, readiness rules, signal logic, order sizing, fill/stop/TP behavior, or strategy thresholds.
 ```
+
+## 2026-05-20 - P345 proposed - live2 startup context prewarm
+
+Files:
+
+```text
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/market_data/open_interest.py
+research_tools/anomaly_live2/market_data/prior_context.py
+research_tools/anomaly_live2/runner.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Make live2 less blind at the first impulse by prewarming OI and 24h prior context for the entire selected startup universe before runtime entries begin. Runtime pollers remain active/radar scoped, but the initial context dataset is no longer lazy-loaded only after a symbol already trades. Missing/empty context remains explicit data_dependency_not_ready; there is no zero fallback and no signal hot-path REST fetch.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# synthetic startup context prewarm smoke: explicit OI/prior poll methods update SymbolState without starting poller threads
+```
+
+Risk:
+
+```text
+Medium. Startup becomes heavier because it performs explicit OI and 24h prior-context requests for the selected universe. This is intentional: live2 is meant to be a continuous real-order runtime, not a best-effort lazy scanner. Trading logic, thresholds, order sizing, WS endpoints, fill/stop/TP behavior are unchanged.
+```

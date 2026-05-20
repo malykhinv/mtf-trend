@@ -38,6 +38,8 @@ class AnomalyLive2Config:
     prior_context_radar_symbol_ttl_ms: int = 60_000
     prior_context_spike_return_pct: float = 0.03
     prior_context_fast_fade_retrace_fraction: float = 0.55
+    startup_context_prewarm_request_sleep_seconds: float = 0.03
+    startup_context_prewarm_error_limit: int = 50
     ws_reconnect_initial_delay_seconds: float = 1.0
     ws_reconnect_max_delay_seconds: float = 60.0
     ws_connection_max_age_seconds: float = 84_600.0
@@ -125,6 +127,10 @@ class AnomalyLive2Config:
             raise ValueError("prior_context_spike_return_pct must be > 0")
         if not 0.0 <= self.prior_context_fast_fade_retrace_fraction <= 1.0:
             raise ValueError("prior_context_fast_fade_retrace_fraction must be in [0, 1]")
+        if self.startup_context_prewarm_request_sleep_seconds < 0:
+            raise ValueError("startup_context_prewarm_request_sleep_seconds must be >= 0")
+        if self.startup_context_prewarm_error_limit <= 0:
+            raise ValueError("startup_context_prewarm_error_limit must be > 0")
         if self.ws_reconnect_initial_delay_seconds <= 0:
             raise ValueError("ws_reconnect_initial_delay_seconds must be > 0")
         if self.ws_reconnect_max_delay_seconds < self.ws_reconnect_initial_delay_seconds:

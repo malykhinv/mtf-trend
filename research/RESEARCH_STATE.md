@@ -2288,3 +2288,11 @@ Current commit: UNKNOWN.
 P344 proposed after P343. Additional audit found that markPrice WS and private user-data stream used `Live2ReconnectBackoff.next_delay()`, but the shared helper exposes `next_delay_seconds()`. Compileall cannot catch this because the path is runtime-only after reconnect/error. P344 fixes both call sites so markPrice/private WS threads can recover instead of dying on the first reconnect.
 
 Next validation: apply P331-P344, run compileall, then run a short live2 smoke and verify reconnect/error paths do not produce `AttributeError: 'Live2ReconnectBackoff' object has no attribute 'next_delay'`.
+
+## 2026-05-20 - P345 live2 startup context prewarm state
+
+Current commit: UNKNOWN.
+
+P345 proposed after P344. Live2 is still not a true all-seeing runtime if OI and 24h prior context are lazy-loaded only after a symbol becomes active/radar, because the first 5s impulse can be classified as `data_dependency_not_ready` before context arrives. P345 adds startup prewarm for OI and strict 24h prior context across the selected universe before runtime entries begin. Runtime context refresh remains active/radar-only. No fallback or hot-path REST is added.
+
+Next validation: apply P331-P345, run compileall, then run a short live2 smoke. Startup should show OI/24h prewarm progress and `live2_status.json.market_data.startup_context_prewarm`. If startup is too slow, tune source-side request pacing deliberately; do not revert to lazy-only context for real-order mode.

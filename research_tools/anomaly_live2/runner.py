@@ -109,6 +109,7 @@ class AnomalyLive2Runner:
         self.universe_selection: Live2UniverseSelection | None = None
         self.startup_ticker_snapshot_result: Live2StartupTickerSnapshotResult | None = None
         self.startup_warmup_result: Live2StartupWarmupResult | None = None
+        self.startup_context_prewarm_result: dict[str, object] | None = None
         self.deadline_engine = Live2DeadlineEngine(
             state_store=self.state_store,
             config=Live2DeadlineEngineConfig(
@@ -394,8 +395,6 @@ class AnomalyLive2Runner:
                     ),
                 )
                 self._write_open_interest_starting_event(writer)
-                self._set_startup_status("OI", "запускаю poller для active/radar")
-                self.open_interest_source.start()
                 self.prior_context_source = Live2PriorContextPoller(
                     state_store=self.state_store,
                     exchange_client=self.execution_engine.exchange_client,
@@ -411,7 +410,10 @@ class AnomalyLive2Runner:
                     ),
                 )
                 self._write_prior_context_starting_event(writer)
-                self._set_startup_status("24h context", "запускаю prior context poller")
+                self.startup_context_prewarm_result = self._run_startup_context_prewarm(writer)
+                self._set_startup_status("OI", "запускаю runtime poller для active/radar")
+                self.open_interest_source.start()
+                self._set_startup_status("24h context", "запускаю runtime poller для active/radar")
                 self.prior_context_source.start()
             else:
                 writer.write_event(
@@ -902,6 +904,7 @@ class AnomalyLive2Runner:
                 "open_interest_status_counts": market_data_status.get("open_interest_status_counts"),
                 "prior_context": market_data_status.get("prior_context"),
                 "prior_context_status_counts": market_data_status.get("prior_context_status_counts"),
+                "startup_context_prewarm": market_data_status.get("startup_context_prewarm"),
                 "ws_reconnect_summary": {
                     "reconnect_attempts": int(ws_health_dict.get("reconnect_attempts") or 0),
                     "disconnect_count": int(ws_health_dict.get("disconnect_count") or 0),
@@ -1009,6 +1012,7 @@ class AnomalyLive2Runner:
             if self.startup_ticker_snapshot_result is None
             else self.startup_ticker_snapshot_result.as_dict(),
             "startup_warmup": None if self.startup_warmup_result is None else self.startup_warmup_result.as_dict(),
+            "startup_context_prewarm": self.startup_context_prewarm_result,
         }
 
     def _execution_status(self) -> dict[str, object]:
@@ -1100,6 +1104,7 @@ class AnomalyLive2Runner:
             if self.startup_ticker_snapshot_result is None
             else self.startup_ticker_snapshot_result.as_dict(),
             "startup_warmup": None if self.startup_warmup_result is None else self.startup_warmup_result.as_dict(),
+            "startup_context_prewarm": self.startup_context_prewarm_result,
         }
 
     def _ws_health_status(
@@ -1293,6 +1298,9 @@ class AnomalyLive2Runner:
                     "prior_context_radar_symbol_ttl_ms": self.config.prior_context_radar_symbol_ttl_ms,
                     "prior_context_spike_return_pct": self.config.prior_context_spike_return_pct,
                     "prior_context_fast_fade_retrace_fraction": self.config.prior_context_fast_fade_retrace_fraction,
+                    "startup_context_prewarm_request_sleep_seconds": self.config.startup_context_prewarm_request_sleep_seconds,
+                    "startup_context_prewarm_error_limit": self.config.startup_context_prewarm_error_limit,
+                    "startup_context_prewarm_scope": "selected_universe_before_runtime_entries",
                     "execution_order_placement": "verified_fill_and_initial_stop_lifecycle_enabled",
                     "live2_trading_mode": "real_orders_always_enabled",
                     "dry_run_supported": False,
@@ -1388,6 +1396,113 @@ class AnomalyLive2Runner:
         writer.write_event(result.as_event())
         return result
 
+    def _run_startup_context_prewarm(self, writer: Live2ArtifactWriter) -> dict[str, object]:
+        selected_symbols = () if self.universe_selection is None else self.universe_selection.selected_symbols
+        if self.open_interest_source is None or self.prior_context_source is None:
+            return {
+                "status": "not_started",
+                "reason": "context_sources_not_initialized",
+                "symbols_requested": len(selected_symbols),
+            }
+        writer.write_event(
+            Live2Event(
+                event_type="startup_context_prewarm_starting",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO,
+                message="prewarming OI and 24h prior context for the selected universe before runtime entries",
+                data={
+                    "symbols_requested": len(selected_symbols),
+                    "scope": "selected_universe",
+                    "hot_path_available": False,
+                    "silent_zero_fallback": False,
+                    "request_sleep_seconds": self.config.startup_context_prewarm_request_sleep_seconds,
+                    "error_limit": self.config.startup_context_prewarm_error_limit,
+                },
+            )
+        )
+        self._set_startup_status("OI prewarm", f"0/{len(selected_symbols)}")
+        oi_summary = self.open_interest_source.poll_symbols_once(
+            selected_symbols,
+            request_sleep_seconds=self.config.startup_context_prewarm_request_sleep_seconds,
+            error_limit=self.config.startup_context_prewarm_error_limit,
+            progress=self._set_oi_prewarm_progress_status,
+        )
+        writer.write_event(
+            Live2Event(
+                event_type="startup_open_interest_prewarm_completed",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO if bool(oi_summary.get("ready")) else Live2Severity.WARNING,
+                message="startup open-interest prewarm completed",
+                data=oi_summary,
+            )
+        )
+        self._set_startup_status("24h prewarm", f"0/{len(selected_symbols)}")
+        prior_summary = self.prior_context_source.poll_symbols_once(
+            selected_symbols,
+            request_sleep_seconds=self.config.startup_context_prewarm_request_sleep_seconds,
+            error_limit=self.config.startup_context_prewarm_error_limit,
+            progress=self._set_prior_prewarm_progress_status,
+        )
+        writer.write_event(
+            Live2Event(
+                event_type="startup_prior_context_prewarm_completed",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO if bool(prior_summary.get("ready")) else Live2Severity.WARNING,
+                message="startup 24h prior-context prewarm completed",
+                data=prior_summary,
+            )
+        )
+        result = {
+            "status": "completed",
+            "scope": "selected_universe",
+            "symbols_requested": len(selected_symbols),
+            "open_interest": oi_summary,
+            "prior_context": prior_summary,
+            "ready": bool(oi_summary.get("ready")) and bool(prior_summary.get("ready")),
+            "reason": "startup_context_prewarm_completed",
+        }
+        writer.write_event(
+            Live2Event(
+                event_type="startup_context_prewarm_completed",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO if bool(result["ready"]) else Live2Severity.WARNING,
+                message="startup OI and 24h prior-context prewarm completed",
+                data=result,
+            )
+        )
+        return result
+
+    def _set_oi_prewarm_progress_status(self, progress: dict[str, object]) -> None:
+        self.status_logger.status(
+            "\n".join(
+                (
+                    "Live2",
+                    "Этап OI prewarm",
+                    (
+                        f"{progress.get('current_index')}/{progress.get('symbols_requested')} · "
+                        f"ok {progress.get('ok')} · empty {progress.get('empty')} · errors {progress.get('error')}"
+                    ),
+                    f"Символ {progress.get('symbol')}",
+                )
+            )
+        )
+
+    def _set_prior_prewarm_progress_status(self, progress: dict[str, object]) -> None:
+        self.status_logger.status(
+            "\n".join(
+                (
+                    "Live2",
+                    "Этап 24h prewarm",
+                    (
+                        f"{progress.get('current_index')}/{progress.get('symbols_requested')} · "
+                        f"ok {progress.get('ok')} · empty {progress.get('empty')} · errors {progress.get('error')}"
+                    ),
+                    f"Символ {progress.get('symbol')}",
+                )
+            )
+        )
+
+
     def _write_aggtrade_starting_event(self, writer: Live2ArtifactWriter) -> None:
         selected_symbols = 0 if self.universe_selection is None else len(self.universe_selection.selected_symbols)
         writer.write_event(
@@ -1452,7 +1567,8 @@ class AnomalyLive2Runner:
                     "lookback_minutes": self.config.oi_lookback_minutes,
                     "max_symbols_per_cycle": self.config.oi_max_symbols_per_cycle,
                     "radar_symbol_ttl_ms": self.config.oi_radar_symbol_ttl_ms,
-                    "full_universe_polling": False,
+                    "startup_full_universe_prewarm": True,
+                    "runtime_full_universe_polling": False,
                     "silent_zero_fallback": False,
                     "universe": self._universe_status(),
                 },
@@ -1480,7 +1596,8 @@ class AnomalyLive2Runner:
                     "radar_symbol_ttl_ms": self.config.prior_context_radar_symbol_ttl_ms,
                     "spike_return_pct": self.config.prior_context_spike_return_pct,
                     "fast_fade_retrace_fraction": self.config.prior_context_fast_fade_retrace_fraction,
-                    "full_universe_polling": False,
+                    "startup_full_universe_prewarm": True,
+                    "runtime_full_universe_polling": False,
                     "silent_zero_fallback": False,
                     "legacy_category_72h_names_use_24h_live_context": True,
                     "universe": self._universe_status(),

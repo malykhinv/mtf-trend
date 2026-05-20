@@ -11,6 +11,7 @@ import copy
 import threading
 import time
 from dataclasses import dataclass, field
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 import pandas as pd
@@ -215,6 +216,128 @@ class Live2OpenInterestPoller:
         self._stop_event.set()
         if self._thread is not None:
             self._thread.join(timeout=5.0)
+
+    def poll_symbols_once(
+        self,
+        symbols: tuple[str, ...],
+        *,
+        request_sleep_seconds: float = 0.0,
+        error_limit: int | None = None,
+        progress: Callable[[dict[str, object]], None] | None = None,
+    ) -> dict[str, object]:
+        """Synchronously hydrate OI context for an explicit symbol set.
+
+        Used by live2 startup prewarm so first pump decisions do not wait for
+        lazy active/radar polling. This is a direct data-source pass, not a
+        fallback and not part of the signal hot path.
+        """
+
+        unique_symbols = tuple(dict.fromkeys(symbol.strip() for symbol in symbols if symbol.strip()))
+        started_at_ms = utc_now_ms()
+        summary: dict[str, object] = {
+            "source_id": self.source_id,
+            "mode": "startup_explicit_symbol_prewarm",
+            "symbols_requested": len(unique_symbols),
+            "symbols_polled": 0,
+            "ok": 0,
+            "empty": 0,
+            "error": 0,
+            "stopped_early": False,
+            "started_at_ms": started_at_ms,
+            "completed_at_ms": None,
+            "ready": False,
+            "reason": "not_started",
+        }
+        if not unique_symbols:
+            summary.update({"completed_at_ms": utc_now_ms(), "reason": "no_symbols_requested"})
+            return summary
+        if self.exchange_client is None or not isinstance(self.exchange_client, Live2OpenInterestExchange):
+            with self._lock:
+                self._status.status = "disabled"
+                self._status.reason = "exchange_client_has_no_fetch_open_interest_boundary"
+                self._status.started_at_ms = self._status.started_at_ms or started_at_ms
+                self._ready_event.set()
+            summary.update({
+                "completed_at_ms": utc_now_ms(),
+                "reason": "exchange_client_has_no_fetch_open_interest_boundary",
+            })
+            return summary
+        with self._lock:
+            self._status.started_at_ms = self._status.started_at_ms or started_at_ms
+            self._status.status = "bootstrapping"
+            self._status.reason = "startup_open_interest_context_prewarm_running"
+        polled: list[str] = []
+        for index, symbol in enumerate(unique_symbols, start=1):
+            if self._stop_event.is_set():
+                summary["stopped_early"] = True
+                break
+            snapshot = self._fetch_symbol(symbol=symbol, now_ms=utc_now_ms())
+            polled.append(symbol)
+            self.state_store.update_open_interest(
+                symbol=symbol,
+                fetched_at_ms=snapshot.fetched_at_ms,
+                latest_timestamp_ms=snapshot.latest_timestamp_ms,
+                previous_timestamp_ms=snapshot.previous_timestamp_ms,
+                open_interest=snapshot.open_interest,
+                previous_open_interest=snapshot.previous_open_interest,
+                open_interest_change_pct_3x5m=snapshot.open_interest_change_pct_3x5m,
+                rows_received=snapshot.rows_received,
+                source=snapshot.source,
+                status=snapshot.status,
+                reason=snapshot.reason,
+            )
+            self._last_poll_by_symbol[symbol] = snapshot.fetched_at_ms
+            with self._lock:
+                self._status.total_requests += 1
+                self._status.last_polled_symbols = tuple(polled[-25:])
+                if snapshot.status == "ok":
+                    summary["ok"] = int(summary["ok"]) + 1
+                    self._status.total_success += 1
+                    self._status.last_success_at_ms = snapshot.fetched_at_ms
+                    self._ready_event.set()
+                elif snapshot.status == "empty":
+                    summary["empty"] = int(summary["empty"]) + 1
+                    self._status.total_empty += 1
+                else:
+                    summary["error"] = int(summary["error"]) + 1
+                    self._status.total_errors += 1
+                    self._status.last_error_at_ms = snapshot.fetched_at_ms
+                    self._status.last_error_type = snapshot.status
+                    self._status.last_error = snapshot.reason[:500]
+            summary["symbols_polled"] = len(polled)
+            if progress is not None:
+                progress({
+                    **summary,
+                    "current_index": index,
+                    "symbol": symbol,
+                    "last_status": snapshot.status,
+                    "last_reason": snapshot.reason,
+                })
+            if error_limit is not None and int(summary["error"]) >= int(error_limit):
+                summary["stopped_early"] = True
+                break
+            if request_sleep_seconds > 0:
+                self._stop_event.wait(float(request_sleep_seconds))
+        completed_at_ms = utc_now_ms()
+        ready = int(summary["ok"]) > 0
+        with self._lock:
+            self._status.last_cycle_completed_at_ms = completed_at_ms
+            self._status.last_polled_symbols = tuple(polled[-25:])
+            if ready:
+                self._status.status = "ready"
+                self._status.reason = "startup_open_interest_context_prewarm_completed"
+            elif int(summary["error"]) > 0:
+                self._status.status = "degraded"
+                self._status.reason = "startup_open_interest_context_prewarm_errors_without_success"
+            else:
+                self._status.status = "running"
+                self._status.reason = "startup_open_interest_context_prewarm_completed_without_ready_symbols"
+        summary.update({
+            "completed_at_ms": completed_at_ms,
+            "ready": ready,
+            "reason": self._status.reason,
+        })
+        return summary
 
     def wait_until_ready(self, timeout_seconds: float) -> bool:
         self._ready_event.wait(max(0.0, float(timeout_seconds)))
