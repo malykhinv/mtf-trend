@@ -14,6 +14,21 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+## 2026-05-20 - live2 run review 20260520_135941
+
+```text
+Artifact reviewed: .output/results/live2_anomaly_runs/20260520_135941.
+Window: live2_started 2026-05-20T13:59:41Z, market loop after startup prewarm about 2026-05-20T14:15:11Z through latest summary 2026-05-20T17:18:16Z.
+Verdict for "all-seeing eye": improved prior-context freshness, but not ironclad. Startup selected 578 symbols; aggTrade warmup 578/578; prior-context prewarm 578/578. P354 rolling context is active (`runtime_maintenance=live_ws_closed_5m_roll_forward_after_startup_rest_bootstrap`), current prior_context_status_counts are ok=578/not_seen=44, and Ctx stale is no longer the main problem.
+Main blocker: market-data readiness flaps. Runtime gate was all_gates_ready about 6551s and blocked by stream_coverage_not_ready about 4529s in the reviewed market window. Market transitions were dominated by ticker/mark/aggTrade not-ready combinations; reconnect totals are high (ticker disconnects 260, aggTrade 548, markPrice 101), with stale_ms=5000.
+Decision latency: most evaluated non-missed decisions are fast (rejected_signal_contract p95 46ms, data_dependency p95 47ms), but deadline_missed remains 1446 decisions. Missed latency p50 8120ms, p95 52148ms, max 108942ms; 908 missed decisions were >5s late. This violates the ideal pump->entry <5s guarantee for the affected buckets.
+Prior-context rolling diagnostics: `total_ws_5m_candles_appended=12907`, `total_ws_5m_gap_tolerated=432`, `total_ws_5m_gap_rejected=9042`. Rejected 5m gap candles are visible, not hidden, but the tolerance is likely too strict for Binance aggTrade id sequencing across sparse/fragmented symbols or reconnects. Current symbol-state still shows ok context because previous valid rolling/bootstrap context remains within stale_ms; rejected gaps are tracked in counters.
+Execution/audit: no orders, fills, stops, or integrity errors. artifact_writer ready=true with error_count=0/rejected_count=0. Entry guard never ran because no category selected.
+Signal funnel: 91417 decisions, selected_count=0, total_rejected=84930, total_data_dependency_not_ready=5049. Rejects dominated by non-upward candles and prior whipsaw/spike/fast-fade caps; no profitability conclusion.
+Audit gap: no top_growth directory was present, so missed pump comparison against hourly top movers is not available from this run.
+Next action: fix WS readiness stability / stale handling first. The prior-context stale issue is mostly gone; the current risk is that stream_coverage_not_ready and deadline_missed windows can block or delay an otherwise valid pump beyond 5s.
+```
+
 ## 2026-05-20 - P354 live2 rolling prior-context test plan
 
 ```text
