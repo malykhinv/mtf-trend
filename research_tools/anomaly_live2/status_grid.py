@@ -28,6 +28,7 @@ def format_live2_status_grid(
     """Format one live2 operator heartbeat in the compact v1 grid style."""
 
     ws_health = _dict(market_data_status.get("ws_health"))
+    aggtrade_ws = _dict(market_data_status.get("aggtrade_ws"))
     universe = _dict(market_data_status.get("universe"))
     startup_warmup = _dict(market_data_status.get("startup_warmup"))
     readiness = _dict(runtime_gate_status.get("readiness"))
@@ -38,6 +39,8 @@ def format_live2_status_grid(
     reconnects = _int(ws_health.get("reconnect_attempts"))
     disconnects = _int(ws_health.get("disconnect_count"))
     payload_errors = _int(ws_health.get("payload_errors"))
+    aggtrade_rows_applied = _int(aggtrade_ws.get("rows_applied"))
+    aggtrade_pre_first_payload_failures = _int(ws_health.get("aggtrade_pre_first_payload_failures"))
     coverage_ready = bool(market_data_status.get("stream_coverage_ready"))
     market_gate_ready = bool(market_data_status.get("market_data_ready_for_entries"))
     artifact_ready = bool(artifact_writer_status.get("ready"))
@@ -104,7 +107,24 @@ def format_live2_status_grid(
         ),
         _format_status_line(
             _format_status_cell("Шарды", f"{shards_connected}/{shards_total}"),
+            _format_status_cell(
+                "Сделки",
+                _format_marked_quality_value(
+                    aggtrade_rows_applied,
+                    "good" if aggtrade_rows_applied > 0 else "bad" if shards_total > 0 else "warn",
+                ),
+            ),
+            _format_status_cell(
+                "До payload",
+                _format_marked_quality_value(
+                    aggtrade_pre_first_payload_failures,
+                    _quality_level_from_count(aggtrade_pre_first_payload_failures, good_max=0, warn_max=2),
+                ),
+            ),
+        ),
+        _format_status_line(
             _format_status_cell("Переподкл", reconnects),
+            _format_status_cell("Разрывы", disconnects),
             _format_status_cell(
                 "Ошибки",
                 _format_marked_quality_value(payload_errors, _quality_level_from_count(payload_errors, good_max=0, warn_max=3)),

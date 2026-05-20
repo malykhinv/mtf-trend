@@ -26,6 +26,14 @@ Next: runtime hardening for reconnect/coverage/latency degradation gates before 
 
 Compact project memory. Detailed rules live in Project Instructions.
 
+## 2026-05-20 - P331 live2 aggTrade market routed WS readiness
+
+```text
+Status: PROPOSED / UNKNOWN commit.
+Live2 aggTrade combined streams now use the Binance USD-M Futures routed `/market/stream?streams=` endpoint. Shards are not ready on TCP connect alone: readiness requires a fresh applied aggTrade payload. Reconnect backoff is reset only after the first valid payload of the current connection, and endpoint URL length / close / exception / pre-first-payload failure diagnostics are exposed in live2_status and the terminal grid. This changes only live2 market-data infrastructure, not strategy filters or order logic. Prior-context planning should use 24h, not 72h.
+Next: apply P331, run a 2-3 minute live2 smoke without changing strategy parameters, and require aggTrade rows_applied > 0, shards_connected == shards_total, no pre-first-payload reconnect storm, and new_entries_allowed staying false until real payload readiness.
+```
+
 ---
 
 ## 1. Current state
@@ -34,8 +42,8 @@ Compact project memory. Detailed rules live in Project Instructions.
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P324 proposed live2 Telegram operator safety messages
-Updated: 2026-05-19
+Last active patch: P331 proposed live2 aggTrade market routed WS readiness
+Updated: 2026-05-20
 ```
 
 ## 2026-05-19 - P315 live2 deadline verdict engine

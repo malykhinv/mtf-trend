@@ -707,11 +707,18 @@ class AnomalyLive2Runner:
         agg_reconnects = int(aggtrade_status.get("reconnect_attempts") or 0)
         agg_disconnects = int(aggtrade_status.get("disconnect_count") or 0)
         payload_errors = int(ticker_status.get("payload_errors") or 0) + int(aggtrade_status.get("payload_errors") or 0)
+        pre_first_payload_failures = 0
+        if isinstance(agg_shards, list):
+            for shard in agg_shards:
+                if isinstance(shard, dict):
+                    pre_first_payload_failures += int(shard.get("consecutive_pre_first_payload_failures") or 0)
         return {
             "ticker_ready": bool(ticker_status.get("ready")),
             "aggtrade_ready": bool(aggtrade_status.get("ready")),
             "ticker_connection_status": str(ticker_status.get("connection_status", "unknown")),
             "aggtrade_source_status": str(aggtrade_status.get("source_status", "unknown")),
+            "aggtrade_endpoint_category": str(aggtrade_status.get("endpoint_category", "unknown")),
+            "aggtrade_pre_first_payload_failures": pre_first_payload_failures,
             "shards_total": int(aggtrade_status.get("shards_total") or 0),
             "shards_connected": int(aggtrade_status.get("shards_connected") or 0),
             "shards_disconnected": disconnected_shards,
@@ -871,6 +878,8 @@ class AnomalyLive2Runner:
                 message="starting Binance futures aggTrade WS shards",
                 data={
                     "source": Live2AggTradeWsSource.source_id,
+                    "endpoint_category": Live2AggTradeWsSource.endpoint_category,
+                    "combined_stream_base_url": Live2AggTradeWsSource.combined_stream_base_url,
                     "symbols_filter_count": selected_symbols,
                     "max_streams_per_connection": self.config.aggtrade_max_streams_per_connection,
                     "stale_ms": self.config.aggtrade_stale_ms,
