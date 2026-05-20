@@ -1160,6 +1160,66 @@ class CcxtFuturesClient(ExchangeClient):
             hedge_mode_enabled=hedge_mode_enabled,
         )
 
+
+    def create_futures_user_data_listen_key(self) -> str:
+        """Create or extend a Binance USD-M futures user-data stream listenKey."""
+        if self.exchange != Exchange.BINANCE:
+            raise NotImplementedError("futures user-data stream is implemented only for Binance USD-M futures")
+        raw_client = cast(Any, self._client)
+        endpoint = "fapiPrivatePostListenKey"
+        call = getattr(raw_client, endpoint, None)
+        if not callable(call):
+            raise RuntimeError(f"ccxt client does not expose required Binance endpoint: {endpoint}")
+        payload = self._retry_exchange_startup_call(
+            operation="ccxt_binance_create_user_data_listen_key",
+            endpoint=endpoint,
+            call=call,
+        )
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{endpoint} returned invalid payload")
+        listen_key = payload.get("listenKey")
+        if not isinstance(listen_key, str) or not listen_key.strip():
+            raise RuntimeError(f"{endpoint} returned empty listenKey")
+        return listen_key.strip()
+
+    def keepalive_futures_user_data_listen_key(self, listen_key: str) -> None:
+        """Extend a Binance USD-M futures user-data stream listenKey."""
+        if self.exchange != Exchange.BINANCE:
+            raise NotImplementedError("futures user-data stream is implemented only for Binance USD-M futures")
+        normalized = str(listen_key).strip()
+        if not normalized:
+            raise ValueError("listen_key must not be empty")
+        raw_client = cast(Any, self._client)
+        endpoint = "fapiPrivatePutListenKey"
+        call = getattr(raw_client, endpoint, None)
+        if not callable(call):
+            raise RuntimeError(f"ccxt client does not expose required Binance endpoint: {endpoint}")
+        self._retry_exchange_startup_call(
+            operation="ccxt_binance_keepalive_user_data_listen_key",
+            endpoint=endpoint,
+            call=call,
+            args=({"listenKey": normalized},),
+        )
+
+    def close_futures_user_data_listen_key(self, listen_key: str) -> None:
+        """Close a Binance USD-M futures user-data stream listenKey."""
+        if self.exchange != Exchange.BINANCE:
+            raise NotImplementedError("futures user-data stream is implemented only for Binance USD-M futures")
+        normalized = str(listen_key).strip()
+        if not normalized:
+            return
+        raw_client = cast(Any, self._client)
+        endpoint = "fapiPrivateDeleteListenKey"
+        call = getattr(raw_client, endpoint, None)
+        if not callable(call):
+            raise RuntimeError(f"ccxt client does not expose required Binance endpoint: {endpoint}")
+        self._retry_exchange_startup_call(
+            operation="ccxt_binance_close_user_data_listen_key",
+            endpoint=endpoint,
+            call=call,
+            args=({"listenKey": normalized},),
+        )
+
     @staticmethod
     def _position_row_symbol(row: dict[str, object]) -> str | None:
         symbol = row.get("symbol")

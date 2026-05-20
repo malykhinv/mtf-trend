@@ -1668,6 +1668,8 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
                 universe_min_trade_count_24h=int(getattr(args, "universe_min_trade_count_24h", 0)),
                 universe_min_auto_symbols=int(getattr(args, "universe_min_auto_symbols", 300)),
                 ws_connection_max_age_seconds=float(getattr(args, "ws_connection_max_age_seconds", 84_600.0)),
+                user_data_stream_startup_wait_seconds=float(getattr(args, "user_data_stream_startup_wait_seconds", 10.0)),
+                user_data_stream_keepalive_interval_seconds=float(getattr(args, "user_data_stream_keepalive_interval_seconds", 1_800.0)),
                 mark_price_stale_ms=int(getattr(args, "mark_price_stale_ms", 5_000)),
                 mark_price_startup_wait_seconds=float(getattr(args, "mark_price_startup_wait_seconds", 10.0)),
                 oi_stale_ms=int(getattr(args, "oi_stale_ms", 180_000)),

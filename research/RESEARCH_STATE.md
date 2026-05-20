@@ -2242,3 +2242,11 @@ Live2 now has a stream-only SignalEngine adapter connected to the deadline engin
 New entries remain forbidden: execution, executable-entry guards, exchange position precheck, actual fill, verified stop, and position supervisor are still TODO.
 Next validation: run `run-anomaly-live2` after P311-P316 and inspect `deadline_decision` events. On strong buckets, verdicts should be `selected` only when stream baseline/category checks pass; otherwise `rejected_signal_contract`, `data_not_ready`, or `deadline_missed` must explain the reason.
 ```
+
+## 2026-05-20 - P340 live2 private user-data stream state
+
+Current commit: UNKNOWN.
+
+P340 proposed after P339. Live2 now starts a Binance USD-M private user-data stream through a typed exchange boundary: create listenKey, connect to `/private/ws/<listenKey>`, keep listenKey alive, rotate before 24h, and emit user-data execution events into artifacts. `new_entries_allowed` now requires `user_data_stream_ready=true` in addition to market data, decision latency, artifact writer, exchange preflight, position supervisor, and execution gates. Raw listenKey is not written to artifacts.
+
+Next validation: apply P331-P340, run compileall, then run a short live2 smoke with minimal account exposure. `live2_status.json.execution_status.user_data_stream.ready` must become true before any entry can be allowed; user stream disconnect/keepalive failure must flip entries off with `user_data_stream_not_ready`.

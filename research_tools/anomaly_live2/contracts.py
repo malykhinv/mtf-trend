@@ -48,6 +48,7 @@ class Live2Readiness:
     exchange_boundary_ready: bool = False
     position_supervisor_ready: bool = False
     execution_ready: bool = False
+    user_data_stream_ready: bool = False
 
     @property
     def new_entries_allowed(self) -> bool:
@@ -58,6 +59,7 @@ class Live2Readiness:
             and self.exchange_boundary_ready
             and self.position_supervisor_ready
             and self.execution_ready
+            and self.user_data_stream_ready
         )
 
     def as_dict(self) -> dict[str, bool]:
@@ -68,5 +70,6 @@ class Live2Readiness:
             "exchange_boundary_ready": self.exchange_boundary_ready,
             "position_supervisor_ready": self.position_supervisor_ready,
             "execution_ready": self.execution_ready,
+            "user_data_stream_ready": self.user_data_stream_ready,
             "new_entries_allowed": self.new_entries_allowed,
         }

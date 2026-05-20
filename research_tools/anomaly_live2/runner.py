@@ -31,6 +31,7 @@ from .position_supervisor import Live2PositionSupervisor, Live2PositionSuperviso
 from .state import SymbolStateStore
 from .status_grid import format_live2_status_grid
 from .telegram import Live2TelegramConfig, Live2TelegramDispatcher
+from .user_data_stream import Live2UserDataStreamSource
 
 
 class AnomalyLive2Runner:
@@ -84,6 +85,7 @@ class AnomalyLive2Runner:
         self.mark_price_source: Live2MarkPriceWsSource | None = None
         self.open_interest_source: Live2OpenInterestPoller | None = None
         self.prior_context_source: Live2PriorContextPoller | None = None
+        self.user_data_source: Live2UserDataStreamSource | None = None
         self.execution_engine = Live2ExecutionEngine(
             exchange_client=exchange_client,
             config=Live2ExecutionConfig(
@@ -171,6 +173,33 @@ class AnomalyLive2Runner:
                     data=execution_preflight.as_dict(),
                 )
             )
+            user_data_ready = False
+            if execution_preflight.ready:
+                self.user_data_source = Live2UserDataStreamSource(
+                    exchange_client=self.execution_engine.exchange_client,
+                    startup_wait_seconds=self.config.user_data_stream_startup_wait_seconds,
+                    keepalive_interval_seconds=self.config.user_data_stream_keepalive_interval_seconds,
+                    reconnect_initial_delay_seconds=self.config.ws_reconnect_initial_delay_seconds,
+                    reconnect_max_delay_seconds=self.config.ws_reconnect_max_delay_seconds,
+                    connection_max_age_seconds=self.config.ws_connection_max_age_seconds,
+                    event_callback=writer.write_event,
+                )
+                self._write_user_data_stream_starting_event(writer)
+                self._set_startup_status("user stream", "создаю listenKey и подключаю private WS")
+                self.user_data_source.start()
+                user_data_ready = self.user_data_source.wait_until_ready()
+                self._set_startup_status("user stream", "private WS готов" if user_data_ready else "private WS пока не готов")
+            else:
+                writer.write_event(
+                    Live2Event(
+                        event_type="user_data_stream_not_started",
+                        component=Live2Component.EXECUTION,
+                        severity=Live2Severity.ERROR,
+                        message="user-data stream not started because execution preflight is not ready",
+                        data=execution_preflight.as_dict(),
+                    )
+                )
+            self.readiness.user_data_stream_ready = user_data_ready
             if not self.config.symbols:
                 self._set_startup_status("вселенная", "загружаю startup ticker snapshot")
                 self.startup_ticker_snapshot_result = self._run_startup_ticker_snapshot(writer)
@@ -367,7 +396,7 @@ class AnomalyLive2Runner:
             self.status_logger(
                 f"live2 · старт · артефакты {self.config.output_dir} · "
                 f"universe {len(self.universe_selection.selected_symbols)} · "
-                "ticker+aggTrade WS включены · stream signal adapter включен · verified entry+stop execution включен"
+                "ticker+aggTrade+mark WS включены · private user stream включен · verified entry+stop execution включен"
             )
             last_heartbeat_at = 0.0
             while not self._shutdown_requested:
@@ -417,6 +446,7 @@ class AnomalyLive2Runner:
                                 "runtime_gate_status": runtime_gate_status,
                                 "new_entries_allowed": self.readiness.new_entries_allowed,
                                 "execution_status": self._execution_status(),
+                                "user_data_stream_status": self._user_data_stream_status(),
                                 "position_supervisor_cycle": supervisor_result.as_dict(),
                                 "artifact_writer_status": writer.status().as_dict(),
                             },
@@ -461,6 +491,7 @@ class AnomalyLive2Runner:
                             market_data_status=market_data_status,
                             decision_status=decision_status,
                             execution_status=execution_status,
+                            user_data_stream_status=self._user_data_stream_status(),
                             runtime_gate_status=runtime_gate_status,
                             artifact_writer_status=artifact_writer_status,
                         ),
@@ -534,6 +565,8 @@ class AnomalyLive2Runner:
             raise
         finally:
             self.status_logger.finish_status()
+            if self.user_data_source is not None:
+                self.user_data_source.close()
             if self.prior_context_source is not None:
                 self.prior_context_source.close()
             if self.open_interest_source is not None:
@@ -597,6 +630,7 @@ class AnomalyLive2Runner:
         self._write_market_data_coverage_transition_if_changed(writer, market_data_status)
         self.readiness.exchange_boundary_ready = self.execution_engine.preflight_result.ready
         self.readiness.execution_ready = self.execution_engine.ready
+        self.readiness.user_data_stream_ready = bool(self._user_data_stream_status().get("ready"))
         self.readiness.position_supervisor_ready = self.position_supervisor.ready
         self.readiness.decision_latency_ready = self._decision_latency_gate_ready(
             deadline_result=deadline_result,
@@ -610,6 +644,7 @@ class AnomalyLive2Runner:
             "exchange_boundary_ready": self.readiness.exchange_boundary_ready,
             "position_supervisor_ready": self.readiness.position_supervisor_ready,
             "execution_ready": self.readiness.execution_ready,
+            "user_data_stream_ready": self.readiness.user_data_stream_ready,
             "new_entries_allowed": self.readiness.new_entries_allowed,
             "reason": runtime_gate_status["reason"],
             "market_data_source_ready": bool(market_data_status.get("stream_coverage_ready")),
@@ -725,6 +760,7 @@ class AnomalyLive2Runner:
             "exchange_boundary_ready",
             "position_supervisor_ready",
             "execution_ready",
+            "user_data_stream_ready",
         ))
         self._runtime_gate_transition_counts[transition_key] += 1
 
@@ -811,6 +847,7 @@ class AnomalyLive2Runner:
                 "total_positions_protected": int(execution_status.get("total_positions_protected") or 0),
                 "total_integrity_errors": int(execution_status.get("total_integrity_errors") or 0),
             },
+            "private_user_data_stream": self._user_data_stream_status(),
             "artifact_writer": writer.status().as_dict(),
         }
 
@@ -856,6 +893,8 @@ class AnomalyLive2Runner:
             reasons.append("position_supervisor_not_ready")
         if not self.readiness.execution_ready:
             reasons.append("execution_not_ready")
+        if not self.readiness.user_data_stream_ready:
+            reasons.append("user_data_stream_not_ready")
         reason = "+".join(reasons) if reasons else "all_gates_ready"
         self._last_runtime_gate_reason = reason
         return {
@@ -874,6 +913,7 @@ class AnomalyLive2Runner:
             "market_data_recovery_windows": self.config.market_data_recovery_windows,
             "readiness": self.readiness.as_dict(),
             "position_supervisor_status": self.position_supervisor.status(),
+            "user_data_stream_status": self._user_data_stream_status(),
             "startup_ticker_snapshot": None
             if self.startup_ticker_snapshot_result is None
             else self.startup_ticker_snapshot_result.as_dict(),
@@ -884,7 +924,20 @@ class AnomalyLive2Runner:
         return {
             **self.execution_engine.status(),
             "position_supervisor": self.position_supervisor.status(),
+            "user_data_stream": self._user_data_stream_status(),
         }
+
+    def _user_data_stream_status(self) -> dict[str, object]:
+        if self.user_data_source is None:
+            return {
+                "source_id": Live2UserDataStreamSource.source_id,
+                "status": "not_started",
+                "ready": False,
+                "reason": "execution_preflight_not_ready_or_user_data_source_not_started",
+                "endpoint_category": Live2UserDataStreamSource.endpoint_category,
+                "websocket_url_redacted": Live2UserDataStreamSource.websocket_url_redacted,
+            }
+        return self.user_data_source.status().as_dict()
 
     def _select_universe(self) -> Live2UniverseSelection:
         selector = Live2UniverseSelector(
@@ -1131,6 +1184,8 @@ class AnomalyLive2Runner:
                     "ws_reconnect_initial_delay_seconds": self.config.ws_reconnect_initial_delay_seconds,
                     "ws_reconnect_max_delay_seconds": self.config.ws_reconnect_max_delay_seconds,
                     "ws_connection_max_age_seconds": self.config.ws_connection_max_age_seconds,
+                    "user_data_stream_startup_wait_seconds": self.config.user_data_stream_startup_wait_seconds,
+                    "user_data_stream_keepalive_interval_seconds": self.config.user_data_stream_keepalive_interval_seconds,
                     "mark_price_stale_ms": self.config.mark_price_stale_ms,
                     "mark_price_startup_wait_seconds": self.config.mark_price_startup_wait_seconds,
                     "oi_stale_ms": self.config.oi_stale_ms,

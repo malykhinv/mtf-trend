@@ -5918,3 +5918,39 @@ Risk:
 ```text
 Medium. The patch intentionally changes live2 from `flow_hold_count_not_ready` to a real closed-live-candle confirmation contract. It does not use future data, but live semantics are explicitly labelled as trailing closed pre-entry flow, not backtest lookahead. This may make `runner_flow` computable where it was previously blocked by dependency status.
 ```
+
+## 2026-05-20 - P340 proposed - live2 private user-data stream
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+data/exchanges/ccxt_futures_client.py
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/contracts.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/status_grid.py
+research_tools/anomaly_live2/user_data_stream.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Add a Binance USD-M private user-data stream to live2 execution truth. Live2 now creates/keeps alive a listenKey, connects to the routed `/private/ws/<listenKey>` WebSocket, emits ORDER_TRADE_UPDATE / ACCOUNT_UPDATE / conditional reject payloads into artifacts, redacts the listenKey in status, and blocks new entries unless the private stream is connected and the listenKey is active.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# synthetic user-data order payload smoke
+```
+
+Risk:
+
+```text
+Medium. This intentionally makes live2 stricter: real entries are blocked when the private user-data stream is not healthy. The patch does not replace REST fill/stop verification yet; it adds the private stream as mandatory execution telemetry and audit truth so order/fill/position lifecycle events are no longer invisible between REST checks.
+```

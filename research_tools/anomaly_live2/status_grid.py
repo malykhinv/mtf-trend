@@ -25,6 +25,7 @@ def format_live2_status_grid(
     market_data_status: Mapping[str, object],
     decision_status: Mapping[str, object],
     execution_status: Mapping[str, object],
+    user_data_stream_status: Mapping[str, object],
     runtime_gate_status: Mapping[str, object],
     artifact_writer_status: Mapping[str, object],
 ) -> str:
@@ -39,6 +40,7 @@ def format_live2_status_grid(
     startup_warmup = _dict(market_data_status.get("startup_warmup"))
     readiness = _dict(runtime_gate_status.get("readiness"))
     supervisor_status = _dict(execution_status.get("position_supervisor"))
+    user_stream = _dict(user_data_stream_status)
 
     shards_total = _int(ws_health.get("shards_total"))
     shards_connected = _int(ws_health.get("shards_connected"))
@@ -97,6 +99,8 @@ def format_live2_status_grid(
     integrity_errors = _int(execution_status.get("total_integrity_errors")) + _int(supervisor_status.get("total_integrity_errors"))
     tp1_count = _int(supervisor_status.get("total_tp1_closes"))
     final_count = _int(supervisor_status.get("total_final_closes"))
+    user_stream_ready = bool(user_stream.get("ready"))
+    user_stream_events = _int(user_stream.get("messages_received"))
 
     runtime_reason = _compact_gate_reason(str(runtime_gate_status.get("reason") or ""))
     queue_size = _int(artifact_writer_status.get("queue_size"))
@@ -186,6 +190,11 @@ def format_live2_status_grid(
             _format_status_cell("Ордера", total_orders),
             _format_status_cell("TP1", tp1_count),
             _format_status_cell("Закрыто", final_count),
+        ),
+        _format_status_line(
+            _format_status_cell("User WS", _format_marked_quality_value("Ok" if user_stream_ready else "Нет", "good" if user_stream_ready else "bad")),
+            _format_status_cell("User ev", user_stream_events),
+            _format_status_cell("User key", str(user_stream.get("listen_key_status") or "-")[:10]),
         ),
         "",
         "Контроль",
