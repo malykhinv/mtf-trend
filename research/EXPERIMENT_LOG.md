@@ -1,4 +1,12 @@
 
+## 2026-05-20 - P358 top-growth off-hot-path validation
+
+```text
+Patch applied locally. Top-growth audit now runs through a daemon worker. In the next live2 run, heartbeat/status should show `top_growth_audit.status=scheduled/processing/completed` while `decision_loop_overrun_count` and fresh `total_deadline_missed` remain near zero.
+
+Failure condition: if worker scheduling accumulates stale `scheduled` status for many minutes or decision latency still degrades at the same time as top-growth processing, disable top-growth or move it to a fully detached automation/process.
+```
+
 ## 2026-05-20 - P357 live2 top-growth audit validation plan
 
 ```text

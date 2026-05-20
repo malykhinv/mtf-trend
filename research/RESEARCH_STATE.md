@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P358 live2 top-growth audit off hot path
+
+```text
+Current patch status: P358 APPLIED locally / UNKNOWN commit.
+Question: is anything left before launching after P357?
+Change: top-growth audit no longer calls exchange REST from the main heartbeat/decision loop. The runner starts a single daemon worker for bounded audit chunks and drains completion events from the main loop.
+Trading impact: none. This closes the main remaining concern from P357: audit visibility should not become a latency bottleneck for live entries.
+Validation: `python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py`; `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py`.
+Next validation: start live2 and watch `decision_loop_overrun_count`, `total_deadline_missed`, `total_deadline_expired_backlog`, `entry_stream_ready`, and `top_growth_audit.status` for the first hour.
+```
+
 ## 2026-05-20 - P357 live2 closed-hour top-growth audit
 
 ```text

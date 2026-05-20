@@ -1,5 +1,41 @@
 # Anomaly Patch Log
 
+## 2026-05-20 - P358 applied locally - live2 top-growth audit off hot path
+
+Files:
+
+```text
+research_tools/anomaly_live2/runner.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Prevent the new live2 top-growth audit from moving REST latency into the heartbeat/decision loop.
+```
+
+Change:
+
+```text
+The runner now starts top-growth audit chunks in a daemon background worker and only reads immutable status/completion events from the main loop. If the worker is still running, the heartbeat does not start another chunk. Completion is still written as `live2_top_growth_audit_completed`.
+```
+
+Validation:
+
+```bash
+python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py
+```
+
+Risk:
+
+```text
+Low. Audit-only threading; no signal, entry guard, execution, fill, stop, or position lifecycle changes. The next live run should verify `top_growth_audit.status` progresses without decision-loop overruns.
+```
+
 ## 2026-05-20 - P357 applied locally - live2 closed-hour top-growth audit
 
 Files:

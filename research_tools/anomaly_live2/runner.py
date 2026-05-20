@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from collections import Counter
 from typing import Any
 
@@ -137,6 +138,9 @@ class AnomalyLive2Runner:
             status="not_started",
             reason="not_started",
         )
+        self._top_growth_audit_lock = threading.Lock()
+        self._top_growth_audit_worker: threading.Thread | None = None
+        self._top_growth_completed_events: list[dict[str, object]] = []
         self.deadline_engine = Live2DeadlineEngine(
             state_store=self.state_store,
             config=Live2DeadlineEngineConfig(
@@ -563,19 +567,19 @@ class AnomalyLive2Runner:
                     last_heartbeat_at = now_monotonic
                     self.session_top_tracker.update_from_state_snapshot(self.state_store.snapshot())
                     self._last_session_top_snapshot = self.session_top_tracker.snapshot()
-                    self._last_top_growth_audit_stats = self.top_growth_audit.process_due(
+                    self._kick_top_growth_audit(
                         symbols=self._selected_symbols_tuple(),
                         now_ms=int(time.time() * 1000),
                     )
-                    if self._last_top_growth_audit_stats.status == "completed":
+                    for top_growth_event_data in self._drain_top_growth_completed_events():
                         writer.write_event(
                             Live2Event(
                                 event_type="live2_top_growth_audit_completed",
                                 component=Live2Component.RUNNER,
                                 severity=Live2Severity.INFO,
                                 symbol="__top_growth__",
-                                message=self._last_top_growth_audit_stats.reason,
-                                data=self._last_top_growth_audit_stats.as_dict(),
+                                message=str(top_growth_event_data.get("reason") or "closed_hour_top_growth_artifacts_written"),
+                                data=top_growth_event_data,
                             )
                         )
                     market_data_status = self._market_data_status(include_symbol_counts=True)
@@ -1208,6 +1212,42 @@ class AnomalyLive2Runner:
         if self.universe_selection is None:
             return ()
         return tuple(self.universe_selection.selected_symbols)
+
+    def _kick_top_growth_audit(self, *, symbols: tuple[str, ...], now_ms: int) -> None:
+        with self._top_growth_audit_lock:
+            if self._top_growth_audit_worker is not None and self._top_growth_audit_worker.is_alive():
+                return
+
+            def run_worker() -> None:
+                stats = self.top_growth_audit.process_due(symbols=symbols, now_ms=now_ms)
+                with self._top_growth_audit_lock:
+                    self._last_top_growth_audit_stats = stats
+                    if stats.status == "completed":
+                        self._top_growth_completed_events.append(stats.as_dict())
+
+            self._last_top_growth_audit_stats = Live2TopGrowthAuditStats(
+                enabled=self.config.top_growth_enabled,
+                status="scheduled",
+                reason="background_worker_started",
+                period_start_ms=self._last_top_growth_audit_stats.period_start_ms,
+                period_end_ms=self._last_top_growth_audit_stats.period_end_ms,
+                processed_count=self._last_top_growth_audit_stats.processed_count,
+                remaining_count=self._last_top_growth_audit_stats.remaining_count,
+                symbols_total=self._last_top_growth_audit_stats.symbols_total,
+                top_count=self._last_top_growth_audit_stats.top_count,
+            )
+            self._top_growth_audit_worker = threading.Thread(
+                target=run_worker,
+                name="live2-top-growth-audit",
+                daemon=True,
+            )
+            self._top_growth_audit_worker.start()
+
+    def _drain_top_growth_completed_events(self) -> list[dict[str, object]]:
+        with self._top_growth_audit_lock:
+            events = list(self._top_growth_completed_events)
+            self._top_growth_completed_events.clear()
+            return events
 
     def _market_data_status(self, *, include_symbol_counts: bool = True) -> dict[str, object]:
         ticker_status = self.ticker_source.status().as_dict(stale_ms=self.config.ticker_stale_ms)
