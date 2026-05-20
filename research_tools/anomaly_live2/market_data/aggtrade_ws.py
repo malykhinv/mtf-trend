@@ -261,6 +261,7 @@ class Live2AggTradeWsSource:
                 state_store=self.state_store,
                 source_id=self.source_id,
                 ready_callback=self._mark_ready_if_all_ready,
+                stale_ms=self.stale_ms,
                 reconnect_initial_delay_seconds=float(reconnect_initial_delay_seconds),
                 reconnect_max_delay_seconds=float(reconnect_max_delay_seconds),
                 connection_max_age_seconds=self.connection_max_age_seconds,
@@ -329,6 +330,7 @@ class _Live2AggTradeWsShard:
         state_store: SymbolStateStore,
         source_id: str,
         ready_callback: Callable[[], None],
+        stale_ms: int,
         reconnect_initial_delay_seconds: float = 1.0,
         reconnect_max_delay_seconds: float = 60.0,
         connection_max_age_seconds: float = 84_600.0,
@@ -339,6 +341,9 @@ class _Live2AggTradeWsShard:
         self.state_store = state_store
         self.source_id = source_id
         self.ready_callback = ready_callback
+        self.stale_ms = int(stale_ms)
+        if self.stale_ms <= 0:
+            raise ValueError("stale_ms must be > 0")
         self.connection_max_age_seconds = float(connection_max_age_seconds)
         if self.connection_max_age_seconds <= 0:
             raise ValueError("connection_max_age_seconds must be > 0")

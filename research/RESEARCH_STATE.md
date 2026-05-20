@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P349 live2 aggTrade shard stale_ms wiring
+
+```text
+Current patch status: P349 PROPOSED / UNKNOWN commit.
+Question: fresh live2 startup run 20260520_090142 failed after aggTrade WS startup with all four shards reporting `AttributeError: _Live2AggTradeWsShard object has no attribute stale_ms`.
+Change: Live2AggTradeWsSource now passes its configured `aggtrade_stale_ms` into every `_Live2AggTradeWsShard`, and the shard validates/stores it before using it for receive timeouts and stale watchdog checks.
+Trading impact: bugfix only. This does not loosen readiness: all aggTrade shards still need fresh live WS payload before live2 can enter the main loop.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; rerun live2 startup and require the previous AttributeError to disappear.
+Next validation: inspect the next `aggtrade_ws_startup_failed` event if startup still fails; it should now expose the real Binance/network/payload blocker instead of the local AttributeError.
+```
+
 ## 2026-05-20 - P342 live2 hard startup/execution safety
 
 ```text
