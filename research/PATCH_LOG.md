@@ -6018,3 +6018,32 @@ Risk:
 ```text
 Low-to-medium. This makes live2 fail faster instead of continuing as a blocked diagnostic process when real-order prerequisites are missing. That is intended for the current non-optional live2 contract. No signal thresholds, order sizing, market-data ingestion, TP price, or stop price calculation are changed.
 ```
+
+## 2026-05-20 - P343 proposed - live2 hard market-data startup
+
+Files:
+
+```text
+research_tools/anomaly_live2/runner.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Make live2 fail fast when mandatory market-data streams are not ready at startup. After P342, execution/user-data/universe prerequisites were hard startup gates, but ticker, aggTrade, and markPrice WS could still leave the process running indefinitely in a blocked state. Live2 is a real-order runtime: missing mandatory market data is a startup failure, not an optional watch-only mode.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# synthetic startup-fail smoke: ticker/aggTrade/mark not-ready paths raise RuntimeError after writing explicit startup_failed events
+```
+
+Risk:
+
+```text
+Low. This only changes startup failure semantics for missing mandatory market-data streams. It does not change signal thresholds, category logic, order sizing, fill/stop/TP behavior, WS URLs, or poller behavior.
+```

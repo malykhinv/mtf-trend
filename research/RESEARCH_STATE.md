@@ -2272,3 +2272,11 @@ Current commit: UNKNOWN.
 P340 proposed after P339. Live2 now starts a Binance USD-M private user-data stream through a typed exchange boundary: create listenKey, connect to `/private/ws/<listenKey>`, keep listenKey alive, rotate before 24h, and emit user-data execution events into artifacts. `new_entries_allowed` now requires `user_data_stream_ready=true` in addition to market data, decision latency, artifact writer, exchange preflight, position supervisor, and execution gates. Raw listenKey is not written to artifacts.
 
 Next validation: apply P331-P340, run compileall, then run a short live2 smoke with minimal account exposure. `live2_status.json.execution_status.user_data_stream.ready` must become true before any entry can be allowed; user stream disconnect/keepalive failure must flip entries off with `user_data_stream_not_ready`.
+
+## 2026-05-20 - P343 live2 hard market-data startup state
+
+Current commit: UNKNOWN.
+
+P343 proposed after P342. Live2 now treats missing mandatory ticker, aggTrade, or markPrice WS readiness at startup as a hard startup failure. This removes the ambiguous long-running blocked mode for dead market data while preserving runtime gates for later disconnects/recovery after a successful startup.
+
+Next validation: apply P331-P343, run compileall, then run a short live2 smoke. Startup must fail quickly with `ticker_ws_startup_failed`, `aggtrade_ws_startup_failed`, or `mark_price_ws_startup_failed` if a mandatory stream has no valid payload within its startup wait. If startup succeeds, later runtime disconnects should still be handled by normal gates/transitions.

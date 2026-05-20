@@ -232,6 +232,22 @@ class AnomalyLive2Runner:
             self.ticker_source.start()
             ticker_ready = self.ticker_source.wait_until_ready()
             self._set_startup_status("ticker", "ticker готов" if ticker_ready else "ticker пока не готов")
+            if not ticker_ready:
+                ticker_status = self.ticker_source.status().as_dict(stale_ms=self.config.ticker_stale_ms)
+                writer.write_event(
+                    Live2Event(
+                        event_type="ticker_ws_startup_failed",
+                        component=Live2Component.MARKET_DATA,
+                        severity=Live2Severity.ERROR,
+                        message="live2 requires a ready ticker WS before entering the main loop",
+                        data={
+                            "ticker_ws": ticker_status,
+                            "startup_failure": True,
+                            "live2_trading_mode": "real_orders_always_enabled",
+                        },
+                    )
+                )
+                raise RuntimeError(f"live2 ticker WS startup failed: {ticker_status.get('reason') or ticker_status.get('connection_status')}")
             self._set_startup_status("вселенная", "выбираю universe из startup snapshot + ticker state")
             self.universe_selection = self._select_universe()
             if (
@@ -260,6 +276,23 @@ class AnomalyLive2Runner:
                     f"selected={len(self.universe_selection.selected_symbols)} "
                     f"minimum={self.config.universe_min_auto_symbols}"
                 )
+            if not self.universe_selection.selected_symbols:
+                writer.write_event(
+                    Live2Event(
+                        event_type="startup_universe_empty",
+                        component=Live2Component.MARKET_DATA,
+                        severity=Live2Severity.ERROR,
+                        message="live2 startup universe is empty",
+                        data={
+                            "universe": self.universe_selection.as_dict(),
+                            "startup_ticker_snapshot": None
+                            if self.startup_ticker_snapshot_result is None
+                            else self.startup_ticker_snapshot_result.as_dict(),
+                            "startup_failure": True,
+                        },
+                    )
+                )
+                raise RuntimeError("live2 startup universe is empty")
             self.state_store.apply_universe_selection(
                 selected_rank_by_symbol=self.universe_selection.rank_by_symbol(),
                 selected_at_ms=self.universe_selection.selected_at_ms,
@@ -302,6 +335,22 @@ class AnomalyLive2Runner:
                 self.aggtrade_source.start()
                 aggtrade_ready = self.aggtrade_source.wait_until_ready()
                 self._set_startup_status("aggTrade", "поток готов" if aggtrade_ready else "поток пока не готов")
+                if not aggtrade_ready:
+                    aggtrade_status = self.aggtrade_source.status().as_dict(stale_ms=self.config.aggtrade_stale_ms)
+                    writer.write_event(
+                        Live2Event(
+                            event_type="aggtrade_ws_startup_failed",
+                            component=Live2Component.MARKET_DATA,
+                            severity=Live2Severity.ERROR,
+                            message="live2 requires all aggTrade shards to receive live WS payload before entering the main loop",
+                            data={
+                                "aggtrade_ws": aggtrade_status,
+                                "startup_failure": True,
+                                "live2_trading_mode": "real_orders_always_enabled",
+                            },
+                        )
+                    )
+                    raise RuntimeError(f"live2 aggTrade WS startup failed: {aggtrade_status.get('reason') or aggtrade_status.get('source_status')}")
                 self.mark_price_source = Live2MarkPriceWsSource(
                     state_store=self.state_store,
                     symbols=self.universe_selection.selected_symbols,
@@ -316,6 +365,22 @@ class AnomalyLive2Runner:
                 self.mark_price_source.start()
                 mark_ready = self.mark_price_source.wait_until_ready()
                 self._set_startup_status("markPrice", "поток готов" if mark_ready else "поток пока не готов")
+                if not mark_ready:
+                    mark_status = self.mark_price_source.status().as_dict(stale_ms=self.config.mark_price_stale_ms)
+                    writer.write_event(
+                        Live2Event(
+                            event_type="mark_price_ws_startup_failed",
+                            component=Live2Component.MARKET_DATA,
+                            severity=Live2Severity.ERROR,
+                            message="live2 requires markPrice WS context before entering the main loop",
+                            data={
+                                "mark_price_ws": mark_status,
+                                "startup_failure": True,
+                                "live2_trading_mode": "real_orders_always_enabled",
+                            },
+                        )
+                    )
+                    raise RuntimeError(f"live2 markPrice WS startup failed: {mark_status.get('reason') or mark_status.get('connection_status')}")
                 self.open_interest_source = Live2OpenInterestPoller(
                     state_store=self.state_store,
                     exchange_client=self.execution_engine.exchange_client,
