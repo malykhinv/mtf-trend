@@ -220,13 +220,13 @@ class Live2DeadlineEngine:
     def run_cycle(self, *, now_ms: int | None = None) -> Live2DeadlineCycleResult:
         effective_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
         result = Live2DeadlineCycleResult()
-        for state in self.state_store.snapshot():
-            if not state.universe_selected:
-                result.skipped_symbols += 1
-                continue
+        candidates = self.state_store.decision_snapshot()
+        result.skipped_symbols = max(0, len(self.state_store) - len(candidates))
+        live_watermark_ms = self.live_decision_watermark_ms()
+        for state in candidates:
             result.checked_symbols += 1
             previous_bucket_ms = state.last_decision_bucket_ms
-            decision = self._evaluate_state(state, now_ms=effective_now_ms)
+            decision = self._evaluate_state(state, now_ms=effective_now_ms, live_watermark_ms=live_watermark_ms)
             if decision is None:
                 if (
                     state.last_decision_bucket_ms is not None
@@ -283,16 +283,24 @@ class Live2DeadlineEngine:
             "execution_engine": None if self.execution_engine is None else self.execution_engine.status(),
         }
 
-    def _evaluate_state(self, state: SymbolState, *, now_ms: int) -> Live2DecisionRecord | None:
+    def _evaluate_state(
+        self,
+        state: SymbolState,
+        *,
+        now_ms: int,
+        live_watermark_ms: int | None,
+    ) -> Live2DecisionRecord | None:
         ring = state.candle_book.rings.get(self.config.timeframe_ms)
         if ring is None:
+            state.decision_dirty_since_ms = None
             return None
         candle = ring.latest_closed()
         if candle is None:
+            state.decision_dirty_since_ms = None
             return None
         if state.last_decision_bucket_ms == candle.open_time_ms:
+            state.decision_dirty_since_ms = None
             return None
-        live_watermark_ms = self.live_decision_watermark_ms()
         if live_watermark_ms is None:
             self._apply_pre_live_bucket(
                 state,
@@ -446,6 +454,7 @@ class Live2DeadlineEngine:
         state.last_verdict = verdict
         state.last_verdict_reason = reason
         state.last_decision_latency_ms = max(0, now_ms - candle.close_time_ms)
+        state.decision_dirty_since_ms = None
         state.updated_ms = now_ms
         state.decision_deadline_ms = None
         state.actionable_since_ms = None
@@ -454,6 +463,7 @@ class Live2DeadlineEngine:
         state.status = SymbolLive2Status.WATCHING
         state.last_decision_bucket_ms = candle.open_time_ms
         state.last_verdict = "rejected_not_actionable"
+        state.decision_dirty_since_ms = None
         state.updated_ms = now_ms
         state.decision_deadline_ms = None
         state.actionable_since_ms = None
@@ -532,6 +542,7 @@ class Live2DeadlineEngine:
             state.last_execution_stop_order_id = ""
             state.last_execution_stop_price = None
             state.last_execution_integrity_error = False
+        state.decision_dirty_since_ms = None
         state.decision_count += 1
         if verdict == "deadline_missed":
             state.deadline_missed_count += 1

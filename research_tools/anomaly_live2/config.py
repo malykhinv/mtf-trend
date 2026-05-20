@@ -13,7 +13,7 @@ class AnomalyLive2Config:
     output_dir: Path
     symbols: tuple[str, ...] = ()
     heartbeat_interval_seconds: float = 5.0
-    decision_loop_interval_seconds: float = 0.1
+    decision_loop_interval_seconds: float = 0.05
     decision_latency_degraded_windows: int = 2
     decision_latency_recovery_windows: int = 3
     market_data_recovery_windows: int = 3
@@ -28,7 +28,7 @@ class AnomalyLive2Config:
     oi_poll_interval_seconds: float = 5.0
     oi_symbol_cooldown_seconds: float = 60.0
     oi_lookback_minutes: int = 20
-    oi_max_symbols_per_cycle: int = 10
+    oi_max_symbols_per_cycle: int = 20
     oi_radar_symbol_ttl_ms: int = 60_000
     prior_context_stale_ms: int = 900_000
     prior_context_poll_interval_seconds: float = 10.0
@@ -38,7 +38,7 @@ class AnomalyLive2Config:
     prior_context_radar_symbol_ttl_ms: int = 60_000
     prior_context_spike_return_pct: float = 0.03
     prior_context_fast_fade_retrace_fraction: float = 0.55
-    startup_context_prewarm_request_sleep_seconds: float = 0.03
+    startup_context_prewarm_request_sleep_seconds: float = 0.0
     startup_context_prewarm_error_limit: int = 50
     ws_reconnect_initial_delay_seconds: float = 1.0
     ws_reconnect_max_delay_seconds: float = 60.0

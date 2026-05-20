@@ -42,6 +42,7 @@ class SymbolState:
     created_ms: int = 0
     updated_ms: int = 0
     dirty_since_ms: int | None = None
+    decision_dirty_since_ms: int | None = None
     actionable_since_ms: int | None = None
     decision_deadline_ms: int | None = None
     last_decision_bucket_ms: int | None = None
@@ -254,7 +255,10 @@ class SymbolState:
         result = self.candle_book.add_trade(trade)
         self.candle_gap_count = self.candle_book.total_gap_count()
         self.candle_out_of_order_count = self.candle_book.total_out_of_order_count()
-        source_status, source_reason = self._aggtrade_result_status(result_out_of_order=result.out_of_order)
+        source_status, source_reason = self._aggtrade_result_status(
+            result_gap_count=result.gap_count,
+            result_out_of_order=result.out_of_order,
+        )
         self.aggtrade_status = source_status
         self.aggtrade_reason = source_reason
         if trade.source == LIVE2_STARTUP_AGGTRADE_REST_SOURCE:
@@ -270,14 +274,15 @@ class SymbolState:
             self.candle_coverage_status = "startup_warmup_only"
         else:
             self.candle_coverage_status = "not_ready"
+        self.decision_dirty_since_ms = received_at_ms
         self.mark_dirty(now_ms=received_at_ms)
 
-    def _aggtrade_result_status(self, *, result_out_of_order: bool) -> tuple[str, str]:
+    def _aggtrade_result_status(self, *, result_gap_count: int, result_out_of_order: bool) -> tuple[str, str]:
         if result_out_of_order:
             return "out_of_order_trade_ignored", "aggtrade_trade_time_older_than_current_bucket"
-        if self.candle_gap_count > 0:
-            return "ok_with_gaps", "aggtrade_bucket_gap_detected_no_synthetic_fill"
-        return "ok", ""
+        if result_gap_count > 0:
+            return "gap_missing_expected_bucket", "aggtrade_update_skipped_empty_buckets_no_synthetic_fill"
+        return "ok_active", "live_aggtrade_trade_seen_without_bucket_gap"
 
     def _update_startup_aggtrade_source(
         self,
@@ -320,6 +325,25 @@ class SymbolState:
         self.live_aggtrade_source = trade.source
         self.live_aggtrade_status = status
         self.live_aggtrade_reason = reason
+
+    def effective_live_aggtrade_status(
+        self,
+        *,
+        now_ms: int,
+        stale_ms: int,
+    ) -> tuple[str, str, int | None]:
+        if self.live_aggtrade_update_count <= 0 or self.live_aggtrade_last_seen_ms is None:
+            if self.universe_selected and self.ticker_status == "ok":
+                return "ok_idle_no_trades", "selected_symbol_has_no_live_aggtrade_trades_yet", None
+            return self.live_aggtrade_status or "not_seen", self.live_aggtrade_reason or "live_aggtrade_not_seen", None
+        age_ms = max(0, int(now_ms) - int(self.live_aggtrade_last_seen_ms))
+        if self.live_aggtrade_status == "gap_missing_expected_bucket":
+            return "gap_missing_expected_bucket", self.live_aggtrade_reason, age_ms
+        if age_ms <= int(stale_ms):
+            return "ok_active", "live_aggtrade_trade_seen_within_stale_window", age_ms
+        if self.status == SymbolLive2Status.IN_POSITION or self.status == SymbolLive2Status.ACTIONABLE or self.last_signal_category_id:
+            return "stale", "actionable_or_position_symbol_live_aggtrade_stale", age_ms
+        return "ok_idle_no_trades", "no_recent_live_aggtrade_for_passive_selected_symbol", age_ms
 
     def update_mark_price(
         self,
@@ -423,13 +447,22 @@ class SymbolState:
         self.prior_context_reason = reason
         self.mark_dirty(now_ms=fetched_at_ms)
 
-    def to_artifact_row(self) -> dict[str, object]:
+    def to_artifact_row(self, *, now_ms: int | None = None, aggtrade_stale_ms: int | None = None) -> dict[str, object]:
+        effective_live_status = self.live_aggtrade_status
+        effective_live_reason = self.live_aggtrade_reason
+        effective_live_age_ms: int | None = None
+        if now_ms is not None and aggtrade_stale_ms is not None:
+            effective_live_status, effective_live_reason, effective_live_age_ms = self.effective_live_aggtrade_status(
+                now_ms=int(now_ms),
+                stale_ms=int(aggtrade_stale_ms),
+            )
         row: dict[str, object] = {
             "symbol": self.symbol,
             "status": self.status.value,
             "created_ms": self.created_ms,
             "updated_ms": self.updated_ms,
             "dirty_since_ms": self.dirty_since_ms,
+            "decision_dirty_since_ms": self.decision_dirty_since_ms,
             "actionable_since_ms": self.actionable_since_ms,
             "decision_deadline_ms": self.decision_deadline_ms,
             "last_decision_bucket_ms": self.last_decision_bucket_ms,
@@ -514,6 +547,9 @@ class SymbolState:
             "live_aggtrade_source": self.live_aggtrade_source,
             "live_aggtrade_status": self.live_aggtrade_status,
             "live_aggtrade_reason": self.live_aggtrade_reason,
+            "live_aggtrade_effective_status": effective_live_status,
+            "live_aggtrade_effective_reason": effective_live_reason,
+            "live_aggtrade_age_ms": effective_live_age_ms,
             "mark_market_id": self.mark_market_id,
             "mark_first_seen_ms": self.mark_first_seen_ms,
             "mark_last_seen_ms": self.mark_last_seen_ms,
@@ -786,6 +822,14 @@ class SymbolStateStore:
         with self._lock:
             return tuple(self._states.values())
 
+    def decision_snapshot(self) -> tuple[SymbolState, ...]:
+        with self._lock:
+            return tuple(
+                state
+                for state in self._states.values()
+                if state.universe_selected and state.decision_dirty_since_ms is not None
+            )
+
     def counts_by_status(self) -> dict[str, int]:
         counts: dict[str, int] = {status.value: 0 for status in SymbolLive2Status}
         with self._lock:
@@ -801,11 +845,15 @@ class SymbolStateStore:
                 counts[key] = counts.get(key, 0) + 1
         return counts
 
-    def aggtrade_counts(self) -> dict[str, int]:
+    def aggtrade_counts(self, *, now_ms: int | None = None, stale_ms: int | None = None) -> dict[str, int]:
         counts: dict[str, int] = {}
+        effective_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
         with self._lock:
             for state in self._states.values():
-                key = state.aggtrade_status or "unknown"
+                if stale_ms is not None and state.aggtrade_source == LIVE2_AGGTRADE_WS_SOURCE:
+                    key, _, _ = state.effective_live_aggtrade_status(now_ms=effective_now_ms, stale_ms=int(stale_ms))
+                else:
+                    key = state.aggtrade_status or "unknown"
                 counts[key] = counts.get(key, 0) + 1
         return counts
 
@@ -857,11 +905,15 @@ class SymbolStateStore:
                 counts[key] = counts.get(key, 0) + 1
         return counts
 
-    def live_aggtrade_counts(self) -> dict[str, int]:
+    def live_aggtrade_counts(self, *, now_ms: int | None = None, stale_ms: int | None = None) -> dict[str, int]:
         counts: dict[str, int] = {}
+        effective_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
         with self._lock:
             for state in self._states.values():
-                key = state.live_aggtrade_status or "unknown"
+                if stale_ms is None:
+                    key = state.live_aggtrade_status or "unknown"
+                else:
+                    key, _, _ = state.effective_live_aggtrade_status(now_ms=effective_now_ms, stale_ms=int(stale_ms))
                 counts[key] = counts.get(key, 0) + 1
         return counts
 

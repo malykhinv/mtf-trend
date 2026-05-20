@@ -1,5 +1,41 @@
 # Anomaly Patch Log
 
+## 2026-05-20 - P351 proposed - event-driven live2 deadline loop and honest aggTrade/OI health
+
+Files:
+
+```text
+cli/commands.py
+cli/parser.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research_tools/anomaly_live2/artifacts.py
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/market_data/open_interest.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/state.py
+```
+
+Intent:
+
+```text
+Reduce live2 decision latency at the source and make market-data health more truthful after run 20260520_103312 showed stable WS but frequent deadline misses. The deadline loop now evaluates only symbols dirtied by aggTrade updates, caches the live WS watermark once per cycle, and avoids full per-symbol count aggregation on every 50ms runtime-gate pass. Full diagnostics still write on heartbeat/status. AggTrade diagnostics replace permanent `ok_with_gaps` with `ok_active`, `ok_idle_no_trades`, `gap_missing_expected_bucket`, and `stale`. Runtime OI refresh becomes starvation-free by ordering due symbols by priority and oldest poll timestamp.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# launcher.py is absent in the supplied zip, so the project-hygiene command that includes launcher.py cannot be run literally here.
+```
+
+Risk:
+
+```text
+Medium. The hot path changes from full-universe polling to aggTrade-dirty evaluation. This should reduce latency without hiding missed data, but the next live2 smoke must confirm that selected/actionable buckets are still emitted exactly once and that deadline_missed drops. OI request rate increases to 20 symbols per 5s by default; this is intended to keep the selected universe fresh without hot-path REST fallback and should be watched in OI error counters.
+```
+
 Compact active patch log for the anomaly-first source tree. Retired strategy history was removed from active research memory in P129 to avoid stale contracts controlling current work.
 
 | ID | Title | Status | Files | Type | Purpose | Validation |

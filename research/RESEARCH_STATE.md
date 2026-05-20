@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P351 live2 event-driven deadline and aggTrade/OI diagnostics
+
+```text
+Current patch status: P351 PROPOSED / UNKNOWN commit.
+Question: live2 run 20260520_103312 had stable WS/execution infrastructure but frequent decision deadline misses and useless `ok_with_gaps` aggTrade diagnostics; OI startup prewarm existed but runtime OI refresh fairness let alphabetically early symbols recycle before the tail of the universe.
+Change: deadline evaluation is now event-driven by aggTrade dirtiness instead of scanning every selected symbol every 50-100ms, and the live decision watermark is cached once per cycle. Fast runtime gates no longer build full per-symbol count summaries every loop; full counts stay on heartbeat/status writes. aggTrade status now separates `ok_active`, `ok_idle_no_trades`, `gap_missing_expected_bucket`, and `stale`. Runtime OI polling rotates by oldest poll time inside priority buckets, so selected-universe refresh cannot starve later symbols. Defaults align OI stale with 5m OI cadence and full-universe refresh, with explicit startup OI prewarm retained before live entries.
+Trading impact: latency/audit bugfix only. No signal threshold, fill, stop, TP, or fallback logic is loosened. Missing data still blocks via dependency/status paths.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; `launcher.py` is absent in this zip, so the broader hygiene command with launcher cannot be run literally.
+Next validation: rerun live2 and require deadline_missed share to collapse, `live_aggtrade_status_counts` to split across ok_active/ok_idle/gap/stale instead of all ok_with_gaps, and OI stale counts to trend down after one refresh cycle.
+```
+
 ## 2026-05-20 - P349 live2 aggTrade shard stale_ms wiring
 
 ```text

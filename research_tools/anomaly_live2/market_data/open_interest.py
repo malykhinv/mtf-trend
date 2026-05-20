@@ -432,15 +432,20 @@ class Live2OpenInterestPoller:
 
     def _eligible_symbols(self, *, now_ms: int) -> tuple[str, ...]:
         cooldown_ms = int(self.config.symbol_cooldown_seconds * 1000)
-        due: list[tuple[int, str]] = []
+        due: list[tuple[int, int, str]] = []
         for symbol in self._target_symbols(now_ms=now_ms):
             last_poll_ms = self._last_poll_by_symbol.get(symbol)
             if last_poll_ms is not None and now_ms - last_poll_ms < cooldown_ms:
                 continue
             priority = self._symbol_priority(symbol=symbol, now_ms=now_ms)
-            due.append((priority, symbol))
-        due.sort(key=lambda item: (item[0], item[1]))
-        return tuple(symbol for _, symbol in due)
+            oldest_first_ms = -1 if last_poll_ms is None else int(last_poll_ms)
+            due.append((priority, oldest_first_ms, symbol))
+        # Keep active/radar symbols first, but rotate fairly inside each priority
+        # bucket. Sorting only by priority+symbol starves later alphabetic symbols
+        # after a startup prewarm because the same first symbols become due again
+        # before the tail of the universe is refreshed.
+        due.sort(key=lambda item: (item[0], item[1], item[2]))
+        return tuple(symbol for _, _, symbol in due)
 
     def _target_symbols(self, *, now_ms: int) -> tuple[str, ...]:
         # Keep OI fresh for the whole selected universe. OI is 5m historical

@@ -53,6 +53,10 @@ class Live2ArtifactWriterStatus:
         }
 
 
+def _dict_or_else(value: Any, fallback: dict[str, Any]) -> dict[str, Any]:
+    return value if isinstance(value, dict) else fallback
+
+
 class Live2ArtifactWriter:
     """Bounded asynchronous append-only audit writer for live2 artifacts.
 
@@ -147,11 +151,26 @@ class Live2ArtifactWriter:
             "symbols_total": len(state_store),
             "symbol_status_counts": state_store.counts_by_status(),
             "ticker_status_counts": state_store.ticker_counts(),
-            "aggtrade_status_counts": state_store.aggtrade_counts(),
-            "startup_aggtrade_status_counts": state_store.startup_aggtrade_counts(),
-            "live_aggtrade_status_counts": state_store.live_aggtrade_counts(),
-            "prior_context_status_counts": state_store.prior_context_counts(),
-            "candle_coverage_counts": state_store.candle_coverage_counts(),
+            "aggtrade_status_counts": _dict_or_else(
+                (market_data_status or {}).get("aggtrade_status_counts"),
+                state_store.aggtrade_counts(),
+            ),
+            "startup_aggtrade_status_counts": _dict_or_else(
+                (market_data_status or {}).get("startup_aggtrade_status_counts"),
+                state_store.startup_aggtrade_counts(),
+            ),
+            "live_aggtrade_status_counts": _dict_or_else(
+                (market_data_status or {}).get("live_aggtrade_status_counts"),
+                state_store.live_aggtrade_counts(),
+            ),
+            "prior_context_status_counts": _dict_or_else(
+                (market_data_status or {}).get("prior_context_status_counts"),
+                state_store.prior_context_counts(),
+            ),
+            "candle_coverage_counts": _dict_or_else(
+                (market_data_status or {}).get("candle_coverage_counts"),
+                state_store.candle_coverage_counts(),
+            ),
             "readiness": readiness.as_dict(),
             "execution_status": execution_status or {"status": "todo_not_implemented"},
             "market_data_status": market_data_status or {"status": "todo_not_implemented"},
@@ -166,14 +185,19 @@ class Live2ArtifactWriter:
     def write_diagnostics_summary(self, summary: dict[str, Any]) -> None:
         self._enqueue(_ArtifactJob(kind="diagnostics_summary", payload=summary))
 
-    def write_symbol_state(self, state_store: SymbolStateStore) -> None:
-        rows = [state.to_artifact_row() for state in state_store.snapshot()]
+    def write_symbol_state(self, state_store: SymbolStateStore, *, aggtrade_stale_ms: int | None = None) -> None:
+        now_ms = utc_now_ms()
+        rows = [
+            state.to_artifact_row(now_ms=now_ms, aggtrade_stale_ms=aggtrade_stale_ms)
+            for state in state_store.snapshot()
+        ]
         base_fieldnames = [
             "symbol",
             "status",
             "created_ms",
             "updated_ms",
             "dirty_since_ms",
+            "decision_dirty_since_ms",
             "actionable_since_ms",
             "decision_deadline_ms",
             "last_decision_bucket_ms",

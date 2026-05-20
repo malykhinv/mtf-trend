@@ -456,7 +456,7 @@ class AnomalyLive2Runner:
                     data=market_data_status,
                 )
             )
-            writer.write_symbol_state(self.state_store)
+            writer.write_symbol_state(self.state_store, aggtrade_stale_ms=self.config.aggtrade_stale_ms)
             writer.write_status(
                 runtime_generation=self.config.runtime_generation,
                 started_at_utc=self.started_at_utc,
@@ -513,7 +513,7 @@ class AnomalyLive2Runner:
                     writer.write_event(decision.as_event())
                     self.telegram.notify_decision(decision)
 
-                market_data_status = self._market_data_status()
+                market_data_status = self._market_data_status(include_symbol_counts=False)
                 self._refresh_runtime_gates(
                     writer=writer,
                     market_data_status=market_data_status,
@@ -526,6 +526,7 @@ class AnomalyLive2Runner:
                     last_heartbeat_at = now_monotonic
                     self.session_top_tracker.update_from_state_snapshot(self.state_store.snapshot())
                     self._last_session_top_snapshot = self.session_top_tracker.snapshot()
+                    market_data_status = self._market_data_status(include_symbol_counts=True)
                     runtime_gate_status = self._runtime_gate_status()
                     writer.write_event(
                         Live2Event(
@@ -535,10 +536,10 @@ class AnomalyLive2Runner:
                             data={
                                 "symbols_total": len(self.state_store),
                                 "ticker_status_counts": self.state_store.ticker_counts(),
-                                "aggtrade_status_counts": self.state_store.aggtrade_counts(),
-                                "startup_aggtrade_status_counts": self.state_store.startup_aggtrade_counts(),
-                                "live_aggtrade_status_counts": self.state_store.live_aggtrade_counts(),
-                                "candle_coverage_counts": self.state_store.candle_coverage_counts(),
+                                "aggtrade_status_counts": market_data_status.get("aggtrade_status_counts", {}),
+                                "startup_aggtrade_status_counts": market_data_status.get("startup_aggtrade_status_counts", {}),
+                                "live_aggtrade_status_counts": market_data_status.get("live_aggtrade_status_counts", {}),
+                                "candle_coverage_counts": market_data_status.get("candle_coverage_counts", {}),
                                 "market_data_status": market_data_status,
                                 "decision_status": self.deadline_engine.status(),
                                 "deadline_cycle": deadline_result.as_dict(),
@@ -563,7 +564,7 @@ class AnomalyLive2Runner:
                         execution_status=execution_status,
                         runtime_gate_status=runtime_gate_status,
                     )
-                    writer.write_symbol_state(self.state_store)
+                    writer.write_symbol_state(self.state_store, aggtrade_stale_ms=self.config.aggtrade_stale_ms)
                     writer.write_status(
                         runtime_generation=self.config.runtime_generation,
                         started_at_utc=self.started_at_utc,
@@ -584,11 +585,11 @@ class AnomalyLive2Runner:
                             cycle_seconds=max(0.0, self._last_decision_cycle_elapsed_ms / 1000.0),
                             state_counts=self.state_store.counts_by_status(),
                             ticker_counts=self.state_store.ticker_counts(),
-                            aggtrade_counts=self.state_store.aggtrade_counts(),
-                            mark_counts=self.state_store.mark_counts(),
-                            open_interest_counts=self.state_store.open_interest_counts(stale_ms=self.config.oi_stale_ms),
-                            prior_context_counts=self.state_store.prior_context_counts(stale_ms=self.config.prior_context_stale_ms),
-                            candle_counts=self.state_store.candle_coverage_counts(),
+                            aggtrade_counts=market_data_status.get("aggtrade_status_counts", {}),
+                            mark_counts=market_data_status.get("mark_price_status_counts", {}),
+                            open_interest_counts=market_data_status.get("open_interest_status_counts", {}),
+                            prior_context_counts=market_data_status.get("prior_context_status_counts", {}),
+                            candle_counts=market_data_status.get("candle_coverage_counts", {}),
                             market_data_status=market_data_status,
                             decision_status=decision_status,
                             execution_status=execution_status,
@@ -1082,12 +1083,30 @@ class AnomalyLive2Runner:
         )
         return selector.select()
 
-    def _market_data_status(self) -> dict[str, object]:
+    def _market_data_status(self, *, include_symbol_counts: bool = True) -> dict[str, object]:
         ticker_status = self.ticker_source.status().as_dict(stale_ms=self.config.ticker_stale_ms)
         aggtrade_status = self._aggtrade_status()
         mark_price_status = self._mark_price_status()
-        open_interest_status = self._open_interest_status()
-        prior_context_status = self._prior_context_status()
+        open_interest_status = (
+            self._open_interest_status()
+            if include_symbol_counts
+            else {
+                "source_id": Live2OpenInterestPoller.source_id,
+                "status": "omitted_on_fast_runtime_gate_path",
+                "ready": True,
+                "reason": "not_required_for_stream_coverage_gate",
+            }
+        )
+        prior_context_status = (
+            self._prior_context_status()
+            if include_symbol_counts
+            else {
+                "source_id": Live2PriorContextPoller.source_id,
+                "status": "omitted_on_fast_runtime_gate_path",
+                "ready": True,
+                "reason": "not_required_for_stream_coverage_gate",
+            }
+        )
         ticker_ready = bool(ticker_status.get("ready"))
         aggtrade_ready = bool(aggtrade_status.get("ready"))
         mark_price_ready = bool(mark_price_status.get("ready"))
@@ -1116,6 +1135,19 @@ class AnomalyLive2Runner:
         else:
             status = "stream_coverage_not_ready"
             reason = "+".join(reasons) if reasons else "stream_coverage_not_ready"
+        symbol_counts: dict[str, object] = {"included": False, "reason": "omitted_on_fast_runtime_gate_path"}
+        if include_symbol_counts:
+            now_ms = int(time.time() * 1000)
+            symbol_counts = {
+                "included": True,
+                "aggtrade_status_counts": self.state_store.aggtrade_counts(now_ms=now_ms, stale_ms=self.config.aggtrade_stale_ms),
+                "startup_aggtrade_status_counts": self.state_store.startup_aggtrade_counts(),
+                "live_aggtrade_status_counts": self.state_store.live_aggtrade_counts(now_ms=now_ms, stale_ms=self.config.aggtrade_stale_ms),
+                "mark_price_status_counts": self.state_store.mark_counts(),
+                "open_interest_status_counts": self.state_store.open_interest_counts(now_ms=now_ms, stale_ms=self.config.oi_stale_ms),
+                "prior_context_status_counts": self.state_store.prior_context_counts(now_ms=now_ms, stale_ms=self.config.prior_context_stale_ms),
+                "candle_coverage_counts": self.state_store.candle_coverage_counts(),
+            }
         return {
             "status": status,
             "reason": reason,
@@ -1124,13 +1156,15 @@ class AnomalyLive2Runner:
             "mark_price_ws": mark_price_status,
             "open_interest": open_interest_status,
             "prior_context": prior_context_status,
-            "live_decision_watermark_ms": self._live_decision_watermark_ms(),
-            "startup_aggtrade_status_counts": self.state_store.startup_aggtrade_counts(),
-            "live_aggtrade_status_counts": self.state_store.live_aggtrade_counts(),
-            "mark_price_status_counts": self.state_store.mark_counts(),
-            "open_interest_status_counts": self.state_store.open_interest_counts(stale_ms=self.config.oi_stale_ms),
-            "prior_context_status_counts": self.state_store.prior_context_counts(stale_ms=self.config.prior_context_stale_ms),
-            "candle_coverage_counts": self.state_store.candle_coverage_counts(),
+            "live_decision_watermark_ms": self._live_decision_watermark_ms_from_status(aggtrade_status),
+            "symbol_counts_included": bool(symbol_counts.get("included")),
+            "aggtrade_status_counts": symbol_counts.get("aggtrade_status_counts", {}),
+            "startup_aggtrade_status_counts": symbol_counts.get("startup_aggtrade_status_counts", {}),
+            "live_aggtrade_status_counts": symbol_counts.get("live_aggtrade_status_counts", {}),
+            "mark_price_status_counts": symbol_counts.get("mark_price_status_counts", {}),
+            "open_interest_status_counts": symbol_counts.get("open_interest_status_counts", {}),
+            "prior_context_status_counts": symbol_counts.get("prior_context_status_counts", {}),
+            "candle_coverage_counts": symbol_counts.get("candle_coverage_counts", {}),
             "universe": self._universe_status(),
             "ws_health": ws_health,
             "stream_coverage_ready": stream_coverage_ready,
