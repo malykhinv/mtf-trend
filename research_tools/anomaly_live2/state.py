@@ -10,7 +10,7 @@ from .clock import utc_now_ms
 from .market_data.candles import Live2AggTradeEvent, Live2CandleBook
 
 
-LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS = (5_000, 15_000, 30_000, 60_000)
+LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS = (5_000, 15_000, 30_000, 60_000, 300_000)
 LIVE2_DEFAULT_MAX_CLOSED_CANDLES = 360
 LIVE2_STARTUP_AGGTRADE_REST_SOURCE = "binance_futures_aggTrades_startup_rest"
 LIVE2_AGGTRADE_WS_SOURCE = "binance_futures_aggtrade_ws"
@@ -169,6 +169,14 @@ class SymbolState:
     prior_context_source: str = ""
     prior_context_status: str = "not_seen"
     prior_context_reason: str = ""
+    prior_context_maintenance_source: str = ""
+    prior_context_last_live_5m_open_time_ms: int | None = None
+    prior_context_last_live_5m_close_time_ms: int | None = None
+    prior_context_live_5m_appended_count: int = 0
+    prior_context_live_5m_gap_tolerated_count: int = 0
+    prior_context_live_5m_gap_rejected_count: int = 0
+    prior_context_last_live_5m_missing_aggtrade_ids: int = 0
+    prior_context_last_live_5m_gap_tolerance: int = 0
     candle_coverage_status: str = "not_ready"
     candle_gap_count: int = 0
     candle_out_of_order_count: int = 0
@@ -425,6 +433,13 @@ class SymbolState:
         source: str,
         status: str,
         reason: str,
+        maintenance_source: str = "",
+        live_5m_open_time_ms: int | None = None,
+        live_5m_close_time_ms: int | None = None,
+        live_5m_gap_tolerated: bool = False,
+        live_5m_gap_rejected: bool = False,
+        live_5m_missing_aggtrade_ids: int = 0,
+        live_5m_gap_tolerance: int = 0,
     ) -> None:
         self.updated_ms = fetched_at_ms
         if self.prior_context_first_seen_ms is None:
@@ -445,6 +460,19 @@ class SymbolState:
         self.prior_context_source = source
         self.prior_context_status = status
         self.prior_context_reason = reason
+        if maintenance_source:
+            self.prior_context_maintenance_source = maintenance_source
+        if live_5m_open_time_ms is not None:
+            self.prior_context_last_live_5m_open_time_ms = live_5m_open_time_ms
+            self.prior_context_last_live_5m_close_time_ms = live_5m_close_time_ms
+            if not live_5m_gap_rejected:
+                self.prior_context_live_5m_appended_count += 1
+            if live_5m_gap_tolerated:
+                self.prior_context_live_5m_gap_tolerated_count += 1
+            if live_5m_gap_rejected:
+                self.prior_context_live_5m_gap_rejected_count += 1
+            self.prior_context_last_live_5m_missing_aggtrade_ids = int(live_5m_missing_aggtrade_ids)
+            self.prior_context_last_live_5m_gap_tolerance = int(live_5m_gap_tolerance)
         self.mark_dirty(now_ms=fetched_at_ms)
 
     def to_artifact_row(self, *, now_ms: int | None = None, aggtrade_stale_ms: int | None = None) -> dict[str, object]:
@@ -592,6 +620,14 @@ class SymbolState:
             "prior_context_source": self.prior_context_source,
             "prior_context_status": self.prior_context_status,
             "prior_context_reason": self.prior_context_reason,
+            "prior_context_maintenance_source": self.prior_context_maintenance_source,
+            "prior_context_last_live_5m_open_time_ms": self.prior_context_last_live_5m_open_time_ms,
+            "prior_context_last_live_5m_close_time_ms": self.prior_context_last_live_5m_close_time_ms,
+            "prior_context_live_5m_appended_count": self.prior_context_live_5m_appended_count,
+            "prior_context_live_5m_gap_tolerated_count": self.prior_context_live_5m_gap_tolerated_count,
+            "prior_context_live_5m_gap_rejected_count": self.prior_context_live_5m_gap_rejected_count,
+            "prior_context_last_live_5m_missing_aggtrade_ids": self.prior_context_last_live_5m_missing_aggtrade_ids,
+            "prior_context_last_live_5m_gap_tolerance": self.prior_context_last_live_5m_gap_tolerance,
             "candle_coverage_status": self.candle_coverage_status,
             "candle_gap_count": self.candle_gap_count,
             "candle_out_of_order_count": self.candle_out_of_order_count,
@@ -788,6 +824,13 @@ class SymbolStateStore:
         source: str,
         status: str,
         reason: str,
+        maintenance_source: str = "",
+        live_5m_open_time_ms: int | None = None,
+        live_5m_close_time_ms: int | None = None,
+        live_5m_gap_tolerated: bool = False,
+        live_5m_gap_rejected: bool = False,
+        live_5m_missing_aggtrade_ids: int = 0,
+        live_5m_gap_tolerance: int = 0,
     ) -> None:
         with self._lock:
             state = self.get_or_create(symbol)
@@ -807,6 +850,13 @@ class SymbolStateStore:
                 source=source,
                 status=status,
                 reason=reason,
+                maintenance_source=maintenance_source,
+                live_5m_open_time_ms=live_5m_open_time_ms,
+                live_5m_close_time_ms=live_5m_close_time_ms,
+                live_5m_gap_tolerated=live_5m_gap_tolerated,
+                live_5m_gap_rejected=live_5m_gap_rejected,
+                live_5m_missing_aggtrade_ids=live_5m_missing_aggtrade_ids,
+                live_5m_gap_tolerance=live_5m_gap_tolerance,
             )
 
 

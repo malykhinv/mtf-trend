@@ -1,11 +1,19 @@
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
+
+import pandas as pd
 
 from cli.parser import build_parser
 from research_tools.anomaly_live2.artifacts import Live2ArtifactWriter
 from research_tools.anomaly_live2.config import AnomalyLive2Config
 from research_tools.anomaly_live2.market_data.candles import Live2AggTradeEvent, Live2CandleRing
+from research_tools.anomaly_live2.market_data.prior_context import (
+    LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS,
+    Live2PriorContextPollConfig,
+    Live2PriorContextPoller,
+)
 from research_tools.anomaly_live2.signal import _effective_context_status
 from research_tools.anomaly_live2.state import LIVE2_AGGTRADE_WS_SOURCE, SymbolStateStore
 
@@ -146,3 +154,93 @@ def test_live2_artifact_writer_replaces_json_atomically(tmp_path) -> None:
         assert list(tmp_path.glob("*.tmp")) == []
     finally:
         writer.close()
+
+
+class _FakePriorContextExchange:
+    def fetch_ohlcv(self, symbol, timeframe, start_timestamp_ms, end_timestamp_ms):
+        timestamps = list(range(
+            end_timestamp_ms - (287 * LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS),
+            end_timestamp_ms + 1,
+            LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS,
+        ))
+        return pd.DataFrame(
+            {
+                "timestamp": timestamps,
+                "open": [1.0] * len(timestamps),
+                "high": [1.01] * len(timestamps),
+                "low": [0.99] * len(timestamps),
+                "close": [1.0] * len(timestamps),
+            }
+        )
+
+
+def test_live2_prior_context_rolls_forward_from_live_5m_with_tolerated_gap() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    state.set_universe_selection(selected=True, rank=1, reason="test", selected_at_ms=0)
+    poller = Live2PriorContextPoller(
+        state_store=store,
+        exchange_client=_FakePriorContextExchange(),
+        config=Live2PriorContextPollConfig(),
+    )
+    assert poller.poll_symbols_once(("AAA/USDT:USDT",))["ok"] == 1
+
+    bucket_open = (int(time.time() * 1000) // LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS) * LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS
+    store.update_aggtrade(
+        replace(
+            _trade(trade_time_ms=bucket_open + 1_000, price=1.0, source=LIVE2_AGGTRADE_WS_SOURCE),
+            aggregate_trade_id=bucket_open + 1,
+        ),
+        received_at_ms=bucket_open + 1_010,
+    )
+    store.update_aggtrade(
+        replace(
+            _trade(trade_time_ms=bucket_open + 2_000, price=1.02, source=LIVE2_AGGTRADE_WS_SOURCE),
+            aggregate_trade_id=bucket_open + 4,
+        ),
+        received_at_ms=bucket_open + 2_010,
+    )
+    store.close_due_candles(now_ms=bucket_open + LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS)
+
+    assert poller._apply_live_closed_5m_candles(now_ms=bucket_open + LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS) == 1
+    state = store.get_or_create("AAA/USDT:USDT")
+    assert state.prior_context_status == "ok"
+    assert state.prior_context_maintenance_source == "binance_futures_aggtrade_ws_5m_rolling_prior_context"
+    assert state.prior_context_live_5m_appended_count == 1
+    assert state.prior_context_live_5m_gap_tolerated_count == 1
+    assert state.prior_context_last_live_5m_missing_aggtrade_ids == 2
+
+
+def test_live2_prior_context_rejects_large_live_5m_gap() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    state.set_universe_selection(selected=True, rank=1, reason="test", selected_at_ms=0)
+    poller = Live2PriorContextPoller(
+        state_store=store,
+        exchange_client=_FakePriorContextExchange(),
+        config=Live2PriorContextPollConfig(),
+    )
+    assert poller.poll_symbols_once(("AAA/USDT:USDT",))["ok"] == 1
+
+    bucket_open = (int(time.time() * 1000) // LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS) * LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS
+    store.update_aggtrade(
+        replace(
+            _trade(trade_time_ms=bucket_open + 1_000, price=1.0, source=LIVE2_AGGTRADE_WS_SOURCE),
+            aggregate_trade_id=bucket_open + 1,
+        ),
+        received_at_ms=bucket_open + 1_010,
+    )
+    store.update_aggtrade(
+        replace(
+            _trade(trade_time_ms=bucket_open + 2_000, price=1.02, source=LIVE2_AGGTRADE_WS_SOURCE),
+            aggregate_trade_id=bucket_open + 100,
+        ),
+        received_at_ms=bucket_open + 2_010,
+    )
+    store.close_due_candles(now_ms=bucket_open + LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS)
+
+    assert poller._apply_live_closed_5m_candles(now_ms=bucket_open + LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS) == 0
+    state = store.get_or_create("AAA/USDT:USDT")
+    assert state.prior_context_status == "ws_gap_exceeds_tolerance"
+    assert state.prior_context_live_5m_gap_rejected_count == 1
+    assert "gap_exceeds_tolerance" in state.prior_context_reason

@@ -1,5 +1,46 @@
 # Anomaly Patch Log
 
+## 2026-05-20 - P354 applied locally - live2 rolling WS-maintained prior context
+
+Files:
+
+```text
+research_tools/anomaly_live2/market_data/candles.py
+research_tools/anomaly_live2/market_data/prior_context.py
+research_tools/anomaly_live2/state.py
+research_tools/anomaly_live2/runner.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Keep live2 24h prior context fresh cheaply without repeatedly repolling a full 24h OHLCV window for every selected symbol. Preserve honest diagnostics and avoid turning WS gaps into hidden ok context.
+```
+
+Change:
+
+```text
+Live2 now includes a 5m real-trade candle ring. Prior context still bootstraps from REST closed 5m OHLCV at startup, then the runtime prior-context source maintains a rolling 24h buffer by appending closed live WS 5m candles. Runtime full-universe REST polling is disabled for symbols with an ok rolling buffer; REST remains only for bootstrap/repair of missing or non-ok context. Intra-5m aggTrade id gaps are tolerated only when missing ids <= max(5, 10% of observed trades); tolerated and rejected gaps are exposed in prior_context status and symbol-state artifacts. A gap above tolerance marks the symbol `ws_gap_exceeds_tolerance` until repair instead of silently continuing.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py
+.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium. Prior-context freshness becomes dependent on live aggTrade WS 5m closure after startup. This should reduce REST load and Ctx stale, but the next live2 restart must verify that `total_ws_5m_candles_appended` rises, `total_ws_5m_gap_rejected` stays near zero, and prior_context status does not silently hide rejected gaps.
+```
+
 ## 2026-05-20 - P353 applied locally - live2 prior-context CLI wiring and atomic rewrite artifacts
 
 Files:

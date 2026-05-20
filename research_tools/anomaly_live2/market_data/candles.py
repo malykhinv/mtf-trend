@@ -47,6 +47,9 @@ class Live2Candle:
     last_source: str = ""
     startup_rest_trade_count: int = 0
     live_ws_trade_count: int = 0
+    agg_trade_id_gap_count: int = 0
+    missing_agg_trade_id_count: int = 0
+    max_agg_trade_id_gap: int = 0
 
     @classmethod
     def from_trade(cls, *, timeframe_ms: int, bucket_open_ms: int, trade: Live2AggTradeEvent) -> "Live2Candle":
@@ -73,6 +76,12 @@ class Live2Candle:
         )
 
     def update(self, trade: Live2AggTradeEvent) -> None:
+        if self.last_agg_trade_id is not None and trade.aggregate_trade_id is not None:
+            missing_ids = int(trade.aggregate_trade_id) - int(self.last_agg_trade_id) - 1
+            if missing_ids > 0:
+                self.agg_trade_id_gap_count += 1
+                self.missing_agg_trade_id_count += missing_ids
+                self.max_agg_trade_id_gap = max(self.max_agg_trade_id_gap, missing_ids)
         self.high = max(self.high, trade.price)
         self.low = min(self.low, trade.price)
         self.close = trade.price
@@ -103,6 +112,9 @@ class Live2Candle:
             f"{prefix}_last_source": self.last_source,
             f"{prefix}_startup_rest_trade_count": self.startup_rest_trade_count,
             f"{prefix}_live_ws_trade_count": self.live_ws_trade_count,
+            f"{prefix}_agg_trade_id_gap_count": self.agg_trade_id_gap_count,
+            f"{prefix}_missing_agg_trade_id_count": self.missing_agg_trade_id_count,
+            f"{prefix}_max_agg_trade_id_gap": self.max_agg_trade_id_gap,
         }
 
 

@@ -17,7 +17,12 @@ from .execution import Live2ExecutionConfig, Live2ExecutionEngine, Live2Executio
 from .market_data.aggtrade_ws import Live2AggTradeWsSource
 from .market_data.mark_price_ws import Live2MarkPriceWsSource
 from .market_data.open_interest import Live2OpenInterestPollConfig, Live2OpenInterestPoller
-from .market_data.prior_context import Live2PriorContextPollConfig, Live2PriorContextPoller
+from .market_data.prior_context import (
+    LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_ID_RATIO,
+    LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_IDS_PER_CANDLE,
+    Live2PriorContextPollConfig,
+    Live2PriorContextPoller,
+)
 from .market_data.ticker_ws import Live2TickerWsSource
 from .market_data.startup_tickers import Live2StartupTickerSnapshot, Live2StartupTickerSnapshotResult
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
@@ -1662,7 +1667,7 @@ class AnomalyLive2Runner:
                 event_type="prior_context_poller_starting",
                 component=Live2Component.MARKET_DATA,
                 severity=Live2Severity.INFO if selected_symbols else Live2Severity.ERROR,
-                message="starting selected-universe 24h prior-context poller with active priority",
+                message="starting selected-universe 24h prior-context bootstrap plus live WS 5m rolling maintenance",
                 data={
                     "source": Live2PriorContextPoller.source_id,
                     "symbols_filter_count": selected_symbols,
@@ -1677,7 +1682,12 @@ class AnomalyLive2Runner:
                     "spike_return_pct": self.config.prior_context_spike_return_pct,
                     "fast_fade_retrace_fraction": self.config.prior_context_fast_fade_retrace_fraction,
                     "startup_full_universe_prewarm": True,
-                    "runtime_full_universe_polling": True,
+                    "runtime_full_universe_polling": False,
+                    "runtime_maintenance": "live_ws_closed_5m_roll_forward_after_startup_rest_bootstrap",
+                    "ws_5m_gap_tolerance": {
+                        "max_missing_aggtrade_ids_per_candle": LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_IDS_PER_CANDLE,
+                        "max_missing_aggtrade_id_ratio": LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_ID_RATIO,
+                    },
                     "silent_zero_fallback": False,
                     "legacy_category_72h_names_use_24h_live_context": True,
                     "universe": self._universe_status(),

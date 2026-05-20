@@ -22,12 +22,17 @@ import pandas as pd
 from domain.enums.timeframe import Timeframe
 
 from ..clock import utc_now_ms
+from .candles import Live2Candle
 from ..state import SymbolLive2Status, SymbolState, SymbolStateStore
 
 LIVE2_PRIOR_CONTEXT_SOURCE = "binance_futures_ohlcv_5m_prior_context_24h_poll"
+LIVE2_PRIOR_CONTEXT_ROLLING_WS_SOURCE = "binance_futures_aggtrade_ws_5m_rolling_prior_context"
 LIVE2_PRIOR_CONTEXT_TIMEFRAME = Timeframe.M5
 LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS = LIVE2_PRIOR_CONTEXT_TIMEFRAME.to_milliseconds()
 LIVE2_PRIOR_CONTEXT_LOOKBACK_HOURS = 24
+LIVE2_PRIOR_CONTEXT_MIN_COVERAGE_RATIO = 0.80
+LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_IDS_PER_CANDLE = 5
+LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_ID_RATIO = 0.10
 
 
 @runtime_checkable
@@ -78,6 +83,21 @@ class Live2PriorContextPollConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class Live2PriorContextCandle:
+    """One closed 5m candle accepted into the rolling prior-context buffer."""
+
+    timestamp: int
+    open: float
+    high: float
+    low: float
+    close: float
+    source: str
+    missing_aggtrade_ids: int = 0
+    gap_tolerance: int = 0
+    gap_tolerated: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class Live2PriorContextSnapshot:
     """Computed 24h prior context for one symbol."""
 
@@ -97,6 +117,7 @@ class Live2PriorContextSnapshot:
     spike_return_pct: float | None = None
     fast_fade_retrace_fraction: float | None = None
     source: str = LIVE2_PRIOR_CONTEXT_SOURCE
+    rolling_candles: tuple[Live2PriorContextCandle, ...] = ()
 
     @property
     def ready(self) -> bool:
@@ -155,6 +176,12 @@ class Live2PriorContextPollStatus:
     total_success: int = 0
     total_empty: int = 0
     total_errors: int = 0
+    total_ws_5m_candles_appended: int = 0
+    total_ws_5m_gap_tolerated: int = 0
+    total_ws_5m_gap_rejected: int = 0
+    last_ws_5m_update_at_ms: int | None = None
+    last_ws_5m_update_symbol: str = ""
+    last_ws_5m_gap_reason: str = ""
     last_polled_symbols: tuple[str, ...] = ()
     last_target_symbols: tuple[str, ...] = ()
     reason: str = "not_started"
@@ -187,6 +214,17 @@ class Live2PriorContextPollStatus:
             "total_success": self.total_success,
             "total_empty": self.total_empty,
             "total_errors": self.total_errors,
+            "total_ws_5m_candles_appended": self.total_ws_5m_candles_appended,
+            "total_ws_5m_gap_tolerated": self.total_ws_5m_gap_tolerated,
+            "total_ws_5m_gap_rejected": self.total_ws_5m_gap_rejected,
+            "last_ws_5m_update_at_ms": self.last_ws_5m_update_at_ms,
+            "last_ws_5m_update_symbol": self.last_ws_5m_update_symbol,
+            "last_ws_5m_gap_reason": self.last_ws_5m_gap_reason,
+            "maintenance_mode": "startup_rest_bootstrap_plus_live_ws_5m_rolling_append",
+            "ws_5m_gap_tolerance": {
+                "max_missing_aggtrade_ids_per_candle": LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_IDS_PER_CANDLE,
+                "max_missing_aggtrade_id_ratio": LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_ID_RATIO,
+            },
             "last_polled_symbols": list(self.last_polled_symbols),
             "last_target_symbols": list(self.last_target_symbols),
             "reason": self.reason,
@@ -213,6 +251,8 @@ class Live2PriorContextPoller:
         self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
         self._last_poll_by_symbol: dict[str, int] = {}
+        self._rolling_candles_by_symbol: dict[str, dict[int, Live2PriorContextCandle]] = {}
+        self._last_live_5m_open_by_symbol: dict[str, int] = {}
         self._status = Live2PriorContextPollStatus(
             poll_interval_seconds=config.poll_interval_seconds,
             symbol_cooldown_seconds=config.symbol_cooldown_seconds,
@@ -297,24 +337,7 @@ class Live2PriorContextPoller:
                 break
             snapshot = self._fetch_symbol(symbol=symbol, now_ms=utc_now_ms())
             polled.append(symbol)
-            self.state_store.update_prior_context(
-                symbol=symbol,
-                fetched_at_ms=snapshot.fetched_at_ms,
-                context_start_ms=snapshot.context_start_ms,
-                context_end_ms=snapshot.context_end_ms,
-                rows_received=snapshot.rows_received,
-                rows_used=snapshot.rows_used,
-                prior_spike_count_24h=snapshot.prior_spike_count_24h,
-                prior_fast_fade_count_24h=snapshot.prior_fast_fade_count_24h,
-                prior_high_24h=snapshot.prior_high_24h,
-                prior_low_before_high_24h=snapshot.prior_low_before_high_24h,
-                prior_low_after_high_24h=snapshot.prior_low_after_high_24h,
-                spike_return_pct=snapshot.spike_return_pct,
-                fast_fade_retrace_fraction=snapshot.fast_fade_retrace_fraction,
-                source=snapshot.source,
-                status=snapshot.status,
-                reason=snapshot.reason,
-            )
+            self._apply_snapshot(snapshot)
             self._last_poll_by_symbol[symbol] = snapshot.fetched_at_ms
             with self._lock:
                 self._status.total_requests += 1
@@ -407,6 +430,7 @@ class Live2PriorContextPoller:
 
     def _run_cycle(self) -> None:
         now_ms = utc_now_ms()
+        live_append_count = self._apply_live_closed_5m_candles(now_ms=now_ms)
         targets = self._eligible_symbols(now_ms=now_ms)
         with self._lock:
             self._status.total_cycles += 1
@@ -418,24 +442,7 @@ class Live2PriorContextPoller:
                 break
             snapshot = self._fetch_symbol(symbol=symbol, now_ms=utc_now_ms())
             polled.append(symbol)
-            self.state_store.update_prior_context(
-                symbol=symbol,
-                fetched_at_ms=snapshot.fetched_at_ms,
-                context_start_ms=snapshot.context_start_ms,
-                context_end_ms=snapshot.context_end_ms,
-                rows_received=snapshot.rows_received,
-                rows_used=snapshot.rows_used,
-                prior_spike_count_24h=snapshot.prior_spike_count_24h,
-                prior_fast_fade_count_24h=snapshot.prior_fast_fade_count_24h,
-                prior_high_24h=snapshot.prior_high_24h,
-                prior_low_before_high_24h=snapshot.prior_low_before_high_24h,
-                prior_low_after_high_24h=snapshot.prior_low_after_high_24h,
-                spike_return_pct=snapshot.spike_return_pct,
-                fast_fade_retrace_fraction=snapshot.fast_fade_retrace_fraction,
-                source=snapshot.source,
-                status=snapshot.status,
-                reason=snapshot.reason,
-            )
+            self._apply_snapshot(snapshot)
             self._last_poll_by_symbol[symbol] = snapshot.fetched_at_ms
             with self._lock:
                 self._status.total_requests += 1
@@ -455,6 +462,8 @@ class Live2PriorContextPoller:
             self._status.last_cycle_completed_at_ms = utc_now_ms()
             if polled and self._status.status in {"running", "ready", "degraded"}:
                 self._status.reason = "prior_context_poll_cycle_completed"
+            elif live_append_count > 0 and self._status.status in {"running", "ready", "degraded"}:
+                self._status.reason = "prior_context_live_ws_5m_roll_forward_completed"
             elif not polled and self._status.status in {"running", "ready", "degraded"}:
                 self._status.reason = "no_active_symbols_due_for_prior_context_poll"
 
@@ -462,6 +471,17 @@ class Live2PriorContextPoller:
         cooldown_ms = int(self.config.symbol_cooldown_seconds * 1000)
         due: list[tuple[int, int, str]] = []
         for symbol in self._target_symbols(now_ms=now_ms):
+            state = self.state_store.get_or_create(symbol)
+            context_age_ms = None
+            if state.prior_context_last_seen_ms is not None:
+                context_age_ms = int(now_ms) - int(state.prior_context_last_seen_ms)
+            if (
+                symbol in self._rolling_candles_by_symbol
+                and state.prior_context_status == "ok"
+                and context_age_ms is not None
+                and context_age_ms <= self.config.stale_ms
+            ):
+                continue
             last_poll_ms = self._last_poll_by_symbol.get(symbol)
             if last_poll_ms is not None and now_ms - last_poll_ms < cooldown_ms:
                 continue
@@ -470,6 +490,136 @@ class Live2PriorContextPoller:
             due.append((priority, oldest_first_ms, symbol))
         due.sort(key=lambda item: (item[0], item[1], item[2]))
         return tuple(symbol for _, _, symbol in due)
+
+    def _apply_snapshot(
+        self,
+        snapshot: Live2PriorContextSnapshot,
+        *,
+        maintenance_source: str = "",
+        live_5m_candle: Live2PriorContextCandle | None = None,
+        live_5m_gap_rejected: bool = False,
+    ) -> None:
+        if snapshot.ready and snapshot.rolling_candles:
+            self._rolling_candles_by_symbol[snapshot.symbol] = {
+                candle.timestamp: candle for candle in snapshot.rolling_candles
+            }
+        self.state_store.update_prior_context(
+            symbol=snapshot.symbol,
+            fetched_at_ms=snapshot.fetched_at_ms,
+            context_start_ms=snapshot.context_start_ms,
+            context_end_ms=snapshot.context_end_ms,
+            rows_received=snapshot.rows_received,
+            rows_used=snapshot.rows_used,
+            prior_spike_count_24h=snapshot.prior_spike_count_24h,
+            prior_fast_fade_count_24h=snapshot.prior_fast_fade_count_24h,
+            prior_high_24h=snapshot.prior_high_24h,
+            prior_low_before_high_24h=snapshot.prior_low_before_high_24h,
+            prior_low_after_high_24h=snapshot.prior_low_after_high_24h,
+            spike_return_pct=snapshot.spike_return_pct,
+            fast_fade_retrace_fraction=snapshot.fast_fade_retrace_fraction,
+            source=snapshot.source,
+            status=snapshot.status,
+            reason=snapshot.reason,
+            maintenance_source=maintenance_source,
+            live_5m_open_time_ms=None if live_5m_candle is None else live_5m_candle.timestamp,
+            live_5m_close_time_ms=None if live_5m_candle is None else live_5m_candle.timestamp + LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS,
+            live_5m_gap_tolerated=False if live_5m_candle is None else live_5m_candle.gap_tolerated,
+            live_5m_gap_rejected=live_5m_gap_rejected,
+            live_5m_missing_aggtrade_ids=0 if live_5m_candle is None else live_5m_candle.missing_aggtrade_ids,
+            live_5m_gap_tolerance=0 if live_5m_candle is None else live_5m_candle.gap_tolerance,
+        )
+
+    def _apply_live_closed_5m_candles(self, *, now_ms: int) -> int:
+        appended = 0
+        rejected = 0
+        tolerated = 0
+        for state in self.state_store.snapshot():
+            if not state.universe_selected:
+                continue
+            ring = state.candle_book.rings.get(LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS)
+            if ring is None:
+                continue
+            for candle in ring.closed_snapshot():
+                last_open = self._last_live_5m_open_by_symbol.get(state.symbol)
+                if last_open is not None and candle.open_time_ms <= last_open:
+                    continue
+                if candle.live_ws_trade_count <= 0:
+                    continue
+                prior_candle, reject_reason = _prior_context_candle_from_live_5m(candle)
+                self._last_live_5m_open_by_symbol[state.symbol] = candle.open_time_ms
+                if reject_reason:
+                    rejected += 1
+                    self._mark_live_5m_gap_rejected(
+                        symbol=state.symbol,
+                        now_ms=now_ms,
+                        live_candle=prior_candle,
+                        reason=reject_reason,
+                    )
+                    continue
+                buffer = self._rolling_candles_by_symbol.setdefault(state.symbol, {})
+                buffer[prior_candle.timestamp] = prior_candle
+                context_end_ms = prior_candle.timestamp + LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS - 1
+                context_start_ms = context_end_ms - self.config.lookback_hours * 60 * 60 * 1000 + 1
+                old_keys = [timestamp for timestamp in buffer if timestamp < context_start_ms]
+                for timestamp in old_keys:
+                    buffer.pop(timestamp, None)
+                snapshot = _build_prior_context_snapshot_from_candles(
+                    symbol=state.symbol,
+                    candles=tuple(buffer.values()),
+                    fetched_at_ms=now_ms,
+                    context_start_ms=context_start_ms,
+                    context_end_ms=context_end_ms,
+                    spike_return_pct=self.config.spike_return_pct,
+                    fast_fade_retrace_fraction=self.config.fast_fade_retrace_fraction,
+                    source=LIVE2_PRIOR_CONTEXT_ROLLING_WS_SOURCE,
+                    ready_reason="prior_24h_context_ready_from_startup_rest_plus_live_ws_5m_roll_forward",
+                )
+                self._apply_snapshot(
+                    snapshot,
+                    maintenance_source=LIVE2_PRIOR_CONTEXT_ROLLING_WS_SOURCE,
+                    live_5m_candle=prior_candle,
+                )
+                appended += 1
+                if prior_candle.gap_tolerated:
+                    tolerated += 1
+        if appended or rejected:
+            with self._lock:
+                self._status.total_ws_5m_candles_appended += appended
+                self._status.total_ws_5m_gap_tolerated += tolerated
+                self._status.total_ws_5m_gap_rejected += rejected
+                self._status.last_ws_5m_update_at_ms = now_ms
+        return appended
+
+    def _mark_live_5m_gap_rejected(
+        self,
+        *,
+        symbol: str,
+        now_ms: int,
+        live_candle: Live2PriorContextCandle,
+        reason: str,
+    ) -> None:
+        snapshot = Live2PriorContextSnapshot(
+            symbol=symbol,
+            status="ws_gap_exceeds_tolerance",
+            reason=reason,
+            fetched_at_ms=now_ms,
+            context_start_ms=None,
+            context_end_ms=live_candle.timestamp + LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS - 1,
+            rows_received=0,
+            rows_used=0,
+            spike_return_pct=self.config.spike_return_pct,
+            fast_fade_retrace_fraction=self.config.fast_fade_retrace_fraction,
+            source=LIVE2_PRIOR_CONTEXT_ROLLING_WS_SOURCE,
+        )
+        self._apply_snapshot(
+            snapshot,
+            maintenance_source=LIVE2_PRIOR_CONTEXT_ROLLING_WS_SOURCE,
+            live_5m_candle=live_candle,
+            live_5m_gap_rejected=True,
+        )
+        with self._lock:
+            self._status.last_ws_5m_update_symbol = symbol
+            self._status.last_ws_5m_gap_reason = reason
 
     def _target_symbols(self, *, now_ms: int) -> tuple[str, ...]:
         targets: list[str] = []
@@ -565,32 +715,62 @@ def _build_prior_context_snapshot(
     spike_return_pct: float,
     fast_fade_retrace_fraction: float,
 ) -> Live2PriorContextSnapshot:
-    if frame is None or frame.empty:
+    rows_received = 0 if frame is None else len(frame)
+    normalized_result = _normalize_prior_context_frame(
+        frame=frame,
+        context_start_ms=context_start_ms,
+        context_end_ms=context_end_ms,
+    )
+    if normalized_result["status"] != "ok":
         return Live2PriorContextSnapshot(
             symbol=symbol,
-            status="empty",
-            reason="prior_context_ohlcv_empty",
+            status=str(normalized_result["status"]),
+            reason=str(normalized_result["reason"]),
             fetched_at_ms=fetched_at_ms,
             context_start_ms=context_start_ms,
             context_end_ms=context_end_ms,
-            rows_received=0,
+            rows_received=rows_received,
+            rows_used=int(normalized_result.get("rows_used") or 0),
             spike_return_pct=spike_return_pct,
             fast_fade_retrace_fraction=fast_fade_retrace_fraction,
         )
+    candles = tuple(normalized_result["candles"])
+    return _build_prior_context_snapshot_from_candles(
+        symbol=symbol,
+        candles=candles,
+        fetched_at_ms=fetched_at_ms,
+        context_start_ms=context_start_ms,
+        context_end_ms=context_end_ms,
+        spike_return_pct=spike_return_pct,
+        fast_fade_retrace_fraction=fast_fade_retrace_fraction,
+        source=LIVE2_PRIOR_CONTEXT_SOURCE,
+        rows_received=rows_received,
+        ready_reason="prior_24h_context_ready_from_closed_5m_ohlcv",
+    )
+
+
+def _normalize_prior_context_frame(
+    *,
+    frame: pd.DataFrame,
+    context_start_ms: int,
+    context_end_ms: int,
+) -> dict[str, object]:
+    if frame is None or frame.empty:
+        return {
+            "status": "empty",
+            "reason": "prior_context_ohlcv_empty",
+            "rows_used": 0,
+            "candles": (),
+        }
     required = ["timestamp", "open", "high", "low", "close"]
     missing = [column for column in required if column not in frame.columns]
     if missing:
-        return Live2PriorContextSnapshot(
-            symbol=symbol,
-            status="invalid_schema",
-            reason=f"prior_context_ohlcv_missing_columns:{','.join(missing)}",
-            fetched_at_ms=fetched_at_ms,
-            context_start_ms=context_start_ms,
-            context_end_ms=context_end_ms,
-            rows_received=len(frame),
-            spike_return_pct=spike_return_pct,
-            fast_fade_retrace_fraction=fast_fade_retrace_fraction,
-        )
+        return {
+            "status": "invalid_schema",
+            "reason": f"prior_context_ohlcv_missing_columns:{','.join(missing)}",
+            "rows_used": 0,
+            "candles": (),
+        }
     normalized = frame.loc[:, required].copy()
     for column in required:
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
@@ -604,22 +784,61 @@ def _build_prior_context_snapshot(
         & (normalized["close"] > 0)
     ]
     normalized = normalized.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
-    rows_received = len(frame)
     rows_used = len(normalized)
-    min_expected_rows = max(1, int((LIVE2_PRIOR_CONTEXT_LOOKBACK_HOURS * 60) / 5 * 0.80))
     if normalized.empty:
-        return Live2PriorContextSnapshot(
-            symbol=symbol,
-            status="invalid_rows",
-            reason="prior_context_ohlcv_has_no_positive_numeric_rows",
-            fetched_at_ms=fetched_at_ms,
-            context_start_ms=context_start_ms,
-            context_end_ms=context_end_ms,
-            rows_received=rows_received,
-            rows_used=0,
-            spike_return_pct=spike_return_pct,
-            fast_fade_retrace_fraction=fast_fade_retrace_fraction,
+        return {
+            "status": "invalid_rows",
+            "reason": "prior_context_ohlcv_has_no_positive_numeric_rows",
+            "rows_used": 0,
+            "candles": (),
+        }
+    candles = tuple(
+        Live2PriorContextCandle(
+            timestamp=int(row.timestamp),
+            open=float(row.open),
+            high=float(row.high),
+            low=float(row.low),
+            close=float(row.close),
+            source=LIVE2_PRIOR_CONTEXT_SOURCE,
         )
+        for row in normalized.itertuples(index=False)
+    )
+    return {
+        "status": "ok",
+        "reason": "prior_context_ohlcv_ready",
+        "rows_used": rows_used,
+        "candles": candles,
+    }
+
+
+def _build_prior_context_snapshot_from_candles(
+    *,
+    symbol: str,
+    candles: tuple[Live2PriorContextCandle, ...],
+    fetched_at_ms: int,
+    context_start_ms: int,
+    context_end_ms: int,
+    spike_return_pct: float,
+    fast_fade_retrace_fraction: float,
+    source: str,
+    ready_reason: str,
+    rows_received: int | None = None,
+) -> Live2PriorContextSnapshot:
+    normalized = sorted(
+        (
+            candle
+            for candle in candles
+            if context_start_ms <= candle.timestamp <= context_end_ms
+            and candle.open > 0
+            and candle.high > 0
+            and candle.low > 0
+            and candle.close > 0
+        ),
+        key=lambda candle: candle.timestamp,
+    )
+    rows_used = len(normalized)
+    expected_rows = max(1, int((LIVE2_PRIOR_CONTEXT_LOOKBACK_HOURS * 60) / 5))
+    min_expected_rows = max(1, int(expected_rows * LIVE2_PRIOR_CONTEXT_MIN_COVERAGE_RATIO))
     if rows_used < min_expected_rows:
         return Live2PriorContextSnapshot(
             symbol=symbol,
@@ -628,34 +847,39 @@ def _build_prior_context_snapshot(
             fetched_at_ms=fetched_at_ms,
             context_start_ms=context_start_ms,
             context_end_ms=context_end_ms,
-            rows_received=rows_received,
+            rows_received=rows_used if rows_received is None else rows_received,
             rows_used=rows_used,
             spike_return_pct=spike_return_pct,
             fast_fade_retrace_fraction=fast_fade_retrace_fraction,
+            source=source,
+            rolling_candles=tuple(normalized),
         )
-    open_price = normalized["open"].astype(float)
-    high = normalized["high"].astype(float)
-    low = normalized["low"].astype(float)
-    close = normalized["close"].astype(float)
-    spike_return = (high / open_price) - 1.0
-    spike_mask = spike_return.ge(float(spike_return_pct))
-    spike_count = int(spike_mask.sum())
-    spike_leg = high - open_price
-    retrace_fraction = (high - close) / spike_leg.replace(0.0, math.nan)
-    fast_fade_count = int((spike_mask & retrace_fraction.ge(float(fast_fade_retrace_fraction))).sum())
-
-    high_pos = int(high.to_numpy().argmax()) if not high.empty else -1
-    prior_high = float(high.iloc[high_pos]) if high_pos >= 0 else None
-    low_before_high = float(low.iloc[: high_pos + 1].min()) if high_pos >= 0 else None
-    low_after_high = float(low.iloc[high_pos:].min()) if high_pos >= 0 else None
+    spike_count = 0
+    fast_fade_count = 0
+    highest_price = -math.inf
+    high_pos = -1
+    for index, candle in enumerate(normalized):
+        spike_return = (candle.high / candle.open) - 1.0
+        if spike_return >= float(spike_return_pct):
+            spike_count += 1
+            spike_leg = candle.high - candle.open
+            retrace_fraction = math.inf if spike_leg <= 0 else (candle.high - candle.close) / spike_leg
+            if retrace_fraction >= float(fast_fade_retrace_fraction):
+                fast_fade_count += 1
+        if candle.high > highest_price:
+            highest_price = candle.high
+            high_pos = index
+    prior_high = float(normalized[high_pos].high) if high_pos >= 0 else None
+    low_before_high = min(candle.low for candle in normalized[: high_pos + 1]) if high_pos >= 0 else None
+    low_after_high = min(candle.low for candle in normalized[high_pos:]) if high_pos >= 0 else None
     return Live2PriorContextSnapshot(
         symbol=symbol,
         status="ok",
-        reason="prior_24h_context_ready_from_closed_5m_ohlcv",
+        reason=ready_reason,
         fetched_at_ms=fetched_at_ms,
         context_start_ms=context_start_ms,
         context_end_ms=context_end_ms,
-        rows_received=rows_received,
+        rows_received=rows_used if rows_received is None else rows_received,
         rows_used=rows_used,
         prior_spike_count_24h=spike_count,
         prior_fast_fade_count_24h=fast_fade_count,
@@ -664,4 +888,35 @@ def _build_prior_context_snapshot(
         prior_low_after_high_24h=low_after_high,
         spike_return_pct=spike_return_pct,
         fast_fade_retrace_fraction=fast_fade_retrace_fraction,
+        source=source,
+        rolling_candles=tuple(normalized),
     )
+
+
+def _prior_context_candle_from_live_5m(candle: Live2Candle) -> tuple[Live2PriorContextCandle, str]:
+    missing_ids = max(0, int(candle.missing_agg_trade_id_count))
+    tolerance = max(
+        LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_IDS_PER_CANDLE,
+        int(candle.number_of_trades * LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_ID_RATIO),
+    )
+    gap_tolerated = 0 < missing_ids <= tolerance
+    prior_candle = Live2PriorContextCandle(
+        timestamp=int(candle.open_time_ms),
+        open=float(candle.open),
+        high=float(candle.high),
+        low=float(candle.low),
+        close=float(candle.close),
+        source=LIVE2_PRIOR_CONTEXT_ROLLING_WS_SOURCE,
+        missing_aggtrade_ids=missing_ids,
+        gap_tolerance=tolerance,
+        gap_tolerated=gap_tolerated,
+    )
+    if missing_ids > tolerance:
+        return (
+            prior_candle,
+            (
+                "live_ws_5m_aggtrade_id_gap_exceeds_tolerance:"
+                f"missing={missing_ids}:tolerance={tolerance}:trades={candle.number_of_trades}"
+            ),
+        )
+    return prior_candle, ""

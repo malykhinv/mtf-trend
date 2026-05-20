@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P354 live2 rolling prior-context maintenance
+
+```text
+Current patch status: P354 APPLIED locally / UNKNOWN commit.
+Question: can live2 keep Ctx stale near zero cheaply from existing WebSockets without masking data holes?
+Change: prior 24h context remains REST-bootstrapped from closed 5m OHLCV at startup, then rolls forward from live aggTrade-derived closed 5m candles. Full-window runtime REST repoll is no longer the normal freshness mechanism for symbols with an ok rolling buffer. Minor intra-5m aggTrade id gaps are tolerated up to max(5 ids, 10% observed trades) and recorded; larger gaps mark `ws_gap_exceeds_tolerance` and block context until repair. Symbol-state artifacts include last live 5m context open/close, appended/tolerated/rejected counts, missing id count, and tolerance.
+Trading impact: stricter and cheaper context freshness. No signal thresholds, entry guards, fills, stops, TP, or position lifecycle changed. Stale/missing/rejected prior context still becomes `prior_24h_context_not_ready`; the patch changes maintenance, not acceptance.
+Validation: `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py`; `.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py`.
+Next validation: restart live2 and require `prior_context.maintenance_mode=startup_rest_bootstrap_plus_live_ws_5m_rolling_append`, rising `total_ws_5m_candles_appended`, low/zero `total_ws_5m_gap_rejected`, and no sustained `Ctx stale` for hot symbols after startup.
+```
+
 ## 2026-05-20 - P353 live2 prior-context launch wiring and artifact durability
 
 ```text

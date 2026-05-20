@@ -14,6 +14,15 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+## 2026-05-20 - P354 live2 rolling prior-context test plan
+
+```text
+Patch: P354 changes live2 prior-context maintenance from repeated selected-universe full-window REST polling to startup REST bootstrap plus live WS closed-5m rolling append.
+Synthetic validation: minor intra-candle aggTrade id gaps are tolerated and counted; large gaps mark `ws_gap_exceeds_tolerance`; atomic artifact tests and wall-clock candle closure tests still pass.
+Live acceptance after restart: prior_context startup event must show `runtime_maintenance=live_ws_closed_5m_roll_forward_after_startup_rest_bootstrap`, status must show `maintenance_mode=startup_rest_bootstrap_plus_live_ws_5m_rolling_append`, `total_ws_5m_candles_appended` must increase every closed 5m interval for symbols with trades, `Ctx stale` should not accumulate from normal cooldown mechanics, and any rejected WS gap must be visible through prior_context status counts plus symbol-state gap counters.
+Residual risk: symbols with no trades in a 5m interval do not create synthetic candles; this is intentional. If those symbols later become hot and their rolling buffer lacks enough coverage, they must be repaired or blocked, not marked ok.
+```
+
 ## 2026-05-20 - live2 run review 20260520_122522 after P352
 
 ```text
