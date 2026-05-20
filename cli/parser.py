@@ -485,6 +485,14 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live2.add_argument("--oi-lookback-minutes", type=_positive_int_for("--oi-lookback-minutes"), default=20)
     anomaly_live2.add_argument("--oi-max-symbols-per-cycle", type=_positive_int_for("--oi-max-symbols-per-cycle"), default=8)
     anomaly_live2.add_argument("--oi-radar-symbol-ttl-ms", type=_positive_int_for("--oi-radar-symbol-ttl-ms"), default=60_000)
+    anomaly_live2.add_argument("--prior-context-stale-ms", type=_positive_int_for("--prior-context-stale-ms"), default=900_000)
+    anomaly_live2.add_argument("--prior-context-poll-interval-seconds", type=float, default=10.0)
+    anomaly_live2.add_argument("--prior-context-symbol-cooldown-seconds", type=float, default=300.0)
+    anomaly_live2.add_argument("--prior-context-lookback-hours", type=int, default=24, help="Live2 prior context lookback; must stay exactly 24.")
+    anomaly_live2.add_argument("--prior-context-max-symbols-per-cycle", type=_positive_int_for("--prior-context-max-symbols-per-cycle"), default=4)
+    anomaly_live2.add_argument("--prior-context-radar-symbol-ttl-ms", type=_positive_int_for("--prior-context-radar-symbol-ttl-ms"), default=60_000)
+    anomaly_live2.add_argument("--prior-context-spike-return-pct", type=float, default=0.03)
+    anomaly_live2.add_argument("--prior-context-fast-fade-retrace-fraction", type=float, default=0.55)
     anomaly_live2.add_argument("--output-dir", default=None, help="Optional artifact output directory")
 
     live_order_smoke = subparsers.add_parser(

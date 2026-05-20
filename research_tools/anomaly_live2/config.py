@@ -30,6 +30,14 @@ class AnomalyLive2Config:
     oi_lookback_minutes: int = 20
     oi_max_symbols_per_cycle: int = 8
     oi_radar_symbol_ttl_ms: int = 60_000
+    prior_context_stale_ms: int = 900_000
+    prior_context_poll_interval_seconds: float = 10.0
+    prior_context_symbol_cooldown_seconds: float = 300.0
+    prior_context_lookback_hours: int = 24
+    prior_context_max_symbols_per_cycle: int = 4
+    prior_context_radar_symbol_ttl_ms: int = 60_000
+    prior_context_spike_return_pct: float = 0.03
+    prior_context_fast_fade_retrace_fraction: float = 0.55
     ws_reconnect_initial_delay_seconds: float = 1.0
     ws_reconnect_max_delay_seconds: float = 60.0
     ws_connection_max_age_seconds: float = 84_600.0
@@ -99,6 +107,22 @@ class AnomalyLive2Config:
             raise ValueError("oi_max_symbols_per_cycle must be > 0")
         if self.oi_radar_symbol_ttl_ms <= 0:
             raise ValueError("oi_radar_symbol_ttl_ms must be > 0")
+        if self.prior_context_stale_ms <= 0:
+            raise ValueError("prior_context_stale_ms must be > 0")
+        if self.prior_context_poll_interval_seconds <= 0:
+            raise ValueError("prior_context_poll_interval_seconds must be > 0")
+        if self.prior_context_symbol_cooldown_seconds <= 0:
+            raise ValueError("prior_context_symbol_cooldown_seconds must be > 0")
+        if self.prior_context_lookback_hours != 24:
+            raise ValueError("prior_context_lookback_hours must be exactly 24")
+        if self.prior_context_max_symbols_per_cycle <= 0:
+            raise ValueError("prior_context_max_symbols_per_cycle must be > 0")
+        if self.prior_context_radar_symbol_ttl_ms <= 0:
+            raise ValueError("prior_context_radar_symbol_ttl_ms must be > 0")
+        if self.prior_context_spike_return_pct <= 0:
+            raise ValueError("prior_context_spike_return_pct must be > 0")
+        if not 0.0 <= self.prior_context_fast_fade_retrace_fraction <= 1.0:
+            raise ValueError("prior_context_fast_fade_retrace_fraction must be in [0, 1]")
         if self.ws_reconnect_initial_delay_seconds <= 0:
             raise ValueError("ws_reconnect_initial_delay_seconds must be > 0")
         if self.ws_reconnect_max_delay_seconds < self.ws_reconnect_initial_delay_seconds:

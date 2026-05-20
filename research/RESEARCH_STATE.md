@@ -1,3 +1,16 @@
+# Anomaly Research State
+
+## 2026-05-20 - P337 live2 24h prior context poller
+
+```text
+Current patch status: P337 PROPOSED / UNKNOWN commit.
+Question: provide the prior fake-pump/spike/whipsaw context required by current live2 categories without using 72h or hot-path fallback.
+Change: live2 now starts an active/radar-only prior-context poller that fetches closed 5m OHLCV over an exact 24h window, computes prior spike count, prior fast-fade count, and prior whipsaw legs, stores source/status/coverage fields per SymbolState, exposes context counts in status/grid/diagnostics, and evaluates legacy category `*_72h` fields from explicitly labelled 24h live context. Missing/empty/invalid context remains `prior_24h_context_not_ready`; no zero fallback is introduced.
+Trading impact: category acceptance is stricter and more honest for prior-context-required categories. Market-data stream readiness, order placement, fills, stops, TP/BE and execution guards are unchanged. This patch also fixes the P336 OI poller status snapshot copy so OI diagnostics can be read without constructing from its `ready` view field.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic 24h prior-context snapshot/poller smoke.
+Next validation: live2 smoke with small explicit universe; require `prior_context_poller_starting`, `prior_context_status_counts`, grid `24h ctx`, and category rejects to move from missing prior context to real `prior_24h_context_not_ready` / count-threshold rejects / accepted when context is ready.
+```
+
 
 ## 2026-05-20 - P334 live2 planned WS rotation lifecycle
 

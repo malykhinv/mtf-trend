@@ -38,10 +38,10 @@ class Live2SignalDecision:
 class Live2SignalEngine:
     """Small stream-only adapter for the shared pump-category contract.
 
-    Generation 0 has no prior-fast-fade context. Mark basis comes from the
-    live2 markPrice stream and OI delta comes from the live2 active-symbol OI
-    poller; unavailable required fields are rejected explicitly instead of
-    silently substituting zeros.
+    Mark basis comes from the live2 markPrice stream, OI delta comes from the
+    live2 active-symbol OI poller, and prior fake-pump context comes from the
+    live2 24h prior-context poller. Unavailable required fields are rejected
+    explicitly instead of silently substituting zeros.
     """
 
     def __init__(self, *, category_ids: tuple[str, ...] = DEFAULT_PUMP_CATEGORY_IDS) -> None:
@@ -101,7 +101,8 @@ class Live2SignalEngine:
             "total_selected": self._total_selected,
             "total_rejected": self._total_rejected,
             "limitations": (
-                "generation_0_has_no_prior_fast_fade_context; "
+                "prior_context_from_live2_24h_closed_5m_ohlcv_poller; "
+                "legacy_category_72h_names_use_24h_live_context; "
                 "mark_context_from_live_markPrice_ws; "
                 "oi_context_from_active_symbol_open_interest_poller; "
                 "categories_requiring_unavailable_context_are_rejected"
@@ -135,6 +136,19 @@ class Live2SignalEngine:
             mark_basis_status = "ok"
         elif state.mark_status:
             mark_basis_status = state.mark_status
+        prior_whipsaw = None
+        impulse_range = candle.high - candle.low
+        if (
+            state.prior_context_status == "ok"
+            and state.prior_high_24h is not None
+            and state.prior_low_before_high_24h is not None
+            and state.prior_low_after_high_24h is not None
+            and impulse_range > 0
+        ):
+            prior_up_leg = state.prior_high_24h - state.prior_low_before_high_24h
+            prior_down_leg = state.prior_high_24h - state.prior_low_after_high_24h
+            if prior_up_leg >= 0 and prior_down_leg >= 0:
+                prior_whipsaw = min(prior_up_leg, prior_down_leg) / impulse_range
         # Generation 0 uses the current 5s bucket low as a strict stream-local
         # initial stop candidate. Execution remains disabled until P318; this is
         # only the signal-side risk candidate consumed by P317 entry guards.
@@ -178,9 +192,52 @@ class Live2SignalEngine:
             "oi_source": state.oi_source,
             "oi_status": state.oi_status,
             "oi_reason": state.oi_reason,
+            "prior_context_status": state.prior_context_status,
+            "prior_context_reason": state.prior_context_reason,
+            "prior_context_source": state.prior_context_source,
+            "prior_context_last_seen_ms": state.prior_context_last_seen_ms,
+            "prior_context_start_ms": state.prior_context_start_ms,
+            "prior_context_end_ms": state.prior_context_end_ms,
+            "prior_context_rows_used": state.prior_context_rows_used,
+            "prior_context_lookback_hours": 24,
+            "prior_spike_count_24h": state.prior_spike_count_24h,
+            "prior_fast_fade_count_24h": state.prior_fast_fade_count_24h,
+            # Legacy category contract field names are intentionally populated
+            # from the current live 24h context; source labels above make this
+            # explicit in artifacts.
+            "prior_spike_count_72h": state.prior_spike_count_24h,
+            "prior_fast_fade_count_72h": state.prior_fast_fade_count_24h,
+            "prior_up_down_whipsaw_to_impulse_range": prior_whipsaw,
+            "prior_context_spike_return_pct": state.prior_context_spike_return_pct,
+            "prior_context_fast_fade_retrace_fraction": state.prior_context_fast_fade_retrace_fraction,
         }
 
     def _category_accepts(self, *, category: PumpCategoryContract, features: dict[str, object]) -> tuple[bool, str]:
+        if (
+            category.max_prior_spike_count_72h is not None
+            or category.max_prior_fast_fade_count_72h is not None
+            or category.max_prior_up_down_whipsaw_to_impulse_range is not None
+        ):
+            if features.get("prior_context_status") != "ok":
+                return False, "prior_24h_context_not_ready"
+        if category.max_prior_spike_count_72h is not None:
+            prior_spikes = _int_or_none(features.get("prior_spike_count_24h"))
+            if prior_spikes is None:
+                return False, "prior_spike_count_24h_not_ready"
+            if prior_spikes > category.max_prior_spike_count_72h:
+                return False, "prior_spike_count_24h_above_category_max"
+        if category.max_prior_fast_fade_count_72h is not None:
+            prior_fast_fades = _int_or_none(features.get("prior_fast_fade_count_24h"))
+            if prior_fast_fades is None:
+                return False, "prior_fast_fade_count_24h_not_ready"
+            if prior_fast_fades > category.max_prior_fast_fade_count_72h:
+                return False, "prior_fast_fade_count_24h_above_category_max"
+        if category.max_prior_up_down_whipsaw_to_impulse_range is not None:
+            prior_whipsaw = _float_or_none(features.get("prior_up_down_whipsaw_to_impulse_range"))
+            if prior_whipsaw is None:
+                return False, "prior_whipsaw_24h_not_ready"
+            if prior_whipsaw > category.max_prior_up_down_whipsaw_to_impulse_range:
+                return False, "prior_whipsaw_24h_above_category_max"
         if category.min_oi_change_pct_3x5m is not None:
             oi_change = _float_or_none(features.get("oi_change_pct_3x5m"))
             if features.get("oi_status") != "ok" or oi_change is None:
@@ -231,5 +288,14 @@ def _float_or_none(value: object) -> float | None:
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None

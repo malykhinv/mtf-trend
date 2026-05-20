@@ -15,6 +15,7 @@ LIVE2_DEFAULT_MAX_CLOSED_CANDLES = 360
 LIVE2_STARTUP_AGGTRADE_REST_SOURCE = "binance_futures_aggTrades_startup_rest"
 LIVE2_AGGTRADE_WS_SOURCE = "binance_futures_aggtrade_ws"
 LIVE2_OPEN_INTEREST_SOURCE = "binance_futures_open_interest_hist_5m_poll"
+LIVE2_PRIOR_CONTEXT_SOURCE = "binance_futures_ohlcv_5m_prior_context_24h_poll"
 
 
 class SymbolLive2Status(StrEnum):
@@ -149,6 +150,23 @@ class SymbolState:
     oi_source: str = ""
     oi_status: str = "not_seen"
     oi_reason: str = ""
+    prior_context_first_seen_ms: int | None = None
+    prior_context_last_seen_ms: int | None = None
+    prior_context_start_ms: int | None = None
+    prior_context_end_ms: int | None = None
+    prior_context_update_count: int = 0
+    prior_context_rows_received: int = 0
+    prior_context_rows_used: int = 0
+    prior_spike_count_24h: int | None = None
+    prior_fast_fade_count_24h: int | None = None
+    prior_high_24h: float | None = None
+    prior_low_before_high_24h: float | None = None
+    prior_low_after_high_24h: float | None = None
+    prior_context_spike_return_pct: float | None = None
+    prior_context_fast_fade_retrace_fraction: float | None = None
+    prior_context_source: str = ""
+    prior_context_status: str = "not_seen"
+    prior_context_reason: str = ""
     candle_coverage_status: str = "not_ready"
     candle_gap_count: int = 0
     candle_out_of_order_count: int = 0
@@ -364,6 +382,46 @@ class SymbolState:
         self.oi_reason = reason
         self.mark_dirty(now_ms=fetched_at_ms)
 
+    def update_prior_context(
+        self,
+        *,
+        fetched_at_ms: int,
+        context_start_ms: int | None,
+        context_end_ms: int | None,
+        rows_received: int,
+        rows_used: int,
+        prior_spike_count_24h: int | None,
+        prior_fast_fade_count_24h: int | None,
+        prior_high_24h: float | None,
+        prior_low_before_high_24h: float | None,
+        prior_low_after_high_24h: float | None,
+        spike_return_pct: float | None,
+        fast_fade_retrace_fraction: float | None,
+        source: str,
+        status: str,
+        reason: str,
+    ) -> None:
+        self.updated_ms = fetched_at_ms
+        if self.prior_context_first_seen_ms is None:
+            self.prior_context_first_seen_ms = fetched_at_ms
+        self.prior_context_last_seen_ms = fetched_at_ms
+        self.prior_context_start_ms = context_start_ms
+        self.prior_context_end_ms = context_end_ms
+        self.prior_context_update_count += 1
+        self.prior_context_rows_received = rows_received
+        self.prior_context_rows_used = rows_used
+        self.prior_spike_count_24h = prior_spike_count_24h
+        self.prior_fast_fade_count_24h = prior_fast_fade_count_24h
+        self.prior_high_24h = prior_high_24h
+        self.prior_low_before_high_24h = prior_low_before_high_24h
+        self.prior_low_after_high_24h = prior_low_after_high_24h
+        self.prior_context_spike_return_pct = spike_return_pct
+        self.prior_context_fast_fade_retrace_fraction = fast_fade_retrace_fraction
+        self.prior_context_source = source
+        self.prior_context_status = status
+        self.prior_context_reason = reason
+        self.mark_dirty(now_ms=fetched_at_ms)
+
     def to_artifact_row(self) -> dict[str, object]:
         row: dict[str, object] = {
             "symbol": self.symbol,
@@ -479,6 +537,23 @@ class SymbolState:
             "oi_source": self.oi_source,
             "oi_status": self.oi_status,
             "oi_reason": self.oi_reason,
+            "prior_context_first_seen_ms": self.prior_context_first_seen_ms,
+            "prior_context_last_seen_ms": self.prior_context_last_seen_ms,
+            "prior_context_start_ms": self.prior_context_start_ms,
+            "prior_context_end_ms": self.prior_context_end_ms,
+            "prior_context_update_count": self.prior_context_update_count,
+            "prior_context_rows_received": self.prior_context_rows_received,
+            "prior_context_rows_used": self.prior_context_rows_used,
+            "prior_spike_count_24h": self.prior_spike_count_24h,
+            "prior_fast_fade_count_24h": self.prior_fast_fade_count_24h,
+            "prior_high_24h": self.prior_high_24h,
+            "prior_low_before_high_24h": self.prior_low_before_high_24h,
+            "prior_low_after_high_24h": self.prior_low_after_high_24h,
+            "prior_context_spike_return_pct": self.prior_context_spike_return_pct,
+            "prior_context_fast_fade_retrace_fraction": self.prior_context_fast_fade_retrace_fraction,
+            "prior_context_source": self.prior_context_source,
+            "prior_context_status": self.prior_context_status,
+            "prior_context_reason": self.prior_context_reason,
             "candle_coverage_status": self.candle_coverage_status,
             "candle_gap_count": self.candle_gap_count,
             "candle_out_of_order_count": self.candle_out_of_order_count,
@@ -656,6 +731,47 @@ class SymbolStateStore:
             )
 
 
+    def update_prior_context(
+        self,
+        *,
+        symbol: str,
+        fetched_at_ms: int,
+        context_start_ms: int | None,
+        context_end_ms: int | None,
+        rows_received: int,
+        rows_used: int,
+        prior_spike_count_24h: int | None,
+        prior_fast_fade_count_24h: int | None,
+        prior_high_24h: float | None,
+        prior_low_before_high_24h: float | None,
+        prior_low_after_high_24h: float | None,
+        spike_return_pct: float | None,
+        fast_fade_retrace_fraction: float | None,
+        source: str,
+        status: str,
+        reason: str,
+    ) -> None:
+        with self._lock:
+            state = self.get_or_create(symbol)
+            state.update_prior_context(
+                fetched_at_ms=fetched_at_ms,
+                context_start_ms=context_start_ms,
+                context_end_ms=context_end_ms,
+                rows_received=rows_received,
+                rows_used=rows_used,
+                prior_spike_count_24h=prior_spike_count_24h,
+                prior_fast_fade_count_24h=prior_fast_fade_count_24h,
+                prior_high_24h=prior_high_24h,
+                prior_low_before_high_24h=prior_low_before_high_24h,
+                prior_low_after_high_24h=prior_low_after_high_24h,
+                spike_return_pct=spike_return_pct,
+                fast_fade_retrace_fraction=fast_fade_retrace_fraction,
+                source=source,
+                status=status,
+                reason=reason,
+            )
+
+
     def update_aggtrade_many(self, trades: tuple[Live2AggTradeEvent, ...], *, received_at_ms: int) -> None:
         if not trades:
             return
@@ -710,6 +826,22 @@ class SymbolStateStore:
                     and stale_ms is not None
                     and state.oi_last_seen_ms is not None
                     and effective_now_ms - state.oi_last_seen_ms > stale_ms
+                ):
+                    key = "stale"
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def prior_context_counts(self, *, now_ms: int | None = None, stale_ms: int | None = None) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        effective_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
+        with self._lock:
+            for state in self._states.values():
+                key = state.prior_context_status or "unknown"
+                if (
+                    key == "ok"
+                    and stale_ms is not None
+                    and state.prior_context_last_seen_ms is not None
+                    and effective_now_ms - state.prior_context_last_seen_ms > stale_ms
                 ):
                     key = "stale"
                 counts[key] = counts.get(key, 0) + 1
