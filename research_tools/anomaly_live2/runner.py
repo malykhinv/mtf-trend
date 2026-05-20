@@ -28,6 +28,7 @@ from .market_data.warmup import (
     Live2StartupWarmupResult,
 )
 from .position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorConfig
+from .session_top import Live2SessionTopTracker
 from .state import SymbolStateStore
 from .status_grid import format_live2_status_grid
 from .telegram import Live2TelegramConfig, Live2TelegramDispatcher
@@ -110,6 +111,8 @@ class AnomalyLive2Runner:
         self.startup_ticker_snapshot_result: Live2StartupTickerSnapshotResult | None = None
         self.startup_warmup_result: Live2StartupWarmupResult | None = None
         self.startup_context_prewarm_result: dict[str, object] | None = None
+        self.session_top_tracker = Live2SessionTopTracker()
+        self._last_session_top_snapshot: dict[str, object] | None = None
         self.deadline_engine = Live2DeadlineEngine(
             state_store=self.state_store,
             config=Live2DeadlineEngineConfig(
@@ -150,6 +153,7 @@ class AnomalyLive2Runner:
         self._last_runtime_gate_reason = "startup"
         self._last_decision_cycle_elapsed_ms = 0
         self._started_monotonic = time.perf_counter()
+        self._market_started_monotonic: float | None = None
 
     def run(self) -> int:
         writer = Live2ArtifactWriter(
@@ -486,6 +490,7 @@ class AnomalyLive2Runner:
                 universe_size=len(self.universe_selection.selected_symbols),
                 runtime_generation=self.config.runtime_generation,
             )
+            self._market_started_monotonic = time.perf_counter()
             self.status_logger(
                 f"live2 · старт · артефакты {self.config.output_dir} · "
                 f"universe {len(self.universe_selection.selected_symbols)} · "
@@ -519,6 +524,8 @@ class AnomalyLive2Runner:
                 now_monotonic = time.monotonic()
                 if now_monotonic - last_heartbeat_at >= self.config.heartbeat_interval_seconds:
                     last_heartbeat_at = now_monotonic
+                    self.session_top_tracker.update_from_state_snapshot(self.state_store.snapshot())
+                    self._last_session_top_snapshot = self.session_top_tracker.snapshot()
                     runtime_gate_status = self._runtime_gate_status()
                     writer.write_event(
                         Live2Event(
@@ -541,6 +548,7 @@ class AnomalyLive2Runner:
                                 "execution_status": self._execution_status(),
                                 "user_data_stream_status": self._user_data_stream_status(),
                                 "position_supervisor_cycle": supervisor_result.as_dict(),
+                                "session_top": self._last_session_top_snapshot or {},
                                 "artifact_writer_status": writer.status().as_dict(),
                             },
                         )
@@ -572,7 +580,7 @@ class AnomalyLive2Runner:
                     writer.write_diagnostics_summary(diagnostics_summary)
                     self.status_logger.status(
                         format_live2_status_grid(
-                            runtime_seconds=time.perf_counter() - self._started_monotonic,
+                            runtime_seconds=self._market_runtime_seconds(),
                             cycle_seconds=max(0.0, self._last_decision_cycle_elapsed_ms / 1000.0),
                             state_counts=self.state_store.counts_by_status(),
                             ticker_counts=self.state_store.ticker_counts(),
@@ -587,6 +595,7 @@ class AnomalyLive2Runner:
                             user_data_stream_status=self._user_data_stream_status(),
                             runtime_gate_status=runtime_gate_status,
                             artifact_writer_status=artifact_writer_status,
+                            session_top_snapshot=self._last_session_top_snapshot,
                         ),
                     )
 
@@ -709,6 +718,11 @@ class AnomalyLive2Runner:
     def _refresh_artifact_writer_readiness(self, writer: Live2ArtifactWriter) -> None:
         status = writer.status()
         self.readiness.artifact_writer_ready = status.ready
+
+    def _market_runtime_seconds(self) -> float:
+        if self._market_started_monotonic is None:
+            return 0.0
+        return max(0.0, time.perf_counter() - self._market_started_monotonic)
 
     def _refresh_runtime_gates(
         self,
@@ -918,6 +932,8 @@ class AnomalyLive2Runner:
                     "shards_stale": int(ws_health_dict.get("shards_stale") or 0),
                 },
             },
+            "market_runtime_seconds": round(self._market_runtime_seconds(), 3),
+            "session_top": self._last_session_top_snapshot or {},
             "runtime_gate": {
                 "status": runtime_gate_status.get("status"),
                 "reason": runtime_gate_status.get("reason"),

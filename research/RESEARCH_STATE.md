@@ -2333,3 +2333,11 @@ Current commit: UNKNOWN.
 P348 proposed after live2 reached strict market-data startup and failed with `live2 aggTrade WS startup failed: partial_or_connecting`. That error is too generic for post-mortem. The patch keeps aggTrade fail-fast strict, increases the default startup wait from 10s to 60s for multi-shard startup, and adds `reason` plus `readiness_blockers` to aggTrade status so the next failure identifies the exact shard-level blocker.
 
 Next validation: apply P348, run compileall, then run `run-anomaly-live2` again. If it still fails, inspect `aggtrade_ws_startup_failed.data.aggtrade_ws.readiness_blockers` in `live2_events.csv` / status instead of guessing.
+
+## 2026-05-20 - P350 live2 operator status state
+
+Current commit: UNKNOWN.
+
+P350 proposed after a live2 smoke reached running market-data state. It fixes operator-facing status semantics only: the grid `Время` now starts at market monitoring instead of startup/prewarm, `Позиции` shows open/session-total so a fresh run is 0/0 instead of 0/max-capacity, v1-style session top movers are shown between Market and Trading, and the ambiguous `Дедлайн` label is renamed to `Опоздало`.
+
+Next validation: apply P350, run compileall, then restart live2 and confirm the grid shows market-monitoring runtime, fresh-run positions 0/0, session top movers, and no trading-path behavior changes.

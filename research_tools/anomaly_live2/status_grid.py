@@ -28,6 +28,7 @@ def format_live2_status_grid(
     user_data_stream_status: Mapping[str, object],
     runtime_gate_status: Mapping[str, object],
     artifact_writer_status: Mapping[str, object],
+    session_top_snapshot: Mapping[str, object] | None = None,
 ) -> str:
     """Format one live2 operator heartbeat in the compact v1 grid style."""
 
@@ -94,6 +95,7 @@ def format_live2_status_grid(
     open_positions = _int(execution_status.get("open_protected_positions"))
     protected_positions = execution_status.get("protected_positions")
     protected_count = len(protected_positions) if isinstance(protected_positions, list) else open_positions
+    session_positions_total = _int(execution_status.get("total_positions_protected"))
     total_orders = _int(execution_status.get("total_orders_submitted"))
     protected_total = _int(execution_status.get("total_positions_protected"))
     integrity_errors = _int(execution_status.get("total_integrity_errors")) + _int(supervisor_status.get("total_integrity_errors"))
@@ -179,11 +181,12 @@ def format_live2_status_grid(
             _format_status_cell("Прогрев", f"{warmed_symbols}/{warmup_requested}" if warmup_requested else "-"),
             _format_status_cell("Только REST", warmup_only_candles),
         ),
+        *_format_session_top_block(session_top_snapshot),
         "",
         "Торговля",
         _format_status_line(
             _format_status_cell("PNL", "-"),
-            _format_status_cell("Позиции", f"{open_positions}/{max_positions}"),
+            _format_status_cell("Позиции", f"{open_positions}/{session_positions_total}"),
             _format_status_cell("Защита", protected_count),
         ),
         _format_status_line(
@@ -214,7 +217,7 @@ def format_live2_status_grid(
         ),
         _format_status_line(
             _format_status_cell(
-                "Дедлайн",
+                "Опоздало",
                 _format_marked_quality_value(deadline_missed, _quality_level_from_count(deadline_missed, good_max=0, warn_max=2)),
             ),
             _format_status_cell("Данные", data_not_ready + data_dependency_not_ready),
@@ -244,6 +247,60 @@ def format_live2_status_grid(
         ),
     ]
     return "\n".join(rows)
+
+
+def _format_session_top_block(session_top_snapshot: Mapping[str, object] | None) -> list[str]:
+    if not session_top_snapshot:
+        return []
+    label_base = str(session_top_snapshot.get("session_label") or "Топы")
+    window_label = str(session_top_snapshot.get("top_window_label") or "")
+    phase = str(session_top_snapshot.get("session_phase") or "")
+    label = f"{label_base} · {window_label}" if window_label else label_base
+    if phase == "overlap" and "+" not in label:
+        label = f"{label} · наложение"
+    elif phase == "transition" and "→" not in label:
+        label = f"{label} · переход"
+    items_raw = session_top_snapshot.get("items")
+    items = items_raw if isinstance(items_raw, list) else []
+    cells: list[str] = []
+    for item in items[:3]:
+        if not isinstance(item, Mapping):
+            continue
+        symbol = _compact_symbol(str(item.get("symbol") or ""))
+        growth = _float_or_none(item.get("growth_fraction"))
+        if not symbol or growth is None:
+            continue
+        cells.append(_format_session_top_cell(f"{symbol} {_format_percent(growth, signed=False, precision=1)}"))
+    if cells:
+        while len(cells) < 3:
+            cells.append(_format_session_top_cell(""))
+        return ["", label, _format_status_line(*cells[:3])]
+    reason = str(session_top_snapshot.get("reason") or "")
+    if reason in {"no_positive_growth_since_session_metric_baseline"}:
+        value = "нет роста"
+    elif reason in {"no_usable_ticker_price_snapshots_since_session_metric_start"}:
+        value = "нет данных"
+    else:
+        value = "нет данных"
+    return ["", label, _format_status_line(_format_session_top_cell(value), _format_session_top_cell(""), _format_session_top_cell(""))]
+
+
+def _format_session_top_cell(text: str, *, width: int = 26) -> str:
+    cleaned = str(text).strip()
+    if len(cleaned) > width:
+        cleaned = cleaned[: max(0, width - 1)] + "~"
+    return f"{cleaned:<{width}}"
+
+
+def _compact_symbol(symbol: str) -> str:
+    text = str(symbol or "").strip()
+    if not text:
+        return ""
+    if "/" in text:
+        return text.split("/", 1)[0]
+    if "_" in text:
+        return text.split("_", 1)[0]
+    return text
 
 
 def _format_status_cell(label: str, value: object, *, width: int = 26) -> str:
@@ -386,6 +443,16 @@ def _compact_gate_reason(reason: str) -> str:
 
 def _dict(value: object) -> Mapping[str, object]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _float_or_none(value: object) -> float | None:
+    try:
+        result = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(result):
+        return None
+    return result
 
 
 def _int(value: object) -> int:

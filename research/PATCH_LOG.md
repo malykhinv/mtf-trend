@@ -6201,3 +6201,63 @@ Risk:
 ```text
 Low. This does not weaken the startup gate and does not add a fallback. It only gives aggTrade shards more realistic startup time and makes readiness blockers explicit.
 ```
+
+## 2026-05-20 - P350 proposed - polish live2 operator market status
+
+Files:
+
+```text
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/session_top.py
+research_tools/anomaly_live2/status_grid.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix operator-visible live2 status issues found after the first successful market-data startup: show runtime from the beginning of market monitoring rather than startup/prewarm, show live positions as open/session-total instead of open/max-capacity so a fresh run displays 0/0, add v1-style session top movers between Market and Trading, and rename the cryptic deadline counter in the grid to `Опоздало`.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python - <<'CHECK'
+from research_tools.anomaly_live2.status_grid import format_live2_status_grid
+assert 'Позиции 0/0' in format_live2_status_grid(
+    runtime_seconds=1,
+    cycle_seconds=0.1,
+    state_counts={'watching': 1},
+    ticker_counts={},
+    aggtrade_counts={},
+    mark_counts={'ok': 1},
+    open_interest_counts={},
+    prior_context_counts={},
+    candle_counts={'live_ready': 1},
+    market_data_status={
+        'ws_health': {'shards_total': 1, 'shards_connected': 1},
+        'aggtrade_ws': {'rows_applied': 1},
+        'mark_price_ws': {'rows_applied': 1},
+        'open_interest': {'ready_symbols': 0, 'active_target_symbols': 0},
+        'prior_context': {'ready_symbols': 0, 'active_target_symbols': 0},
+        'universe': {'selected_symbols': 1},
+        'startup_warmup': {},
+        'stream_coverage_ready': True,
+        'market_data_ready_for_entries': True,
+    },
+    decision_status={'total_deadline_missed': 0},
+    execution_status={'open_protected_positions': 0, 'total_positions_protected': 0, 'max_open_positions': 1},
+    user_data_stream_status={'ready': True},
+    runtime_gate_status={'reason': 'ok', 'readiness': {'new_entries_allowed': True}},
+    artifact_writer_status={'ready': True, 'queue_size': 0, 'queue_max_size': 8192},
+)
+CHECK
+```
+
+Risk:
+
+```text
+Low. This is operator UI/diagnostics only. It does not change signal thresholds, market-data gates, execution, stops, TP, OI/prior-context fetching, or order placement.
+```
