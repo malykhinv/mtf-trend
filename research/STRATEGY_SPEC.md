@@ -620,10 +620,19 @@ If the ticker source fails or the filter would produce an empty universe, live k
 This is only a universe-cost/data-quality gate. The trade decision still needs the shared anomaly category contract, including P281 min_baseline_quote_daily_proxy from closed-kline baseline data.
 ```
 
-### Live position management after P274
+### Legacy live1 position management after P274
 
 ```text
-TP1 in live is an exchange-side reduce-only limit sell for the planned partial size. Live must not infer a TP1 hit from candle high and then submit a market close at a later price.
+TP1 in legacy live1 is an exchange-side reduce-only limit sell for the planned partial size. Live must not infer a TP1 hit from candle high and then submit a market close at a later price.
 After confirmed TP1 fill, the remaining protective stop moves to breakeven and structural trailing uses closed candles from the signal entry timeframe, not a hardcoded 1m frame.
 Before the first closed post-fill entry-timeframe candle exists, the monitor is waiting for structural context; this is not an OHLCV integrity error while the exchange stop and TP1 orders are already placed.
+```
+
+### Live2 position management after P341
+
+```text
+Live2 TP1 size is exactly 100% of the exchange position. There is no default runner remainder and no BE-stop replacement after TP1.
+Live2 TP1 close uses an exchange reduce-only close with verified actual fill; it must not infer a close from candle high alone.
+A TP1 close is accepted only after the exchange position is flat and the old initial stop is cancelled/verified gone.
+If TP1 close leaves exchange exposure or the old initial stop cannot be cancelled, live2 emits a strict position-integrity error and blocks further entries.
 ```

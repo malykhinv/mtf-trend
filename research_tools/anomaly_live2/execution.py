@@ -148,7 +148,7 @@ class Live2ProtectedPosition:
     tp1_price: float
     initial_amount: float
     remaining_amount: float
-    tp1_close_fraction: float = 0.5
+    tp1_close_fraction: float = 1.0
     tp1_closed_amount: float = 0.0
     tp1_fill_price: float | None = None
     tp1_order_id: str = ""

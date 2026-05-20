@@ -134,7 +134,7 @@ class Live2TelegramDispatcher:
             )
 
     def notify_supervisor_action(self, action: Live2PositionSupervisorAction) -> None:
-        if action.event_type == "position_tp1_filled_be_stop_verified":
+        if action.event_type in {"position_tp1_full_close_verified", "position_tp1_filled_be_stop_verified"}:
             self.send_sync(channel="positions", text=format_tp1_message(action), symbol=action.symbol)
         elif action.event_type == "position_final_close_verified":
             self.send_sync(channel="positions", text=format_final_close_message(action), symbol=action.symbol)
@@ -354,10 +354,19 @@ def format_tp1_message(action: Live2PositionSupervisorAction) -> str:
     fill_price = _float_or_none(tp1_fill.get("average_price"))
     filled_amount = _float_or_none(tp1_fill.get("filled_amount"))
     realized_pnl = _float_or_none(action.data.get("realized_pnl_usdt"))
-    breakeven_stop = _float_or_none(action.data.get("breakeven_stop_price"))
-    remaining_amount = _float_or_none(action.data.get("remaining_amount"))
     if realized_pnl is None:
         realized_pnl = _float_or_none(position.get("realized_pnl_usdt"))
+    if action.event_type == "position_tp1_full_close_verified":
+        return (
+            f"{symbol_emoji(action.symbol)} <b>{telegram_symbol_link(action.symbol)} TP1 full "
+            f"{format_usdt(realized_pnl or 0.0)} USDT</b>\n\n"
+            f"Выход: {format_price(fill_price)} · amount {format_price(filled_amount)}\n"
+            "Позиция: закрыта полностью\n"
+            "Stop: старый initial stop отменён"
+        )
+
+    breakeven_stop = _float_or_none(action.data.get("breakeven_stop_price"))
+    remaining_amount = _float_or_none(action.data.get("remaining_amount"))
     return (
         f"{symbol_emoji(action.symbol)} <b>{telegram_symbol_link(action.symbol)} TP1 "
         f"{format_usdt(realized_pnl or 0.0)} USDT</b>\n\n"

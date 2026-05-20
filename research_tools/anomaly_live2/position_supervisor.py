@@ -2,9 +2,10 @@
 
 The supervisor only manages positions that P321 already recorded as protected:
 actual entry fill is known and the current stop is visible on the exchange. It
-never substitutes candle/ticker prices for fills. Partial exits use reduce-only
-market orders with verified fills; final exits are accepted only when exchange
-position amount is flat.
+never substitutes candle/ticker prices for fills. TP1 is a full-position
+reduce-only market close: no runner remainder and no BE-stop replacement. Final
+TP1 close is accepted only after the exchange position is flat and the old
+initial stop is cancelled/verified gone.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ class Live2PositionSupervisorConfig:
     """Strict defaults for generation-0 position supervision."""
 
     monitor_interval_ms: int = 1_000
-    tp1_close_fraction: float = 0.5
+    tp1_close_fraction: float = 1.0
     breakeven_stop_offset_pct: float = 0.0
     flat_position_abs_epsilon: float = 1e-12
     min_remaining_amount: float = 1e-12
@@ -33,8 +34,8 @@ class Live2PositionSupervisorConfig:
     def __post_init__(self) -> None:
         if self.monitor_interval_ms <= 0:
             raise ValueError("monitor_interval_ms must be > 0")
-        if not 0.0 < self.tp1_close_fraction < 1.0:
-            raise ValueError("tp1_close_fraction must be in (0, 1)")
+        if self.tp1_close_fraction != 1.0:
+            raise ValueError("tp1_close_fraction must be exactly 1.0 for live2 full-TP1 contract")
         if self.breakeven_stop_offset_pct < 0:
             raise ValueError("breakeven_stop_offset_pct must be >= 0")
         if self.flat_position_abs_epsilon < 0:
@@ -127,10 +128,10 @@ class Live2PositionSupervisor:
             if action is None:
                 continue
             result.actions.append(action)
-            if action.event_type == "position_tp1_filled_be_stop_verified":
+            if action.event_type in {"position_tp1_full_close_verified", "position_tp1_filled_be_stop_verified"}:
                 result.tp1_close_count += 1
                 self._total_tp1_closes += 1
-            elif action.event_type == "position_final_close_verified":
+            if action.event_type in {"position_tp1_full_close_verified", "position_final_close_verified"}:
                 result.final_close_count += 1
                 self._total_final_closes += 1
             elif action.severity == Live2Severity.ERROR:
@@ -204,23 +205,23 @@ class Live2PositionSupervisor:
 
         if position.status == "protected_initial_stop_verified" and _positive_finite(latest_price):
             if position.tp1_price > 0 and float(latest_price) >= position.tp1_price:
-                return self._close_tp1_and_move_stop(position=position, exchange_amount=exchange_amount, now_ms=now_ms)
+                return self._close_tp1_full_position(position=position, exchange_amount=exchange_amount, now_ms=now_ms)
 
         self.execution_engine.replace_protected_position(replace(position, last_supervised_ms=now_ms))
         return None
 
-    def _close_tp1_and_move_stop(
+    def _close_tp1_full_position(
         self,
         *,
         position: Live2ProtectedPosition,
         exchange_amount: float,
         now_ms: int,
     ) -> Live2PositionSupervisorAction:
-        close_amount = min(float(exchange_amount), position.initial_amount * self.config.tp1_close_fraction)
+        close_amount = float(exchange_amount)
         if close_amount <= self.config.min_remaining_amount:
             return self._integrity_error(
                 position=position,
-                reason="tp1_close_amount_too_small",
+                reason="tp1_full_close_amount_too_small",
                 emergency_amount=exchange_amount,
                 details={"computed_close_amount": close_amount},
             )
@@ -242,14 +243,14 @@ class Live2PositionSupervisor:
             self.execution_engine.mark_exchange_error()
             return self._integrity_error(
                 position=position,
-                reason=f"tp1_reduce_only_close_failed:{type(exc).__name__}:{exc}",
+                reason=f"tp1_full_reduce_only_close_failed:{type(exc).__name__}:{exc}",
                 emergency_amount=exchange_amount,
                 details={"tp1_client_order_id": tp1_client_order_id, "close_amount": close_amount},
             )
         if not _valid_fill(fill):
             return self._integrity_error(
                 position=position,
-                reason="tp1_close_fill_missing_positive_price_or_amount",
+                reason="tp1_full_close_fill_missing_positive_price_or_amount",
                 emergency_amount=exchange_amount,
                 details={"tp1_client_order_id": tp1_client_order_id, "fill": _fill_dict(fill)},
             )
@@ -258,92 +259,42 @@ class Live2PositionSupervisor:
         if remaining_amount is None:
             return self._integrity_error(
                 position=position,
-                reason="post_tp1_position_fetch_failed",
-                emergency_amount=max(exchange_amount - close_amount, 0.0),
+                reason="post_tp1_full_close_position_fetch_failed",
+                emergency_amount=max(exchange_amount - float(fill.filled_amount), 0.0),
                 details={"tp1_fill": _fill_dict(fill)},
             )
-        if remaining_amount <= self.config.flat_position_abs_epsilon:
-            removed = self.execution_engine.remove_protected_position(position.symbol) or position
-            realized_pnl = (float(fill.average_price) - removed.entry_fill_price) * float(fill.filled_amount)
-            return Live2PositionSupervisorAction(
-                event_type="position_final_close_verified",
-                symbol=removed.symbol,
-                position_id=removed.position_id,
-                severity=Live2Severity.INFO,
-                message="tp1 reduce-only fill flattened the exchange position",
-                data={
-                    "reason": "tp1_fill_flattened_position",
+        if remaining_amount > self.config.flat_position_abs_epsilon:
+            return self._integrity_error(
+                position=position,
+                reason="tp1_full_close_did_not_flatten_exchange_position",
+                emergency_amount=remaining_amount,
+                details={
                     "tp1_fill": _fill_dict(fill),
-                    "exchange_position_amount": remaining_amount,
-                    "realized_pnl_usdt": realized_pnl,
-                    "position": replace(
-                        removed,
-                        status="closed_verified_tp1_flat",
-                        tp1_closed_amount=float(fill.filled_amount),
-                        tp1_fill_price=float(fill.average_price),
-                        tp1_order_id=fill.order_id,
-                        tp1_client_order_id=tp1_client_order_id,
-                        tp1_closed_at_ms=int(fill.timestamp_ms),
-                        realized_pnl_usdt=realized_pnl,
-                        remaining_amount=0.0,
-                        closed_at_ms=now_ms,
-                        close_reason="tp1_fill_flattened_position",
-                        last_supervised_ms=now_ms,
-                    ).as_dict(),
+                    "exchange_position_amount_after_tp1": remaining_amount,
+                    "expected_contract": "tp1_full_position_close",
                 },
             )
 
-        breakeven_stop_price = position.entry_fill_price * (1.0 + self.config.breakeven_stop_offset_pct)
-        stop_client_order_id = self.execution_engine.make_client_order_id(
-            prefix="l2be",
-            symbol=position.symbol,
-            timestamp_ms=now_ms,
-        )
-        try:
-            stop_payload = self.exchange_client.create_stop_market_order(
-                position.symbol,
-                "sell",
-                float(remaining_amount),
-                float(breakeven_stop_price),
-                client_order_id=stop_client_order_id,
-            )
-        except Exception as exc:
-            self.execution_engine.mark_exchange_error()
-            return self._integrity_error(
-                position=position,
-                reason=f"breakeven_stop_submit_failed:{type(exc).__name__}:{exc}",
-                emergency_amount=remaining_amount,
-                details={"tp1_fill": _fill_dict(fill), "breakeven_stop_price": breakeven_stop_price},
-            )
-        verified_stop = self.execution_engine.verify_stop_visible(position.symbol, stop_client_order_id)
-        if verified_stop is None:
-            return self._integrity_error(
-                position=position,
-                reason="breakeven_stop_not_visible_after_submit",
-                emergency_amount=remaining_amount,
-                details={"tp1_fill": _fill_dict(fill), "breakeven_stop_price": breakeven_stop_price},
-            )
-        new_stop_order_id = _extract_order_id(verified_stop) or _extract_order_id(stop_payload) or stop_client_order_id
         cancel_result = self._cancel_old_stop_and_verify_gone(position)
         if cancel_result is not None:
             return self._integrity_error(
                 position=position,
                 reason=cancel_result,
-                emergency_amount=remaining_amount,
+                emergency_amount=0.0,
                 details={
                     "tp1_fill": _fill_dict(fill),
-                    "new_stop_order_id": new_stop_order_id,
-                    "new_stop_client_order_id": stop_client_order_id,
+                    "exchange_position_amount_after_tp1": remaining_amount,
+                    "expected_contract": "flat_position_without_orphan_stop",
                 },
             )
-        realized_pnl = (float(fill.average_price) - position.entry_fill_price) * float(fill.filled_amount)
-        updated = replace(
-            position,
-            amount=float(remaining_amount),
-            remaining_amount=float(remaining_amount),
-            stop_price=float(breakeven_stop_price),
-            stop_order_id=new_stop_order_id,
-            stop_client_order_id=stop_client_order_id,
+
+        removed = self.execution_engine.remove_protected_position(position.symbol) or position
+        realized_pnl = (float(fill.average_price) - removed.entry_fill_price) * float(fill.filled_amount)
+        closed = replace(
+            removed,
+            status="closed_verified_tp1_full",
+            amount=0.0,
+            remaining_amount=0.0,
             tp1_close_fraction=self.config.tp1_close_fraction,
             tp1_closed_amount=float(fill.filled_amount),
             tp1_fill_price=float(fill.average_price),
@@ -351,26 +302,24 @@ class Live2PositionSupervisor:
             tp1_client_order_id=tp1_client_order_id,
             tp1_closed_at_ms=int(fill.timestamp_ms),
             realized_pnl_usdt=realized_pnl,
-            status="tp1_filled_be_stop_verified",
+            closed_at_ms=now_ms,
+            close_reason="tp1_full_close_verified",
             last_supervised_ms=now_ms,
         )
-        self.execution_engine.replace_protected_position(updated)
         return Live2PositionSupervisorAction(
-            event_type="position_tp1_filled_be_stop_verified",
-            symbol=position.symbol,
-            position_id=position.position_id,
+            event_type="position_tp1_full_close_verified",
+            symbol=closed.symbol,
+            position_id=closed.position_id,
             severity=Live2Severity.INFO,
-            message="TP1 reduce-only fill verified and BE stop replacement verified",
+            message="TP1 full-position reduce-only fill verified and initial stop cancelled",
             data={
+                "reason": "tp1_full_close_verified",
                 "tp1_fill": _fill_dict(fill),
                 "old_stop_order_id": position.stop_order_id,
                 "old_stop_client_order_id": position.stop_client_order_id,
-                "new_stop_order_id": new_stop_order_id,
-                "new_stop_client_order_id": stop_client_order_id,
-                "breakeven_stop_price": breakeven_stop_price,
-                "remaining_amount": remaining_amount,
+                "exchange_position_amount": remaining_amount,
                 "realized_pnl_usdt": realized_pnl,
-                "position": updated.as_dict(),
+                "position": closed.as_dict(),
             },
         )
 

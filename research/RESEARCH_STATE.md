@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P341 live2 full-TP1 position contract
+
+```text
+Current patch status: P341 PROPOSED / UNKNOWN commit.
+Question: live2 supervisor still implemented the older TP1 partial-close + BE-stop runner lifecycle, while the current live2 strategy contract needs TP1 to close the whole position and avoid runner remainder complexity.
+Change: live2 TP1 close fraction is now exactly 1.0; config validation rejects partial fractions; protected positions default to 100% TP1; supervisor submits a reduce-only full-position TP1 close, requires exchange position flat afterwards, cancels/verifies gone the old initial stop, removes the protected registry row, and emits `position_tp1_full_close_verified`. If the full close does not flatten the exchange position or the old stop cannot be cancelled, live2 emits a strict position integrity error. No BE stop is created after TP1.
+Trading impact: simpler and stricter live2 exit lifecycle. TP1 is now terminal for the position. Runner/BE-stop behavior is deliberately removed from live2 default, not kept as optional fallback.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic full-TP1 close smoke.
+Next validation: live2 smoke after P331-P341; verify `position_tp1_full_close_verified`, `total_tp1_closes`, `total_final_closes`, old stop cancellation artifacts, and no `position_tp1_filled_be_stop_verified` on the new path.
+```
+
 ## 2026-05-20 - P339 live2 flow-hold/taker confirmation contract
 
 ```text

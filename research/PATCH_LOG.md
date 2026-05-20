@@ -5954,3 +5954,36 @@ Risk:
 ```text
 Medium. This intentionally makes live2 stricter: real entries are blocked when the private user-data stream is not healthy. The patch does not replace REST fill/stop verification yet; it adds the private stream as mandatory execution telemetry and audit truth so order/fill/position lifecycle events are no longer invisible between REST checks.
 ```
+
+## 2026-05-20 - P341 proposed - live2 full-TP1 position contract
+
+Files:
+
+```text
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/execution.py
+research_tools/anomaly_live2/position_supervisor.py
+research_tools/anomaly_live2/telegram.py
+research/STRATEGY_SPEC.md
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Bring live2 position supervision to the current no-runner TP1 contract: TP1 closes 100% of the exchange position, no BE stop is submitted for a remainder, and a TP1 close is accepted only after the exchange position is flat and the old initial stop is cancelled/verified gone. A non-flat post-TP1 position or orphan-stop cancellation failure is a strict position-integrity error.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# synthetic full-TP1 close smoke: verified fill -> exchange flat -> old stop cancelled -> protected registry removed
+```
+
+Risk:
+
+```text
+Medium. This intentionally removes the live2 TP1 partial/runner path. It is safer and simpler for the current strategy contract, but it changes position lifecycle semantics: there is no BE stop replacement after TP1 because there is no remaining position.
+```
