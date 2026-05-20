@@ -63,10 +63,12 @@ class Live2SignalEngine:
         self,
         *,
         category_ids: tuple[str, ...] = DEFAULT_PUMP_CATEGORY_IDS,
+        mark_stale_ms: int | None = None,
         oi_stale_ms: int | None = None,
         prior_context_stale_ms: int | None = None,
     ) -> None:
         self.category_ids = tuple(category_ids)
+        self.mark_stale_ms = None if mark_stale_ms is None else int(mark_stale_ms)
         self.oi_stale_ms = None if oi_stale_ms is None else int(oi_stale_ms)
         self.prior_context_stale_ms = None if prior_context_stale_ms is None else int(prior_context_stale_ms)
         self._total_evaluations = 0
@@ -259,11 +261,17 @@ class Live2SignalEngine:
         )
         mark_basis = None
         mark_basis_status = "not_available"
-        if state.mark_status == "ok" and state.mark_price is not None and state.mark_price > 0 and candle.close > 0:
+        effective_mark_status = _effective_context_status(
+            status=state.mark_status,
+            last_seen_ms=state.mark_last_seen_ms,
+            decision_time_ms=candle.close_time_ms,
+            stale_ms=self.mark_stale_ms,
+        )
+        if effective_mark_status == "ok" and state.mark_price is not None and state.mark_price > 0 and candle.close > 0:
             mark_basis = (state.mark_price - candle.close) / candle.close
             mark_basis_status = "ok"
-        elif state.mark_status:
-            mark_basis_status = state.mark_status
+        elif effective_mark_status:
+            mark_basis_status = effective_mark_status
         oi_status = _effective_context_status(
             status=state.oi_status,
             last_seen_ms=state.oi_last_seen_ms,
@@ -338,7 +346,8 @@ class Live2SignalEngine:
             "mark_index_price": state.mark_index_price,
             "mark_funding_rate": state.mark_funding_rate,
             "mark_last_seen_ms": state.mark_last_seen_ms,
-            "mark_status": state.mark_status,
+            "mark_status": effective_mark_status,
+            "mark_raw_status": state.mark_status,
             "mark_basis_status": mark_basis_status,
             "mark_close_vs_decision_close_basis": mark_basis,
             "oi_open_interest": state.oi_open_interest,

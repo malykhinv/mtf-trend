@@ -124,12 +124,14 @@ class AnomalyLive2Runner:
             config=Live2DeadlineEngineConfig(
                 timeframe_ms=config.decision_timeframe_ms,
                 decision_deadline_ms=config.decision_deadline_ms,
+                backlog_expire_ms=config.decision_backlog_expire_ms,
                 actionable_min_quote_volume=config.actionable_min_quote_volume,
                 actionable_min_trade_count=config.actionable_min_trade_count,
                 actionable_min_abs_return_pct=config.actionable_min_abs_return_pct,
                 stale_trade_ms=config.aggtrade_stale_ms,
             ),
             signal_engine=Live2SignalEngine(
+                mark_stale_ms=config.mark_price_stale_ms,
                 oi_stale_ms=config.oi_stale_ms,
                 prior_context_stale_ms=config.prior_context_stale_ms,
             ),
@@ -772,7 +774,7 @@ class AnomalyLive2Runner:
             "user_data_stream_ready": self.readiness.user_data_stream_ready,
             "new_entries_allowed": self.readiness.new_entries_allowed,
             "reason": runtime_gate_status["reason"],
-            "market_data_source_ready": bool(market_data_status.get("stream_coverage_ready")),
+            "market_data_source_ready": bool(market_data_status.get("entry_stream_ready")),
             "market_data_status": str(market_data_status.get("status", "")),
         }
         if snapshot != self._last_runtime_gate_snapshot:
@@ -796,7 +798,7 @@ class AnomalyLive2Runner:
             )
 
     def _market_data_gate_ready(self, market_data_status: dict[str, object]) -> bool:
-        source_ready = bool(market_data_status.get("stream_coverage_ready"))
+        source_ready = bool(market_data_status.get("entry_stream_ready"))
         if not source_ready:
             self._market_data_degraded_windows += 1
             self._market_data_clean_windows = 0
@@ -821,6 +823,7 @@ class AnomalyLive2Runner:
             "status",
             "reason",
             "stream_coverage_ready",
+            "entry_stream_ready",
             "market_data_gate_ready",
             "ticker_ready",
             "aggtrade_ready",
@@ -852,6 +855,7 @@ class AnomalyLive2Runner:
             "status": str(market_data_status.get("status", "")),
             "reason": str(market_data_status.get("reason", "")),
             "stream_coverage_ready": bool(market_data_status.get("stream_coverage_ready")),
+            "entry_stream_ready": bool(market_data_status.get("entry_stream_ready")),
             "market_data_gate_ready": bool(self._market_data_ready_gate),
             "ticker_ready": bool(ws_health_dict.get("ticker_ready")),
             "aggtrade_ready": bool(ws_health_dict.get("aggtrade_ready")),
@@ -981,6 +985,7 @@ class AnomalyLive2Runner:
                 "status": market_data_status.get("status"),
                 "reason": market_data_status.get("reason"),
                 "stream_coverage_ready": bool(market_data_status.get("stream_coverage_ready")),
+                "entry_stream_ready": bool(market_data_status.get("entry_stream_ready")),
                 "market_data_ready_for_entries": bool(market_data_status.get("market_data_ready_for_entries")),
                 "clean_windows": int(market_data_status.get("market_data_clean_windows") or 0),
                 "degraded_windows": int(market_data_status.get("market_data_degraded_windows") or 0),
@@ -994,6 +999,15 @@ class AnomalyLive2Runner:
                     "disconnect_count": int(ws_health_dict.get("disconnect_count") or 0),
                     "payload_errors": int(ws_health_dict.get("payload_errors") or 0),
                     "planned_rotation_count": int(ws_health_dict.get("planned_rotation_count") or 0),
+                    "ticker_reconnect_attempts": int(ws_health_dict.get("ticker_reconnect_attempts") or 0),
+                    "ticker_disconnect_count": int(ws_health_dict.get("ticker_disconnect_count") or 0),
+                    "ticker_last_message_age_ms": ws_health_dict.get("ticker_last_message_age_ms"),
+                    "aggtrade_reconnect_attempts": int(ws_health_dict.get("aggtrade_reconnect_attempts") or 0),
+                    "aggtrade_disconnect_count": int(ws_health_dict.get("aggtrade_disconnect_count") or 0),
+                    "aggtrade_last_message_age_ms": ws_health_dict.get("aggtrade_last_message_age_ms"),
+                    "mark_price_reconnect_attempts": int(ws_health_dict.get("mark_price_reconnect_attempts") or 0),
+                    "mark_price_disconnect_count": int(ws_health_dict.get("mark_price_disconnect_count") or 0),
+                    "mark_price_last_message_age_ms": ws_health_dict.get("mark_price_last_message_age_ms"),
                     "mark_price_ready": bool(ws_health_dict.get("mark_price_ready")),
                     "mark_price_connection_status": str(ws_health_dict.get("mark_price_connection_status", "unknown")),
                     "aggtrade_pre_first_payload_failures": int(ws_health_dict.get("aggtrade_pre_first_payload_failures") or 0),
@@ -1018,6 +1032,7 @@ class AnomalyLive2Runner:
                 "total_data_not_ready": int(decision_status.get("total_data_not_ready") or 0),
                 "total_data_dependency_not_ready": int(decision_status.get("total_data_dependency_not_ready") or 0),
                 "total_deadline_missed": int(decision_status.get("total_deadline_missed") or 0),
+                "total_deadline_expired_backlog": int(decision_status.get("total_deadline_expired_backlog") or 0),
                 "total_pre_live_bucket_skipped": int(decision_status.get("total_pre_live_bucket_skipped") or 0),
                 "signal_dependency_funnel": _dict_or_empty(decision_status.get("signal_engine")).get("dependency_reason_counts", {}),
                 "signal_reject_funnel": _dict_or_empty(decision_status.get("signal_engine")).get("reject_reason_counts", {}),
@@ -1065,7 +1080,7 @@ class AnomalyLive2Runner:
         if not self.readiness.artifact_writer_ready:
             reasons.append("artifact_writer_not_ready")
         if not self.readiness.market_data_ready:
-            reasons.append("stream_coverage_not_ready")
+            reasons.append("entry_stream_not_ready")
         if not self.readiness.decision_latency_ready:
             reasons.append("decision_latency_degraded")
         if not self.readiness.exchange_boundary_ready:
@@ -1183,6 +1198,8 @@ class AnomalyLive2Runner:
         mark_price_ready = bool(mark_price_status.get("ready"))
         stream_coverage_ready = ticker_ready and aggtrade_ready and mark_price_ready
         selected_symbols = 0 if self.universe_selection is None else len(self.universe_selection.selected_symbols)
+        live_decision_watermark_ms = self._live_decision_watermark_ms_from_status(aggtrade_status)
+        entry_stream_ready = selected_symbols > 0 and aggtrade_ready and live_decision_watermark_ms is not None
         ws_health = self._ws_health_status(
             ticker_status=ticker_status,
             aggtrade_status=aggtrade_status,
@@ -1200,6 +1217,13 @@ class AnomalyLive2Runner:
         if stream_coverage_ready:
             status = "stream_coverage_ready_signal_adapter_active"
             reason = "ticker_aggtrade_and_mark_price_ws_ready_signal_adapter_active_execution_boundary_active"
+        elif entry_stream_ready:
+            status = "entry_stream_ready_symbol_dependencies_checked_per_candidate"
+            reason = (
+                "aggtrade_ws_ready_for_fresh_buckets; "
+                "ticker_and_mark_price_global_stream_health_is_diagnostic; "
+                "per_symbol_mark_oi_prior_context_dependencies_still_gate_entries"
+            )
         elif selected_symbols <= 0:
             status = "no_startup_universe"
             reason = "+".join(reasons)
@@ -1227,7 +1251,7 @@ class AnomalyLive2Runner:
             "mark_price_ws": mark_price_status,
             "open_interest": open_interest_status,
             "prior_context": prior_context_status,
-            "live_decision_watermark_ms": self._live_decision_watermark_ms_from_status(aggtrade_status),
+            "live_decision_watermark_ms": live_decision_watermark_ms,
             "symbol_counts_included": bool(symbol_counts.get("included")),
             "aggtrade_status_counts": symbol_counts.get("aggtrade_status_counts", {}),
             "startup_aggtrade_status_counts": symbol_counts.get("startup_aggtrade_status_counts", {}),
@@ -1239,6 +1263,12 @@ class AnomalyLive2Runner:
             "universe": self._universe_status(),
             "ws_health": ws_health,
             "stream_coverage_ready": stream_coverage_ready,
+            "entry_stream_ready": entry_stream_ready,
+            "readiness_policy": (
+                "global_aggtrade_watermark_required; "
+                "ticker_mark_global_health_diagnostic_only; "
+                "per_symbol_mark_oi_prior_context_stale_checks_gate_signal_categories"
+            ),
             "market_data_ready_for_entries": self._market_data_ready_gate,
             "market_data_clean_windows": self._market_data_clean_windows,
             "market_data_degraded_windows": self._market_data_degraded_windows,
@@ -1294,6 +1324,15 @@ class AnomalyLive2Runner:
             "ticker_ready": bool(ticker_status.get("ready")),
             "aggtrade_ready": bool(aggtrade_status.get("ready")),
             "mark_price_ready": bool(mark_price_status.get("ready")),
+            "ticker_last_message_age_ms": ticker_status.get("last_message_age_ms"),
+            "aggtrade_last_message_age_ms": aggtrade_status.get("last_message_age_ms"),
+            "mark_price_last_message_age_ms": mark_price_status.get("last_message_age_ms"),
+            "ticker_reconnect_attempts": ticker_reconnects,
+            "ticker_disconnect_count": ticker_disconnects,
+            "aggtrade_reconnect_attempts": agg_reconnects,
+            "aggtrade_disconnect_count": agg_disconnects,
+            "mark_price_reconnect_attempts": mark_reconnects,
+            "mark_price_disconnect_count": mark_disconnects,
             "ticker_connection_status": str(ticker_status.get("connection_status", "unknown")),
             "aggtrade_source_status": str(aggtrade_status.get("source_status", "unknown")),
             "aggtrade_endpoint_category": str(aggtrade_status.get("endpoint_category", "unknown")),
@@ -1416,6 +1455,7 @@ class AnomalyLive2Runner:
                     "universe_min_auto_symbols": self.config.universe_min_auto_symbols,
                     "decision_timeframe_ms": self.config.decision_timeframe_ms,
                     "decision_deadline_ms": self.config.decision_deadline_ms,
+                    "decision_backlog_expire_ms": self.config.decision_backlog_expire_ms,
                     "market_data_recovery_windows": self.config.market_data_recovery_windows,
                     "startup_warmup_lookback_minutes": self.config.startup_warmup_lookback_minutes,
                     "startup_warmup_max_trades_per_symbol": self.config.startup_warmup_max_trades_per_symbol,

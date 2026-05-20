@@ -1,4 +1,14 @@
 
+## 2026-05-20 - P356 live2 stability patch validation plan
+
+```text
+Patch applied locally. Validate on the next live2 restart, not against the already-running process. Expected artifact changes: `market_data_status.entry_stream_ready`, `readiness_policy`, per-source WS reconnect/disconnect/age fields, `decision_status.total_deadline_expired_backlog`, and `prior_context.total_ws_5m_gap_above_tolerance_tolerated`.
+
+Expected improvement: global ticker/mark stream flaps should no longer turn the whole runtime into no-entry if aggTrade and per-symbol dependencies are fresh. Fresh actionable buckets should be processed before reconnect/backlog buckets. Ctx stale caused only by aggTrade-id discontinuity inside an otherwise closed live 5m candle should disappear; the gap evidence should remain in counters.
+
+Failure condition: if `entry_stream_ready=true` but selected signals still show stale per-symbol mark/OI/prior context passing as ok, or if above-tolerance id gaps grow while no artifact counter changes, the patch is masking a data-quality problem and must be reverted or tightened with outage-window detection.
+```
+
 ## 2026-05-19 - P319 live2 audit latency hardening
 
 ```text

@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P356 live2 entry-stream gate and backlog/context diagnostics
+
+```text
+Current patch status: P356 APPLIED locally / UNKNOWN commit.
+Question: can live2 stop losing entries to global WS flaps, reconnect backlog, and over-strict prior-context id-gap invalidation without sweeping failures under the rug?
+Change: runtime market-data readiness now requires selected universe + aggTrade readiness + live decision watermark, not global ticker+aggTrade+mark all at once. Ticker/mark global readiness remains in artifacts; mark is now checked stale-aware per symbol inside the signal dependency contract. Deadline processing is fresh-first and old reconnect/backlog buckets become explicit `deadline_expired_backlog` instead of competing with still-enterable buckets. Prior-context live 5m roll-forward tolerates aggTrade-id gaps as diagnostic, with `total_ws_5m_gap_above_tolerance_tolerated` preserving the evidence.
+Trading impact: fewer false global no-entry windows and fewer stale backlog decisions on the hot path. No entry can pass with stale required per-symbol mark/OI/prior context; stale context remains `data_dependency_not_ready`. No fill/stop/TP logic changed.
+Validation: `python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py`; `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py`.
+Next validation: restart live2 and require `entry_stream_ready=true` during ticker/mark global flaps when aggTrade is fresh, `total_deadline_missed` near zero for fresh buckets, old reconnect bursts visible as `total_deadline_expired_backlog`, `total_ws_5m_gap_rejected=0`, and above-tolerance gap counts visible rather than silently absent.
+```
+
 ## 2026-05-20 - P355 live2 session trading percent
 
 ```text

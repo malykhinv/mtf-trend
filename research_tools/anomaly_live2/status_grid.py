@@ -62,6 +62,7 @@ def format_live2_status_grid(
     prior_stale_symbols = _int(prior_context_counts.get("stale"))
     aggtrade_pre_first_payload_failures = _int(ws_health.get("aggtrade_pre_first_payload_failures"))
     coverage_ready = bool(market_data_status.get("stream_coverage_ready"))
+    entry_stream_ready = bool(market_data_status.get("entry_stream_ready"))
     market_gate_ready = bool(market_data_status.get("market_data_ready_for_entries"))
     artifact_ready = bool(artifact_writer_status.get("ready"))
     entries_allowed = bool(readiness.get("new_entries_allowed"))
@@ -71,6 +72,8 @@ def format_live2_status_grid(
     data_status = "Поток" if coverage_ready else "Нет потока"
     if coverage_ready and not market_gate_ready:
         data_status = "Прогрев"
+    if entry_stream_ready and not coverage_ready:
+        data_status = "Entry"
     if disconnects > 0 or reconnects > 0:
         data_status = "Reconnect"
 
@@ -88,6 +91,7 @@ def format_live2_status_grid(
     selected_count = _int(decision_status.get("selected_count"))
     total_rejected = _int(decision_status.get("total_rejected"))
     deadline_missed = _int(decision_status.get("total_deadline_missed"))
+    deadline_expired_backlog = _int(decision_status.get("total_deadline_expired_backlog"))
     data_not_ready = _int(decision_status.get("total_data_not_ready"))
     data_dependency_not_ready = _int(decision_status.get("total_data_dependency_not_ready"))
     pre_live_skipped = _int(decision_status.get("total_pre_live_bucket_skipped"))
@@ -130,7 +134,7 @@ def format_live2_status_grid(
             ),
             _format_status_cell(
                 "Данные",
-                _format_marked_quality_value(data_status, "good" if coverage_ready else "warn"),
+                _format_marked_quality_value(data_status, "good" if entry_stream_ready else "warn"),
             ),
         ),
         _format_status_line(
@@ -225,7 +229,7 @@ def format_live2_status_grid(
             _format_status_cell("Отказы", total_rejected),
         ),
         _format_status_line(
-            _format_status_cell("Deps", data_dependency_not_ready),
+            _format_status_cell("Deps", f"{data_dependency_not_ready}/{deadline_expired_backlog}"),
             _format_status_cell("До live", pre_live_skipped),
             _format_status_cell("Выбрано", selected_count),
         ),

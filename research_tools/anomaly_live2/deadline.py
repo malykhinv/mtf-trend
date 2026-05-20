@@ -26,6 +26,7 @@ class Live2DeadlineEngineConfig:
 
     timeframe_ms: int = 5_000
     decision_deadline_ms: int = 750
+    backlog_expire_ms: int = 5_000
     actionable_min_quote_volume: float = 2_500.0
     actionable_min_trade_count: int = 20
     actionable_min_abs_return_pct: float = 0.003
@@ -36,6 +37,8 @@ class Live2DeadlineEngineConfig:
             raise ValueError("timeframe_ms must be > 0")
         if self.decision_deadline_ms <= 0:
             raise ValueError("decision_deadline_ms must be > 0")
+        if self.backlog_expire_ms <= 0:
+            raise ValueError("backlog_expire_ms must be > 0")
         if self.actionable_min_quote_volume < 0:
             raise ValueError("actionable_min_quote_volume must be >= 0")
         if self.actionable_min_trade_count < 0:
@@ -96,7 +99,7 @@ class Live2DecisionRecord:
     def as_event(self) -> Live2Event:
         if self.verdict == "position_integrity_error" or self.execution_integrity_error:
             severity = Live2Severity.ERROR
-        elif self.verdict in {"deadline_missed", "data_not_ready", "data_dependency_not_ready"}:
+        elif self.verdict in {"deadline_missed", "deadline_expired_backlog", "data_not_ready", "data_dependency_not_ready"}:
             severity = Live2Severity.WARNING
         else:
             severity = Live2Severity.INFO
@@ -164,6 +167,7 @@ class Live2DeadlineCycleResult:
     data_not_ready_count: int = 0
     data_dependency_not_ready_count: int = 0
     deadline_missed_count: int = 0
+    deadline_expired_backlog_count: int = 0
     pre_live_bucket_skipped_count: int = 0
     max_latency_ms: int = 0
 
@@ -177,6 +181,7 @@ class Live2DeadlineCycleResult:
             "data_not_ready_count": self.data_not_ready_count,
             "data_dependency_not_ready_count": self.data_dependency_not_ready_count,
             "deadline_missed_count": self.deadline_missed_count,
+            "deadline_expired_backlog_count": self.deadline_expired_backlog_count,
             "pre_live_bucket_skipped_count": self.pre_live_bucket_skipped_count,
             "max_latency_ms": self.max_latency_ms,
         }
@@ -211,6 +216,7 @@ class Live2DeadlineEngine:
         self._last_cycle: Live2DeadlineCycleResult = Live2DeadlineCycleResult()
         self._total_decisions = 0
         self._total_deadline_missed = 0
+        self._total_deadline_expired_backlog = 0
         self._total_pre_live_bucket_skipped = 0
         self._total_data_not_ready = 0
         self._total_data_dependency_not_ready = 0
@@ -220,7 +226,7 @@ class Live2DeadlineEngine:
     def run_cycle(self, *, now_ms: int | None = None) -> Live2DeadlineCycleResult:
         effective_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
         result = Live2DeadlineCycleResult()
-        candidates = self.state_store.decision_snapshot()
+        candidates = self._fresh_first_candidates(self.state_store.decision_snapshot(), now_ms=effective_now_ms)
         result.skipped_symbols = max(0, len(self.state_store) - len(candidates))
         live_watermark_ms = self.live_decision_watermark_ms()
         for state in candidates:
@@ -248,11 +254,14 @@ class Live2DeadlineEngine:
                 result.data_dependency_not_ready_count += 1
             elif decision.verdict == "deadline_missed":
                 result.deadline_missed_count += 1
+            elif decision.verdict == "deadline_expired_backlog":
+                result.deadline_expired_backlog_count += 1
             else:
                 result.rejected_count += 1
         self._last_cycle = result
         self._total_decisions += len(result.decisions)
         self._total_deadline_missed += result.deadline_missed_count
+        self._total_deadline_expired_backlog += result.deadline_expired_backlog_count
         self._total_pre_live_bucket_skipped += result.pre_live_bucket_skipped_count
         self._total_data_not_ready += result.data_not_ready_count
         self._total_data_dependency_not_ready += result.data_dependency_not_ready_count
@@ -275,6 +284,7 @@ class Live2DeadlineEngine:
             "total_data_not_ready": self._total_data_not_ready,
             "total_data_dependency_not_ready": self._total_data_dependency_not_ready,
             "total_deadline_missed": self._total_deadline_missed,
+            "total_deadline_expired_backlog": self._total_deadline_expired_backlog,
             "total_pre_live_bucket_skipped": self._total_pre_live_bucket_skipped,
             "live_decision_watermark_ms": self.live_decision_watermark_ms(),
             "selected_count": self._total_selected,
@@ -282,6 +292,27 @@ class Live2DeadlineEngine:
             "entry_guard": self.entry_guard.status(),
             "execution_engine": None if self.execution_engine is None else self.execution_engine.status(),
         }
+
+    def _fresh_first_candidates(self, candidates: tuple[SymbolState, ...], *, now_ms: int) -> tuple[SymbolState, ...]:
+        """Evaluate still-enterable buckets before old reconnect/backlog buckets."""
+
+        def key(state: SymbolState) -> tuple[int, int, int, str]:
+            ring = state.candle_book.rings.get(self.config.timeframe_ms)
+            candle = None if ring is None else ring.latest_closed()
+            if candle is None:
+                return (3, 0, 0, state.symbol)
+            latency_ms = now_ms - candle.close_time_ms
+            if state.status == SymbolLive2Status.IN_POSITION:
+                priority = 0
+            elif latency_ms <= self.config.decision_deadline_ms:
+                priority = 1
+            elif latency_ms <= self.config.backlog_expire_ms:
+                priority = 2
+            else:
+                priority = 3
+            return (priority, max(0, latency_ms), -int(candle.close_time_ms), state.symbol)
+
+        return tuple(sorted(candidates, key=key))
 
     def _evaluate_state(
         self,
@@ -329,7 +360,10 @@ class Live2DeadlineEngine:
         signal_decision: Live2SignalDecision | None = None
         entry_guard_result: Live2EntryGuardResult | None = None
         execution_result: Live2ExecutionResult | None = None
-        if now_ms > deadline_ms:
+        if latency_ms > self.config.backlog_expire_ms:
+            verdict = "deadline_expired_backlog"
+            reason = "closed_bucket_expired_before_hot_path_reconnect_or_backlog"
+        elif now_ms > deadline_ms:
             verdict = "deadline_missed"
             reason = "closed_bucket_was_not_evaluated_before_deadline"
         elif _is_trade_stale(candle=candle, now_ms=now_ms, stale_trade_ms=self.config.stale_trade_ms):
@@ -544,7 +578,7 @@ class Live2DeadlineEngine:
             state.last_execution_integrity_error = False
         state.decision_dirty_since_ms = None
         state.decision_count += 1
-        if verdict == "deadline_missed":
+        if verdict in {"deadline_missed", "deadline_expired_backlog"}:
             state.deadline_missed_count += 1
         elif verdict == "data_not_ready":
             state.data_not_ready_decision_count += 1

@@ -1,5 +1,50 @@
 # Anomaly Patch Log
 
+## 2026-05-20 - P356 applied locally - live2 entry-stream gate and honest backlog/context diagnostics
+
+Files:
+
+```text
+cli/commands.py
+cli/parser.py
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/market_data/prior_context.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/status_grid.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Reduce live2 false downtime and missed fresh buckets without hiding data failures. Global ticker/mark flaps should not block every entry when aggTrade is fresh; per-symbol required context must still gate signals.
+```
+
+Change:
+
+```text
+Market-data readiness now uses an entry-stream gate: selected universe + ready aggTrade shards + live decision watermark. Global ticker/mark coverage remains visible diagnostics, while signal categories use stale-aware per-symbol mark/OI/prior-context checks. The deadline engine processes fresh buckets first and classifies buckets older than decision_backlog_expire_ms as deadline_expired_backlog, separate from near-deadline misses. Prior-context live 5m aggTrade-id gaps are no longer hard rejects by id discontinuity alone; all gaps are tolerated for context roll-forward and above-tolerance gaps are counted as diagnostics.
+```
+
+Validation:
+
+```bash
+python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py
+```
+
+Risk:
+
+```text
+Medium. The entry gate is less globally conservative, but required per-symbol mark/OI/prior context remains strict and stale-aware. Large aggTrade-id gaps no longer invalidate 5m prior context by themselves; the new counters must be monitored in live2 artifacts to confirm this removes false Ctx stale without masking real WS outages.
+```
+
 ## 2026-05-20 - P355 applied locally - live2 session trading-allowed percent
 
 Files:

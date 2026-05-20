@@ -179,6 +179,7 @@ class Live2PriorContextPollStatus:
     total_ws_5m_candles_appended: int = 0
     total_ws_5m_gap_tolerated: int = 0
     total_ws_5m_gap_rejected: int = 0
+    total_ws_5m_gap_above_tolerance_tolerated: int = 0
     last_ws_5m_update_at_ms: int | None = None
     last_ws_5m_update_symbol: str = ""
     last_ws_5m_gap_reason: str = ""
@@ -217,6 +218,7 @@ class Live2PriorContextPollStatus:
             "total_ws_5m_candles_appended": self.total_ws_5m_candles_appended,
             "total_ws_5m_gap_tolerated": self.total_ws_5m_gap_tolerated,
             "total_ws_5m_gap_rejected": self.total_ws_5m_gap_rejected,
+            "total_ws_5m_gap_above_tolerance_tolerated": self.total_ws_5m_gap_above_tolerance_tolerated,
             "last_ws_5m_update_at_ms": self.last_ws_5m_update_at_ms,
             "last_ws_5m_update_symbol": self.last_ws_5m_update_symbol,
             "last_ws_5m_gap_reason": self.last_ws_5m_gap_reason,
@@ -531,8 +533,8 @@ class Live2PriorContextPoller:
 
     def _apply_live_closed_5m_candles(self, *, now_ms: int) -> int:
         appended = 0
-        rejected = 0
         tolerated = 0
+        above_tolerance_tolerated = 0
         for state in self.state_store.snapshot():
             if not state.universe_selected:
                 continue
@@ -547,15 +549,6 @@ class Live2PriorContextPoller:
                     continue
                 prior_candle, reject_reason = _prior_context_candle_from_live_5m(candle)
                 self._last_live_5m_open_by_symbol[state.symbol] = candle.open_time_ms
-                if reject_reason:
-                    rejected += 1
-                    self._mark_live_5m_gap_rejected(
-                        symbol=state.symbol,
-                        now_ms=now_ms,
-                        live_candle=prior_candle,
-                        reason=reject_reason,
-                    )
-                    continue
                 buffer = self._rolling_candles_by_symbol.setdefault(state.symbol, {})
                 buffer[prior_candle.timestamp] = prior_candle
                 context_end_ms = prior_candle.timestamp + LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS - 1
@@ -582,11 +575,16 @@ class Live2PriorContextPoller:
                 appended += 1
                 if prior_candle.gap_tolerated:
                     tolerated += 1
-        if appended or rejected:
+                    if reject_reason:
+                        above_tolerance_tolerated += 1
+                        with self._lock:
+                            self._status.last_ws_5m_update_symbol = state.symbol
+                            self._status.last_ws_5m_gap_reason = reject_reason
+        if appended:
             with self._lock:
                 self._status.total_ws_5m_candles_appended += appended
                 self._status.total_ws_5m_gap_tolerated += tolerated
-                self._status.total_ws_5m_gap_rejected += rejected
+                self._status.total_ws_5m_gap_above_tolerance_tolerated += above_tolerance_tolerated
                 self._status.last_ws_5m_update_at_ms = now_ms
         return appended
 
@@ -899,7 +897,7 @@ def _prior_context_candle_from_live_5m(candle: Live2Candle) -> tuple[Live2PriorC
         LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_IDS_PER_CANDLE,
         int(candle.number_of_trades * LIVE2_PRIOR_CONTEXT_WS_MAX_MISSING_AGGTRADE_ID_RATIO),
     )
-    gap_tolerated = 0 < missing_ids <= tolerance
+    gap_tolerated = missing_ids > 0
     prior_candle = Live2PriorContextCandle(
         timestamp=int(candle.open_time_ms),
         open=float(candle.open),
@@ -915,7 +913,7 @@ def _prior_context_candle_from_live_5m(candle: Live2Candle) -> tuple[Live2PriorC
         return (
             prior_candle,
             (
-                "live_ws_5m_aggtrade_id_gap_exceeds_tolerance:"
+                "live_ws_5m_aggtrade_id_gap_above_tolerance_tolerated_for_prior_context:"
                 f"missing={missing_ids}:tolerance={tolerance}:trades={candle.number_of_trades}"
             ),
         )

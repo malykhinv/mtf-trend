@@ -8,20 +8,27 @@ import pandas as pd
 from cli.parser import build_parser
 from research_tools.anomaly_live2.artifacts import Live2ArtifactWriter
 from research_tools.anomaly_live2.config import AnomalyLive2Config
+from research_tools.anomaly_live2.deadline import Live2DeadlineEngine, Live2DeadlineEngineConfig
 from research_tools.anomaly_live2.market_data.candles import Live2AggTradeEvent, Live2CandleRing
 from research_tools.anomaly_live2.market_data.prior_context import (
     LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS,
     Live2PriorContextPollConfig,
     Live2PriorContextPoller,
 )
-from research_tools.anomaly_live2.signal import _effective_context_status
+from research_tools.anomaly_live2.signal import Live2SignalEngine, _effective_context_status
 from research_tools.anomaly_live2.state import LIVE2_AGGTRADE_WS_SOURCE, SymbolStateStore
 
 
-def _trade(*, trade_time_ms: int, price: float = 1.0, source: str = LIVE2_AGGTRADE_WS_SOURCE) -> Live2AggTradeEvent:
+def _trade(
+    *,
+    trade_time_ms: int,
+    price: float = 1.0,
+    source: str = LIVE2_AGGTRADE_WS_SOURCE,
+    symbol: str = "AAA/USDT:USDT",
+) -> Live2AggTradeEvent:
     return Live2AggTradeEvent(
-        symbol="AAA/USDT:USDT",
-        market_id="AAAUSDT",
+        symbol=symbol,
+        market_id=symbol.split("/")[0] + "USDT",
         aggregate_trade_id=trade_time_ms,
         event_time_ms=trade_time_ms,
         trade_time_ms=trade_time_ms,
@@ -107,6 +114,7 @@ def test_live2_cli_prior_context_defaults_match_runtime_config() -> None:
     assert args.prior_context_stale_ms == config.prior_context_stale_ms
     assert args.prior_context_symbol_cooldown_seconds == config.prior_context_symbol_cooldown_seconds
     assert args.prior_context_max_symbols_per_cycle == config.prior_context_max_symbols_per_cycle
+    assert args.decision_backlog_expire_ms == config.decision_backlog_expire_ms
 
 
 def test_live2_artifact_writer_replaces_symbol_state_atomically(tmp_path) -> None:
@@ -211,7 +219,7 @@ def test_live2_prior_context_rolls_forward_from_live_5m_with_tolerated_gap() -> 
     assert state.prior_context_last_live_5m_missing_aggtrade_ids == 2
 
 
-def test_live2_prior_context_rejects_large_live_5m_gap() -> None:
+def test_live2_prior_context_tolerates_large_live_5m_gap_as_diagnostic() -> None:
     store = SymbolStateStore(("AAA/USDT:USDT",))
     state = store.get_or_create("AAA/USDT:USDT")
     state.set_universe_selection(selected=True, rank=1, reason="test", selected_at_ms=0)
@@ -239,8 +247,75 @@ def test_live2_prior_context_rejects_large_live_5m_gap() -> None:
     )
     store.close_due_candles(now_ms=bucket_open + LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS)
 
-    assert poller._apply_live_closed_5m_candles(now_ms=bucket_open + LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS) == 0
+    assert poller._apply_live_closed_5m_candles(now_ms=bucket_open + LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS) == 1
     state = store.get_or_create("AAA/USDT:USDT")
-    assert state.prior_context_status == "ws_gap_exceeds_tolerance"
-    assert state.prior_context_live_5m_gap_rejected_count == 1
-    assert "gap_exceeds_tolerance" in state.prior_context_reason
+    assert state.prior_context_status == "ok"
+    assert state.prior_context_live_5m_gap_rejected_count == 0
+    assert state.prior_context_live_5m_gap_tolerated_count == 1
+    status = poller.status()
+    assert status["total_ws_5m_gap_rejected"] == 0
+    assert status["total_ws_5m_gap_above_tolerance_tolerated"] == 1
+    assert "gap_above_tolerance_tolerated" in str(status["last_ws_5m_gap_reason"])
+
+
+def test_live2_signal_marks_stale_mark_context_as_dependency_not_ready() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    state.update_mark_price(
+        market_id="AAAUSDT",
+        received_at_ms=1_000,
+        event_time_ms=1_000,
+        mark_price=1.01,
+        index_price=1.0,
+        estimated_settle_price=None,
+        funding_rate=None,
+        next_funding_time_ms=None,
+        source="test",
+        status="ok",
+        reason="ok",
+    )
+    ring = Live2CandleRing(timeframe_ms=5_000, max_closed_candles=10)
+    ring.add_trade(_trade(trade_time_ms=10_000, price=1.0))
+    ring.add_trade(_trade(trade_time_ms=14_000, price=1.01))
+    ring.close_due(now_ms=15_000)
+    candle = ring.latest_closed()
+    assert candle is not None
+
+    features = Live2SignalEngine(mark_stale_ms=5_000)._features(
+        state=state,
+        candle=candle,
+        actionable_reason="test",
+    )
+
+    assert features["mark_status"] == "stale"
+    assert features["mark_raw_status"] == "ok"
+    assert features["mark_basis_status"] == "stale"
+
+
+def test_live2_deadline_expires_backlog_without_counting_near_deadline_miss() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    state.set_universe_selection(selected=True, rank=1, reason="test", selected_at_ms=0)
+    for offset in range(30):
+        store.update_aggtrade(
+            _trade(trade_time_ms=1_000 + offset * 10, price=1.0 + offset * 0.001),
+            received_at_ms=1_010 + offset * 10,
+        )
+    store.close_due_candles(now_ms=5_000)
+
+    engine = Live2DeadlineEngine(
+        state_store=store,
+        config=Live2DeadlineEngineConfig(
+            decision_deadline_ms=750,
+            backlog_expire_ms=5_000,
+            actionable_min_quote_volume=0.0,
+            actionable_min_trade_count=1,
+            actionable_min_abs_return_pct=0.0,
+        ),
+        live_decision_watermark_ms=lambda: 0,
+    )
+    result = engine.run_cycle(now_ms=11_001)
+
+    assert result.deadline_missed_count == 0
+    assert result.deadline_expired_backlog_count == 1
+    assert result.decisions[0].verdict == "deadline_expired_backlog"

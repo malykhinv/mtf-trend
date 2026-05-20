@@ -55,6 +55,8 @@ Current live fake-pump context contract:
 lookback: 24h
 accepted prior fast-fade / fake-pump events: <= 2
 active/retryable stale-tail policy: fetch missing levels-TF OHLCV suffix, update cache/context snapshot, then re-check category once
+live2 maintenance: REST bootstrap closed 5m 24h context, then roll forward from live aggTrade-derived closed 5m candles
+live2 gap policy: aggTrade-id discontinuity inside a real closed 5m candle is diagnostic, not alone a hard context invalidation; stale/missing context still blocks category acceptance
 ```
 
 The suffix refresh is data-quality plumbing, not a signal by itself. It only prevents an otherwise active/retryable candidate from expiring because the recent context tail was missing from cache.

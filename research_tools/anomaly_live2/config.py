@@ -56,6 +56,7 @@ class AnomalyLive2Config:
     universe_min_auto_symbols: int = 300
     decision_timeframe_ms: int = 5_000
     decision_deadline_ms: int = 750
+    decision_backlog_expire_ms: int = 5_000
     actionable_min_quote_volume: float = 2_500.0
     actionable_min_trade_count: int = 20
     actionable_min_abs_return_pct: float = 0.003
@@ -165,6 +166,8 @@ class AnomalyLive2Config:
             raise ValueError("decision_timeframe_ms must be > 0")
         if self.decision_deadline_ms <= 0:
             raise ValueError("decision_deadline_ms must be > 0")
+        if self.decision_backlog_expire_ms <= 0:
+            raise ValueError("decision_backlog_expire_ms must be > 0")
         if self.actionable_min_quote_volume < 0:
             raise ValueError("actionable_min_quote_volume must be >= 0")
         if self.actionable_min_trade_count < 0:
