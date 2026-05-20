@@ -5748,6 +5748,52 @@ Risk:
 Low. The startup universe becomes slightly narrower than P328 when many symbols have extremely low 24h quote volume, but should remain far broader than the old 300k floor. Users can still override with --universe-min-quote-volume-24h.
 ```
 
+## 2026-05-19 - P330 proposed - live2 REST startup universe snapshot
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/market_data/startup_tickers.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix live2 auto-universe startup coverage. The first Binance !ticker@arr WebSocket payload can be partial and caused live2 to select/warm only about 90 symbols. Hydrate SymbolStateStore once at startup from the exchange ticker/liquidity snapshot, then select the universe from startup snapshot + live ticker state. Keep this REST call startup-only and unavailable to signal/decision hot path. Add a minimum auto-universe coverage guard so live2 does not silently proceed with a tiny auto universe.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-live2 --help
+python - <<'PY'
+from research_tools.anomaly_live2.state import SymbolStateStore
+from research_tools.anomaly_live2.market_data.startup_tickers import Live2StartupTickerSnapshot
+from research_tools.anomaly_live2.market_data.universe import Live2UniverseSelector
+class FakeExchange:
+    def get_futures_symbols_with_liquidity_metrics(self):
+        return [{"symbol": f"T{i:03d}/USDT:USDT", "quote_volume": 30000+i, "trade_count_24h": i} for i in range(520)]
+store=SymbolStateStore(())
+res=Live2StartupTickerSnapshot(state_store=store, exchange_client=FakeExchange()).run()
+sel=Live2UniverseSelector(state_store=store, explicit_symbols=(), max_symbols=600, min_quote_volume_24h=30000, min_trade_count_24h=0).select()
+assert res.rows_applied == 520
+assert len(sel.selected_symbols) == 520
+PY
+```
+
+Risk:
+
+```text
+Medium. Startup now does one broad exchange ticker/liquidity call before WS universe selection. This is intentionally outside the hot signal path and should prevent tiny partial-WS universes, but if the startup exchange snapshot fails live2 will emit explicit startup_ticker_snapshot/status diagnostics and the minimum auto-universe guard will expose undercoverage instead of silently warming only a small market subset.
+```
+
 ## 2026-05-19 - P316 proposed - live2 stream signal adapter
 
 Files:

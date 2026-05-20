@@ -32,6 +32,7 @@ class AnomalyLive2Config:
     universe_max_symbols: int = 600
     universe_min_quote_volume_24h: float = 30_000.0
     universe_min_trade_count_24h: int = 0
+    universe_min_auto_symbols: int = 300
     decision_timeframe_ms: int = 5_000
     decision_deadline_ms: int = 750
     actionable_min_quote_volume: float = 2_500.0
@@ -93,6 +94,10 @@ class AnomalyLive2Config:
             raise ValueError("universe_min_quote_volume_24h must be >= 0")
         if self.universe_min_trade_count_24h < 0:
             raise ValueError("universe_min_trade_count_24h must be >= 0")
+        if self.universe_min_auto_symbols < 0:
+            raise ValueError("universe_min_auto_symbols must be >= 0")
+        if self.universe_min_auto_symbols > self.universe_max_symbols:
+            raise ValueError("universe_min_auto_symbols must be <= universe_max_symbols")
         if self.decision_timeframe_ms <= 0:
             raise ValueError("decision_timeframe_ms must be > 0")
         if self.decision_deadline_ms <= 0:

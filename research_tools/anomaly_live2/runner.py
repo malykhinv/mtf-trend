@@ -15,6 +15,7 @@ from .entry_guard import Live2EntryGuardConfig, Live2EntryGuardEngine
 from .execution import Live2ExecutionConfig, Live2ExecutionEngine, Live2ExecutionExchange
 from .market_data.aggtrade_ws import Live2AggTradeWsSource
 from .market_data.ticker_ws import Live2TickerWsSource
+from .market_data.startup_tickers import Live2StartupTickerSnapshot, Live2StartupTickerSnapshotResult
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
 from .market_data.warmup import (
     Live2StartupAggTradeWarmup,
@@ -96,6 +97,7 @@ class AnomalyLive2Runner:
             ),
         )
         self.universe_selection: Live2UniverseSelection | None = None
+        self.startup_ticker_snapshot_result: Live2StartupTickerSnapshotResult | None = None
         self.startup_warmup_result: Live2StartupWarmupResult | None = None
         self.deadline_engine = Live2DeadlineEngine(
             state_store=self.state_store,
@@ -154,12 +156,40 @@ class AnomalyLive2Runner:
                     data=execution_preflight.as_dict(),
                 )
             )
+            if not self.config.symbols:
+                self._set_startup_status("вселенная", "загружаю startup ticker snapshot")
+                self.startup_ticker_snapshot_result = self._run_startup_ticker_snapshot(writer)
+                self._set_startup_status(
+                    "вселенная",
+                    f"snapshot {self.startup_ticker_snapshot_result.rows_applied}/{self.startup_ticker_snapshot_result.rows_received}",
+                )
             self._set_startup_status("ticker", "подключаю !ticker@arr")
             self.ticker_source.start()
             ticker_ready = self.ticker_source.wait_until_ready()
             self._set_startup_status("ticker", "ticker готов" if ticker_ready else "ticker пока не готов")
-            self._set_startup_status("вселенная", "выбираю universe из ticker snapshot")
+            self._set_startup_status("вселенная", "выбираю universe из startup snapshot + ticker state")
             self.universe_selection = self._select_universe()
+            if (
+                not self.config.symbols
+                and self.config.universe_min_auto_symbols > 0
+                and len(self.universe_selection.selected_symbols) < self.config.universe_min_auto_symbols
+            ):
+                writer.write_event(
+                    Live2Event(
+                        event_type="startup_universe_too_small",
+                        component=Live2Component.MARKET_DATA,
+                        severity=Live2Severity.ERROR,
+                        message="live2 startup universe is below the configured minimum auto coverage",
+                        data={
+                            "selected_symbols": len(self.universe_selection.selected_symbols),
+                            "min_auto_symbols": self.config.universe_min_auto_symbols,
+                            "universe": self.universe_selection.as_dict(),
+                            "startup_ticker_snapshot": None
+                            if self.startup_ticker_snapshot_result is None
+                            else self.startup_ticker_snapshot_result.as_dict(),
+                        },
+                    )
+                )
             self.state_store.apply_universe_selection(
                 selected_rank_by_symbol=self.universe_selection.rank_by_symbol(),
                 selected_at_ms=self.universe_selection.selected_at_ms,
@@ -590,6 +620,9 @@ class AnomalyLive2Runner:
             "market_data_recovery_windows": self.config.market_data_recovery_windows,
             "readiness": self.readiness.as_dict(),
             "position_supervisor_status": self.position_supervisor.status(),
+            "startup_ticker_snapshot": None
+            if self.startup_ticker_snapshot_result is None
+            else self.startup_ticker_snapshot_result.as_dict(),
             "startup_warmup": None if self.startup_warmup_result is None else self.startup_warmup_result.as_dict(),
         }
 
@@ -645,6 +678,9 @@ class AnomalyLive2Runner:
             "market_data_clean_windows": self._market_data_clean_windows,
             "market_data_degraded_windows": self._market_data_degraded_windows,
             "market_data_recovery_windows": self.config.market_data_recovery_windows,
+            "startup_ticker_snapshot": None
+            if self.startup_ticker_snapshot_result is None
+            else self.startup_ticker_snapshot_result.as_dict(),
             "startup_warmup": None if self.startup_warmup_result is None else self.startup_warmup_result.as_dict(),
         }
 
@@ -723,6 +759,7 @@ class AnomalyLive2Runner:
                     "universe_max_symbols": self.config.universe_max_symbols,
                     "universe_min_quote_volume_24h": self.config.universe_min_quote_volume_24h,
                     "universe_min_trade_count_24h": self.config.universe_min_trade_count_24h,
+                    "universe_min_auto_symbols": self.config.universe_min_auto_symbols,
                     "decision_timeframe_ms": self.config.decision_timeframe_ms,
                     "decision_deadline_ms": self.config.decision_deadline_ms,
                     "market_data_recovery_windows": self.config.market_data_recovery_windows,
@@ -766,6 +803,30 @@ class AnomalyLive2Runner:
                 message="execution boundary is protected by verified fill, verified initial stop, and live2 position supervisor",
             )
         )
+
+
+    def _run_startup_ticker_snapshot(self, writer: Live2ArtifactWriter) -> Live2StartupTickerSnapshotResult:
+        writer.write_event(
+            Live2Event(
+                event_type="startup_ticker_snapshot_starting",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO,
+                message="hydrating live2 startup universe from one exchange ticker/liquidity snapshot",
+                data={
+                    "source": "exchange_startup_fetch_tickers",
+                    "hot_path_available": False,
+                    "universe_max_symbols": self.config.universe_max_symbols,
+                    "universe_min_quote_volume_24h": self.config.universe_min_quote_volume_24h,
+                    "universe_min_auto_symbols": self.config.universe_min_auto_symbols,
+                },
+            )
+        )
+        result = Live2StartupTickerSnapshot(
+            state_store=self.state_store,
+            exchange_client=self.execution_engine.exchange_client,
+        ).run()
+        writer.write_event(result.as_event())
+        return result
 
 
     def _run_startup_aggtrade_warmup(self, writer: Live2ArtifactWriter) -> Live2StartupWarmupResult:

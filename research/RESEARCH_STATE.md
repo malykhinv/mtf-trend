@@ -2131,6 +2131,12 @@ Current commit: UNKNOWN.
 
 P329 proposed after P328. Live2 default auto-universe now uses `universe_min_quote_volume_24h=30_000` instead of `0`. This filters dead/dust symbols while preserving broad 500+ style coverage. Trading logic, real-order lifecycle, stop/TP handling, Telegram behavior, and runtime gates are unchanged.
 
+## 2026-05-19 - P330 live2 startup universe snapshot state
+
+Current commit: UNKNOWN.
+
+P330 proposed after P329. Live2 auto-universe selection no longer depends on the first partial `!ticker@arr` WebSocket payload. At startup it hydrates ticker/liquidity fields once through the exchange startup ticker snapshot boundary, then selects the 30k+ quote-volume universe from that broad snapshot plus any live WS updates. The REST snapshot remains startup-only and is not available to signal/decision hot path. A minimum auto-universe guard is added so live2 does not silently proceed with a tiny auto universe such as 90 symbols.
+
 ## 2026-05-19 — P316 proposed
 
 ```text

@@ -1666,6 +1666,7 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
                 universe_max_symbols=int(getattr(args, "universe_max_symbols", 600)),
                 universe_min_quote_volume_24h=float(getattr(args, "universe_min_quote_volume_24h", 30_000.0)),
                 universe_min_trade_count_24h=int(getattr(args, "universe_min_trade_count_24h", 0)),
+                universe_min_auto_symbols=int(getattr(args, "universe_min_auto_symbols", 300)),
             ),
             exchange_client=exchange_client,
             telegram_config=build_live2_telegram_config_from_env(),
