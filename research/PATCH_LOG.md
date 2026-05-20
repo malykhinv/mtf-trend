@@ -6047,3 +6047,33 @@ Risk:
 ```text
 Low. This only changes startup failure semantics for missing mandatory market-data streams. It does not change signal thresholds, category logic, order sizing, fill/stop/TP behavior, WS URLs, or poller behavior.
 ```
+
+## 2026-05-20 - P344 proposed - live2 reconnect backoff API fix
+
+Files:
+
+```text
+research_tools/anomaly_live2/market_data/mark_price_ws.py
+research_tools/anomaly_live2/user_data_stream.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix a runtime-only reconnect defect introduced by the newer markPrice and private user-data stream sources. They called a non-existent Live2ReconnectBackoff.next_delay() method on reconnect/error paths, while the shared backoff helper exposes next_delay_seconds(). This could crash the WS thread after the first markPrice/private-stream reconnect instead of backing off and recovering.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# synthetic reconnect backoff smoke: markPrice and user-data sources call next_delay_seconds() without AttributeError
+```
+
+Risk:
+
+```text
+Low. This only fixes method-name usage on reconnect/error paths. It does not change endpoints, readiness rules, signal logic, order sizing, fill/stop/TP behavior, or strategy thresholds.
+```

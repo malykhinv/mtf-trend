@@ -625,7 +625,7 @@ class Live2UserDataStreamSource:
         )
 
     def _sleep_backoff(self) -> None:
-        delay = self._backoff.next_delay()
+        delay = self._backoff.next_delay_seconds()
         self._last_backoff_delay_seconds = delay
         self._stop_event.wait(delay)
 

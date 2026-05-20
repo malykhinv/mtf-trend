@@ -2280,3 +2280,11 @@ Current commit: UNKNOWN.
 P343 proposed after P342. Live2 now treats missing mandatory ticker, aggTrade, or markPrice WS readiness at startup as a hard startup failure. This removes the ambiguous long-running blocked mode for dead market data while preserving runtime gates for later disconnects/recovery after a successful startup.
 
 Next validation: apply P331-P343, run compileall, then run a short live2 smoke. Startup must fail quickly with `ticker_ws_startup_failed`, `aggtrade_ws_startup_failed`, or `mark_price_ws_startup_failed` if a mandatory stream has no valid payload within its startup wait. If startup succeeds, later runtime disconnects should still be handled by normal gates/transitions.
+
+## 2026-05-20 - P344 live2 reconnect backoff state
+
+Current commit: UNKNOWN.
+
+P344 proposed after P343. Additional audit found that markPrice WS and private user-data stream used `Live2ReconnectBackoff.next_delay()`, but the shared helper exposes `next_delay_seconds()`. Compileall cannot catch this because the path is runtime-only after reconnect/error. P344 fixes both call sites so markPrice/private WS threads can recover instead of dying on the first reconnect.
+
+Next validation: apply P331-P344, run compileall, then run a short live2 smoke and verify reconnect/error paths do not produce `AttributeError: 'Live2ReconnectBackoff' object has no attribute 'next_delay'`.

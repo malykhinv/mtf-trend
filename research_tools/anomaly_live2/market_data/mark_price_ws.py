@@ -408,7 +408,7 @@ class Live2MarkPriceWsSource:
             return self._current_connection_has_valid_payload
 
     def _next_backoff_delay(self) -> float:
-        delay = self._backoff.next_delay()
+        delay = self._backoff.next_delay_seconds()
         with self._lock:
             self._last_backoff_delay_seconds = delay
         return delay
