@@ -56,7 +56,9 @@ def format_live2_status_grid(
     selected_symbols = _int(universe.get("selected_symbols"))
     warmed_symbols = _int(startup_warmup.get("symbols_warmed"))
     warmup_requested = _int(startup_warmup.get("symbols_requested"))
-    ready_candles = _int(candle_counts.get("ready"))
+    live_ready_candles = _int(candle_counts.get("live_ready"))
+    warmup_only_candles = _int(candle_counts.get("startup_warmup_only"))
+    ready_candles = live_ready_candles + warmup_only_candles
     total_symbols = max(_sum_counts(state_counts), selected_symbols, ready_candles)
     watched_symbols = _int(state_counts.get("watching")) + _int(state_counts.get("actionable"))
     actionable_symbols = _int(state_counts.get("actionable"))
@@ -66,6 +68,7 @@ def format_live2_status_grid(
     total_rejected = _int(decision_status.get("total_rejected"))
     deadline_missed = _int(decision_status.get("total_deadline_missed"))
     data_not_ready = _int(decision_status.get("total_data_not_ready"))
+    pre_live_skipped = _int(decision_status.get("total_pre_live_bucket_skipped"))
 
     max_positions = _int(execution_status.get("max_open_positions"))
     open_positions = _int(execution_status.get("open_protected_positions"))
@@ -135,12 +138,12 @@ def format_live2_status_grid(
         _format_status_line(
             _format_status_cell("Время", _format_live_runtime(runtime_seconds)),
             _format_status_cell("Вселенная", selected_symbols),
-            _format_status_cell("Свечи", f"{ready_candles}/{total_symbols}"),
+            _format_status_cell("Свечи", f"{live_ready_candles}/{total_symbols}"),
         ),
         _format_status_line(
             _format_status_cell("Активные", f"{actionable_symbols}/{watched_symbols}"),
             _format_status_cell("Прогрев", f"{warmed_symbols}/{warmup_requested}" if warmup_requested else "-"),
-            _format_status_cell("Решения", total_decisions),
+            _format_status_cell("Только REST", warmup_only_candles),
         ),
         "",
         "Торговля",
@@ -175,7 +178,7 @@ def format_live2_status_grid(
                 "Дедлайн",
                 _format_marked_quality_value(deadline_missed, _quality_level_from_count(deadline_missed, good_max=0, warn_max=2)),
             ),
-            _format_status_cell("Нет данных", data_not_ready),
+            _format_status_cell("До live", pre_live_skipped),
             _format_status_cell("Отказы", total_rejected),
         ),
         _format_status_line(

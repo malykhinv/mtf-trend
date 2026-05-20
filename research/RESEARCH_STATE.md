@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P332 live2 warmup/live watermark separation
+
+```text
+Current patch status: P332 PROPOSED / UNKNOWN commit.
+Question: prevent startup REST warmup from masquerading as live flow or creating stale live decisions.
+Change: live2 now stores startup REST aggTrade and live WS aggTrade counters separately, labels candle source composition, exposes live/startup counts in status artifacts, and gives the deadline engine a live aggTrade watermark. Closed buckets before the first valid live WS payload are consumed as pre-live buckets without `deadline_decision` events, so warmup history cannot become fake `deadline_missed`.
+Trading impact: no strategy thresholds, order placement, fills, stops, or category logic changed. This is market-data truthfulness and decision-gating only.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic warmup/live watermark smoke.
+Next validation: short live2 smoke after P331+P332; require `candle_coverage_counts.startup_warmup_only` during REST warmup, transition to `live_ready` only after WS payloads, and no startup burst of `deadline_missed`.
+```
+
 ## 2026-05-19 - P324 live2 Telegram operator safety messages
 
 ```text

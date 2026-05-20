@@ -61,6 +61,10 @@ class Live2DecisionRecord:
     quote_volume: float
     number_of_trades: int
     return_pct: float
+    candle_first_source: str = ""
+    candle_last_source: str = ""
+    candle_startup_rest_trade_count: int = 0
+    candle_live_ws_trade_count: int = 0
     category_id: str = ""
     category_rank: int | None = None
     signal_entry_price: float | None = None
@@ -111,6 +115,10 @@ class Live2DecisionRecord:
                 "quote_volume": self.quote_volume,
                 "number_of_trades": self.number_of_trades,
                 "return_pct": self.return_pct,
+                "candle_first_source": self.candle_first_source,
+                "candle_last_source": self.candle_last_source,
+                "candle_startup_rest_trade_count": self.candle_startup_rest_trade_count,
+                "candle_live_ws_trade_count": self.candle_live_ws_trade_count,
                 "category_id": self.category_id,
                 "category_rank": self.category_rank,
                 "signal_entry_price": self.signal_entry_price,
@@ -151,6 +159,7 @@ class Live2DeadlineCycleResult:
     rejected_count: int = 0
     data_not_ready_count: int = 0
     deadline_missed_count: int = 0
+    pre_live_bucket_skipped_count: int = 0
     max_latency_ms: int = 0
 
     def as_dict(self) -> dict[str, object]:
@@ -162,6 +171,7 @@ class Live2DeadlineCycleResult:
             "rejected_count": self.rejected_count,
             "data_not_ready_count": self.data_not_ready_count,
             "deadline_missed_count": self.deadline_missed_count,
+            "pre_live_bucket_skipped_count": self.pre_live_bucket_skipped_count,
             "max_latency_ms": self.max_latency_ms,
         }
 
@@ -183,6 +193,7 @@ class Live2DeadlineEngine:
         entry_guard: Live2EntryGuardEngine | None = None,
         execution_engine: Live2ExecutionEngine | None = None,
         entries_allowed: Callable[[], bool] | None = None,
+        live_decision_watermark_ms: Callable[[], int | None] | None = None,
     ) -> None:
         self.state_store = state_store
         self.config = config
@@ -190,9 +201,11 @@ class Live2DeadlineEngine:
         self.entry_guard = entry_guard or Live2EntryGuardEngine()
         self.execution_engine = execution_engine
         self.entries_allowed = entries_allowed or (lambda: False)
+        self.live_decision_watermark_ms = live_decision_watermark_ms or (lambda: None)
         self._last_cycle: Live2DeadlineCycleResult = Live2DeadlineCycleResult()
         self._total_decisions = 0
         self._total_deadline_missed = 0
+        self._total_pre_live_bucket_skipped = 0
         self._total_data_not_ready = 0
         self._total_rejected = 0
         self._total_selected = 0
@@ -205,8 +218,18 @@ class Live2DeadlineEngine:
                 result.skipped_symbols += 1
                 continue
             result.checked_symbols += 1
+            previous_bucket_ms = state.last_decision_bucket_ms
             decision = self._evaluate_state(state, now_ms=effective_now_ms)
             if decision is None:
+                if (
+                    state.last_decision_bucket_ms is not None
+                    and state.last_decision_bucket_ms != previous_bucket_ms
+                    and state.last_verdict in {
+                        "pre_live_ws_not_ready",
+                        "pre_live_warmup_bucket_ignored",
+                    }
+                ):
+                    result.pre_live_bucket_skipped_count += 1
                 continue
             result.decisions.append(decision)
             result.max_latency_ms = max(result.max_latency_ms, decision.latency_ms)
@@ -221,6 +244,7 @@ class Live2DeadlineEngine:
         self._last_cycle = result
         self._total_decisions += len(result.decisions)
         self._total_deadline_missed += result.deadline_missed_count
+        self._total_pre_live_bucket_skipped += result.pre_live_bucket_skipped_count
         self._total_data_not_ready += result.data_not_ready_count
         self._total_rejected += result.rejected_count
         self._total_selected += result.selected_count
@@ -240,6 +264,8 @@ class Live2DeadlineEngine:
             "total_rejected": self._total_rejected,
             "total_data_not_ready": self._total_data_not_ready,
             "total_deadline_missed": self._total_deadline_missed,
+            "total_pre_live_bucket_skipped": self._total_pre_live_bucket_skipped,
+            "live_decision_watermark_ms": self.live_decision_watermark_ms(),
             "selected_count": self._total_selected,
             "signal_engine": self.signal_engine.status(),
             "entry_guard": self.entry_guard.status(),
@@ -254,6 +280,25 @@ class Live2DeadlineEngine:
         if candle is None:
             return None
         if state.last_decision_bucket_ms == candle.open_time_ms:
+            return None
+        live_watermark_ms = self.live_decision_watermark_ms()
+        if live_watermark_ms is None:
+            self._apply_pre_live_bucket(
+                state,
+                candle=candle,
+                now_ms=now_ms,
+                verdict="pre_live_ws_not_ready",
+                reason="live_aggtrade_ws_has_no_valid_payload_yet",
+            )
+            return None
+        if candle.close_time_ms < int(live_watermark_ms):
+            self._apply_pre_live_bucket(
+                state,
+                candle=candle,
+                now_ms=now_ms,
+                verdict="pre_live_warmup_bucket_ignored",
+                reason="closed_bucket_before_live_aggtrade_ws_watermark",
+            )
             return None
         return_pct = _candle_return_pct(candle)
         actionable_reason = self._actionable_reason(candle=candle, return_pct=return_pct)
@@ -331,6 +376,10 @@ class Live2DeadlineEngine:
             quote_volume=candle.quote_volume,
             number_of_trades=candle.number_of_trades,
             return_pct=return_pct,
+            candle_first_source=candle.first_source,
+            candle_last_source=candle.last_source,
+            candle_startup_rest_trade_count=candle.startup_rest_trade_count,
+            candle_live_ws_trade_count=candle.live_ws_trade_count,
             category_id="" if signal_decision is None else signal_decision.category_id,
             category_rank=None if signal_decision is None else signal_decision.category_rank,
             signal_entry_price=None if signal_decision is None else signal_decision.signal_entry_price,
@@ -369,6 +418,24 @@ class Live2DeadlineEngine:
         if not reasons:
             return None
         return "+".join(reasons)
+
+    def _apply_pre_live_bucket(
+        self,
+        state: SymbolState,
+        *,
+        candle: Live2Candle,
+        now_ms: int,
+        verdict: str,
+        reason: str,
+    ) -> None:
+        state.status = SymbolLive2Status.WATCHING
+        state.last_decision_bucket_ms = candle.open_time_ms
+        state.last_verdict = verdict
+        state.last_verdict_reason = reason
+        state.last_decision_latency_ms = max(0, now_ms - candle.close_time_ms)
+        state.updated_ms = now_ms
+        state.decision_deadline_ms = None
+        state.actionable_since_ms = None
 
     def _apply_non_actionable(self, state: SymbolState, *, candle: Live2Candle, now_ms: int) -> None:
         state.status = SymbolLive2Status.WATCHING

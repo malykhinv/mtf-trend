@@ -43,6 +43,10 @@ class Live2Candle:
     last_trade_time_ms: int
     first_agg_trade_id: int | None = None
     last_agg_trade_id: int | None = None
+    first_source: str = ""
+    last_source: str = ""
+    startup_rest_trade_count: int = 0
+    live_ws_trade_count: int = 0
 
     @classmethod
     def from_trade(cls, *, timeframe_ms: int, bucket_open_ms: int, trade: Live2AggTradeEvent) -> "Live2Candle":
@@ -62,6 +66,10 @@ class Live2Candle:
             last_trade_time_ms=trade.trade_time_ms,
             first_agg_trade_id=trade.aggregate_trade_id,
             last_agg_trade_id=trade.aggregate_trade_id,
+            first_source=trade.source,
+            last_source=trade.source,
+            startup_rest_trade_count=1 if _is_startup_rest_source(trade.source) else 0,
+            live_ws_trade_count=1 if _is_live_ws_source(trade.source) else 0,
         )
 
     def update(self, trade: Live2AggTradeEvent) -> None:
@@ -74,6 +82,11 @@ class Live2Candle:
         self.taker_buy_quote_volume += trade.taker_buy_quote_quantity
         self.last_trade_time_ms = trade.trade_time_ms
         self.last_agg_trade_id = trade.aggregate_trade_id
+        self.last_source = trade.source
+        if _is_startup_rest_source(trade.source):
+            self.startup_rest_trade_count += 1
+        elif _is_live_ws_source(trade.source):
+            self.live_ws_trade_count += 1
 
     def to_summary_dict(self, *, prefix: str) -> dict[str, object]:
         return {
@@ -86,7 +99,19 @@ class Live2Candle:
             f"{prefix}_quote_volume": self.quote_volume,
             f"{prefix}_number_of_trades": self.number_of_trades,
             f"{prefix}_taker_buy_quote_volume": self.taker_buy_quote_volume,
+            f"{prefix}_first_source": self.first_source,
+            f"{prefix}_last_source": self.last_source,
+            f"{prefix}_startup_rest_trade_count": self.startup_rest_trade_count,
+            f"{prefix}_live_ws_trade_count": self.live_ws_trade_count,
         }
+
+
+def _is_startup_rest_source(source: str) -> bool:
+    return source == "binance_futures_aggTrades_startup_rest"
+
+
+def _is_live_ws_source(source: str) -> bool:
+    return source == "binance_futures_aggtrade_ws"
 
 
 @dataclass(frozen=True, slots=True)

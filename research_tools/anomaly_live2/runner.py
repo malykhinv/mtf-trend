@@ -118,6 +118,7 @@ class AnomalyLive2Runner:
             ),
             execution_engine=self.execution_engine,
             entries_allowed=lambda: self.readiness.new_entries_allowed,
+            live_decision_watermark_ms=self._live_decision_watermark_ms,
         )
         self._shutdown_requested = False
         self._decision_latency_degraded_windows = 0
@@ -329,6 +330,8 @@ class AnomalyLive2Runner:
                                 "symbols_total": len(self.state_store),
                                 "ticker_status_counts": self.state_store.ticker_counts(),
                                 "aggtrade_status_counts": self.state_store.aggtrade_counts(),
+                                "startup_aggtrade_status_counts": self.state_store.startup_aggtrade_counts(),
+                                "live_aggtrade_status_counts": self.state_store.live_aggtrade_counts(),
                                 "candle_coverage_counts": self.state_store.candle_coverage_counts(),
                                 "market_data_status": market_data_status,
                                 "decision_status": self.deadline_engine.status(),
@@ -671,6 +674,10 @@ class AnomalyLive2Runner:
             "reason": reason,
             "ticker_ws": ticker_status,
             "aggtrade_ws": aggtrade_status,
+            "live_decision_watermark_ms": self._live_decision_watermark_ms(),
+            "startup_aggtrade_status_counts": self.state_store.startup_aggtrade_counts(),
+            "live_aggtrade_status_counts": self.state_store.live_aggtrade_counts(),
+            "candle_coverage_counts": self.state_store.candle_coverage_counts(),
             "universe": self._universe_status(),
             "ws_health": ws_health,
             "stream_coverage_ready": stream_coverage_ready,
@@ -719,6 +726,7 @@ class AnomalyLive2Runner:
             "aggtrade_source_status": str(aggtrade_status.get("source_status", "unknown")),
             "aggtrade_endpoint_category": str(aggtrade_status.get("endpoint_category", "unknown")),
             "aggtrade_pre_first_payload_failures": pre_first_payload_failures,
+            "live_decision_watermark_ms": self._live_decision_watermark_ms_from_status(aggtrade_status),
             "shards_total": int(aggtrade_status.get("shards_total") or 0),
             "shards_connected": int(aggtrade_status.get("shards_connected") or 0),
             "shards_disconnected": disconnected_shards,
@@ -727,6 +735,31 @@ class AnomalyLive2Runner:
             "disconnect_count": ticker_disconnects + agg_disconnects,
             "payload_errors": payload_errors,
         }
+
+    def _live_decision_watermark_ms(self) -> int | None:
+        if self.aggtrade_source is None:
+            return None
+        return self._live_decision_watermark_ms_from_status(
+            self.aggtrade_source.status().as_dict(stale_ms=self.config.aggtrade_stale_ms)
+        )
+
+    def _live_decision_watermark_ms_from_status(self, aggtrade_status: dict[str, object]) -> int | None:
+        if not bool(aggtrade_status.get("ready")):
+            return None
+        shards = aggtrade_status.get("shards")
+        if not isinstance(shards, list) or not shards:
+            return None
+        first_payload_times: list[int] = []
+        for shard in shards:
+            if not isinstance(shard, dict):
+                return None
+            first_message_at_ms = shard.get("first_message_at_ms")
+            if not isinstance(first_message_at_ms, int):
+                return None
+            first_payload_times.append(first_message_at_ms)
+        if len(first_payload_times) != len(shards):
+            return None
+        return max(first_payload_times)
 
     def _aggtrade_status(self) -> dict[str, object]:
         if self.aggtrade_source is None:

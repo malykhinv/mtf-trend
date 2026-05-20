@@ -141,6 +141,8 @@ class Live2ArtifactWriter:
             "symbol_status_counts": state_store.counts_by_status(),
             "ticker_status_counts": state_store.ticker_counts(),
             "aggtrade_status_counts": state_store.aggtrade_counts(),
+            "startup_aggtrade_status_counts": state_store.startup_aggtrade_counts(),
+            "live_aggtrade_status_counts": state_store.live_aggtrade_counts(),
             "candle_coverage_counts": state_store.candle_coverage_counts(),
             "readiness": readiness.as_dict(),
             "execution_status": execution_status or {"status": "todo_not_implemented"},
