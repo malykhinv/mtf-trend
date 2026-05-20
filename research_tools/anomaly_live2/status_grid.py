@@ -85,6 +85,7 @@ def format_live2_status_grid(
     total_rejected = _int(decision_status.get("total_rejected"))
     deadline_missed = _int(decision_status.get("total_deadline_missed"))
     data_not_ready = _int(decision_status.get("total_data_not_ready"))
+    data_dependency_not_ready = _int(decision_status.get("total_data_dependency_not_ready"))
     pre_live_skipped = _int(decision_status.get("total_pre_live_bucket_skipped"))
 
     max_positions = _int(execution_status.get("max_open_positions"))
@@ -207,8 +208,13 @@ def format_live2_status_grid(
                 "Дедлайн",
                 _format_marked_quality_value(deadline_missed, _quality_level_from_count(deadline_missed, good_max=0, warn_max=2)),
             ),
-            _format_status_cell("До live", pre_live_skipped),
+            _format_status_cell("Данные", data_not_ready + data_dependency_not_ready),
             _format_status_cell("Отказы", total_rejected),
+        ),
+        _format_status_line(
+            _format_status_cell("Deps", data_dependency_not_ready),
+            _format_status_cell("До live", pre_live_skipped),
+            _format_status_cell("Выбрано", selected_count),
         ),
         _format_status_line(
             _format_status_cell(

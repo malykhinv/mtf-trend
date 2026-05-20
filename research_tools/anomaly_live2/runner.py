@@ -799,8 +799,11 @@ class AnomalyLive2Runner:
                 "selected_count": int(decision_status.get("selected_count") or 0),
                 "total_rejected": int(decision_status.get("total_rejected") or 0),
                 "total_data_not_ready": int(decision_status.get("total_data_not_ready") or 0),
+                "total_data_dependency_not_ready": int(decision_status.get("total_data_dependency_not_ready") or 0),
                 "total_deadline_missed": int(decision_status.get("total_deadline_missed") or 0),
                 "total_pre_live_bucket_skipped": int(decision_status.get("total_pre_live_bucket_skipped") or 0),
+                "signal_dependency_funnel": _dict_or_empty(decision_status.get("signal_engine")).get("dependency_reason_counts", {}),
+                "signal_reject_funnel": _dict_or_empty(decision_status.get("signal_engine")).get("reject_reason_counts", {}),
             },
             "execution_funnel": {
                 "open_protected_positions": int(execution_status.get("open_protected_positions") or 0),
@@ -1336,3 +1339,7 @@ class AnomalyLive2Runner:
                 },
             )
         )
+
+
+def _dict_or_empty(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}

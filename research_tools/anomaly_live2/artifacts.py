@@ -183,6 +183,7 @@ class Live2ArtifactWriter:
             "decision_count",
             "rejected_decision_count",
             "data_not_ready_decision_count",
+            "data_dependency_not_ready_decision_count",
             "deadline_missed_count",
             "ticker_market_id",
             "ticker_first_seen_ms",

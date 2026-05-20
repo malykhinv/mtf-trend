@@ -5845,3 +5845,46 @@ Trading impact: stricter and more truthful. New entries remain blocked until tic
 Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic mark-price payload smoke.
 Next validation: short live2 smoke after P331-P335; require `mark_price_ws.ready=true`, `mark_price_status_counts.ok > 0`, grid Mark rows > 0, and no `mark_price_context_not_ready` for symbols that have fresh mark rows.
 ```
+
+## 2026-05-20 - P338 proposed - live2 dependency-aware signal gate
+
+Files:
+
+```text
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/state.py
+research_tools/anomaly_live2/artifacts.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/status_grid.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Separate missing required live2 category dependencies from real strategy rejects. Missing mark/OI/24h prior/baseline/derived required fields now produce `data_dependency_not_ready` with per-category dependency reasons. Real threshold failures remain `rejected_signal_contract`. This prevents incomplete data sources from being counted as strategy failure or silently accepted.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python - <<'PY'
+from research_tools.anomaly_live2.signal import Live2SignalEngine
+from research_tools.anomaly_live2.state import SymbolState
+from research_tools.anomaly_live2.market_data.candles import Live2Candle
+state = SymbolState("TEST/USDT:USDT")
+candle = Live2Candle(5000, 10000, 15000, 1.0, 1.05, 0.99, 1.04, 10.0, 10000.0, 100, 7000.0, 10001, 14999)
+result = Live2SignalEngine().evaluate(state=state, candle=candle, actionable_reason="synthetic")
+assert result.verdict == "data_dependency_not_ready", result
+assert result.dependency_reasons
+PY
+```
+
+Risk:
+
+```text
+Medium and intentionally stricter. Live2 may show fewer `rejected_signal_contract` and more `data_dependency_not_ready`. If current categories require flow-hold/taker-delta features that are not yet fully implemented, this patch exposes that as a dependency instead of accepting incomplete category evaluation.
+```

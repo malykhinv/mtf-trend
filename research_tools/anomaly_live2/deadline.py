@@ -90,11 +90,13 @@ class Live2DecisionRecord:
     execution_integrity_error: bool = False
     execution_emergency_close_status: str = ""
     signal_features: dict[str, object] = field(default_factory=dict)
+    signal_dependency_reasons: tuple[str, ...] = ()
+    signal_reject_reasons: tuple[str, ...] = ()
 
     def as_event(self) -> Live2Event:
         if self.verdict == "position_integrity_error" or self.execution_integrity_error:
             severity = Live2Severity.ERROR
-        elif self.verdict in {"deadline_missed", "data_not_ready"}:
+        elif self.verdict in {"deadline_missed", "data_not_ready", "data_dependency_not_ready"}:
             severity = Live2Severity.WARNING
         else:
             severity = Live2Severity.INFO
@@ -144,6 +146,8 @@ class Live2DecisionRecord:
                 "execution_integrity_error": self.execution_integrity_error,
                 "execution_emergency_close_status": self.execution_emergency_close_status,
                 "signal_features": self.signal_features,
+                "signal_dependency_reasons": self.signal_dependency_reasons,
+                "signal_reject_reasons": self.signal_reject_reasons,
             },
         )
 
@@ -158,6 +162,7 @@ class Live2DeadlineCycleResult:
     selected_count: int = 0
     rejected_count: int = 0
     data_not_ready_count: int = 0
+    data_dependency_not_ready_count: int = 0
     deadline_missed_count: int = 0
     pre_live_bucket_skipped_count: int = 0
     max_latency_ms: int = 0
@@ -170,6 +175,7 @@ class Live2DeadlineCycleResult:
             "selected_count": self.selected_count,
             "rejected_count": self.rejected_count,
             "data_not_ready_count": self.data_not_ready_count,
+            "data_dependency_not_ready_count": self.data_dependency_not_ready_count,
             "deadline_missed_count": self.deadline_missed_count,
             "pre_live_bucket_skipped_count": self.pre_live_bucket_skipped_count,
             "max_latency_ms": self.max_latency_ms,
@@ -207,6 +213,7 @@ class Live2DeadlineEngine:
         self._total_deadline_missed = 0
         self._total_pre_live_bucket_skipped = 0
         self._total_data_not_ready = 0
+        self._total_data_dependency_not_ready = 0
         self._total_rejected = 0
         self._total_selected = 0
 
@@ -237,6 +244,8 @@ class Live2DeadlineEngine:
                 result.selected_count += 1
             elif decision.verdict == "data_not_ready":
                 result.data_not_ready_count += 1
+            elif decision.verdict == "data_dependency_not_ready":
+                result.data_dependency_not_ready_count += 1
             elif decision.verdict == "deadline_missed":
                 result.deadline_missed_count += 1
             else:
@@ -246,6 +255,7 @@ class Live2DeadlineEngine:
         self._total_deadline_missed += result.deadline_missed_count
         self._total_pre_live_bucket_skipped += result.pre_live_bucket_skipped_count
         self._total_data_not_ready += result.data_not_ready_count
+        self._total_data_dependency_not_ready += result.data_dependency_not_ready_count
         self._total_rejected += result.rejected_count
         self._total_selected += result.selected_count
         return result
@@ -263,6 +273,7 @@ class Live2DeadlineEngine:
             "total_decisions": self._total_decisions,
             "total_rejected": self._total_rejected,
             "total_data_not_ready": self._total_data_not_ready,
+            "total_data_dependency_not_ready": self._total_data_dependency_not_ready,
             "total_deadline_missed": self._total_deadline_missed,
             "total_pre_live_bucket_skipped": self._total_pre_live_bucket_skipped,
             "live_decision_watermark_ms": self.live_decision_watermark_ms(),
@@ -405,6 +416,8 @@ class Live2DeadlineEngine:
             execution_integrity_error=False if execution_result is None else execution_result.integrity_error,
             execution_emergency_close_status="" if execution_result is None else execution_result.emergency_close_status,
             signal_features={} if signal_decision is None else dict(signal_decision.features),
+            signal_dependency_reasons=() if signal_decision is None else tuple(signal_decision.dependency_reasons),
+            signal_reject_reasons=() if signal_decision is None else tuple(signal_decision.reject_reasons),
         )
 
     def _actionable_reason(self, *, candle: Live2Candle, return_pct: float) -> str | None:
@@ -524,6 +537,8 @@ class Live2DeadlineEngine:
             state.deadline_missed_count += 1
         elif verdict == "data_not_ready":
             state.data_not_ready_decision_count += 1
+        elif verdict == "data_dependency_not_ready":
+            state.data_dependency_not_ready_decision_count += 1
         elif verdict.startswith("rejected"):
             state.rejected_decision_count += 1
         elif verdict == "selected":

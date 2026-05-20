@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P338 live2 dependency-aware signal gate
+
+```text
+Current patch status: P338 PROPOSED / UNKNOWN commit.
+Question: current live2 category evaluation mixed missing data dependencies with strategy rejects and also risked accepting categories while some contract fields were unavailable.
+Change: signal evaluation now classifies missing required mark/OI/24h prior/baseline/derived category inputs as `data_dependency_not_ready`, keeps real threshold failures as `rejected_signal_contract`, writes dependency/reject reason arrays into deadline events, adds dependency counters to deadline status, diagnostics summary, symbol state, and the terminal grid. There is no fallback or zero substitution.
+Trading impact: stricter and more honest. Live2 can now show that a signal was not decidable because data dependencies were not ready, instead of counting it as a strategy reject. Current categories that require not-yet-final flow-hold/taker-delta handling can remain blocked by dependency status until that data contract is completed.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic missing-dependency signal smoke.
+Next validation: live2 smoke after P331-P338; inspect `deadline_decision.verdict=data_dependency_not_ready`, `signal_dependency_reasons`, `live2_status.json.decision_status.total_data_dependency_not_ready`, and `live2_diagnostics_summary.json.decision_funnel.signal_dependency_funnel`.
+```
+
 ## 2026-05-20 - P337 live2 24h prior context poller
 
 ```text
