@@ -24,11 +24,11 @@ class AnomalyLive2Config:
     aggtrade_max_streams_per_connection: int = 150
     mark_price_stale_ms: int = 5_000
     mark_price_startup_wait_seconds: float = 10.0
-    oi_stale_ms: int = 180_000
+    oi_stale_ms: int = 720_000
     oi_poll_interval_seconds: float = 5.0
     oi_symbol_cooldown_seconds: float = 60.0
     oi_lookback_minutes: int = 20
-    oi_max_symbols_per_cycle: int = 8
+    oi_max_symbols_per_cycle: int = 10
     oi_radar_symbol_ttl_ms: int = 60_000
     prior_context_stale_ms: int = 900_000
     prior_context_poll_interval_seconds: float = 10.0

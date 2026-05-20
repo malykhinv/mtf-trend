@@ -6202,6 +6202,42 @@ Risk:
 Low. This does not weaken the startup gate and does not add a fallback. It only gives aggTrade shards more realistic startup time and makes readiness blockers explicit.
 ```
 
+## 2026-05-20 - P351 proposed - keep live2 OI fresh across selected universe
+
+Files:
+
+```text
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/market_data/open_interest.py
+research_tools/anomaly_live2/runner.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix the post-P345 runtime OI blind spot where startup prewarm hydrated the full selected universe, but the runtime OI poller refreshed only active/radar symbols. After the 180s stale window, most passive selected symbols became `OI stale`, so their first impulse could still hit `data_dependency_not_ready` before OI refreshed.
+```
+
+Change:
+
+```text
+Runtime OI polling now continuously refreshes the whole selected universe with active/actionable/in-position symbols still prioritized first. OI stale window is aligned to the 5m OI-history cadence and the amortized full-universe refresh rate: default `oi_stale_ms=720000` and `oi_max_symbols_per_cycle=10` at a 5s poll interval. This is still bounded below Binance's documented open-interest history limit envelope and still has no zero fallback or hot-path REST decision fetch.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium-low. It increases steady OI REST traffic from active/radar-only to an amortized selected-universe refresh. The default request rate is about 600 requests / 5 minutes at 10 symbols per 5s cycle, below the documented 1000 requests / 5 minutes open-interest history limit, but this must be watched in live2_status: OI err should not rise, and OI stale should trend toward near zero after one full refresh cycle.
+```
+
 ## 2026-05-20 - P350 proposed - polish live2 operator market status
 
 Files:

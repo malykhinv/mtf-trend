@@ -415,7 +415,7 @@ class AnomalyLive2Runner:
                 )
                 self._write_prior_context_starting_event(writer)
                 self.startup_context_prewarm_result = self._run_startup_context_prewarm(writer)
-                self._set_startup_status("OI", "запускаю runtime poller для active/radar")
+                self._set_startup_status("OI", "запускаю runtime poller для universe")
                 self.open_interest_source.start()
                 self._set_startup_status("24h context", "запускаю runtime poller для active/radar")
                 self.prior_context_source.start()
@@ -1592,11 +1592,11 @@ class AnomalyLive2Runner:
                 event_type="open_interest_poller_starting",
                 component=Live2Component.MARKET_DATA,
                 severity=Live2Severity.INFO if selected_symbols else Live2Severity.ERROR,
-                message="starting active/radar-only open-interest poller",
+                message="starting selected-universe open-interest poller with active priority",
                 data={
                     "source": Live2OpenInterestPoller.source_id,
                     "symbols_filter_count": selected_symbols,
-                    "poll_scope": "active_radar_actionable_symbols_only",
+                    "poll_scope": "selected_universe_active_priority",
                     "timeframe": "5m",
                     "change_window": "3x5m",
                     "stale_ms": self.config.oi_stale_ms,
@@ -1605,8 +1605,9 @@ class AnomalyLive2Runner:
                     "lookback_minutes": self.config.oi_lookback_minutes,
                     "max_symbols_per_cycle": self.config.oi_max_symbols_per_cycle,
                     "radar_symbol_ttl_ms": self.config.oi_radar_symbol_ttl_ms,
+                    "selected_universe_refresh": True,
                     "startup_full_universe_prewarm": True,
-                    "runtime_full_universe_polling": False,
+                    "runtime_full_universe_polling": True,
                     "silent_zero_fallback": False,
                     "universe": self._universe_status(),
                 },

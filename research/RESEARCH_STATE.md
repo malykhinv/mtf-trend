@@ -2334,6 +2334,14 @@ P348 proposed after live2 reached strict market-data startup and failed with `li
 
 Next validation: apply P348, run compileall, then run `run-anomaly-live2` again. If it still fails, inspect `aggtrade_ws_startup_failed.data.aggtrade_ws.readiness_blockers` in `live2_events.csv` / status instead of guessing.
 
+## 2026-05-20 - P351 live2 selected-universe OI refresh state
+
+Current commit: UNKNOWN.
+
+P351 proposed after a successful live2 market-data startup showed `OI ! 72/578` and `OI stale 503` after ~17 minutes. Root cause: P345 prewarmed OI for the selected universe, but runtime refresh remained active/radar-only, so most prewarmed passive symbols expired after the 180s stale window. P351 makes runtime OI refresh the selected universe continuously, active-first, and aligns OI freshness to 5m historical OI cadence plus the full-universe refresh rate.
+
+Next validation: apply P351, run compileall, then run live2 long enough for one full OI refresh cycle. Expected status after several minutes: OI ready should climb toward selected universe size, OI stale should fall sharply, OI err should remain low. If OI err rises or Binance rate-limit symptoms appear, reduce `oi_max_symbols_per_cycle` deliberately rather than reverting to lazy-only OI.
+
 ## 2026-05-20 - P350 live2 operator status state
 
 Current commit: UNKNOWN.

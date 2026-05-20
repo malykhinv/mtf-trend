@@ -1,8 +1,8 @@
 """Open-interest polling context for anomaly live2.
 
-This module intentionally polls only symbols that are already live2-active
-(watching/actionable/in-position or recently seen in live aggTrade). It does not
-scan the full universe and it never substitutes missing OI with zero.
+This module continuously refreshes the selected live2 universe, with
+active/actionable/in-position symbols prioritized ahead of passive symbols. It
+never substitutes missing OI with zero.
 """
 
 from __future__ import annotations
@@ -51,6 +51,7 @@ class Live2OpenInterestPollConfig:
     lookback_minutes: int = 20
     max_symbols_per_cycle: int = 8
     radar_symbol_ttl_ms: int = 60_000
+    selected_universe_refresh: bool = True
 
     def __post_init__(self) -> None:
         if self.poll_interval_seconds <= 0:
@@ -119,6 +120,7 @@ class Live2OpenInterestPollStatus:
     lookback_minutes: int = 0
     max_symbols_per_cycle: int = 0
     radar_symbol_ttl_ms: int = 0
+    selected_universe_refresh: bool = True
     started_at_ms: int | None = None
     last_cycle_started_at_ms: int | None = None
     last_cycle_completed_at_ms: int | None = None
@@ -149,6 +151,7 @@ class Live2OpenInterestPollStatus:
             "lookback_minutes": self.lookback_minutes,
             "max_symbols_per_cycle": self.max_symbols_per_cycle,
             "radar_symbol_ttl_ms": self.radar_symbol_ttl_ms,
+            "selected_universe_refresh": self.selected_universe_refresh,
             "started_at_ms": self.started_at_ms,
             "last_cycle_started_at_ms": self.last_cycle_started_at_ms,
             "last_cycle_completed_at_ms": self.last_cycle_completed_at_ms,
@@ -168,7 +171,7 @@ class Live2OpenInterestPollStatus:
 
 
 class Live2OpenInterestPoller:
-    """Background OI source for symbols that are already active in live2."""
+    """Background OI source for the selected live2 universe, active-first."""
 
     source_id = LIVE2_OPEN_INTEREST_SOURCE
 
@@ -194,6 +197,7 @@ class Live2OpenInterestPoller:
             lookback_minutes=config.lookback_minutes,
             max_symbols_per_cycle=config.max_symbols_per_cycle,
             radar_symbol_ttl_ms=config.radar_symbol_ttl_ms,
+            selected_universe_refresh=config.selected_universe_refresh,
         )
 
     def start(self) -> None:
@@ -208,7 +212,7 @@ class Live2OpenInterestPoller:
                 self._ready_event.set()
                 return
             self._status.status = "running"
-            self._status.reason = "open_interest_poller_running_for_active_live2_symbols_only"
+            self._status.reason = "open_interest_poller_running_for_selected_universe_with_active_priority"
         self._thread = threading.Thread(target=self._run_thread, name="live2-open-interest-poller", daemon=True)
         self._thread.start()
 
@@ -358,7 +362,7 @@ class Live2OpenInterestPoller:
                 status.reason = "open_interest_context_ready_for_some_active_symbols"
             elif status.status == "ready" and status.ready_symbols <= 0:
                 status.status = "running"
-                status.reason = "waiting_for_open_interest_context_on_active_symbols"
+                status.reason = "waiting_for_open_interest_context_on_selected_universe"
             elif status.status == "running" and status.total_errors > 0 and status.total_success <= 0:
                 status.status = "degraded"
                 status.reason = "open_interest_poller_errors_without_success"
@@ -424,7 +428,7 @@ class Live2OpenInterestPoller:
             if polled and self._status.status in {"running", "ready", "degraded"}:
                 self._status.reason = "open_interest_poll_cycle_completed"
             elif not polled and self._status.status in {"running", "ready", "degraded"}:
-                self._status.reason = "no_active_symbols_due_for_open_interest_poll"
+                self._status.reason = "no_selected_universe_symbols_due_for_open_interest_poll"
 
     def _eligible_symbols(self, *, now_ms: int) -> tuple[str, ...]:
         cooldown_ms = int(self.config.symbol_cooldown_seconds * 1000)
@@ -439,12 +443,17 @@ class Live2OpenInterestPoller:
         return tuple(symbol for _, symbol in due)
 
     def _target_symbols(self, *, now_ms: int) -> tuple[str, ...]:
+        # Keep OI fresh for the whole selected universe. OI is 5m historical
+        # data, so an amortized universe-wide poller is cheaper and more honest
+        # than lazy loading only after a symbol has already become actionable.
+        # Active/radar symbols are still prioritized by _symbol_priority(); this
+        # target list only guarantees passive selected symbols are not allowed to
+        # decay into stale context forever.
         targets: list[str] = []
         for state in self.state_store.snapshot():
             if not state.universe_selected:
                 continue
-            if self._is_target_state(state, now_ms=now_ms):
-                targets.append(state.symbol)
+            targets.append(state.symbol)
         return tuple(dict.fromkeys(targets))
 
     def _symbol_priority(self, *, symbol: str, now_ms: int) -> int:
