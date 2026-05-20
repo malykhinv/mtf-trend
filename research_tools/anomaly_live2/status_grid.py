@@ -38,6 +38,7 @@ def format_live2_status_grid(
     shards_connected = _int(ws_health.get("shards_connected"))
     reconnects = _int(ws_health.get("reconnect_attempts"))
     disconnects = _int(ws_health.get("disconnect_count"))
+    planned_rotations = _int(ws_health.get("planned_rotation_count"))
     payload_errors = _int(ws_health.get("payload_errors"))
     aggtrade_rows_applied = _int(aggtrade_ws.get("rows_applied"))
     aggtrade_pre_first_payload_failures = _int(ws_health.get("aggtrade_pre_first_payload_failures"))
@@ -128,10 +129,7 @@ def format_live2_status_grid(
         _format_status_line(
             _format_status_cell("Переподкл", reconnects),
             _format_status_cell("Разрывы", disconnects),
-            _format_status_cell(
-                "Ошибки",
-                _format_marked_quality_value(payload_errors, _quality_level_from_count(payload_errors, good_max=0, warn_max=3)),
-            ),
+            _format_status_cell("Ротации", planned_rotations),
         ),
         "",
         "Рынок",

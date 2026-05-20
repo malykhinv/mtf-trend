@@ -24,6 +24,7 @@ class AnomalyLive2Config:
     aggtrade_max_streams_per_connection: int = 150
     ws_reconnect_initial_delay_seconds: float = 1.0
     ws_reconnect_max_delay_seconds: float = 60.0
+    ws_connection_max_age_seconds: float = 84_600.0
     startup_warmup_lookback_minutes: int = 15
     startup_warmup_max_trades_per_symbol: int = 1000
     startup_warmup_request_sleep_seconds: float = 0.03
@@ -78,6 +79,8 @@ class AnomalyLive2Config:
             raise ValueError("ws_reconnect_initial_delay_seconds must be > 0")
         if self.ws_reconnect_max_delay_seconds < self.ws_reconnect_initial_delay_seconds:
             raise ValueError("ws_reconnect_max_delay_seconds must be >= ws_reconnect_initial_delay_seconds")
+        if self.ws_connection_max_age_seconds <= 0:
+            raise ValueError("ws_connection_max_age_seconds must be > 0")
         if self.startup_warmup_lookback_minutes <= 0:
             raise ValueError("startup_warmup_lookback_minutes must be > 0")
         if not 1 <= self.startup_warmup_max_trades_per_symbol <= 1000:

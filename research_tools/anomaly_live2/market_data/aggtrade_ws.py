@@ -38,8 +38,11 @@ class Live2AggTradeWsShardStatus:
     connection_status: str
     endpoint_category: str
     stream_url_length: int | None
+    connection_started_at_ms: int | None
     first_message_at_ms: int | None
     last_message_at_ms: int | None
+    current_connection_age_seconds: float | None
+    connection_max_age_seconds: float
     last_error: str | None
     last_close_code: int | None
     last_close_reason: str | None
@@ -53,6 +56,8 @@ class Live2AggTradeWsShardStatus:
     connect_attempts: int
     reconnect_attempts: int
     disconnect_count: int
+    planned_rotation_count: int
+    last_rotation_reason: str | None
     consecutive_pre_first_payload_failures: int
     thread_alive: bool
     backoff_attempt: int
@@ -78,8 +83,11 @@ class Live2AggTradeWsShardStatus:
             "connection_status": self.connection_status,
             "endpoint_category": self.endpoint_category,
             "stream_url_length": self.stream_url_length,
+            "connection_started_at_ms": self.connection_started_at_ms,
             "first_message_at_ms": self.first_message_at_ms,
             "last_message_at_ms": self.last_message_at_ms,
+            "current_connection_age_seconds": self.current_connection_age_seconds,
+            "connection_max_age_seconds": self.connection_max_age_seconds,
             "last_message_age_ms": age_ms,
             "last_error": self.last_error,
             "last_close_code": self.last_close_code,
@@ -94,6 +102,8 @@ class Live2AggTradeWsShardStatus:
             "connect_attempts": self.connect_attempts,
             "reconnect_attempts": self.reconnect_attempts,
             "disconnect_count": self.disconnect_count,
+            "planned_rotation_count": self.planned_rotation_count,
+            "last_rotation_reason": self.last_rotation_reason,
             "consecutive_pre_first_payload_failures": self.consecutive_pre_first_payload_failures,
             "thread_alive": self.thread_alive,
             "backoff_attempt": self.backoff_attempt,
@@ -127,6 +137,7 @@ class Live2AggTradeWsStatus:
         connect_attempts = sum(shard.connect_attempts for shard in self.shard_statuses)
         reconnect_attempts = sum(shard.reconnect_attempts for shard in self.shard_statuses)
         disconnect_count = sum(shard.disconnect_count for shard in self.shard_statuses)
+        planned_rotation_count = sum(shard.planned_rotation_count for shard in self.shard_statuses)
         ready = bool(self.shard_statuses) and connected == len(self.shard_statuses)
         return {
             "source_status": self.source_status,
@@ -147,6 +158,7 @@ class Live2AggTradeWsStatus:
             "connect_attempts": connect_attempts,
             "reconnect_attempts": reconnect_attempts,
             "disconnect_count": disconnect_count,
+            "planned_rotation_count": planned_rotation_count,
             "shards": [shard.as_dict(stale_ms=stale_ms) for shard in self.shard_statuses],
             "stale_ms": stale_ms,
         }
@@ -173,11 +185,15 @@ class Live2AggTradeWsSource:
         max_streams_per_connection: int,
         reconnect_initial_delay_seconds: float = 1.0,
         reconnect_max_delay_seconds: float = 60.0,
+        connection_max_age_seconds: float = 84_600.0,
     ) -> None:
         self.state_store = state_store
         self.symbols = tuple(dict.fromkeys(symbol.strip() for symbol in symbols if symbol.strip()))
         self.stale_ms = int(stale_ms)
         self.startup_wait_seconds = float(startup_wait_seconds)
+        self.connection_max_age_seconds = float(connection_max_age_seconds)
+        if self.connection_max_age_seconds <= 0:
+            raise ValueError("connection_max_age_seconds must be > 0")
         self.max_streams_per_connection = int(max_streams_per_connection)
         if self.max_streams_per_connection <= 0:
             raise ValueError("max_streams_per_connection must be > 0")
@@ -193,6 +209,7 @@ class Live2AggTradeWsSource:
                 ready_callback=self._mark_ready_if_all_ready,
                 reconnect_initial_delay_seconds=float(reconnect_initial_delay_seconds),
                 reconnect_max_delay_seconds=float(reconnect_max_delay_seconds),
+                connection_max_age_seconds=self.connection_max_age_seconds,
             )
             for index, market_ids in enumerate(_chunked(tuple(self._market_id_to_symbol), self.max_streams_per_connection))
         )
@@ -260,6 +277,7 @@ class _Live2AggTradeWsShard:
         ready_callback: Callable[[], None],
         reconnect_initial_delay_seconds: float = 1.0,
         reconnect_max_delay_seconds: float = 60.0,
+        connection_max_age_seconds: float = 84_600.0,
     ) -> None:
         self.shard_id = int(shard_id)
         self.market_ids = tuple(market_ids)
@@ -267,6 +285,9 @@ class _Live2AggTradeWsShard:
         self.state_store = state_store
         self.source_id = source_id
         self.ready_callback = ready_callback
+        self.connection_max_age_seconds = float(connection_max_age_seconds)
+        if self.connection_max_age_seconds <= 0:
+            raise ValueError("connection_max_age_seconds must be > 0")
         self._backoff = Live2ReconnectBackoff(
             initial_seconds=float(reconnect_initial_delay_seconds),
             max_seconds=float(reconnect_max_delay_seconds),
@@ -276,6 +297,7 @@ class _Live2AggTradeWsShard:
         self._stop_event = threading.Event()
         self._connection_status = "starting"
         self._stream_url_length: int | None = None
+        self._connection_started_at_ms: int | None = None
         self._first_message_at_ms: int | None = None
         self._last_message_at_ms: int | None = None
         self._last_error: str | None = None
@@ -291,6 +313,8 @@ class _Live2AggTradeWsShard:
         self._connect_attempts = 0
         self._reconnect_attempts = 0
         self._disconnect_count = 0
+        self._planned_rotation_count = 0
+        self._last_rotation_reason: str | None = None
         self._consecutive_pre_first_payload_failures = 0
         self._thread = threading.Thread(
             target=self._run_thread,
@@ -312,13 +336,19 @@ class _Live2AggTradeWsShard:
 
     def status(self) -> Live2AggTradeWsShardStatus:
         with self._lock:
+            connection_age_seconds = None
+            if self._connection_started_at_ms is not None:
+                connection_age_seconds = max(0.0, (utc_now_ms() - int(self._connection_started_at_ms)) / 1000.0)
             return Live2AggTradeWsShardStatus(
                 shard_id=self.shard_id,
                 connection_status=self._connection_status,
                 endpoint_category=BINANCE_FUTURES_MARKET_ENDPOINT_CATEGORY,
                 stream_url_length=self._stream_url_length,
+                connection_started_at_ms=self._connection_started_at_ms,
                 first_message_at_ms=self._first_message_at_ms,
                 last_message_at_ms=self._last_message_at_ms,
+                current_connection_age_seconds=connection_age_seconds,
+                connection_max_age_seconds=self.connection_max_age_seconds,
                 last_error=self._last_error,
                 last_close_code=self._last_close_code,
                 last_close_reason=self._last_close_reason,
@@ -332,6 +362,8 @@ class _Live2AggTradeWsShard:
                 connect_attempts=self._connect_attempts,
                 reconnect_attempts=self._reconnect_attempts,
                 disconnect_count=self._disconnect_count,
+                planned_rotation_count=self._planned_rotation_count,
+                last_rotation_reason=self._last_rotation_reason,
                 consecutive_pre_first_payload_failures=self._consecutive_pre_first_payload_failures,
                 thread_alive=self._thread.is_alive(),
                 backoff_attempt=self._backoff.attempt,
@@ -347,8 +379,9 @@ class _Live2AggTradeWsShard:
             loop = asyncio.new_event_loop()
             try:
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._run_ws_loop())
+                outcome = loop.run_until_complete(self._run_ws_loop())
             except Exception as exc:  # pragma: no cover - network boundary
+                outcome = "error"
                 self._set_status(
                     "error",
                     f"{type(exc).__name__}: {exc}",
@@ -362,13 +395,18 @@ class _Live2AggTradeWsShard:
                 except Exception:
                     pass
             if not self._stop_event.is_set():
+                if outcome == "planned_rotation":
+                    self._reset_backoff()
+                    continue
                 delay = self._next_backoff_delay()
                 self._stop_event.wait(timeout=delay)
 
-    async def _run_ws_loop(self) -> None:
+    async def _run_ws_loop(self) -> str | None:
         import aiohttp
 
+        connection_started_at_ms = utc_now_ms()
         self._set_current_connection_payload_state(False)
+        self._mark_connection_started(connection_started_at_ms)
         self._set_status("connecting", None)
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=30)
         connector = _aiohttp_ws_connector()
@@ -381,8 +419,14 @@ class _Live2AggTradeWsShard:
                 self._set_status("connected", None)
                 connection_has_valid_payload = False
                 while not self._stop_event.is_set():
+                    rotation_remaining_seconds = self._planned_rotation_remaining_seconds(connection_started_at_ms)
+                    if rotation_remaining_seconds <= 0.0:
+                        self._mark_planned_rotation("aggtrade_ws_planned_rotation_before_24h_lifetime")
+                        await ws.close()
+                        return "planned_rotation"
+                    receive_timeout = max(0.1, min(max(1.0, self.stale_ms / 1000.0), rotation_remaining_seconds))
                     try:
-                        message = await ws.receive(timeout=max(1.0, self.stale_ms / 1000.0))
+                        message = await ws.receive(timeout=receive_timeout)
                     except TimeoutError:
                         if self._watchdog_stale():
                             self._set_status(
@@ -394,7 +438,7 @@ class _Live2AggTradeWsShard:
                                 pre_first_payload_disconnect=not connection_has_valid_payload,
                             )
                             await ws.close()
-                            return
+                            return "watchdog_stale"
                         continue
                     if message.type == aiohttp.WSMsgType.TEXT:
                         applied = self._handle_ws_payload(message.data)
@@ -411,7 +455,7 @@ class _Live2AggTradeWsShard:
                             close_reason=getattr(message, "extra", None),
                             pre_first_payload_disconnect=not connection_has_valid_payload,
                         )
-                        return
+                        return "closed"
                     elif message.type == aiohttp.WSMsgType.ERROR:
                         exception = ws.exception()
                         self._set_status(
@@ -422,7 +466,7 @@ class _Live2AggTradeWsShard:
                             exception=exception,
                             pre_first_payload_disconnect=not connection_has_valid_payload,
                         )
-                        return
+                        return "error"
 
     def _handle_ws_payload(self, raw: str) -> bool:
         try:
@@ -479,6 +523,22 @@ class _Live2AggTradeWsShard:
             buyer_is_maker=buyer_is_maker,
             source=self.source_id,
         )
+
+    def _planned_rotation_remaining_seconds(self, connection_started_at_ms: int) -> float:
+        age_seconds = max(0.0, (utc_now_ms() - int(connection_started_at_ms)) / 1000.0)
+        return max(0.0, self.connection_max_age_seconds - age_seconds)
+
+    def _mark_connection_started(self, connection_started_at_ms: int) -> None:
+        with self._lock:
+            self._connection_started_at_ms = int(connection_started_at_ms)
+            self._last_rotation_reason = None
+
+    def _mark_planned_rotation(self, reason: str) -> None:
+        with self._lock:
+            self._connection_status = "planned_rotation"
+            self._last_error = reason
+            self._planned_rotation_count += 1
+            self._last_rotation_reason = reason
 
     def _watchdog_stale(self) -> bool:
         with self._lock:

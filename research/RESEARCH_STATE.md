@@ -1,3 +1,13 @@
+
+## 2026-05-20 - P334 live2 planned WS rotation lifecycle
+
+```text
+Current patch status: P334 PROPOSED / UNKNOWN commit.
+Question: prevent Binance USD-M market WebSocket sessions from relying on server-side 24h disconnects and make WS lifecycle/audit data explicit.
+Change: live2 ticker and aggTrade WS sources now accept `ws_connection_max_age_seconds` (default 84600s = 23h30m), track per-connection start/age/max-age, close/error details, and planned rotation counters. When the configured age is reached, the source closes the WS intentionally and reconnects immediately without consuming exponential backoff. AggTrade shard readiness still requires fresh applied payload. No signal/category/order/fill/stop/TP logic changed.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic short-lifetime rotation smoke.
+Next validation: run live2 smoke long enough to see normal payloads, then a short test with `--ws-connection-max-age-seconds 2` and confirm planned rotations increment without reconnect storm or new-entry false readiness.
+```
 # Anomaly Research State
 
 ## 2026-05-20 - P333 live2 transition-only market-data diagnostics

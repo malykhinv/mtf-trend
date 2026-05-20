@@ -15,6 +15,8 @@ from .backoff import Live2ReconnectBackoff
 from .common import market_id_to_default_symbol, optional_float, optional_int, symbol_to_market_id
 
 BINANCE_FUTURES_ALL_TICKER_WS_URL = "wss://fstream.binance.com/market/ws/!ticker@arr"
+BINANCE_FUTURES_MARKET_ENDPOINT_CATEGORY = "market"
+
 
 
 def _aiohttp_ws_connector() -> object:
@@ -27,8 +29,18 @@ def _aiohttp_ws_connector() -> object:
 @dataclass(frozen=True, slots=True)
 class Live2TickerWsStatus:
     connection_status: str
+    endpoint_category: str
+    websocket_url: str
+    connection_started_at_ms: int | None
+    first_message_at_ms: int | None
     last_message_at_ms: int | None
+    current_connection_age_seconds: float | None
+    connection_max_age_seconds: float
     last_error: str | None
+    last_close_code: int | None
+    last_close_reason: str | None
+    last_exception_type: str | None
+    last_exception_text: str | None
     messages_received: int
     rows_received: int
     rows_applied: int
@@ -39,6 +51,8 @@ class Live2TickerWsStatus:
     connect_attempts: int
     reconnect_attempts: int
     disconnect_count: int
+    planned_rotation_count: int
+    last_rotation_reason: str | None
     thread_alive: bool
     backoff_attempt: int
     last_backoff_delay_seconds: float
@@ -49,9 +63,19 @@ class Live2TickerWsStatus:
         ready = self.connection_status == "connected" and age_ms is not None and age_ms <= stale_ms
         return {
             "connection_status": self.connection_status,
+            "endpoint_category": self.endpoint_category,
+            "websocket_url": self.websocket_url,
+            "connection_started_at_ms": self.connection_started_at_ms,
+            "first_message_at_ms": self.first_message_at_ms,
             "last_message_at_ms": self.last_message_at_ms,
+            "current_connection_age_seconds": self.current_connection_age_seconds,
+            "connection_max_age_seconds": self.connection_max_age_seconds,
             "last_message_age_ms": age_ms,
             "last_error": self.last_error,
+            "last_close_code": self.last_close_code,
+            "last_close_reason": self.last_close_reason,
+            "last_exception_type": self.last_exception_type,
+            "last_exception_text": self.last_exception_text,
             "messages_received": self.messages_received,
             "rows_received": self.rows_received,
             "rows_applied": self.rows_applied,
@@ -62,6 +86,8 @@ class Live2TickerWsStatus:
             "connect_attempts": self.connect_attempts,
             "reconnect_attempts": self.reconnect_attempts,
             "disconnect_count": self.disconnect_count,
+            "planned_rotation_count": self.planned_rotation_count,
+            "last_rotation_reason": self.last_rotation_reason,
             "thread_alive": self.thread_alive,
             "backoff_attempt": self.backoff_attempt,
             "last_backoff_delay_seconds": self.last_backoff_delay_seconds,
@@ -89,10 +115,14 @@ class Live2TickerWsSource:
         startup_wait_seconds: float,
         reconnect_initial_delay_seconds: float = 1.0,
         reconnect_max_delay_seconds: float = 60.0,
+        connection_max_age_seconds: float = 84_600.0,
     ) -> None:
         self.state_store = state_store
         self.stale_ms = int(stale_ms)
         self.startup_wait_seconds = float(startup_wait_seconds)
+        self.connection_max_age_seconds = float(connection_max_age_seconds)
+        if self.connection_max_age_seconds <= 0:
+            raise ValueError("connection_max_age_seconds must be > 0")
         self._backoff = Live2ReconnectBackoff(
             initial_seconds=float(reconnect_initial_delay_seconds),
             max_seconds=float(reconnect_max_delay_seconds),
@@ -104,8 +134,14 @@ class Live2TickerWsSource:
         self._stop_event = threading.Event()
         self._ready_event = threading.Event()
         self._connection_status = "starting"
+        self._connection_started_at_ms: int | None = None
+        self._first_message_at_ms: int | None = None
         self._last_message_at_ms: int | None = None
         self._last_error: str | None = None
+        self._last_close_code: int | None = None
+        self._last_close_reason: str | None = None
+        self._last_exception_type: str | None = None
+        self._last_exception_text: str | None = None
         self._messages_received = 0
         self._rows_received = 0
         self._rows_applied = 0
@@ -114,6 +150,8 @@ class Live2TickerWsSource:
         self._connect_attempts = 0
         self._reconnect_attempts = 0
         self._disconnect_count = 0
+        self._planned_rotation_count = 0
+        self._last_rotation_reason: str | None = None
         self._thread = threading.Thread(target=self._run_thread, name="live2-binance-all-ticker", daemon=True)
 
     def start(self) -> None:
@@ -136,10 +174,23 @@ class Live2TickerWsSource:
 
     def status(self) -> Live2TickerWsStatus:
         with self._lock:
+            connection_age_seconds = None
+            if self._connection_started_at_ms is not None:
+                connection_age_seconds = max(0.0, (utc_now_ms() - int(self._connection_started_at_ms)) / 1000.0)
             return Live2TickerWsStatus(
                 connection_status=self._connection_status,
+                endpoint_category=BINANCE_FUTURES_MARKET_ENDPOINT_CATEGORY,
+                websocket_url=BINANCE_FUTURES_ALL_TICKER_WS_URL,
+                connection_started_at_ms=self._connection_started_at_ms,
+                first_message_at_ms=self._first_message_at_ms,
                 last_message_at_ms=self._last_message_at_ms,
+                current_connection_age_seconds=connection_age_seconds,
+                connection_max_age_seconds=self.connection_max_age_seconds,
                 last_error=self._last_error,
+                last_close_code=self._last_close_code,
+                last_close_reason=self._last_close_reason,
+                last_exception_type=self._last_exception_type,
+                last_exception_text=self._last_exception_text,
                 messages_received=self._messages_received,
                 rows_received=self._rows_received,
                 rows_applied=self._rows_applied,
@@ -150,6 +201,8 @@ class Live2TickerWsSource:
                 connect_attempts=self._connect_attempts,
                 reconnect_attempts=self._reconnect_attempts,
                 disconnect_count=self._disconnect_count,
+                planned_rotation_count=self._planned_rotation_count,
+                last_rotation_reason=self._last_rotation_reason,
                 thread_alive=self._thread.is_alive(),
                 backoff_attempt=self._backoff.attempt,
                 last_backoff_delay_seconds=self._last_backoff_delay_seconds,
@@ -171,45 +224,69 @@ class Live2TickerWsSource:
             loop = asyncio.new_event_loop()
             try:
                 asyncio.set_event_loop(loop)
-                loop.run_until_complete(self._run_ws_loop())
+                outcome = loop.run_until_complete(self._run_ws_loop())
             except Exception as exc:  # pragma: no cover - network boundary
-                self._set_status("error", f"{type(exc).__name__}: {exc}", count_disconnect=True)
+                outcome = "error"
+                self._set_status("error", f"{type(exc).__name__}: {exc}", count_disconnect=True, exception=exc)
             finally:
                 try:
                     loop.close()
                 except Exception:
                     pass
             if not self._stop_event.is_set():
+                if outcome == "planned_rotation":
+                    self._reset_backoff()
+                    continue
                 delay = self._next_backoff_delay()
                 self._stop_event.wait(timeout=delay)
 
-    async def _run_ws_loop(self) -> None:
+    async def _run_ws_loop(self) -> str | None:
         import aiohttp
 
+        connection_started_at_ms = utc_now_ms()
+        self._mark_connection_started(connection_started_at_ms)
         self._set_status("connecting", None)
         timeout = aiohttp.ClientTimeout(total=None, sock_connect=15, sock_read=30)
         connector = _aiohttp_ws_connector()
         async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
             async with session.ws_connect(BINANCE_FUTURES_ALL_TICKER_WS_URL, heartbeat=20) as ws:
                 self._set_status("connected", None)
-                self._reset_backoff()
                 while not self._stop_event.is_set():
+                    rotation_remaining_seconds = self._planned_rotation_remaining_seconds(connection_started_at_ms)
+                    if rotation_remaining_seconds <= 0.0:
+                        self._mark_planned_rotation("ticker_ws_planned_rotation_before_24h_lifetime")
+                        await ws.close()
+                        return "planned_rotation"
+                    receive_timeout = max(0.1, min(max(1.0, self.stale_ms / 1000.0), rotation_remaining_seconds))
                     try:
-                        message = await ws.receive(timeout=max(1.0, self.stale_ms / 1000.0))
+                        message = await ws.receive(timeout=receive_timeout)
                     except TimeoutError:
                         if self._watchdog_stale():
                             self._set_status("watchdog_stale", "ticker_ws_watchdog_stale", count_disconnect=True)
                             await ws.close()
-                            return
+                            return "watchdog_stale"
                         continue
                     if message.type == aiohttp.WSMsgType.TEXT:
                         self._handle_ws_payload(message.data)
                     elif message.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING):
-                        self._set_status("closed", "ws_closed", count_disconnect=True)
-                        return
+                        self._set_status(
+                            "closed",
+                            "ws_closed",
+                            count_disconnect=True,
+                            close_code=getattr(ws, "close_code", None),
+                            close_reason=getattr(message, "extra", None),
+                        )
+                        return "closed"
                     elif message.type == aiohttp.WSMsgType.ERROR:
-                        self._set_status("error", f"ws_error:{ws.exception()}", count_disconnect=True)
-                        return
+                        exception = ws.exception()
+                        self._set_status(
+                            "error",
+                            f"ws_error:{exception}",
+                            count_disconnect=True,
+                            close_code=getattr(ws, "close_code", None),
+                            exception=exception,
+                        )
+                        return "error"
 
     def _handle_ws_payload(self, raw: str) -> None:
         try:
@@ -240,6 +317,9 @@ class Live2TickerWsSource:
             self._rows_applied += rows_applied
             self._rows_filtered += rows_filtered
             self._last_message_at_ms = now_ms
+            if self._first_message_at_ms is None:
+                self._first_message_at_ms = now_ms
+                self._reset_backoff_locked()
             self._last_error = None
             self._connection_status = "connected"
             if rows_applied > 0:
@@ -275,6 +355,23 @@ class Live2TickerWsSource:
         )
         return True
 
+    def _planned_rotation_remaining_seconds(self, connection_started_at_ms: int) -> float:
+        age_seconds = max(0.0, (utc_now_ms() - int(connection_started_at_ms)) / 1000.0)
+        return max(0.0, self.connection_max_age_seconds - age_seconds)
+
+    def _mark_connection_started(self, connection_started_at_ms: int) -> None:
+        with self._lock:
+            self._connection_started_at_ms = int(connection_started_at_ms)
+            self._first_message_at_ms = None
+            self._last_rotation_reason = None
+
+    def _mark_planned_rotation(self, reason: str) -> None:
+        with self._lock:
+            self._connection_status = "planned_rotation"
+            self._last_error = reason
+            self._planned_rotation_count += 1
+            self._last_rotation_reason = reason
+
     def _watchdog_stale(self) -> bool:
         with self._lock:
             if self._last_message_at_ms is None:
@@ -292,18 +389,41 @@ class Live2TickerWsSource:
         with self._lock:
             self._last_backoff_delay_seconds = 0.0
 
+    def _reset_backoff_locked(self) -> None:
+        self._backoff.reset()
+        self._last_backoff_delay_seconds = 0.0
+
     def _record_connect_attempt(self) -> None:
         with self._lock:
             self._connect_attempts += 1
             if self._connect_attempts > 1:
                 self._reconnect_attempts += 1
 
-    def _set_status(self, status: str, error: str | None, *, count_disconnect: bool = False) -> None:
+    def _set_status(
+        self,
+        status: str,
+        error: str | None,
+        *,
+        count_disconnect: bool = False,
+        close_code: object | None = None,
+        close_reason: object | None = None,
+        exception: BaseException | None = None,
+    ) -> None:
         with self._lock:
             self._connection_status = status
             self._last_error = error
             if count_disconnect:
                 self._disconnect_count += 1
+            if close_code is not None:
+                try:
+                    self._last_close_code = int(close_code)  # type: ignore[arg-type]
+                except (TypeError, ValueError):
+                    self._last_close_code = None
+            if close_reason is not None:
+                self._last_close_reason = str(close_reason)[:500]
+            if exception is not None:
+                self._last_exception_type = type(exception).__name__
+                self._last_exception_text = str(exception)[:500]
 
     def _record_payload_error(self, error: str) -> None:
         with self._lock:

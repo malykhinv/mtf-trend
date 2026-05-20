@@ -75,6 +75,7 @@ class AnomalyLive2Runner:
             startup_wait_seconds=config.ticker_startup_wait_seconds,
             reconnect_initial_delay_seconds=config.ws_reconnect_initial_delay_seconds,
             reconnect_max_delay_seconds=config.ws_reconnect_max_delay_seconds,
+            connection_max_age_seconds=config.ws_connection_max_age_seconds,
         )
         self.aggtrade_source: Live2AggTradeWsSource | None = None
         self.execution_engine = Live2ExecutionEngine(
@@ -233,6 +234,7 @@ class AnomalyLive2Runner:
                     max_streams_per_connection=self.config.aggtrade_max_streams_per_connection,
                     reconnect_initial_delay_seconds=self.config.ws_reconnect_initial_delay_seconds,
                     reconnect_max_delay_seconds=self.config.ws_reconnect_max_delay_seconds,
+                    connection_max_age_seconds=self.config.ws_connection_max_age_seconds,
                 )
                 self._write_aggtrade_starting_event(writer)
                 self._set_startup_status("aggTrade", "запускаю WS shards")
@@ -709,6 +711,7 @@ class AnomalyLive2Runner:
                     "reconnect_attempts": int(ws_health_dict.get("reconnect_attempts") or 0),
                     "disconnect_count": int(ws_health_dict.get("disconnect_count") or 0),
                     "payload_errors": int(ws_health_dict.get("payload_errors") or 0),
+                    "planned_rotation_count": int(ws_health_dict.get("planned_rotation_count") or 0),
                     "aggtrade_pre_first_payload_failures": int(ws_health_dict.get("aggtrade_pre_first_payload_failures") or 0),
                     "shards_total": int(ws_health_dict.get("shards_total") or 0),
                     "shards_connected": int(ws_health_dict.get("shards_connected") or 0),
@@ -889,6 +892,9 @@ class AnomalyLive2Runner:
         agg_reconnects = int(aggtrade_status.get("reconnect_attempts") or 0)
         agg_disconnects = int(aggtrade_status.get("disconnect_count") or 0)
         payload_errors = int(ticker_status.get("payload_errors") or 0) + int(aggtrade_status.get("payload_errors") or 0)
+        planned_rotation_count = int(ticker_status.get("planned_rotation_count") or 0) + int(
+            aggtrade_status.get("planned_rotation_count") or 0
+        )
         pre_first_payload_failures = 0
         if isinstance(agg_shards, list):
             for shard in agg_shards:
@@ -908,6 +914,7 @@ class AnomalyLive2Runner:
             "shards_stale": stale_shards,
             "reconnect_attempts": ticker_reconnects + agg_reconnects,
             "disconnect_count": ticker_disconnects + agg_disconnects,
+            "planned_rotation_count": planned_rotation_count,
             "payload_errors": payload_errors,
         }
 
@@ -983,6 +990,7 @@ class AnomalyLive2Runner:
                     "max_closed_candles_per_timeframe": self.config.max_closed_candles_per_timeframe,
                     "ws_reconnect_initial_delay_seconds": self.config.ws_reconnect_initial_delay_seconds,
                     "ws_reconnect_max_delay_seconds": self.config.ws_reconnect_max_delay_seconds,
+                    "ws_connection_max_age_seconds": self.config.ws_connection_max_age_seconds,
                     "execution_order_placement": "verified_fill_and_initial_stop_lifecycle_enabled",
                 },
             )
