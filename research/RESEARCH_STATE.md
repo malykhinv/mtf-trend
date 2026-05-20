@@ -1,5 +1,13 @@
 # Anomaly Research State
 
+## 2026-05-20 - P355 live2 session trading percent
+
+```text
+Current patch status: P355 APPLIED locally / UNKNOWN commit.
+Change: live2 now tracks runtime-gate allowed/blocked seconds per current crypto session metric window and renders the operator header as `Торговля N%`. The window resets on the same metric_start_ms used by session top-growth, so the percentage describes the current session, not whole process uptime.
+Validation: `.venv\Scripts\python.exe -m compileall -q research_tools\anomaly_live2\runner.py research_tools\anomaly_live2\status_grid.py`; `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py`.
+```
+
 ## 2026-05-20 - P354 live2 rolling prior-context maintenance
 
 ```text

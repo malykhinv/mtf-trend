@@ -1,5 +1,41 @@
 # Anomaly Patch Log
 
+## 2026-05-20 - P355 applied locally - live2 session trading-allowed percent
+
+Files:
+
+```text
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/status_grid.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Expose the operator-facing share of time when live2 actually allowed new entries, scoped to the current crypto session metric window like session tops, not to the whole process uptime.
+```
+
+Change:
+
+```text
+Runtime gate accounting now keeps separate session-scoped allowed/blocked seconds that reset on the same metric_start_ms used by live2 session top-growth. The status grid title renders `Торговля N%` from session_seconds, with a runtime-wide fallback only for old artifacts that do not yet carry the new field.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m compileall -q research_tools\anomaly_live2\runner.py research_tools\anomaly_live2\status_grid.py
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py
+```
+
+Risk:
+
+```text
+Low. Display/diagnostics only. It does not change market-data gates, signal decisions, execution, fills, stops, or position lifecycle.
+```
+
 ## 2026-05-20 - P354 applied locally - live2 rolling WS-maintained prior context
 
 Files:

@@ -33,7 +33,7 @@ from .market_data.warmup import (
     Live2StartupWarmupResult,
 )
 from .position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorConfig
-from .session_top import Live2SessionTopTracker
+from .session_top import Live2SessionTopTracker, live2_session_metric_window_ms
 from .signal import Live2SignalEngine
 from .state import SymbolStateStore
 from .status_grid import format_live2_status_grid
@@ -160,6 +160,11 @@ class AnomalyLive2Runner:
         self._runtime_gate_blocked_seconds = 0.0
         self._runtime_gate_current_allowed = False
         self._runtime_gate_current_since_monotonic = time.perf_counter()
+        self._session_gate_metric_start_ms: int | None = None
+        self._session_gate_allowed_seconds = 0.0
+        self._session_gate_blocked_seconds = 0.0
+        self._session_gate_current_allowed = False
+        self._session_gate_current_since_monotonic = self._runtime_gate_current_since_monotonic
         self._last_runtime_gate_reason = "startup"
         self._last_decision_cycle_elapsed_ms = 0
         self._started_monotonic = time.perf_counter()
@@ -864,11 +869,17 @@ class AnomalyLive2Runner:
 
     def _record_runtime_gate_transition(self, snapshot: dict[str, object]) -> None:
         now_monotonic = time.perf_counter()
+        now_ms = int(time.time() * 1000)
         elapsed = max(0.0, now_monotonic - self._runtime_gate_current_since_monotonic)
         if self._runtime_gate_current_allowed:
             self._runtime_gate_allowed_seconds += elapsed
         else:
             self._runtime_gate_blocked_seconds += elapsed
+        self._record_session_gate_transition(
+            snapshot=snapshot,
+            now_monotonic=now_monotonic,
+            now_ms=now_ms,
+        )
         self._runtime_gate_current_since_monotonic = now_monotonic
         self._runtime_gate_current_allowed = bool(snapshot.get("new_entries_allowed"))
         transition_key = self._transition_key(snapshot, (
@@ -884,6 +895,33 @@ class AnomalyLive2Runner:
         ))
         self._runtime_gate_transition_counts[transition_key] += 1
 
+    def _record_session_gate_transition(
+        self,
+        *,
+        snapshot: dict[str, object],
+        now_monotonic: float,
+        now_ms: int,
+    ) -> None:
+        self._ensure_session_gate_window(now_monotonic=now_monotonic, now_ms=now_ms)
+        elapsed = max(0.0, now_monotonic - self._session_gate_current_since_monotonic)
+        if self._session_gate_current_allowed:
+            self._session_gate_allowed_seconds += elapsed
+        else:
+            self._session_gate_blocked_seconds += elapsed
+        self._session_gate_current_since_monotonic = now_monotonic
+        self._session_gate_current_allowed = bool(snapshot.get("new_entries_allowed"))
+
+    def _ensure_session_gate_window(self, *, now_monotonic: float, now_ms: int) -> None:
+        session = live2_session_metric_window_ms(int(now_ms))
+        metric_start_ms = int(session["metric_start_ms"])
+        if self._session_gate_metric_start_ms == metric_start_ms:
+            return
+        self._session_gate_metric_start_ms = metric_start_ms
+        self._session_gate_allowed_seconds = 0.0
+        self._session_gate_blocked_seconds = 0.0
+        self._session_gate_current_allowed = self._runtime_gate_current_allowed
+        self._session_gate_current_since_monotonic = now_monotonic
+
     def _runtime_gate_seconds_snapshot(self) -> dict[str, object]:
         now_monotonic = time.perf_counter()
         current_elapsed = max(0.0, now_monotonic - self._runtime_gate_current_since_monotonic)
@@ -897,6 +935,25 @@ class AnomalyLive2Runner:
             "allowed_seconds": round(allowed, 3),
             "blocked_seconds": round(blocked, 3),
             "current_allowed": self._runtime_gate_current_allowed,
+            "current_state_seconds": round(current_elapsed, 3),
+        }
+
+    def _session_gate_seconds_snapshot(self) -> dict[str, object]:
+        now_monotonic = time.perf_counter()
+        now_ms = int(time.time() * 1000)
+        self._ensure_session_gate_window(now_monotonic=now_monotonic, now_ms=now_ms)
+        current_elapsed = max(0.0, now_monotonic - self._session_gate_current_since_monotonic)
+        allowed = self._session_gate_allowed_seconds
+        blocked = self._session_gate_blocked_seconds
+        if self._session_gate_current_allowed:
+            allowed += current_elapsed
+        else:
+            blocked += current_elapsed
+        return {
+            "metric_start_ms": self._session_gate_metric_start_ms,
+            "allowed_seconds": round(allowed, 3),
+            "blocked_seconds": round(blocked, 3),
+            "current_allowed": self._session_gate_current_allowed,
             "current_state_seconds": round(current_elapsed, 3),
         }
 
@@ -952,6 +1009,7 @@ class AnomalyLive2Runner:
                 "reason": runtime_gate_status.get("reason"),
                 "transition_counts": dict(self._runtime_gate_transition_counts),
                 "seconds": self._runtime_gate_seconds_snapshot(),
+                "session_seconds": self._session_gate_seconds_snapshot(),
             },
             "decision_funnel": {
                 "total_decisions": int(decision_status.get("total_decisions") or 0),
@@ -1035,6 +1093,7 @@ class AnomalyLive2Runner:
             "market_data_clean_windows": self._market_data_clean_windows,
             "market_data_recovery_windows": self.config.market_data_recovery_windows,
             "readiness": self.readiness.as_dict(),
+            "session_seconds": self._session_gate_seconds_snapshot(),
             "position_supervisor_status": self.position_supervisor.status(),
             "user_data_stream_status": self._user_data_stream_status(),
             "startup_ticker_snapshot": None

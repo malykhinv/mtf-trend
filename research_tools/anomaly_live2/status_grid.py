@@ -65,6 +65,7 @@ def format_live2_status_grid(
     market_gate_ready = bool(market_data_status.get("market_data_ready_for_entries"))
     artifact_ready = bool(artifact_writer_status.get("ready"))
     entries_allowed = bool(readiness.get("new_entries_allowed"))
+    trading_allowed_ratio = _trading_allowed_ratio(runtime_gate_status)
 
     connected_ratio = _connection_ratio(ws_health)
     data_status = "Поток" if coverage_ready else "Нет потока"
@@ -183,7 +184,7 @@ def format_live2_status_grid(
         ),
         *_format_session_top_block(session_top_snapshot),
         "",
-        "Торговля",
+        f"Торговля {_format_percent(trading_allowed_ratio, signed=False, precision=0)}",
         _format_status_line(
             _format_status_cell("PNL", "-"),
             _format_status_cell("Позиции", f"{open_positions}/{session_positions_total}"),
@@ -422,6 +423,18 @@ def _connection_ratio(ws_health: Mapping[str, object]) -> float | None:
     if ticker_ready:
         return 0.5
     return 0.0
+
+
+def _trading_allowed_ratio(runtime_gate_status: Mapping[str, object]) -> float | None:
+    seconds = _dict(runtime_gate_status.get("session_seconds")) or _dict(runtime_gate_status.get("seconds"))
+    allowed = _float_or_none(seconds.get("allowed_seconds"))
+    blocked = _float_or_none(seconds.get("blocked_seconds"))
+    if allowed is None or blocked is None:
+        return None
+    total = allowed + blocked
+    if total <= 0:
+        return 1.0 if _dict(runtime_gate_status.get("readiness")).get("new_entries_allowed") else 0.0
+    return max(0.0, min(1.0, allowed / total))
 
 
 def _compact_gate_reason(reason: str) -> str:
