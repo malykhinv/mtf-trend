@@ -6166,3 +6166,37 @@ Risk:
 ```text
 Low. This adds only the missing startup audit event writer. It does not change execution gates, endpoints, signal logic, thresholds, order placement, fill verification, stop handling, or TP behavior.
 ```
+
+
+## 2026-05-20 - P348 proposed - improve live2 aggTrade startup readiness diagnostics
+
+Files:
+
+```text
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/market_data/aggtrade_ws.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix the too-generic `live2 aggTrade WS startup failed: partial_or_connecting` startup failure by extending the default aggTrade startup wait and surfacing per-shard readiness blockers in `aggtrade_ws_startup_failed` artifacts/status. This keeps fail-fast strictness, but makes the failure actionable: no_messages vs connecting vs stale vs payload_error vs closed/error, including URL length, close code/reason, exception, rows and reconnect counters.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python - <<'CHECK'
+from research_tools.anomaly_live2.market_data.aggtrade_ws import Live2AggTradeWsStatus
+assert callable(getattr(Live2AggTradeWsStatus, '_readiness_reason'))
+CHECK
+```
+
+Risk:
+
+```text
+Low. This does not weaken the startup gate and does not add a fallback. It only gives aggTrade shards more realistic startup time and makes readiness blockers explicit.
+```

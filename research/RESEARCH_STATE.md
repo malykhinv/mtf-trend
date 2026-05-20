@@ -2313,3 +2313,12 @@ Current commit: UNKNOWN.
 P347 proposed after a failed live2 startup showed `AttributeError: 'AnomalyLive2Runner' object has no attribute '_write_user_data_stream_starting_event'`. The private user-data stream startup path called an audit helper that was missing from the applied patch stack. P347 adds that helper so startup can proceed to listenKey creation and private WS readiness checks.
 
 Next validation: apply P347, run compileall, then run `run-anomaly-live2` again. If startup passes this point, continue debugging from the next concrete startup/runtime error.
+
+
+## 2026-05-20 - P348 live2 aggTrade startup blocker diagnostics state
+
+Current commit: UNKNOWN.
+
+P348 proposed after live2 reached strict market-data startup and failed with `live2 aggTrade WS startup failed: partial_or_connecting`. That error is too generic for post-mortem. The patch keeps aggTrade fail-fast strict, increases the default startup wait from 10s to 60s for multi-shard startup, and adds `reason` plus `readiness_blockers` to aggTrade status so the next failure identifies the exact shard-level blocker.
+
+Next validation: apply P348, run compileall, then run `run-anomaly-live2` again. If it still fails, inspect `aggtrade_ws_startup_failed.data.aggtrade_ws.readiness_blockers` in `live2_events.csv` / status instead of guessing.

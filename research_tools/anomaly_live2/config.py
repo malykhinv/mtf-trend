@@ -20,7 +20,7 @@ class AnomalyLive2Config:
     ticker_stale_ms: int = 5_000
     ticker_startup_wait_seconds: float = 10.0
     aggtrade_stale_ms: int = 5_000
-    aggtrade_startup_wait_seconds: float = 10.0
+    aggtrade_startup_wait_seconds: float = 60.0
     aggtrade_max_streams_per_connection: int = 150
     mark_price_stale_ms: int = 5_000
     mark_price_startup_wait_seconds: float = 10.0

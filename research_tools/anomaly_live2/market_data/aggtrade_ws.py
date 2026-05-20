@@ -139,9 +139,12 @@ class Live2AggTradeWsStatus:
         disconnect_count = sum(shard.disconnect_count for shard in self.shard_statuses)
         planned_rotation_count = sum(shard.planned_rotation_count for shard in self.shard_statuses)
         ready = bool(self.shard_statuses) and connected == len(self.shard_statuses)
+        readiness_blockers = self._readiness_blockers(stale_ms=stale_ms)
         return {
             "source_status": self.source_status,
             "ready": ready,
+            "reason": "ready" if ready else self._readiness_reason(readiness_blockers),
+            "readiness_blockers": readiness_blockers,
             "endpoint_category": self.endpoint_category,
             "combined_stream_base_url": self.combined_stream_base_url,
             "shards_total": len(self.shard_statuses),
@@ -162,6 +165,57 @@ class Live2AggTradeWsStatus:
             "shards": [shard.as_dict(stale_ms=stale_ms) for shard in self.shard_statuses],
             "stale_ms": stale_ms,
         }
+
+    def _readiness_blockers(self, *, stale_ms: int) -> list[dict[str, object]]:
+        now_ms = utc_now_ms()
+        blockers: list[dict[str, object]] = []
+        if not self.shard_statuses:
+            return [{"reason": "no_shards"}]
+        for shard in self.shard_statuses:
+            if shard.is_ready(stale_ms=stale_ms):
+                continue
+            age_ms = None if shard.last_message_at_ms is None else max(0, now_ms - int(shard.last_message_at_ms))
+            reason = "not_connected"
+            if shard.connection_status in {"connecting", "starting"}:
+                reason = "connecting"
+            elif shard.connection_status in {"error", "closed", "watchdog_stale", "payload_error"}:
+                reason = shard.connection_status
+            elif shard.messages_received <= 0:
+                reason = "no_messages"
+            elif shard.rows_applied <= 0:
+                reason = "no_applicable_payload"
+            elif age_ms is not None and age_ms > stale_ms:
+                reason = "stale"
+            blockers.append({
+                "shard_id": shard.shard_id,
+                "reason": reason,
+                "connection_status": shard.connection_status,
+                "streams_count": shard.streams_count,
+                "stream_url_length": shard.stream_url_length,
+                "messages_received": shard.messages_received,
+                "rows_applied": shard.rows_applied,
+                "payload_errors": shard.payload_errors,
+                "last_message_age_ms": age_ms,
+                "last_error": shard.last_error,
+                "last_close_code": shard.last_close_code,
+                "last_close_reason": shard.last_close_reason,
+                "last_exception_type": shard.last_exception_type,
+                "last_exception_text": shard.last_exception_text,
+                "consecutive_pre_first_payload_failures": shard.consecutive_pre_first_payload_failures,
+                "connect_attempts": shard.connect_attempts,
+                "disconnect_count": shard.disconnect_count,
+            })
+        return blockers
+
+    @staticmethod
+    def _readiness_reason(blockers: list[dict[str, object]]) -> str:
+        if not blockers:
+            return "unknown_not_ready"
+        reasons = [str(blocker.get("reason") or "unknown") for blocker in blockers]
+        unique_reasons = tuple(dict.fromkeys(reasons))
+        if len(unique_reasons) == 1:
+            return unique_reasons[0]
+        return "+".join(unique_reasons)
 
 
 class Live2AggTradeWsSource:
