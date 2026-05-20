@@ -17,6 +17,7 @@ from research_tools.anomaly_live2.market_data.prior_context import (
 )
 from research_tools.anomaly_live2.signal import Live2SignalEngine, _effective_context_status
 from research_tools.anomaly_live2.state import LIVE2_AGGTRADE_WS_SOURCE, SymbolStateStore
+from research_tools.anomaly_live2.top_growth import HOUR_MS, Live2TopGrowthAudit, Live2TopGrowthAuditConfig
 
 
 def _trade(
@@ -319,3 +320,43 @@ def test_live2_deadline_expires_backlog_without_counting_near_deadline_miss() ->
     assert result.deadline_missed_count == 0
     assert result.deadline_expired_backlog_count == 1
     assert result.decisions[0].verdict == "deadline_expired_backlog"
+
+
+class _FakeTopGrowthExchange:
+    def fetch_ohlcv(self, symbol, timeframe, start_timestamp_ms, end_timestamp_ms):
+        close = 1.15 if symbol.startswith("AAA") else 1.02
+        return pd.DataFrame(
+            {
+                "timestamp": [start_timestamp_ms],
+                "open": [1.0],
+                "high": [close],
+                "low": [0.99],
+                "close": [close],
+                "quote_volume": [1000.0],
+                "number_of_trades": [100],
+                "taker_buy_quote_volume": [700.0],
+            }
+        )
+
+
+def test_live2_top_growth_writes_closed_hour_top_status_and_index(tmp_path) -> None:
+    audit = Live2TopGrowthAudit(
+        output_dir=tmp_path,
+        exchange_client=_FakeTopGrowthExchange(),
+        config=Live2TopGrowthAuditConfig(symbols_per_cycle=10, fetch_spacing_seconds=0.0),
+    )
+    now_ms = 10 * HOUR_MS + 123_000
+
+    stats = audit.process_due(symbols=("AAA/USDT:USDT", "BBB/USDT:USDT"), now_ms=now_ms)
+
+    assert stats.status == "completed"
+    assert stats.top_count == 1
+    index = tmp_path / "top_growth" / "top_growth_index.csv"
+    assert index.exists()
+    assert (tmp_path / stats.top_file).exists()
+    assert (tmp_path / stats.status_file).exists()
+    top_text = (tmp_path / stats.top_file).read_text(encoding="utf-8-sig")
+    status_text = (tmp_path / stats.status_file).read_text(encoding="utf-8-sig")
+    assert "AAA/USDT:USDT" in top_text
+    assert "BBB/USDT:USDT" in status_text
+    assert "below_threshold" in status_text

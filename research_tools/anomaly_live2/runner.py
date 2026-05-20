@@ -38,6 +38,7 @@ from .signal import Live2SignalEngine
 from .state import SymbolStateStore
 from .status_grid import format_live2_status_grid
 from .telegram import Live2TelegramConfig, Live2TelegramDispatcher
+from .top_growth import Live2TopGrowthAudit, Live2TopGrowthAuditConfig, Live2TopGrowthAuditStats
 from .user_data_stream import Live2UserDataStreamSource
 
 
@@ -119,6 +120,23 @@ class AnomalyLive2Runner:
         self.startup_context_prewarm_result: dict[str, object] | None = None
         self.session_top_tracker = Live2SessionTopTracker()
         self._last_session_top_snapshot: dict[str, object] | None = None
+        self.top_growth_audit = Live2TopGrowthAudit(
+            output_dir=config.output_dir,
+            exchange_client=exchange_client,
+            config=Live2TopGrowthAuditConfig(
+                enabled=config.top_growth_enabled,
+                min_return_pct=config.top_growth_min_return_pct,
+                limit=config.top_growth_limit,
+                symbols_per_cycle=config.top_growth_symbols_per_cycle,
+                max_cycle_seconds=config.top_growth_max_cycle_seconds,
+                fetch_spacing_seconds=config.top_growth_fetch_spacing_seconds,
+            ),
+        )
+        self._last_top_growth_audit_stats = Live2TopGrowthAuditStats(
+            enabled=config.top_growth_enabled,
+            status="not_started",
+            reason="not_started",
+        )
         self.deadline_engine = Live2DeadlineEngine(
             state_store=self.state_store,
             config=Live2DeadlineEngineConfig(
@@ -545,6 +563,21 @@ class AnomalyLive2Runner:
                     last_heartbeat_at = now_monotonic
                     self.session_top_tracker.update_from_state_snapshot(self.state_store.snapshot())
                     self._last_session_top_snapshot = self.session_top_tracker.snapshot()
+                    self._last_top_growth_audit_stats = self.top_growth_audit.process_due(
+                        symbols=self._selected_symbols_tuple(),
+                        now_ms=int(time.time() * 1000),
+                    )
+                    if self._last_top_growth_audit_stats.status == "completed":
+                        writer.write_event(
+                            Live2Event(
+                                event_type="live2_top_growth_audit_completed",
+                                component=Live2Component.RUNNER,
+                                severity=Live2Severity.INFO,
+                                symbol="__top_growth__",
+                                message=self._last_top_growth_audit_stats.reason,
+                                data=self._last_top_growth_audit_stats.as_dict(),
+                            )
+                        )
                     market_data_status = self._market_data_status(include_symbol_counts=True)
                     runtime_gate_status = self._runtime_gate_status()
                     writer.write_event(
@@ -569,6 +602,7 @@ class AnomalyLive2Runner:
                                 "user_data_stream_status": self._user_data_stream_status(),
                                 "position_supervisor_cycle": supervisor_result.as_dict(),
                                 "session_top": self._last_session_top_snapshot or {},
+                                "top_growth_audit": self._last_top_growth_audit_stats.as_dict(),
                                 "artifact_writer_status": writer.status().as_dict(),
                             },
                         )
@@ -1018,6 +1052,7 @@ class AnomalyLive2Runner:
             },
             "market_runtime_seconds": round(self._market_runtime_seconds(), 3),
             "session_top": self._last_session_top_snapshot or {},
+            "top_growth_audit": self._last_top_growth_audit_stats.as_dict(),
             "runtime_gate": {
                 "status": runtime_gate_status.get("status"),
                 "reason": runtime_gate_status.get("reason"),
@@ -1168,6 +1203,11 @@ class AnomalyLive2Runner:
             min_trade_count_24h=self.config.universe_min_trade_count_24h,
         )
         return selector.select()
+
+    def _selected_symbols_tuple(self) -> tuple[str, ...]:
+        if self.universe_selection is None:
+            return ()
+        return tuple(self.universe_selection.selected_symbols)
 
     def _market_data_status(self, *, include_symbol_counts: bool = True) -> dict[str, object]:
         ticker_status = self.ticker_source.status().as_dict(stale_ms=self.config.ticker_stale_ms)
@@ -1456,6 +1496,11 @@ class AnomalyLive2Runner:
                     "decision_timeframe_ms": self.config.decision_timeframe_ms,
                     "decision_deadline_ms": self.config.decision_deadline_ms,
                     "decision_backlog_expire_ms": self.config.decision_backlog_expire_ms,
+                    "top_growth_enabled": self.config.top_growth_enabled,
+                    "top_growth_min_return_pct": self.config.top_growth_min_return_pct,
+                    "top_growth_limit": self.config.top_growth_limit,
+                    "top_growth_symbols_per_cycle": self.config.top_growth_symbols_per_cycle,
+                    "top_growth_max_cycle_seconds": self.config.top_growth_max_cycle_seconds,
                     "market_data_recovery_windows": self.config.market_data_recovery_windows,
                     "startup_warmup_lookback_minutes": self.config.startup_warmup_lookback_minutes,
                     "startup_warmup_max_trades_per_symbol": self.config.startup_warmup_max_trades_per_symbol,

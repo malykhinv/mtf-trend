@@ -1,5 +1,46 @@
 # Anomaly Patch Log
 
+## 2026-05-20 - P357 applied locally - live2 closed-hour top-growth audit
+
+Files:
+
+```text
+cli/commands.py
+cli/parser.py
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/top_growth.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make live2 write closed-hour top-growth artifacts inside the same run so missed pumps can be compared against observed live visibility without relying on ticker/session UI snapshots.
+```
+
+Change:
+
+```text
+Added a bounded incremental top-growth audit for live2. On heartbeat it processes a small number of selected-universe symbols against the previous fully closed 1h exchange candle and writes top_growth_index.csv, top_growth_YYYYMMDD_HH0000_UTC.csv, and top_growth_status_YYYYMMDD_HH0000_UTC.csv under the run directory. Empty top files are still written with headers; status rows retain below_threshold, empty_ohlcv, missing_columns, no_exact_hour_candle, invalid_open_close, and fetch_ohlcv_failed reasons.
+```
+
+Validation:
+
+```bash
+python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py
+```
+
+Risk:
+
+```text
+Low to medium. The audit is bounded to one symbol per heartbeat by default and is not a signal source or entry gate. It still uses REST OHLCV calls, so live artifacts must monitor `top_growth_audit.cycle_seconds` and processing lag; increase symbols_per_cycle only if decision latency stays clean.
+```
+
 ## 2026-05-20 - P356 applied locally - live2 entry-stream gate and honest backlog/context diagnostics
 
 Files:

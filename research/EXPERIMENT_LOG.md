@@ -1,4 +1,14 @@
 
+## 2026-05-20 - P357 live2 top-growth audit validation plan
+
+```text
+Patch applied locally. The next live2 run should create `top_growth/top_growth_index.csv` immediately with headers, then after the first heartbeat after a closed UTC hour should process the previous closed 1h period incrementally. Completion should write top/status files even when no symbol crosses the 10% threshold.
+
+Expected improvement: every run can now answer whether live2 saw or missed the real hourly movers. This is audit/research data only, not an entry filter.
+
+Failure condition: if top-growth processing increases `decision_loop_overrun_count`, `total_deadline_missed`, or artifact writer backpressure, reduce `top_growth_symbols_per_cycle` or disable it until a fully background-safe exchange boundary is implemented.
+```
+
 ## 2026-05-20 - P356 live2 stability patch validation plan
 
 ```text

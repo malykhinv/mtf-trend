@@ -497,6 +497,12 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live2.add_argument("--prior-context-radar-symbol-ttl-ms", type=_positive_int_for("--prior-context-radar-symbol-ttl-ms"), default=60_000)
     anomaly_live2.add_argument("--prior-context-spike-return-pct", type=float, default=0.03)
     anomaly_live2.add_argument("--prior-context-fast-fade-retrace-fraction", type=float, default=0.55)
+    anomaly_live2.add_argument("--top-growth-enabled", type=_str_to_bool, default=True)
+    anomaly_live2.add_argument("--top-growth-min-return-pct", type=float, default=0.10)
+    anomaly_live2.add_argument("--top-growth-limit", type=_positive_int_for("--top-growth-limit"), default=5)
+    anomaly_live2.add_argument("--top-growth-symbols-per-cycle", type=_positive_int_for("--top-growth-symbols-per-cycle"), default=1)
+    anomaly_live2.add_argument("--top-growth-max-cycle-seconds", type=float, default=0.75)
+    anomaly_live2.add_argument("--top-growth-fetch-spacing-seconds", type=float, default=0.02)
     anomaly_live2.add_argument("--output-dir", default=None, help="Optional artifact output directory")
 
     live_order_smoke = subparsers.add_parser(

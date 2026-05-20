@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P357 live2 closed-hour top-growth audit
+
+```text
+Current patch status: P357 APPLIED locally / UNKNOWN commit.
+Question: can live2 prove what hourly pumps happened during the run even when it made no trades?
+Change: live2 now owns a bounded top-growth audit task. It writes closed 1h exchange-candle `top_growth/` artifacts inside the run root: index, capped top rows, and full per-symbol status rows. The task is not a signal source and does not use ticker/session snapshots as a fallback.
+Trading impact: none directly. This improves missed-pump visibility and data-quality audit only. It may add low-rate REST load on heartbeat; default is one symbol per heartbeat to avoid moving the latency bottleneck into the decision loop.
+Validation: `python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py`; `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py`.
+Next validation: run live2 across one UTC hour close and require `top_growth/top_growth_index.csv`, `top_growth_*.csv`, and `top_growth_status_*.csv` to appear; heartbeat diagnostics should show `top_growth_audit.status=processing/completed` without decision latency degradation.
+```
+
 ## 2026-05-20 - P356 live2 entry-stream gate and backlog/context diagnostics
 
 ```text

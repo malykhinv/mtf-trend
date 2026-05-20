@@ -38,6 +38,12 @@ class AnomalyLive2Config:
     prior_context_radar_symbol_ttl_ms: int = 60_000
     prior_context_spike_return_pct: float = 0.03
     prior_context_fast_fade_retrace_fraction: float = 0.55
+    top_growth_enabled: bool = True
+    top_growth_min_return_pct: float = 0.10
+    top_growth_limit: int = 5
+    top_growth_symbols_per_cycle: int = 1
+    top_growth_max_cycle_seconds: float = 0.75
+    top_growth_fetch_spacing_seconds: float = 0.02
     startup_context_prewarm_request_sleep_seconds: float = 0.0
     startup_context_prewarm_error_limit: int = 50
     ws_reconnect_initial_delay_seconds: float = 1.0
@@ -128,6 +134,16 @@ class AnomalyLive2Config:
             raise ValueError("prior_context_spike_return_pct must be > 0")
         if not 0.0 <= self.prior_context_fast_fade_retrace_fraction <= 1.0:
             raise ValueError("prior_context_fast_fade_retrace_fraction must be in [0, 1]")
+        if self.top_growth_min_return_pct <= 0:
+            raise ValueError("top_growth_min_return_pct must be > 0")
+        if self.top_growth_limit <= 0:
+            raise ValueError("top_growth_limit must be > 0")
+        if self.top_growth_symbols_per_cycle <= 0:
+            raise ValueError("top_growth_symbols_per_cycle must be > 0")
+        if self.top_growth_max_cycle_seconds <= 0:
+            raise ValueError("top_growth_max_cycle_seconds must be > 0")
+        if self.top_growth_fetch_spacing_seconds < 0:
+            raise ValueError("top_growth_fetch_spacing_seconds must be >= 0")
         if self.startup_context_prewarm_request_sleep_seconds < 0:
             raise ValueError("startup_context_prewarm_request_sleep_seconds must be >= 0")
         if self.startup_context_prewarm_error_limit <= 0:
