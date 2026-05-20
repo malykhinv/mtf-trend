@@ -1034,6 +1034,28 @@ class AnomalyLive2Runner:
             }
         return self.user_data_source.status().as_dict()
 
+    def _write_user_data_stream_starting_event(self, writer: Live2ArtifactWriter) -> None:
+        writer.write_event(
+            Live2Event(
+                event_type="user_data_stream_starting",
+                component=Live2Component.EXECUTION,
+                severity=Live2Severity.INFO,
+                message="starting Binance futures private user-data WS",
+                data={
+                    "source": Live2UserDataStreamSource.source_id,
+                    "endpoint_category": Live2UserDataStreamSource.endpoint_category,
+                    "websocket_url_redacted": Live2UserDataStreamSource.websocket_url_redacted,
+                    "startup_wait_seconds": self.config.user_data_stream_startup_wait_seconds,
+                    "keepalive_interval_seconds": self.config.user_data_stream_keepalive_interval_seconds,
+                    "reconnect_initial_delay_seconds": self.config.ws_reconnect_initial_delay_seconds,
+                    "reconnect_max_delay_seconds": self.config.ws_reconnect_max_delay_seconds,
+                    "connection_max_age_seconds": self.config.ws_connection_max_age_seconds,
+                    "raw_listen_key_in_artifacts": False,
+                    "trading_mode": "real_orders_always_enabled",
+                },
+            )
+        )
+
     def _select_universe(self) -> Live2UniverseSelection:
         selector = Live2UniverseSelector(
             state_store=self.state_store,

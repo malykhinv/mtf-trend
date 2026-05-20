@@ -6137,3 +6137,32 @@ Risk:
 ```text
 Low. This adds the module that P337/P345 already referenced. It does not change thresholds, order execution, WS endpoints, TP/stop behavior, or runtime gates.
 ```
+
+
+## 2026-05-20 - P347 proposed - add missing live2 user-data startup event writer
+
+Files:
+
+```text
+research_tools/anomaly_live2/runner.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix the incomplete P340/P342 private user-data stream patch stack by adding the missing `_write_user_data_stream_starting_event()` method called during live2 startup. Without it, run-anomaly-live2 fails with AttributeError before listenKey creation and private WS startup can be audited.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low. This adds only the missing startup audit event writer. It does not change execution gates, endpoints, signal logic, thresholds, order placement, fill verification, stop handling, or TP behavior.
+```

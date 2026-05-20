@@ -2304,3 +2304,12 @@ Current commit: UNKNOWN.
 P346 proposed after a failed live2 startup showed `ModuleNotFoundError: No module named 'research_tools.anomaly_live2.market_data.prior_context'`. The earlier P345 prewarm patch referenced `Live2PriorContextPoller`, but the module file was missing from the applied patch stack. P346 adds the missing module so live2 can import and proceed to startup preflight.
 
 Next validation: apply P346, run compileall, then run `run-anomaly-live2` again. If import succeeds, continue debugging from the next concrete startup/runtime error.
+
+
+## 2026-05-20 - P347 live2 user-data startup event writer state
+
+Current commit: UNKNOWN.
+
+P347 proposed after a failed live2 startup showed `AttributeError: 'AnomalyLive2Runner' object has no attribute '_write_user_data_stream_starting_event'`. The private user-data stream startup path called an audit helper that was missing from the applied patch stack. P347 adds that helper so startup can proceed to listenKey creation and private WS readiness checks.
+
+Next validation: apply P347, run compileall, then run `run-anomaly-live2` again. If startup passes this point, continue debugging from the next concrete startup/runtime error.
