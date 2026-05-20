@@ -6109,3 +6109,31 @@ Risk:
 ```text
 Medium. Startup becomes heavier because it performs explicit OI and 24h prior-context requests for the selected universe. This is intentional: live2 is meant to be a continuous real-order runtime, not a best-effort lazy scanner. Trading logic, thresholds, order sizing, WS endpoints, fill/stop/TP behavior are unchanged.
 ```
+
+## 2026-05-20 - P346 proposed - add missing live2 prior-context module
+
+Files:
+
+```text
+research_tools/anomaly_live2/market_data/prior_context.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix the incomplete P345 patch stack by adding the missing live2 24h prior-context module imported by runner.py. Without this file, run-anomaly-live2 fails at import time with ModuleNotFoundError before startup diagnostics can run.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low. This adds the module that P337/P345 already referenced. It does not change thresholds, order execution, WS endpoints, TP/stop behavior, or runtime gates.
+```

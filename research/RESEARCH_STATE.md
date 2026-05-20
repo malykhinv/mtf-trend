@@ -2296,3 +2296,11 @@ Current commit: UNKNOWN.
 P345 proposed after P344. Live2 is still not a true all-seeing runtime if OI and 24h prior context are lazy-loaded only after a symbol becomes active/radar, because the first 5s impulse can be classified as `data_dependency_not_ready` before context arrives. P345 adds startup prewarm for OI and strict 24h prior context across the selected universe before runtime entries begin. Runtime context refresh remains active/radar-only. No fallback or hot-path REST is added.
 
 Next validation: apply P331-P345, run compileall, then run a short live2 smoke. Startup should show OI/24h prewarm progress and `live2_status.json.market_data.startup_context_prewarm`. If startup is too slow, tune source-side request pacing deliberately; do not revert to lazy-only context for real-order mode.
+
+## 2026-05-20 - P346 live2 missing prior-context module state
+
+Current commit: UNKNOWN.
+
+P346 proposed after a failed live2 startup showed `ModuleNotFoundError: No module named 'research_tools.anomaly_live2.market_data.prior_context'`. The earlier P345 prewarm patch referenced `Live2PriorContextPoller`, but the module file was missing from the applied patch stack. P346 adds the missing module so live2 can import and proceed to startup preflight.
+
+Next validation: apply P346, run compileall, then run `run-anomaly-live2` again. If import succeeds, continue debugging from the next concrete startup/runtime error.
