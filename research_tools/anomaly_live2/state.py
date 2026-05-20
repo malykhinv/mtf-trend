@@ -818,6 +818,30 @@ class SymbolStateStore:
                 state = self.get_or_create(trade.symbol)
                 state.update_aggtrade(trade, received_at_ms=received_at_ms)
 
+    def close_due_candles(self, *, now_ms: int) -> int:
+        """Finalize ended real-trade candles without synthetic gap filling."""
+
+        closed_symbols = 0
+        with self._lock:
+            for state in self._states.values():
+                if not state.universe_selected:
+                    continue
+                result = state.candle_book.close_due(now_ms=int(now_ms))
+                if result.closed_count <= 0:
+                    continue
+                state.candle_gap_count = state.candle_book.total_gap_count()
+                state.candle_out_of_order_count = state.candle_book.total_out_of_order_count()
+                if state.live_aggtrade_update_count > 0:
+                    state.candle_coverage_status = "live_ready"
+                elif state.startup_aggtrade_update_count > 0:
+                    state.candle_coverage_status = "startup_warmup_only"
+                else:
+                    state.candle_coverage_status = "not_ready"
+                state.decision_dirty_since_ms = int(now_ms)
+                state.mark_dirty(now_ms=int(now_ms))
+                closed_symbols += 1
+        return closed_symbols
+
     def snapshot(self) -> tuple[SymbolState, ...]:
         with self._lock:
             return tuple(self._states.values())

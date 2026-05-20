@@ -29,6 +29,7 @@ from .market_data.warmup import (
 )
 from .position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorConfig
 from .session_top import Live2SessionTopTracker
+from .signal import Live2SignalEngine
 from .state import SymbolStateStore
 from .status_grid import format_live2_status_grid
 from .telegram import Live2TelegramConfig, Live2TelegramDispatcher
@@ -122,6 +123,10 @@ class AnomalyLive2Runner:
                 actionable_min_trade_count=config.actionable_min_trade_count,
                 actionable_min_abs_return_pct=config.actionable_min_abs_return_pct,
                 stale_trade_ms=config.aggtrade_stale_ms,
+            ),
+            signal_engine=Live2SignalEngine(
+                oi_stale_ms=config.oi_stale_ms,
+                prior_context_stale_ms=config.prior_context_stale_ms,
             ),
             entry_guard=Live2EntryGuardEngine(
                 config=Live2EntryGuardConfig(
@@ -499,11 +504,13 @@ class AnomalyLive2Runner:
             last_heartbeat_at = 0.0
             while not self._shutdown_requested:
                 cycle_started = time.perf_counter()
+                decision_now_ms = int(time.time() * 1000)
+                self.state_store.close_due_candles(now_ms=decision_now_ms)
                 supervisor_result = self.position_supervisor.run_cycle(self.state_store)
                 for action in supervisor_result.actions:
                     writer.write_event(action.as_event())
                     self.telegram.notify_supervisor_action(action)
-                deadline_result = self.deadline_engine.run_cycle()
+                deadline_result = self.deadline_engine.run_cycle(now_ms=decision_now_ms)
                 self._last_decision_cycle_elapsed_ms = int((time.perf_counter() - cycle_started) * 1000)
                 self._decision_loop_max_elapsed_ms = max(
                     self._decision_loop_max_elapsed_ms,

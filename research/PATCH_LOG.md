@@ -1,5 +1,48 @@
 # Anomaly Patch Log
 
+## 2026-05-20 - P352 applied locally - live2 wall-clock candle close and prior-context freshness
+
+Files:
+
+```text
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/market_data/candles.py
+research_tools/anomaly_live2/market_data/prior_context.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/state.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Fix live2 market-watch stability issues visible in run 20260520_112804: actionable 5s real-trade candles could become deadline_missed when no next trade arrived to close the bucket, and prior 24h context could not stay fresh across the selected universe with the old 4-symbol/10s active/radar-only poller. Also prevent signal categories from treating stale OI/prior context as ok.
+```
+
+Change:
+
+```text
+Live2 now finalizes ended real-trade candles on the decision loop wall clock without synthetic candles, REST backfill, or zero-volume gap fill. Gap diagnostics are preserved when the next real trade arrives after idle buckets. The prior-context poller now refreshes the whole selected universe with active/actionable/in-position symbols prioritized and oldest-first fairness; defaults are 10 symbols per 10s, 600s symbol cooldown, and 20m stale window. Signal features now expose effective stale-aware OI/prior-context statuses plus raw statuses, so stale context becomes data_dependency_not_ready instead of hidden ok.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py
+```
+
+Risk:
+
+```text
+Medium. Decision timing should improve because buckets close at wall-clock bucket end, but the decision loop now checks due candle closure for selected symbols every cycle. Prior-context REST load increases to about 60 OHLCV requests/minute at default universe size; it is bounded and visible through prior_context status/errors/stale counts.
+```
+
 ## 2026-05-20 - P351 proposed - event-driven live2 deadline loop and honest aggTrade/OI health
 
 Files:

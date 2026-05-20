@@ -59,8 +59,16 @@ class Live2SignalEngine:
     ``data_dependency_not_ready`` instead of being mixed into trading rejects.
     """
 
-    def __init__(self, *, category_ids: tuple[str, ...] = DEFAULT_PUMP_CATEGORY_IDS) -> None:
+    def __init__(
+        self,
+        *,
+        category_ids: tuple[str, ...] = DEFAULT_PUMP_CATEGORY_IDS,
+        oi_stale_ms: int | None = None,
+        prior_context_stale_ms: int | None = None,
+    ) -> None:
         self.category_ids = tuple(category_ids)
+        self.oi_stale_ms = None if oi_stale_ms is None else int(oi_stale_ms)
+        self.prior_context_stale_ms = None if prior_context_stale_ms is None else int(prior_context_stale_ms)
         self._total_evaluations = 0
         self._total_selected = 0
         self._total_rejected = 0
@@ -256,10 +264,22 @@ class Live2SignalEngine:
             mark_basis_status = "ok"
         elif state.mark_status:
             mark_basis_status = state.mark_status
+        oi_status = _effective_context_status(
+            status=state.oi_status,
+            last_seen_ms=state.oi_last_seen_ms,
+            decision_time_ms=candle.close_time_ms,
+            stale_ms=self.oi_stale_ms,
+        )
+        prior_context_status = _effective_context_status(
+            status=state.prior_context_status,
+            last_seen_ms=state.prior_context_last_seen_ms,
+            decision_time_ms=candle.close_time_ms,
+            stale_ms=self.prior_context_stale_ms,
+        )
         prior_whipsaw = None
         impulse_range = candle.high - candle.low
         if (
-            state.prior_context_status == "ok"
+            prior_context_status == "ok"
             and state.prior_high_24h is not None
             and state.prior_low_before_high_24h is not None
             and state.prior_low_after_high_24h is not None
@@ -328,9 +348,11 @@ class Live2SignalEngine:
             "oi_previous_timestamp_ms": state.oi_previous_timestamp_ms,
             "oi_last_seen_ms": state.oi_last_seen_ms,
             "oi_source": state.oi_source,
-            "oi_status": state.oi_status,
+            "oi_status": oi_status,
+            "oi_raw_status": state.oi_status,
             "oi_reason": state.oi_reason,
-            "prior_context_status": state.prior_context_status,
+            "prior_context_status": prior_context_status,
+            "prior_context_raw_status": state.prior_context_status,
             "prior_context_reason": state.prior_context_reason,
             "prior_context_source": state.prior_context_source,
             "prior_context_last_seen_ms": state.prior_context_last_seen_ms,
@@ -598,6 +620,20 @@ def _avg(values: list[float]) -> float:
 
 def _range_pct(candle: Live2Candle) -> float:
     return (candle.high / candle.low) - 1.0 if candle.low > 0 else 0.0
+
+
+def _effective_context_status(
+    *,
+    status: str,
+    last_seen_ms: int | None,
+    decision_time_ms: int,
+    stale_ms: int | None,
+) -> str:
+    if status != "ok" or stale_ms is None or last_seen_ms is None:
+        return status
+    if int(decision_time_ms) - int(last_seen_ms) > int(stale_ms):
+        return "stale"
+    return status
 
 
 def _float_or_none(value: object) -> float | None:

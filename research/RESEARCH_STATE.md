@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P352 live2 market-watch stability patch
+
+```text
+Current patch status: P352 APPLIED locally / UNKNOWN commit.
+Question: current live2 run 20260520_112804 is stable at WS/execution level but still has market-watch holes: many `deadline_missed`, prior-context stale counts across the selected universe, and signal-side stale context could still be treated as ok.
+Change: live2 closes ended real-trade candles by wall clock inside the decision loop, without synthetic candles or REST/backfill. This removes the dependency on a later trade to make the previous 5s bucket visible to the deadline engine. Prior-context runtime refresh now covers the whole selected universe with active/actionable symbols prioritized and oldest-first fairness, defaulting to 10 symbols/10s, 600s cooldown, and 20m stale. Signal features now use effective stale-aware OI/prior-context statuses while preserving raw status fields in artifacts.
+Trading impact: stricter and more timely. Potential entries are less likely to be lost as deadline_missed after a burst goes quiet; stale derivative/prior context can no longer pass category gates as ok. No thresholds, fill, stop, TP, or execution safety are loosened.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py`.
+Next validation: restart live2 on this commit only when ready, then require `total_deadline_missed` share and prior_context stale count to trend down while artifact writer backpressure and prior_context total_errors stay near zero.
+```
+
 ## 2026-05-20 - P351 live2 event-driven deadline and aggTrade/OI diagnostics
 
 ```text

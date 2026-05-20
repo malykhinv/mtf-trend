@@ -3191,6 +3191,15 @@ Conclusion: trailing-only can raise summed return, but the extra return mostly c
 
 Decision:
 
+## 2026-05-20 - live2 20260520_112804 stability triage
+
+```text
+Artifact: .output/results/live2_anomaly_runs/20260520_112804
+Observation: WS/execution/writer were healthy: aggTrade/ticker/mark ready, user-data/execution ready, artifact writer had no backpressure/errors, no integrity errors/orders. Bottlenecks were market-watch completeness: ~15.5k decisions with ~3.8k deadline_missed, prior_context_status_counts had hundreds of stale selected symbols, and aggTrade gap diagnostics were visible but not fatal.
+Root cause found in code: real-trade candles were only moved to closed by the next trade, so a burst candle followed by silence could miss the 750ms deadline despite being a valid ended bucket. Prior-context runtime refresh was active/radar scoped and too slow for the selected universe. Signal evaluation used raw status fields, so stale OI/prior context could still look ok to categories.
+Patch: P352 applied locally. Next run should validate lower deadline_missed share, lower prior_context stale count after one refresh cycle, and no rise in prior_context total_errors or artifact writer queue pressure.
+```
+
 ```text
 Yes. Use a cheap universe gate on the implicit exchange symbol list: REST 24h ticker quoteVolume >= 300k USDT at startup, then refresh every 12h by default.
 This should reduce 72h context and scan load before trading starts. It must not replace category-level baseline liquidity, because a current 24h ticker can include the pump itself while P281 uses pre-pump closed-kline baseline.

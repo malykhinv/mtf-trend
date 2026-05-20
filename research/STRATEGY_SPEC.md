@@ -121,6 +121,7 @@ Live scheduling contract:
 live2 contract starts as a separate `run-anomaly-live2` runtime, not a flag on live1; generation 0 may keep execution unimplemented, but must expose this as `todo_not_implemented` readiness gates and must keep `new_entries_allowed=false` until market-data, signal, exchange boundary, position supervisor, and execution gates are true
 live2 ticker WS is discovery/state context only: it may update one mutable SymbolState per symbol, but it must not create warm/radar queues, perform REST ticker fallback in the hot path, or act as sufficient pump-flow evidence without aggTrade/candle coverage
 live2 aggTrade WS is the first allowed hot-path flow source: it may build in-memory 5s/15s/30s/1m candle rings from real trades only, but must not REST-backfill missed buckets, synthesize flat candles, or enable entries before deadline signal and execution gates exist
+ended live2 real-trade candles may be finalized by wall clock after the bucket close, without waiting for the next trade; this creates no synthetic candles and preserves idle-gap diagnostics on the next real trade
 selected hot symbol -> scan all due configured TF sets -> then move to next symbol
 noticed radar symbols have a fixed hot-lane before warm bulk/cold coverage; active/opening symbols remain protected first
 symbols that already exceed the 24h prior fake-pump / fast-fade threshold are quarantined before warm/radar hot-lane promotion until enough excess fast-fade timestamps age out of the 24h window; they remain visible to ticker/top-growth audit
@@ -154,6 +155,7 @@ cache gaps are not valid zero-signal evidence
 empty setup/entry OHLCV in live is a retryable dependency, not a normal no_signal that may consume the LTF decision before cache fill catches up
 WS ticker radar required for subminute live must be healthy before startup continues
 WS aggTrade missing coverage must be explicit; unbounded REST backfill is not a default live path
+OI and prior-context category dependencies must use stale-aware effective statuses. Raw ok context older than its configured stale window is a data dependency miss, not acceptable signal evidence.
 ```
 
 Live operator/session metric contract:

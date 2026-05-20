@@ -139,6 +139,7 @@ class Live2CandleRing:
         self.max_closed_candles = int(max_closed_candles)
         self.current: Live2Candle | None = None
         self.closed: deque[Live2Candle] = deque(maxlen=self.max_closed_candles)
+        self.last_closed_open_time_ms: int | None = None
         self.gap_count = 0
         self.out_of_order_count = 0
         self.closed_count = 0
@@ -146,12 +147,19 @@ class Live2CandleRing:
     def add_trade(self, trade: Live2AggTradeEvent) -> Live2CandleUpdateResult:
         bucket_open_ms = (int(trade.trade_time_ms) // self.timeframe_ms) * self.timeframe_ms
         if self.current is None:
+            gap_count = 0
+            if self.last_closed_open_time_ms is not None:
+                if bucket_open_ms <= self.last_closed_open_time_ms:
+                    self.out_of_order_count += 1
+                    return Live2CandleUpdateResult(updated=False, closed_count=0, gap_count=0, out_of_order=True)
+                gap_count = max(0, (bucket_open_ms - self.last_closed_open_time_ms) // self.timeframe_ms - 1)
+                self.gap_count += gap_count
             self.current = Live2Candle.from_trade(
                 timeframe_ms=self.timeframe_ms,
                 bucket_open_ms=bucket_open_ms,
                 trade=trade,
             )
-            return Live2CandleUpdateResult(updated=True, closed_count=0, gap_count=0, out_of_order=False)
+            return Live2CandleUpdateResult(updated=True, closed_count=0, gap_count=gap_count, out_of_order=False)
 
         if bucket_open_ms < self.current.open_time_ms:
             self.out_of_order_count += 1
@@ -162,8 +170,7 @@ class Live2CandleRing:
             return Live2CandleUpdateResult(updated=True, closed_count=0, gap_count=0, out_of_order=False)
 
         previous_open_ms = self.current.open_time_ms
-        self.closed.append(self.current)
-        self.closed_count += 1
+        self._append_closed_current()
         skipped = max(0, (bucket_open_ms - previous_open_ms) // self.timeframe_ms - 1)
         self.gap_count += skipped
         self.current = Live2Candle.from_trade(
@@ -172,6 +179,29 @@ class Live2CandleRing:
             trade=trade,
         )
         return Live2CandleUpdateResult(updated=True, closed_count=1, gap_count=skipped, out_of_order=False)
+
+    def close_due(self, *, now_ms: int) -> Live2CandleUpdateResult:
+        """Close a real-trade candle whose wall-clock bucket has ended.
+
+        This creates no synthetic candles and does not invent volume. It only
+        makes the latest already-ended real-trade bucket available to the
+        decision engine without waiting for the next trade.
+        """
+
+        if self.current is None:
+            return Live2CandleUpdateResult(updated=False, closed_count=0, gap_count=0, out_of_order=False)
+        if int(now_ms) < self.current.close_time_ms:
+            return Live2CandleUpdateResult(updated=False, closed_count=0, gap_count=0, out_of_order=False)
+        self._append_closed_current()
+        self.current = None
+        return Live2CandleUpdateResult(updated=True, closed_count=1, gap_count=0, out_of_order=False)
+
+    def _append_closed_current(self) -> None:
+        if self.current is None:
+            return
+        self.closed.append(self.current)
+        self.last_closed_open_time_ms = self.current.open_time_ms
+        self.closed_count += 1
 
     def latest_closed(self) -> Live2Candle | None:
         return self.closed[-1] if self.closed else None
@@ -213,6 +243,20 @@ class Live2CandleBook:
             closed_count=closed_count,
             gap_count=gap_count,
             out_of_order=out_of_order,
+        )
+
+    def close_due(self, *, now_ms: int) -> Live2CandleUpdateResult:
+        closed_count = 0
+        updated = False
+        for ring in self.rings.values():
+            result = ring.close_due(now_ms=now_ms)
+            updated = updated or result.updated
+            closed_count += result.closed_count
+        return Live2CandleUpdateResult(
+            updated=updated,
+            closed_count=closed_count,
+            gap_count=0,
+            out_of_order=False,
         )
 
     def coverage_summary(self) -> dict[str, object]:

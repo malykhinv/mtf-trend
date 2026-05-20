@@ -1,8 +1,7 @@
 """24h prior pump-context polling for anomaly live2.
 
-The poller is deliberately scoped to symbols that are already live2-active
-(watching/actionable/in-position or recently seen in live aggTrade). It does not
-scan the full universe, does not run inside the signal hot path, and never
+The poller keeps the selected live2 universe fresh with active/actionable
+symbols prioritized first. It does not run inside the signal hot path and never
 substitutes missing context with zero. The legacy category contract still uses
 ``*_72h`` field names; live2 populates those checks from this explicit 24h
 context and exposes the source label in artifacts.
@@ -51,10 +50,10 @@ class Live2PriorContextPollConfig:
     """Runtime throttles and thresholds for 24h prior-context polling."""
 
     poll_interval_seconds: float = 10.0
-    symbol_cooldown_seconds: float = 300.0
-    stale_ms: int = 900_000
+    symbol_cooldown_seconds: float = 600.0
+    stale_ms: int = 1_200_000
     lookback_hours: int = LIVE2_PRIOR_CONTEXT_LOOKBACK_HOURS
-    max_symbols_per_cycle: int = 4
+    max_symbols_per_cycle: int = 10
     radar_symbol_ttl_ms: int = 60_000
     spike_return_pct: float = 0.03
     fast_fade_retrace_fraction: float = 0.55
@@ -237,7 +236,7 @@ class Live2PriorContextPoller:
                 self._ready_event.set()
                 return
             self._status.status = "running"
-            self._status.reason = "prior_context_poller_running_for_active_live2_symbols_only"
+            self._status.reason = "prior_context_poller_running_for_selected_universe"
         self._thread = threading.Thread(target=self._run_thread, name="live2-prior-context-poller", daemon=True)
         self._thread.start()
 
@@ -461,23 +460,23 @@ class Live2PriorContextPoller:
 
     def _eligible_symbols(self, *, now_ms: int) -> tuple[str, ...]:
         cooldown_ms = int(self.config.symbol_cooldown_seconds * 1000)
-        due: list[tuple[int, str]] = []
+        due: list[tuple[int, int, str]] = []
         for symbol in self._target_symbols(now_ms=now_ms):
             last_poll_ms = self._last_poll_by_symbol.get(symbol)
             if last_poll_ms is not None and now_ms - last_poll_ms < cooldown_ms:
                 continue
             priority = self._symbol_priority(symbol=symbol, now_ms=now_ms)
-            due.append((priority, symbol))
-        due.sort(key=lambda item: (item[0], item[1]))
-        return tuple(symbol for _, symbol in due)
+            oldest_first_ms = -1 if last_poll_ms is None else int(last_poll_ms)
+            due.append((priority, oldest_first_ms, symbol))
+        due.sort(key=lambda item: (item[0], item[1], item[2]))
+        return tuple(symbol for _, _, symbol in due)
 
     def _target_symbols(self, *, now_ms: int) -> tuple[str, ...]:
         targets: list[str] = []
         for state in self.state_store.snapshot():
             if not state.universe_selected:
                 continue
-            if self._is_target_state(state, now_ms=now_ms):
-                targets.append(state.symbol)
+            targets.append(state.symbol)
         return tuple(dict.fromkeys(targets))
 
     def _symbol_priority(self, *, symbol: str, now_ms: int) -> int:

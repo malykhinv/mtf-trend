@@ -30,11 +30,11 @@ class AnomalyLive2Config:
     oi_lookback_minutes: int = 20
     oi_max_symbols_per_cycle: int = 20
     oi_radar_symbol_ttl_ms: int = 60_000
-    prior_context_stale_ms: int = 900_000
+    prior_context_stale_ms: int = 1_200_000
     prior_context_poll_interval_seconds: float = 10.0
-    prior_context_symbol_cooldown_seconds: float = 300.0
+    prior_context_symbol_cooldown_seconds: float = 600.0
     prior_context_lookback_hours: int = 24
-    prior_context_max_symbols_per_cycle: int = 4
+    prior_context_max_symbols_per_cycle: int = 10
     prior_context_radar_symbol_ttl_ms: int = 60_000
     prior_context_spike_return_pct: float = 0.03
     prior_context_fast_fade_retrace_fraction: float = 0.55
