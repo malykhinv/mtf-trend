@@ -15,6 +15,7 @@ from .deadline import Live2DeadlineCycleResult, Live2DeadlineEngine, Live2Deadli
 from .entry_guard import Live2EntryGuardConfig, Live2EntryGuardEngine
 from .execution import Live2ExecutionConfig, Live2ExecutionEngine, Live2ExecutionExchange
 from .market_data.aggtrade_ws import Live2AggTradeWsSource
+from .market_data.mark_price_ws import Live2MarkPriceWsSource
 from .market_data.ticker_ws import Live2TickerWsSource
 from .market_data.startup_tickers import Live2StartupTickerSnapshot, Live2StartupTickerSnapshotResult
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
@@ -78,6 +79,7 @@ class AnomalyLive2Runner:
             connection_max_age_seconds=config.ws_connection_max_age_seconds,
         )
         self.aggtrade_source: Live2AggTradeWsSource | None = None
+        self.mark_price_source: Live2MarkPriceWsSource | None = None
         self.execution_engine = Live2ExecutionEngine(
             exchange_client=exchange_client,
             config=Live2ExecutionConfig(
@@ -241,6 +243,20 @@ class AnomalyLive2Runner:
                 self.aggtrade_source.start()
                 aggtrade_ready = self.aggtrade_source.wait_until_ready()
                 self._set_startup_status("aggTrade", "поток готов" if aggtrade_ready else "поток пока не готов")
+                self.mark_price_source = Live2MarkPriceWsSource(
+                    state_store=self.state_store,
+                    symbols=self.universe_selection.selected_symbols,
+                    stale_ms=self.config.mark_price_stale_ms,
+                    startup_wait_seconds=self.config.mark_price_startup_wait_seconds,
+                    reconnect_initial_delay_seconds=self.config.ws_reconnect_initial_delay_seconds,
+                    reconnect_max_delay_seconds=self.config.ws_reconnect_max_delay_seconds,
+                    connection_max_age_seconds=self.config.ws_connection_max_age_seconds,
+                )
+                self._write_mark_price_starting_event(writer)
+                self._set_startup_status("markPrice", "запускаю WS")
+                self.mark_price_source.start()
+                mark_ready = self.mark_price_source.wait_until_ready()
+                self._set_startup_status("markPrice", "поток готов" if mark_ready else "поток пока не готов")
             else:
                 writer.write_event(
                     Live2Event(
@@ -402,6 +418,7 @@ class AnomalyLive2Runner:
                             state_counts=self.state_store.counts_by_status(),
                             ticker_counts=self.state_store.ticker_counts(),
                             aggtrade_counts=self.state_store.aggtrade_counts(),
+                            mark_counts=self.state_store.mark_counts(),
                             candle_counts=self.state_store.candle_coverage_counts(),
                             market_data_status=market_data_status,
                             decision_status=decision_status,
@@ -479,6 +496,8 @@ class AnomalyLive2Runner:
             raise
         finally:
             self.status_logger.finish_status()
+            if self.mark_price_source is not None:
+                self.mark_price_source.close()
             if self.aggtrade_source is not None:
                 self.aggtrade_source.close()
             self.ticker_source.close()
@@ -603,6 +622,7 @@ class AnomalyLive2Runner:
             "market_data_gate_ready",
             "ticker_ready",
             "aggtrade_ready",
+            "mark_price_ready",
             "shards_connected",
             "shards_total",
             "shards_stale",
@@ -633,9 +653,11 @@ class AnomalyLive2Runner:
             "market_data_gate_ready": bool(self._market_data_ready_gate),
             "ticker_ready": bool(ws_health_dict.get("ticker_ready")),
             "aggtrade_ready": bool(ws_health_dict.get("aggtrade_ready")),
+            "mark_price_ready": bool(ws_health_dict.get("mark_price_ready")),
             "ticker_connection_status": str(ws_health_dict.get("ticker_connection_status", "unknown")),
             "aggtrade_source_status": str(ws_health_dict.get("aggtrade_source_status", "unknown")),
             "aggtrade_endpoint_category": str(ws_health_dict.get("aggtrade_endpoint_category", "unknown")),
+            "mark_price_connection_status": str(ws_health_dict.get("mark_price_connection_status", "unknown")),
             "shards_total": int(ws_health_dict.get("shards_total") or 0),
             "shards_connected": int(ws_health_dict.get("shards_connected") or 0),
             "shards_disconnected": int(ws_health_dict.get("shards_disconnected") or 0),
@@ -712,6 +734,8 @@ class AnomalyLive2Runner:
                     "disconnect_count": int(ws_health_dict.get("disconnect_count") or 0),
                     "payload_errors": int(ws_health_dict.get("payload_errors") or 0),
                     "planned_rotation_count": int(ws_health_dict.get("planned_rotation_count") or 0),
+                    "mark_price_ready": bool(ws_health_dict.get("mark_price_ready")),
+                    "mark_price_connection_status": str(ws_health_dict.get("mark_price_connection_status", "unknown")),
                     "aggtrade_pre_first_payload_failures": int(ws_health_dict.get("aggtrade_pre_first_payload_failures") or 0),
                     "shards_total": int(ws_health_dict.get("shards_total") or 0),
                     "shards_connected": int(ws_health_dict.get("shards_connected") or 0),
@@ -826,11 +850,17 @@ class AnomalyLive2Runner:
     def _market_data_status(self) -> dict[str, object]:
         ticker_status = self.ticker_source.status().as_dict(stale_ms=self.config.ticker_stale_ms)
         aggtrade_status = self._aggtrade_status()
+        mark_price_status = self._mark_price_status()
         ticker_ready = bool(ticker_status.get("ready"))
         aggtrade_ready = bool(aggtrade_status.get("ready"))
-        stream_coverage_ready = ticker_ready and aggtrade_ready
+        mark_price_ready = bool(mark_price_status.get("ready"))
+        stream_coverage_ready = ticker_ready and aggtrade_ready and mark_price_ready
         selected_symbols = 0 if self.universe_selection is None else len(self.universe_selection.selected_symbols)
-        ws_health = self._ws_health_status(ticker_status=ticker_status, aggtrade_status=aggtrade_status)
+        ws_health = self._ws_health_status(
+            ticker_status=ticker_status,
+            aggtrade_status=aggtrade_status,
+            mark_price_status=mark_price_status,
+        )
         reasons: list[str] = []
         if selected_symbols <= 0:
             reasons.append("startup_ticker_universe_selection_empty")
@@ -838,9 +868,11 @@ class AnomalyLive2Runner:
             reasons.append("ticker_ws_not_ready")
         if not aggtrade_ready:
             reasons.append("aggtrade_ws_not_ready")
+        if not mark_price_ready:
+            reasons.append("mark_price_ws_not_ready")
         if stream_coverage_ready:
             status = "stream_coverage_ready_signal_adapter_active"
-            reason = "ticker_and_aggtrade_ws_ready_signal_adapter_active_execution_boundary_active"
+            reason = "ticker_aggtrade_and_mark_price_ws_ready_signal_adapter_active_execution_boundary_active"
         elif selected_symbols <= 0:
             status = "no_startup_universe"
             reason = "+".join(reasons)
@@ -852,9 +884,11 @@ class AnomalyLive2Runner:
             "reason": reason,
             "ticker_ws": ticker_status,
             "aggtrade_ws": aggtrade_status,
+            "mark_price_ws": mark_price_status,
             "live_decision_watermark_ms": self._live_decision_watermark_ms(),
             "startup_aggtrade_status_counts": self.state_store.startup_aggtrade_counts(),
             "live_aggtrade_status_counts": self.state_store.live_aggtrade_counts(),
+            "mark_price_status_counts": self.state_store.mark_counts(),
             "candle_coverage_counts": self.state_store.candle_coverage_counts(),
             "universe": self._universe_status(),
             "ws_health": ws_health,
@@ -874,6 +908,7 @@ class AnomalyLive2Runner:
         *,
         ticker_status: dict[str, object],
         aggtrade_status: dict[str, object],
+        mark_price_status: dict[str, object],
     ) -> dict[str, object]:
         agg_shards = aggtrade_status.get("shards", [])
         stale_shards = 0
@@ -891,9 +926,17 @@ class AnomalyLive2Runner:
         ticker_disconnects = int(ticker_status.get("disconnect_count") or 0)
         agg_reconnects = int(aggtrade_status.get("reconnect_attempts") or 0)
         agg_disconnects = int(aggtrade_status.get("disconnect_count") or 0)
-        payload_errors = int(ticker_status.get("payload_errors") or 0) + int(aggtrade_status.get("payload_errors") or 0)
-        planned_rotation_count = int(ticker_status.get("planned_rotation_count") or 0) + int(
-            aggtrade_status.get("planned_rotation_count") or 0
+        mark_reconnects = int(mark_price_status.get("reconnect_attempts") or 0)
+        mark_disconnects = int(mark_price_status.get("disconnect_count") or 0)
+        payload_errors = (
+            int(ticker_status.get("payload_errors") or 0)
+            + int(aggtrade_status.get("payload_errors") or 0)
+            + int(mark_price_status.get("payload_errors") or 0)
+        )
+        planned_rotation_count = (
+            int(ticker_status.get("planned_rotation_count") or 0)
+            + int(aggtrade_status.get("planned_rotation_count") or 0)
+            + int(mark_price_status.get("planned_rotation_count") or 0)
         )
         pre_first_payload_failures = 0
         if isinstance(agg_shards, list):
@@ -903,17 +946,20 @@ class AnomalyLive2Runner:
         return {
             "ticker_ready": bool(ticker_status.get("ready")),
             "aggtrade_ready": bool(aggtrade_status.get("ready")),
+            "mark_price_ready": bool(mark_price_status.get("ready")),
             "ticker_connection_status": str(ticker_status.get("connection_status", "unknown")),
             "aggtrade_source_status": str(aggtrade_status.get("source_status", "unknown")),
             "aggtrade_endpoint_category": str(aggtrade_status.get("endpoint_category", "unknown")),
+            "mark_price_connection_status": str(mark_price_status.get("connection_status", "unknown")),
+            "mark_price_endpoint_category": str(mark_price_status.get("endpoint_category", "unknown")),
             "aggtrade_pre_first_payload_failures": pre_first_payload_failures,
             "live_decision_watermark_ms": self._live_decision_watermark_ms_from_status(aggtrade_status),
             "shards_total": int(aggtrade_status.get("shards_total") or 0),
             "shards_connected": int(aggtrade_status.get("shards_connected") or 0),
             "shards_disconnected": disconnected_shards,
             "shards_stale": stale_shards,
-            "reconnect_attempts": ticker_reconnects + agg_reconnects,
-            "disconnect_count": ticker_disconnects + agg_disconnects,
+            "reconnect_attempts": ticker_reconnects + agg_reconnects + mark_reconnects,
+            "disconnect_count": ticker_disconnects + agg_disconnects + mark_disconnects,
             "planned_rotation_count": planned_rotation_count,
             "payload_errors": payload_errors,
         }
@@ -957,6 +1003,18 @@ class AnomalyLive2Runner:
             }
         return self.aggtrade_source.status().as_dict(stale_ms=self.config.aggtrade_stale_ms)
 
+    def _mark_price_status(self) -> dict[str, object]:
+        if self.mark_price_source is None:
+            return {
+                "connection_status": "not_started",
+                "ready": False,
+                "endpoint_category": Live2MarkPriceWsSource.endpoint_category,
+                "websocket_url": Live2MarkPriceWsSource.websocket_url,
+                "tracked_symbols": 0,
+                "reason": "startup_universe_not_selected_or_empty",
+            }
+        return self.mark_price_source.status().as_dict(stale_ms=self.config.mark_price_stale_ms)
+
     def _universe_status(self) -> dict[str, Any]:
         if self.universe_selection is None:
             return {
@@ -991,6 +1049,8 @@ class AnomalyLive2Runner:
                     "ws_reconnect_initial_delay_seconds": self.config.ws_reconnect_initial_delay_seconds,
                     "ws_reconnect_max_delay_seconds": self.config.ws_reconnect_max_delay_seconds,
                     "ws_connection_max_age_seconds": self.config.ws_connection_max_age_seconds,
+                    "mark_price_stale_ms": self.config.mark_price_stale_ms,
+                    "mark_price_startup_wait_seconds": self.config.mark_price_startup_wait_seconds,
                     "execution_order_placement": "verified_fill_and_initial_stop_lifecycle_enabled",
                 },
             )
@@ -1102,6 +1162,27 @@ class AnomalyLive2Runner:
                     "startup_wait_seconds": self.config.aggtrade_startup_wait_seconds,
                     "hot_rest_backfill": False,
                     "startup_rest_warmup": None if self.startup_warmup_result is None else self.startup_warmup_result.as_dict(),
+                    "universe": self._universe_status(),
+                },
+            )
+        )
+
+    def _write_mark_price_starting_event(self, writer: Live2ArtifactWriter) -> None:
+        selected_symbols = 0 if self.universe_selection is None else len(self.universe_selection.selected_symbols)
+        writer.write_event(
+            Live2Event(
+                event_type="mark_price_ws_starting",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO if selected_symbols else Live2Severity.ERROR,
+                message="starting Binance futures all-market markPrice WS ingestion",
+                data={
+                    "source": Live2MarkPriceWsSource.source_id,
+                    "endpoint_category": Live2MarkPriceWsSource.endpoint_category,
+                    "websocket_url": Live2MarkPriceWsSource.websocket_url,
+                    "symbols_filter_count": selected_symbols,
+                    "stale_ms": self.config.mark_price_stale_ms,
+                    "startup_wait_seconds": self.config.mark_price_startup_wait_seconds,
+                    "hot_rest_backfill": False,
                     "universe": self._universe_status(),
                 },
             )

@@ -38,8 +38,9 @@ class Live2SignalDecision:
 class Live2SignalEngine:
     """Small stream-only adapter for the shared pump-category contract.
 
-    Generation 0 has no OI/mark/prior-fast-fade context. Categories that require
-    those fields are rejected explicitly instead of silently substituting zeros.
+    Generation 0 has no OI/prior-fast-fade context. Mark basis comes from the
+    live2 markPrice stream; unavailable required fields are rejected explicitly
+    instead of silently substituting zeros.
     """
 
     def __init__(self, *, category_ids: tuple[str, ...] = DEFAULT_PUMP_CATEGORY_IDS) -> None:
@@ -99,7 +100,8 @@ class Live2SignalEngine:
             "total_selected": self._total_selected,
             "total_rejected": self._total_rejected,
             "limitations": (
-                "generation_0_has_no_OI_mark_prior_fast_fade_context; "
+                "generation_0_has_no_OI_prior_fast_fade_context; "
+                "mark_context_from_live_markPrice_ws; "
                 "categories_requiring_unavailable_context_are_rejected"
             ),
         }
@@ -124,6 +126,13 @@ class Live2SignalEngine:
         trade_ratio = float(candle.number_of_trades) / baseline_trades if baseline_trades > 0 else None
         range_ratio = candle_range / baseline_range if baseline_range > 0 else None
         taker_share = candle.taker_buy_quote_volume / candle.quote_volume if candle.quote_volume > 0 else None
+        mark_basis = None
+        mark_basis_status = "not_available"
+        if state.mark_status == "ok" and state.mark_price is not None and state.mark_price > 0 and candle.close > 0:
+            mark_basis = (state.mark_price - candle.close) / candle.close
+            mark_basis_status = "ok"
+        elif state.mark_status:
+            mark_basis_status = state.mark_status
         # Generation 0 uses the current 5s bucket low as a strict stream-local
         # initial stop candidate. Execution remains disabled until P318; this is
         # only the signal-side risk candidate consumed by P317 entry guards.
@@ -151,13 +160,24 @@ class Live2SignalEngine:
             "prior_closed_5s_count": len(previous),
             "ticker_last_price": state.ticker_last_price,
             "aggtrade_last_price": state.aggtrade_last_price,
+            "mark_price": state.mark_price,
+            "mark_index_price": state.mark_index_price,
+            "mark_funding_rate": state.mark_funding_rate,
+            "mark_last_seen_ms": state.mark_last_seen_ms,
+            "mark_status": state.mark_status,
+            "mark_basis_status": mark_basis_status,
+            "mark_close_vs_decision_close_basis": mark_basis,
         }
 
     def _category_accepts(self, *, category: PumpCategoryContract, features: dict[str, object]) -> tuple[bool, str]:
         if category.min_oi_change_pct_3x5m is not None:
             return False, "oi_context_not_available_in_live2_generation_0"
         if category.min_mark_close_vs_decision_close_basis is not None:
-            return False, "mark_price_context_not_available_in_live2_generation_0"
+            mark_basis = _float_or_none(features.get("mark_close_vs_decision_close_basis"))
+            if mark_basis is None:
+                return False, "mark_price_context_not_ready"
+            if mark_basis < category.min_mark_close_vs_decision_close_basis:
+                return False, "mark_basis_below_category_min"
         baseline_quote = _float_or_none(features.get("baseline_quote_5s"))
         if category.min_baseline_quote_daily_proxy is not None and (baseline_quote is None or baseline_quote <= 0):
             return False, "stream_baseline_quote_not_ready"

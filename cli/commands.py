@@ -1668,6 +1668,8 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
                 universe_min_trade_count_24h=int(getattr(args, "universe_min_trade_count_24h", 0)),
                 universe_min_auto_symbols=int(getattr(args, "universe_min_auto_symbols", 300)),
                 ws_connection_max_age_seconds=float(getattr(args, "ws_connection_max_age_seconds", 84_600.0)),
+                mark_price_stale_ms=int(getattr(args, "mark_price_stale_ms", 5_000)),
+                mark_price_startup_wait_seconds=float(getattr(args, "mark_price_startup_wait_seconds", 10.0)),
             ),
             exchange_client=exchange_client,
             telegram_config=build_live2_telegram_config_from_env(),

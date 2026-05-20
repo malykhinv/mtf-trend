@@ -477,6 +477,8 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live2.add_argument("--universe-min-trade-count-24h", type=_non_negative_int_for("--universe-min-trade-count-24h"), default=0)
     anomaly_live2.add_argument("--universe-min-auto-symbols", type=_non_negative_int_for("--universe-min-auto-symbols"), default=300)
     anomaly_live2.add_argument("--ws-connection-max-age-seconds", type=float, default=84_600.0)
+    anomaly_live2.add_argument("--mark-price-stale-ms", type=_positive_int_for("--mark-price-stale-ms"), default=5_000)
+    anomaly_live2.add_argument("--mark-price-startup-wait-seconds", type=float, default=10.0)
     anomaly_live2.add_argument("--output-dir", default=None, help="Optional artifact output directory")
 
     live_order_smoke = subparsers.add_parser(

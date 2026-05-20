@@ -18,6 +18,7 @@ def format_live2_status_grid(
     state_counts: Mapping[str, int],
     ticker_counts: Mapping[str, int],
     aggtrade_counts: Mapping[str, int],
+    mark_counts: Mapping[str, int],
     candle_counts: Mapping[str, int],
     market_data_status: Mapping[str, object],
     decision_status: Mapping[str, object],
@@ -29,6 +30,7 @@ def format_live2_status_grid(
 
     ws_health = _dict(market_data_status.get("ws_health"))
     aggtrade_ws = _dict(market_data_status.get("aggtrade_ws"))
+    mark_price_ws = _dict(market_data_status.get("mark_price_ws"))
     universe = _dict(market_data_status.get("universe"))
     startup_warmup = _dict(market_data_status.get("startup_warmup"))
     readiness = _dict(runtime_gate_status.get("readiness"))
@@ -41,6 +43,8 @@ def format_live2_status_grid(
     planned_rotations = _int(ws_health.get("planned_rotation_count"))
     payload_errors = _int(ws_health.get("payload_errors"))
     aggtrade_rows_applied = _int(aggtrade_ws.get("rows_applied"))
+    mark_rows_applied = _int(mark_price_ws.get("rows_applied"))
+    mark_ready_symbols = _int(mark_counts.get("ok"))
     aggtrade_pre_first_payload_failures = _int(ws_health.get("aggtrade_pre_first_payload_failures"))
     coverage_ready = bool(market_data_status.get("stream_coverage_ready"))
     market_gate_ready = bool(market_data_status.get("market_data_ready_for_entries"))
@@ -127,9 +131,14 @@ def format_live2_status_grid(
             ),
         ),
         _format_status_line(
+            _format_status_cell("Mark", _format_marked_quality_value(mark_rows_applied, "good" if mark_rows_applied > 0 else "warn")),
+            _format_status_cell("Mark sym", mark_ready_symbols),
+            _format_status_cell("Ротации", planned_rotations),
+        ),
+        _format_status_line(
             _format_status_cell("Переподкл", reconnects),
             _format_status_cell("Разрывы", disconnects),
-            _format_status_cell("Ротации", planned_rotations),
+            _format_status_cell("Ошибки", payload_errors),
         ),
         "",
         "Рынок",

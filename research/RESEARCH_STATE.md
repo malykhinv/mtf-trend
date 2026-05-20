@@ -10,6 +10,17 @@ Next validation: run live2 smoke long enough to see normal payloads, then a shor
 ```
 # Anomaly Research State
 
+## 2026-05-20 - P335 live2 markPrice WS context
+
+```text
+Current patch status: P335 PROPOSED / UNKNOWN commit.
+Question: current default live2 categories need mark-vs-decision basis, while live2 had no markPrice data source.
+Change: live2 now runs a routed Binance USD-M `!markPrice@arr@1s` WS source for the selected universe, stores mark/index/funding fields in SymbolState, gates market-data readiness on fresh markPrice payloads, writes mark diagnostics/status counts, and evaluates `mark_close_vs_decision_close_basis` from real mark price in the signal adapter. No mark fallback is introduced.
+Trading impact: no order/fill/stop/TP behavior changed. Market-data readiness is stricter: ticker + live aggTrade + markPrice are required. OI and prior 24h context are still missing by design and remain next patches.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic mark-price payload smoke.
+Next validation: run a short live2 smoke and confirm `mark_price_ws.ready=true`, `mark_price_status_counts.ok > 0`, and `stream_coverage_ready` only when ticker, aggTrade, and markPrice are all fresh.
+```
+
 ## 2026-05-20 - P333 live2 transition-only market-data diagnostics
 
 ```text

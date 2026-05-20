@@ -123,6 +123,19 @@ class SymbolState:
     live_aggtrade_source: str = ""
     live_aggtrade_status: str = "not_seen"
     live_aggtrade_reason: str = ""
+    mark_market_id: str = ""
+    mark_first_seen_ms: int | None = None
+    mark_last_seen_ms: int | None = None
+    mark_event_time_ms: int | None = None
+    mark_update_count: int = 0
+    mark_price: float | None = None
+    mark_index_price: float | None = None
+    mark_estimated_settle_price: float | None = None
+    mark_funding_rate: float | None = None
+    mark_next_funding_time_ms: int | None = None
+    mark_source: str = ""
+    mark_status: str = "not_seen"
+    mark_reason: str = ""
     candle_coverage_status: str = "not_ready"
     candle_gap_count: int = 0
     candle_out_of_order_count: int = 0
@@ -276,6 +289,38 @@ class SymbolState:
         self.live_aggtrade_status = status
         self.live_aggtrade_reason = reason
 
+    def update_mark_price(
+        self,
+        *,
+        market_id: str,
+        received_at_ms: int,
+        event_time_ms: int | None,
+        mark_price: float,
+        index_price: float | None,
+        estimated_settle_price: float | None,
+        funding_rate: float | None,
+        next_funding_time_ms: int | None,
+        source: str,
+        status: str,
+        reason: str,
+    ) -> None:
+        self.updated_ms = received_at_ms
+        self.mark_market_id = market_id
+        if self.mark_first_seen_ms is None:
+            self.mark_first_seen_ms = received_at_ms
+        self.mark_last_seen_ms = received_at_ms
+        self.mark_event_time_ms = event_time_ms
+        self.mark_update_count += 1
+        self.mark_price = mark_price
+        self.mark_index_price = index_price
+        self.mark_estimated_settle_price = estimated_settle_price
+        self.mark_funding_rate = funding_rate
+        self.mark_next_funding_time_ms = next_funding_time_ms
+        self.mark_source = source
+        self.mark_status = status
+        self.mark_reason = reason
+        self.mark_dirty(now_ms=received_at_ms)
+
     def to_artifact_row(self) -> dict[str, object]:
         row: dict[str, object] = {
             "symbol": self.symbol,
@@ -366,6 +411,19 @@ class SymbolState:
             "live_aggtrade_source": self.live_aggtrade_source,
             "live_aggtrade_status": self.live_aggtrade_status,
             "live_aggtrade_reason": self.live_aggtrade_reason,
+            "mark_market_id": self.mark_market_id,
+            "mark_first_seen_ms": self.mark_first_seen_ms,
+            "mark_last_seen_ms": self.mark_last_seen_ms,
+            "mark_event_time_ms": self.mark_event_time_ms,
+            "mark_update_count": self.mark_update_count,
+            "mark_price": self.mark_price,
+            "mark_index_price": self.mark_index_price,
+            "mark_estimated_settle_price": self.mark_estimated_settle_price,
+            "mark_funding_rate": self.mark_funding_rate,
+            "mark_next_funding_time_ms": self.mark_next_funding_time_ms,
+            "mark_source": self.mark_source,
+            "mark_status": self.mark_status,
+            "mark_reason": self.mark_reason,
             "candle_coverage_status": self.candle_coverage_status,
             "candle_gap_count": self.candle_gap_count,
             "candle_out_of_order_count": self.candle_out_of_order_count,
@@ -480,6 +538,38 @@ class SymbolStateStore:
             state = self.get_or_create(trade.symbol)
             state.update_aggtrade(trade, received_at_ms=received_at_ms)
 
+    def update_mark_price(
+        self,
+        *,
+        symbol: str,
+        market_id: str,
+        received_at_ms: int,
+        event_time_ms: int | None,
+        mark_price: float,
+        index_price: float | None,
+        estimated_settle_price: float | None,
+        funding_rate: float | None,
+        next_funding_time_ms: int | None,
+        source: str,
+        status: str,
+        reason: str,
+    ) -> None:
+        with self._lock:
+            state = self.get_or_create(symbol)
+            state.update_mark_price(
+                market_id=market_id,
+                received_at_ms=received_at_ms,
+                event_time_ms=event_time_ms,
+                mark_price=mark_price,
+                index_price=index_price,
+                estimated_settle_price=estimated_settle_price,
+                funding_rate=funding_rate,
+                next_funding_time_ms=next_funding_time_ms,
+                source=source,
+                status=status,
+                reason=reason,
+            )
+
 
     def update_aggtrade_many(self, trades: tuple[Live2AggTradeEvent, ...], *, received_at_ms: int) -> None:
         if not trades:
@@ -513,6 +603,14 @@ class SymbolStateStore:
         with self._lock:
             for state in self._states.values():
                 key = state.aggtrade_status or "unknown"
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def mark_counts(self) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        with self._lock:
+            for state in self._states.values():
+                key = state.mark_status or "unknown"
                 counts[key] = counts.get(key, 0) + 1
         return counts
 
