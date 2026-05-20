@@ -5987,3 +5987,34 @@ Risk:
 ```text
 Medium. This intentionally removes the live2 TP1 partial/runner path. It is safer and simpler for the current strategy contract, but it changes position lifecycle semantics: there is no BE stop replacement after TP1 because there is no remaining position.
 ```
+
+## 2026-05-20 - P342 proposed - live2 hard startup/execution safety
+
+Files:
+
+```text
+data/exchanges/ccxt_futures_client.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/position_supervisor.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Remove ambiguous watch-only startup behavior from live2 after P341. Live2 is a real-order runtime: failed execution preflight, missing private user-data stream, or auto-universe below the configured minimum are startup failures, not long-running blocked states. Also align Binance USD-M listenKey keepalive/close REST calls with the documented no-parameter endpoints, and prevent orphan stop orders when a protected position is already flat outside the TP1 path.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# synthetic flat-position orphan-stop smoke: exchange flat + visible stop -> cancel -> verify gone before registry removal
+```
+
+Risk:
+
+```text
+Low-to-medium. This makes live2 fail faster instead of continuing as a blocked diagnostic process when real-order prerequisites are missing. That is intended for the current non-optional live2 contract. No signal thresholds, order sizing, market-data ingestion, TP price, or stop price calculation are changed.
+```

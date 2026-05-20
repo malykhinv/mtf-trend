@@ -170,9 +170,15 @@ class AnomalyLive2Runner:
                     component=Live2Component.EXECUTION,
                     severity=Live2Severity.INFO if execution_preflight.ready else Live2Severity.ERROR,
                     message=execution_preflight.reason,
-                    data=execution_preflight.as_dict(),
+                    data={
+                        **execution_preflight.as_dict(),
+                        "live2_trading_mode": "real_orders_always_enabled",
+                        "dry_run_supported": False,
+                    },
                 )
             )
+            if not execution_preflight.ready:
+                raise RuntimeError(f"live2 execution preflight failed: {execution_preflight.reason}")
             user_data_ready = False
             if execution_preflight.ready:
                 self.user_data_source = Live2UserDataStreamSource(
@@ -200,6 +206,21 @@ class AnomalyLive2Runner:
                     )
                 )
             self.readiness.user_data_stream_ready = user_data_ready
+            if not user_data_ready:
+                writer.write_event(
+                    Live2Event(
+                        event_type="user_data_stream_startup_failed",
+                        component=Live2Component.EXECUTION,
+                        severity=Live2Severity.ERROR,
+                        message="live2 real-order runtime requires a ready private user-data stream",
+                        data={
+                            "user_data_stream_status": self._user_data_stream_status(),
+                            "live2_trading_mode": "real_orders_always_enabled",
+                            "dry_run_supported": False,
+                        },
+                    )
+                )
+                raise RuntimeError("live2 user-data stream is not ready")
             if not self.config.symbols:
                 self._set_startup_status("вселенная", "загружаю startup ticker snapshot")
                 self.startup_ticker_snapshot_result = self._run_startup_ticker_snapshot(writer)
@@ -233,6 +254,11 @@ class AnomalyLive2Runner:
                             else self.startup_ticker_snapshot_result.as_dict(),
                         },
                     )
+                )
+                raise RuntimeError(
+                    "live2 startup universe below minimum auto coverage: "
+                    f"selected={len(self.universe_selection.selected_symbols)} "
+                    f"minimum={self.config.universe_min_auto_symbols}"
                 )
             self.state_store.apply_universe_selection(
                 selected_rank_by_symbol=self.universe_selection.rank_by_symbol(),
@@ -1203,6 +1229,8 @@ class AnomalyLive2Runner:
                     "prior_context_spike_return_pct": self.config.prior_context_spike_return_pct,
                     "prior_context_fast_fade_retrace_fraction": self.config.prior_context_fast_fade_retrace_fraction,
                     "execution_order_placement": "verified_fill_and_initial_stop_lifecycle_enabled",
+                    "live2_trading_mode": "real_orders_always_enabled",
+                    "dry_run_supported": False,
                 },
             )
         )

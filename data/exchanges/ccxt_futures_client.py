@@ -1198,7 +1198,6 @@ class CcxtFuturesClient(ExchangeClient):
             operation="ccxt_binance_keepalive_user_data_listen_key",
             endpoint=endpoint,
             call=call,
-            args=({"listenKey": normalized},),
         )
 
     def close_futures_user_data_listen_key(self, listen_key: str) -> None:
@@ -1217,7 +1216,6 @@ class CcxtFuturesClient(ExchangeClient):
             operation="ccxt_binance_close_user_data_listen_key",
             endpoint=endpoint,
             call=call,
-            args=({"listenKey": normalized},),
         )
 
     @staticmethod

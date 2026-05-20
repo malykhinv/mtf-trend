@@ -174,22 +174,37 @@ class Live2PositionSupervisor:
                 emergency_amount=position.remaining_amount,
             )
         if abs(exchange_amount) <= self.config.flat_position_abs_epsilon:
+            stop_gone_error = self._ensure_old_stop_gone_after_flat(position)
+            if stop_gone_error is not None:
+                return self._integrity_error(
+                    position=position,
+                    reason=stop_gone_error,
+                    emergency_amount=0.0,
+                    details={
+                        "exchange_position_amount": exchange_amount,
+                        "expected_contract": "flat_position_without_visible_orphan_stop",
+                        "stop_client_order_id": position.stop_client_order_id,
+                        "stop_order_id": position.stop_order_id,
+                    },
+                )
             closed = self.execution_engine.remove_protected_position(position.symbol) or position
             return Live2PositionSupervisorAction(
                 event_type="position_final_close_verified",
                 symbol=closed.symbol,
                 position_id=closed.position_id,
                 severity=Live2Severity.INFO,
-                message="exchange position is flat; final close verified",
+                message="exchange position is flat and protected stop is gone; final close verified",
                 data={
-                    "reason": "exchange_position_flat",
+                    "reason": "exchange_position_flat_stop_gone",
                     "exchange_position_amount": exchange_amount,
+                    "old_stop_order_id": position.stop_order_id,
+                    "old_stop_client_order_id": position.stop_client_order_id,
                     "position": replace(
                         closed,
-                        status="closed_verified_exchange_flat",
+                        status="closed_verified_exchange_flat_stop_gone",
                         remaining_amount=0.0,
                         closed_at_ms=now_ms,
-                        close_reason="exchange_position_flat",
+                        close_reason="exchange_position_flat_stop_gone",
                         last_supervised_ms=now_ms,
                     ).as_dict(),
                 },
@@ -335,6 +350,24 @@ class Live2PositionSupervisor:
         still_visible = self.execution_engine.verify_stop_visible(position.symbol, position.stop_client_order_id)
         if still_visible is not None:
             return "old_stop_still_visible_after_cancel"
+        return None
+
+    def _ensure_old_stop_gone_after_flat(self, position: Live2ProtectedPosition) -> str | None:
+        assert self.exchange_client is not None
+        visible_stop = self.execution_engine.verify_stop_visible(position.symbol, position.stop_client_order_id)
+        if visible_stop is None:
+            return None
+        order_id = _extract_order_id(visible_stop) or position.stop_order_id
+        if not order_id:
+            return "flat_position_visible_stop_without_order_id"
+        try:
+            self.exchange_client.cancel_stop_order(position.symbol, order_id)
+        except Exception as exc:
+            self.execution_engine.mark_exchange_error()
+            return f"flat_position_orphan_stop_cancel_failed:{type(exc).__name__}:{exc}"
+        still_visible = self.execution_engine.verify_stop_visible(position.symbol, position.stop_client_order_id)
+        if still_visible is not None:
+            return "flat_position_orphan_stop_still_visible_after_cancel"
         return None
 
     def _fetch_position_amount(self, symbol: str) -> float | None:

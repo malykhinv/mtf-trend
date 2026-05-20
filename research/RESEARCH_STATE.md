@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P342 live2 hard startup/execution safety
+
+```text
+Current patch status: P342 PROPOSED / UNKNOWN commit.
+Question: after P331-P341, live2 still had a few ambiguous runtime states: it could keep running with failed execution preflight, missing private user-data stream, or too-small auto-universe; Binance listenKey keepalive/close calls sent an unnecessary listenKey parameter despite the USD-M endpoints documenting no request parameters; and a protected position that became exchange-flat outside the TP1 path could be removed from the local registry without proving the old stop was gone.
+Change: live2 now treats execution preflight failure, user-data stream startup failure, and auto-universe below minimum as startup failures. The startup event explicitly labels live2 as real-orders-only/no dry-run. Binance USD-M listenKey keepalive/close calls now call their documented no-parameter endpoints. When the exchange position is flat, the supervisor verifies the protected stop is already gone or cancels/verifies it gone before removing the protected position.
+Trading impact: stricter and less ambiguous. Live2 either has the mandatory execution/user-data/universe prerequisites or stops. It will not silently keep a flat local state while a reduce-only conditional stop remains visible.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic flat-position orphan-stop smoke.
+Next validation: run live2 smoke and require either clean startup with user-data ready + universe >= floor, or immediate explicit startup failure event/reason.
+```
+
 ## 2026-05-20 - P341 live2 full-TP1 position contract
 
 ```text
