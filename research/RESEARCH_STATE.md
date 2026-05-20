@@ -69,6 +69,17 @@ Next: runtime hardening for reconnect/coverage/latency degradation gates before 
 
 Compact project memory. Detailed rules live in Project Instructions.
 
+## 2026-05-20 - P336 live2 active/radar OI poller
+
+```text
+Current patch status: P336 PROPOSED / UNKNOWN commit.
+Question: provide real open-interest context for live2 categories without polling the whole universe or substituting missing OI with zero.
+Change: live2 now starts an active/radar-only 5m open-interest poller after universe/WS startup. It polls only watching/actionable/in-position or recently live-flow symbols, computes real 3x5m OI change from exchange OI history, stores OI fields/source/status per SymbolState, exposes status counts/grid/diagnostics, and lets `runner_oi_confirmed` evaluate `min_oi_change_pct_3x5m` from those fields. Missing/empty/invalid OI remains explicit `oi_context_not_ready` or source status; no silent fallback is introduced.
+Trading impact: no thresholds, prior-24h context, entry guards, order placement, fills, stops, TP/BE, or runtime market-data readiness are loosened. OI is a category dependency, not a global stream-coverage gate in this patch.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic open-interest snapshot/poller smoke.
+Next validation: live2 smoke with small explicit universe; require `open_interest_poller_starting`, OI status counts in heartbeat/status/grid, and OI-required category rejects to move from unavailable-generation reason to real `oi_context_not_ready` / `oi_change_3x5m_below_category_min` / accepted when data is ready. Prior-context planning remains 24h.
+```
+
 ## 2026-05-20 - P331 live2 aggTrade market routed WS readiness
 
 ```text
@@ -85,7 +96,7 @@ Next: apply P331, run a 2-3 minute live2 smoke without changing strategy paramet
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P333 proposed live2 transition-only market-data diagnostics
+Last active patch: P336 proposed live2 active-symbol OI poller
 Updated: 2026-05-20
 ```
 

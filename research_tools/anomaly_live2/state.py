@@ -14,6 +14,7 @@ LIVE2_DEFAULT_CANDLE_TIMEFRAMES_MS = (5_000, 15_000, 30_000, 60_000)
 LIVE2_DEFAULT_MAX_CLOSED_CANDLES = 360
 LIVE2_STARTUP_AGGTRADE_REST_SOURCE = "binance_futures_aggTrades_startup_rest"
 LIVE2_AGGTRADE_WS_SOURCE = "binance_futures_aggtrade_ws"
+LIVE2_OPEN_INTEREST_SOURCE = "binance_futures_open_interest_hist_5m_poll"
 
 
 class SymbolLive2Status(StrEnum):
@@ -136,6 +137,18 @@ class SymbolState:
     mark_source: str = ""
     mark_status: str = "not_seen"
     mark_reason: str = ""
+    oi_first_seen_ms: int | None = None
+    oi_last_seen_ms: int | None = None
+    oi_latest_timestamp_ms: int | None = None
+    oi_previous_timestamp_ms: int | None = None
+    oi_update_count: int = 0
+    oi_open_interest: float | None = None
+    oi_previous_open_interest: float | None = None
+    oi_change_pct_3x5m: float | None = None
+    oi_rows_received: int = 0
+    oi_source: str = ""
+    oi_status: str = "not_seen"
+    oi_reason: str = ""
     candle_coverage_status: str = "not_ready"
     candle_gap_count: int = 0
     candle_out_of_order_count: int = 0
@@ -321,6 +334,36 @@ class SymbolState:
         self.mark_reason = reason
         self.mark_dirty(now_ms=received_at_ms)
 
+    def update_open_interest(
+        self,
+        *,
+        fetched_at_ms: int,
+        latest_timestamp_ms: int | None,
+        previous_timestamp_ms: int | None,
+        open_interest: float | None,
+        previous_open_interest: float | None,
+        open_interest_change_pct_3x5m: float | None,
+        rows_received: int,
+        source: str,
+        status: str,
+        reason: str,
+    ) -> None:
+        self.updated_ms = fetched_at_ms
+        if self.oi_first_seen_ms is None:
+            self.oi_first_seen_ms = fetched_at_ms
+        self.oi_last_seen_ms = fetched_at_ms
+        self.oi_latest_timestamp_ms = latest_timestamp_ms
+        self.oi_previous_timestamp_ms = previous_timestamp_ms
+        self.oi_update_count += 1
+        self.oi_open_interest = open_interest
+        self.oi_previous_open_interest = previous_open_interest
+        self.oi_change_pct_3x5m = open_interest_change_pct_3x5m
+        self.oi_rows_received = rows_received
+        self.oi_source = source
+        self.oi_status = status
+        self.oi_reason = reason
+        self.mark_dirty(now_ms=fetched_at_ms)
+
     def to_artifact_row(self) -> dict[str, object]:
         row: dict[str, object] = {
             "symbol": self.symbol,
@@ -424,6 +467,18 @@ class SymbolState:
             "mark_source": self.mark_source,
             "mark_status": self.mark_status,
             "mark_reason": self.mark_reason,
+            "oi_first_seen_ms": self.oi_first_seen_ms,
+            "oi_last_seen_ms": self.oi_last_seen_ms,
+            "oi_latest_timestamp_ms": self.oi_latest_timestamp_ms,
+            "oi_previous_timestamp_ms": self.oi_previous_timestamp_ms,
+            "oi_update_count": self.oi_update_count,
+            "oi_open_interest": self.oi_open_interest,
+            "oi_previous_open_interest": self.oi_previous_open_interest,
+            "oi_change_pct_3x5m": self.oi_change_pct_3x5m,
+            "oi_rows_received": self.oi_rows_received,
+            "oi_source": self.oi_source,
+            "oi_status": self.oi_status,
+            "oi_reason": self.oi_reason,
             "candle_coverage_status": self.candle_coverage_status,
             "candle_gap_count": self.candle_gap_count,
             "candle_out_of_order_count": self.candle_out_of_order_count,
@@ -570,6 +625,36 @@ class SymbolStateStore:
                 reason=reason,
             )
 
+    def update_open_interest(
+        self,
+        *,
+        symbol: str,
+        fetched_at_ms: int,
+        latest_timestamp_ms: int | None,
+        previous_timestamp_ms: int | None,
+        open_interest: float | None,
+        previous_open_interest: float | None,
+        open_interest_change_pct_3x5m: float | None,
+        rows_received: int,
+        source: str,
+        status: str,
+        reason: str,
+    ) -> None:
+        with self._lock:
+            state = self.get_or_create(symbol)
+            state.update_open_interest(
+                fetched_at_ms=fetched_at_ms,
+                latest_timestamp_ms=latest_timestamp_ms,
+                previous_timestamp_ms=previous_timestamp_ms,
+                open_interest=open_interest,
+                previous_open_interest=previous_open_interest,
+                open_interest_change_pct_3x5m=open_interest_change_pct_3x5m,
+                rows_received=rows_received,
+                source=source,
+                status=status,
+                reason=reason,
+            )
+
 
     def update_aggtrade_many(self, trades: tuple[Live2AggTradeEvent, ...], *, received_at_ms: int) -> None:
         if not trades:
@@ -611,6 +696,22 @@ class SymbolStateStore:
         with self._lock:
             for state in self._states.values():
                 key = state.mark_status or "unknown"
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
+    def open_interest_counts(self, *, now_ms: int | None = None, stale_ms: int | None = None) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        effective_now_ms = utc_now_ms() if now_ms is None else int(now_ms)
+        with self._lock:
+            for state in self._states.values():
+                key = state.oi_status or "unknown"
+                if (
+                    key == "ok"
+                    and stale_ms is not None
+                    and state.oi_last_seen_ms is not None
+                    and effective_now_ms - state.oi_last_seen_ms > stale_ms
+                ):
+                    key = "stale"
                 counts[key] = counts.get(key, 0) + 1
         return counts
 

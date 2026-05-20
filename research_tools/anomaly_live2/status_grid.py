@@ -19,6 +19,7 @@ def format_live2_status_grid(
     ticker_counts: Mapping[str, int],
     aggtrade_counts: Mapping[str, int],
     mark_counts: Mapping[str, int],
+    open_interest_counts: Mapping[str, int],
     candle_counts: Mapping[str, int],
     market_data_status: Mapping[str, object],
     decision_status: Mapping[str, object],
@@ -31,6 +32,7 @@ def format_live2_status_grid(
     ws_health = _dict(market_data_status.get("ws_health"))
     aggtrade_ws = _dict(market_data_status.get("aggtrade_ws"))
     mark_price_ws = _dict(market_data_status.get("mark_price_ws"))
+    open_interest = _dict(market_data_status.get("open_interest"))
     universe = _dict(market_data_status.get("universe"))
     startup_warmup = _dict(market_data_status.get("startup_warmup"))
     readiness = _dict(runtime_gate_status.get("readiness"))
@@ -45,6 +47,10 @@ def format_live2_status_grid(
     aggtrade_rows_applied = _int(aggtrade_ws.get("rows_applied"))
     mark_rows_applied = _int(mark_price_ws.get("rows_applied"))
     mark_ready_symbols = _int(mark_counts.get("ok"))
+    oi_ready_symbols = _int(open_interest.get("ready_symbols"))
+    oi_active_symbols = _int(open_interest.get("active_target_symbols"))
+    oi_errors = _int(open_interest.get("total_errors"))
+    oi_stale_symbols = _int(open_interest_counts.get("stale"))
     aggtrade_pre_first_payload_failures = _int(ws_health.get("aggtrade_pre_first_payload_failures"))
     coverage_ready = bool(market_data_status.get("stream_coverage_ready"))
     market_gate_ready = bool(market_data_status.get("market_data_ready_for_entries"))
@@ -134,6 +140,11 @@ def format_live2_status_grid(
             _format_status_cell("Mark", _format_marked_quality_value(mark_rows_applied, "good" if mark_rows_applied > 0 else "warn")),
             _format_status_cell("Mark sym", mark_ready_symbols),
             _format_status_cell("Ротации", planned_rotations),
+        ),
+        _format_status_line(
+            _format_status_cell("OI", _format_marked_quality_value(f"{oi_ready_symbols}/{oi_active_symbols}", "good" if not oi_active_symbols or oi_ready_symbols >= oi_active_symbols else "warn")),
+            _format_status_cell("OI stale", oi_stale_symbols),
+            _format_status_cell("OI err", _format_marked_quality_value(oi_errors, _quality_level_from_count(oi_errors, good_max=0, warn_max=3))),
         ),
         _format_status_line(
             _format_status_cell("Переподкл", reconnects),

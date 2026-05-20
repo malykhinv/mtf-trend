@@ -16,6 +16,7 @@ from .entry_guard import Live2EntryGuardConfig, Live2EntryGuardEngine
 from .execution import Live2ExecutionConfig, Live2ExecutionEngine, Live2ExecutionExchange
 from .market_data.aggtrade_ws import Live2AggTradeWsSource
 from .market_data.mark_price_ws import Live2MarkPriceWsSource
+from .market_data.open_interest import Live2OpenInterestPollConfig, Live2OpenInterestPoller
 from .market_data.ticker_ws import Live2TickerWsSource
 from .market_data.startup_tickers import Live2StartupTickerSnapshot, Live2StartupTickerSnapshotResult
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
@@ -80,6 +81,7 @@ class AnomalyLive2Runner:
         )
         self.aggtrade_source: Live2AggTradeWsSource | None = None
         self.mark_price_source: Live2MarkPriceWsSource | None = None
+        self.open_interest_source: Live2OpenInterestPoller | None = None
         self.execution_engine = Live2ExecutionEngine(
             exchange_client=exchange_client,
             config=Live2ExecutionConfig(
@@ -257,6 +259,21 @@ class AnomalyLive2Runner:
                 self.mark_price_source.start()
                 mark_ready = self.mark_price_source.wait_until_ready()
                 self._set_startup_status("markPrice", "поток готов" if mark_ready else "поток пока не готов")
+                self.open_interest_source = Live2OpenInterestPoller(
+                    state_store=self.state_store,
+                    exchange_client=self.execution_engine.exchange_client,
+                    config=Live2OpenInterestPollConfig(
+                        poll_interval_seconds=self.config.oi_poll_interval_seconds,
+                        symbol_cooldown_seconds=self.config.oi_symbol_cooldown_seconds,
+                        stale_ms=self.config.oi_stale_ms,
+                        lookback_minutes=self.config.oi_lookback_minutes,
+                        max_symbols_per_cycle=self.config.oi_max_symbols_per_cycle,
+                        radar_symbol_ttl_ms=self.config.oi_radar_symbol_ttl_ms,
+                    ),
+                )
+                self._write_open_interest_starting_event(writer)
+                self._set_startup_status("OI", "запускаю poller для active/radar")
+                self.open_interest_source.start()
             else:
                 writer.write_event(
                     Live2Event(
@@ -419,6 +436,7 @@ class AnomalyLive2Runner:
                             ticker_counts=self.state_store.ticker_counts(),
                             aggtrade_counts=self.state_store.aggtrade_counts(),
                             mark_counts=self.state_store.mark_counts(),
+                            open_interest_counts=self.state_store.open_interest_counts(stale_ms=self.config.oi_stale_ms),
                             candle_counts=self.state_store.candle_coverage_counts(),
                             market_data_status=market_data_status,
                             decision_status=decision_status,
@@ -496,6 +514,8 @@ class AnomalyLive2Runner:
             raise
         finally:
             self.status_logger.finish_status()
+            if self.open_interest_source is not None:
+                self.open_interest_source.close()
             if self.mark_price_source is not None:
                 self.mark_price_source.close()
             if self.aggtrade_source is not None:
@@ -729,6 +749,8 @@ class AnomalyLive2Runner:
                 "market_data_ready_for_entries": bool(market_data_status.get("market_data_ready_for_entries")),
                 "clean_windows": int(market_data_status.get("market_data_clean_windows") or 0),
                 "degraded_windows": int(market_data_status.get("market_data_degraded_windows") or 0),
+                "open_interest": market_data_status.get("open_interest"),
+                "open_interest_status_counts": market_data_status.get("open_interest_status_counts"),
                 "ws_reconnect_summary": {
                     "reconnect_attempts": int(ws_health_dict.get("reconnect_attempts") or 0),
                     "disconnect_count": int(ws_health_dict.get("disconnect_count") or 0),
@@ -851,6 +873,7 @@ class AnomalyLive2Runner:
         ticker_status = self.ticker_source.status().as_dict(stale_ms=self.config.ticker_stale_ms)
         aggtrade_status = self._aggtrade_status()
         mark_price_status = self._mark_price_status()
+        open_interest_status = self._open_interest_status()
         ticker_ready = bool(ticker_status.get("ready"))
         aggtrade_ready = bool(aggtrade_status.get("ready"))
         mark_price_ready = bool(mark_price_status.get("ready"))
@@ -885,10 +908,12 @@ class AnomalyLive2Runner:
             "ticker_ws": ticker_status,
             "aggtrade_ws": aggtrade_status,
             "mark_price_ws": mark_price_status,
+            "open_interest": open_interest_status,
             "live_decision_watermark_ms": self._live_decision_watermark_ms(),
             "startup_aggtrade_status_counts": self.state_store.startup_aggtrade_counts(),
             "live_aggtrade_status_counts": self.state_store.live_aggtrade_counts(),
             "mark_price_status_counts": self.state_store.mark_counts(),
+            "open_interest_status_counts": self.state_store.open_interest_counts(stale_ms=self.config.oi_stale_ms),
             "candle_coverage_counts": self.state_store.candle_coverage_counts(),
             "universe": self._universe_status(),
             "ws_health": ws_health,
@@ -1015,6 +1040,19 @@ class AnomalyLive2Runner:
             }
         return self.mark_price_source.status().as_dict(stale_ms=self.config.mark_price_stale_ms)
 
+    def _open_interest_status(self) -> dict[str, object]:
+        if self.open_interest_source is None:
+            return {
+                "source_id": Live2OpenInterestPoller.source_id,
+                "status": "not_started",
+                "ready": False,
+                "reason": "startup_universe_not_selected_or_empty",
+                "active_target_symbols": 0,
+                "ready_symbols": 0,
+                "tracked_symbols": 0,
+            }
+        return self.open_interest_source.status()
+
     def _universe_status(self) -> dict[str, Any]:
         if self.universe_selection is None:
             return {
@@ -1051,6 +1089,12 @@ class AnomalyLive2Runner:
                     "ws_connection_max_age_seconds": self.config.ws_connection_max_age_seconds,
                     "mark_price_stale_ms": self.config.mark_price_stale_ms,
                     "mark_price_startup_wait_seconds": self.config.mark_price_startup_wait_seconds,
+                    "oi_stale_ms": self.config.oi_stale_ms,
+                    "oi_poll_interval_seconds": self.config.oi_poll_interval_seconds,
+                    "oi_symbol_cooldown_seconds": self.config.oi_symbol_cooldown_seconds,
+                    "oi_lookback_minutes": self.config.oi_lookback_minutes,
+                    "oi_max_symbols_per_cycle": self.config.oi_max_symbols_per_cycle,
+                    "oi_radar_symbol_ttl_ms": self.config.oi_radar_symbol_ttl_ms,
                     "execution_order_placement": "verified_fill_and_initial_stop_lifecycle_enabled",
                 },
             )
@@ -1183,6 +1227,33 @@ class AnomalyLive2Runner:
                     "stale_ms": self.config.mark_price_stale_ms,
                     "startup_wait_seconds": self.config.mark_price_startup_wait_seconds,
                     "hot_rest_backfill": False,
+                    "universe": self._universe_status(),
+                },
+            )
+        )
+
+    def _write_open_interest_starting_event(self, writer: Live2ArtifactWriter) -> None:
+        selected_symbols = 0 if self.universe_selection is None else len(self.universe_selection.selected_symbols)
+        writer.write_event(
+            Live2Event(
+                event_type="open_interest_poller_starting",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO if selected_symbols else Live2Severity.ERROR,
+                message="starting active/radar-only open-interest poller",
+                data={
+                    "source": Live2OpenInterestPoller.source_id,
+                    "symbols_filter_count": selected_symbols,
+                    "poll_scope": "active_radar_actionable_symbols_only",
+                    "timeframe": "5m",
+                    "change_window": "3x5m",
+                    "stale_ms": self.config.oi_stale_ms,
+                    "poll_interval_seconds": self.config.oi_poll_interval_seconds,
+                    "symbol_cooldown_seconds": self.config.oi_symbol_cooldown_seconds,
+                    "lookback_minutes": self.config.oi_lookback_minutes,
+                    "max_symbols_per_cycle": self.config.oi_max_symbols_per_cycle,
+                    "radar_symbol_ttl_ms": self.config.oi_radar_symbol_ttl_ms,
+                    "full_universe_polling": False,
+                    "silent_zero_fallback": False,
                     "universe": self._universe_status(),
                 },
             )

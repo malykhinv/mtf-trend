@@ -38,9 +38,10 @@ class Live2SignalDecision:
 class Live2SignalEngine:
     """Small stream-only adapter for the shared pump-category contract.
 
-    Generation 0 has no OI/prior-fast-fade context. Mark basis comes from the
-    live2 markPrice stream; unavailable required fields are rejected explicitly
-    instead of silently substituting zeros.
+    Generation 0 has no prior-fast-fade context. Mark basis comes from the
+    live2 markPrice stream and OI delta comes from the live2 active-symbol OI
+    poller; unavailable required fields are rejected explicitly instead of
+    silently substituting zeros.
     """
 
     def __init__(self, *, category_ids: tuple[str, ...] = DEFAULT_PUMP_CATEGORY_IDS) -> None:
@@ -100,8 +101,9 @@ class Live2SignalEngine:
             "total_selected": self._total_selected,
             "total_rejected": self._total_rejected,
             "limitations": (
-                "generation_0_has_no_OI_prior_fast_fade_context; "
+                "generation_0_has_no_prior_fast_fade_context; "
                 "mark_context_from_live_markPrice_ws; "
+                "oi_context_from_active_symbol_open_interest_poller; "
                 "categories_requiring_unavailable_context_are_rejected"
             ),
         }
@@ -167,11 +169,24 @@ class Live2SignalEngine:
             "mark_status": state.mark_status,
             "mark_basis_status": mark_basis_status,
             "mark_close_vs_decision_close_basis": mark_basis,
+            "oi_open_interest": state.oi_open_interest,
+            "oi_previous_open_interest": state.oi_previous_open_interest,
+            "oi_change_pct_3x5m": state.oi_change_pct_3x5m,
+            "oi_latest_timestamp_ms": state.oi_latest_timestamp_ms,
+            "oi_previous_timestamp_ms": state.oi_previous_timestamp_ms,
+            "oi_last_seen_ms": state.oi_last_seen_ms,
+            "oi_source": state.oi_source,
+            "oi_status": state.oi_status,
+            "oi_reason": state.oi_reason,
         }
 
     def _category_accepts(self, *, category: PumpCategoryContract, features: dict[str, object]) -> tuple[bool, str]:
         if category.min_oi_change_pct_3x5m is not None:
-            return False, "oi_context_not_available_in_live2_generation_0"
+            oi_change = _float_or_none(features.get("oi_change_pct_3x5m"))
+            if features.get("oi_status") != "ok" or oi_change is None:
+                return False, "oi_context_not_ready"
+            if oi_change < category.min_oi_change_pct_3x5m:
+                return False, "oi_change_3x5m_below_category_min"
         if category.min_mark_close_vs_decision_close_basis is not None:
             mark_basis = _float_or_none(features.get("mark_close_vs_decision_close_basis"))
             if mark_basis is None:

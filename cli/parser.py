@@ -479,6 +479,12 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live2.add_argument("--ws-connection-max-age-seconds", type=float, default=84_600.0)
     anomaly_live2.add_argument("--mark-price-stale-ms", type=_positive_int_for("--mark-price-stale-ms"), default=5_000)
     anomaly_live2.add_argument("--mark-price-startup-wait-seconds", type=float, default=10.0)
+    anomaly_live2.add_argument("--oi-stale-ms", type=_positive_int_for("--oi-stale-ms"), default=180_000)
+    anomaly_live2.add_argument("--oi-poll-interval-seconds", type=float, default=5.0)
+    anomaly_live2.add_argument("--oi-symbol-cooldown-seconds", type=float, default=60.0)
+    anomaly_live2.add_argument("--oi-lookback-minutes", type=_positive_int_for("--oi-lookback-minutes"), default=20)
+    anomaly_live2.add_argument("--oi-max-symbols-per-cycle", type=_positive_int_for("--oi-max-symbols-per-cycle"), default=8)
+    anomaly_live2.add_argument("--oi-radar-symbol-ttl-ms", type=_positive_int_for("--oi-radar-symbol-ttl-ms"), default=60_000)
     anomaly_live2.add_argument("--output-dir", default=None, help="Optional artifact output directory")
 
     live_order_smoke = subparsers.add_parser(
