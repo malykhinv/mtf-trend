@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P353 live2 prior-context launch wiring and artifact durability
+
+```text
+Current patch status: P353 APPLIED locally / UNKNOWN commit.
+Question: post-P352 live2 run 20260520_122522 showed deadline misses largely fixed, but prior 24h context remained materially stale/not_seen and some decisions stayed blocked by prior_24h_context_not_ready. Root cause: CLI parser/command defaults still injected the old P337/P351 values (15m stale, 5m cooldown, 4 symbols/cycle), overriding the widened AnomalyLive2Config defaults. A separate audit durability issue was observed: full-rewrite artifacts such as live2_symbol_state.csv could be momentarily truncated while the async writer rewrote them in place.
+Change: CLI parser defaults and command fallbacks now match runtime config (20m stale, 10m cooldown, 10 symbols/cycle). The prior-context startup event now labels the real selected-universe active-priority poll scope. Status, diagnostics summary, and symbol-state full rewrites are atomic temp-file replacements with fsync before replace. Writer failures still surface through artifact_writer_status and can disable new entries; no fallback data is introduced.
+Trading impact: stricter visibility and better context freshness after restart. Signals still reject/block on stale or missing prior context; this patch makes the intended poller budget actually reach launched live2 and prevents audit snapshots from disappearing during rewrite. No category thresholds, execution guards, fill, stop, TP, or position lifecycle changed.
+Validation: `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py`; `.venv\Scripts\python.exe -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+Next validation: restart live2 on this commit, then require prior_context stale/not_seen counts to trend down after one 20m window, `total_data_dependency_not_ready` from prior_24h_context_not_ready to stop accumulating at the old rate, and artifact_writer_status error/rejected counts to remain zero.
+```
+
 ## 2026-05-20 - P352 live2 market-watch stability patch
 
 ```text

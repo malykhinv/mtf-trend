@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import queue
 import threading
 from dataclasses import dataclass
@@ -315,25 +316,42 @@ class Live2ArtifactWriter:
             self._events_file.flush()
             return
         if job.kind == "status":
-            self.status_path.write_text(
+            self._atomic_write_text(
+                self.status_path,
                 json.dumps(job.payload, ensure_ascii=False, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
             return
         if job.kind == "diagnostics_summary":
-            self.diagnostics_summary_path.write_text(
+            self._atomic_write_text(
+                self.diagnostics_summary_path,
                 json.dumps(job.payload, ensure_ascii=False, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
             return
         if job.kind == "symbol_state":
             payload = job.payload
-            with self.symbol_state_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
+            tmp_path = self._tmp_path_for(self.symbol_state_path)
+            with tmp_path.open("w", encoding="utf-8-sig", newline="") as file_obj:
                 writer = csv.DictWriter(file_obj, fieldnames=payload["fieldnames"])
                 writer.writeheader()
                 writer.writerows(payload["rows"])
+                file_obj.flush()
+                os.fsync(file_obj.fileno())
+            tmp_path.replace(self.symbol_state_path)
             return
         raise RuntimeError(f"unknown artifact writer job kind: {job.kind}")
+
+    def _atomic_write_text(self, path: Path, text: str, *, encoding: str) -> None:
+        tmp_path = self._tmp_path_for(path)
+        with tmp_path.open("w", encoding=encoding, newline="") as file_obj:
+            file_obj.write(text)
+            file_obj.flush()
+            os.fsync(file_obj.fileno())
+        tmp_path.replace(path)
+
+    def _tmp_path_for(self, path: Path) -> Path:
+        return path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
 
     def _mark_error(self, message: str) -> None:
         with self._lock:

@@ -122,6 +122,9 @@ live2 contract starts as a separate `run-anomaly-live2` runtime, not a flag on l
 live2 ticker WS is discovery/state context only: it may update one mutable SymbolState per symbol, but it must not create warm/radar queues, perform REST ticker fallback in the hot path, or act as sufficient pump-flow evidence without aggTrade/candle coverage
 live2 aggTrade WS is the first allowed hot-path flow source: it may build in-memory 5s/15s/30s/1m candle rings from real trades only, but must not REST-backfill missed buckets, synthesize flat candles, or enable entries before deadline signal and execution gates exist
 ended live2 real-trade candles may be finalized by wall clock after the bucket close, without waiting for the next trade; this creates no synthetic candles and preserves idle-gap diagnostics on the next real trade
+live2 prior 24h context polling covers the selected universe with active/actionable/open-position symbols prioritized and oldest-polled fairness; stale/missing prior context is a data dependency block, not an ok context and not a strategy reject
+CLI, command, and runtime config defaults must stay aligned for prior_context_stale_ms, prior_context_symbol_cooldown_seconds, and prior_context_max_symbols_per_cycle because launched live is the source of truth, not dataclass defaults alone
+live2 full-rewrite audit artifacts (status, diagnostics summary, symbol state) must be atomic temp-file replacements; a transient empty/truncated audit file is an observability failure
 selected hot symbol -> scan all due configured TF sets -> then move to next symbol
 noticed radar symbols have a fixed hot-lane before warm bulk/cold coverage; active/opening symbols remain protected first
 symbols that already exceed the 24h prior fake-pump / fast-fade threshold are quarantined before warm/radar hot-lane promotion until enough excess fast-fade timestamps age out of the 24h window; they remain visible to ticker/top-growth audit

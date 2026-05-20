@@ -14,6 +14,17 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+## 2026-05-20 - live2 run review 20260520_122522 after P352
+
+```text
+Artifact reviewed: .output/results/live2_anomaly_runs/20260520_122522 while preserving the running process.
+Verdict: P352 removed the mass decision-lateness failure mode, but this live process still did not have the intended prior-context polling budget. Deadline misses were down to a small minority of processed decisions, while prior 24h context remained materially stale/not_seen and prior_24h_context_not_ready still dominated data-dependency blocks.
+Root cause: launched CLI defaults still passed the old prior_context_stale_ms=900000, prior_context_symbol_cooldown_seconds=300, and prior_context_max_symbols_per_cycle=4 values into AnomalyLive2Config, overriding the newer runtime defaults. This is a wiring bug, not a market signal issue.
+Audit durability issue: live2_symbol_state.csv was observed as 0 bytes during an async writer full rewrite before recovering. That can hide the state at exactly the moment an operator or post-mortem reader inspects it. P353 changes full-rewrite status/summary/symbol-state artifacts to atomic temp-file replacement.
+No-sweep check: stale/missing context remains visible as data_dependency_not_ready; the patch does not turn stale context into ok, does not synthesize context, and does not loosen signal/category/execution guards.
+Next test: restart live2 on P353 and inspect the first 20-30 minutes. Required evidence: prior_context status counts trend toward ok for the selected universe, prior_24h_context_not_ready accumulation slows materially, `prior_context_poller_starting.poll_scope=selected_universe_active_priority`, no tmp files remain, and artifact_writer_status stays ready with zero errors/rejections.
+```
+
 ## 2026-05-19 - P324 live2 operator-message smoke plan
 
 ```text

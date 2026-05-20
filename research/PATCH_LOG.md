@@ -1,5 +1,46 @@
 # Anomaly Patch Log
 
+## 2026-05-20 - P353 applied locally - live2 prior-context CLI wiring and atomic rewrite artifacts
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/artifacts.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Fix the remaining live2 market-watch instability visible in run 20260520_122522 after P352. The runtime dataclass defaults were widened, but CLI parser/command fallback defaults still passed the old 15m stale / 5m cooldown / 4-symbol cycle values, so normal launched live2 processes could keep producing prior_24h_context_not_ready despite the intended selected-universe poller budget. Also remove in-place rewrite risk for status/diagnostic/symbol-state artifacts so audit files cannot briefly appear as empty/truncated during writer replacement.
+```
+
+Change:
+
+```text
+CLI defaults and command fallbacks now match AnomalyLive2Config: prior_context_stale_ms=1200000, prior_context_symbol_cooldown_seconds=600, prior_context_max_symbols_per_cycle=10. The prior-context startup event now states the true selected-universe active-priority polling scope instead of the old active/radar-only label. Live2 status, diagnostics summary, and symbol-state full rewrites are written to a flushed/fsynced temp file and atomically replaced. Writer errors are not suppressed; artifact readiness remains the safety gate.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py
+.venv\Scripts\python.exe -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low-to-medium. The change increases default prior-context REST budget for launched live2 to the already intended runtime values, about 60 OHLCV requests/minute at default cycle/cooldown. It does not add fallback data, zero substitution, signal threshold loosening, order changes, or hidden retries. Existing currently-running live2 processes must be restarted to pick up CLI defaults.
+```
+
 ## 2026-05-20 - P352 applied locally - live2 wall-clock candle close and prior-context freshness
 
 Files:
