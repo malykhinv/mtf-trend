@@ -5888,3 +5888,33 @@ Risk:
 ```text
 Medium and intentionally stricter. Live2 may show fewer `rejected_signal_contract` and more `data_dependency_not_ready`. If current categories require flow-hold/taker-delta features that are not yet fully implemented, this patch exposes that as a dependency instead of accepting incomplete category evaluation.
 ```
+
+
+## 2026-05-20 - P339 proposed - live2 flow-hold/taker confirmation contract
+
+Files:
+
+```text
+research_tools/anomaly_live2/signal.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Implement the live2 flow-hold/taker-buy confirmation fields required by current category contracts without lookahead. The signal adapter now derives flow-hold only from already closed live WS 5s candles at or before the decision candle, exposes the exact definition/source fields, and maps category `min_flow_hold_count` / `min_next_taker_buy_quote_share` to live-confirmed pre-entry flow instead of future candles or zero fallback.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+# synthetic closed-live-flow signal smoke
+```
+
+Risk:
+
+```text
+Medium. The patch intentionally changes live2 from `flow_hold_count_not_ready` to a real closed-live-candle confirmation contract. It does not use future data, but live semantics are explicitly labelled as trailing closed pre-entry flow, not backtest lookahead. This may make `runner_flow` computable where it was previously blocked by dependency status.
+```

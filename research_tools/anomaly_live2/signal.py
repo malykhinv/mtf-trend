@@ -158,6 +158,7 @@ class Live2SignalEngine:
                 "legacy_category_72h_names_use_24h_live_context; "
                 "mark_context_from_live_markPrice_ws; "
                 "oi_context_from_active_symbol_open_interest_poller; "
+                "flow_hold_from_trailing_closed_live_5s_pre_entry_no_lookahead; "
                 "missing_required_category_dependencies_return_data_dependency_not_ready"
             ),
         }
@@ -241,6 +242,13 @@ class Live2SignalEngine:
         trade_ratio_per_abs_return = None
         if trade_ratio is not None and abs_return_pct > 0:
             trade_ratio_per_abs_return = trade_ratio / abs_return_pct
+        flow_hold = _trailing_live_flow_hold(
+            closed_5s=closed_5s,
+            decision_candle=candle,
+            baseline_quote=baseline_quote,
+            baseline_trades=baseline_trades,
+            baseline_taker_share=baseline_taker_share,
+        )
         mark_basis = None
         mark_basis_status = "not_available"
         if state.mark_status == "ok" and state.mark_price is not None and state.mark_price > 0 and candle.close > 0:
@@ -288,8 +296,19 @@ class Live2SignalEngine:
             "start_trade_ratio_per_abs_return": trade_ratio_per_abs_return,
             "start_taker_buy_quote_share": taker_share,
             "start_taker_buy_quote_share_delta": taker_share_delta,
-            "flow_hold_count": None,
-            "flow_hold_status": "not_implemented_two_phase_dependency",
+            "flow_hold_count": flow_hold.count,
+            "flow_hold_status": flow_hold.status,
+            "flow_hold_reason": flow_hold.reason,
+            "flow_hold_definition": "trailing_closed_live_5s_pre_entry_no_lookahead",
+            "flow_hold_window_ms": flow_hold.window_ms,
+            "flow_hold_quote_volume": flow_hold.quote_volume,
+            "flow_hold_number_of_trades": flow_hold.number_of_trades,
+            "flow_hold_taker_buy_quote_volume": flow_hold.taker_buy_quote_volume,
+            "flow_hold_taker_buy_quote_share_mean": flow_hold.taker_buy_quote_share_mean,
+            "flow_hold_taker_buy_quote_share_last": flow_hold.taker_buy_quote_share_last,
+            "flow_hold_taker_buy_quote_share_delta": flow_hold.taker_buy_quote_share_delta,
+            "live_confirmed_taker_buy_quote_share": flow_hold.taker_buy_quote_share_last,
+            "live_confirmed_taker_buy_quote_share_delta": flow_hold.taker_buy_quote_share_delta,
             "quote_volume": candle.quote_volume,
             "number_of_trades": candle.number_of_trades,
             "prior_closed_5s_count": len(previous),
@@ -416,9 +435,15 @@ class Live2SignalEngine:
                 return _dependency("start_taker_buy_quote_share_delta_not_ready")
             if taker_share_delta > category.max_start_taker_buy_quote_share_delta:
                 return _reject("start_taker_buy_quote_share_delta_above_category_max")
+        live_confirmed_taker_share = _float_or_none(features.get("live_confirmed_taker_buy_quote_share"))
+        if category.min_next_taker_buy_quote_share is not None:
+            if features.get("flow_hold_status") != "ok" or live_confirmed_taker_share is None:
+                return _dependency("live_confirmed_taker_buy_quote_share_not_ready")
+            if live_confirmed_taker_share < category.min_next_taker_buy_quote_share:
+                return _reject("live_confirmed_taker_buy_quote_share_below_category_min")
         flow_hold_count = _int_or_none(features.get("flow_hold_count"))
         if category.min_flow_hold_count is not None:
-            if flow_hold_count is None:
+            if features.get("flow_hold_status") != "ok" or flow_hold_count is None:
                 return _dependency("flow_hold_count_not_ready")
             if flow_hold_count < category.min_flow_hold_count:
                 return _reject("flow_hold_count_below_category_min")
@@ -428,6 +453,134 @@ class Live2SignalEngine:
         if category.max_initial_risk_pct is not None and initial_risk_pct is not None and initial_risk_pct > category.max_initial_risk_pct:
             return _reject("initial_risk_pct_above_category_max")
         return Live2CategoryEvaluation(True, "accepted", "accepted")
+
+
+@dataclass(frozen=True, slots=True)
+class Live2FlowHoldSnapshot:
+    """Closed live-flow confirmation available before entry.
+
+    This deliberately uses only closed live WS candles at or before the decision
+    candle. It does not read future buckets and it does not perform hot-path IO.
+    """
+
+    status: str
+    reason: str
+    count: int | None
+    window_ms: int | None
+    quote_volume: float | None
+    number_of_trades: int | None
+    taker_buy_quote_volume: float | None
+    taker_buy_quote_share_mean: float | None
+    taker_buy_quote_share_last: float | None
+    taker_buy_quote_share_delta: float | None
+
+
+def _trailing_live_flow_hold(
+    *,
+    closed_5s: tuple[Live2Candle, ...],
+    decision_candle: Live2Candle,
+    baseline_quote: float,
+    baseline_trades: float,
+    baseline_taker_share: float,
+) -> Live2FlowHoldSnapshot:
+    if baseline_quote <= 0 or baseline_trades <= 0:
+        return _flow_hold_not_ready("baseline_flow_not_ready")
+    if decision_candle.live_ws_trade_count <= 0:
+        return _flow_hold_not_ready("decision_candle_not_from_live_ws")
+    ordered = tuple(item for item in closed_5s if item.open_time_ms <= decision_candle.open_time_ms)
+    if not ordered or ordered[-1].open_time_ms != decision_candle.open_time_ms:
+        return _flow_hold_not_ready("decision_candle_missing_from_closed_ring")
+
+    held: list[Live2Candle] = []
+    expected_open_ms: int | None = decision_candle.open_time_ms
+    for item in reversed(ordered):
+        if expected_open_ms is not None and item.open_time_ms != expected_open_ms:
+            break
+        if not _is_live_flow_hold_candle(
+            item,
+            baseline_quote=baseline_quote,
+            baseline_trades=baseline_trades,
+            baseline_taker_share=baseline_taker_share,
+        ):
+            break
+        held.append(item)
+        expected_open_ms = item.open_time_ms - item.timeframe_ms
+
+    if not held:
+        return Live2FlowHoldSnapshot(
+            status="ok",
+            reason="no_trailing_live_flow_hold_candles",
+            count=0,
+            window_ms=0,
+            quote_volume=0.0,
+            number_of_trades=0,
+            taker_buy_quote_volume=0.0,
+            taker_buy_quote_share_mean=None,
+            taker_buy_quote_share_last=None,
+            taker_buy_quote_share_delta=None,
+        )
+
+    chronological = tuple(reversed(held))
+    quote_volume = sum(item.quote_volume for item in chronological)
+    number_of_trades = sum(item.number_of_trades for item in chronological)
+    taker_buy_quote_volume = sum(item.taker_buy_quote_volume for item in chronological)
+    shares = [
+        item.taker_buy_quote_volume / item.quote_volume
+        for item in chronological
+        if item.quote_volume > 0
+    ]
+    share_mean = sum(shares) / len(shares) if shares else None
+    share_last = shares[-1] if shares else None
+    share_delta = None
+    if share_last is not None and baseline_taker_share > 0:
+        share_delta = share_last - baseline_taker_share
+    return Live2FlowHoldSnapshot(
+        status="ok",
+        reason="trailing_live_flow_hold_ready",
+        count=len(chronological),
+        window_ms=sum(item.timeframe_ms for item in chronological),
+        quote_volume=quote_volume,
+        number_of_trades=number_of_trades,
+        taker_buy_quote_volume=taker_buy_quote_volume,
+        taker_buy_quote_share_mean=share_mean,
+        taker_buy_quote_share_last=share_last,
+        taker_buy_quote_share_delta=share_delta,
+    )
+
+
+def _flow_hold_not_ready(reason: str) -> Live2FlowHoldSnapshot:
+    return Live2FlowHoldSnapshot(
+        status="not_ready",
+        reason=reason,
+        count=None,
+        window_ms=None,
+        quote_volume=None,
+        number_of_trades=None,
+        taker_buy_quote_volume=None,
+        taker_buy_quote_share_mean=None,
+        taker_buy_quote_share_last=None,
+        taker_buy_quote_share_delta=None,
+    )
+
+
+def _is_live_flow_hold_candle(
+    candle: Live2Candle,
+    *,
+    baseline_quote: float,
+    baseline_trades: float,
+    baseline_taker_share: float,
+) -> bool:
+    if candle.live_ws_trade_count <= 0:
+        return False
+    if candle.quote_volume <= baseline_quote:
+        return False
+    if float(candle.number_of_trades) <= baseline_trades:
+        return False
+    if candle.close < candle.open:
+        return False
+    if baseline_taker_share > 0 and candle.quote_volume > 0:
+        return (candle.taker_buy_quote_volume / candle.quote_volume) > baseline_taker_share
+    return True
 
 
 def _dependency(reason: str) -> Live2CategoryEvaluation:

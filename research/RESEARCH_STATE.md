@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P339 live2 flow-hold/taker confirmation contract
+
+```text
+Current patch status: P339 PROPOSED / UNKNOWN commit.
+Question: current live2 categories include flow-hold / next-taker-buy confirmation fields, but P338 correctly exposed them as not ready. Live2 needs a non-lookahead contract for those fields before `runner_flow` can be evaluated honestly.
+Change: signal evaluation now computes flow-hold from trailing closed live WS 5s candles at or before the decision candle. It exposes `flow_hold_status`, reason, count, window, quote/trade/taker-buy totals, taker share mean/last/delta, and maps legacy `min_next_taker_buy_quote_share` to `live_confirmed_taker_buy_quote_share`. No future buckets, hot-path IO, REST fallback, or zero substitution are used.
+Trading impact: `runner_flow` can now become computable when live aggTrade candles provide enough closed pre-entry flow. Missing baseline/live candles still produce `data_dependency_not_ready`; weak confirmed flow remains a real strategy reject. Mark/OI/24h prior dependencies are unchanged.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic closed-live-flow signal smoke.
+Next validation: live2 smoke after P331-P339; inspect `deadline_decision.signal_features.flow_hold_*`, `live_confirmed_taker_buy_quote_share`, and ensure no category uses future candles or startup REST candles as live flow hold.
+```
+
 ## 2026-05-20 - P338 live2 dependency-aware signal gate
 
 ```text
