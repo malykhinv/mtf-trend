@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-20 - P333 live2 transition-only market-data diagnostics
+
+```text
+Current patch status: P333 PROPOSED / UNKNOWN commit.
+Question: stop live2 from spamming hundreds of thousands of market-data coverage events while preserving post-mortem truth.
+Change: live2 now emits `market_data_coverage_transition` only when the semantic market-data state changes. The dedup key excludes rolling clean/degraded windows and reconnect counters, which remain in status/summary artifacts instead of event spam. A new `live2_diagnostics_summary.json` exposes event-type counts, market-data transition counts, runtime-gate transition counts, allowed/blocked gate seconds, reconnect summary, decision funnel, and execution funnel.
+Trading impact: none. No strategy thresholds, categories, WS ingestion, order placement, fills, stops, TP/BE, or runtime gates are loosened. This is audit volume control and diagnostic truthfulness only. Prior-context planning remains 24h.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic artifact-writer diagnostics smoke.
+Next validation: short live2 smoke after P331-P333; require `live2_events.csv` to contain transitions/heartbeats/decisions rather than per-cycle `market_data_coverage_update` spam, while `live2_diagnostics_summary.json` contains reconnect counters and gate durations.
+```
+
 ## 2026-05-20 - P332 live2 warmup/live watermark separation
 
 ```text
@@ -53,7 +64,7 @@ Next: apply P331, run a 2-3 minute live2 smoke without changing strategy paramet
 Branch: codex/ideal-like from uploaded ZIP
 Commit: UNKNOWN
 Local patch stack: P130-P176 present in uploaded ZIP / UNKNOWN commit; P177/P178/P179/P180 applied locally by user / UNKNOWN commit; P181/P184/P185 present in uploaded ZIP / UNKNOWN commit; P186 proposed; P189/P190/P192/P205/P206/P207/P208/P209 applied/proposed status UNKNOWN from prior memory; P213-P217 applied locally in uploaded ZIP / UNKNOWN commit; P218 proposed; P219/P220/P221 applied locally / UNKNOWN commit; P222 proposed; P223/P224/P225/P226/P227/P228/P229 applied locally by user / UNKNOWN commit; P230 proposed
-Last active patch: P331 proposed live2 aggTrade market routed WS readiness
+Last active patch: P333 proposed live2 transition-only market-data diagnostics
 Updated: 2026-05-20
 ```
 

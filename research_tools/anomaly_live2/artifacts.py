@@ -14,7 +14,7 @@ from .clock import utc_now_iso, utc_now_ms
 from .contracts import Live2Event, Live2Readiness
 from .state import SymbolStateStore
 
-ArtifactJobKind = Literal["event", "status", "symbol_state", "stop"]
+ArtifactJobKind = Literal["event", "status", "diagnostics_summary", "symbol_state", "stop"]
 
 
 @dataclass(slots=True)
@@ -33,6 +33,7 @@ class Live2ArtifactWriterStatus:
     enqueued_count: int
     written_count: int
     rejected_count: int
+    events_enqueued_by_type: dict[str, int]
     error_count: int
     last_error: str
     backpressure_active: bool
@@ -45,6 +46,7 @@ class Live2ArtifactWriterStatus:
             "enqueued_count": self.enqueued_count,
             "written_count": self.written_count,
             "rejected_count": self.rejected_count,
+            "events_enqueued_by_type": dict(getattr(self, "events_enqueued_by_type", {})),
             "error_count": self.error_count,
             "last_error": self.last_error,
             "backpressure_active": self.backpressure_active,
@@ -79,6 +81,7 @@ class Live2ArtifactWriter:
         self.events_path = output_dir / "live2_events.csv"
         self.status_path = output_dir / "live2_status.json"
         self.symbol_state_path = output_dir / "live2_symbol_state.csv"
+        self.diagnostics_summary_path = output_dir / "live2_diagnostics_summary.json"
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         self._queue: queue.Queue[_ArtifactJob] = queue.Queue(maxsize=queue_max_size)
@@ -89,6 +92,7 @@ class Live2ArtifactWriter:
         self._enqueued_count = 0
         self._written_count = 0
         self._rejected_count = 0
+        self._events_enqueued_by_type: dict[str, int] = {}
         self._error_count = 0
         self._last_error = ""
         self._events_file = self.events_path.open("w", encoding="utf-8-sig", newline="")
@@ -113,6 +117,8 @@ class Live2ArtifactWriter:
             "message": event.message,
             "data_json": json.dumps(event.data, ensure_ascii=False, sort_keys=True),
         }
+        with self._lock:
+            self._events_enqueued_by_type[event.event_type] = self._events_enqueued_by_type.get(event.event_type, 0) + 1
         self._enqueue(_ArtifactJob(kind="event", payload=row))
 
     def write_status(
@@ -128,6 +134,7 @@ class Live2ArtifactWriter:
         decision_status: dict[str, Any] | None = None,
         execution_status: dict[str, Any] | None = None,
         runtime_gate_status: dict[str, Any] | None = None,
+        diagnostics_summary: dict[str, Any] | None = None,
     ) -> None:
         artifact_writer_status = self.status().as_dict()
         payload: dict[str, Any] = {
@@ -151,8 +158,12 @@ class Live2ArtifactWriter:
             "decision_status": decision_status or {"status": "todo_not_implemented"},
             "artifact_writer_status": artifact_writer_status,
             "runtime_gate_status": runtime_gate_status or {"status": "not_evaluated"},
+            "diagnostics_summary": diagnostics_summary or {"status": "not_available"},
         }
         self._enqueue(_ArtifactJob(kind="status", payload=payload))
+
+    def write_diagnostics_summary(self, summary: dict[str, Any]) -> None:
+        self._enqueue(_ArtifactJob(kind="diagnostics_summary", payload=summary))
 
     def write_symbol_state(self, state_store: SymbolStateStore) -> None:
         rows = [state.to_artifact_row() for state in state_store.snapshot()]
@@ -218,6 +229,7 @@ class Live2ArtifactWriter:
                 enqueued_count=self._enqueued_count,
                 written_count=self._written_count,
                 rejected_count=self._rejected_count,
+                events_enqueued_by_type=dict(self._events_enqueued_by_type),
                 error_count=self._error_count,
                 last_error=self._last_error,
                 backpressure_active=self._rejected_count > 0,
@@ -278,6 +290,12 @@ class Live2ArtifactWriter:
             return
         if job.kind == "status":
             self.status_path.write_text(
+                json.dumps(job.payload, ensure_ascii=False, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            return
+        if job.kind == "diagnostics_summary":
+            self.diagnostics_summary_path.write_text(
                 json.dumps(job.payload, ensure_ascii=False, indent=2, sort_keys=True),
                 encoding="utf-8",
             )

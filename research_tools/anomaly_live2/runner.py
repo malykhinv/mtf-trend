@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from collections import Counter
 from typing import Any
 
 from .artifacts import Live2ArtifactWriter
@@ -130,6 +131,12 @@ class AnomalyLive2Runner:
         self._decision_loop_max_elapsed_ms = 0
         self._last_runtime_gate_snapshot: dict[str, object] | None = None
         self._last_market_data_coverage_snapshot: dict[str, object] | None = None
+        self._market_data_transition_counts: Counter[str] = Counter()
+        self._runtime_gate_transition_counts: Counter[str] = Counter()
+        self._runtime_gate_allowed_seconds = 0.0
+        self._runtime_gate_blocked_seconds = 0.0
+        self._runtime_gate_current_allowed = False
+        self._runtime_gate_current_since_monotonic = time.perf_counter()
         self._last_runtime_gate_reason = "startup"
         self._last_decision_cycle_elapsed_ms = 0
         self._started_monotonic = time.perf_counter()
@@ -281,6 +288,22 @@ class AnomalyLive2Runner:
                 decision_status=self.deadline_engine.status(),
                 execution_status=self._execution_status(),
                 runtime_gate_status=runtime_gate_status,
+                diagnostics_summary=self._diagnostics_summary(
+                    writer=writer,
+                    market_data_status=market_data_status,
+                    decision_status=self.deadline_engine.status(),
+                    execution_status=self._execution_status(),
+                    runtime_gate_status=runtime_gate_status,
+                ),
+            )
+            writer.write_diagnostics_summary(
+                self._diagnostics_summary(
+                    writer=writer,
+                    market_data_status=market_data_status,
+                    decision_status=self.deadline_engine.status(),
+                    execution_status=self._execution_status(),
+                    runtime_gate_status=runtime_gate_status,
+                )
             )
             self.telegram.send_startup(
                 output_dir=self.config.output_dir,
@@ -348,6 +371,13 @@ class AnomalyLive2Runner:
                     decision_status = self.deadline_engine.status()
                     execution_status = self._execution_status()
                     artifact_writer_status = writer.status().as_dict()
+                    diagnostics_summary = self._diagnostics_summary(
+                        writer=writer,
+                        market_data_status=market_data_status,
+                        decision_status=decision_status,
+                        execution_status=execution_status,
+                        runtime_gate_status=runtime_gate_status,
+                    )
                     writer.write_symbol_state(self.state_store)
                     writer.write_status(
                         runtime_generation=self.config.runtime_generation,
@@ -360,7 +390,9 @@ class AnomalyLive2Runner:
                         decision_status=decision_status,
                         execution_status=execution_status,
                         runtime_gate_status=runtime_gate_status,
+                        diagnostics_summary=diagnostics_summary,
                     )
+                    writer.write_diagnostics_summary(diagnostics_summary)
                     self.status_logger.status(
                         format_live2_status_grid(
                             runtime_seconds=time.perf_counter() - self._started_monotonic,
@@ -392,6 +424,17 @@ class AnomalyLive2Runner:
                     message="keyboard_interrupt",
                 )
             )
+            market_data_status = self._market_data_status()
+            decision_status = self.deadline_engine.status()
+            execution_status = self._execution_status()
+            runtime_gate_status = self._runtime_gate_status()
+            diagnostics_summary = self._diagnostics_summary(
+                writer=writer,
+                market_data_status=market_data_status,
+                decision_status=decision_status,
+                execution_status=execution_status,
+                runtime_gate_status=runtime_gate_status,
+            )
             writer.write_status(
                 runtime_generation=self.config.runtime_generation,
                 started_at_utc=self.started_at_utc,
@@ -399,11 +442,13 @@ class AnomalyLive2Runner:
                 state_store=self.state_store,
                 status="stopped",
                 reason="keyboard_interrupt",
-                market_data_status=self._market_data_status(),
-                decision_status=self.deadline_engine.status(),
-                execution_status=self._execution_status(),
-                runtime_gate_status=self._runtime_gate_status(),
+                market_data_status=market_data_status,
+                decision_status=decision_status,
+                execution_status=execution_status,
+                runtime_gate_status=runtime_gate_status,
+                diagnostics_summary=diagnostics_summary,
             )
+            writer.write_diagnostics_summary(diagnostics_summary)
             self.telegram.send(
                 channel="events",
                 key="live2_stopped_keyboard_interrupt",
@@ -486,7 +531,7 @@ class AnomalyLive2Runner:
     ) -> None:
         self._refresh_artifact_writer_readiness(writer)
         self.readiness.market_data_ready = self._market_data_gate_ready(market_data_status)
-        self._write_market_data_coverage_update_if_changed(writer, market_data_status)
+        self._write_market_data_coverage_transition_if_changed(writer, market_data_status)
         self.readiness.exchange_boundary_ready = self.execution_engine.preflight_result.ready
         self.readiness.execution_ready = self.execution_engine.ready
         self.readiness.position_supervisor_ready = self.position_supervisor.ready
@@ -510,6 +555,7 @@ class AnomalyLive2Runner:
         if snapshot != self._last_runtime_gate_snapshot:
             previous_allowed = bool(self._last_runtime_gate_snapshot.get("new_entries_allowed")) if self._last_runtime_gate_snapshot else False
             current_allowed = self.readiness.new_entries_allowed
+            self._record_runtime_gate_transition(snapshot)
             self._last_runtime_gate_snapshot = dict(snapshot)
             writer.write_event(
                 Live2Event(
@@ -539,33 +585,162 @@ class AnomalyLive2Runner:
             self._market_data_ready_gate = True
         return self._market_data_ready_gate
 
-    def _write_market_data_coverage_update_if_changed(
+    def _write_market_data_coverage_transition_if_changed(
         self,
         writer: Live2ArtifactWriter,
         market_data_status: dict[str, object],
     ) -> None:
-        ws_health = market_data_status.get("ws_health")
-        snapshot = {
-            "status": market_data_status.get("status"),
-            "reason": market_data_status.get("reason"),
-            "stream_coverage_ready": market_data_status.get("stream_coverage_ready"),
-            "market_data_gate_ready": self._market_data_ready_gate,
-            "market_data_clean_windows": self._market_data_clean_windows,
-            "market_data_degraded_windows": self._market_data_degraded_windows,
-            "ws_health": ws_health if isinstance(ws_health, dict) else {},
-        }
+        snapshot = self._market_data_transition_snapshot(market_data_status)
         if snapshot == self._last_market_data_coverage_snapshot:
             return
         self._last_market_data_coverage_snapshot = dict(snapshot)
+        transition_key = self._transition_key(snapshot, (
+            "status",
+            "reason",
+            "stream_coverage_ready",
+            "market_data_gate_ready",
+            "ticker_ready",
+            "aggtrade_ready",
+            "shards_connected",
+            "shards_total",
+            "shards_stale",
+        ))
+        self._market_data_transition_counts[transition_key] += 1
         writer.write_event(
             Live2Event(
-                event_type="market_data_coverage_update",
+                event_type="market_data_coverage_transition",
                 component=Live2Component.MARKET_DATA,
                 severity=Live2Severity.INFO if self._market_data_ready_gate else Live2Severity.WARNING,
                 message=str(market_data_status.get("reason", "")),
-                data=snapshot,
+                data={
+                    "transition": snapshot,
+                    "transition_count": self._market_data_transition_counts[transition_key],
+                    "event_policy": "transition_only_no_counter_window_spam",
+                    "full_market_data_status_at_transition": market_data_status,
+                },
             )
         )
+
+    def _market_data_transition_snapshot(self, market_data_status: dict[str, object]) -> dict[str, object]:
+        ws_health = market_data_status.get("ws_health")
+        ws_health_dict = ws_health if isinstance(ws_health, dict) else {}
+        return {
+            "status": str(market_data_status.get("status", "")),
+            "reason": str(market_data_status.get("reason", "")),
+            "stream_coverage_ready": bool(market_data_status.get("stream_coverage_ready")),
+            "market_data_gate_ready": bool(self._market_data_ready_gate),
+            "ticker_ready": bool(ws_health_dict.get("ticker_ready")),
+            "aggtrade_ready": bool(ws_health_dict.get("aggtrade_ready")),
+            "ticker_connection_status": str(ws_health_dict.get("ticker_connection_status", "unknown")),
+            "aggtrade_source_status": str(ws_health_dict.get("aggtrade_source_status", "unknown")),
+            "aggtrade_endpoint_category": str(ws_health_dict.get("aggtrade_endpoint_category", "unknown")),
+            "shards_total": int(ws_health_dict.get("shards_total") or 0),
+            "shards_connected": int(ws_health_dict.get("shards_connected") or 0),
+            "shards_disconnected": int(ws_health_dict.get("shards_disconnected") or 0),
+            "shards_stale": int(ws_health_dict.get("shards_stale") or 0),
+            "live_decision_watermark_ready": market_data_status.get("live_decision_watermark_ms") is not None,
+        }
+
+    def _record_runtime_gate_transition(self, snapshot: dict[str, object]) -> None:
+        now_monotonic = time.perf_counter()
+        elapsed = max(0.0, now_monotonic - self._runtime_gate_current_since_monotonic)
+        if self._runtime_gate_current_allowed:
+            self._runtime_gate_allowed_seconds += elapsed
+        else:
+            self._runtime_gate_blocked_seconds += elapsed
+        self._runtime_gate_current_since_monotonic = now_monotonic
+        self._runtime_gate_current_allowed = bool(snapshot.get("new_entries_allowed"))
+        transition_key = self._transition_key(snapshot, (
+            "reason",
+            "new_entries_allowed",
+            "market_data_ready",
+            "decision_latency_ready",
+            "artifact_writer_ready",
+            "exchange_boundary_ready",
+            "position_supervisor_ready",
+            "execution_ready",
+        ))
+        self._runtime_gate_transition_counts[transition_key] += 1
+
+    def _runtime_gate_seconds_snapshot(self) -> dict[str, object]:
+        now_monotonic = time.perf_counter()
+        current_elapsed = max(0.0, now_monotonic - self._runtime_gate_current_since_monotonic)
+        allowed = self._runtime_gate_allowed_seconds
+        blocked = self._runtime_gate_blocked_seconds
+        if self._runtime_gate_current_allowed:
+            allowed += current_elapsed
+        else:
+            blocked += current_elapsed
+        return {
+            "allowed_seconds": round(allowed, 3),
+            "blocked_seconds": round(blocked, 3),
+            "current_allowed": self._runtime_gate_current_allowed,
+            "current_state_seconds": round(current_elapsed, 3),
+        }
+
+    def _diagnostics_summary(
+        self,
+        *,
+        writer: Live2ArtifactWriter,
+        market_data_status: dict[str, object],
+        decision_status: dict[str, object],
+        execution_status: dict[str, object],
+        runtime_gate_status: dict[str, object],
+    ) -> dict[str, object]:
+        ws_health = market_data_status.get("ws_health")
+        ws_health_dict = ws_health if isinstance(ws_health, dict) else {}
+        return {
+            "updated_at_utc": utc_now_iso(),
+            "updated_at_ms": int(time.time() * 1000),
+            "event_policy": {
+                "market_data_coverage": "transition_only",
+                "market_data_counter_windows": "status_only_not_event_dedup_keys",
+            },
+            "market_data": {
+                "current_transition": self._last_market_data_coverage_snapshot or {},
+                "transition_counts": dict(self._market_data_transition_counts),
+                "status": market_data_status.get("status"),
+                "reason": market_data_status.get("reason"),
+                "stream_coverage_ready": bool(market_data_status.get("stream_coverage_ready")),
+                "market_data_ready_for_entries": bool(market_data_status.get("market_data_ready_for_entries")),
+                "clean_windows": int(market_data_status.get("market_data_clean_windows") or 0),
+                "degraded_windows": int(market_data_status.get("market_data_degraded_windows") or 0),
+                "ws_reconnect_summary": {
+                    "reconnect_attempts": int(ws_health_dict.get("reconnect_attempts") or 0),
+                    "disconnect_count": int(ws_health_dict.get("disconnect_count") or 0),
+                    "payload_errors": int(ws_health_dict.get("payload_errors") or 0),
+                    "aggtrade_pre_first_payload_failures": int(ws_health_dict.get("aggtrade_pre_first_payload_failures") or 0),
+                    "shards_total": int(ws_health_dict.get("shards_total") or 0),
+                    "shards_connected": int(ws_health_dict.get("shards_connected") or 0),
+                    "shards_stale": int(ws_health_dict.get("shards_stale") or 0),
+                },
+            },
+            "runtime_gate": {
+                "status": runtime_gate_status.get("status"),
+                "reason": runtime_gate_status.get("reason"),
+                "transition_counts": dict(self._runtime_gate_transition_counts),
+                "seconds": self._runtime_gate_seconds_snapshot(),
+            },
+            "decision_funnel": {
+                "total_decisions": int(decision_status.get("total_decisions") or 0),
+                "selected_count": int(decision_status.get("selected_count") or 0),
+                "total_rejected": int(decision_status.get("total_rejected") or 0),
+                "total_data_not_ready": int(decision_status.get("total_data_not_ready") or 0),
+                "total_deadline_missed": int(decision_status.get("total_deadline_missed") or 0),
+                "total_pre_live_bucket_skipped": int(decision_status.get("total_pre_live_bucket_skipped") or 0),
+            },
+            "execution_funnel": {
+                "open_protected_positions": int(execution_status.get("open_protected_positions") or 0),
+                "total_orders_submitted": int(execution_status.get("total_orders_submitted") or 0),
+                "total_positions_protected": int(execution_status.get("total_positions_protected") or 0),
+                "total_integrity_errors": int(execution_status.get("total_integrity_errors") or 0),
+            },
+            "artifact_writer": writer.status().as_dict(),
+        }
+
+    @staticmethod
+    def _transition_key(snapshot: dict[str, object], fields: tuple[str, ...]) -> str:
+        return "|".join(f"{field}={snapshot.get(field)}" for field in fields)
 
     def _decision_latency_gate_ready(
         self,
