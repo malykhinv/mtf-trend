@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-21 - P368 remove live1 monolith and tighten parity audit
+
+```text
+Current patch status: P368 APPLIED locally / UNKNOWN commit.
+Question: can the old 19k-line live1 monolith be removed, and are there other live2/backtest filtering mismatches?
+Change: removed research_tools/anomaly_micro_live.py and the run-anomaly-live CLI command. The still-used aggTrade cache aggregation helpers moved to research_tools/anomaly_aggtrade_cache.py, and standalone run-anomaly-top-growth now uses live2 top-growth plumbing. The live1-only lifecycle test file was removed with the live1 runner.
+Parity finding: another live2-overfilter remained after P367. Live2 rejected any final 5s decision candle that was not green, but backtest does not require the last confirmation candle to be green; it requires setup-level price_retention, verticality and hold_count across the forming setup. Live2 now removes the single-5s upward gate and applies the backtest setup-level confirmation filters instead, with near-miss live_setup_* diagnostics.
+Residual parity risk: runner_flow flow_hold is not bit-identical; live uses trailing no-lookahead 5s hold while backtest's field name is next_n but is computed on the confirmation segment available at decision. This is not currently an overfilter relative to backtest, but future run artifacts should compare runner_flow rejects separately.
+Validation: `python -m compileall data\exchanges research_tools cli constants.py main.py`; `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py tests\test_anomaly_continuation_lab.py`; `python main.py run-anomaly-top-growth --help`; CLI help no longer lists run-anomaly-live.
+```
+
 ## 2026-05-21 - P367 live2/backtest candidate parity repair
 
 ```text

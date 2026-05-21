@@ -102,6 +102,16 @@ class Live2TopGrowthAuditConfig:
             raise ValueError("top_growth_fetch_spacing_seconds must be finite and >= 0")
 
 
+@dataclass(frozen=True, slots=True)
+class TopGrowthSnapshotConfig:
+    output_dir: Path
+    symbols: tuple[str, ...]
+    period_start_ms: int | None = None
+    min_return_pct: float = 0.10
+    limit: int = 5
+    fetch_spacing_seconds: float = 0.05
+
+
 @dataclass(slots=True)
 class Live2TopGrowthAuditTask:
     period_start_ms: int
@@ -320,6 +330,77 @@ class Live2TopGrowthAudit:
         return top_path, status_path
 
 
+class TopGrowthSnapshotRunner:
+    def __init__(
+        self,
+        *,
+        config: TopGrowthSnapshotConfig,
+        exchange_client: Any,
+        logger: Any = print,
+    ) -> None:
+        self.config = config
+        self.exchange = exchange_client
+        self.logger = logger
+
+    def run(self) -> int:
+        if self.config.limit <= 0:
+            raise ValueError("top_growth_limit must be > 0")
+        if self.config.min_return_pct <= 0.0 or not math.isfinite(self.config.min_return_pct):
+            raise ValueError("top_growth_min_return_pct must be finite and > 0")
+        if self.config.fetch_spacing_seconds < 0.0 or not math.isfinite(self.config.fetch_spacing_seconds):
+            raise ValueError("top_growth_fetch_spacing_seconds must be finite and >= 0")
+        symbols = tuple(dict.fromkeys(self.config.symbols or tuple(self.exchange.list_usdt_swap_symbols())))
+        if not symbols:
+            raise ValueError("no symbols for top-growth snapshot")
+        now_ms = int(time.time() * 1000)
+        period_start_ms = self.config.period_start_ms
+        if period_start_ms is None:
+            period_start_ms = _previous_closed_hour_start_ms(now_ms)
+        period_end_ms = period_start_ms + HOUR_MS
+        if period_end_ms > now_ms:
+            raise ValueError("top-growth period must be a fully closed 1h interval")
+        audit = Live2TopGrowthAudit(
+            output_dir=self.config.output_dir,
+            exchange_client=self.exchange,
+            config=Live2TopGrowthAuditConfig(
+                enabled=True,
+                min_return_pct=self.config.min_return_pct,
+                limit=self.config.limit,
+                symbols_per_cycle=max(1, len(symbols)),
+                max_cycle_seconds=max(1.0, float(len(symbols)) * max(0.01, self.config.fetch_spacing_seconds + 0.5)),
+                fetch_spacing_seconds=self.config.fetch_spacing_seconds,
+            ),
+        )
+        stats = audit.process_due(symbols=symbols, now_ms=period_end_ms)
+        # Force the requested period for explicit --period-start-utc without exposing live audit internals.
+        if self.config.period_start_ms is not None:
+            audit = Live2TopGrowthAudit(
+                output_dir=self.config.output_dir,
+                exchange_client=self.exchange,
+                config=Live2TopGrowthAuditConfig(
+                    enabled=True,
+                    min_return_pct=self.config.min_return_pct,
+                    limit=self.config.limit,
+                    symbols_per_cycle=max(1, len(symbols)),
+                    max_cycle_seconds=max(1.0, float(len(symbols)) * max(0.01, self.config.fetch_spacing_seconds + 0.5)),
+                    fetch_spacing_seconds=self.config.fetch_spacing_seconds,
+                ),
+            )
+            audit._task = Live2TopGrowthAuditTask(
+                period_start_ms=period_start_ms,
+                period_end_ms=period_end_ms,
+                snapshot_utc=datetime.now(UTC).isoformat(),
+                symbols=symbols,
+            )
+            stats = audit.process_due(symbols=symbols, now_ms=period_end_ms)
+        self.logger(
+            "top-growth: "
+            f"{_iso_ms(period_start_ms)} · top {stats.top_count} · "
+            f"artifacts {self.config.output_dir / 'top_growth'}"
+        )
+        return 0 if stats.status == "completed" else 1
+
+
 def _load_top_growth_symbol_row(
     *,
     exchange: Any,
@@ -434,6 +515,19 @@ def _rank_candidates(candidates: list[dict[str, object]], *, limit: int) -> list
 
 def _previous_closed_hour_start_ms(now_ms: int) -> int:
     return ((int(now_ms) // HOUR_MS) - 1) * HOUR_MS
+
+
+def parse_top_growth_period_start_ms(value: str | None) -> int | None:
+    if value is None or not str(value).strip():
+        return None
+    raw = str(value).strip().replace("Z", "+00:00")
+    parsed = datetime.fromisoformat(raw)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    parsed_utc = parsed.astimezone(UTC)
+    if parsed_utc.minute != 0 or parsed_utc.second != 0 or parsed_utc.microsecond != 0:
+        raise ValueError("period-start-utc must point to the start of a closed 1h candle")
+    return int(parsed_utc.timestamp() * 1000)
 
 
 def _iso_ms(timestamp_ms: int) -> str:

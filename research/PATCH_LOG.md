@@ -1,5 +1,53 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P368 applied locally - remove live1 monolith and setup-level live2 confirmation
+
+Files:
+
+```text
+research_tools/anomaly_micro_live.py
+research_tools/anomaly_aggtrade_cache.py
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/artifacts.py
+research_tools/anomaly_live2/top_growth.py
+research_tools/anomaly_strategy_backtest.py
+cli/commands.py
+cli/parser.py
+tests/test_live_order_lifecycle.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Remove obsolete live1 code without losing still-used helper behavior, and close the remaining live2-overfilter where live required the final 5s candle to be green although backtest does not.
+```
+
+Change:
+
+```text
+Deleted the old live1 monolith and its live1-only lifecycle tests. Moved aggTrade->OHLCV helper functions into research_tools/anomaly_aggtrade_cache.py and updated backtest/cache imports. Removed run-anomaly-live from CLI. Standalone top-growth now uses live2 top-growth plumbing. Live2 no longer rejects solely because the final 5s candle is red; it applies backtest-like setup price_retention, verticality, hold_count and max-risk checks and writes the corresponding live_setup_* near-miss fields.
+```
+
+Validation:
+
+```bash
+python -m compileall data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py tests\test_anomaly_continuation_lab.py
+python main.py run-anomaly-top-growth --help
+python main.py --help
+```
+
+Risk:
+
+```text
+Medium. This intentionally removes the old run-anomaly-live command and its monolithic implementation. Live2 remains the live path. Top-growth visibility output no longer includes live1-specific missed_pump_visibility enrichment; live2 already writes its own top_growth audit and near-miss artifacts.
+```
+
 ## 2026-05-21 - P367 applied locally - live2/backtest candidate parity and reject diagnostics
 
 Files:

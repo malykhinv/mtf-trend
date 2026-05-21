@@ -29,6 +29,10 @@ LIVE2_BACKTEST_BASELINE_CANDLES = 60
 LIVE2_BACKTEST_CONFIRMATION_CANDLES = 4
 LIVE2_BACKTEST_MIN_QUOTE_RATIO_START = 4.0
 LIVE2_BACKTEST_MIN_TRADE_RATIO_START = 4.0
+LIVE2_BACKTEST_MIN_PRICE_RETENTION = 0.70
+LIVE2_BACKTEST_MIN_VERTICALITY_SCORE = 0.25
+LIVE2_BACKTEST_MIN_HOLD_COUNT = 2
+LIVE2_BACKTEST_MAX_INITIAL_RISK_PCT = 0.16
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,8 +97,6 @@ class Live2SignalEngine:
         features = self._features(state=state, candle=candle, actionable_reason=actionable_reason)
         if candle.open <= 0 or candle.close <= 0:
             return self._reject("invalid_stream_candle_price", features=features)
-        if candle.close <= candle.open:
-            return self._reject("stream_candle_is_not_upward_price_confirmation", features=features)
         if candle.quote_volume <= 0 or candle.number_of_trades <= 0:
             return self._reject("stream_candle_has_no_real_flow", features=features)
 
@@ -361,6 +363,12 @@ class Live2SignalEngine:
             "live_setup_trade_ratio": live_setup.get("trade_ratio"),
             "live_setup_min_quote_ratio": LIVE2_BACKTEST_MIN_QUOTE_RATIO_START,
             "live_setup_min_trade_ratio": LIVE2_BACKTEST_MIN_TRADE_RATIO_START,
+            "live_setup_price_retention": live_setup.get("price_retention"),
+            "live_setup_min_price_retention": LIVE2_BACKTEST_MIN_PRICE_RETENTION,
+            "live_setup_hold_count": live_setup.get("hold_count"),
+            "live_setup_min_hold_count": LIVE2_BACKTEST_MIN_HOLD_COUNT,
+            "live_setup_verticality_score": live_setup.get("verticality_score"),
+            "live_setup_min_verticality_score": LIVE2_BACKTEST_MIN_VERTICALITY_SCORE,
             "live_setup_range": live_setup.get("range"),
             "live_setup_range_pct": live_setup.get("range_pct"),
             "live_setup_baseline_1m_count": live_setup.get("baseline_1m_count"),
@@ -546,6 +554,8 @@ class Live2SignalEngine:
         initial_risk_pct = _float_or_none(features.get("initial_risk_pct_at_decision"))
         if category.min_initial_risk_pct is not None and (initial_risk_pct is None or initial_risk_pct < category.min_initial_risk_pct):
             return _reject("initial_risk_pct_below_category_min")
+        if initial_risk_pct is not None and initial_risk_pct > LIVE2_BACKTEST_MAX_INITIAL_RISK_PCT:
+            return _reject("initial_risk_pct_above_backtest_max")
         if category.max_initial_risk_pct is not None and initial_risk_pct is not None and initial_risk_pct > category.max_initial_risk_pct:
             return _reject("initial_risk_pct_above_category_max")
         return Live2CategoryEvaluation(True, "accepted", "accepted")
@@ -737,6 +747,10 @@ def _live_backtest_like_setup(
     setup_range = high - low
     range_pct = setup_range / open_price if open_price > 0 else None
     range_pct_ratio = (range_pct / baseline_range_pct) if range_pct is not None and baseline_range_pct > 0 else None
+    activation_price = open_price + max(0.0, close_price - open_price) * 0.50
+    hold_count = sum(1 for item in segment if item.close >= activation_price)
+    price_retention = (close_price - open_price) / (high - open_price) if high > open_price else None
+    verticality = _verticality_score(segment)
     common = {
         "closed_entry_candles": closed_entry_candles,
         "elapsed_fraction": setup_elapsed_fraction,
@@ -749,6 +763,10 @@ def _live_backtest_like_setup(
         "range": setup_range,
         "range_pct": range_pct,
         "range_pct_ratio_to_baseline": range_pct_ratio,
+        "activation_price": activation_price,
+        "hold_count": hold_count,
+        "price_retention": price_retention,
+        "verticality_score": verticality,
         "low": low,
         "high": high,
         "open": open_price,
@@ -767,6 +785,12 @@ def _live_backtest_like_setup(
         return {**common, "status": "rejected", "reason": "live_setup_quote_ratio_below_backtest_min"}
     if trade_ratio < LIVE2_BACKTEST_MIN_TRADE_RATIO_START or raw_trade_ratio < min_raw_trade_ratio:
         return {**common, "status": "rejected", "reason": "live_setup_trade_ratio_below_backtest_min"}
+    if price_retention is None or price_retention < LIVE2_BACKTEST_MIN_PRICE_RETENTION:
+        return {**common, "status": "rejected", "reason": "live_setup_price_retention_below_backtest_min"}
+    if verticality < LIVE2_BACKTEST_MIN_VERTICALITY_SCORE:
+        return {**common, "status": "rejected", "reason": "live_setup_verticality_below_backtest_min"}
+    if hold_count < LIVE2_BACKTEST_MIN_HOLD_COUNT:
+        return {**common, "status": "rejected", "reason": "live_setup_hold_count_below_backtest_min"}
     return {**common, "status": "ok", "reason": "live_setup_backtest_candidate"}
 
 
@@ -811,6 +835,40 @@ def _median(values: list[float]) -> float:
     if len(valid) % 2:
         return valid[mid]
     return (valid[mid - 1] + valid[mid]) / 2.0
+
+
+def _verticality_score(segment: tuple[Live2Candle, ...]) -> float:
+    if not segment:
+        return 0.0
+    opens = [item.open for item in segment]
+    highs = [item.high for item in segment]
+    lows = [item.low for item in segment]
+    closes = [item.close for item in segment]
+    start_price = float(opens[0])
+    end_price = float(closes[-1])
+    net_move = end_price - start_price
+    positive_net_move = max(net_move, 0.0)
+    close_path = abs(float(closes[0]) - start_price)
+    for previous, current in zip(closes, closes[1:]):
+        close_path += abs(float(current) - float(previous))
+    path_efficiency = positive_net_move / close_path if close_path > 0 else 0.0
+    segment_range = max(highs) - min(lows)
+    range_efficiency = positive_net_move / segment_range if segment_range > 0 else 0.0
+    running_high = highs[0]
+    max_retrace = 0.0
+    for high, low in zip(highs, lows):
+        running_high = max(running_high, high)
+        max_retrace = max(max_retrace, running_high - low)
+    max_retrace_fraction = max_retrace / positive_net_move if positive_net_move > 0.0 else 1.0
+    retrace_component = 1.0 - min(max(max_retrace_fraction, 0.0), 1.0)
+    green_share = sum(1 for open_price, close_price in zip(opens, closes) if close_price >= open_price) / len(segment)
+    verticality_score = (
+        0.45 * min(max(path_efficiency, 0.0), 1.0)
+        + 0.25 * min(max(range_efficiency, 0.0), 1.0)
+        + 0.20 * retrace_component
+        + 0.10 * green_share
+    )
+    return 0.0 if net_move <= 0.0 else float(verticality_score)
 
 
 def _range_pct(candle: Live2Candle) -> float:

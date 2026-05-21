@@ -940,9 +940,9 @@ def _ensure_latency_1s_cache(
 
     from data.storage.parquet_storage import ParquetStorage
     from domain.enums.timeframe import Timeframe
-    from research_tools.anomaly_micro_live import _aggregate_aggtrades_to_ohlcv_frame
+    from research_tools.anomaly_aggtrade_cache import aggregate_aggtrades_to_ohlcv_frame
 
-    fetched = _aggregate_aggtrades_to_ohlcv_frame(
+    fetched = aggregate_aggtrades_to_ohlcv_frame(
         pd.DataFrame(all_rows),
         timeframe_ms=1000,
         start_timestamp_ms=int(start_timestamp_ms),

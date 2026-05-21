@@ -724,7 +724,7 @@ def _run_hourly_levels_inner(config: AppConfig, args: argparse.Namespace) -> int
     scan_config = build_config_from_namespace(
         args,
         cache_dir=config.backtest.cache_dir,
-        results_dir=config.backtest.results_dir,
+        output_dir=config.backtest.results_dir / "top_growth_runs" / datetime.now(UTC).strftime("%Y%m%d_%H%M%S"),
     )
     summary = run_hourly_level_scan(scan_config, progress_callback=logger.info)
     logger.info("1h level scan completed: %s", json.dumps(summary, ensure_ascii=False, indent=2))
@@ -1322,7 +1322,11 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
 
     def _run() -> int:
         from data.storage.parquet_storage import ParquetStorage
-        from research_tools.anomaly_micro_live import _aggregate_aggtrades_to_ohlcv_frame, _resolve_aggtrade_id, _resolve_aggtrade_timestamp
+        from research_tools.anomaly_aggtrade_cache import (
+            aggregate_aggtrades_to_ohlcv_frame,
+            resolve_aggtrade_id,
+            resolve_aggtrade_timestamp,
+        )
 
         logger = get_logger("backfill-anomaly-aggtrade-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
         _, exchange_client, _ = _build_fetch_stack(config)
@@ -1379,8 +1383,8 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
                             break
                         all_rows.extend(dict(row) for row in batch)
                         last_row = batch[-1]
-                        last_id = _resolve_aggtrade_id(dict(last_row))
-                        last_ts = _resolve_aggtrade_timestamp(dict(last_row))
+                        last_id = resolve_aggtrade_id(dict(last_row))
+                        last_ts = resolve_aggtrade_timestamp(dict(last_row))
                         if last_id is None or (previous_last_id is not None and last_id <= previous_last_id):
                             break
                         previous_last_id = last_id
@@ -1388,7 +1392,7 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
                         if last_ts is None or last_ts >= chunk_end or len(batch) < 1000:
                             break
                     if all_rows:
-                        frame = _aggregate_aggtrades_to_ohlcv_frame(
+                        frame = aggregate_aggtrades_to_ohlcv_frame(
                             pd.DataFrame(all_rows),
                             timeframe_ms=1000,
                             start_timestamp_ms=int(chunk_start),
@@ -1432,211 +1436,6 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
         return 0 if manifest.empty or not manifest["status"].eq("error").any() else 1
 
     return _run_with_logging("backfill-anomaly-aggtrade-cache", config, _run)
-
-
-def run_anomaly_live(config: AppConfig, args: argparse.Namespace) -> int:
-    """Запускает строгий REST-only micro-live цикл anomaly wake-up."""
-
-    def _run() -> int:
-        from research_tools.anomaly_micro_live import (
-            AnomalyMicroLiveRunner,
-            LiveAnomalyConfig,
-            LiveStartupError,
-            build_telegram_config_from_env,
-        )
-
-        live_config = LiveAnomalyConfig(
-            results_dir=config.backtest.results_dir,
-            symbols=tuple(getattr(args, "symbols", None) or ()),
-            confirm_real_orders=bool(getattr(args, "confirm_real_orders", False)),
-            danger_continue_after_order_position_errors=bool(
-                getattr(args, "danger_continue_after_order_position_errors", False)
-            ),
-            cache_dir=config.backtest.cache_dir,
-            pump_categories=tuple(
-                item.strip()
-                for item in str(
-                    getattr(
-                        args,
-                        "pump_categories",
-                        "runner_oi_confirmed,runner_flow,runner_balanced",
-                    )
-                ).split(",")
-                if item.strip()
-            ),
-            baseline_candles=int(getattr(args, "baseline_candles", 60)),
-            confirmation_candles=int(getattr(args, "confirmation_candles", 4)),
-            min_quote_ratio_start=float(getattr(args, "min_quote_ratio_start", 4.0)),
-            min_trade_ratio_start=float(getattr(args, "min_trade_ratio_start", 4.0)),
-            min_price_retention=float(getattr(args, "min_price_retention", 0.65)),
-            min_verticality_score=float(getattr(args, "min_verticality_score", 0.20)),
-            min_hold_count=int(getattr(args, "min_hold_count", 2)),
-            min_oi_change_pct_3x5m=(
-                None
-                if getattr(args, "min_oi_change_pct_3x5m", None) is None
-                else float(args.min_oi_change_pct_3x5m)
-            ),
-            max_initial_risk_pct=float(getattr(args, "max_initial_risk_pct", 0.16)),
-            stop_buffer_range_fraction=float(getattr(args, "stop_buffer_range_fraction", 0.05)),
-            max_prior_up_down_whipsaw_to_impulse_range=(
-                None
-                if getattr(args, "max_prior_up_down_whipsaw_to_impulse_range", None) is None
-                else float(args.max_prior_up_down_whipsaw_to_impulse_range)
-            ),
-            position_notional_usdt=float(getattr(args, "position_notional_usdt", 12.0)),
-            max_open_positions=int(getattr(args, "max_open_positions", 3)),
-            exclude_default_high_cap_symbols=_to_bool_flag(
-                getattr(args, "exclude_default_high_cap_symbols", True),
-                default=True,
-            ),
-            live_universe_liquidity_filter_enabled=_to_bool_flag(
-                getattr(args, "live_universe_liquidity_filter_enabled", True),
-                default=True,
-            ),
-            live_universe_min_quote_volume_24h=float(getattr(args, "live_universe_min_quote_volume_24h", 300_000.0)),
-            live_universe_refresh_interval_seconds=float(
-                getattr(args, "live_universe_refresh_interval_seconds", 12 * 60 * 60)
-            ),
-            symbol_batch_size=int(getattr(args, "symbol_batch_size", 20)),
-            inactive_scan_slots_per_cycle=getattr(args, "inactive_scan_slots_per_cycle", None),
-            scan_hot_timeframes_per_symbol=_to_bool_flag(
-                getattr(args, "scan_hot_timeframes_per_symbol", True),
-                default=True,
-            ),
-            active_symbol_ttl_ms=int(getattr(args, "active_symbol_ttl_ms", 60_000)),
-            ticker_radar_enabled=_to_bool_flag(getattr(args, "ticker_radar_enabled", True), default=True),
-            live_ws_ticker_enabled=_to_bool_flag(getattr(args, "live_ws_ticker_enabled", True), default=True),
-            live_ws_ticker_stale_ms=int(getattr(args, "live_ws_ticker_stale_ms", 5_000)),
-            live_ws_ticker_startup_wait_seconds=float(
-                getattr(args, "live_ws_ticker_startup_wait_seconds", 10.0)
-            ),
-            live_ws_ticker_startup_seed_enabled=_to_bool_flag(
-                getattr(args, "live_ws_ticker_startup_seed_enabled", True),
-                default=True,
-            ),
-            live_ws_aggtrade_enabled=_to_bool_flag(getattr(args, "live_ws_aggtrade_enabled", True), default=True),
-            live_ws_aggtrade_stale_ms=int(getattr(args, "live_ws_aggtrade_stale_ms", 5_000)),
-            live_ws_aggtrade_buffer_minutes=int(getattr(args, "live_ws_aggtrade_buffer_minutes", 20)),
-            live_ws_aggtrade_max_backfill_ms=int(getattr(args, "live_ws_aggtrade_max_backfill_ms", 360_000)),
-            live_aggtrade_rest_cache_ttl_ms=int(getattr(args, "live_aggtrade_rest_cache_ttl_ms", 1_200_000)),
-            live_aggtrade_rest_cache_padding_ms=int(getattr(args, "live_aggtrade_rest_cache_padding_ms", 60_000)),
-            ticker_radar_interval_seconds=float(getattr(args, "ticker_radar_interval_seconds", 5.0)),
-            ticker_radar_watch_ttl_ms=int(getattr(args, "ticker_radar_watch_ttl_ms", 120_000)),
-            ticker_radar_watch_batch_size=int(getattr(args, "ticker_radar_watch_batch_size", 5)),
-            ticker_radar_max_promotions_per_cycle=int(getattr(args, "ticker_radar_max_promotions_per_cycle", 20)),
-            max_precise_scan_symbols_per_cycle=getattr(args, "max_precise_scan_symbols_per_cycle", None),
-            latency_sla_controller_enabled=_to_bool_flag(
-                getattr(args, "latency_sla_controller_enabled", True),
-                default=True,
-            ),
-            latency_sla_due_scan_p95_seconds=float(
-                getattr(args, "latency_sla_due_scan_p95_seconds", 15.0)
-            ),
-            latency_sla_min_due_samples=int(getattr(args, "latency_sla_min_due_samples", 1)),
-            ticker_radar_min_price_delta_pct=float(getattr(args, "ticker_radar_min_price_delta_pct", 0.003)),
-            ticker_radar_min_quote_volume_delta_usdt=float(getattr(args, "ticker_radar_min_quote_volume_delta_usdt", 10_000.0)),
-            ticker_radar_min_quote_volume_delta_ratio=float(getattr(args, "ticker_radar_min_quote_volume_delta_ratio", 3.0)),
-            warm_watch_enabled=_to_bool_flag(getattr(args, "warm_watch_enabled", True), default=True),
-            warm_watch_ttl_ms=int(getattr(args, "warm_watch_ttl_ms", 600_000)),
-            warm_watch_min_observations_for_precise=int(
-                getattr(args, "warm_watch_min_observations_for_precise", 2)
-            ),
-            warm_watch_min_price_delta_pct=float(getattr(args, "warm_watch_min_price_delta_pct", -0.001)),
-            warm_watch_max_price_delta_pct=float(getattr(args, "warm_watch_max_price_delta_pct", 0.012)),
-            warm_watch_aggtrade_target_cap=int(getattr(args, "warm_watch_aggtrade_target_cap", 40)),
-            prepump_warm_watch_scoring_enabled=_to_bool_flag(
-                getattr(args, "prepump_warm_watch_scoring_enabled", False),
-                default=False,
-            ),
-            prepump_warm_watch_profile_csv=getattr(args, "prepump_warm_watch_profile_csv", None),
-            prepump_warm_watch_min_abs_standardized_diff=float(
-                getattr(args, "prepump_warm_watch_min_abs_standardized_diff", 0.75)
-            ),
-            prepump_warm_watch_min_runner_rows=int(
-                getattr(args, "prepump_warm_watch_min_runner_rows", 10)
-            ),
-            prepump_warm_watch_min_fader_rows=int(
-                getattr(args, "prepump_warm_watch_min_fader_rows", 10)
-            ),
-            prepump_warm_watch_max_features=int(getattr(args, "prepump_warm_watch_max_features", 8)),
-            prepump_warm_watch_score_weight=float(getattr(args, "prepump_warm_watch_score_weight", 0.35)),
-            prepump_warm_watch_windows=str(getattr(args, "prepump_warm_watch_windows", "30m,1h,2h,6h")),
-            prepump_warm_watch_min_coverage_ratio=float(
-                getattr(args, "prepump_warm_watch_min_coverage_ratio", 0.80)
-            ),
-            symbol_context_snapshot_enabled=_to_bool_flag(
-                getattr(args, "symbol_context_snapshot_enabled", True),
-                default=True,
-            ),
-            symbol_context_snapshot_interval_seconds=float(
-                getattr(args, "symbol_context_snapshot_interval_seconds", 60.0)
-            ),
-            symbol_context_snapshot_symbols_per_cycle=int(
-                getattr(args, "symbol_context_snapshot_symbols_per_cycle", 20)
-            ),
-            symbol_context_snapshot_fresh_ms=int(getattr(args, "symbol_context_snapshot_fresh_ms", 900_000)),
-            symbol_context_snapshot_max_cycle_seconds=float(
-                getattr(args, "symbol_context_snapshot_max_cycle_seconds", 0.75)
-            ),
-            max_signal_age_ms=int(getattr(args, "max_signal_age_ms", 60_000)),
-            max_entry_price_drift_pct=float(
-                getattr(args, "max_entry_price_drift_pct", DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT)
-            ),
-            min_executable_rr_to_signal_tp1=float(getattr(args, "min_executable_rr_to_signal_tp1", 0.70)),
-            max_position_amount_slippage_ratio=float(getattr(args, "max_position_amount_slippage_ratio", 0.05)),
-            scan_sleep_seconds=float(getattr(args, "scan_sleep_seconds", 2.0)),
-            live_ohlcv_cache_enabled=_to_bool_flag(getattr(args, "live_ohlcv_cache_enabled", True), default=True),
-            live_ohlcv_cache_write_enabled=_to_bool_flag(
-                getattr(args, "live_ohlcv_cache_write_enabled", True),
-                default=True,
-            ),
-            live_ohlcv_cache_flush_interval_seconds=float(
-                getattr(args, "live_ohlcv_cache_flush_interval_seconds", 30.0)
-            ),
-            live_ohlcv_cache_max_buffer_rows=int(getattr(args, "live_ohlcv_cache_max_buffer_rows", 50_000)),
-            live_ohlcv_cache_flush_max_symbol_timeframes=getattr(
-                args,
-                "live_ohlcv_cache_flush_max_symbol_timeframes",
-                4,
-            ),
-            delayed_replay_enabled=_to_bool_flag(getattr(args, "delayed_replay_enabled", False), default=False),
-            delayed_replay_delay_seconds=float(getattr(args, "delayed_replay_delay_seconds", 300.0)),
-            delayed_replay_min_idle_seconds=float(getattr(args, "delayed_replay_min_idle_seconds", 45.0)),
-            delayed_replay_max_cases_per_cycle=int(getattr(args, "delayed_replay_max_cases_per_cycle", 3)),
-            delayed_replay_max_cycle_seconds=float(getattr(args, "delayed_replay_max_cycle_seconds", 1.5)),
-            delayed_replay_max_queue_size=int(getattr(args, "delayed_replay_max_queue_size", 2000)),
-            delayed_replay_outcome_lookahead_seconds=float(
-                getattr(args, "delayed_replay_outcome_lookahead_seconds", 300.0)
-            ),
-            signal_scan_backfill_candles=int(getattr(args, "signal_scan_backfill_candles", 10)),
-            max_cycles=getattr(args, "max_cycles", None),
-            trail_lookback_candles=int(getattr(args, "trail_lookback_candles", 5)),
-            trail_buffer_r=float(getattr(args, "trail_buffer_r", 0.10)),
-        )
-        _, exchange_client, _ = _build_fetch_stack(config)
-        runner = None
-        try:
-            runner = AnomalyMicroLiveRunner(
-                config=live_config,
-                telegram=build_telegram_config_from_env(),
-                exchange_client=exchange_client,
-            )
-            return runner.run()
-        except KeyboardInterrupt:
-            if runner is not None:
-                runner.shutdown(reason="command_keyboard_interrupt")
-            raise
-        except LiveStartupError as exc:
-            if runner is not None:
-                runner.shutdown(reason="command_live_startup_error")
-            print(f"live: запуск остановлен: {exc}", flush=True)
-            return 2
-        except Exception:
-            if runner is not None:
-                runner.shutdown(reason="command_exception")
-            raise
-
-    return _run_with_logging("run-anomaly-live", config, _run)
 
 
 def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
@@ -1743,22 +1542,19 @@ def run_anomaly_top_growth(config: AppConfig, args: argparse.Namespace) -> int:
     """Exports standalone closed-hour top-growth artifacts."""
 
     def _run() -> int:
-        from research_tools.anomaly_micro_live import (
-            LiveStartupError,
+        from research_tools.anomaly_live2.top_growth import (
             TopGrowthSnapshotConfig,
             TopGrowthSnapshotRunner,
             parse_top_growth_period_start_ms,
         )
 
-        visibility_events_csv_arg = getattr(args, "visibility_events_csv", None)
         top_growth_config = TopGrowthSnapshotConfig(
-            results_dir=config.backtest.results_dir,
+            output_dir=config.backtest.results_dir / "top_growth_runs" / datetime.now(UTC).strftime("%Y%m%d_%H%M%S"),
             symbols=tuple(getattr(args, "symbols", None) or ()),
             period_start_ms=parse_top_growth_period_start_ms(getattr(args, "period_start_utc", None)),
             min_return_pct=float(getattr(args, "top_growth_min_return_pct", 0.10)),
             limit=int(getattr(args, "top_growth_limit", 5)),
             fetch_spacing_seconds=float(getattr(args, "top_growth_fetch_spacing_seconds", 0.05)),
-            visibility_events_csv=Path(visibility_events_csv_arg) if visibility_events_csv_arg else None,
         )
         _, exchange_client, _ = _build_fetch_stack(config)
         try:
@@ -1766,8 +1562,8 @@ def run_anomaly_top_growth(config: AppConfig, args: argparse.Namespace) -> int:
                 config=top_growth_config,
                 exchange_client=exchange_client,
             ).run()
-        except LiveStartupError as exc:
-            print(f"top-growth: запуск остановлен: {exc}", flush=True)
+        except ValueError as exc:
+            print(f"top-growth: invalid request: {exc}", flush=True)
             return 2
 
     return _run_with_logging("run-anomaly-top-growth", config, _run)

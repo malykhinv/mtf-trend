@@ -1,4 +1,12 @@
 
+## 2026-05-21 - live2/backtest parity follow-up after P367
+
+```text
+Code review after P367 found one remaining overfilter: live2 had a pre-category single-candle `stream_candle_is_not_upward_price_confirmation` gate, while backtest uses setup-level price_retention, verticality and hold_count across the confirmation segment. This could reject a valid forming 1m setup whose final 5s candle was red but retained enough of the move.
+Patch P368 removes that single-5s upward gate and adds live setup-level parity checks/diagnostics. Remaining observed strict live2 filters are now expected shared/backtest filters: quote/trade setup pace, retention, verticality, hold count, initial risk, OI/mark category context, prior spike/fade/whipsaw caps, and entry guard.
+Potential residual mismatch to monitor: runner_flow flow_hold naming differs (`next_n` in backtest artifacts, trailing no-lookahead in live), but live uses only already closed 5s candles at decision and is not currently proven stricter than backtest.
+```
+
 ## 2026-05-21 - live2 run review 20260521_124514 parity choke
 
 ```text
