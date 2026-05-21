@@ -15,6 +15,7 @@ Verdict: the displayed `Активные 0/0` was a misleading operator metric, 
 Primary signal blockers: stream_candle_is_not_upward_price_confirmation=23806; prior_whipsaw_24h_above_category_max=15505 for all live priority categories; prior_spike_count caps=796; prior_fast_fade caps=722/457; prior_context_not_ready=210. Data/latency issues were secondary: deadline_missed=62, data_not_ready=8, backlog=2, latency p95=49ms, p99=133ms, max=19548ms from one startup/audit burst.
 Market context: closed 10:00-11:00 UTC top-growth completed with top_count=0 at the 10% threshold. Best closed-hour growth was MITO +8.67%, then MAVIA +5.07%, FIDA +5.02%, B +3.66%, CL +3.49%. Session ticker top later showed UB about +4.94%, FIDA about +4.59%, CYS about +4.28%.
 Follow-up patch P363 changes `Активные` to current/seen actionable symbols based on actionable_since_ms TTL, because live2 does not retain state.status=actionable after a verdict.
+Follow-up patch P365 fixes feature-scale mismatches found in this audit: 5s baseline quote was being compared directly to a daily-proxy threshold, prior-whipsaw used one 5s candle range as denominator, and signal risk used the current 5s low instead of the decision-box low.
 ```
 
 ## 2026-05-21 - live2 run review 20260521_103438 active-count audit

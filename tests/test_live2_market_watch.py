@@ -348,6 +348,46 @@ def test_live2_signal_marks_stale_mark_context_as_dependency_not_ready() -> None
     assert features["mark_basis_status"] == "stale"
 
 
+def test_live2_signal_features_use_decision_box_and_daily_quote_proxy() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    state.set_universe_selection(selected=True, rank=1, reason="test", selected_at_ms=0)
+    state.update_prior_context(
+        fetched_at_ms=20_000,
+        context_start_ms=0,
+        context_end_ms=20_000,
+        rows_received=288,
+        rows_used=288,
+        prior_spike_count_24h=0,
+        prior_fast_fade_count_24h=0,
+        prior_high_24h=1.20,
+        prior_low_before_high_24h=1.00,
+        prior_low_after_high_24h=1.10,
+        spike_return_pct=0.03,
+        fast_fade_retrace_fraction=0.55,
+        source="test",
+        status="ok",
+        reason="test",
+    )
+    for ts, price in [(1_000, 1.00), (6_000, 0.99), (11_000, 1.08)]:
+        state.update_aggtrade(_trade(trade_time_ms=ts, price=price), received_at_ms=ts)
+        state.candle_book.close_due(now_ms=((ts // 5_000) + 1) * 5_000)
+    candle = state.candle_book.rings[5_000].latest_closed()
+    assert candle is not None
+
+    features = Live2SignalEngine()._features(
+        state=state,
+        candle=candle,
+        actionable_reason="test",
+    )
+
+    assert features["baseline_quote_daily_proxy"] == features["baseline_quote_5s"] * 17280.0
+    assert features["initial_stop_at_decision"] == 0.99
+    assert features["decision_box_low"] == 0.99
+    assert features["decision_box_high"] == 1.08
+    assert features["prior_up_down_whipsaw_to_impulse_range"] < 2.0
+
+
 def test_live2_deadline_expires_backlog_without_counting_near_deadline_miss() -> None:
     store = SymbolStateStore(("AAA/USDT:USDT",))
     state = store.get_or_create("AAA/USDT:USDT")

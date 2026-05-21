@@ -1,5 +1,46 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P365 applied locally - live2 signal feature contract parity
+
+Files:
+
+```text
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/artifacts.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Fix live2 feature-scale mismatches that could make all live-priority categories impossible before entry guard.
+```
+
+Change:
+
+```text
+Live2 now computes baseline_quote_daily_proxy from the 5s baseline quote pace before comparing it with min_baseline_quote_daily_proxy, matching the backtest daily-proxy contract. The signal stop/risk and prior-whipsaw denominator now use a closed-live decision box built from recent 5s candles plus the decision candle, rather than the micro range of the single current 5s candle. Near-miss artifacts include the daily proxy and decision-box fields.
+```
+
+Validation:
+
+```bash
+python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py constants.py main.py
+python -m compileall data/exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m pytest -q tests/test_live2_market_watch.py
+```
+
+Risk:
+
+```text
+Medium. This changes live signal feature semantics to match the existing category contract. It does not alter category thresholds, entry guard, runtime gates, exchange execution, fills, stops, or position lifecycle. The next live2 run must be audited for selected_count and entry_guard rejects before treating any trade as edge evidence.
+```
+
 ## 2026-05-21 - P364 applied locally - live2 session-scoped operator grid
 
 Files:

@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-21 - P365 live2 signal feature contract parity
+
+```text
+Current patch status: P365 APPLIED locally / UNKNOWN commit.
+Question: are the zero selected signals in run 20260521_110133 healthy strictness or bugs that choke everything?
+Finding: not fully healthy. The run had real activity, but live2 compared a 5s baseline quote value directly to min_baseline_quote_daily_proxy=300000 and used a single 5s candle range as the prior-whipsaw denominator. Those units do not match the backtest/category contract and can make all categories unreachable. Initial risk also used the current 5s low instead of a decision-box low, making min_initial_risk_pct likely unreachable if earlier filters passed.
+Change: live2 now computes baseline_quote_daily_proxy from the 5s baseline pace, and uses a recent closed-live decision box for prior-whipsaw range and initial stop/risk. Thresholds and execution safety were not loosened.
+Validation: `python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py constants.py main.py`; `python -m compileall data/exchanges research_tools cli constants.py main.py`; `.venv\Scripts\python.exe -m pytest -q tests/test_live2_market_watch.py`.
+Next validation: restart live2 and require near-miss/decision artifacts to show whether remaining blockers are now real OI/mark/category rejections, entry_guard drift/RR/stale rejections, or actual exchange execution.
+```
+
 ## 2026-05-21 - P364 live2 session-scoped operator grid
 
 ```text

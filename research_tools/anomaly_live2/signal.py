@@ -259,6 +259,11 @@ class Live2SignalEngine:
             baseline_trades=baseline_trades,
             baseline_taker_share=baseline_taker_share,
         )
+        decision_box = (*previous, candle)
+        decision_box_low = min((item.low for item in decision_box), default=candle.low)
+        decision_box_high = max((item.high for item in decision_box), default=candle.high)
+        decision_box_range = decision_box_high - decision_box_low
+        baseline_quote_daily_proxy = baseline_quote * (1440.0 / (5.0 / 60.0)) if baseline_quote > 0 else None
         mark_basis = None
         mark_basis_status = "not_available"
         effective_mark_status = _effective_context_status(
@@ -285,22 +290,18 @@ class Live2SignalEngine:
             stale_ms=self.prior_context_stale_ms,
         )
         prior_whipsaw = None
-        impulse_range = candle.high - candle.low
         if (
             prior_context_status == "ok"
             and state.prior_high_24h is not None
             and state.prior_low_before_high_24h is not None
             and state.prior_low_after_high_24h is not None
-            and impulse_range > 0
+            and decision_box_range > 0
         ):
             prior_up_leg = state.prior_high_24h - state.prior_low_before_high_24h
             prior_down_leg = state.prior_high_24h - state.prior_low_after_high_24h
             if prior_up_leg >= 0 and prior_down_leg >= 0:
-                prior_whipsaw = min(prior_up_leg, prior_down_leg) / impulse_range
-        # Generation 0 uses the current 5s bucket low as a strict stream-local
-        # initial stop candidate. Execution remains disabled until P318; this is
-        # only the signal-side risk candidate consumed by P317 entry guards.
-        stop = candle.low
+                prior_whipsaw = min(prior_up_leg, prior_down_leg) / decision_box_range
+        stop = decision_box_low
         entry = candle.close
         risk_fraction = (entry / stop) - 1.0 if stop > 0 else 0.0
         tp1 = entry + (entry - stop)
@@ -314,6 +315,7 @@ class Live2SignalEngine:
             "abs_return_pct": abs_return_pct,
             "range_pct": candle_range,
             "baseline_quote_5s": baseline_quote,
+            "baseline_quote_daily_proxy": baseline_quote_daily_proxy,
             "baseline_trade_count_5s": baseline_trades,
             "baseline_range_pct_5s": baseline_range,
             "baseline_taker_buy_quote_share_5s": baseline_taker_share,
@@ -340,6 +342,11 @@ class Live2SignalEngine:
             "quote_volume": candle.quote_volume,
             "number_of_trades": candle.number_of_trades,
             "prior_closed_5s_count": len(previous),
+            "decision_box_window_ms": 5_000 * len(decision_box),
+            "decision_box_low": decision_box_low,
+            "decision_box_high": decision_box_high,
+            "decision_box_range": decision_box_range,
+            "decision_box_range_pct": decision_box_range / entry if entry > 0 else None,
             "ticker_last_price": state.ticker_last_price,
             "aggtrade_last_price": state.aggtrade_last_price,
             "mark_price": state.mark_price,
@@ -421,9 +428,10 @@ class Live2SignalEngine:
                 return _reject("mark_basis_below_category_min")
         baseline_quote = _float_or_none(features.get("baseline_quote_5s"))
         if category.min_baseline_quote_daily_proxy is not None:
-            if baseline_quote is None or baseline_quote <= 0:
-                return _dependency("stream_baseline_quote_not_ready")
-            if baseline_quote < category.min_baseline_quote_daily_proxy:
+            baseline_quote_daily_proxy = _float_or_none(features.get("baseline_quote_daily_proxy"))
+            if baseline_quote_daily_proxy is None or baseline_quote_daily_proxy <= 0:
+                return _dependency("stream_baseline_quote_daily_proxy_not_ready")
+            if baseline_quote_daily_proxy < category.min_baseline_quote_daily_proxy:
                 return _reject("stream_baseline_quote_below_category_min")
         quote_ratio = _float_or_none(features.get("start_quote_ratio"))
         if category.max_start_quote_ratio is not None:
