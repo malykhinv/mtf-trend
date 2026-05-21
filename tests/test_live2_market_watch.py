@@ -21,6 +21,7 @@ from research_tools.anomaly_live2.market_data.prior_context import (
 from research_tools.anomaly_live2.signal import Live2SignalEngine, _effective_context_status
 from research_tools.anomaly_live2.signal import Live2SignalDecision
 from research_tools.anomaly_live2.state import LIVE2_AGGTRADE_WS_SOURCE, SymbolStateStore
+from research_tools.anomaly_live2.status_grid import format_live2_status_grid
 from research_tools.anomaly_live2.top_growth import HOUR_MS, Live2TopGrowthAudit, Live2TopGrowthAuditConfig
 
 
@@ -399,6 +400,78 @@ def test_live2_execution_records_entry_attempt_timing() -> None:
     assert result.timing["stop_order_submit_duration_ms"] >= 0
     assert result.timing["stop_verify_duration_ms"] >= 0
     assert result.details["execution_timing"]["duration_ms"] == result.duration_ms
+
+
+def test_live2_status_grid_uses_four_column_operator_sections() -> None:
+    text = format_live2_status_grid(
+        runtime_seconds=1560.0,
+        cycle_seconds=0.05,
+        state_counts={"watching": 578, "actionable": 0},
+        ticker_counts={"ok": 578},
+        aggtrade_counts={"ok": 578},
+        mark_counts={"ok": 578, "stale": 0},
+        open_interest_counts={"ok": 576, "stale": 0},
+        prior_context_counts={"ok": 578, "stale": 0},
+        candle_counts={"live_ready": 578},
+        market_data_status={
+            "stream_coverage_ready": True,
+            "entry_stream_ready": True,
+            "market_data_ready_for_entries": True,
+            "clean_windows": 647,
+            "ws_health": {
+                "ticker_ready": True,
+                "aggtrade_ready": True,
+                "shards_total": 4,
+                "shards_connected": 4,
+                "reconnect_attempts": 0,
+            },
+            "open_interest": {"ready_symbols": 576, "active_target_symbols": 578, "total_errors": 4},
+            "prior_context": {
+                "ready_symbols": 578,
+                "active_target_symbols": 578,
+                "total_ws_5m_gap_tolerated": 0,
+                "total_ws_5m_gap_above_tolerance_tolerated": 0,
+                "total_ws_5m_gap_rejected": 0,
+            },
+            "universe": {"selected_symbols": 578},
+        },
+        decision_status={
+            "total_decisions": 14167,
+            "selected_count": 0,
+            "total_deadline_missed": 28,
+            "total_deadline_expired_backlog": 6,
+            "total_data_not_ready": 4,
+            "total_data_dependency_not_ready": 0,
+        },
+        execution_status={"max_open_positions": 1, "open_protected_positions": 0, "total_positions_protected": 0},
+        user_data_stream_status={"ready": True},
+        runtime_gate_status={
+            "readiness": {"new_entries_allowed": True},
+            "session_seconds": {"allowed_seconds": 100.0, "blocked_seconds": 0.0},
+            "decision_loop_overrun_count": 5,
+            "decision_loop_max_elapsed_ms": 81,
+        },
+        artifact_writer_status={"ready": True, "queue_size": 0, "queue_max_size": 8192},
+        session_top_snapshot={
+            "session_label": "Европа",
+            "items": [
+                {"symbol": "BTC/USDT:USDT", "growth_fraction": 0.018},
+                {"symbol": "ZEC/USDT:USDT", "growth_fraction": 0.015},
+                {"symbol": "HYPE/USDT:USDT", "growth_fraction": 0.011},
+                {"symbol": "SOL/USDT:USDT", "growth_fraction": 0.009},
+            ],
+        },
+    )
+
+    assert "◆ Соединение" in text
+    assert "◆ Задержки" in text
+    assert "◆ Контекст" in text
+    assert "◆ Рынок" in text
+    assert "◆ Торговля 100%" in text
+    assert "Аномалии 14167" in text
+    assert "Активные 0/0" in text
+    assert "Разрывы контекста 0/0/0" in text
+    assert "BTC 1.8%" in text and "SOL 0.9%" in text
 
 
 class _FakeTopGrowthExchange:

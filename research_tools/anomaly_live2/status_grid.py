@@ -1,7 +1,7 @@
 """Human-readable terminal status grid for anomaly live2.
 
 The grid intentionally mirrors the compact v1 operator log style: short
-Russian section titles, three fixed-width cells per row, and explicit quality
+Russian section titles, four fixed-width cells per row, and explicit quality
 marks. It is console-only; artifacts remain the source of truth.
 """
 
@@ -52,6 +52,7 @@ def format_live2_status_grid(
     aggtrade_rows_applied = _int(aggtrade_ws.get("rows_applied"))
     mark_rows_applied = _int(mark_price_ws.get("rows_applied"))
     mark_ready_symbols = _int(mark_counts.get("ok"))
+    mark_stale_symbols = _int(mark_counts.get("stale"))
     oi_ready_symbols = _int(open_interest.get("ready_symbols"))
     oi_active_symbols = _int(open_interest.get("active_target_symbols"))
     oi_errors = _int(open_interest.get("total_errors"))
@@ -60,6 +61,9 @@ def format_live2_status_grid(
     prior_active_symbols = _int(prior_context.get("active_target_symbols"))
     prior_errors = _int(prior_context.get("total_errors"))
     prior_stale_symbols = _int(prior_context_counts.get("stale"))
+    prior_gap_tolerated = _int(prior_context.get("total_ws_5m_gap_tolerated"))
+    prior_gap_above_tolerance = _int(prior_context.get("total_ws_5m_gap_above_tolerance_tolerated"))
+    prior_gap_rejected = _int(prior_context.get("total_ws_5m_gap_rejected"))
     aggtrade_pre_first_payload_failures = _int(ws_health.get("aggtrade_pre_first_payload_failures"))
     coverage_ready = bool(market_data_status.get("stream_coverage_ready"))
     entry_stream_ready = bool(market_data_status.get("entry_stream_ready"))
@@ -114,14 +118,17 @@ def format_live2_status_grid(
     queue_max = _int(artifact_writer_status.get("queue_max_size"))
     loop_overruns = _int(runtime_gate_status.get("decision_loop_overrun_count"))
     loop_max_ms = _int(runtime_gate_status.get("decision_loop_max_elapsed_ms"))
+    clean_windows = _int(market_data_status.get("clean_windows"))
+    active_total = selected_count
+    context_gap_summary = f"{prior_gap_tolerated}/{prior_gap_above_tolerance}/{prior_gap_rejected}"
 
     rows = [
-        "Соединение",
+        _section_title("Соединение"),
         _format_status_line(
             _format_status_cell(
                 "Стабильность",
                 _format_marked_quality_value(
-                    _format_percent(connected_ratio, signed=False, precision=1),
+                    _format_percent(connected_ratio, signed=False, precision=0),
                     _quality_level_from_ratio(connected_ratio, good_min=0.98, warn_min=0.95),
                 ),
             ),
@@ -136,119 +143,73 @@ def format_live2_status_grid(
                 "Данные",
                 _format_marked_quality_value(data_status, "good" if entry_stream_ready else "warn"),
             ),
+            _format_status_cell("Переподключения", reconnects),
         ),
+        _separator_line(),
+        _section_title("Задержки"),
         _format_status_line(
-            _format_status_cell("Шарды", f"{shards_connected}/{shards_total}"),
             _format_status_cell(
-                "Сделки",
-                _format_marked_quality_value(
-                    aggtrade_rows_applied,
-                    "good" if aggtrade_rows_applied > 0 else "bad" if shards_total > 0 else "warn",
-                ),
+                "Цикл",
+                _format_millis(max(0, int(cycle_seconds * 1000))) if math.isfinite(cycle_seconds) else "-",
             ),
             _format_status_cell(
-                "До payload",
-                _format_marked_quality_value(
-                    aggtrade_pre_first_payload_failures,
-                    _quality_level_from_count(aggtrade_pre_first_payload_failures, good_max=0, warn_max=2),
-                ),
-            ),
-        ),
-        _format_status_line(
-            _format_status_cell("Mark", _format_marked_quality_value(mark_rows_applied, "good" if mark_rows_applied > 0 else "warn")),
-            _format_status_cell("Mark sym", mark_ready_symbols),
-            _format_status_cell("Ротации", planned_rotations),
-        ),
-        _format_status_line(
-            _format_status_cell("OI", _format_marked_quality_value(f"{oi_ready_symbols}/{oi_active_symbols}", "good" if not oi_active_symbols or oi_ready_symbols >= oi_active_symbols else "warn")),
-            _format_status_cell("OI stale", oi_stale_symbols),
-            _format_status_cell("OI err", _format_marked_quality_value(oi_errors, _quality_level_from_count(oi_errors, good_max=0, warn_max=3))),
-        ),
-        _format_status_line(
-            _format_status_cell("24h ctx", _format_marked_quality_value(f"{prior_ready_symbols}/{prior_active_symbols}", "good" if not prior_active_symbols or prior_ready_symbols >= prior_active_symbols else "warn")),
-            _format_status_cell("Ctx stale", prior_stale_symbols),
-            _format_status_cell("Ctx err", _format_marked_quality_value(prior_errors, _quality_level_from_count(prior_errors, good_max=0, warn_max=3))),
-        ),
-        _format_status_line(
-            _format_status_cell("Переподкл", reconnects),
-            _format_status_cell("Разрывы", disconnects),
-            _format_status_cell("Ошибки", payload_errors),
-        ),
-        "",
-        "Рынок",
-        _format_status_line(
-            _format_status_cell("Время", _format_live_runtime(runtime_seconds)),
-            _format_status_cell("Вселенная", selected_symbols),
-            _format_status_cell("Свечи", f"{live_ready_candles}/{total_symbols}"),
-        ),
-        _format_status_line(
-            _format_status_cell("Активные", f"{actionable_symbols}/{watched_symbols}"),
-            _format_status_cell("Прогрев", f"{warmed_symbols}/{warmup_requested}" if warmup_requested else "-"),
-            _format_status_cell("Только REST", warmup_only_candles),
-        ),
-        *_format_session_top_block(session_top_snapshot),
-        "",
-        f"Торговля {_format_percent(trading_allowed_ratio, signed=False, precision=0)}",
-        _format_status_line(
-            _format_status_cell("PNL", "-"),
-            _format_status_cell("Позиции", f"{open_positions}/{session_positions_total}"),
-            _format_status_cell("Защита", protected_count),
-        ),
-        _format_status_line(
-            _format_status_cell("Ордера", total_orders),
-            _format_status_cell("TP1", tp1_count),
-            _format_status_cell("Закрыто", final_count),
-        ),
-        _format_status_line(
-            _format_status_cell("User WS", _format_marked_quality_value("Ok" if user_stream_ready else "Нет", "good" if user_stream_ready else "bad")),
-            _format_status_cell("User ev", user_stream_events),
-            _format_status_cell("User key", str(user_stream.get("listen_key_status") or "-")[:10]),
-        ),
-        "",
-        "Контроль",
-        _format_status_line(
-            _format_status_cell(
-                "Входы",
-                _format_marked_quality_value("Вкл" if entries_allowed else "Выкл", "good" if entries_allowed else "warn"),
-            ),
-            _format_status_cell("Причина", runtime_reason),
-            _format_status_cell(
-                "Аудит",
-                _format_marked_quality_value(
-                    f"{queue_size}/{queue_max}",
-                    "good" if artifact_ready and queue_size <= max(1, queue_max // 4) else "warn" if artifact_ready else "bad",
-                ),
-            ),
-        ),
-        _format_status_line(
-            _format_status_cell(
-                "Опоздало",
-                _format_marked_quality_value(deadline_missed, _quality_level_from_count(deadline_missed, good_max=0, warn_max=2)),
-            ),
-            _format_status_cell("Данные", data_not_ready + data_dependency_not_ready),
-            _format_status_cell("Отказы", total_rejected),
-        ),
-        _format_status_line(
-            _format_status_cell("Deps", f"{data_dependency_not_ready}/{deadline_expired_backlog}"),
-            _format_status_cell("До live", pre_live_skipped),
-            _format_status_cell("Выбрано", selected_count),
-        ),
-        _format_status_line(
-            _format_status_cell(
-                "Цикл max",
+                "Цикл максимум",
                 _format_marked_quality_value(
                     _format_millis(loop_max_ms),
                     _quality_level_from_seconds(loop_max_ms / 1000.0 if loop_max_ms > 0 else 0.0, good_max=0.20, warn_max=0.75),
                 ),
             ),
             _format_status_cell(
-                "Перегруз",
+                "Перегрузки",
                 _format_marked_quality_value(loop_overruns, _quality_level_from_count(loop_overruns, good_max=0, warn_max=2)),
             ),
             _format_status_cell(
-                "Риск",
-                _format_marked_quality_value(integrity_errors, _quality_level_from_count(integrity_errors, good_max=0, warn_max=0)),
+                "Опоздания",
+                _format_marked_quality_value(deadline_missed, _quality_level_from_count(deadline_missed, good_max=0, warn_max=2)),
             ),
+        ),
+        _format_status_line(
+            _format_status_cell("Хвост", deadline_expired_backlog),
+            _format_status_cell("Данные поздно", data_not_ready),
+            _format_status_cell("Зависимости", data_dependency_not_ready),
+            _format_status_cell("Чистые окна", clean_windows),
+        ),
+        _separator_line(),
+        _section_title("Контекст"),
+        _format_status_line(
+            _format_status_cell("Цена", f"{mark_ready_symbols}/{selected_symbols or total_symbols}"),
+            _format_status_cell("Цена устарела", mark_stale_symbols),
+            _format_status_cell("ОИ", f"{oi_ready_symbols}/{oi_active_symbols or selected_symbols}"),
+            _format_status_cell("ОИ устарел", oi_stale_symbols),
+        ),
+        _format_status_line(
+            _format_status_cell("ОИ ошибки", _format_marked_quality_value(oi_errors, _quality_level_from_count(oi_errors, good_max=0, warn_max=3))),
+            _format_status_cell("Контекст", f"{prior_ready_symbols}/{prior_active_symbols or selected_symbols}"),
+            _format_status_cell("Контекст устарел", prior_stale_symbols),
+            _format_status_cell("Разрывы контекста", context_gap_summary),
+        ),
+        _separator_line(),
+        _section_title("Рынок"),
+        _format_status_line(
+            _format_status_cell("Время", _format_live_runtime(runtime_seconds)),
+            _format_status_cell("Символы", selected_symbols),
+            _format_status_cell("Аномалии", total_decisions),
+            _format_status_cell("Активные", f"{actionable_symbols}/{active_total}"),
+        ),
+        *_format_session_top_block(session_top_snapshot),
+        _separator_line(),
+        _section_title(f"Торговля {_format_percent(trading_allowed_ratio, signed=False, precision=0)}"),
+        _format_status_line(
+            _format_status_cell("Позиции", f"{open_positions}/{session_positions_total}"),
+            _format_status_cell("Ордера", total_orders),
+            _format_status_cell("RRR", "-"),
+            _format_status_cell("WR", "-"),
+        ),
+        _format_status_line(
+            _format_status_cell("PNL", "-"),
+            _format_status_cell("SL", "-"),
+            _format_status_cell("BE", "-"),
+            _format_status_cell("TP", tp1_count),
         ),
     ]
     return "\n".join(rows)
@@ -268,7 +229,7 @@ def _format_session_top_block(session_top_snapshot: Mapping[str, object] | None)
     items_raw = session_top_snapshot.get("items")
     items = items_raw if isinstance(items_raw, list) else []
     cells: list[str] = []
-    for item in items[:3]:
+    for item in items[:4]:
         if not isinstance(item, Mapping):
             continue
         symbol = _compact_symbol(str(item.get("symbol") or ""))
@@ -277,9 +238,9 @@ def _format_session_top_block(session_top_snapshot: Mapping[str, object] | None)
             continue
         cells.append(_format_session_top_cell(f"{symbol} {_format_percent(growth, signed=False, precision=1)}"))
     if cells:
-        while len(cells) < 3:
+        while len(cells) < 4:
             cells.append(_format_session_top_cell(""))
-        return ["", label, _format_status_line(*cells[:3])]
+        return [_separator_line(), _section_title(label), _format_status_line(*cells[:4])]
     reason = str(session_top_snapshot.get("reason") or "")
     if reason in {"no_positive_growth_since_session_metric_baseline"}:
         value = "нет роста"
@@ -287,10 +248,19 @@ def _format_session_top_block(session_top_snapshot: Mapping[str, object] | None)
         value = "нет данных"
     else:
         value = "нет данных"
-    return ["", label, _format_status_line(_format_session_top_cell(value), _format_session_top_cell(""), _format_session_top_cell(""))]
+    return [
+        _separator_line(),
+        _section_title(label),
+        _format_status_line(
+            _format_session_top_cell(value),
+            _format_session_top_cell(""),
+            _format_session_top_cell(""),
+            _format_session_top_cell(""),
+        ),
+    ]
 
 
-def _format_session_top_cell(text: str, *, width: int = 26) -> str:
+def _format_session_top_cell(text: str, *, width: int = 24) -> str:
     cleaned = str(text).strip()
     if len(cleaned) > width:
         cleaned = cleaned[: max(0, width - 1)] + "~"
@@ -308,7 +278,7 @@ def _compact_symbol(symbol: str) -> str:
     return text
 
 
-def _format_status_cell(label: str, value: object, *, width: int = 26) -> str:
+def _format_status_cell(label: str, value: object, *, width: int = 24) -> str:
     text = f"{label} {_format_live_status_value(value)}"
     if len(text) > width:
         text = text[: max(0, width - 1)] + "~"
@@ -317,6 +287,14 @@ def _format_status_cell(label: str, value: object, *, width: int = 26) -> str:
 
 def _format_status_line(*cells: str) -> str:
     return "  ".join(cells).rstrip()
+
+
+def _section_title(title: str) -> str:
+    return f"◆ {title}"
+
+
+def _separator_line() -> str:
+    return _format_status_line(*(_format_status_cell("·", "", width=24) for _ in range(4)))
 
 
 def _format_live_status_value(value: object) -> str:
@@ -394,6 +372,8 @@ def _format_live_runtime(seconds: float) -> str:
 def _format_live_pulse(seconds: float) -> str:
     if not math.isfinite(seconds) or seconds < 0.0:
         return "-"
+    if seconds < 1.0:
+        return _format_millis(int(seconds * 1000))
     if seconds >= 60.0:
         return _format_live_runtime(seconds)
     return f"{float(seconds):.1f}с"

@@ -1,5 +1,41 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P361 applied locally - live2 four-column operator grid semantics
+
+Files:
+
+```text
+research_tools/anomaly_live2/status_grid.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Make the live2 terminal grid match the requested four-column operator layout without mixing active entry candidates with universe size.
+```
+
+Change:
+
+```text
+The grid now renders four-column sections with `◆` titles and non-empty dot separator rows. Sections are Соединение, Задержки, Контекст, Рынок, current session top, and Торговля %. `Рынок/Аномалии` remains total actionable decisions; `Рынок/Активные` is now current actionable symbols / total selected entry signals instead of current actionable / universe size, so `0/578` no longer implies 578 active entry candidates.
+```
+
+Validation:
+
+```bash
+python -m compileall research_tools/anomaly_live2/status_grid.py
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py
+```
+
+Risk:
+
+```text
+Low. Console UI only. Artifacts and trading logic are unchanged.
+```
+
 ## 2026-05-21 - P360 applied locally - live2 entry attempt timing artifacts
 
 Files:

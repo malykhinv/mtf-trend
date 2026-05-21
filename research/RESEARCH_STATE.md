@@ -1,5 +1,14 @@
 # Anomaly Research State
 
+## 2026-05-21 - P361 live2 operator grid semantics
+
+```text
+Current patch status: P361 APPLIED locally / UNKNOWN commit.
+Question: live2 terminal grid did not match requested semantics; `Активные 0/578` mixed current actionable entry candidates with universe size.
+Change: live2 status grid now uses four-column `◆` sections with dot separator rows and renders `Аномалии` as total actionable decisions while `Активные` is current actionable / total selected entry signals. Context, latency, market, session top, and trading rows are kept compact and operator-facing only.
+Validation: `python -m compileall research_tools/anomaly_live2/status_grid.py`; `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py`.
+```
+
 ## 2026-05-21 - P360 live2 entry attempt timing artifacts
 
 ```text
