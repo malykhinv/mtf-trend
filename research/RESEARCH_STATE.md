@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-21 - P372 live2 stage state store hotfix
+
+```text
+Current patch status: P372 PROPOSED / UNKNOWN commit. GitHub branch head checked before patch: 2e9f38269a32546247fe22bff794cd3d8b4b5f4f.
+Incident: after applying P371 locally, `run-anomaly-live2` crashed during startup with `AttributeError: 'SymbolStateStore' object has no attribute 'stage_symbol_counts'` in `AnomalyLive2Runner._market_data_status()`.
+Cause: runner/status-grid path referenced the new stage counter, but the state-store boundary was missing from the runtime code. Because `SymbolState` uses `slots=True`, the stage timestamp fields must also exist explicitly; otherwise the next decision path could fail when deadline code assigns `stage0_passed_ms` etc.
+Change: add `LIVE2_STAGE_LABELS`, explicit `stage0_passed_ms`..`stage5_passed_ms` fields, export them into symbol-state artifacts, and implement `SymbolStateStore.stage_symbol_counts()`. Keep `actionable_symbol_counts` backward-compatible but source it from stage0 threshold crossings.
+Trading impact: none. Diagnostics/status only.
+Validation: compileall plus direct `SymbolStateStore.stage_symbol_counts()` smoke.
+```
+
 ## 2026-05-21 - P371 live2 stage-aware active grid
 
 ```text

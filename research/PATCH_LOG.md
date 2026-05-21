@@ -7160,3 +7160,43 @@ Risk:
 ```text
 Low. This changes diagnostics/operator UI and status JSON counters only. It does not change signal thresholds, category evaluation, guards, execution, exchange calls, stops, or TP management. Stage0 deliberately ignores `real_trade_bucket_for_backtest_parity` so passive liquid symbols no longer inflate `Активные`.
 ```
+
+## 2026-05-21 - P372 proposed - live2 stage state store hotfix
+
+Files:
+
+```text
+research_tools/anomaly_live2/state.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix the local P371 runtime crash: `AttributeError: 'SymbolStateStore' object has no attribute 'stage_symbol_counts'`. P371 added runner/status-grid reads of stage counters, but the state-store hunk was not present in the local runtime path. Add the missing stage fields and `SymbolStateStore.stage_symbol_counts()` boundary in the state module itself.
+```
+
+Runtime failure fixed:
+
+```text
+run-anomaly-live2 failed in AnomalyLive2Runner._market_data_status() when reading self.state_store.stage_symbol_counts(...). This is a direct missing-method bug, not a data issue or exchange issue.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python - <<'CHECK'
+from research_tools.anomaly_live2.state import SymbolStateStore
+
+store = SymbolStateStore()
+state = store.get_or_create('TEST/USDT:USDT')
+state.stage0_passed_ms = 1_000
+counts = store.stage_symbol_counts(now_ms=1_500, ttl_ms=1_000, session_start_ms=0)
+assert counts['stages']['stage0']['current'] == 1
+assert counts['stages']['stage0']['session_seen'] == 1
+CHECK
+```
+
+Risk:

@@ -16,6 +16,14 @@ LIVE2_STARTUP_AGGTRADE_REST_SOURCE = "binance_futures_aggTrades_startup_rest"
 LIVE2_AGGTRADE_WS_SOURCE = "binance_futures_aggtrade_ws"
 LIVE2_OPEN_INTEREST_SOURCE = "binance_futures_open_interest_hist_5m_poll"
 LIVE2_PRIOR_CONTEXT_SOURCE = "binance_futures_ohlcv_5m_prior_context_24h_poll"
+LIVE2_STAGE_LABELS: tuple[str, ...] = (
+    "stage0",
+    "stage1",
+    "stage2",
+    "stage3",
+    "stage4",
+    "stage5",
+)
 
 
 class SymbolLive2Status(StrEnum):
@@ -46,6 +54,12 @@ class SymbolState:
     actionable_since_ms: int | None = None
     first_actionable_ms: int | None = None
     last_actionable_ms: int | None = None
+    stage0_passed_ms: int | None = None
+    stage1_passed_ms: int | None = None
+    stage2_passed_ms: int | None = None
+    stage3_passed_ms: int | None = None
+    stage4_passed_ms: int | None = None
+    stage5_passed_ms: int | None = None
     decision_deadline_ms: int | None = None
     last_decision_bucket_ms: int | None = None
     last_verdict: str = "not_evaluated"
@@ -496,6 +510,12 @@ class SymbolState:
             "actionable_since_ms": self.actionable_since_ms,
             "first_actionable_ms": self.first_actionable_ms,
             "last_actionable_ms": self.last_actionable_ms,
+            "stage0_passed_ms": self.stage0_passed_ms,
+            "stage1_passed_ms": self.stage1_passed_ms,
+            "stage2_passed_ms": self.stage2_passed_ms,
+            "stage3_passed_ms": self.stage3_passed_ms,
+            "stage4_passed_ms": self.stage4_passed_ms,
+            "stage5_passed_ms": self.stage5_passed_ms,
             "decision_deadline_ms": self.decision_deadline_ms,
             "last_decision_bucket_ms": self.last_decision_bucket_ms,
             "last_verdict": self.last_verdict,
@@ -915,23 +935,52 @@ class SymbolStateStore:
                 counts[state.status.value] = counts.get(state.status.value, 0) + 1
         return counts
 
-    def actionable_symbol_counts(self, *, now_ms: int, ttl_ms: int, session_start_ms: int | None = None) -> dict[str, int]:
-        current = 0
-        seen = 0
+    def actionable_symbol_counts(self, *, now_ms: int, ttl_ms: int, session_start_ms: int | None = None) -> dict[str, object]:
+        stage_counts = self.stage_symbol_counts(now_ms=now_ms, ttl_ms=ttl_ms, session_start_ms=session_start_ms)
+        stage0 = stage_counts["stages"].get("stage0", {})
+        return {
+            "current": int(stage0.get("current", 0)),
+            "seen": int(stage0.get("session_seen", 0)),
+            "session_seen": int(stage0.get("session_seen", 0)),
+            "session_start_ms": stage_counts["session_start_ms"],
+            "source": "stage0_threshold_crossed",
+        }
+
+    def stage_symbol_counts(self, *, now_ms: int, ttl_ms: int, session_start_ms: int | None = None) -> dict[str, object]:
+        current_by_stage: dict[str, int] = {label: 0 for label in LIVE2_STAGE_LABELS}
+        session_seen_by_stage: dict[str, int] = {label: 0 for label in LIVE2_STAGE_LABELS}
         cutoff_ms = int(now_ms) - int(ttl_ms)
         session_cutoff_ms = None if session_start_ms is None else int(session_start_ms)
+        stage_fields = (
+            ("stage0", "stage0_passed_ms"),
+            ("stage1", "stage1_passed_ms"),
+            ("stage2", "stage2_passed_ms"),
+            ("stage3", "stage3_passed_ms"),
+            ("stage4", "stage4_passed_ms"),
+            ("stage5", "stage5_passed_ms"),
+        )
         with self._lock:
             for state in self._states.values():
-                if state.actionable_since_ms is not None and int(state.actionable_since_ms) >= cutoff_ms:
-                    current += 1
-                last_actionable_ms = state.last_actionable_ms
-                if last_actionable_ms is None:
-                    last_actionable_ms = state.actionable_since_ms
-                if last_actionable_ms is None:
-                    continue
-                if session_cutoff_ms is None or int(last_actionable_ms) >= session_cutoff_ms:
-                    seen += 1
-        return {"current": current, "seen": seen, "session_seen": seen, "session_start_ms": session_cutoff_ms}
+                for label, field_name in stage_fields:
+                    passed_ms = getattr(state, field_name)
+                    if passed_ms is None:
+                        continue
+                    if int(passed_ms) >= cutoff_ms:
+                        current_by_stage[label] += 1
+                    if session_cutoff_ms is None or int(passed_ms) >= session_cutoff_ms:
+                        session_seen_by_stage[label] += 1
+        stages = {
+            label: {
+                "current": current_by_stage[label],
+                "session_seen": session_seen_by_stage[label],
+            }
+            for label in LIVE2_STAGE_LABELS
+        }
+        return {
+            "ttl_ms": int(ttl_ms),
+            "session_start_ms": session_cutoff_ms,
+            "stages": stages,
+        }
 
     def ticker_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
