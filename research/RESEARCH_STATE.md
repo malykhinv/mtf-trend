@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-21 - P371 live2 stage-aware active grid
+
+```text
+Current patch status: P371 PROPOSED / UNKNOWN commit. GitHub branch head checked before patch: f12455f264f63432af8b64abed9f433532a0390b.
+Question: `Активные 564/579` is misleading because it counts ordinary real-trade buckets, not symbols that passed meaningful strategy stages.
+Finding: the previous active metric used `actionable_since_ms`, and P370 intentionally let every real 5s trade bucket reach the signal engine for backtest parity. That made operator UI interpret passive liquidity as active opportunity.
+Change: live2 now keeps TTL stage flags: stage0 threshold-crossed bucket, stage1 signal selected, stage2 entry guard checked, stage3 guard accepted, stage4 execution attempted, stage5 position opened/protected. The grid renders stage0/1/2 and stage3/4/5 counts. Backward-compatible `actionable_symbol_counts` now reports stage0 counts, not parity-only buckets.
+Trading impact: none. The decision path still evaluates parity buckets; only diagnostics and status-grid semantics change.
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; status-grid smoke asserts `stage0/1/2 1/0/0`.
+```
+
 ## 2026-05-21 - P370 deeper live2/backtest parity repair
 
 ```text

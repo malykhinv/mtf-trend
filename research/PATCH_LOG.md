@@ -7097,3 +7097,66 @@ Risk:
 ```text
 Low. This is operator UI/diagnostics only. It does not change signal thresholds, market-data gates, execution, stops, TP, OI/prior-context fetching, or order placement.
 ```
+## 2026-05-21 - P371 proposed - live2 stage-aware active grid
+
+Files:
+
+```text
+research_tools/anomaly_live2/state.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/status_grid.py
+research_tools/anomaly_live2/artifacts.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Stop the operator grid from calling ordinary real-trade buckets active. Replace `Активные current/seen` with live stage TTL counters: stage0 threshold-crossed bucket, stage1 signal selected, stage2 entry guard checked, stage3 entry guard accepted, stage4 execution attempted, stage5 position opened/protected. Keep the old actionable counter in status JSON for compatibility, but make it source from stage0 instead of `real_trade_bucket_for_backtest_parity`.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python - <<'CHECK'
+from research_tools.anomaly_live2.status_grid import format_live2_status_grid
+text = format_live2_status_grid(
+    runtime_seconds=1,
+    cycle_seconds=0.1,
+    state_counts={'watching': 1},
+    ticker_counts={},
+    aggtrade_counts={},
+    mark_counts={'ok': 1},
+    open_interest_counts={},
+    prior_context_counts={},
+    candle_counts={'live_ready': 1},
+    market_data_status={
+        'ws_health': {'shards_total': 1, 'shards_connected': 1},
+        'aggtrade_ws': {'rows_applied': 1},
+        'mark_price_ws': {'rows_applied': 1},
+        'open_interest': {'ready_symbols': 0, 'active_target_symbols': 0},
+        'prior_context': {'ready_symbols': 0, 'active_target_symbols': 0},
+        'universe': {'selected_symbols': 1},
+        'startup_warmup': {},
+        'stream_coverage_ready': True,
+        'market_data_ready_for_entries': True,
+        'stage_symbol_counts': {'stages': {'stage0': {'current': 1}, 'stage1': {'current': 0}, 'stage2': {'current': 0}, 'stage3': {'current': 0}, 'stage4': {'current': 0}, 'stage5': {'current': 0}}},
+    },
+    decision_status={'total_decisions': 1, 'total_deadline_missed': 0},
+    execution_status={'open_protected_positions': 0, 'total_positions_protected': 0, 'max_open_positions': 1},
+    user_data_stream_status={'ready': True},
+    runtime_gate_status={'reason': 'ok', 'readiness': {'new_entries_allowed': True}},
+    artifact_writer_status={'ready': True, 'queue_size': 0, 'queue_max_size': 8192},
+)
+assert 'stage0/1/2 1/0/0' in text
+CHECK
+```
+
+Risk:
+
+```text
+Low. This changes diagnostics/operator UI and status JSON counters only. It does not change signal thresholds, category evaluation, guards, execution, exchange calls, stops, or TP management. Stage0 deliberately ignores `real_trade_bucket_for_backtest_parity` so passive liquid symbols no longer inflate `Активные`.
+```
