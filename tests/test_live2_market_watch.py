@@ -12,13 +12,13 @@ from research_tools.anomaly_live2.config import AnomalyLive2Config
 from research_tools.anomaly_live2.deadline import Live2DeadlineEngine, Live2DeadlineEngineConfig, Live2DecisionRecord
 from research_tools.anomaly_live2.entry_guard import Live2EntryGuardResult
 from research_tools.anomaly_live2.execution import Live2ExecutionConfig, Live2ExecutionEngine
-from research_tools.anomaly_live2.market_data.candles import Live2AggTradeEvent, Live2CandleRing
+from research_tools.anomaly_live2.market_data.candles import Live2AggTradeEvent, Live2Candle, Live2CandleRing
 from research_tools.anomaly_live2.market_data.prior_context import (
     LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS,
     Live2PriorContextPollConfig,
     Live2PriorContextPoller,
 )
-from research_tools.anomaly_live2.signal import Live2SignalEngine, _effective_context_status
+from research_tools.anomaly_live2.signal import Live2SignalEngine, _effective_context_status, _live_backtest_like_setup
 from research_tools.anomaly_live2.signal import Live2SignalDecision
 from research_tools.anomaly_live2.state import LIVE2_AGGTRADE_WS_SOURCE, SymbolStateStore
 from research_tools.anomaly_live2.status_grid import format_live2_status_grid
@@ -44,6 +44,37 @@ def _trade(
         taker_buy_quote_quantity=price,
         buyer_is_maker=False,
         source=source,
+    )
+
+
+def _candle(
+    *,
+    timeframe_ms: int,
+    open_time_ms: int,
+    open_price: float = 1.0,
+    high: float = 1.0,
+    low: float = 1.0,
+    close: float = 1.0,
+    quote_volume: float = 100.0,
+    number_of_trades: int = 10,
+) -> Live2Candle:
+    return Live2Candle(
+        timeframe_ms=timeframe_ms,
+        open_time_ms=open_time_ms,
+        close_time_ms=open_time_ms + timeframe_ms,
+        open=open_price,
+        high=high,
+        low=low,
+        close=close,
+        base_volume=quote_volume / close if close > 0 else quote_volume,
+        quote_volume=quote_volume,
+        number_of_trades=number_of_trades,
+        taker_buy_quote_volume=quote_volume * 0.55,
+        first_trade_time_ms=open_time_ms,
+        last_trade_time_ms=open_time_ms + timeframe_ms - 1,
+        first_source=LIVE2_AGGTRADE_WS_SOURCE,
+        last_source=LIVE2_AGGTRADE_WS_SOURCE,
+        live_ws_trade_count=number_of_trades,
     )
 
 
@@ -391,6 +422,32 @@ def test_live2_signal_features_use_decision_box_and_daily_quote_proxy() -> None:
     assert features["decision_box_low"] == 0.99
     assert features["decision_box_high"] == 1.08
     assert features["prior_up_down_whipsaw_to_impulse_range"] < 2.0
+
+
+def test_live2_backtest_like_setup_uses_backtest_stop_and_tp1_model() -> None:
+    baseline_1m = tuple(
+        _candle(timeframe_ms=60_000, open_time_ms=idx * 60_000, high=1.005, low=0.995)
+        for idx in range(60)
+    )
+    setup_open_ms = 60 * 60_000
+    segment = (
+        _candle(timeframe_ms=5_000, open_time_ms=setup_open_ms, open_price=1.0, high=1.02, low=0.98, close=1.02, quote_volume=75.0, number_of_trades=8),
+        _candle(timeframe_ms=5_000, open_time_ms=setup_open_ms + 5_000, open_price=1.02, high=1.05, low=1.01, close=1.045, quote_volume=75.0, number_of_trades=8),
+        _candle(timeframe_ms=5_000, open_time_ms=setup_open_ms + 10_000, open_price=1.045, high=1.07, low=1.04, close=1.065, quote_volume=75.0, number_of_trades=8),
+        _candle(timeframe_ms=5_000, open_time_ms=setup_open_ms + 15_000, open_price=1.065, high=1.08, low=1.06, close=1.07, quote_volume=75.0, number_of_trades=8),
+    )
+
+    setup = _live_backtest_like_setup(
+        closed_5s=segment,
+        closed_1m=baseline_1m,
+        decision_candle=segment[-1],
+    )
+
+    assert setup["status"] == "ok"
+    assert setup["initial_stop_at_decision"] > setup["low"]
+    assert round(float(setup["initial_stop_at_decision"]), 6) == round(float(setup["decision_ema20"]), 6)
+    assert setup["tp1_r"] == 0.75
+    assert setup["tp1_at_decision"] == 1.15
 
 
 def test_live2_deadline_expires_backlog_without_counting_near_deadline_miss() -> None:

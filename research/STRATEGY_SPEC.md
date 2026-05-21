@@ -97,7 +97,7 @@ Backtest execution latency contract:
 ```text
 default market entry remains next LTF candle open after the decision (`market_entry_latency_candles=1`)
 optional latency mode has one public flag: `--latency true`
-latency mode internally tests a 10s delayed executable price/path using 1s cache and writes a hidden 0/7/10/15s latency grid, reusing the primary 10s run for that grid point
+for the current live2 1m/5s contract, latency mode compares 0ms versus 5000ms extra executable-price stress by default
 latency mode must never fabricate 1s fills; missing 1s cache should be backfilled from real aggTrades during backtest, and failed backfill remains an execution skip
 latency-grid artifacts are research stress tests, not a live trading rule by themselves
 ```
@@ -111,12 +111,13 @@ no candle/ticker-derived synthetic fill for ledger/PnL
 live ledger must write scan/guard provenance (`source_scan_mode`, `danger_cold_coverage_source`, `entry_position_guard_source`) from the opened position object
 every actionable live2 entry attempt must write artifact timing from bucket close -> signal evaluation -> entry guard -> runtime gate -> execution call, and execution must write exchange-step timing for pre-position fetch, entry order/fill, post-position fetch, stop submit, and stop visibility verification
 every post-actionable live2 signal that is not selected must be visible in `live2_near_misses.csv` with blocker stage/reasons and key flow/context fields; this artifact is diagnostic only and must not loosen live entries
-no stale signal order after freshness window
+no stale signal order after freshness window; default live2 freshness is 5000ms to match the backtest next-5s-candle market-entry model
 prescan decisions that arrive after max_signal_age_ms must emit reject_stale_decision_latency, distinct from execution-guard reject_stale_signal
 no order if TP1 is already reached or RR collapsed at live price
 BE/TP/PnL are computed from actual fill, not signal close
 TP1 is a full-position limit at actual_entry + 0.75 * (actual_entry - pump_leg_bottom)
 initial SL remains max(pump_leg_bottom - structural buffer, EMA20), so TP1 risk basis and SL risk basis are deliberately separate
+pre-fill live2 entry guard uses the same signal TP1/SL basis as backtest: drift <= 0.4%, RR to signal TP1 >= 0.70, TP1 not touched before entry
 ```
 
 Live scheduling contract:

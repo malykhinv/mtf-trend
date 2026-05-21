@@ -15,9 +15,9 @@ from .state import SymbolState
 
 @dataclass(frozen=True, slots=True)
 class Live2EntryGuardConfig:
-    max_signal_age_ms: int = 2_000
+    max_signal_age_ms: int = 5_000
     max_entry_price_drift_pct: float = 0.004
-    min_rr_to_tp1: float = 0.95
+    min_rr_to_tp1: float = 0.70
 
     def __post_init__(self) -> None:
         if self.max_signal_age_ms <= 0:

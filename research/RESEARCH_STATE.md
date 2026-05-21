@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-21 - P369 live2/backtest execution parity audit
+
+```text
+Current patch status: P369 APPLIED locally / UNKNOWN commit.
+Question: check live2/backtest parity carefully.
+Finding: after P367/P368, candidate shape was much closer, but execution parity still had two live-overfilters and one risk-model mismatch. Live2 entry guard accepted only 2000ms signal age and RR>=0.95, while the backtest market model enters on the next 5s entry candle and uses min_market_rr_to_signal_tp1=0.70. Live2 also built signal stop/TP1 from decision_box_low and 1R, while backtest uses initial_stop=max(box_low - 0.05*box_range, decision EMA20) and signal TP1=rounded(entry + 0.75*(entry - box_low)).
+Change: live2 signal construction now uses the backtest stop/TP1 model for selected signals and entry-guard RR checks. Live2 entry guard defaults are now max_signal_age_ms=5000 and min_rr_to_tp1=0.70. The backtest latency stress default/grid now uses 0ms and 5000ms to match the live entry freshness window. Near-miss artifacts expose live_setup_decision_ema20, stop buffer, and tp1_r.
+Residual parity risk: live2's runner_flow flow_hold remains stream-native rather than bit-identical to the backtest confirmation-segment calculation. It is not currently the known live-overfilter, but it should be checked in the next live near-miss funnel.
+Validation: `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py`; compileall on touched files.
+```
+
 ## 2026-05-21 - P368 remove live1 monolith and tighten parity audit
 
 ```text

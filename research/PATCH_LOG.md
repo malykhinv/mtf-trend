@@ -1,5 +1,48 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P369 applied locally - live2/backtest execution parity
+
+Files:
+
+```text
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/entry_guard.py
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/artifacts.py
+research_tools/anomaly_strategy_backtest.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Remove remaining live2-overfilters versus the backtest execution model and make selected-signal risk levels use the same stop/TP1 contract.
+```
+
+Change:
+
+```text
+Live2 selected signals now use backtest-equivalent initial_stop_at_decision=max(box_low - 0.05*box_range, decision EMA20) and TP1=rounded(entry + 0.75*(entry - box_low)). Live2 entry guard defaults now match the backtest executable-entry guard: max signal age 5000ms for the 1m/5s next-candle market model, drift 0.4%, and min RR to signal TP1 0.70. Backtest latency stress defaults now compare 0ms and 5000ms, matching the live freshness window.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py
+python -m compileall research_tools\anomaly_live2\signal.py research_tools\anomaly_live2\entry_guard.py research_tools\anomaly_live2\config.py research_tools\anomaly_strategy_backtest.py tests\test_live2_market_watch.py
+```
+
+Risk:
+
+```text
+Medium. This intentionally loosens live entry freshness/RR back to the backtest contract instead of hiding the discrepancy. Drift, TP1-already-touched, positive-risk, actual fill, max-position, and verified-stop guards remain in force. Next live validation should inspect live2_near_misses.csv and entry_guard rejects for stale/drift/RR after restart.
+```
+
 ## 2026-05-21 - P368 applied locally - remove live1 monolith and setup-level live2 confirmation
 
 Files:

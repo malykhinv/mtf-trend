@@ -7,6 +7,7 @@ and does not guess unavailable derivative context.
 
 from __future__ import annotations
 
+import math
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Literal
@@ -33,6 +34,8 @@ LIVE2_BACKTEST_MIN_PRICE_RETENTION = 0.70
 LIVE2_BACKTEST_MIN_VERTICALITY_SCORE = 0.25
 LIVE2_BACKTEST_MIN_HOLD_COUNT = 2
 LIVE2_BACKTEST_MAX_INITIAL_RISK_PCT = 0.16
+LIVE2_BACKTEST_STOP_BUFFER_RANGE_FRACTION = 0.05
+LIVE2_BACKTEST_TP1_R = 0.75
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,10 +337,12 @@ class Live2SignalEngine:
             prior_down_leg = state.prior_high_24h - state.prior_low_after_high_24h
             if prior_up_leg >= 0 and prior_down_leg >= 0:
                 prior_whipsaw = min(prior_up_leg, prior_down_leg) / decision_box_range
-        stop = decision_box_low
         entry = candle.close
+        setup_stop = live_setup.get("initial_stop_at_decision")
+        stop = float(setup_stop) if setup_stop is not None else decision_box_low
         risk_fraction = (entry / stop) - 1.0 if stop > 0 else 0.0
-        tp1 = entry + (entry - stop)
+        setup_tp1 = live_setup.get("tp1_at_decision")
+        tp1 = float(setup_tp1) if setup_tp1 is not None else entry + LIVE2_BACKTEST_TP1_R * (entry - decision_box_low)
         return {
             "actionable_reason": actionable_reason,
             "signal_entry_price": entry,
@@ -371,6 +376,9 @@ class Live2SignalEngine:
             "live_setup_min_verticality_score": LIVE2_BACKTEST_MIN_VERTICALITY_SCORE,
             "live_setup_range": live_setup.get("range"),
             "live_setup_range_pct": live_setup.get("range_pct"),
+            "live_setup_decision_ema20": live_setup.get("decision_ema20"),
+            "live_setup_stop_buffer_range_fraction": LIVE2_BACKTEST_STOP_BUFFER_RANGE_FRACTION,
+            "live_setup_tp1_r": LIVE2_BACKTEST_TP1_R,
             "live_setup_baseline_1m_count": live_setup.get("baseline_1m_count"),
             "live_setup_baseline_quote_1m": live_setup.get("baseline_quote_1m"),
             "live_setup_baseline_trade_count_1m": live_setup.get("baseline_trade_count_1m"),
@@ -751,6 +759,16 @@ def _live_backtest_like_setup(
     hold_count = sum(1 for item in segment if item.close >= activation_price)
     price_retention = (close_price - open_price) / (high - open_price) if high > open_price else None
     verticality = _verticality_score(segment)
+    decision_ema20 = _ema20([item.close for item in (*baseline, decision_candle)])
+    previous_stop = low - LIVE2_BACKTEST_STOP_BUFFER_RANGE_FRACTION * setup_range
+    initial_stop = max(previous_stop, decision_ema20) if decision_ema20 is not None else previous_stop
+    pump_leg_risk = close_price - low
+    base_tp1 = close_price + LIVE2_BACKTEST_TP1_R * pump_leg_risk
+    tp1, tp1_round_step = _round_up_tp1_to_market_number(
+        base_tp1,
+        reference_price=close_price,
+        movement=max(pump_leg_risk, setup_range),
+    )
     common = {
         "closed_entry_candles": closed_entry_candles,
         "elapsed_fraction": setup_elapsed_fraction,
@@ -771,6 +789,12 @@ def _live_backtest_like_setup(
         "high": high,
         "open": open_price,
         "close": close_price,
+        "decision_ema20": decision_ema20,
+        "initial_stop_at_decision": initial_stop,
+        "tp1_at_decision": tp1,
+        "tp1_round_step": tp1_round_step,
+        "stop_buffer_range_fraction": LIVE2_BACKTEST_STOP_BUFFER_RANGE_FRACTION,
+        "tp1_r": LIVE2_BACKTEST_TP1_R,
         "quote_volume": quote_volume,
         "number_of_trades": trade_count,
         "baseline_1m_count": len(baseline),
@@ -835,6 +859,44 @@ def _median(values: list[float]) -> float:
     if len(valid) % 2:
         return valid[mid]
     return (valid[mid - 1] + valid[mid]) / 2.0
+
+
+def _ema20(values: list[float]) -> float | None:
+    valid = [float(value) for value in values if value is not None and math.isfinite(float(value))]
+    if not valid:
+        return None
+    alpha = 2.0 / (20.0 + 1.0)
+    ema = valid[0]
+    for value in valid[1:]:
+        ema = alpha * value + (1.0 - alpha) * ema
+    return ema
+
+
+def _nice_market_round_step(*, reference_price: float, movement: float) -> float:
+    if not math.isfinite(reference_price) or reference_price <= 0.0:
+        return float("nan")
+    raw_step = max(abs(float(movement)) * 0.25, abs(float(reference_price)) * 0.0002, 1e-12)
+    exponent = math.floor(math.log10(raw_step))
+    base = 10.0 ** exponent
+    normalized = raw_step / base
+    for multiplier in (1.0, 2.0, 5.0, 10.0):
+        if normalized <= multiplier:
+            return multiplier * base
+    return 10.0 * base
+
+
+def _round_up_tp1_to_market_number(base_tp1_price: float, *, reference_price: float, movement: float) -> tuple[float, float]:
+    if not math.isfinite(base_tp1_price) or base_tp1_price <= 0.0:
+        return base_tp1_price, float("nan")
+    step = _nice_market_round_step(reference_price=reference_price, movement=movement)
+    if not math.isfinite(step) or step <= 0.0:
+        return base_tp1_price, float("nan")
+    rounded = math.ceil((base_tp1_price - step * 1e-9) / step) * step
+    tolerance = max(abs(float(base_tp1_price)) * 1e-12, step * 1e-9)
+    if rounded <= base_tp1_price + tolerance:
+        rounded += step
+    decimals = max(0, int(math.ceil(-math.log10(step))) + 2) if step < 1.0 else 8
+    return round(float(rounded), min(decimals, 12)), float(step)
 
 
 def _verticality_score(segment: tuple[Live2Candle, ...]) -> float:

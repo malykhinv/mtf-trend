@@ -66,9 +66,9 @@ class AnomalyLive2Config:
     actionable_min_quote_volume: float = 2_500.0
     actionable_min_trade_count: int = 20
     actionable_min_abs_return_pct: float = 0.003
-    entry_guard_max_signal_age_ms: int = 2_000
+    entry_guard_max_signal_age_ms: int = 5_000
     entry_guard_max_price_drift_pct: float = 0.004
-    entry_guard_min_rr_to_tp1: float = 0.95
+    entry_guard_min_rr_to_tp1: float = 0.70
     artifact_writer_queue_max_size: int = 8192
     execution_order_notional_usdt: float = 12.0
     execution_max_open_positions: int = 1

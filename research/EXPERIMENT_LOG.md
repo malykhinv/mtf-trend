@@ -1,4 +1,14 @@
 
+## 2026-05-21 - P369 live2/backtest execution parity audit
+
+```text
+Run analyzed: code audit, no new market run.
+Question: check live2/backtest parity carefully.
+Result: fixed two execution-level live-overfilters: live freshness 2000ms -> 5000ms and live RR guard 0.95 -> 0.70, matching the default backtest next-5s market-entry contract. Also fixed selected-signal stop/TP1 parity so live2 uses the same decision EMA20/structural-buffer stop and rounded 0.75R pump-leg TP1 basis as backtest.
+Expected impact: fewer live-only rejections after a signal is selected; entry guard should now reject mainly real stale >5s, drift >0.4%, TP1 already touched, invalid risk, or RR<0.70. Candidate/category filters are unchanged by this patch.
+Next test: restart live2 and compare live2_near_misses.csv plus live2_events.csv entry_guard reasons against a same-profile backtest. The important check is selected_count>0 when the backtest would have a candidate, and no live-only stale/RR choke inside <=5s.
+```
+
 ## 2026-05-21 - live2/backtest parity follow-up after P367
 
 ```text
