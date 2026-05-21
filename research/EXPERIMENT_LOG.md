@@ -72,6 +72,16 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+## 2026-05-21 - post-P365 live2 choke audit
+
+```text
+Question: after the signal feature contract patch, are we still choking live2 with dumb blockers?
+Artifacts/code reviewed: current live2 signal path plus .output/results/live2_anomaly_runs/20260521_110133 diagnostics. The run predates P365, so it is useful for identifying the old choke point but cannot validate the post-P365 funnel.
+Finding: the primary confirmed bugs were already fixed in P365: baseline_quote_daily_proxy units, prior-whipsaw denominator, and initial risk based on one 5s low. The remaining strict filters in current code are not proven bugs: upward price confirmation, OI 3x5m increase, mark premium, prior spike/fade/whipsaw caps, range expansion, and no-lookahead live flow hold. These are strategy filters from the shared category contract.
+No trading-logic patch applied in this audit. Lowering mark/OI/prior/range thresholds now would be parameter loosening, not a root-cause fix. The next live2 restart must be judged by live2_near_misses.csv and decision_funnel; if selected_count remains zero after P365, compare near-miss distributions against hourly top_growth before changing thresholds.
+Expected healthy post-P365 outcome: rejects shift away from impossible unit/risk/whipsaw-scale blockers toward real mark/OI/range/category rejects, or selected_count becomes non-zero and entry_guard/execution timing artifacts start proving the <5s path.
+```
+
 ## 2026-05-21 - anomaly-lab category/TF review
 
 ```text

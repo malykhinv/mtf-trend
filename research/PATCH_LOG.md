@@ -1,5 +1,39 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P366 applied locally - post-P365 live2 choke audit record
+
+Files:
+
+```text
+research/EXPERIMENT_LOG.md
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Record the post-P365 code/run audit without loosening live2 trading filters blindly.
+```
+
+Change:
+
+```text
+No trading code changed. The audit records that the confirmed live2 choke bugs were already fixed in P365 and that remaining strict gates require a post-P365 near-miss/top-growth validation before any threshold change.
+```
+
+Validation:
+
+```bash
+Not run; documentation-only audit record.
+```
+
+Risk:
+
+```text
+None to trading behavior. This commit does not change signal filters, entry guard, runtime gates, exchange execution, fills, stops, artifacts, or operator grid code.
+```
+
 ## 2026-05-21 - P365 applied locally - live2 signal feature contract parity
 
 Files:

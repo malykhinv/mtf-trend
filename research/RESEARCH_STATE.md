@@ -1,5 +1,14 @@
 # Anomaly Research State
 
+## 2026-05-21 - post-P365 live2 choke audit
+
+```text
+Current patch status: no additional trading-logic patch after P365.
+Question: are current live2 zero-selected symptoms still caused by dumb blockers?
+Finding: current code no longer shows the confirmed unit/scale blockers fixed by P365. The old run 20260521_110133 cannot validate the new funnel because it predates P365. Remaining gates are strict but strategy-level: upward price confirmation, mark premium, OI delta, prior fake-pump caps, range expansion, and no-lookahead flow hold. Changing them without a post-P365 near-miss/top-growth comparison would be threshold loosening, not root-cause repair.
+Next validation: restart live2 on current head and inspect live2_near_misses.csv, decision_funnel, selected_count, entry_guard counts, and top_growth mismatch. If selected_count remains zero, the next patch should be category/threshold research-driven, not a live hotfix.
+```
+
 ## 2026-05-21 - P365 live2 signal feature contract parity
 
 ```text
