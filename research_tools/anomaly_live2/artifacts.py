@@ -15,7 +15,7 @@ from .clock import utc_now_iso, utc_now_ms
 from .contracts import Live2Event, Live2Readiness
 from .state import SymbolStateStore
 
-ArtifactJobKind = Literal["event", "status", "diagnostics_summary", "symbol_state", "stop"]
+ArtifactJobKind = Literal["event", "near_miss", "status", "diagnostics_summary", "symbol_state", "stop"]
 
 
 @dataclass(slots=True)
@@ -78,12 +78,58 @@ class Live2ArtifactWriter:
         "message",
         "data_json",
     )
+    _NEAR_MISS_FIELDS = (
+        "timestamp_utc",
+        "timestamp_ms",
+        "symbol",
+        "verdict",
+        "near_miss_stage",
+        "reason",
+        "bucket_open_ms",
+        "bucket_close_ms",
+        "decision_timestamp_ms",
+        "deadline_ms",
+        "latency_ms",
+        "return_pct",
+        "quote_volume",
+        "number_of_trades",
+        "candle_first_source",
+        "candle_last_source",
+        "candle_live_ws_trade_count",
+        "actionable_reason",
+        "signal_reject_reasons",
+        "signal_dependency_reasons",
+        "unique_blocker_count",
+        "prior_context_status",
+        "prior_context_reason",
+        "prior_up_down_whipsaw_to_impulse_range",
+        "prior_spike_count_24h",
+        "prior_fast_fade_count_24h",
+        "oi_status",
+        "oi_change_pct_3x5m",
+        "mark_basis_status",
+        "mark_close_vs_decision_close_basis",
+        "start_quote_ratio",
+        "start_trade_ratio",
+        "start_range_pct_ratio_to_baseline",
+        "start_quote_ratio_per_abs_return",
+        "start_trade_ratio_per_abs_return",
+        "start_taker_buy_quote_share",
+        "flow_hold_status",
+        "flow_hold_count",
+        "initial_risk_pct_at_decision",
+        "signal_entry_price",
+        "initial_stop_at_decision",
+        "tp1_at_decision",
+        "event_data_json",
+    )
 
     def __init__(self, output_dir: Path, *, queue_max_size: int = 8192) -> None:
         if queue_max_size <= 0:
             raise ValueError("queue_max_size must be > 0")
         self.output_dir = output_dir
         self.events_path = output_dir / "live2_events.csv"
+        self.near_misses_path = output_dir / "live2_near_misses.csv"
         self.status_path = output_dir / "live2_status.json"
         self.symbol_state_path = output_dir / "live2_symbol_state.csv"
         self.diagnostics_summary_path = output_dir / "live2_diagnostics_summary.json"
@@ -104,6 +150,10 @@ class Live2ArtifactWriter:
         self._events_writer = csv.DictWriter(self._events_file, fieldnames=self._EVENT_FIELDS)
         self._events_writer.writeheader()
         self._events_file.flush()
+        self._near_misses_file = self.near_misses_path.open("w", encoding="utf-8-sig", newline="")
+        self._near_misses_writer = csv.DictWriter(self._near_misses_file, fieldnames=self._NEAR_MISS_FIELDS)
+        self._near_misses_writer.writeheader()
+        self._near_misses_file.flush()
         self._worker = threading.Thread(
             target=self._run_worker,
             name="live2-artifact-writer",
@@ -125,6 +175,10 @@ class Live2ArtifactWriter:
         with self._lock:
             self._events_enqueued_by_type[event.event_type] = self._events_enqueued_by_type.get(event.event_type, 0) + 1
         self._enqueue(_ArtifactJob(kind="event", payload=row))
+
+    def write_near_miss(self, row: dict[str, Any]) -> None:
+        payload = {field: row.get(field, "") for field in self._NEAR_MISS_FIELDS}
+        self._enqueue(_ArtifactJob(kind="near_miss", payload=payload))
 
     def write_status(
         self,
@@ -275,6 +329,8 @@ class Live2ArtifactWriter:
         try:
             self._events_file.flush()
             self._events_file.close()
+            self._near_misses_file.flush()
+            self._near_misses_file.close()
         except OSError as exc:
             self._mark_error(f"artifact writer close failed: {type(exc).__name__}: {exc}")
 
@@ -314,6 +370,10 @@ class Live2ArtifactWriter:
         if job.kind == "event":
             self._events_writer.writerow(job.payload)
             self._events_file.flush()
+            return
+        if job.kind == "near_miss":
+            self._near_misses_writer.writerow(job.payload)
+            self._near_misses_file.flush()
             return
         if job.kind == "status":
             self._atomic_write_text(

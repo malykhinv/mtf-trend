@@ -8,8 +8,10 @@ not run the real signal strategy yet, so actionable buckets end in an explicit
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 from .clock import utc_now_ms
 from .contracts import Live2Component, Live2Event, Live2Severity
@@ -163,6 +165,66 @@ class Live2DecisionRecord:
                 "signal_reject_reasons": self.signal_reject_reasons,
             },
         )
+
+    def as_near_miss_row(self) -> dict[str, object] | None:
+        """Return a compact CSV row for post-actionable non-selected decisions."""
+
+        if self.verdict not in {"rejected_signal_contract", "data_dependency_not_ready"}:
+            return None
+        if not self.signal_features:
+            return None
+        blockers = tuple(dict.fromkeys([*self.signal_reject_reasons, *self.signal_dependency_reasons]))
+        if self.verdict == "data_dependency_not_ready":
+            near_miss_stage = "data_dependency_not_ready_after_actionable"
+        elif any(item == "stream_candle_is_not_upward_price_confirmation" for item in blockers):
+            near_miss_stage = "actionable_without_upward_price_confirmation"
+        else:
+            near_miss_stage = "category_contract_rejected_after_actionable"
+        return {
+            "timestamp_utc": datetime.fromtimestamp(self.decision_timestamp_ms / 1000, UTC).isoformat(timespec="milliseconds"),
+            "timestamp_ms": self.decision_timestamp_ms,
+            "symbol": self.symbol,
+            "verdict": self.verdict,
+            "near_miss_stage": near_miss_stage,
+            "reason": self.reason,
+            "bucket_open_ms": self.bucket_open_ms,
+            "bucket_close_ms": self.bucket_close_ms,
+            "decision_timestamp_ms": self.decision_timestamp_ms,
+            "deadline_ms": self.deadline_ms,
+            "latency_ms": self.latency_ms,
+            "return_pct": self.return_pct,
+            "quote_volume": self.quote_volume,
+            "number_of_trades": self.number_of_trades,
+            "candle_first_source": self.candle_first_source,
+            "candle_last_source": self.candle_last_source,
+            "candle_live_ws_trade_count": self.candle_live_ws_trade_count,
+            "actionable_reason": self.signal_features.get("actionable_reason", ""),
+            "signal_reject_reasons": json.dumps(self.signal_reject_reasons, ensure_ascii=False),
+            "signal_dependency_reasons": json.dumps(self.signal_dependency_reasons, ensure_ascii=False),
+            "unique_blocker_count": len(blockers),
+            "prior_context_status": self.signal_features.get("prior_context_status", ""),
+            "prior_context_reason": self.signal_features.get("prior_context_reason", ""),
+            "prior_up_down_whipsaw_to_impulse_range": self.signal_features.get("prior_up_down_whipsaw_to_impulse_range", ""),
+            "prior_spike_count_24h": self.signal_features.get("prior_spike_count_24h", ""),
+            "prior_fast_fade_count_24h": self.signal_features.get("prior_fast_fade_count_24h", ""),
+            "oi_status": self.signal_features.get("oi_status", ""),
+            "oi_change_pct_3x5m": self.signal_features.get("oi_change_pct_3x5m", ""),
+            "mark_basis_status": self.signal_features.get("mark_basis_status", ""),
+            "mark_close_vs_decision_close_basis": self.signal_features.get("mark_close_vs_decision_close_basis", ""),
+            "start_quote_ratio": self.signal_features.get("start_quote_ratio", ""),
+            "start_trade_ratio": self.signal_features.get("start_trade_ratio", ""),
+            "start_range_pct_ratio_to_baseline": self.signal_features.get("start_range_pct_ratio_to_baseline", ""),
+            "start_quote_ratio_per_abs_return": self.signal_features.get("start_quote_ratio_per_abs_return", ""),
+            "start_trade_ratio_per_abs_return": self.signal_features.get("start_trade_ratio_per_abs_return", ""),
+            "start_taker_buy_quote_share": self.signal_features.get("start_taker_buy_quote_share", ""),
+            "flow_hold_status": self.signal_features.get("flow_hold_status", ""),
+            "flow_hold_count": self.signal_features.get("flow_hold_count", ""),
+            "initial_risk_pct_at_decision": self.initial_risk_pct_at_decision,
+            "signal_entry_price": self.signal_entry_price,
+            "initial_stop_at_decision": self.initial_stop_at_decision,
+            "tp1_at_decision": self.tp1_at_decision,
+            "event_data_json": json.dumps(self.as_event().data, ensure_ascii=False, sort_keys=True),
+        }
 
 
 @dataclass(slots=True)
@@ -468,6 +530,7 @@ class Live2DeadlineEngine:
             entry_guard_result=entry_guard_result,
             execution_result=execution_result,
         )
+
         execution_timing = {} if execution_result is None else dict(execution_result.timing)
         return Live2DecisionRecord(
             symbol=state.symbol,

@@ -1,5 +1,17 @@
 # Anomaly Research State
 
+## 2026-05-21 - P362 live2 near-miss artifacts
+
+```text
+Current patch status: P362 APPLIED locally / UNKNOWN commit.
+Question: why did current live2 show zero active/selected symbols despite running for much longer on the terminal?
+Finding: in run 20260521_103438, persisted diagnostics showed about 11m of market-runtime after startup/context warmup, not full process wall-clock. The run had 9129 deadline decisions, selected_count=0, entry_guard total_checked=0, and execution total_execute_calls=0, so the choke point was signal contract before entry/execution.
+Change: live2 writes live2_near_misses.csv for post-actionable non-selected decisions. This makes "market was quiet vs filters cut too hard" directly inspectable by symbol, stage, blocker reasons, prior whipsaw/spike/fade context, OI/mark status, flow metrics, and full event JSON.
+Trading impact: none. The patch adds audit only; no category threshold, runtime gate, entry guard, exchange order, fill, stop, or position lifecycle behavior changed.
+Validation: `python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py constants.py main.py`; `python -m compileall data/exchanges research_tools cli constants.py main.py`; `.venv\Scripts\python.exe -m pytest -q tests/test_live2_market_watch.py`.
+Next validation: restart live2 on this commit and require live2_near_misses.csv to fill while live2_events.csv still records every deadline_decision; if artifact_writer_status rejected_count/error_count rises, new entries must remain disabled rather than silently losing audit.
+```
+
 ## 2026-05-21 - P361 live2 operator grid semantics
 
 ```text

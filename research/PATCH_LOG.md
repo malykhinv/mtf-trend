@@ -1,5 +1,46 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P362 applied locally - live2 near-miss artifacts
+
+Files:
+
+```text
+research_tools/anomaly_live2/artifacts.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/runner.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make post-actionable non-selected live2 candidates directly auditable without scraping nested deadline_decision JSON.
+```
+
+Change:
+
+```text
+Live2 now writes live2_near_misses.csv with one row for every actionable bucket that reached signal evaluation but did not become selected because of signal-contract rejection or missing signal dependency. Rows include latency, return/flow, stage, reject/dependency reasons, prior whipsaw/spike/fade context, OI/mark status, flow-hold fields, and the full event payload JSON for forensic joins.
+```
+
+Validation:
+
+```bash
+python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py constants.py main.py
+python -m compileall data/exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m pytest -q tests/test_live2_market_watch.py
+```
+
+Risk:
+
+```text
+Low to medium. This is artifact-only and does not change signal thresholds, entry guard, execution, fills, stops, or runtime gates. It adds one bounded artifact-writer queue job per signal-evaluated near miss; artifact writer backpressure remains a hard no-entry gate.
+```
+
 ## 2026-05-21 - P361 applied locally - live2 four-column operator grid semantics
 
 Files:

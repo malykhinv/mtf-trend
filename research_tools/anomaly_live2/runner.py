@@ -552,6 +552,9 @@ class AnomalyLive2Runner:
                 )
                 for decision in deadline_result.decisions:
                     writer.write_event(decision.as_event())
+                    near_miss_row = decision.as_near_miss_row()
+                    if near_miss_row is not None:
+                        writer.write_near_miss(near_miss_row)
                     self.telegram.notify_decision(decision)
 
                 market_data_status = self._market_data_status(include_symbol_counts=False)

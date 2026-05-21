@@ -9,7 +9,7 @@ from cli.parser import build_parser
 from data.exchanges.ccxt_types import ExchangeLiveAccountPreflight, ExchangeOrderFill
 from research_tools.anomaly_live2.artifacts import Live2ArtifactWriter
 from research_tools.anomaly_live2.config import AnomalyLive2Config
-from research_tools.anomaly_live2.deadline import Live2DeadlineEngine, Live2DeadlineEngineConfig
+from research_tools.anomaly_live2.deadline import Live2DeadlineEngine, Live2DeadlineEngineConfig, Live2DecisionRecord
 from research_tools.anomaly_live2.entry_guard import Live2EntryGuardResult
 from research_tools.anomaly_live2.execution import Live2ExecutionConfig, Live2ExecutionEngine
 from research_tools.anomaly_live2.market_data.candles import Live2AggTradeEvent, Live2CandleRing
@@ -166,6 +166,46 @@ def test_live2_artifact_writer_replaces_json_atomically(tmp_path) -> None:
         assert status["status"] == "running"
         assert summary["status"] == "ok"
         assert list(tmp_path.glob("*.tmp")) == []
+    finally:
+        writer.close()
+
+
+def test_live2_artifact_writer_records_near_miss_csv(tmp_path) -> None:
+    writer = Live2ArtifactWriter(tmp_path)
+    try:
+        decision = Live2DecisionRecord(
+            symbol="AAA/USDT:USDT",
+            verdict="rejected_signal_contract",
+            reason="runner_flow:prior_whipsaw_24h_above_category_max",
+            bucket_open_ms=1_000,
+            bucket_close_ms=6_000,
+            decision_timestamp_ms=6_040,
+            deadline_ms=6_750,
+            latency_ms=40,
+            quote_volume=10_000.0,
+            number_of_trades=100,
+            return_pct=0.02,
+            candle_first_source="binance_futures_aggtrade_ws",
+            candle_last_source="binance_futures_aggtrade_ws",
+            candle_live_ws_trade_count=100,
+            signal_features={
+                "actionable_reason": "abs_return_threshold_crossed",
+                "prior_context_status": "ok",
+                "prior_up_down_whipsaw_to_impulse_range": 1.2,
+                "prior_spike_count_24h": 0,
+                "prior_fast_fade_count_24h": 0,
+            },
+            signal_reject_reasons=("runner_flow:prior_whipsaw_24h_above_category_max",),
+        )
+        row = decision.as_near_miss_row()
+        assert row is not None
+        writer.write_near_miss(row)
+        writer._queue.join()
+
+        text = (tmp_path / "live2_near_misses.csv").read_text(encoding="utf-8-sig")
+        assert "AAA/USDT:USDT" in text
+        assert "category_contract_rejected_after_actionable" in text
+        assert "runner_flow:prior_whipsaw_24h_above_category_max" in text
     finally:
         writer.close()
 

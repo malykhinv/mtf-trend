@@ -15,6 +15,7 @@ Verdict: zero active/selected symbols was not caused by a dead market-data path.
 Primary blocker: signal contract, before entry guard. Top rejects were stream_candle_is_not_upward_price_confirmation=5361 and prior_whipsaw_24h_above_category_max=3343 for all live priority categories, followed by prior_fast_fade/prior_spike caps. Data dependency misses were minor (21 prior context not ready, 1 stale trade-flow bucket), and WS/reconnect health was clean.
 Session movers existed but were not clear hourly top-growth confirmations in the available artifacts: final session leaders were USAR about +4.0%, UB about +2.1%, 1000CHEEMS about +1.8%; top-growth audit had not completed before keyboard_interrupt. These symbols were also rejected by the same two classes: upward price confirmation and prior_whipsaw caps.
 Next useful test: near-miss/top-growth replay for USAR, UB, and 1000CHEEMS plus a backtest/shadow variant that reports what would pass with the prior_whipsaw cap relaxed or category-specific, without loosening live orders first.
+Follow-up patch P362 adds live2_near_misses.csv for future runs, so this analysis no longer requires ad hoc parsing of nested deadline_decision JSON.
 ```
 
 ## 2026-05-20 - P358 top-growth off-hot-path validation
