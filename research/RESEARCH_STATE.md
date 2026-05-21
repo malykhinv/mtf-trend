@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-21 - P370 deeper live2/backtest parity repair
+
+```text
+Current patch status: P370 APPLIED locally / UNKNOWN commit.
+Question: make live2 match backtest as closely as possible excluding network/CPU latency, and check for logic/math/substituted-value errors.
+Finding: P369 aligned entry execution, but live2 still used several lookalike fields differently from backtest. The live whipsaw cap used 24h prior context, while backtest uses the 60 setup-candle baseline. Live effort-per-return divided by the final 5s return, while backtest divides by the whole forming setup return. Live taker/flow-hold was trailing stream-native, while backtest uses the confirmation segment. Live also had a pre-signal single-bucket actionability gate that could skip a cumulative backtest candidate before the signal engine saw it. Finally, live still allowed a 5s-scaled baseline fallback before 60 closed 1m baseline candles existed.
+Change: live2 now computes whipsaw, quote/trade effort per return, taker share/delta, and flow_hold from the same forming 1m/5s confirmation segment and 60x1m baseline used by backtest. Live quote/trade setup ratio constants are aligned to the current backtest CLI defaults, 5.0/5.0. The 5s-scaled trading baseline fallback was removed; live returns data_dependency_not_ready until the real 1m baseline exists. Any real 5s trade bucket reaches the signal engine for parity, even if the old actionability display thresholds are not crossed. Computed-feature missing values now reject like backtest masks instead of being reported as external data dependencies.
+Residual parity risk: live candle rings are built from real aggTrades and do not synthesize zero-trade candles. If the historical cache contains exchange kline zero-volume candles, baseline medians can still differ. This is honest and visible rather than hidden by fallback.
+Validation: `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py tests\test_anomaly_continuation_lab.py`; `python -m compileall data\exchanges research_tools cli constants.py main.py`; `git diff --check`.
+```
+
 ## 2026-05-21 - P369 live2/backtest execution parity audit
 
 ```text

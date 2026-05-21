@@ -118,6 +118,8 @@ BE/TP/PnL are computed from actual fill, not signal close
 TP1 is a full-position limit at actual_entry + 0.75 * (actual_entry - pump_leg_bottom)
 initial SL remains max(pump_leg_bottom - structural buffer, EMA20), so TP1 risk basis and SL risk basis are deliberately separate
 pre-fill live2 entry guard uses the same signal TP1/SL basis as backtest: drift <= 0.4%, RR to signal TP1 >= 0.70, TP1 not touched before entry
+live2 signal math must use the same forming setup segment as the backtest for quote/trade setup ratios, whipsaw, effort-per-return, taker-share delta, flow_hold, and range/baseline ratios; no 5s-scaled baseline fallback may make a tradable signal before the real 60x1m baseline is available
+single-bucket actionability thresholds are operator diagnostics only; every real closed 5s trade bucket may reach the signal engine so cumulative forming-setup candidates are not skipped before backtest-equivalent filters run
 ```
 
 Live scheduling contract:

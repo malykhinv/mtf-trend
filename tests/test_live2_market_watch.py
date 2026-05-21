@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
 from cli.parser import build_parser
 from data.exchanges.ccxt_types import ExchangeLiveAccountPreflight, ExchangeOrderFill
@@ -23,6 +24,8 @@ from research_tools.anomaly_live2.signal import Live2SignalDecision
 from research_tools.anomaly_live2.state import LIVE2_AGGTRADE_WS_SOURCE, SymbolStateStore
 from research_tools.anomaly_live2.status_grid import format_live2_status_grid
 from research_tools.anomaly_live2.top_growth import HOUR_MS, Live2TopGrowthAudit, Live2TopGrowthAuditConfig
+from research_tools.anomaly_continuation_lab import AnomalyLabConfig
+from research_tools.anomaly_strategy_backtest import AnomalyBacktestConfig, _build_pair_candidate_row
 
 
 def _trade(
@@ -421,7 +424,8 @@ def test_live2_signal_features_use_decision_box_and_daily_quote_proxy() -> None:
     assert features["initial_stop_at_decision"] == 0.99
     assert features["decision_box_low"] == 0.99
     assert features["decision_box_high"] == 1.08
-    assert features["prior_up_down_whipsaw_to_impulse_range"] < 2.0
+    assert features["live_setup_reason"] == "live_setup_1m_baseline_not_ready"
+    assert features["prior_up_down_whipsaw_to_impulse_range"] is None
 
 
 def test_live2_backtest_like_setup_uses_backtest_stop_and_tp1_model() -> None:
@@ -448,6 +452,100 @@ def test_live2_backtest_like_setup_uses_backtest_stop_and_tp1_model() -> None:
     assert round(float(setup["initial_stop_at_decision"]), 6) == round(float(setup["decision_ema20"]), 6)
     assert setup["tp1_r"] == 0.75
     assert setup["tp1_at_decision"] == 1.15
+    assert round(float(setup["prior_up_down_whipsaw_to_impulse_range"]), 6) == 0.1
+    assert setup["flow_hold_count"] == 0
+
+
+def test_live2_setup_math_matches_backtest_pair_candidate_row() -> None:
+    baseline_1m = tuple(
+        _candle(timeframe_ms=60_000, open_time_ms=idx * 60_000, high=1.005, low=0.995)
+        for idx in range(60)
+    )
+    setup_open_ms = 60 * 60_000
+    segment = (
+        _candle(timeframe_ms=5_000, open_time_ms=setup_open_ms, open_price=1.0, high=1.02, low=0.98, close=1.02, quote_volume=75.0, number_of_trades=8),
+        _candle(timeframe_ms=5_000, open_time_ms=setup_open_ms + 5_000, open_price=1.02, high=1.05, low=1.01, close=1.045, quote_volume=75.0, number_of_trades=8),
+        _candle(timeframe_ms=5_000, open_time_ms=setup_open_ms + 10_000, open_price=1.045, high=1.07, low=1.04, close=1.065, quote_volume=75.0, number_of_trades=8),
+        _candle(timeframe_ms=5_000, open_time_ms=setup_open_ms + 15_000, open_price=1.065, high=1.08, low=1.06, close=1.07, quote_volume=75.0, number_of_trades=8),
+    )
+    baseline_frame = pd.DataFrame([item.to_summary_dict(prefix="").copy() for item in baseline_1m])
+    entry_segment = pd.DataFrame([item.to_summary_dict(prefix="").copy() for item in segment])
+    for frame in (baseline_frame, entry_segment):
+        frame.rename(
+            columns={
+                "_open_time_ms": "timestamp",
+                "_open": "open",
+                "_high": "high",
+                "_low": "low",
+                "_close": "close",
+                "_quote_volume": "quote_volume",
+                "_number_of_trades": "number_of_trades",
+                "_taker_buy_quote_volume": "taker_buy_quote_volume",
+            },
+            inplace=True,
+        )
+    setup_row = pd.Series(
+        {
+            "timestamp": setup_open_ms,
+            "open": entry_segment["open"].iloc[0],
+            "high": entry_segment["high"].max(),
+            "low": entry_segment["low"].min(),
+            "close": entry_segment["close"].iloc[-1],
+            "quote_volume": entry_segment["quote_volume"].sum(),
+            "number_of_trades": entry_segment["number_of_trades"].sum(),
+            "taker_buy_quote_volume": entry_segment["taker_buy_quote_volume"].sum(),
+        }
+    )
+
+    live_setup = _live_backtest_like_setup(
+        closed_5s=segment,
+        closed_1m=baseline_1m,
+        decision_candle=segment[-1],
+    )
+    backtest_row = _build_pair_candidate_row(
+        symbol="AAA/USDT:USDT",
+        setup_timeframe="1m",
+        entry_timeframe="5s",
+        setup_ms=60_000,
+        entry_ms=5_000,
+        setup_idx=60,
+        baseline=baseline_frame,
+        setup_row=setup_row,
+        entry_segment=entry_segment,
+        entry_frame=entry_segment,
+        config=AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(min_quote_ratio_start=5.0, min_trade_ratio_start=5.0)
+        ),
+    )
+
+    assert backtest_row is not None
+    for live_key, backtest_key in (
+        ("quote_ratio", "start_quote_ratio"),
+        ("trade_ratio", "start_trade_ratio"),
+        ("start_quote_ratio_per_abs_return", "start_quote_ratio_per_abs_return"),
+        ("start_trade_ratio_per_abs_return", "start_trade_ratio_per_abs_return"),
+        ("prior_up_down_whipsaw_to_impulse_range", "prior_up_down_whipsaw_to_impulse_range"),
+        ("flow_hold_count", "flow_hold_count_next_n_candles"),
+        ("start_taker_buy_quote_share_delta", "start_taker_buy_quote_share_delta"),
+        ("next_n_taker_buy_quote_share_mean", "next_n_taker_buy_quote_share_mean"),
+        ("decision_ema20", "decision_ema20"),
+    ):
+        assert float(live_setup[live_key]) == pytest.approx(float(backtest_row[backtest_key]))
+
+
+def test_live2_deadline_evaluates_low_volume_real_bucket_for_backtest_parity() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    engine = Live2DeadlineEngine(
+        state_store=store,
+        config=Live2DeadlineEngineConfig(
+            actionable_min_quote_volume=2_500.0,
+            actionable_min_trade_count=20,
+            actionable_min_abs_return_pct=0.003,
+        ),
+    )
+    candle = _candle(timeframe_ms=5_000, open_time_ms=0, quote_volume=1.0, number_of_trades=1)
+
+    assert engine._actionable_reason(candle=candle, return_pct=0.0) == "real_trade_bucket_for_backtest_parity"
 
 
 def test_live2_deadline_expires_backlog_without_counting_near_deadline_miss() -> None:

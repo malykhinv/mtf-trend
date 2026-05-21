@@ -1,4 +1,14 @@
 
+## 2026-05-21 - P370 live2/backtest signal math parity audit
+
+```text
+Run analyzed: code audit, no new market run.
+Question: make live2 match backtest excluding network/CPU latency, and check math/substituted values.
+Result: fixed signal-math mismatches that could change live2 decisions versus backtest: quote/trade setup ratio constants now match the current backtest CLI defaults, whipsaw now uses the 60x1m setup baseline, effort-per-return uses the whole forming setup return, taker and flow_hold use the confirmation segment, and the range baseline denominator matches backtest. Removed the trading 5s-scaled baseline fallback; missing 60x1m baseline is now an explicit data dependency.
+Expected impact: live2 should no longer choke or pass candidates because of single-5s proxy math where backtest uses forming 1m/5s setup math. Near-miss volume may rise because every real 5s trade bucket can reach the signal engine for parity; acceptance remains gated by the same backtest-like filters.
+Next test: restart live2 and verify live2_near_misses.csv shows live_setup_* reject distribution dominated by true setup-level reasons, not old 24h whipsaw or final-5s effort artifacts.
+```
+
 ## 2026-05-21 - P369 live2/backtest execution parity audit
 
 ```text

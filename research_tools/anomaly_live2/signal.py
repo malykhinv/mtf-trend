@@ -28,8 +28,8 @@ LIVE2_BACKTEST_SETUP_TIMEFRAME_MS = 60_000
 LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS = 5_000
 LIVE2_BACKTEST_BASELINE_CANDLES = 60
 LIVE2_BACKTEST_CONFIRMATION_CANDLES = 4
-LIVE2_BACKTEST_MIN_QUOTE_RATIO_START = 4.0
-LIVE2_BACKTEST_MIN_TRADE_RATIO_START = 4.0
+LIVE2_BACKTEST_MIN_QUOTE_RATIO_START = 5.0
+LIVE2_BACKTEST_MIN_TRADE_RATIO_START = 5.0
 LIVE2_BACKTEST_MIN_PRICE_RETENTION = 0.70
 LIVE2_BACKTEST_MIN_VERTICALITY_SCORE = 0.25
 LIVE2_BACKTEST_MIN_HOLD_COUNT = 2
@@ -260,7 +260,8 @@ class Live2SignalEngine:
         ])
         candle_range = _range_pct(candle)
         return_pct = (candle.close / candle.open) - 1.0 if candle.open > 0 else 0.0
-        abs_return_pct = abs(return_pct)
+        setup_return_pct = _float_or_none(live_setup.get("decision_return_from_start_open"))
+        abs_return_pct = abs(setup_return_pct) if setup_return_pct is not None else abs(return_pct)
         quote_ratio = candle.quote_volume / baseline_quote if baseline_quote > 0 else None
         trade_ratio = float(candle.number_of_trades) / baseline_trades if baseline_trades > 0 else None
         range_ratio = candle_range / baseline_range if baseline_range > 0 else None
@@ -278,10 +279,16 @@ class Live2SignalEngine:
         if setup_range_ratio is not None:
             range_ratio = float(setup_range_ratio)
         quote_ratio_per_abs_return = None
-        if quote_ratio is not None and abs_return_pct > 0:
+        setup_quote_ratio_per_abs_return = live_setup.get("start_quote_ratio_per_abs_return")
+        if setup_quote_ratio_per_abs_return is not None:
+            quote_ratio_per_abs_return = float(setup_quote_ratio_per_abs_return)
+        elif quote_ratio is not None and abs_return_pct > 0:
             quote_ratio_per_abs_return = quote_ratio / abs_return_pct
         trade_ratio_per_abs_return = None
-        if trade_ratio is not None and abs_return_pct > 0:
+        setup_trade_ratio_per_abs_return = live_setup.get("start_trade_ratio_per_abs_return")
+        if setup_trade_ratio_per_abs_return is not None:
+            trade_ratio_per_abs_return = float(setup_trade_ratio_per_abs_return)
+        elif trade_ratio is not None and abs_return_pct > 0:
             trade_ratio_per_abs_return = trade_ratio / abs_return_pct
         flow_hold = _trailing_live_flow_hold(
             closed_5s=closed_5s,
@@ -300,6 +307,16 @@ class Live2SignalEngine:
             if setup_baseline_quote is not None and float(setup_baseline_quote) > 0
             else (baseline_quote * (1440.0 / (5.0 / 60.0)) if baseline_quote > 0 else None)
         )
+        setup_taker_share = live_setup.get("start_taker_buy_quote_share")
+        if setup_taker_share is not None:
+            taker_share = float(setup_taker_share)
+        setup_taker_share_delta = live_setup.get("start_taker_buy_quote_share_delta")
+        if setup_taker_share_delta is not None:
+            taker_share_delta = float(setup_taker_share_delta)
+        setup_flow_hold_count = live_setup.get("flow_hold_count")
+        flow_hold_count = int(setup_flow_hold_count) if setup_flow_hold_count is not None else flow_hold.count
+        setup_next_taker_share = live_setup.get("next_n_taker_buy_quote_share_mean")
+        setup_next_taker_delta = live_setup.get("next_n_taker_buy_quote_share_delta")
         mark_basis = None
         mark_basis_status = "not_available"
         effective_mark_status = _effective_context_status(
@@ -325,18 +342,7 @@ class Live2SignalEngine:
             decision_time_ms=candle.close_time_ms,
             stale_ms=self.prior_context_stale_ms,
         )
-        prior_whipsaw = None
-        if (
-            prior_context_status == "ok"
-            and state.prior_high_24h is not None
-            and state.prior_low_before_high_24h is not None
-            and state.prior_low_after_high_24h is not None
-            and decision_box_range > 0
-        ):
-            prior_up_leg = state.prior_high_24h - state.prior_low_before_high_24h
-            prior_down_leg = state.prior_high_24h - state.prior_low_after_high_24h
-            if prior_up_leg >= 0 and prior_down_leg >= 0:
-                prior_whipsaw = min(prior_up_leg, prior_down_leg) / decision_box_range
+        prior_whipsaw = live_setup.get("prior_up_down_whipsaw_to_impulse_range")
         entry = candle.close
         setup_stop = live_setup.get("initial_stop_at_decision")
         stop = float(setup_stop) if setup_stop is not None else decision_box_low
@@ -351,6 +357,7 @@ class Live2SignalEngine:
             "initial_risk_pct_at_decision": risk_fraction,
             "return_pct": return_pct,
             "abs_return_pct": abs_return_pct,
+            "decision_return_from_start_open": setup_return_pct,
             "range_pct": candle_range,
             "baseline_quote_5s": baseline_quote,
             "baseline_quote_daily_proxy": baseline_quote_daily_proxy,
@@ -376,6 +383,14 @@ class Live2SignalEngine:
             "live_setup_min_verticality_score": LIVE2_BACKTEST_MIN_VERTICALITY_SCORE,
             "live_setup_range": live_setup.get("range"),
             "live_setup_range_pct": live_setup.get("range_pct"),
+            "live_setup_prior_up_down_whipsaw_to_impulse_range": live_setup.get("prior_up_down_whipsaw_to_impulse_range"),
+            "live_setup_flow_hold_count": live_setup.get("flow_hold_count"),
+            "live_setup_start_quote_ratio_per_abs_return": live_setup.get("start_quote_ratio_per_abs_return"),
+            "live_setup_start_trade_ratio_per_abs_return": live_setup.get("start_trade_ratio_per_abs_return"),
+            "live_setup_start_taker_buy_quote_share": live_setup.get("start_taker_buy_quote_share"),
+            "live_setup_start_taker_buy_quote_share_delta": live_setup.get("start_taker_buy_quote_share_delta"),
+            "live_setup_next_taker_buy_quote_share_mean": live_setup.get("next_n_taker_buy_quote_share_mean"),
+            "live_setup_next_taker_buy_quote_share_delta": live_setup.get("next_n_taker_buy_quote_share_delta"),
             "live_setup_decision_ema20": live_setup.get("decision_ema20"),
             "live_setup_stop_buffer_range_fraction": LIVE2_BACKTEST_STOP_BUFFER_RANGE_FRACTION,
             "live_setup_tp1_r": LIVE2_BACKTEST_TP1_R,
@@ -387,6 +402,7 @@ class Live2SignalEngine:
             "baseline_trade_count_5s": baseline_trades,
             "baseline_range_pct_5s": baseline_range,
             "baseline_taker_buy_quote_share_5s": baseline_taker_share,
+            "baseline_taker_buy_quote_share_1m": live_setup.get("baseline_taker_buy_quote_share_median"),
             "start_quote_ratio": quote_ratio,
             "start_trade_ratio": trade_ratio,
             "start_range_pct_ratio_to_baseline": range_ratio,
@@ -394,19 +410,22 @@ class Live2SignalEngine:
             "start_trade_ratio_per_abs_return": trade_ratio_per_abs_return,
             "start_taker_buy_quote_share": taker_share,
             "start_taker_buy_quote_share_delta": taker_share_delta,
-            "flow_hold_count": flow_hold.count,
-            "flow_hold_status": flow_hold.status,
-            "flow_hold_reason": flow_hold.reason,
-            "flow_hold_definition": "trailing_closed_live_5s_pre_entry_no_lookahead",
-            "flow_hold_window_ms": flow_hold.window_ms,
-            "flow_hold_quote_volume": flow_hold.quote_volume,
-            "flow_hold_number_of_trades": flow_hold.number_of_trades,
-            "flow_hold_taker_buy_quote_volume": flow_hold.taker_buy_quote_volume,
-            "flow_hold_taker_buy_quote_share_mean": flow_hold.taker_buy_quote_share_mean,
-            "flow_hold_taker_buy_quote_share_last": flow_hold.taker_buy_quote_share_last,
-            "flow_hold_taker_buy_quote_share_delta": flow_hold.taker_buy_quote_share_delta,
-            "live_confirmed_taker_buy_quote_share": flow_hold.taker_buy_quote_share_last,
-            "live_confirmed_taker_buy_quote_share_delta": flow_hold.taker_buy_quote_share_delta,
+            "flow_hold_count": flow_hold_count,
+            "flow_hold_status": "ok" if setup_flow_hold_count is not None else flow_hold.status,
+            "flow_hold_reason": "backtest_confirmation_segment_flow_hold" if setup_flow_hold_count is not None else flow_hold.reason,
+            "flow_hold_definition": "backtest_confirmation_segment_per_5s_vs_cumulative_start_and_1m_baseline",
+            "flow_hold_window_ms": live_setup.get("flow_hold_window_ms"),
+            "flow_hold_quote_volume": live_setup.get("flow_hold_quote_volume"),
+            "flow_hold_number_of_trades": live_setup.get("flow_hold_number_of_trades"),
+            "flow_hold_taker_buy_quote_volume": live_setup.get("flow_hold_taker_buy_quote_volume"),
+            "flow_hold_taker_buy_quote_share_mean": setup_next_taker_share,
+            "flow_hold_taker_buy_quote_share_last": live_setup.get("start_taker_buy_quote_share"),
+            "flow_hold_taker_buy_quote_share_delta": setup_next_taker_delta,
+            "trailing_live_flow_hold_count": flow_hold.count,
+            "trailing_live_flow_hold_status": flow_hold.status,
+            "trailing_live_flow_hold_reason": flow_hold.reason,
+            "live_confirmed_taker_buy_quote_share": setup_next_taker_share,
+            "live_confirmed_taker_buy_quote_share_delta": setup_next_taker_delta,
             "quote_volume": candle.quote_volume,
             "number_of_trades": candle.number_of_trades,
             "prior_closed_5s_count": len(previous),
@@ -465,7 +484,6 @@ class Live2SignalEngine:
         if (
             category.max_prior_spike_count_72h is not None
             or category.max_prior_fast_fade_count_72h is not None
-            or category.max_prior_up_down_whipsaw_to_impulse_range is not None
         ):
             if features.get("prior_context_status") != "ok":
                 return _dependency("prior_24h_context_not_ready")
@@ -491,7 +509,7 @@ class Live2SignalEngine:
             oi_change = _float_or_none(features.get("oi_change_pct_3x5m"))
             if features.get("oi_status") != "ok" or oi_change is None:
                 return _dependency("oi_context_not_ready")
-            if oi_change < category.min_oi_change_pct_3x5m:
+            if oi_change <= category.min_oi_change_pct_3x5m:
                 return _reject("oi_change_3x5m_below_category_min")
         if category.min_mark_close_vs_decision_close_basis is not None:
             mark_basis = _float_or_none(features.get("mark_close_vs_decision_close_basis"))
@@ -521,13 +539,13 @@ class Live2SignalEngine:
         quote_ratio_per_abs_return = _float_or_none(features.get("start_quote_ratio_per_abs_return"))
         if category.max_start_quote_ratio_per_abs_return is not None:
             if quote_ratio_per_abs_return is None:
-                return _dependency("start_quote_ratio_per_abs_return_not_ready")
+                return _reject("start_quote_ratio_per_abs_return_not_ready")
             if quote_ratio_per_abs_return > category.max_start_quote_ratio_per_abs_return:
                 return _reject("start_quote_ratio_per_abs_return_above_category_max")
         trade_ratio_per_abs_return = _float_or_none(features.get("start_trade_ratio_per_abs_return"))
         if category.max_start_trade_ratio_per_abs_return is not None:
             if trade_ratio_per_abs_return is None:
-                return _dependency("start_trade_ratio_per_abs_return_not_ready")
+                return _reject("start_trade_ratio_per_abs_return_not_ready")
             if trade_ratio_per_abs_return > category.max_start_trade_ratio_per_abs_return:
                 return _reject("start_trade_ratio_per_abs_return_above_category_max")
         range_ratio = _float_or_none(features.get("start_range_pct_ratio_to_baseline"))
@@ -544,19 +562,19 @@ class Live2SignalEngine:
         taker_share_delta = _float_or_none(features.get("start_taker_buy_quote_share_delta"))
         if category.max_start_taker_buy_quote_share_delta is not None:
             if taker_share_delta is None:
-                return _dependency("start_taker_buy_quote_share_delta_not_ready")
+                return _reject("start_taker_buy_quote_share_delta_not_ready")
             if taker_share_delta > category.max_start_taker_buy_quote_share_delta:
                 return _reject("start_taker_buy_quote_share_delta_above_category_max")
         live_confirmed_taker_share = _float_or_none(features.get("live_confirmed_taker_buy_quote_share"))
         if category.min_next_taker_buy_quote_share is not None:
             if features.get("flow_hold_status") != "ok" or live_confirmed_taker_share is None:
-                return _dependency("live_confirmed_taker_buy_quote_share_not_ready")
+                return _reject("live_confirmed_taker_buy_quote_share_not_ready")
             if live_confirmed_taker_share < category.min_next_taker_buy_quote_share:
                 return _reject("live_confirmed_taker_buy_quote_share_below_category_min")
         flow_hold_count = _int_or_none(features.get("flow_hold_count"))
         if category.min_flow_hold_count is not None:
             if features.get("flow_hold_status") != "ok" or flow_hold_count is None:
-                return _dependency("flow_hold_count_not_ready")
+                return _reject("flow_hold_count_not_ready")
             if flow_hold_count < category.min_flow_hold_count:
                 return _reject("flow_hold_count_below_category_min")
         initial_risk_pct = _float_or_none(features.get("initial_risk_pct_at_decision"))
@@ -706,23 +724,13 @@ def _live_backtest_like_setup(
     baseline_trades = _median([float(item.number_of_trades) for item in baseline])
     baseline_range_pct = _median([_range_pct(item) for item in baseline])
     if len(baseline) < LIVE2_BACKTEST_BASELINE_CANDLES:
-        previous_5s = tuple(item for item in closed_5s if int(item.open_time_ms) < setup_open_ms)[-24:]
-        fallback_quote = _avg([item.quote_volume for item in previous_5s])
-        fallback_trades = _avg([float(item.number_of_trades) for item in previous_5s])
-        fallback_range_pct = _avg([_range_pct(item) for item in previous_5s])
-        if fallback_quote > 0 and fallback_trades > 0 and fallback_range_pct > 0:
-            baseline_source = "rolling_5s_scaled_to_1m_until_60_closed_1m_ready"
-            baseline_quote = fallback_quote * (LIVE2_BACKTEST_SETUP_TIMEFRAME_MS / LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS)
-            baseline_trades = fallback_trades * (LIVE2_BACKTEST_SETUP_TIMEFRAME_MS / LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS)
-            baseline_range_pct = fallback_range_pct
-        else:
-            return {
-                "status": "not_ready",
-                "reason": "live_setup_1m_baseline_not_ready",
-                "closed_entry_candles": len(segment),
-                "baseline_1m_count": len(baseline),
-                "baseline_source": baseline_source,
-            }
+        return {
+            "status": "not_ready",
+            "reason": "live_setup_1m_baseline_not_ready",
+            "closed_entry_candles": len(segment),
+            "baseline_1m_count": len(baseline),
+            "baseline_source": baseline_source,
+        }
     if baseline_quote <= 0 or baseline_trades <= 0 or baseline_range_pct <= 0:
         return {
             "status": "not_ready",
@@ -755,10 +763,57 @@ def _live_backtest_like_setup(
     setup_range = high - low
     range_pct = setup_range / open_price if open_price > 0 else None
     range_pct_ratio = (range_pct / baseline_range_pct) if range_pct is not None and baseline_range_pct > 0 else None
+    decision_return_from_start_open = (close_price / open_price) - 1.0 if open_price > 0 else None
+    abs_start_return = abs(decision_return_from_start_open) if decision_return_from_start_open is not None else None
+    quote_ratio_per_abs_return = quote_ratio / abs_start_return if abs_start_return is not None and abs_start_return > 0 else None
+    trade_ratio_per_abs_return = trade_ratio / abs_start_return if abs_start_return is not None and abs_start_return > 0 else None
     activation_price = open_price + max(0.0, close_price - open_price) * 0.50
     hold_count = sum(1 for item in segment if item.close >= activation_price)
     price_retention = (close_price - open_price) / (high - open_price) if high > open_price else None
     verticality = _verticality_score(segment)
+    baseline_taker_share = _median([
+        item.taker_buy_quote_volume / item.quote_volume
+        for item in baseline
+        if item.quote_volume > 0
+    ])
+    start_taker_buy_quote_share = (
+        segment[0].taker_buy_quote_volume / segment[0].quote_volume
+        if segment[0].quote_volume > 0
+        else None
+    )
+    segment_taker_shares = [
+        item.taker_buy_quote_volume / item.quote_volume
+        for item in segment
+        if item.quote_volume > 0
+    ]
+    next_taker_buy_quote_share_mean = (
+        sum(segment_taker_shares) / len(segment_taker_shares)
+        if segment_taker_shares
+        else None
+    )
+    start_taker_buy_quote_share_delta = (
+        start_taker_buy_quote_share - baseline_taker_share
+        if start_taker_buy_quote_share is not None and baseline_taker_share > 0
+        else None
+    )
+    next_taker_buy_quote_share_delta = (
+        next_taker_buy_quote_share_mean - baseline_taker_share
+        if next_taker_buy_quote_share_mean is not None and baseline_taker_share > 0
+        else None
+    )
+    flow_hold_threshold_quote = max(0.35 * quote_volume, 3.0 * baseline_quote)
+    flow_hold_threshold_trades = max(0.35 * trade_count, 3.0 * baseline_trades)
+    flow_hold_candles = tuple(
+        item
+        for item in segment
+        if item.quote_volume >= flow_hold_threshold_quote
+        and float(item.number_of_trades) >= flow_hold_threshold_trades
+    )
+    flow_hold_count = len(flow_hold_candles)
+    flow_hold_quote_volume = sum(item.quote_volume for item in flow_hold_candles)
+    flow_hold_trades = sum(float(item.number_of_trades) for item in flow_hold_candles)
+    flow_hold_taker_quote = sum(item.taker_buy_quote_volume for item in flow_hold_candles)
+    prior_whipsaw = _prior_up_down_whipsaw_to_impulse_range(baseline, impulse_range=setup_range)
     decision_ema20 = _ema20([item.close for item in (*baseline, decision_candle)])
     previous_stop = low - LIVE2_BACKTEST_STOP_BUFFER_RANGE_FRACTION * setup_range
     initial_stop = max(previous_stop, decision_ema20) if decision_ema20 is not None else previous_stop
@@ -781,10 +836,26 @@ def _live_backtest_like_setup(
         "range": setup_range,
         "range_pct": range_pct,
         "range_pct_ratio_to_baseline": range_pct_ratio,
+        "decision_return_from_start_open": decision_return_from_start_open,
+        "start_quote_ratio_per_abs_return": quote_ratio_per_abs_return,
+        "start_trade_ratio_per_abs_return": trade_ratio_per_abs_return,
         "activation_price": activation_price,
         "hold_count": hold_count,
         "price_retention": price_retention,
         "verticality_score": verticality,
+        "baseline_taker_buy_quote_share_median": baseline_taker_share,
+        "start_taker_buy_quote_share": start_taker_buy_quote_share,
+        "start_taker_buy_quote_share_delta": start_taker_buy_quote_share_delta,
+        "next_n_taker_buy_quote_share_mean": next_taker_buy_quote_share_mean,
+        "next_n_taker_buy_quote_share_delta": next_taker_buy_quote_share_delta,
+        "flow_hold_count": flow_hold_count,
+        "flow_hold_window_ms": closed_entry_candles * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS,
+        "flow_hold_quote_volume": flow_hold_quote_volume,
+        "flow_hold_number_of_trades": flow_hold_trades,
+        "flow_hold_taker_buy_quote_volume": flow_hold_taker_quote,
+        "flow_hold_threshold_quote_volume": flow_hold_threshold_quote,
+        "flow_hold_threshold_number_of_trades": flow_hold_threshold_trades,
+        "prior_up_down_whipsaw_to_impulse_range": prior_whipsaw,
         "low": low,
         "high": high,
         "open": open_price,
@@ -861,6 +932,28 @@ def _median(values: list[float]) -> float:
     return (valid[mid - 1] + valid[mid]) / 2.0
 
 
+def _prior_up_down_whipsaw_to_impulse_range(
+    baseline: tuple[Live2Candle, ...],
+    *,
+    impulse_range: float,
+) -> float | None:
+    if not baseline or not math.isfinite(float(impulse_range)) or impulse_range <= 0.0:
+        return None
+    highs = [float(item.high) for item in baseline]
+    lows = [float(item.low) for item in baseline]
+    if not highs or not lows:
+        return None
+    high_pos = max(range(len(highs)), key=lambda idx: highs[idx])
+    high_value = highs[high_pos]
+    low_before_high = min(lows[: high_pos + 1])
+    low_after_high = min(lows[high_pos:])
+    prior_up_leg = high_value - low_before_high
+    prior_down_leg = high_value - low_after_high
+    if prior_up_leg < 0 or prior_down_leg < 0:
+        return None
+    return min(prior_up_leg, prior_down_leg) / impulse_range
+
+
 def _ema20(values: list[float]) -> float | None:
     valid = [float(value) for value in values if value is not None and math.isfinite(float(value))]
     if not valid:
@@ -934,7 +1027,7 @@ def _verticality_score(segment: tuple[Live2Candle, ...]) -> float:
 
 
 def _range_pct(candle: Live2Candle) -> float:
-    return (candle.high / candle.low) - 1.0 if candle.low > 0 else 0.0
+    return (candle.high - candle.low) / candle.close if candle.close > 0 else 0.0
 
 
 def _effective_context_status(

@@ -218,6 +218,9 @@ class Live2DecisionRecord:
             "start_quote_ratio_per_abs_return": self.signal_features.get("start_quote_ratio_per_abs_return", ""),
             "start_trade_ratio_per_abs_return": self.signal_features.get("start_trade_ratio_per_abs_return", ""),
             "start_taker_buy_quote_share": self.signal_features.get("start_taker_buy_quote_share", ""),
+            "start_taker_buy_quote_share_delta": self.signal_features.get("start_taker_buy_quote_share_delta", ""),
+            "live_confirmed_taker_buy_quote_share": self.signal_features.get("live_confirmed_taker_buy_quote_share", ""),
+            "live_confirmed_taker_buy_quote_share_delta": self.signal_features.get("live_confirmed_taker_buy_quote_share_delta", ""),
             "flow_hold_status": self.signal_features.get("flow_hold_status", ""),
             "flow_hold_count": self.signal_features.get("flow_hold_count", ""),
             "initial_risk_pct_at_decision": self.signal_features.get("initial_risk_pct_at_decision", self.initial_risk_pct_at_decision),
@@ -244,6 +247,14 @@ class Live2DecisionRecord:
             "live_setup_min_verticality_score": self.signal_features.get("live_setup_min_verticality_score", ""),
             "live_setup_range": self.signal_features.get("live_setup_range", ""),
             "live_setup_range_pct": self.signal_features.get("live_setup_range_pct", ""),
+            "live_setup_prior_up_down_whipsaw_to_impulse_range": self.signal_features.get("live_setup_prior_up_down_whipsaw_to_impulse_range", ""),
+            "live_setup_flow_hold_count": self.signal_features.get("live_setup_flow_hold_count", ""),
+            "live_setup_start_quote_ratio_per_abs_return": self.signal_features.get("live_setup_start_quote_ratio_per_abs_return", ""),
+            "live_setup_start_trade_ratio_per_abs_return": self.signal_features.get("live_setup_start_trade_ratio_per_abs_return", ""),
+            "live_setup_start_taker_buy_quote_share": self.signal_features.get("live_setup_start_taker_buy_quote_share", ""),
+            "live_setup_start_taker_buy_quote_share_delta": self.signal_features.get("live_setup_start_taker_buy_quote_share_delta", ""),
+            "live_setup_next_taker_buy_quote_share_mean": self.signal_features.get("live_setup_next_taker_buy_quote_share_mean", ""),
+            "live_setup_next_taker_buy_quote_share_delta": self.signal_features.get("live_setup_next_taker_buy_quote_share_delta", ""),
             "live_setup_decision_ema20": self.signal_features.get("live_setup_decision_ema20", ""),
             "live_setup_stop_buffer_range_fraction": self.signal_features.get("live_setup_stop_buffer_range_fraction", ""),
             "live_setup_tp1_r": self.signal_features.get("live_setup_tp1_r", ""),
@@ -618,6 +629,8 @@ class Live2DeadlineEngine:
         )
 
     def _actionable_reason(self, *, candle: Live2Candle, return_pct: float) -> str | None:
+        if candle.quote_volume <= 0 or candle.number_of_trades <= 0:
+            return None
         reasons: list[str] = []
         if candle.quote_volume >= self.config.actionable_min_quote_volume:
             reasons.append("quote_volume_threshold_crossed")
@@ -626,7 +639,7 @@ class Live2DeadlineEngine:
         if abs(return_pct) >= self.config.actionable_min_abs_return_pct:
             reasons.append("abs_return_threshold_crossed")
         if not reasons:
-            return None
+            reasons.append("real_trade_bucket_for_backtest_parity")
         return "+".join(reasons)
 
     def _apply_pre_live_bucket(

@@ -1,5 +1,46 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P370 applied locally - deeper live2/backtest signal parity
+
+Files:
+
+```text
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/artifacts.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make live2 signal construction match the backtest candidate/filter math more closely, and remove substituted trading baselines.
+```
+
+Change:
+
+```text
+Live2 now computes prior_up_down_whipsaw_to_impulse_range from the 60x1m setup baseline instead of 24h prior context, computes quote/trade effort per return from the forming setup return, computes taker share/delta and flow_hold from the backtest confirmation segment, and uses the same baseline range percentage denominator as backtest. Live quote/trade setup ratio constants now match current backtest CLI defaults, 5.0/5.0. The old 5s-scaled baseline fallback no longer feeds trading decisions. Any real closed 5s trade bucket can reach the signal engine so cumulative backtest candidates are not skipped by single-bucket actionability thresholds.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py tests\test_anomaly_continuation_lab.py
+python -m compileall data\exchanges research_tools cli constants.py main.py
+git diff --check
+```
+
+Risk:
+
+```text
+Medium. This may increase live2_near_misses.csv volume because low-volume real buckets now reach the signal engine for parity. That is intentional diagnostic truth, not a trading loosen. Category acceptance still requires the backtest-like setup quote/trade/retention/verticality/risk/category filters.
+```
+
 ## 2026-05-21 - P369 applied locally - live2/backtest execution parity
 
 Files:
