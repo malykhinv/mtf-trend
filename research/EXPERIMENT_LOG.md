@@ -50,6 +50,17 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+## 2026-05-21 - anomaly-lab category/TF review
+
+```text
+Artifacts reviewed: .output/results/anomaly_lab/5m_30s, 1m_15s, 1m_5s. These are the latest local anomaly_lab artifacts found, last written 2026-05-18, not a rerun after P359 latency-grid default changes.
+Verdict: current live_priority categories show a promising long edge across all three TF sets, but not yet a production-grade "edge found" proof. The result is 40 days only and still uses next_bar_open_proxy_latency_1, not real live fill/stop exchange execution.
+By TF live_priority: 5m_30s n=141, WR=70.9%, avg_net=1.78%, median=2.01%, sum=2.505, top5 dependency=23.6%; 1m_15s n=141, WR=77.3%, avg_net=1.93%, median=1.73%, sum=2.724, top5 dependency=22.1%; 1m_5s n=94, WR=87.2%, avg_net=2.12%, median=1.59%, sum=1.990, top5 dependency=25.5%.
+By category: runner_oi_confirmed is the cleanest current category; runner_flow is strong but small/fragile on 1m_5s; runner_balanced is the weakest and most top-tail dependent on 1m_15s.
+Weaknesses: all-TF health still fails worst-day containment; discovery fallback is much weaker than live_priority and should not be treated as tradable; 1m_5s all-trades median is negative because discovery dominates; latency stress artifacts are old 0/7/10/15s and show material decay with delay, especially 1m_15s and 1m_5s.
+Short live: no evidence from these artifacts supports real short live. Current backtest/live code is long-entry oriented. A short version should start as a research-only inverse/fade lab or shadow live audit, not real orders.
+```
+
 ## 2026-05-21 - P360 recent live2 blocker audit
 
 ```text
