@@ -1,5 +1,40 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P359 applied locally - anomaly latency grid matches live2 guard
+
+Files:
+
+```text
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Keep anomaly-lab latency stress testing focused on no extra delay versus a realistic live2 entry budget instead of old broad 7/10/15s stress buckets.
+```
+
+Change:
+
+```text
+Default latency extra delay is now 2000ms and DEFAULT_LATENCY_GRID_MS is `(0, 2000)`. The 2s value matches the current live2 entry_guard_max_signal_age_ms, so the stress variant represents the maximum signal age live2 is willing to execute rather than a stale-entry scenario that live would reject.
+```
+
+Validation:
+
+```bash
+python -m compileall research_tools/anomaly_strategy_backtest.py cli/commands.py cli/parser.py
+```
+
+Risk:
+
+```text
+Low. This changes only anomaly-lab latency stress defaults. Normal runs without `--latency true` remain non-latency-grid runs.
+```
+
 ## 2026-05-20 - P358 applied locally - live2 top-growth audit off hot path
 
 Files:

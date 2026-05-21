@@ -1,4 +1,12 @@
 
+## 2026-05-21 - P359 anomaly-lab latency grid plan
+
+```text
+Patch applied locally. For no latency stress, run anomaly-lab without `--latency true` or pass `--latency false` explicitly. For latency stress, grid artifacts will compare 0ms versus 2000ms extra delay.
+
+Interpretation: 2000ms is not a promise that live will always enter in 2s; it is the current live2 maximum signal age accepted by entry guard. If future live runs show a stricter stable p99 entry path, reduce this value.
+```
+
 ## 2026-05-20 - P358 top-growth off-hot-path validation
 
 ```text

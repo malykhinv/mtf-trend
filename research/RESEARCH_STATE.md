@@ -1,5 +1,14 @@
 # Anomaly Research State
 
+## 2026-05-21 - P359 anomaly-lab latency grid
+
+```text
+Current patch status: P359 APPLIED locally / UNKNOWN commit.
+Question: how to run 40d anomaly-lab without latency simulation, and what latency grid should be used when enabled?
+Change: normal `run-anomaly-lab` still does not run hidden 1s latency stress unless `--latency true` is passed. When latency stress is enabled, default grid is now `0ms, 2000ms`. The 2000ms value is aligned with live2 `entry_guard_max_signal_age_ms`, so it models the largest signal age live2 should still execute.
+Validation: `python -m compileall research_tools/anomaly_strategy_backtest.py cli/commands.py cli/parser.py`.
+```
+
 ## 2026-05-20 - P358 live2 top-growth audit off hot path
 
 ```text
