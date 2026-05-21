@@ -80,6 +80,7 @@ class Live2DecisionRecord:
     entry_guard_signal_age_ms: int | None = None
     entry_guard_price_drift_pct: float | None = None
     entry_guard_rr_to_tp1: float | None = None
+    entry_attempt_timing: dict[str, object] = field(default_factory=dict)
     execution_verdict: str = ""
     execution_reason: str = ""
     execution_pre_position_amount: float | None = None
@@ -92,6 +93,10 @@ class Live2DecisionRecord:
     execution_stop_price: float | None = None
     execution_integrity_error: bool = False
     execution_emergency_close_status: str = ""
+    execution_started_at_ms: int | None = None
+    execution_finished_at_ms: int | None = None
+    execution_duration_ms: int | None = None
+    execution_timing: dict[str, object] = field(default_factory=dict)
     signal_features: dict[str, object] = field(default_factory=dict)
     signal_dependency_reasons: tuple[str, ...] = ()
     signal_reject_reasons: tuple[str, ...] = ()
@@ -136,6 +141,7 @@ class Live2DecisionRecord:
                 "entry_guard_signal_age_ms": self.entry_guard_signal_age_ms,
                 "entry_guard_price_drift_pct": self.entry_guard_price_drift_pct,
                 "entry_guard_rr_to_tp1": self.entry_guard_rr_to_tp1,
+                "entry_attempt_timing": self.entry_attempt_timing,
                 "execution_verdict": self.execution_verdict,
                 "execution_reason": self.execution_reason,
                 "execution_pre_position_amount": self.execution_pre_position_amount,
@@ -148,6 +154,10 @@ class Live2DecisionRecord:
                 "execution_stop_price": self.execution_stop_price,
                 "execution_integrity_error": self.execution_integrity_error,
                 "execution_emergency_close_status": self.execution_emergency_close_status,
+                "execution_started_at_ms": self.execution_started_at_ms,
+                "execution_finished_at_ms": self.execution_finished_at_ms,
+                "execution_duration_ms": self.execution_duration_ms,
+                "execution_timing": self.execution_timing,
                 "signal_features": self.signal_features,
                 "signal_dependency_reasons": self.signal_dependency_reasons,
                 "signal_reject_reasons": self.signal_reject_reasons,
@@ -360,6 +370,12 @@ class Live2DeadlineEngine:
         signal_decision: Live2SignalDecision | None = None
         entry_guard_result: Live2EntryGuardResult | None = None
         execution_result: Live2ExecutionResult | None = None
+        entry_attempt_timing: dict[str, object] = {
+            "bucket_close_ms": candle.close_time_ms,
+            "decision_timestamp_ms": now_ms,
+            "bucket_close_to_decision_ms": max(0, latency_ms),
+            "decision_deadline_ms": deadline_ms,
+        }
         if latency_ms > self.config.backlog_expire_ms:
             verdict = "deadline_expired_backlog"
             reason = "closed_bucket_expired_before_hot_path_reconnect_or_backlog"
@@ -374,37 +390,72 @@ class Live2DeadlineEngine:
             # hard rejection. Dormant symbols naturally have no-trade gaps between
             # real aggTrade buckets; banning all future buckets after the first gap
             # would make live2 blind to exactly the wake-up pattern it is meant to see.
+            signal_started_at_ms = utc_now_ms()
+            entry_attempt_timing["signal_evaluate_started_at_ms"] = signal_started_at_ms
             signal_decision = self.signal_engine.evaluate(
                 state=state,
                 candle=candle,
                 actionable_reason=actionable_reason,
             )
+            signal_finished_at_ms = utc_now_ms()
+            entry_attempt_timing["signal_evaluate_finished_at_ms"] = signal_finished_at_ms
+            entry_attempt_timing["signal_evaluate_duration_ms"] = max(0, signal_finished_at_ms - signal_started_at_ms)
             verdict = signal_decision.verdict
             reason = signal_decision.reason
             if signal_decision.verdict == "selected":
+                guard_started_at_ms = utc_now_ms()
+                entry_attempt_timing["entry_guard_started_at_ms"] = guard_started_at_ms
                 entry_guard_result = self.entry_guard.evaluate(
                     state=state,
                     signal_decision=signal_decision,
                     signal_timestamp_ms=candle.close_time_ms,
                     now_ms=now_ms,
                 )
+                guard_finished_at_ms = utc_now_ms()
+                entry_attempt_timing["entry_guard_finished_at_ms"] = guard_finished_at_ms
+                entry_attempt_timing["entry_guard_duration_ms"] = max(0, guard_finished_at_ms - guard_started_at_ms)
+                entry_attempt_timing["entry_guard_signal_age_ms"] = entry_guard_result.signal_age_ms
                 if entry_guard_result.verdict != "accepted":
                     verdict = entry_guard_result.verdict
                     reason = entry_guard_result.reason
                 elif self.execution_engine is None:
                     verdict = "rejected_execution_engine_not_configured"
                     reason = "live2_execution_engine_missing"
-                elif not self.entries_allowed():
-                    verdict = "rejected_runtime_gates_not_ready"
-                    reason = "live2_runtime_gates_do_not_allow_new_entries"
                 else:
-                    execution_result = self.execution_engine.execute_selected(
-                        state=state,
-                        signal_decision=signal_decision,
-                        entry_guard_result=entry_guard_result,
-                    )
-                    verdict = execution_result.verdict
-                    reason = execution_result.reason
+                    runtime_gate_started_at_ms = utc_now_ms()
+                    entry_attempt_timing["runtime_gate_check_started_at_ms"] = runtime_gate_started_at_ms
+                    runtime_gate_allowed = self.entries_allowed()
+                    runtime_gate_finished_at_ms = utc_now_ms()
+                    entry_attempt_timing["runtime_gate_check_finished_at_ms"] = runtime_gate_finished_at_ms
+                    entry_attempt_timing["runtime_gate_check_duration_ms"] = max(0, runtime_gate_finished_at_ms - runtime_gate_started_at_ms)
+                    entry_attempt_timing["runtime_gate_allowed"] = runtime_gate_allowed
+                    if not runtime_gate_allowed:
+                        verdict = "rejected_runtime_gates_not_ready"
+                        reason = "live2_runtime_gates_do_not_allow_new_entries"
+                    else:
+                        execution_started_at_ms = utc_now_ms()
+                        entry_attempt_timing["execution_call_started_at_ms"] = execution_started_at_ms
+                        execution_result = self.execution_engine.execute_selected(
+                            state=state,
+                            signal_decision=signal_decision,
+                            entry_guard_result=entry_guard_result,
+                        )
+                        execution_finished_at_ms = utc_now_ms()
+                        entry_attempt_timing["execution_call_finished_at_ms"] = execution_finished_at_ms
+                        entry_attempt_timing["execution_call_duration_ms"] = max(0, execution_finished_at_ms - execution_started_at_ms)
+                        verdict = execution_result.verdict
+                        reason = execution_result.reason
+        if "entry_guard_started_at_ms" in entry_attempt_timing:
+            last_stage_finished = entry_attempt_timing.get("execution_call_finished_at_ms") or entry_attempt_timing.get("runtime_gate_check_finished_at_ms") or entry_attempt_timing.get("entry_guard_finished_at_ms")
+            try:
+                entry_attempt_timing["selected_signal_to_attempt_done_ms"] = max(0, int(last_stage_finished) - now_ms) if last_stage_finished is not None else None
+            except (TypeError, ValueError):
+                entry_attempt_timing["selected_signal_to_attempt_done_ms"] = None
+        if "execution_call_finished_at_ms" in entry_attempt_timing:
+            try:
+                entry_attempt_timing["bucket_close_to_execution_done_ms"] = max(0, int(entry_attempt_timing["execution_call_finished_at_ms"]) - int(candle.close_time_ms))
+            except (TypeError, ValueError):
+                entry_attempt_timing["bucket_close_to_execution_done_ms"] = None
         self._apply_verdict(
             state,
             candle=candle,
@@ -417,6 +468,7 @@ class Live2DeadlineEngine:
             entry_guard_result=entry_guard_result,
             execution_result=execution_result,
         )
+        execution_timing = {} if execution_result is None else dict(execution_result.timing)
         return Live2DecisionRecord(
             symbol=state.symbol,
             verdict=verdict,
@@ -445,6 +497,7 @@ class Live2DeadlineEngine:
             entry_guard_signal_age_ms=None if entry_guard_result is None else entry_guard_result.signal_age_ms,
             entry_guard_price_drift_pct=None if entry_guard_result is None else entry_guard_result.entry_price_drift_pct,
             entry_guard_rr_to_tp1=None if entry_guard_result is None else entry_guard_result.rr_to_tp1_at_live_price,
+            entry_attempt_timing=entry_attempt_timing,
             execution_verdict="" if execution_result is None else execution_result.verdict,
             execution_reason="" if execution_result is None else execution_result.reason,
             execution_pre_position_amount=None if execution_result is None else execution_result.pre_position_amount,
@@ -457,6 +510,10 @@ class Live2DeadlineEngine:
             execution_stop_price=None if execution_result is None else execution_result.stop_price,
             execution_integrity_error=False if execution_result is None else execution_result.integrity_error,
             execution_emergency_close_status="" if execution_result is None else execution_result.emergency_close_status,
+            execution_started_at_ms=None if execution_result is None else execution_result.started_at_ms,
+            execution_finished_at_ms=None if execution_result is None else execution_result.finished_at_ms,
+            execution_duration_ms=None if execution_result is None else execution_result.duration_ms,
+            execution_timing=execution_timing,
             signal_features={} if signal_decision is None else dict(signal_decision.features),
             signal_dependency_reasons=() if signal_decision is None else tuple(signal_decision.dependency_reasons),
             signal_reject_reasons=() if signal_decision is None else tuple(signal_decision.reject_reasons),

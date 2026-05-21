@@ -1,5 +1,45 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P360 applied locally - live2 entry attempt timing artifacts
+
+Files:
+
+```text
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/execution.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make every live2 attempted entry auditable from market bucket close through signal evaluation, entry guard, runtime gate, exchange order, fill, post-position check, stop submit, and stop visibility verification.
+```
+
+Change:
+
+```text
+`deadline_decision.data_json` now carries `entry_attempt_timing` for actionable decisions. When a selected signal reaches execution, the event also carries top-level execution start/finish/duration plus `execution_timing` from the execution engine. Execution timing includes pre-position fetch, entry order submit/fill, post-position fetch, stop submit, stop verification, and emergency close timing when needed.
+```
+
+Validation:
+
+```bash
+python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low. This is artifact instrumentation only. No signal thresholds, entry guards, runtime gates, exchange fills, stop verification, or position lifecycle decisions were loosened.
+```
+
 ## 2026-05-21 - P359 applied locally - anomaly latency grid matches live2 guard
 
 Files:

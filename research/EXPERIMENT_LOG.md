@@ -50,6 +50,16 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+## 2026-05-21 - P360 recent live2 blocker audit
+
+```text
+Artifacts reviewed: .output/results/live2_anomaly_runs/20260521_073643, 20260521_044228, 20260520_182501, and 20260520_135941.
+Usable latest full run: 20260521_044228. 20260521_073643 stopped during early startup with 0 decisions, so it cannot evaluate entry blockers.
+Finding: 20260521_044228 had 97882 decisions, selected_count=0, total_orders_submitted=0, total_integrity_errors=0, entry_guard checks absent, and execution calls absent. The latest full run was not losing entries to order submission, fill verification, stop verification, artifact writer, or private user-data stream.
+Remaining blocker class: signal contract. Top rejects were stream_candle_is_not_upward_price_confirmation=55842, prior_whipsaw category caps about 38758 per category, prior_spike caps up to 3073, and prior_fast_fade caps up to 1318. These are hypothesis filters, not infrastructure blockers. They may be too strict, but changing them needs a near-miss/top-growth/backtest check rather than a live safety patch.
+Latency: 20260521_044228 rejected-signal p95=49ms/p99=134ms/max=678ms; deadline_missed=37 with p50=3196ms and max=3924ms; deadline_expired_backlog=8 with max=13196ms. No selected signal hit these paths in this run.
+```
+
 ## 2026-05-21 - live2 run review 20260521_044228
 
 ```text

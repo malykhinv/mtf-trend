@@ -6,9 +6,12 @@ from pathlib import Path
 import pandas as pd
 
 from cli.parser import build_parser
+from data.exchanges.ccxt_types import ExchangeLiveAccountPreflight, ExchangeOrderFill
 from research_tools.anomaly_live2.artifacts import Live2ArtifactWriter
 from research_tools.anomaly_live2.config import AnomalyLive2Config
 from research_tools.anomaly_live2.deadline import Live2DeadlineEngine, Live2DeadlineEngineConfig
+from research_tools.anomaly_live2.entry_guard import Live2EntryGuardResult
+from research_tools.anomaly_live2.execution import Live2ExecutionConfig, Live2ExecutionEngine
 from research_tools.anomaly_live2.market_data.candles import Live2AggTradeEvent, Live2CandleRing
 from research_tools.anomaly_live2.market_data.prior_context import (
     LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS,
@@ -16,6 +19,7 @@ from research_tools.anomaly_live2.market_data.prior_context import (
     Live2PriorContextPoller,
 )
 from research_tools.anomaly_live2.signal import Live2SignalEngine, _effective_context_status
+from research_tools.anomaly_live2.signal import Live2SignalDecision
 from research_tools.anomaly_live2.state import LIVE2_AGGTRADE_WS_SOURCE, SymbolStateStore
 from research_tools.anomaly_live2.top_growth import HOUR_MS, Live2TopGrowthAudit, Live2TopGrowthAuditConfig
 
@@ -320,6 +324,81 @@ def test_live2_deadline_expires_backlog_without_counting_near_deadline_miss() ->
     assert result.deadline_missed_count == 0
     assert result.deadline_expired_backlog_count == 1
     assert result.decisions[0].verdict == "deadline_expired_backlog"
+
+
+class _FakeExecutionExchange:
+    def __init__(self) -> None:
+        self.position_amount = 0.0
+
+    def fetch_live_account_preflight(self):
+        return ExchangeLiveAccountPreflight(exchange="fake", position_mode="one_way", hedge_mode_enabled=False)
+
+    def fetch_symbol_position_amount(self, symbol):
+        return self.position_amount
+
+    def create_market_order_with_fill(self, symbol, side, amount, *, reduce_only, client_order_id):
+        if not reduce_only:
+            self.position_amount += float(amount)
+        else:
+            self.position_amount -= float(amount)
+        return ExchangeOrderFill(
+            order_id=f"order-{client_order_id}",
+            status="closed",
+            timestamp_ms=int(time.time() * 1000),
+            average_price=1.0,
+            filled_amount=float(amount),
+        )
+
+    def create_stop_market_order(self, symbol, side, amount, stop_price, *, client_order_id):
+        return {"id": f"stop-{client_order_id}"}
+
+    def fetch_stop_order_by_client_order_id(self, symbol, client_order_id):
+        return {"id": f"stop-{client_order_id}", "clientOrderId": client_order_id}
+
+    def cancel_stop_order(self, symbol, order_id):
+        return {"id": order_id, "status": "canceled"}
+
+
+def test_live2_execution_records_entry_attempt_timing() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    exchange = _FakeExecutionExchange()
+    engine = Live2ExecutionEngine(
+        exchange_client=exchange,
+        config=Live2ExecutionConfig(stop_visibility_sleep_seconds=0.0),
+    )
+    assert engine.preflight().ready
+    signal = Live2SignalDecision(
+        verdict="selected",
+        reason="test",
+        category_id="test_category",
+        category_rank=1,
+        signal_entry_price=1.0,
+        initial_stop_at_decision=0.99,
+        initial_risk_pct_at_decision=0.01,
+        tp1_at_decision=1.02,
+    )
+    guard = Live2EntryGuardResult(
+        verdict="accepted",
+        reason="entry_guard_passed",
+        live_price=1.0,
+        signal_age_ms=100,
+        entry_price_drift_pct=0.0,
+        rr_to_tp1_at_live_price=2.0,
+    )
+
+    result = engine.execute_selected(state=state, signal_decision=signal, entry_guard_result=guard)
+
+    assert result.verdict == "selected"
+    assert result.started_at_ms is not None
+    assert result.finished_at_ms is not None
+    assert result.duration_ms is not None
+    assert result.timing["pre_position_fetch_duration_ms"] >= 0
+    assert result.timing["entry_order_submit_duration_ms"] >= 0
+    assert result.timing["post_position_fetch_duration_ms"] >= 0
+    assert result.timing["stop_order_submit_duration_ms"] >= 0
+    assert result.timing["stop_verify_duration_ms"] >= 0
+    assert result.details["execution_timing"]["duration_ms"] == result.duration_ms
 
 
 class _FakeTopGrowthExchange:

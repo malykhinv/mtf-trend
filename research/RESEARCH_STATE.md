@@ -1,5 +1,15 @@
 # Anomaly Research State
 
+## 2026-05-21 - P360 live2 entry attempt timing artifacts
+
+```text
+Current patch status: P360 APPLIED locally / UNKNOWN commit.
+Question: can live2 prove where time is spent for each attempted entry, and are recent live runs blocked by dumb entry blockers?
+Change: live2 deadline_decision events now include `entry_attempt_timing` for actionable buckets, with signal evaluation, entry guard, runtime gate, and execution call timestamps/durations. Execution results now include internal `execution_timing`: pre-position fetch, market order submit/fill, post-position fetch, stop submit, stop visibility verification, and emergency close timing when applicable.
+Run check: latest usable full run 20260521_044228 had 0 selected signals, 0 entry guard checks, 0 execution calls, 0 orders, and 0 integrity errors. It was not blocked by order/execution plumbing; rejects were signal-contract filters dominated by non-upward price confirmation and prior whipsaw/spike/fast-fade category caps.
+Risk: artifact-only hot-path additions use in-memory timestamps and JSON event fields; no entry thresholds, fallback data, fill model, or stop logic changed.
+```
+
 ## 2026-05-21 - P359 anomaly-lab latency grid
 
 ```text

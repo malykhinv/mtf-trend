@@ -214,6 +214,10 @@ class Live2ExecutionResult:
     position_id: str = ""
     emergency_close_status: str = "not_attempted"
     integrity_error: bool = False
+    started_at_ms: int | None = None
+    finished_at_ms: int | None = None
+    duration_ms: int | None = None
+    timing: dict[str, object] = field(default_factory=dict)
     details: dict[str, object] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, object]:
@@ -237,6 +241,10 @@ class Live2ExecutionResult:
             "position_id": self.position_id,
             "emergency_close_status": self.emergency_close_status,
             "integrity_error": self.integrity_error,
+            "started_at_ms": self.started_at_ms,
+            "finished_at_ms": self.finished_at_ms,
+            "duration_ms": self.duration_ms,
+            "timing": self.timing,
             "details": self.details,
         }
 
@@ -318,76 +326,106 @@ class Live2ExecutionEngine:
         entry_guard_result: Live2EntryGuardResult,
     ) -> Live2ExecutionResult:
         self._total_execute_calls += 1
-        checked_at_ms = utc_now_ms()
+        started_at_ms = utc_now_ms()
+        checked_at_ms = started_at_ms
+        timing: dict[str, object] = {"started_at_ms": started_at_ms}
         if self._trading_halted_reason:
-            return Live2ExecutionResult(
+            return self._finish_result(
+                Live2ExecutionResult(
                 verdict="rejected_execution_halted",
                 reason=self._trading_halted_reason,
                 checked_at_ms=checked_at_ms,
                 exchange_boundary_status="halted",
+                ),
+                timing=timing,
             )
         if not self.preflight_result.ready:
             self._total_exchange_errors += 1
-            return Live2ExecutionResult(
+            return self._finish_result(
+                Live2ExecutionResult(
                 verdict="rejected_execution_boundary_not_ready",
                 reason=self.preflight_result.reason or "execution_preflight_not_ready",
                 checked_at_ms=checked_at_ms,
                 exchange_boundary_status=self.preflight_result.status,
+                ),
+                timing=timing,
             )
         if self.exchange_client is None:
             self._total_exchange_errors += 1
-            return Live2ExecutionResult(
+            return self._finish_result(
+                Live2ExecutionResult(
                 verdict="rejected_execution_boundary_not_ready",
                 reason="exchange_client_not_provided",
                 checked_at_ms=checked_at_ms,
                 exchange_boundary_status="not_ready",
+                ),
+                timing=timing,
             )
         if state.symbol in self._protected_positions:
             self._total_rejected_existing_position += 1
-            return Live2ExecutionResult(
+            return self._finish_result(
+                Live2ExecutionResult(
                 verdict="rejected_symbol_already_has_live2_position",
                 reason="symbol_already_in_live2_protected_position_registry",
                 checked_at_ms=checked_at_ms,
                 exchange_boundary_status="ready",
+                ),
+                timing=timing,
             )
         if len(self._protected_positions) >= self.config.max_open_positions:
             self._total_rejected_capacity += 1
-            return Live2ExecutionResult(
+            return self._finish_result(
+                Live2ExecutionResult(
                 verdict="rejected_execution_capacity_full",
                 reason="live2_max_open_positions_reached",
                 checked_at_ms=checked_at_ms,
                 exchange_boundary_status="ready",
                 details={"max_open_positions": self.config.max_open_positions},
+                ),
+                timing=timing,
             )
 
+        precheck_started_at_ms = utc_now_ms()
+        timing["pre_position_fetch_started_at_ms"] = precheck_started_at_ms
         precheck = self._fetch_pre_position(state.symbol, checked_at_ms=checked_at_ms)
+        precheck_finished_at_ms = utc_now_ms()
+        timing["pre_position_fetch_finished_at_ms"] = precheck_finished_at_ms
+        timing["pre_position_fetch_duration_ms"] = max(0, precheck_finished_at_ms - precheck_started_at_ms)
         if precheck.verdict != "pre_position_flat":
-            return precheck
+            return self._finish_result(precheck, timing=timing)
         pre_position_amount = float(precheck.pre_position_amount or 0.0)
 
         live_price = entry_guard_result.live_price
         stop_price = signal_decision.initial_stop_at_decision
         signal_entry_price = signal_decision.signal_entry_price
         if not _positive_finite(live_price) or not _positive_finite(stop_price) or not _positive_finite(signal_entry_price):
-            return Live2ExecutionResult(
+            return self._finish_result(
+                Live2ExecutionResult(
                 verdict="rejected_execution_invalid_signal_prices",
                 reason="live_price_stop_or_signal_entry_is_missing_or_invalid",
                 checked_at_ms=checked_at_ms,
                 pre_position_amount=pre_position_amount,
                 exchange_boundary_status="ready",
+                ),
+                timing=timing,
             )
         amount = self.config.order_notional_usdt / float(live_price)
         if not _positive_finite(amount):
-            return Live2ExecutionResult(
+            return self._finish_result(
+                Live2ExecutionResult(
                 verdict="rejected_execution_invalid_order_amount",
                 reason="computed_order_amount_is_not_positive_finite",
                 checked_at_ms=checked_at_ms,
                 pre_position_amount=pre_position_amount,
                 exchange_boundary_status="ready",
                 details={"order_notional_usdt": self.config.order_notional_usdt, "live_price": live_price},
+                ),
+                timing=timing,
             )
 
         entry_client_order_id = self._client_order_id(prefix="l2e", symbol=state.symbol, timestamp_ms=checked_at_ms)
+        order_submit_started_at_ms = utc_now_ms()
+        timing["entry_order_submit_started_at_ms"] = order_submit_started_at_ms
         try:
             self._total_orders_submitted += 1
             fill = self.exchange_client.create_market_order_with_fill(
@@ -399,7 +437,11 @@ class Live2ExecutionEngine:
             )
         except Exception as exc:
             self._total_exchange_errors += 1
-            return Live2ExecutionResult(
+            order_submit_finished_at_ms = utc_now_ms()
+            timing["entry_order_submit_finished_at_ms"] = order_submit_finished_at_ms
+            timing["entry_order_submit_duration_ms"] = max(0, order_submit_finished_at_ms - order_submit_started_at_ms)
+            return self._finish_result(
+                Live2ExecutionResult(
                 verdict="rejected_entry_order_failed",
                 reason=f"create_market_order_with_fill_failed:{type(exc).__name__}:{exc}",
                 checked_at_ms=checked_at_ms,
@@ -407,7 +449,14 @@ class Live2ExecutionEngine:
                 exchange_boundary_status="ready",
                 order_placement_status="entry_order_failed",
                 entry_client_order_id=entry_client_order_id,
+                ),
+                timing=timing,
             )
+        order_submit_finished_at_ms = utc_now_ms()
+        timing["entry_order_submit_finished_at_ms"] = order_submit_finished_at_ms
+        timing["entry_order_submit_duration_ms"] = max(0, order_submit_finished_at_ms - order_submit_started_at_ms)
+        timing["entry_fill_timestamp_ms"] = int(fill.timestamp_ms)
+        timing["entry_fill_exchange_lag_ms"] = max(0, int(fill.timestamp_ms) - order_submit_started_at_ms)
 
         if not _positive_finite(fill.average_price) or not _positive_finite(fill.filled_amount):
             return self._integrity_error_after_fill(
@@ -416,18 +465,28 @@ class Live2ExecutionEngine:
                 fill=fill,
                 pre_position_amount=pre_position_amount,
                 position_delta_amount=None,
+                timing=timing,
             )
 
+        post_position_started_at_ms = utc_now_ms()
+        timing["post_position_fetch_started_at_ms"] = post_position_started_at_ms
         try:
             post_position_amount = float(self.exchange_client.fetch_symbol_position_amount(state.symbol))
         except Exception as exc:
+            post_position_finished_at_ms = utc_now_ms()
+            timing["post_position_fetch_finished_at_ms"] = post_position_finished_at_ms
+            timing["post_position_fetch_duration_ms"] = max(0, post_position_finished_at_ms - post_position_started_at_ms)
             return self._integrity_error_after_fill(
                 state=state,
                 reason=f"post_entry_position_fetch_failed:{type(exc).__name__}:{exc}",
                 fill=fill,
                 pre_position_amount=pre_position_amount,
                 position_delta_amount=None,
+                timing=timing,
             )
+        post_position_finished_at_ms = utc_now_ms()
+        timing["post_position_fetch_finished_at_ms"] = post_position_finished_at_ms
+        timing["post_position_fetch_duration_ms"] = max(0, post_position_finished_at_ms - post_position_started_at_ms)
         position_delta_amount = post_position_amount - pre_position_amount
         if not isfinite(post_position_amount) or not isfinite(position_delta_amount) or position_delta_amount <= 0.0:
             return self._integrity_error_after_fill(
@@ -437,6 +496,7 @@ class Live2ExecutionEngine:
                 pre_position_amount=pre_position_amount,
                 position_delta_amount=position_delta_amount if isfinite(position_delta_amount) else None,
                 post_position_amount=post_position_amount if isfinite(post_position_amount) else None,
+                timing=timing,
             )
         fill_delta_slippage = abs(position_delta_amount - fill.filled_amount) / max(fill.filled_amount, 1e-12)
         if fill_delta_slippage > self.config.max_position_amount_slippage_ratio:
@@ -448,6 +508,7 @@ class Live2ExecutionEngine:
                 position_delta_amount=position_delta_amount,
                 post_position_amount=post_position_amount,
                 details={"fill_delta_slippage": fill_delta_slippage},
+                timing=timing,
             )
 
         actual_initial_risk = float(fill.average_price) - float(stop_price)
@@ -461,10 +522,13 @@ class Live2ExecutionEngine:
                 position_delta_amount=position_delta_amount,
                 post_position_amount=post_position_amount,
                 details={"stop_price": stop_price, "actual_initial_risk_pct": actual_initial_risk_pct},
+                timing=timing,
             )
 
         position_id = self._position_id(state.symbol, checked_at_ms, fill.order_id)
         stop_client_order_id = self._client_order_id(prefix="l2s", symbol=state.symbol, timestamp_ms=checked_at_ms)
+        stop_submit_started_at_ms = utc_now_ms()
+        timing["stop_order_submit_started_at_ms"] = stop_submit_started_at_ms
         try:
             stop_payload = self.exchange_client.create_stop_market_order(
                 state.symbol,
@@ -474,6 +538,9 @@ class Live2ExecutionEngine:
                 client_order_id=stop_client_order_id,
             )
         except Exception as exc:
+            stop_submit_finished_at_ms = utc_now_ms()
+            timing["stop_order_submit_finished_at_ms"] = stop_submit_finished_at_ms
+            timing["stop_order_submit_duration_ms"] = max(0, stop_submit_finished_at_ms - stop_submit_started_at_ms)
             return self._integrity_error_after_fill(
                 state=state,
                 reason=f"initial_stop_submit_failed:{type(exc).__name__}:{exc}",
@@ -482,9 +549,18 @@ class Live2ExecutionEngine:
                 position_delta_amount=position_delta_amount,
                 post_position_amount=post_position_amount,
                 position_id=position_id,
+                timing=timing,
             )
+        stop_submit_finished_at_ms = utc_now_ms()
+        timing["stop_order_submit_finished_at_ms"] = stop_submit_finished_at_ms
+        timing["stop_order_submit_duration_ms"] = max(0, stop_submit_finished_at_ms - stop_submit_started_at_ms)
         stop_order_id = _extract_order_id(stop_payload) or stop_client_order_id
+        stop_verify_started_at_ms = utc_now_ms()
+        timing["stop_verify_started_at_ms"] = stop_verify_started_at_ms
         verified_stop = self._verify_stop_visible(state.symbol, stop_client_order_id)
+        stop_verify_finished_at_ms = utc_now_ms()
+        timing["stop_verify_finished_at_ms"] = stop_verify_finished_at_ms
+        timing["stop_verify_duration_ms"] = max(0, stop_verify_finished_at_ms - stop_verify_started_at_ms)
         if verified_stop is None:
             return self._integrity_error_after_fill(
                 state=state,
@@ -497,6 +573,7 @@ class Live2ExecutionEngine:
                 stop_order_id=stop_order_id,
                 stop_client_order_id=stop_client_order_id,
                 stop_price=float(stop_price),
+                timing=timing,
             )
         stop_order_id = _extract_order_id(verified_stop) or stop_order_id
         protected_position = Live2ProtectedPosition(
@@ -520,7 +597,8 @@ class Live2ExecutionEngine:
         )
         self._protected_positions[state.symbol] = protected_position
         self._total_positions_protected += 1
-        return Live2ExecutionResult(
+        return self._finish_result(
+            Live2ExecutionResult(
             verdict="selected",
             reason="entry_fill_and_initial_stop_verified",
             checked_at_ms=checked_at_ms,
@@ -542,6 +620,8 @@ class Live2ExecutionEngine:
                 "order_notional_usdt": self.config.order_notional_usdt,
                 "protected_position": protected_position.as_dict(),
             },
+            ),
+            timing=timing,
         )
 
 
@@ -636,13 +716,22 @@ class Live2ExecutionEngine:
         stop_client_order_id: str = "",
         stop_price: float | None = None,
         details: dict[str, object] | None = None,
+        timing: dict[str, object] | None = None,
     ) -> Live2ExecutionResult:
         self._total_integrity_errors += 1
         self._trading_halted_reason = f"position_integrity_error:{reason}"
         close_amount = position_delta_amount if _positive_finite(position_delta_amount) else fill.filled_amount
+        emergency_close_started_at_ms = utc_now_ms()
+        if timing is not None:
+            timing["emergency_close_started_at_ms"] = emergency_close_started_at_ms
         emergency_close_status = self._attempt_emergency_close(state.symbol, close_amount)
-        return Live2ExecutionResult(
-            verdict="position_integrity_error",
+        emergency_close_finished_at_ms = utc_now_ms()
+        if timing is not None:
+            timing["emergency_close_finished_at_ms"] = emergency_close_finished_at_ms
+            timing["emergency_close_duration_ms"] = max(0, emergency_close_finished_at_ms - emergency_close_started_at_ms)
+        return self._finish_result(
+            Live2ExecutionResult(
+                verdict="position_integrity_error",
             reason=reason,
             checked_at_ms=utc_now_ms(),
             pre_position_amount=pre_position_amount,
@@ -661,6 +750,46 @@ class Live2ExecutionEngine:
             emergency_close_status=emergency_close_status,
             integrity_error=True,
             details=details or {},
+            ),
+            timing=timing or {},
+        )
+
+    def _finish_result(self, result: Live2ExecutionResult, *, timing: dict[str, object]) -> Live2ExecutionResult:
+        finished_at_ms = utc_now_ms()
+        started_value = timing.get("started_at_ms")
+        try:
+            started_at_ms = int(started_value) if started_value is not None else finished_at_ms
+        except (TypeError, ValueError):
+            started_at_ms = finished_at_ms
+        timing["finished_at_ms"] = finished_at_ms
+        timing["duration_ms"] = max(0, finished_at_ms - started_at_ms)
+        details = dict(result.details)
+        details["execution_timing"] = dict(timing)
+        return Live2ExecutionResult(
+            verdict=result.verdict,
+            reason=result.reason,
+            checked_at_ms=result.checked_at_ms,
+            pre_position_amount=result.pre_position_amount,
+            post_position_amount=result.post_position_amount,
+            position_delta_amount=result.position_delta_amount,
+            exchange_boundary_status=result.exchange_boundary_status,
+            order_placement_status=result.order_placement_status,
+            entry_order_id=result.entry_order_id,
+            entry_client_order_id=result.entry_client_order_id,
+            entry_fill_price=result.entry_fill_price,
+            entry_filled_amount=result.entry_filled_amount,
+            entry_fill_timestamp_ms=result.entry_fill_timestamp_ms,
+            stop_order_id=result.stop_order_id,
+            stop_client_order_id=result.stop_client_order_id,
+            stop_price=result.stop_price,
+            position_id=result.position_id,
+            emergency_close_status=result.emergency_close_status,
+            integrity_error=result.integrity_error,
+            started_at_ms=started_at_ms,
+            finished_at_ms=finished_at_ms,
+            duration_ms=max(0, finished_at_ms - started_at_ms),
+            timing=dict(timing),
+            details=details,
         )
 
     def _attempt_emergency_close(self, symbol: str, amount: float | None) -> str:

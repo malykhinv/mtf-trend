@@ -109,6 +109,7 @@ signal_entry_price/time != actual_fill_price/time
 actual fill must come from exchange order/trade payloads
 no candle/ticker-derived synthetic fill for ledger/PnL
 live ledger must write scan/guard provenance (`source_scan_mode`, `danger_cold_coverage_source`, `entry_position_guard_source`) from the opened position object
+every actionable live2 entry attempt must write artifact timing from bucket close -> signal evaluation -> entry guard -> runtime gate -> execution call, and execution must write exchange-step timing for pre-position fetch, entry order/fill, post-position fetch, stop submit, and stop visibility verification
 no stale signal order after freshness window
 prescan decisions that arrive after max_signal_age_ms must emit reject_stale_decision_latency, distinct from execution-guard reject_stale_signal
 no order if TP1 is already reached or RR collapsed at live price
