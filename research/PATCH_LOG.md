@@ -1,5 +1,49 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P367 applied locally - live2/backtest candidate parity and reject diagnostics
+
+Files:
+
+```text
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/artifacts.py
+research_tools/anomaly_live2/state.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/status_grid.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Stop live2 from applying shared backtest category caps to a stricter single-5s candidate shape, and make rejection artifacts show the exact parity/blocker layer.
+```
+
+Change:
+
+```text
+Live2 signal features now build a backtest-like forming 1m/5s setup before shared-category evaluation. Category features use cumulative setup quote/trade pace, forming setup range/risk, and prior-whipsaw divided by forming setup range. Near-miss rows include live_setup_* diagnostics, baseline source, and feature-level initial risk. The status grid active metric now renders current active symbols versus unique symbols active since the current session metric start.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py
+python -m compileall research_tools\anomaly_live2 cli\commands.py cli\parser.py constants.py main.py
+python -m compileall data\exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium. Trading category timing now matches the current backtest candidate confirmation horizon instead of trying to classify every single 5s actionable bucket. This is a parity repair, not a threshold optimization. If <5s pump-start-to-order is required, the backtest candidate contract must be changed and revalidated too.
+```
+
 ## 2026-05-21 - P366 applied locally - post-P365 live2 choke audit record
 
 Files:

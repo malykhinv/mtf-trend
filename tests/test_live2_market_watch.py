@@ -95,11 +95,16 @@ def test_live2_state_store_marks_due_closed_candle_for_decision() -> None:
 def test_live2_state_store_counts_recent_actionable_symbols() -> None:
     store = SymbolStateStore(("AAA/USDT:USDT", "BBB/USDT:USDT", "CCC/USDT:USDT"))
     store.get_or_create("AAA/USDT:USDT").actionable_since_ms = 10_000
+    store.get_or_create("AAA/USDT:USDT").last_actionable_ms = 10_000
     store.get_or_create("BBB/USDT:USDT").actionable_since_ms = 1_000
+    store.get_or_create("BBB/USDT:USDT").last_actionable_ms = 1_000
 
-    counts = store.actionable_symbol_counts(now_ms=11_000, ttl_ms=5_000)
+    counts = store.actionable_symbol_counts(now_ms=11_000, ttl_ms=5_000, session_start_ms=5_000)
 
-    assert counts == {"current": 1, "seen": 2}
+    assert counts["current"] == 1
+    assert counts["seen"] == 1
+    assert counts["session_seen"] == 1
+    assert counts["session_start_ms"] == 5_000
 
 
 def test_live2_signal_context_status_marks_stale_ok_context() -> None:

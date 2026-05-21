@@ -220,7 +220,29 @@ class Live2DecisionRecord:
             "start_taker_buy_quote_share": self.signal_features.get("start_taker_buy_quote_share", ""),
             "flow_hold_status": self.signal_features.get("flow_hold_status", ""),
             "flow_hold_count": self.signal_features.get("flow_hold_count", ""),
-            "initial_risk_pct_at_decision": self.initial_risk_pct_at_decision,
+            "initial_risk_pct_at_decision": self.signal_features.get("initial_risk_pct_at_decision", self.initial_risk_pct_at_decision),
+            "feature_initial_risk_pct_at_decision": self.signal_features.get("initial_risk_pct_at_decision", ""),
+            "live_setup_status": self.signal_features.get("live_setup_status", ""),
+            "live_setup_reason": self.signal_features.get("live_setup_reason", ""),
+            "live_setup_timeframe": self.signal_features.get("live_setup_timeframe", ""),
+            "live_setup_entry_timeframe": self.signal_features.get("live_setup_entry_timeframe", ""),
+            "live_setup_closed_entry_candles": self.signal_features.get("live_setup_closed_entry_candles", ""),
+            "live_setup_elapsed_fraction": self.signal_features.get("live_setup_elapsed_fraction", ""),
+            "live_setup_raw_quote_ratio": self.signal_features.get("live_setup_raw_quote_ratio", ""),
+            "live_setup_raw_trade_ratio": self.signal_features.get("live_setup_raw_trade_ratio", ""),
+            "live_setup_min_raw_quote_ratio": self.signal_features.get("live_setup_min_raw_quote_ratio", ""),
+            "live_setup_min_raw_trade_ratio": self.signal_features.get("live_setup_min_raw_trade_ratio", ""),
+            "live_setup_quote_ratio": self.signal_features.get("live_setup_quote_ratio", ""),
+            "live_setup_trade_ratio": self.signal_features.get("live_setup_trade_ratio", ""),
+            "live_setup_min_quote_ratio": self.signal_features.get("live_setup_min_quote_ratio", ""),
+            "live_setup_min_trade_ratio": self.signal_features.get("live_setup_min_trade_ratio", ""),
+            "live_setup_range": self.signal_features.get("live_setup_range", ""),
+            "live_setup_range_pct": self.signal_features.get("live_setup_range_pct", ""),
+            "live_setup_baseline_1m_count": self.signal_features.get("live_setup_baseline_1m_count", ""),
+            "live_setup_baseline_quote_1m": self.signal_features.get("live_setup_baseline_quote_1m", ""),
+            "live_setup_baseline_trade_count_1m": self.signal_features.get("live_setup_baseline_trade_count_1m", ""),
+            "live_setup_baseline_range_pct_1m": self.signal_features.get("live_setup_baseline_range_pct_1m", ""),
+            "live_setup_baseline_source": self.signal_features.get("live_setup_baseline_source", ""),
             "decision_box_low": self.signal_features.get("decision_box_low", ""),
             "decision_box_high": self.signal_features.get("decision_box_high", ""),
             "decision_box_range": self.signal_features.get("decision_box_range", ""),
@@ -645,6 +667,9 @@ class Live2DeadlineEngine:
         else:
             state.status = SymbolLive2Status.WATCHING
         state.actionable_since_ms = candle.close_time_ms
+        if state.first_actionable_ms is None:
+            state.first_actionable_ms = candle.close_time_ms
+        state.last_actionable_ms = candle.close_time_ms
         state.decision_deadline_ms = deadline_ms
         state.last_decision_bucket_ms = candle.open_time_ms
         state.last_verdict = verdict

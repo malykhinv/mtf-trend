@@ -23,6 +23,13 @@ from .state import SymbolState
 
 Live2CategoryDecisionKind = Literal["accepted", "rejected", "data_dependency_not_ready"]
 
+LIVE2_BACKTEST_SETUP_TIMEFRAME_MS = 60_000
+LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS = 5_000
+LIVE2_BACKTEST_BASELINE_CANDLES = 60
+LIVE2_BACKTEST_CONFIRMATION_CANDLES = 4
+LIVE2_BACKTEST_MIN_QUOTE_RATIO_START = 4.0
+LIVE2_BACKTEST_MIN_TRADE_RATIO_START = 4.0
+
 
 @dataclass(frozen=True, slots=True)
 class Live2CategoryEvaluation:
@@ -227,6 +234,16 @@ class Live2SignalEngine:
 
     def _features(self, *, state: SymbolState, candle: Live2Candle, actionable_reason: str) -> dict[str, object]:
         closed_5s = state.candle_book.rings.get(5_000).closed_snapshot() if 5_000 in state.candle_book.rings else ()
+        closed_1m = (
+            state.candle_book.rings.get(LIVE2_BACKTEST_SETUP_TIMEFRAME_MS).closed_snapshot()
+            if LIVE2_BACKTEST_SETUP_TIMEFRAME_MS in state.candle_book.rings
+            else ()
+        )
+        live_setup = _live_backtest_like_setup(
+            closed_5s=closed_5s,
+            closed_1m=closed_1m,
+            decision_candle=candle,
+        )
         previous = tuple(item for item in closed_5s if item.open_time_ms < candle.open_time_ms)[-24:]
         baseline_quote = _avg([item.quote_volume for item in previous])
         baseline_trades = _avg([float(item.number_of_trades) for item in previous])
@@ -246,6 +263,15 @@ class Live2SignalEngine:
         taker_share_delta = None
         if taker_share is not None and baseline_taker_share > 0:
             taker_share_delta = taker_share - baseline_taker_share
+        setup_quote_ratio = live_setup.get("quote_ratio")
+        if setup_quote_ratio is not None:
+            quote_ratio = float(setup_quote_ratio)
+        setup_trade_ratio = live_setup.get("trade_ratio")
+        if setup_trade_ratio is not None:
+            trade_ratio = float(setup_trade_ratio)
+        setup_range_ratio = live_setup.get("range_pct_ratio_to_baseline")
+        if setup_range_ratio is not None:
+            range_ratio = float(setup_range_ratio)
         quote_ratio_per_abs_return = None
         if quote_ratio is not None and abs_return_pct > 0:
             quote_ratio_per_abs_return = quote_ratio / abs_return_pct
@@ -260,10 +286,15 @@ class Live2SignalEngine:
             baseline_taker_share=baseline_taker_share,
         )
         decision_box = (*previous, candle)
-        decision_box_low = min((item.low for item in decision_box), default=candle.low)
-        decision_box_high = max((item.high for item in decision_box), default=candle.high)
+        decision_box_low = float(live_setup.get("low") or min((item.low for item in decision_box), default=candle.low))
+        decision_box_high = float(live_setup.get("high") or max((item.high for item in decision_box), default=candle.high))
         decision_box_range = decision_box_high - decision_box_low
-        baseline_quote_daily_proxy = baseline_quote * (1440.0 / (5.0 / 60.0)) if baseline_quote > 0 else None
+        setup_baseline_quote = live_setup.get("baseline_quote_1m")
+        baseline_quote_daily_proxy = (
+            float(setup_baseline_quote) * 1440.0
+            if setup_baseline_quote is not None and float(setup_baseline_quote) > 0
+            else (baseline_quote * (1440.0 / (5.0 / 60.0)) if baseline_quote > 0 else None)
+        )
         mark_basis = None
         mark_basis_status = "not_available"
         effective_mark_status = _effective_context_status(
@@ -316,6 +347,27 @@ class Live2SignalEngine:
             "range_pct": candle_range,
             "baseline_quote_5s": baseline_quote,
             "baseline_quote_daily_proxy": baseline_quote_daily_proxy,
+            "live_setup_status": live_setup["status"],
+            "live_setup_reason": live_setup["reason"],
+            "live_setup_timeframe": "1m",
+            "live_setup_entry_timeframe": "5s",
+            "live_setup_closed_entry_candles": live_setup.get("closed_entry_candles"),
+            "live_setup_elapsed_fraction": live_setup.get("elapsed_fraction"),
+            "live_setup_raw_quote_ratio": live_setup.get("raw_quote_ratio"),
+            "live_setup_raw_trade_ratio": live_setup.get("raw_trade_ratio"),
+            "live_setup_min_raw_quote_ratio": live_setup.get("min_raw_quote_ratio"),
+            "live_setup_min_raw_trade_ratio": live_setup.get("min_raw_trade_ratio"),
+            "live_setup_quote_ratio": live_setup.get("quote_ratio"),
+            "live_setup_trade_ratio": live_setup.get("trade_ratio"),
+            "live_setup_min_quote_ratio": LIVE2_BACKTEST_MIN_QUOTE_RATIO_START,
+            "live_setup_min_trade_ratio": LIVE2_BACKTEST_MIN_TRADE_RATIO_START,
+            "live_setup_range": live_setup.get("range"),
+            "live_setup_range_pct": live_setup.get("range_pct"),
+            "live_setup_baseline_1m_count": live_setup.get("baseline_1m_count"),
+            "live_setup_baseline_quote_1m": live_setup.get("baseline_quote_1m"),
+            "live_setup_baseline_trade_count_1m": live_setup.get("baseline_trade_count_1m"),
+            "live_setup_baseline_range_pct_1m": live_setup.get("baseline_range_pct_1m"),
+            "live_setup_baseline_source": live_setup.get("baseline_source"),
             "baseline_trade_count_5s": baseline_trades,
             "baseline_range_pct_5s": baseline_range,
             "baseline_taker_buy_quote_share_5s": baseline_taker_share,
@@ -389,6 +441,11 @@ class Live2SignalEngine:
         }
 
     def _category_accepts(self, *, category: PumpCategoryContract, features: dict[str, object]) -> Live2CategoryEvaluation:
+        if features.get("live_setup_status") != "ok":
+            reason = str(features.get("live_setup_reason") or "live_setup_not_backtest_candidate")
+            if features.get("live_setup_status") == "not_ready":
+                return _dependency(reason)
+            return _reject(reason)
         if (
             category.max_prior_spike_count_72h is not None
             or category.max_prior_fast_fade_count_72h is not None
@@ -602,6 +659,117 @@ def _flow_hold_not_ready(reason: str) -> Live2FlowHoldSnapshot:
     )
 
 
+def _live_backtest_like_setup(
+    *,
+    closed_5s: tuple[Live2Candle, ...],
+    closed_1m: tuple[Live2Candle, ...],
+    decision_candle: Live2Candle,
+) -> dict[str, object]:
+    setup_open_ms = (int(decision_candle.open_time_ms) // LIVE2_BACKTEST_SETUP_TIMEFRAME_MS) * LIVE2_BACKTEST_SETUP_TIMEFRAME_MS
+    segment = tuple(
+        item
+        for item in closed_5s
+        if setup_open_ms <= int(item.open_time_ms) <= int(decision_candle.open_time_ms)
+    )
+    if not segment or segment[-1].open_time_ms != decision_candle.open_time_ms:
+        return {
+            "status": "not_ready",
+            "reason": "live_setup_entry_segment_not_ready",
+            "closed_entry_candles": len(segment),
+            "baseline_1m_count": 0,
+        }
+    baseline = tuple(
+        item
+        for item in closed_1m
+        if int(item.open_time_ms) < setup_open_ms
+    )[-LIVE2_BACKTEST_BASELINE_CANDLES:]
+    baseline_source = "closed_live_1m"
+    baseline_quote = _median([item.quote_volume for item in baseline])
+    baseline_trades = _median([float(item.number_of_trades) for item in baseline])
+    baseline_range_pct = _median([_range_pct(item) for item in baseline])
+    if len(baseline) < LIVE2_BACKTEST_BASELINE_CANDLES:
+        previous_5s = tuple(item for item in closed_5s if int(item.open_time_ms) < setup_open_ms)[-24:]
+        fallback_quote = _avg([item.quote_volume for item in previous_5s])
+        fallback_trades = _avg([float(item.number_of_trades) for item in previous_5s])
+        fallback_range_pct = _avg([_range_pct(item) for item in previous_5s])
+        if fallback_quote > 0 and fallback_trades > 0 and fallback_range_pct > 0:
+            baseline_source = "rolling_5s_scaled_to_1m_until_60_closed_1m_ready"
+            baseline_quote = fallback_quote * (LIVE2_BACKTEST_SETUP_TIMEFRAME_MS / LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS)
+            baseline_trades = fallback_trades * (LIVE2_BACKTEST_SETUP_TIMEFRAME_MS / LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS)
+            baseline_range_pct = fallback_range_pct
+        else:
+            return {
+                "status": "not_ready",
+                "reason": "live_setup_1m_baseline_not_ready",
+                "closed_entry_candles": len(segment),
+                "baseline_1m_count": len(baseline),
+                "baseline_source": baseline_source,
+            }
+    if baseline_quote <= 0 or baseline_trades <= 0 or baseline_range_pct <= 0:
+        return {
+            "status": "not_ready",
+            "reason": "live_setup_1m_baseline_invalid",
+            "closed_entry_candles": len(segment),
+            "baseline_1m_count": len(baseline),
+            "baseline_quote_1m": baseline_quote,
+            "baseline_trade_count_1m": baseline_trades,
+            "baseline_range_pct_1m": baseline_range_pct,
+            "baseline_source": baseline_source,
+        }
+    closed_entry_candles = len(segment)
+    setup_elapsed_fraction = min(
+        1.0,
+        (closed_entry_candles * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS) / LIVE2_BACKTEST_SETUP_TIMEFRAME_MS,
+    )
+    elapsed_for_ratio = max(1e-9, setup_elapsed_fraction)
+    quote_volume = sum(item.quote_volume for item in segment)
+    trade_count = sum(float(item.number_of_trades) for item in segment)
+    raw_quote_ratio = quote_volume / baseline_quote
+    raw_trade_ratio = trade_count / baseline_trades
+    quote_ratio = raw_quote_ratio / elapsed_for_ratio
+    trade_ratio = raw_trade_ratio / elapsed_for_ratio
+    min_raw_quote_ratio = LIVE2_BACKTEST_MIN_QUOTE_RATIO_START * min(1.0, max(0.35, elapsed_for_ratio))
+    min_raw_trade_ratio = LIVE2_BACKTEST_MIN_TRADE_RATIO_START * min(1.0, max(0.35, elapsed_for_ratio))
+    low = min(item.low for item in segment)
+    high = max(item.high for item in segment)
+    open_price = segment[0].open
+    close_price = decision_candle.close
+    setup_range = high - low
+    range_pct = setup_range / open_price if open_price > 0 else None
+    range_pct_ratio = (range_pct / baseline_range_pct) if range_pct is not None and baseline_range_pct > 0 else None
+    common = {
+        "closed_entry_candles": closed_entry_candles,
+        "elapsed_fraction": setup_elapsed_fraction,
+        "raw_quote_ratio": raw_quote_ratio,
+        "raw_trade_ratio": raw_trade_ratio,
+        "min_raw_quote_ratio": min_raw_quote_ratio,
+        "min_raw_trade_ratio": min_raw_trade_ratio,
+        "quote_ratio": quote_ratio,
+        "trade_ratio": trade_ratio,
+        "range": setup_range,
+        "range_pct": range_pct,
+        "range_pct_ratio_to_baseline": range_pct_ratio,
+        "low": low,
+        "high": high,
+        "open": open_price,
+        "close": close_price,
+        "quote_volume": quote_volume,
+        "number_of_trades": trade_count,
+        "baseline_1m_count": len(baseline),
+        "baseline_quote_1m": baseline_quote,
+        "baseline_trade_count_1m": baseline_trades,
+        "baseline_range_pct_1m": baseline_range_pct,
+        "baseline_source": baseline_source,
+    }
+    if closed_entry_candles < LIVE2_BACKTEST_CONFIRMATION_CANDLES:
+        return {**common, "status": "not_ready", "reason": "live_setup_confirmation_candles_below_backtest_min"}
+    if quote_ratio < LIVE2_BACKTEST_MIN_QUOTE_RATIO_START or raw_quote_ratio < min_raw_quote_ratio:
+        return {**common, "status": "rejected", "reason": "live_setup_quote_ratio_below_backtest_min"}
+    if trade_ratio < LIVE2_BACKTEST_MIN_TRADE_RATIO_START or raw_trade_ratio < min_raw_trade_ratio:
+        return {**common, "status": "rejected", "reason": "live_setup_trade_ratio_below_backtest_min"}
+    return {**common, "status": "ok", "reason": "live_setup_backtest_candidate"}
+
+
 def _is_live_flow_hold_candle(
     candle: Live2Candle,
     *,
@@ -633,6 +801,16 @@ def _reject(reason: str) -> Live2CategoryEvaluation:
 def _avg(values: list[float]) -> float:
     valid = [float(value) for value in values if value is not None and value >= 0]
     return sum(valid) / len(valid) if valid else 0.0
+
+
+def _median(values: list[float]) -> float:
+    valid = sorted(float(value) for value in values if value is not None and value >= 0)
+    if not valid:
+        return 0.0
+    mid = len(valid) // 2
+    if len(valid) % 2:
+        return valid[mid]
+    return (valid[mid - 1] + valid[mid]) / 2.0
 
 
 def _range_pct(candle: Live2Candle) -> float:

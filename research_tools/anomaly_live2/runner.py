@@ -1392,11 +1392,14 @@ class AnomalyLive2Runner:
         symbol_counts: dict[str, object] = {"included": False, "reason": "omitted_on_fast_runtime_gate_path"}
         if include_symbol_counts:
             now_ms = int(time.time() * 1000)
+            session = live2_session_metric_window_ms(now_ms)
+            metric_start_ms = int(session["metric_start_ms"])
             symbol_counts = {
                 "included": True,
                 "actionable_symbol_counts": self.state_store.actionable_symbol_counts(
                     now_ms=now_ms,
                     ttl_ms=self.config.oi_radar_symbol_ttl_ms,
+                    session_start_ms=metric_start_ms,
                 ),
                 "aggtrade_status_counts": self.state_store.aggtrade_counts(now_ms=now_ms, stale_ms=self.config.aggtrade_stale_ms),
                 "startup_aggtrade_status_counts": self.state_store.startup_aggtrade_counts(),

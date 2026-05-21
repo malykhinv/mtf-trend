@@ -1,4 +1,15 @@
 
+## 2026-05-21 - live2 run review 20260521_124514 parity choke
+
+```text
+Artifacts reviewed: .output/results/live2_anomaly_runs/20260521_124514.
+Verdict: live2 was still choking pre-entry. Infrastructure was not the blocker: selected_count=0, total_orders_submitted=0, total_integrity_errors=0, OI ok=578/579, prior_context ok=578/579. The signal funnel had 123388 decisions, 122303 rejected, 365 dependency-not-ready, 351 deadline_missed, and 333 expired backlog.
+Main blockers: stream_candle_is_not_upward_price_confirmation=67516; prior_whipsaw_24h_above_category_max about 50k per live-priority category; prior spike/fade caps about 2k-2.6k; mark/OI/range rejects were small after prior filters. Near-miss distributions showed prior_up_down_whipsaw_to_impulse_range p50 about 9.9 and p95 about 34 against live limits 0.5-0.6.
+Top-growth disproves "no market": closed 12:00 UTC hour had BSB +14.0%, EDEN +11.9%, FIDA +10.6%; closed 13:00 UTC hour had BSB +17.5%.
+Root cause: live2 evaluated shared categories on single 5s actionable buckets, while backtest forms a 1m setup from 5s entry candles with default confirmation_candles=4. That made prior_whipsaw/range/risk stricter in live than in backtest. Follow-up patch P367 aligns live2 category features to a backtest-like 1m/5s forming setup and adds live_setup_* near-miss diagnostics.
+Live1 note: research_tools/anomaly_micro_live.py is removable only after extracting still-used utilities/imports; deleting it directly would break CLI/backtest/tests.
+```
+
 ## 2026-05-21 - P359 anomaly-lab latency grid plan
 
 ```text

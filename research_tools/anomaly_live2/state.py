@@ -44,6 +44,8 @@ class SymbolState:
     dirty_since_ms: int | None = None
     decision_dirty_since_ms: int | None = None
     actionable_since_ms: int | None = None
+    first_actionable_ms: int | None = None
+    last_actionable_ms: int | None = None
     decision_deadline_ms: int | None = None
     last_decision_bucket_ms: int | None = None
     last_verdict: str = "not_evaluated"
@@ -492,6 +494,8 @@ class SymbolState:
             "dirty_since_ms": self.dirty_since_ms,
             "decision_dirty_since_ms": self.decision_dirty_since_ms,
             "actionable_since_ms": self.actionable_since_ms,
+            "first_actionable_ms": self.first_actionable_ms,
+            "last_actionable_ms": self.last_actionable_ms,
             "decision_deadline_ms": self.decision_deadline_ms,
             "last_decision_bucket_ms": self.last_decision_bucket_ms,
             "last_verdict": self.last_verdict,
@@ -911,18 +915,23 @@ class SymbolStateStore:
                 counts[state.status.value] = counts.get(state.status.value, 0) + 1
         return counts
 
-    def actionable_symbol_counts(self, *, now_ms: int, ttl_ms: int) -> dict[str, int]:
+    def actionable_symbol_counts(self, *, now_ms: int, ttl_ms: int, session_start_ms: int | None = None) -> dict[str, int]:
         current = 0
         seen = 0
         cutoff_ms = int(now_ms) - int(ttl_ms)
+        session_cutoff_ms = None if session_start_ms is None else int(session_start_ms)
         with self._lock:
             for state in self._states.values():
-                if state.actionable_since_ms is None:
-                    continue
-                seen += 1
-                if int(state.actionable_since_ms) >= cutoff_ms:
+                if state.actionable_since_ms is not None and int(state.actionable_since_ms) >= cutoff_ms:
                     current += 1
-        return {"current": current, "seen": seen}
+                last_actionable_ms = state.last_actionable_ms
+                if last_actionable_ms is None:
+                    last_actionable_ms = state.actionable_since_ms
+                if last_actionable_ms is None:
+                    continue
+                if session_cutoff_ms is None or int(last_actionable_ms) >= session_cutoff_ms:
+                    seen += 1
+        return {"current": current, "seen": seen, "session_seen": seen, "session_start_ms": session_cutoff_ms}
 
     def ticker_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}

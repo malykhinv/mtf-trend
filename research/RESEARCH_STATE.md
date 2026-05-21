@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-21 - P367 live2/backtest candidate parity repair
+
+```text
+Current patch status: P367 APPLIED locally / UNKNOWN commit.
+Question: why did post-P365 live2 run 20260521_124514 still have selected_count=0?
+Finding: live2 still choked before entry guard. The run had 123388 decisions, selected_count=0, execution/orders=0, and rejects dominated by stream_candle_is_not_upward_price_confirmation=67516 and prior_whipsaw caps about 50k per live-priority category. Top-growth showed real hourly movers (BSB +14.0% and +17.5%, EDEN +11.9%, FIDA +10.6%), so "dead market" is false. Root cause: live2 applied shared category caps to a single 5s actionable bucket, while backtest builds a forming 1m setup from 5s entry candles after the default 4 confirmation candles. This made prior_whipsaw/range/risk materially stricter in live than in backtest.
+Change: live2 signal features now build a backtest-like 1m/5s forming setup before category evaluation. Category gates use cumulative setup quote/trade pace, forming setup range/risk, and prior-whipsaw divided by the forming setup range. Near-miss artifacts now expose live_setup_* parity diagnostics and feature initial risk. The grid `Активные` count now uses current TTL / unique active symbols since the current session metric start.
+Risk: medium. This aligns live2 with the existing backtest candidate contract, but it means default live2 category evaluation waits for the same 4x5s confirmation horizon as the backtest before shared categories can accept. If the operator target is truly pump-start-to-order <5s, the backtest contract itself must be changed and revalidated; live2 should not fake faster parity.
+Validation: `.venv\Scripts\python.exe -m pytest -q tests\test_live2_market_watch.py`; `python -m compileall research_tools\anomaly_live2 cli\commands.py cli\parser.py constants.py main.py`; `python -m compileall data\exchanges research_tools cli constants.py main.py`.
+```
+
 ## 2026-05-21 - post-P365 live2 choke audit
 
 ```text

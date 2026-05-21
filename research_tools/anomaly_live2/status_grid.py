@@ -91,7 +91,9 @@ def format_live2_status_grid(
     watched_symbols = _int(state_counts.get("watching")) + _int(state_counts.get("actionable"))
     actionable_symbol_counts = _dict(market_data_status.get("actionable_symbol_counts"))
     current_actionable_symbols = _int(actionable_symbol_counts.get("current"))
-    seen_actionable_symbols = _int(actionable_symbol_counts.get("seen"))
+    seen_actionable_symbols = _int(actionable_symbol_counts.get("session_seen"))
+    if seen_actionable_symbols <= 0:
+        seen_actionable_symbols = _int(actionable_symbol_counts.get("seen"))
     if current_actionable_symbols <= 0 and seen_actionable_symbols <= 0:
         current_actionable_symbols = _int(state_counts.get("actionable"))
 
