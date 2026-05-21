@@ -42,6 +42,20 @@ Retired strategy experiments were removed from active research memory in P129 be
 
 ---
 
+## 2026-05-21 - live2 run review 20260521_044228
+
+```text
+Artifact reviewed: .output/results/live2_anomaly_runs/20260521_044228.
+Window: live2_started 2026-05-21T04:42:28Z; latest inspected status 2026-05-21T05:23:54Z; market_runtime about 26m after startup warmup/context prewarm.
+Verdict for "all-seeing eye <5s": materially improved and acceptable for market-watch hot path, with one audit weakness. Runtime gates are currently all_gates_ready; session allowed share is 1560.582s allowed / 0.756s blocked = 99.95%, rounded in UI to 100%. WS health is clean: ticker/aggTrade/markPrice reconnects=0, disconnects=0, payload_errors=0, shards_connected=4/4, last message ages low.
+Data coverage: selected universe 578. mark ok=578, prior_context ok=578, OI ok=576 with 2 not_enough_history. prior_context rolling maintenance is active and clean: total_ws_5m_candles_appended=3459, gap_tolerated=0, gap_above_tolerance_tolerated=0, gap_rejected=0, total_errors=0. No Ctx stale was observed.
+Decision latency: total_decisions=14167, selected_count=0, data_dependency_not_ready=0, data_not_ready=4, deadline_missed=28, deadline_expired_backlog=6. Rejected_signal_contract latency p50=26ms, p95=49ms, p99=137ms, max=402ms; no normal evaluated decision exceeded 750ms or 5s. deadline_missed rows were 3196ms, still <5s. The 6 deadline_expired_backlog rows were >5s stale backlog, not fresh accepted signals.
+Trading/execution truth: no selected signals, orders, fills, stops, protected positions, or integrity errors. Therefore this run proves market observation/gating health, but does not prove real entry/fill/stop lifecycle under live signal pressure.
+Signal funnel: no entries because categories rejected, dominated by stream_candle_is_not_upward_price_confirmation and prior_whipsaw/prior_spike/prior_fast_fade caps. No profit/edge conclusion can be made.
+Residual issues: top_growth audit exists but is too slow to complete promptly with default one symbol per heartbeat; at inspection it was still scheduled/processing around 304/578 symbols and top_growth_index had only headers. This is not a trading blocker because it is off the hot path, but it weakens missed-pump audit until completion. Telegram startup notification had one SSL handshake timeout; artifacts remained healthy and this is operator-notification risk, not source-of-truth risk.
+Next action: no critical live-entry blocker found in this run. For audit quality, increase top_growth_symbols_per_cycle moderately or keep the run alive long enough to confirm top_growth completion; then evaluate any hourly top movers against live decision/reject visibility.
+```
+
 ## 2026-05-20 - live2 run review 20260520_135941
 
 ```text
