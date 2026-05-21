@@ -16,7 +16,7 @@ from typing import Iterable
 from .clock import utc_now_ms
 from .state import SymbolState
 
-LIVE2_SESSION_TOP_LIMIT = 3
+LIVE2_SESSION_TOP_LIMIT = 4
 HOUR_MS = 60 * 60 * 1000
 
 LIVE2_CRYPTO_SESSION_WINDOWS_UTC: tuple[tuple[int, int, str, str, str, str], ...] = (

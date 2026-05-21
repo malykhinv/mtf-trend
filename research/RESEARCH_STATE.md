@@ -1,5 +1,15 @@
 # Anomaly Research State
 
+## 2026-05-21 - P364 live2 session-scoped operator grid
+
+```text
+Current patch status: P364 APPLIED locally / UNKNOWN commit.
+Question: make grid-log numbers session-scoped where appropriate, show four session growth tops, and replace dot spacer rows.
+Change: the live2 grid now uses session-scoped decision/execution/runtime counters derived by subtracting a baseline at the session metric window boundary. First session after process start counts from live start; later session rollovers reset the baseline. Session top tracker limit is four, and grid separators are full-width underscore lines.
+Trading impact: none. This changes operator display semantics only; cumulative forensic counters remain in events/diagnostics.
+Validation: `python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py constants.py main.py`; `python -m compileall data/exchanges research_tools cli constants.py main.py`; `.venv\Scripts\python.exe -m pytest -q tests/test_live2_market_watch.py`.
+```
+
 ## 2026-05-21 - P363 live2 active-symbol grid truth
 
 ```text

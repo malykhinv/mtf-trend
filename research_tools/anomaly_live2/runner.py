@@ -189,6 +189,10 @@ class AnomalyLive2Runner:
         self._session_gate_blocked_seconds = 0.0
         self._session_gate_current_allowed = False
         self._session_gate_current_since_monotonic = self._runtime_gate_current_since_monotonic
+        self._session_counter_metric_start_ms: int | None = None
+        self._session_decision_baseline: dict[str, int] = {}
+        self._session_execution_baseline: dict[str, int] = {}
+        self._session_runtime_baseline: dict[str, int] = {}
         self._last_runtime_gate_reason = "startup"
         self._last_decision_cycle_elapsed_ms = 0
         self._started_monotonic = time.perf_counter()
@@ -617,6 +621,11 @@ class AnomalyLive2Runner:
                     decision_status = self.deadline_engine.status()
                     execution_status = self._execution_status()
                     artifact_writer_status = writer.status().as_dict()
+                    grid_decision_status, grid_execution_status, grid_runtime_gate_status = self._session_scoped_grid_status(
+                        decision_status=decision_status,
+                        execution_status=execution_status,
+                        runtime_gate_status=runtime_gate_status,
+                    )
                     diagnostics_summary = self._diagnostics_summary(
                         writer=writer,
                         market_data_status=market_data_status,
@@ -651,10 +660,10 @@ class AnomalyLive2Runner:
                             prior_context_counts=market_data_status.get("prior_context_status_counts", {}),
                             candle_counts=market_data_status.get("candle_coverage_counts", {}),
                             market_data_status=market_data_status,
-                            decision_status=decision_status,
-                            execution_status=execution_status,
+                            decision_status=grid_decision_status,
+                            execution_status=grid_execution_status,
                             user_data_stream_status=self._user_data_stream_status(),
-                            runtime_gate_status=runtime_gate_status,
+                            runtime_gate_status=grid_runtime_gate_status,
                             artifact_writer_status=artifact_writer_status,
                             session_top_snapshot=self._last_session_top_snapshot,
                         ),
@@ -1001,6 +1010,73 @@ class AnomalyLive2Runner:
             "current_allowed": self._session_gate_current_allowed,
             "current_state_seconds": round(current_elapsed, 3),
         }
+
+    def _session_scoped_grid_status(
+        self,
+        *,
+        decision_status: dict[str, object],
+        execution_status: dict[str, object],
+        runtime_gate_status: dict[str, object],
+    ) -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
+        now_ms = int(time.time() * 1000)
+        session = live2_session_metric_window_ms(now_ms)
+        metric_start_ms = int(session["metric_start_ms"])
+        if self._session_counter_metric_start_ms != metric_start_ms:
+            first_session_window = self._session_counter_metric_start_ms is None
+            self._session_counter_metric_start_ms = metric_start_ms
+            self._session_decision_baseline = {} if first_session_window else _counter_baseline(
+                decision_status,
+                (
+                    "total_decisions",
+                    "selected_count",
+                    "total_rejected",
+                    "total_data_not_ready",
+                    "total_data_dependency_not_ready",
+                    "total_deadline_missed",
+                    "total_deadline_expired_backlog",
+                    "total_pre_live_bucket_skipped",
+                ),
+            )
+            self._session_execution_baseline = {} if first_session_window else _counter_baseline(
+                execution_status,
+                (
+                    "total_orders_submitted",
+                    "total_positions_protected",
+                    "total_integrity_errors",
+                    "total_exchange_errors",
+                    "total_rejected_capacity",
+                    "total_rejected_existing_position",
+                ),
+            )
+            self._session_runtime_baseline = {} if first_session_window else _counter_baseline(
+                runtime_gate_status,
+                (
+                    "decision_loop_overrun_count",
+                    "decision_loop_max_elapsed_ms",
+                    "market_data_clean_windows",
+                    "market_data_degraded_windows",
+                ),
+            )
+        session_decision_status = _subtract_counter_baseline(
+            decision_status,
+            self._session_decision_baseline,
+        )
+        session_execution_status = _subtract_counter_baseline(
+            execution_status,
+            self._session_execution_baseline,
+        )
+        session_runtime_gate_status = _subtract_counter_baseline(
+            runtime_gate_status,
+            self._session_runtime_baseline,
+            max_keys={"decision_loop_max_elapsed_ms"},
+        )
+        session_decision_status["counter_scope"] = "session"
+        session_decision_status["session_metric_start_ms"] = metric_start_ms
+        session_execution_status["counter_scope"] = "session"
+        session_execution_status["session_metric_start_ms"] = metric_start_ms
+        session_runtime_gate_status["counter_scope"] = "session"
+        session_runtime_gate_status["session_metric_start_ms"] = metric_start_ms
+        return session_decision_status, session_execution_status, session_runtime_gate_status
 
     def _diagnostics_summary(
         self,
@@ -1890,3 +1966,25 @@ class AnomalyLive2Runner:
 
 def _dict_or_empty(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
+
+
+def _counter_baseline(source: dict[str, object], keys: tuple[str, ...]) -> dict[str, int]:
+    return {key: int(source.get(key) or 0) for key in keys}
+
+
+def _subtract_counter_baseline(
+    source: dict[str, object],
+    baseline: dict[str, int],
+    *,
+    max_keys: set[str] | None = None,
+) -> dict[str, object]:
+    result = dict(source)
+    keep_as_total = max_keys or set()
+    for key, base_value in baseline.items():
+        if key not in result:
+            continue
+        value = int(result.get(key) or 0)
+        if key in keep_as_total:
+            continue
+        result[key] = max(0, value - int(base_value))
+    return result

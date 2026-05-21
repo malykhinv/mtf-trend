@@ -1,5 +1,43 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P364 applied locally - live2 session-scoped operator grid
+
+Files:
+
+```text
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/session_top.py
+research_tools/anomaly_live2/status_grid.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Make the live2 operator grid read as a current-session control panel instead of mixing run-lifetime counters with session top movers.
+```
+
+Change:
+
+```text
+The grid now receives session-scoped decision/execution/runtime counters using the same session metric window as trading percent and session tops. On first live start inside a session, counters start from the run start; on session rollover, the baseline resets. Session top growth keeps four items instead of three. Separator rows render as a full-width underscore line instead of four dot cells.
+```
+
+Validation:
+
+```bash
+python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py constants.py main.py
+python -m compileall data/exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m pytest -q tests/test_live2_market_watch.py
+```
+
+Risk:
+
+```text
+Low. Operator grid/status presentation only. Trading gates, signal filters, entry guard, exchange execution, fills, stops, and artifact truth are unchanged. Cumulative totals remain in live2_events.csv and diagnostics artifacts.
+```
+
 ## 2026-05-21 - P363 applied locally - live2 active-symbol grid truth
 
 Files:

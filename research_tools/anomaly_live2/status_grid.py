@@ -298,7 +298,7 @@ def _section_title(title: str) -> str:
 
 
 def _separator_line() -> str:
-    return _format_status_line(*(_format_status_cell("·", "", width=24) for _ in range(4)))
+    return "_" * 99
 
 
 def _format_live_status_value(value: object) -> str:
