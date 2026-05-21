@@ -1,5 +1,45 @@
 # Anomaly Patch Log
 
+## 2026-05-21 - P363 applied locally - live2 active-symbol grid truth
+
+Files:
+
+```text
+research_tools/anomaly_live2/state.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/status_grid.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Fix the operator grid's misleading `Активные 0/0` display. In live2 the ACTIONABLE enum is not retained after a deadline verdict, so counting only state.status=actionable reports zero even while thousands of actionable buckets are processed.
+```
+
+Change:
+
+```text
+SymbolStateStore now reports actionable_symbol_counts as current symbols with actionable_since_ms inside the radar TTL and total symbols that have ever become actionable in the run. The live2 status payload exposes that object, and the grid renders `Активные current/seen` from it instead of the transient enum count.
+```
+
+Validation:
+
+```bash
+python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py constants.py main.py
+python -m compileall data/exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m pytest -q tests/test_live2_market_watch.py
+```
+
+Risk:
+
+```text
+Low. Operator/status artifact semantics only. No signal filter, entry guard, runtime gate, exchange order, fill, stop, or position lifecycle behavior changed.
+```
+
 ## 2026-05-21 - P362 applied locally - live2 near-miss artifacts
 
 Files:

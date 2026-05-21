@@ -1318,6 +1318,10 @@ class AnomalyLive2Runner:
             now_ms = int(time.time() * 1000)
             symbol_counts = {
                 "included": True,
+                "actionable_symbol_counts": self.state_store.actionable_symbol_counts(
+                    now_ms=now_ms,
+                    ttl_ms=self.config.oi_radar_symbol_ttl_ms,
+                ),
                 "aggtrade_status_counts": self.state_store.aggtrade_counts(now_ms=now_ms, stale_ms=self.config.aggtrade_stale_ms),
                 "startup_aggtrade_status_counts": self.state_store.startup_aggtrade_counts(),
                 "live_aggtrade_status_counts": self.state_store.live_aggtrade_counts(now_ms=now_ms, stale_ms=self.config.aggtrade_stale_ms),
@@ -1336,6 +1340,7 @@ class AnomalyLive2Runner:
             "prior_context": prior_context_status,
             "live_decision_watermark_ms": live_decision_watermark_ms,
             "symbol_counts_included": bool(symbol_counts.get("included")),
+            "actionable_symbol_counts": symbol_counts.get("actionable_symbol_counts", {}),
             "aggtrade_status_counts": symbol_counts.get("aggtrade_status_counts", {}),
             "startup_aggtrade_status_counts": symbol_counts.get("startup_aggtrade_status_counts", {}),
             "live_aggtrade_status_counts": symbol_counts.get("live_aggtrade_status_counts", {}),

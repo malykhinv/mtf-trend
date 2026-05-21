@@ -911,6 +911,19 @@ class SymbolStateStore:
                 counts[state.status.value] = counts.get(state.status.value, 0) + 1
         return counts
 
+    def actionable_symbol_counts(self, *, now_ms: int, ttl_ms: int) -> dict[str, int]:
+        current = 0
+        seen = 0
+        cutoff_ms = int(now_ms) - int(ttl_ms)
+        with self._lock:
+            for state in self._states.values():
+                if state.actionable_since_ms is None:
+                    continue
+                seen += 1
+                if int(state.actionable_since_ms) >= cutoff_ms:
+                    current += 1
+        return {"current": current, "seen": seen}
+
     def ticker_counts(self) -> dict[str, int]:
         counts: dict[str, int] = {}
         with self._lock:

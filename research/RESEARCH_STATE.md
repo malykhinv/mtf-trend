@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-21 - P363 live2 active-symbol grid truth
+
+```text
+Current patch status: P363 APPLIED locally / UNKNOWN commit.
+Question: why did run 20260521_110133 show 0 active symbols after 50+ minutes?
+Finding: it was a metric bug, not a market fact. Live2 processed about 67m of market-runtime, 41053 decisions, 40981 signal evaluations, and 0 selected signals. However, the grid counted only state.status=actionable. The deadline engine writes actionable_since_ms for every actionable bucket but immediately sets status back to watching after the verdict, so current status actionable stays zero by design.
+Change: the grid now renders `Активные current/seen` using actionable_since_ms within the radar TTL and total symbols ever actionable in the run. This makes the operator view reflect active recent anomaly symbols instead of a transient internal enum.
+Trading impact: none. It does not loosen filters; selected_count remains the count of category-accepted entry signals, and entry_guard/execution are unchanged.
+Validation: `python -m compileall research_tools/anomaly_live2 cli/commands.py cli/parser.py constants.py main.py`; `python -m compileall data/exchanges research_tools cli constants.py main.py`; `.venv\Scripts\python.exe -m pytest -q tests/test_live2_market_watch.py`.
+```
+
 ## 2026-05-21 - P362 live2 near-miss artifacts
 
 ```text

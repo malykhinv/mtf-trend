@@ -89,7 +89,11 @@ def format_live2_status_grid(
     ready_candles = live_ready_candles + warmup_only_candles
     total_symbols = max(_sum_counts(state_counts), selected_symbols, ready_candles)
     watched_symbols = _int(state_counts.get("watching")) + _int(state_counts.get("actionable"))
-    actionable_symbols = _int(state_counts.get("actionable"))
+    actionable_symbol_counts = _dict(market_data_status.get("actionable_symbol_counts"))
+    current_actionable_symbols = _int(actionable_symbol_counts.get("current"))
+    seen_actionable_symbols = _int(actionable_symbol_counts.get("seen"))
+    if current_actionable_symbols <= 0 and seen_actionable_symbols <= 0:
+        current_actionable_symbols = _int(state_counts.get("actionable"))
 
     total_decisions = _int(decision_status.get("total_decisions"))
     selected_count = _int(decision_status.get("selected_count"))
@@ -119,7 +123,7 @@ def format_live2_status_grid(
     loop_overruns = _int(runtime_gate_status.get("decision_loop_overrun_count"))
     loop_max_ms = _int(runtime_gate_status.get("decision_loop_max_elapsed_ms"))
     clean_windows = _int(market_data_status.get("clean_windows"))
-    active_total = selected_count
+    active_total = seen_actionable_symbols
     context_gap_summary = f"{prior_gap_tolerated}/{prior_gap_above_tolerance}/{prior_gap_rejected}"
 
     rows = [
@@ -194,7 +198,7 @@ def format_live2_status_grid(
             _format_status_cell("Время", _format_live_runtime(runtime_seconds)),
             _format_status_cell("Символы", selected_symbols),
             _format_status_cell("Аномалии", total_decisions),
-            _format_status_cell("Активные", f"{actionable_symbols}/{active_total}"),
+            _format_status_cell("Активные", f"{current_actionable_symbols}/{active_total}"),
         ),
         *_format_session_top_block(session_top_snapshot),
         _separator_line(),

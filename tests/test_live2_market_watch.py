@@ -92,6 +92,16 @@ def test_live2_state_store_marks_due_closed_candle_for_decision() -> None:
     assert state.candle_book.rings[5_000].latest_closed() is not None
 
 
+def test_live2_state_store_counts_recent_actionable_symbols() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT", "BBB/USDT:USDT", "CCC/USDT:USDT"))
+    store.get_or_create("AAA/USDT:USDT").actionable_since_ms = 10_000
+    store.get_or_create("BBB/USDT:USDT").actionable_since_ms = 1_000
+
+    counts = store.actionable_symbol_counts(now_ms=11_000, ttl_ms=5_000)
+
+    assert counts == {"current": 1, "seen": 2}
+
+
 def test_live2_signal_context_status_marks_stale_ok_context() -> None:
     assert (
         _effective_context_status(
@@ -474,6 +484,7 @@ def test_live2_status_grid_uses_four_column_operator_sections() -> None:
                 "total_ws_5m_gap_rejected": 0,
             },
             "universe": {"selected_symbols": 578},
+            "actionable_symbol_counts": {"current": 17, "seen": 143},
         },
         decision_status={
             "total_decisions": 14167,
@@ -509,7 +520,7 @@ def test_live2_status_grid_uses_four_column_operator_sections() -> None:
     assert "◆ Рынок" in text
     assert "◆ Торговля 100%" in text
     assert "Аномалии 14167" in text
-    assert "Активные 0/0" in text
+    assert "Активные 17/143" in text
     assert "Разрывы контекста 0/0/0" in text
     assert "BTC 1.8%" in text and "SOL 0.9%" in text
 
