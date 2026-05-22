@@ -494,6 +494,37 @@ def _market_context_status_is_bad(value: object) -> bool:
     return status != "ok"
 
 
+def _candidate_availability_mask(candidates: pd.DataFrame) -> pd.Series:
+    """Return rows whose signal fields have explicit closed-candle availability semantics."""
+
+    required_columns = (
+        "timestamp_ms",
+        "setup_available_timestamp_ms",
+        "decision_timestamp_ms",
+        "decision_available_timestamp_ms",
+        "timestamp_semantics",
+    )
+    for column in required_columns:
+        if column not in candidates.columns:
+            return pd.Series(False, index=candidates.index)
+    timestamp = pd.to_numeric(candidates["timestamp_ms"], errors="coerce")
+    setup_available = pd.to_numeric(candidates["setup_available_timestamp_ms"], errors="coerce")
+    decision_timestamp = pd.to_numeric(candidates["decision_timestamp_ms"], errors="coerce")
+    decision_available = pd.to_numeric(candidates["decision_available_timestamp_ms"], errors="coerce")
+    semantics = candidates["timestamp_semantics"].astype(str)
+    return (
+        timestamp.notna()
+        & setup_available.notna()
+        & decision_timestamp.notna()
+        & decision_available.notna()
+        & setup_available.ge(timestamp)
+        & decision_available.ge(decision_timestamp)
+        & decision_available.ge(setup_available)
+        & semantics.str.contains("ohlcv_timestamp_is_candle_open", regex=False)
+        & semantics.str.contains("available_timestamp_is_candle_close", regex=False)
+    )
+
+
 def _red_flag_violation_masks(signals: pd.DataFrame, *, config: AnomalyBacktestConfig) -> dict[str, pd.Series]:
     if signals.empty:
         return {}
@@ -1612,7 +1643,10 @@ def build_anomaly_signals(
         "decision_box_range",
         "decision_ema20",
         "timestamp_ms",
+        "setup_available_timestamp_ms",
         "decision_timestamp_ms",
+        "decision_available_timestamp_ms",
+        "timestamp_semantics",
     }
     if config.min_oi_change_pct_3x5m is not None:
         required.add("oi_change_pct_3x5m")
@@ -1678,6 +1712,7 @@ def build_anomaly_signals(
         & signals["hold_count_next_n_candles"].astype(float).ge(config.min_hold_count)
         & signals["initial_risk_pct_at_decision"].gt(0.0)
         & signals["initial_risk_pct_at_decision"].le(config.max_initial_risk_pct)
+        & _candidate_availability_mask(signals)
         & _candidate_flow_source_mask(signals)
     )
     if config.min_initial_risk_pct is not None:

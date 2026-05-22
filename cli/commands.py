@@ -228,7 +228,17 @@ def _filter_reused_candidates_to_current_request(
     symbols: Iterable[str] | None,
     candidate_path: Path,
 ) -> pd.DataFrame:
-    required_columns = {"symbol", "decision_timestamp_ms", "setup_timeframe", "entry_timeframe", "feature_contract"}
+    required_columns = {
+        "symbol",
+        "timestamp_ms",
+        "setup_available_timestamp_ms",
+        "decision_timestamp_ms",
+        "decision_available_timestamp_ms",
+        "timestamp_semantics",
+        "setup_timeframe",
+        "entry_timeframe",
+        "feature_contract",
+    }
     missing_columns = sorted(required_columns - set(candidates.columns))
     if missing_columns:
         raise ValueError(
@@ -243,6 +253,13 @@ def _filter_reused_candidates_to_current_request(
             "refusing --reuse-candidates-dir because anomaly_candidates.csv contains invalid "
             f"decision_timestamp_ms rows={invalid_ts_count}: {candidate_path}"
         )
+    filtered["decision_available_timestamp_ms"] = pd.to_numeric(filtered["decision_available_timestamp_ms"], errors="coerce")
+    invalid_available_ts_count = int(filtered["decision_available_timestamp_ms"].isna().sum())
+    if invalid_available_ts_count:
+        raise ValueError(
+            "refusing --reuse-candidates-dir because anomaly_candidates.csv contains invalid "
+            f"decision_available_timestamp_ms rows={invalid_available_ts_count}: {candidate_path}"
+        )
     expected_setup = str(expected_config.setup_timeframe)
     expected_entry = str(expected_config.entry_timeframe)
     expected_contract = str(expected_config.feature_contract)
@@ -256,13 +273,14 @@ def _filter_reused_candidates_to_current_request(
         end_ms = int(end_ms)
         start_ms = int((datetime.fromtimestamp(end_ms / 1000, UTC) - pd.Timedelta(days=int(expected_config.lab_config.days))).timestamp() * 1000)
         filtered = filtered.loc[
-            (filtered["decision_timestamp_ms"] >= start_ms)
-            & (filtered["decision_timestamp_ms"] <= end_ms)
+            (filtered["decision_available_timestamp_ms"] >= start_ms)
+            & (filtered["decision_available_timestamp_ms"] <= end_ms)
         ].copy()
     wanted_symbols = set(_normalized_symbol_tuple(symbols))
     if wanted_symbols:
         filtered = filtered.loc[filtered["symbol"].astype(str).map(normalize_symbol).isin(wanted_symbols)].copy()
     filtered["decision_timestamp_ms"] = filtered["decision_timestamp_ms"].astype("int64")
+    filtered["decision_available_timestamp_ms"] = filtered["decision_available_timestamp_ms"].astype("int64")
     return filtered
 
 
