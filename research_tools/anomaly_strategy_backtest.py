@@ -1956,6 +1956,350 @@ def ensure_targeted_subminute_flow_cache_for_configs(
     return backfill, materialize
 
 
+def split_targeted_flow_backfill_artifacts(backfill: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Split the combined targeted-flow artifact into plan and fetch tables.
+
+    `ensure_targeted_subminute_flow_cache_for_configs` keeps returning the legacy
+    combined backfill frame for compatibility, but the audit trail needs two
+    separate, operator-readable files: what was planned before network fetch and
+    what each actual fetch window returned.
+    """
+
+    if backfill.empty:
+        empty_plan = pd.DataFrame([{"status": "no_targeted_flow_rows", "reason": "targeted_flow_planner_returned_empty"}])
+        empty_fetch = pd.DataFrame([{"status": "no_fetch_windows", "reason": "targeted_flow_planner_returned_empty"}])
+        return empty_plan, empty_fetch
+    if "symbol" not in backfill.columns:
+        return backfill.copy(), pd.DataFrame([{"status": "invalid_backfill_artifact", "reason": "missing_symbol_column"}])
+    symbols = backfill["symbol"].astype(str)
+    plan = backfill.loc[symbols.eq("__coarse_scan__")].copy()
+    fetch = backfill.loc[~symbols.eq("__coarse_scan__")].copy()
+    if plan.empty:
+        plan = pd.DataFrame([{"status": "missing_window_plan", "reason": "combined_backfill_has_no_coarse_scan_rows"}])
+    if fetch.empty:
+        fetch = pd.DataFrame([{"status": "no_fetch_windows", "reason": "targeted_flow_plan_selected_zero_windows"}])
+    return plan.reset_index(drop=True), fetch.reset_index(drop=True)
+
+
+def _targeted_flow_planned_window_count(plan: pd.DataFrame) -> int:
+    if plan.empty:
+        return 0
+    for column in ("merged_targeted_windows", "targeted_windows", "raw_targeted_windows"):
+        if column in plan.columns:
+            values = pd.to_numeric(plan[column], errors="coerce").fillna(0)
+            count = int(values.sum())
+            if count > 0:
+                return count
+    return 0
+
+
+def _targeted_flow_entry_timeframes(configs: Iterable[AnomalyBacktestConfig]) -> tuple[str, ...]:
+    timeframes = {
+        _effective_entry_timeframe(config)
+        for config in configs
+        if _effective_entry_timeframe(config) != _effective_setup_timeframe(config)
+        and 0 < _timeframe_to_milliseconds(_effective_entry_timeframe(config)) < 60_000
+    }
+    return tuple(sorted(timeframes, key=_timeframe_to_milliseconds))
+
+
+def _materialized_entry_window_status(
+    *,
+    cache_dir: Path,
+    symbol: str,
+    entry_timeframe: str,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+    frame_cache: dict[tuple[str, str], pd.DataFrame],
+) -> dict[str, object]:
+    key = (symbol, entry_timeframe)
+    if key not in frame_cache:
+        frame_cache[key] = _read_symbol_frame_optional(cache_dir, symbol, entry_timeframe)
+    frame = frame_cache[key]
+    if frame.empty:
+        return {"coverage_status": "missing_materialized_entry_flow_cache", "coverage_rows": 0}
+    validation_error = _flow_cache_validation_error(
+        frame,
+        cache_timeframe=entry_timeframe,
+        entry_timeframe=entry_timeframe,
+    )
+    if validation_error is not None:
+        return {
+            "coverage_status": "untrusted_materialized_entry_flow_cache",
+            "coverage_error": validation_error,
+            "coverage_rows": 0,
+        }
+    if "timestamp" not in frame.columns:
+        return {"coverage_status": "missing_timestamp", "coverage_rows": 0}
+    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce").dropna().astype("int64")
+    if timestamps.empty:
+        return {"coverage_status": "empty_materialized_entry_flow_cache", "coverage_rows": 0}
+    entry_ms = _timeframe_to_milliseconds(entry_timeframe)
+    first_bucket = int(start_timestamp_ms // entry_ms) * entry_ms
+    last_bucket = int(end_timestamp_ms // entry_ms) * entry_ms
+    in_window = timestamps.loc[timestamps.ge(first_bucket) & timestamps.le(last_bucket)]
+    if in_window.empty:
+        return {
+            "coverage_status": "missing_window_candles",
+            "coverage_rows": 0,
+            "required_first_bucket_ms": int(first_bucket),
+            "required_last_bucket_ms": int(last_bucket),
+        }
+    return {
+        "coverage_status": "ready",
+        "coverage_rows": int(len(in_window)),
+        "coverage_min_timestamp_ms": int(in_window.min()),
+        "coverage_max_timestamp_ms": int(in_window.max()),
+        "coverage_min_timestamp_utc": _timestamp_to_utc(int(in_window.min())),
+        "coverage_max_timestamp_utc": _timestamp_to_utc(int(in_window.max())),
+        "required_first_bucket_ms": int(first_bucket),
+        "required_last_bucket_ms": int(last_bucket),
+    }
+
+
+def build_targeted_flow_coverage(
+    *,
+    backfill: pd.DataFrame,
+    materialize: pd.DataFrame,
+    configs: Iterable[AnomalyBacktestConfig],
+) -> pd.DataFrame:
+    """Audit whether targeted 1s fetches produced trusted subminute flow windows."""
+
+    resolved_configs = [_apply_red_flag_profile(config) for config in configs]
+    entry_timeframes = _targeted_flow_entry_timeframes(resolved_configs)
+    if not entry_timeframes:
+        return pd.DataFrame([{"coverage_status": "not_required", "reason": "no_subminute_entry_timeframes"}])
+    _, fetch = split_targeted_flow_backfill_artifacts(backfill)
+    if fetch.empty or "symbol" not in fetch.columns:
+        fetch_rows = pd.DataFrame()
+    else:
+        fetch_rows = fetch.loc[fetch["symbol"].astype(str).ne("__coarse_scan__")].copy()
+    if fetch_rows.empty or "symbol" not in fetch_rows.columns:
+        return pd.DataFrame([{"coverage_status": "no_targeted_flow_windows", "reason": "no_fetch_windows"}])
+    cache_dir = resolved_configs[0].lab_config.cache_dir
+    frame_cache: dict[tuple[str, str], pd.DataFrame] = {}
+    rows: list[dict[str, object]] = []
+    materialize_status_counts: dict[str, int] = {}
+    if not materialize.empty and "status" in materialize.columns:
+        for status, count in materialize["status"].astype(str).value_counts().items():
+            materialize_status_counts[str(status)] = int(count)
+    for _, row in fetch_rows.iterrows():
+        symbol = str(row.get("symbol") or "").strip()
+        start_ms = _safe_int(row.get("start_timestamp_ms"))
+        end_ms = _safe_int(row.get("end_timestamp_ms"))
+        fetch_status = str(row.get("status") or "").strip() or "unknown"
+        if not symbol or symbol == "__all__" or start_ms is None or end_ms is None:
+            rows.append({
+                "symbol": symbol or "__missing__",
+                "coverage_status": "invalid_fetch_window",
+                "fetch_status": fetch_status,
+            })
+            continue
+        for entry_timeframe in entry_timeframes:
+            base = {
+                "symbol": symbol,
+                "entry_timeframe": entry_timeframe,
+                "start_timestamp_ms": int(start_ms),
+                "end_timestamp_ms": int(end_ms),
+                "start_timestamp_utc": _timestamp_to_utc(int(start_ms)),
+                "end_timestamp_utc": _timestamp_to_utc(int(end_ms)),
+                "fetch_status": fetch_status,
+                "fetch_error": row.get("error", ""),
+                "materialize_status_counts": json.dumps(materialize_status_counts, sort_keys=True),
+            }
+            if fetch_status != "ok":
+                rows.append({**base, "coverage_status": "fetch_not_ok", "coverage_rows": 0})
+                continue
+            rows.append({
+                **base,
+                **_materialized_entry_window_status(
+                    cache_dir=cache_dir,
+                    symbol=symbol,
+                    entry_timeframe=entry_timeframe,
+                    start_timestamp_ms=int(start_ms),
+                    end_timestamp_ms=int(end_ms),
+                    frame_cache=frame_cache,
+                ),
+            })
+    if not rows:
+        return pd.DataFrame([{"coverage_status": "no_targeted_flow_windows", "reason": "no_fetch_windows"}])
+    return pd.DataFrame(rows)
+
+
+def ready_symbols_from_targeted_flow_coverage(
+    coverage: pd.DataFrame,
+    *,
+    entry_timeframe: str | None = None,
+) -> tuple[str, ...]:
+    if coverage.empty or "coverage_status" not in coverage.columns or "symbol" not in coverage.columns:
+        return ()
+    frame = coverage.loc[coverage["coverage_status"].astype(str).eq("ready")].copy()
+    if entry_timeframe is not None and "entry_timeframe" in frame.columns:
+        frame = frame.loc[frame["entry_timeframe"].astype(str).eq(str(entry_timeframe))]
+    return tuple(sorted({str(symbol) for symbol in frame["symbol"].dropna().astype(str) if symbol and symbol != "__all__"}))
+
+
+def _status_counts_json(frame: pd.DataFrame, column: str) -> str:
+    if frame.empty or column not in frame.columns:
+        return "{}"
+    return json.dumps({str(key): int(value) for key, value in frame[column].astype(str).value_counts().items()}, sort_keys=True)
+
+
+def _valid_candidate_count(candidates: pd.DataFrame) -> int:
+    if candidates.empty:
+        return 0
+    if "status" not in candidates.columns:
+        return int(len(candidates))
+    return int((~candidates["status"].astype(str).eq("error")).sum())
+
+
+def _candidate_error_count(candidates: pd.DataFrame) -> int:
+    if candidates.empty or "status" not in candidates.columns:
+        return 0
+    return int(candidates["status"].astype(str).eq("error").sum())
+
+
+def _flow_data_error_count(candidates: pd.DataFrame) -> int:
+    if candidates.empty or "error" not in candidates.columns:
+        return 0
+    errors = candidates["error"].fillna("").astype(str).str.lower()
+    markers = ("flow_cache", "subminute", "trusted_flow", "materialized_entry_flow")
+    return int(errors.map(lambda value: any(marker in value for marker in markers)).sum())
+
+
+def build_anomaly_funnel(
+    *,
+    candidates: pd.DataFrame,
+    signals: pd.DataFrame,
+    trades: pd.DataFrame,
+    targeted_flow_plan: pd.DataFrame,
+    targeted_flow_fetch: pd.DataFrame,
+    targeted_flow_materialize: pd.DataFrame,
+    targeted_flow_coverage: pd.DataFrame,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+
+    def add(stage: str, count: int, **extra: object) -> None:
+        rows.append({"stage": stage, "count": int(count), **extra})
+
+    if not targeted_flow_plan.empty and "setup_timeframe" in targeted_flow_plan.columns:
+        coarse_rows = targeted_flow_plan.loc[targeted_flow_plan["setup_timeframe"].astype(str).ne("__all__")].copy()
+    elif not targeted_flow_plan.empty:
+        coarse_rows = targeted_flow_plan.copy()
+    else:
+        coarse_rows = pd.DataFrame()
+    add("coarse_candidates", int(pd.to_numeric(coarse_rows.get("coarse_candidates", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()))
+    add("coarse_prefilter_candidates", int(pd.to_numeric(coarse_rows.get("coarse_prefilter_candidates", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()))
+    add("coarse_signals", int(pd.to_numeric(coarse_rows.get("coarse_signals", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()))
+    add("targeted_raw_windows", int(pd.to_numeric(targeted_flow_plan.get("raw_targeted_windows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()))
+    add("targeted_merged_windows", int(pd.to_numeric(targeted_flow_plan.get("merged_targeted_windows", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()))
+    fetch_window_count = (
+        int(len(targeted_flow_fetch.loc[targeted_flow_fetch["symbol"].astype(str).ne("__coarse_scan__")]))
+        if not targeted_flow_fetch.empty and "symbol" in targeted_flow_fetch.columns
+        else 0
+    )
+    add("targeted_fetch_windows", fetch_window_count, status_counts=_status_counts_json(targeted_flow_fetch, "status"))
+    add("targeted_materialize_rows", int(len(targeted_flow_materialize)), status_counts=_status_counts_json(targeted_flow_materialize, "status"))
+    add("targeted_coverage_ready", int((targeted_flow_coverage.get("coverage_status", pd.Series(dtype=str)).astype(str) == "ready").sum()) if not targeted_flow_coverage.empty else 0, status_counts=_status_counts_json(targeted_flow_coverage, "coverage_status"))
+    add("final_candidates", int(len(candidates)), error_count=_candidate_error_count(candidates), valid_count=_valid_candidate_count(candidates))
+    add("signals", int(len(signals)))
+    add("trade_rows", int(len(trades)))
+    if not trades.empty and "trade_status" in trades.columns:
+        closed = int(trades["trade_status"].astype(str).eq("closed").sum())
+        skipped = int(trades["trade_status"].astype(str).eq("skipped").sum())
+    else:
+        closed = 0
+        skipped = 0
+    add("closed_trades", closed)
+    add("skipped_trades", skipped)
+    return pd.DataFrame(rows)
+
+
+def build_backtest_run_verdict(
+    *,
+    config: AnomalyBacktestConfig,
+    candidates: pd.DataFrame,
+    signals: pd.DataFrame,
+    trades: pd.DataFrame,
+    targeted_flow_plan: pd.DataFrame,
+    targeted_flow_coverage: pd.DataFrame,
+) -> pd.DataFrame:
+    entry_timeframe = _effective_entry_timeframe(config)
+    setup_timeframe = _effective_setup_timeframe(config)
+    subminute_pair = entry_timeframe != setup_timeframe and 0 < _timeframe_to_milliseconds(entry_timeframe) < 60_000
+    planned_windows = _targeted_flow_planned_window_count(targeted_flow_plan)
+    ready_windows = int((targeted_flow_coverage.get("coverage_status", pd.Series(dtype=str)).astype(str) == "ready").sum()) if not targeted_flow_coverage.empty else 0
+    valid_candidates = _valid_candidate_count(candidates)
+    candidate_errors = _candidate_error_count(candidates)
+    flow_data_errors = _flow_data_error_count(candidates)
+    valid_backtest = True
+    verdict = "valid_no_trades_yet"
+    reason = "signals_or_trades_may_still_be_zero_after_filters"
+    if subminute_pair and planned_windows > 0 and ready_windows == 0:
+        valid_backtest = False
+        verdict = "invalid_data_pipeline"
+        reason = "no_trusted_subminute_flow_coverage_after_targeted_fetch"
+    elif not candidates.empty and valid_candidates == 0 and flow_data_errors > 0:
+        valid_backtest = False
+        verdict = "invalid_data_pipeline"
+        reason = "no_valid_candidates_due_to_flow_data_errors"
+    elif not candidates.empty and valid_candidates == 0 and candidate_errors > 0:
+        valid_backtest = False
+        verdict = "invalid_candidate_collection"
+        reason = "all_candidates_are_error_rows"
+    elif candidates.empty:
+        verdict = "valid_empty_candidate_set"
+        reason = "no_candidates_after_asof_collection"
+    elif signals.empty:
+        verdict = "valid_no_signals"
+        reason = "valid_candidates_exist_but_signal_filters_selected_zero"
+    elif trades.empty:
+        verdict = "valid_no_trade_rows"
+        reason = "signals_exist_but_execution_simulation_returned_zero_rows"
+    else:
+        verdict = "valid_edge_evaluable"
+        reason = "trades_artifact_available"
+    return pd.DataFrame([
+        {
+            "valid_backtest": bool(valid_backtest),
+            "verdict": verdict,
+            "reason": reason,
+            "setup_timeframe": setup_timeframe,
+            "entry_timeframe": entry_timeframe,
+            "planned_targeted_flow_windows": int(planned_windows),
+            "ready_targeted_flow_windows": int(ready_windows),
+            "candidate_rows": int(len(candidates)),
+            "valid_candidate_rows": int(valid_candidates),
+            "candidate_error_rows": int(candidate_errors),
+            "flow_data_error_rows": int(flow_data_errors),
+            "signal_rows": int(len(signals)),
+            "trade_rows": int(len(trades)),
+            "coverage_status_counts": _status_counts_json(targeted_flow_coverage, "coverage_status"),
+        }
+    ])
+
+
+def _disabled_artifact_frame(*, artifact: str, reason: str) -> pd.DataFrame:
+    return pd.DataFrame([{"status": "disabled", "artifact": artifact, "reason": reason}])
+
+
+def targeted_flow_collection_symbols(
+    coverage: pd.DataFrame,
+    *,
+    requested_symbols: Iterable[str] | None = None,
+) -> tuple[str, ...] | None:
+    ready = set(ready_symbols_from_targeted_flow_coverage(coverage))
+    requested = tuple(symbol for symbol in (requested_symbols or ()) if str(symbol).strip())
+    if requested:
+        if not ready:
+            return requested
+        normalized_ready = {normalize_symbol(symbol) for symbol in ready}
+        return tuple(symbol for symbol in requested if normalize_symbol(symbol) in normalized_ready)
+    if ready:
+        return tuple(sorted(ready))
+    return None
+
+
 def build_entry_cache_coverage(
     *,
     cache_dir: Path,
@@ -6018,6 +6362,11 @@ def run_anomaly_strategy_backtest(
     run_latency_grid = bool(run_latency_grid or config.latency_enabled)
     output_dir = config.lab_config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    targeted_flow_backfill = pd.DataFrame()
+    targeted_flow_plan = pd.DataFrame()
+    targeted_flow_fetch = pd.DataFrame()
+    targeted_flow_materialize = pd.DataFrame()
+    targeted_flow_coverage = pd.DataFrame()
     stage_started_at = time.monotonic()
     if precollected_candidates is not None:
         candidates = precollected_candidates.copy()
@@ -6032,20 +6381,52 @@ def run_anomaly_strategy_backtest(
             symbols=symbols,
             progress_label="anomaly targeted flow",
         )
+        targeted_flow_plan, targeted_flow_fetch = split_targeted_flow_backfill_artifacts(targeted_flow_backfill)
+        targeted_flow_coverage = build_targeted_flow_coverage(
+            backfill=targeted_flow_backfill,
+            materialize=targeted_flow_materialize,
+            configs=[config],
+        )
         _write_artifact_frames(
             [
+                (output_dir / "targeted_flow_plan.csv", targeted_flow_plan),
+                (output_dir / "targeted_flow_fetch.csv", targeted_flow_fetch),
                 (output_dir / "targeted_flow_backfill.csv", targeted_flow_backfill),
                 (output_dir / "targeted_flow_materialize.csv", targeted_flow_materialize),
+                (output_dir / "targeted_flow_coverage.csv", targeted_flow_coverage),
             ],
             progress_label="anomaly artifacts: targeted flow",
         )
-        candidates = collect_pair_anomaly_rows(
-            config,
-            symbols=symbols,
-            progress_label="anomaly candidates",
-            include_derivatives_context=derivatives_context_fetcher is None,
-            auto_targeted_flow_backfill=False,
+        planned_windows = _targeted_flow_planned_window_count(targeted_flow_plan)
+        ready_symbols = ready_symbols_from_targeted_flow_coverage(
+            targeted_flow_coverage,
+            entry_timeframe=_effective_entry_timeframe(config),
         )
+        if planned_windows > 0 and not ready_symbols:
+            candidates = pd.DataFrame([
+                {
+                    "symbol": "__all__",
+                    "timeframe": _effective_setup_timeframe(config),
+                    "setup_timeframe": _effective_setup_timeframe(config),
+                    "entry_timeframe": _effective_entry_timeframe(config),
+                    "feature_contract": "htf_setup_ltf_entry_v1",
+                    "status": "error",
+                    "error": "no_trusted_targeted_flow_coverage_after_fetch",
+                    "execution_model": "targeted_flow_required_before_pair_collection",
+                }
+            ])
+        else:
+            collection_symbols = targeted_flow_collection_symbols(
+                targeted_flow_coverage,
+                requested_symbols=symbols,
+            )
+            candidates = collect_pair_anomaly_rows(
+                config,
+                symbols=collection_symbols if collection_symbols is not None else symbols,
+                progress_label="anomaly candidates",
+                include_derivatives_context=derivatives_context_fetcher is None,
+                auto_targeted_flow_backfill=False,
+            )
     else:
         candidates = collect_anomaly_lab_rows(
             config.lab_config,
@@ -6171,6 +6552,25 @@ def run_anomaly_strategy_backtest(
         run_entry_grid=bool(run_entry_grid),
         run_latency_grid=bool(run_latency_grid),
     )
+    anomaly_funnel = build_anomaly_funnel(
+        candidates=candidates,
+        signals=signals,
+        trades=trades,
+        targeted_flow_plan=targeted_flow_plan,
+        targeted_flow_fetch=targeted_flow_fetch,
+        targeted_flow_materialize=targeted_flow_materialize,
+        targeted_flow_coverage=targeted_flow_coverage,
+    )
+    run_verdict = build_backtest_run_verdict(
+        config=config,
+        candidates=candidates,
+        signals=signals,
+        trades=trades,
+        targeted_flow_plan=targeted_flow_plan,
+        targeted_flow_coverage=targeted_flow_coverage,
+    )
+    valid_backtest = bool(run_verdict.iloc[0]["valid_backtest"]) if not run_verdict.empty else False
+    invalid_reason = str(run_verdict.iloc[0]["reason"]) if not run_verdict.empty else "missing_run_verdict"
     stage_started_at = time.monotonic()
     _write_artifact_frames(
         [
@@ -6182,6 +6582,8 @@ def run_anomaly_strategy_backtest(
             (output_dir / "anomaly_profitability_by_category_family.csv", summarize_trades_by_pump_category_family(trades)),
             (output_dir / "anomaly_context_parity_report.csv", context_parity_report),
             (output_dir / "anomaly_backtest_honesty_report.csv", honesty_report),
+            (output_dir / "anomaly_funnel.csv", anomaly_funnel),
+            (output_dir / "anomaly_run_verdict.csv", run_verdict),
         ],
         progress_label="anomaly artifacts: trade files",
     )
@@ -6190,37 +6592,51 @@ def run_anomaly_strategy_backtest(
     _write_prepump_context_artifacts(config=config, output_dir=output_dir)
     timings["prepump_context_artifacts_seconds"] = time.monotonic() - stage_started_at
     if run_latency_grid:
-        print("anomaly latency grid: running variants", flush=True)
-        stage_started_at = time.monotonic()
-        latency_grid = run_anomaly_latency_grid(
-            signals,
-            config,
-            latency_ms_values=latency_grid_ms,
-            primary_trades=trades,
-        )
+        if valid_backtest:
+            print("anomaly latency grid: running variants", flush=True)
+            stage_started_at = time.monotonic()
+            latency_grid = run_anomaly_latency_grid(
+                signals,
+                config,
+                latency_ms_values=latency_grid_ms,
+                primary_trades=trades,
+            )
+        else:
+            stage_started_at = time.monotonic()
+            latency_grid = _disabled_artifact_frame(
+                artifact="anomaly_latency_grid_summary.csv",
+                reason=invalid_reason,
+            )
         _write_artifact_frames(
             [(output_dir / "anomaly_latency_grid_summary.csv", latency_grid)],
             progress_label="anomaly artifacts: latency grid files",
         )
         timings["latency_grid_seconds"] = time.monotonic() - stage_started_at
     if run_entry_grid:
-        print("anomaly entry grid: running variants", flush=True)
-        stage_started_at = time.monotonic()
-        grid = run_anomaly_entry_grid(
-            candidates,
-            config,
-            oi3_values=grid_oi3_values,
-            hold_values=grid_hold_values,
-            pullback_fractions=grid_pullback_fractions,
-            exhaustion_profiles=grid_exhaustion_profiles,
-            exit_rules=grid_exit_rules,
-            signal_sets=grid_signal_sets,
-        )
+        if valid_backtest:
+            print("anomaly entry grid: running variants", flush=True)
+            stage_started_at = time.monotonic()
+            grid = run_anomaly_entry_grid(
+                candidates,
+                config,
+                oi3_values=grid_oi3_values,
+                hold_values=grid_hold_values,
+                pullback_fractions=grid_pullback_fractions,
+                exhaustion_profiles=grid_exhaustion_profiles,
+                exit_rules=grid_exit_rules,
+                signal_sets=grid_signal_sets,
+            )
+        else:
+            stage_started_at = time.monotonic()
+            grid = _disabled_artifact_frame(
+                artifact="anomaly_entry_grid_summary.csv",
+                reason=invalid_reason,
+            )
         _write_artifact_frames(
             [(output_dir / "anomaly_entry_grid_summary.csv", grid)],
             progress_label="anomaly artifacts: grid files",
         )
-        if grid_signal_sets is not None and not grid.empty and "variant_id" in grid.columns:
+        if valid_backtest and grid_signal_sets is not None and not grid.empty and "variant_id" in grid.columns:
             best_variant_id = int(grid.iloc[0]["variant_id"])
             if 0 <= best_variant_id < len(grid_signal_sets):
                 best_config, best_signals = grid_signal_sets[best_variant_id]
@@ -6256,7 +6672,7 @@ def run_anomaly_strategy_backtest(
                     progress_label="anomaly artifacts: chart status",
                 )
         timings["entry_grid_seconds"] = time.monotonic() - stage_started_at
-    elif not trades.empty:
+    elif valid_backtest and not trades.empty:
         stage_started_at = time.monotonic()
         health = build_edge_health_table(trades, label="primary")
         chart_status = (
@@ -6276,6 +6692,16 @@ def run_anomaly_strategy_backtest(
             progress_label="anomaly artifacts: health chart status",
         )
         timings["health_charts_seconds"] = time.monotonic() - stage_started_at
+    elif not valid_backtest:
+        stage_started_at = time.monotonic()
+        _write_artifact_frames(
+            [
+                (output_dir / "anomaly_edge_health.csv", _disabled_artifact_frame(artifact="anomaly_edge_health.csv", reason=invalid_reason)),
+                (output_dir / "anomaly_trade_chart_status.csv", _disabled_artifact_frame(artifact="anomaly_trade_chart_status.csv", reason=invalid_reason)),
+            ],
+            progress_label="anomaly artifacts: disabled health chart status",
+        )
+        timings["health_charts_seconds"] = time.monotonic() - stage_started_at
     requested_symbols_normalized = _normalized_symbol_tuple(symbols)
     run_config = {
         **asdict(config),
@@ -6293,6 +6719,11 @@ def run_anomaly_strategy_backtest(
         "entry_slippage_pct": float(config.entry_slippage_pct),
         "exit_slippage_pct": float(config.exit_slippage_pct),
         "prior_context_lookback_hours": int(_PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS),
+        "valid_backtest": bool(valid_backtest),
+        "backtest_verdict": str(run_verdict.iloc[0]["verdict"]) if not run_verdict.empty else "missing_run_verdict",
+        "backtest_invalid_reason": invalid_reason,
+        "targeted_flow_planned_windows": int(_targeted_flow_planned_window_count(targeted_flow_plan)),
+        "targeted_flow_ready_windows": int((targeted_flow_coverage.get("coverage_status", pd.Series(dtype=str)).astype(str) == "ready").sum()) if not targeted_flow_coverage.empty else 0,
         "lab_config": asdict(config.lab_config),
     }
     timings["total_seconds"] = time.monotonic() - total_started_at

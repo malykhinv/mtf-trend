@@ -7819,3 +7819,32 @@ Risk:
 ```text
 The automatic planner is intentionally bounded. It is appropriate for normal research/backtest runs, but a forensic search for rare cases visible only in subminute flow while failing closed setup-TF prefilters still needs an explicit narrow symbol/date slice.
 ```
+
+## 2026-05-22 - P391 proposed - backtest pipeline integrity artifacts
+
+Files:
+
+```text
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Make targeted-flow backtests self-auditing before edge metrics are interpreted. The runner now splits the targeted flow artifact into plan/fetch files, writes materialization and coverage reports, gates pair collection when planned flow windows produced zero trusted coverage, writes a funnel and run verdict, and disables grid/edge-health artifacts when the run is not data-valid.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges data/fetchers research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Runs with planned subminute flow windows and zero trusted coverage will now be explicitly invalid instead of continuing into misleading edge summaries. This can reduce apparent result availability, but it prevents treating data-pipeline failures as strategy outcomes.
+```

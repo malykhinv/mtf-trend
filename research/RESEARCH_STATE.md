@@ -2755,3 +2755,11 @@ Current commit: UNKNOWN.
 P390 proposed after P389 still produced multi-thousand-hour `targeted 1s flow` ETAs. Root cause: the planner was still fetching too many and too-wide windows before enough cheap gates were applied, and materialization still operated at symbol-cache scope. P390 narrows the fetch plan to coarse/pre-context signal rows, applies a closed setup-candle upper-bound prune for subminute flow, fetches setup-candle plus immediate-entry-tail windows only, merges nearby windows by symbol, materializes only requested intervals, and filters pair collection to trusted subminute caches.
 
 Next validation: apply P390, run compileall, then rerun a small 1m/5s slice. Inspect `targeted_flow_backfill.csv`: `status=window_plan` should show `merged_targeted_windows` and `merged_targeted_window_ms` far below the raw candidate-window totals; `targeted_flow_materialize.csv` should show `written_interval`, not full-symbol rebuild behavior.
+
+## 2026-05-22 - P391 targeted-flow pipeline integrity state
+
+Current commit: UNKNOWN.
+
+P391 proposed after the latest post-P390 run still produced zero valid candidates and contradictory stale-looking edge artifacts. The issue is pipeline integrity: the backtest must prove that targeted aggTrade windows were planned, fetched, materialized into trusted subminute flow, and covered before final candidate collection and edge reporting. P391 adds explicit plan/fetch/materialize/coverage/funnel/verdict artifacts and disables edge/grid summaries when the run is data-invalid.
+
+Next validation: apply P391, run compileall, then rerun a small 1m/5s slice. Inspect `targeted_flow_plan.csv`, `targeted_flow_fetch.csv`, `targeted_flow_materialize.csv`, `targeted_flow_coverage.csv`, `anomaly_funnel.csv`, and `anomaly_run_verdict.csv`. Only interpret PnL if `valid_backtest=true`.

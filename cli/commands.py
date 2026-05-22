@@ -1222,8 +1222,11 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             _parse_grid_values,
             _parse_grid_exit_rules,
             _parse_grid_profile_values,
+            build_targeted_flow_coverage,
             collect_pair_anomaly_rows_for_configs,
             ensure_targeted_subminute_flow_cache_for_configs,
+            ready_symbols_from_targeted_flow_coverage,
+            split_targeted_flow_backfill_artifacts,
             run_anomaly_strategy_backtest,
         )
         from research_tools.anomaly_config import ANOMALY_BACKTEST_TIMEFRAME_PAIRS
@@ -1517,26 +1520,61 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                     )
                     for setup_timeframe, entry_timeframe in timeframe_pairs
                 ]
+                collection_symbols = getattr(args, "symbols", None)
                 if _to_bool_flag(getattr(args, "targeted_flow_backfill", True), default=True):
                     targeted_flow_backfill, targeted_flow_materialize = ensure_targeted_subminute_flow_cache_for_configs(
                         collection_configs,
                         symbols=getattr(args, "symbols", None),
                         progress_label="anomaly targeted flow tf-set",
                     )
+                    targeted_flow_plan, targeted_flow_fetch = split_targeted_flow_backfill_artifacts(targeted_flow_backfill)
+                    targeted_flow_coverage = build_targeted_flow_coverage(
+                        backfill=targeted_flow_backfill,
+                        materialize=targeted_flow_materialize,
+                        configs=collection_configs,
+                    )
                     output_dir.mkdir(parents=True, exist_ok=True)
+                    targeted_flow_plan.to_csv(output_dir / "targeted_flow_plan.csv", index=False)
+                    targeted_flow_fetch.to_csv(output_dir / "targeted_flow_fetch.csv", index=False)
                     targeted_flow_backfill.to_csv(output_dir / "targeted_flow_backfill.csv", index=False)
                     targeted_flow_materialize.to_csv(output_dir / "targeted_flow_materialize.csv", index=False)
-                print(
-                    "anomaly-lab: collecting candidates in one symbol-major pass across timeframe pairs",
-                    flush=True,
-                )
-                precollected_by_pair = collect_pair_anomaly_rows_for_configs(
-                    collection_configs,
-                    symbols=getattr(args, "symbols", None),
-                    progress_label="anomaly candidates tf-set",
-                    include_derivatives_context=False,
-                    auto_targeted_flow_backfill=False,
-                )
+                    targeted_flow_coverage.to_csv(output_dir / "targeted_flow_coverage.csv", index=False)
+                    ready_symbols = ready_symbols_from_targeted_flow_coverage(targeted_flow_coverage)
+                    planned_windows = 0
+                    for column in ("merged_targeted_windows", "targeted_windows", "raw_targeted_windows"):
+                        if column in targeted_flow_plan.columns:
+                            planned_windows = max(planned_windows, int(pd.to_numeric(targeted_flow_plan[column], errors="coerce").fillna(0).sum()))
+                    if planned_windows > 0 and not ready_symbols:
+                        precollected_by_pair = {
+                            (setup_timeframe, entry_timeframe): pd.DataFrame([
+                                {
+                                    "symbol": "__all__",
+                                    "timeframe": setup_timeframe,
+                                    "setup_timeframe": setup_timeframe,
+                                    "entry_timeframe": entry_timeframe,
+                                    "feature_contract": "htf_setup_ltf_entry_v1" if setup_timeframe != entry_timeframe else "closed_setup_tf_v1",
+                                    "status": "error",
+                                    "error": "no_trusted_targeted_flow_coverage_after_fetch",
+                                    "execution_model": "targeted_flow_required_before_pair_collection",
+                                }
+                            ])
+                            for setup_timeframe, entry_timeframe in timeframe_pairs
+                        }
+                        collection_mode = "targeted_flow_no_trusted_coverage"
+                    elif ready_symbols and not getattr(args, "symbols", None):
+                        collection_symbols = ready_symbols
+                if not precollected_by_pair:
+                    print(
+                        "anomaly-lab: collecting candidates in one symbol-major pass across timeframe pairs",
+                        flush=True,
+                    )
+                    precollected_by_pair = collect_pair_anomaly_rows_for_configs(
+                        collection_configs,
+                        symbols=collection_symbols,
+                        progress_label="anomaly candidates tf-set",
+                        include_derivatives_context=False,
+                        auto_targeted_flow_backfill=False,
+                    )
 
         for setup_timeframe, entry_timeframe in timeframe_pairs_to_run:
             pair_output_dir = (
