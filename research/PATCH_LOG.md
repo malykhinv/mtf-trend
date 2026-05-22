@@ -1,5 +1,39 @@
 # Anomaly Patch Log
 
+## 2026-05-22 - P374 proposed - guard reused backtest candidates
+
+Files:
+
+```text
+cli/commands.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Close the critical CLI/config lookahead path where --reuse-candidates-dir could silently feed candidates collected under another window, timeframe pair, symbol set or collection contract into a new anomaly backtest.
+```
+
+Change:
+
+```text
+Reused anomaly_candidates.csv now requires a sibling run_config.csv and must match critical candidate-collection config exactly: setup/entry timeframe, feature contract, days/end timestamp, baseline/confirmation/future windows, and collection min quote/trade ratios. The loader rejects missing audit columns, invalid decision timestamps, and then filters reused rows to the current timeframe pair, feature contract, explicit end window and requested symbols.
+```
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low trading risk. This only affects --reuse-candidates-dir. Old candidate artifacts without run_config.csv are now rejected instead of being trusted; regenerate candidates once to reuse safely.
+```
+
 ## 2026-05-22 - P373 applied locally - live2 event-cache and backtest parity repair
 
 Files:

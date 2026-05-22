@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import json
 import shutil
@@ -12,7 +13,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from logging import Logger
 from pathlib import Path
-from typing import Callable, cast
+from typing import Callable, Iterable, cast
 
 import pandas as pd
 
@@ -63,6 +64,169 @@ def _to_bool_flag(value: object, *, default: bool = False) -> bool:
         return False
     return default
 
+
+
+def _is_missing_csv_value(value: object) -> bool:
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _parse_run_config_mapping(raw: object, *, path: Path) -> dict[str, object]:
+    if isinstance(raw, dict):
+        return dict(raw)
+    if _is_missing_csv_value(raw):
+        raise ValueError(f"reused candidates run_config.csv has empty lab_config: {path}")
+    text = str(raw).strip()
+    if not text:
+        raise ValueError(f"reused candidates run_config.csv has empty lab_config: {path}")
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError) as exc:
+        raise ValueError(f"reused candidates run_config.csv has unparsable lab_config: {path}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"reused candidates run_config.csv lab_config is not a dict: {path}")
+    return dict(parsed)
+
+
+def _read_reused_candidates_run_config(run_config_path: Path) -> dict[str, object]:
+    if not run_config_path.exists():
+        raise FileNotFoundError(
+            "refusing --reuse-candidates-dir without run_config.csv next to anomaly_candidates.csv: "
+            f"{run_config_path}"
+        )
+    frame = pd.read_csv(run_config_path)
+    if frame.empty:
+        raise ValueError(f"reused candidates run_config.csv is empty: {run_config_path}")
+    row = dict(frame.iloc[0].to_dict())
+    lab_config = _parse_run_config_mapping(row.get("lab_config"), path=run_config_path)
+    for key, value in lab_config.items():
+        row[f"lab_config.{key}"] = value
+    return row
+
+
+def _reuse_config_value_equal(expected: object, actual: object) -> bool:
+    if _is_missing_csv_value(expected):
+        return _is_missing_csv_value(actual)
+    if _is_missing_csv_value(actual):
+        return False
+    if isinstance(expected, bool):
+        return _to_bool_flag(actual) == expected
+    if isinstance(expected, int) and not isinstance(expected, bool):
+        try:
+            return int(float(str(actual))) == expected
+        except (TypeError, ValueError):
+            return False
+    if isinstance(expected, float):
+        try:
+            return abs(float(actual) - expected) <= 1e-12
+        except (TypeError, ValueError):
+            return False
+    return str(actual) == str(expected)
+
+
+def _validate_reused_candidates_config(
+    *,
+    source_config: dict[str, object],
+    expected_config: object,
+    run_config_path: Path,
+) -> None:
+    lab_config = expected_config.lab_config
+    expected_values: dict[str, object] = {
+        "feature_contract": expected_config.feature_contract,
+        "setup_timeframe": expected_config.setup_timeframe,
+        "entry_timeframe": expected_config.entry_timeframe,
+        "lab_config.timeframe": lab_config.timeframe,
+        "lab_config.days": lab_config.days,
+        "lab_config.end_timestamp_ms": lab_config.end_timestamp_ms,
+        "lab_config.baseline_candles": lab_config.baseline_candles,
+        "lab_config.confirmation_candles": lab_config.confirmation_candles,
+        "lab_config.forward_high_candles": lab_config.forward_high_candles,
+        "lab_config.forward_low_candles": lab_config.forward_low_candles,
+        "lab_config.min_quote_ratio_start": lab_config.min_quote_ratio_start,
+        "lab_config.min_trade_ratio_start": lab_config.min_trade_ratio_start,
+    }
+    mismatches: list[str] = []
+    for key, expected in expected_values.items():
+        actual = source_config.get(key)
+        if not _reuse_config_value_equal(expected, actual):
+            mismatches.append(f"{key}: expected={expected!r} source={actual!r}")
+    if mismatches:
+        details = "; ".join(mismatches)
+        raise ValueError(
+            "refusing --reuse-candidates-dir because anomaly_candidates.csv was collected with a different "
+            f"critical config ({run_config_path}): {details}"
+        )
+
+
+def _filter_reused_candidates_to_current_request(
+    candidates: pd.DataFrame,
+    *,
+    expected_config: object,
+    symbols: Iterable[str] | None,
+    candidate_path: Path,
+) -> pd.DataFrame:
+    required_columns = {"symbol", "decision_timestamp_ms", "setup_timeframe", "entry_timeframe", "feature_contract"}
+    missing_columns = sorted(required_columns - set(candidates.columns))
+    if missing_columns:
+        raise ValueError(
+            "refusing --reuse-candidates-dir because anomaly_candidates.csv misses required audit columns "
+            f"{missing_columns}: {candidate_path}"
+        )
+    filtered = candidates.copy()
+    filtered["decision_timestamp_ms"] = pd.to_numeric(filtered["decision_timestamp_ms"], errors="coerce")
+    invalid_ts_count = int(filtered["decision_timestamp_ms"].isna().sum())
+    if invalid_ts_count:
+        raise ValueError(
+            "refusing --reuse-candidates-dir because anomaly_candidates.csv contains invalid "
+            f"decision_timestamp_ms rows={invalid_ts_count}: {candidate_path}"
+        )
+    expected_setup = str(expected_config.setup_timeframe)
+    expected_entry = str(expected_config.entry_timeframe)
+    expected_contract = str(expected_config.feature_contract)
+    filtered = filtered.loc[
+        filtered["setup_timeframe"].astype(str).eq(expected_setup)
+        & filtered["entry_timeframe"].astype(str).eq(expected_entry)
+        & filtered["feature_contract"].astype(str).eq(expected_contract)
+    ].copy()
+    end_ms = expected_config.lab_config.end_timestamp_ms
+    if end_ms is not None:
+        end_ms = int(end_ms)
+        start_ms = int((datetime.fromtimestamp(end_ms / 1000, UTC) - pd.Timedelta(days=int(expected_config.lab_config.days))).timestamp() * 1000)
+        filtered = filtered.loc[
+            (filtered["decision_timestamp_ms"] >= start_ms)
+            & (filtered["decision_timestamp_ms"] <= end_ms)
+        ].copy()
+    if symbols is not None:
+        wanted_symbols = {normalize_symbol(str(symbol)) for symbol in symbols}
+        filtered = filtered.loc[filtered["symbol"].astype(str).map(normalize_symbol).isin(wanted_symbols)].copy()
+    filtered["decision_timestamp_ms"] = filtered["decision_timestamp_ms"].astype("int64")
+    return filtered
+
+
+def _load_reused_candidates(
+    candidate_path: Path,
+    *,
+    expected_config: object,
+    symbols: Iterable[str] | None,
+) -> pd.DataFrame:
+    run_config_path = candidate_path.parent / "run_config.csv"
+    source_config = _read_reused_candidates_run_config(run_config_path)
+    _validate_reused_candidates_config(
+        source_config=source_config,
+        expected_config=expected_config,
+        run_config_path=run_config_path,
+    )
+    candidates = pd.read_csv(candidate_path)
+    return _filter_reused_candidates_to_current_request(
+        candidates,
+        expected_config=expected_config,
+        symbols=symbols,
+        candidate_path=candidate_path,
+    )
 
 def _build_futures_symbol_map(symbols: list[str]) -> dict[str, str]:
     return {
@@ -1215,10 +1379,26 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                     else reuse_candidates_dir / pair_dir / "anomaly_candidates.csv"
                 )
                 if candidate_path.exists():
-                    precollected_by_pair[(setup_timeframe, entry_timeframe)] = pd.read_csv(candidate_path)
+                    pair_output_dir = (
+                        output_dir
+                        if explicit_timeframe
+                        else output_dir / f"{setup_timeframe}_{entry_timeframe}".replace("/", "_")
+                    )
+                    expected_reuse_config = _build_timeframe_pair_config(
+                        setup_timeframe,
+                        entry_timeframe,
+                        pair_output_dir,
+                    )
+                    reusable_candidates = _load_reused_candidates(
+                        candidate_path,
+                        expected_config=expected_reuse_config,
+                        symbols=getattr(args, "symbols", None),
+                    )
+                    precollected_by_pair[(setup_timeframe, entry_timeframe)] = reusable_candidates
                     loaded_pairs.append((setup_timeframe, entry_timeframe))
                     print(
-                        f"anomaly-lab: reused candidates {setup_timeframe}/{entry_timeframe} <- {candidate_path}",
+                        f"anomaly-lab: reused candidates {setup_timeframe}/{entry_timeframe} "
+                        f"rows={len(reusable_candidates)} <- {candidate_path}",
                         flush=True,
                     )
                 else:

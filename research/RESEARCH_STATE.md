@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-22 - P374 reused candidate lookahead guard
+
+```text
+Current patch status: P374 PROPOSED / UNKNOWN commit.
+Question: audit p.1 CLI/config for critical backtest lookahead only and fix what is critical.
+Finding: the critical p.1 issue is --reuse-candidates-dir. It could load anomaly_candidates.csv from a previous run without verifying the candidate collection contract, symbol scope, timeframe pair or end timestamp. That lets a run that claims one window/config consume candidates collected under another, including candidates from after the requested end timestamp.
+Change: reused candidates now require sibling run_config.csv, exact match of critical collection config, required audit columns, valid decision timestamps, and row-level filtering to current timeframe/contract/window/symbols.
+Residual risk: this does not address non-critical p.1 issues such as in-sample grid selection or execution realism; those belong to later nodes. Reuse artifacts from older runs without run_config.csv must be regenerated.
+Validation: python -m compileall data/exchanges research_tools cli constants.py main.py. Uploaded zip does not contain launcher.py.
+```
+
 ## 2026-05-22 - P373 live2 trade parity and targeted event cache
 
 ```text
