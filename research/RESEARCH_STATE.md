@@ -8,6 +8,16 @@ P379 proposed after p.6 lookahead audit. The closed setup candidate collector no
 
 Next validation: apply P379 after P378, run compileall, then run a small closed-TF backtest near an explicit `--end-timestamp-ms`. Check that candidates near the right edge appear with `future_label_status=insufficient_future_window` instead of being silently dropped.
 
+## 2026-05-22 - P381 flow-ratio source trust gate
+
+Current commit: UNKNOWN.
+
+P381 proposed after p.9 audit. Critical finding: after P378, the code could still consume old subminute/aggTrade-derived caches by merely labeling them `missing_version`/`unknown_version`, and pair/forming candidate provenance still labeled setup/levels flow as generic cached OHLCV even when the forming HTF candle was built from entry/LTF flow.
+
+Change: subminute entry flow now requires trusted P378 cache versions. Materialization from 1s refuses old/missing-version 1s caches. Signal building refuses candidates with missing/unknown/proxy flow source labels, and pair/forming candidates now label setup/levels flow from the actual entry-flow source. The trusted direct 1s aggTrade version is `p378_latency_aggtrades_full_buckets_v1`, matching P378.
+
+Next validation: regenerate affected 1s and materialized subminute caches, then run a small pair-mode backtest and confirm no `untrusted_*_entry_flow_cache` rows remain in candidate artifacts.
+
 ## 2026-05-22 - P380 pair/forming collector audit state
 
 Current commit: UNKNOWN.

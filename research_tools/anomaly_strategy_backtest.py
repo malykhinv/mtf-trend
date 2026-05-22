@@ -93,9 +93,10 @@ _PRIOR_CONTEXT_LIVE_LOOKBACK_MS = _PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS * _HOUR_MS
 _PRIOR_CONTEXT_MIN_COVERAGE_RATIO = 0.80
 _TRADE_CHART_CONTEXT_DAYS = 4
 _MATERIALIZED_SUBMINUTE_CACHE_VERSION = "p378_1s_ohlcv_to_subminute_full_buckets_v1"
+AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION = "p378_latency_aggtrades_full_buckets_v1"
 DEFAULT_LATENCY_EXTRA_MS = 5_000
 DEFAULT_LATENCY_GRID_MS = (0, 5_000)
-LATENCY_1S_BACKFILL_VERSION = "p378_latency_aggtrades_full_buckets_v1"
+LATENCY_1S_BACKFILL_VERSION = AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION
 _BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_column", "missing_timestamp", "missing_frame", "empty_oi", "stale_asof"}
 _TRADE_CHART_FLOW_PROVENANCE = {
     "trade_count_proxy_used": False,
@@ -1207,7 +1208,7 @@ def _first_non_empty_string(frame: pd.DataFrame, column: str) -> str:
 
 def _materialized_entry_flow_source(frame: pd.DataFrame, *, entry_timeframe: str) -> str:
     if "aggregation_source_timeframe" not in frame.columns:
-        return "cached_ohlcv"
+        return "cached_ohlcv_missing_aggregation_metadata"
     source = _first_non_empty_string(frame, "aggregation_source_timeframe")
     version = _first_non_empty_string(frame, "aggregation_version")
     if not source:
@@ -1217,6 +1218,57 @@ def _materialized_entry_flow_source(frame: pd.DataFrame, *, entry_timeframe: str
     if source == "1s" and not version:
         return f"cached_1s_aggregated_to_{entry_timeframe}_missing_version"
     return f"cached_{source}_materialized_to_{entry_timeframe}_unknown_version"
+
+
+def _flow_source_is_untrusted(value: object) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+        return True
+    return any(marker in text for marker in ("missing", "unknown", "proxy"))
+
+
+def _flow_cache_validation_error(
+    frame: pd.DataFrame,
+    *,
+    cache_timeframe: str,
+    entry_timeframe: str,
+) -> str | None:
+    entry_ms = _timeframe_to_milliseconds(entry_timeframe)
+    if entry_ms >= 60_000:
+        return None
+    cache_tf = str(cache_timeframe)
+    if cache_tf == "1s":
+        version = _first_non_empty_string(frame, "aggregation_version")
+        if version != AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION:
+            return f"untrusted_1s_entry_flow_cache_version:{version or 'missing'}"
+        return None
+    version = _first_non_empty_string(frame, "aggregation_version")
+    source = _first_non_empty_string(frame, "aggregation_source_timeframe")
+    if source != "1s" or version != _MATERIALIZED_SUBMINUTE_CACHE_VERSION:
+        return (
+            "untrusted_materialized_entry_flow_cache:"
+            f"source={source or 'missing'}:version={version or 'missing'}"
+        )
+    return None
+
+
+def _candidate_flow_source_mask(candidates: pd.DataFrame) -> pd.Series:
+    mask = pd.Series(True, index=candidates.index)
+    for column in (
+        "levels_trade_count_source",
+        "entry_trade_count_source",
+        "levels_quote_volume_source",
+        "entry_quote_volume_source",
+    ):
+        if column not in candidates.columns:
+            return pd.Series(False, index=candidates.index)
+        mask &= ~candidates[column].map(_flow_source_is_untrusted)
+    if "entry_timeframe" in candidates.columns:
+        entry_ms = candidates["entry_timeframe"].map(lambda value: _timeframe_to_milliseconds(str(value)))
+        subminute = entry_ms.lt(60_000)
+        entry_sources = candidates["entry_trade_count_source"].astype(str)
+        mask &= ~subminute | entry_sources.str.contains("cached_1s_aggregated_to_", regex=False)
+    return mask
 
 
 def materialize_subminute_entry_caches(
@@ -1249,6 +1301,13 @@ def materialize_subminute_entry_caches(
         symbol = _symbol_from_cache_symbol_dir(path.parent.parent)
         try:
             source_frame = _read_symbol_frame(cache_dir, symbol, "1s")
+            validation_error = _flow_cache_validation_error(
+                source_frame,
+                cache_timeframe="1s",
+                entry_timeframe="1s",
+            )
+            if validation_error is not None:
+                raise ValueError(validation_error)
         except Exception as exc:
             for target in targets:
                 rows.append(
@@ -1505,6 +1564,13 @@ def _resolve_entry_cache_timeframe(cache_dir: Path, entry_timeframe: str) -> str
 def _read_entry_simulation_frame(cache_dir: Path, symbol: str, entry_timeframe: str) -> pd.DataFrame:
     entry_cache_timeframe = _resolve_entry_cache_timeframe(cache_dir, entry_timeframe)
     frame = _read_symbol_frame(cache_dir, symbol, entry_cache_timeframe)
+    validation_error = _flow_cache_validation_error(
+        frame,
+        cache_timeframe=entry_cache_timeframe,
+        entry_timeframe=entry_timeframe,
+    )
+    if validation_error is not None:
+        raise ValueError(validation_error)
     if entry_cache_timeframe == entry_timeframe:
         return frame
     aggregated = _aggregate_frame_to_timeframe(
@@ -1567,6 +1633,13 @@ def build_anomaly_signals(
     if config.reject_oi_down_mark_discount:
         required.add("mark_close_vs_decision_close_basis")
         required.add("oi_price_interaction_3x5m")
+    for flow_source_column in (
+        "levels_trade_count_source",
+        "entry_trade_count_source",
+        "levels_quote_volume_source",
+        "entry_quote_volume_source",
+    ):
+        required.add(flow_source_column)
     if config.reject_stale_derivatives_context:
         context_columns = _context_status_columns(candidates)
         if not context_columns:
@@ -1593,6 +1666,7 @@ def build_anomaly_signals(
         & signals["hold_count_next_n_candles"].astype(float).ge(config.min_hold_count)
         & signals["initial_risk_pct_at_decision"].gt(0.0)
         & signals["initial_risk_pct_at_decision"].le(config.max_initial_risk_pct)
+        & _candidate_flow_source_mask(signals)
     )
     if config.min_initial_risk_pct is not None:
         mask &= signals["initial_risk_pct_at_decision"].ge(config.min_initial_risk_pct)
@@ -1957,6 +2031,13 @@ def collect_pair_anomaly_rows(
         try:
             setup_frame = _read_symbol_frame(lab_config.cache_dir, symbol, setup_timeframe)
             entry_frame = _read_symbol_frame(lab_config.cache_dir, symbol, entry_cache_timeframe)
+            validation_error = _flow_cache_validation_error(
+                entry_frame,
+                cache_timeframe=entry_cache_timeframe,
+                entry_timeframe=entry_timeframe,
+            )
+            if validation_error is not None:
+                raise ValueError(validation_error)
             setup_frame = _slice_ohlcv_asof_window(
                 setup_frame,
                 timeframe=setup_timeframe,
@@ -2162,6 +2243,13 @@ def collect_pair_anomaly_rows_for_configs(
                     raise frame_errors[setup_timeframe]
                 if entry_cache_timeframe in frame_errors:
                     raise frame_errors[entry_cache_timeframe]
+                validation_error = _flow_cache_validation_error(
+                    frame_cache[entry_cache_timeframe],
+                    cache_timeframe=entry_cache_timeframe,
+                    entry_timeframe=entry_timeframe,
+                )
+                if validation_error is not None:
+                    raise ValueError(validation_error)
                 start_ms = int(state["start_ms"])
                 end_ms = int(state["end_ms"])
                 setup_ms = _timeframe_to_milliseconds(setup_timeframe)
@@ -2359,6 +2447,7 @@ def _collect_symbol_pair_rows(
                 entry_frame=entry_frame,
                 config=config,
                 entry_flow_source=entry_flow_source,
+                setup_flow_source=entry_flow_source if entry_ms < setup_ms else "cached_ohlcv",
             )
             if row is None:
                 continue
@@ -2382,6 +2471,7 @@ def _build_pair_candidate_row(
     entry_frame: pd.DataFrame,
     config: AnomalyBacktestConfig,
     entry_flow_source: str = "cached_ohlcv",
+    setup_flow_source: str = "cached_ohlcv",
 ) -> dict[str, object] | None:
     lab_config = config.lab_config
     quote_volume = pd.to_numeric(baseline["quote_volume"], errors="coerce")
@@ -2538,6 +2628,8 @@ def _build_pair_candidate_row(
         "outcome_label": outcome_label,
         **{
             **_TRADE_CHART_FLOW_PROVENANCE,
+            "levels_trade_count_source": f"{setup_flow_source}.number_of_trades",
+            "levels_quote_volume_source": f"{setup_flow_source}.quote_volume",
             "entry_trade_count_source": f"{entry_flow_source}.number_of_trades",
             "entry_quote_volume_source": f"{entry_flow_source}.quote_volume",
         },

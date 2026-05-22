@@ -28,6 +28,40 @@ Risk:
 Low for live/backtest signal logic: `build_anomaly_signals()` does not read `future_*` or `outcome_label`. Near the right edge, closed-TF runs may now produce additional candidates/signals that are later skipped by execution if no future execution candles exist, which is more honest than silently hiding them during candidate collection.
 ```
 
+## 2026-05-22 - P381 proposed - trust-gate flow ratio sources
+
+Files:
+
+```text
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Close the critical p.9 flow-ratio trust gap: subminute flow ratios must not be built from old/missing-version aggTrade-derived caches or from candidate rows whose source labels are missing/unknown/proxy.
+```
+
+Change:
+
+```text
+Backtest now rejects untrusted subminute entry-flow caches before candidate collection and before execution-frame reads. Materializing 5s/15s/30s entry caches now requires a trusted P378 1s aggTrade cache. Signal building requires explicit trusted flow source columns, and pair/forming candidates now label levels/setup flow from the same entry-flow source that actually built the forming HTF candle. The trusted 1s cache version matches P378 (`p378_latency_aggtrades_full_buckets_v1`).
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium operationally: existing pre-P378 1s/5s/15s/30s caches will be rejected until regenerated. This is intentional; otherwise old partial/proxy flow can still influence start_quote_ratio/start_trade_ratio.
+```
+
 ## 2026-05-22 - P380 proposed - pair/forming candidate future-label boundary guard
 
 Files:
