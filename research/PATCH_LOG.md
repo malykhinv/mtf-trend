@@ -7701,3 +7701,33 @@ CHECK
 ```
 
 Risk:
+
+
+## 2026-05-22 - P387 proposed - align aggTrade 1s trust version with backfill
+
+Files:
+
+```text
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix the backtest choke where subminute entry candidates are rejected as untrusted because the aggTrade 1s backfill writes `p378_aggtrades_to_1s_full_buckets_v1` while the strategy trust gate expects a different P378 version string. Also prevent the backfill command from skipping old covered 1s cache ranges unless the existing cache already carries the trusted version.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges data/fetchers research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Old p165/missing-version 1s/subminute caches remain untrusted. They must be regenerated; this patch only makes the regeneration path produce and reuse the version that the strategy accepts.
+```

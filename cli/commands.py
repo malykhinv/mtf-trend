@@ -1598,6 +1598,7 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
     def _run() -> int:
         from data.storage.parquet_storage import ParquetStorage
         from research_tools.anomaly_aggtrade_cache import aggregate_aggtrades_to_ohlcv_frame, resolve_aggtrade_timestamp
+        from research_tools.anomaly_strategy_backtest import AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION
 
         logger = get_logger("backfill-anomaly-aggtrade-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
         _, exchange_client, _ = _build_fetch_stack(config)
@@ -1633,6 +1634,17 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
             log_level=config.backtest.log_level,
             logs_dir=config.backtest.logs_dir,
         )
+        def _existing_1s_cache_has_trusted_version(symbol: str) -> bool:
+            existing = storage.load(symbol, Timeframe.S1)
+            if existing.empty or "aggregation_version" not in existing.columns:
+                return False
+            versions = {
+                str(value).strip()
+                for value in existing["aggregation_version"].dropna().unique().tolist()
+                if str(value).strip()
+            }
+            return bool(versions) and versions <= {AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION}
+
         rows: list[dict[str, object]] = []
         for symbol_index, symbol in enumerate(symbols, start=1):
             symbol_added = 0
@@ -1641,8 +1653,10 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
             symbol_status = "ok"
             symbol_error = ""
             added_by_window: list[dict[str, object]] = []
+            existing_1s_cache_trusted = False
             logger.warning("aggTrades 1s backfill %s/%s %s", symbol_index, len(symbols), symbol)
             try:
+                existing_1s_cache_trusted = _existing_1s_cache_has_trusted_version(symbol)
                 market_id = exchange_client.get_market_id(symbol)
                 for window_start, window_end in windows:
                     chunk_start = int(window_start)
@@ -1653,7 +1667,8 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
                             existing_first = storage.get_first_timestamp(symbol, Timeframe.S1)
                             existing_last = storage.get_last_timestamp(symbol, Timeframe.S1)
                             if (
-                                existing_first is not None
+                                existing_1s_cache_trusted
+                                and existing_first is not None
                                 and existing_last is not None
                                 and existing_first <= chunk_start
                                 and existing_last >= chunk_end
@@ -1693,7 +1708,7 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
                             if not frame.empty:
                                 frame["aggregation_source"] = "binance_futures_aggTrades"
                                 frame["aggregation_target_timeframe"] = "1s"
-                                frame["aggregation_version"] = "p378_aggtrades_to_1s_full_buckets_v1"
+                                frame["aggregation_version"] = AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION
                                 added_rows = storage.save_incremental(symbol, Timeframe.S1, frame)
                                 symbol_added += added_rows
                                 window_added += added_rows
@@ -1714,6 +1729,8 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
                     "symbol": symbol,
                     "status": symbol_status,
                     "error": symbol_error,
+                    "existing_1s_cache_trusted": bool(existing_1s_cache_trusted),
+                    "trusted_1s_cache_version": AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION,
                     "added_rows": int(symbol_added),
                     "fetched_chunks": int(symbol_fetched_chunks),
                     "skipped_existing_chunks": int(symbol_skipped_chunks),
