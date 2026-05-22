@@ -92,10 +92,10 @@ _PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS = 24
 _PRIOR_CONTEXT_LIVE_LOOKBACK_MS = _PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS * _HOUR_MS
 _PRIOR_CONTEXT_MIN_COVERAGE_RATIO = 0.80
 _TRADE_CHART_CONTEXT_DAYS = 4
-_MATERIALIZED_SUBMINUTE_CACHE_VERSION = "p165_1s_ohlcv_to_subminute_v1"
+_MATERIALIZED_SUBMINUTE_CACHE_VERSION = "p378_1s_ohlcv_to_subminute_full_buckets_v1"
 DEFAULT_LATENCY_EXTRA_MS = 5_000
 DEFAULT_LATENCY_GRID_MS = (0, 5_000)
-LATENCY_1S_BACKFILL_VERSION = "p294_latency_aggtrades_to_1s_v1"
+LATENCY_1S_BACKFILL_VERSION = "p378_latency_aggtrades_full_buckets_v1"
 _BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_column", "missing_timestamp", "missing_frame", "empty_oi", "stale_asof"}
 _TRADE_CHART_FLOW_PROVENANCE = {
     "trade_count_proxy_used": False,
@@ -1098,6 +1098,23 @@ def _ensure_latency_1s_cache(
     return merged
 
 
+def _coverage_intervals_cover_bucket(intervals: list[tuple[int, int]], *, bucket_start_ms: int, bucket_end_ms: int) -> bool:
+    if not intervals:
+        return False
+    covered_until = int(bucket_start_ms) - 1
+    for start_ms, end_ms in sorted(intervals):
+        start_ms = int(start_ms)
+        end_ms = int(end_ms)
+        if end_ms < int(bucket_start_ms) or start_ms > int(bucket_end_ms):
+            continue
+        if start_ms > covered_until + 1:
+            return False
+        covered_until = max(covered_until, end_ms)
+        if covered_until >= int(bucket_end_ms):
+            return True
+    return False
+
+
 def _aggregate_frame_to_timeframe(frame: pd.DataFrame, *, timeframe_ms: int) -> pd.DataFrame:
     if frame.empty or timeframe_ms <= 0:
         return pd.DataFrame()
@@ -1105,7 +1122,21 @@ def _aggregate_frame_to_timeframe(frame: pd.DataFrame, *, timeframe_ms: int) -> 
     if required.difference(frame.columns):
         return pd.DataFrame()
     prepared = frame.copy()
-    for column in ("timestamp", "open", "high", "low", "close", "volume", "quote_volume", "number_of_trades", "taker_buy_volume", "taker_buy_quote_volume"):
+    numeric_columns = (
+        "timestamp",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "quote_volume",
+        "number_of_trades",
+        "taker_buy_volume",
+        "taker_buy_quote_volume",
+        "aggtrade_coverage_start_timestamp_ms",
+        "aggtrade_coverage_end_timestamp_ms",
+    )
+    for column in numeric_columns:
         if column in prepared.columns:
             prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
     prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close"])
@@ -1115,6 +1146,26 @@ def _aggregate_frame_to_timeframe(frame: pd.DataFrame, *, timeframe_ms: int) -> 
     prepared.sort_values("timestamp", inplace=True)
     prepared.drop_duplicates("timestamp", keep="last", inplace=True)
     prepared["bucket"] = (prepared["timestamp"] // int(timeframe_ms)) * int(timeframe_ms)
+    coverage_by_bucket: dict[int, bool] = {}
+    coverage_columns = {"aggtrade_coverage_start_timestamp_ms", "aggtrade_coverage_end_timestamp_ms"}
+    if coverage_columns.issubset(prepared.columns):
+        for bucket, group in prepared.groupby("bucket", sort=False):
+            intervals_frame = group.loc[
+                group["aggtrade_coverage_start_timestamp_ms"].notna()
+                & group["aggtrade_coverage_end_timestamp_ms"].notna(),
+                ["aggtrade_coverage_start_timestamp_ms", "aggtrade_coverage_end_timestamp_ms"],
+            ].drop_duplicates()
+            intervals = [
+                (int(row["aggtrade_coverage_start_timestamp_ms"]), int(row["aggtrade_coverage_end_timestamp_ms"]))
+                for _, row in intervals_frame.iterrows()
+            ]
+            bucket_start = int(bucket)
+            bucket_end = bucket_start + int(timeframe_ms) - 1
+            coverage_by_bucket[bucket_start] = _coverage_intervals_cover_bucket(
+                intervals,
+                bucket_start_ms=bucket_start,
+                bucket_end_ms=bucket_end,
+            )
     aggregation: dict[str, str] = {
         "timestamp": "first",
         "open": "first",
@@ -1126,6 +1177,13 @@ def _aggregate_frame_to_timeframe(frame: pd.DataFrame, *, timeframe_ms: int) -> 
         if column in prepared.columns:
             aggregation[column] = "sum"
     aggregated = prepared.groupby("bucket", as_index=False).agg(aggregation)
+    if coverage_by_bucket:
+        aggregated = aggregated.loc[
+            aggregated["bucket"].astype("int64").map(lambda value: bool(coverage_by_bucket.get(int(value), False)))
+        ].copy()
+        if aggregated.empty:
+            return pd.DataFrame()
+        aggregated["aggtrade_coverage_verified"] = True
     aggregated["timestamp"] = aggregated["bucket"].astype("int64")
     aggregated.drop(columns=["bucket"], inplace=True)
     aggregated.sort_values("timestamp", inplace=True)

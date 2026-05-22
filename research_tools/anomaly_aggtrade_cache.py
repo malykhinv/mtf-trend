@@ -44,8 +44,17 @@ def aggregate_aggtrades_to_ohlcv_frame(
         "quote_volume",
         "number_of_trades",
         "taker_buy_quote_volume",
+        "candle_open_timestamp_ms",
+        "candle_close_timestamp_ms",
+        "available_timestamp_ms",
+        "aggtrade_coverage_start_timestamp_ms",
+        "aggtrade_coverage_end_timestamp_ms",
+        "aggregation_is_full_bucket",
     ]
-    if trades.empty:
+    timeframe_ms_int = int(timeframe_ms)
+    start_ms = int(start_timestamp_ms)
+    end_ms = int(end_timestamp_ms)
+    if timeframe_ms_int <= 0 or end_ms < start_ms or trades.empty:
         return pd.DataFrame(columns=columns)
     timestamp_column = "transact_time" if "transact_time" in trades.columns else "T"
     price_column = "price" if "price" in trades.columns else "p"
@@ -63,13 +72,13 @@ def aggregate_aggtrades_to_ohlcv_frame(
         work["timestamp"].notna()
         & work["price"].notna()
         & work["quantity"].notna()
-        & (work["timestamp"] >= int(start_timestamp_ms))
-        & (work["timestamp"] <= int(end_timestamp_ms))
+        & (work["timestamp"] >= start_ms)
+        & (work["timestamp"] <= end_ms)
     ].copy()
     if work.empty:
         return pd.DataFrame(columns=columns)
     work["timestamp"] = work["timestamp"].astype("int64")
-    work["bucket"] = (work["timestamp"] // int(timeframe_ms)) * int(timeframe_ms)
+    work["bucket"] = (work["timestamp"] // timeframe_ms_int) * timeframe_ms_int
     work["quote_volume"] = work["price"].astype("float64") * work["quantity"].astype("float64")
     buyer_is_maker = work[maker_column].astype(str).str.lower().isin(("true", "1"))
     work["taker_buy_quote_volume"] = work["quote_volume"].where(~buyer_is_maker, 0.0)
@@ -88,10 +97,21 @@ def aggregate_aggtrades_to_ohlcv_frame(
         .reset_index()
         .rename(columns={"bucket": "timestamp"})
     )
+    bucket_start = pd.to_numeric(aggregated["timestamp"], errors="coerce")
+    bucket_end_inclusive = bucket_start + timeframe_ms_int - 1
     aggregated = aggregated.loc[
-        (aggregated["timestamp"] >= int(start_timestamp_ms))
-        & (aggregated["timestamp"] <= int(end_timestamp_ms))
+        bucket_start.ge(start_ms)
+        & bucket_end_inclusive.le(end_ms)
     ].copy()
+    if aggregated.empty:
+        return pd.DataFrame(columns=columns)
+    timestamps = pd.to_numeric(aggregated["timestamp"], errors="coerce")
+    aggregated["candle_open_timestamp_ms"] = timestamps.astype("int64")
+    aggregated["candle_close_timestamp_ms"] = (timestamps + timeframe_ms_int).astype("int64")
+    aggregated["available_timestamp_ms"] = aggregated["candle_close_timestamp_ms"]
+    aggregated["aggtrade_coverage_start_timestamp_ms"] = start_ms
+    aggregated["aggtrade_coverage_end_timestamp_ms"] = end_ms
+    aggregated["aggregation_is_full_bucket"] = True
     return aggregated.loc[:, columns].reset_index(drop=True)
 
 

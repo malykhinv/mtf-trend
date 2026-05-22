@@ -1,5 +1,53 @@
 # Anomaly Patch Log
 
+## 2026-05-22 - P378 proposed - require full aggTrade aggregation buckets
+
+Files:
+
+```text
+research_tools/anomaly_aggtrade_cache.py
+research_tools/anomaly_strategy_backtest.py
+cli/commands.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Close the critical p.5 aggTrade/event-cache leakage where arbitrary REST aggTrade windows could materialize the first or last incomplete bucket as a final OHLCV/flow candle. A 1s row built from only timestamp=start_ms inside a second, or a 5s row built from an event-window edge, must not be treated as closed historical flow.
+```
+
+Change:
+
+```text
+aggTrade-to-OHLCV aggregation now emits only buckets whose entire [bucket_start, bucket_end] interval is covered by the requested aggTrade window. The helper records candle availability and aggTrade coverage metadata on generated rows. 1s->subminute aggregation uses that coverage metadata to drop target buckets whose full interval is not covered by the source event windows. The 1s and materialized subminute aggregation version strings were bumped so newly generated caches are distinguishable from old partial-bucket caches.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python - <<'CHECK'
+import pandas as pd
+from research_tools.anomaly_aggtrade_cache import aggregate_aggtrades_to_ohlcv_frame
+rows = pd.DataFrame([
+    {'T': 1000, 'p': '10', 'q': '1', 'm': False},
+    {'T': 1999, 'p': '11', 'q': '2', 'm': True},
+])
+full = aggregate_aggtrades_to_ohlcv_frame(rows, timeframe_ms=1000, start_timestamp_ms=1000, end_timestamp_ms=1999)
+assert full['timestamp'].tolist() == [1000]
+partial = aggregate_aggtrades_to_ohlcv_frame(rows, timeframe_ms=1000, start_timestamp_ms=1000, end_timestamp_ms=1000)
+assert partial.empty
+CHECK
+```
+
+Risk:
+
+```text
+Low/medium. This makes historical aggTrade caches stricter and can reduce rows at targeted-window edges. Existing old caches are not automatically deleted; regenerate/backfill affected 1s and derived 5s/15s/30s caches when using P378 for parity or edge claims.
+```
+
 ## 2026-05-22 - P377 proposed - drop unavailable OHLCV fetch rows
 
 Files:

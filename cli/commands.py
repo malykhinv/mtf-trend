@@ -1670,7 +1670,7 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
                             if not frame.empty:
                                 frame["aggregation_source"] = "binance_futures_aggTrades"
                                 frame["aggregation_target_timeframe"] = "1s"
-                                frame["aggregation_version"] = "p166_aggtrades_to_1s_v1"
+                                frame["aggregation_version"] = "p378_aggtrades_to_1s_full_buckets_v1"
                                 added_rows = storage.save_incremental(symbol, Timeframe.S1, frame)
                                 symbol_added += added_rows
                                 window_added += added_rows

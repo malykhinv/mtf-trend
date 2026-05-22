@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-22 - P378 aggTrade/event cache full-bucket guard
+
+```text
+Current patch status: P378 PROPOSED / UNKNOWN commit.
+Question: audit p.5 aggTrade/event-derived cache for critical lookahead/data leakage only and patch if needed.
+Finding: aggTrade REST/event windows can start or end at arbitrary milliseconds. The old aggregation accepted buckets by `bucket_timestamp <= end_timestamp_ms`, so a final bucket could contain only the early part of a second/5s window while being saved as a closed OHLCV/flow candle. Targeted event backfills are especially exposed because their edges are not guaranteed to align with 1s/5s boundaries.
+Change: aggTrade-to-OHLCV aggregation now requires full source-window coverage for every emitted bucket and records candle availability plus aggTrade coverage metadata. 1s->subminute materialization uses that metadata and drops derived buckets whose complete interval is not covered. Aggregation version strings were bumped for both direct 1s backfill and materialized subminute caches.
+Residual risk: existing caches generated before P378 may already contain partial edge buckets and are not cleaned automatically by this patch. Regenerate affected 1s cache and derived subminute caches before making parity/edge claims from aggTrade data. This does not audit OI/derivatives publication lag.
+Validation: python -m compileall -q data/exchanges research_tools cli constants.py main.py, plus direct checks that a full 1s bucket is kept and an edge-partial 1s bucket is dropped.
+```
+
 ## 2026-05-22 - P377 OHLCV fetch normalization availability guard
 
 ```text
