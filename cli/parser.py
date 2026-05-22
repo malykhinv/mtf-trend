@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 from config import AppConfig
 from constants import (
+    DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS,
     DEFAULT_ANOMALY_LAB_DAYS,
     DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT,
     DEFAULT_FETCH_DAYS,
@@ -182,7 +183,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="structural_trail",
     )
     anomaly_lab.add_argument("--max-hold-candles", type=_positive_int_for("--max-hold-candles"), default=240)
-    anomaly_lab.add_argument("--max-open-positions", type=_positive_int_for("--max-open-positions"), default=1)
+    anomaly_lab.add_argument("--max-open-positions", type=_positive_int_for("--max-open-positions"), default=DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS)
     anomaly_lab.add_argument("--fee-rate", type=float, default=0.0004)
     anomaly_lab.add_argument("--entry-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
     anomaly_lab.add_argument("--exit-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)

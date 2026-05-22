@@ -19,6 +19,7 @@ import pandas as pd
 
 from config import AppConfig
 from constants import (
+    DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS,
     DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
     DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT,
     DEFAULT_SLIPPAGE,
@@ -1403,7 +1404,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 trail_buffer_r=float(args.trail_buffer_r),
                 exit_rule=str(getattr(args, "exit_rule", "structural_trail")),
                 max_hold_candles=int(args.max_hold_candles),
-                max_open_positions=int(getattr(args, "max_open_positions", 1)),
+                max_open_positions=int(getattr(args, "max_open_positions", DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS)),
                 fee_rate=float(args.fee_rate),
                 entry_slippage_pct=float(getattr(args, "entry_slippage_pct", DEFAULT_SLIPPAGE)),
                 exit_slippage_pct=float(getattr(args, "exit_slippage_pct", DEFAULT_SLIPPAGE)),

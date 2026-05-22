@@ -20,7 +20,11 @@ from urllib.parse import quote
 import numpy as np
 import pandas as pd
 
-from constants import DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT, DEFAULT_SLIPPAGE
+from constants import (
+    DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS,
+    DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT,
+    DEFAULT_SLIPPAGE,
+)
 from research_tools.anomaly_category_contract import (
     CATEGORY_CONTRACT_ID as PUMP_CATEGORY_CONTRACT,
     DEFAULT_PUMP_CATEGORY_IDS as PUMP_CATEGORY_PROFILE_ORDER,
@@ -307,7 +311,7 @@ class AnomalyBacktestConfig:
     trail_buffer_r: float = 0.10
     exit_rule: str = "structural_trail"
     max_hold_candles: int = 240
-    max_open_positions: int = 1
+    max_open_positions: int = DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS
     fee_rate: float = 0.0004
     entry_slippage_pct: float = DEFAULT_SLIPPAGE
     exit_slippage_pct: float = DEFAULT_SLIPPAGE
@@ -1136,7 +1140,9 @@ def _ensure_latency_1s_cache(
             & timestamps.le(int(end_timestamp_ms))
         ].copy()
         if not covered.empty:
-            return frame
+            version = _first_non_empty_string(frame, "aggregation_version")
+            if version == LATENCY_1S_BACKFILL_VERSION:
+                return frame
 
     market_id = _binance_futures_market_id(symbol)
     all_rows: list[dict[str, object]] = []
@@ -1167,7 +1173,7 @@ def _ensure_latency_1s_cache(
         chunk_start = chunk_end + 1
 
     if not all_rows:
-        return frame
+        return pd.DataFrame()
 
     from data.storage.parquet_storage import ParquetStorage
     from domain.enums.timeframe import Timeframe
@@ -1963,7 +1969,9 @@ def _resolve_signal_entry(
             if latency_frame.empty or "timestamp" not in latency_frame.columns:
                 return entry_ts, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_latency_execution_frame", {}
             target_ts = int(entry_ts) + max(0, int(config.latency_extra_ms))
-            latency_rows = latency_frame.loc[pd.to_numeric(latency_frame["timestamp"], errors="coerce").ge(target_ts)]
+            latency_ts = pd.to_numeric(latency_frame["timestamp"], errors="coerce")
+            target_bucket_end_ts = int(target_ts) + 1000
+            latency_rows = latency_frame.loc[latency_ts.ge(target_ts) & latency_ts.lt(target_bucket_end_ts)]
             if latency_rows.empty:
                 return target_ts, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_latency_execution_candle", {}
             entry_row_source = latency_rows.iloc[0]
@@ -4326,7 +4334,7 @@ def build_backtest_honesty_report(
             detail="same-symbol overlap is checked against actual simulated entry timestamp, not decision timestamp",
         )
     )
-    portfolio_warning = int(config.max_open_positions) != 1
+    portfolio_warning = int(config.max_open_positions) < int(DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS)
     status, severity = _honesty_status(failures=0, warning=bool(portfolio_warning))
     rows.append(
         _honesty_row(
@@ -5853,7 +5861,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--trail-buffer-r", type=float, default=0.10)
     parser.add_argument("--exit-rule", choices=sorted(EXIT_RULES), default="structural_trail")
     parser.add_argument("--max-hold-candles", type=int, default=240)
-    parser.add_argument("--max-open-positions", type=int, default=1)
+    parser.add_argument("--max-open-positions", type=int, default=DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS)
     parser.add_argument("--fee-rate", type=float, default=0.0004)
     parser.add_argument("--entry-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
     parser.add_argument("--exit-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
