@@ -686,6 +686,7 @@ def collect_anomaly_lab_rows(
     *,
     symbols: Iterable[str] | None = None,
     progress_label: str | None = None,
+    include_oi_context: bool = True,
     include_derivatives_context: bool = True,
 ) -> pd.DataFrame:
     end_ms = config.end_timestamp_ms
@@ -731,11 +732,12 @@ def collect_anomaly_lab_rows(
     if not result.empty and "timestamp_ms" in result.columns:
         result.sort_values(["timestamp_ms", "symbol"], inplace=True)
         result.reset_index(drop=True, inplace=True)
-    result = enrich_candidates_with_open_interest(
-        result,
-        cache_dir=config.cache_dir,
-        progress_label=f"{progress_label}: oi context" if progress_label is not None else None,
-    )
+    if include_oi_context:
+        result = enrich_candidates_with_open_interest(
+            result,
+            cache_dir=config.cache_dir,
+            progress_label=f"{progress_label}: oi context" if progress_label is not None else None,
+        )
     if include_derivatives_context:
         result = enrich_candidates_with_derivatives_context(
             result,

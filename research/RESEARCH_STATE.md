@@ -2738,3 +2738,11 @@ Current commit: UNKNOWN.
 P388 proposed after the latest 1m/5s artifact set showed the backtest was fully choked by missing/untrusted subminute flow caches. The intended historical path is restored: run-anomaly-lab performs a coarse setup-timeframe scan, backfills trusted 1s aggTrade windows only around coarse anomaly windows, materializes required subminute entry caches, and then runs pair/forming collection. This avoids full 1s backfill for the entire 40-day universe while keeping P381/P387 trust gates strict.
 
 Next validation: apply P388 after P386v2 and P387, run compileall, rerun a small 1m/5s slice, and inspect `targeted_flow_backfill.csv`, `targeted_flow_materialize.csv`, and `anomaly_candidates.csv`. Expected: no mass `untrusted_materialized_entry_flow_cache`; candidate rows should be non-error unless Binance fetch failed or no coarse anomaly windows exist.
+
+## 2026-05-22 - P389 targeted flow backfill planner state
+
+Current commit: UNKNOWN.
+
+P389 proposed after P388 started `targeted 1s flow` with an effectively unbounded ETA. Root cause: the planner used every coarse anomaly candidate as a fetch window and padded each with setup-baseline history, so long runs collapsed toward a full 1s rebuild. P389 changes planning to coarse pre-context signals only, removes OI/derivatives enrichment from the coarse planning scan, and makes pair/forming historical baseline come from setup-timeframe OHLCV instead of subminute cache.
+
+Next validation: apply P389, run compileall, then rerun a small 1m/5s slice. Inspect `targeted_flow_backfill.csv`: the `__coarse_scan__` row should show `window_selection=coarse_signal_prefilter`, `coarse_signals` much smaller than `coarse_candidates`, and `window_before_ms` near one setup candle instead of baseline history.

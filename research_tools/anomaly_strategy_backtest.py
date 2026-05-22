@@ -101,8 +101,8 @@ AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION = "p378_aggtrades_to_1s_full_buckets_v1"
 DEFAULT_LATENCY_EXTRA_MS = 5_000
 DEFAULT_LATENCY_GRID_MS = (0, 5_000)
 LATENCY_1S_BACKFILL_VERSION = AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION
-TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS = 5_400_000
-TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS = 2_700_000
+TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS = 120_000
+TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS = 120_000
 _BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_column", "missing_timestamp", "missing_frame", "empty_oi", "stale_asof"}
 _TRADE_CHART_FLOW_PROVENANCE = {
     "trade_count_proxy_used": False,
@@ -1547,7 +1547,12 @@ def _merge_targeted_timestamp_windows(windows: Iterable[tuple[int, int]]) -> lis
 def _targeted_flow_window_padding_ms(config: AnomalyBacktestConfig) -> tuple[int, int]:
     setup_ms = _timeframe_to_milliseconds(_effective_setup_timeframe(config))
     entry_ms = _timeframe_to_milliseconds(_effective_entry_timeframe(config))
-    baseline_before_ms = int(config.lab_config.baseline_candles) * setup_ms + setup_ms
+    # Pair/forming rows use the closed setup-timeframe cache for historical
+    # baseline after P389. Targeted subminute flow only needs to cover the
+    # forming setup candle itself, plus a small edge buffer. Do not fetch the
+    # whole setup baseline in 1s data: that degenerates into a near full-cache
+    # rebuild for long historical tests.
+    forming_setup_before_ms = setup_ms + 2 * entry_ms
     execution_after_ms = (
         int(config.market_entry_latency_candles)
         + int(config.max_hold_candles)
@@ -1555,7 +1560,7 @@ def _targeted_flow_window_padding_ms(config: AnomalyBacktestConfig) -> tuple[int
         + 2
     ) * entry_ms
     return (
-        max(TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS, baseline_before_ms),
+        max(TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS, forming_setup_before_ms),
         max(TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS, execution_after_ms),
     )
 
@@ -1572,6 +1577,60 @@ def _candidate_decision_center_ms(row: pd.Series) -> int | None:
             if value is not None:
                 return value
     return None
+
+
+def _prepare_coarse_candidates_for_targeted_flow(
+    coarse: pd.DataFrame,
+    *,
+    config: AnomalyBacktestConfig,
+    setup_timeframe: str,
+) -> pd.DataFrame:
+    if coarse.empty:
+        return coarse.copy()
+    result = coarse.copy()
+    if "status" in result.columns:
+        result = result.loc[~result["status"].astype(str).eq("error")].copy()
+    if result.empty:
+        return result
+    result["feature_contract"] = "closed_setup_tf_v1"
+    result["setup_timeframe"] = setup_timeframe
+    result["entry_timeframe"] = setup_timeframe
+    result["setup_source"] = "closed_setup_tf_targeted_flow_prefilter"
+    if "setup_elapsed_fraction" not in result.columns:
+        result["setup_elapsed_fraction"] = 1.0
+    if "setup_closed_entry_candles" not in result.columns:
+        result["setup_closed_entry_candles"] = int(config.lab_config.confirmation_candles)
+    return result
+
+
+def _select_coarse_signal_rows_for_targeted_flow(
+    coarse: pd.DataFrame,
+    *,
+    config: AnomalyBacktestConfig,
+    setup_timeframe: str,
+) -> tuple[pd.DataFrame, str, str]:
+    prepared = _prepare_coarse_candidates_for_targeted_flow(
+        coarse,
+        config=config,
+        setup_timeframe=setup_timeframe,
+    )
+    if prepared.empty:
+        return prepared, "no_usable_coarse_candidates", ""
+    signal_config = _strip_derivative_context_requirements(
+        replace(
+            config,
+            setup_timeframe=setup_timeframe,
+            entry_timeframe=setup_timeframe,
+            feature_contract="closed_setup_tf_v1",
+        )
+    )
+    try:
+        signals = build_anomaly_signals(prepared, config=signal_config)
+    except Exception as exc:
+        return prepared.iloc[0:0].copy(), "coarse_signal_filter_error", f"{type(exc).__name__}: {exc}"
+    if signals.empty:
+        return signals, "no_coarse_signals", ""
+    return signals, "ok", ""
 
 
 def ensure_targeted_subminute_flow_cache_for_configs(
@@ -1611,6 +1670,7 @@ def ensure_targeted_subminute_flow_cache_for_configs(
             coarse_lab_config,
             symbols=symbols,
             progress_label=label,
+            include_oi_context=False,
             include_derivatives_context=False,
         )
         if coarse.empty:
@@ -1620,13 +1680,17 @@ def ensure_targeted_subminute_flow_cache_for_configs(
                     "entry_timeframe": entry_timeframe,
                     "status": "no_coarse_candidates",
                     "coarse_candidates": 0,
+                    "coarse_signals": 0,
                     "targeted_windows": 0,
                 }
             )
             continue
-        valid = coarse.copy()
-        if "status" in valid.columns:
-            valid = valid.loc[~valid["status"].astype(str).eq("error")].copy()
+        usable_coarse_count = int(len(coarse.loc[~coarse["status"].astype(str).eq("error")])) if "status" in coarse.columns else int(len(coarse))
+        valid, selection_status, selection_error = _select_coarse_signal_rows_for_targeted_flow(
+            coarse,
+            config=config,
+            setup_timeframe=setup_timeframe,
+        )
         before_ms, after_ms = _targeted_flow_window_padding_ms(config)
         windows_added = 0
         for _, row in valid.iterrows():
@@ -1644,11 +1708,14 @@ def ensure_targeted_subminute_flow_cache_for_configs(
             {
                 "setup_timeframe": setup_timeframe,
                 "entry_timeframe": entry_timeframe,
-                "status": "ok" if windows_added else "no_usable_coarse_candidate_timestamps",
-                "coarse_candidates": int(len(valid)),
+                "status": selection_status if not windows_added else "ok",
+                "error": selection_error,
+                "coarse_candidates": int(usable_coarse_count),
+                "coarse_signals": int(len(valid)),
                 "targeted_windows": int(windows_added),
                 "window_before_ms": int(before_ms),
                 "window_after_ms": int(after_ms),
+                "window_selection": "coarse_signal_prefilter",
             }
         )
 
@@ -2779,11 +2846,12 @@ def _collect_symbol_pair_rows(
         return []
     setup_frame = setup_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
     entry_frame = entry_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
-    setup_metric_frame = (
-        _aggregate_entry_frame_to_setup_frame(entry_frame, setup_ms=setup_ms)
-        if entry_ms < setup_ms
-        else setup_frame.copy()
-    )
+    # Historical baseline belongs to the setup timeframe. Entry/subminute data
+    # is only needed for the currently forming setup candle and execution path.
+    # Using entry_frame to build the whole setup baseline forces targeted
+    # backfill to fetch baseline_candles * setup_ms of 1s data per event, which
+    # turns a targeted run into a near full-cache rebuild.
+    setup_metric_frame = setup_frame.copy()
     if setup_metric_frame.empty:
         return []
     rows: list[dict[str, object]] = []

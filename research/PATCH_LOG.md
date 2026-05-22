@@ -7761,3 +7761,32 @@ Risk:
 ```text
 The coarse setup-timeframe scan is intentionally a fetch planner, not a signal source. It can miss pathological cases where only the subminute forming path is interesting while the closed setup candle is not. The benefit is bounded network/cache work without reintroducing untrusted p165 subminute flow.
 ```
+
+## 2026-05-22 - P389 proposed - bounded targeted flow backfill planner
+
+Files:
+
+```text
+research_tools/anomaly_continuation_lab.py
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix P388's too-broad targeted flow planner. Coarse scan now only schedules 1s aggTrade windows for rows that pass pre-context closed setup signal guards, skips OI/derivatives enrichment during that planning scan, and no longer fetches setup baseline history in 1s data. Pair/forming baseline uses the trusted closed setup-timeframe cache; subminute data is used for the forming setup candle and execution path.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges data/fetchers research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+This intentionally reduces backfill scope. A pathological setup that is only visible in the subminute forming path while not passing the closed setup prefilter can be missed by the automatic planner. That is preferable to accidentally rebuilding full-universe 1s history inside a backtest; use explicit symbols/date slices for deeper forensic scans.
+```
