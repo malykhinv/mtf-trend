@@ -2282,7 +2282,6 @@ def _collect_symbol_pair_rows(
     rows: list[dict[str, object]] = []
     setup_timestamps = setup_metric_frame["timestamp"].astype("int64").to_numpy()
     entry_timestamps = entry_frame["timestamp"].astype("int64").to_numpy()
-    entry_max_timestamp = int(entry_timestamps[-1]) if len(entry_timestamps) else 0
     baseline_quote_medians = (
         pd.to_numeric(setup_metric_frame["quote_volume"], errors="coerce")
         .rolling(window=lab_config.baseline_candles, min_periods=lab_config.baseline_candles)
@@ -2297,7 +2296,6 @@ def _collect_symbol_pair_rows(
         .shift(1)
         .to_numpy()
     )
-    max_forward = max(lab_config.forward_high_candles, lab_config.forward_low_candles)
     for setup_idx, setup_start in enumerate(setup_timestamps):
         setup_start = int(setup_start)
         if setup_idx < lab_config.baseline_candles:
@@ -2341,8 +2339,6 @@ def _collect_symbol_pair_rows(
             entry_segment = entry_segment_full.iloc[: entry_end_pos + 1].copy()
             decision = entry_segment.iloc[-1]
             decision_ts = int(decision["timestamp"])
-            if decision_ts + max_forward * entry_ms >= entry_max_timestamp:
-                continue
             forming_setup = _aggregate_ohlcv_to_candle(entry_segment, timestamp_ms=setup_start)
             if forming_setup is None:
                 continue
@@ -2430,10 +2426,35 @@ def _build_pair_candidate_row(
     price_retention = _safe_divide_value(decision_close - start_open, impulse_high - start_open)
     verticality = compute_start_verticality_metrics(entry_segment)
     future = entry_frame.loc[entry_frame["timestamp"].astype("int64") > decision_ts]
-    future_high = float(pd.to_numeric(future.head(lab_config.forward_high_candles)["high"], errors="coerce").max())
-    future_low = float(pd.to_numeric(future.head(lab_config.forward_low_candles)["low"], errors="coerce").min())
+    future_high_window = future.head(lab_config.forward_high_candles)
+    future_low_window = future.head(lab_config.forward_low_candles)
+    future_high_observed_candles = int(len(future_high_window))
+    future_low_observed_candles = int(len(future_low_window))
+    future_label_status = (
+        "ok"
+        if (
+            future_high_observed_candles >= int(lab_config.forward_high_candles)
+            and future_low_observed_candles >= int(lab_config.forward_low_candles)
+        )
+        else "insufficient_future_window"
+    )
+    future_high = (
+        float(pd.to_numeric(future_high_window["high"], errors="coerce").max())
+        if future_high_observed_candles
+        else float("nan")
+    )
+    future_low = (
+        float(pd.to_numeric(future_low_window["low"], errors="coerce").min())
+        if future_low_observed_candles
+        else float("nan")
+    )
     future_ret_high = _safe_divide_value(future_high - decision_close, decision_close)
     future_dd_low = _safe_divide_value(future_low - decision_close, decision_close)
+    outcome_label = (
+        _classify_pair_outcome(future_ret_high=future_ret_high, future_dd_low=future_dd_low, config=lab_config)
+        if future_label_status == "ok"
+        else "unlabeled_insufficient_future"
+    )
     setup_with_current = pd.concat([baseline, pd.DataFrame([setup_row.to_dict()])], ignore_index=True)
     decision_ema20 = float(setup_with_current["close"].astype(float).ewm(span=20, adjust=False).mean().iloc[-1])
     range_series = baseline["high"].astype(float) - baseline["low"].astype(float)
@@ -2507,11 +2528,14 @@ def _build_pair_candidate_row(
         "decision_box_low": impulse_low,
         "decision_box_high": impulse_high,
         "decision_box_range": impulse_range,
+        "future_label_status": future_label_status,
+        "future_high_observed_candles": future_high_observed_candles,
+        "future_low_observed_candles": future_low_observed_candles,
         "future_high": future_high,
         "future_low": future_low,
         "future_ret_high_after_decision": future_ret_high,
         "future_dd_low_after_decision": future_dd_low,
-        "outcome_label": _classify_pair_outcome(future_ret_high=future_ret_high, future_dd_low=future_dd_low, config=lab_config),
+        "outcome_label": outcome_label,
         **{
             **_TRADE_CHART_FLOW_PROVENANCE,
             "entry_trade_count_source": f"{entry_flow_source}.number_of_trades",

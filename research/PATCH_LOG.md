@@ -28,6 +28,40 @@ Risk:
 Low for live/backtest signal logic: `build_anomaly_signals()` does not read `future_*` or `outcome_label`. Near the right edge, closed-TF runs may now produce additional candidates/signals that are later skipped by execution if no future execution candles exist, which is more honest than silently hiding them during candidate collection.
 ```
 
+## 2026-05-22 - P380 proposed - pair/forming candidate future-label boundary guard
+
+Files:
+
+```text
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix the critical p.7 pair/forming collector lookahead leak: an HTF/LTF candidate row must not exist only when a full future outcome-label horizon is already present after decision_ts. Candidate construction should depend only on baseline data and closed entry candles through the decision candle.
+```
+
+Change:
+
+```text
+Removed the future-horizon gate from _collect_symbol_pair_rows(). _build_pair_candidate_row() now writes future_label_status plus observed future high/low candle counts, and marks right-edge labels as unlabeled_insufficient_future instead of dropping the candidate. Future labels remain artifact-only.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low for signal logic: build_anomaly_signals() does not consume future_* or outcome_label. Near explicit right-edge cutoffs, pair/forming runs may now surface candidates that were previously hidden by future-label availability and later get skipped by execution if no post-entry candles exist.
+```
+
 ## 2026-05-22 - P378 proposed - require full aggTrade aggregation buckets
 
 Files:

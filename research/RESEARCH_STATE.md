@@ -8,6 +8,14 @@ P379 proposed after p.6 lookahead audit. The closed setup candidate collector no
 
 Next validation: apply P379 after P378, run compileall, then run a small closed-TF backtest near an explicit `--end-timestamp-ms`. Check that candidates near the right edge appear with `future_label_status=insufficient_future_window` instead of being silently dropped.
 
+## 2026-05-22 - P380 pair/forming collector audit state
+
+Current commit: UNKNOWN.
+
+P380 proposed after p.7 lookahead audit. The HTF/LTF pair/forming candidate collector no longer requires a complete future label horizon for a candidate row to exist. Candidate construction now only depends on closed entry candles through decision_ts and historical baseline rows. Future outcome fields remain artifact-only and are marked `unlabeled_insufficient_future` when the right-edge future window is incomplete.
+
+Next validation: apply P380 after P379, run compileall, then run a small pair-mode backtest near an explicit `--end-timestamp-ms`. Check that right-edge candidates appear with `future_label_status=insufficient_future_window` instead of being silently dropped.
+
 ## 2026-05-22 - P378 aggTrade/event cache full-bucket guard
 
 ```text
