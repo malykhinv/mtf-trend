@@ -504,7 +504,6 @@ def collect_symbol_anomaly_rows(
     if len(frame) < (
         config.baseline_candles
         + config.confirmation_candles
-        + max(config.forward_high_candles, config.forward_low_candles)
         + 1
     ):
         return []
@@ -529,9 +528,8 @@ def collect_symbol_anomaly_rows(
 
     rows: list[dict[str, object]] = []
     last_selected_idx = -10**9
-    max_forward = max(config.forward_high_candles, config.forward_low_candles)
     for idx in np.flatnonzero(anomaly_mask.to_numpy()):
-        if idx < config.baseline_candles or idx + config.confirmation_candles + max_forward >= len(frame):
+        if idx < config.baseline_candles or idx + config.confirmation_candles >= len(frame):
             continue
         if idx - last_selected_idx < config.cooldown_candles:
             continue
@@ -572,10 +570,31 @@ def collect_symbol_anomaly_rows(
         midpoint_lost = bool(decision_close < (impulse_low + 0.5 * impulse_range))
         new_high_count = int(high.iloc[idx + 1 : decision_idx + 1].gt(float(high.iloc[idx])).sum())
         entry_price = decision_close
-        future_high = float(high.iloc[decision_idx + 1 : decision_idx + 1 + config.forward_high_candles].max())
-        future_low = float(low.iloc[decision_idx + 1 : decision_idx + 1 + config.forward_low_candles].min())
+        future_high_window = high.iloc[decision_idx + 1 : decision_idx + 1 + config.forward_high_candles]
+        future_low_window = low.iloc[decision_idx + 1 : decision_idx + 1 + config.forward_low_candles]
+        future_high_observed_candles = int(len(future_high_window))
+        future_low_observed_candles = int(len(future_low_window))
+        future_label_status = (
+            "ok"
+            if (
+                future_high_observed_candles >= int(config.forward_high_candles)
+                and future_low_observed_candles >= int(config.forward_low_candles)
+            )
+            else "insufficient_future_window"
+        )
+        future_high = float(future_high_window.max()) if future_high_observed_candles else float("nan")
+        future_low = float(future_low_window.min()) if future_low_observed_candles else float("nan")
         future_ret_high = _safe_divide(future_high - entry_price, entry_price)
         future_dd_low = _safe_divide(future_low - entry_price, entry_price)
+        outcome_label = (
+            _classify_outcome(
+                future_ret_high=future_ret_high,
+                future_dd_low=future_dd_low,
+                config=config,
+            )
+            if future_label_status == "ok"
+            else "unlabeled_insufficient_future"
+        )
         flow = _flow_metrics(
             frame=frame,
             idx=idx,
@@ -639,15 +658,14 @@ def collect_symbol_anomaly_rows(
                 "decision_box_low": impulse_low,
                 "decision_box_high": impulse_high,
                 "decision_box_range": impulse_range,
+                "future_label_status": future_label_status,
+                "future_high_observed_candles": future_high_observed_candles,
+                "future_low_observed_candles": future_low_observed_candles,
                 "future_high": future_high,
                 "future_low": future_low,
                 "future_ret_high_after_decision": future_ret_high,
                 "future_dd_low_after_decision": future_dd_low,
-                "outcome_label": _classify_outcome(
-                    future_ret_high=future_ret_high,
-                    future_dd_low=future_dd_low,
-                    config=config,
-                ),
+                "outcome_label": outcome_label,
                 **_ANOMALY_FLOW_PROVENANCE,
                 **verticality,
                 **flow,

@@ -1,5 +1,33 @@
 # Anomaly Patch Log
 
+## 2026-05-22 - P379 proposed - closed-candidate future-label boundary guard
+
+Files:
+
+```text
+research_tools/anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix a critical lookahead/audit leak in the closed setup candidate collector: candidate existence must not depend on whether the full future outcome-label horizon is already present. The collector now only requires data through the decision candle. Future outcome fields are still written for research when the horizon is complete, but incomplete right-edge labels are explicitly marked as `unlabeled_insufficient_future`.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low for live/backtest signal logic: `build_anomaly_signals()` does not read `future_*` or `outcome_label`. Near the right edge, closed-TF runs may now produce additional candidates/signals that are later skipped by execution if no future execution candles exist, which is more honest than silently hiding them during candidate collection.
+```
+
 ## 2026-05-22 - P378 proposed - require full aggTrade aggregation buckets
 
 Files:

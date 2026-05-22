@@ -1,5 +1,13 @@
 # Anomaly Research State
 
+## 2026-05-22 - P379 closed candidate collector audit state
+
+Current commit: UNKNOWN.
+
+P379 proposed after p.6 lookahead audit. The closed setup candidate collector no longer requires a complete future label horizon for a candidate row to exist. Candidate construction now only depends on data available through the decision candle. Future labels remain artifact-only and are marked `unlabeled_insufficient_future` when the right-edge future window is incomplete.
+
+Next validation: apply P379 after P378, run compileall, then run a small closed-TF backtest near an explicit `--end-timestamp-ms`. Check that candidates near the right edge appear with `future_label_status=insufficient_future_window` instead of being silently dropped.
+
 ## 2026-05-22 - P378 aggTrade/event cache full-bucket guard
 
 ```text
