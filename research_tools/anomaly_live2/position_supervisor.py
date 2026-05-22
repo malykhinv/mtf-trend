@@ -10,6 +10,7 @@ initial stop is cancelled/verified gone.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field, replace
 from math import isfinite
 
@@ -30,6 +31,8 @@ class Live2PositionSupervisorConfig:
     breakeven_stop_offset_pct: float = 0.0
     flat_position_abs_epsilon: float = 1e-12
     min_remaining_amount: float = 1e-12
+    stop_trigger_settle_attempts: int = 3
+    stop_trigger_settle_sleep_seconds: float = 0.5
 
     def __post_init__(self) -> None:
         if self.monitor_interval_ms <= 0:
@@ -42,6 +45,10 @@ class Live2PositionSupervisorConfig:
             raise ValueError("flat_position_abs_epsilon must be >= 0")
         if self.min_remaining_amount < 0:
             raise ValueError("min_remaining_amount must be >= 0")
+        if self.stop_trigger_settle_attempts < 0:
+            raise ValueError("stop_trigger_settle_attempts must be >= 0")
+        if self.stop_trigger_settle_sleep_seconds < 0:
+            raise ValueError("stop_trigger_settle_sleep_seconds must be >= 0")
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,6 +157,8 @@ class Live2PositionSupervisor:
                 "breakeven_stop_offset_pct": self.config.breakeven_stop_offset_pct,
                 "flat_position_abs_epsilon": self.config.flat_position_abs_epsilon,
                 "min_remaining_amount": self.config.min_remaining_amount,
+                "stop_trigger_settle_attempts": self.config.stop_trigger_settle_attempts,
+                "stop_trigger_settle_sleep_seconds": self.config.stop_trigger_settle_sleep_seconds,
             },
             "total_cycles": self._total_cycles,
             "total_checked_positions": self._total_checked_positions,
@@ -211,6 +220,9 @@ class Live2PositionSupervisor:
             )
 
         if self.execution_engine.verify_stop_visible(position.symbol, position.stop_client_order_id) is None:
+            settled = self._wait_for_stop_trigger_settle(position=position, exchange_amount=exchange_amount, now_ms=now_ms)
+            if settled is not None:
+                return settled
             return self._integrity_error(
                 position=position,
                 reason="protected_position_stop_not_visible_during_supervision",
@@ -223,6 +235,90 @@ class Live2PositionSupervisor:
                 return self._close_tp1_full_position(position=position, exchange_amount=exchange_amount, now_ms=now_ms)
 
         self.execution_engine.replace_protected_position(replace(position, last_supervised_ms=now_ms))
+        return None
+
+    def _wait_for_stop_trigger_settle(
+        self,
+        *,
+        position: Live2ProtectedPosition,
+        exchange_amount: float,
+        now_ms: int,
+    ) -> Live2PositionSupervisorAction | None:
+        """Verify a stop-trigger transition before declaring unprotected exposure.
+
+        On Binance futures a stop-market algo can disappear from the open-algo
+        endpoint while the exchange is settling the triggered reduce-only market
+        order. That intermediate state is not safe to ignore, but treating the
+        first invisible-stop read as a permanent integrity failure also halts
+        live after a normal stop fill. We wait briefly and accept only two
+        explicit outcomes: the stop becomes visible again, or the exchange
+        position is flat and the old stop is gone.
+        """
+
+        attempts = int(self.config.stop_trigger_settle_attempts)
+        if attempts <= 0:
+            return None
+        last_amount = exchange_amount
+        for _ in range(attempts):
+            if self.config.stop_trigger_settle_sleep_seconds > 0:
+                time.sleep(float(self.config.stop_trigger_settle_sleep_seconds))
+            visible_stop = self.execution_engine.verify_stop_visible(position.symbol, position.stop_client_order_id)
+            if visible_stop is not None:
+                self.execution_engine.replace_protected_position(replace(position, last_supervised_ms=now_ms))
+                return Live2PositionSupervisorAction(
+                    event_type="position_stop_visibility_restored",
+                    symbol=position.symbol,
+                    position_id=position.position_id,
+                    severity=Live2Severity.INFO,
+                    message="protected stop became visible again during trigger-settle verification",
+                    data={
+                        "reason": "stop_visibility_restored_after_transient_invisible_read",
+                        "exchange_position_amount": last_amount,
+                        "stop_client_order_id": position.stop_client_order_id,
+                        "stop_order_id": position.stop_order_id,
+                    },
+                )
+            refreshed_amount = self._fetch_position_amount(position.symbol)
+            if refreshed_amount is None:
+                return None
+            last_amount = refreshed_amount
+            if abs(refreshed_amount) > self.config.flat_position_abs_epsilon:
+                continue
+            stop_gone_error = self._ensure_old_stop_gone_after_flat(position)
+            if stop_gone_error is not None:
+                return self._integrity_error(
+                    position=position,
+                    reason=stop_gone_error,
+                    emergency_amount=0.0,
+                    details={
+                        "exchange_position_amount": refreshed_amount,
+                        "expected_contract": "flat_position_without_visible_orphan_stop",
+                        "stop_client_order_id": position.stop_client_order_id,
+                        "stop_order_id": position.stop_order_id,
+                    },
+                )
+            closed = self.execution_engine.remove_protected_position(position.symbol) or position
+            return Live2PositionSupervisorAction(
+                event_type="position_final_close_verified",
+                symbol=closed.symbol,
+                position_id=closed.position_id,
+                severity=Live2Severity.INFO,
+                message="protected stop trigger settled: exchange position is flat and stop is gone",
+                data={
+                    "reason": "stop_trigger_settled_exchange_flat_stop_gone",
+                    "exchange_position_amount": refreshed_amount,
+                    "old_stop_order_id": position.stop_order_id,
+                    "old_stop_client_order_id": position.stop_client_order_id,
+                    "position": replace(
+                        closed,
+                        status="closed_verified_stop_trigger_exchange_flat_stop_gone",
+                        remaining_amount=0.0,
+                        closed_at_ms=now_ms,
+                        close_reason="stop_trigger_settled_exchange_flat_stop_gone",
+                        last_supervised_ms=now_ms,
+                    ).as_dict(),
+                },
+            )
         return None
 
     def _close_tp1_full_position(

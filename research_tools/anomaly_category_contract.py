@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-CATEGORY_CONTRACT_ID = "shared_pump_category_contract_v1_live_overlay_v8"
+CATEGORY_CONTRACT_ID = "shared_pump_category_contract_v1_live_overlay_v9"
 PUMP_CATEGORY_DISCOVERY = "discovery"
 PUMP_CATEGORY_FAMILY_LIVE = "live_priority"
 PUMP_CATEGORY_FAMILY_DISCOVERY = "discovery"
@@ -62,7 +62,6 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         label="runner OI confirmed",
         priority=10,
         min_oi_change_pct_3x5m=0.002,
-        min_mark_close_vs_decision_close_basis=0.002,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=250.0,
         min_baseline_quote_daily_proxy=300_000.0,
@@ -79,7 +78,6 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         category_id="runner_flow",
         label="runner flow",
         priority=20,
-        min_mark_close_vs_decision_close_basis=0.0005,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=250.0,
         min_baseline_quote_daily_proxy=300_000.0,
@@ -97,7 +95,6 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         category_id="runner_reclaim",
         label="runner reclaim",
         priority=30,
-        min_mark_close_vs_decision_close_basis=0.0005,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=10.0,
         min_baseline_quote_daily_proxy=300_000.0,
@@ -115,7 +112,6 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         category_id="runner_balanced",
         label="runner balanced",
         priority=40,
-        min_mark_close_vs_decision_close_basis=0.002,
         max_start_quote_ratio=1000.0,
         max_start_trade_ratio=250.0,
         min_baseline_quote_daily_proxy=300_000.0,

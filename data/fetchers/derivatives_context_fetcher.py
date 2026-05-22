@@ -22,9 +22,11 @@ class DerivativesContextSpec:
     path_parts: tuple[str, ...]
     columns: tuple[str, ...]
     interval_ms: int
+    period: str = "5m"
     limit: int = 500
 
 
+DERIVATIVES_CONTEXT_1M_MS = 60 * 1000
 DERIVATIVES_CONTEXT_5M_MS = 5 * 60 * 1000
 DERIVATIVES_CONTEXT_8H_MS = 8 * 60 * 60 * 1000
 
@@ -34,6 +36,7 @@ DERIVATIVES_CONTEXT_FETCH_SPECS: tuple[DerivativesContextSpec, ...] = (
         path_parts=("funding_rate",),
         columns=("timestamp", "funding_rate"),
         interval_ms=DERIVATIVES_CONTEXT_8H_MS,
+        period="8h",
         limit=1000,
     ),
     DerivativesContextSpec(
@@ -41,36 +44,42 @@ DERIVATIVES_CONTEXT_FETCH_SPECS: tuple[DerivativesContextSpec, ...] = (
         path_parts=("premium_index", "5m"),
         columns=("timestamp", "open", "high", "low", "close"),
         interval_ms=DERIVATIVES_CONTEXT_5M_MS,
+        period="5m",
     ),
     DerivativesContextSpec(
         name="mark",
-        path_parts=("mark_price", "5m"),
+        path_parts=("mark_price", "1m"),
         columns=("timestamp", "open", "high", "low", "close"),
-        interval_ms=DERIVATIVES_CONTEXT_5M_MS,
+        interval_ms=DERIVATIVES_CONTEXT_1M_MS,
+        period="1m",
     ),
     DerivativesContextSpec(
         name="global_ls",
         path_parts=("global_long_short_account_ratio", "5m"),
         columns=("timestamp", "long_short_ratio", "long_account", "short_account"),
         interval_ms=DERIVATIVES_CONTEXT_5M_MS,
+        period="5m",
     ),
     DerivativesContextSpec(
         name="top_account_ls",
         path_parts=("top_long_short_account_ratio", "5m"),
         columns=("timestamp", "long_short_ratio", "long_account", "short_account"),
         interval_ms=DERIVATIVES_CONTEXT_5M_MS,
+        period="5m",
     ),
     DerivativesContextSpec(
         name="top_position_ls",
         path_parts=("top_long_short_position_ratio", "5m"),
         columns=("timestamp", "long_short_ratio", "long_account", "short_account"),
         interval_ms=DERIVATIVES_CONTEXT_5M_MS,
+        period="5m",
     ),
     DerivativesContextSpec(
         name="taker_ls",
         path_parts=("taker_long_short_ratio", "5m"),
         columns=("timestamp", "buy_sell_ratio", "buy_vol", "sell_vol"),
         interval_ms=DERIVATIVES_CONTEXT_5M_MS,
+        period="5m",
     ),
 )
 
@@ -202,7 +211,7 @@ class DerivativesContextFetcher:
                         source=spec.name,
                         start_timestamp_ms=cursor_ms,
                         end_timestamp_ms=chunk_end_ms,
-                        period="5m",
+                        period=spec.period,
                         limit=spec.limit,
                     )
                     if not data.empty:

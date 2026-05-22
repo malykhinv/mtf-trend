@@ -1322,11 +1322,7 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
 
     def _run() -> int:
         from data.storage.parquet_storage import ParquetStorage
-        from research_tools.anomaly_aggtrade_cache import (
-            aggregate_aggtrades_to_ohlcv_frame,
-            resolve_aggtrade_id,
-            resolve_aggtrade_timestamp,
-        )
+        from research_tools.anomaly_aggtrade_cache import aggregate_aggtrades_to_ohlcv_frame, resolve_aggtrade_timestamp
 
         logger = get_logger("backfill-anomaly-aggtrade-cache", level=config.backtest.log_level, logs_dir=config.backtest.logs_dir)
         _, exchange_client, _ = _build_fetch_stack(config)
@@ -1334,7 +1330,28 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
         max_symbols = getattr(args, "max_symbols", None)
         if max_symbols is not None:
             symbols = symbols[: int(max_symbols)]
+        start_arg = getattr(args, "start_timestamp_ms", None)
+        if start_arg is not None and getattr(args, "end_timestamp_ms", None) is None:
+            raise ValueError("--start-timestamp-ms requires --end-timestamp-ms")
         start_timestamp_ms, end_timestamp_ms = _fetch_period(config, int(args.days), getattr(args, "end_timestamp_ms", None))
+        if start_arg is not None:
+            start_timestamp_ms = int(start_arg)
+            if start_timestamp_ms > int(end_timestamp_ms):
+                raise ValueError("--start-timestamp-ms must be <= --end-timestamp-ms")
+        window_timestamps = tuple(int(value) for value in (getattr(args, "window_timestamps_ms", None) or ()))
+        if window_timestamps:
+            before_ms = int(getattr(args, "window_before_ms", 5_400_000))
+            after_ms = int(getattr(args, "window_after_ms", 2_700_000))
+            raw_windows = [
+                (
+                    max(int(start_timestamp_ms), int(timestamp_ms) - before_ms),
+                    min(int(end_timestamp_ms), int(timestamp_ms) + after_ms),
+                )
+                for timestamp_ms in sorted(window_timestamps)
+            ]
+            windows = _merge_timestamp_windows(raw_windows)
+        else:
+            windows = [(int(start_timestamp_ms), int(end_timestamp_ms))]
         chunk_ms = int(args.chunk_hours) * 3_600_000
         storage = ParquetStorage(
             base_dir=config.backtest.cache_dir,
@@ -1348,62 +1365,71 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
             symbol_fetched_chunks = 0
             symbol_status = "ok"
             symbol_error = ""
-            chunk_start = int(start_timestamp_ms)
+            added_by_window: list[dict[str, object]] = []
             logger.warning("aggTrades 1s backfill %s/%s %s", symbol_index, len(symbols), symbol)
             try:
                 market_id = exchange_client.get_market_id(symbol)
-                while chunk_start <= int(end_timestamp_ms):
-                    chunk_end = min(int(end_timestamp_ms), chunk_start + chunk_ms - 1)
-                    existing_first = storage.get_first_timestamp(symbol, Timeframe.S1)
-                    existing_last = storage.get_last_timestamp(symbol, Timeframe.S1)
-                    if existing_first is not None and existing_last is not None and existing_first <= chunk_start and existing_last >= chunk_end:
-                        symbol_skipped_chunks += 1
-                        chunk_start = chunk_end + 1
-                        continue
-                    symbol_fetched_chunks += 1
-                    all_rows: list[dict[str, object]] = []
-                    next_from_id: int | None = None
-                    previous_last_id: int | None = None
-                    while True:
-                        params: dict[str, object] = {
-                            "symbol": market_id,
-                            "limit": 1000,
-                            "startTime": int(chunk_start),
-                            "endTime": int(chunk_end),
-                        }
-                        if next_from_id is not None:
-                            params = {
+                for window_start, window_end in windows:
+                    chunk_start = int(window_start)
+                    window_added = 0
+                    while chunk_start <= int(window_end):
+                        chunk_end = min(int(window_end), chunk_start + chunk_ms - 1)
+                        if not window_timestamps:
+                            existing_first = storage.get_first_timestamp(symbol, Timeframe.S1)
+                            existing_last = storage.get_last_timestamp(symbol, Timeframe.S1)
+                            if (
+                                existing_first is not None
+                                and existing_last is not None
+                                and existing_first <= chunk_start
+                                and existing_last >= chunk_end
+                            ):
+                                symbol_skipped_chunks += 1
+                                chunk_start = chunk_end + 1
+                                continue
+                        symbol_fetched_chunks += 1
+                        all_rows: list[dict[str, object]] = []
+                        cursor_ms = int(chunk_start)
+                        while True:
+                            params: dict[str, object] = {
                                 "symbol": market_id,
                                 "limit": 1000,
-                                "fromId": int(next_from_id),
+                                "startTime": int(cursor_ms),
                                 "endTime": int(chunk_end),
                             }
-                        batch = exchange_client.fetch_binance_agg_trades(symbol=symbol, params=params)
-                        if not batch:
-                            break
-                        all_rows.extend(dict(row) for row in batch)
-                        last_row = batch[-1]
-                        last_id = resolve_aggtrade_id(dict(last_row))
-                        last_ts = resolve_aggtrade_timestamp(dict(last_row))
-                        if last_id is None or (previous_last_id is not None and last_id <= previous_last_id):
-                            break
-                        previous_last_id = last_id
-                        next_from_id = last_id + 1
-                        if last_ts is None or last_ts >= chunk_end or len(batch) < 1000:
-                            break
-                    if all_rows:
-                        frame = aggregate_aggtrades_to_ohlcv_frame(
-                            pd.DataFrame(all_rows),
-                            timeframe_ms=1000,
-                            start_timestamp_ms=int(chunk_start),
-                            end_timestamp_ms=int(chunk_end),
-                        )
-                        if not frame.empty:
-                            frame["aggregation_source"] = "binance_futures_aggTrades"
-                            frame["aggregation_target_timeframe"] = "1s"
-                            frame["aggregation_version"] = "p166_aggtrades_to_1s_v1"
-                            symbol_added += storage.save_incremental(symbol, Timeframe.S1, frame)
-                    chunk_start = chunk_end + 1
+                            batch = exchange_client.fetch_binance_agg_trades(symbol=symbol, params=params)
+                            if not batch:
+                                break
+                            all_rows.extend(dict(row) for row in batch)
+                            last_row = batch[-1]
+                            last_ts = resolve_aggtrade_timestamp(dict(last_row))
+                            if last_ts is None or last_ts < cursor_ms:
+                                break
+                            if last_ts >= chunk_end or len(batch) < 1000:
+                                break
+                            cursor_ms = int(last_ts) + 1
+                            time.sleep(0.02)
+                        if all_rows:
+                            frame = aggregate_aggtrades_to_ohlcv_frame(
+                                pd.DataFrame(all_rows),
+                                timeframe_ms=1000,
+                                start_timestamp_ms=int(chunk_start),
+                                end_timestamp_ms=int(chunk_end),
+                            )
+                            if not frame.empty:
+                                frame["aggregation_source"] = "binance_futures_aggTrades"
+                                frame["aggregation_target_timeframe"] = "1s"
+                                frame["aggregation_version"] = "p166_aggtrades_to_1s_v1"
+                                added_rows = storage.save_incremental(symbol, Timeframe.S1, frame)
+                                symbol_added += added_rows
+                                window_added += added_rows
+                        chunk_start = chunk_end + 1
+                    added_by_window.append(
+                        {
+                            "start_timestamp_ms": int(window_start),
+                            "end_timestamp_ms": int(window_end),
+                            "added_rows": int(window_added),
+                        }
+                    )
             except Exception as exc:
                 symbol_status = "error"
                 symbol_error = f"{type(exc).__name__}: {exc}"
@@ -1420,6 +1446,11 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
                     "end_timestamp_ms": int(end_timestamp_ms),
                     "start_timestamp_utc": datetime.fromtimestamp(int(start_timestamp_ms) / 1000, UTC).isoformat(),
                     "end_timestamp_utc": datetime.fromtimestamp(int(end_timestamp_ms) / 1000, UTC).isoformat(),
+                    "targeted_window_count": len(windows) if window_timestamps else 0,
+                    "window_timestamps_ms": ",".join(str(value) for value in window_timestamps),
+                    "window_before_ms": int(getattr(args, "window_before_ms", 5_400_000)) if window_timestamps else 0,
+                    "window_after_ms": int(getattr(args, "window_after_ms", 2_700_000)) if window_timestamps else 0,
+                    "windows_json": json.dumps(added_by_window, ensure_ascii=False),
                 }
             )
         manifest = pd.DataFrame(rows)
@@ -1436,6 +1467,20 @@ def backfill_anomaly_aggtrade_cache(config: AppConfig, args: argparse.Namespace)
         return 0 if manifest.empty or not manifest["status"].eq("error").any() else 1
 
     return _run_with_logging("backfill-anomaly-aggtrade-cache", config, _run)
+
+
+def _merge_timestamp_windows(windows: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    valid = sorted((int(start), int(end)) for start, end in windows if int(start) <= int(end))
+    if not valid:
+        return []
+    merged: list[tuple[int, int]] = [valid[0]]
+    for start, end in valid[1:]:
+        prev_start, prev_end = merged[-1]
+        if start <= prev_end + 1:
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
 
 
 def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:

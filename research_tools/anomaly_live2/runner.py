@@ -621,7 +621,7 @@ class AnomalyLive2Runner:
                     decision_status = self.deadline_engine.status()
                     execution_status = self._execution_status()
                     artifact_writer_status = writer.status().as_dict()
-                    grid_decision_status, grid_execution_status, grid_runtime_gate_status = self._session_scoped_grid_status(
+                    grid_decision_status, _grid_execution_status, grid_runtime_gate_status = self._session_scoped_grid_status(
                         decision_status=decision_status,
                         execution_status=execution_status,
                         runtime_gate_status=runtime_gate_status,
@@ -661,7 +661,7 @@ class AnomalyLive2Runner:
                             candle_counts=market_data_status.get("candle_coverage_counts", {}),
                             market_data_status=market_data_status,
                             decision_status=grid_decision_status,
-                            execution_status=grid_execution_status,
+                            execution_status=execution_status,
                             user_data_stream_status=self._user_data_stream_status(),
                             runtime_gate_status=grid_runtime_gate_status,
                             artifact_writer_status=artifact_writer_status,

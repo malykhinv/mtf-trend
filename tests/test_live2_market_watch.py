@@ -14,6 +14,7 @@ from research_tools.anomaly_live2.deadline import Live2DeadlineEngine, Live2Dead
 from research_tools.anomaly_live2.entry_guard import Live2EntryGuardResult
 from research_tools.anomaly_live2.execution import Live2ExecutionConfig, Live2ExecutionEngine
 from research_tools.anomaly_live2.market_data.candles import Live2AggTradeEvent, Live2Candle, Live2CandleRing
+from research_tools.anomaly_live2.position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorConfig
 from research_tools.anomaly_live2.market_data.prior_context import (
     LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS,
     Live2PriorContextPollConfig,
@@ -580,6 +581,7 @@ def test_live2_deadline_expires_backlog_without_counting_near_deadline_miss() ->
 class _FakeExecutionExchange:
     def __init__(self) -> None:
         self.position_amount = 0.0
+        self.stop_visible = True
 
     def fetch_live_account_preflight(self):
         return ExchangeLiveAccountPreflight(exchange="fake", position_mode="one_way", hedge_mode_enabled=False)
@@ -601,13 +603,30 @@ class _FakeExecutionExchange:
         )
 
     def create_stop_market_order(self, symbol, side, amount, stop_price, *, client_order_id):
+        self.stop_visible = True
         return {"id": f"stop-{client_order_id}"}
 
     def fetch_stop_order_by_client_order_id(self, symbol, client_order_id):
+        if not self.stop_visible:
+            raise LookupError("stop not visible")
         return {"id": f"stop-{client_order_id}", "clientOrderId": client_order_id}
 
     def cancel_stop_order(self, symbol, order_id):
+        self.stop_visible = False
         return {"id": order_id, "status": "canceled"}
+
+
+class _FakeStopTriggerSettlingExchange(_FakeExecutionExchange):
+    def __init__(self) -> None:
+        super().__init__()
+        self.position_reads_after_trigger = 0
+
+    def fetch_symbol_position_amount(self, symbol):
+        if not self.stop_visible:
+            self.position_reads_after_trigger += 1
+            if self.position_reads_after_trigger >= 2:
+                self.position_amount = 0.0
+        return self.position_amount
 
 
 def test_live2_execution_records_entry_attempt_timing() -> None:
@@ -650,6 +669,56 @@ def test_live2_execution_records_entry_attempt_timing() -> None:
     assert result.timing["stop_order_submit_duration_ms"] >= 0
     assert result.timing["stop_verify_duration_ms"] >= 0
     assert result.details["execution_timing"]["duration_ms"] == result.duration_ms
+
+
+def test_live2_supervisor_treats_settled_stop_trigger_as_final_close() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    exchange = _FakeStopTriggerSettlingExchange()
+    engine = Live2ExecutionEngine(
+        exchange_client=exchange,
+        config=Live2ExecutionConfig(stop_visibility_sleep_seconds=0.0),
+    )
+    assert engine.preflight().ready
+    signal = Live2SignalDecision(
+        verdict="selected",
+        reason="test",
+        category_id="test_category",
+        category_rank=1,
+        signal_entry_price=1.0,
+        initial_stop_at_decision=0.99,
+        initial_risk_pct_at_decision=0.01,
+        tp1_at_decision=1.02,
+    )
+    guard = Live2EntryGuardResult(
+        verdict="accepted",
+        reason="entry_guard_passed",
+        live_price=1.0,
+        signal_age_ms=100,
+        entry_price_drift_pct=0.0,
+        rr_to_tp1_at_live_price=2.0,
+    )
+    result = engine.execute_selected(state=state, signal_decision=signal, entry_guard_result=guard)
+    assert result.verdict == "selected"
+
+    exchange.stop_visible = False
+    supervisor = Live2PositionSupervisor(
+        exchange_client=exchange,
+        execution_engine=engine,
+        config=Live2PositionSupervisorConfig(
+            monitor_interval_ms=1,
+            stop_trigger_settle_attempts=2,
+            stop_trigger_settle_sleep_seconds=0.0,
+        ),
+    )
+
+    cycle = supervisor.run_cycle(store)
+
+    assert cycle.integrity_error_count == 0
+    assert cycle.final_close_count == 1
+    assert cycle.actions[0].event_type == "position_final_close_verified"
+    assert engine.ready
+    assert engine.protected_positions_snapshot() == ()
 
 
 def test_live2_status_grid_uses_four_column_operator_sections() -> None:

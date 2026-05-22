@@ -85,8 +85,10 @@ from research_tools.runner_fader_prepump_context import (
 
 _HOUR_MS = 3_600_000
 _DAY_MS = 86_400_000
+_FIVE_MINUTE_MS = 5 * 60 * 1000
 _PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS = 24
 _PRIOR_CONTEXT_LIVE_LOOKBACK_MS = _PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS * _HOUR_MS
+_PRIOR_CONTEXT_MIN_COVERAGE_RATIO = 0.80
 _TRADE_CHART_CONTEXT_DAYS = 4
 _MATERIALIZED_SUBMINUTE_CACHE_VERSION = "p165_1s_ohlcv_to_subminute_v1"
 DEFAULT_LATENCY_EXTRA_MS = 5_000
@@ -181,6 +183,12 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "start_trades_per_abs_return",
     "start_quote_ratio_per_abs_return",
     "start_trade_ratio_per_abs_return",
+    "prior_context_status",
+    "prior_context_reason",
+    "prior_context_source",
+    "prior_context_rows_used",
+    "prior_context_start_ms",
+    "prior_context_end_ms",
     "prior_spike_count_24h",
     "prior_spike_count_72h",
     "prior_fast_fade_count_24h",
@@ -223,6 +231,8 @@ for _context_spec in DERIVATIVES_CONTEXT_SPECS:
         f"{_context_prefix}_status",
         f"{_context_prefix}_timestamp_ms",
         f"{_context_prefix}_timestamp_utc",
+        f"{_context_prefix}_asof_timestamp_ms",
+        f"{_context_prefix}_asof_timestamp_utc",
         f"{_context_prefix}_age_ms",
     )
     for _context_column in _context_spec["value_columns"]:
@@ -534,11 +544,19 @@ def _red_flag_violation_masks(signals: pd.DataFrame, *, config: AnomalyBacktestC
         flow_hold = pd.to_numeric(signals["flow_hold_count_next_n_candles"], errors="coerce")
         masks["flow_hold_count_below_min"] = flow_hold.lt(config.min_flow_hold_count) | flow_hold.isna()
     if config.max_prior_spike_count_72h is not None:
-        prior_spikes = pd.to_numeric(signals["prior_spike_count_72h"], errors="coerce").fillna(0.0)
-        masks["prior_spike_count_72h_above_max"] = prior_spikes.gt(config.max_prior_spike_count_72h)
+        prior_spikes = pd.to_numeric(signals["prior_spike_count_72h"], errors="coerce")
+        prior_status = signals.get("prior_context_status", pd.Series("", index=index)).astype(str)
+        masks["prior_spike_count_72h_above_max"] = (
+            prior_status.ne("ok") | prior_spikes.gt(config.max_prior_spike_count_72h) | prior_spikes.isna()
+        )
     if config.max_prior_fast_fade_count_72h is not None:
-        prior_fast_fades = pd.to_numeric(signals["prior_fast_fade_count_72h"], errors="coerce").fillna(0.0)
-        masks["prior_fast_fade_count_72h_above_max"] = prior_fast_fades.gt(config.max_prior_fast_fade_count_72h)
+        prior_fast_fades = pd.to_numeric(signals["prior_fast_fade_count_72h"], errors="coerce")
+        prior_status = signals.get("prior_context_status", pd.Series("", index=index)).astype(str)
+        masks["prior_fast_fade_count_72h_above_max"] = (
+            prior_status.ne("ok")
+            | prior_fast_fades.gt(config.max_prior_fast_fade_count_72h)
+            | prior_fast_fades.isna()
+        )
     if config.min_start_lower_wick_to_range is not None:
         lower_wick = pd.to_numeric(signals["start_lower_wick_to_range"], errors="coerce")
         masks["start_lower_wick_below_min"] = lower_wick.le(config.min_start_lower_wick_to_range) | lower_wick.isna()
@@ -850,6 +868,40 @@ def _aggregate_ohlcv_to_candle(frame: pd.DataFrame, *, timestamp_ms: int) -> pd.
         if column in ordered.columns:
             row[column] = float(pd.to_numeric(ordered[column], errors="coerce").fillna(0.0).sum())
     return pd.Series(row)
+
+
+def _aggregate_entry_frame_to_setup_frame(entry_frame: pd.DataFrame, *, setup_ms: int) -> pd.DataFrame:
+    if entry_frame.empty or setup_ms <= 0 or "timestamp" not in entry_frame.columns:
+        return pd.DataFrame()
+    required = ("open", "high", "low", "close", "quote_volume", "number_of_trades")
+    if any(column not in entry_frame.columns for column in required):
+        return pd.DataFrame()
+    frame = entry_frame.copy().sort_values("timestamp")
+    frame["timestamp"] = pd.to_numeric(frame["timestamp"], errors="coerce")
+    frame.dropna(subset=["timestamp"], inplace=True)
+    if frame.empty:
+        return pd.DataFrame()
+    frame["setup_timestamp"] = (frame["timestamp"].astype("int64") // int(setup_ms)) * int(setup_ms)
+    aggregations: dict[str, tuple[str, str]] = {
+        "timestamp": ("setup_timestamp", "first"),
+        "open": ("open", "first"),
+        "high": ("high", "max"),
+        "low": ("low", "min"),
+        "close": ("close", "last"),
+        "quote_volume": ("quote_volume", "sum"),
+        "number_of_trades": ("number_of_trades", "sum"),
+    }
+    if "volume" in frame.columns:
+        aggregations["volume"] = ("volume", "sum")
+    if "taker_buy_quote_volume" in frame.columns:
+        aggregations["taker_buy_quote_volume"] = ("taker_buy_quote_volume", "sum")
+    result = frame.groupby("setup_timestamp", as_index=False).agg(**aggregations)
+    result.sort_values("timestamp", inplace=True)
+    result.drop_duplicates("timestamp", keep="last", inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    if "ema20" not in result.columns and "close" in result.columns:
+        result["ema20"] = result["close"].astype(float).ewm(span=20, adjust=False).mean()
+    return result
 
 
 def _cache_symbol_dir_name(symbol: str) -> str:
@@ -1194,6 +1246,12 @@ def enrich_candidates_with_recent_spike_context(
         return candidates
     result = candidates.copy()
     for column in (
+        "prior_context_status",
+        "prior_context_reason",
+        "prior_context_source",
+        "prior_context_rows_used",
+        "prior_context_start_ms",
+        "prior_context_end_ms",
         "prior_spike_count_24h",
         "prior_spike_count_72h",
         "prior_fast_fade_count_24h",
@@ -1205,49 +1263,83 @@ def enrich_candidates_with_recent_spike_context(
         "time_since_prior_spike_hours",
     ):
         result[column] = np.nan
-    entry_ms = _timeframe_to_milliseconds(_effective_entry_timeframe(config))
-    maturity_ms = max(config.lab_config.forward_high_candles, config.lab_config.forward_low_candles) * entry_ms
+    for column in ("prior_context_status", "prior_context_reason", "prior_context_source"):
+        result[column] = ""
     for _, group in result.groupby("symbol", sort=False):
+        symbol = str(group.iloc[0]["symbol"])
+        prior_frame = _read_symbol_frame_optional(config.lab_config.cache_dir, symbol, "5m")
+        if prior_frame.empty or not {"timestamp", "open", "high", "low", "close"}.issubset(prior_frame.columns):
+            for row_index in group.index:
+                result.at[row_index, "prior_context_status"] = "missing_5m_prior_context"
+                result.at[row_index, "prior_context_reason"] = "missing_or_invalid_5m_ohlcv"
+                result.at[row_index, "prior_context_source"] = "cached_5m_ohlcv_for_live_prior_context"
+            continue
+        prior_frame = prior_frame.loc[:, ["timestamp", "open", "high", "low", "close"]].copy()
+        for column in prior_frame.columns:
+            prior_frame[column] = pd.to_numeric(prior_frame[column], errors="coerce")
+        prior_frame.dropna(subset=["timestamp", "open", "high", "low", "close"], inplace=True)
+        prior_frame = prior_frame.loc[
+            prior_frame["open"].gt(0.0)
+            & prior_frame["high"].gt(0.0)
+            & prior_frame["low"].gt(0.0)
+            & prior_frame["close"].gt(0.0)
+        ].copy()
+        prior_frame.sort_values("timestamp", inplace=True)
+        prior_frame.drop_duplicates("timestamp", keep="last", inplace=True)
+        prior_timestamps = prior_frame["timestamp"].astype("int64").to_numpy()
+
         ordered = group.copy()
         ordered["_decision_ts_numeric"] = pd.to_numeric(ordered["decision_timestamp_ms"], errors="coerce")
         ordered = ordered.dropna(subset=["_decision_ts_numeric"]).sort_values("_decision_ts_numeric")
         if ordered.empty:
             continue
         timestamps = ordered["_decision_ts_numeric"].astype("int64").to_numpy()
-        labels = (
-            ordered["outcome_label"].astype(str).to_numpy()
-            if "outcome_label" in ordered.columns
-            else np.array([""] * len(ordered), dtype=object)
-        )
+        expected_rows = max(1, int((_PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS * 60) / 5))
+        min_expected_rows = max(1, int(expected_rows * _PRIOR_CONTEXT_MIN_COVERAGE_RATIO))
         for pos, row_index in enumerate(ordered.index):
             decision_ts = int(timestamps[pos])
-            prior_end = int(np.searchsorted(timestamps, decision_ts, side="left"))
-            prior_start_24h = int(np.searchsorted(timestamps, decision_ts - _DAY_MS, side="left"))
-            # Keep legacy *_72h column names for artifact compatibility, but use the
-            # current live prior-context window.
-            prior_start_context = int(
-                np.searchsorted(timestamps, decision_ts - _PRIOR_CONTEXT_LIVE_LOOKBACK_MS, side="left")
-            )
-            mature_cutoff = decision_ts - maturity_ms
-            mature_end = int(np.searchsorted(timestamps, mature_cutoff, side="right"))
-            mature_24h_start = min(prior_start_24h, mature_end)
-            mature_context_start = min(prior_start_context, mature_end)
-            mature_labels_24h = labels[mature_24h_start:mature_end]
-            mature_labels_context = labels[mature_context_start:mature_end]
-            prior_count_24h = max(0, prior_end - prior_start_24h)
-            prior_count_context = max(0, prior_end - prior_start_context)
-            result.at[row_index, "prior_spike_count_24h"] = prior_count_24h
-            result.at[row_index, "prior_spike_count_72h"] = prior_count_context
-            result.at[row_index, "prior_fast_fade_count_24h"] = int((mature_labels_24h == "fast_fade").sum())
-            result.at[row_index, "prior_fast_fade_count_72h"] = int((mature_labels_context == "fast_fade").sum())
-            result.at[row_index, "prior_big_move_count_24h"] = int((mature_labels_24h == "big_move").sum())
-            result.at[row_index, "prior_big_move_count_72h"] = int((mature_labels_context == "big_move").sum())
+            context_end_exclusive_ms = int(decision_ts // _FIVE_MINUTE_MS) * _FIVE_MINUTE_MS
+            context_start_ms = context_end_exclusive_ms - _PRIOR_CONTEXT_LIVE_LOOKBACK_MS
+            left = int(np.searchsorted(prior_timestamps, context_start_ms, side="left"))
+            right = int(np.searchsorted(prior_timestamps, context_end_exclusive_ms, side="left"))
+            window = prior_frame.iloc[left:right]
+            rows_used = int(len(window))
+            result.at[row_index, "prior_context_source"] = "cached_5m_ohlcv_for_live_prior_context"
+            result.at[row_index, "prior_context_rows_used"] = rows_used
+            result.at[row_index, "prior_context_start_ms"] = context_start_ms
+            result.at[row_index, "prior_context_end_ms"] = context_end_exclusive_ms - 1
+            if rows_used < min_expected_rows:
+                result.at[row_index, "prior_context_status"] = "insufficient_coverage"
+                result.at[row_index, "prior_context_reason"] = (
+                    f"prior_context_24h_coverage_below_80pct:{rows_used}/{min_expected_rows}"
+                )
+                continue
+            result.at[row_index, "prior_context_status"] = "ok"
+            result.at[row_index, "prior_context_reason"] = "cached_5m_prior_context_ready"
+            open_values = window["open"].astype(float)
+            high_values = window["high"].astype(float)
+            close_values = window["close"].astype(float)
+            spike_return = (high_values / open_values) - 1.0
+            spike_mask = spike_return.ge(0.03)
+            spike_count = int(spike_mask.sum())
+            spike_leg = high_values - open_values
+            retrace_fraction = (high_values - close_values) / spike_leg.replace(0.0, np.nan)
+            fast_fade_count = int((spike_mask & retrace_fraction.ge(0.55)).sum())
+            result.at[row_index, "prior_spike_count_24h"] = spike_count
+            # Keep legacy *_72h column names for artifact compatibility, but match
+            # live2 category gating, which uses 24h closed 5m prior context.
+            result.at[row_index, "prior_spike_count_72h"] = spike_count
+            result.at[row_index, "prior_fast_fade_count_24h"] = fast_fade_count
+            result.at[row_index, "prior_fast_fade_count_72h"] = fast_fade_count
+            result.at[row_index, "prior_big_move_count_24h"] = spike_count
+            result.at[row_index, "prior_big_move_count_72h"] = spike_count
             result.at[row_index, "prior_spike_density_72h"] = _safe_divide_value(
-                prior_count_context,
+                spike_count,
                 max(1.0, float(_PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS) / 24.0),
             )
-            if prior_end > 0:
-                elapsed_ms = int(decision_ts - timestamps[prior_end - 1])
+            spike_timestamps = window.loc[spike_mask, "timestamp"]
+            if not spike_timestamps.empty:
+                elapsed_ms = int(decision_ts - int(spike_timestamps.iloc[-1]))
                 result.at[row_index, "time_since_prior_spike_ms"] = elapsed_ms
                 result.at[row_index, "time_since_prior_spike_hours"] = _safe_divide_value(elapsed_ms, _HOUR_MS)
     return result
@@ -1395,11 +1487,12 @@ def build_anomaly_signals(
     if config.min_flow_hold_count is not None:
         mask &= signals["flow_hold_count_next_n_candles"].astype(float).ge(config.min_flow_hold_count)
     if config.max_prior_spike_count_72h is not None:
-        mask &= signals["prior_spike_count_72h"].fillna(0.0).astype(float).le(config.max_prior_spike_count_72h)
+        mask &= signals.get("prior_context_status", pd.Series("", index=signals.index)).astype(str).eq("ok")
+        mask &= signals["prior_spike_count_72h"].astype(float).le(config.max_prior_spike_count_72h)
     if config.max_prior_fast_fade_count_72h is not None:
+        mask &= signals.get("prior_context_status", pd.Series("", index=signals.index)).astype(str).eq("ok")
         mask &= (
             signals["prior_fast_fade_count_72h"]
-            .fillna(0.0)
             .astype(float)
             .le(config.max_prior_fast_fade_count_72h)
         )
@@ -2003,19 +2096,26 @@ def _collect_symbol_pair_rows(
         return []
     setup_frame = setup_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
     entry_frame = entry_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    setup_metric_frame = (
+        _aggregate_entry_frame_to_setup_frame(entry_frame, setup_ms=setup_ms)
+        if entry_ms < setup_ms
+        else setup_frame.copy()
+    )
+    if setup_metric_frame.empty:
+        return []
     rows: list[dict[str, object]] = []
-    setup_timestamps = setup_frame["timestamp"].astype("int64").to_numpy()
+    setup_timestamps = setup_metric_frame["timestamp"].astype("int64").to_numpy()
     entry_timestamps = entry_frame["timestamp"].astype("int64").to_numpy()
     entry_max_timestamp = int(entry_timestamps[-1]) if len(entry_timestamps) else 0
     baseline_quote_medians = (
-        pd.to_numeric(setup_frame["quote_volume"], errors="coerce")
+        pd.to_numeric(setup_metric_frame["quote_volume"], errors="coerce")
         .rolling(window=lab_config.baseline_candles, min_periods=lab_config.baseline_candles)
         .median()
         .shift(1)
         .to_numpy()
     )
     baseline_trade_medians = (
-        pd.to_numeric(setup_frame["number_of_trades"], errors="coerce")
+        pd.to_numeric(setup_metric_frame["number_of_trades"], errors="coerce")
         .rolling(window=lab_config.baseline_candles, min_periods=lab_config.baseline_candles)
         .median()
         .shift(1)
@@ -2071,7 +2171,7 @@ def _collect_symbol_pair_rows(
             if forming_setup is None:
                 continue
             if baseline_for_row is None:
-                baseline_for_row = setup_frame.iloc[setup_idx - lab_config.baseline_candles : setup_idx].copy()
+                baseline_for_row = setup_metric_frame.iloc[setup_idx - lab_config.baseline_candles : setup_idx].copy()
                 if baseline_for_row.empty:
                     break
             row = _build_pair_candidate_row(
@@ -3108,6 +3208,8 @@ def build_context_parity_report(
         "mark_status",
         "mark_timestamp_ms",
         "mark_timestamp_utc",
+        "mark_asof_timestamp_ms",
+        "mark_asof_timestamp_utc",
         "mark_age_ms",
         "mark_close_vs_decision_close_basis",
         "oi_status",

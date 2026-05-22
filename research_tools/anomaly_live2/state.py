@@ -936,14 +936,25 @@ class SymbolStateStore:
         return counts
 
     def actionable_symbol_counts(self, *, now_ms: int, ttl_ms: int, session_start_ms: int | None = None) -> dict[str, object]:
-        stage_counts = self.stage_symbol_counts(now_ms=now_ms, ttl_ms=ttl_ms, session_start_ms=session_start_ms)
-        stage0 = stage_counts["stages"].get("stage0", {})
+        current = 0
+        session_seen = 0
+        cutoff_ms = int(now_ms) - int(ttl_ms)
+        session_cutoff_ms = None if session_start_ms is None else int(session_start_ms)
+        with self._lock:
+            for state in self._states.values():
+                last_actionable_ms = state.last_actionable_ms
+                if last_actionable_ms is None:
+                    continue
+                if int(last_actionable_ms) >= cutoff_ms:
+                    current += 1
+                if session_cutoff_ms is None or int(last_actionable_ms) >= session_cutoff_ms:
+                    session_seen += 1
         return {
-            "current": int(stage0.get("current", 0)),
-            "seen": int(stage0.get("session_seen", 0)),
-            "session_seen": int(stage0.get("session_seen", 0)),
-            "session_start_ms": stage_counts["session_start_ms"],
-            "source": "stage0_threshold_crossed",
+            "current": current,
+            "seen": session_seen,
+            "session_seen": session_seen,
+            "session_start_ms": session_cutoff_ms,
+            "source": "last_actionable_ms",
         }
 
     def stage_symbol_counts(self, *, now_ms: int, ttl_ms: int, session_start_ms: int | None = None) -> dict[str, object]:

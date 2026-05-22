@@ -1,6 +1,8 @@
 import pandas as pd
+from urllib.parse import quote
 
 from research_tools.anomaly_continuation_lab import (
+    _enrich_symbol_context,
     build_oi_context_status,
     collect_symbol_anomaly_rows,
     compute_start_verticality_metrics,
@@ -11,7 +13,9 @@ from research_tools import anomaly_strategy_backtest
 from research_tools.anomaly_strategy_backtest import (
     AnomalyBacktestConfig,
     AnomalyLabConfig,
+    _collect_symbol_pair_rows,
     build_anomaly_signals,
+    enrich_candidates_with_recent_spike_context,
     simulate_long_signal,
 )
 
@@ -56,6 +60,146 @@ def test_start_verticality_score_zero_for_negative_segment() -> None:
 
     assert metrics["start_verticality_score"] == 0.0
     assert metrics["start_verticality_slope_pct_per_candle"] < 0
+
+
+def test_derivatives_context_uses_only_rows_available_at_decision() -> None:
+    spec = {
+        "prefix": "mark",
+        "value_columns": ("close",),
+        "lookback_bars": (1,),
+        "expected_interval_ms": 60_000,
+        "availability_lag_ms": 60_000,
+    }
+    candidates = pd.DataFrame(
+        [
+            {"decision_timestamp_ms": 90_000},
+            {"decision_timestamp_ms": 120_000},
+        ]
+    )
+    frame = pd.DataFrame(
+        {
+            "timestamp": [0, 60_000],
+            "close": [10.0, 20.0],
+        }
+    )
+
+    rows = _enrich_symbol_context(candidates, frame, "ok", spec)
+
+    assert rows[0]["mark_status"] == "ok"
+    assert rows[0]["mark_timestamp_ms"] == 0
+    assert rows[0]["mark_asof_timestamp_ms"] == 60_000
+    assert rows[0]["mark_age_ms"] == 30_000
+    assert rows[0]["mark_close"] == 10.0
+    assert rows[1]["mark_status"] == "ok"
+    assert rows[1]["mark_timestamp_ms"] == 60_000
+    assert rows[1]["mark_asof_timestamp_ms"] == 120_000
+    assert rows[1]["mark_age_ms"] == 0
+    assert rows[1]["mark_close"] == 20.0
+
+
+def test_recent_spike_context_counts_live_5m_candles_not_entry_rows(tmp_path) -> None:
+    symbol = "TEST/USDT:USDT"
+    symbol_dir = tmp_path / quote(symbol, safe="")
+    cache_dir = symbol_dir / "5m"
+    cache_dir.mkdir(parents=True)
+    timestamps = [300_000 + index * 300_000 for index in range(288)]
+    frame = pd.DataFrame(
+        {
+            "timestamp": timestamps,
+            "open": [100.0] * 288,
+            "high": [101.0] * 288,
+            "low": [99.0] * 288,
+            "close": [100.5] * 288,
+        }
+    )
+    frame.loc[[5, 120, 240], "high"] = 104.0
+    frame.loc[[5, 240], "close"] = 103.5
+    frame.loc[120, "close"] = 101.0
+    frame.to_parquet(cache_dir / "data.parquet", index=False)
+    candidates = pd.DataFrame(
+        [
+            {"symbol": symbol, "decision_timestamp_ms": 86_700_000, "outcome_label": "big_move"},
+            {"symbol": symbol, "decision_timestamp_ms": 86_705_000, "outcome_label": "big_move"},
+        ]
+    )
+
+    enriched = enrich_candidates_with_recent_spike_context(
+        candidates,
+        config=AnomalyBacktestConfig(lab_config=AnomalyLabConfig(cache_dir=tmp_path)),
+    )
+
+    assert enriched["prior_context_status"].tolist() == ["ok", "ok"]
+    assert enriched["prior_spike_count_72h"].tolist() == [3, 3]
+    assert enriched["prior_fast_fade_count_72h"].tolist() == [1, 1]
+
+
+def test_pair_candidates_use_entry_derived_trade_baseline() -> None:
+    symbol = "TEST/USDT:USDT"
+    setup_rows = []
+    entry_rows = []
+    for minute in range(61):
+        ts = minute * 60_000
+        setup_rows.append(
+            {
+                "timestamp": ts,
+                "open": 10.0,
+                "high": 10.1,
+                "low": 9.9,
+                "close": 10.0,
+                "quote_volume": 100.0,
+                "number_of_trades": 1000.0,
+            }
+        )
+        if minute < 60:
+            entry_rows.append(
+                {
+                    "timestamp": ts,
+                    "open": 10.0,
+                    "high": 10.1,
+                    "low": 9.9,
+                    "close": 10.0,
+                    "volume": 10.0,
+                    "quote_volume": 100.0,
+                    "number_of_trades": 10.0,
+                    "taker_buy_quote_volume": 50.0,
+                }
+            )
+    setup_start = 60 * 60_000
+    for index in range(12):
+        price = 10.0 + index * 0.05
+        entry_rows.append(
+            {
+                "timestamp": setup_start + index * 5_000,
+                "open": price,
+                "high": price + 0.04,
+                "low": price - 0.01,
+                "close": price + 0.03,
+                "volume": 100.0,
+                "quote_volume": 1000.0,
+                "number_of_trades": 40.0,
+                "taker_buy_quote_volume": 700.0,
+            }
+        )
+
+    rows = _collect_symbol_pair_rows(
+        symbol=symbol,
+        setup_frame=pd.DataFrame(setup_rows),
+        entry_frame=pd.DataFrame(entry_rows),
+        config=AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(
+                baseline_candles=60,
+                confirmation_candles=4,
+                forward_high_candles=5,
+                forward_low_candles=5,
+            ),
+            setup_timeframe="1m",
+            entry_timeframe="5s",
+        ),
+    )
+
+    assert rows
+    assert rows[0]["baseline_trade_count_median"] == 10.0
+    assert rows[0]["start_trade_ratio"] > 5.0
 
 
 def test_runner_review_ranks_target_date_by_future_return() -> None:
@@ -312,6 +456,7 @@ def test_pre_context_universe_does_not_require_missing_mark_basis_column() -> No
                 "flow_hold_count_next_n_candles": 3,
                 "prior_spike_count_72h": 0,
                 "prior_fast_fade_count_72h": 0,
+                "prior_context_status": "ok",
                 "start_lower_wick_to_range": 0.1,
                 "start_upper_wick_to_range": 0.1,
                 "next_n_taker_buy_quote_share_mean": 0.5,

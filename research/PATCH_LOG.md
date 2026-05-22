@@ -1,5 +1,59 @@
 # Anomaly Patch Log
 
+## 2026-05-22 - P373 applied locally - live2 event-cache and backtest parity repair
+
+Files:
+
+```text
+cli/commands.py
+cli/parser.py
+data/fetchers/derivatives_context_fetcher.py
+research_tools/anomaly_category_contract.py
+research_tools/anomaly_continuation_lab.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/position_supervisor.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/state.py
+research_tools/anomaly_strategy_backtest.py
+tests/test_anomaly_continuation_lab.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Compare live2 trades from runs 20260521_164122 and 20260521_194030 against category-only backtests without building a full 1s cache, then fix concrete live/backtest parity errors and operator-grid misreporting.
+```
+
+Change:
+
+```text
+AggTrade backfill now supports targeted timestamp windows, so event studies can fill only the 5s/1s cache around interesting live signals/trades. Binance aggTrade pagination was corrected to time-cursor pagination for bounded windows.
+
+Backtest derivatives context now uses availability-aware as-of lookup, mark context is fetched/read at 1m, and artifacts expose mark_asof timestamps. Category contract v9 removes mark-basis as a trading blocker because live has mark WS ticks but historical backtest has only delayed mark klines; mark basis remains diagnostic.
+
+Backtest prior spike/fade context now counts closed cached 5m candles over the same effective 24h live-priority window as live2, and missing/insufficient prior context rejects explicitly instead of acting like zero spikes. Pair-mode 1m/5s candidates now derive setup quote/trade baselines from the same 5s aggTrade cache used for entry flow, avoiding raw-kline trade-count inflation versus live.
+
+Live2 grid/state now records stage/actionable timestamps consistently, `Active` is current/session-seen actionable symbols, and the trading row uses run-level execution status for positions/orders. Supervisor now verifies the transient stop-trigger settlement state before declaring a protected position unprotected.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_anomaly_continuation_lab.py tests\test_live2_market_watch.py -q
+.venv\Scripts\python.exe -m compileall data\exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium. Backtest/live signal parity is materially closer, but same-period backtest still uses next-bar proxy fills while live uses exchange fills. The next live run must verify that BEAT-like signals are selected earlier now that mark-basis is diagnostic only, and that no runtime gate remains stuck after normal stop-trigger settlement.
+```
+
 ## 2026-05-21 - P370 applied locally - deeper live2/backtest signal parity
 
 Files:

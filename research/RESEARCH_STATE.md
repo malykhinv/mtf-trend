@@ -1,5 +1,20 @@
 # Anomaly Research State
 
+## 2026-05-22 - P373 live2 trade parity and targeted event cache
+
+```text
+Current patch status: P373 APPLIED locally / UNKNOWN commit.
+Question: compare live2 trades INJ (run 20260521_164122) and BEAT (run 20260521_194030) with same-period category-only backtests, avoid a full 1s cache, and fix any live2/backtest choke or display bugs.
+
+Finding: the old comparison was not trustworthy. BEAT was rejected live at 2026-05-21T22:11:30Z only by mark_basis_below_category_min, then selected later at 2026-05-21T22:11:47Z after mark WS basis improved. Historical backtest cannot reproduce that tick-level mark basis from closed mark klines without lookahead or stale under-entry, so mark basis was an unfair trading gate. INJ was also missed/shifted by mixing live aggTrade-derived entry counts with raw kline setup trade-count baselines in the backtest.
+
+Change: use targeted aggTrade windows around interesting live events, not a full-second cache; fix bounded aggTrade pagination; add availability-aware derivatives context with 1m mark as-of timestamps; remove mark basis from live-priority category blockers while keeping diagnostics; compute prior spike/fade context from closed cached 5m candles like live2; compute setup quote/trade baselines from the same 5s aggTrade cache in 1m/5s pair mode. Live2 grid active/trading rows and stop-trigger settle handling were fixed at the same time.
+
+Result after targeted backfill/materialized 5s and fixed4 backtests: runner_oi_confirmed sees both INJ and BEAT. INJ appears at decision 2026-05-21T17:36:30Z / entry 17:36:35, while live entered later at 17:36:42.752Z fill 5.211. BEAT appears at decision 2026-05-21T22:11:30Z / entry 22:11:35, while old live entered later at 22:11:47.668Z fill 0.8475. The BEAT delay was mostly the old mark-basis category gate, not proof that the market was untradeable.
+
+Residual risk: fixed4 is an event-window parity audit, not an edge proof. Backtest still uses next-bar proxy execution and cannot claim exact live fill prices. The next validation is a new live2 run on P373: selected/rejected artifacts should show no mark-basis trading rejects, Active should be current/session-seen, Trading should show run-level orders/positions, and a normal stop fill should not leave runtime gates disabled.
+```
+
 ## 2026-05-21 - P372 live2 stage state store hotfix
 
 ```text

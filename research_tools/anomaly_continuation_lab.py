@@ -33,8 +33,10 @@ OI_TIMEFRAME = "5m"
 OI_LOOKBACK_BARS = (1, 3, 6)
 OI_EXPECTED_INTERVAL_MS = 5 * 60 * 1000
 DERIVATIVES_CONTEXT_TIMEFRAME = "5m"
+DERIVATIVES_MARK_CONTEXT_TIMEFRAME = "1m"
 DERIVATIVES_CONTEXT_LOOKBACK_BARS = (1, 3, 6)
 DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS = 5 * 60 * 1000
+DERIVATIVES_MARK_CONTEXT_EXPECTED_INTERVAL_MS = 60 * 1000
 FUNDING_EXPECTED_INTERVAL_MS = 9 * 60 * 60 * 1000
 
 OHLCV_COLUMNS = (
@@ -75,14 +77,16 @@ DERIVATIVES_CONTEXT_SPECS: tuple[dict[str, object], ...] = (
         "value_columns": ("close",),
         "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
         "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+        "availability_lag_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
     },
     {
         "prefix": "mark",
-        "path_parts": ("mark_price", DERIVATIVES_CONTEXT_TIMEFRAME),
+        "path_parts": ("mark_price", DERIVATIVES_MARK_CONTEXT_TIMEFRAME),
         "required_columns": ("timestamp", "close"),
         "value_columns": ("close",),
         "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
-        "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+        "expected_interval_ms": DERIVATIVES_MARK_CONTEXT_EXPECTED_INTERVAL_MS,
+        "availability_lag_ms": DERIVATIVES_MARK_CONTEXT_EXPECTED_INTERVAL_MS,
     },
     {
         "prefix": "global_ls",
@@ -91,6 +95,7 @@ DERIVATIVES_CONTEXT_SPECS: tuple[dict[str, object], ...] = (
         "value_columns": ("long_short_ratio", "long_account", "short_account"),
         "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
         "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+        "availability_lag_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
     },
     {
         "prefix": "top_account_ls",
@@ -99,6 +104,7 @@ DERIVATIVES_CONTEXT_SPECS: tuple[dict[str, object], ...] = (
         "value_columns": ("long_short_ratio", "long_account", "short_account"),
         "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
         "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+        "availability_lag_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
     },
     {
         "prefix": "top_position_ls",
@@ -107,6 +113,7 @@ DERIVATIVES_CONTEXT_SPECS: tuple[dict[str, object], ...] = (
         "value_columns": ("long_short_ratio", "long_account", "short_account"),
         "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
         "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+        "availability_lag_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
     },
     {
         "prefix": "taker_ls",
@@ -115,6 +122,7 @@ DERIVATIVES_CONTEXT_SPECS: tuple[dict[str, object], ...] = (
         "value_columns": ("buy_sell_ratio", "buy_vol", "sell_vol"),
         "lookback_bars": DERIVATIVES_CONTEXT_LOOKBACK_BARS,
         "expected_interval_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
+        "availability_lag_ms": DERIVATIVES_CONTEXT_EXPECTED_INTERVAL_MS,
     },
 )
 
@@ -857,6 +865,8 @@ def _empty_context_columns(spec: dict[str, object]) -> dict[str, object]:
         f"{prefix}_status": "not_checked",
         f"{prefix}_timestamp_ms": np.nan,
         f"{prefix}_timestamp_utc": "",
+        f"{prefix}_asof_timestamp_ms": np.nan,
+        f"{prefix}_asof_timestamp_utc": "",
         f"{prefix}_age_ms": np.nan,
     }
     for column in spec["value_columns"]:
@@ -908,6 +918,7 @@ def _enrich_symbol_context(
     rows: list[dict[str, object]] = []
     prefix = str(spec["prefix"])
     expected_interval_ms = int(spec["expected_interval_ms"])
+    availability_lag_ms = int(spec.get("availability_lag_ms", 0) or 0)
     value_columns = tuple(str(column) for column in spec["value_columns"])
     lookback_bars = tuple(int(bars) for bars in spec["lookback_bars"])
     if frame is None:
@@ -927,17 +938,21 @@ def _enrich_symbol_context(
             rows.append(values)
             continue
         decision_ts_int = int(decision_ts)
-        context_idx = int(np.searchsorted(timestamps, decision_ts_int, side="right") - 1)
+        lookup_ts_int = decision_ts_int - availability_lag_ms
+        context_idx = int(np.searchsorted(timestamps, lookup_ts_int, side="right") - 1)
         if context_idx < 0:
             values[f"{prefix}_status"] = "no_context_before_decision"
             rows.append(values)
             continue
 
         context_ts = int(timestamps[context_idx])
-        age_ms = decision_ts_int - context_ts
+        asof_ts = context_ts + availability_lag_ms
+        age_ms = decision_ts_int - asof_ts
         values[f"{prefix}_status"] = "stale_asof" if age_ms > expected_interval_ms else "ok"
         values[f"{prefix}_timestamp_ms"] = context_ts
         values[f"{prefix}_timestamp_utc"] = _timestamp_to_utc(context_ts)
+        values[f"{prefix}_asof_timestamp_ms"] = asof_ts
+        values[f"{prefix}_asof_timestamp_utc"] = _timestamp_to_utc(asof_ts)
         values[f"{prefix}_age_ms"] = int(age_ms)
         for column, array in value_arrays.items():
             current = float(array[context_idx])

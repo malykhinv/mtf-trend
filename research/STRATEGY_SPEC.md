@@ -59,6 +59,16 @@ live2 maintenance: REST bootstrap closed 5m 24h context, then roll forward from 
 live2 gap policy: aggTrade-id discontinuity inside a real closed 5m candle is diagnostic, not alone a hard context invalidation; stale/missing context still blocks category acceptance
 ```
 
+Current live/backtest category parity contract:
+
+```text
+live-priority prior spike/fade gates use closed 5m candles over the effective 24h context window
+missing or insufficient prior 5m context is a category rejection, not zero prior spikes
+mark premium/basis is diagnostic until historical tick-level mark replay exists; live mark WS basis must not be a category-only blocker that the backtest cannot replay without lookahead
+1m/5s pair-mode quote/trade baselines must come from the same real aggTrade-derived entry cache used for entry flow when that cache is available
+event studies should build targeted 1s/5s cache windows around selected/rejected live events and top movers, not a full universal second cache
+```
+
 The suffix refresh is data-quality plumbing, not a signal by itself. It only prevents an otherwise active/retryable candidate from expiring because the recent context tail was missing from cache.
 
 Compatibility note:

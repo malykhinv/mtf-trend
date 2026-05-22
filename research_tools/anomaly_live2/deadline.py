@@ -692,6 +692,17 @@ class Live2DeadlineEngine:
         if state.first_actionable_ms is None:
             state.first_actionable_ms = candle.close_time_ms
         state.last_actionable_ms = candle.close_time_ms
+        state.stage0_passed_ms = candle.close_time_ms
+        if signal_decision is not None:
+            state.stage1_passed_ms = candle.close_time_ms
+            if signal_decision.verdict != "data_dependency_not_ready":
+                state.stage2_passed_ms = candle.close_time_ms
+            if signal_decision.verdict == "selected":
+                state.stage3_passed_ms = candle.close_time_ms
+        if entry_guard_result is not None:
+            state.stage4_passed_ms = candle.close_time_ms
+            if entry_guard_result.verdict == "accepted":
+                state.stage5_passed_ms = candle.close_time_ms
         state.decision_deadline_ms = deadline_ms
         state.last_decision_bucket_ms = candle.open_time_ms
         state.last_verdict = verdict

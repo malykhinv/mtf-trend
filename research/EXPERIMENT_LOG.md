@@ -1,4 +1,25 @@
 
+## 2026-05-22 - live2 INJ/BEAT targeted parity audit after P373
+
+```text
+Artifacts reviewed: .output/results/live2_anomaly_runs/20260521_164122 and .output/results/live2_anomaly_runs/20260521_194030.
+Targeted cache: filled only event windows around INJ, BEAT, and same-run selected/top interesting symbols with --window-timestamps-ms, then materialized 5s cache. No full universal 1s cache is required for this audit pattern.
+
+Live INJ: selected 2026-05-21T17:36:42.752Z, bucket_close_ms=1779385000000, category runner_oi_confirmed, signal_entry=5.209, fill=5.211.
+Live BEAT: selected/executed 2026-05-21T22:11:47.668Z, bucket_close_ms=1779401505000, category runner_oi_confirmed, signal_entry=0.8496, fill=0.8475, later stopped near 0.809.
+
+Pre-fix issue: BEAT at 2026-05-21T22:11:30Z had a valid setup except mark_basis_below_category_min. That gate depended on live mark WS ticks, while backtest was using delayed/historical mark klines. INJ also exposed a baseline mismatch: backtest entry flow used aggTrade-derived counts but setup baseline used raw kline number_of_trades, inflating the denominator versus live.
+
+Fixed4 category-only targeted backtests:
+runner_oi_confirmed: signals=25, closed=6, skipped=19, avg_net=0.5928%, sum_net=3.5565%, win_rate=50.00%.
+runner_flow: signals=19, closed=4, skipped=15, avg_net=0.3004%, sum_net=1.2017%, win_rate=50.00%.
+runner_balanced: signals=52, closed=12, skipped=40, avg_net=0.7061%, sum_net=8.4734%, win_rate=66.67%.
+
+Parity result: runner_oi_confirmed now sees INJ at decision 2026-05-21T17:36:30Z / entry 17:36:35 and BEAT at decision 2026-05-21T22:11:30Z / entry 22:11:35. Old live entered both later, especially BEAT, because of live-only/runtime differences now addressed by P373. These small event-window numbers are not an edge proof; they only validate that the backtest can now replay the live-relevant category path more honestly.
+
+Next test: run live2 on P373 and verify no mark_basis trading rejects, no permanent execution_not_ready after normal stop settlement, and compare new selected trades against targeted event-window backtests.
+```
+
 ## 2026-05-21 - P370 live2/backtest signal math parity audit
 
 ```text
