@@ -1,5 +1,41 @@
 # Anomaly Patch Log
 
+## 2026-05-22 - P376 proposed - make OHLCV cache windows availability-aware
+
+Files:
+
+```text
+data/storage/parquet_storage.py
+research_tools/anomaly_continuation_lab.py
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Close the critical p.3 ambiguity where cached OHLCV `timestamp` is the exchange candle open time, but high/low/close/volume/flow are only known after the candle closes. Historical as-of windows must not include a candle merely because its open timestamp is <= end_timestamp_ms.
+```
+
+Change:
+
+```text
+ParquetStorage now attaches explicit `candle_open_timestamp_ms`, `candle_close_timestamp_ms`, and `available_timestamp_ms` to loaded OHLCV frames. Closed-TF and pair candidate collectors now slice backtest input windows by candle availability (`available_timestamp_ms <= end_timestamp_ms`) instead of treating open timestamp as known time. Candidate artifacts record setup/decision availability timestamps and timestamp semantics for audit. Aggregated lower-TF frames also carry availability timestamps so partially formed target buckets are excluded at the as-of boundary.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium research-output impact: historical runs with explicit end_timestamp_ms can lose the last open-time candle because it was not yet closed/available. This is intentional. Trading/live code is not changed. This does not solve OI/derivatives publication lag; that remains a separate node.
+```
+
 ## 2026-05-22 - P375 proposed - guard backtest universe scope
 
 Files:

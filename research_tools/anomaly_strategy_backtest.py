@@ -789,6 +789,49 @@ def _timeframe_to_milliseconds(timeframe: str) -> int:
     return amount * seconds_by_unit[unit] * 1000
 
 
+def _with_ohlcv_availability_columns(frame: pd.DataFrame, *, timeframe: str) -> pd.DataFrame:
+    if frame.empty or "timestamp" not in frame.columns:
+        return frame
+    result = frame.copy()
+    timestamps = pd.to_numeric(result["timestamp"], errors="coerce")
+    timeframe_ms = _timeframe_to_milliseconds(timeframe)
+    result["candle_open_timestamp_ms"] = timestamps
+    result["candle_close_timestamp_ms"] = timestamps + timeframe_ms
+    result["available_timestamp_ms"] = result["candle_close_timestamp_ms"]
+    return result
+
+
+def _slice_ohlcv_asof_window(
+    frame: pd.DataFrame,
+    *,
+    timeframe: str,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+) -> pd.DataFrame:
+    """Slice OHLCV by open start and close/availability end.
+
+    Exchange OHLCV timestamps are candle opens.  The candle's high/low/close and
+    flow are not available until the candle closes, so the end boundary must be
+    checked against `available_timestamp_ms`, not `timestamp`.
+    """
+    if frame.empty or "timestamp" not in frame.columns:
+        return frame.copy()
+    prepared = _with_ohlcv_availability_columns(frame, timeframe=timeframe)
+    timestamps = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    available = pd.to_numeric(prepared["available_timestamp_ms"], errors="coerce")
+    return prepared.loc[
+        timestamps.ge(int(start_timestamp_ms))
+        & available.le(int(end_timestamp_ms))
+    ].copy()
+
+
+def _row_available_timestamp_ms(row: pd.Series, *, timeframe: str) -> int:
+    value = _safe_int(row.get("available_timestamp_ms"))
+    if value is not None:
+        return value
+    return int(row["timestamp"]) + _timeframe_to_milliseconds(timeframe)
+
+
 def _effective_setup_timeframe(config: AnomalyBacktestConfig) -> str:
     return str(config.setup_timeframe or config.lab_config.timeframe)
 
@@ -962,6 +1005,7 @@ def _read_symbol_frame(cache_dir: Path, symbol: str, timeframe: str) -> pd.DataF
     frame.sort_values("timestamp", inplace=True)
     frame.drop_duplicates("timestamp", keep="last", inplace=True)
     frame.reset_index(drop=True, inplace=True)
+    frame = _with_ohlcv_availability_columns(frame, timeframe=timeframe)
     if "ema20" not in frame.columns and "close" in frame.columns:
         frame["ema20"] = frame["close"].astype(float).ewm(span=20, adjust=False).mean()
     return frame
@@ -1048,6 +1092,7 @@ def _ensure_latency_1s_cache(
     merged.sort_values("timestamp", inplace=True)
     merged.drop_duplicates("timestamp", keep="last", inplace=True)
     merged.reset_index(drop=True, inplace=True)
+    merged = _with_ohlcv_availability_columns(merged, timeframe="1s")
     if "ema20" not in merged.columns and "close" in merged.columns:
         merged["ema20"] = merged["close"].astype(float).ewm(span=20, adjust=False).mean()
     return merged
@@ -1085,6 +1130,10 @@ def _aggregate_frame_to_timeframe(frame: pd.DataFrame, *, timeframe_ms: int) -> 
     aggregated.drop(columns=["bucket"], inplace=True)
     aggregated.sort_values("timestamp", inplace=True)
     aggregated.reset_index(drop=True, inplace=True)
+    timestamps = pd.to_numeric(aggregated["timestamp"], errors="coerce")
+    aggregated["candle_open_timestamp_ms"] = timestamps
+    aggregated["candle_close_timestamp_ms"] = timestamps + int(timeframe_ms)
+    aggregated["available_timestamp_ms"] = aggregated["candle_close_timestamp_ms"]
     if "ema20" not in aggregated.columns and "close" in aggregated.columns:
         aggregated["ema20"] = aggregated["close"].astype(float).ewm(span=20, adjust=False).mean()
     return aggregated
@@ -1850,12 +1899,28 @@ def collect_pair_anomaly_rows(
         try:
             setup_frame = _read_symbol_frame(lab_config.cache_dir, symbol, setup_timeframe)
             entry_frame = _read_symbol_frame(lab_config.cache_dir, symbol, entry_cache_timeframe)
-            setup_frame = setup_frame.loc[(setup_frame["timestamp"] >= start_ms - lab_config.baseline_candles * _timeframe_to_milliseconds(setup_timeframe)) & (setup_frame["timestamp"] <= int(end_ms))].copy()
-            entry_frame = entry_frame.loc[(entry_frame["timestamp"] >= start_ms) & (entry_frame["timestamp"] <= int(end_ms))].copy()
+            setup_frame = _slice_ohlcv_asof_window(
+                setup_frame,
+                timeframe=setup_timeframe,
+                start_timestamp_ms=start_ms - lab_config.baseline_candles * _timeframe_to_milliseconds(setup_timeframe),
+                end_timestamp_ms=int(end_ms),
+            )
+            entry_frame = _slice_ohlcv_asof_window(
+                entry_frame,
+                timeframe=entry_cache_timeframe,
+                start_timestamp_ms=start_ms,
+                end_timestamp_ms=int(end_ms),
+            )
             if entry_cache_timeframe != entry_timeframe:
                 entry_frame = _aggregate_frame_to_timeframe(
                     entry_frame,
                     timeframe_ms=_timeframe_to_milliseconds(entry_timeframe),
+                )
+                entry_frame = _slice_ohlcv_asof_window(
+                    entry_frame,
+                    timeframe=entry_timeframe,
+                    start_timestamp_ms=start_ms,
+                    end_timestamp_ms=int(end_ms),
                 )
                 entry_flow_source = f"cached_{entry_cache_timeframe}_aggregated_to_{entry_timeframe}"
             else:
@@ -2042,20 +2107,28 @@ def collect_pair_anomaly_rows_for_configs(
                 start_ms = int(state["start_ms"])
                 end_ms = int(state["end_ms"])
                 setup_ms = _timeframe_to_milliseconds(setup_timeframe)
-                setup_frame = frame_cache[setup_timeframe]
-                entry_frame = frame_cache[entry_cache_timeframe]
-                setup_frame = setup_frame.loc[
-                    (setup_frame["timestamp"] >= start_ms - config.lab_config.baseline_candles * setup_ms)
-                    & (setup_frame["timestamp"] <= end_ms)
-                ].copy()
-                entry_frame = entry_frame.loc[
-                    (entry_frame["timestamp"] >= start_ms)
-                    & (entry_frame["timestamp"] <= end_ms)
-                ].copy()
+                setup_frame = _slice_ohlcv_asof_window(
+                    frame_cache[setup_timeframe],
+                    timeframe=setup_timeframe,
+                    start_timestamp_ms=start_ms - config.lab_config.baseline_candles * setup_ms,
+                    end_timestamp_ms=end_ms,
+                )
+                entry_frame = _slice_ohlcv_asof_window(
+                    frame_cache[entry_cache_timeframe],
+                    timeframe=entry_cache_timeframe,
+                    start_timestamp_ms=start_ms,
+                    end_timestamp_ms=end_ms,
+                )
                 if entry_cache_timeframe != entry_timeframe:
                     entry_frame = _aggregate_frame_to_timeframe(
                         entry_frame,
                         timeframe_ms=_timeframe_to_milliseconds(entry_timeframe),
+                    )
+                    entry_frame = _slice_ohlcv_asof_window(
+                        entry_frame,
+                        timeframe=entry_timeframe,
+                        start_timestamp_ms=start_ms,
+                        end_timestamp_ms=end_ms,
                     )
                     entry_flow_source = f"cached_{entry_cache_timeframe}_aggregated_to_{entry_timeframe}"
                 else:
@@ -2286,6 +2359,8 @@ def _build_pair_candidate_row(
     start_close = float(setup_row["close"])
     decision = entry_segment.iloc[-1]
     decision_ts = int(decision["timestamp"])
+    decision_available_ts = _row_available_timestamp_ms(decision, timeframe=entry_timeframe)
+    setup_available_ts = _row_available_timestamp_ms(setup_row, timeframe=setup_timeframe)
     decision_close = float(decision["close"])
     impulse_low = float(min(start_low, pd.to_numeric(entry_segment["low"], errors="coerce").min()))
     impulse_high = float(max(start_high, pd.to_numeric(entry_segment["high"], errors="coerce").max()))
@@ -2332,8 +2407,13 @@ def _build_pair_candidate_row(
         "setup_closed_entry_candles": int(len(entry_segment)),
         "timestamp_ms": int(setup_row["timestamp"]),
         "timestamp_utc": _timestamp_to_utc(int(setup_row["timestamp"])),
+        "setup_available_timestamp_ms": setup_available_ts,
+        "setup_available_timestamp_utc": _timestamp_to_utc(setup_available_ts),
         "decision_timestamp_ms": decision_ts,
         "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
+        "decision_available_timestamp_ms": decision_available_ts,
+        "decision_available_timestamp_utc": _timestamp_to_utc(decision_available_ts),
+        "timestamp_semantics": "ohlcv_timestamp_is_candle_open;available_timestamp_is_candle_close",
         "confirmation_candles": int(lab_config.confirmation_candles),
         "baseline_candles": int(lab_config.baseline_candles),
         "start_open": start_open,

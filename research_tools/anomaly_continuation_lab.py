@@ -7,6 +7,7 @@ the early "wake-up after sleep" hypothesis without changing trading logic.
 from __future__ import annotations
 
 import argparse
+import re
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -179,6 +180,35 @@ def _timestamp_to_utc(timestamp_ms: int | float) -> str:
     return datetime.fromtimestamp(int(timestamp_ms) / 1000, UTC).isoformat()
 
 
+def _timeframe_to_milliseconds(timeframe: str) -> int:
+    match = re.fullmatch(r"(\d+)([smhdw])", str(timeframe))
+    if match is None:
+        raise ValueError(f"unsupported timeframe: {timeframe}")
+    amount = int(match.group(1))
+    unit = match.group(2)
+    seconds_by_unit = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+    return amount * seconds_by_unit[unit] * 1000
+
+
+def _with_ohlcv_availability_columns(frame: pd.DataFrame, *, timeframe: str) -> pd.DataFrame:
+    if frame.empty or "timestamp" not in frame.columns:
+        return frame
+    result = frame.copy()
+    timestamps = pd.to_numeric(result["timestamp"], errors="coerce")
+    timeframe_ms = _timeframe_to_milliseconds(timeframe)
+    result["candle_open_timestamp_ms"] = timestamps
+    result["candle_close_timestamp_ms"] = timestamps + timeframe_ms
+    result["available_timestamp_ms"] = result["candle_close_timestamp_ms"]
+    return result
+
+
+def _row_available_timestamp_ms(row: pd.Series, *, timeframe: str) -> int:
+    value = row.get("available_timestamp_ms")
+    if value is not None and pd.notna(value):
+        return int(float(value))
+    return int(row["timestamp"]) + _timeframe_to_milliseconds(timeframe)
+
+
 def _format_eta(seconds: float) -> str:
     if not np.isfinite(seconds) or seconds < 0:
         return "unknown"
@@ -196,14 +226,21 @@ def _emit_progress(*, label: str, done: int, total: int, started_at: float) -> N
     print(f"{label}: {pct:5.1f}% eta {_format_eta(eta)}", flush=True)
 
 
-def _read_symbol_frame(path: Path, *, start_ms: int, end_ms: int) -> pd.DataFrame:
+def _read_symbol_frame(path: Path, *, timeframe: str, start_ms: int, end_ms: int) -> pd.DataFrame:
     frame = pd.read_parquet(path)
     missing_columns = [column for column in OHLCV_COLUMNS if column not in frame.columns]
     if missing_columns:
         raise ValueError(f"{path} missing required columns: {missing_columns}")
-    selected_columns = list(OHLCV_COLUMNS) + [column for column in OPTIONAL_FLOW_COLUMNS if column in frame.columns]
+    frame = _with_ohlcv_availability_columns(frame, timeframe=timeframe)
+    selected_columns = (
+        list(OHLCV_COLUMNS)
+        + [column for column in OPTIONAL_FLOW_COLUMNS if column in frame.columns]
+        + ["candle_open_timestamp_ms", "candle_close_timestamp_ms", "available_timestamp_ms"]
+    )
+    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce")
+    available = pd.to_numeric(frame["available_timestamp_ms"], errors="coerce")
     frame = frame.loc[
-        (frame["timestamp"] >= start_ms) & (frame["timestamp"] <= end_ms),
+        timestamps.ge(int(start_ms)) & available.le(int(end_ms)),
         selected_columns,
     ].copy()
     frame.sort_values("timestamp", inplace=True)
@@ -569,8 +606,13 @@ def collect_symbol_anomaly_rows(
                 "timeframe": config.timeframe,
                 "timestamp_ms": int(frame["timestamp"].iloc[idx]),
                 "timestamp_utc": _timestamp_to_utc(int(frame["timestamp"].iloc[idx])),
+                "setup_available_timestamp_ms": _row_available_timestamp_ms(frame.iloc[idx], timeframe=config.timeframe),
+                "setup_available_timestamp_utc": _timestamp_to_utc(_row_available_timestamp_ms(frame.iloc[idx], timeframe=config.timeframe)),
                 "decision_timestamp_ms": int(frame["timestamp"].iloc[decision_idx]),
                 "decision_timestamp_utc": _timestamp_to_utc(int(frame["timestamp"].iloc[decision_idx])),
+                "decision_available_timestamp_ms": _row_available_timestamp_ms(frame.iloc[decision_idx], timeframe=config.timeframe),
+                "decision_available_timestamp_utc": _timestamp_to_utc(_row_available_timestamp_ms(frame.iloc[decision_idx], timeframe=config.timeframe)),
+                "timestamp_semantics": "ohlcv_timestamp_is_candle_open;available_timestamp_is_candle_close",
                 "confirmation_candles": int(config.confirmation_candles),
                 "baseline_candles": int(config.baseline_candles),
                 "start_open": start_open,
@@ -640,7 +682,7 @@ def collect_anomaly_lab_rows(
     for processed_count, path in enumerate(paths, start=1):
         symbol = _symbol_from_cache_dir(path.parent.parent)
         try:
-            frame = _read_symbol_frame(path, start_ms=start_ms, end_ms=end_ms)
+            frame = _read_symbol_frame(path, timeframe=config.timeframe, start_ms=start_ms, end_ms=end_ms)
             rows.extend(collect_symbol_anomaly_rows(symbol=symbol, frame=frame, config=config))
         except Exception as exc:
             rows.append(

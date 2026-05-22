@@ -116,6 +116,25 @@ class ParquetStorage:
             .reset_index(drop=True)
         )
 
+    @staticmethod
+    def _add_ohlcv_availability_columns(data: pd.DataFrame, timeframe: Timeframe) -> pd.DataFrame:
+        """Attach explicit candle availability timestamps.
+
+        Cached OHLCV rows use exchange candle open time in `timestamp`.  The
+        values `high/low/close/volume/flow` are only known after the candle
+        closes, so downstream as-of code must not treat `timestamp` as the
+        information-availability time.
+        """
+        if data.empty or "timestamp" not in data.columns:
+            return data
+        prepared = data.copy()
+        timestamps = pd.to_numeric(prepared["timestamp"], errors="coerce")
+        timeframe_ms = int(timeframe.to_milliseconds())
+        prepared["candle_open_timestamp_ms"] = timestamps
+        prepared["candle_close_timestamp_ms"] = timestamps + timeframe_ms
+        prepared["available_timestamp_ms"] = prepared["candle_close_timestamp_ms"]
+        return prepared
+
     def _merge_base_and_delta(self, base: pd.DataFrame, delta: pd.DataFrame) -> pd.DataFrame:
         if base.empty:
             return delta
@@ -171,7 +190,7 @@ class ParquetStorage:
             delta = self._load_delta_frame(symbol, timeframe)
             if not delta.empty:
                 return ParquetLoadResult(
-                    frame=delta,
+                    frame=self._add_ohlcv_availability_columns(delta, timeframe),
                     ok=True,
                     status="ok",
                     reason="parquet_delta_loaded",
@@ -217,6 +236,7 @@ class ParquetStorage:
                 rows=int(len(frame)),
                 missing_columns=("timestamp",),
             )
+        prepared = self._add_ohlcv_availability_columns(prepared, timeframe)
         return ParquetLoadResult(
             frame=prepared,
             ok=True,
@@ -246,7 +266,7 @@ class ParquetStorage:
             )
             if not delta.empty:
                 return ParquetLoadResult(
-                    frame=delta,
+                    frame=self._add_ohlcv_availability_columns(delta, timeframe),
                     ok=True,
                     status="ok",
                     reason="parquet_delta_window_loaded",
@@ -304,6 +324,7 @@ class ParquetStorage:
                 rows=int(len(frame)),
                 missing_columns=("timestamp",),
             )
+        prepared = self._add_ohlcv_availability_columns(prepared, timeframe)
         return ParquetLoadResult(
             frame=prepared,
             ok=True,

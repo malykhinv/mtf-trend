@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-22 - P376 OHLCV cache availability guard
+
+```text
+Current patch status: P376 PROPOSED / UNKNOWN commit.
+Question: audit p.3 OHLCV cache loader for critical lookahead only and patch if needed.
+Finding: cached OHLCV rows use exchange candle open time in `timestamp`. The row's high/low/close/volume/quote_volume/number_of_trades are only fully known after candle close. The previous backtest window slicing used `timestamp <= end_timestamp_ms`, so an explicit as-of cutoff inside a candle could include data from a candle that was not closed yet.
+Change: attach explicit availability columns to ParquetStorage OHLCV loads; slice closed and pair candidate input windows by `available_timestamp_ms <= end_timestamp_ms`; propagate setup/decision availability timestamps into candidates. Lower-TF aggregation also carries availability timestamps and excludes partial target buckets at the end boundary.
+Residual risk: this is not a full exchange publication-lag model and does not fix OI/derivatives context availability; those are later audit nodes. Historical all-cache runs with no explicit cutoff remain final-data backtests, now with clearer timestamp semantics.
+Validation: python -m compileall -q data/exchanges research_tools cli constants.py main.py. Uploaded zip does not contain launcher.py.
+```
+
 ## 2026-05-22 - P375 universe/symbol-scope guard
 
 ```text
