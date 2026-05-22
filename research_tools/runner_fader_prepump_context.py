@@ -182,7 +182,15 @@ def _last_n_vs_median(values: pd.Series, *, n: int = 3) -> float:
 def _select_window(frame: pd.DataFrame, *, anchor_ms: int, window_ms: int) -> pd.DataFrame:
     # Strictly before anchor: these features must be available before pump start.
     start_ms = int(anchor_ms - window_ms)
-    selected = frame.loc[(frame["timestamp"] >= start_ms) & (frame["timestamp"] < anchor_ms)].copy()
+    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce")
+    if "available_timestamp_ms" in frame.columns:
+        available = pd.to_numeric(frame["available_timestamp_ms"], errors="coerce")
+    else:
+        available = timestamps
+    selected = frame.loc[
+        timestamps.ge(start_ms)
+        & available.lt(int(anchor_ms))
+    ].copy()
     selected.sort_values("timestamp", inplace=True)
     return selected
 
@@ -228,6 +236,14 @@ def _read_spot_frame(cache_dir: Path, symbol: str, timeframe: str) -> tuple[pd.D
     selected.dropna(subset=["timestamp", "open", "high", "low", "close"], inplace=True)
     if selected.empty:
         return None, "empty_ohlcv"
+    if "available_timestamp_ms" in frame.columns:
+        selected["available_timestamp_ms"] = pd.to_numeric(frame.loc[selected.index, "available_timestamp_ms"], errors="coerce")
+    else:
+        selected["available_timestamp_ms"] = selected["timestamp"] + _timeframe_to_ms(timeframe)
+    selected.dropna(subset=["available_timestamp_ms"], inplace=True)
+    selected = selected.loc[selected["available_timestamp_ms"].ge(selected["timestamp"])].copy()
+    if selected.empty:
+        return None, "empty_ohlcv_available_timestamp"
     selected.sort_values("timestamp", inplace=True)
     selected.reset_index(drop=True, inplace=True)
     return selected, "ok"
@@ -238,16 +254,28 @@ def _oi_frame_path(cache_dir: Path, symbol: str) -> Path:
 
 
 def _read_oi_frame(cache_dir: Path, symbol: str) -> tuple[pd.DataFrame | None, str]:
-    frame, status = _read_parquet_frame(_oi_frame_path(cache_dir, symbol), columns=("timestamp", "open_interest"))
+    frame, status = _read_parquet_frame(_oi_frame_path(cache_dir, symbol))
     if frame is None:
         return None, status
     if "open_interest" not in frame.columns:
         return None, "missing_column:open_interest"
-    frame["open_interest"] = pd.to_numeric(frame["open_interest"], errors="coerce")
-    frame.dropna(subset=["open_interest"], inplace=True)
-    if frame.empty:
+    selected_columns = ["timestamp", "open_interest"]
+    if "available_timestamp_ms" in frame.columns:
+        selected_columns.append("available_timestamp_ms")
+    selected = frame.loc[:, selected_columns].copy()
+    selected["open_interest"] = pd.to_numeric(selected["open_interest"], errors="coerce")
+    if "available_timestamp_ms" in selected.columns:
+        selected["available_timestamp_ms"] = pd.to_numeric(selected["available_timestamp_ms"], errors="coerce")
+    else:
+        selected["available_timestamp_ms"] = selected["timestamp"] + _timeframe_to_ms(OI_TIMEFRAME)
+    selected.dropna(subset=["timestamp", "open_interest", "available_timestamp_ms"], inplace=True)
+    selected = selected.loc[selected["available_timestamp_ms"].ge(selected["timestamp"])].copy()
+    if selected.empty:
         return None, "empty_oi"
-    return frame, "ok"
+    selected.sort_values(["available_timestamp_ms", "timestamp"], inplace=True)
+    selected.drop_duplicates("timestamp", keep="last", inplace=True)
+    selected.reset_index(drop=True, inplace=True)
+    return selected, "ok"
 
 
 def _context_path(cache_dir: Path, symbol: str, spec: dict[str, object]) -> Path:
@@ -266,14 +294,17 @@ def _read_context_frame(cache_dir: Path, symbol: str, spec: dict[str, object]) -
     missing = [column for column in required if column not in frame.columns]
     if missing:
         return None, "missing_columns:" + ",".join(missing)
-    selected_columns = ["timestamp", *[column for column in value_columns if column in frame.columns]]
+    if "available_timestamp_ms" not in frame.columns:
+        return None, "missing_available_timestamp"
+    selected_columns = ["timestamp", "available_timestamp_ms", *[column for column in value_columns if column in frame.columns]]
     selected = frame.loc[:, selected_columns].copy()
     for column in selected_columns:
         selected[column] = pd.to_numeric(selected[column], errors="coerce")
-    selected.dropna(subset=["timestamp"], inplace=True)
+    selected.dropna(subset=["timestamp", "available_timestamp_ms"], inplace=True)
+    selected = selected.loc[selected["available_timestamp_ms"].ge(selected["timestamp"])].copy()
     if selected.empty:
         return None, "empty_context"
-    selected.sort_values("timestamp", inplace=True)
+    selected.sort_values(["available_timestamp_ms", "timestamp"], inplace=True)
     selected.drop_duplicates("timestamp", keep="last", inplace=True)
     selected.reset_index(drop=True, inplace=True)
     return selected, "ok"
@@ -392,6 +423,14 @@ def compute_spot_prepump_window_features(
     if prepared.empty:
         raise ValueError("empty spot prepump frame")
     prepared["timestamp"] = prepared["timestamp"].astype(np.int64)
+    if "available_timestamp_ms" in prepared.columns:
+        prepared["available_timestamp_ms"] = pd.to_numeric(prepared["available_timestamp_ms"], errors="coerce")
+    else:
+        prepared["available_timestamp_ms"] = prepared["timestamp"] + int(timeframe_ms)
+    prepared.dropna(subset=["available_timestamp_ms"], inplace=True)
+    prepared = prepared.loc[prepared["available_timestamp_ms"].ge(prepared["timestamp"])].copy()
+    if prepared.empty:
+        raise ValueError("empty available spot prepump frame")
     prepared.sort_values("timestamp", inplace=True)
     prepared.drop_duplicates("timestamp", keep="last", inplace=True)
 

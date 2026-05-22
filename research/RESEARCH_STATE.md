@@ -1,5 +1,17 @@
 # Anomaly Research State
 
+## 2026-05-22 - P384 backtest lookahead audit closure
+
+Current commit: UNKNOWN.
+
+Status: APPLIED locally. P374-P383 were reviewed against the current execution path. The main availability guards are real: reused candidates are config/window scoped, historical cache-snapshot universe scans are blocked without explicit opt-in, OHLCV/aggTrade/OI/derivatives rows now have as-of semantics, and future outcome labels are artifact-only.
+
+New fixes: market-entry simulation now includes the entry candle and rejects delayed fills after TP1 was already reached; forming HTF setup availability is the LTF decision close, with full HTF close recorded separately; chart/prepump context uses only rows available at decision/anchor; entry-grid signals are rebuilt after derivatives enrichment; closed-TF candidates now carry the flow-hold/prior-context fields required by category replay.
+
+Validation: 23 anomaly continuation tests passed. Compact INJ/BEAT 2-day closed-1m anomaly-lab run completed at `.output/results/anomaly_lab/lookahead_audit_p384_closed_1m`: 23 candidates, 5 signals, 5 closed trades. Artifact checks confirmed decision/setup availability ordering, OI/mark/premium/funding/long-short as-of <= decision availability where present, and all trades have `post_entry_simulation_includes_entry_candle=True`.
+
+Residual risk: this compact run was not an edge test and used closed 1m, not the live 1m/5s path because local INJ/BEAT 1s/5s caches are old pre-P378 versions. Funding context still shows explicit `missing_available_timestamp` for old INJ funding cache rows; those rows are refused rather than consumed.
+
 ## 2026-05-22 - P379 closed candidate collector audit state
 
 Current commit: UNKNOWN.

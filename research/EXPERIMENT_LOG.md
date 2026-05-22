@@ -1,4 +1,26 @@
 
+## 2026-05-22 - P384 compact lookahead-audit backtest
+
+```text
+Run: .output/results/anomaly_lab/lookahead_audit_p384_closed_1m
+Command: .venv\Scripts\python.exe main.py run-anomaly-lab --symbols INJ/USDT:USDT BEAT/USDT:USDT --days 2 --timeframe 1m --end-timestamp-ms 1779426180000 --render-charts false --output-dir .output\results\anomaly_lab\lookahead_audit_p384_closed_1m
+
+Purpose: compact artifact-level validation after the P374-P384 lookahead audit. This is not an edge test.
+
+Result: run completed. candidates=23, signals=5, closed=5, skipped=0, avg_net=0.9796%, sum_net=4.8981%, win_rate=80.00%. Do not treat these tiny targeted numbers as profitability evidence.
+
+Artifact checks:
+- candidate timestamp contract passed: setup_available >= timestamp, decision_available >= decision_timestamp, decision_available >= setup_available, and timestamp_semantics contains available-at-candle-close.
+- OI/mark/premium/funding/long-short as-of timestamps are <= decision_available_timestamp_ms where present.
+- future_label_status was `ok` for this short historical window, but unit coverage confirms `build_anomaly_signals()` does not gate on insufficient future labels.
+- all five trades have post_entry_simulation_includes_entry_candle=True.
+- runner/fader prepump context was written with availability-window filtering.
+
+Diagnostics: market_context_status still reports explicit funding missing_available_timestamp for old INJ funding cache rows. Those rows were not silently consumed; rebuild/migrate funding cache before using funding context for claims.
+
+Fixes discovered by this run before successful completion: closed-TF run path needed prior-context refresh before category replay, and closed candidates needed flow_hold_* fields to match category filter inputs.
+```
+
 ## 2026-05-22 - live2 INJ/BEAT targeted parity audit after P373
 
 ```text

@@ -1,5 +1,46 @@
 # Anomaly Patch Log
 
+## 2026-05-22 - P384 applied locally - backtest lookahead closure audit
+
+Files:
+
+```text
+research_tools/anomaly_strategy_backtest.py
+research_tools/anomaly_continuation_lab.py
+research_tools/runner_fader_prepump_context.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Close remaining lookahead/optimism gaps found after P374-P383 and make the affected audit paths testable: execution must evaluate the entry candle, forming HTF setup availability must match the LTF decision close, chart/prepump context must be as-of only, and closed-TF candidates must expose the same prior/flow-hold fields required by category replay.
+```
+
+Change:
+
+```text
+Market-entry simulation now includes the entry candle in the post-entry path and uses stop-first intrabar conflict handling there. Delayed market entry also rejects if TP1 was already reached before the delayed fill. Forming HTF pair candidates now set setup_available_timestamp_ms to the entry decision availability timestamp and separately record setup_full_available_timestamp_ms. Trade artifacts carry setup/decision availability fields. Entry-grid signal sets are rebuilt after derivatives-context enrichment. Trade chart 1h context/levels are computed from closed hours available at decision availability, not from post-exit chart range. Runner/fader prepump windows now select rows by available_timestamp_ms < pump anchor; spot/OI/context readers attach or require availability. Closed-TF candidates now write flow_hold_* and price_retention_model fields and all run paths refresh prior 24h context before category replay.
+```
+
+Validation:
+
+```bash
+.venv\Scripts\python.exe -m pytest tests\test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe -m compileall data\exchanges research_tools cli constants.py main.py launcher.py
+.venv\Scripts\python.exe main.py run-anomaly-lab --symbols INJ/USDT:USDT BEAT/USDT:USDT --days 2 --timeframe 1m --end-timestamp-ms 1779426180000 --render-charts false --output-dir .output\results\anomaly_lab\lookahead_audit_p384_closed_1m
+```
+
+Risk:
+
+```text
+Backtest results can become more conservative because entry-candle stop/TP conflicts are no longer skipped. Old derivatives funding caches without available_timestamp_ms are still refused and appear as explicit missing_available_timestamp diagnostics; this is intentional until those caches are rebuilt or migrated with a proven source contract.
+```
+
 ## 2026-05-22 - P379 proposed - closed-candidate future-label boundary guard
 
 Files:

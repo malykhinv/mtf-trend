@@ -224,6 +224,8 @@ entry_timeframe / LTF:
 
 Live may create a setup before the HTF candle closes by aggregating already closed LTF candles inside the current HTF bucket. This must be marked as `setup_source=forming_htf_from_entry_tf` with `setup_elapsed_fraction` and `setup_closed_entry_candles`. Backtest parity mode must use the same contract and write `feature_contract=htf_setup_ltf_entry_v1`.
 
+For forming HTF candidates, `setup_available_timestamp_ms` is the LTF decision candle availability timestamp, not the full HTF candle close. The full HTF close may be recorded separately as `setup_full_available_timestamp_ms` for audit only. This prevents both directions of self-deception: using unseen HTF data is forbidden, and rejecting an otherwise available forming setup because the full HTF candle has not closed is also not live/backtest parity.
+
 ---
 
 ## 5. Exit logic
@@ -236,6 +238,8 @@ default live-ready exit:
 - TP1 multiple: 0.75R from that basis
 - TP1 size: 100% of position
 - no runner by default
+- backtest execution path includes the entry candle and applies stop-first handling on same-candle stop/TP ambiguity
+- delayed market-entry proxy rejects if TP1 was reached before the delayed fill
 ```
 
 ```text

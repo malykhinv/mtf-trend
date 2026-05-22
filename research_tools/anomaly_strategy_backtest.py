@@ -107,6 +107,13 @@ _TRADE_CHART_FLOW_PROVENANCE = {
 }
 
 TRADE_SIGNAL_CONTEXT_COLUMNS = (
+    "setup_available_timestamp_ms",
+    "setup_available_timestamp_utc",
+    "setup_full_available_timestamp_ms",
+    "setup_full_available_timestamp_utc",
+    "decision_available_timestamp_ms",
+    "decision_available_timestamp_utc",
+    "timestamp_semantics",
     "trade_count_proxy_used",
     "levels_trade_count_source",
     "entry_trade_count_source",
@@ -1900,6 +1907,7 @@ def _resolve_signal_entry(
         future = frame.loc[frame["timestamp"] > decision_timestamp_ms].head(config.market_entry_latency_candles)
         if len(future) < config.market_entry_latency_candles:
             return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_market_execution_candle", {}
+        pre_entry_start_ts = int(future.iloc[0]["timestamp"])
         entry_row_source = future.iloc[-1]
         entry_ts = int(entry_row_source["timestamp"])
         entry_price = float(entry_row_source["open"])
@@ -1930,6 +1938,31 @@ def _resolve_signal_entry(
             signal_tp1_price=signal_tp1_price,
             config=config,
         )
+        pre_entry_frame = execution_frame if config.latency_enabled and execution_frame is not None and not execution_frame.empty else frame
+        if "timestamp" in pre_entry_frame.columns and "high" in pre_entry_frame.columns:
+            pre_entry_timestamps = pd.to_numeric(pre_entry_frame["timestamp"], errors="coerce")
+            pre_entry_rows = pre_entry_frame.loc[
+                pre_entry_timestamps.ge(int(pre_entry_start_ts))
+                & pre_entry_timestamps.lt(int(entry_ts))
+            ].copy()
+            if not pre_entry_rows.empty:
+                pre_entry_high = pd.to_numeric(pre_entry_rows["high"], errors="coerce")
+                tp1_reached = pre_entry_rows.loc[pre_entry_high.ge(float(signal_tp1_price))]
+                if not tp1_reached.empty:
+                    reject_audit = dict(reject_audit)
+                    reject_audit["pre_entry_tp1_reached_timestamp_ms"] = int(tp1_reached.iloc[0]["timestamp"])
+                    reject_audit["pre_entry_tp1_reached_timestamp_utc"] = _timestamp_to_utc(int(tp1_reached.iloc[0]["timestamp"]))
+                    reject_audit["pre_entry_tp1_reached_high"] = float(pre_entry_high.loc[tp1_reached.index[0]])
+                    return (
+                        entry_ts,
+                        float("nan"),
+                        stop_at_decision,
+                        float("nan"),
+                        box_range,
+                        box_high,
+                        "tp1_already_reached_before_market_entry",
+                        reject_audit,
+                    )
         if entry_price >= signal_tp1_price:
             return (
                 entry_ts,
@@ -2551,7 +2584,8 @@ def _build_pair_candidate_row(
     decision = entry_segment.iloc[-1]
     decision_ts = int(decision["timestamp"])
     decision_available_ts = _row_available_timestamp_ms(decision, timeframe=entry_timeframe)
-    setup_available_ts = _row_available_timestamp_ms(setup_row, timeframe=setup_timeframe)
+    setup_full_available_ts = int(setup_row["timestamp"]) + int(setup_ms)
+    setup_available_ts = decision_available_ts
     decision_close = float(decision["close"])
     impulse_low = float(min(start_low, pd.to_numeric(entry_segment["low"], errors="coerce").min()))
     impulse_high = float(max(start_high, pd.to_numeric(entry_segment["high"], errors="coerce").max()))
@@ -2625,11 +2659,16 @@ def _build_pair_candidate_row(
         "timestamp_utc": _timestamp_to_utc(int(setup_row["timestamp"])),
         "setup_available_timestamp_ms": setup_available_ts,
         "setup_available_timestamp_utc": _timestamp_to_utc(setup_available_ts),
+        "setup_full_available_timestamp_ms": setup_full_available_ts,
+        "setup_full_available_timestamp_utc": _timestamp_to_utc(setup_full_available_ts),
         "decision_timestamp_ms": decision_ts,
         "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
         "decision_available_timestamp_ms": decision_available_ts,
         "decision_available_timestamp_utc": _timestamp_to_utc(decision_available_ts),
-        "timestamp_semantics": "ohlcv_timestamp_is_candle_open;available_timestamp_is_candle_close",
+        "timestamp_semantics": (
+            "ohlcv_timestamp_is_candle_open;available_timestamp_is_candle_close;"
+            "forming_htf_setup_available_at_entry_decision_close"
+        ),
         "confirmation_candles": int(lab_config.confirmation_candles),
         "baseline_candles": int(lab_config.baseline_candles),
         "start_open": start_open,
@@ -2841,11 +2880,11 @@ def simulate_long_signal(
     max_hold_rows = int(config.max_hold_candles)
     if simulation_step_ms > 0 and base_step_ms > 0:
         max_hold_rows = max(1, int(math.ceil(config.max_hold_candles * base_step_ms / simulation_step_ms)))
-    future = simulation_frame.loc[simulation_frame["timestamp"] > entry_ts].head(max_hold_rows).copy()
+    future = simulation_frame.loc[simulation_frame["timestamp"] >= entry_ts].head(max_hold_rows).copy()
     if future.empty:
         return _skipped_signal_result(
             signal,
-            skip_reason="no_future_candles",
+            skip_reason="no_post_entry_execution_candles",
             config=config,
             entry_timestamp_ms=entry_ts,
             entry_timestamp_utc=_timestamp_to_utc(entry_ts),
@@ -2856,6 +2895,7 @@ def simulate_long_signal(
             box_range=box_range,
             box_high=box_high,
         )
+    post_entry_simulation_start_ts = int(future["timestamp"].iloc[0])
 
     box_low = _safe_float(signal.get("decision_box_low"))
     if box_low is None:
@@ -3039,6 +3079,10 @@ def simulate_long_signal(
         "tp1_fill_timestamp_utc": _timestamp_to_utc(tp1_fill_timestamp_ms) if np.isfinite(tp1_fill_timestamp_ms) else "",
         "tp1_fill_price": tp1_fill_price,
         "intrabar_path_assumption": intrabar_path_assumption,
+        "entry_candle_path_model": "entry_candle_included_stop_first",
+        "post_entry_simulation_start_timestamp_ms": post_entry_simulation_start_ts,
+        "post_entry_simulation_start_timestamp_utc": _timestamp_to_utc(post_entry_simulation_start_ts),
+        "post_entry_simulation_includes_entry_candle": bool(post_entry_simulation_start_ts == int(entry_ts)),
         "tp1_fraction": config.tp1_fraction,
         "trail_stop_final": trail_stop,
         "exit_rule": config.exit_rule,
@@ -4167,7 +4211,7 @@ def _build_trade_chart_hourly_context(frame: pd.DataFrame, *, end_timestamp_ms: 
     if frame.empty or required.difference(frame.columns):
         return pd.DataFrame()
 
-    end_exclusive = ((int(end_timestamp_ms) // _HOUR_MS) + 1) * _HOUR_MS
+    end_exclusive = (int(end_timestamp_ms) // _HOUR_MS) * _HOUR_MS
     start_inclusive = end_exclusive - max(int(days), 1) * _DAY_MS
     source = frame.copy()
     source["timestamp"] = pd.to_numeric(source["timestamp"], errors="coerce")
@@ -4213,11 +4257,11 @@ def _slice_trade_chart_hourly_level_context(
     end_timestamp_ms: int,
     days: int,
 ) -> pd.DataFrame:
-    """Return the exact 1h context window used for chart-level discovery."""
+    """Return closed 1h context available at the chart as-of timestamp."""
     if hourly_context.empty or "timestamp" not in hourly_context.columns:
         return pd.DataFrame()
 
-    end_exclusive = ((int(end_timestamp_ms) // _HOUR_MS) + 1) * _HOUR_MS
+    end_exclusive = (int(end_timestamp_ms) // _HOUR_MS) * _HOUR_MS
     start_inclusive = end_exclusive - max(int(days), 1) * _DAY_MS
     sliced = hourly_context.copy()
     sliced["timestamp"] = pd.to_numeric(sliced["timestamp"], errors="coerce")
@@ -4409,16 +4453,17 @@ def _render_anomaly_trade_chart(
     )
     htf_x_values = np.arange(len(htf_frame), dtype=np.float64)
     context_source_frame = hourly_context_frame if hourly_context_frame is not None else frame
+    context_asof_ts = _safe_int(trade.get("decision_available_timestamp_ms")) or decision_ts
     context_frame = _build_trade_chart_hourly_context(
         context_source_frame,
-        end_timestamp_ms=end_ts,
+        end_timestamp_ms=context_asof_ts,
         days=_TRADE_CHART_CONTEXT_DAYS,
     )
     context_x_values = np.arange(len(context_frame), dtype=np.float64)
     context_levels = _find_trade_chart_hourly_levels(
         context_frame,
         symbol=str(trade.get("symbol", "")),
-        end_timestamp_ms=end_ts,
+        end_timestamp_ms=context_asof_ts,
         days=_TRADE_CHART_CONTEXT_DAYS,
     )
     anomaly_idx = resolve_timestamp_plot_idx(timestamps, anomaly_ts)
@@ -4874,6 +4919,8 @@ def run_anomaly_strategy_backtest(
             candidates["setup_source"] = "closed_setup_tf"
             candidates["setup_elapsed_fraction"] = 1.0
             candidates["setup_closed_entry_candles"] = candidates.get("confirmation_candles", config.lab_config.confirmation_candles)
+    if not candidates.empty:
+        candidates = enrich_candidates_with_recent_spike_context(candidates, config=config)
     timings["candidates_seconds"] = time.monotonic() - stage_started_at
     print("anomaly signals: filtering", flush=True)
     stage_started_at = time.monotonic()
@@ -4888,6 +4935,7 @@ def run_anomaly_strategy_backtest(
         candidates,
         config=pre_context_config if derivatives_context_fetcher is not None else config,
     )
+    grid_variants: list[AnomalyBacktestConfig] | None = None
     grid_signal_sets: list[tuple[AnomalyBacktestConfig, pd.DataFrame]] | None = None
     pre_context_universe = _build_pre_context_signal_universe(candidates, config)
     if derivatives_context_fetcher is not None:
@@ -4900,8 +4948,11 @@ def run_anomaly_strategy_backtest(
                 exhaustion_profiles=grid_exhaustion_profiles,
                 exit_rules=grid_exit_rules,
             )
-            grid_signal_sets = _build_entry_grid_signal_sets(candidates, grid_variants)
-            grid_context_signals = _signal_universe_from_signal_sets(grid_signal_sets)
+            pre_context_grid_signal_sets = _build_entry_grid_signal_sets(
+                candidates,
+                [_strip_derivative_context_requirements(variant) for variant in grid_variants],
+            )
+            grid_context_signals = _signal_universe_from_signal_sets(pre_context_grid_signal_sets)
             context_signals = pd.concat([pre_context_universe, grid_context_signals], ignore_index=True, sort=False)
             if not context_signals.empty:
                 context_signals.drop_duplicates(["symbol", "decision_timestamp_ms"], inplace=True)
@@ -4922,6 +4973,8 @@ def run_anomaly_strategy_backtest(
         )
         red_flag_universe = build_anomaly_signals(candidates, config=pre_context_config)
         signals = build_anomaly_signals(candidates, config=config)
+        if run_entry_grid and grid_variants is not None:
+            grid_signal_sets = _build_entry_grid_signal_sets(candidates, grid_variants)
     else:
         red_flag_universe = build_anomaly_signals(candidates, config=pre_context_config)
     signals = annotate_pump_categories(signals, candidates, config=config)
