@@ -1,5 +1,49 @@
 # Anomaly Patch Log
 
+## 2026-05-22 - P377 proposed - drop unavailable OHLCV fetch rows
+
+Files:
+
+```text
+data/exchanges/ccxt_futures_client.py
+data/fetchers/ohlcv_fetcher.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Close the critical p.4 fetch-normalization leak where Binance/CCXT OHLCV fetches can return the currently forming candle, or a historical candle whose open time is <= end_timestamp_ms but whose close/volume/flow were not available at that as-of cutoff. Such a row can poison cache as if quote_volume, number_of_trades and taker_buy fields were final.
+```
+
+Change:
+
+```text
+Binance kline normalization now uses the raw kline close-time field and drops rows with close_time + 1 > min(end_timestamp_ms, fetch_time_ms). The generic OHLCV fetch path applies the same closed-candle rule from timestamp + timeframe_ms. M10 aggregation from fetched or cached M5 data also drops target buckets that were not closed by the same availability cutoff, preventing partial aggregate candles from being saved as final.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python - <<'CHECK'
+from data.exchanges.ccxt_futures_client import CcxtFuturesClient
+rows = [
+    [0, '1', '2', '0.5', '1.5', '10', 59999, '15', 3, '4', '6', '0'],
+    [60000, '1.5', '2', '1', '1.8', '20', 119999, '36', 5, '8', '14', '0'],
+]
+frame = CcxtFuturesClient._normalize_binance_kline_rows(rows, available_cutoff_timestamp_ms=60000)
+assert frame['timestamp'].tolist() == [0]
+CHECK
+```
+
+Risk:
+
+```text
+Low-to-medium research-output impact: fresh cache updates can stop saving the latest forming candle. That is intentional. It may reduce the newest cached row by one candle but prevents partial flow from being treated as final historical data.
+```
+
 ## 2026-05-22 - P376 proposed - make OHLCV cache windows availability-aware
 
 Files:

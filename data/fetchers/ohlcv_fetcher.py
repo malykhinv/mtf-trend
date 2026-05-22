@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import time
 
 import pandas as pd
 
@@ -180,6 +181,13 @@ class OhlcvFetcher:
             cached_base_frame = cached_base_result.frame
             if not cached_base_frame.empty:
                 data = self._aggregate_cached_frame(cached_base_frame, target_timeframe=timeframe)
+                if not data.empty:
+                    available_cutoff_timestamp_ms = min(int(end_timestamp_ms), int(time.time() * 1000))
+                    target_timeframe_ms = int(timeframe.to_milliseconds())
+                    timestamps = pd.to_numeric(data["timestamp"], errors="coerce")
+                    data = data.loc[
+                        (timestamps + target_timeframe_ms) <= available_cutoff_timestamp_ms
+                    ].reset_index(drop=True)
                 added_rows = self._storage.save_incremental(symbol, timeframe, data)
                 self._logger.debug(
                     "OHLCV %s %s собран из уже имеющегося %s. Новых строк: %s.",

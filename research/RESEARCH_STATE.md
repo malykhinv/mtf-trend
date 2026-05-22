@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-22 - P377 OHLCV fetch normalization availability guard
+
+```text
+Current patch status: P377 PROPOSED / UNKNOWN commit.
+Question: audit p.4 Binance OHLCV normalization for critical lookahead/data leakage only and patch if needed.
+Finding: Binance klines and generic CCXT OHLCV fetches can include a still-forming candle when the fetch end is current time, or include a candle whose open time is <= historical end_timestamp_ms even though its final high/low/close/volume/quote_volume/number_of_trades/taker_buy values were not available at that as-of cutoff. Saving that row poisons the cache; later runs may treat partial flow as final.
+Change: Binance normalization now drops rows using raw kline close_time + 1 > min(end_timestamp_ms, fetch_time_ms). The final fetch frame also enforces timestamp + timeframe_ms <= availability cutoff. M10 aggregation from M5 data applies the same cutoff to avoid partial target buckets.
+Residual risk: this does not solve historical exchange publication lag beyond candle close, and does not audit OI/derivatives context. Existing caches that already contain partial rows need refetch/overwrite for affected newest candles if they were produced before P377.
+Validation: python -m compileall -q data/exchanges research_tools cli constants.py main.py, plus direct Binance kline normalizer check that drops a row not closed by the cutoff. Uploaded zip does not contain launcher.py.
+```
+
 ## 2026-05-22 - P376 OHLCV cache availability guard
 
 ```text

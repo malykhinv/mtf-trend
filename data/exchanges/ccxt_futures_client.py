@@ -1652,11 +1652,22 @@ class CcxtFuturesClient(ExchangeClient):
         )
 
     @staticmethod
-    def _normalize_binance_kline_rows(rows: list[list[object]]) -> pd.DataFrame:
+    def _normalize_binance_kline_rows(
+        rows: list[list[object]],
+        *,
+        available_cutoff_timestamp_ms: int | None = None,
+    ) -> pd.DataFrame:
         normalized_rows: list[list[object]] = []
         for row in rows:
             if len(row) < 11:
                 continue
+            if available_cutoff_timestamp_ms is not None:
+                try:
+                    close_timestamp_ms = int(float(row[6]))
+                except (TypeError, ValueError):
+                    continue
+                if close_timestamp_ms + 1 > int(available_cutoff_timestamp_ms):
+                    continue
             normalized_rows.append(
                 [
                     row[0],
@@ -1696,6 +1707,7 @@ class CcxtFuturesClient(ExchangeClient):
         market_id = self.get_market_id(symbol)
         since = int(start_timestamp_ms)
         timeframe_ms = int(timeframe.to_milliseconds())
+        available_cutoff_timestamp_ms = min(int(end_timestamp_ms), int(time.time() * 1000))
         all_rows: list[list[object]] = []
 
         while since <= end_timestamp_ms:
@@ -1731,7 +1743,10 @@ class CcxtFuturesClient(ExchangeClient):
                 break
             since = next_since
 
-        return self._normalize_binance_kline_rows(all_rows)
+        return self._normalize_binance_kline_rows(
+            all_rows,
+            available_cutoff_timestamp_ms=available_cutoff_timestamp_ms,
+        )
 
     def _fetch_ccxt_ohlcv_frame(
         self,
@@ -1791,9 +1806,14 @@ class CcxtFuturesClient(ExchangeClient):
                 end_timestamp_ms=end_timestamp_ms,
             )
             aggregated = self._aggregate_ohlcv_frame(base_frame, target_timeframe=timeframe)
+            if aggregated.empty:
+                return aggregated
+            timeframe_ms = int(timeframe.to_milliseconds())
+            available_cutoff_timestamp_ms = min(int(end_timestamp_ms), int(time.time() * 1000))
             return aggregated.loc[
                 (aggregated["timestamp"] >= start_timestamp_ms)
                 & (aggregated["timestamp"] <= end_timestamp_ms)
+                & ((aggregated["timestamp"] + timeframe_ms) <= available_cutoff_timestamp_ms)
             ].reset_index(drop=True)
 
         frame = (
@@ -1816,9 +1836,12 @@ class CcxtFuturesClient(ExchangeClient):
 
         for column in frame.columns:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        available_cutoff_timestamp_ms = min(int(end_timestamp_ms), int(time.time() * 1000))
+        timeframe_ms = int(timeframe.to_milliseconds())
         frame = frame.loc[
             (frame["timestamp"] >= start_timestamp_ms)
             & (frame["timestamp"] <= end_timestamp_ms)
+            & ((frame["timestamp"] + timeframe_ms) <= available_cutoff_timestamp_ms)
         ]
         return frame.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
