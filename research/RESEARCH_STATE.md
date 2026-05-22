@@ -2746,3 +2746,12 @@ Current commit: UNKNOWN.
 P389 proposed after P388 started `targeted 1s flow` with an effectively unbounded ETA. Root cause: the planner used every coarse anomaly candidate as a fetch window and padded each with setup-baseline history, so long runs collapsed toward a full 1s rebuild. P389 changes planning to coarse pre-context signals only, removes OI/derivatives enrichment from the coarse planning scan, and makes pair/forming historical baseline come from setup-timeframe OHLCV instead of subminute cache.
 
 Next validation: apply P389, run compileall, then rerun a small 1m/5s slice. Inspect `targeted_flow_backfill.csv`: the `__coarse_scan__` row should show `window_selection=coarse_signal_prefilter`, `coarse_signals` much smaller than `coarse_candidates`, and `window_before_ms` near one setup candle instead of baseline history.
+
+
+## 2026-05-22 - P390 targeted flow backfill planner state
+
+Current commit: UNKNOWN.
+
+P390 proposed after P389 still produced multi-thousand-hour `targeted 1s flow` ETAs. Root cause: the planner was still fetching too many and too-wide windows before enough cheap gates were applied, and materialization still operated at symbol-cache scope. P390 narrows the fetch plan to coarse/pre-context signal rows, applies a closed setup-candle upper-bound prune for subminute flow, fetches setup-candle plus immediate-entry-tail windows only, merges nearby windows by symbol, materializes only requested intervals, and filters pair collection to trusted subminute caches.
+
+Next validation: apply P390, run compileall, then rerun a small 1m/5s slice. Inspect `targeted_flow_backfill.csv`: `status=window_plan` should show `merged_targeted_windows` and `merged_targeted_window_ms` far below the raw candidate-window totals; `targeted_flow_materialize.csv` should show `written_interval`, not full-symbol rebuild behavior.

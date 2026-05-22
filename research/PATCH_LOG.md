@@ -7790,3 +7790,32 @@ Risk:
 ```text
 This intentionally reduces backfill scope. A pathological setup that is only visible in the subminute forming path while not passing the closed setup prefilter can be missed by the automatic planner. That is preferable to accidentally rebuilding full-universe 1s history inside a backtest; use explicit symbols/date slices for deeper forensic scans.
 ```
+
+
+## 2026-05-22 - P390 proposed - aggressively bounded targeted flow backfill
+
+Files:
+
+```text
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Make targeted aggTrade flow backfill genuinely targeted. The planner now applies cheap coarse/pre-context guards before fetch, prunes windows that cannot pass subminute flow by closed setup-candle upper bounds, fetches only setup-candle plus immediate-entry-tail 1s windows instead of exit horizons, merges nearby windows per symbol, materializes only requested intervals, and ignores old/untrusted subminute cache files when choosing pair-collection symbols.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges data/fetchers research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+The automatic planner is intentionally bounded. It is appropriate for normal research/backtest runs, but a forensic search for rare cases visible only in subminute flow while failing closed setup-TF prefilters still needs an explicit narrow symbol/date slice.
+```

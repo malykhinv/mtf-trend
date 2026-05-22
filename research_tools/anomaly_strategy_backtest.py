@@ -12,7 +12,7 @@ from dataclasses import replace
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Mapping, Iterable
 import urllib.parse
 import urllib.request
 from urllib.parse import quote
@@ -103,6 +103,8 @@ DEFAULT_LATENCY_GRID_MS = (0, 5_000)
 LATENCY_1S_BACKFILL_VERSION = AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION
 TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS = 120_000
 TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS = 120_000
+TARGETED_FLOW_MERGE_GAP_MS = 60_000
+TARGETED_FLOW_MAX_MERGED_SPAN_MS = 10 * 60_000
 _BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_column", "missing_timestamp", "missing_frame", "empty_oi", "stale_asof"}
 _TRADE_CHART_FLOW_PROVENANCE = {
     "trade_count_proxy_used": False,
@@ -1406,6 +1408,34 @@ def _candidate_flow_source_mask(candidates: pd.DataFrame) -> pd.Series:
     return mask
 
 
+def _slice_frame_to_timestamp_windows(frame: pd.DataFrame, windows: Iterable[tuple[int, int]]) -> pd.DataFrame:
+    if frame.empty or "timestamp" not in frame.columns:
+        return frame.iloc[0:0].copy()
+    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce")
+    mask = pd.Series(False, index=frame.index)
+    for start_ms, end_ms in _merge_targeted_timestamp_windows(windows):
+        mask |= timestamps.ge(int(start_ms)) & timestamps.le(int(end_ms))
+    return frame.loc[mask].copy()
+
+
+def _merge_existing_and_materialized_subminute(
+    *,
+    existing_frame: pd.DataFrame,
+    new_frame: pd.DataFrame,
+    keep_existing: bool,
+) -> pd.DataFrame:
+    if new_frame.empty:
+        return new_frame.copy()
+    if keep_existing and not existing_frame.empty:
+        merged = pd.concat([existing_frame, new_frame], ignore_index=True, sort=False)
+    else:
+        merged = new_frame.copy()
+    merged.sort_values("timestamp", inplace=True)
+    merged.drop_duplicates("timestamp", keep="last", inplace=True)
+    merged.reset_index(drop=True, inplace=True)
+    return merged
+
+
 def materialize_subminute_entry_caches(
     *,
     cache_dir: Path,
@@ -1413,6 +1443,7 @@ def materialize_subminute_entry_caches(
     symbols: Iterable[str] | None = None,
     overwrite: bool = False,
     progress_label: str | None = None,
+    intervals_by_symbol: Mapping[str, Iterable[tuple[int, int]]] | None = None,
 ) -> pd.DataFrame:
     wanted_symbols = set(_normalized_symbol_tuple(symbols))
     targets = tuple(dict.fromkeys(str(timeframe) for timeframe in target_timeframes))
@@ -1420,13 +1451,28 @@ def materialize_subminute_entry_caches(
         target_ms = _timeframe_to_milliseconds(target)
         if target == "1s" or target_ms <= 0 or target_ms >= 60_000 or target_ms % 1000 != 0:
             raise ValueError(f"target subminute timeframe must be derived from 1s: {target}")
-    paths = sorted(cache_dir.glob("*%2FUSDT%3AUSDT/1s/data.parquet"))
-    if wanted_symbols:
-        paths = [
-            path
-            for path in paths
-            if normalize_symbol(_symbol_from_cache_symbol_dir(path.parent.parent)) in wanted_symbols
-        ]
+    interval_map: dict[str, list[tuple[int, int]]] = {}
+    if intervals_by_symbol is not None:
+        for raw_symbol, raw_windows in intervals_by_symbol.items():
+            symbol = str(raw_symbol)
+            windows = _merge_targeted_timestamp_windows(raw_windows)
+            if windows:
+                interval_map[symbol] = windows
+        if wanted_symbols:
+            interval_map = {
+                symbol: windows
+                for symbol, windows in interval_map.items()
+                if normalize_symbol(symbol) in wanted_symbols
+            }
+        paths = [cache_dir / _cache_symbol_dir_name(symbol) / "1s" / "data.parquet" for symbol in sorted(interval_map)]
+    else:
+        paths = sorted(cache_dir.glob("*%2FUSDT%3AUSDT/1s/data.parquet"))
+        if wanted_symbols:
+            paths = [
+                path
+                for path in paths
+                if normalize_symbol(_symbol_from_cache_symbol_dir(path.parent.parent)) in wanted_symbols
+            ]
     rows: list[dict[str, object]] = []
     started_at = time.monotonic()
     next_progress_pct = 0
@@ -1443,6 +1489,11 @@ def materialize_subminute_entry_caches(
             )
             if validation_error is not None:
                 raise ValueError(validation_error)
+            symbol_windows = interval_map.get(symbol) if intervals_by_symbol is not None else None
+            if symbol_windows is not None:
+                source_frame = _slice_frame_to_timestamp_windows(source_frame, symbol_windows)
+                if source_frame.empty:
+                    raise ValueError("empty_1s_source_in_requested_intervals")
         except Exception as exc:
             for target in targets:
                 rows.append(
@@ -1460,6 +1511,7 @@ def materialize_subminute_entry_caches(
             done += 1
             output_path = cache_dir / _cache_symbol_dir_name(symbol) / target / "data.parquet"
             existing_error: str | None = None
+            existing_frame = pd.DataFrame()
             if output_path.exists() and not overwrite:
                 try:
                     existing_frame = _read_symbol_frame(cache_dir, symbol, target)
@@ -1470,7 +1522,7 @@ def materialize_subminute_entry_caches(
                     )
                 except Exception as exc:
                     existing_error = f"{type(exc).__name__}: {exc}"
-                if existing_error is None:
+                if intervals_by_symbol is None and existing_error is None:
                     rows.append(
                         {
                             "symbol": symbol,
@@ -1505,20 +1557,29 @@ def materialize_subminute_entry_caches(
                 aggregated["aggregation_source_timeframe"] = "1s"
                 aggregated["aggregation_target_timeframe"] = target
                 aggregated["aggregation_version"] = _MATERIALIZED_SUBMINUTE_CACHE_VERSION
+                keep_existing = bool(existing_error is None and not overwrite)
+                written = _merge_existing_and_materialized_subminute(
+                    existing_frame=existing_frame,
+                    new_frame=aggregated,
+                    keep_existing=keep_existing,
+                )
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                aggregated.to_parquet(output_path, index=False)
+                written.to_parquet(output_path, index=False)
                 rows.append(
                     {
                         "symbol": symbol,
                         "target_timeframe": target,
                         "source_timeframe": "1s",
-                        "status": "written",
+                        "status": "written_interval" if intervals_by_symbol is not None else "written",
                         "path": str(output_path),
-                        "rows": int(len(aggregated)),
-                        "min_timestamp_ms": int(aggregated["timestamp"].min()),
-                        "max_timestamp_ms": int(aggregated["timestamp"].max()),
-                        "min_timestamp_utc": _timestamp_to_utc(int(aggregated["timestamp"].min())),
-                        "max_timestamp_utc": _timestamp_to_utc(int(aggregated["timestamp"].max())),
+                        "rows": int(len(written)),
+                        "new_rows": int(len(aggregated)),
+                        "kept_existing_rows": int(len(existing_frame)) if keep_existing else 0,
+                        "discarded_existing_reason": "" if keep_existing or existing_frame.empty else str(existing_error or "overwrite_requested"),
+                        "min_timestamp_ms": int(written["timestamp"].min()),
+                        "max_timestamp_ms": int(written["timestamp"].max()),
+                        "min_timestamp_utc": _timestamp_to_utc(int(written["timestamp"].min())),
+                        "max_timestamp_utc": _timestamp_to_utc(int(written["timestamp"].max())),
                     }
                 )
             if progress_label is not None:
@@ -1530,39 +1591,105 @@ def materialize_subminute_entry_caches(
     return pd.DataFrame(rows)
 
 
-def _merge_targeted_timestamp_windows(windows: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+def _merge_targeted_timestamp_windows(
+    windows: Iterable[tuple[int, int]],
+    *,
+    merge_gap_ms: int = TARGETED_FLOW_MERGE_GAP_MS,
+    max_merged_span_ms: int = TARGETED_FLOW_MAX_MERGED_SPAN_MS,
+) -> list[tuple[int, int]]:
     valid = sorted((int(start), int(end)) for start, end in windows if int(start) <= int(end))
     if not valid:
         return []
     merged: list[tuple[int, int]] = [valid[0]]
     for start, end in valid[1:]:
         prev_start, prev_end = merged[-1]
-        if start <= prev_end + 1:
-            merged[-1] = (prev_start, max(prev_end, end))
+        candidate_start = prev_start
+        candidate_end = max(prev_end, end)
+        candidate_span = candidate_end - candidate_start + 1
+        if start <= prev_end + max(0, int(merge_gap_ms)) + 1 and candidate_span <= max(1, int(max_merged_span_ms)):
+            merged[-1] = (candidate_start, candidate_end)
         else:
             merged.append((start, end))
     return merged
 
 
-def _targeted_flow_window_padding_ms(config: AnomalyBacktestConfig) -> tuple[int, int]:
+def _targeted_flow_window_for_row(row: pd.Series, *, config: AnomalyBacktestConfig) -> tuple[int, int] | None:
+    """Return the minimal 1s flow window needed to build pair/forming candidates.
+
+    The subminute pre-signal cache is only a flow source for the forming setup
+    candle plus the tiny immediate-entry guard tail.  Exit simulation is
+    intentionally not included here; fetching a full post-entry horizon before
+    we even know which subminute rows become signals turns targeted backfill into
+    a full 1s data-lake rebuild.
+    """
+
+    setup_start = _safe_int(row.get("timestamp_ms"))
+    if setup_start is None:
+        setup_start = _safe_int(row.get("timestamp"))
+    if setup_start is None:
+        return None
     setup_ms = _timeframe_to_milliseconds(_effective_setup_timeframe(config))
     entry_ms = _timeframe_to_milliseconds(_effective_entry_timeframe(config))
-    # Pair/forming rows use the closed setup-timeframe cache for historical
-    # baseline after P389. Targeted subminute flow only needs to cover the
-    # forming setup candle itself, plus a small edge buffer. Do not fetch the
-    # whole setup baseline in 1s data: that degenerates into a near full-cache
-    # rebuild for long historical tests.
-    forming_setup_before_ms = setup_ms + 2 * entry_ms
-    execution_after_ms = (
-        int(config.market_entry_latency_candles)
-        + int(config.max_hold_candles)
-        + int(config.lab_config.forward_high_candles)
-        + 2
-    ) * entry_ms
+    immediate_entry_tail_ms = max(1, int(config.market_entry_latency_candles) + 2) * int(entry_ms)
+    return int(setup_start), int(setup_start) + int(setup_ms) - 1 + int(immediate_entry_tail_ms)
+
+
+def _targeted_flow_needs_oi_context(config: AnomalyBacktestConfig) -> bool:
     return (
-        max(TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS, forming_setup_before_ms),
-        max(TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS, execution_after_ms),
+        config.min_oi_change_pct_3x5m is not None
+        or bool(config.require_oi_status_ok)
+        or bool(config.reject_oi_down_mark_discount)
     )
+
+
+def _targeted_flow_needs_derivatives_context(config: AnomalyBacktestConfig) -> bool:
+    return (
+        config.min_mark_close_vs_decision_close_basis is not None
+        or bool(config.reject_stale_derivatives_context)
+        or bool(config.reject_oi_down_mark_discount)
+        or config.max_start_taker_buy_quote_share_delta is not None
+        or config.max_next_taker_buy_quote_share_delta is not None
+    )
+
+
+def _apply_subminute_flow_upper_bound_filter(
+    coarse: pd.DataFrame,
+    *,
+    config: AnomalyBacktestConfig,
+) -> tuple[pd.DataFrame, int]:
+    """Drop rows whose full setup candle cannot satisfy any subminute flow gate.
+
+    This is a safe upper-bound prune: every forming 5s/15s/30s prefix inside a
+    setup candle has quote/trade flow <= the already-closed setup candle.  If the
+    full setup candle is below the minimum raw ratio required for the earliest
+    allowed subminute decision, no subminute segment inside it can pass.
+    """
+
+    required = {
+        "start_quote_volume",
+        "start_trade_count",
+        "baseline_quote_volume_median",
+        "baseline_trade_count_median",
+    }
+    if coarse.empty or required.difference(coarse.columns):
+        return coarse, 0
+    quote = pd.to_numeric(coarse["start_quote_volume"], errors="coerce")
+    trades = pd.to_numeric(coarse["start_trade_count"], errors="coerce")
+    baseline_quote = pd.to_numeric(coarse["baseline_quote_volume_median"], errors="coerce")
+    baseline_trades = pd.to_numeric(coarse["baseline_trade_count_median"], errors="coerce")
+    min_fraction = 0.35
+    quote_required = baseline_quote * float(config.lab_config.min_quote_ratio_start) * min_fraction
+    trade_required = baseline_trades * float(config.lab_config.min_trade_ratio_start) * min_fraction
+    mask = (
+        quote.notna()
+        & trades.notna()
+        & baseline_quote.gt(0.0)
+        & baseline_trades.gt(0.0)
+        & quote.ge(quote_required)
+        & trades.ge(trade_required)
+    )
+    filtered = coarse.loc[mask].copy()
+    return filtered, int(len(coarse) - len(filtered))
 
 
 def _candidate_decision_center_ms(row: pd.Series) -> int | None:
@@ -1600,6 +1727,7 @@ def _prepare_coarse_candidates_for_targeted_flow(
         result["setup_elapsed_fraction"] = 1.0
     if "setup_closed_entry_candles" not in result.columns:
         result["setup_closed_entry_candles"] = int(config.lab_config.confirmation_candles)
+    result, _dropped_by_upper_bound = _apply_subminute_flow_upper_bound_filter(result, config=config)
     return result
 
 
@@ -1670,9 +1798,11 @@ def ensure_targeted_subminute_flow_cache_for_configs(
             coarse_lab_config,
             symbols=symbols,
             progress_label=label,
-            include_oi_context=False,
-            include_derivatives_context=False,
+            include_oi_context=_targeted_flow_needs_oi_context(config),
+            include_derivatives_context=_targeted_flow_needs_derivatives_context(config),
         )
+        if not coarse.empty:
+            coarse = enrich_candidates_with_recent_spike_context(coarse, config=config)
         if coarse.empty:
             discovery_rows.append(
                 {
@@ -1686,23 +1816,24 @@ def ensure_targeted_subminute_flow_cache_for_configs(
             )
             continue
         usable_coarse_count = int(len(coarse.loc[~coarse["status"].astype(str).eq("error")])) if "status" in coarse.columns else int(len(coarse))
+        bounded_coarse, upper_bound_dropped = _apply_subminute_flow_upper_bound_filter(coarse, config=config)
         valid, selection_status, selection_error = _select_coarse_signal_rows_for_targeted_flow(
-            coarse,
+            bounded_coarse,
             config=config,
             setup_timeframe=setup_timeframe,
         )
-        before_ms, after_ms = _targeted_flow_window_padding_ms(config)
         windows_added = 0
+        raw_window_ms = 0
         for _, row in valid.iterrows():
             symbol = str(row.get("symbol") or "").strip()
             if not symbol or symbol == "__all__":
                 continue
-            center_ms = _candidate_decision_center_ms(row)
-            if center_ms is None:
+            window = _targeted_flow_window_for_row(row, config=config)
+            if window is None:
                 continue
-            window_start = int(center_ms) - before_ms
-            window_end = int(center_ms) + after_ms
+            window_start, window_end = window
             windows_by_symbol.setdefault(symbol, []).append((window_start, window_end))
+            raw_window_ms += int(window_end) - int(window_start) + 1
             windows_added += 1
         discovery_rows.append(
             {
@@ -1711,11 +1842,14 @@ def ensure_targeted_subminute_flow_cache_for_configs(
                 "status": selection_status if not windows_added else "ok",
                 "error": selection_error,
                 "coarse_candidates": int(usable_coarse_count),
+                "coarse_upper_bound_dropped": int(upper_bound_dropped),
+                "coarse_prefilter_candidates": int(len(bounded_coarse)),
                 "coarse_signals": int(len(valid)),
                 "targeted_windows": int(windows_added),
-                "window_before_ms": int(before_ms),
-                "window_after_ms": int(after_ms),
-                "window_selection": "coarse_signal_prefilter",
+                "raw_targeted_window_ms": int(raw_window_ms),
+                "window_before_ms": 0,
+                "window_after_ms": 0,
+                "window_selection": "coarse_signal_prefilter_plus_flow_upper_bound_exact_setup_window",
             }
         )
 
@@ -1725,7 +1859,31 @@ def ensure_targeted_subminute_flow_cache_for_configs(
         for symbol, windows in windows_by_symbol.items()
         if windows
     }
+    raw_windows_total = sum(len(windows) for windows in windows_by_symbol.values())
+    raw_window_ms_total = sum(
+        int(end) - int(start) + 1
+        for windows in windows_by_symbol.values()
+        for start, end in windows
+    )
     total_windows = sum(len(windows) for windows in merged_windows_by_symbol.values())
+    merged_window_ms_total = sum(
+        int(end) - int(start) + 1
+        for windows in merged_windows_by_symbol.values()
+        for start, end in windows
+    )
+    discovery_rows.append(
+        {
+            "setup_timeframe": "__all__",
+            "entry_timeframe": ",".join(sorted(target_timeframes, key=_timeframe_to_milliseconds)),
+            "status": "window_plan",
+            "raw_targeted_windows": int(raw_windows_total),
+            "merged_targeted_windows": int(total_windows),
+            "raw_targeted_window_ms": int(raw_window_ms_total),
+            "merged_targeted_window_ms": int(merged_window_ms_total),
+            "merge_gap_ms": int(TARGETED_FLOW_MERGE_GAP_MS),
+            "max_merged_span_ms": int(TARGETED_FLOW_MAX_MERGED_SPAN_MS),
+        }
+    )
     done_windows = 0
     started_at = time.monotonic()
     next_progress_pct = 0
@@ -1787,6 +1945,7 @@ def ensure_targeted_subminute_flow_cache_for_configs(
             symbols=symbols_to_materialize,
             overwrite=False,
             progress_label=f"{progress_label}: materialize subminute flow" if progress_label else None,
+            intervals_by_symbol=merged_windows_by_symbol,
         )
     else:
         materialize = pd.DataFrame()
@@ -2484,10 +2643,11 @@ def collect_pair_anomaly_rows(
             if normalize_symbol(_symbol_from_cache_symbol_dir(path.parent.parent)) in wanted_symbols
         ]
     if entry_timeframe != setup_timeframe and _timeframe_to_milliseconds(entry_timeframe) < 60_000:
-        symbols_with_entry_cache = {
-            _symbol_from_cache_symbol_dir(path.parent.parent)
-            for path in lab_config.cache_dir.glob(f"*%2FUSDT%3AUSDT/{entry_cache_timeframe}/data.parquet")
-        }
+        symbols_with_entry_cache = _trusted_flow_cache_symbols_for_timeframe(
+            lab_config.cache_dir,
+            cache_timeframe=entry_cache_timeframe,
+            entry_timeframe=entry_timeframe,
+        )
         if not symbols_with_entry_cache:
             return pd.DataFrame([
                 {
@@ -2616,6 +2776,23 @@ def _cache_symbols_for_timeframe(cache_dir: Path, timeframe: str) -> set[str]:
     }
 
 
+def _trusted_flow_cache_symbols_for_timeframe(cache_dir: Path, *, cache_timeframe: str, entry_timeframe: str) -> set[str]:
+    symbols: set[str] = set()
+    for path in cache_dir.glob(f"*%2FUSDT%3AUSDT/{cache_timeframe}/data.parquet"):
+        symbol = _symbol_from_cache_symbol_dir(path.parent.parent)
+        try:
+            frame = _read_symbol_frame(cache_dir, symbol, cache_timeframe)
+            if _flow_cache_validation_error(
+                frame,
+                cache_timeframe=cache_timeframe,
+                entry_timeframe=entry_timeframe,
+            ) is None:
+                symbols.add(symbol)
+        except Exception:
+            continue
+    return symbols
+
+
 def collect_pair_anomaly_rows_for_configs(
     configs: Iterable[AnomalyBacktestConfig],
     *,
@@ -2650,7 +2827,11 @@ def collect_pair_anomaly_rows_for_configs(
         entry_ms = _timeframe_to_milliseconds(entry_timeframe)
         eligible_symbols = set(setup_symbols)
         if entry_timeframe != setup_timeframe and entry_ms < 60_000:
-            entry_symbols = _cache_symbols_for_timeframe(config.lab_config.cache_dir, entry_cache_timeframe)
+            entry_symbols = _trusted_flow_cache_symbols_for_timeframe(
+                config.lab_config.cache_dir,
+                cache_timeframe=entry_cache_timeframe,
+                entry_timeframe=entry_timeframe,
+            )
             if wanted_symbols:
                 entry_symbols = {symbol for symbol in entry_symbols if normalize_symbol(symbol) in wanted_symbols}
             if not entry_symbols:
