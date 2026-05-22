@@ -2730,3 +2730,11 @@ Current commit: UNKNOWN.
 Latest 1m/5s, 1m/15s and 5m/30s artifact set produced zero final signals because every pair/forming candidate failed with `untrusted_materialized_entry_flow_cache` from old `p165_1s_ohlcv_to_subminute_v1` or missing 1s-derived cache metadata. A code mismatch also meant freshly backfilled 1s aggTrade caches would be written with `p378_aggtrades_to_1s_full_buckets_v1` while the strategy expected `p378_latency_aggtrades_full_buckets_v1`. P387 aligns the trusted version and makes the aggTrade backfill skip existing chunks only when the existing 1s cache already has trusted P378 metadata.
 
 Next validation: apply P387, run compileall, regenerate 1s aggTrade cache and materialized 5s/15s/30s caches, then rerun anomaly lab and confirm anomaly_candidates contain non-error rows and anomaly_signals is non-empty before interpreting PnL.
+
+## 2026-05-22 - P388 targeted flow backfill state
+
+Current commit: UNKNOWN.
+
+P388 proposed after the latest 1m/5s artifact set showed the backtest was fully choked by missing/untrusted subminute flow caches. The intended historical path is restored: run-anomaly-lab performs a coarse setup-timeframe scan, backfills trusted 1s aggTrade windows only around coarse anomaly windows, materializes required subminute entry caches, and then runs pair/forming collection. This avoids full 1s backfill for the entire 40-day universe while keeping P381/P387 trust gates strict.
+
+Next validation: apply P388 after P386v2 and P387, run compileall, rerun a small 1m/5s slice, and inspect `targeted_flow_backfill.csv`, `targeted_flow_materialize.csv`, and `anomaly_candidates.csv`. Expected: no mass `untrusted_materialized_entry_flow_cache`; candidate rows should be non-error unless Binance fetch failed or no coarse anomaly windows exist.

@@ -7731,3 +7731,33 @@ Risk:
 ```text
 Old p165/missing-version 1s/subminute caches remain untrusted. They must be regenerated; this patch only makes the regeneration path produce and reuse the version that the strategy accepts.
 ```
+
+## 2026-05-22 - P388 proposed - targeted flow backfill inside backtest
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Restore the cheap backtest path: coarse setup-timeframe anomaly scan first, targeted 1s aggTrade backfill only around interesting anomaly windows, then materialize 5s/15s/30s entry caches before pair/forming candidate collection. Do not require full-universe 1s cache for the whole backtest period.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges data/fetchers research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+The coarse setup-timeframe scan is intentionally a fetch planner, not a signal source. It can miss pathological cases where only the subminute forming path is interesting while the closed setup candle is not. The benefit is bounded network/cache work without reintroducing untrusted p165 subminute flow.
+```

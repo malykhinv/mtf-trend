@@ -1223,6 +1223,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             _parse_grid_exit_rules,
             _parse_grid_profile_values,
             collect_pair_anomaly_rows_for_configs,
+            ensure_targeted_subminute_flow_cache_for_configs,
             run_anomaly_strategy_backtest,
         )
         from research_tools.anomaly_config import ANOMALY_BACKTEST_TIMEFRAME_PAIRS
@@ -1516,6 +1517,15 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                     )
                     for setup_timeframe, entry_timeframe in timeframe_pairs
                 ]
+                if _to_bool_flag(getattr(args, "targeted_flow_backfill", True), default=True):
+                    targeted_flow_backfill, targeted_flow_materialize = ensure_targeted_subminute_flow_cache_for_configs(
+                        collection_configs,
+                        symbols=getattr(args, "symbols", None),
+                        progress_label="anomaly targeted flow tf-set",
+                    )
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    targeted_flow_backfill.to_csv(output_dir / "targeted_flow_backfill.csv", index=False)
+                    targeted_flow_materialize.to_csv(output_dir / "targeted_flow_materialize.csv", index=False)
                 print(
                     "anomaly-lab: collecting candidates in one symbol-major pass across timeframe pairs",
                     flush=True,
@@ -1525,6 +1535,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                     symbols=getattr(args, "symbols", None),
                     progress_label="anomaly candidates tf-set",
                     include_derivatives_context=False,
+                    auto_targeted_flow_backfill=False,
                 )
 
         for setup_timeframe, entry_timeframe in timeframe_pairs_to_run:

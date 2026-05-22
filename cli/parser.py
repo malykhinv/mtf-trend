@@ -188,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--entry-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
     anomaly_lab.add_argument("--exit-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
     anomaly_lab.add_argument("--render-charts", type=_str_to_bool, default=True)
+    anomaly_lab.add_argument("--targeted-flow-backfill", type=_str_to_bool, default=True)
     anomaly_lab.add_argument("--run-entry-grid", type=_str_to_bool, default=False)
     anomaly_lab.add_argument("--grid-oi3-values", default="0.01,0.02,0.03")
     anomaly_lab.add_argument("--grid-hold-values", default="1,2")

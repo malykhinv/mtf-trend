@@ -101,6 +101,8 @@ AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION = "p378_aggtrades_to_1s_full_buckets_v1"
 DEFAULT_LATENCY_EXTRA_MS = 5_000
 DEFAULT_LATENCY_GRID_MS = (0, 5_000)
 LATENCY_1S_BACKFILL_VERSION = AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION
+TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS = 5_400_000
+TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS = 2_700_000
 _BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_column", "missing_timestamp", "missing_frame", "empty_oi", "stale_asof"}
 _TRADE_CHART_FLOW_PROVENANCE = {
     "trade_count_proxy_used": False,
@@ -1125,6 +1127,41 @@ def _read_symbol_frame_optional(cache_dir: Path, symbol: str, timeframe: str) ->
         return pd.DataFrame()
 
 
+
+def _trusted_aggtrade_window_covered(frame: pd.DataFrame, *, start_timestamp_ms: int, end_timestamp_ms: int) -> bool:
+    """Return True only when trusted 1s aggTrade metadata covers the whole requested window.
+
+    Missing trade seconds are valid for quiet markets, so coverage must be checked
+    through P378 aggTrade coverage intervals, not by requiring one OHLCV row per
+    second.  Old 1s caches without full-bucket coverage metadata must be treated
+    as untrusted and refetched.
+    """
+    if frame.empty:
+        return False
+    version = _first_non_empty_string(frame, "aggregation_version")
+    if version != AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION:
+        return False
+    required = {"aggtrade_coverage_start_timestamp_ms", "aggtrade_coverage_end_timestamp_ms"}
+    if not required.issubset(frame.columns):
+        return False
+    intervals_frame = frame.loc[
+        frame["aggtrade_coverage_start_timestamp_ms"].notna()
+        & frame["aggtrade_coverage_end_timestamp_ms"].notna(),
+        ["aggtrade_coverage_start_timestamp_ms", "aggtrade_coverage_end_timestamp_ms"],
+    ].drop_duplicates()
+    if intervals_frame.empty:
+        return False
+    intervals = [
+        (int(row["aggtrade_coverage_start_timestamp_ms"]), int(row["aggtrade_coverage_end_timestamp_ms"]))
+        for _, row in intervals_frame.iterrows()
+    ]
+    return _coverage_intervals_cover_bucket(
+        intervals,
+        bucket_start_ms=int(start_timestamp_ms),
+        bucket_end_ms=int(end_timestamp_ms),
+    )
+
+
 def _ensure_latency_1s_cache(
     cache_dir: Path,
     symbol: str,
@@ -1133,16 +1170,12 @@ def _ensure_latency_1s_cache(
     end_timestamp_ms: int,
 ) -> pd.DataFrame:
     frame = _read_symbol_frame_optional(cache_dir, symbol, "1s")
-    if not frame.empty and "timestamp" in frame.columns:
-        timestamps = pd.to_numeric(frame["timestamp"], errors="coerce")
-        covered = frame.loc[
-            timestamps.ge(int(start_timestamp_ms))
-            & timestamps.le(int(end_timestamp_ms))
-        ].copy()
-        if not covered.empty:
-            version = _first_non_empty_string(frame, "aggregation_version")
-            if version == LATENCY_1S_BACKFILL_VERSION:
-                return frame
+    if _trusted_aggtrade_window_covered(
+        frame,
+        start_timestamp_ms=int(start_timestamp_ms),
+        end_timestamp_ms=int(end_timestamp_ms),
+    ):
+        return frame
 
     market_id = _binance_futures_market_id(symbol)
     all_rows: list[dict[str, object]] = []
@@ -1173,7 +1206,7 @@ def _ensure_latency_1s_cache(
         chunk_start = chunk_end + 1
 
     if not all_rows:
-        return pd.DataFrame()
+        return frame
 
     from data.storage.parquet_storage import ParquetStorage
     from domain.enums.timeframe import Timeframe
@@ -1200,7 +1233,6 @@ def _ensure_latency_1s_cache(
     if "ema20" not in merged.columns and "close" in merged.columns:
         merged["ema20"] = merged["close"].astype(float).ewm(span=20, adjust=False).mean()
     return merged
-
 
 def _coverage_intervals_cover_bucket(intervals: list[tuple[int, int]], *, bucket_start_ms: int, bucket_end_ms: int) -> bool:
     if not intervals:
@@ -1427,58 +1459,275 @@ def materialize_subminute_entry_caches(
         for target in targets:
             done += 1
             output_path = cache_dir / _cache_symbol_dir_name(symbol) / target / "data.parquet"
+            existing_error: str | None = None
             if output_path.exists() and not overwrite:
+                try:
+                    existing_frame = _read_symbol_frame(cache_dir, symbol, target)
+                    existing_error = _flow_cache_validation_error(
+                        existing_frame,
+                        cache_timeframe=target,
+                        entry_timeframe=target,
+                    )
+                except Exception as exc:
+                    existing_error = f"{type(exc).__name__}: {exc}"
+                if existing_error is None:
+                    rows.append(
+                        {
+                            "symbol": symbol,
+                            "target_timeframe": target,
+                            "source_timeframe": "1s",
+                            "status": "exists",
+                            "path": str(output_path),
+                        }
+                    )
+                    if progress_label is not None:
+                        current_pct = int(100 * done / total)
+                        if current_pct >= next_progress_pct or done == total:
+                            _emit_progress(label=progress_label, done=done, total=total, started_at=started_at)
+                            next_progress_pct = current_pct + 5
+                    continue
+            aggregated = _aggregate_frame_to_timeframe(
+                source_frame,
+                timeframe_ms=_timeframe_to_milliseconds(target),
+            )
+            if aggregated.empty:
                 rows.append(
                     {
                         "symbol": symbol,
                         "target_timeframe": target,
                         "source_timeframe": "1s",
-                        "status": "exists",
+                        "status": "empty",
                         "path": str(output_path),
                     }
                 )
             else:
-                aggregated = _aggregate_frame_to_timeframe(
-                    source_frame,
-                    timeframe_ms=_timeframe_to_milliseconds(target),
+                aggregated = aggregated.copy()
+                aggregated["aggregation_source_timeframe"] = "1s"
+                aggregated["aggregation_target_timeframe"] = target
+                aggregated["aggregation_version"] = _MATERIALIZED_SUBMINUTE_CACHE_VERSION
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                aggregated.to_parquet(output_path, index=False)
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "target_timeframe": target,
+                        "source_timeframe": "1s",
+                        "status": "written",
+                        "path": str(output_path),
+                        "rows": int(len(aggregated)),
+                        "min_timestamp_ms": int(aggregated["timestamp"].min()),
+                        "max_timestamp_ms": int(aggregated["timestamp"].max()),
+                        "min_timestamp_utc": _timestamp_to_utc(int(aggregated["timestamp"].min())),
+                        "max_timestamp_utc": _timestamp_to_utc(int(aggregated["timestamp"].max())),
+                    }
                 )
-                if aggregated.empty:
-                    rows.append(
-                        {
-                            "symbol": symbol,
-                            "target_timeframe": target,
-                            "source_timeframe": "1s",
-                            "status": "empty",
-                            "path": str(output_path),
-                        }
-                    )
-                else:
-                    aggregated = aggregated.copy()
-                    aggregated["aggregation_source_timeframe"] = "1s"
-                    aggregated["aggregation_target_timeframe"] = target
-                    aggregated["aggregation_version"] = _MATERIALIZED_SUBMINUTE_CACHE_VERSION
-                    output_path.parent.mkdir(parents=True, exist_ok=True)
-                    aggregated.to_parquet(output_path, index=False)
-                    rows.append(
-                        {
-                            "symbol": symbol,
-                            "target_timeframe": target,
-                            "source_timeframe": "1s",
-                            "status": "written",
-                            "path": str(output_path),
-                            "rows": int(len(aggregated)),
-                            "min_timestamp_ms": int(aggregated["timestamp"].min()),
-                            "max_timestamp_ms": int(aggregated["timestamp"].max()),
-                            "min_timestamp_utc": _timestamp_to_utc(int(aggregated["timestamp"].min())),
-                            "max_timestamp_utc": _timestamp_to_utc(int(aggregated["timestamp"].max())),
-                        }
-                    )
             if progress_label is not None:
                 current_pct = int(100 * done / total)
                 if current_pct >= next_progress_pct or done == total:
                     _emit_progress(label=progress_label, done=done, total=total, started_at=started_at)
                     next_progress_pct = current_pct + 5
+
     return pd.DataFrame(rows)
+
+
+def _merge_targeted_timestamp_windows(windows: Iterable[tuple[int, int]]) -> list[tuple[int, int]]:
+    valid = sorted((int(start), int(end)) for start, end in windows if int(start) <= int(end))
+    if not valid:
+        return []
+    merged: list[tuple[int, int]] = [valid[0]]
+    for start, end in valid[1:]:
+        prev_start, prev_end = merged[-1]
+        if start <= prev_end + 1:
+            merged[-1] = (prev_start, max(prev_end, end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _targeted_flow_window_padding_ms(config: AnomalyBacktestConfig) -> tuple[int, int]:
+    setup_ms = _timeframe_to_milliseconds(_effective_setup_timeframe(config))
+    entry_ms = _timeframe_to_milliseconds(_effective_entry_timeframe(config))
+    baseline_before_ms = int(config.lab_config.baseline_candles) * setup_ms + setup_ms
+    execution_after_ms = (
+        int(config.market_entry_latency_candles)
+        + int(config.max_hold_candles)
+        + int(config.lab_config.forward_high_candles)
+        + 2
+    ) * entry_ms
+    return (
+        max(TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS, baseline_before_ms),
+        max(TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS, execution_after_ms),
+    )
+
+
+def _candidate_decision_center_ms(row: pd.Series) -> int | None:
+    for column in (
+        "decision_available_timestamp_ms",
+        "decision_timestamp_ms",
+        "timestamp_ms",
+        "timestamp",
+    ):
+        if column in row.index:
+            value = _safe_int(row.get(column))
+            if value is not None:
+                return value
+    return None
+
+
+def ensure_targeted_subminute_flow_cache_for_configs(
+    configs: Iterable[AnomalyBacktestConfig],
+    *,
+    symbols: Iterable[str] | None = None,
+    progress_label: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Backfill only the 1s aggTrade windows needed by subminute pair backtests.
+
+    The coarse scan uses closed setup-timeframe OHLCV to find interesting anomaly
+    windows cheaply.  It then fetches true aggTrades only around those windows and
+    materializes the requested 5s/15s/30s entry caches.  This restores the intended
+    backtest flow without requiring a full 1s cache for the whole test range.
+    """
+
+    resolved_configs = [_apply_red_flag_profile(config) for config in configs]
+    subminute_configs = [
+        config
+        for config in resolved_configs
+        if _effective_entry_timeframe(config) != _effective_setup_timeframe(config)
+        and 0 < _timeframe_to_milliseconds(_effective_entry_timeframe(config)) < 60_000
+    ]
+    if not subminute_configs:
+        return pd.DataFrame(), pd.DataFrame()
+
+    windows_by_symbol: dict[str, list[tuple[int, int]]] = {}
+    target_timeframes: set[str] = set()
+    discovery_rows: list[dict[str, object]] = []
+    for config in subminute_configs:
+        setup_timeframe = _effective_setup_timeframe(config)
+        entry_timeframe = _effective_entry_timeframe(config)
+        target_timeframes.add(entry_timeframe)
+        coarse_lab_config = replace(config.lab_config, timeframe=setup_timeframe)
+        label = f"{progress_label}: coarse {setup_timeframe}/{entry_timeframe}" if progress_label else None
+        coarse = collect_anomaly_lab_rows(
+            coarse_lab_config,
+            symbols=symbols,
+            progress_label=label,
+            include_derivatives_context=False,
+        )
+        if coarse.empty:
+            discovery_rows.append(
+                {
+                    "setup_timeframe": setup_timeframe,
+                    "entry_timeframe": entry_timeframe,
+                    "status": "no_coarse_candidates",
+                    "coarse_candidates": 0,
+                    "targeted_windows": 0,
+                }
+            )
+            continue
+        valid = coarse.copy()
+        if "status" in valid.columns:
+            valid = valid.loc[~valid["status"].astype(str).eq("error")].copy()
+        before_ms, after_ms = _targeted_flow_window_padding_ms(config)
+        windows_added = 0
+        for _, row in valid.iterrows():
+            symbol = str(row.get("symbol") or "").strip()
+            if not symbol or symbol == "__all__":
+                continue
+            center_ms = _candidate_decision_center_ms(row)
+            if center_ms is None:
+                continue
+            window_start = int(center_ms) - before_ms
+            window_end = int(center_ms) + after_ms
+            windows_by_symbol.setdefault(symbol, []).append((window_start, window_end))
+            windows_added += 1
+        discovery_rows.append(
+            {
+                "setup_timeframe": setup_timeframe,
+                "entry_timeframe": entry_timeframe,
+                "status": "ok" if windows_added else "no_usable_coarse_candidate_timestamps",
+                "coarse_candidates": int(len(valid)),
+                "targeted_windows": int(windows_added),
+                "window_before_ms": int(before_ms),
+                "window_after_ms": int(after_ms),
+            }
+        )
+
+    backfill_rows: list[dict[str, object]] = []
+    merged_windows_by_symbol = {
+        symbol: _merge_targeted_timestamp_windows(windows)
+        for symbol, windows in windows_by_symbol.items()
+        if windows
+    }
+    total_windows = sum(len(windows) for windows in merged_windows_by_symbol.values())
+    done_windows = 0
+    started_at = time.monotonic()
+    next_progress_pct = 0
+    for symbol in sorted(merged_windows_by_symbol):
+        for window_start, window_end in merged_windows_by_symbol[symbol]:
+            status = "ok"
+            error = ""
+            rows_before = 0
+            rows_after = 0
+            try:
+                before_frame = _read_symbol_frame_optional(subminute_configs[0].lab_config.cache_dir, symbol, "1s")
+                rows_before = int(len(before_frame))
+                frame = _ensure_latency_1s_cache(
+                    subminute_configs[0].lab_config.cache_dir,
+                    symbol,
+                    start_timestamp_ms=int(window_start),
+                    end_timestamp_ms=int(window_end),
+                )
+                rows_after = int(len(frame))
+                if not _trusted_aggtrade_window_covered(
+                    frame,
+                    start_timestamp_ms=int(window_start),
+                    end_timestamp_ms=int(window_end),
+                ):
+                    status = "partial_or_empty"
+            except Exception as exc:
+                status = "error"
+                error = f"{type(exc).__name__}: {exc}"
+            backfill_rows.append(
+                {
+                    "symbol": symbol,
+                    "status": status,
+                    "error": error,
+                    "start_timestamp_ms": int(window_start),
+                    "end_timestamp_ms": int(window_end),
+                    "start_timestamp_utc": _timestamp_to_utc(int(window_start)),
+                    "end_timestamp_utc": _timestamp_to_utc(int(window_end)),
+                    "rows_before": int(rows_before),
+                    "rows_after": int(rows_after),
+                    "rows_delta": int(rows_after - rows_before),
+                    "aggregation_version": AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION,
+                }
+            )
+            done_windows += 1
+            if progress_label is not None and total_windows:
+                next_progress_pct = _emit_progress_5pct(
+                    label=f"{progress_label}: targeted 1s flow",
+                    done=done_windows,
+                    total=total_windows,
+                    started_at=started_at,
+                    next_progress_pct=next_progress_pct,
+                )
+
+    symbols_to_materialize = sorted(merged_windows_by_symbol)
+    if symbols_to_materialize and target_timeframes:
+        materialize = materialize_subminute_entry_caches(
+            cache_dir=subminute_configs[0].lab_config.cache_dir,
+            target_timeframes=sorted(target_timeframes, key=_timeframe_to_milliseconds),
+            symbols=symbols_to_materialize,
+            overwrite=False,
+            progress_label=f"{progress_label}: materialize subminute flow" if progress_label else None,
+        )
+    else:
+        materialize = pd.DataFrame()
+    discovery = pd.DataFrame(discovery_rows)
+    backfill = pd.DataFrame(backfill_rows)
+    if not discovery.empty:
+        backfill = pd.concat([discovery.assign(symbol="__coarse_scan__"), backfill], ignore_index=True, sort=False)
+    return backfill, materialize
 
 
 def build_entry_cache_coverage(
@@ -2125,9 +2374,20 @@ def collect_pair_anomaly_rows(
     symbols: Iterable[str] | None = None,
     progress_label: str | None = None,
     include_derivatives_context: bool = True,
+    auto_targeted_flow_backfill: bool = True,
 ) -> pd.DataFrame:
     setup_timeframe = _effective_setup_timeframe(config)
     entry_timeframe = _effective_entry_timeframe(config)
+    if (
+        auto_targeted_flow_backfill
+        and entry_timeframe != setup_timeframe
+        and 0 < _timeframe_to_milliseconds(entry_timeframe) < 60_000
+    ):
+        ensure_targeted_subminute_flow_cache_for_configs(
+            [config],
+            symbols=symbols,
+            progress_label=progress_label or "anomaly targeted flow",
+        )
     entry_cache_timeframe = _resolve_entry_cache_timeframe(config.lab_config.cache_dir, entry_timeframe)
     lab_config = config.lab_config
     end_ms = lab_config.end_timestamp_ms
@@ -2295,12 +2555,19 @@ def collect_pair_anomaly_rows_for_configs(
     symbols: Iterable[str] | None = None,
     progress_label: str | None = None,
     include_derivatives_context: bool = True,
+    auto_targeted_flow_backfill: bool = True,
 ) -> dict[tuple[str, str], pd.DataFrame]:
     """Collect pair candidates in one symbol-major pass across multiple TF sets."""
 
     resolved_configs = [_apply_red_flag_profile(config) for config in configs]
     if not resolved_configs:
         return {}
+    if auto_targeted_flow_backfill:
+        ensure_targeted_subminute_flow_cache_for_configs(
+            resolved_configs,
+            symbols=symbols,
+            progress_label=progress_label or "anomaly targeted flow",
+        )
 
     wanted_symbols = set(_normalized_symbol_tuple(symbols))
     states: list[dict[str, object]] = []
@@ -5511,11 +5778,24 @@ def run_anomaly_strategy_backtest(
             progress_label="anomaly candidates: oi context refresh",
         )
     elif _effective_entry_timeframe(config) != _effective_setup_timeframe(config):
+        targeted_flow_backfill, targeted_flow_materialize = ensure_targeted_subminute_flow_cache_for_configs(
+            [config],
+            symbols=symbols,
+            progress_label="anomaly targeted flow",
+        )
+        _write_artifact_frames(
+            [
+                (output_dir / "targeted_flow_backfill.csv", targeted_flow_backfill),
+                (output_dir / "targeted_flow_materialize.csv", targeted_flow_materialize),
+            ],
+            progress_label="anomaly artifacts: targeted flow",
+        )
         candidates = collect_pair_anomaly_rows(
             config,
             symbols=symbols,
             progress_label="anomaly candidates",
             include_derivatives_context=derivatives_context_fetcher is None,
+            auto_targeted_flow_backfill=False,
         )
     else:
         candidates = collect_anomaly_lab_rows(
