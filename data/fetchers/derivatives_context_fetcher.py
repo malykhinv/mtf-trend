@@ -22,6 +22,7 @@ class DerivativesContextSpec:
     path_parts: tuple[str, ...]
     columns: tuple[str, ...]
     interval_ms: int
+    availability_lag_ms: int
     period: str = "5m"
     limit: int = 500
 
@@ -34,51 +35,58 @@ DERIVATIVES_CONTEXT_FETCH_SPECS: tuple[DerivativesContextSpec, ...] = (
     DerivativesContextSpec(
         name="funding",
         path_parts=("funding_rate",),
-        columns=("timestamp", "funding_rate"),
+        columns=("timestamp", "available_timestamp_ms", "funding_rate"),
         interval_ms=DERIVATIVES_CONTEXT_8H_MS,
+        availability_lag_ms=0,
         period="8h",
         limit=1000,
     ),
     DerivativesContextSpec(
         name="premium",
         path_parts=("premium_index", "5m"),
-        columns=("timestamp", "open", "high", "low", "close"),
+        columns=("timestamp", "available_timestamp_ms", "open", "high", "low", "close"),
         interval_ms=DERIVATIVES_CONTEXT_5M_MS,
+        availability_lag_ms=DERIVATIVES_CONTEXT_5M_MS,
         period="5m",
     ),
     DerivativesContextSpec(
         name="mark",
         path_parts=("mark_price", "1m"),
-        columns=("timestamp", "open", "high", "low", "close"),
+        columns=("timestamp", "available_timestamp_ms", "open", "high", "low", "close"),
         interval_ms=DERIVATIVES_CONTEXT_1M_MS,
+        availability_lag_ms=DERIVATIVES_CONTEXT_1M_MS,
         period="1m",
     ),
     DerivativesContextSpec(
         name="global_ls",
         path_parts=("global_long_short_account_ratio", "5m"),
-        columns=("timestamp", "long_short_ratio", "long_account", "short_account"),
+        columns=("timestamp", "available_timestamp_ms", "long_short_ratio", "long_account", "short_account"),
         interval_ms=DERIVATIVES_CONTEXT_5M_MS,
+        availability_lag_ms=DERIVATIVES_CONTEXT_5M_MS,
         period="5m",
     ),
     DerivativesContextSpec(
         name="top_account_ls",
         path_parts=("top_long_short_account_ratio", "5m"),
-        columns=("timestamp", "long_short_ratio", "long_account", "short_account"),
+        columns=("timestamp", "available_timestamp_ms", "long_short_ratio", "long_account", "short_account"),
         interval_ms=DERIVATIVES_CONTEXT_5M_MS,
+        availability_lag_ms=DERIVATIVES_CONTEXT_5M_MS,
         period="5m",
     ),
     DerivativesContextSpec(
         name="top_position_ls",
         path_parts=("top_long_short_position_ratio", "5m"),
-        columns=("timestamp", "long_short_ratio", "long_account", "short_account"),
+        columns=("timestamp", "available_timestamp_ms", "long_short_ratio", "long_account", "short_account"),
         interval_ms=DERIVATIVES_CONTEXT_5M_MS,
+        availability_lag_ms=DERIVATIVES_CONTEXT_5M_MS,
         period="5m",
     ),
     DerivativesContextSpec(
         name="taker_ls",
         path_parts=("taker_long_short_ratio", "5m"),
-        columns=("timestamp", "buy_sell_ratio", "buy_vol", "sell_vol"),
+        columns=("timestamp", "available_timestamp_ms", "buy_sell_ratio", "buy_vol", "sell_vol"),
         interval_ms=DERIVATIVES_CONTEXT_5M_MS,
+        availability_lag_ms=DERIVATIVES_CONTEXT_5M_MS,
         period="5m",
     ),
 )
@@ -111,35 +119,49 @@ class DerivativesContextFetcher:
         return path / "data.parquet"
 
     @staticmethod
-    def _prepare_frame(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.DataFrame:
+    def _empty_prepared_frame(columns: tuple[str, ...]) -> pd.DataFrame:
+        return pd.DataFrame(columns=list(columns))
+
+    @classmethod
+    def _prepare_frame(
+        cls,
+        frame: pd.DataFrame,
+        spec: DerivativesContextSpec,
+        *,
+        drop_legacy_without_availability: bool = False,
+    ) -> pd.DataFrame:
+        columns = spec.columns
         if frame.empty:
-            return pd.DataFrame(columns=list(columns))
+            return cls._empty_prepared_frame(columns)
         missing = [column for column in columns if column not in frame.columns]
         if missing:
+            if drop_legacy_without_availability and missing == ["available_timestamp_ms"]:
+                return cls._empty_prepared_frame(columns)
             raise ValueError(f"derivatives_context_missing_columns:{','.join(missing)}")
         prepared = frame.loc[:, list(columns)].copy()
         for column in columns:
             prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
-        prepared.dropna(subset=["timestamp"], inplace=True)
+        prepared.dropna(subset=["timestamp", "available_timestamp_ms"], inplace=True)
+        prepared = prepared.loc[prepared["available_timestamp_ms"].ge(prepared["timestamp"])]
         prepared.drop_duplicates("timestamp", keep="last", inplace=True)
-        prepared.sort_values("timestamp", inplace=True)
+        prepared.sort_values(["timestamp", "available_timestamp_ms"], inplace=True)
         prepared.reset_index(drop=True, inplace=True)
         return prepared
 
     def _save_incremental(self, symbol: str, spec: DerivativesContextSpec, incoming: pd.DataFrame) -> int:
-        incoming = self._prepare_frame(incoming, spec.columns)
+        incoming = self._prepare_frame(incoming, spec)
         if incoming.empty:
             return 0
         path = self._path(symbol, spec)
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.exists():
-            existing = self._prepare_frame(pd.read_parquet(path), spec.columns)
+            existing = self._prepare_frame(pd.read_parquet(path), spec, drop_legacy_without_availability=True)
             previous_count = len(existing)
             merged = pd.concat([existing, incoming], ignore_index=True)
         else:
             previous_count = 0
             merged = incoming
-        merged = self._prepare_frame(merged, spec.columns)
+        merged = self._prepare_frame(merged, spec)
         tmp_path = path.with_suffix(path.suffix + ".tmp")
         merged.to_parquet(tmp_path, index=False)
         written = pd.read_parquet(tmp_path)
@@ -152,7 +174,7 @@ class DerivativesContextFetcher:
         path = self._path(symbol, spec)
         if not path.exists():
             return None, None
-        frame = self._prepare_frame(pd.read_parquet(path), spec.columns)
+        frame = self._prepare_frame(pd.read_parquet(path), spec, drop_legacy_without_availability=True)
         if frame.empty:
             return None, None
         timestamps = frame["timestamp"].dropna()

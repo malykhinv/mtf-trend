@@ -28,6 +28,42 @@ Risk:
 Low for live/backtest signal logic: `build_anomaly_signals()` does not read `future_*` or `outcome_label`. Near the right edge, closed-TF runs may now produce additional candidates/signals that are later skipped by execution if no future execution candles exist, which is more honest than silently hiding them during candidate collection.
 ```
 
+## 2026-05-22 - P383 proposed - make derivatives context availability-aware
+
+Files:
+
+```text
+data/exchanges/ccxt_futures_client.py
+data/fetchers/derivatives_context_fetcher.py
+research_tools/anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Close the critical p.13 derivatives-context lookahead gap: funding/premium/mark/long-short/taker context must be selected by an explicit availability timestamp, not merely by the exchange period timestamp.
+```
+
+Change:
+
+```text
+Derivatives context fetch now writes `available_timestamp_ms` for all context sources. Mark/premium klines use raw Binance close time + 1ms and are dropped if unavailable by the request/fetch cutoff. Long-short and taker ratio rows use a conservative period timestamp + period lag. Funding rows use fundingTime as their availability timestamp. Backtest enrichment refuses legacy context caches that lack `available_timestamp_ms` and selects context rows using `available_timestamp_ms <= decision_available_timestamp_ms`.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges data/fetchers research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium operationally: old derivatives context caches without `available_timestamp_ms` are no longer trusted by backtest enrichment and will need to be rebuilt. This is intentional; old caches may contain partial current context candles or ambiguous period timestamps.
+```
+
 ## 2026-05-22 - P382 proposed - make OI context availability-aware
 
 Files:

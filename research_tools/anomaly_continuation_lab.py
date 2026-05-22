@@ -73,6 +73,7 @@ DERIVATIVES_CONTEXT_SPECS: tuple[dict[str, object], ...] = (
         "value_columns": ("funding_rate",),
         "lookback_bars": (1, 3),
         "expected_interval_ms": FUNDING_EXPECTED_INTERVAL_MS,
+        "availability_lag_ms": 0,
     },
     {
         "prefix": "premium",
@@ -988,6 +989,8 @@ def _empty_context_columns(spec: dict[str, object]) -> dict[str, object]:
         f"{prefix}_status": "not_checked",
         f"{prefix}_timestamp_ms": np.nan,
         f"{prefix}_timestamp_utc": "",
+        f"{prefix}_available_timestamp_ms": np.nan,
+        f"{prefix}_available_timestamp_utc": "",
         f"{prefix}_asof_timestamp_ms": np.nan,
         f"{prefix}_asof_timestamp_utc": "",
         f"{prefix}_age_ms": np.nan,
@@ -1019,14 +1022,21 @@ def _read_context_frame(cache_dir: Path, symbol: str, spec: dict[str, object]) -
     missing = [column for column in required if column not in frame.columns]
     if missing:
         return None, "missing_column:" + ",".join(missing)
-    selected = ["timestamp", *[str(column) for column in spec["value_columns"] if str(column) in frame.columns]]
+    if "available_timestamp_ms" not in frame.columns:
+        return None, "missing_available_timestamp"
+    selected = [
+        "timestamp",
+        "available_timestamp_ms",
+        *[str(column) for column in spec["value_columns"] if str(column) in frame.columns],
+    ]
     selected_frame = frame.loc[:, selected].copy()
     for column in selected:
         selected_frame[column] = pd.to_numeric(selected_frame[column], errors="coerce")
-    selected_frame.dropna(subset=["timestamp"], inplace=True)
+    selected_frame.dropna(subset=["timestamp", "available_timestamp_ms"], inplace=True)
+    selected_frame = selected_frame.loc[selected_frame["available_timestamp_ms"].ge(selected_frame["timestamp"])]
     if selected_frame.empty:
         return None, "empty_frame"
-    selected_frame.sort_values("timestamp", inplace=True)
+    selected_frame.sort_values(["available_timestamp_ms", "timestamp"], inplace=True)
     selected_frame.drop_duplicates("timestamp", keep="last", inplace=True)
     selected_frame.reset_index(drop=True, inplace=True)
     return selected_frame, "ok"
@@ -1041,7 +1051,6 @@ def _enrich_symbol_context(
     rows: list[dict[str, object]] = []
     prefix = str(spec["prefix"])
     expected_interval_ms = int(spec["expected_interval_ms"])
-    availability_lag_ms = int(spec.get("availability_lag_ms", 0) or 0)
     value_columns = tuple(str(column) for column in spec["value_columns"])
     lookback_bars = tuple(int(bars) for bars in spec["lookback_bars"])
     if frame is None:
@@ -1052,6 +1061,7 @@ def _enrich_symbol_context(
         return rows
 
     timestamps = frame["timestamp"].astype(np.int64).to_numpy()
+    available_timestamps = frame["available_timestamp_ms"].astype(np.int64).to_numpy()
     value_arrays = {column: frame[column].astype(float).to_numpy() for column in value_columns if column in frame.columns}
     for _, candidate in candidates.iterrows():
         values = _empty_context_columns(spec)
@@ -1061,19 +1071,25 @@ def _enrich_symbol_context(
             rows.append(values)
             continue
         decision_ts_int = int(decision_ts)
-        lookup_ts_int = decision_ts_int - availability_lag_ms
-        context_idx = int(np.searchsorted(timestamps, lookup_ts_int, side="right") - 1)
+        decision_available_ts = candidate.get("decision_available_timestamp_ms")
+        if pd.isna(decision_available_ts):
+            decision_available_ts_int = decision_ts_int
+        else:
+            decision_available_ts_int = int(decision_available_ts)
+        context_idx = int(np.searchsorted(available_timestamps, decision_available_ts_int, side="right") - 1)
         if context_idx < 0:
             values[f"{prefix}_status"] = "no_context_before_decision"
             rows.append(values)
             continue
 
         context_ts = int(timestamps[context_idx])
-        asof_ts = context_ts + availability_lag_ms
-        age_ms = decision_ts_int - asof_ts
+        asof_ts = int(available_timestamps[context_idx])
+        age_ms = decision_available_ts_int - asof_ts
         values[f"{prefix}_status"] = "stale_asof" if age_ms > expected_interval_ms else "ok"
         values[f"{prefix}_timestamp_ms"] = context_ts
         values[f"{prefix}_timestamp_utc"] = _timestamp_to_utc(context_ts)
+        values[f"{prefix}_available_timestamp_ms"] = asof_ts
+        values[f"{prefix}_available_timestamp_utc"] = _timestamp_to_utc(asof_ts)
         values[f"{prefix}_asof_timestamp_ms"] = asof_ts
         values[f"{prefix}_asof_timestamp_utc"] = _timestamp_to_utc(asof_ts)
         values[f"{prefix}_age_ms"] = int(age_ms)

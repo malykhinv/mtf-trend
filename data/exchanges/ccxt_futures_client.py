@@ -1330,13 +1330,31 @@ class CcxtFuturesClient(ExchangeClient):
         return payloads
 
     @staticmethod
+    def _period_to_milliseconds(period: str) -> int:
+        match = re.fullmatch(r"(\d+)([smhdw])", str(period))
+        if match is None:
+            raise ValueError(f"unsupported_period:{period}")
+        unit_ms = {
+            "s": 1000,
+            "m": 60 * 1000,
+            "h": 60 * 60 * 1000,
+            "d": 24 * 60 * 60 * 1000,
+            "w": 7 * 24 * 60 * 60 * 1000,
+        }
+        return int(match.group(1)) * unit_ms[match.group(2)]
+
+    @staticmethod
     def _normalize_binance_context_kline_rows(rows: list[object]) -> pd.DataFrame:
         normalized_rows: list[list[object]] = []
         for row in rows:
-            if not isinstance(row, (list, tuple)) or len(row) < 5:
+            if not isinstance(row, (list, tuple)) or len(row) < 7:
                 continue
-            normalized_rows.append([row[0], row[1], row[2], row[3], row[4]])
-        return pd.DataFrame(normalized_rows, columns=["timestamp", "open", "high", "low", "close"])
+            close_timestamp_ms = row[6]
+            normalized_rows.append([row[0], close_timestamp_ms, row[1], row[2], row[3], row[4]])
+        return pd.DataFrame(
+            normalized_rows,
+            columns=["timestamp", "close_timestamp_ms", "open", "high", "low", "close"],
+        )
 
     @staticmethod
     def _normalize_binance_context_ratio_rows(rows: list[object]) -> pd.DataFrame:
@@ -1438,9 +1456,20 @@ class CcxtFuturesClient(ExchangeClient):
             return frame
         for column in frame.columns:
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
+        period_ms = self._period_to_milliseconds(period) if source in {"premium", "mark"} else 0
+        if source not in {"premium", "mark", "funding"}:
+            period_ms = self._period_to_milliseconds(period)
+        if "close_timestamp_ms" in frame.columns:
+            frame["available_timestamp_ms"] = frame["close_timestamp_ms"] + 1
+            frame.drop(columns=["close_timestamp_ms"], inplace=True)
+        elif source == "funding":
+            frame["available_timestamp_ms"] = frame["timestamp"]
+        else:
+            frame["available_timestamp_ms"] = frame["timestamp"] + period_ms
+        availability_cutoff_ms = min(int(end_timestamp_ms), int(time.time() * 1000))
         frame = frame.loc[
             (frame["timestamp"] >= int(start_timestamp_ms))
-            & (frame["timestamp"] <= int(end_timestamp_ms))
+            & (frame["available_timestamp_ms"] <= availability_cutoff_ms)
         ]
         return frame.drop_duplicates("timestamp", keep="last").sort_values("timestamp").reset_index(drop=True)
 

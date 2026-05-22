@@ -8,6 +8,16 @@ P379 proposed after p.6 lookahead audit. The closed setup candidate collector no
 
 Next validation: apply P379 after P378, run compileall, then run a small closed-TF backtest near an explicit `--end-timestamp-ms`. Check that candidates near the right edge appear with `future_label_status=insufficient_future_window` instead of being silently dropped.
 
+## 2026-05-22 - P383 derivatives context availability guard
+
+Current commit: UNKNOWN.
+
+P383 proposed after p.13 audit. Critical finding: derivatives context rows were selected with period timestamp semantics. Premium/mark klines could be saved while still forming, and long-short/taker rows had no explicit `available_timestamp_ms`; downstream enrichment used a lag approximation over `timestamp` instead of a cache-level known-time contract.
+
+Change: derivatives context caches now store `available_timestamp_ms`. Premium/mark rows derive it from raw Binance close time + 1ms and are dropped until available. Ratio rows get conservative period-lag availability, funding uses fundingTime. Backtest context enrichment now rejects legacy context caches without availability metadata and selects rows using `available_timestamp_ms <= decision_available_timestamp_ms`.
+
+Next validation: rebuild derivatives context caches for a small explicit symbol set, run a small red-flag/profile backtest, and confirm market_context_status has no `missing_available_timestamp` rows and boundary decisions select the previous available context row.
+
 ## 2026-05-22 - P382 OI context availability guard
 
 Current commit: UNKNOWN.
