@@ -106,10 +106,14 @@ Backtest execution latency contract:
 
 ```text
 default market entry remains next LTF candle open after the decision (`market_entry_latency_candles=1`)
+default anomaly-lab portfolio cap is live-like `max_open_positions=1`; same-symbol overlap and global cap are evaluated at actual simulated entry time
+default anomaly-lab fill model applies adverse long-entry slippage 0.0005 and adverse long-exit slippage 0.0005 in addition to fees
+trade artifacts must expose raw entry/exit prices, slippage-adjusted fill prices, fill model labels, and portfolio state at entry
 optional latency mode has one public flag: `--latency true`
 for the current live2 1m/5s contract, latency mode compares 0ms versus 5000ms extra executable-price stress by default
 latency mode must never fabricate 1s fills; missing 1s cache should be backfilled from real aggTrades during backtest, and failed backfill remains an execution skip
 latency-grid artifacts are research stress tests, not a live trading rule by themselves
+every anomaly-lab run must write anomaly_backtest_honesty_report.csv; all 28 checklist nodes should be ok/0 failures before treating a run as usable for edge analysis
 ```
 
 Live execution contract:

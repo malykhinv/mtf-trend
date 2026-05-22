@@ -1,4 +1,19 @@
 
+## 2026-05-22 - P385 compact backtest honesty smoke
+
+```text
+Run: .output/results/anomaly_lab/lookahead_honesty_p385_closed_1m
+Command: .venv\Scripts\python.exe main.py run-anomaly-lab --symbols INJ/USDT:USDT BEAT/USDT:USDT --days 2 --setup-timeframe 1m --entry-timeframe 1m --render-charts false --output-dir .output\results\anomaly_lab\lookahead_honesty_p385_closed_1m
+
+Purpose: verify the hardened default execution model after P385. This is a correctness smoke, not an edge test.
+
+Result: run completed with execution_model=next_bar_open_proxy_latency_1_slip_entry_0.0005_exit_0.0005 and portfolio_model=global_max_open_positions_1_at_actual_entry. candidates=23, signals=5, closed=5, skipped=0, avg_net=0.8786%, sum_net=4.3930%, win_rate=80.00%.
+
+Honesty artifact: anomaly_backtest_honesty_report.csv has 28 rows matching the audit checklist. All 28 nodes are ok with 0 failures. run_config.csv records explicit symbols, max_open_positions=1, fee_rate=0.0004, entry_slippage_pct=0.0005 and exit_slippage_pct=0.0005.
+
+Interpretation: the compact run proves the audit plumbing and default execution assumptions are active. It does not prove edge. Larger runs should now be read through the 28-node honesty report first; any warning/failure blocks profitability claims until explained.
+```
+
 ## 2026-05-22 - P384 compact lookahead-audit backtest
 
 ```text

@@ -21,6 +21,7 @@ from config import AppConfig
 from constants import (
     DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
     DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT,
+    DEFAULT_SLIPPAGE,
     OI_STALE_MIN_OBSERVATIONS,
     OI_STALE_RATIO_THRESHOLD,
     QUALITY_OI_LEADING_GAPS_ISSUE,
@@ -1402,7 +1403,10 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 trail_buffer_r=float(args.trail_buffer_r),
                 exit_rule=str(getattr(args, "exit_rule", "structural_trail")),
                 max_hold_candles=int(args.max_hold_candles),
+                max_open_positions=int(getattr(args, "max_open_positions", 1)),
                 fee_rate=float(args.fee_rate),
+                entry_slippage_pct=float(getattr(args, "entry_slippage_pct", DEFAULT_SLIPPAGE)),
+                exit_slippage_pct=float(getattr(args, "exit_slippage_pct", DEFAULT_SLIPPAGE)),
             )
 
         def _run_timeframe_pair(

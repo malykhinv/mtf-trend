@@ -14,6 +14,7 @@ from constants import (
     DEFAULT_HOURLY_LEVELS_DAYS,
     DEFAULT_MIN_VOLUME_USD,
     DEFAULT_QUALITY_REPORT_OUTPUT_FILE,
+    DEFAULT_SLIPPAGE,
     DEFAULT_UPDATE_DAYS,
 )
 
@@ -181,7 +182,10 @@ def build_parser() -> argparse.ArgumentParser:
         default="structural_trail",
     )
     anomaly_lab.add_argument("--max-hold-candles", type=_positive_int_for("--max-hold-candles"), default=240)
+    anomaly_lab.add_argument("--max-open-positions", type=_positive_int_for("--max-open-positions"), default=1)
     anomaly_lab.add_argument("--fee-rate", type=float, default=0.0004)
+    anomaly_lab.add_argument("--entry-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
+    anomaly_lab.add_argument("--exit-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
     anomaly_lab.add_argument("--render-charts", type=_str_to_bool, default=True)
     anomaly_lab.add_argument("--run-entry-grid", type=_str_to_bool, default=False)
     anomaly_lab.add_argument("--grid-oi3-values", default="0.01,0.02,0.03")

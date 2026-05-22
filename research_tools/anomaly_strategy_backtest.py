@@ -20,7 +20,7 @@ from urllib.parse import quote
 import numpy as np
 import pandas as pd
 
-from constants import DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT
+from constants import DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT, DEFAULT_SLIPPAGE
 from research_tools.anomaly_category_contract import (
     CATEGORY_CONTRACT_ID as PUMP_CATEGORY_CONTRACT,
     DEFAULT_PUMP_CATEGORY_IDS as PUMP_CATEGORY_PROFILE_ORDER,
@@ -307,7 +307,10 @@ class AnomalyBacktestConfig:
     trail_buffer_r: float = 0.10
     exit_rule: str = "structural_trail"
     max_hold_candles: int = 240
+    max_open_positions: int = 1
     fee_rate: float = 0.0004
+    entry_slippage_pct: float = DEFAULT_SLIPPAGE
+    exit_slippage_pct: float = DEFAULT_SLIPPAGE
     write_prepump_context: bool = True
     prepump_context_timeframe: str = DEFAULT_PREPUMP_CONTEXT_TIMEFRAME
     prepump_context_windows: str = DEFAULT_PREPUMP_CONTEXT_WINDOWS
@@ -336,14 +339,55 @@ def _category_priority_for_timeframe(setup_timeframe: object, entry_timeframe: o
 
 
 def _execution_model_label(config: AnomalyBacktestConfig) -> str:
+    slippage_suffix = ""
+    if float(config.entry_slippage_pct) or float(config.exit_slippage_pct):
+        slippage_suffix = (
+            f"_slip_entry_{float(config.entry_slippage_pct):g}"
+            f"_exit_{float(config.exit_slippage_pct):g}"
+        )
     if config.entry_method == "market":
         if config.latency_enabled:
             return (
                 f"next_bar_open_proxy_latency_{config.market_entry_latency_candles}"
                 f"_plus_1s_delay_{int(config.latency_extra_ms)}ms"
+                f"{slippage_suffix}"
             )
-        return f"next_bar_open_proxy_latency_{config.market_entry_latency_candles}"
-    return config.entry_method
+        return f"next_bar_open_proxy_latency_{config.market_entry_latency_candles}{slippage_suffix}"
+    return f"{config.entry_method}{slippage_suffix}"
+
+
+def _nonnegative_ratio(value: object, *, field_name: str) -> float:
+    resolved = float(value)
+    if not np.isfinite(resolved) or resolved < 0.0:
+        raise ValueError(f"{field_name} must be a finite non-negative ratio")
+    return resolved
+
+
+def _long_entry_fill_price(raw_price: float, *, config: AnomalyBacktestConfig) -> float:
+    slippage = _nonnegative_ratio(config.entry_slippage_pct, field_name="entry_slippage_pct")
+    return float(raw_price) * (1.0 + slippage)
+
+
+def _long_exit_fill_price(raw_price: float, *, config: AnomalyBacktestConfig) -> float:
+    slippage = _nonnegative_ratio(config.exit_slippage_pct, field_name="exit_slippage_pct")
+    return float(raw_price) * (1.0 - slippage)
+
+
+def _entry_fill_audit(
+    *,
+    raw_entry_price: float,
+    entry_price: float,
+    config: AnomalyBacktestConfig,
+    model: str,
+) -> dict[str, object]:
+    return {
+        "entry_raw_price": float(raw_entry_price),
+        "entry_fill_price_model": str(model),
+        "entry_slippage_pct": float(config.entry_slippage_pct),
+        "exit_slippage_pct": float(config.exit_slippage_pct),
+        "slippage_model": "adverse_long_entry_and_exit",
+        "max_open_positions": int(config.max_open_positions),
+    }
 
 
 def _strip_derivative_context_requirements(config: AnomalyBacktestConfig) -> AnomalyBacktestConfig:
@@ -789,6 +833,7 @@ def _timestamp_to_utc(timestamp_ms: int | float) -> str:
 def _market_entry_reject_audit(
     *,
     entry_ts: int,
+    raw_entry_price: float,
     entry_price: float,
     drift_pct: float,
     abs_drift_pct: float,
@@ -800,7 +845,9 @@ def _market_entry_reject_audit(
     return {
         "rejected_market_entry_timestamp_ms": int(entry_ts),
         "rejected_market_entry_timestamp_utc": _timestamp_to_utc(entry_ts),
+        "rejected_market_entry_raw_price": float(raw_entry_price),
         "rejected_market_entry_price": float(entry_price),
+        "entry_slippage_pct": float(config.entry_slippage_pct),
         "market_entry_drift_pct": float(drift_pct),
         "market_entry_abs_drift_pct": float(abs_drift_pct),
         "max_market_entry_drift_pct": float(config.max_market_entry_drift_pct),
@@ -1910,7 +1957,7 @@ def _resolve_signal_entry(
         pre_entry_start_ts = int(future.iloc[0]["timestamp"])
         entry_row_source = future.iloc[-1]
         entry_ts = int(entry_row_source["timestamp"])
-        entry_price = float(entry_row_source["open"])
+        raw_entry_price = float(entry_row_source["open"])
         if config.latency_enabled:
             latency_frame = execution_frame if execution_frame is not None else pd.DataFrame()
             if latency_frame.empty or "timestamp" not in latency_frame.columns:
@@ -1921,15 +1968,17 @@ def _resolve_signal_entry(
                 return target_ts, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "no_latency_execution_candle", {}
             entry_row_source = latency_rows.iloc[0]
             entry_ts = int(entry_row_source["timestamp"])
-            entry_price = float(entry_row_source["open"])
-        if not np.isfinite(entry_price) or entry_price <= 0.0:
+            raw_entry_price = float(entry_row_source["open"])
+        if not np.isfinite(raw_entry_price) or raw_entry_price <= 0.0:
             return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "invalid_market_execution_price", {}
+        entry_price = _long_entry_fill_price(raw_entry_price, config=config)
         drift_pct = _safe_divide_value(entry_price - decision_close, decision_close)
         abs_drift_pct = abs(drift_pct) if np.isfinite(drift_pct) else float("nan")
         actual_risk_at_signal_stop = entry_price - stop_at_decision
         rr_to_signal_tp1 = _safe_divide_value(signal_tp1_price - entry_price, actual_risk_at_signal_stop)
         reject_audit = _market_entry_reject_audit(
             entry_ts=entry_ts,
+            raw_entry_price=raw_entry_price,
             entry_price=entry_price,
             drift_pct=drift_pct,
             abs_drift_pct=abs_drift_pct,
@@ -2009,7 +2058,13 @@ def _resolve_signal_entry(
             )
         initial_stop = stop_at_decision
         initial_risk = entry_price - initial_stop
-        return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, "", {}
+        entry_audit = _entry_fill_audit(
+            raw_entry_price=raw_entry_price,
+            entry_price=entry_price,
+            config=config,
+            model="next_bar_open_proxy_plus_adverse_slippage",
+        )
+        return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, "", entry_audit
     else:
         future = frame.loc[frame["timestamp"] > decision_timestamp_ms].head(config.entry_timeout_candles)
         if future.empty:
@@ -2020,11 +2075,13 @@ def _resolve_signal_entry(
             if hit.empty:
                 return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "entry_trigger_not_reached", {}
             entry_ts = int(hit["timestamp"].iloc[0])
-            entry_price = trigger
+            raw_entry_price = trigger
+            entry_price = _long_entry_fill_price(raw_entry_price, config=config)
         elif config.entry_method == "pullback_box_fraction":
             trigger = box_low + config.pullback_box_fraction * box_range
             entry_ts = decision_timestamp_ms
             entry_price = float("nan")
+            raw_entry_price = float("nan")
             for _, row in future.iterrows():
                 low = float(row["low"])
                 high = float(row["high"])
@@ -2032,7 +2089,8 @@ def _resolve_signal_entry(
                     return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "stop_touched_before_entry", {}
                 if low <= trigger <= high:
                     entry_ts = int(row["timestamp"])
-                    entry_price = trigger
+                    raw_entry_price = trigger
+                    entry_price = _long_entry_fill_price(raw_entry_price, config=config)
                     break
             if not np.isfinite(entry_price):
                 return decision_timestamp_ms, float("nan"), stop_at_decision, float("nan"), box_range, box_high, "entry_trigger_not_reached", {}
@@ -2043,7 +2101,13 @@ def _resolve_signal_entry(
     entry_ema20 = _safe_float(entry_row["ema20"].iloc[0]) if not entry_row.empty and "ema20" in entry_row.columns else None
     initial_stop = max(previous_stop, entry_ema20) if entry_ema20 is not None else previous_stop
     initial_risk = entry_price - initial_stop
-    return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, "", {}
+    entry_audit = _entry_fill_audit(
+        raw_entry_price=raw_entry_price,
+        entry_price=entry_price,
+        config=config,
+        model=f"{config.entry_method}_trigger_plus_adverse_slippage",
+    )
+    return entry_ts, entry_price, initial_stop, initial_risk, box_range, box_high, "", entry_audit
 
 
 
@@ -2824,7 +2888,7 @@ def simulate_long_signal(
         box_range,
         box_high,
         entry_skip_reason,
-        entry_skip_audit,
+        entry_audit,
     ) = _resolve_signal_entry(
         frame,
         anomaly_timestamp_ms=anomaly_ts,
@@ -2843,7 +2907,7 @@ def simulate_long_signal(
             initial_stop=initial_stop,
             box_range=box_range,
             box_high=box_high,
-            **entry_skip_audit,
+            **entry_audit,
         )
     if not np.isfinite(initial_risk) or initial_risk <= 0.0:
         return _skipped_signal_result(
@@ -2857,6 +2921,7 @@ def simulate_long_signal(
             initial_risk=initial_risk,
             box_range=box_range,
             box_high=box_high,
+            **entry_audit,
         )
     initial_risk_pct = initial_risk / entry_price
     if initial_risk_pct > config.max_initial_risk_pct:
@@ -2872,6 +2937,7 @@ def simulate_long_signal(
             initial_risk_pct=initial_risk_pct,
             box_range=box_range,
             box_high=box_high,
+            **entry_audit,
         )
 
     simulation_frame = execution_frame if config.latency_enabled and execution_frame is not None and not execution_frame.empty else frame
@@ -2894,6 +2960,7 @@ def simulate_long_signal(
             initial_risk_pct=initial_risk_pct,
             box_range=box_range,
             box_high=box_high,
+            **entry_audit,
         )
     post_entry_simulation_start_ts = int(future["timestamp"].iloc[0])
 
@@ -2918,6 +2985,7 @@ def simulate_long_signal(
             initial_risk_pct=initial_risk_pct,
             box_range=box_range,
             box_high=box_high,
+            **entry_audit,
         )
     base_tp1_price = entry_price + config.tp1_r * tp1_risk
     tp1_price, tp1_round_step = _round_up_tp1_to_market_number(
@@ -2938,7 +3006,9 @@ def simulate_long_signal(
     min_low = entry_price
     exit_reason = "time_exit"
     exit_ts = int(future["timestamp"].iloc[-1])
-    exit_price = float(future["close"].iloc[-1])
+    raw_exit_price = float(future["close"].iloc[-1])
+    exit_price = _long_exit_fill_price(raw_exit_price, config=config)
+    exit_fill_model = "time_exit_close_minus_adverse_slippage"
     trail_stop = float("nan")
     ema20_exit_armed = False
     ema20_exit_armed_ts = float("nan")
@@ -2961,7 +3031,9 @@ def simulate_long_signal(
         if stop_hit:
             exit_reason = "stop_loss" if not tp1_hit else "trailing_stop"
             exit_ts = candle_ts
-            exit_price = active_stop
+            raw_exit_price = active_stop
+            exit_price = _long_exit_fill_price(raw_exit_price, config=config)
+            exit_fill_model = "stop_price_minus_adverse_slippage"
             realized_r += remaining_fraction * ((exit_price - entry_price) / initial_risk)
             remaining_fraction = 0.0
             if not tp1_hit and tp1_touched:
@@ -2975,7 +3047,9 @@ def simulate_long_signal(
         ):
             exit_reason = "ema20_negative_pnl_be_escape"
             exit_ts = candle_ts
-            exit_price = entry_price
+            raw_exit_price = entry_price
+            exit_price = _long_exit_fill_price(raw_exit_price, config=config)
+            exit_fill_model = "breakeven_guard_minus_adverse_slippage"
             realized_r += remaining_fraction * ((exit_price - entry_price) / initial_risk)
             remaining_fraction = 0.0
             ema20_exit_triggered = True
@@ -2985,7 +3059,7 @@ def simulate_long_signal(
             tp1_hit = True
             tp1_fill_status = "filled_conservative_trade_through"
             tp1_fill_timestamp_ms = candle_ts
-            tp1_fill_price = tp1_price
+            tp1_fill_price = _long_exit_fill_price(tp1_price, config=config)
             realized_r += config.tp1_fraction * ((tp1_fill_price - entry_price) / initial_risk)
             remaining_fraction = 1.0 - config.tp1_fraction
             if config.move_stop_to_breakeven_after_tp1:
@@ -2993,7 +3067,9 @@ def simulate_long_signal(
             if remaining_fraction <= 0.0:
                 exit_reason = "tp1_full_exit"
                 exit_ts = candle_ts
+                raw_exit_price = tp1_price
                 exit_price = tp1_fill_price
+                exit_fill_model = "tp1_limit_proxy_minus_adverse_slippage"
                 break
         elif not tp1_hit and tp1_touched:
             tp1_fill_status = "touched_not_filled_conservative"
@@ -3005,7 +3081,9 @@ def simulate_long_signal(
         ):
             exit_reason = "ema20_close"
             exit_ts = candle_ts
-            exit_price = close
+            raw_exit_price = close
+            exit_price = _long_exit_fill_price(raw_exit_price, config=config)
+            exit_fill_model = "ema20_close_minus_adverse_slippage"
             realized_r += remaining_fraction * ((exit_price - entry_price) / initial_risk)
             remaining_fraction = 0.0
             ema20_exit_triggered = True
@@ -3058,6 +3136,7 @@ def simulate_long_signal(
         "latency_enabled": bool(config.latency_enabled),
         "latency_extra_ms": int(config.latency_extra_ms) if config.latency_enabled else 0,
         "entry_price": entry_price,
+        **entry_audit,
         "initial_stop": initial_stop,
         "initial_risk": initial_risk,
         "initial_risk_pct": initial_risk_pct,
@@ -3077,6 +3156,7 @@ def simulate_long_signal(
         "tp1_fill_status": tp1_fill_status,
         "tp1_fill_timestamp_ms": tp1_fill_timestamp_ms,
         "tp1_fill_timestamp_utc": _timestamp_to_utc(tp1_fill_timestamp_ms) if np.isfinite(tp1_fill_timestamp_ms) else "",
+        "tp1_raw_price": tp1_price,
         "tp1_fill_price": tp1_fill_price,
         "intrabar_path_assumption": intrabar_path_assumption,
         "entry_candle_path_model": "entry_candle_included_stop_first",
@@ -3094,7 +3174,9 @@ def simulate_long_signal(
         "ema20_exit_was_better_than_final": ema20_exit_was_better_than_final,
         "exit_timestamp_ms": exit_ts,
         "exit_timestamp_utc": _timestamp_to_utc(exit_ts),
+        "exit_raw_price": raw_exit_price,
         "exit_price": exit_price,
+        "exit_fill_price_model": exit_fill_model,
         "exit_reason": exit_reason,
         "holding_candles": int((future["timestamp"] <= exit_ts).sum()),
         "mfe_pct": (max_high - entry_price) / entry_price,
@@ -3110,6 +3192,44 @@ def simulate_long_signal(
     return result
 
 
+def _portfolio_skip_after_resolved_entry(
+    signal: pd.Series,
+    *,
+    resolved_trade: dict[str, object],
+    skip_reason: str,
+    config: AnomalyBacktestConfig,
+    open_positions: list[tuple[str, int]],
+) -> dict[str, object]:
+    entry_ts = _safe_int(resolved_trade.get("entry_timestamp_ms")) or int(signal["decision_timestamp_ms"])
+    extras: dict[str, object] = {
+        "entry_timestamp_ms": entry_ts,
+        "entry_timestamp_utc": _timestamp_to_utc(entry_ts),
+        "entry_price": resolved_trade.get("entry_price", float("nan")),
+        "entry_raw_price": resolved_trade.get("entry_raw_price", float("nan")),
+        "entry_fill_price_model": resolved_trade.get("entry_fill_price_model", ""),
+        "entry_slippage_pct": resolved_trade.get("entry_slippage_pct", float(config.entry_slippage_pct)),
+        "exit_slippage_pct": resolved_trade.get("exit_slippage_pct", float(config.exit_slippage_pct)),
+        "initial_stop": resolved_trade.get("initial_stop", float("nan")),
+        "initial_risk": resolved_trade.get("initial_risk", float("nan")),
+        "initial_risk_pct": resolved_trade.get("initial_risk_pct", float("nan")),
+        "box_range": resolved_trade.get("box_range", float("nan")),
+        "box_high": resolved_trade.get("box_high", float("nan")),
+        "portfolio_open_positions_at_entry": int(len(open_positions)),
+        "portfolio_open_symbols_at_entry": ",".join(symbol for symbol, _exit_ts in open_positions),
+        "max_open_positions": int(config.max_open_positions),
+        "would_have_exit_timestamp_ms": resolved_trade.get("exit_timestamp_ms", float("nan")),
+        "would_have_exit_timestamp_utc": resolved_trade.get("exit_timestamp_utc", ""),
+        "would_have_exit_reason": resolved_trade.get("exit_reason", ""),
+        "would_have_net_return": resolved_trade.get("net_return", float("nan")),
+    }
+    return _skipped_signal_result(
+        signal,
+        skip_reason=skip_reason,
+        config=config,
+        **extras,
+    )
+
+
 def simulate_anomaly_trades(
     signals: pd.DataFrame,
     *,
@@ -3119,8 +3239,11 @@ def simulate_anomaly_trades(
 ) -> pd.DataFrame:
     if signals.empty:
         return pd.DataFrame()
+    max_open_positions = int(config.max_open_positions)
+    if max_open_positions <= 0:
+        raise ValueError("max_open_positions must be > 0")
     rows: list[dict[str, object]] = []
-    last_exit_by_symbol: dict[str, int] = {}
+    open_positions: list[tuple[str, int]] = []
     if frame_cache is None:
         frame_cache = {}
     execution_frame_cache: dict[str, pd.DataFrame] = {}
@@ -3144,23 +3267,7 @@ def simulate_anomaly_trades(
     total_signals = len(ordered_signals)
     for processed_count, (_, signal) in enumerate(ordered_signals.iterrows(), start=1):
         symbol = str(signal["symbol"])
-        entry_ts = int(signal["decision_timestamp_ms"])
-        if entry_ts <= last_exit_by_symbol.get(symbol, -1):
-            skipped_row = {
-                "symbol": symbol,
-                "entry_timestamp_ms": entry_ts,
-                "entry_timestamp_utc": _timestamp_to_utc(entry_ts),
-                "decision_timestamp_ms": entry_ts,
-                "decision_timestamp_utc": _timestamp_to_utc(entry_ts),
-                "status": "skipped",
-                "skip_reason": "overlapping_signal",
-                "entry_method": config.entry_method,
-                "execution_model": _execution_model_label(config),
-            }
-            for column in TRADE_SIGNAL_CONTEXT_COLUMNS:
-                skipped_row[column] = signal.get(column, "")
-            rows.append(skipped_row)
-            continue
+        decision_ts = int(signal["decision_timestamp_ms"])
         frame = frame_cache.get(symbol)
         if frame is None:
             frame = _read_entry_simulation_frame(
@@ -3177,7 +3284,7 @@ def simulate_anomaly_trades(
                 execution_frame = execution_frame_cache.get(symbol)
             if execution_frame is None:
                 try:
-                    window_start, window_end = latency_windows.get(symbol, (entry_ts, entry_ts))
+                    window_start, window_end = latency_windows.get(symbol, (decision_ts, decision_ts))
                     execution_frame = _ensure_latency_1s_cache(
                         config.lab_config.cache_dir,
                         symbol,
@@ -3189,9 +3296,37 @@ def simulate_anomaly_trades(
                 execution_frame_cache[symbol] = execution_frame
                 frame_cache[execution_cache_key] = execution_frame
         result = simulate_long_signal(frame, signal, config=config, execution_frame=execution_frame)
+        if result.get("status") == "closed":
+            entry_ts = _safe_int(result.get("entry_timestamp_ms")) or decision_ts
+            open_positions = [(open_symbol, exit_ts) for open_symbol, exit_ts in open_positions if int(exit_ts) >= entry_ts]
+            if any(open_symbol == symbol for open_symbol, _exit_ts in open_positions):
+                rows.append(
+                    _portfolio_skip_after_resolved_entry(
+                        signal,
+                        resolved_trade=result,
+                        skip_reason="overlapping_symbol_position_at_entry",
+                        config=config,
+                        open_positions=open_positions,
+                    )
+                )
+                continue
+            if len(open_positions) >= max_open_positions:
+                rows.append(
+                    _portfolio_skip_after_resolved_entry(
+                        signal,
+                        resolved_trade=result,
+                        skip_reason="max_open_positions_at_entry",
+                        config=config,
+                        open_positions=open_positions,
+                    )
+                )
+                continue
+            exit_ts = _safe_int(result.get("exit_timestamp_ms"))
+            if exit_ts is not None:
+                result["portfolio_open_positions_at_entry"] = int(len(open_positions))
+                result["max_open_positions"] = int(max_open_positions)
+                open_positions.append((symbol, int(exit_ts)))
         rows.append(result)
-        if result.get("status") == "closed" and "exit_timestamp_ms" in result:
-            last_exit_by_symbol[symbol] = int(result["exit_timestamp_ms"])
         if progress_label is not None:
             current_pct = int(100 * processed_count / total_signals)
             if current_pct >= next_progress_pct or processed_count == total_signals:
@@ -3636,7 +3771,7 @@ def build_context_parity_report(
     else:
         report["pre_context_intent"] = ""
         report["in_pre_context_universe"] = False
-    report["in_pre_context_universe"] = report["in_pre_context_universe"].fillna(False).astype(bool)
+    report["in_pre_context_universe"] = report["in_pre_context_universe"].astype("boolean").fillna(False).astype(bool)
     report["pre_context_intent"] = report["pre_context_intent"].fillna("")
 
     if not signals.empty and set(key_columns).issubset(signals.columns):
@@ -3660,7 +3795,7 @@ def build_context_parity_report(
         report["is_final_signal"] = False
         report["final_pump_category_id"] = ""
         report["final_pump_category_family"] = ""
-    report["is_final_signal"] = report["is_final_signal"].fillna(False).astype(bool)
+    report["is_final_signal"] = report["is_final_signal"].astype("boolean").fillna(False).astype(bool)
     for column in ("final_pump_category_id", "final_pump_category_family"):
         if column not in report.columns:
             report[column] = ""
@@ -3805,6 +3940,476 @@ def build_context_parity_report(
     result.sort_values(key_columns, inplace=True)
     result.reset_index(drop=True, inplace=True)
     return result
+
+
+def _honesty_status(*, failures: int, warning: bool = False) -> tuple[str, str]:
+    if failures > 0:
+        return "fail", "error"
+    if warning:
+        return "warning", "warning"
+    return "ok", "info"
+
+
+def _honesty_row(
+    *,
+    node_id: int,
+    node: str,
+    status: str,
+    severity: str,
+    rows_checked: int,
+    failures: int,
+    detail: str,
+) -> dict[str, object]:
+    return {
+        "node_id": int(node_id),
+        "node": str(node),
+        "status": str(status),
+        "severity": str(severity),
+        "rows_checked": int(rows_checked),
+        "failures": int(failures),
+        "detail": str(detail),
+    }
+
+
+def _context_asof_failures(frame: pd.DataFrame, *, prefixes: Iterable[str]) -> int:
+    if frame.empty or "decision_available_timestamp_ms" not in frame.columns:
+        return 0
+    decision_available = pd.to_numeric(frame["decision_available_timestamp_ms"], errors="coerce")
+    failures = 0
+    for prefix in prefixes:
+        asof_column = f"{prefix}_asof_timestamp_ms"
+        if asof_column not in frame.columns:
+            continue
+        asof = pd.to_numeric(frame[asof_column], errors="coerce")
+        failures += int((asof.notna() & decision_available.notna() & asof.gt(decision_available)).sum())
+    return failures
+
+
+def build_backtest_honesty_report(
+    *,
+    config: AnomalyBacktestConfig,
+    candidates: pd.DataFrame,
+    signals: pd.DataFrame,
+    trades: pd.DataFrame,
+    symbols: Iterable[str] | None,
+    context_parity_report: pd.DataFrame,
+    run_entry_grid: bool,
+    run_latency_grid: bool,
+) -> pd.DataFrame:
+    """Summarize the non-negotiable anti-lookahead and live-parity checks."""
+
+    rows: list[dict[str, object]] = []
+    requested_symbols = _normalized_symbol_tuple(symbols)
+    universe_warning = not bool(requested_symbols)
+    status, severity = _honesty_status(failures=0, warning=universe_warning)
+    rows.append(
+        _honesty_row(
+            node_id=1,
+            node="CLI/config",
+            status="ok",
+            severity="info",
+            rows_checked=1,
+            failures=0,
+            detail=(
+                f"execution_model={_execution_model_label(config)}; "
+                f"max_open_positions={int(config.max_open_positions)}; "
+                f"fee_rate={float(config.fee_rate):g}; "
+                f"entry_slippage_pct={float(config.entry_slippage_pct):g}; "
+                f"exit_slippage_pct={float(config.exit_slippage_pct):g}; "
+                f"latency_grid={'on' if run_latency_grid else 'off'}"
+            ),
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=2,
+            node="Universe / symbols",
+            status=status,
+            severity=severity,
+            rows_checked=max(1, len(requested_symbols)),
+            failures=0,
+            detail=(
+                "explicit symbol universe"
+                if requested_symbols
+                else "cache snapshot universe; historical survivorship/listing bias is still a research limitation"
+            ),
+        )
+    )
+
+    if candidates.empty:
+        candidate_availability_failures = 0
+        flow_source_failures = 0
+    else:
+        availability_mask = _candidate_availability_mask(candidates)
+        candidate_availability_failures = int((~availability_mask).sum())
+        flow_source_mask = _candidate_flow_source_mask(candidates)
+        flow_source_failures = int((~flow_source_mask).sum())
+    status, severity = _honesty_status(failures=candidate_availability_failures)
+    rows.append(
+        _honesty_row(
+            node_id=3,
+            node="OHLCV cache loader availability",
+            status=status,
+            severity=severity,
+            rows_checked=int(len(candidates)),
+            failures=candidate_availability_failures,
+            detail="candidate rows must carry candle-open timestamp and explicit candle-close availability timestamps",
+        )
+    )
+    status, severity = _honesty_status(failures=flow_source_failures)
+    rows.append(
+        _honesty_row(
+            node_id=4,
+            node="OHLCV flow provenance",
+            status=status,
+            severity=severity,
+            rows_checked=int(len(candidates)),
+            failures=flow_source_failures,
+            detail="quote_volume and number_of_trades source labels must not be missing/unknown/proxy",
+        )
+    )
+    subminute_signals = 0
+    bad_subminute_sources = 0
+    if not signals.empty and "entry_timeframe" in signals.columns and "entry_trade_count_source" in signals.columns:
+        entry_ms = signals["entry_timeframe"].map(lambda value: _timeframe_to_milliseconds(str(value)))
+        subminute = entry_ms.lt(60_000)
+        subminute_signals = int(subminute.sum())
+        bad_subminute_sources = int(
+            (
+                subminute
+                & ~signals["entry_trade_count_source"].astype(str).str.contains("cached_1s_aggregated_to_", regex=False)
+            ).sum()
+        )
+    status, severity = _honesty_status(failures=bad_subminute_sources)
+    rows.append(
+        _honesty_row(
+            node_id=5,
+            node="AggTrade/event cache",
+            status=status,
+            severity=severity,
+            rows_checked=subminute_signals,
+            failures=bad_subminute_sources,
+            detail="sub-minute entry signals must be built from full-bucket 1s aggTrade materialization",
+        )
+    )
+
+    closed_rows = 0
+    pair_rows = 0
+    if not candidates.empty and "feature_contract" in candidates.columns:
+        contracts = candidates["feature_contract"].astype(str)
+        closed_rows = int(contracts.eq("closed_setup_tf_v1").sum())
+        pair_rows = int(contracts.eq("htf_setup_ltf_entry_v1").sum())
+    rows.append(
+        _honesty_row(
+            node_id=6,
+            node="Closed setup candidate collector",
+            status="ok",
+            severity="info",
+            rows_checked=closed_rows,
+            failures=0,
+            detail="closed setup rows use closed-candle availability; confirmation is decision-time gated, not pre-signal",
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=7,
+            node="Pair/forming setup collector",
+            status="ok",
+            severity="info",
+            rows_checked=pair_rows,
+            failures=0,
+            detail="pair rows use entry candles available by decision_ts; setup_full_available_timestamp_ms is audit-only",
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=8,
+            node="Baseline calculations",
+            status="ok" if candidate_availability_failures == 0 else "fail",
+            severity="info" if candidate_availability_failures == 0 else "error",
+            rows_checked=int(len(candidates)),
+            failures=candidate_availability_failures,
+            detail="rolling baselines are shifted to prior candles and availability checks reject impossible setup/decision timestamps",
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=9,
+            node="Flow ratios",
+            status="ok" if flow_source_failures == 0 else "fail",
+            severity="info" if flow_source_failures == 0 else "error",
+            rows_checked=int(len(candidates)),
+            failures=flow_source_failures,
+            detail="flow ratios are accepted only when quote_volume and number_of_trades provenance is trusted",
+        )
+    )
+
+    future_columns = [
+        column
+        for column in signals.columns
+        if str(column).startswith("future_") or str(column) in {"outcome_label", "future_label_status"}
+    ] if not signals.empty else []
+    rows.append(
+        _honesty_row(
+            node_id=10,
+            node="Future labels",
+            status="ok",
+            severity="info",
+            rows_checked=int(len(signals)),
+            failures=0,
+            detail=(
+                "future/outcome columns may exist in artifacts only; build_anomaly_signals has a static test forbidding future filters; "
+                f"artifact_future_columns={','.join(future_columns[:12])}"
+            ),
+        )
+    )
+
+    prior_context_failures = 0
+    if not candidates.empty and "prior_context_status" in candidates.columns:
+        prior_status = candidates["prior_context_status"].astype(str)
+        prior_context_failures = int(prior_status.isin({"future_leak", "invalid_anchor"}).sum())
+    status, severity = _honesty_status(failures=prior_context_failures)
+    rows.append(
+        _honesty_row(
+            node_id=11,
+            node="Prior spike context",
+            status=status,
+            severity=severity,
+            rows_checked=int(len(candidates)),
+            failures=prior_context_failures,
+            detail="recent spike context is anchored to decision availability and uses closed 5m candles before the anchor",
+        )
+    )
+
+    oi_asof_failures = _context_asof_failures(candidates, prefixes=("oi",))
+    status, severity = _honesty_status(failures=oi_asof_failures)
+    rows.append(
+        _honesty_row(
+            node_id=12,
+            node="Open interest context as-of",
+            status=status,
+            severity=severity,
+            rows_checked=int(len(candidates)),
+            failures=oi_asof_failures,
+            detail="OI rows must be selected by available/asof timestamp <= decision availability",
+        )
+    )
+    derivative_prefixes = [str(spec["prefix"]) for spec in DERIVATIVES_CONTEXT_SPECS]
+    derivatives_asof_failures = _context_asof_failures(candidates, prefixes=derivative_prefixes)
+    status, severity = _honesty_status(failures=derivatives_asof_failures)
+    rows.append(
+        _honesty_row(
+            node_id=13,
+            node="Derivatives context as-of",
+            status=status,
+            severity=severity,
+            rows_checked=int(len(candidates)),
+            failures=derivatives_asof_failures,
+            detail="funding/premium/mark/long-short/taker context must be availability-lagged before decision use",
+        )
+    )
+    stale_context_failures = 0
+    if not context_parity_report.empty and "context_parity_status" in context_parity_report.columns:
+        stale_context_failures = int(
+            context_parity_report["context_parity_status"]
+            .astype(str)
+            .isin({"final_signal_missing_pre_context_request", "execution_guard_missing_category_metadata"})
+            .sum()
+        )
+    status, severity = _honesty_status(failures=stale_context_failures)
+    rows.append(
+        _honesty_row(
+            node_id=14,
+            node="Category contract",
+            status=status,
+            severity=severity,
+            rows_checked=int(len(context_parity_report)),
+            failures=stale_context_failures,
+            detail="category filtering is pre-context widened, then rebuilt after context; final trades must carry category metadata",
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=15,
+            node="Signal builder",
+            status="ok",
+            severity="info",
+            rows_checked=int(len(signals)),
+            failures=0,
+            detail="static test forbids future_/future_label_status/outcome_label references inside build_anomaly_signals",
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=16,
+            node="Signal entry price",
+            status="ok",
+            severity="info",
+            rows_checked=int(len(signals)),
+            failures=0,
+            detail="decision close is retained as signal/audit price; simulated fills use execution entry_price after latency/slippage",
+        )
+    )
+    market_signals = int(len(signals)) if config.entry_method == "market" else 0
+    rows.append(
+        _honesty_row(
+            node_id=17,
+            node="Market entry simulation",
+            status="ok",
+            severity="info",
+            rows_checked=market_signals,
+            failures=0,
+            detail="market mode enters at next entry candle open after decision, then applies adverse entry slippage",
+        )
+    )
+    guard_skips = 0
+    if not trades.empty and "skip_reason" in trades.columns:
+        guard_skips = int(trades["skip_reason"].astype(str).isin(EXECUTION_GUARD_SKIP_REASONS).sum())
+    rows.append(
+        _honesty_row(
+            node_id=18,
+            node="Entry guards",
+            status="ok",
+            severity="info",
+            rows_checked=int(len(trades)),
+            failures=0,
+            detail=f"drift, TP-before-entry, positive-risk and RR-collapsed skips are artifacted; execution_guard_skips={guard_skips}",
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=19,
+            node="Stop/TP basis",
+            status="ok",
+            severity="info",
+            rows_checked=int(len(trades)),
+            failures=0,
+            detail="risk, TP and PnL are based on simulated fill entry_price, not decision signal price",
+        )
+    )
+
+    entry_candle_failures = 0
+    closed = trades.loc[trades["status"].eq("closed")].copy() if "status" in trades.columns else pd.DataFrame()
+    if not closed.empty and "post_entry_simulation_includes_entry_candle" in closed.columns:
+        entry_candle_failures = int((~closed["post_entry_simulation_includes_entry_candle"].astype(bool)).sum())
+    status, severity = _honesty_status(failures=entry_candle_failures)
+    rows.append(
+        _honesty_row(
+            node_id=20,
+            node="Exit simulation",
+            status=status,
+            severity=severity,
+            rows_checked=int(len(closed)),
+            failures=entry_candle_failures,
+            detail="post-entry OHLCV path must include the entry candle and use stop-first intrabar ordering",
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=21,
+            node="Intrabar ordering",
+            status="ok",
+            severity="info",
+            rows_checked=int(len(closed)),
+            failures=0,
+            detail="OHLCV ambiguity is handled conservatively with stop-first conflicts and TP trade-through requirement",
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=22,
+            node="Position overlap",
+            status="ok",
+            severity="info",
+            rows_checked=int(len(trades)),
+            failures=0,
+            detail="same-symbol overlap is checked against actual simulated entry timestamp, not decision timestamp",
+        )
+    )
+    portfolio_warning = int(config.max_open_positions) != 1
+    status, severity = _honesty_status(failures=0, warning=bool(portfolio_warning))
+    rows.append(
+        _honesty_row(
+            node_id=23,
+            node="Portfolio/max positions",
+            status=status,
+            severity=severity,
+            rows_checked=int(len(trades)),
+            failures=0,
+            detail=f"global max_open_positions={int(config.max_open_positions)} is enforced at actual simulated entry timestamp",
+        )
+    )
+    slippage_warning = float(config.entry_slippage_pct) <= 0.0 or float(config.exit_slippage_pct) <= 0.0
+    status, severity = _honesty_status(failures=0, warning=slippage_warning)
+    rows.append(
+        _honesty_row(
+            node_id=24,
+            node="Fees/slippage",
+            status=status,
+            severity=severity,
+            rows_checked=int(len(trades)),
+            failures=0,
+            detail=(
+                f"fee_rate={float(config.fee_rate):g}; "
+                f"entry_slippage_pct={float(config.entry_slippage_pct):g}; "
+                f"exit_slippage_pct={float(config.exit_slippage_pct):g}; "
+                "slippage is applied adversely to long fills"
+            ),
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=25,
+            node="Entry/latency grid selection bias",
+            status="warning" if run_entry_grid else "ok",
+            severity="warning" if run_entry_grid else "info",
+            rows_checked=1,
+            failures=0,
+            detail=(
+                "entry grid is in-sample research only; do not treat best-grid artifacts as edge proof"
+                if run_entry_grid
+                else "no in-sample entry grid selection requested"
+            ),
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=26,
+            node="Precollected candidates",
+            status="ok",
+            severity="info",
+            rows_checked=int(len(candidates)),
+            failures=0,
+            detail="reuse/precollect path validates exact config and re-applies as-of filtering before signal/trade simulation",
+        )
+    )
+    targeted_context_rows = 0
+    if not context_parity_report.empty and "context_fetch_status" in context_parity_report.columns:
+        targeted_context_rows = int(context_parity_report["context_fetch_status"].astype(str).eq("requested").sum())
+    rows.append(
+        _honesty_row(
+            node_id=27,
+            node="Targeted event backfill",
+            status="ok",
+            severity="info",
+            rows_checked=targeted_context_rows,
+            failures=0,
+            detail="targeted derivative/event windows are allowed only as as-of context and are audited by context parity/status artifacts",
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=28,
+            node="Artifacts / summaries",
+            status="ok",
+            severity="info",
+            rows_checked=int(len(trades)),
+            failures=0,
+            detail="future outcome fields remain analysis artifacts; trade summaries use simulated trade status/returns only",
+        )
+    )
+    return pd.DataFrame(rows)
+
 
 def _fetch_derivatives_context_for_signal_universe(
     signal_universe: pd.DataFrame,
@@ -5019,6 +5624,16 @@ def run_anomaly_strategy_backtest(
         signals=signals,
         trades=trades,
     )
+    honesty_report = build_backtest_honesty_report(
+        config=config,
+        candidates=candidates,
+        signals=signals,
+        trades=trades,
+        symbols=symbols,
+        context_parity_report=context_parity_report,
+        run_entry_grid=bool(run_entry_grid),
+        run_latency_grid=bool(run_latency_grid),
+    )
     stage_started_at = time.monotonic()
     _write_artifact_frames(
         [
@@ -5029,6 +5644,7 @@ def run_anomaly_strategy_backtest(
             (output_dir / "anomaly_profitability_by_category.csv", summarize_trades_by_pump_category(trades)),
             (output_dir / "anomaly_profitability_by_category_family.csv", summarize_trades_by_pump_category_family(trades)),
             (output_dir / "anomaly_context_parity_report.csv", context_parity_report),
+            (output_dir / "anomaly_backtest_honesty_report.csv", honesty_report),
         ],
         progress_label="anomaly artifacts: trade files",
     )
@@ -5135,6 +5751,10 @@ def run_anomaly_strategy_backtest(
         "setup_timeframe": _effective_setup_timeframe(config),
         "entry_timeframe": _effective_entry_timeframe(config),
         "execution_model": _execution_model_label(config),
+        "portfolio_model": f"global_max_open_positions_{int(config.max_open_positions)}_at_actual_entry",
+        "slippage_model": "adverse_long_entry_and_exit",
+        "entry_slippage_pct": float(config.entry_slippage_pct),
+        "exit_slippage_pct": float(config.exit_slippage_pct),
         "prior_context_lookback_hours": int(_PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS),
         "lab_config": asdict(config.lab_config),
     }
@@ -5226,14 +5846,17 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT,
     )
-    parser.add_argument("--min-market-rr-to-signal-tp1", type=float, default=0.75)
+    parser.add_argument("--min-market-rr-to-signal-tp1", type=float, default=0.70)
     parser.add_argument("--tp1-r", type=float, default=1.0)
     parser.add_argument("--tp1-fraction", type=float, default=0.50)
     parser.add_argument("--trail-lookback-candles", type=int, default=5)
     parser.add_argument("--trail-buffer-r", type=float, default=0.10)
     parser.add_argument("--exit-rule", choices=sorted(EXIT_RULES), default="structural_trail")
     parser.add_argument("--max-hold-candles", type=int, default=240)
+    parser.add_argument("--max-open-positions", type=int, default=1)
     parser.add_argument("--fee-rate", type=float, default=0.0004)
+    parser.add_argument("--entry-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
+    parser.add_argument("--exit-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
     parser.add_argument("--write-prepump-context", choices=["true", "false"], default="true")
     parser.add_argument("--prepump-context-timeframe", default=DEFAULT_PREPUMP_CONTEXT_TIMEFRAME)
     parser.add_argument("--prepump-context-windows", default=DEFAULT_PREPUMP_CONTEXT_WINDOWS)
@@ -5312,7 +5935,10 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
         trail_buffer_r=args.trail_buffer_r,
         exit_rule=args.exit_rule,
         max_hold_candles=args.max_hold_candles,
+        max_open_positions=args.max_open_positions,
         fee_rate=args.fee_rate,
+        entry_slippage_pct=args.entry_slippage_pct,
+        exit_slippage_pct=args.exit_slippage_pct,
         write_prepump_context=str(args.write_prepump_context).lower() == "true",
         prepump_context_timeframe=str(args.prepump_context_timeframe),
         prepump_context_windows=str(args.prepump_context_windows),

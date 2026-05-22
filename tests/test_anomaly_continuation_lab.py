@@ -1,3 +1,5 @@
+import inspect
+
 import pandas as pd
 from urllib.parse import quote
 
@@ -16,6 +18,7 @@ from research_tools.anomaly_strategy_backtest import (
     _collect_symbol_pair_rows,
     build_anomaly_signals,
     enrich_candidates_with_recent_spike_context,
+    simulate_anomaly_trades,
     simulate_long_signal,
 )
 from research_tools.runner_fader_prepump_context import (
@@ -417,6 +420,13 @@ def test_anomaly_signal_filter_does_not_gate_on_future_label_status() -> None:
     assert signals["decision_timestamp_ms"].tolist() == [240_000]
 
 
+def test_anomaly_signal_builder_source_does_not_reference_future_labels() -> None:
+    source = inspect.getsource(build_anomaly_signals)
+
+    for forbidden in ("future_", "future_label_status", "outcome_label"):
+        assert forbidden not in source
+
+
 def test_anomaly_signal_filter_can_apply_anti_exhaustion_caps() -> None:
     candidates = _with_signal_audit_columns(pd.DataFrame(
         [
@@ -632,6 +642,92 @@ def test_simulate_long_signal_does_not_fill_tp1_on_exact_touch() -> None:
     assert result["status"] == "closed"
     assert result["tp1_hit"] is False
     assert result["tp1_fill_status"] == "touched_not_filled_conservative"
+
+
+def test_simulate_long_signal_applies_adverse_entry_and_exit_slippage() -> None:
+    frame = pd.DataFrame(
+        {
+            "timestamp": [0, 60_000, 120_000, 180_000],
+            "open": [100.0, 100.0, 100.0, 100.0],
+            "high": [100.5, 100.5, 103.0, 103.0],
+            "low": [99.0, 99.0, 99.5, 99.5],
+            "close": [100.0, 100.0, 102.0, 102.0],
+        }
+    )
+    signal = pd.Series(
+        {
+            "symbol": "TEST/USDT:USDT",
+            "timestamp_ms": 0,
+            "decision_timestamp_ms": 60_000,
+            "decision_close": 100.0,
+            "outcome_label": "test",
+        }
+    )
+
+    result = simulate_long_signal(
+        frame,
+        signal,
+        config=AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(),
+            fee_rate=0.0,
+            entry_slippage_pct=0.001,
+            exit_slippage_pct=0.002,
+            max_hold_candles=2,
+        ),
+    )
+
+    assert result["status"] == "closed"
+    assert result["entry_raw_price"] == 100.0
+    assert abs(result["entry_price"] - 100.1) < 1e-9
+    assert result["tp1_fill_price"] < result["tp1_raw_price"]
+    assert result["exit_fill_price_model"].endswith("adverse_slippage")
+
+
+def test_simulate_anomaly_trades_enforces_portfolio_cap_at_actual_entry() -> None:
+    frame = pd.DataFrame(
+        {
+            "timestamp": [0, 60_000, 120_000, 180_000, 240_000],
+            "open": [100.0, 100.0, 100.0, 100.0, 100.0],
+            "high": [100.5, 101.0, 103.0, 103.0, 103.0],
+            "low": [99.0, 99.0, 99.5, 99.5, 99.5],
+            "close": [100.0, 100.0, 102.0, 102.0, 102.0],
+        }
+    )
+    signals = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA/USDT:USDT",
+                "timestamp_ms": 0,
+                "decision_timestamp_ms": 60_000,
+                "decision_close": 100.0,
+                "outcome_label": "test",
+            },
+            {
+                "symbol": "BBB/USDT:USDT",
+                "timestamp_ms": 0,
+                "decision_timestamp_ms": 60_000,
+                "decision_close": 100.0,
+                "outcome_label": "test",
+            },
+        ]
+    )
+
+    trades = simulate_anomaly_trades(
+        signals,
+        config=AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(),
+            fee_rate=0.0,
+            entry_slippage_pct=0.0,
+            exit_slippage_pct=0.0,
+            max_open_positions=1,
+            max_hold_candles=3,
+        ),
+        frame_cache={"AAA/USDT:USDT": frame, "BBB/USDT:USDT": frame},
+    )
+
+    assert trades["status"].tolist() == ["closed", "skipped"]
+    assert trades["skip_reason"].fillna("").tolist()[1] == "max_open_positions_at_entry"
+    assert trades["portfolio_open_positions_at_entry"].tolist()[1] == 1
 
 
 def test_trade_chart_hourly_context_uses_closed_hours_only() -> None:

@@ -1,5 +1,46 @@
 # Anomaly Patch Log
 
+## 2026-05-22 - P385 applied locally - backtest honesty hardening
+
+Files:
+
+```text
+research_tools/anomaly_strategy_backtest.py
+cli/parser.py
+cli/commands.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Close remaining non-lookahead self-deception gaps in anomaly-lab execution parity: default backtest execution must no longer be unbounded versus live2, and fill/exit prices must include an explicit adverse slippage model instead of acting as frictionless candle prices.
+```
+
+Change:
+
+```text
+Anomaly backtest config now defaults to max_open_positions=1, entry_slippage_pct=0.0005 and exit_slippage_pct=0.0005. Market and trigger entries use raw candle/trigger price plus adverse long-entry slippage; exits and TP1 fills use adverse long-exit slippage. Trade artifacts expose raw/fill prices, fill models, slippage fields and portfolio state. simulate_anomaly_trades now enforces same-symbol overlap and global max_open_positions at the actual simulated entry timestamp. run-anomaly-lab CLI exposes --max-open-positions, --entry-slippage-pct and --exit-slippage-pct. Each run now writes anomaly_backtest_honesty_report.csv with the 28 audited nodes from the lookahead/parity checklist.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data\exchanges research_tools cli constants.py main.py
+.venv\Scripts\python.exe -m pytest tests\test_anomaly_continuation_lab.py -q
+.venv\Scripts\python.exe main.py run-anomaly-lab --symbols INJ/USDT:USDT BEAT/USDT:USDT --days 2 --setup-timeframe 1m --entry-timeframe 1m --render-charts false --output-dir .output\results\anomaly_lab\lookahead_honesty_p385_closed_1m
+```
+
+Risk:
+
+```text
+Backtest results become stricter and are not directly comparable to older frictionless/unbounded runs. The slippage model is still a conservative candle-level proxy, not order-book replay. Portfolio cap ordering is deterministic by decision timestamp and symbol for same-timestamp signals; this is stricter than assuming invisible simultaneous fills.
+```
+
 ## 2026-05-22 - P384 applied locally - backtest lookahead closure audit
 
 Files:

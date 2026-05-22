@@ -1,5 +1,17 @@
 # Anomaly Research State
 
+## 2026-05-22 - P385 backtest honesty hardening
+
+Current commit: UNKNOWN.
+
+Status: APPLIED locally. The backtest is now stricter on the remaining non-lookahead optimism gaps: default anomaly-lab execution is live-like `max_open_positions=1`, adverse entry/exit slippage is applied by default, and portfolio overlap is checked at the actual simulated entry timestamp rather than at decision time.
+
+New artifacts: every anomaly-lab run writes `anomaly_backtest_honesty_report.csv` with 28 checklist nodes covering CLI/config, universe scope, OHLCV/flow provenance, candidate collectors, baseline/flow/future-label boundaries, prior/OI/derivatives context, signal builder, entry/guards/stop/TP/exit, overlap/portfolio, fees/slippage, grid bias, precollect/backfill, and summaries.
+
+Validation: 26 anomaly continuation tests passed. Existing-code compile passed with `python -m compileall -q data\exchanges research_tools cli constants.py main.py`; `launcher.py` is absent in this workspace, so the literal AGENTS command including launcher.py cannot be used here. Compact INJ/BEAT 2-day closed-1m run completed at `.output/results/anomaly_lab/lookahead_honesty_p385_closed_1m`: 23 candidates, 5 signals, 5 closed, 0 skipped, avg_net 0.8786%, sum_net 4.3930%, win_rate 80.00%. All 28 honesty-report nodes were `ok` with 0 failures.
+
+Residual risk: this is still candle-level execution, not order-book/tick replay. Slippage is a conservative fixed proxy. Tiny INJ/BEAT validation is a correctness smoke, not edge evidence.
+
 ## 2026-05-22 - P384 backtest lookahead audit closure
 
 Current commit: UNKNOWN.
