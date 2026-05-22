@@ -475,11 +475,23 @@ def _apply_red_flag_profile(config: AnomalyBacktestConfig) -> AnomalyBacktestCon
 
 
 def _context_status_columns(frame: pd.DataFrame) -> list[str]:
-    return [
-        column
-        for column in frame.columns
-        if column == "oi_status" or column.endswith("_status")
-    ]
+    """Return only OI/derivatives market-context status columns.
+
+    Do not include unrelated artifact status columns such as
+    future_label_status or prior_context_status. Category filtering must
+    not accidentally depend on research labels or non-market diagnostics.
+    """
+
+    expected = {"oi_status", "oi_cache_status", "oi_fetch_or_load_status"}
+    expected.update(f"{str(spec['prefix'])}_status" for spec in DERIVATIVES_CONTEXT_SPECS)
+    return [column for column in frame.columns if column in expected]
+
+
+def _market_context_status_is_bad(value: object) -> bool:
+    status = str(value or "").strip().lower()
+    if not status:
+        return False
+    return status != "ok"
 
 
 def _red_flag_violation_masks(signals: pd.DataFrame, *, config: AnomalyBacktestConfig) -> dict[str, pd.Series]:
@@ -501,7 +513,7 @@ def _red_flag_violation_masks(signals: pd.DataFrame, *, config: AnomalyBacktestC
         if status_columns:
             bad_status = pd.Series(False, index=index)
             for column in status_columns:
-                bad_status |= signals[column].astype(str).isin(_BAD_CONTEXT_STATUSES)
+                bad_status |= signals[column].map(_market_context_status_is_bad)
             masks["stale_or_missing_market_context"] = bad_status
         else:
             masks["stale_or_missing_market_context"] = pd.Series(True, index=index)
@@ -3606,10 +3618,10 @@ def build_context_parity_report(
     report.loc[
         report["in_pre_context_universe"]
         & (
-            mark_status.ne("ok")
-            | oi_status.ne("ok")
-            | oi_cache_status.isin(_BAD_CONTEXT_STATUSES)
-            | oi_fetch_or_load_status.isin(_BAD_CONTEXT_STATUSES)
+            mark_status.map(_market_context_status_is_bad)
+            | oi_status.map(_market_context_status_is_bad)
+            | oi_cache_status.map(_market_context_status_is_bad)
+            | oi_fetch_or_load_status.map(_market_context_status_is_bad)
         ),
         "context_parity_status",
     ] = "requested_context_missing_or_bad"
