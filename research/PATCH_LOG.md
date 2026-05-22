@@ -1,5 +1,42 @@
 # Anomaly Patch Log
 
+## 2026-05-22 - P375 proposed - guard backtest universe scope
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+research_tools/anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Close the critical universe/symbol-scope self-deception path where a historical anomaly backtest could silently scan the current local cache snapshot and where reused candidates could be treated as the current universe without proving the same symbol scope.
+```
+
+Change:
+
+```text
+run-anomaly-lab now refuses --end-timestamp-ms with no explicit --symbols unless --allow-cache-snapshot-universe true is passed, making cache-snapshot survivorship bias an explicit operator choice. Backtest artifacts now write anomaly_universe_contract.csv and run_config.csv fields for universe_symbol_scope, requested normalized symbols, historical_listing_snapshot_available=false, and survivorship_bias_risk. --reuse-candidates-dir now requires those universe fields and rejects mismatched explicit/cache-snapshot symbol scope. Explicit symbol matching is normalized so BTC/USDT and BTC/USDT:USDT compare consistently against cached futures paths.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Low trading risk. This only affects research/backtest/cache artifact paths. Historical cache-snapshot runs without explicit symbols now need an intentional override; old reusable candidate artifacts without universe metadata are rejected and must be regenerated.
+```
+
 ## 2026-05-22 - P374 proposed - guard reused backtest candidates
 
 Files:

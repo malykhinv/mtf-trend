@@ -75,6 +75,8 @@ from research_tools.anomaly_continuation_lab import (
     _emit_progress,
 )
 
+from utils.symbols import normalize_symbol
+
 from research_tools.runner_fader_prepump_context import (
     DEFAULT_PREPUMP_CONTEXT_TIMEFRAME,
     DEFAULT_PREPUMP_CONTEXT_WINDOWS,
@@ -801,6 +803,41 @@ def _symbol_from_cache_symbol_dir(symbol_dir: Path) -> str:
     return unquote(symbol_dir.name)
 
 
+def _normalized_symbol_tuple(symbols: Iterable[str] | None) -> tuple[str, ...]:
+    if symbols is None:
+        return ()
+    normalized = {
+        normalize_symbol(str(symbol))
+        for symbol in symbols
+        if str(symbol).strip()
+    }
+    return tuple(sorted(symbol for symbol in normalized if symbol))
+
+
+def _universe_symbol_scope(symbols: Iterable[str] | None) -> str:
+    return "explicit_symbols" if _normalized_symbol_tuple(symbols) else "cache_snapshot_scan"
+
+
+def _universe_contract_frame(*, symbols: Iterable[str] | None) -> pd.DataFrame:
+    requested_symbols = _normalized_symbol_tuple(symbols)
+    scope = "explicit_symbols" if requested_symbols else "cache_snapshot_scan"
+    cache_snapshot = scope == "cache_snapshot_scan"
+    return pd.DataFrame([
+        {
+            "universe_symbol_scope": scope,
+            "universe_requested_symbols_count": int(len(requested_symbols)),
+            "universe_requested_symbols_normalized": requested_symbols,
+            "historical_listing_snapshot_available": False,
+            "survivorship_bias_risk": bool(cache_snapshot),
+            "universe_contract_note": (
+                "explicit caller-provided symbol scope"
+                if requested_symbols
+                else "current local cache snapshot; not an as-of historical listing universe"
+            ),
+        }
+    ])
+
+
 def _safe_divide_value(numerator: float, denominator: float) -> float:
     if not np.isfinite(numerator) or not np.isfinite(denominator) or abs(denominator) <= 1e-12:
         return float("nan")
@@ -1083,15 +1120,19 @@ def materialize_subminute_entry_caches(
     overwrite: bool = False,
     progress_label: str | None = None,
 ) -> pd.DataFrame:
-    wanted_symbols = set(symbols) if symbols is not None else None
+    wanted_symbols = set(_normalized_symbol_tuple(symbols))
     targets = tuple(dict.fromkeys(str(timeframe) for timeframe in target_timeframes))
     for target in targets:
         target_ms = _timeframe_to_milliseconds(target)
         if target == "1s" or target_ms <= 0 or target_ms >= 60_000 or target_ms % 1000 != 0:
             raise ValueError(f"target subminute timeframe must be derived from 1s: {target}")
     paths = sorted(cache_dir.glob("*%2FUSDT%3AUSDT/1s/data.parquet"))
-    if wanted_symbols is not None:
-        paths = [path for path in paths if _symbol_from_cache_symbol_dir(path.parent.parent) in wanted_symbols]
+    if wanted_symbols:
+        paths = [
+            path
+            for path in paths
+            if normalize_symbol(_symbol_from_cache_symbol_dir(path.parent.parent)) in wanted_symbols
+        ]
     rows: list[dict[str, object]] = []
     started_at = time.monotonic()
     next_progress_pct = 0
@@ -1180,7 +1221,7 @@ def build_entry_cache_coverage(
     end_ms: int,
     symbols: Iterable[str] | None = None,
 ) -> pd.DataFrame:
-    wanted_symbols = set(symbols) if symbols is not None else None
+    wanted_symbols = set(_normalized_symbol_tuple(symbols))
     rows: list[dict[str, object]] = []
     for requested, cache_timeframe, role in (
         (setup_timeframe, setup_timeframe, "setup"),
@@ -1189,7 +1230,7 @@ def build_entry_cache_coverage(
         symbol_rows: list[tuple[str, int, int, int]] = []
         for path in cache_dir.glob(f"*%2FUSDT%3AUSDT/{cache_timeframe}/data.parquet"):
             symbol = _symbol_from_cache_symbol_dir(path.parent.parent)
-            if wanted_symbols is not None and symbol not in wanted_symbols:
+            if wanted_symbols and normalize_symbol(symbol) not in wanted_symbols:
                 continue
             try:
                 timestamps = pd.read_parquet(path, columns=["timestamp"])["timestamp"]
@@ -1774,10 +1815,14 @@ def collect_pair_anomaly_rows(
         else:
             end_ms = max_timestamp
     start_ms = int((datetime.fromtimestamp(int(end_ms) / 1000, UTC) - pd.Timedelta(days=lab_config.days)).timestamp() * 1000)
-    wanted_symbols = set(symbols) if symbols is not None else None
+    wanted_symbols = set(_normalized_symbol_tuple(symbols))
     paths = sorted(lab_config.cache_dir.glob(f"*%2FUSDT%3AUSDT/{setup_timeframe}/data.parquet"))
-    if wanted_symbols is not None:
-        paths = [path for path in paths if _symbol_from_cache_symbol_dir(path.parent.parent) in wanted_symbols]
+    if wanted_symbols:
+        paths = [
+            path
+            for path in paths
+            if normalize_symbol(_symbol_from_cache_symbol_dir(path.parent.parent)) in wanted_symbols
+        ]
     if entry_timeframe != setup_timeframe and _timeframe_to_milliseconds(entry_timeframe) < 60_000:
         symbols_with_entry_cache = {
             _symbol_from_cache_symbol_dir(path.parent.parent)
@@ -1901,7 +1946,7 @@ def collect_pair_anomaly_rows_for_configs(
     if not resolved_configs:
         return {}
 
-    wanted_symbols = set(symbols) if symbols is not None else None
+    wanted_symbols = set(_normalized_symbol_tuple(symbols))
     states: list[dict[str, object]] = []
     rows_by_key: dict[tuple[str, str], list[dict[str, object]]] = {}
     for config in resolved_configs:
@@ -1910,14 +1955,14 @@ def collect_pair_anomaly_rows_for_configs(
         rows_by_key.setdefault(key, [])
         start_ms, end_ms, entry_cache_timeframe = _resolve_pair_collection_window(config)
         setup_symbols = _cache_symbols_for_timeframe(config.lab_config.cache_dir, setup_timeframe)
-        if wanted_symbols is not None:
-            setup_symbols &= wanted_symbols
+        if wanted_symbols:
+            setup_symbols = {symbol for symbol in setup_symbols if normalize_symbol(symbol) in wanted_symbols}
         entry_ms = _timeframe_to_milliseconds(entry_timeframe)
         eligible_symbols = set(setup_symbols)
         if entry_timeframe != setup_timeframe and entry_ms < 60_000:
             entry_symbols = _cache_symbols_for_timeframe(config.lab_config.cache_dir, entry_cache_timeframe)
-            if wanted_symbols is not None:
-                entry_symbols &= wanted_symbols
+            if wanted_symbols:
+                entry_symbols = {symbol for symbol in entry_symbols if normalize_symbol(symbol) in wanted_symbols}
             if not entry_symbols:
                 rows_by_key[key].append(
                     {
@@ -4583,6 +4628,7 @@ def run_anomaly_strategy_backtest(
     _write_artifact_frames(
         [
             (output_dir / "anomaly_candidates.csv", candidates),
+            (output_dir / "anomaly_universe_contract.csv", _universe_contract_frame(symbols=symbols)),
             (
                 output_dir / "entry_cache_coverage.csv",
                 build_entry_cache_coverage(
@@ -4718,9 +4764,15 @@ def run_anomaly_strategy_backtest(
             progress_label="anomaly artifacts: health chart status",
         )
         timings["health_charts_seconds"] = time.monotonic() - stage_started_at
+    requested_symbols_normalized = _normalized_symbol_tuple(symbols)
     run_config = {
         **asdict(config),
         "feature_contract": config.feature_contract,
+        "universe_symbol_scope": _universe_symbol_scope(symbols),
+        "universe_requested_symbols_count": int(len(requested_symbols_normalized)),
+        "universe_requested_symbols_normalized": requested_symbols_normalized,
+        "historical_listing_snapshot_available": False,
+        "survivorship_bias_risk": _universe_symbol_scope(symbols) == "cache_snapshot_scan",
         "setup_timeframe": _effective_setup_timeframe(config),
         "entry_timeframe": _effective_entry_timeframe(config),
         "execution_model": _execution_model_label(config),

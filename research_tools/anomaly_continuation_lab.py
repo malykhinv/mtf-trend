@@ -17,6 +17,8 @@ from urllib.parse import quote, unquote
 import numpy as np
 import pandas as pd
 
+from utils.symbols import normalize_symbol
+
 
 DEFAULT_CACHE_DIR = Path(".output/cache")
 DEFAULT_OUTPUT_DIR = Path(".output/manual_checks/anomaly_continuation_lab")
@@ -156,6 +158,17 @@ def _safe_divide(numerator: float, denominator: float) -> float:
 
 def _symbol_from_cache_dir(symbol_dir: Path) -> str:
     return unquote(symbol_dir.name)
+
+
+def _normalized_symbol_tuple(symbols: Iterable[str] | None) -> tuple[str, ...]:
+    if symbols is None:
+        return ()
+    normalized = {
+        normalize_symbol(str(symbol))
+        for symbol in symbols
+        if str(symbol).strip()
+    }
+    return tuple(sorted(symbol for symbol in normalized if symbol))
 
 
 def _cache_symbol_dir_name(symbol: str) -> str:
@@ -613,11 +626,15 @@ def collect_anomaly_lab_rows(
     if end_ms is None:
         end_ms = _resolve_end_timestamp_ms(config.cache_dir, config.timeframe)
     start_ms = int((datetime.fromtimestamp(end_ms / 1000, UTC) - timedelta(days=config.days)).timestamp() * 1000)
-    wanted_symbols = set(symbols) if symbols is not None else None
+    wanted_symbols = set(_normalized_symbol_tuple(symbols))
     rows: list[dict[str, object]] = []
     paths = sorted(config.cache_dir.glob(f"*%2FUSDT%3AUSDT/{config.timeframe}/data.parquet"))
-    if wanted_symbols is not None:
-        paths = [path for path in paths if _symbol_from_cache_dir(path.parent.parent) in wanted_symbols]
+    if wanted_symbols:
+        paths = [
+            path
+            for path in paths
+            if normalize_symbol(_symbol_from_cache_dir(path.parent.parent)) in wanted_symbols
+        ]
     progress_started_at = time.monotonic()
     next_progress_pct = 0
     for processed_count, path in enumerate(paths, start=1):

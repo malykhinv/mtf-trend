@@ -1,5 +1,16 @@
 # Anomaly Research State
 
+## 2026-05-22 - P375 universe/symbol-scope guard
+
+```text
+Current patch status: P375 PROPOSED / UNKNOWN commit.
+Question: audit p.2 universe/symbol selection for critical backtest lookahead/survivorship only and patch if needed.
+Finding: the critical p.2 issue is not per-candle future data; it is universe contamination. A historical run with --end-timestamp-ms and no explicit --symbols scanned the current local cache snapshot, which is not an as-of historical listing universe. Reused candidates also had no symbol-scope contract, so a subset-universe candidate CSV could be silently treated as the current requested universe.
+Change: run-anomaly-lab now blocks historical cache-snapshot universe unless explicitly overridden with --allow-cache-snapshot-universe true. Backtest outputs record universe_symbol_scope, normalized requested symbols, survivorship_bias_risk and historical_listing_snapshot_available=false in run_config.csv plus anomaly_universe_contract.csv. Reused candidates must now prove the same universe scope/symbol set. Explicit symbol filtering is normalized across closed/pair collectors and coverage artifacts.
+Residual risk: this does not create a true historical listing universe. For a clean all-market historical test, provide an explicit as-of universe/symbol snapshot or accept the override as cache-snapshot biased.
+Validation: python -m compileall -q data/exchanges research_tools cli constants.py main.py. Uploaded zip does not contain launcher.py.
+```
+
 ## 2026-05-22 - P374 reused candidate lookahead guard
 
 ```text

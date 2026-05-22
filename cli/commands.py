@@ -66,6 +66,40 @@ def _to_bool_flag(value: object, *, default: bool = False) -> bool:
 
 
 
+def _normalized_symbol_tuple(symbols: Iterable[str] | None) -> tuple[str, ...]:
+    if symbols is None:
+        return ()
+    normalized = {
+        normalize_symbol(str(symbol))
+        for symbol in symbols
+        if str(symbol).strip()
+    }
+    return tuple(sorted(symbol for symbol in normalized if symbol))
+
+
+def _reuse_universe_symbol_scope(symbols: Iterable[str] | None) -> str:
+    return "explicit_symbols" if _normalized_symbol_tuple(symbols) else "cache_snapshot_scan"
+
+
+def _parse_run_config_sequence(raw: object, *, path: Path, column: str) -> tuple[str, ...]:
+    if _is_missing_csv_value(raw):
+        return ()
+    text = str(raw).strip()
+    if not text:
+        return ()
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError):
+        parsed = [part.strip() for part in text.split(",") if part.strip()]
+    if isinstance(parsed, str):
+        values = [parsed]
+    elif isinstance(parsed, (list, tuple, set)):
+        values = list(parsed)
+    else:
+        raise ValueError(f"reused candidates run_config.csv {column} is not a sequence: {path}")
+    return tuple(sorted({normalize_symbol(str(value)) for value in values if str(value).strip()}))
+
+
 def _is_missing_csv_value(value: object) -> bool:
     if value is None:
         return True
@@ -132,10 +166,25 @@ def _validate_reused_candidates_config(
     *,
     source_config: dict[str, object],
     expected_config: object,
+    symbols: Iterable[str] | None,
     run_config_path: Path,
 ) -> None:
     lab_config = expected_config.lab_config
+    expected_universe_scope = _reuse_universe_symbol_scope(symbols)
+    expected_symbols = _normalized_symbol_tuple(symbols)
+    source_universe_scope = str(source_config.get("universe_symbol_scope", "")).strip()
+    if not source_universe_scope:
+        raise ValueError(
+            "refusing --reuse-candidates-dir because run_config.csv does not declare universe_symbol_scope; "
+            f"regenerate candidates with the guarded universe contract: {run_config_path}"
+        )
+    source_symbols = _parse_run_config_sequence(
+        source_config.get("universe_requested_symbols_normalized"),
+        path=run_config_path,
+        column="universe_requested_symbols_normalized",
+    )
     expected_values: dict[str, object] = {
+        "universe_symbol_scope": expected_universe_scope,
         "feature_contract": expected_config.feature_contract,
         "setup_timeframe": expected_config.setup_timeframe,
         "entry_timeframe": expected_config.entry_timeframe,
@@ -154,6 +203,16 @@ def _validate_reused_candidates_config(
         actual = source_config.get(key)
         if not _reuse_config_value_equal(expected, actual):
             mismatches.append(f"{key}: expected={expected!r} source={actual!r}")
+    if expected_universe_scope == "explicit_symbols" and source_symbols != expected_symbols:
+        mismatches.append(
+            "universe_requested_symbols_normalized: "
+            f"expected={expected_symbols!r} source={source_symbols!r}"
+        )
+    if expected_universe_scope == "cache_snapshot_scan" and source_symbols:
+        mismatches.append(
+            "universe_requested_symbols_normalized: expected=() "
+            f"source={source_symbols!r}"
+        )
     if mismatches:
         details = "; ".join(mismatches)
         raise ValueError(
@@ -200,8 +259,8 @@ def _filter_reused_candidates_to_current_request(
             (filtered["decision_timestamp_ms"] >= start_ms)
             & (filtered["decision_timestamp_ms"] <= end_ms)
         ].copy()
-    if symbols is not None:
-        wanted_symbols = {normalize_symbol(str(symbol)) for symbol in symbols}
+    wanted_symbols = set(_normalized_symbol_tuple(symbols))
+    if wanted_symbols:
         filtered = filtered.loc[filtered["symbol"].astype(str).map(normalize_symbol).isin(wanted_symbols)].copy()
     filtered["decision_timestamp_ms"] = filtered["decision_timestamp_ms"].astype("int64")
     return filtered
@@ -218,6 +277,7 @@ def _load_reused_candidates(
     _validate_reused_candidates_config(
         source_config=source_config,
         expected_config=expected_config,
+        symbols=symbols,
         run_config_path=run_config_path,
     )
     candidates = pd.read_csv(candidate_path)
@@ -1152,6 +1212,18 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             if getattr(args, "output_dir", None)
             else config.backtest.results_dir / "anomaly_lab"
         )
+        requested_symbols_normalized = _normalized_symbol_tuple(getattr(args, "symbols", None))
+        if (
+            getattr(args, "end_timestamp_ms", None) is not None
+            and not requested_symbols_normalized
+            and not _to_bool_flag(getattr(args, "allow_cache_snapshot_universe", False))
+        ):
+            raise ValueError(
+                "refusing historical run-anomaly-lab with --end-timestamp-ms and no explicit --symbols: "
+                "the default cache scan is a current local cache snapshot, not an as-of historical listing universe. "
+                "Pass --symbols from an explicit research universe, or intentionally add "
+                "--allow-cache-snapshot-universe true and treat the result as cache-snapshot biased."
+            )
         _, _, derivatives_context_fetcher = _build_fetch_stack(config)
 
         explicit_timeframe = any(

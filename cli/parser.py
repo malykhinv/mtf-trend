@@ -104,6 +104,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Reuse existing anomaly_candidates.csv artifacts from a previous anomaly-lab output root.",
     )
+    anomaly_lab.add_argument(
+        "--allow-cache-snapshot-universe",
+        type=_str_to_bool,
+        default=False,
+        help=(
+            "Allow historical anomaly-lab runs with no explicit --symbols to scan the current local cache "
+            "universe. By default this is refused when --end-timestamp-ms is set because it is not an "
+            "as-of historical listing universe."
+        ),
+    )
     anomaly_lab.add_argument("--baseline-candles", type=_positive_int_for("--baseline-candles"), default=60)
     anomaly_lab.add_argument("--confirmation-candles", type=_positive_int_for("--confirmation-candles"), default=4)
     anomaly_lab.add_argument("--forward-high-candles", type=_positive_int_for("--forward-high-candles"), default=240)
