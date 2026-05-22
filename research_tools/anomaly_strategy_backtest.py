@@ -4800,6 +4800,11 @@ def run_anomaly_strategy_backtest(
     stage_started_at = time.monotonic()
     if precollected_candidates is not None:
         candidates = precollected_candidates.copy()
+        candidates = enrich_candidates_with_open_interest(
+            candidates,
+            cache_dir=config.lab_config.cache_dir,
+            progress_label="anomaly candidates: oi context refresh",
+        )
     elif _effective_entry_timeframe(config) != _effective_setup_timeframe(config):
         candidates = collect_pair_anomaly_rows(
             config,

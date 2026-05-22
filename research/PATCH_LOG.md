@@ -28,6 +28,40 @@ Risk:
 Low for live/backtest signal logic: `build_anomaly_signals()` does not read `future_*` or `outcome_label`. Near the right edge, closed-TF runs may now produce additional candidates/signals that are later skipped by execution if no future execution candles exist, which is more honest than silently hiding them during candidate collection.
 ```
 
+## 2026-05-22 - P382 proposed - make OI context availability-aware
+
+Files:
+
+```text
+research_tools/anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Close the critical p.12 Open Interest lookahead gap: backtest must not select an OI row merely because its period timestamp is <= decision time when the row may only be available after the 5m OI period closes.
+```
+
+Change:
+
+```text
+OI enrichment now computes an availability timestamp for every cached OI row (`timestamp + 5m` unless the cache explicitly stores `available_timestamp_ms`) and selects the latest row with `oi_available_timestamp_ms <= decision_available_timestamp_ms`. Artifacts now separate OI period timestamp from OI as-of/available timestamp and report available cache coverage. Precollected/reused candidates refresh OI context at run time so old candidate CSVs cannot carry pre-P382 OI as-of semantics into signal filtering.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Medium result impact: OI-confirmed categories may produce fewer signals because the current 5m OI period is no longer usable before its conservative availability timestamp. This is intentional; using period timestamp as known-time is a critical lookahead risk.
+```
+
 ## 2026-05-22 - P381 proposed - trust-gate flow ratio sources
 
 Files:

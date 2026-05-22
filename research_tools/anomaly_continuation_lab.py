@@ -35,6 +35,7 @@ DEFAULT_BIG_MOVE_THRESHOLD = 0.25
 OI_TIMEFRAME = "5m"
 OI_LOOKBACK_BARS = (1, 3, 6)
 OI_EXPECTED_INTERVAL_MS = 5 * 60 * 1000
+OI_AVAILABILITY_LAG_MS = OI_EXPECTED_INTERVAL_MS
 DERIVATIVES_CONTEXT_TIMEFRAME = "5m"
 DERIVATIVES_MARK_CONTEXT_TIMEFRAME = "1m"
 DERIVATIVES_CONTEXT_LOOKBACK_BARS = (1, 3, 6)
@@ -749,11 +750,18 @@ def _empty_oi_columns() -> dict[str, object]:
         "oi_cache_min_timestamp_utc": "",
         "oi_cache_max_timestamp_ms": np.nan,
         "oi_cache_max_timestamp_utc": "",
+        "oi_cache_min_available_timestamp_ms": np.nan,
+        "oi_cache_min_available_timestamp_utc": "",
+        "oi_cache_max_available_timestamp_ms": np.nan,
+        "oi_cache_max_available_timestamp_utc": "",
         "oi_timestamp_ms": np.nan,
         "oi_timestamp_utc": "",
+        "oi_available_timestamp_ms": np.nan,
+        "oi_available_timestamp_utc": "",
         "oi_asof_timestamp_ms": np.nan,
         "oi_asof_timestamp_utc": "",
         "oi_age_ms": np.nan,
+        "oi_timestamp_semantics": "period_timestamp_plus_5m_availability_lag",
         "oi_open_interest": np.nan,
     }
     for bars in OI_LOOKBACK_BARS:
@@ -774,11 +782,21 @@ def _read_oi_frame(cache_dir: Path, symbol: str) -> tuple[pd.DataFrame | None, s
         return None, "missing_column"
     if "timestamp" not in frame.columns:
         return None, "missing_timestamp"
-    oi_frame = frame.loc[:, ["timestamp", "open_interest"]].copy()
+    selected = ["timestamp", "open_interest"]
+    if "available_timestamp_ms" in frame.columns:
+        selected.append("available_timestamp_ms")
+    oi_frame = frame.loc[:, selected].copy()
+    for column in selected:
+        oi_frame[column] = pd.to_numeric(oi_frame[column], errors="coerce")
     oi_frame.dropna(subset=["timestamp", "open_interest"], inplace=True)
     if oi_frame.empty:
         return None, "empty_oi"
-    oi_frame.sort_values("timestamp", inplace=True)
+    if "available_timestamp_ms" not in oi_frame.columns:
+        oi_frame["available_timestamp_ms"] = oi_frame["timestamp"] + OI_AVAILABILITY_LAG_MS
+    oi_frame.dropna(subset=["available_timestamp_ms"], inplace=True)
+    if oi_frame.empty:
+        return None, "empty_oi_available_timestamp"
+    oi_frame.sort_values(["available_timestamp_ms", "timestamp"], inplace=True)
     oi_frame.drop_duplicates("timestamp", keep="last", inplace=True)
     oi_frame.reset_index(drop=True, inplace=True)
     return oi_frame, "ok"
@@ -795,10 +813,16 @@ def _enrich_symbol_oi(candidates: pd.DataFrame, oi_frame: pd.DataFrame | None, s
             rows.append(values)
         return rows
 
+    if "available_timestamp_ms" not in oi_frame.columns:
+        oi_frame = oi_frame.copy()
+        oi_frame["available_timestamp_ms"] = oi_frame["timestamp"] + OI_AVAILABILITY_LAG_MS
     oi_ts = oi_frame["timestamp"].astype(np.int64).to_numpy()
+    oi_available_ts = oi_frame["available_timestamp_ms"].astype(np.int64).to_numpy()
     oi_values = oi_frame["open_interest"].astype(float).to_numpy()
     cache_min_ts = int(oi_ts[0]) if len(oi_ts) else None
     cache_max_ts = int(oi_ts[-1]) if len(oi_ts) else None
+    cache_min_available_ts = int(oi_available_ts[0]) if len(oi_available_ts) else None
+    cache_max_available_ts = int(oi_available_ts[-1]) if len(oi_available_ts) else None
     for _, candidate in candidates.iterrows():
         values = _empty_oi_columns()
         values["oi_cache_status"] = status
@@ -809,25 +833,39 @@ def _enrich_symbol_oi(candidates: pd.DataFrame, oi_frame: pd.DataFrame | None, s
         if cache_max_ts is not None:
             values["oi_cache_max_timestamp_ms"] = cache_max_ts
             values["oi_cache_max_timestamp_utc"] = _timestamp_to_utc(cache_max_ts)
+        if cache_min_available_ts is not None:
+            values["oi_cache_min_available_timestamp_ms"] = cache_min_available_ts
+            values["oi_cache_min_available_timestamp_utc"] = _timestamp_to_utc(cache_min_available_ts)
+        if cache_max_available_ts is not None:
+            values["oi_cache_max_available_timestamp_ms"] = cache_max_available_ts
+            values["oi_cache_max_available_timestamp_utc"] = _timestamp_to_utc(cache_max_available_ts)
         decision_ts = candidate.get("decision_timestamp_ms")
         if pd.isna(decision_ts):
             values["oi_status"] = "missing_decision_timestamp"
             rows.append(values)
             continue
         decision_ts_int = int(decision_ts)
-        oi_idx = int(np.searchsorted(oi_ts, decision_ts_int, side="right") - 1)
+        decision_available_ts = candidate.get("decision_available_timestamp_ms", decision_ts_int)
+        if pd.isna(decision_available_ts):
+            decision_available_ts_int = decision_ts_int
+        else:
+            decision_available_ts_int = int(decision_available_ts)
+        oi_idx = int(np.searchsorted(oi_available_ts, decision_available_ts_int, side="right") - 1)
         if oi_idx < 0:
-            values["oi_status"] = "no_oi_before_decision"
+            values["oi_status"] = "no_oi_available_before_decision"
             rows.append(values)
             continue
 
         current_ts = int(oi_ts[oi_idx])
-        age_ms = decision_ts_int - current_ts
+        current_available_ts = int(oi_available_ts[oi_idx])
+        age_ms = decision_available_ts_int - current_available_ts
         values["oi_status"] = "stale_asof" if age_ms > OI_EXPECTED_INTERVAL_MS else "ok"
         values["oi_timestamp_ms"] = current_ts
         values["oi_timestamp_utc"] = _timestamp_to_utc(current_ts)
-        values["oi_asof_timestamp_ms"] = current_ts
-        values["oi_asof_timestamp_utc"] = _timestamp_to_utc(current_ts)
+        values["oi_available_timestamp_ms"] = current_available_ts
+        values["oi_available_timestamp_utc"] = _timestamp_to_utc(current_available_ts)
+        values["oi_asof_timestamp_ms"] = current_available_ts
+        values["oi_asof_timestamp_utc"] = _timestamp_to_utc(current_available_ts)
         values["oi_age_ms"] = int(age_ms)
         values["oi_open_interest"] = float(oi_values[oi_idx])
         for bars in OI_LOOKBACK_BARS:
@@ -851,8 +889,9 @@ def enrich_candidates_with_open_interest(
     """Attach 5m open-interest context available at each decision timestamp.
 
     Open interest is not available on 1m in this project. For any lab timeframe,
-    the feature is the last cached 5m OI row with timestamp <= decision time.
-    Missing OI stays missing and is reported through oi_status.
+    the feature is the last cached 5m OI row whose availability timestamp is <=
+    the signal decision availability timestamp. Missing OI stays missing and is
+    reported through oi_status.
     """
     if candidates.empty or "symbol" not in candidates.columns:
         return candidates
@@ -918,7 +957,12 @@ def build_oi_context_status(candidates: pd.DataFrame) -> pd.DataFrame:
             ]
         )
     candidates = candidates.copy()
-    for column in ("oi_cache_min_timestamp_ms", "oi_cache_max_timestamp_ms"):
+    for column in (
+        "oi_cache_min_timestamp_ms",
+        "oi_cache_max_timestamp_ms",
+        "oi_cache_min_available_timestamp_ms",
+        "oi_cache_max_available_timestamp_ms",
+    ):
         if column not in candidates.columns:
             candidates[column] = np.nan
     status = (
@@ -930,6 +974,8 @@ def build_oi_context_status(candidates: pd.DataFrame) -> pd.DataFrame:
             max_oi_age_ms=("oi_age_ms", "max"),
             min_oi_cache_timestamp_ms=("oi_cache_min_timestamp_ms", "min"),
             max_oi_cache_timestamp_ms=("oi_cache_max_timestamp_ms", "max"),
+            min_oi_cache_available_timestamp_ms=("oi_cache_min_available_timestamp_ms", "min"),
+            max_oi_cache_available_timestamp_ms=("oi_cache_max_available_timestamp_ms", "max"),
         )
         .reset_index()
     )

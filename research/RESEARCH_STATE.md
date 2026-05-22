@@ -8,6 +8,16 @@ P379 proposed after p.6 lookahead audit. The closed setup candidate collector no
 
 Next validation: apply P379 after P378, run compileall, then run a small closed-TF backtest near an explicit `--end-timestamp-ms`. Check that candidates near the right edge appear with `future_label_status=insufficient_future_window` instead of being silently dropped.
 
+## 2026-05-22 - P382 OI context availability guard
+
+Current commit: UNKNOWN.
+
+P382 proposed after p.12 audit. Critical finding: OI enrichment used the last cached 5m OI row with `timestamp <= decision_timestamp_ms`, but cached OI rows had no explicit publication/availability timestamp. If the exchange/cache timestamp is a period timestamp rather than known-time, OI-confirmed categories can consume a value from the still-unavailable current 5m OI period.
+
+Change: OI context is now selected by availability timestamp, defaulting to `timestamp + 5m`, and compared against `decision_available_timestamp_ms` when present. Artifacts now expose `oi_available_timestamp_ms`, `oi_asof_timestamp_ms`, and available cache coverage.
+
+Next validation: run a small backtest with `runner_oi_confirmed` categories and confirm OI rows near 5m boundaries shift back to the last available completed OI period instead of the current period timestamp.
+
 ## 2026-05-22 - P381 flow-ratio source trust gate
 
 Current commit: UNKNOWN.
