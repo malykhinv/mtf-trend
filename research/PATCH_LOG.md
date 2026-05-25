@@ -1,5 +1,382 @@
 # Anomaly Patch Log
 
+## 2026-05-25 - P403 applied locally - stricter short/fader HTF anomaly prefilter
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Stop `bare_htf_short_fader` discovery from planning too many targeted 1s aggTrade windows on weak flow-only HTF anomalies.
+```
+
+Change:
+
+```text
+Added a short/fader HTF anomaly prefilter before targeted 1s flow planning and inside final bare-HTF candidate collection. Defaults: `short_fader_prefilter_min_quote_ratio=10.0`, `short_fader_prefilter_min_trade_ratio=8.0`, `short_fader_prefilter_min_htf_return=0.015`. CLI flags expose all three thresholds. `targeted_flow_plan.csv` records the thresholds and dropped-row count.
+Also fixed decay-category and factor-separation artifact bugs where missing `ltf12_*` columns on very small strict runs produced scalar NaN values instead of index-aligned Series.
+```
+
+Validation:
+
+```text
+compileall passed for research_tools cli constants.py main.py tests/test_anomaly_continuation_lab.py. Focused short_fader tests passed: 5 passed. P403 smoke at .output/results/bare_htf_short_fader_p403_smoke completed. targeted_flow_plan.csv: 23 coarse candidates, 21 dropped by short_fader prefilter, 2 coarse_prefilter candidates, 2 targeted windows, 2 ready windows. anomaly_backtest_honesty_report.csv shows 0 failures.
+```
+
+Risk:
+
+```text
+This intentionally changes the discovery universe. It makes 1s research cheaper and focuses on stronger price-confirmed HTF awakenings, but can miss weak-flow/low-return anomalies that later fade.
+```
+
+## 2026-05-25 - P402 applied locally - short/fader decision availability contract
+
+Files:
+
+```text
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Fix the bare-HTF short/fader artifact contract so post-close LTF trigger rows truthfully state when the decision became available.
+```
+
+Change:
+
+```text
+Short/fader candidates now carry the standard OHLCV timestamp semantics (`ohlcv_timestamp_is_candle_open;available_timestamp_is_candle_close`). Trigger rows override `decision_available_timestamp_ms` to the close of the triggering LTF candle (`decision_timestamp_ms + entry_timeframe_ms`) instead of inheriting the HTF-close timestamp from the base anomaly row.
+```
+
+Validation:
+
+```text
+compileall passed for research_tools cli constants.py main.py tests/test_anomaly_continuation_lab.py. Focused short_fader tests passed: 4 passed. P402 smoke at .output/results/bare_htf_short_fader_p402_smoke completed; anomaly_backtest_honesty_report.csv shows OHLCV cache loader availability and baseline calculations ok with 0 failures.
+```
+
+Risk:
+
+```text
+This fixes artifact truthfulness and honesty-report availability validation. It should not change simulated entry timing because short/fader execution was already using the next LTF open after the trigger timestamp.
+```
+
+## 2026-05-25 - P401 applied locally - short/fader category analysis script
+
+Files:
+
+```text
+research_tools/short_fader_category_analysis.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Add a standalone analyzer over `bare_htf_short_*` discovery artifacts so decay/fader categories can be extracted after a wide run without rerunning the backtest.
+```
+
+Change:
+
+```text
+Added `python -m research_tools.short_fader_category_analysis`. It reads a bare-HTF short/fader run directory, builds event/category buckets, scores rule families across trigger, decay category, prior context, LTF direction, taker weakness, red-share, and trigger delay, joins raw/live-filtered trade outcomes by event key, and writes `short_fader_category_analysis/*` artifacts: summary, event category matrix, rule scores, category candidates, and watchlist.
+```
+
+Validation:
+
+```text
+compileall passed for research_tools/short_fader_category_analysis.py. Smoke analysis completed on .output/results/bare_htf_short_fader_expanded_smoke and wrote five category-analysis CSV files.
+```
+
+Risk:
+
+```text
+This is post-run research analysis only. Candidate rules are in-sample discoveries and must be replayed separately before any trading conclusion.
+```
+
+## 2026-05-25 - P400 applied locally - expanded wide short/fader discovery artifacts
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make the short/fader mode useful as a broad discovery dataset for later category extraction by decay nature and post-close LTF path, not as a narrow fixed trigger test.
+```
+
+Change:
+
+```text
+Expanded default trigger library to `failed_new_high,taker_fade_red,close_below_htf_close,close_below_post_mid,lower_high_close_down,effort_no_progress,pullback_without_recovery`. Added compact post-close LTF path artifact `bare_htf_short_post_close_path_slices.csv`. Added heuristic decay-category artifacts `bare_htf_short_decay_category_events.csv` and `bare_htf_short_decay_category_summary.csv` for research triage. Signal priority now keeps one first/priority trigger per HTF event for execution while preserving all trigger rows in `bare_htf_short_triggers.csv`.
+```
+
+Validation:
+
+```text
+compileall passed for research_tools cli constants.py main.py tests/test_anomaly_continuation_lab.py.
+Focused short_fader tests passed. Expanded smoke at .output/results/bare_htf_short_fader_expanded_smoke completed: 142 candidate rows / 76 events, 81 triggered rows / 15 triggered events, 15 discovery signals, 15 raw closed trades, 14 live-filtered closed trades. New path/category artifacts were written.
+```
+
+Risk:
+
+```text
+The new decay categories are heuristic research labels, not trading categories. They are meant to guide manual/statistical analysis on a larger discovery run.
+```
+
+## 2026-05-25 - P399 applied locally - make bare-HTF short/fader a wide discovery artifact mode
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Stop treating the first short/fader pass as a parameter/category optimization problem. Collect a wide discovery dataset from bare HTF anomalies and post-close LTF behavior, then derive decay/fader categories from artifacts later.
+```
+
+Change:
+
+```text
+`bare_htf_short_fader` now uses wide discovery by default: every enabled post-close short-pressure trigger can become a discovery signal. Prior spike/fade thresholds are annotation columns, not an entry gate, unless `--short-fader-require-prior-context true` is explicitly passed. RR exit grid is disabled by default through `--short-fader-run-exit-grid false`. Added discovery artifacts: label distribution, data-quality summary, funnel, top trades, and live-filtered top trades.
+```
+
+Validation:
+
+```text
+compileall passed for research_tools cli constants.py main.py tests/test_anomaly_continuation_lab.py.
+Focused short_fader tests passed. Discovery smoke at .output/results/bare_htf_short_fader_discovery_smoke completed: 79 candidate rows / 76 unique events, 16 triggered rows / 13 triggered events, 13 discovery signals, 13 raw closed trades, 10 live-filtered closed trades. The smoke result was negative and is not an edge claim.
+```
+
+Risk:
+
+```text
+Wide discovery intentionally includes dirty signals. Profitability should not be judged until artifacts are analyzed into separate decay/fader nature categories and then replayed out-of-sample or on a larger period/universe.
+```
+
+## 2026-05-25 - P398 applied locally - honest bare-HTF short/fader backtest mode
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Implement the separate short/fader research path from bare closed HTF anomalies without reusing long continuation categories as short entry classes.
+```
+
+Change:
+
+```text
+Added `--pair-collection-mode bare_htf_short_fader` with `feature_contract=bare_htf_short_fader_v1`. The mode collects closed HTF anomaly events, scans only post-HTF-close LTF behavior inside the configured analysis window, detects `failed_new_high` and `taker_fade_red` triggers, filters by prior crowding/fade context, and simulates short entries at the next LTF open with adverse short slippage, structural stop, fixed RR target, max hold, cap-1 live filter, skip reasons, factor separation, trigger summaries, top dependency, edge health, and RR exit grid artifacts.
+```
+
+Validation:
+
+```text
+compileall passed for research_tools cli constants.py main.py tests/test_anomaly_continuation_lab.py.
+Focused tests passed: bare HTF short/fader collector waits until post-HTF close; short fader execution enters at next LTF open and computes short-side PnL.
+Smoke run completed at .output/results/bare_htf_short_fader_smoke with feature_contract=bare_htf_short_fader_v1 and slippage_model=adverse_short_entry_and_exit. The tiny INJ/BEAT smoke produced 79 candidates and 0 final signals under strict prior crowding/fade filters; this validates plumbing, not edge.
+```
+
+Risk:
+
+```text
+This is a research backtest mode only. It does not enable live shorts. Edge still requires larger period/universe validation, cap-1/live-filtered readout, top-dependency review, and data-quality audit.
+```
+
+## 2026-05-25 - P397 research plan - honest bare-HTF short/fader backtest
+
+Files:
+
+```text
+research/EXPERIMENT_LOG.md
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Record the next short/fader research protocol before implementation so future code changes do not mix this path with long continuation categories.
+```
+
+Change:
+
+```text
+Added the planned honest bare-HTF short/fader backtest protocol: closed HTF anomaly, post-close LTF feature windows within 60 minutes, independent factor search, trigger-based next-LTF-open short execution, structural stop, RR variants, cap-1 portfolio filtering, and top-dependency/distribution artifacts.
+```
+
+Validation:
+
+```text
+No code validation required; research memory update only.
+```
+
+Risk:
+
+```text
+This records a plan, not a completed implementation or edge proof.
+```
+
+## 2026-05-25 - P396 spec update - proposed bare-HTF short/fader contract
+
+Files:
+
+```text
+research/STRATEGY_SPEC.md
+research/PATCH_LOG.md
+```
+
+Intent:
+
+```text
+Document the short/fader research strategy as a separate contract so it is not confused with long continuation categories.
+```
+
+Change:
+
+```text
+Added a proposed short/fader research contract: closed HTF anomaly first, post-close HTF/LTF analysis within one hour, prior crowding/fade context, post-close LTF short-pressure triggers, structural stop, and full RR2.0-2.5 exit. Explicitly rejects converting long categories into short categories and marks partial/BE/trailing as not proven defaults.
+```
+
+Validation:
+
+```text
+No code validation required; documentation/spec update only.
+```
+
+Risk:
+
+```text
+This is a proposed research contract, not implemented live short logic and not an edge proof. It requires larger-period/universe validation with cap-1/live-filtered artifacts before live use.
+```
+
+## 2026-05-25 - P395 applied locally - add post-HTF forward LTF confirmation mode
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Add a separate honest mode for the idea: closed HTF candle N proves setup interest, then LTF confirmation is searched only after N closes, starting in N+1. Left LTF context remains available for rejection/context, but no entry is allowed retroactively inside HTF N.
+```
+
+Change:
+
+```text
+New CLI mode `--pair-collection-mode post_htf_close_ltf_forward_confirmation` with feature_contract `post_htf_close_ltf_forward_confirmation_v1`. Candidate collection first checks closed HTF setup anomaly, requires full LTF left context, then emits LTF decision rows from the next HTF window only after enough forward confirmation candles. Targeted flow windows include left context, the HTF setup, the forward confirmation window, and the immediate execution tail.
+```
+
+Validation:
+
+```text
+compileall passed for data\exchanges data\fetchers research_tools cli constants.py main.py.
+Focused tests passed for post-HTF left-context and post-HTF forward-confirmation collectors.
+```
+
+Risk:
+
+```text
+This is not current live2 parity. It is a late-confirmation research mode. Results should be compared against forming live-parity runs separately, and only after artifacts show the forward contract columns and entry timestamps after HTF close.
+```
+
+## 2026-05-25 - P394 applied locally - add post-HTF LTF left-context parity
+
+Files:
+
+```text
+research_tools/anomaly_strategy_backtest.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make `post_htf_close_ltf_confirmation` honest about LTF context: the backtest may inspect LTF candles before the anomalous HTF candle only after the HTF close decision point, but must still enter no earlier than the HTF close. This mirrors live having already accumulated left-side LTF tape/context without allowing retroactive fills.
+```
+
+Change:
+
+```text
+Post-HTF-close targeted flow windows now include a left LTF context window equal to the HTF baseline duration. Pair collection slices entry frames with that left context, the symbol-major multi-pair collector now respects the post-HTF collector, and post-HTF rows require full left-context LTF coverage. In this mode `prior_up_down_whipsaw_to_impulse_range` is sourced from `entry_timeframe_left_context`; artifacts expose left-context status/source/window fields.
+```
+
+Validation:
+
+```text
+compileall passed for data\exchanges data\fetchers research_tools cli constants.py main.py.
+Focused new post-HTF left-context test passed.
+Full tests/test_anomaly_continuation_lab.py still has two pre-existing/current-HEAD forming-mode failures: tests expect entry-derived baseline for forming 1m/5s, while current collector uses setup-timeframe baseline. This is a separate parity question, not fixed by P394.
+```
+
+Risk:
+
+```text
+This can reduce signals because missing left LTF context now removes post-HTF candidates instead of silently evaluating only the HTF baseline. It also increases targeted aggTrade fetch size for post-HTF runs by baseline_candles * setup_timeframe per planned setup. It does not make late post-HTF mode an early-entry proof.
+```
+
 ## 2026-05-24 - P393 proposed - add post-HTF-close LTF confirmation mode
 
 Files:

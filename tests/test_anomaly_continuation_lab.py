@@ -1,4 +1,6 @@
 import inspect
+from dataclasses import replace
+from pathlib import Path
 
 import pandas as pd
 from urllib.parse import quote
@@ -15,10 +17,18 @@ from research_tools import anomaly_strategy_backtest
 from research_tools.anomaly_strategy_backtest import (
     AnomalyBacktestConfig,
     AnomalyLabConfig,
+    PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER,
+    PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION,
+    PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION,
+    _collect_symbol_bare_htf_short_fader_rows,
     _collect_symbol_pair_rows,
+    _collect_symbol_post_htf_close_ltf_rows,
+    _collect_symbol_post_htf_close_ltf_forward_rows,
     build_anomaly_signals,
+    build_bare_htf_short_fader_signals,
     enrich_candidates_with_recent_spike_context,
     simulate_anomaly_trades,
+    simulate_short_fader_signal,
     simulate_long_signal,
 )
 from research_tools.runner_fader_prepump_context import (
@@ -305,6 +315,429 @@ def test_pair_forming_setup_is_available_at_entry_decision_not_full_htf_close() 
     assert first["setup_available_timestamp_ms"] == first["decision_available_timestamp_ms"]
     assert first["setup_full_available_timestamp_ms"] > first["decision_available_timestamp_ms"]
     assert bool(anomaly_strategy_backtest._candidate_availability_mask(pd.DataFrame([first])).iloc[0])
+
+
+def test_post_htf_close_mode_uses_ltf_left_context_without_retro_entry() -> None:
+    symbol = "TEST/USDT:USDT"
+    setup_rows = []
+    for index in range(3):
+        ts = index * 300_000
+        setup_rows.append(
+            {
+                "timestamp": ts,
+                "open": 10.0,
+                "high": 10.1 if index < 2 else 12.6,
+                "low": 9.9 if index < 2 else 9.95,
+                "close": 10.0 if index < 2 else 12.3,
+                "quote_volume": 100.0 if index < 2 else 2_000.0,
+                "number_of_trades": 100.0 if index < 2 else 2_000.0,
+            }
+        )
+
+    entry_rows = []
+    for minute in range(10):
+        ts = minute * 60_000
+        choppy = minute % 2 == 0
+        entry_rows.append(
+            {
+                "timestamp": ts,
+                "open": 10.0,
+                "high": 10.8 if choppy else 10.2,
+                "low": 9.8 if choppy else 9.6,
+                "close": 10.1 if choppy else 9.9,
+                "volume": 10.0,
+                "quote_volume": 100.0,
+                "number_of_trades": 100.0,
+                "taker_buy_quote_volume": 50.0,
+            }
+        )
+    setup_start = 600_000
+    for index in range(5):
+        price = 10.0 + index * 0.45
+        entry_rows.append(
+            {
+                "timestamp": setup_start + index * 60_000,
+                "open": price,
+                "high": price + 0.55,
+                "low": price - 0.05,
+                "close": price + 0.45,
+                "volume": 100.0,
+                "quote_volume": 400.0,
+                "number_of_trades": 400.0,
+                "taker_buy_quote_volume": 280.0,
+            }
+        )
+    entry_rows.append(
+        {
+            "timestamp": 900_000,
+            "open": 12.4,
+            "high": 12.5,
+            "low": 12.2,
+            "close": 12.3,
+            "volume": 10.0,
+            "quote_volume": 100.0,
+            "number_of_trades": 100.0,
+            "taker_buy_quote_volume": 50.0,
+        }
+    )
+
+    rows = _collect_symbol_post_htf_close_ltf_rows(
+        symbol=symbol,
+        setup_frame=pd.DataFrame(setup_rows),
+        entry_frame=pd.DataFrame(entry_rows),
+        config=AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(
+                baseline_candles=2,
+                confirmation_candles=2,
+                forward_high_candles=1,
+                forward_low_candles=1,
+            ),
+            setup_timeframe="5m",
+            entry_timeframe="1m",
+            pair_collection_mode=PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION,
+        ),
+        entry_flow_source="cached_ohlcv",
+    )
+
+    assert rows
+    row = rows[0]
+    assert row["decision_timestamp_ms"] == 840_000
+    assert row["decision_available_timestamp_ms"] == 900_000
+    assert row["post_htf_close_entry_not_before_ms"] == 900_000
+    assert row["post_htf_close_ltf_left_context_status"] == "ok"
+    assert row["post_htf_close_ltf_left_context_candles"] == 10
+    assert row["prior_up_down_whipsaw_source"] == "entry_timeframe_left_context"
+
+
+def test_post_htf_forward_mode_waits_for_ltf_confirmation_after_htf_close() -> None:
+    symbol = "TEST/USDT:USDT"
+    setup_rows = []
+    for index in range(3):
+        ts = index * 300_000
+        setup_rows.append(
+            {
+                "timestamp": ts,
+                "open": 10.0,
+                "high": 10.1 if index < 2 else 12.6,
+                "low": 9.9 if index < 2 else 9.95,
+                "close": 10.0 if index < 2 else 12.3,
+                "quote_volume": 100.0 if index < 2 else 2_000.0,
+                "number_of_trades": 100.0 if index < 2 else 2_000.0,
+            }
+        )
+    entry_rows = []
+    for minute in range(10):
+        ts = minute * 60_000
+        entry_rows.append(
+            {
+                "timestamp": ts,
+                "open": 10.0,
+                "high": 10.2,
+                "low": 9.8,
+                "close": 10.0,
+                "volume": 10.0,
+                "quote_volume": 100.0,
+                "number_of_trades": 100.0,
+                "taker_buy_quote_volume": 50.0,
+            }
+        )
+    setup_start = 600_000
+    for index in range(5):
+        price = 10.0 + index * 0.45
+        entry_rows.append(
+            {
+                "timestamp": setup_start + index * 60_000,
+                "open": price,
+                "high": price + 0.55,
+                "low": price - 0.05,
+                "close": price + 0.45,
+                "volume": 100.0,
+                "quote_volume": 400.0,
+                "number_of_trades": 400.0,
+                "taker_buy_quote_volume": 280.0,
+            }
+        )
+    forward_start = 900_000
+    for index in range(5):
+        price = 12.3 + index * 0.10
+        entry_rows.append(
+            {
+                "timestamp": forward_start + index * 60_000,
+                "open": price,
+                "high": price + 0.25,
+                "low": price - 0.05,
+                "close": price + 0.20,
+                "volume": 100.0,
+                "quote_volume": 250.0,
+                "number_of_trades": 250.0,
+                "taker_buy_quote_volume": 170.0,
+            }
+        )
+
+    rows = _collect_symbol_post_htf_close_ltf_forward_rows(
+        symbol=symbol,
+        setup_frame=pd.DataFrame(setup_rows),
+        entry_frame=pd.DataFrame(entry_rows),
+        config=AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(
+                baseline_candles=2,
+                confirmation_candles=2,
+                forward_high_candles=1,
+                forward_low_candles=1,
+            ),
+            setup_timeframe="5m",
+            entry_timeframe="1m",
+            pair_collection_mode=PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION,
+        ),
+        entry_flow_source="cached_ohlcv",
+    )
+
+    assert rows
+    first = rows[0]
+    assert first["decision_timestamp_ms"] == 960_000
+    assert first["decision_available_timestamp_ms"] == 1_020_000
+    assert first["post_htf_close_entry_not_before_ms"] == 900_000
+    assert first["post_htf_close_ltf_forward_confirmation"] is True
+    assert first["post_htf_close_ltf_forward_confirmation_start_ms"] == 900_000
+    assert first["post_htf_close_ltf_forward_confirmation_candles"] == 2
+    assert first["setup_elapsed_fraction"] == 1.0
+
+
+def test_bare_htf_short_fader_collects_only_post_close_triggers() -> None:
+    setup_frame = pd.DataFrame(
+        [
+            {"timestamp": 0, "open": 10.0, "high": 10.2, "low": 9.8, "close": 10.0, "quote_volume": 100.0, "number_of_trades": 10.0},
+            {"timestamp": 60_000, "open": 10.0, "high": 10.2, "low": 9.8, "close": 10.0, "quote_volume": 100.0, "number_of_trades": 10.0},
+            {"timestamp": 120_000, "open": 10.0, "high": 12.0, "low": 9.9, "close": 11.5, "quote_volume": 1000.0, "number_of_trades": 100.0},
+        ]
+    )
+    entry_rows = []
+    for idx in range(12):
+        ts = 180_000 + idx * 5_000
+        entry_rows.append(
+            {
+                "timestamp": ts,
+                "open": 12.2 if idx == 0 else 11.7,
+                "high": 12.5 if idx == 0 else 11.8,
+                "low": 11.6 if idx == 0 else 10.8,
+                "close": 11.8 if idx == 0 else 11.2,
+                "quote_volume": 100.0,
+                "number_of_trades": 10.0,
+                "taker_buy_quote_volume": 40.0,
+            }
+        )
+    rows = _collect_symbol_bare_htf_short_fader_rows(
+        symbol="TEST/USDT:USDT",
+        setup_frame=setup_frame,
+        entry_frame=pd.DataFrame(entry_rows),
+        config=AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(
+                cache_dir=Path("."),
+                output_dir=Path("."),
+                timeframe="1m",
+                baseline_candles=2,
+                confirmation_candles=2,
+                min_quote_ratio_start=5.0,
+                min_trade_ratio_start=5.0,
+            ),
+            setup_timeframe="1m",
+            entry_timeframe="5s",
+            pair_collection_mode=PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER,
+            short_fader_analysis_minutes=1,
+        ),
+    )
+    assert rows
+    failed = [row for row in rows if row["short_trigger_type"] == "failed_new_high"][0]
+    assert failed["feature_contract"] == "bare_htf_short_fader_v1"
+    assert failed["decision_timestamp_ms"] == 180_000
+    assert failed["decision_timestamp_ms"] >= failed["setup_available_timestamp_ms"]
+    assert failed["short_trigger_status"] == "triggered"
+
+
+def test_bare_htf_short_fader_collects_decay_discovery_triggers() -> None:
+    setup_frame = pd.DataFrame(
+        [
+            {"timestamp": 0, "open": 10.0, "high": 10.2, "low": 9.8, "close": 10.0, "quote_volume": 100.0, "number_of_trades": 10.0},
+            {"timestamp": 60_000, "open": 10.0, "high": 10.2, "low": 9.8, "close": 10.0, "quote_volume": 100.0, "number_of_trades": 10.0},
+            {"timestamp": 120_000, "open": 10.0, "high": 12.0, "low": 9.5, "close": 11.5, "quote_volume": 1000.0, "number_of_trades": 100.0},
+        ]
+    )
+    entry_rows = []
+    values = [
+        (11.5, 11.7, 11.0, 11.1),
+        (11.1, 11.2, 10.3, 10.4),
+        (10.4, 10.5, 10.1, 10.2),
+        (10.2, 10.3, 10.0, 10.1),
+    ]
+    for idx in range(12):
+        open_, high, low, close = values[min(idx, len(values) - 1)]
+        entry_rows.append(
+            {
+                "timestamp": 180_000 + idx * 5_000,
+                "open": open_,
+                "high": high,
+                "low": low,
+                "close": close,
+                "quote_volume": 100.0,
+                "number_of_trades": 10.0,
+                "taker_buy_quote_volume": 40.0,
+            }
+        )
+    entry_frame = pd.DataFrame(entry_rows)
+    rows = _collect_symbol_bare_htf_short_fader_rows(
+        symbol="TEST/USDT:USDT",
+        setup_frame=setup_frame,
+        entry_frame=entry_frame,
+        config=AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(
+                cache_dir=Path("."),
+                output_dir=Path("."),
+                timeframe="1m",
+                baseline_candles=2,
+                min_quote_ratio_start=5.0,
+                min_trade_ratio_start=5.0,
+            ),
+            setup_timeframe="1m",
+            entry_timeframe="5s",
+            pair_collection_mode=PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER,
+            short_fader_analysis_minutes=1,
+        ),
+    )
+    trigger_types = {row["short_trigger_type"] for row in rows}
+    assert "close_below_htf_close" in trigger_types
+    assert "close_below_post_mid" in trigger_types
+    assert "pullback_without_recovery" in trigger_types
+
+
+def test_bare_htf_short_fader_prefilter_requires_stronger_htf_anomaly() -> None:
+    setup_frame = pd.DataFrame(
+        [
+            {"timestamp": 0, "open": 10.0, "high": 10.2, "low": 9.8, "close": 10.0, "quote_volume": 100.0, "number_of_trades": 10.0},
+            {"timestamp": 60_000, "open": 10.0, "high": 10.2, "low": 9.8, "close": 10.0, "quote_volume": 100.0, "number_of_trades": 10.0},
+            {"timestamp": 120_000, "open": 10.0, "high": 10.4, "low": 9.9, "close": 10.1, "quote_volume": 1000.0, "number_of_trades": 100.0},
+        ]
+    )
+    entry_frame = pd.DataFrame(
+        [
+            {
+                "timestamp": 180_000 + idx * 5_000,
+                "open": 10.4 if idx == 0 else 10.1,
+                "high": 10.5 if idx == 0 else 10.2,
+                "low": 10.0,
+                "close": 10.2 if idx == 0 else 10.05,
+                "quote_volume": 100.0,
+                "number_of_trades": 10.0,
+                "taker_buy_quote_volume": 40.0,
+            }
+            for idx in range(12)
+        ]
+    )
+    base_config = AnomalyBacktestConfig(
+        lab_config=AnomalyLabConfig(
+            cache_dir=Path("."),
+            output_dir=Path("."),
+            timeframe="1m",
+            baseline_candles=2,
+            min_quote_ratio_start=5.0,
+            min_trade_ratio_start=5.0,
+        ),
+        setup_timeframe="1m",
+        entry_timeframe="5s",
+        pair_collection_mode=PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER,
+        short_fader_analysis_minutes=1,
+    )
+
+    strict_rows = _collect_symbol_bare_htf_short_fader_rows(
+        symbol="TEST/USDT:USDT",
+        setup_frame=setup_frame,
+        entry_frame=entry_frame,
+        config=base_config,
+    )
+    relaxed_rows = _collect_symbol_bare_htf_short_fader_rows(
+        symbol="TEST/USDT:USDT",
+        setup_frame=setup_frame,
+        entry_frame=entry_frame,
+        config=replace(base_config, short_fader_prefilter_min_htf_return=0.005),
+    )
+
+    assert strict_rows == []
+    assert relaxed_rows
+
+
+def test_short_fader_signal_uses_next_ltf_open_and_short_pnl() -> None:
+    signal = pd.Series(
+        {
+            "symbol": "TEST/USDT:USDT",
+            "timestamp_ms": 120_000,
+            "anomaly_timestamp_ms": 120_000,
+            "decision_timestamp_ms": 180_000,
+            "htf_high": 12.0,
+            "htf_low": 10.0,
+            "short_trigger_reference_high": 12.5,
+            "short_trigger_reference_low": 10.0,
+            "short_trigger_type": "failed_new_high",
+        }
+    )
+    frame = pd.DataFrame(
+        [
+            {"timestamp": 180_000, "open": 11.8, "high": 12.1, "low": 11.6, "close": 11.7},
+            {"timestamp": 185_000, "open": 11.7, "high": 11.8, "low": 10.5, "close": 10.8},
+            {"timestamp": 190_000, "open": 10.8, "high": 11.0, "low": 10.4, "close": 10.6},
+        ]
+    )
+    config = AnomalyBacktestConfig(
+        lab_config=AnomalyLabConfig(cache_dir=Path("."), output_dir=Path("."), timeframe="1m"),
+        setup_timeframe="1m",
+        entry_timeframe="5s",
+        pair_collection_mode=PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER,
+        short_fader_target_r=1.0,
+        entry_slippage_pct=0.0,
+        exit_slippage_pct=0.0,
+        fee_rate=0.0,
+    )
+    trade = simulate_short_fader_signal(frame, signal, config=config)
+    assert trade["status"] == "closed"
+    assert trade["entry_timestamp_ms"] == 185_000
+    assert trade["entry_price"] == 11.7
+    assert trade["exit_reason"] == "target_full_exit"
+    assert trade["net_return"] > 0
+
+
+def test_short_fader_discovery_default_does_not_require_prior_context() -> None:
+    candidates = pd.DataFrame(
+        [
+            {
+                "symbol": "TEST/USDT:USDT",
+                "timestamp_ms": 120_000,
+                "decision_timestamp_ms": 180_000,
+                "short_trigger_status": "triggered",
+                "short_trigger_type": "failed_new_high",
+                "prior_spike_count_72h": 0,
+                "prior_fast_fade_count_72h": 0,
+            }
+        ]
+    )
+    config = AnomalyBacktestConfig(
+        lab_config=AnomalyLabConfig(cache_dir=Path("."), output_dir=Path("."), timeframe="1m"),
+        setup_timeframe="1m",
+        entry_timeframe="5s",
+        pair_collection_mode=PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER,
+    )
+    wide = build_bare_htf_short_fader_signals(candidates, config=config)
+    strict = build_bare_htf_short_fader_signals(
+        candidates,
+        config=AnomalyBacktestConfig(
+            lab_config=AnomalyLabConfig(cache_dir=Path("."), output_dir=Path("."), timeframe="1m"),
+            setup_timeframe="1m",
+            entry_timeframe="5s",
+            pair_collection_mode=PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER,
+            short_fader_require_prior_context=True,
+        ),
+    )
+    assert len(wide) == 1
+    assert bool(wide.iloc[0]["short_fader_context_pass"]) is False
+    assert bool(wide.iloc[0]["short_fader_context_gate_required"]) is False
+    assert strict.empty
 
 
 def test_runner_review_ranks_target_date_by_future_return() -> None:

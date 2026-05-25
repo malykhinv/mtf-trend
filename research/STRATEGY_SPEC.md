@@ -32,6 +32,16 @@ acceptable initial risk
 
 If real quote-volume or trade-count is unavailable, conclusions about tape/flow/organic behavior are limited and the candidate should be rejected or marked explicitly degraded.
 
+For `bare_htf_short_fader` research, the default closed-HTF anomaly gate is intentionally stricter than the generic flow gate before expensive 1s LTF data is fetched:
+
+```text
+start_quote_ratio >= 10
+start_trade_ratio >= 8
+htf_close_open_return >= 1.5%
+```
+
+These are discovery cost-control and signal-quality gates, not proven trading categories. They can be raised for fewer/stronger events or lowered only for narrow forensic runs.
+
 ---
 
 ## 3. Category / nature checks
@@ -232,6 +242,84 @@ entry_timeframe / LTF:
 Live may create a setup before the HTF candle closes by aggregating already closed LTF candles inside the current HTF bucket. This must be marked as `setup_source=forming_htf_from_entry_tf` with `setup_elapsed_fraction` and `setup_closed_entry_candles`. Backtest parity mode must use the same contract and write `feature_contract=htf_setup_ltf_entry_v1`.
 
 For forming HTF candidates, `setup_available_timestamp_ms` is the LTF decision candle availability timestamp, not the full HTF candle close. The full HTF close may be recorded separately as `setup_full_available_timestamp_ms` for audit only. This prevents both directions of self-deception: using unseen HTF data is forbidden, and rejecting an otherwise available forming setup because the full HTF candle has not closed is also not live/backtest parity.
+
+---
+
+## 4B. Proposed short/fader research contract
+
+Short/fader research must start from bare closed HTF anomalies, not from long-selected categories. Long continuation categories are not valid short categories.
+
+```text
+event:
+- closed HTF anomaly candle N with real quote-volume/trade-count expansion and price displacement;
+- no short entry decision before HTF N is closed;
+- post-anomaly analysis window: first 60 minutes after HTF close;
+- LTF tape before and after HTF close may be used as context, but the executable trigger must occur after HTF close.
+```
+
+The current best short hypothesis is not "short every anomaly". It is:
+
+```text
+prior crowding/fade context
++ post-close LTF short pressure
++ still-executable structural stop
++ full RR2.0-2.5 target
+```
+
+Candidate context filters:
+
+```text
+prefer:
+- prior_fast_fade_count / prior_spike_count elevated over the recent context window;
+- prior_spike_count_72h >= 10 or prior_fast_fade_count_72h >= 3 as research starting points;
+- weaker first 12x5s after HTF close, especially ltf12_ret < 0;
+- real trade-count and quote-volume sources, not proxy flow.
+
+avoid:
+- converting discovery/runner long buckets into short buckets;
+- OI/mark-only fader rules without LTF price/tape pressure;
+- entries where the HTF anomaly is still printing clean continuation higher and no failure is visible.
+```
+
+Executable LTF triggers to validate first:
+
+```text
+failed_new_high:
+- after HTF close, price probes above the HTF high or local post-close high;
+- it fails to hold and closes back below the relevant high;
+- red/weak close confirms rejection.
+
+taker_fade_red:
+- recent 4x5s window shows red pressure;
+- taker-buy share is weak versus recent flow;
+- close is below HTF close or below the post-close midline.
+```
+
+Initial short risk/exit contract:
+
+```text
+entry: next LTF open after the trigger candle, with adverse slippage and fees;
+stop: structural stop above max(HTF high, trigger/rejection high) plus small range buffer;
+target: full-position fixed RR2.0-2.5, with RR2.5 the current best research anchor;
+max hold: within the post-anomaly hour unless separately proven;
+do not default to partial close, BE, or trailing SL: current focused checks show they dilute the few large winners.
+```
+
+Acceptance criteria before live:
+
+```text
+validate on a larger period/universe;
+read only cap-1/live-filtered results for tradability;
+require enough trades to judge top dependency;
+report top5/top15 contribution, per-symbol/month/session distribution, and skip/reject funnel;
+no live shorting until this is implemented as a separate fader contract with honest artifacts.
+```
+
+Implementation note:
+
+```text
+Local mode `--pair-collection-mode bare_htf_short_fader` implements this as research-only feature_contract=bare_htf_short_fader_v1. By default it is a wide discovery artifact mode: post-close short-pressure triggers are included broadly, prior crowding/fade is annotation rather than a required gate, and RR exit grid is disabled unless explicitly requested. Default discovery triggers are failed_new_high, taker_fade_red, close_below_htf_close, close_below_post_mid, lower_high_close_down, effort_no_progress, and pullback_without_recovery. It writes `bare_htf_short_*` artifacts, compact post-close LTF path slices, and heuristic decay-category research labels. It uses adverse short-side slippage, structural stop, fixed RR target, max hold, and cap-1 live filter. It does not enable live shorts.
+```
 
 ---
 
@@ -690,4 +778,10 @@ The existing forming mode evaluates LTF decisions inside the current HTF candle.
 post_htf_close_ltf_confirmation
 ```
 
-The post-HTF-close mode first waits for the HTF setup candle to close. It may then inspect the complete LTF segment inside that now-closed HTF candle as a confirmation/filter, but entry must be no earlier than the HTF close and must still pass drift, TP-before-entry and RR guards. This mode tests late continuation after HTF confirmation; it does not prove early intra-HTF LTF edge.
+The post-HTF-close mode first waits for the HTF setup candle to close. It may then inspect the complete LTF segment inside that now-closed HTF candle as a confirmation/filter, plus a left LTF context window before the anomalous HTF candle for rejection/context features such as prior whipsaw. Entry must be no earlier than the HTF close and must still pass drift, TP-before-entry and RR guards. This mode tests late continuation after HTF confirmation; it does not prove early intra-HTF LTF edge.
+
+```text
+post_htf_close_ltf_forward_confirmation
+```
+
+The post-HTF-forward mode first waits for HTF setup candle N to close and pass setup interest. It then searches LTF confirmation only after N closes, starting in the next HTF window. LTF left context before N may be used for rejection/context, but entry is tied to the forward LTF decision candle and must not be placed retroactively inside N. This is a late-confirmation research mode, not current live2 parity.

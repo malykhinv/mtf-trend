@@ -108,7 +108,19 @@ TARGETED_FLOW_MERGE_GAP_MS = 60_000
 TARGETED_FLOW_MAX_MERGED_SPAN_MS = 10 * 60_000
 PAIR_COLLECTION_MODE_FORMING = "forming"
 PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION = "post_htf_close_ltf_confirmation"
+PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION = "post_htf_close_ltf_forward_confirmation"
+PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER = "bare_htf_short_fader"
 POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT = "post_htf_close_ltf_confirmation_v1"
+POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION_CONTRACT = "post_htf_close_ltf_forward_confirmation_v1"
+BARE_HTF_SHORT_FADER_CONTRACT = "bare_htf_short_fader_v1"
+SHORT_FADER_DEFAULT_TRIGGERS = (
+    "failed_new_high,taker_fade_red,close_below_htf_close,close_below_post_mid,"
+    "lower_high_close_down,effort_no_progress,pullback_without_recovery"
+)
+_POST_HTF_CLOSE_PAIR_MODES = {
+    PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION,
+    PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION,
+}
 _BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_column", "missing_timestamp", "missing_frame", "empty_oi", "stale_asof"}
 _TRADE_CHART_FLOW_PROVENANCE = {
     "trade_count_proxy_used": False,
@@ -148,6 +160,16 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "post_htf_close_ltf_confirmation",
     "post_htf_close_entry_not_before_ms",
     "post_htf_close_entry_not_before_utc",
+    "post_htf_close_ltf_left_context_ms",
+    "post_htf_close_ltf_left_context_candles",
+    "post_htf_close_ltf_left_context_status",
+    "post_htf_close_ltf_left_context_source",
+    "post_htf_close_ltf_left_context_start_ms",
+    "post_htf_close_ltf_left_context_end_ms",
+    "post_htf_close_ltf_forward_confirmation",
+    "post_htf_close_ltf_forward_confirmation_start_ms",
+    "post_htf_close_ltf_forward_confirmation_end_ms",
+    "post_htf_close_ltf_forward_confirmation_candles",
     "entry_activation_price",
     "start_trade_count",
     "baseline_trade_count_median",
@@ -205,6 +227,7 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "prior_up_leg_to_impulse_range",
     "prior_down_leg_to_impulse_range",
     "prior_up_down_whipsaw_to_impulse_range",
+    "prior_up_down_whipsaw_source",
     "start_quote_per_abs_return",
     "start_trades_per_abs_return",
     "start_quote_ratio_per_abs_return",
@@ -328,6 +351,18 @@ class AnomalyBacktestConfig:
     fee_rate: float = 0.0004
     entry_slippage_pct: float = DEFAULT_SLIPPAGE
     exit_slippage_pct: float = DEFAULT_SLIPPAGE
+    short_fader_analysis_minutes: int = 60
+    short_fader_target_r: float = 2.5
+    short_fader_min_prior_spike_count_72h: int = 10
+    short_fader_min_prior_fast_fade_count_72h: int = 3
+    short_fader_triggers: str = SHORT_FADER_DEFAULT_TRIGGERS
+    short_fader_require_prior_context: bool = False
+    short_fader_run_exit_grid: bool = False
+    short_fader_prefilter_min_quote_ratio: float = 10.0
+    short_fader_prefilter_min_trade_ratio: float = 8.0
+    short_fader_prefilter_min_htf_return: float = 0.015
+    short_fader_clean_adverse_threshold_pct: float = 0.015
+    short_fader_mfe_threshold_pct: float = 0.02
     write_prepump_context: bool = True
     prepump_context_timeframe: str = DEFAULT_PREPUMP_CONTEXT_TIMEFRAME
     prepump_context_windows: str = DEFAULT_PREPUMP_CONTEXT_WINDOWS
@@ -363,8 +398,13 @@ def _execution_model_label(config: AnomalyBacktestConfig) -> str:
             f"_exit_{float(config.exit_slippage_pct):g}"
         )
     pair_mode_suffix = ""
-    if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION:
+    pair_collection_mode = str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING))
+    if pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION:
         pair_mode_suffix = "_post_htf_close_ltf_confirmation"
+    elif pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION:
+        pair_mode_suffix = "_post_htf_close_ltf_forward_confirmation"
+    elif pair_collection_mode == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER:
+        pair_mode_suffix = "_bare_htf_short_fader"
     if config.entry_method == "market":
         if config.latency_enabled:
             return (
@@ -391,6 +431,16 @@ def _long_entry_fill_price(raw_price: float, *, config: AnomalyBacktestConfig) -
 def _long_exit_fill_price(raw_price: float, *, config: AnomalyBacktestConfig) -> float:
     slippage = _nonnegative_ratio(config.exit_slippage_pct, field_name="exit_slippage_pct")
     return float(raw_price) * (1.0 - slippage)
+
+
+def _short_entry_fill_price(raw_price: float, *, config: AnomalyBacktestConfig) -> float:
+    slippage = _nonnegative_ratio(config.entry_slippage_pct, field_name="entry_slippage_pct")
+    return float(raw_price) * (1.0 - slippage)
+
+
+def _short_exit_fill_price(raw_price: float, *, config: AnomalyBacktestConfig) -> float:
+    slippage = _nonnegative_ratio(config.exit_slippage_pct, field_name="exit_slippage_pct")
+    return float(raw_price) * (1.0 + slippage)
 
 
 def _entry_fill_audit(
@@ -1051,6 +1101,40 @@ def _prior_up_down_whipsaw_to_impulse_range(baseline: pd.DataFrame, *, impulse_r
     return float(min(up_ratio, down_ratio))
 
 
+def _post_htf_ltf_left_context_ms(config: AnomalyBacktestConfig) -> int:
+    if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) not in _POST_HTF_CLOSE_PAIR_MODES:
+        return 0
+    setup_ms = _timeframe_to_milliseconds(_effective_setup_timeframe(config))
+    entry_ms = _timeframe_to_milliseconds(_effective_entry_timeframe(config))
+    if setup_ms <= 0 or entry_ms <= 0 or entry_ms >= setup_ms:
+        return 0
+    return int(max(0, int(config.lab_config.baseline_candles)) * setup_ms)
+
+
+def _entry_segment_has_full_range_coverage(
+    entry_segment: pd.DataFrame,
+    *,
+    range_start_ms: int,
+    range_end_exclusive_ms: int,
+    entry_ms: int,
+) -> bool:
+    if entry_ms <= 0 or int(range_end_exclusive_ms) <= int(range_start_ms):
+        return False
+    expected_count = int((int(range_end_exclusive_ms) - int(range_start_ms)) // int(entry_ms))
+    if expected_count <= 0:
+        return False
+    if len(entry_segment) != expected_count:
+        return False
+    if "timestamp" not in entry_segment.columns:
+        return False
+    timestamps = pd.to_numeric(entry_segment["timestamp"], errors="coerce")
+    if timestamps.isna().any():
+        return False
+    expected = np.arange(int(range_start_ms), int(range_end_exclusive_ms), int(entry_ms), dtype=np.int64)
+    actual = timestamps.astype("int64").to_numpy()
+    return bool(len(actual) == len(expected) and np.array_equal(actual, expected))
+
+
 def _aggregate_ohlcv_to_candle(frame: pd.DataFrame, *, timestamp_ms: int) -> pd.Series | None:
     if frame.empty:
         return None
@@ -1643,7 +1727,22 @@ def _targeted_flow_window_for_row(row: pd.Series, *, config: AnomalyBacktestConf
     setup_ms = _timeframe_to_milliseconds(_effective_setup_timeframe(config))
     entry_ms = _timeframe_to_milliseconds(_effective_entry_timeframe(config))
     immediate_entry_tail_ms = max(1, int(config.market_entry_latency_candles) + 2) * int(entry_ms)
-    return int(setup_start), int(setup_start) + int(setup_ms) - 1 + int(immediate_entry_tail_ms)
+    left_context_ms = _post_htf_ltf_left_context_ms(config)
+    right_confirmation_ms = (
+        int(max(1, int(getattr(config, "short_fader_analysis_minutes", 60))) * 60_000)
+        if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING))
+        == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER
+        else (
+            int(setup_ms)
+            if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING))
+            == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION
+            else 0
+        )
+    )
+    return (
+        int(setup_start) - int(left_context_ms),
+        int(setup_start) + int(setup_ms) - 1 + int(right_confirmation_ms) + int(immediate_entry_tail_ms),
+    )
 
 
 def _targeted_flow_needs_oi_context(config: AnomalyBacktestConfig) -> bool:
@@ -1704,6 +1803,51 @@ def _apply_subminute_flow_upper_bound_filter(
     return filtered, int(len(coarse) - len(filtered))
 
 
+def _short_fader_prefilter_thresholds(config: AnomalyBacktestConfig) -> tuple[float, float, float]:
+    min_quote_ratio = max(
+        float(config.lab_config.min_quote_ratio_start),
+        float(getattr(config, "short_fader_prefilter_min_quote_ratio", 10.0)),
+    )
+    min_trade_ratio = max(
+        float(config.lab_config.min_trade_ratio_start),
+        float(getattr(config, "short_fader_prefilter_min_trade_ratio", 8.0)),
+    )
+    min_htf_return = float(getattr(config, "short_fader_prefilter_min_htf_return", 0.015))
+    return min_quote_ratio, min_trade_ratio, min_htf_return
+
+
+def _short_fader_htf_return_from_row(row: pd.Series) -> float:
+    open_value = row.get("htf_open", row.get("start_open", row.get("open", np.nan)))
+    close_value = row.get("htf_close", row.get("start_close", row.get("close", np.nan)))
+    try:
+        return _safe_divide_value(float(close_value) - float(open_value), float(open_value))
+    except (TypeError, ValueError):
+        return float("nan")
+
+
+def _apply_short_fader_htf_anomaly_prefilter(
+    coarse: pd.DataFrame,
+    *,
+    config: AnomalyBacktestConfig,
+) -> tuple[pd.DataFrame, int]:
+    if coarse.empty:
+        return coarse.copy(), 0
+    required = {"start_quote_ratio", "start_trade_ratio"}
+    if required.difference(coarse.columns):
+        return coarse.iloc[0:0].copy(), int(len(coarse))
+    min_quote_ratio, min_trade_ratio, min_htf_return = _short_fader_prefilter_thresholds(config)
+    quote_ratio = pd.to_numeric(coarse["start_quote_ratio"], errors="coerce")
+    trade_ratio = pd.to_numeric(coarse["start_trade_ratio"], errors="coerce")
+    htf_return = coarse.apply(_short_fader_htf_return_from_row, axis=1)
+    mask = (
+        quote_ratio.ge(min_quote_ratio)
+        & trade_ratio.ge(min_trade_ratio)
+        & pd.to_numeric(htf_return, errors="coerce").ge(min_htf_return)
+    )
+    filtered = coarse.loc[mask].copy()
+    return filtered, int(len(coarse) - len(filtered))
+
+
 def _candidate_decision_center_ms(row: pd.Series) -> int | None:
     for column in (
         "decision_available_timestamp_ms",
@@ -1756,6 +1900,8 @@ def _select_coarse_signal_rows_for_targeted_flow(
     )
     if prepared.empty:
         return prepared, "no_usable_coarse_candidates", ""
+    if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER:
+        return prepared, "ok_bare_htf_short_fader_prefilter", ""
     signal_config = _strip_derivative_context_requirements(
         replace(
             config,
@@ -1829,6 +1975,15 @@ def ensure_targeted_subminute_flow_cache_for_configs(
             continue
         usable_coarse_count = int(len(coarse.loc[~coarse["status"].astype(str).eq("error")])) if "status" in coarse.columns else int(len(coarse))
         bounded_coarse, upper_bound_dropped = _apply_subminute_flow_upper_bound_filter(coarse, config=config)
+        short_fader_prefilter_dropped = 0
+        if (
+            str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING))
+            == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER
+        ):
+            bounded_coarse, short_fader_prefilter_dropped = _apply_short_fader_htf_anomaly_prefilter(
+                bounded_coarse,
+                config=config,
+            )
         valid, selection_status, selection_error = _select_coarse_signal_rows_for_targeted_flow(
             bounded_coarse,
             config=config,
@@ -1836,6 +1991,18 @@ def ensure_targeted_subminute_flow_cache_for_configs(
         )
         windows_added = 0
         raw_window_ms = 0
+        left_context_ms = _post_htf_ltf_left_context_ms(config)
+        right_context_ms = (
+            int(max(1, int(getattr(config, "short_fader_analysis_minutes", 60))) * 60_000)
+            if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING))
+            == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER
+            else (
+                _timeframe_to_milliseconds(setup_timeframe)
+                if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING))
+                == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION
+                else 0
+            )
+        )
         for _, row in valid.iterrows():
             symbol = str(row.get("symbol") or "").strip()
             if not symbol or symbol == "__all__":
@@ -1855,13 +2022,26 @@ def ensure_targeted_subminute_flow_cache_for_configs(
                 "error": selection_error,
                 "coarse_candidates": int(usable_coarse_count),
                 "coarse_upper_bound_dropped": int(upper_bound_dropped),
+                "short_fader_prefilter_dropped": int(short_fader_prefilter_dropped),
+                "short_fader_prefilter_min_quote_ratio": float(_short_fader_prefilter_thresholds(config)[0]),
+                "short_fader_prefilter_min_trade_ratio": float(_short_fader_prefilter_thresholds(config)[1]),
+                "short_fader_prefilter_min_htf_return": float(_short_fader_prefilter_thresholds(config)[2]),
                 "coarse_prefilter_candidates": int(len(bounded_coarse)),
                 "coarse_signals": int(len(valid)),
                 "targeted_windows": int(windows_added),
                 "raw_targeted_window_ms": int(raw_window_ms),
-                "window_before_ms": 0,
-                "window_after_ms": 0,
-                "window_selection": "coarse_signal_prefilter_plus_flow_upper_bound_exact_setup_window",
+                "window_before_ms": int(left_context_ms),
+                "window_after_ms": int(right_context_ms),
+                "window_selection": (
+                    "bare_htf_anomaly_prefilter_post_close_short_fader_window"
+                    if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING))
+                    == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER
+                    else (
+                        "coarse_signal_prefilter_plus_flow_upper_bound_setup_window_with_post_htf_ltf_left_context"
+                        if left_context_ms > 0
+                        else "coarse_signal_prefilter_plus_flow_upper_bound_exact_setup_window"
+                    )
+                ),
             }
         )
 
@@ -3039,10 +3219,11 @@ def collect_pair_anomaly_rows(
                 start_timestamp_ms=start_ms - lab_config.baseline_candles * _timeframe_to_milliseconds(setup_timeframe),
                 end_timestamp_ms=int(end_ms),
             )
+            entry_left_context_ms = _post_htf_ltf_left_context_ms(config)
             entry_frame = _slice_ohlcv_asof_window(
                 entry_frame,
                 timeframe=entry_cache_timeframe,
-                start_timestamp_ms=start_ms,
+                start_timestamp_ms=start_ms - entry_left_context_ms,
                 end_timestamp_ms=int(end_ms),
             )
             if entry_cache_timeframe != entry_timeframe:
@@ -3053,17 +3234,21 @@ def collect_pair_anomaly_rows(
                 entry_frame = _slice_ohlcv_asof_window(
                     entry_frame,
                     timeframe=entry_timeframe,
-                    start_timestamp_ms=start_ms,
+                    start_timestamp_ms=start_ms - entry_left_context_ms,
                     end_timestamp_ms=int(end_ms),
                 )
                 entry_flow_source = f"cached_{entry_cache_timeframe}_aggregated_to_{entry_timeframe}"
             else:
                 entry_flow_source = _materialized_entry_flow_source(entry_frame, entry_timeframe=entry_timeframe)
-            collector = (
-                _collect_symbol_post_htf_close_ltf_rows
-                if str(config.pair_collection_mode) == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION
-                else _collect_symbol_pair_rows
-            )
+            pair_collection_mode = str(config.pair_collection_mode)
+            if pair_collection_mode == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER:
+                collector = _collect_symbol_bare_htf_short_fader_rows
+            elif pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION:
+                collector = _collect_symbol_post_htf_close_ltf_forward_rows
+            elif pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION:
+                collector = _collect_symbol_post_htf_close_ltf_rows
+            else:
+                collector = _collect_symbol_pair_rows
             rows.extend(collector(
                 symbol=symbol,
                 setup_frame=setup_frame,
@@ -3287,10 +3472,11 @@ def collect_pair_anomaly_rows_for_configs(
                     start_timestamp_ms=start_ms - config.lab_config.baseline_candles * setup_ms,
                     end_timestamp_ms=end_ms,
                 )
+                entry_left_context_ms = _post_htf_ltf_left_context_ms(config)
                 entry_frame = _slice_ohlcv_asof_window(
                     frame_cache[entry_cache_timeframe],
                     timeframe=entry_cache_timeframe,
-                    start_timestamp_ms=start_ms,
+                    start_timestamp_ms=start_ms - entry_left_context_ms,
                     end_timestamp_ms=end_ms,
                 )
                 if entry_cache_timeframe != entry_timeframe:
@@ -3301,7 +3487,7 @@ def collect_pair_anomaly_rows_for_configs(
                     entry_frame = _slice_ohlcv_asof_window(
                         entry_frame,
                         timeframe=entry_timeframe,
-                        start_timestamp_ms=start_ms,
+                        start_timestamp_ms=start_ms - entry_left_context_ms,
                         end_timestamp_ms=end_ms,
                     )
                     entry_flow_source = f"cached_{entry_cache_timeframe}_aggregated_to_{entry_timeframe}"
@@ -3310,8 +3496,17 @@ def collect_pair_anomaly_rows_for_configs(
                         entry_frame,
                         entry_timeframe=entry_timeframe,
                     )
+                pair_collection_mode = str(config.pair_collection_mode)
+                if pair_collection_mode == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER:
+                    collector = _collect_symbol_bare_htf_short_fader_rows
+                elif pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION:
+                    collector = _collect_symbol_post_htf_close_ltf_forward_rows
+                elif pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION:
+                    collector = _collect_symbol_post_htf_close_ltf_rows
+                else:
+                    collector = _collect_symbol_pair_rows
                 rows_by_key[key].extend(
-                    _collect_symbol_pair_rows(
+                    collector(
                         symbol=symbol,
                         setup_frame=setup_frame,
                         entry_frame=entry_frame,
@@ -3378,17 +3573,12 @@ def _entry_segment_has_full_setup_coverage(
 ) -> bool:
     if entry_ms <= 0 or setup_ms <= 0 or setup_ms % entry_ms != 0:
         return False
-    expected_count = int(setup_ms // entry_ms)
-    if len(entry_segment) != expected_count:
-        return False
-    if "timestamp" not in entry_segment.columns:
-        return False
-    timestamps = pd.to_numeric(entry_segment["timestamp"], errors="coerce")
-    if timestamps.isna().any():
-        return False
-    expected = np.arange(int(setup_start_ms), int(setup_start_ms + setup_ms), int(entry_ms), dtype=np.int64)
-    actual = timestamps.astype("int64").to_numpy()
-    return bool(len(actual) == len(expected) and np.array_equal(actual, expected))
+    return _entry_segment_has_full_range_coverage(
+        entry_segment,
+        range_start_ms=int(setup_start_ms),
+        range_end_exclusive_ms=int(setup_start_ms + setup_ms),
+        entry_ms=int(entry_ms),
+    )
 
 
 def _collect_symbol_post_htf_close_ltf_rows(
@@ -3468,6 +3658,26 @@ def _collect_symbol_post_htf_close_ltf_rows(
             continue
         if len(entry_segment) < lab_config.confirmation_candles:
             continue
+        left_context_ms = _post_htf_ltf_left_context_ms(config)
+        left_context_start = int(setup_start - left_context_ms)
+        left_context = pd.DataFrame()
+        left_context_status = "disabled"
+        if left_context_ms > 0:
+            left_start_pos = int(np.searchsorted(entry_timestamps, left_context_start, side="left"))
+            left_end_pos = int(np.searchsorted(entry_timestamps, setup_start, side="left"))
+            left_context = entry_frame.iloc[left_start_pos:left_end_pos].copy()
+            left_context_status = (
+                "ok"
+                if _entry_segment_has_full_range_coverage(
+                    left_context,
+                    range_start_ms=left_context_start,
+                    range_end_exclusive_ms=setup_start,
+                    entry_ms=entry_ms,
+                )
+                else "missing_ltf_left_context"
+            )
+            if left_context_status != "ok":
+                continue
 
         baseline = setup_frame.iloc[setup_idx - lab_config.baseline_candles : setup_idx].copy()
         if baseline.empty:
@@ -3486,6 +3696,7 @@ def _collect_symbol_post_htf_close_ltf_rows(
             config=config,
             entry_flow_source=entry_flow_source,
             setup_flow_source="cached_ohlcv",
+            ltf_left_context=left_context,
             feature_contract=POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT,
             setup_source="closed_htf_ltf_confirmation_after_close_backtest",
             timestamp_semantics_note=(
@@ -3501,7 +3712,581 @@ def _collect_symbol_post_htf_close_ltf_rows(
         row["post_htf_close_ltf_confirmation"] = True
         row["post_htf_close_entry_not_before_ms"] = int(setup_start + setup_ms)
         row["post_htf_close_entry_not_before_utc"] = _timestamp_to_utc(int(setup_start + setup_ms))
+        row["post_htf_close_ltf_left_context_ms"] = int(left_context_ms)
+        row["post_htf_close_ltf_left_context_candles"] = int(len(left_context))
+        row["post_htf_close_ltf_left_context_status"] = left_context_status
+        row["post_htf_close_ltf_left_context_source"] = str(entry_flow_source)
+        row["post_htf_close_ltf_left_context_start_ms"] = int(left_context_start) if left_context_ms > 0 else None
+        row["post_htf_close_ltf_left_context_end_ms"] = int(setup_start - entry_ms) if left_context_ms > 0 else None
         rows.append(row)
+    return rows
+
+
+def _collect_symbol_post_htf_close_ltf_forward_rows(
+    *,
+    symbol: str,
+    setup_frame: pd.DataFrame,
+    entry_frame: pd.DataFrame,
+    config: AnomalyBacktestConfig,
+    entry_flow_source: str = "cached_ohlcv",
+) -> list[dict[str, object]]:
+    lab_config = config.lab_config
+    setup_timeframe = _effective_setup_timeframe(config)
+    entry_timeframe = _effective_entry_timeframe(config)
+    setup_ms = _timeframe_to_milliseconds(setup_timeframe)
+    entry_ms = _timeframe_to_milliseconds(entry_timeframe)
+    if setup_ms <= 0 or entry_ms <= 0 or entry_ms >= setup_ms:
+        raise ValueError("post_htf_close_ltf_forward_confirmation requires entry_timeframe below setup_timeframe")
+    if setup_ms % entry_ms != 0:
+        raise ValueError(f"entry_timeframe must evenly divide setup_timeframe: {setup_timeframe}/{entry_timeframe}")
+    if setup_frame.empty or entry_frame.empty:
+        return []
+
+    setup_frame = setup_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    entry_frame = entry_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    rows: list[dict[str, object]] = []
+    setup_timestamps = setup_frame["timestamp"].astype("int64").to_numpy()
+    entry_timestamps = entry_frame["timestamp"].astype("int64").to_numpy()
+    baseline_quote_medians = (
+        pd.to_numeric(setup_frame["quote_volume"], errors="coerce")
+        .rolling(window=lab_config.baseline_candles, min_periods=lab_config.baseline_candles)
+        .median()
+        .shift(1)
+        .to_numpy()
+    )
+    baseline_trade_medians = (
+        pd.to_numeric(setup_frame["number_of_trades"], errors="coerce")
+        .rolling(window=lab_config.baseline_candles, min_periods=lab_config.baseline_candles)
+        .median()
+        .shift(1)
+        .to_numpy()
+    )
+
+    for setup_idx, setup_start in enumerate(setup_timestamps):
+        setup_start = int(setup_start)
+        if setup_idx < lab_config.baseline_candles:
+            continue
+        baseline_quote_value = float(baseline_quote_medians[setup_idx])
+        baseline_trade_value = float(baseline_trade_medians[setup_idx])
+        if not np.isfinite(baseline_quote_value) or not np.isfinite(baseline_trade_value):
+            continue
+        if baseline_quote_value <= 0.0 or baseline_trade_value <= 0.0:
+            continue
+        setup_row = setup_frame.iloc[setup_idx]
+        start_quote = float(setup_row["quote_volume"])
+        start_trades = float(setup_row["number_of_trades"])
+        start_quote_ratio = _safe_divide_value(start_quote, baseline_quote_value)
+        start_trade_ratio = _safe_divide_value(start_trades, baseline_trade_value)
+        if (
+            not np.isfinite(start_quote_ratio)
+            or not np.isfinite(start_trade_ratio)
+            or start_quote_ratio < lab_config.min_quote_ratio_start
+            or start_trade_ratio < lab_config.min_trade_ratio_start
+        ):
+            continue
+
+        left_context_ms = _post_htf_ltf_left_context_ms(config)
+        left_context_start = int(setup_start - left_context_ms)
+        left_context = pd.DataFrame()
+        left_context_status = "disabled"
+        if left_context_ms > 0:
+            left_start_pos = int(np.searchsorted(entry_timestamps, left_context_start, side="left"))
+            left_end_pos = int(np.searchsorted(entry_timestamps, setup_start, side="left"))
+            left_context = entry_frame.iloc[left_start_pos:left_end_pos].copy()
+            left_context_status = (
+                "ok"
+                if _entry_segment_has_full_range_coverage(
+                    left_context,
+                    range_start_ms=left_context_start,
+                    range_end_exclusive_ms=setup_start,
+                    entry_ms=entry_ms,
+                )
+                else "missing_ltf_left_context"
+            )
+            if left_context_status != "ok":
+                continue
+
+        forward_start = int(setup_start + setup_ms)
+        forward_end = int(forward_start + setup_ms)
+        forward_start_pos = int(np.searchsorted(entry_timestamps, forward_start, side="left"))
+        forward_end_pos_exclusive = int(np.searchsorted(entry_timestamps, forward_end, side="left"))
+        forward_segment_full = entry_frame.iloc[forward_start_pos:forward_end_pos_exclusive]
+        if len(forward_segment_full) < lab_config.confirmation_candles:
+            continue
+
+        baseline = setup_frame.iloc[setup_idx - lab_config.baseline_candles : setup_idx].copy()
+        if baseline.empty:
+            continue
+        for entry_end_pos in range(lab_config.confirmation_candles - 1, len(forward_segment_full)):
+            entry_segment = forward_segment_full.iloc[: entry_end_pos + 1].copy()
+            decision = entry_segment.iloc[-1]
+            decision_ts = int(decision["timestamp"])
+            if not _entry_segment_has_full_range_coverage(
+                entry_segment,
+                range_start_ms=forward_start,
+                range_end_exclusive_ms=decision_ts + entry_ms,
+                entry_ms=entry_ms,
+            ):
+                continue
+            row = _build_pair_candidate_row(
+                symbol=symbol,
+                setup_timeframe=setup_timeframe,
+                entry_timeframe=entry_timeframe,
+                setup_ms=setup_ms,
+                entry_ms=entry_ms,
+                setup_idx=setup_idx,
+                baseline=baseline,
+                setup_row=setup_row,
+                entry_segment=entry_segment,
+                entry_frame=entry_frame,
+                config=config,
+                entry_flow_source=entry_flow_source,
+                setup_flow_source="cached_ohlcv",
+                ltf_left_context=left_context,
+                setup_elapsed_fraction_override=1.0,
+                feature_contract=POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION_CONTRACT,
+                setup_source="closed_htf_ltf_forward_confirmation_after_close_backtest",
+                timestamp_semantics_note=(
+                    "closed_htf_setup_available_at_full_close;"
+                    "ltf_left_context_read_after_htf_close;"
+                    "ltf_forward_confirmation_after_htf_close;"
+                    "entry_not_retroactively_inside_htf"
+                ),
+            )
+            if row is None:
+                continue
+            row["setup_decision_index"] = int(entry_end_pos)
+            row["candidate_collection_policy"] = "all_ltf_forward_confirmations_after_post_htf_close"
+            row["post_htf_close_ltf_confirmation"] = False
+            row["post_htf_close_ltf_forward_confirmation"] = True
+            row["post_htf_close_entry_not_before_ms"] = int(forward_start)
+            row["post_htf_close_entry_not_before_utc"] = _timestamp_to_utc(int(forward_start))
+            row["post_htf_close_ltf_left_context_ms"] = int(left_context_ms)
+            row["post_htf_close_ltf_left_context_candles"] = int(len(left_context))
+            row["post_htf_close_ltf_left_context_status"] = left_context_status
+            row["post_htf_close_ltf_left_context_source"] = str(entry_flow_source)
+            row["post_htf_close_ltf_left_context_start_ms"] = int(left_context_start) if left_context_ms > 0 else None
+            row["post_htf_close_ltf_left_context_end_ms"] = int(setup_start - entry_ms) if left_context_ms > 0 else None
+            row["post_htf_close_ltf_forward_confirmation_start_ms"] = int(forward_start)
+            row["post_htf_close_ltf_forward_confirmation_end_ms"] = int(decision_ts)
+            row["post_htf_close_ltf_forward_confirmation_candles"] = int(len(entry_segment))
+            rows.append(row)
+    return rows
+
+
+def _short_fader_trigger_names(config: AnomalyBacktestConfig) -> set[str]:
+    raw = str(getattr(config, "short_fader_triggers", SHORT_FADER_DEFAULT_TRIGGERS) or "")
+    names = {item.strip() for item in raw.split(",") if item.strip()}
+    return names or {"failed_new_high", "taker_fade_red"}
+
+
+def _window_feature_row(window: pd.DataFrame, *, prefix: str) -> dict[str, object]:
+    if window.empty:
+        return {
+            f"{prefix}_candles": 0,
+            f"{prefix}_ret": float("nan"),
+            f"{prefix}_red_share": float("nan"),
+            f"{prefix}_taker_buy_quote_share": float("nan"),
+            f"{prefix}_quote_volume": float("nan"),
+            f"{prefix}_number_of_trades": float("nan"),
+        }
+    first_open = float(window["open"].iloc[0])
+    last_close = float(window["close"].iloc[-1])
+    red_share = float((pd.to_numeric(window["close"], errors="coerce") < pd.to_numeric(window["open"], errors="coerce")).mean())
+    quote_sum = float(pd.to_numeric(window.get("quote_volume", pd.Series(dtype=float)), errors="coerce").sum())
+    trades_sum = float(pd.to_numeric(window.get("number_of_trades", pd.Series(dtype=float)), errors="coerce").sum())
+    taker_sum = float(pd.to_numeric(window.get("taker_buy_quote_volume", pd.Series(dtype=float)), errors="coerce").sum())
+    return {
+        f"{prefix}_candles": int(len(window)),
+        f"{prefix}_ret": _safe_divide_value(last_close - first_open, first_open),
+        f"{prefix}_red_share": red_share,
+        f"{prefix}_taker_buy_quote_share": _safe_divide_value(taker_sum, quote_sum),
+        f"{prefix}_quote_volume": quote_sum,
+        f"{prefix}_number_of_trades": trades_sum,
+    }
+
+
+def _post_close_short_labels(
+    post_window: pd.DataFrame,
+    *,
+    anchor_close: float,
+    config: AnomalyBacktestConfig,
+) -> dict[str, object]:
+    if post_window.empty or not np.isfinite(anchor_close) or anchor_close <= 0.0:
+        return {
+            "short_label_status": "missing_post_close_window",
+            "short_mfe_from_post_close": float("nan"),
+            "long_mfe_from_post_close": float("nan"),
+            "adverse_up_before_short_low": float("nan"),
+            "short2": False,
+            "clean_short2": False,
+        }
+    highs = pd.to_numeric(post_window["high"], errors="coerce")
+    lows = pd.to_numeric(post_window["low"], errors="coerce")
+    low_idx = lows.idxmin()
+    high_idx = highs.idxmax()
+    min_low = float(lows.min())
+    max_high = float(highs.max())
+    before_low = post_window.loc[:low_idx]
+    max_high_before_low = float(pd.to_numeric(before_low["high"], errors="coerce").max()) if not before_low.empty else max_high
+    short_mfe = _safe_divide_value(anchor_close - min_low, anchor_close)
+    long_mfe = _safe_divide_value(max_high - anchor_close, anchor_close)
+    adverse = _safe_divide_value(max_high_before_low - anchor_close, anchor_close)
+    threshold = float(config.short_fader_mfe_threshold_pct)
+    clean_threshold = float(config.short_fader_clean_adverse_threshold_pct)
+    first_low_ts = int(post_window.loc[low_idx, "timestamp"]) if low_idx in post_window.index else None
+    first_high_ts = int(post_window.loc[high_idx, "timestamp"]) if high_idx in post_window.index else None
+    return {
+        "short_label_status": "ok",
+        "short_mfe_from_post_close": float(short_mfe),
+        "long_mfe_from_post_close": float(long_mfe),
+        "adverse_up_before_short_low": float(adverse),
+        "short2_threshold": threshold,
+        "clean_short_adverse_threshold": clean_threshold,
+        "short2": bool(np.isfinite(short_mfe) and short_mfe >= threshold),
+        "clean_short2": bool(
+            np.isfinite(short_mfe)
+            and short_mfe >= threshold
+            and np.isfinite(adverse)
+            and adverse <= clean_threshold
+        ),
+        "post_close_low_timestamp_ms": first_low_ts,
+        "post_close_low_timestamp_utc": _timestamp_to_utc(first_low_ts) if first_low_ts is not None else "",
+        "post_close_high_timestamp_ms": first_high_ts,
+        "post_close_high_timestamp_utc": _timestamp_to_utc(first_high_ts) if first_high_ts is not None else "",
+    }
+
+
+def _first_short_trigger_rows(
+    post_window: pd.DataFrame,
+    *,
+    htf_high: float,
+    htf_low: float,
+    htf_close: float,
+    entry_ms: int,
+    enabled_triggers: set[str],
+) -> list[dict[str, object]]:
+    if post_window.empty:
+        return []
+    rows: list[dict[str, object]] = []
+    found: set[str] = set()
+    local_high = float("-inf")
+    local_low = float("inf")
+    htf_range = max(float(htf_high) - float(htf_low), 0.0)
+    post_mid = float(htf_low) + 0.5 * htf_range
+    normalized = post_window.reset_index(drop=True)
+
+    def emit(
+        *,
+        trigger_type: str,
+        idx: int,
+        row: pd.Series,
+        reference_high: float,
+        reference_low: float,
+        detail: str,
+        extra: Mapping[str, object] | None = None,
+    ) -> None:
+        found.add(trigger_type)
+        ts = int(row["timestamp"])
+        decision_available_ts = int(ts + entry_ms)
+        payload = {
+            "short_trigger_type": trigger_type,
+            "short_trigger_status": "triggered",
+            "decision_timestamp_ms": ts,
+            "decision_timestamp_utc": _timestamp_to_utc(ts),
+            "decision_available_timestamp_ms": decision_available_ts,
+            "decision_available_timestamp_utc": _timestamp_to_utc(decision_available_ts),
+            "short_trigger_rejection_high": float(reference_high),
+            "short_trigger_reference_high": max(float(reference_high), float(htf_high)),
+            "short_trigger_reference_low": min(float(reference_low), float(htf_low)),
+            "short_trigger_close": float(row["close"]),
+            "short_trigger_delay_candles": int(idx + 1),
+            "short_trigger_delay_ms": int((idx + 1) * entry_ms),
+            "short_trigger_detail": detail,
+        }
+        if extra:
+            payload.update(extra)
+        rows.append(payload)
+
+    for idx, row in normalized.iterrows():
+        ts = int(row["timestamp"])
+        open_ = float(row["open"])
+        high = float(row["high"])
+        low = float(row["low"])
+        close = float(row["close"])
+        local_high = max(local_high, high)
+        local_low = min(local_low, low)
+        if "failed_new_high" in enabled_triggers and "failed_new_high" not in found:
+            if high >= float(htf_high) and close < float(htf_high) and close < open_:
+                emit(
+                    trigger_type="failed_new_high",
+                    idx=int(idx),
+                    row=row,
+                    reference_high=high,
+                    reference_low=float(htf_low),
+                    detail="probed_htf_high_and_closed_back_below_red",
+                )
+        if "taker_fade_red" in enabled_triggers and "taker_fade_red" not in found and idx >= 3:
+            recent = normalized.iloc[idx - 3 : idx + 1]
+            recent_features = _window_feature_row(recent, prefix="short_trigger_recent4")
+            red_share = float(recent_features["short_trigger_recent4_red_share"])
+            taker_share = float(recent_features["short_trigger_recent4_taker_buy_quote_share"])
+            if red_share >= 0.50 and np.isfinite(taker_share) and taker_share < 0.48 and close < float(htf_close):
+                emit(
+                    trigger_type="taker_fade_red",
+                    idx=int(idx),
+                    row=row,
+                    reference_high=float(pd.to_numeric(recent["high"], errors="coerce").max()),
+                    reference_low=min(float(htf_low), float(pd.to_numeric(recent["low"], errors="coerce").min())),
+                    detail="recent_red_pressure_weak_taker_buy_below_htf_close",
+                    extra=recent_features,
+                )
+        if "close_below_htf_close" in enabled_triggers and "close_below_htf_close" not in found:
+            if close < float(htf_close) and close < open_:
+                emit(
+                    trigger_type="close_below_htf_close",
+                    idx=int(idx),
+                    row=row,
+                    reference_high=max(local_high, float(htf_high)),
+                    reference_low=min(local_low, float(htf_low)),
+                    detail="red_close_below_htf_close",
+                )
+        if "close_below_post_mid" in enabled_triggers and "close_below_post_mid" not in found:
+            if close < post_mid:
+                emit(
+                    trigger_type="close_below_post_mid",
+                    idx=int(idx),
+                    row=row,
+                    reference_high=max(local_high, float(htf_high)),
+                    reference_low=min(local_low, float(htf_low)),
+                    detail="close_below_htf_range_midline",
+                    extra={"short_trigger_post_mid": float(post_mid)},
+                )
+        if "lower_high_close_down" in enabled_triggers and "lower_high_close_down" not in found and idx >= 2:
+            previous = normalized.iloc[max(0, idx - 3) : idx]
+            previous_high = float(pd.to_numeric(previous["high"], errors="coerce").max())
+            previous_close = float(previous["close"].iloc[-1])
+            if high < previous_high and close < previous_close and close < open_:
+                emit(
+                    trigger_type="lower_high_close_down",
+                    idx=int(idx),
+                    row=row,
+                    reference_high=previous_high,
+                    reference_low=min(local_low, float(htf_low)),
+                    detail="lower_high_and_close_down_after_post_close_attempt",
+                    extra={"short_trigger_previous_high": previous_high, "short_trigger_previous_close": previous_close},
+                )
+        if "effort_no_progress" in enabled_triggers and "effort_no_progress" not in found and idx >= 3:
+            recent = normalized.iloc[idx - 3 : idx + 1]
+            recent_features = _window_feature_row(recent, prefix="short_trigger_recent4")
+            recent_high = float(pd.to_numeric(recent["high"], errors="coerce").max())
+            prior_high = float(pd.to_numeric(normalized.iloc[:idx]["high"], errors="coerce").max()) if idx > 0 else recent_high
+            quote_sum = float(recent_features["short_trigger_recent4_quote_volume"])
+            red_share = float(recent_features["short_trigger_recent4_red_share"])
+            if quote_sum > 0.0 and recent_high <= prior_high * 1.001 and red_share >= 0.50 and close <= float(recent["open"].iloc[0]):
+                emit(
+                    trigger_type="effort_no_progress",
+                    idx=int(idx),
+                    row=row,
+                    reference_high=max(recent_high, float(htf_high)),
+                    reference_low=min(float(pd.to_numeric(recent["low"], errors="coerce").min()), float(htf_low)),
+                    detail="recent_flow_effort_without_new_high_progress",
+                    extra={**recent_features, "short_trigger_prior_high": prior_high},
+                )
+        if "pullback_without_recovery" in enabled_triggers and "pullback_without_recovery" not in found:
+            if np.isfinite(local_high) and local_high > 0.0:
+                pullback_from_local_high = _safe_divide_value(local_high - close, local_high)
+                local_range_mid = local_low + 0.5 * max(local_high - local_low, 0.0)
+                if pullback_from_local_high >= 0.005 and close < local_range_mid:
+                    emit(
+                        trigger_type="pullback_without_recovery",
+                        idx=int(idx),
+                        row=row,
+                        reference_high=max(local_high, float(htf_high)),
+                        reference_low=min(local_low, float(htf_low)),
+                        detail="pullback_from_post_close_high_without_recovery",
+                        extra={
+                            "short_trigger_pullback_from_local_high": float(pullback_from_local_high),
+                            "short_trigger_local_range_mid": float(local_range_mid),
+                        },
+                    )
+        if found.issuperset(enabled_triggers):
+            break
+    return sorted(rows, key=lambda item: (int(item["decision_timestamp_ms"]), str(item["short_trigger_type"])))
+
+
+def _collect_symbol_bare_htf_short_fader_rows(
+    *,
+    symbol: str,
+    setup_frame: pd.DataFrame,
+    entry_frame: pd.DataFrame,
+    config: AnomalyBacktestConfig,
+    entry_flow_source: str = "cached_ohlcv",
+) -> list[dict[str, object]]:
+    lab_config = config.lab_config
+    setup_timeframe = _effective_setup_timeframe(config)
+    entry_timeframe = _effective_entry_timeframe(config)
+    setup_ms = _timeframe_to_milliseconds(setup_timeframe)
+    entry_ms = _timeframe_to_milliseconds(entry_timeframe)
+    if setup_ms <= 0 or entry_ms <= 0 or entry_ms >= setup_ms:
+        raise ValueError("bare_htf_short_fader requires entry_timeframe below setup_timeframe")
+    if setup_frame.empty or entry_frame.empty:
+        return []
+
+    setup_frame = setup_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    entry_frame = entry_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    setup_timestamps = setup_frame["timestamp"].astype("int64").to_numpy()
+    entry_timestamps = entry_frame["timestamp"].astype("int64").to_numpy()
+    baseline_quote_medians = (
+        pd.to_numeric(setup_frame["quote_volume"], errors="coerce")
+        .rolling(window=lab_config.baseline_candles, min_periods=lab_config.baseline_candles)
+        .median()
+        .shift(1)
+        .to_numpy()
+    )
+    baseline_trade_medians = (
+        pd.to_numeric(setup_frame["number_of_trades"], errors="coerce")
+        .rolling(window=lab_config.baseline_candles, min_periods=lab_config.baseline_candles)
+        .median()
+        .shift(1)
+        .to_numpy()
+    )
+    analysis_ms = int(max(1, int(config.short_fader_analysis_minutes)) * 60_000)
+    enabled_triggers = _short_fader_trigger_names(config)
+    rows: list[dict[str, object]] = []
+    for setup_idx, setup_start_value in enumerate(setup_timestamps):
+        setup_start = int(setup_start_value)
+        if setup_idx < lab_config.baseline_candles:
+            continue
+        baseline_quote_value = float(baseline_quote_medians[setup_idx])
+        baseline_trade_value = float(baseline_trade_medians[setup_idx])
+        if not np.isfinite(baseline_quote_value) or not np.isfinite(baseline_trade_value):
+            continue
+        if baseline_quote_value <= 0.0 or baseline_trade_value <= 0.0:
+            continue
+        setup_row = setup_frame.iloc[setup_idx]
+        start_quote = float(setup_row["quote_volume"])
+        start_trades = float(setup_row["number_of_trades"])
+        start_quote_ratio = _safe_divide_value(start_quote, baseline_quote_value)
+        start_trade_ratio = _safe_divide_value(start_trades, baseline_trade_value)
+        htf_open = float(setup_row["open"])
+        htf_high = float(setup_row["high"])
+        htf_low = float(setup_row["low"])
+        htf_close = float(setup_row["close"])
+        htf_return = _safe_divide_value(htf_close - htf_open, htf_open)
+        min_prefilter_quote_ratio, min_prefilter_trade_ratio, min_prefilter_htf_return = _short_fader_prefilter_thresholds(config)
+        if (
+            not np.isfinite(start_quote_ratio)
+            or not np.isfinite(start_trade_ratio)
+            or not np.isfinite(htf_return)
+            or start_quote_ratio < min_prefilter_quote_ratio
+            or start_trade_ratio < min_prefilter_trade_ratio
+            or htf_return < min_prefilter_htf_return
+        ):
+            continue
+
+        htf_close_ts = int(setup_start + setup_ms)
+        post_end = int(htf_close_ts + analysis_ms)
+        post_start_pos = int(np.searchsorted(entry_timestamps, htf_close_ts, side="left"))
+        post_end_pos = int(np.searchsorted(entry_timestamps, post_end, side="left"))
+        post_window = entry_frame.iloc[post_start_pos:post_end_pos].copy()
+        post_status = (
+            "ok"
+            if _entry_segment_has_full_range_coverage(
+                post_window,
+                range_start_ms=htf_close_ts,
+                range_end_exclusive_ms=post_end,
+                entry_ms=entry_ms,
+            )
+            else "missing_post_close_ltf_window"
+        )
+        if post_window.empty:
+            post_status = "missing_post_close_ltf_window"
+
+        base_row: dict[str, object] = {
+            "symbol": symbol,
+            "timeframe": setup_timeframe,
+            "setup_timeframe": setup_timeframe,
+            "entry_timeframe": entry_timeframe,
+            "feature_contract": BARE_HTF_SHORT_FADER_CONTRACT,
+            "candidate_collection_policy": "closed_htf_anomaly_post_close_ltf_window",
+            "setup_source": "closed_htf_bare_anomaly",
+            "setup_elapsed_fraction": 1.0,
+            "setup_closed_entry_candles": int(setup_ms / entry_ms),
+            "timestamp_ms": setup_start,
+            "timestamp_utc": _timestamp_to_utc(setup_start),
+            "anomaly_timestamp_ms": setup_start,
+            "anomaly_timestamp_utc": _timestamp_to_utc(setup_start),
+            "setup_available_timestamp_ms": htf_close_ts,
+            "setup_available_timestamp_utc": _timestamp_to_utc(htf_close_ts),
+            "decision_available_timestamp_ms": htf_close_ts,
+            "decision_available_timestamp_utc": _timestamp_to_utc(htf_close_ts),
+            "setup_full_available_timestamp_ms": htf_close_ts,
+            "setup_full_available_timestamp_utc": _timestamp_to_utc(htf_close_ts),
+            "timestamp_semantics": (
+                "ohlcv_timestamp_is_candle_open;available_timestamp_is_candle_close;"
+                "closed_htf_anomaly_available_at_htf_close;short_trigger_after_htf_close_only"
+            ),
+            "trade_count_proxy_used": False,
+            "levels_trade_count_source": "cached_ohlcv.number_of_trades",
+            "entry_trade_count_source": f"{entry_flow_source}.number_of_trades",
+            "levels_quote_volume_source": "cached_ohlcv.quote_volume",
+            "entry_quote_volume_source": f"{entry_flow_source}.quote_volume",
+            "htf_open": htf_open,
+            "htf_high": htf_high,
+            "htf_low": htf_low,
+            "htf_close": htf_close,
+            "htf_return": htf_return,
+            "short_fader_prefilter_min_quote_ratio": float(min_prefilter_quote_ratio),
+            "short_fader_prefilter_min_trade_ratio": float(min_prefilter_trade_ratio),
+            "short_fader_prefilter_min_htf_return": float(min_prefilter_htf_return),
+            "start_quote_volume": start_quote,
+            "start_trade_count": start_trades,
+            "baseline_quote_volume_median": baseline_quote_value,
+            "baseline_trade_count_median": baseline_trade_value,
+            "start_quote_ratio": start_quote_ratio,
+            "start_trade_ratio": start_trade_ratio,
+            "short_post_close_start_ms": htf_close_ts,
+            "short_post_close_start_utc": _timestamp_to_utc(htf_close_ts),
+            "short_post_close_end_ms": post_end,
+            "short_post_close_end_utc": _timestamp_to_utc(post_end),
+            "short_post_close_ltf_candles": int(len(post_window)),
+            "short_post_close_ltf_status": post_status,
+            "short_fader_analysis_minutes": int(config.short_fader_analysis_minutes),
+            "short_fader_trigger_contract": "failed_new_high_or_taker_fade_red_v1",
+        }
+        if not post_window.empty:
+            for size in (4, 6, 12, 24):
+                base_row.update(_window_feature_row(post_window.head(size), prefix=f"ltf{size}"))
+            base_row.update(_post_close_short_labels(post_window, anchor_close=htf_close, config=config))
+        else:
+            base_row.update(_post_close_short_labels(post_window, anchor_close=htf_close, config=config))
+
+        triggers = (
+            _first_short_trigger_rows(
+                post_window,
+                htf_high=htf_high,
+                htf_low=htf_low,
+                htf_close=htf_close,
+                entry_ms=entry_ms,
+                enabled_triggers=enabled_triggers,
+            )
+            if post_status == "ok"
+            else []
+        )
+        if not triggers:
+            rows.append(
+                {
+                    **base_row,
+                    "short_trigger_type": "",
+                    "short_trigger_status": "no_trigger" if post_status == "ok" else post_status,
+                    "decision_timestamp_ms": htf_close_ts,
+                    "decision_timestamp_utc": _timestamp_to_utc(htf_close_ts),
+                }
+            )
+            continue
+        for trigger in triggers:
+            rows.append({**base_row, **trigger})
     return rows
 
 
@@ -3637,6 +4422,8 @@ def _build_pair_candidate_row(
     config: AnomalyBacktestConfig,
     entry_flow_source: str = "cached_ohlcv",
     setup_flow_source: str = "cached_ohlcv",
+    ltf_left_context: pd.DataFrame | None = None,
+    setup_elapsed_fraction_override: float | None = None,
     feature_contract: str = "htf_setup_ltf_entry_v1",
     setup_source: str = "forming_htf_from_entry_tf_backtest",
     timestamp_semantics_note: str = "forming_htf_setup_available_at_entry_decision_close",
@@ -3650,7 +4437,12 @@ def _build_pair_candidate_row(
     start_trades = float(setup_row["number_of_trades"])
     raw_start_quote_ratio = _safe_divide_value(start_quote, baseline_quote_value)
     raw_start_trade_ratio = _safe_divide_value(start_trades, baseline_trade_value)
-    setup_elapsed_fraction = min(1.0, len(entry_segment) * entry_ms / setup_ms)
+    setup_elapsed_fraction = (
+        float(setup_elapsed_fraction_override)
+        if setup_elapsed_fraction_override is not None
+        else min(1.0, len(entry_segment) * entry_ms / setup_ms)
+    )
+    setup_elapsed_fraction = min(1.0, max(0.0, setup_elapsed_fraction))
     elapsed_for_ratio = max(1e-9, setup_elapsed_fraction)
     start_quote_ratio = _safe_divide_value(raw_start_quote_ratio, elapsed_for_ratio)
     start_trade_ratio = _safe_divide_value(raw_start_trade_ratio, elapsed_for_ratio)
@@ -3724,7 +4516,12 @@ def _build_pair_candidate_row(
     abs_start_ret = abs(start_ret) if np.isfinite(start_ret) else float("nan")
     baseline_avg_trade_quote = _safe_divide_value(baseline_quote_value, baseline_trade_value)
     start_avg_trade_quote = _safe_divide_value(start_quote, start_trades)
-    prior_whipsaw = _prior_up_down_whipsaw_to_impulse_range(baseline, impulse_range=impulse_range)
+    prior_whipsaw_source = "setup_timeframe_baseline"
+    prior_whipsaw_frame = baseline
+    if ltf_left_context is not None and not ltf_left_context.empty:
+        prior_whipsaw_source = "entry_timeframe_left_context"
+        prior_whipsaw_frame = ltf_left_context
+    prior_whipsaw = _prior_up_down_whipsaw_to_impulse_range(prior_whipsaw_frame, impulse_range=impulse_range)
     flow_hold_count = int(
         (
             pd.to_numeric(entry_segment["quote_volume"], errors="coerce").ge(max(0.35 * start_quote, 3.0 * baseline_quote_value))
@@ -3828,6 +4625,7 @@ def _build_pair_candidate_row(
         "prior_up_leg_to_impulse_range": float("nan"),
         "prior_down_leg_to_impulse_range": float("nan"),
         "prior_up_down_whipsaw_to_impulse_range": prior_whipsaw,
+        "prior_up_down_whipsaw_source": prior_whipsaw_source,
         "start_range_ratio_to_baseline": _safe_divide_value(start_range, baseline_range),
         "start_range_pct": _safe_divide_value(start_range, start_open),
         "start_range_pct_ratio_to_baseline": _safe_divide_value(_safe_divide_value(start_range, start_open), baseline_range_pct),
@@ -4362,6 +5160,857 @@ def simulate_anomaly_trades(
                 )
                 next_progress_pct = current_pct + 5
     return pd.DataFrame(rows)
+
+
+def build_bare_htf_short_fader_signals(candidates: pd.DataFrame, *, config: AnomalyBacktestConfig) -> pd.DataFrame:
+    if candidates.empty:
+        return pd.DataFrame()
+    required = {"short_trigger_status", "short_trigger_type", "decision_timestamp_ms", "symbol"}
+    if required.difference(candidates.columns):
+        return candidates.iloc[0:0].copy()
+    enabled_triggers = _short_fader_trigger_names(config)
+    result = candidates.loc[
+        candidates["short_trigger_status"].astype(str).eq("triggered")
+        & candidates["short_trigger_type"].astype(str).isin(enabled_triggers)
+    ].copy()
+    if result.empty:
+        return result
+    prior_spike = pd.to_numeric(result.get("prior_spike_count_72h", 0), errors="coerce").fillna(0)
+    prior_fade = pd.to_numeric(result.get("prior_fast_fade_count_72h", 0), errors="coerce").fillna(0)
+    result["short_fader_prior_spike_pass"] = prior_spike.ge(int(config.short_fader_min_prior_spike_count_72h))
+    result["short_fader_prior_fast_fade_pass"] = prior_fade.ge(int(config.short_fader_min_prior_fast_fade_count_72h))
+    result["short_fader_context_pass"] = (
+        result["short_fader_prior_spike_pass"].astype(bool)
+        | result["short_fader_prior_fast_fade_pass"].astype(bool)
+    )
+    result["short_fader_signal_contract"] = (
+        "bare_htf_anomaly_wide_post_close_ltf_short_pressure_discovery_v1"
+    )
+    result["short_fader_context_gate_required"] = bool(config.short_fader_require_prior_context)
+    if bool(config.short_fader_require_prior_context):
+        result["short_fader_signal_contract"] = (
+            "bare_htf_anomaly_plus_prior_crowding_fade_plus_post_close_ltf_short_pressure_v1"
+        )
+        result = result.loc[result["short_fader_context_pass"].astype(bool)].copy()
+        if result.empty:
+            return result
+    priority = {
+        "failed_new_high": 0,
+        "taker_fade_red": 1,
+        "lower_high_close_down": 2,
+        "effort_no_progress": 3,
+        "pullback_without_recovery": 4,
+        "close_below_htf_close": 5,
+        "close_below_post_mid": 6,
+    }
+    result["_short_trigger_priority"] = result["short_trigger_type"].map(priority).fillna(9).astype(int)
+    for column in ("decision_timestamp_ms", "timestamp_ms"):
+        if column in result.columns:
+            result[column] = pd.to_numeric(result[column], errors="coerce")
+    result.sort_values(
+        ["decision_timestamp_ms", "_short_trigger_priority", "symbol"],
+        inplace=True,
+        kind="stable",
+    )
+    if {"symbol", "timestamp_ms"}.issubset(result.columns):
+        result.drop_duplicates(["symbol", "timestamp_ms"], keep="first", inplace=True)
+    result.drop(columns=["_short_trigger_priority"], errors="ignore", inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result
+
+
+def _attach_all_signal_columns(result: dict[str, object], signal: pd.Series) -> dict[str, object]:
+    for key, value in signal.items():
+        result.setdefault(str(key), value)
+    return result
+
+
+def simulate_short_fader_signal(
+    frame: pd.DataFrame,
+    signal: pd.Series,
+    *,
+    config: AnomalyBacktestConfig,
+) -> dict[str, object]:
+    symbol = str(signal["symbol"])
+    decision_ts = int(signal["decision_timestamp_ms"])
+    anomaly_ts = _safe_int(signal.get("anomaly_timestamp_ms")) or _safe_int(signal.get("timestamp_ms")) or decision_ts
+    if frame.empty or "timestamp" not in frame.columns:
+        return _attach_all_signal_columns(
+            _skipped_signal_result(signal, skip_reason="missing_entry_frame", config=config),
+            signal,
+        )
+    frame = frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    if config.market_entry_latency_candles < 1:
+        raise ValueError("market_entry_latency_candles must be >= 1")
+    future_entry = frame.loc[pd.to_numeric(frame["timestamp"], errors="coerce").gt(decision_ts)].head(config.market_entry_latency_candles)
+    if len(future_entry) < config.market_entry_latency_candles:
+        return _attach_all_signal_columns(
+            _skipped_signal_result(signal, skip_reason="no_market_execution_candle", config=config),
+            signal,
+        )
+    entry_row = future_entry.iloc[-1]
+    entry_ts = int(entry_row["timestamp"])
+    raw_entry_price = float(entry_row["open"])
+    if not np.isfinite(raw_entry_price) or raw_entry_price <= 0.0:
+        return _attach_all_signal_columns(
+            _skipped_signal_result(signal, skip_reason="invalid_market_execution_price", config=config),
+            signal,
+        )
+    entry_price = _short_entry_fill_price(raw_entry_price, config=config)
+    htf_high = _safe_float(signal.get("htf_high"))
+    htf_low = _safe_float(signal.get("htf_low"))
+    reference_high = _safe_float(signal.get("short_trigger_reference_high"))
+    reference_low = _safe_float(signal.get("short_trigger_reference_low"))
+    if htf_high is None:
+        htf_high = reference_high
+    if htf_low is None:
+        htf_low = reference_low
+    if reference_high is None:
+        reference_high = htf_high
+    if reference_low is None:
+        reference_low = htf_low
+    if htf_high is None or htf_low is None or reference_high is None or reference_low is None:
+        return _attach_all_signal_columns(
+            _skipped_signal_result(signal, skip_reason="missing_short_stop_context", config=config),
+            signal,
+        )
+    structure_range = max(float(htf_high) - float(htf_low), float(reference_high) - float(reference_low), 0.0)
+    initial_stop = max(float(htf_high), float(reference_high)) + float(config.stop_buffer_range_fraction) * structure_range
+    initial_risk = initial_stop - entry_price
+    if not np.isfinite(initial_risk) or initial_risk <= 0.0:
+        return _attach_all_signal_columns(
+            _skipped_signal_result(
+                signal,
+                skip_reason="invalid_actual_market_risk",
+                config=config,
+                entry_timestamp_ms=entry_ts,
+                entry_timestamp_utc=_timestamp_to_utc(entry_ts),
+                entry_price=entry_price,
+                initial_stop=initial_stop,
+                initial_risk=initial_risk,
+            ),
+            signal,
+        )
+    target_r = float(config.short_fader_target_r)
+    target_price = entry_price - target_r * initial_risk
+    if not np.isfinite(target_price) or target_price <= 0.0:
+        return _attach_all_signal_columns(
+            _skipped_signal_result(
+                signal,
+                skip_reason="invalid_short_target_price",
+                config=config,
+                entry_timestamp_ms=entry_ts,
+                entry_timestamp_utc=_timestamp_to_utc(entry_ts),
+                entry_price=entry_price,
+                initial_stop=initial_stop,
+                initial_risk=initial_risk,
+            ),
+            signal,
+        )
+    simulation_frame = frame.loc[pd.to_numeric(frame["timestamp"], errors="coerce").ge(entry_ts)].head(int(config.max_hold_candles)).copy()
+    if simulation_frame.empty:
+        return _attach_all_signal_columns(
+            _skipped_signal_result(signal, skip_reason="no_post_entry_simulation_candles", config=config),
+            signal,
+        )
+    exit_reason = "time_exit"
+    exit_ts = int(simulation_frame.iloc[-1]["timestamp"])
+    raw_exit_price = float(simulation_frame.iloc[-1]["close"])
+    exit_price = _short_exit_fill_price(raw_exit_price, config=config)
+    exit_fill_model = "time_exit_close_plus_adverse_slippage"
+    target_hit = False
+    target_fill_status = "not_hit"
+    min_low = float("inf")
+    max_high = float("-inf")
+    for _, row in simulation_frame.iterrows():
+        candle_ts = int(row["timestamp"])
+        high = float(row["high"])
+        low = float(row["low"])
+        close = float(row["close"])
+        min_low = min(min_low, low)
+        max_high = max(max_high, high)
+        if high >= initial_stop:
+            exit_reason = "stop_loss"
+            exit_ts = candle_ts
+            raw_exit_price = initial_stop
+            exit_price = _short_exit_fill_price(raw_exit_price, config=config)
+            exit_fill_model = "stop_price_plus_adverse_slippage"
+            if low <= target_price:
+                target_fill_status = "ambiguous_intrabar_stop_first"
+            break
+        if low < target_price:
+            target_hit = True
+            target_fill_status = "filled_conservative_trade_through"
+            exit_reason = "target_full_exit"
+            exit_ts = candle_ts
+            raw_exit_price = target_price
+            exit_price = _short_exit_fill_price(raw_exit_price, config=config)
+            exit_fill_model = "target_limit_proxy_plus_adverse_slippage"
+            break
+        if low <= target_price:
+            target_fill_status = "touched_not_filled_conservative"
+    gross_return = (entry_price - exit_price) / entry_price
+    gross_r = (entry_price - exit_price) / initial_risk
+    net_return = gross_return - float(config.fee_rate) * 2.0
+    result = {
+        "symbol": symbol,
+        "status": "closed",
+        "side": "short",
+        "anomaly_timestamp_ms": anomaly_ts,
+        "anomaly_timestamp_utc": _timestamp_to_utc(anomaly_ts),
+        "decision_timestamp_ms": decision_ts,
+        "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
+        "entry_timestamp_ms": entry_ts,
+        "entry_timestamp_utc": _timestamp_to_utc(entry_ts),
+        "entry_method": "short_next_ltf_open_after_trigger",
+        "execution_model": _execution_model_label(config),
+        "entry_delay_ms": int(entry_ts - decision_ts),
+        "entry_delay_candles": _entry_delay_candles(frame, entry_timestamp_ms=entry_ts, decision_timestamp_ms=decision_ts),
+        "entry_price": entry_price,
+        "entry_raw_price": raw_entry_price,
+        "entry_fill_price_model": "short_next_bar_open_minus_adverse_slippage",
+        "slippage_model": "adverse_short_entry_and_exit",
+        "entry_slippage_pct": float(config.entry_slippage_pct),
+        "exit_slippage_pct": float(config.exit_slippage_pct),
+        "initial_stop": initial_stop,
+        "initial_risk": initial_risk,
+        "initial_risk_pct": initial_risk / entry_price,
+        "short_target_r": target_r,
+        "tp1_r": target_r,
+        "tp1_hit": bool(target_hit),
+        "tp1_price": target_price,
+        "tp1_fill_status": target_fill_status,
+        "tp1_fraction": 1.0,
+        "exit_rule": "short_full_fixed_rr",
+        "exit_timestamp_ms": exit_ts,
+        "exit_timestamp_utc": _timestamp_to_utc(exit_ts),
+        "exit_raw_price": raw_exit_price,
+        "exit_price": exit_price,
+        "exit_fill_price_model": exit_fill_model,
+        "exit_reason": exit_reason,
+        "holding_candles": int((simulation_frame["timestamp"] <= exit_ts).sum()),
+        "post_entry_simulation_start_timestamp_ms": entry_ts,
+        "post_entry_simulation_start_timestamp_utc": _timestamp_to_utc(entry_ts),
+        "post_entry_simulation_includes_entry_candle": True,
+        "mfe_pct": (entry_price - min_low) / entry_price,
+        "mae_pct": (max_high - entry_price) / entry_price,
+        "gross_r": gross_r,
+        "gross_return": gross_return,
+        "fee_rate": float(config.fee_rate),
+        "net_return": net_return,
+    }
+    return _attach_all_signal_columns(result, signal)
+
+
+def simulate_short_fader_trades(
+    signals: pd.DataFrame,
+    *,
+    config: AnomalyBacktestConfig,
+    progress_label: str | None = None,
+    frame_cache: dict[str, pd.DataFrame] | None = None,
+) -> pd.DataFrame:
+    if signals.empty:
+        return pd.DataFrame()
+    max_open_positions = int(config.max_open_positions)
+    if max_open_positions <= 0:
+        raise ValueError("max_open_positions must be > 0")
+    rows: list[dict[str, object]] = []
+    open_positions: list[tuple[str, int]] = []
+    if frame_cache is None:
+        frame_cache = {}
+    ordered = signals.sort_values(["decision_timestamp_ms", "symbol"])
+    started_at = time.monotonic()
+    next_progress_pct = 0
+    total = len(ordered)
+    for processed_count, (_, signal) in enumerate(ordered.iterrows(), start=1):
+        symbol = str(signal["symbol"])
+        frame = frame_cache.get(symbol)
+        if frame is None:
+            frame = _read_entry_simulation_frame(config.lab_config.cache_dir, symbol, _effective_entry_timeframe(config))
+            frame_cache[symbol] = frame
+        trade = simulate_short_fader_signal(frame, signal, config=config)
+        if trade.get("status") == "closed":
+            entry_ts = _safe_int(trade.get("entry_timestamp_ms")) or int(signal["decision_timestamp_ms"])
+            open_positions = [(open_symbol, exit_ts) for open_symbol, exit_ts in open_positions if int(exit_ts) >= entry_ts]
+            skip_reason = ""
+            if any(open_symbol == symbol for open_symbol, _exit_ts in open_positions):
+                skip_reason = "overlapping_symbol_position_at_entry"
+            elif len(open_positions) >= max_open_positions:
+                skip_reason = "max_open_positions_at_entry"
+            if skip_reason:
+                skipped = _portfolio_skip_after_resolved_entry(
+                    signal,
+                    resolved_trade=trade,
+                    skip_reason=skip_reason,
+                    config=config,
+                    open_positions=open_positions,
+                )
+                skipped["side"] = "short"
+                rows.append(_attach_all_signal_columns(skipped, signal))
+            else:
+                exit_ts = _safe_int(trade.get("exit_timestamp_ms"))
+                trade["portfolio_open_positions_at_entry"] = int(len(open_positions))
+                trade["portfolio_open_symbols_at_entry"] = ",".join(open_symbol for open_symbol, _exit_ts in open_positions)
+                trade["max_open_positions"] = int(max_open_positions)
+                rows.append(trade)
+                if exit_ts is not None:
+                    open_positions.append((symbol, int(exit_ts)))
+        else:
+            rows.append(_attach_all_signal_columns(trade, signal))
+        if progress_label is not None:
+            next_progress_pct = _emit_progress_5pct(
+                label=progress_label,
+                done=processed_count,
+                total=total,
+                started_at=started_at,
+                next_progress_pct=next_progress_pct,
+            )
+    return pd.DataFrame(rows)
+
+
+def _metric_map(summary: pd.DataFrame) -> dict[str, object]:
+    if summary.empty or not {"metric", "value"}.issubset(summary.columns):
+        return {}
+    return {str(row["metric"]): row["value"] for _, row in summary.iterrows()}
+
+
+def summarize_short_fader_by_column(trades: pd.DataFrame, *, column: str) -> pd.DataFrame:
+    if trades.empty or "status" not in trades.columns or column not in trades.columns:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    for value, group in trades.groupby(column, dropna=False):
+        summary = _metric_map(summarize_trades(group))
+        rows.append({"group_column": column, "group_value": value, **summary})
+    result = pd.DataFrame(rows)
+    if not result.empty and "sum_net_return" in result.columns:
+        result.sort_values(["sum_net_return", "closed_trades"], ascending=[False, False], inplace=True)
+    return result
+
+
+def build_short_fader_top_dependency(trades: pd.DataFrame) -> pd.DataFrame:
+    columns = ["scope", "closed_trades", "sum_net_return", "top1_share", "top5_share", "top15_share"]
+    if trades.empty or "status" not in trades.columns:
+        return pd.DataFrame(columns=columns)
+    closed = trades.loc[trades["status"].eq("closed")].copy()
+    if closed.empty:
+        return pd.DataFrame(columns=columns)
+    net = pd.to_numeric(closed["net_return"], errors="coerce").dropna().sort_values(ascending=False)
+    total = float(net.sum())
+    def share(n: int) -> float:
+        return float(net.head(n).sum() / total) if total > 0 else float("inf")
+    return pd.DataFrame(
+        [
+            {
+                "scope": "all_closed",
+                "closed_trades": int(len(net)),
+                "sum_net_return": total,
+                "top1_share": share(1),
+                "top5_share": share(5),
+                "top15_share": share(15),
+            }
+        ],
+        columns=columns,
+    )
+
+
+def build_short_fader_factor_separation(candidates: pd.DataFrame, *, config: AnomalyBacktestConfig) -> pd.DataFrame:
+    if candidates.empty:
+        return pd.DataFrame()
+    frame = candidates.copy()
+    if {"symbol", "timestamp_ms"}.issubset(frame.columns):
+        event_frame = frame.drop_duplicates(["symbol", "timestamp_ms"], keep="first").copy()
+    else:
+        event_frame = frame.copy()
+    rules: list[tuple[str, pd.Series]] = []
+    def numeric_series(column: str, default: float = np.nan) -> pd.Series:
+        values = event_frame[column] if column in event_frame.columns else pd.Series(default, index=event_frame.index)
+        return pd.to_numeric(values, errors="coerce")
+
+    spike = numeric_series("prior_spike_count_72h", 0.0).fillna(0)
+    fade = numeric_series("prior_fast_fade_count_72h", 0.0).fillna(0)
+    ltf12_ret = numeric_series("ltf12_ret")
+    rules.append(("all_bare_htf_anomalies", pd.Series(True, index=event_frame.index)))
+    rules.append((f"prior_spike_ge_{int(config.short_fader_min_prior_spike_count_72h)}", spike.ge(int(config.short_fader_min_prior_spike_count_72h))))
+    rules.append((f"prior_fast_fade_ge_{int(config.short_fader_min_prior_fast_fade_count_72h)}", fade.ge(int(config.short_fader_min_prior_fast_fade_count_72h))))
+    rules.append(("ltf12_ret_lt_0", ltf12_ret.lt(0.0)))
+    rules.append((f"prior_spike_ge_{int(config.short_fader_min_prior_spike_count_72h)}_and_ltf12_ret_lt_0", spike.ge(int(config.short_fader_min_prior_spike_count_72h)) & ltf12_ret.lt(0.0)))
+    rules.append((f"prior_fast_fade_ge_{int(config.short_fader_min_prior_fast_fade_count_72h)}_and_ltf12_ret_lt_0", fade.ge(int(config.short_fader_min_prior_fast_fade_count_72h)) & ltf12_ret.lt(0.0)))
+    rows: list[dict[str, object]] = []
+    for name, mask in rules:
+        subset = event_frame.loc[mask.fillna(False)].copy()
+        short2 = subset.get("short2", pd.Series(dtype=bool)).astype(bool) if not subset.empty else pd.Series(dtype=bool)
+        clean = subset.get("clean_short2", pd.Series(dtype=bool)).astype(bool) if not subset.empty else pd.Series(dtype=bool)
+        long_mfe = pd.to_numeric(subset.get("long_mfe_from_post_close", pd.Series(dtype=float)), errors="coerce")
+        short_mfe = pd.to_numeric(subset.get("short_mfe_from_post_close", pd.Series(dtype=float)), errors="coerce")
+        adverse = pd.to_numeric(subset.get("adverse_up_before_short_low", pd.Series(dtype=float)), errors="coerce")
+        rows.append(
+            {
+                "rule": name,
+                "events": int(len(subset)),
+                "short2_events": int(short2.sum()) if len(short2) else 0,
+                "short2_rate": float(short2.mean()) if len(short2) else 0.0,
+                "clean_short2_events": int(clean.sum()) if len(clean) else 0,
+                "clean_short2_rate": float(clean.mean()) if len(clean) else 0.0,
+                "long_up2_rate": float((long_mfe >= 0.02).mean()) if len(long_mfe) else 0.0,
+                "median_short_mfe": float(short_mfe.median()) if len(short_mfe) else float("nan"),
+                "median_adverse_before_low": float(adverse.median()) if len(adverse) else float("nan"),
+            }
+        )
+    return pd.DataFrame(rows).sort_values(["short2_rate", "events"], ascending=[False, False]).reset_index(drop=True)
+
+
+def build_short_fader_label_distribution(candidates: pd.DataFrame) -> pd.DataFrame:
+    if candidates.empty:
+        return pd.DataFrame()
+    events = candidates.drop_duplicates(["symbol", "timestamp_ms"], keep="first").copy() if {"symbol", "timestamp_ms"}.issubset(candidates.columns) else candidates.copy()
+    rows = [{"metric": "events", "value": int(len(events))}]
+    for column in ("short2", "clean_short2"):
+        if column in events.columns:
+            values = events[column].astype(bool)
+            rows.append({"metric": f"{column}_events", "value": int(values.sum())})
+            rows.append({"metric": f"{column}_rate", "value": float(values.mean()) if len(values) else 0.0})
+    if "long_mfe_from_post_close" in events.columns:
+        long_mfe = pd.to_numeric(events["long_mfe_from_post_close"], errors="coerce")
+        rows.append({"metric": "long_up2_events", "value": int(long_mfe.ge(0.02).sum())})
+        rows.append({"metric": "long_up2_rate", "value": float(long_mfe.ge(0.02).mean()) if len(long_mfe) else 0.0})
+    for column in ("short_post_close_ltf_status", "short_trigger_status"):
+        if column in candidates.columns:
+            for value, count in candidates[column].astype(str).value_counts(dropna=False).items():
+                rows.append({"metric": f"{column}:{value}", "value": int(count)})
+    return pd.DataFrame(rows)
+
+
+def build_short_fader_data_quality_summary(candidates: pd.DataFrame) -> pd.DataFrame:
+    if candidates.empty:
+        return pd.DataFrame([{"metric": "candidate_rows", "value": 0}])
+    rows: list[dict[str, object]] = [{"metric": "candidate_rows", "value": int(len(candidates))}]
+    if "symbol" in candidates.columns and "timestamp_ms" in candidates.columns:
+        rows.append({"metric": "unique_events", "value": int(candidates.drop_duplicates(["symbol", "timestamp_ms"]).shape[0])})
+    if "trade_count_proxy_used" in candidates.columns:
+        proxy = candidates["trade_count_proxy_used"].astype(str).str.lower().isin({"true", "1", "yes"})
+        rows.append({"metric": "trade_count_proxy_rows", "value": int(proxy.sum())})
+    for column in (
+        "levels_trade_count_source",
+        "entry_trade_count_source",
+        "levels_quote_volume_source",
+        "entry_quote_volume_source",
+        "short_post_close_ltf_status",
+    ):
+        if column in candidates.columns:
+            for value, count in candidates[column].astype(str).value_counts(dropna=False).items():
+                rows.append({"metric": f"{column}:{value}", "value": int(count)})
+    return pd.DataFrame(rows)
+
+
+def build_short_fader_funnel(
+    *,
+    candidates: pd.DataFrame,
+    signals: pd.DataFrame,
+    trades: pd.DataFrame,
+    live_filtered: pd.DataFrame,
+) -> pd.DataFrame:
+    def event_count(frame: pd.DataFrame) -> int:
+        if frame.empty:
+            return 0
+        if {"symbol", "timestamp_ms"}.issubset(frame.columns):
+            return int(frame.drop_duplicates(["symbol", "timestamp_ms"]).shape[0])
+        return int(len(frame))
+
+    rows = [
+        {"stage": "bare_htf_anomaly_events", "rows": int(len(candidates)), "events": event_count(candidates)},
+    ]
+    if not candidates.empty and "short_post_close_ltf_status" in candidates.columns:
+        ok = candidates.loc[candidates["short_post_close_ltf_status"].astype(str).eq("ok")]
+        rows.append({"stage": "post_close_ltf_window_ok", "rows": int(len(ok)), "events": event_count(ok)})
+    if not candidates.empty and "short_trigger_status" in candidates.columns:
+        triggered = candidates.loc[candidates["short_trigger_status"].astype(str).eq("triggered")]
+        rows.append({"stage": "short_pressure_triggered", "rows": int(len(triggered)), "events": event_count(triggered)})
+    rows.append({"stage": "discovery_signals", "rows": int(len(signals)), "events": event_count(signals)})
+    closed = trades.loc[trades["status"].eq("closed")] if not trades.empty and "status" in trades.columns else pd.DataFrame()
+    rows.append({"stage": "raw_closed_trades", "rows": int(len(closed)), "events": event_count(closed)})
+    live_closed = live_filtered.loc[live_filtered["status"].eq("closed")] if not live_filtered.empty and "status" in live_filtered.columns else pd.DataFrame()
+    rows.append({"stage": "live_filtered_closed_trades", "rows": int(len(live_closed)), "events": event_count(live_closed)})
+    return pd.DataFrame(rows)
+
+
+def build_short_fader_top_trades(trades: pd.DataFrame, *, limit: int = 50) -> pd.DataFrame:
+    if trades.empty or "status" not in trades.columns or "net_return" not in trades.columns:
+        return pd.DataFrame()
+    closed = trades.loc[trades["status"].eq("closed")].copy()
+    if closed.empty:
+        return pd.DataFrame()
+    closed["net_return"] = pd.to_numeric(closed["net_return"], errors="coerce")
+    columns = [
+        column
+        for column in (
+            "symbol",
+            "anomaly_timestamp_utc",
+            "decision_timestamp_utc",
+            "entry_timestamp_utc",
+            "short_trigger_type",
+            "exit_reason",
+            "net_return",
+            "gross_r",
+            "mfe_pct",
+            "mae_pct",
+            "prior_spike_count_72h",
+            "prior_fast_fade_count_72h",
+            "ltf12_ret",
+            "short_mfe_from_post_close",
+            "long_mfe_from_post_close",
+            "adverse_up_before_short_low",
+        )
+        if column in closed.columns
+    ]
+    return closed.sort_values("net_return", ascending=False).head(int(limit)).loc[:, columns].reset_index(drop=True)
+
+
+def build_short_fader_post_close_path_slices(
+    candidates: pd.DataFrame,
+    *,
+    config: AnomalyBacktestConfig,
+    max_events: int = 5_000,
+) -> pd.DataFrame:
+    if candidates.empty or not {"symbol", "timestamp_ms", "short_post_close_start_ms", "short_post_close_end_ms"}.issubset(candidates.columns):
+        return pd.DataFrame()
+    events = candidates.drop_duplicates(["symbol", "timestamp_ms"], keep="first").copy()
+    if len(events) > int(max_events):
+        events = events.head(int(max_events)).copy()
+    cache: dict[str, pd.DataFrame] = {}
+    rows: list[dict[str, object]] = []
+    entry_ms = _timeframe_to_milliseconds(_effective_entry_timeframe(config))
+    for _, event in events.iterrows():
+        symbol = str(event["symbol"])
+        start_ts = _safe_int(event.get("short_post_close_start_ms"))
+        end_ts = _safe_int(event.get("short_post_close_end_ms"))
+        anchor_close = _safe_float(event.get("htf_close"))
+        if start_ts is None or end_ts is None:
+            continue
+        frame = cache.get(symbol)
+        if frame is None:
+            try:
+                frame = _read_entry_simulation_frame(config.lab_config.cache_dir, symbol, _effective_entry_timeframe(config))
+            except Exception:
+                frame = pd.DataFrame()
+            cache[symbol] = frame
+        if frame.empty:
+            continue
+        path = frame.loc[
+            pd.to_numeric(frame["timestamp"], errors="coerce").ge(start_ts)
+            & pd.to_numeric(frame["timestamp"], errors="coerce").lt(end_ts)
+        ].copy()
+        if path.empty:
+            continue
+        for idx, candle in enumerate(path.itertuples(index=False), start=0):
+            timestamp = int(getattr(candle, "timestamp"))
+            open_ = float(getattr(candle, "open"))
+            high = float(getattr(candle, "high"))
+            low = float(getattr(candle, "low"))
+            close = float(getattr(candle, "close"))
+            row = {
+                "symbol": symbol,
+                "anomaly_timestamp_ms": int(event["timestamp_ms"]),
+                "anomaly_timestamp_utc": _timestamp_to_utc(int(event["timestamp_ms"])),
+                "relative_candle": int(idx),
+                "relative_ms": int(timestamp - start_ts),
+                "timestamp_ms": timestamp,
+                "timestamp_utc": _timestamp_to_utc(timestamp),
+                "open": open_,
+                "high": high,
+                "low": low,
+                "close": close,
+                "ret_from_htf_close": _safe_divide_value(close - anchor_close, anchor_close) if anchor_close else float("nan"),
+                "high_from_htf_close": _safe_divide_value(high - anchor_close, anchor_close) if anchor_close else float("nan"),
+                "low_from_htf_close": _safe_divide_value(low - anchor_close, anchor_close) if anchor_close else float("nan"),
+                "entry_timeframe_ms": int(entry_ms),
+            }
+            for column in ("quote_volume", "number_of_trades", "taker_buy_quote_volume"):
+                if hasattr(candle, column):
+                    row[column] = float(getattr(candle, column))
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def build_short_fader_decay_category_artifacts(candidates: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if candidates.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    events = candidates.drop_duplicates(["symbol", "timestamp_ms"], keep="first").copy() if {"symbol", "timestamp_ms"}.issubset(candidates.columns) else candidates.copy()
+    if events.empty:
+        return events, pd.DataFrame()
+    def numeric_series(column: str) -> pd.Series:
+        values = events[column] if column in events.columns else pd.Series(np.nan, index=events.index)
+        return pd.to_numeric(values, errors="coerce")
+
+    short_mfe = numeric_series("short_mfe_from_post_close")
+    long_mfe = numeric_series("long_mfe_from_post_close")
+    adverse = numeric_series("adverse_up_before_short_low")
+    ltf12_ret = numeric_series("ltf12_ret")
+    ltf12_taker = numeric_series("ltf12_taker_buy_quote_share")
+    clean_short = events.get("clean_short2", pd.Series(False, index=events.index)).astype(bool)
+    short2 = events.get("short2", pd.Series(False, index=events.index)).astype(bool)
+    categories: list[str] = []
+    reasons: list[str] = []
+    for idx in events.index:
+        reason_parts: list[str] = []
+        category = "unclassified_decay_research"
+        if bool(clean_short.loc[idx]):
+            category = "clean_fader"
+            reason_parts.append("short2_clean_adverse")
+        elif bool(short2.loc[idx]) and np.isfinite(adverse.loc[idx]) and adverse.loc[idx] > 0.015:
+            category = "dirty_fader_after_adverse_pop"
+            reason_parts.append("short2_after_adverse")
+        elif np.isfinite(long_mfe.loc[idx]) and long_mfe.loc[idx] >= 0.02 and (not np.isfinite(short_mfe.loc[idx]) or short_mfe.loc[idx] < 0.02):
+            category = "continuation_risk"
+            reason_parts.append("long_up2_without_short2")
+        elif np.isfinite(ltf12_ret.loc[idx]) and ltf12_ret.loc[idx] < 0.0 and np.isfinite(ltf12_taker.loc[idx]) and ltf12_taker.loc[idx] < 0.48:
+            category = "early_ltf_flow_decay"
+            reason_parts.append("ltf12_negative_weak_taker")
+        elif np.isfinite(short_mfe.loc[idx]) and short_mfe.loc[idx] >= 0.01:
+            category = "shallow_decay"
+            reason_parts.append("short_mfe_ge_1pct")
+        else:
+            reason_parts.append("no_clear_decay_edge")
+        categories.append(category)
+        reasons.append(",".join(reason_parts))
+    events["short_decay_category_candidate"] = categories
+    events["short_decay_category_reason"] = reasons
+
+    rows: list[dict[str, object]] = []
+    for category, group in events.groupby("short_decay_category_candidate", dropna=False):
+        group_short2 = group.get("short2", pd.Series(dtype=bool)).astype(bool)
+        group_clean = group.get("clean_short2", pd.Series(dtype=bool)).astype(bool)
+        group_long_mfe = pd.to_numeric(group.get("long_mfe_from_post_close", pd.Series(dtype=float)), errors="coerce")
+        group_short_mfe = pd.to_numeric(group.get("short_mfe_from_post_close", pd.Series(dtype=float)), errors="coerce")
+        rows.append(
+            {
+                "short_decay_category_candidate": category,
+                "events": int(len(group)),
+                "short2_rate": float(group_short2.mean()) if len(group_short2) else 0.0,
+                "clean_short2_rate": float(group_clean.mean()) if len(group_clean) else 0.0,
+                "long_up2_rate": float(group_long_mfe.ge(0.02).mean()) if len(group_long_mfe) else 0.0,
+                "median_short_mfe": float(group_short_mfe.median()) if len(group_short_mfe) else float("nan"),
+                "symbols": int(group["symbol"].nunique()) if "symbol" in group.columns else 0,
+            }
+        )
+    summary = pd.DataFrame(rows).sort_values(["short2_rate", "events"], ascending=[False, False]).reset_index(drop=True)
+    return events, summary
+
+
+def run_short_fader_exit_grid(
+    signals: pd.DataFrame,
+    config: AnomalyBacktestConfig,
+    *,
+    frame_cache: dict[str, pd.DataFrame] | None = None,
+) -> pd.DataFrame:
+    if signals.empty:
+        return pd.DataFrame()
+    rr_values = (1.5, 2.0, 2.5, 3.0)
+    trigger_sets: list[tuple[str, pd.DataFrame]] = [("all", signals)]
+    if "short_trigger_type" in signals.columns:
+        for trigger_type, group in signals.groupby("short_trigger_type", dropna=False):
+            trigger_sets.append((str(trigger_type), group.copy()))
+    rows: list[dict[str, object]] = []
+    cache = frame_cache if frame_cache is not None else {}
+    for rr in rr_values:
+        variant = replace(config, short_fader_target_r=float(rr))
+        for trigger_name, signal_set in trigger_sets:
+            trades = simulate_short_fader_trades(signal_set, config=variant, frame_cache=cache)
+            live_filtered = apply_live_portfolio_filter(
+                trades,
+                max_open_positions=DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS,
+            )
+            row = {
+                "target_r": float(rr),
+                "trigger_scope": trigger_name,
+                "signals": int(len(signal_set)),
+            }
+            row.update({f"raw_{key}": value for key, value in _metric_map(summarize_trades(trades)).items()})
+            row.update({f"live_filtered_{key}": value for key, value in _metric_map(summarize_trades(live_filtered)).items()})
+            top = build_short_fader_top_dependency(live_filtered)
+            if not top.empty:
+                row["live_filtered_top5_share"] = float(top.iloc[0]["top5_share"])
+                row["live_filtered_top15_share"] = float(top.iloc[0]["top15_share"])
+            rows.append(row)
+    result = pd.DataFrame(rows)
+    if not result.empty:
+        sort_cols = [column for column in ("live_filtered_sum_net_return", "live_filtered_closed_trades") if column in result.columns]
+        if sort_cols:
+            result.sort_values(sort_cols, ascending=[False] * len(sort_cols), inplace=True)
+    return result.reset_index(drop=True)
+
+
+def run_bare_htf_short_fader_backtest(
+    candidates: pd.DataFrame,
+    *,
+    config: AnomalyBacktestConfig,
+    output_dir: Path,
+    symbols: Iterable[str] | None,
+    targeted_flow_plan: pd.DataFrame,
+    targeted_flow_fetch: pd.DataFrame,
+    targeted_flow_materialize: pd.DataFrame,
+    targeted_flow_coverage: pd.DataFrame,
+    timings: dict[str, float],
+    total_started_at: float,
+) -> Path:
+    print("bare HTF short/fader: filtering signals", flush=True)
+    stage_started_at = time.monotonic()
+    signals = build_bare_htf_short_fader_signals(candidates, config=config)
+    timings["short_signals_seconds"] = time.monotonic() - stage_started_at
+
+    stage_started_at = time.monotonic()
+    decay_events, decay_summary = build_short_fader_decay_category_artifacts(candidates)
+    path_slices = build_short_fader_post_close_path_slices(candidates, config=config)
+    _write_artifact_frames(
+        [
+            (output_dir / "bare_htf_short_candidates.csv", candidates),
+            (output_dir / "bare_htf_short_features.csv", candidates),
+            (output_dir / "bare_htf_short_labels.csv", candidates),
+            (output_dir / "bare_htf_short_triggers.csv", candidates.loc[candidates.get("short_trigger_status", pd.Series(dtype=str)).astype(str).eq("triggered")].copy() if not candidates.empty and "short_trigger_status" in candidates.columns else pd.DataFrame()),
+            (output_dir / "bare_htf_short_signals.csv", signals),
+            (output_dir / "bare_htf_short_factor_separation.csv", build_short_fader_factor_separation(candidates, config=config)),
+            (output_dir / "bare_htf_short_label_distribution.csv", build_short_fader_label_distribution(candidates)),
+            (output_dir / "bare_htf_short_data_quality_summary.csv", build_short_fader_data_quality_summary(candidates)),
+            (output_dir / "bare_htf_short_post_close_path_slices.csv", path_slices),
+            (output_dir / "bare_htf_short_decay_category_events.csv", decay_events),
+            (output_dir / "bare_htf_short_decay_category_summary.csv", decay_summary),
+            (output_dir / "anomaly_universe_contract.csv", _universe_contract_frame(symbols=symbols)),
+        ],
+        progress_label="short/fader artifacts: base files",
+    )
+    timings["short_base_artifacts_seconds"] = time.monotonic() - stage_started_at
+
+    print(f"bare HTF short/fader: simulating {len(signals)} signals", flush=True)
+    stage_started_at = time.monotonic()
+    frame_cache: dict[str, pd.DataFrame] = {}
+    trades = simulate_short_fader_trades(signals, config=config, progress_label="short/fader trades", frame_cache=frame_cache)
+    timings["short_trades_seconds"] = time.monotonic() - stage_started_at
+    live_filtered = apply_live_portfolio_filter(
+        trades,
+        max_open_positions=DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS,
+    )
+    summary = summarize_trades(trades)
+    live_summary = summarize_trades(live_filtered)
+    stage_started_at = time.monotonic()
+    exit_grid = (
+        run_short_fader_exit_grid(signals, config, frame_cache=frame_cache)
+        if bool(config.short_fader_run_exit_grid)
+        else _disabled_artifact_frame(
+            artifact="bare_htf_short_exit_grid.csv",
+            reason="short_fader_run_exit_grid_false",
+        )
+    )
+    timings["short_exit_grid_seconds"] = time.monotonic() - stage_started_at
+
+    context_parity_report = pd.DataFrame(
+        [
+            {
+                "context_parity_status": "ok",
+                "detail": "short/fader contract does not use long pump categories as entry classes",
+                "signals": int(len(signals)),
+            }
+        ]
+    )
+    honesty_report = build_backtest_honesty_report(
+        config=config,
+        candidates=candidates,
+        signals=signals,
+        trades=trades,
+        symbols=symbols,
+        context_parity_report=context_parity_report,
+        run_entry_grid=False,
+        run_latency_grid=False,
+    )
+    run_verdict = pd.DataFrame(
+        [
+            {
+                "verdict": "research_only",
+                "valid_backtest": True,
+                "reason": "bare_htf_short_fader_contract_written;not_live_ready_without_larger_validation",
+                "feature_contract": BARE_HTF_SHORT_FADER_CONTRACT,
+                "signals": int(len(signals)),
+                "closed_trades": int(trades["status"].eq("closed").sum()) if "status" in trades.columns else 0,
+            }
+        ]
+    )
+    stage_started_at = time.monotonic()
+    _write_artifact_frames(
+        [
+            (output_dir / "bare_htf_short_trades_raw.csv", trades),
+            (output_dir / "bare_htf_short_trades_live_filtered.csv", live_filtered),
+            (output_dir / "bare_htf_short_profitability_summary.csv", summary),
+            (output_dir / "bare_htf_short_profitability_summary_live_filtered.csv", live_summary),
+            (output_dir / "bare_htf_short_skip_reasons.csv", summarize_trade_skip_reasons(trades)),
+            (output_dir / "bare_htf_short_skip_reasons_live_filtered.csv", summarize_trade_skip_reasons(live_filtered)),
+            (output_dir / "bare_htf_short_by_symbol.csv", summarize_trades_by_symbol(trades)),
+            (output_dir / "bare_htf_short_by_symbol_live_filtered.csv", summarize_trades_by_symbol(live_filtered)),
+            (output_dir / "bare_htf_short_by_trigger.csv", summarize_short_fader_by_column(trades, column="short_trigger_type")),
+            (output_dir / "bare_htf_short_by_trigger_live_filtered.csv", summarize_short_fader_by_column(live_filtered, column="short_trigger_type")),
+            (output_dir / "bare_htf_short_top_dependency.csv", build_short_fader_top_dependency(trades)),
+            (output_dir / "bare_htf_short_top_dependency_live_filtered.csv", build_short_fader_top_dependency(live_filtered)),
+            (output_dir / "bare_htf_short_top_trades.csv", build_short_fader_top_trades(trades)),
+            (output_dir / "bare_htf_short_top_trades_live_filtered.csv", build_short_fader_top_trades(live_filtered)),
+            (output_dir / "bare_htf_short_funnel.csv", build_short_fader_funnel(candidates=candidates, signals=signals, trades=trades, live_filtered=live_filtered)),
+            (output_dir / "bare_htf_short_exit_grid.csv", exit_grid),
+            (output_dir / "bare_htf_short_edge_health.csv", build_edge_health_table(trades, label="short_fader_primary")),
+            (output_dir / "bare_htf_short_edge_health_live_filtered.csv", build_edge_health_table(live_filtered, label="short_fader_live_filtered")),
+            (output_dir / "anomaly_context_parity_report.csv", context_parity_report),
+            (output_dir / "anomaly_backtest_honesty_report.csv", honesty_report),
+            (output_dir / "anomaly_run_verdict.csv", run_verdict),
+        ],
+        progress_label="short/fader artifacts: trade files",
+    )
+    timings["short_trade_artifacts_seconds"] = time.monotonic() - stage_started_at
+
+    requested_symbols_normalized = _normalized_symbol_tuple(symbols)
+    timings["total_seconds"] = time.monotonic() - total_started_at
+    run_config = {
+        **asdict(config),
+        "feature_contract": BARE_HTF_SHORT_FADER_CONTRACT,
+        "universe_symbol_scope": _universe_symbol_scope(symbols),
+        "universe_requested_symbols_count": int(len(requested_symbols_normalized)),
+        "universe_requested_symbols_normalized": requested_symbols_normalized,
+        "historical_listing_snapshot_available": False,
+        "survivorship_bias_risk": _universe_symbol_scope(symbols) == "cache_snapshot_scan",
+        "setup_timeframe": _effective_setup_timeframe(config),
+        "entry_timeframe": _effective_entry_timeframe(config),
+        "execution_model": _execution_model_label(config),
+        "portfolio_model": f"global_max_open_positions_{int(config.max_open_positions)}_at_actual_entry",
+        "live_filtered_portfolio_model": (
+            f"post_simulation_global_max_open_positions_{int(DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS)}"
+        ),
+        "live_filtered_max_open_positions": int(DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS),
+        "slippage_model": "adverse_short_entry_and_exit",
+        "entry_slippage_pct": float(config.entry_slippage_pct),
+        "exit_slippage_pct": float(config.exit_slippage_pct),
+        "prior_context_lookback_hours": int(_PRIOR_CONTEXT_LIVE_LOOKBACK_HOURS),
+        "valid_backtest": True,
+        "backtest_verdict": "research_only",
+        "backtest_invalid_reason": "",
+        "targeted_flow_planned_windows": int(_targeted_flow_planned_window_count(targeted_flow_plan)),
+        "targeted_flow_ready_windows": int((targeted_flow_coverage.get("coverage_status", pd.Series(dtype=str)).astype(str) == "ready").sum()) if not targeted_flow_coverage.empty else 0,
+        "lab_config": asdict(config.lab_config),
+    }
+    timing_frame = pd.DataFrame(
+        [{"stage": key, "seconds": round(float(value), 3)} for key, value in timings.items()]
+    )
+    _write_artifact_frames(
+        [
+            (output_dir / "anomaly_timing_summary.csv", timing_frame),
+            (output_dir / "run_config.csv", pd.DataFrame([run_config])),
+        ],
+        progress_label="short/fader artifacts: run config",
+    )
+    print(
+        "bare HTF short/fader result: "
+        f"signals={len(signals)} "
+        f"closed={_summary_metric(summary, 'closed_trades')} "
+        f"skipped={_summary_metric(summary, 'skipped_trades')} "
+        f"avg_net={float(_summary_metric(summary, 'avg_net_return', 0.0)):.4%} "
+        f"sum_net={float(_summary_metric(summary, 'sum_net_return', 0.0)):.4%} "
+        f"win_rate={float(_summary_metric(summary, 'win_rate', 0.0)):.2%}",
+        flush=True,
+    )
+    return output_dir
 
 
 def apply_live_portfolio_filter(
@@ -5226,11 +6875,15 @@ def build_backtest_honesty_report(
     closed_rows = 0
     pair_rows = 0
     post_htf_rows = 0
+    post_htf_forward_rows = 0
+    short_fader_rows = 0
     if not candidates.empty and "feature_contract" in candidates.columns:
         contracts = candidates["feature_contract"].astype(str)
         closed_rows = int(contracts.eq("closed_setup_tf_v1").sum())
         pair_rows = int(contracts.eq("htf_setup_ltf_entry_v1").sum())
         post_htf_rows = int(contracts.eq(POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT).sum())
+        post_htf_forward_rows = int(contracts.eq(POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION_CONTRACT).sum())
+        short_fader_rows = int(contracts.eq(BARE_HTF_SHORT_FADER_CONTRACT).sum())
     rows.append(
         _honesty_row(
             node_id=6,
@@ -5259,9 +6912,20 @@ def build_backtest_honesty_report(
             node="Post-HTF-close LTF confirmation collector",
             status="ok",
             severity="info",
-            rows_checked=post_htf_rows,
+            rows_checked=post_htf_rows + post_htf_forward_rows,
             failures=0,
-            detail="post-HTF-close rows may inspect the closed HTF candle and its complete LTF segment, but entry remains after the HTF close",
+            detail="post-HTF-close rows may inspect left/closed HTF context after HTF close; forward mode waits for LTF confirmation after that close",
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=30,
+            node="Bare HTF short/fader collector",
+            status="ok",
+            severity="info",
+            rows_checked=short_fader_rows,
+            failures=0,
+            detail="short/fader rows start from closed HTF anomalies and require executable LTF triggers after HTF close; long categories are not entry classes",
         )
     )
     rows.append(
@@ -5500,7 +7164,7 @@ def build_backtest_honesty_report(
                 f"fee_rate={float(config.fee_rate):g}; "
                 f"entry_slippage_pct={float(config.entry_slippage_pct):g}; "
                 f"exit_slippage_pct={float(config.exit_slippage_pct):g}; "
-                "slippage is applied adversely to long fills"
+                "slippage is applied adversely to fills for the active side"
             ),
         )
     )
@@ -6724,6 +8388,19 @@ def run_anomaly_strategy_backtest(
     if not candidates.empty:
         candidates = enrich_candidates_with_recent_spike_context(candidates, config=config)
     timings["candidates_seconds"] = time.monotonic() - stage_started_at
+    if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER:
+        return run_bare_htf_short_fader_backtest(
+            candidates,
+            config=config,
+            output_dir=output_dir,
+            symbols=symbols,
+            targeted_flow_plan=targeted_flow_plan,
+            targeted_flow_fetch=targeted_flow_fetch,
+            targeted_flow_materialize=targeted_flow_materialize,
+            targeted_flow_coverage=targeted_flow_coverage,
+            timings=timings,
+            total_started_at=total_started_at,
+        )
     print("anomaly signals: filtering", flush=True)
     stage_started_at = time.monotonic()
     pre_context_config = replace(

@@ -1,5 +1,51 @@
 # Anomaly Research State
 
+## 2026-05-25 - post-HTF fader/short research state
+
+Current commit: UNKNOWN.
+
+Status: UPDATED ANALYSIS. The first signal-row inversion test was methodologically dirty and not sufficient. A cleaner bare-HTF anomaly research pass collapsed the run to 167 unique closed HTF anomalies and ignored long categories as classes. Result: 81/167 reached >=2% post-close short MFE; 49/167 were clean with adverse_up_before_short_low <=1.5%.
+
+Finding: the short/fader effect is concentrated in prior crowding/fade plus LTF short-pressure confirmation. Best small probes are prior_fast_fade>=3 or prior_spike>=10 combined with failed_new_high/taker_fade_red, using RR2.0-2.5. Best cap-1 variants showed about +20% over 9-12 closed trades, but top-dependency is high because the sample is small.
+
+Exit check: focused partial exits did not help the best probes. Full RR2.5 beat 50% partial at 1R and 1.5R, with or without BE, because the few clean winners need room.
+
+Conclusion: do not enable live shorts yet. This is now a plausible research candidate, not proof. Next validation must rerun the bare HTF fader contract on a larger period/universe and compare against forming long/live-priority results.
+
+Planned implementation: write a separate honest bare-HTF short/fader backtest path with closed HTF anomaly detection, post-close LTF feature windows within 60 minutes, trigger-based next-LTF-open short simulation, structural stop, RR2.0-2.5 variants, cap-1 live filter, skip reasons, top-dependency and distribution artifacts. Long categories may appear only as diagnostics, not as short entry classes.
+
+Implementation update: P398 is APPLIED locally / UNKNOWN commit. `--pair-collection-mode bare_htf_short_fader` now writes the separate short/fader artifact set and keeps long categories out of short entry selection. Smoke validation passed on INJ/BEAT plumbing, but edge is still unproven and requires a larger run.
+
+Discovery update: P399 is APPLIED locally / UNKNOWN commit. The short/fader mode is now wide discovery by default: prior crowding/fade is artifact annotation, not a required signal gate, and RR exit grid is off unless explicitly enabled. Next step is a larger discovery run, then category extraction by decay/fader nature from artifacts and cached candles.
+
+Expanded discovery update: P400 is APPLIED locally / UNKNOWN commit. The short/fader mode now includes seven default post-close trigger types, compact post-close LTF path slices, and heuristic decay-category artifacts. These categories are research triage labels only; final categories still need to be derived from a larger run.
+
+Analysis tooling update: P401 is APPLIED locally / UNKNOWN commit. Added `research_tools.short_fader_category_analysis` to score category/rule candidates from an existing wide discovery run. It is in-sample artifact analysis only; promising rules need strict replay after selection.
+
+## 2026-05-25 - P395 post-HTF forward LTF confirmation mode
+
+Current commit: UNKNOWN.
+
+Status: APPLIED locally / UNKNOWN commit. Added `post_htf_close_ltf_forward_confirmation`: closed HTF N must show setup interest, then LTF confirmation is evaluated only after HTF N close, inside the following HTF window. Entry remains tied to the forward LTF decision and cannot occur inside N.
+
+Expected impact: tests the conservative "HTF noticed first, LTF confirms after" hypothesis without mixing it with forming/live2 early-entry logic. It should reduce stale/retro-fill optimism versus using LTF inside N as if it were an entry trigger.
+
+Validation: compileall passed; focused collector tests for P394/P395 passed.
+
+Next validation: run one small explicit pair first, then inspect candidates for `feature_contract=post_htf_close_ltf_forward_confirmation_v1`, `candidate_collection_policy=all_ltf_forward_confirmations_after_post_htf_close`, and non-empty forward confirmation fields before interpreting PnL.
+
+## 2026-05-25 - P394 post-HTF LTF left-context parity
+
+Current commit: UNKNOWN.
+
+Status: APPLIED locally / UNKNOWN commit. Follow-up to P393: `post_htf_close_ltf_confirmation` now requires and uses LTF candles to the left of the anomalous HTF candle, without moving the decision/fill back into the past. The decision remains available at HTF close, simulated market entry remains no earlier than that close, and left LTF context is used for the prior-whipsaw filter in this mode.
+
+Expected impact: closer live/backtest parity for post-HTF-close continuation tests, because live would already have the left LTF tape by the time the HTF close decision is made. Results may become stricter and targeted backfill heavier because full left LTF context is now required.
+
+Validation: compileall passed and the focused new post-HTF left-context test passed. Full anomaly continuation test file still exposes two forming-mode baseline failures in current HEAD: tests expect entry-derived baseline, while the code uses setup-timeframe baseline.
+
+Next validation: resolve the forming-mode baseline contract honestly, then run a small `5m/1m --pair-collection-mode post_htf_close_ltf_confirmation` slice and inspect `targeted_flow_plan.csv` window_before_ms plus candidate left-context columns.
+
 ## 2026-05-24 - P393 post-HTF-close LTF confirmation mode
 
 Current commit: UNKNOWN.
@@ -2719,6 +2765,22 @@ Next validation: apply P331-P345, run compileall, then run a short live2 smoke. 
 ## 2026-05-20 - P346 live2 missing prior-context module state
 
 Current commit: UNKNOWN.
+
+## 2026-05-25 - P403 short/fader cost-control state
+
+Current commit: UNKNOWN.
+
+P403 tightens the default `bare_htf_short_fader` anomaly definition for targeted 1s planning. Before P403, short/fader discovery used flow-only coarse anomalies (`quote/trades >= 5x baseline`) and could plan an excessive number of 1s windows over 30d full-market runs. After P403, the default short/fader prefilter requires stronger closed HTF evidence: quote ratio >=10, trade ratio >=8, and HTF close-open return >=1.5%. Validation smoke reduced 23 coarse candidates to 2 targeted 1s windows and passed honesty checks.
+
+Next validation: run the 30d discovery with defaults first. If targeted 1s ETA is still too high, raise `--short-fader-prefilter-min-htf-return` to 0.02 or 0.03.
+
+## 2026-05-25 - P402 short/fader artifact honesty state
+
+Current commit: UNKNOWN.
+
+P402 fixes a discovered artifact-contract bug in `bare_htf_short_fader`: trigger rows inherited `decision_available_timestamp_ms` from the closed HTF anomaly even though the actual trigger decision is only available after the triggering LTF candle closes. The simulated fill path already entered on the next LTF open, so this is primarily an audit/honesty bug rather than a known PnL timing bug. Validation smoke passed the honesty availability/baseline checks with 0 failures.
+
+Next validation: run the larger 30d/60d discovery and analyze categories out-of-sample or by time split before treating any category as an edge.
 
 P346 proposed after a failed live2 startup showed `ModuleNotFoundError: No module named 'research_tools.anomaly_live2.market_data.prior_context'`. The earlier P345 prewarm patch referenced `Live2PriorContextPoller`, but the module file was missing from the applied patch stack. P346 adds the missing module so live2 can import and proceed to startup preflight.
 

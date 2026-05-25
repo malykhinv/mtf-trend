@@ -1228,8 +1228,12 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             _parse_grid_exit_rules,
             _parse_grid_profile_values,
             PAIR_COLLECTION_MODE_FORMING,
+            PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER,
             PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION,
+            PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION,
+            BARE_HTF_SHORT_FADER_CONTRACT,
             POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT,
+            POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION_CONTRACT,
             build_targeted_flow_coverage,
             collect_pair_anomaly_rows_for_configs,
             ensure_targeted_subminute_flow_cache_for_configs,
@@ -1302,15 +1306,27 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 min_trade_ratio_start=float(args.min_trade_ratio_start),
             )
             pair_collection_mode = str(getattr(args, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING))
-            if pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION and entry_timeframe == setup_timeframe:
-                raise ValueError("--pair-collection-mode post_htf_close_ltf_confirmation requires --entry-timeframe below --setup-timeframe")
+            if pair_collection_mode in {
+                PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER,
+                PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION,
+                PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION,
+            } and entry_timeframe == setup_timeframe:
+                raise ValueError(f"--pair-collection-mode {pair_collection_mode} requires --entry-timeframe below --setup-timeframe")
             feature_contract = (
                 "closed_setup_tf_v1"
                 if entry_timeframe == setup_timeframe
                 else (
-                    POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT
-                    if pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION
-                    else "htf_setup_ltf_entry_v1"
+                    BARE_HTF_SHORT_FADER_CONTRACT
+                    if pair_collection_mode == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER
+                    else (
+                        POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION_CONTRACT
+                        if pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION
+                        else (
+                            POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT
+                            if pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION
+                            else "htf_setup_ltf_entry_v1"
+                        )
+                    )
                 )
             )
             return AnomalyBacktestConfig(
@@ -1430,6 +1446,25 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 fee_rate=float(args.fee_rate),
                 entry_slippage_pct=float(getattr(args, "entry_slippage_pct", DEFAULT_SLIPPAGE)),
                 exit_slippage_pct=float(getattr(args, "exit_slippage_pct", DEFAULT_SLIPPAGE)),
+                short_fader_analysis_minutes=int(getattr(args, "short_fader_analysis_minutes", 60)),
+                short_fader_target_r=float(getattr(args, "short_fader_target_r", 2.5)),
+                short_fader_min_prior_spike_count_72h=int(getattr(args, "short_fader_min_prior_spike_count_72h", 10)),
+                short_fader_min_prior_fast_fade_count_72h=int(getattr(args, "short_fader_min_prior_fast_fade_count_72h", 3)),
+                short_fader_prefilter_min_quote_ratio=float(getattr(args, "short_fader_prefilter_min_quote_ratio", 10.0)),
+                short_fader_prefilter_min_trade_ratio=float(getattr(args, "short_fader_prefilter_min_trade_ratio", 8.0)),
+                short_fader_prefilter_min_htf_return=float(getattr(args, "short_fader_prefilter_min_htf_return", 0.015)),
+                short_fader_triggers=str(
+                    getattr(
+                        args,
+                        "short_fader_triggers",
+                        (
+                            "failed_new_high,taker_fade_red,close_below_htf_close,close_below_post_mid,"
+                            "lower_high_close_down,effort_no_progress,pullback_without_recovery"
+                        ),
+                    )
+                ),
+                short_fader_require_prior_context=bool(getattr(args, "short_fader_require_prior_context", False)),
+                short_fader_run_exit_grid=bool(getattr(args, "short_fader_run_exit_grid", False)),
             )
 
         def _run_timeframe_pair(
@@ -1574,9 +1609,17 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                                         "closed_setup_tf_v1"
                                         if setup_timeframe == entry_timeframe
                                         else (
-                                            POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT
-                                            if str(getattr(args, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION
-                                            else "htf_setup_ltf_entry_v1"
+                                            BARE_HTF_SHORT_FADER_CONTRACT
+                                            if str(getattr(args, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER
+                                            else (
+                                                POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION_CONTRACT
+                                                if str(getattr(args, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_FORWARD_CONFIRMATION
+                                                else (
+                                                    POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT
+                                                    if str(getattr(args, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION
+                                                    else "htf_setup_ltf_entry_v1"
+                                                )
+                                            )
                                         )
                                     ),
                                     "status": "error",

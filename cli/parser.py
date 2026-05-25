@@ -101,11 +101,18 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--entry-timeframe", default=None, help="LTF execution timeframe, e.g. 30s. If omitted, equals setup/timeframe")
     anomaly_lab.add_argument(
         "--pair-collection-mode",
-        choices=["forming", "post_htf_close_ltf_confirmation"],
+        choices=[
+            "forming",
+            "post_htf_close_ltf_confirmation",
+            "post_htf_close_ltf_forward_confirmation",
+            "bare_htf_short_fader",
+        ],
         default="forming",
         help=(
             "For setup/entry pairs, use forming to evaluate every LTF decision inside the current HTF candle, "
-            "or post_htf_close_ltf_confirmation to evaluate one signal after the HTF candle closes and enter only after that close."
+            "post_htf_close_ltf_confirmation to evaluate one signal after the HTF candle closes, "
+            "post_htf_close_ltf_forward_confirmation to wait for LTF confirmation after that close, "
+            "or bare_htf_short_fader to research post-close short/fader triggers from bare HTF anomalies."
         ),
     )
     anomaly_lab.add_argument("--end-timestamp-ms", type=int, default=None)
@@ -196,6 +203,22 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--fee-rate", type=float, default=0.0004)
     anomaly_lab.add_argument("--entry-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
     anomaly_lab.add_argument("--exit-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
+    anomaly_lab.add_argument("--short-fader-analysis-minutes", type=_positive_int_for("--short-fader-analysis-minutes"), default=60)
+    anomaly_lab.add_argument("--short-fader-target-r", type=float, default=2.5)
+    anomaly_lab.add_argument("--short-fader-min-prior-spike-count-72h", type=_non_negative_int_for("--short-fader-min-prior-spike-count-72h"), default=10)
+    anomaly_lab.add_argument("--short-fader-min-prior-fast-fade-count-72h", type=_non_negative_int_for("--short-fader-min-prior-fast-fade-count-72h"), default=3)
+    anomaly_lab.add_argument("--short-fader-prefilter-min-quote-ratio", type=float, default=10.0)
+    anomaly_lab.add_argument("--short-fader-prefilter-min-trade-ratio", type=float, default=8.0)
+    anomaly_lab.add_argument("--short-fader-prefilter-min-htf-return", type=float, default=0.015)
+    anomaly_lab.add_argument(
+        "--short-fader-triggers",
+        default=(
+            "failed_new_high,taker_fade_red,close_below_htf_close,close_below_post_mid,"
+            "lower_high_close_down,effort_no_progress,pullback_without_recovery"
+        ),
+    )
+    anomaly_lab.add_argument("--short-fader-require-prior-context", type=_str_to_bool, default=False)
+    anomaly_lab.add_argument("--short-fader-run-exit-grid", type=_str_to_bool, default=False)
     anomaly_lab.add_argument("--render-charts", type=_str_to_bool, default=True)
     anomaly_lab.add_argument("--targeted-flow-backfill", type=_str_to_bool, default=True)
     anomaly_lab.add_argument("--run-entry-grid", type=_str_to_bool, default=False)

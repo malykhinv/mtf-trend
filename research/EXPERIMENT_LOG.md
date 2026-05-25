@@ -1,4 +1,201 @@
 
+## 2026-05-25 - P403 short/fader strict prefilter validation plan
+
+```text
+Patch: P403 stricter short/fader HTF anomaly prefilter.
+Reason: a 30d 1m/5s full-market short/fader discovery began targeted 1s flow with a multi-thousand-minute ETA, meaning the flow-only coarse anomaly set was too broad.
+
+Validation: compileall; focused short_fader tests; small explicit-symbol smoke. Inspect targeted_flow_plan.csv for short_fader_prefilter_dropped, thresholds, and reduced coarse_prefilter_candidates before running the larger 30d discovery. If still too expensive, raise --short-fader-prefilter-min-htf-return to 0.02 or 0.03.
+```
+
+## 2026-05-25 - P403 short/fader strict prefilter smoke result
+
+```text
+Run: .output/results/bare_htf_short_fader_p403_smoke
+Command shape: explicit BEAT/INJ, 2 days, 1m/5s, pair_collection_mode=bare_htf_short_fader, render_charts=false, short_fader_analysis_minutes=5, max_hold_candles=60.
+
+Result: compileall passed; focused short_fader tests passed. targeted_flow_plan.csv: 23 coarse candidates, 21 dropped by the new short_fader prefilter, 2 coarse_prefilter candidates, 2 targeted windows, 2 ready windows. Honesty report: 0 failures. Final signals on this tiny strict smoke: 0.
+
+Interpretation: P403 solved the cost-control problem on the smoke slice. It does not prove or disprove the short edge.
+```
+
+## 2026-05-25 - P402 short/fader honesty revalidation plan
+
+```text
+Patch: P402 short/fader decision availability contract.
+Issue found: bare_htf_short_fader trigger rows inherited decision_available_timestamp_ms=HTF close while decision_timestamp_ms was the post-close LTF trigger candle open. The standard timestamp_semantics tokens required by the honesty checker were also missing.
+
+Required checks: compileall; focused short_fader tests; rerun a small 1m/5s short/fader smoke. Inspect anomaly_backtest_honesty_report.csv and require candidate availability / baseline checks to pass before interpreting PnL or category artifacts.
+```
+
+## 2026-05-25 - P402 short/fader honesty smoke result
+
+```text
+Run: .output/results/bare_htf_short_fader_p402_smoke
+Command shape: explicit BEAT/INJ, 2 days, 1m/5s, pair_collection_mode=bare_htf_short_fader, render_charts=false, short_fader_analysis_minutes=5, max_hold_candles=60.
+
+Result: compileall passed; focused short_fader tests passed; smoke completed. anomaly_backtest_honesty_report.csv now shows OHLCV cache loader availability ok and baseline calculations ok with 0 failures. Funnel: 142 candidate rows / 76 HTF events; 81 post-close LTF ok rows / 15 events; 15 discovery signals; 15 raw closed trades; 14 live-filtered closed trades. Tiny smoke PnL remained negative: sum_net -2.60%, winrate 33.3%.
+
+Interpretation: P402 fixes artifact truthfulness for decision availability. It does not prove a short edge.
+```
+
+## 2026-05-25 - P401 short/fader category analysis smoke
+
+```text
+Run source: .output/results/bare_htf_short_fader_expanded_smoke
+Command: python -m research_tools.short_fader_category_analysis --run-dir .output/results/bare_htf_short_fader_expanded_smoke --min-events 1 --min-live-trades 1
+
+Result: completed and wrote short_fader_category_analysis/{summary,event_category_matrix,rule_scores,category_candidates,category_watchlist}. Smoke readout: 15 analysis rows, 15 unique events, 15 raw/live trades, 63 rule rows. This only validates the analyzer shape on a tiny sample.
+```
+
+## 2026-05-25 - P400 expanded short/fader discovery smoke
+
+```text
+Run: .output/results/bare_htf_short_fader_expanded_smoke
+Purpose: verify expanded trigger library, compact post-close path slices, and heuristic decay category artifacts.
+
+Result: completed. Default trigger list includes failed_new_high, taker_fade_red, close_below_htf_close, close_below_post_mid, lower_high_close_down, effort_no_progress, pullback_without_recovery. Funnel: 142 candidate rows / 76 unique HTF events; 81 triggered rows / 15 triggered events; 15 discovery signals; 15 raw closed trades; 14 live-filtered closed trades.
+
+Artifacts confirmed: bare_htf_short_post_close_path_slices.csv, bare_htf_short_decay_category_events.csv, bare_htf_short_decay_category_summary.csv. Tiny smoke by-trigger readout is not edge evidence.
+```
+
+## 2026-05-25 - P399 wide bare HTF short/fader discovery smoke
+
+```text
+Run: .output/results/bare_htf_short_fader_discovery_smoke
+Purpose: verify wide discovery behavior after removing the default prior crowding/fade gate and disabling RR grid by default.
+
+Result: completed. run_config.csv records short_fader_require_prior_context=False and short_fader_run_exit_grid=False. Funnel: 79 candidate rows / 76 unique events; 18 post-close-window-ok rows / 15 events; 16 triggered rows / 13 events; 13 discovery signals; 13 raw closed trades; 10 live-filtered closed trades.
+
+Interpretation: plumbing is now suitable for broad discovery artifacts. The tiny INJ/BEAT smoke was negative (13 raw closed, sum_net -6.68%, winrate 7.69%) and is not an edge test.
+```
+
+## 2026-05-25 - P398 bare HTF short/fader smoke
+
+```text
+Run: .output/results/bare_htf_short_fader_smoke
+Command shape: explicit INJ/BEAT, 2 days, 1m/5s, pair_collection_mode=bare_htf_short_fader, render_charts=false, short_fader_analysis_minutes=5, max_hold_candles=60.
+
+Result: command completed. run_config.csv records feature_contract=bare_htf_short_fader_v1, pair_collection_mode=bare_htf_short_fader, execution_model=next_bar_open_proxy_latency_1_slip_entry_0.0005_exit_0.0005_bare_htf_short_fader, slippage_model=adverse_short_entry_and_exit, valid_backtest=True, backtest_verdict=research_only.
+
+Artifact check: bare_htf_short_candidates.csv has 79 rows; bare_htf_short_triggers.csv exists; strict prior crowding/fade signal filter produced 0 final signals on this tiny INJ/BEAT window. This is a plumbing smoke, not an edge test.
+```
+
+## 2026-05-25 - planned honest bare-HTF short/fader backtest
+
+```text
+Goal: build a separate honest short/fader research path from bare closed HTF anomalies, not from long continuation categories.
+
+Protocol:
+1. Detect closed HTF anomaly N using only live-available HTF fields and real quote_volume/number_of_trades provenance.
+2. Start executable short research only after HTF N close.
+3. Build post-close LTF feature windows inside the first 60 minutes after N close, plus clearly marked left-context features available by then.
+4. Label outcomes from actual post-close executable time: short MFE/MAE, clean short2, long continuation adverse, time-to-low, time-to-stop, and missed/no-trigger cases.
+5. Search factors independently of long categories: prior crowding/fade, first-window LTF weakness, failed high, taker fade, effort/no-progress, range position, volume/trade-count decay or continuation.
+6. Simulate only next-LTF-open entries after a trigger, with adverse slippage, fees, structural stop, max hold, cap-1 portfolio filter, skip reasons, and top-dependency artifacts.
+7. Compare variants by expectancy, median trade, winrate, trade count, top5/top15 dependency, per-symbol/month/session distribution, and reject funnel before any live claim.
+
+Initial candidate contract to validate:
+closed HTF anomaly + prior_spike>=10 or prior_fast_fade>=3 + failed_new_high/taker_fade_red + next-5s-open short + structural stop + full RR2.0-2.5.
+
+Hard rejection: do not derive short buckets from discovery/runner long categories. Those can be reported as diagnostics only, not as entry classes.
+```
+
+## 2026-05-25 - P394 validation plan
+
+```text
+Patch: P394 post-HTF LTF left-context parity.
+Purpose: verify that post_htf_close_ltf_confirmation uses LTF candles left of the anomalous HTF candle for decision context while keeping entry no earlier than HTF close.
+Required checks: compileall; focused anomaly continuation tests; small 5m/1m post-HTF run with targeted flow enabled. Inspect targeted_flow_plan.csv window_before_ms, candidate post_htf_close_ltf_left_context_* columns, prior_up_down_whipsaw_source=entry_timeframe_left_context, and entry_timestamp_ms >= post_htf_close_entry_not_before_ms.
+Do not compare old/new profitability directly: this changes the candidate/data contract and can reject setups that previously lacked LTF left context.
+```
+
+## 2026-05-25 - anomaly_lab post-HTF run audit
+
+```text
+Run root: .output/results/anomaly_lab
+TF folders: 1m_5s, 1m_15s, 5m_30s.
+Question: whether the current run proves post_htf_close_ltf_confirmation behavior and whether the mode can be extended to wait for LTF confirmation after HTF N close.
+
+Finding: run_config.csv in each TF folder says pair_collection_mode=post_htf_close_ltf_confirmation and execution_model has the post_htf suffix, but anomaly_candidates.csv shows feature_contract=htf_setup_ltf_entry_v1 and candidate_collection_policy=all_ltf_decisions_per_setup. Candidate rows do not show the post-HTF contract. This run therefore used the forming collector path despite the config label and should not be interpreted as a post-HTF-close result.
+
+Useful raw readout only as forming-style reference: 1m_5s live-filtered 45 closed / sum_net +16.43%; 1m_15s live-filtered 19 closed / +9.07%; 5m_30s live-filtered 31 closed / +27.99%. All still have cache_snapshot_scan survivorship risk and are not post-HTF evidence.
+
+Next: rerun after P394 collector fix, then inspect feature_contract=post_htf_close_ltf_confirmation_v1, candidate_collection_policy=single_post_htf_close_ltf_confirmation_per_setup, post_htf_close_ltf_left_context_status, and entry_timestamp_ms >= post_htf_close_entry_not_before_ms before judging PnL.
+```
+
+## 2026-05-25 - P395 forward-confirmation validation plan
+
+```text
+Patch: P395 post_htf_close_ltf_forward_confirmation.
+Purpose: test "HTF N showed interest, then LTF confirms after N close" without retroactive entry inside N.
+Required first run: explicit small 5m/30s or 1m/5s slice with --pair-collection-mode post_htf_close_ltf_forward_confirmation and render_charts=false.
+Inspect before PnL: feature_contract=post_htf_close_ltf_forward_confirmation_v1, candidate_collection_policy=all_ltf_forward_confirmations_after_post_htf_close, post_htf_close_ltf_left_context_status=ok, post_htf_close_ltf_forward_confirmation_candles >= confirmation_candles, entry_timestamp_ms > post_htf_close_entry_not_before_ms.
+Interpretation: this is a late-confirmation mode, not live2 parity. Compare separately against forming live-parity runs.
+```
+
+## 2026-05-25 - post-HTF forward 1m/5s readout
+
+```text
+Run: .output/results/anomaly_lab_post_htf_forward_1m_5s
+Contract check: ok. Candidates use feature_contract=post_htf_close_ltf_forward_confirmation_v1, candidate_collection_policy=all_ltf_forward_confirmations_after_post_htf_close, and left context status ok for all 1473 candidates. Targeted flow coverage: 3805/3808 ready.
+
+Raw: 435 trade rows, 86 closed, sum_net -26.49%, avg -0.31%, median -0.70%, WR 32.6%.
+Live-filtered: 21 closed, sum_net +9.96%, avg +0.47%, median -0.41%, WR 38.1%; top5 dependency 257%, so positive result is top-led.
+
+Category readout:
+- discovery: raw 72 closed / -37.36%; live-filtered 16 closed / -8.96%. Not tradable.
+- runner_balanced: raw 9 closed / -11.44%; live-filtered 2 closed / -1.11%. Not tradable.
+- runner_oi_confirmed: raw 5 closed / +22.31%; live-filtered 3 closed / +20.03%. Interesting but far too few and top-dependent.
+
+Conclusion: forward post-HTF 1m/5s is not broadly good. Only runner_oi_confirmed survives, but sample is too small for an edge claim.
+```
+
+## 2026-05-25 - post-HTF forward 1m/5s fader/short research
+
+```text
+Run: .output/results/anomaly_lab_post_htf_forward_1m_5s
+Artifact added: short_fader_research_variants.csv
+Question: whether post-HTF forward anomalies that later print a low move >=2% can become a short/fader strategy, and which factors/exits matter.
+
+Label readout: among 435 forward signals, 247 (56.8%) later reached future_dd_low_after_decision <= -2%. Discovery had 203/348 (58.3%), runner_balanced 38/59 (64.4%), runner_oi_confirmed only 6/28 (21.4%). Strongest observable fader markers were prior crowding/fade density: prior_spike_count_72h>=10 gave 120/128 down2 (93.8%), not OI-confirmed + prior_spike>=5 gave 154/172 (89.5%), prior_fast_fade>=3 gave 82/92 (89.1%). OI up and negative mark basis helped only moderately (62.5% down2 together).
+
+Short simulation: structural short stop above decision_box_high + 0.05*box_range, adverse 0.05% entry/exit slippage, fees 0.04% each side, max hold 240x5s. Raw multi-position results can be positive only at high RR: discovery rr2.0 closed 347 / +89.9%, avg +0.26%, median -0.22%, WR 41.2%; discovery_or_balanced rr2.0 closed 406 / +85.8%. But live-like cap-1 turns them negative: discovery rr2.0 cap1 44 / -2.07%, discovery_or_balanced rr2.0 cap1 45 / -1.54%, all rr2.0 cap1 39 / -6.65%. Best near-flat cap1 was prior_spike>=5 rr2.0: 19 closed / -0.09%, median -0.30%.
+
+Exit tests: RR below 1.5 was broadly worse; if this is researched further, 2R is the only plausible fixed target. BE after 0.5R/0.75R did not improve edge and usually hurt. Structural trailing did not rescue cap-1. Early no-progress exits after 12/24 candles did not improve the result.
+
+Conclusion: there is a real post-HTF fader phenomenon in labels, but current short execution is not a tradable edge under cap-1. The factor set is useful for a fader dataset, not for enabling live shorts.
+```
+
+## 2026-05-25 - bare HTF anomaly fader research
+
+```text
+Run source: .output/results/anomaly_lab_post_htf_forward_1m_5s
+Research output dir: .output/results/anomaly_lab_post_htf_forward_1m_5s/htf_fader_bare_research
+Artifacts:
+- bare_htf_anomaly_labels_features.csv
+- bare_htf_short2_factor_separation.csv
+- bare_htf_short2_rule_rates.csv
+- bare_htf_short_trigger_exit_grid.csv
+- bare_htf_short_partial_exit_focus.csv
+
+Method: ignore long-selected categories as strategy classes. Collapse candidates to 167 unique bare HTF anomalies. Label post-close LTF path from first executable 5s after HTF close. Build fixed-window LTF features from 4/6/12/24 closed 5s candles after HTF close. Search short-pressure triggers and simulate short entry at next 5s open with fees/slippage, structural stop, RR/BE/trailing/early-exit variants, plus cap-1 filter.
+
+Label result: 81/167 (48.5%) bare HTF anomalies reached >=2% short MFE after HTF close; 49/167 (29.3%) were clean with adverse_up_before_short_low <=1.5%.
+
+Main factor result: faders are strongly tied to prior crowding/fade, especially when LTF starts weak. prior_spike_count_72h>=10: 35/49 short2 (71.4%). prior_spike>=5 and ltf12_ret<0: 9/13 short2 (69.2%) with 61.5% clean. prior_fade>=1 and ltf12_ret<0: 11/16 short2 (68.8%) with 56.3% clean. OI up + negative mark was weaker and dirtier: 16/25 short2 (64.0%) but only 12.0% clean.
+
+Best executable short probes after LTF pressure:
+- prior_fast_fade>=3 + failed_new_high + RR2.5: cap1 9 closed, +23.87%, avg +2.65%, median +3.41%, WR 66.7%.
+- prior_spike>=10 + failed_new_high + RR2.5: cap1 10 closed, +22.87%, avg +2.29%, median +2.76%, WR 60.0%.
+- prior_spike>=5 + taker_fade_red + RR2.5: cap1 12 closed, +22.31%, avg +1.86%, median +1.65%, WR 66.7%.
+Top5 dependency remains high around/above 1.0 because sample is small.
+
+Exit result: useful winners need large RR. RR2.0-2.5 is the only plausible area. Focused partial-exit checks confirm that full RR2.5 beat 50% partial at 1R and 1.5R on the best probes: prior_fade_ge3_failed cap1 +23.87% full vs +17.51%/+19.63% partial; prior_spike10_failed +22.87% full vs +16.51%/+18.63%; prior_spike5_takerfade +21.30% full vs +14.61%/+16.84%. BE after partial did not help. BE/trailing usually did not change the best probes materially; early no-progress exits helped some noisy pullback variants but was not a robust improvement.
+
+Conclusion: this is the first short/fader result worth follow-up, but not live-ready. It is a small-sample candidate contract: prior crowding/fade + observed LTF short pressure, not long category inversion.
+```
+
 ## 2026-05-23 - P392 1m/5s live-filtered replay
 
 ```text
