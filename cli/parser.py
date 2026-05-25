@@ -99,6 +99,15 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--timeframe", default=None, help="Legacy single-timeframe mode; used as setup timeframe unless --setup-timeframe is set")
     anomaly_lab.add_argument("--setup-timeframe", default=None, help="HTF setup timeframe, e.g. 5m")
     anomaly_lab.add_argument("--entry-timeframe", default=None, help="LTF execution timeframe, e.g. 30s. If omitted, equals setup/timeframe")
+    anomaly_lab.add_argument(
+        "--pair-collection-mode",
+        choices=["forming", "post_htf_close_ltf_confirmation"],
+        default="forming",
+        help=(
+            "For setup/entry pairs, use forming to evaluate every LTF decision inside the current HTF candle, "
+            "or post_htf_close_ltf_confirmation to evaluate one signal after the HTF candle closes and enter only after that close."
+        ),
+    )
     anomaly_lab.add_argument("--end-timestamp-ms", type=int, default=None)
     anomaly_lab.add_argument("--output-dir", default=None)
     anomaly_lab.add_argument(

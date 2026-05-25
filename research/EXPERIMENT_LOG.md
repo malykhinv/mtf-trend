@@ -1,4 +1,57 @@
 
+## 2026-05-23 - P392 1m/5s live-filtered replay
+
+```text
+Run: .output/results/anomaly_lab/live_parity_1m_5s_p392
+Source: reused candidates from .output/results/anomaly_lab/1m_5s
+
+Purpose: keep the wide 1m/5s category-discovery simulation, then apply the new final cap-1 live portfolio filter.
+
+Raw simulation: 1120 closed, 4048 skipped, sum_net +188.65%, avg +0.168%, median +0.275%, WR 58.48%.
+Live-filtered: 45 closed, 5123 skipped, sum_net +16.43%, avg +0.365%, median +0.122%, WR 55.56%.
+Final live filter cut: 1075 of 1120 raw closed trades; kept share 4.02%. All final-filter skips were live_portfolio_filter_max_open_positions_at_entry.
+
+Live-filtered category readout:
+- runner_balanced: 11 trades, sum +10.03%, avg +0.911%, median +1.014%, WR 72.73%. Best current live-default candidate, but too few cap-1 trades for final confidence.
+- runner_flow: 4 trades, sum +7.86%, avg +1.964%, median -0.272%, WR 50.00%. Positive sum is tail-led; keep watch/research, not a standalone default.
+- runner_oi_confirmed: 2 trades, sum +2.49%, avg +1.246%, WR 100%. Too few trades; OI category remains unproven under cap-1.
+- discovery: 28 trades, sum -3.94%, avg -0.141%, median -0.148%, WR 46.43%. Discovery should not trade live by default.
+
+Honesty: 28/28 honesty nodes ok, 0 failures. Universe remains cache_snapshot_scan, so survivorship risk still applies. Replay command timed out after core trade artifacts were written; no chart artifact was needed because render_charts=false.
+```
+
+## 2026-05-23 - latest anomaly_lab TF/session/category readout
+
+```text
+Run root: .output/results/anomaly_lab
+TF sets: 5m/30s, 1m/15s, 1m/5s, feature_contract=htf_setup_ltf_entry_v1.
+
+Purpose: evaluate the latest multi-TF backtest by category/session/TF set, check whether discovery is only research-grade, and audit lookahead/live2 parity risks.
+
+Core result:
+- 1m/5s is the strongest discovery surface: 1120 closed, sum_net +188.65%, avg +0.168%, median +0.275%, WR 58.5%, top5 dependency 22.5%, top15 about 51%.
+- 1m/5s live_priority is cleaner: 280 closed, sum_net +114.06%, avg +0.407%, median +0.927%, WR 61.4%, top15 about 68%.
+- 1m/15s live_priority is also usable but lower frequency: 160 closed, sum_net +68.85%, avg +0.430%, median +0.95%, WR 60.6%.
+- 5m/30s has positive sum but is more top-tail dependent: 221 closed, sum_net +63.20%, avg +0.286%, top5 70.3%, top15 147%.
+
+Session readout:
+- America and Europe carry most of the edge. On 1m/5s, non-Asia keeps almost all profit with fewer trades: 761 closed, sum_net +186.51%, avg +0.245%, worst_day about -7.3% vs all-run worst_day -21.0%.
+- Asia is weak across TF sets: 1m/5s Asia +2.14% total with severe top dependence and worst_day -20.4%; 1m/15s and 5m/30s Asia are negative.
+
+Discovery interpretation:
+- Discovery is useful as a dirty search category, not as live default. On 1m/5s it adds frequency and some sum, but avg trade is only +0.089% and top15 dependency is near 100%. On 1m/15s discovery is negative.
+- Candidate promotion should come from discovery into explicit live_priority subcategories, not by loosening live rules around the discovery bucket.
+
+Honesty/parity audit:
+- anomaly_backtest_honesty_report.csv has 28 nodes, 0 failures for all three TF sets. Artifact checks also found no candidate/context as-of timestamp greater than decision_available_timestamp_ms and all closed trades include the entry candle in post-entry simulation.
+- Flow labels are real aggTrade-derived 1s materializations for closed trades; trade_count_proxy_used=false.
+- Residual honesty limitations: universe_symbol_scope=cache_snapshot_scan with survivorship_bias_risk=true, and this run uses max_open_positions=1000. Therefore the run is edge-evaluable for research, but not a strict live2 PnL projection.
+- Current code/run conflicts with the older P385 memory claim that anomaly-lab default is live-like max_open_positions=1; constants.py and run_config.csv show 1000.
+- live2 parity is only close for 1m/5s signal math. live2 is hardcoded around 1m setup / 5s entry constants and max_open_positions=1, while this backtest also includes 1m/15s and 5m/30s and uses max_open_positions=1000.
+
+Best next test: rerun only 1m/5s with explicit live-like settings first: max_open_positions=1, explicit symbol universe/as-of universe if available, and compare all vs non-Asia vs live_priority_non_asia. Do not optimize category thresholds until that live-like replay is available.
+```
+
 ## 2026-05-22 - P385 compact backtest honesty smoke
 
 ```text

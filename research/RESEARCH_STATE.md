@@ -1,5 +1,41 @@
 # Anomaly Research State
 
+## 2026-05-24 - P393 post-HTF-close LTF confirmation mode
+
+Current commit: UNKNOWN.
+
+Status: PROPOSED against the uploaded ZIP / GitHub commit still UNKNOWN. Adds `--pair-collection-mode post_htf_close_ltf_confirmation` for pair runs. The mode selects a closed HTF setup candle, uses the complete LTF segment inside that candle only after HTF close as confirmation, and forces simulated entry to occur no earlier than the HTF close through the existing next-entry-candle execution model.
+
+Expected impact: provides a cheap honest alternative to early forming LTF backtests for `5m/1m` and similar pairs without requiring universal second-level data. It intentionally does not claim the old early `5s/15s/30s` edge.
+
+Validation: compileall passed for `data/exchanges data/fetchers research_tools cli constants.py main.py`. Synthetic smoke confirmed post-close decision availability equals the no-earlier-than-entry timestamp and the simulated entry is after the HTF close.
+
+Next test: run a 5m/1m post-close backtest with full 1m cache and `--targeted-flow-backfill false`, then compare live-filtered results against 1m-only and 5m-only runs.
+
+## 2026-05-23 - P392 wide simulation plus live-like portfolio filter
+
+Current commit: UNKNOWN.
+
+Status: APPLIED locally / UNKNOWN commit. Anomaly-lab keeps raw `max_open_positions=1000` simulation for category discovery, then writes a separate final live-like cap-1 portfolio filter. New artifacts include `anomaly_trades_live_filtered.csv`, live-filtered profitability summaries/by-category/by-family/by-symbol, skip reasons, edge health, and `anomaly_live_portfolio_filter_summary.csv`.
+
+Expected impact: raw artifacts keep all category material; live-parity conclusions use only the live-filtered artifacts. This patch does not change signal thresholds, categories, TP/SL, fill model, or live2 execution.
+
+Next validation: compileall, focused anomaly/live2 tests, then a reused-candidate 1m/5s replay to read live-filtered live-priority category metrics before deciding whether any category thresholds should change.
+
+Validation update: compileall and focused tests passed. Reused-candidate 1m/5s replay wrote core live-filter artifacts at `.output/results/anomaly_lab/live_parity_1m_5s_p392`: raw 1120 closed -> live-filtered 45 closed, live_priority 17 closed / +20.37% sum_net, discovery 28 closed / -3.94%. The replay timed out after core artifacts were written, before late chart/status completion; render_charts=false, so the core category readout is usable.
+
+## 2026-05-23 - latest anomaly_lab readout state
+
+Current commit: UNKNOWN.
+
+Status: ANALYZED. Latest `.output/results/anomaly_lab` multi-TF artifacts are research-valid but not live2 PnL proof. All three TF sets have 28/28 honesty-report nodes with 0 failures, real aggTrade-derived subminute flow labels, and no observed as-of timestamp violations. The remaining hard limitations are cache-snapshot universe survivorship risk and `max_open_positions=1000`.
+
+Finding: 1m/5s is the strongest surface. Non-Asia keeps almost all 1m/5s profit with fewer trades and much lower worst-day damage. Live-priority categories are cleaner than discovery. Discovery remains a dirty search bucket: useful for finding category candidates, not for live default trading.
+
+Parity note: live2 is closest to the 1m/5s contract only. Current live2 execution uses max_open_positions=1, while the analyzed backtest run uses 1000, and 1m/15s plus 5m/30s are research TF sets rather than proven live2 paths. Current code/run also conflict with the older P385 state text that anomaly-lab default is max_open_positions=1; constants.py/run_config.csv show 1000.
+
+Next: run a cheap 1m/5s live-like replay with `max_open_positions=1` and explicit/as-of symbol universe where possible, then compare all vs non-Asia vs live_priority_non_asia before changing thresholds.
+
 ## 2026-05-22 - P385 backtest honesty hardening
 
 Current commit: UNKNOWN.

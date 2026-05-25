@@ -730,6 +730,52 @@ def test_simulate_anomaly_trades_enforces_portfolio_cap_at_actual_entry() -> Non
     assert trades["portfolio_open_positions_at_entry"].tolist()[1] == 1
 
 
+def test_live_portfolio_filter_keeps_wide_simulation_material() -> None:
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA/USDT:USDT",
+                "status": "closed",
+                "entry_timestamp_ms": 1000,
+                "exit_timestamp_ms": 5000,
+                "decision_timestamp_ms": 900,
+                "pump_category_rank": 10,
+                "net_return": 0.02,
+                "exit_reason": "tp1_full_exit",
+            },
+            {
+                "symbol": "BBB/USDT:USDT",
+                "status": "closed",
+                "entry_timestamp_ms": 2000,
+                "exit_timestamp_ms": 3000,
+                "decision_timestamp_ms": 1900,
+                "pump_category_rank": 20,
+                "net_return": 0.01,
+                "exit_reason": "tp1_full_exit",
+            },
+            {
+                "symbol": "CCC/USDT:USDT",
+                "status": "closed",
+                "entry_timestamp_ms": 6000,
+                "exit_timestamp_ms": 7000,
+                "decision_timestamp_ms": 5900,
+                "pump_category_rank": 20,
+                "net_return": -0.01,
+                "exit_reason": "stop_loss",
+            },
+        ]
+    )
+
+    filtered = anomaly_strategy_backtest.apply_live_portfolio_filter(trades, max_open_positions=1)
+    summary = anomaly_strategy_backtest.summarize_live_portfolio_filter(trades, filtered)
+
+    assert trades["status"].tolist() == ["closed", "closed", "closed"]
+    assert filtered["status"].tolist() == ["closed", "skipped", "closed"]
+    assert filtered["skip_reason"].fillna("").tolist()[1] == "live_portfolio_filter_max_open_positions_at_entry"
+    assert dict(zip(summary["metric"], summary["value"]))["raw_closed_trades"] == 3
+    assert dict(zip(summary["metric"], summary["value"]))["live_filtered_closed_trades"] == 2
+
+
 def test_trade_chart_hourly_context_uses_closed_hours_only() -> None:
     rows = []
     for minute in range(180):

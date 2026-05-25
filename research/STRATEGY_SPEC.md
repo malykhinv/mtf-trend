@@ -106,7 +106,10 @@ Backtest execution latency contract:
 
 ```text
 default market entry remains next LTF candle open after the decision (`market_entry_latency_candles=1`)
-default anomaly-lab portfolio cap is live-like `max_open_positions=1`; same-symbol overlap and global cap are evaluated at actual simulated entry time
+default anomaly-lab raw simulation may use wide `max_open_positions=1000` to preserve category-discovery material
+every anomaly-lab run must also write a final live-like portfolio-filter artifact with `max_open_positions=1`, preserving skipped would-have trades and skip reasons
+live-edge conclusions must use the live-filtered artifacts, not the wide raw `anomaly_trades.csv`
+same-symbol overlap and global cap are evaluated at actual simulated entry time in both raw simulation and final live filter
 default anomaly-lab fill model applies adverse long-entry slippage 0.0005 and adverse long-exit slippage 0.0005 in addition to fees
 trade artifacts must expose raw entry/exit prices, slippage-adjusted fill prices, fill model labels, and portfolio state at entry
 optional latency mode has one public flag: `--latency true`
@@ -671,3 +674,20 @@ Live2 TP1 close uses an exchange reduce-only close with verified actual fill; it
 A TP1 close is accepted only after the exchange position is flat and the old initial stop is cancelled/verified gone.
 If TP1 close leaves exchange exposure or the old initial stop cannot be cancelled, live2 emits a strict position-integrity error and blocks further entries.
 ```
+---
+
+## 6. Backtest pair-mode contracts
+
+Backtest pair modes must not be mixed when making edge claims.
+
+```text
+forming
+```
+
+The existing forming mode evaluates LTF decisions inside the current HTF candle. It is only edge-valid when LTF coverage was available for the watched universe before the decision; targeted event-window coverage is diagnostic-only for early-entry claims.
+
+```text
+post_htf_close_ltf_confirmation
+```
+
+The post-HTF-close mode first waits for the HTF setup candle to close. It may then inspect the complete LTF segment inside that now-closed HTF candle as a confirmation/filter, but entry must be no earlier than the HTF close and must still pass drift, TP-before-entry and RR guards. This mode tests late continuation after HTF confirmation; it does not prove early intra-HTF LTF edge.

@@ -6,6 +6,7 @@ import argparse
 import ast
 import csv
 import json
+import re
 import shutil
 import time
 from collections import Counter
@@ -122,7 +123,11 @@ def _parse_run_config_mapping(raw: object, *, path: Path) -> dict[str, object]:
     try:
         parsed = ast.literal_eval(text)
     except (SyntaxError, ValueError) as exc:
-        raise ValueError(f"reused candidates run_config.csv has unparsable lab_config: {path}") from exc
+        sanitized = re.sub(r"(?:WindowsPath|PosixPath)\((['\"])(.*?)\1\)", r"\1\2\1", text)
+        try:
+            parsed = ast.literal_eval(sanitized)
+        except (SyntaxError, ValueError) as sanitized_exc:
+            raise ValueError(f"reused candidates run_config.csv has unparsable lab_config: {path}") from sanitized_exc
     if not isinstance(parsed, dict):
         raise ValueError(f"reused candidates run_config.csv lab_config is not a dict: {path}")
     return dict(parsed)
@@ -1222,6 +1227,9 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             _parse_grid_values,
             _parse_grid_exit_rules,
             _parse_grid_profile_values,
+            PAIR_COLLECTION_MODE_FORMING,
+            PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION,
+            POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT,
             build_targeted_flow_coverage,
             collect_pair_anomaly_rows_for_configs,
             ensure_targeted_subminute_flow_cache_for_configs,
@@ -1293,14 +1301,24 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 min_quote_ratio_start=float(args.min_quote_ratio_start),
                 min_trade_ratio_start=float(args.min_trade_ratio_start),
             )
+            pair_collection_mode = str(getattr(args, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING))
+            if pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION and entry_timeframe == setup_timeframe:
+                raise ValueError("--pair-collection-mode post_htf_close_ltf_confirmation requires --entry-timeframe below --setup-timeframe")
             feature_contract = (
-                "htf_setup_ltf_entry_v1" if entry_timeframe != setup_timeframe else "closed_setup_tf_v1"
+                "closed_setup_tf_v1"
+                if entry_timeframe == setup_timeframe
+                else (
+                    POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT
+                    if pair_collection_mode == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION
+                    else "htf_setup_ltf_entry_v1"
+                )
             )
             return AnomalyBacktestConfig(
                 lab_config=lab_config,
                 setup_timeframe=setup_timeframe,
                 entry_timeframe=entry_timeframe,
                 feature_contract=feature_contract,
+                pair_collection_mode=pair_collection_mode,
                 min_price_retention=float(args.min_price_retention),
                 max_price_retention=(
                     None if getattr(args, "max_price_retention", None) is None else float(args.max_price_retention)
@@ -1552,7 +1570,15 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                                     "timeframe": setup_timeframe,
                                     "setup_timeframe": setup_timeframe,
                                     "entry_timeframe": entry_timeframe,
-                                    "feature_contract": "htf_setup_ltf_entry_v1" if setup_timeframe != entry_timeframe else "closed_setup_tf_v1",
+                                    "feature_contract": (
+                                        "closed_setup_tf_v1"
+                                        if setup_timeframe == entry_timeframe
+                                        else (
+                                            POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT
+                                            if str(getattr(args, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION
+                                            else "htf_setup_ltf_entry_v1"
+                                        )
+                                    ),
                                     "status": "error",
                                     "error": "no_trusted_targeted_flow_coverage_after_fetch",
                                     "execution_model": "targeted_flow_required_before_pair_collection",

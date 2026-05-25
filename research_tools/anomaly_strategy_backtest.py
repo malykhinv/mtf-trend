@@ -22,6 +22,7 @@ import pandas as pd
 
 from constants import (
     DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS,
+    DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS,
     DEFAULT_EXECUTABLE_ENTRY_PRICE_DRIFT_PCT,
     DEFAULT_SLIPPAGE,
 )
@@ -105,6 +106,9 @@ TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS = 120_000
 TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS = 120_000
 TARGETED_FLOW_MERGE_GAP_MS = 60_000
 TARGETED_FLOW_MAX_MERGED_SPAN_MS = 10 * 60_000
+PAIR_COLLECTION_MODE_FORMING = "forming"
+PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION = "post_htf_close_ltf_confirmation"
+POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT = "post_htf_close_ltf_confirmation_v1"
 _BAD_CONTEXT_STATUSES = {"error", "missing_columns", "missing_column", "missing_timestamp", "missing_frame", "empty_oi", "stale_asof"}
 _TRADE_CHART_FLOW_PROVENANCE = {
     "trade_count_proxy_used": False,
@@ -140,6 +144,10 @@ TRADE_SIGNAL_CONTEXT_COLUMNS = (
     "setup_source",
     "setup_elapsed_fraction",
     "setup_closed_entry_candles",
+    "candidate_collection_policy",
+    "post_htf_close_ltf_confirmation",
+    "post_htf_close_entry_not_before_ms",
+    "post_htf_close_entry_not_before_utc",
     "entry_activation_price",
     "start_trade_count",
     "baseline_trade_count_median",
@@ -269,6 +277,7 @@ class AnomalyBacktestConfig:
     setup_timeframe: str | None = None
     entry_timeframe: str | None = None
     feature_contract: str = "closed_setup_tf_v1"
+    pair_collection_mode: str = PAIR_COLLECTION_MODE_FORMING
     min_price_retention: float = 0.70
     max_price_retention: float | None = None
     min_verticality_score: float = 0.25
@@ -353,15 +362,18 @@ def _execution_model_label(config: AnomalyBacktestConfig) -> str:
             f"_slip_entry_{float(config.entry_slippage_pct):g}"
             f"_exit_{float(config.exit_slippage_pct):g}"
         )
+    pair_mode_suffix = ""
+    if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION:
+        pair_mode_suffix = "_post_htf_close_ltf_confirmation"
     if config.entry_method == "market":
         if config.latency_enabled:
             return (
                 f"next_bar_open_proxy_latency_{config.market_entry_latency_candles}"
                 f"_plus_1s_delay_{int(config.latency_extra_ms)}ms"
-                f"{slippage_suffix}"
+                f"{slippage_suffix}{pair_mode_suffix}"
             )
-        return f"next_bar_open_proxy_latency_{config.market_entry_latency_candles}{slippage_suffix}"
-    return f"{config.entry_method}{slippage_suffix}"
+        return f"next_bar_open_proxy_latency_{config.market_entry_latency_candles}{slippage_suffix}{pair_mode_suffix}"
+    return f"{config.entry_method}{slippage_suffix}{pair_mode_suffix}"
 
 
 def _nonnegative_ratio(value: object, *, field_name: str) -> float:
@@ -3047,7 +3059,12 @@ def collect_pair_anomaly_rows(
                 entry_flow_source = f"cached_{entry_cache_timeframe}_aggregated_to_{entry_timeframe}"
             else:
                 entry_flow_source = _materialized_entry_flow_source(entry_frame, entry_timeframe=entry_timeframe)
-            rows.extend(_collect_symbol_pair_rows(
+            collector = (
+                _collect_symbol_post_htf_close_ltf_rows
+                if str(config.pair_collection_mode) == PAIR_COLLECTION_MODE_POST_HTF_CLOSE_LTF_CONFIRMATION
+                else _collect_symbol_pair_rows
+            )
+            rows.extend(collector(
                 symbol=symbol,
                 setup_frame=setup_frame,
                 entry_frame=entry_frame,
@@ -3352,6 +3369,142 @@ def collect_pair_anomaly_rows_for_configs(
     return result_by_key
 
 
+def _entry_segment_has_full_setup_coverage(
+    entry_segment: pd.DataFrame,
+    *,
+    setup_start_ms: int,
+    setup_ms: int,
+    entry_ms: int,
+) -> bool:
+    if entry_ms <= 0 or setup_ms <= 0 or setup_ms % entry_ms != 0:
+        return False
+    expected_count = int(setup_ms // entry_ms)
+    if len(entry_segment) != expected_count:
+        return False
+    if "timestamp" not in entry_segment.columns:
+        return False
+    timestamps = pd.to_numeric(entry_segment["timestamp"], errors="coerce")
+    if timestamps.isna().any():
+        return False
+    expected = np.arange(int(setup_start_ms), int(setup_start_ms + setup_ms), int(entry_ms), dtype=np.int64)
+    actual = timestamps.astype("int64").to_numpy()
+    return bool(len(actual) == len(expected) and np.array_equal(actual, expected))
+
+
+def _collect_symbol_post_htf_close_ltf_rows(
+    *,
+    symbol: str,
+    setup_frame: pd.DataFrame,
+    entry_frame: pd.DataFrame,
+    config: AnomalyBacktestConfig,
+    entry_flow_source: str = "cached_ohlcv",
+) -> list[dict[str, object]]:
+    lab_config = config.lab_config
+    setup_timeframe = _effective_setup_timeframe(config)
+    entry_timeframe = _effective_entry_timeframe(config)
+    setup_ms = _timeframe_to_milliseconds(setup_timeframe)
+    entry_ms = _timeframe_to_milliseconds(entry_timeframe)
+    if setup_ms <= 0 or entry_ms <= 0 or entry_ms > setup_ms:
+        raise ValueError(f"invalid setup/entry timeframe pair: {setup_timeframe}/{entry_timeframe}")
+    if entry_ms == setup_ms:
+        raise ValueError("post_htf_close_ltf_confirmation requires entry_timeframe < setup_timeframe")
+    if setup_ms % entry_ms != 0:
+        raise ValueError(f"entry_timeframe must evenly divide setup_timeframe: {setup_timeframe}/{entry_timeframe}")
+    if setup_frame.empty or entry_frame.empty:
+        return []
+
+    setup_frame = setup_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    entry_frame = entry_frame.copy().sort_values("timestamp").drop_duplicates("timestamp", keep="last").reset_index(drop=True)
+    rows: list[dict[str, object]] = []
+    setup_timestamps = setup_frame["timestamp"].astype("int64").to_numpy()
+    entry_timestamps = entry_frame["timestamp"].astype("int64").to_numpy()
+    baseline_quote_medians = (
+        pd.to_numeric(setup_frame["quote_volume"], errors="coerce")
+        .rolling(window=lab_config.baseline_candles, min_periods=lab_config.baseline_candles)
+        .median()
+        .shift(1)
+        .to_numpy()
+    )
+    baseline_trade_medians = (
+        pd.to_numeric(setup_frame["number_of_trades"], errors="coerce")
+        .rolling(window=lab_config.baseline_candles, min_periods=lab_config.baseline_candles)
+        .median()
+        .shift(1)
+        .to_numpy()
+    )
+
+    for setup_idx, setup_start in enumerate(setup_timestamps):
+        setup_start = int(setup_start)
+        if setup_idx < lab_config.baseline_candles:
+            continue
+        baseline_quote_value = float(baseline_quote_medians[setup_idx])
+        baseline_trade_value = float(baseline_trade_medians[setup_idx])
+        if not np.isfinite(baseline_quote_value) or not np.isfinite(baseline_trade_value):
+            continue
+        if baseline_quote_value <= 0.0 or baseline_trade_value <= 0.0:
+            continue
+        setup_row = setup_frame.iloc[setup_idx]
+        start_quote = float(setup_row["quote_volume"])
+        start_trades = float(setup_row["number_of_trades"])
+        start_quote_ratio = _safe_divide_value(start_quote, baseline_quote_value)
+        start_trade_ratio = _safe_divide_value(start_trades, baseline_trade_value)
+        if (
+            not np.isfinite(start_quote_ratio)
+            or not np.isfinite(start_trade_ratio)
+            or start_quote_ratio < lab_config.min_quote_ratio_start
+            or start_trade_ratio < lab_config.min_trade_ratio_start
+        ):
+            continue
+
+        entry_start_pos = int(np.searchsorted(entry_timestamps, setup_start, side="left"))
+        entry_end_pos_exclusive = int(np.searchsorted(entry_timestamps, setup_start + setup_ms, side="left"))
+        entry_segment = entry_frame.iloc[entry_start_pos:entry_end_pos_exclusive].copy()
+        if not _entry_segment_has_full_setup_coverage(
+            entry_segment,
+            setup_start_ms=setup_start,
+            setup_ms=setup_ms,
+            entry_ms=entry_ms,
+        ):
+            continue
+        if len(entry_segment) < lab_config.confirmation_candles:
+            continue
+
+        baseline = setup_frame.iloc[setup_idx - lab_config.baseline_candles : setup_idx].copy()
+        if baseline.empty:
+            continue
+        row = _build_pair_candidate_row(
+            symbol=symbol,
+            setup_timeframe=setup_timeframe,
+            entry_timeframe=entry_timeframe,
+            setup_ms=setup_ms,
+            entry_ms=entry_ms,
+            setup_idx=setup_idx,
+            baseline=baseline,
+            setup_row=setup_row,
+            entry_segment=entry_segment,
+            entry_frame=entry_frame,
+            config=config,
+            entry_flow_source=entry_flow_source,
+            setup_flow_source="cached_ohlcv",
+            feature_contract=POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT,
+            setup_source="closed_htf_ltf_confirmation_after_close_backtest",
+            timestamp_semantics_note=(
+                "closed_htf_setup_available_at_full_close;"
+                "ltf_confirmation_read_after_htf_close;"
+                "entry_not_retroactively_inside_htf"
+            ),
+        )
+        if row is None:
+            continue
+        row["setup_decision_index"] = int(len(entry_segment) - 1)
+        row["candidate_collection_policy"] = "single_post_htf_close_ltf_confirmation_per_setup"
+        row["post_htf_close_ltf_confirmation"] = True
+        row["post_htf_close_entry_not_before_ms"] = int(setup_start + setup_ms)
+        row["post_htf_close_entry_not_before_utc"] = _timestamp_to_utc(int(setup_start + setup_ms))
+        rows.append(row)
+    return rows
+
+
 def _collect_symbol_pair_rows(
     *,
     symbol: str,
@@ -3484,6 +3637,9 @@ def _build_pair_candidate_row(
     config: AnomalyBacktestConfig,
     entry_flow_source: str = "cached_ohlcv",
     setup_flow_source: str = "cached_ohlcv",
+    feature_contract: str = "htf_setup_ltf_entry_v1",
+    setup_source: str = "forming_htf_from_entry_tf_backtest",
+    timestamp_semantics_note: str = "forming_htf_setup_available_at_entry_decision_close",
 ) -> dict[str, object] | None:
     lab_config = config.lab_config
     quote_volume = pd.to_numeric(baseline["quote_volume"], errors="coerce")
@@ -3581,10 +3737,10 @@ def _build_pair_candidate_row(
     return {
         "symbol": symbol,
         "timeframe": setup_timeframe,
-        "feature_contract": "htf_setup_ltf_entry_v1",
+        "feature_contract": str(feature_contract),
         "setup_timeframe": setup_timeframe,
         "entry_timeframe": entry_timeframe,
-        "setup_source": "forming_htf_from_entry_tf_backtest",
+        "setup_source": str(setup_source),
         "setup_elapsed_fraction": setup_elapsed_fraction,
         "setup_closed_entry_candles": int(len(entry_segment)),
         "timestamp_ms": int(setup_row["timestamp"]),
@@ -3599,7 +3755,7 @@ def _build_pair_candidate_row(
         "decision_available_timestamp_utc": _timestamp_to_utc(decision_available_ts),
         "timestamp_semantics": (
             "ohlcv_timestamp_is_candle_open;available_timestamp_is_candle_close;"
-            "forming_htf_setup_available_at_entry_decision_close"
+            f"{timestamp_semantics_note}"
         ),
         "confirmation_candles": int(lab_config.confirmation_candles),
         "baseline_candles": int(lab_config.baseline_candles),
@@ -4205,6 +4361,112 @@ def simulate_anomaly_trades(
                     started_at=progress_started_at,
                 )
                 next_progress_pct = current_pct + 5
+    return pd.DataFrame(rows)
+
+
+def apply_live_portfolio_filter(
+    trades: pd.DataFrame,
+    *,
+    max_open_positions: int = DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS,
+) -> pd.DataFrame:
+    """Apply a live-like portfolio cap after the wide research simulation."""
+
+    if trades.empty or "status" not in trades.columns:
+        return trades.copy()
+    if max_open_positions <= 0:
+        raise ValueError("max_open_positions must be > 0")
+    if "entry_timestamp_ms" not in trades.columns or "exit_timestamp_ms" not in trades.columns:
+        return trades.copy()
+
+    original = trades.copy()
+    original["_original_order"] = np.arange(len(original))
+    closed = original.loc[original["status"].eq("closed")].copy()
+    non_closed = original.loc[~original["status"].eq("closed")].copy()
+    if closed.empty:
+        return original.drop(columns=["_original_order"], errors="ignore")
+
+    for column in ("entry_timestamp_ms", "exit_timestamp_ms", "decision_timestamp_ms", "pump_category_rank"):
+        if column in closed.columns:
+            closed[column] = pd.to_numeric(closed[column], errors="coerce")
+    sort_columns = [
+        column
+        for column in ("entry_timestamp_ms", "pump_category_rank", "decision_timestamp_ms", "symbol", "_original_order")
+        if column in closed.columns
+    ]
+    closed.sort_values(sort_columns, inplace=True)
+
+    open_positions: list[tuple[str, int]] = []
+    filtered_rows: list[pd.Series] = []
+    for _, row in closed.iterrows():
+        entry_ts = _safe_int(row.get("entry_timestamp_ms"))
+        exit_ts = _safe_int(row.get("exit_timestamp_ms"))
+        symbol = str(row.get("symbol", ""))
+        if entry_ts is None or exit_ts is None:
+            skipped = row.copy()
+            skipped["status"] = "skipped"
+            skipped["skip_reason"] = "live_portfolio_filter_invalid_entry_or_exit_timestamp"
+            skipped["execution_guard"] = False
+            filtered_rows.append(skipped)
+            continue
+        open_positions = [
+            (open_symbol, open_exit_ts)
+            for open_symbol, open_exit_ts in open_positions
+            if int(open_exit_ts) >= entry_ts
+        ]
+        skip_reason = ""
+        if any(open_symbol == symbol for open_symbol, _open_exit_ts in open_positions):
+            skip_reason = "live_portfolio_filter_overlapping_symbol_position_at_entry"
+        elif len(open_positions) >= int(max_open_positions):
+            skip_reason = "live_portfolio_filter_max_open_positions_at_entry"
+
+        if skip_reason:
+            skipped = row.copy()
+            skipped["status"] = "skipped"
+            skipped["skip_reason"] = skip_reason
+            skipped["execution_guard"] = False
+            skipped["would_have_exit_timestamp_ms"] = row.get("exit_timestamp_ms", float("nan"))
+            skipped["would_have_exit_timestamp_utc"] = row.get("exit_timestamp_utc", "")
+            skipped["would_have_exit_reason"] = row.get("exit_reason", "")
+            skipped["would_have_net_return"] = row.get("net_return", float("nan"))
+            skipped["portfolio_open_positions_at_entry"] = int(len(open_positions))
+            skipped["portfolio_open_symbols_at_entry"] = ",".join(open_symbol for open_symbol, _exit_ts in open_positions)
+            filtered_rows.append(skipped)
+            continue
+
+        kept = row.copy()
+        kept["portfolio_open_positions_at_entry"] = int(len(open_positions))
+        kept["portfolio_open_symbols_at_entry"] = ",".join(open_symbol for open_symbol, _exit_ts in open_positions)
+        kept["max_open_positions"] = int(max_open_positions)
+        filtered_rows.append(kept)
+        open_positions.append((symbol, int(exit_ts)))
+
+    filtered = pd.concat([pd.DataFrame(filtered_rows), non_closed], ignore_index=True, sort=False)
+    filtered.sort_values("_original_order", inplace=True)
+    return filtered.drop(columns=["_original_order"], errors="ignore").reset_index(drop=True)
+
+
+def summarize_live_portfolio_filter(raw_trades: pd.DataFrame, filtered_trades: pd.DataFrame) -> pd.DataFrame:
+    raw_closed = int(raw_trades["status"].eq("closed").sum()) if "status" in raw_trades.columns else 0
+    filtered_closed = int(filtered_trades["status"].eq("closed").sum()) if "status" in filtered_trades.columns else 0
+    skipped = (
+        filtered_trades.loc[
+            filtered_trades["skip_reason"].astype(str).str.startswith("live_portfolio_filter_")
+        ].copy()
+        if "skip_reason" in filtered_trades.columns
+        else pd.DataFrame()
+    )
+    rows = [
+        {"metric": "raw_closed_trades", "value": raw_closed},
+        {"metric": "live_filtered_closed_trades", "value": filtered_closed},
+        {"metric": "live_filter_skipped_trades", "value": int(len(skipped))},
+        {
+            "metric": "live_filter_kept_share_of_raw_closed",
+            "value": float(filtered_closed / raw_closed) if raw_closed else 0.0,
+        },
+    ]
+    if not skipped.empty:
+        for reason, count in skipped["skip_reason"].astype(str).value_counts().sort_values(ascending=False).items():
+            rows.append({"metric": f"live_filter_reason:{reason}", "value": int(count)})
     return pd.DataFrame(rows)
 
 
@@ -4963,10 +5225,12 @@ def build_backtest_honesty_report(
 
     closed_rows = 0
     pair_rows = 0
+    post_htf_rows = 0
     if not candidates.empty and "feature_contract" in candidates.columns:
         contracts = candidates["feature_contract"].astype(str)
         closed_rows = int(contracts.eq("closed_setup_tf_v1").sum())
         pair_rows = int(contracts.eq("htf_setup_ltf_entry_v1").sum())
+        post_htf_rows = int(contracts.eq(POST_HTF_CLOSE_LTF_CONFIRMATION_CONTRACT).sum())
     rows.append(
         _honesty_row(
             node_id=6,
@@ -4986,12 +5250,23 @@ def build_backtest_honesty_report(
             severity="info",
             rows_checked=pair_rows,
             failures=0,
-            detail="pair rows use entry candles available by decision_ts; setup_full_available_timestamp_ms is audit-only",
+            detail="forming pair rows use entry candles available by decision_ts; setup_full_available_timestamp_ms is audit-only",
         )
     )
     rows.append(
         _honesty_row(
             node_id=8,
+            node="Post-HTF-close LTF confirmation collector",
+            status="ok",
+            severity="info",
+            rows_checked=post_htf_rows,
+            failures=0,
+            detail="post-HTF-close rows may inspect the closed HTF candle and its complete LTF segment, but entry remains after the HTF close",
+        )
+    )
+    rows.append(
+        _honesty_row(
+            node_id=9,
             node="Baseline calculations",
             status="ok" if candidate_availability_failures == 0 else "fail",
             severity="info" if candidate_availability_failures == 0 else "error",
@@ -5002,7 +5277,7 @@ def build_backtest_honesty_report(
     )
     rows.append(
         _honesty_row(
-            node_id=9,
+            node_id=10,
             node="Flow ratios",
             status="ok" if flow_source_failures == 0 else "fail",
             severity="info" if flow_source_failures == 0 else "error",
@@ -5019,7 +5294,7 @@ def build_backtest_honesty_report(
     ] if not signals.empty else []
     rows.append(
         _honesty_row(
-            node_id=10,
+            node_id=11,
             node="Future labels",
             status="ok",
             severity="info",
@@ -5039,7 +5314,7 @@ def build_backtest_honesty_report(
     status, severity = _honesty_status(failures=prior_context_failures)
     rows.append(
         _honesty_row(
-            node_id=11,
+            node_id=12,
             node="Prior spike context",
             status=status,
             severity=severity,
@@ -5053,7 +5328,7 @@ def build_backtest_honesty_report(
     status, severity = _honesty_status(failures=oi_asof_failures)
     rows.append(
         _honesty_row(
-            node_id=12,
+            node_id=13,
             node="Open interest context as-of",
             status=status,
             severity=severity,
@@ -5067,7 +5342,7 @@ def build_backtest_honesty_report(
     status, severity = _honesty_status(failures=derivatives_asof_failures)
     rows.append(
         _honesty_row(
-            node_id=13,
+            node_id=14,
             node="Derivatives context as-of",
             status=status,
             severity=severity,
@@ -5087,7 +5362,7 @@ def build_backtest_honesty_report(
     status, severity = _honesty_status(failures=stale_context_failures)
     rows.append(
         _honesty_row(
-            node_id=14,
+            node_id=15,
             node="Category contract",
             status=status,
             severity=severity,
@@ -5098,7 +5373,7 @@ def build_backtest_honesty_report(
     )
     rows.append(
         _honesty_row(
-            node_id=15,
+            node_id=16,
             node="Signal builder",
             status="ok",
             severity="info",
@@ -5109,7 +5384,7 @@ def build_backtest_honesty_report(
     )
     rows.append(
         _honesty_row(
-            node_id=16,
+            node_id=17,
             node="Signal entry price",
             status="ok",
             severity="info",
@@ -5121,7 +5396,7 @@ def build_backtest_honesty_report(
     market_signals = int(len(signals)) if config.entry_method == "market" else 0
     rows.append(
         _honesty_row(
-            node_id=17,
+            node_id=18,
             node="Market entry simulation",
             status="ok",
             severity="info",
@@ -5135,7 +5410,7 @@ def build_backtest_honesty_report(
         guard_skips = int(trades["skip_reason"].astype(str).isin(EXECUTION_GUARD_SKIP_REASONS).sum())
     rows.append(
         _honesty_row(
-            node_id=18,
+            node_id=19,
             node="Entry guards",
             status="ok",
             severity="info",
@@ -5146,7 +5421,7 @@ def build_backtest_honesty_report(
     )
     rows.append(
         _honesty_row(
-            node_id=19,
+            node_id=20,
             node="Stop/TP basis",
             status="ok",
             severity="info",
@@ -5163,7 +5438,7 @@ def build_backtest_honesty_report(
     status, severity = _honesty_status(failures=entry_candle_failures)
     rows.append(
         _honesty_row(
-            node_id=20,
+            node_id=21,
             node="Exit simulation",
             status=status,
             severity=severity,
@@ -5174,7 +5449,7 @@ def build_backtest_honesty_report(
     )
     rows.append(
         _honesty_row(
-            node_id=21,
+            node_id=22,
             node="Intrabar ordering",
             status="ok",
             severity="info",
@@ -5185,7 +5460,7 @@ def build_backtest_honesty_report(
     )
     rows.append(
         _honesty_row(
-            node_id=22,
+            node_id=23,
             node="Position overlap",
             status="ok",
             severity="info",
@@ -5194,24 +5469,28 @@ def build_backtest_honesty_report(
             detail="same-symbol overlap is checked against actual simulated entry timestamp, not decision timestamp",
         )
     )
-    portfolio_warning = int(config.max_open_positions) < int(DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS)
+    portfolio_warning = int(config.max_open_positions) != int(DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS)
     status, severity = _honesty_status(failures=0, warning=bool(portfolio_warning))
     rows.append(
         _honesty_row(
-            node_id=23,
+            node_id=24,
             node="Portfolio/max positions",
             status=status,
             severity=severity,
             rows_checked=int(len(trades)),
             failures=0,
-            detail=f"global max_open_positions={int(config.max_open_positions)} is enforced at actual simulated entry timestamp",
+            detail=(
+                f"raw simulation max_open_positions={int(config.max_open_positions)} is enforced at actual simulated entry timestamp; "
+                f"default_raw_discovery_max_open_positions={int(DEFAULT_ANOMALY_BACKTEST_MAX_OPEN_POSITIONS)}; "
+                f"final live-like portfolio filter max_open_positions={int(DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS)}"
+            ),
         )
     )
     slippage_warning = float(config.entry_slippage_pct) <= 0.0 or float(config.exit_slippage_pct) <= 0.0
     status, severity = _honesty_status(failures=0, warning=slippage_warning)
     rows.append(
         _honesty_row(
-            node_id=24,
+            node_id=25,
             node="Fees/slippage",
             status=status,
             severity=severity,
@@ -5227,7 +5506,7 @@ def build_backtest_honesty_report(
     )
     rows.append(
         _honesty_row(
-            node_id=25,
+            node_id=26,
             node="Entry/latency grid selection bias",
             status="warning" if run_entry_grid else "ok",
             severity="warning" if run_entry_grid else "info",
@@ -5242,7 +5521,7 @@ def build_backtest_honesty_report(
     )
     rows.append(
         _honesty_row(
-            node_id=26,
+            node_id=27,
             node="Precollected candidates",
             status="ok",
             severity="info",
@@ -5256,7 +5535,7 @@ def build_backtest_honesty_report(
         targeted_context_rows = int(context_parity_report["context_fetch_status"].astype(str).eq("requested").sum())
     rows.append(
         _honesty_row(
-            node_id=27,
+            node_id=28,
             node="Targeted event backfill",
             status="ok",
             severity="info",
@@ -5267,7 +5546,7 @@ def build_backtest_honesty_report(
     )
     rows.append(
         _honesty_row(
-            node_id=28,
+            node_id=29,
             node="Artifacts / summaries",
             status="ok",
             severity="info",
@@ -6534,8 +6813,15 @@ def run_anomaly_strategy_backtest(
     stage_started_at = time.monotonic()
     trades = simulate_anomaly_trades(signals, config=config, progress_label="anomaly trades")
     timings["trades_seconds"] = time.monotonic() - stage_started_at
+    live_filtered_trades = apply_live_portfolio_filter(
+        trades,
+        max_open_positions=DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS,
+    )
+    live_filter_summary = summarize_live_portfolio_filter(trades, live_filtered_trades)
     summary = summarize_trades(trades)
     skip_reasons = summarize_trade_skip_reasons(trades)
+    live_filtered_summary = summarize_trades(live_filtered_trades)
+    live_filtered_skip_reasons = summarize_trade_skip_reasons(live_filtered_trades)
     context_parity_report = build_context_parity_report(
         candidates,
         pre_context_universe=pre_context_universe,
@@ -6580,6 +6866,13 @@ def run_anomaly_strategy_backtest(
             (output_dir / "anomaly_profitability_by_symbol.csv", summarize_trades_by_symbol(trades)),
             (output_dir / "anomaly_profitability_by_category.csv", summarize_trades_by_pump_category(trades)),
             (output_dir / "anomaly_profitability_by_category_family.csv", summarize_trades_by_pump_category_family(trades)),
+            (output_dir / "anomaly_trades_live_filtered.csv", live_filtered_trades),
+            (output_dir / "anomaly_live_portfolio_filter_summary.csv", live_filter_summary),
+            (output_dir / "anomaly_profitability_summary_live_filtered.csv", live_filtered_summary),
+            (output_dir / "anomaly_skip_reasons_live_filtered.csv", live_filtered_skip_reasons),
+            (output_dir / "anomaly_profitability_by_symbol_live_filtered.csv", summarize_trades_by_symbol(live_filtered_trades)),
+            (output_dir / "anomaly_profitability_by_category_live_filtered.csv", summarize_trades_by_pump_category(live_filtered_trades)),
+            (output_dir / "anomaly_profitability_by_category_family_live_filtered.csv", summarize_trades_by_pump_category_family(live_filtered_trades)),
             (output_dir / "anomaly_context_parity_report.csv", context_parity_report),
             (output_dir / "anomaly_backtest_honesty_report.csv", honesty_report),
             (output_dir / "anomaly_funnel.csv", anomaly_funnel),
@@ -6675,6 +6968,7 @@ def run_anomaly_strategy_backtest(
     elif valid_backtest and not trades.empty:
         stage_started_at = time.monotonic()
         health = build_edge_health_table(trades, label="primary")
+        live_filtered_health = build_edge_health_table(live_filtered_trades, label="live_filtered")
         chart_status = (
             render_anomaly_trade_charts(
                 trades,
@@ -6687,6 +6981,7 @@ def run_anomaly_strategy_backtest(
         _write_artifact_frames(
             [
                 (output_dir / "anomaly_edge_health.csv", health),
+                (output_dir / "anomaly_edge_health_live_filtered.csv", live_filtered_health),
                 (output_dir / "anomaly_trade_chart_status.csv", chart_status),
             ],
             progress_label="anomaly artifacts: health chart status",
@@ -6697,6 +6992,7 @@ def run_anomaly_strategy_backtest(
         _write_artifact_frames(
             [
                 (output_dir / "anomaly_edge_health.csv", _disabled_artifact_frame(artifact="anomaly_edge_health.csv", reason=invalid_reason)),
+                (output_dir / "anomaly_edge_health_live_filtered.csv", _disabled_artifact_frame(artifact="anomaly_edge_health_live_filtered.csv", reason=invalid_reason)),
                 (output_dir / "anomaly_trade_chart_status.csv", _disabled_artifact_frame(artifact="anomaly_trade_chart_status.csv", reason=invalid_reason)),
             ],
             progress_label="anomaly artifacts: disabled health chart status",
@@ -6715,6 +7011,10 @@ def run_anomaly_strategy_backtest(
         "entry_timeframe": _effective_entry_timeframe(config),
         "execution_model": _execution_model_label(config),
         "portfolio_model": f"global_max_open_positions_{int(config.max_open_positions)}_at_actual_entry",
+        "live_filtered_portfolio_model": (
+            f"post_simulation_global_max_open_positions_{int(DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS)}"
+        ),
+        "live_filtered_max_open_positions": int(DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS),
         "slippage_model": "adverse_long_entry_and_exit",
         "entry_slippage_pct": float(config.entry_slippage_pct),
         "exit_slippage_pct": float(config.exit_slippage_pct),

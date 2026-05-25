@@ -1,5 +1,77 @@
 # Anomaly Patch Log
 
+## 2026-05-24 - P393 proposed - add post-HTF-close LTF confirmation mode
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+```
+
+Intent:
+
+```text
+Add a cheap honest pair-mode where an HTF setup candle is selected only after it closes, LTF candles inside that closed HTF candle are used only as after-close confirmation, and the simulated entry cannot occur inside the already-closed HTF candle. This separates late HTF+LTF confirmation from the existing forming-LTF early-entry mode.
+```
+
+Change:
+
+```text
+run-anomaly-lab now accepts --pair-collection-mode forming|post_htf_close_ltf_confirmation. The new mode uses feature_contract=post_htf_close_ltf_confirmation_v1, emits one candidate per closed HTF setup candle with full LTF coverage, records explicit post_htf_close_* audit fields, and keeps market entry on the next LTF candle after the HTF close via the existing next-bar-open execution model. Honesty report adds a dedicated post-HTF-close collector node.
+```
+
+Validation:
+
+```text
+python -m compileall -q data/exchanges data/fetchers research_tools cli constants.py main.py
+Synthetic smoke confirmed a 5m/1m post-close row has decision_available_timestamp_ms == post_htf_close_entry_not_before_ms and the market entry timestamp is not earlier than the HTF close.
+```
+
+Risk:
+
+```text
+This mode is honest for after-close confirmation, not proof of early intra-HTF LTF entry. It is later by construction, so RR/TP/drift guards may skip many moves that the old forming mode appeared to catch. If used with subminute entry timeframes and targeted backfill, the result is still a selected-event diagnostic unless LTF coverage and fetch latency are explicitly treated as the tested live contract.
+```
+
+## 2026-05-23 - P392 applied locally - add live-like portfolio filter after wide simulation
+
+Files:
+
+```text
+cli/commands.py
+constants.py
+research_tools/anomaly_strategy_backtest.py
+tests/test_anomaly_continuation_lab.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+```
+
+Intent:
+
+```text
+Preserve category-discovery material while still producing a live-like one-position portfolio readout. The anomaly-lab raw simulation default stays wide at max_open_positions=1000, then a deterministic post-simulation live portfolio filter writes separate cap-1 artifacts and counts what was cut. Reused-candidate run_config parsing also accepts legacy `WindowsPath(...)`/`PosixPath(...)` strings inside lab_config so old guarded candidate sets can be replayed.
+```
+
+Validation:
+
+```text
+compileall passed for data\exchanges data\fetchers research_tools cli constants.py main.py.
+Focused tests passed: anomaly portfolio cap, live portfolio filter, and live2 execution timing.
+Reused-candidate 1m/5s replay wrote core raw/live-filter trade artifacts at .output/results/anomaly_lab/live_parity_1m_5s_p392 before the command timed out during late artifact stages with render_charts=false.
+```
+
+Risk:
+
+```text
+Raw anomaly_trades.csv remains a wide research simulation, not live PnL. Live-readiness must be read from anomaly_trades_live_filtered.csv and matching live_filtered summaries. The post-filter is still candle-level proxy execution, not exchange actual fills.
+```
+
 ## 2026-05-22 - P385 applied locally - backtest honesty hardening
 
 Files:
