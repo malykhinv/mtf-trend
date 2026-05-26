@@ -162,6 +162,18 @@ class Live2ProtectedPosition:
     entry_5m_oi_previous_open_interest: float | None = None
     entry_5m_oi_change_pct_3x5m: float | None = None
     entry_5m_oi_latest_timestamp_ms: int | None = None
+    pump_start_current_oi_open_interest: float | None = None
+    pump_start_current_oi_timestamp_ms: int | None = None
+    pump_start_current_oi_last_seen_ms: int | None = None
+    pump_start_current_oi_source: str = ""
+    pump_start_current_oi_status: str = "not_seen"
+    pump_start_current_oi_reason: str = ""
+    signal_current_oi_open_interest: float | None = None
+    signal_current_oi_timestamp_ms: int | None = None
+    signal_current_oi_last_seen_ms: int | None = None
+    signal_current_oi_source: str = ""
+    signal_current_oi_status: str = "not_seen"
+    signal_current_oi_reason: str = ""
     entry_current_oi_open_interest: float | None = None
     entry_current_oi_timestamp_ms: int | None = None
     entry_current_oi_last_seen_ms: int | None = None
@@ -209,6 +221,18 @@ class Live2ProtectedPosition:
             "entry_5m_oi_previous_open_interest": self.entry_5m_oi_previous_open_interest,
             "entry_5m_oi_change_pct_3x5m": self.entry_5m_oi_change_pct_3x5m,
             "entry_5m_oi_latest_timestamp_ms": self.entry_5m_oi_latest_timestamp_ms,
+            "pump_start_current_oi_open_interest": self.pump_start_current_oi_open_interest,
+            "pump_start_current_oi_timestamp_ms": self.pump_start_current_oi_timestamp_ms,
+            "pump_start_current_oi_last_seen_ms": self.pump_start_current_oi_last_seen_ms,
+            "pump_start_current_oi_source": self.pump_start_current_oi_source,
+            "pump_start_current_oi_status": self.pump_start_current_oi_status,
+            "pump_start_current_oi_reason": self.pump_start_current_oi_reason,
+            "signal_current_oi_open_interest": self.signal_current_oi_open_interest,
+            "signal_current_oi_timestamp_ms": self.signal_current_oi_timestamp_ms,
+            "signal_current_oi_last_seen_ms": self.signal_current_oi_last_seen_ms,
+            "signal_current_oi_source": self.signal_current_oi_source,
+            "signal_current_oi_status": self.signal_current_oi_status,
+            "signal_current_oi_reason": self.signal_current_oi_reason,
             "entry_current_oi_open_interest": self.entry_current_oi_open_interest,
             "entry_current_oi_timestamp_ms": self.entry_current_oi_timestamp_ms,
             "entry_current_oi_last_seen_ms": self.entry_current_oi_last_seen_ms,
@@ -646,6 +670,18 @@ class Live2ExecutionEngine:
             entry_5m_oi_previous_open_interest=_finite_float_or_none(signal_decision.features.get("oi_previous_open_interest")),
             entry_5m_oi_change_pct_3x5m=_finite_float_or_none(signal_decision.features.get("oi_change_pct_3x5m")),
             entry_5m_oi_latest_timestamp_ms=_int_or_none(signal_decision.features.get("oi_latest_timestamp_ms")),
+            pump_start_current_oi_open_interest=_finite_float_or_none(signal_decision.features.get("pump_start_current_oi_open_interest")),
+            pump_start_current_oi_timestamp_ms=_int_or_none(signal_decision.features.get("pump_start_current_oi_timestamp_ms")),
+            pump_start_current_oi_last_seen_ms=_int_or_none(signal_decision.features.get("pump_start_current_oi_last_seen_ms")),
+            pump_start_current_oi_source=str(signal_decision.features.get("pump_start_current_oi_source") or ""),
+            pump_start_current_oi_status=str(signal_decision.features.get("pump_start_current_oi_status") or "not_seen"),
+            pump_start_current_oi_reason=str(signal_decision.features.get("pump_start_current_oi_reason") or ""),
+            signal_current_oi_open_interest=_finite_float_or_none(signal_decision.features.get("signal_current_oi_open_interest")),
+            signal_current_oi_timestamp_ms=_int_or_none(signal_decision.features.get("signal_current_oi_timestamp_ms")),
+            signal_current_oi_last_seen_ms=_int_or_none(signal_decision.features.get("signal_current_oi_last_seen_ms")),
+            signal_current_oi_source=str(signal_decision.features.get("signal_current_oi_source") or ""),
+            signal_current_oi_status=str(signal_decision.features.get("signal_current_oi_status") or "not_seen"),
+            signal_current_oi_reason=str(signal_decision.features.get("signal_current_oi_reason") or ""),
             entry_current_oi_open_interest=_finite_float_or_none(entry_current_oi.open_interest),
             entry_current_oi_timestamp_ms=_int_or_none(entry_current_oi.timestamp_ms),
             entry_current_oi_last_seen_ms=_int_or_none(entry_current_oi.fetched_at_ms),

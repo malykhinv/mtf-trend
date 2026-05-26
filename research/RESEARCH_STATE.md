@@ -1,3 +1,11 @@
+## 2026-05-26 - P409 current-OI baseline separation
+
+Current commit: UNKNOWN.
+
+P409 proposed after P408 revealed that `entry_current_oi` answers only "did OI fall after our fill?", not "did OI fall from the pump awakening?" The live2 contract now keeps three separate current-OI baselines: first valid active/radar snapshot (`pump_start_current_oi_*`), selected signal snapshot (`signal_current_oi_*`), and post-fill protected-entry snapshot (`entry_current_oi_*`). Early-exit artifacts expose deltas from all three. Default OI-down threshold is 0.3% to avoid treating tiny endpoint noise as thesis failure.
+
+Next validation: run one small live2 forward session and inspect `position_early_exit_full_close_verified` / protected-position payloads for `pump_start_current_oi_*`, `signal_current_oi_*`, `entry_current_oi_*`, and the three post-baseline change fields. Confirm the pump-start timestamp is not later than selected-signal timestamp for normal radar-covered entries; if it is later/missing, treat pump-start OI conclusion as unavailable for that trade.
+
 # Anomaly Research State
 
 ## 2026-05-26 - P409 live2 current-OI entry baseline completed

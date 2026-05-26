@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
+from math import isfinite
 from enum import StrEnum
 
 from .clock import utc_now_ms
@@ -177,6 +178,12 @@ class SymbolState:
     current_oi_source: str = ""
     current_oi_status: str = "not_seen"
     current_oi_reason: str = ""
+    current_oi_first_ok_seen_ms: int | None = None
+    current_oi_first_ok_timestamp_ms: int | None = None
+    current_oi_first_ok_open_interest: float | None = None
+    current_oi_first_ok_source: str = ""
+    current_oi_first_ok_status: str = "not_seen"
+    current_oi_first_ok_reason: str = ""
     prior_context_first_seen_ms: int | None = None
     prior_context_last_seen_ms: int | None = None
     prior_context_start_ms: int | None = None
@@ -455,6 +462,18 @@ class SymbolState:
             self.current_oi_source = current_source
             self.current_oi_status = current_status
             self.current_oi_reason = current_reason
+            if self.current_oi_first_ok_seen_ms is None and current_status == "ok":
+                try:
+                    current_open_interest_float = float(current_open_interest)
+                except (TypeError, ValueError):
+                    current_open_interest_float = float("nan")
+                if isfinite(current_open_interest_float) and current_open_interest_float > 0.0:
+                    self.current_oi_first_ok_seen_ms = effective_current_seen_ms
+                    self.current_oi_first_ok_timestamp_ms = current_timestamp_ms
+                    self.current_oi_first_ok_open_interest = current_open_interest_float
+                    self.current_oi_first_ok_source = current_source
+                    self.current_oi_first_ok_status = current_status
+                    self.current_oi_first_ok_reason = current_reason
         self.mark_dirty(now_ms=fetched_at_ms)
 
     def update_prior_context(
@@ -661,6 +680,12 @@ class SymbolState:
             "current_oi_source": self.current_oi_source,
             "current_oi_status": self.current_oi_status,
             "current_oi_reason": self.current_oi_reason,
+            "current_oi_first_ok_seen_ms": self.current_oi_first_ok_seen_ms,
+            "current_oi_first_ok_timestamp_ms": self.current_oi_first_ok_timestamp_ms,
+            "current_oi_first_ok_open_interest": self.current_oi_first_ok_open_interest,
+            "current_oi_first_ok_source": self.current_oi_first_ok_source,
+            "current_oi_first_ok_status": self.current_oi_first_ok_status,
+            "current_oi_first_ok_reason": self.current_oi_first_ok_reason,
             "prior_context_first_seen_ms": self.prior_context_first_seen_ms,
             "prior_context_last_seen_ms": self.prior_context_last_seen_ms,
             "prior_context_start_ms": self.prior_context_start_ms,

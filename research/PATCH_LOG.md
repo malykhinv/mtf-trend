@@ -1,5 +1,43 @@
 # Anomaly Patch Log
 
+## 2026-05-26 - P409 proposed - live2 honest current-OI baselines
+
+Files:
+
+```text
+research_tools/anomaly_live2/execution.py
+research_tools/anomaly_live2/position_supervisor.py
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/state.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+```
+
+Intent:
+
+```text
+Separate current-OI baselines instead of pretending that entry-time OI is pump-start OI. Keep entry-current-OI for execution risk, add pump-start/current-radar and selected-signal current-OI baselines for pump thesis and post-entry supervision.
+```
+
+Change:
+
+```text
+SymbolState now preserves the first valid current-OI snapshot seen while the symbol is active/radar. Signal features expose that as `pump_start_current_oi_*` and also expose the latest selected-signal current-OI snapshot as `signal_current_oi_*`. Protected positions persist pump-start, signal, and entry current-OI baselines separately. The supervisor reports OI deltas from all three baselines and can early-exit on exhausted flow when current OI has fallen from pump-start, signal, or entry baseline. Default OI-down threshold is a fixed supervisor default of 0.3%; no new CLI flag is added.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+Pump-start current OI is the first valid snapshot live2 actually saw after the symbol became active/radar, not a retroactive historical current-OI value at the first price tick. If the current-OI poller was late, the artifact will show that through pump_start_current_oi_last_seen_ms/timestamp_ms; do not call it exact movement birth time.
+```
+
 ## 2026-05-26 - P408 applied locally - live2 partial TP1, OI context monitor, flow velocity
 
 Files:

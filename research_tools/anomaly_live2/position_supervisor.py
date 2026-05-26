@@ -43,7 +43,7 @@ class Live2PositionSupervisorConfig:
     early_exit_flow_collapse_quote_ratio: float = 0.45
     early_exit_seller_taker_buy_share_max: float = 0.45
     early_exit_oi_up_min_change_pct: float = 0.0
-    early_exit_current_oi_down_min_change_pct: float = 0.0
+    early_exit_current_oi_down_min_change_pct: float = 0.003
 
     def __post_init__(self) -> None:
         if self.monitor_interval_ms <= 0:
@@ -388,21 +388,42 @@ class Live2PositionSupervisor:
             and float(position.entry_5m_oi_open_interest) > 0.0
         ):
             oi_5m_change_from_entry_pct = (float(state.oi_open_interest) / float(position.entry_5m_oi_open_interest)) - 1.0
-        current_oi_change_from_entry_pct = None
-        current_oi_entry_comparable = (
-            position.entry_current_oi_status == "ok"
-            and state.current_oi_status == "ok"
-            and position.entry_current_oi_open_interest is not None
-            and state.current_oi_open_interest is not None
-            and isfinite(float(position.entry_current_oi_open_interest))
-            and isfinite(float(state.current_oi_open_interest))
-            and float(position.entry_current_oi_open_interest) > 0.0
+        current_oi_entry_comparable, current_oi_change_from_entry_pct = _current_oi_change_pct_from_baseline(
+            current_status=state.current_oi_status,
+            current_open_interest=state.current_oi_open_interest,
+            baseline_status=position.entry_current_oi_status,
+            baseline_open_interest=position.entry_current_oi_open_interest,
         )
-        if current_oi_entry_comparable:
-            current_oi_change_from_entry_pct = (float(state.current_oi_open_interest) / float(position.entry_current_oi_open_interest)) - 1.0
-        current_oi_down_since_entry = (
-            current_oi_change_from_entry_pct is not None
-            and current_oi_change_from_entry_pct < -float(self.config.early_exit_current_oi_down_min_change_pct)
+        current_oi_signal_comparable, current_oi_change_from_signal_pct = _current_oi_change_pct_from_baseline(
+            current_status=state.current_oi_status,
+            current_open_interest=state.current_oi_open_interest,
+            baseline_status=position.signal_current_oi_status,
+            baseline_open_interest=position.signal_current_oi_open_interest,
+        )
+        current_oi_pump_start_comparable, current_oi_change_from_pump_start_pct = _current_oi_change_pct_from_baseline(
+            current_status=state.current_oi_status,
+            current_open_interest=state.current_oi_open_interest,
+            baseline_status=position.pump_start_current_oi_status,
+            baseline_open_interest=position.pump_start_current_oi_open_interest,
+        )
+        entry_current_oi_change_from_signal_pct = _baseline_to_baseline_change_pct(
+            from_status=position.signal_current_oi_status,
+            from_open_interest=position.signal_current_oi_open_interest,
+            to_status=position.entry_current_oi_status,
+            to_open_interest=position.entry_current_oi_open_interest,
+        )
+        entry_current_oi_change_from_pump_start_pct = _baseline_to_baseline_change_pct(
+            from_status=position.pump_start_current_oi_status,
+            from_open_interest=position.pump_start_current_oi_open_interest,
+            to_status=position.entry_current_oi_status,
+            to_open_interest=position.entry_current_oi_open_interest,
+        )
+        oi_down_threshold = float(self.config.early_exit_current_oi_down_min_change_pct)
+        current_oi_down_since_entry = current_oi_change_from_entry_pct is not None and current_oi_change_from_entry_pct < -oi_down_threshold
+        current_oi_down_since_signal = current_oi_change_from_signal_pct is not None and current_oi_change_from_signal_pct < -oi_down_threshold
+        current_oi_down_since_pump_start = (
+            current_oi_change_from_pump_start_pct is not None
+            and current_oi_change_from_pump_start_pct < -oi_down_threshold
         )
         oi_up_nonprogress = (
             oi_up
@@ -427,18 +448,24 @@ class Live2PositionSupervisor:
             and current_r <= 0.05
             and (flow_collapse or seller_arrived or oi_up)
         )
-        current_oi_down_flow_exhausted_after_mfe = (
-            current_oi_down_since_entry
-            and mfe_r >= float(self.config.early_exit_min_mfe_r)
+        current_oi_down_exhausted_base = (
+            mfe_r >= float(self.config.early_exit_min_mfe_r)
             and current_r <= 0.35
             and high_stalled
             and (flow_collapse or seller_arrived or (last_two_taker_share is not None and last_two_taker_share <= 0.45))
         )
+        entry_current_oi_down_flow_exhausted_after_mfe = current_oi_down_since_entry and current_oi_down_exhausted_base
+        signal_current_oi_down_flow_exhausted_after_mfe = current_oi_down_since_signal and current_oi_down_exhausted_base
+        pump_start_current_oi_down_flow_exhausted_after_mfe = current_oi_down_since_pump_start and current_oi_down_exhausted_base
         reason = ""
         if oi_up_nonprogress:
             reason = "early_exit_oi_up_price_not_progressing"
-        elif current_oi_down_flow_exhausted_after_mfe:
-            reason = "early_exit_current_oi_down_flow_exhausted_after_mfe"
+        elif pump_start_current_oi_down_flow_exhausted_after_mfe:
+            reason = "early_exit_pump_start_current_oi_down_flow_exhausted_after_mfe"
+        elif signal_current_oi_down_flow_exhausted_after_mfe:
+            reason = "early_exit_signal_current_oi_down_flow_exhausted_after_mfe"
+        elif entry_current_oi_down_flow_exhausted_after_mfe:
+            reason = "early_exit_entry_current_oi_down_flow_exhausted_after_mfe"
         elif seller_pressure_after_mfe:
             reason = "early_exit_seller_pressure_after_mfe"
         elif flow_exhausted_after_mfe:
@@ -475,6 +502,18 @@ class Live2PositionSupervisor:
             "current_5m_oi_open_interest": state.oi_open_interest,
             "current_5m_oi_latest_timestamp_ms": state.oi_latest_timestamp_ms,
             "post_entry_oi_5m_change_pct_from_entry_5m": oi_5m_change_from_entry_pct,
+            "pump_start_current_oi_open_interest": position.pump_start_current_oi_open_interest,
+            "pump_start_current_oi_timestamp_ms": position.pump_start_current_oi_timestamp_ms,
+            "pump_start_current_oi_last_seen_ms": position.pump_start_current_oi_last_seen_ms,
+            "pump_start_current_oi_source": position.pump_start_current_oi_source,
+            "pump_start_current_oi_status": position.pump_start_current_oi_status,
+            "pump_start_current_oi_reason": position.pump_start_current_oi_reason,
+            "signal_current_oi_open_interest": position.signal_current_oi_open_interest,
+            "signal_current_oi_timestamp_ms": position.signal_current_oi_timestamp_ms,
+            "signal_current_oi_last_seen_ms": position.signal_current_oi_last_seen_ms,
+            "signal_current_oi_source": position.signal_current_oi_source,
+            "signal_current_oi_status": position.signal_current_oi_status,
+            "signal_current_oi_reason": position.signal_current_oi_reason,
             "entry_current_oi_open_interest": position.entry_current_oi_open_interest,
             "entry_current_oi_timestamp_ms": position.entry_current_oi_timestamp_ms,
             "entry_current_oi_last_seen_ms": position.entry_current_oi_last_seen_ms,
@@ -488,8 +527,16 @@ class Live2PositionSupervisor:
             "current_oi_status": state.current_oi_status,
             "current_oi_reason": state.current_oi_reason,
             "current_oi_entry_comparable": current_oi_entry_comparable,
+            "current_oi_signal_comparable": current_oi_signal_comparable,
+            "current_oi_pump_start_comparable": current_oi_pump_start_comparable,
             "post_entry_current_oi_change_pct_from_entry": current_oi_change_from_entry_pct,
+            "post_signal_current_oi_change_pct_from_signal": current_oi_change_from_signal_pct,
+            "post_pump_start_current_oi_change_pct_from_pump_start": current_oi_change_from_pump_start_pct,
+            "entry_current_oi_change_pct_from_signal": entry_current_oi_change_from_signal_pct,
+            "entry_current_oi_change_pct_from_pump_start": entry_current_oi_change_from_pump_start_pct,
             "current_oi_down_since_entry": current_oi_down_since_entry,
+            "current_oi_down_since_signal": current_oi_down_since_signal,
+            "current_oi_down_since_pump_start": current_oi_down_since_pump_start,
             "early_exit_current_oi_down_min_change_pct": self.config.early_exit_current_oi_down_min_change_pct,
             "source_flow_window_ms": position.source_flow_window_ms,
             "source_flow_quote_per_second": position.source_flow_quote_per_second,
@@ -1141,6 +1188,38 @@ def _float_or_none(value: object) -> float | None:
         return None
     return parsed
 
+
+
+def _current_oi_change_pct_from_baseline(
+    *,
+    current_status: str,
+    current_open_interest: object,
+    baseline_status: str,
+    baseline_open_interest: object,
+) -> tuple[bool, float | None]:
+    if current_status != "ok" or baseline_status != "ok":
+        return False, None
+    current_value = _float_or_none(current_open_interest)
+    baseline_value = _float_or_none(baseline_open_interest)
+    if current_value is None or baseline_value is None or baseline_value <= 0.0:
+        return False, None
+    return True, (current_value / baseline_value) - 1.0
+
+
+def _baseline_to_baseline_change_pct(
+    *,
+    from_status: str,
+    from_open_interest: object,
+    to_status: str,
+    to_open_interest: object,
+) -> float | None:
+    comparable, change_pct = _current_oi_change_pct_from_baseline(
+        current_status=to_status,
+        current_open_interest=to_open_interest,
+        baseline_status=from_status,
+        baseline_open_interest=from_open_interest,
+    )
+    return change_pct if comparable else None
 
 def _valid_fill(fill: ExchangeOrderFill) -> bool:
     return _positive_finite(fill.average_price) and _positive_finite(fill.filled_amount)

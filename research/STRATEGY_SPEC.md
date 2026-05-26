@@ -1,3 +1,13 @@
+## 2026-05-26 - Live2 current-OI baseline contract
+
+Live2 must not use one OI number for three meanings. Current-OI supervision uses distinct baselines:
+
+- `pump_start_current_oi_*`: first valid current-OI snapshot live2 actually saw while the symbol was active/radar. This is the closest honest live approximation of pump-awakening OI; it is not backfilled.
+- `signal_current_oi_*`: latest current-OI snapshot present at selected signal time / pre-entry guard.
+- `entry_current_oi_*`: current-OI snapshot fetched only after actual fill and verified initial stop.
+
+Management may early-exit after MFE + stalled high + exhausted/seller flow if current OI falls by the fixed supervisor threshold from any of these baselines. Artifacts must expose which baseline was comparable and which reason fired. If a baseline is missing/stale/not-ok, the decision must mark it non-comparable instead of substituting another OI source.
+
 # Anomaly Strategy Spec
 
 Compact current strategy spec for the anomaly-first trading system.
