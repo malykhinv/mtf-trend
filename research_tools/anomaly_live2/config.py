@@ -53,8 +53,12 @@ class AnomalyLive2Config:
     user_data_stream_keepalive_interval_seconds: float = 1_800.0
     startup_warmup_lookback_minutes: int = 15
     startup_warmup_max_trades_per_symbol: int = 1000
+    startup_warmup_max_pages_per_symbol: int = 1
     startup_warmup_request_sleep_seconds: float = 0.03
     startup_warmup_error_limit: int = 20
+    startup_htf_baseline_lookback_minutes: int = 75
+    startup_htf_baseline_request_sleep_seconds: float = 0.02
+    startup_htf_baseline_error_limit: int = 20
     max_closed_candles_per_timeframe: int = 360
     universe_max_symbols: int = 600
     universe_min_quote_volume_24h: float = 30_000.0
@@ -76,9 +80,13 @@ class AnomalyLive2Config:
     execution_stop_visibility_sleep_seconds: float = 0.5
     execution_max_position_amount_slippage_ratio: float = 0.05
     position_supervisor_monitor_interval_ms: int = 1_000
-    position_supervisor_tp1_close_fraction: float = 1.0
+    position_supervisor_tp1_close_fraction: float = 0.5
     position_supervisor_breakeven_stop_offset_pct: float = 0.0
     position_supervisor_flat_position_abs_epsilon: float = 1e-12
+    position_supervisor_early_exit_enabled: bool = True
+    position_supervisor_early_exit_min_hold_candles: int = 6
+    position_supervisor_early_exit_stall_candles: int = 12
+    position_supervisor_early_exit_min_mfe_r: float = 0.25
     runtime_generation: str = "live2_v0"
 
     def __post_init__(self) -> None:
@@ -162,10 +170,18 @@ class AnomalyLive2Config:
             raise ValueError("startup_warmup_lookback_minutes must be > 0")
         if not 1 <= self.startup_warmup_max_trades_per_symbol <= 1000:
             raise ValueError("startup_warmup_max_trades_per_symbol must be in [1, 1000]")
+        if self.startup_warmup_max_pages_per_symbol <= 0:
+            raise ValueError("startup_warmup_max_pages_per_symbol must be > 0")
         if self.startup_warmup_request_sleep_seconds < 0:
             raise ValueError("startup_warmup_request_sleep_seconds must be >= 0")
         if self.startup_warmup_error_limit <= 0:
             raise ValueError("startup_warmup_error_limit must be > 0")
+        if self.startup_htf_baseline_lookback_minutes <= 0:
+            raise ValueError("startup_htf_baseline_lookback_minutes must be > 0")
+        if self.startup_htf_baseline_request_sleep_seconds < 0:
+            raise ValueError("startup_htf_baseline_request_sleep_seconds must be >= 0")
+        if self.startup_htf_baseline_error_limit <= 0:
+            raise ValueError("startup_htf_baseline_error_limit must be > 0")
         if self.max_closed_candles_per_timeframe <= 0:
             raise ValueError("max_closed_candles_per_timeframe must be > 0")
         if self.universe_max_symbols <= 0:
@@ -210,9 +226,15 @@ class AnomalyLive2Config:
             raise ValueError("execution_max_position_amount_slippage_ratio must be >= 0")
         if self.position_supervisor_monitor_interval_ms <= 0:
             raise ValueError("position_supervisor_monitor_interval_ms must be > 0")
-        if self.position_supervisor_tp1_close_fraction != 1.0:
-            raise ValueError("position_supervisor_tp1_close_fraction must be exactly 1.0 for live2 full-TP1 contract")
+        if not 0.0 < self.position_supervisor_tp1_close_fraction <= 1.0:
+            raise ValueError("position_supervisor_tp1_close_fraction must be in (0, 1]")
         if self.position_supervisor_breakeven_stop_offset_pct < 0:
             raise ValueError("position_supervisor_breakeven_stop_offset_pct must be >= 0")
         if self.position_supervisor_flat_position_abs_epsilon < 0:
             raise ValueError("position_supervisor_flat_position_abs_epsilon must be >= 0")
+        if self.position_supervisor_early_exit_min_hold_candles <= 0:
+            raise ValueError("position_supervisor_early_exit_min_hold_candles must be > 0")
+        if self.position_supervisor_early_exit_stall_candles < self.position_supervisor_early_exit_min_hold_candles:
+            raise ValueError("position_supervisor_early_exit_stall_candles must be >= min hold")
+        if self.position_supervisor_early_exit_min_mfe_r < 0:
+            raise ValueError("position_supervisor_early_exit_min_mfe_r must be >= 0")

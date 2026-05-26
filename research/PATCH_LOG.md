@@ -1,5 +1,224 @@
 # Anomaly Patch Log
 
+## 2026-05-26 - P408 applied locally - live2 partial TP1, OI context monitor, flow velocity
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/execution.py
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/artifacts.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/position_supervisor.py
+research_tools/anomaly_live2/telegram.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Keep TP1, but stop flattening the whole position there. Increase default live2 notional to 12 USDT so a 50% TP leaves about the previous 6 USDT runner. Persist current/anomaly OI context and source-flow speed so management decisions can distinguish continuing flow from exhausted short-cover/squeeze behavior.
+```
+
+Change:
+
+```text
+Live2 defaults are now 12 USDT notional and `position_supervisor_tp1_close_fraction=0.5`; both are exposed as CLI overrides. At TP1 the supervisor submits a reduce-only close for 50%, verifies the fill, creates/verifies a replacement stop for the remaining exchange amount, then cancels/verifies the old stop before keeping the protected position as `tp1_partial_protected_stop_verified`.
+
+Protected positions now persist `category_id`, entry-time 5m OI fields, and selected source-flow velocity/ratio fields. Runner and post-HTF signal features expose flow window duration, quote/sec and trades/sec. Near-miss/deadline artifacts include the new flow-speed columns. The early-exit decision compares current OI to entry 5m OI and can close a post-MFE position when OI falls while flow is exhausted. The post-TP1 remainder can trail its stop structurally from recent closed post-fill 5s lows.
+```
+
+Validation:
+
+```text
+Focused live2 tests passed: 29 passed. compileall passed for data/exchanges research_tools cli constants.py main.py.
+```
+
+Risk:
+
+```text
+OI remains coarse Binance 5m `openInterestHist`, not tick/Coinglass OI. The partial-TP runner may improve upside capture or may add churn; only forward live artifacts with actual fills can judge it. Stop replacement is intentionally strict: failure to verify replacement/old-stop removal becomes a position integrity error.
+```
+
+## 2026-05-26 - P407 applied locally - live2 runner categories use rolling 60s setup
+
+Files:
+
+```text
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/artifacts.py
+research_tools/anomaly_live2/deadline.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+```
+
+Intent:
+
+```text
+Remove calendar-minute dependency from the legacy live2 runner categories (`runner_oi_confirmed`, `runner_flow`, `runner_balanced`) so they evaluate the same rolling 60s HTF idea as the current live direction.
+```
+
+Change:
+
+```text
+`_live_backtest_like_setup` no longer starts at floor(decision_time, 1m). It now builds the runner setup from the trailing contiguous 12 closed 5s candles ending at the decision candle. Baseline remains the 60 closed 1m candles ending before the rolling setup window. Near-miss/deadline artifacts expose `live_setup_alignment=rolling_60s_5s_step`, `live_setup_calendar_aligned=false`, and setup open/close timestamps.
+```
+
+Validation:
+
+```text
+Focused live2 tests passed: 28 passed. compileall passed for data/exchanges research_tools cli constants.py main.py.
+```
+
+Risk:
+
+```text
+This changes live runner entry timing and live/backtest parity versus old calendar-minute forming backtests. It is closer to the desired live rolling behavior, but old anomaly-lab results for runner categories should not be compared directly without a rolling replay/backtest.
+```
+
+## 2026-05-26 - P406 applied locally - live2 post-entry flow/OI early exit
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/position_supervisor.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/telegram.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Prevent live2 long positions from sitting for many minutes after the post-entry buyer flow is exhausted, seller pressure appears, or OI rises while price no longer progresses.
+```
+
+Change:
+
+```text
+The live2 position supervisor now evaluates only closed 5s candles that fully start after the verified entry fill timestamp. After a default 6 closed-candle minimum hold it can full-close the exchange position with a reduce-only market order when conservative post-entry conditions appear: OI-up/non-progress stall, seller pressure after at least 0.25R MFE, flow exhaustion after at least 0.25R MFE, or prolonged stall without progress.
+
+The close remains actual-fill based: the supervisor verifies the reduce-only close fill, verifies the exchange position is flat, cancels/verifies the old initial stop, emits `position_early_exit_full_close_verified`, and removes the protected position. Defaults are exposed through live2 config and CLI flags.
+```
+
+Validation:
+
+```text
+Focused live2 tests passed: 27 passed. compileall passed for data/exchanges research_tools cli constants.py main.py.
+```
+
+Risk:
+
+```text
+This is a live-management safety/expectancy heuristic, not an edge proof. It does not change entry categories, does not solve artifact spam/deadline backlog, and should be judged from forward artifacts by comparing avoided stalls versus missed late TP1 continuations.
+```
+
+## 2026-05-26 - P405 applied locally - rolling HTF live2 baseline and OI divergence guard
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+data/exchanges/ccxt_futures_client.py
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/market_data/warmup.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/state.py
+research_tools/anomaly_live2/artifacts.py
+research_tools/anomaly_live2/deadline.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Remove calendar-minute dependency from the live2 post-HTF acceptance category without loading universal 75m 5s/aggTrade history.
+```
+
+Change:
+
+```text
+The post-HTF acceptance category now builds HTF as a rolling 60s window from the 12 closed 5s candles immediately before the 6-candle confirmation window. Startup loads a lightweight 75m raw Binance 1m kline HTF baseline with real quote/trade-count columns intact; the 5s aggTrade warmup stays short/default 15m. Artifacts mark `post_htf_acceptance_htf_alignment=rolling_60s_5s_step` and `post_htf_acceptance_htf_calendar_aligned=false`.
+
+Added a long-entry block when OI is rising while 15m price context is falling: `post_htf_acceptance_oi_divergence_reason=oi_up_price_down_blocked`. Reduced live2 default and CLI order notional to 6 USDT.
+```
+
+Validation:
+
+```text
+compileall passed for data/exchanges research_tools cli constants.py main.py. Focused live2 tests passed: 25 passed. CLI help exposes startup HTF baseline and 6 USDT notional flags.
+```
+
+Risk:
+
+```text
+The rolling signal uses real 5s trade-built HTF, while the startup baseline is raw 1m Binance kline baseline. This avoids full-market 5s backfill cost and keeps real quote/trade-count baseline, but it is not a rolling-5s baseline. Artifacts expose the baseline/alignment distinction for later analysis.
+```
+
+## 2026-05-26 - P404 applied locally - live2 post-HTF acceptance long trading category
+
+Files:
+
+```text
+research_tools/anomaly_category_contract.py
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_live2/artifacts.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Enable the researched post-HTF acceptance long category in live2, with trading through the existing selected-signal -> entry guard -> real execution path, and make the mode separable in artifacts.
+```
+
+Change:
+
+```text
+Added `post_htf_acceptance_long` to the shared category contract and default live2 category priority. The signal engine now evaluates a closed 1m HTF anomaly, waits for exactly 6 closed 5s candles after the HTF close, requires LTF acceptance and controlled flow distribution, uses a structural stop at the closed HTF anomaly low with a 5 bps buffer, and sets TP1 at 1.5R. Selected features override the generic live2 stop/TP fields before entry guard/execution.
+
+Artifacts now carry `category_id=post_htf_acceptance_long` and `post_htf_acceptance_*` feature fields in event JSON, plus explicit post-HTF fields in `live2_near_misses.csv` for later separate analysis.
+```
+
+Validation:
+
+```text
+compileall passed for data/exchanges research_tools cli constants.py main.py; `launcher.py` is absent in this workspace, so the literal AGENTS command cannot list it. Focused live2 tests passed: 23 passed.
+```
+
+Risk:
+
+```text
+This enables real trading only through existing live2 readiness, entry-guard, max-position, actual-fill and verified-stop gates. It does not bypass safety. Research used a 72h-style prior-spike label; live2 currently has 24h prior context, so artifacts explicitly mark the parity limitation and the first live run must be treated as forward validation, not proof.
+```
+
 ## 2026-05-25 - P403 applied locally - stricter short/fader HTF anomaly prefilter
 
 Files:
@@ -8297,3 +8516,51 @@ Risk:
 ```text
 Runs with planned subminute flow windows and zero trusted coverage will now be explicitly invalid instead of continuing into misleading edge summaries. This can reduce apparent result availability, but it prevents treating data-pipeline failures as strategy outcomes.
 ```
+
+## 2026-05-26 - P409 proposed - live2 current-OI entry baseline completed
+
+Files:
+
+```text
+research_tools/anomaly_live2/execution.py
+research_tools/anomaly_live2/position_supervisor.py
+research_tools/anomaly_live2/state.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+```
+
+Intent:
+
+```text
+Make live2 position management actually compare current open interest after entry against the current open interest baseline captured for the protected entry. Fix the state-store boundary that prevented current OI snapshots from being persisted by the OI poller.
+```
+
+Changes:
+
+```text
+- SymbolStateStore.update_open_interest now accepts and forwards current_* OI fields.
+- Live2ExecutionEngine fetches current OI through the explicit exchange boundary after actual fill and verified initial stop.
+- Live2ProtectedPosition stores entry_current_oi source/status/reason plus value/timestamps.
+- Live2PositionSupervisor uses current-OI-vs-entry-current-OI for the OI-down early-exit branch and artifacts comparability fields.
+- The 5m historical OI comparison remains visible as context, not as the OI-down trigger baseline.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Focused smoke:
+
+```text
+Fake exchange execute_selected captured entry_current_oi_open_interest=12345.0 into the protected position. SymbolStateStore.update_open_interest persisted current_oi_open_interest=11900.0 without TypeError.
+```
+
+Risk:
+
+```text
+The current-OI baseline is captured only after stop verification, intentionally after safety protection. It is close to actual entry but not an exchange-fill-timestamp OI tick. Binance current OI remains a polled endpoint, so use artifacts before treating this as a high-frequency liquidation signal.
+```
+

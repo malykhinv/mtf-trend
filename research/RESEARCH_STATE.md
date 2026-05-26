@@ -1,5 +1,87 @@
 # Anomaly Research State
 
+## 2026-05-26 - P409 live2 current-OI entry baseline completed
+
+Current commit: 7611fbb9d43368dbc82b6ae3c5fb4dd7c883406e on GitHub branch `codex/pno-anomaly-continuation-lab`; patch status: PROPOSED against uploaded workspace.
+
+Finding: the previous P408 current-OI work was incomplete. The OI poller passed `current_*` fields into `SymbolStateStore.update_open_interest`, but the store method did not accept them, so the poller could fail with `TypeError` instead of refreshing current OI. The execution engine also persisted signal-time current OI into the protected position, while the supervisor's OI-down exit compared 5m historical OI against the entry 5m snapshot, not current OI against an actual entry snapshot.
+
+Patch: P409 fixes the state-store boundary, fetches a current-OI snapshot after entry fill and verified initial stop, stores that snapshot in `Live2ProtectedPosition`, and makes the early-exit OI-down branch compare later current-OI snapshots against the protected entry current-OI snapshot. The old 5m OI fields remain artifact context only for this branch.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py` passed. Focused smoke verified protected-position entry current OI capture and state-store current OI update. Literal AGENTS compile command with `launcher.py` cannot be used because `launcher.py` is absent in this workspace.
+
+Residual risk: current OI is a polled Binance USD-M endpoint, not tick-level OI. The snapshot is taken after verified stop protection to avoid delaying stop placement, so it is an entry-protection-time baseline, not a pre-stop blocking guard.
+
+## 2026-05-26 - live2 TP1 partial runner, OI monitor, source-flow velocity
+
+Current commit: UNKNOWN.
+
+Status: P408 APPLIED locally / UNKNOWN commit. Live2 now defaults to 12 USDT notional and TP1 closes 50% of the exchange position instead of flattening it. The remaining position stays protected only after a replacement stop for the remaining exchange amount is submitted, verified visible, and the old stop is cancelled/verified gone.
+
+Position context: protected positions now persist the selected category, selected source-flow velocity (`selected_source_flow_*`) and the entry-time 5m OI snapshot. The supervisor compares current OI against that entry/anomaly snapshot and includes both in early-exit artifacts. Source-flow speed is artifacted for runner and post-HTF acceptance categories.
+
+Management: early exit still uses only closed post-fill 5s candles. It can now also exit after MFE when OI falls from the entry 5m snapshot and buyer flow is exhausted, and it can structurally trail the stop on the post-TP1 remainder using recent closed post-fill 5s lows.
+
+Risk/limitation: OI is still Binance 5m open-interest history, not per-second Coinglass/tick OI. It is useful as a coarse context/exit factor, not proof of liquidation mechanics. Forward live artifacts must be analyzed before treating partial TP/trailing as expectancy-positive.
+
+Validation: focused live2 tests passed (29 passed); compileall passed for available project paths.
+
+## 2026-05-26 - live2 runner categories moved to rolling setup
+
+Current commit: UNKNOWN.
+
+Status: P407 APPLIED locally / UNKNOWN commit. Answer to the open question: no, the old live2 runner categories were not rolling. They used `_live_backtest_like_setup` with `floor(decision_open_ms, 1m)` and therefore depended on calendar-minute boundaries.
+
+Patch: `_live_backtest_like_setup` now uses the trailing contiguous 12 closed 5s candles ending at the decision candle as a rolling 60s setup. This applies to `runner_oi_confirmed`, `runner_flow`, and `runner_balanced`. `post_htf_acceptance_long` was already rolling after P405 and remains separate.
+
+Artifact contract: runner near-misses/deadline rows now expose `live_setup_alignment=rolling_60s_5s_step`, `live_setup_calendar_aligned=false`, `live_setup_setup_open_ms`, and `live_setup_setup_close_ms`.
+
+Risk/limitation: this improves live behavior but breaks direct comparability with old calendar-minute forming runner backtests. Any edge claim for runner categories now needs a rolling replay/backtest or forward live analysis under the new artifact markers.
+
+Validation: focused live2 tests passed (28 passed); compileall passed for available project paths.
+
+## 2026-05-26 - live2 run readout and early-exit patch
+
+Current commit: UNKNOWN.
+
+Status: ANALYZED + P406 APPLIED locally / UNKNOWN commit. The run `.output/results/live2_anomaly_runs/post_htf_rolling_20260526_090002` produced two artifact-confirmed live2 positions: BAS and CGPT. SKYAI appears in rejects/dependency events, but this run does not prove a live2-managed SKYAI trade.
+
+Important interpretation: BAS and CGPT were selected by legacy/live runner categories, not by `post_htf_acceptance_long`. Therefore they should not be used as proof that the new rolling post-HTF category enters too late. They do show the broader live2 failure mode: CGPT entered after a strong 5s push with weak HTF anomaly acceptance, then sat for about 97 minutes and closed near flat before fees.
+
+Runtime/data risk: this run had severe artifact and scheduling pressure (`live2_events.csv` about 4.6 GB, `live2_near_misses.csv` about 5.1 GB, many deadline/backlog events). Some "late entry" symptoms may be runtime lag/artifact pressure, not only strategy timing.
+
+Patch response: P406 adds a conservative post-entry early-exit supervisor based on closed post-fill 5s candles, actual fill, verified flat position, and verified old-stop cancellation. It watches for buyer-flow exhaustion, seller pressure, and OI-up/no-progress patterns. It does not change entry timing or category selection.
+
+Next: run a forward live smoke with P406 and inspect only `position_early_exit_full_close_verified` versus TP1/final closes. Separately, reduce artifact spam/deadline pressure before optimizing rolling length. If earlier pump capture is still desired, test rolling30/45 in shadow/backtest first, not as an immediate live default.
+
+## 2026-05-26 - live2 rolling post-HTF acceptance update
+
+Current commit: UNKNOWN.
+
+Status: P405 APPLIED locally / UNKNOWN commit. Follow-up to P404: post-HTF acceptance no longer depends on calendar 1m boundaries. HTF is now a rolling 60s window built from the 12 closed 5s candles immediately before the 6 closed 5s confirmation window.
+
+Startup data policy: do not load 75m of universal 5s/aggTrades. live2 loads a lightweight 75m HTF baseline from raw Binance 1m klines, preserving real quote volume and number_of_trades; the existing aggTrade warmup remains short/default 15m. This gives immediate HTF baseline without pretending we have full rolling 5s history for the whole market.
+
+New guard: `post_htf_acceptance_long` rejects long entries when OI context is ok, OI change over 3x5m is positive, and 15m price context is negative (`oi_up_price_down_blocked`). This targets the screenshot pattern: price under pressure while OI climbs.
+
+Risk/limitation: rolling HTF uses real 5s flow; baseline is real-flow raw 1m kline baseline, not rolling 5s baseline. Artifacts expose `post_htf_acceptance_htf_alignment=rolling_60s_5s_step` and `post_htf_acceptance_htf_calendar_aligned=false`.
+
+Validation: compileall passed for available paths; focused live2 tests passed (25 passed).
+
+## 2026-05-26 - live2 post-HTF acceptance long enabled
+
+Current commit: UNKNOWN.
+
+Status: P404 APPLIED locally / UNKNOWN commit. The researched long category `post_htf_acceptance_long` is now part of the default live2 category contract and can trade through the existing live2 execution pipeline when runtime readiness and entry guards allow new entries.
+
+Contract: closed 1m HTF anomaly first; no decision inside that HTF candle; exactly 6 closed 5s candles after HTF close; ltf6 return >= 0.5%; structural risk from signal close to closed HTF anomaly low-buffered stop in [1.5%, 5.0%]; ltf6 last3 quote share <= 50%; ltf6 top1 quote share <= 75%; prior_spike_count_24h <= 3. TP1 is 1.5R from the live signal price and structural stop.
+
+Artifact separation: selected events carry `category_id=post_htf_acceptance_long`, `post_htf_acceptance_artifact_mode=post_htf_acceptance_long`, and detailed `post_htf_acceptance_*` fields in `live2_events.csv` data_json. Non-selected post-actionable cases expose the same key fields in `live2_near_misses.csv`.
+
+Validation: compileall passed for available project paths; focused live2 tests passed (23 passed). `launcher.py` is absent in this workspace.
+
+Residual risk: this is live forward validation, not edge proof. The live prior context is 24h while the discovery label used legacy 72h naming; artifacts include `post_htf_acceptance_prior_context_parity_note`. First run should be analyzed by category and artifact marker before trusting expectancy.
+
 ## 2026-05-25 - post-HTF fader/short research state
 
 Current commit: UNKNOWN.
@@ -2766,6 +2848,18 @@ Next validation: apply P331-P345, run compileall, then run a short live2 smoke. 
 
 Current commit: UNKNOWN.
 
+## 2026-05-26 - short/fader 30d research state
+
+Current commit: UNKNOWN.
+
+The 30d `bare_htf_short_discovery_30d_1m_5s` run does not prove a tradable broad short edge. The full live-filtered strategy is strongly negative: 191 closed, sum_net -120.34%, median -1.15%, winrate 29.8%. Data honesty is acceptable except for cache-snapshot universe survivorship/listing bias; flow uses real number_of_trades/quote_volume, not proxy.
+
+Main research finding: early post-HTF LTF pressure matters, but many attractive `ltf12_*` categories are not available at the original early fill and become negative if we honestly wait 12 candles. The only plausible executable candidate from this run is a 6-candle delayed rule: after the closed 1m HTF anomaly and any short-pressure trigger, wait until 6x5s context is available, require `ltf6_red_share >= 66%` and delayed risk <1.5%, then enter short with RR2.5. It produced 23 trades / 19 symbols / 13 days, +11.86% sum, 52.2% winrate, PF 1.89, top5 positive-profit share 60.7%, first/second half both positive. This is still too small for live and needs strict replay on another period/universe.
+
+Follow-up one-print/downtrend audit: a concentrated single 5s print inside the HTF anomaly plus prior downtrend is not a standalone edge. One-print and downtrend filters alone were negative. The only useful one-print refinement was pairing it with immediate LTF taker weakness after HTF close (`one_score>=0.45 & ltf6_taker<48`), but delayed6 replay is weaker than the red/risk candidate: 32 trades, +12.3% sum, WR 50%, median ~0, PF 1.42. We cannot honestly infer liquidation/short-cover from aggTrades alone; that needs liquidation feed or low-latency OI delta.
+
+Next best step: implement or script an explicit delayed-entry replay mode for this candidate rule, then run 60d/time-split validation. Do not enable live shorts from this result.
+
 ## 2026-05-25 - P403 short/fader cost-control state
 
 Current commit: UNKNOWN.
@@ -2861,3 +2955,63 @@ Current commit: UNKNOWN.
 P391 proposed after the latest post-P390 run still produced zero valid candidates and contradictory stale-looking edge artifacts. The issue is pipeline integrity: the backtest must prove that targeted aggTrade windows were planned, fetched, materialized into trusted subminute flow, and covered before final candidate collection and edge reporting. P391 adds explicit plan/fetch/materialize/coverage/funnel/verdict artifacts and disables edge/grid summaries when the run is data-invalid.
 
 Next validation: apply P391, run compileall, then rerun a small 1m/5s slice. Inspect `targeted_flow_plan.csv`, `targeted_flow_fetch.csv`, `targeted_flow_materialize.csv`, `targeted_flow_coverage.csv`, `anomaly_funnel.csv`, and `anomaly_run_verdict.csv`. Only interpret PnL if `valid_backtest=true`.
+
+## 2026-05-26 - Long continuation from bare HTF anomaly, structural-stop status
+
+Current commit: UNKNOWN.
+
+The fixed-percent long SL exploration is invalid for strategy conclusions. Pump Awakening edge claims must use graphically/structurally justified stops only.
+
+Latest structural-only artifact set: `.output/results/bare_htf_short_discovery_30d_1m_5s/long_structural_discovery_analysis/`.
+
+Status:
+- Long continuation after closed 1m HTF anomaly is more promising than the short-fader hypothesis on the same artifacts.
+- Broad local/recent post-close structural stops are negative; they only become positive under momentum filters and still have poor median trade quality.
+- Broad HTF-anomaly-low structural stop is positive but dirty: best broad row wait4/RR2.0 has 622 trades, 210 symbols, 31 days, WR 42.4%, avg +0.266%, median -0.369%, sum +165.2%, PF 1.24.
+- Best current candidate category: wait4/RR2.0, SL under HTF anomaly low, `ltf4_ret>0 & prior_spikes<=3`: 358 trades, 180 symbols, 31 days, WR 44.7%, avg +0.507%, median -0.180%, sum +181.5%, PF 1.53, top5 positive share 25.0%.
+
+Interpretation:
+- This is not a clean final edge yet because the median trade remains negative and the broad edge comes from winners/time exits, not from most trades being good.
+- The structural idea worth testing next is continuation after anomaly reclaim/hold with HTF-low invalidation, not short fading and not fixed-percent risk.
+- Live/backtest parity is not established until live2/backtest both implement the same post-HTF entry timing, structural HTF-low stop, stale/drift/RR guards, and actual-fill risk accounting.
+
+Next best test:
+Implement a minimal honest long-discovery mode that trades only the candidate structural contract, writes reject funnel and structural-risk fields, then run a small parity backtest before any live use.
+
+## 2026-05-26 - Long quality candidate update
+
+Current commit: UNKNOWN.
+
+Quality-over-frequency search found a stronger structural long candidate than the broad wait4/RR2 row:
+
+- Entry timing: wait 6 closed 5s candles after closed 1m HTF anomaly.
+- Rule: `ltf6_ret>0.5% & risk 1.5-5%`.
+- Stop: structural SL under the closed HTF anomaly low, no fixed-percent SL.
+- Exit tested: RR1.5.
+- Metrics: 215 trades, 132 symbols, 30 days, WR 53.5%, avg +0.785%, median +0.391%, sum +168.8%, PF 1.78, top5 positive share 19.9%, max-symbol positive share 5.0%, first half +68.9%, second half +99.9%.
+
+This improves the broad structural baseline at the cost of fewer trades: lower top dependence, higher winrate, positive median, and slightly higher total sum. The cleaner RR1.0 variant has WR 56.7%, median +0.598%, top5 share 17.1%, but lower total sum (+117.2%).
+
+Current status: prefer the wait6/RR1.5 quality candidate for the next honest implementation test. It is still research-only until validated out-of-sample and implemented with live/backtest parity.
+
+## 2026-05-26 - Long candidate nature read
+
+Current commit: UNKNOWN.
+
+The current wait6 long rule should not be understood as "buy because 30s return is >0.5%". That is only a cheap proxy.
+
+Working nature hypothesis:
+- HTF candle shows real awakening flow.
+- After HTF close, the market does not immediately reject the move.
+- The first 30s of 5s candles show post-anomaly acceptance/continuation while structural invalidation remains under HTF low.
+- Best cases are not single-print blowoffs: distributed early flow and moderate taker share are healthier than one 5s print or extreme buyer chase.
+- Clean prior history helps; repeated prior spikes/fades make the same continuation less trustworthy.
+
+Useful evidence from nature audit:
+- Base wait6/RR1.5 rule: 215 trades, WR 53.5%, median +0.391%, PF 1.78, top5 share 19.9%.
+- Wins and losses have similar median `ltf6_ret`; therefore `ltf6_ret` alone is not the edge explanation.
+- `prior_spikes<=3 & last3_quote_share<=50%`: 100 trades, WR 64.0%, median +1.08%, sum +133.0%, PF 3.39, but top share rises to 28.6%.
+- `taker<=55%`: 104 trades, WR 61.5%, median +1.18%, PF 2.23, but top share rises to 30.9%.
+- Very concentrated one-print confirmation is bad; top one 5s quote share >75% was negative in the candidate set.
+
+Next implementation should express this as a nature contract, not a naked momentum rule: post-HTF acceptance, structural HTF-low invalidation, distributed/non-blowoff 5s confirmation, controlled risk, and prior-history cleanliness.

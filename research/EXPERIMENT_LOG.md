@@ -1,4 +1,96 @@
 
+## 2026-05-26 - P408 live2 partial-runner validation plan
+
+```text
+Patch: P408 partial TP1 + OI/flow-speed management.
+Purpose: validate real live behavior after TP1 no longer flattens the whole position.
+
+Required first run checks:
+1. New entries use about 12 USDT notional unless explicitly overridden.
+2. TP1 emits `position_tp1_partial_close_verified`, not full close, and the protected position remains with `status=tp1_partial_protected_stop_verified`.
+3. The partial TP event shows old stop id, new stop id, remaining exchange amount, and actual reduce-only fill.
+4. Later remainder outcomes separate `position_early_exit_full_close_verified`, `position_structural_stop_trail_verified`, and final stop settlements.
+5. Analyze OI fields: entry 5m OI, current 5m OI, `post_entry_oi_change_pct_from_entry_5m`, and source-flow quote/sec/trades/sec.
+
+Interpretation rule: this is execution/management validation first. OI is coarse Binance 5m history, so do not claim liquidation detection from it without a lower-latency source.
+```
+
+## 2026-05-26 - P405 rolling post-HTF live2 validation plan
+
+```text
+Patch: P405 rolling HTF update after P404.
+Purpose: validate that live2 now trades the post-HTF acceptance category without calendar-minute anchoring and without expensive full-market 75m 5s warmup.
+
+Required first run checks:
+1. `startup_htf_baseline_warmup_completed` exists and shows raw 1m HTF baseline candles loaded.
+2. Selected/rejected post_htf rows show `post_htf_acceptance_htf_alignment=rolling_60s_5s_step` and `post_htf_acceptance_htf_calendar_aligned=false`.
+3. Any OI-up/price-down case is rejected with `oi_up_price_down_blocked`.
+4. Actual orders, if any, use 6 USDT notional unless explicitly overridden.
+5. Analyze P405 forward rows separately from P404/calendar-minute assumptions.
+
+Interpretation rule: baseline is real 1m kline flow baseline, not rolling 5s baseline. This is the deliberate cost/parity tradeoff to avoid loading universal 1s/5s history.
+```
+
+## 2026-05-26 - P404 live2 post-HTF acceptance long validation plan
+
+```text
+Patch: P404 live2 post_htf_acceptance_long enabled.
+Purpose: forward-validate the best long post-HTF acceptance candidate through real live2 entry guards and exchange execution path.
+
+Required first run checks:
+1. Confirm `live2_events.csv` has selected/rejected rows with `category_id=post_htf_acceptance_long` or `post_htf_acceptance_artifact_mode=post_htf_acceptance_long`.
+2. Confirm selected rows used closed HTF timestamps and exactly 6 post-close closed 5s candles.
+3. Confirm entry_guard accepted/rejected from live price, not signal price reuse.
+4. Confirm actual entry fill, stop order id, stop price, and integrity status are present for any real order.
+5. Analyze post_htf rows separately from runner_oi_confirmed/runner_flow/runner_balanced.
+
+Interpretation rule: first live run is safety/parity validation only unless enough real fills accumulate. Do not infer edge from near-misses or one/two trades.
+```
+
+## 2026-05-26 - bare HTF short/fader 30d category audit
+
+```text
+Run: .output/results/bare_htf_short_discovery_30d_1m_5s
+Mode: 1m/5s bare_htf_short_fader, 30d, strict HTF prefilter quote>=10/trades>=8/HTF return>=1.5%, RR2.5 fixed short, adverse 0.05% entry/exit slippage, fees 0.04% per side.
+
+Quality: honesty report has 0 failures, but universe scope is cache_snapshot_scan, so survivorship/listing bias remains. Flow is real: trade_count_proxy_rows=0; entry flow source is cached_1s_aggregated_to_5s number_of_trades/quote_volume. Targeted 1s plan: 167930 coarse candidates, 166845 dropped by strict prefilter, 1085 targeted windows, 1040 ready, 45 fetch_not_ok.
+
+Funnel: 4427 unique HTF anomaly events / 5553 rows; only 215 events had full post-close LTF windows and short-pressure triggers; 215 raw closed trades; 191 live-filtered closed trades plus 24 max-position skips.
+
+Baseline result: live-filtered all trades are not tradable: 191 closed, sum_net -120.34%, avg -0.63%, median -1.15%, WR 29.8%, stop rate 67.5%.
+
+In-sample category discovery found broad post-close pressure motifs, but most `ltf12_*` positives are not executable at the original early fill because the 12-candle features are only known after 60s. Delayed-entry replay shows the broad `ltf12_red>=50 & taker<48` motif turns negative if entry waits until 12 candles close.
+
+Most honest executable candidate from this run: wait 6x5s after HTF close / trigger, require ltf6_red_share>=66% and delayed risk<1.5%, then RR2.5 short. Replay: 23 trades, 19 symbols, 13 days, WR 52.2%, avg +0.52%, median +0.25%, sum +11.86%, PF 1.89, top5 positive-profit share 60.7%, max-symbol positive-profit share 21.0%, first half +6.78%, second half +5.08%. This is a weak but plausible research candidate, not live-ready.
+
+Small stronger motifs: lower_high_close_down + early red pressure remains interesting but only 10-12 trades; close_below_htf_close + weak taker has 16 trades but top dependence is high. These are watchlist only.
+
+Exit readout: all-trades RR/BE/time-exit variants remain negative. On the candidate subsets, full RR2.5/RR3 works better than RR1.0-1.5 and partial exits; BE generally reduces median or winrate. Early time exits raise winrate but reduce expectancy. Current best interpretation: if short is taken, it needs room for a 2.5R runner and strict pre-entry risk cap; do not scalp it at 1R by default.
+```
+
+## 2026-05-26 - one-print/downtrend short-fader audit
+
+```text
+Run: .output/results/bare_htf_short_discovery_30d_1m_5s
+New artifacts:
+- short_fader_category_analysis/one_print_downtrend_features.csv
+- short_fader_category_analysis/one_print_downtrend_rule_audit.csv
+- short_fader_category_analysis/one_print_downtrend_delayed6_rule_audit.csv
+
+Question: whether a coin in downtrend with a single concentrated HTF up-print is a better short setup, consistent with short-cover / liquidation squeeze rather than organic pump awakening.
+
+Method: for each live-filtered event, read the cached 5s candles inside the anomalous 1m HTF candle and compute top-5s concentration of quote volume, trade count, and absolute return; taker-buy share on the top quote candle; total taker-buy share; plus pretrend from cached 1m/5m candles before the anomaly. Then evaluate current-fill and honest delayed6 replay categories.
+
+Result: downtrend alone is bad, one-print alone is bad, and one-print+downtrend is still bad/fragile. Examples: one_score>=0.55 had 33 trades, sum -29.2%; quote_top1>=0.60 had 41 trades, sum -32.2%; pre1m30_down had 39 trades, sum -34.6%; one_score>=0.55 & pre1m30_down had 11 trades, sum -18.6%.
+
+Useful refinement: one-print only helps when paired with immediate post-close LTF weakness. Honest delayed6 replay:
+- one_score>=0.45 & ltf6_taker<48: 32 trades, 25 symbols, WR 50.0%, avg +0.38%, median ~0.0%, sum +12.3%, PF 1.42, top5 positive share 63.3%.
+- quote_top1>=0.50 & ltf6_taker<48: 34 trades, WR 50.0%, avg +0.23%, median ~0.0%, sum +7.7%, PF 1.26.
+These are weaker than the prior delayed6 candidate `ltf6_red_share>=66% & delayed risk<1.5%`.
+
+Interpretation: the liquidation/short-cover story is plausible as a label, but not proven from available data. AggTrades show aggressive buy flow, not whether it is short close versus new long. OI is 5m/as-of and not available fast enough for a 30s entry. Without liquidation feed or lower-latency OI delta, do not market this as liquidation detection. Treat it as "concentrated one-print upthrust that fails to attract follow-through".
+```
+
 ## 2026-05-25 - P403 short/fader strict prefilter validation plan
 
 ```text
@@ -3845,3 +3937,86 @@ Acceptance for P316: after P311-P315 are applied, `run-anomaly-live2` emits `dea
 Not accepted yet: no executable entry guard, no real order placement, no actual fill, no verified stop, no TP/BE position supervision, and no profitability claim. `new_entries_allowed=false` remains mandatory.
 Next experiment after P316: add executable-entry guards for stale signal, live-price drift, TP1 already touched, and RR collapsed before any execution code can submit an order.
 ```
+## 2026-05-26 - Long continuation search from bare HTF anomaly artifacts, structural SL only
+
+Current commit: UNKNOWN.
+
+Analyzed `.output/results/bare_htf_short_discovery_30d_1m_5s` for long continuation after closed 1m HTF anomaly with post-close 5s confirmation. The first exploratory fixed-percent SL variants are considered invalid for strategy conclusions after review: fixed 1%/1.5% stops are not graphically/structurally justified and must not be used as evidence for Pump Awakening edge.
+
+New artifacts were written under `.output/results/bare_htf_short_discovery_30d_1m_5s/long_structural_discovery_analysis/`:
+- `long_structural_grid_summary.csv`
+- `long_structural_rule_search_selected.csv`
+- `long_structural_best_live_filtered_trades.csv`
+- `long_structural_data_quality_summary.csv`
+
+Execution contract: entry at next 5s open after 4/6/12/24 closed post-HTF candles, adverse 5 bps entry/exit slippage, 4 bps fee per side, stop-first same-candle ordering, cap1 live-filtered portfolio summaries. Data quality was acceptable for flow fields in this artifact set: real cached `number_of_trades` and real cached/1s-aggregated `quote_volume`, no trade-count proxy rows in candidate set.
+
+Structural SL results: local/recent post-close lows are not broadly good without filtering; broad local-stop grids are negative. The only broad positive structural model is the wide stop under the HTF anomaly low. Best broad row: wait4, RR2.0, stop under HTF anomaly low, 622 trades / 210 symbols / 31 days, winrate 42.4%, avg +0.266%, median -0.369%, sum +165.2%, PF 1.24, top5 positive share 22.4%. This is not clean enough as a final strategy because median trade is negative and many exits are time exits.
+
+Best honest category candidates after applying category rule before cap1:
+- wait4, RR2.0, HTF-low SL, `ltf4_ret>0 & prior_spikes<=3`: 358 trades / 180 symbols / 31 days, winrate 44.7%, avg +0.507%, median -0.180%, sum +181.5%, PF 1.53, top5 positive share 25.0%.
+- wait4, RR2.0, HTF-low SL, `ltf4_ret>0 & red<=50`: 409 trades / 177 symbols / 31 days, winrate 44.7%, avg +0.406%, median -0.268%, sum +165.9%, PF 1.36, top5 positive share 30.2%.
+- wait12, RR2.5, HTF-low SL, `ltf12_ret>0 & prior_spikes<=3`: 336 trades / 186 symbols / 31 days, winrate 44.9%, avg +0.458%, median -0.272%, sum +153.8%, PF 1.46, top5 positive share 29.3%.
+
+Local structural stops can be made positive only by momentum filters such as `ltf4_ret>0.3%`, but the profile is worse: median remains deeply negative, stop rate is high, and top-positive dependence rises. Example: wait4, RR2.5, post-close-window-low SL, `ltf4_ret>0.3%`: 419 trades / 167 symbols, winrate 39.1%, avg +0.366%, median -0.724%, sum +153.2%, PF 1.44, top5 positive share 36.9%. This looks more like runner-tail harvesting with tight structural stops than a clean setup.
+
+Research verdict: long continuation is more promising than short fading on this artifact set, but not proven live-ready. The honest candidate is not "fixed SL"; it is a continuation trade after HTF anomaly with SL under HTF anomaly low, optionally filtered by early post-close 5s continuation and low prior spike count. Remaining risk: 30d/snapshot dependence, negative median trade, many time exits, broad result depends on accepting a wide HTF structural stop, and live2 parity still needs an explicit implementation of the same structural stop contract and entry timing.
+
+## 2026-05-26 - Long quality-over-frequency structural filter search
+
+Current commit: UNKNOWN.
+
+Follow-up question: can we sacrifice trade count to reduce top dependency and improve winrate, median and total sum while keeping structural SL only?
+
+Artifact: `.output/results/bare_htf_short_discovery_30d_1m_5s/long_structural_discovery_analysis/long_structural_htflow_quality_limited.csv`.
+
+Result: yes, the best current quality candidate is wait6/RR1.5 with HTF anomaly low structural stop and rule `ltf6_ret>0.5% & risk 1.5-5%`. This waits 6 closed 5s candles after HTF close, requires post-close continuation of at least +0.5%, and avoids both too-tight/noisy and too-wide structural risk.
+
+Metrics: 215 trades / 132 symbols / 30 days, WR 53.5%, avg +0.785%, median +0.391%, sum +168.8%, PF 1.78, top5 positive share 19.9%, max-symbol positive share 5.0%, first half +68.9%, second half +99.9%. Compared with broad wait4/RR2 HTF-low row, this reduces trades 622 -> 215, raises WR 42.4% -> 53.5%, median -0.369% -> +0.391%, sum +165.2% -> +168.8%, and top5 share 22.4% -> 19.9%.
+
+More conservative/high-winrate variant: wait6/RR1.0 with the same `ltf6_ret>0.5% & risk 1.5-5%` rule: 233 trades / 132 symbols / 30 days, WR 56.7%, avg +0.503%, median +0.598%, sum +117.2%, PF 1.51, top5 positive share 17.1%, max-symbol positive share 4.3%. This is cleaner but gives up total expectancy.
+
+Interpretation: the improvement is coherent and not just a top-trade filter: it uses only entry-time-visible features, improves both halves, and lowers top concentration. Still not proven out-of-sample; this should be implemented as a minimal honest long-discovery rule and validated on another period/cache snapshot before live.
+
+## 2026-05-26 - Long candidate nature audit
+
+Current commit: UNKNOWN.
+
+Question: whether the wait6 `ltf6_ret>0.5% & risk 1.5-5%` entry is just a dumb momentum rule or a proxy for pump nature.
+
+Artifacts:
+- `.output/results/bare_htf_short_discovery_30d_1m_5s/long_structural_discovery_analysis/long_quality_candidate_nature_features.csv`
+- `.output/results/bare_htf_short_discovery_30d_1m_5s/long_structural_discovery_analysis/long_quality_candidate_nature_summary.csv`
+- `.output/results/bare_htf_short_discovery_30d_1m_5s/long_structural_discovery_analysis/long_quality_candidate_nature_bins.csv`
+- `.output/results/bare_htf_short_discovery_30d_1m_5s/long_structural_discovery_analysis/long_quality_candidate_nature_rule_checks.csv`
+
+Interpretation: `ltf6_ret>0.5%` is a mechanical proxy, not the final explanation. The underlying nature appears to be post-anomaly acceptance: after the closed 1m HTF anomaly, price does not immediately fade back through the anomaly close, keeps a meaningful structural invalidation under HTF low, and continues upward for 30s without requiring a single-print blowoff.
+
+Evidence:
+- Base candidate: 215 trades / 132 symbols / 30 days, WR 53.5%, median +0.391%, sum +168.8%, PF 1.78, top5 share 19.9%.
+- Wins and losses have similar median `ltf6_ret` (~0.80-0.87%), so the raw 30s return alone does not explain outcome.
+- Distributed flow matters: top one 5s quote-volume share 25-40% was best among broad bins (109 trades, WR 56.0%, median +0.55%, sum +115.1%); single-print concentration >75% was bad (9 trades, WR 22.2%, median -0.89%).
+- Moderate taker share is better than extreme buyer aggression: `conf_taker_share` 45-55% produced high-quality outcomes; `taker<=55%` rule had 104 trades, WR 61.5%, median +1.18%, PF 2.23, but higher top share (30.9%).
+- Late-volume chase is worse than early burst then acceptance: `last3_quote_share<=50%` had 131 trades, WR 56.5%, median +0.44%, sum +125.7%; `prior_spikes<=3 & last3_quote_share<=50%` had 100 trades, WR 64.0%, median +1.08%, sum +133.0%, PF 3.39, but top share rose to 28.6%.
+- Prior pump history matters: `prior_spikes<=3` had 163 trades, WR 57.1%, median +0.48%, sum +149.6%, PF 2.17, top share 21.6%; higher prior-spike buckets degraded median and stop rate.
+
+Research conclusion: the entry should not be described as "buy after +0.5% in 30s". It should be described as "buy post-anomaly acceptance": closed HTF flow anomaly, no immediate fade, distributed/non-single-print 5s confirmation, controlled structural risk to HTF low, and preferably clean prior history. The raw `ltf6_ret` threshold is only the cheapest measurable trigger for this acceptance.
+
+Daily grouping artifact for the `prior_spikes<=3 & last3_quote_share<=50%` nature refinement was written to `.output/results/bare_htf_short_discovery_30d_1m_5s/long_structural_discovery_analysis/long_quality_prior3_last3le50_by_day.csv`. It contains 100 cap1-filtered trades / 78 symbols, total +132.96%, WR 64.0%, median +1.08%.
+
+## 2026-05-26 - live2 post_htf_rolling_20260526_090002 readout
+
+Current commit: UNKNOWN.
+
+Run: `.output/results/live2_anomaly_runs/post_htf_rolling_20260526_090002`.
+
+Confirmed from artifacts:
+- BAS was a live2-managed long selected as `runner_balanced`, filled near 0.0241794, closed by TP1/full close near 0.024423 after about 8.5 minutes, gross positive before fees.
+- CGPT was a live2-managed long selected as `runner_oi_confirmed`, filled near 0.0251 and finally closed near flat after about 97 minutes. It had strong LTF push but weak post-HTF anomaly acceptance, so it is an example of stale/stalled flow risk.
+- SKYAI has rejects/dependency/deadline events in this run but no artifact-confirmed selected/fill/protected-position lifecycle, so it is not a valid live2 trade sample from this folder.
+
+Key limitation: these trades were not selected by `post_htf_acceptance_long`, so they cannot prove that the new rolling post-HTF category itself is late. They do prove that the current live2 runner path needs post-entry stale-flow management.
+
+Runtime limitation: artifacts were very large (`live2_events.csv` about 4.6 GB and `live2_near_misses.csv` about 5.1 GB) with many deadline/backlog events. Before interpreting late entries too strongly, artifact volume and scheduler pressure need their own fix.
+
+Follow-up implemented: P406 adds closed-post-fill 5s early-exit management for flow exhaustion, seller pressure, and OI-up/no-progress stalls. Next experiment should run live2 forward and inspect early-exit artifacts against TP1/final-close outcomes.

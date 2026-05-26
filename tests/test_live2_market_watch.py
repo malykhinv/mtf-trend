@@ -20,7 +20,16 @@ from research_tools.anomaly_live2.market_data.prior_context import (
     Live2PriorContextPollConfig,
     Live2PriorContextPoller,
 )
-from research_tools.anomaly_live2.signal import Live2SignalEngine, _effective_context_status, _live_backtest_like_setup
+from research_tools.anomaly_live2.market_data.warmup import (
+    Live2StartupHtfBaselineConfig,
+    Live2StartupHtfBaselineWarmup,
+)
+from research_tools.anomaly_live2.signal import (
+    Live2SignalEngine,
+    _effective_context_status,
+    _live_backtest_like_setup,
+    _post_htf_acceptance_setup,
+)
 from research_tools.anomaly_live2.signal import Live2SignalDecision
 from research_tools.anomaly_live2.state import LIVE2_AGGTRADE_WS_SOURCE, SymbolStateStore
 from research_tools.anomaly_live2.status_grid import format_live2_status_grid
@@ -278,6 +287,34 @@ class _FakePriorContextExchange:
         )
 
 
+class _FakeHtfBaselineExchange:
+    def fetch_binance_klines(self, *, symbol, timeframe, start_timestamp_ms, end_timestamp_ms, limit=1000):
+        return [
+            [0, "1.0", "1.02", "0.99", "1.01", "10", 59_999, "1000", 42, "5", "550", "0"],
+            [60_000, "1.01", "1.03", "1.00", "1.02", "11", 119_999, "1200", 48, "6", "660", "0"],
+        ]
+
+
+def test_live2_startup_htf_baseline_warmup_loads_raw_kline_flow_fields() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    warmup = Live2StartupHtfBaselineWarmup(
+        state_store=store,
+        exchange_client=_FakeHtfBaselineExchange(),
+        config=Live2StartupHtfBaselineConfig(lookback_minutes=75, request_sleep_seconds=0.0),
+    )
+
+    result = warmup.run(("AAA/USDT:USDT",), now_ms=180_000)
+
+    assert result.status == "ready"
+    state = store.get_or_create("AAA/USDT:USDT")
+    candles = state.candle_book.rings[60_000].closed_snapshot()
+    assert len(candles) == 2
+    assert candles[-1].quote_volume == 1200.0
+    assert candles[-1].number_of_trades == 48
+    assert candles[-1].taker_buy_quote_volume == 660.0
+    assert candles[-1].first_source == "binance_futures_klines_startup_rest_1m_htf_baseline"
+
+
 def test_live2_prior_context_rolls_forward_from_live_5m_with_tolerated_gap() -> None:
     store = SymbolStateStore(("AAA/USDT:USDT",))
     state = store.get_or_create("AAA/USDT:USDT")
@@ -457,6 +494,46 @@ def test_live2_backtest_like_setup_uses_backtest_stop_and_tp1_model() -> None:
     assert setup["flow_hold_count"] == 0
 
 
+def test_live2_backtest_like_setup_uses_rolling_60s_not_calendar_minute() -> None:
+    baseline_1m = tuple(
+        _candle(timeframe_ms=60_000, open_time_ms=idx * 60_000, high=1.005, low=0.995)
+        for idx in range(60)
+    )
+    first_open_ms = 60 * 60_000 + 25_000
+    previous_close = 1.0
+    segment: list[Live2Candle] = []
+    for index in range(12):
+        close = previous_close + 0.003
+        segment.append(
+            _candle(
+                timeframe_ms=5_000,
+                open_time_ms=first_open_ms + index * 5_000,
+                open_price=previous_close,
+                high=close + 0.001,
+                low=previous_close - 0.001,
+                close=close,
+                quote_volume=75.0,
+                number_of_trades=10,
+            )
+        )
+        previous_close = close
+
+    decision = segment[-1]
+    setup = _live_backtest_like_setup(
+        closed_5s=tuple(segment),
+        closed_1m=baseline_1m,
+        decision_candle=decision,
+    )
+
+    assert setup["status"] == "ok"
+    assert setup["alignment"] == "rolling_60s_5s_step"
+    assert setup["calendar_aligned"] is False
+    assert setup["setup_open_ms"] == first_open_ms
+    assert setup["setup_open_ms"] != (decision.open_time_ms // 60_000) * 60_000
+    assert setup["closed_entry_candles"] == 12
+    assert setup["elapsed_fraction"] == 1.0
+
+
 def test_live2_setup_math_matches_backtest_pair_candidate_row() -> None:
     baseline_1m = tuple(
         _candle(timeframe_ms=60_000, open_time_ms=idx * 60_000, high=1.005, low=0.995)
@@ -534,6 +611,183 @@ def test_live2_setup_math_matches_backtest_pair_candidate_row() -> None:
         assert float(live_setup[live_key]) == pytest.approx(float(backtest_row[backtest_key]))
 
 
+def _post_htf_acceptance_candles() -> tuple[tuple[Live2Candle, ...], tuple[Live2Candle, ...], Live2Candle]:
+    baseline_1m = tuple(
+        _candle(
+            timeframe_ms=60_000,
+            open_time_ms=idx * 60_000,
+            open_price=1.0,
+            high=1.005,
+            low=0.995,
+            close=1.0,
+            quote_volume=100.0,
+            number_of_trades=10,
+        )
+        for idx in range(60)
+    )
+    htf_open_ms = 60 * 60_000
+    htf_closes = (1.002, 1.004, 1.006, 1.008, 1.010, 1.012, 1.014, 1.016, 1.018, 1.019, 1.020, 1.020)
+    htf_segment: list[Live2Candle] = []
+    previous_close = 1.0
+    for index, close in enumerate(htf_closes):
+        open_time_ms = htf_open_ms + index * 5_000
+        htf_segment.append(
+            _candle(
+                timeframe_ms=5_000,
+                open_time_ms=open_time_ms,
+                open_price=previous_close,
+                high=max(previous_close, close) + 0.001,
+                low=0.995 if index == 0 else min(previous_close, close) - 0.001,
+                close=close,
+                quote_volume=125.0,
+                number_of_trades=10,
+            )
+        )
+        previous_close = close
+    post_open_ms = htf_open_ms + 60_000
+    closes = (1.022, 1.023, 1.024, 1.025, 1.026, 1.027)
+    quote_volumes = (100.0, 110.0, 120.0, 90.0, 100.0, 110.0)
+    confirmation_segment: list[Live2Candle] = []
+    for index, (close, quote_volume) in enumerate(zip(closes, quote_volumes, strict=True)):
+        open_time_ms = post_open_ms + index * 5_000
+        confirmation_segment.append(
+            _candle(
+                timeframe_ms=5_000,
+                open_time_ms=open_time_ms,
+                open_price=previous_close,
+                high=max(previous_close, close) + 0.001,
+                low=min(previous_close, close) - 0.001,
+                close=close,
+                quote_volume=quote_volume,
+                number_of_trades=20,
+            )
+        )
+        previous_close = close
+    return baseline_1m, tuple((*htf_segment, *confirmation_segment)), confirmation_segment[-1]
+
+
+def test_live2_post_htf_acceptance_setup_uses_closed_htf_low_stop() -> None:
+    closed_1m, closed_5s, decision = _post_htf_acceptance_candles()
+
+    setup = _post_htf_acceptance_setup(
+        closed_5s=closed_5s,
+        closed_1m=closed_1m,
+        decision_candle=decision,
+    )
+
+    assert setup["status"] == "ok"
+    assert setup["confirmation_candles"] == 6
+    assert setup["htf_alignment"] == "rolling_60s_5s_step"
+    assert setup["htf_calendar_aligned"] is False
+    assert setup["htf_return_pct"] == pytest.approx(0.02)
+    assert setup["htf_quote_ratio"] == pytest.approx(15.0)
+    assert setup["htf_trade_ratio"] == pytest.approx(12.0)
+    assert setup["ltf6_return_pct"] > 0.005
+    assert setup["ltf6_last3_quote_share"] <= 0.50
+    assert setup["ltf6_top1_quote_share"] <= 0.75
+    assert setup["structural_stop_source"] == "rolling_closed_htf_anomaly_low_buffered_5bps"
+    assert setup["initial_stop_at_decision"] == pytest.approx(0.995 * (1.0 - 0.0005))
+    assert 0.015 <= float(setup["initial_risk_pct_at_decision"]) <= 0.050
+    assert setup["tp1_at_decision"] == pytest.approx(decision.close + 1.5 * (decision.close - setup["initial_stop_at_decision"]))
+
+
+def test_live2_signal_selects_post_htf_acceptance_category_with_artifact_marker() -> None:
+    closed_1m, closed_5s, decision = _post_htf_acceptance_candles()
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    state.set_universe_selection(selected=True, rank=1, reason="test", selected_at_ms=0)
+    state.update_prior_context(
+        fetched_at_ms=decision.close_time_ms,
+        context_start_ms=0,
+        context_end_ms=decision.close_time_ms,
+        rows_received=288,
+        rows_used=288,
+        prior_spike_count_24h=1,
+        prior_fast_fade_count_24h=0,
+        prior_high_24h=1.05,
+        prior_low_before_high_24h=0.99,
+        prior_low_after_high_24h=1.00,
+        spike_return_pct=0.03,
+        fast_fade_retrace_fraction=0.2,
+        source="test",
+        status="ok",
+        reason="test",
+    )
+    state.candle_book.rings[60_000].closed.extend(closed_1m)
+    state.candle_book.rings[5_000].closed.extend(closed_5s)
+
+    signal = Live2SignalEngine(category_ids=("post_htf_acceptance_long",)).evaluate(
+        state=state,
+        candle=decision,
+        actionable_reason="test",
+    )
+
+    assert signal.verdict == "selected"
+    assert signal.category_id == "post_htf_acceptance_long"
+    assert signal.features["post_htf_acceptance_artifact_mode"] == "post_htf_acceptance_long"
+    assert signal.features["post_htf_acceptance_selected"] is True
+    assert signal.signal_entry_price == decision.close
+    assert signal.initial_stop_at_decision == pytest.approx(0.995 * (1.0 - 0.0005))
+    assert signal.initial_risk_pct_at_decision == pytest.approx(
+        (decision.close - signal.initial_stop_at_decision) / decision.close
+    )
+    assert signal.tp1_at_decision == pytest.approx(decision.close + 1.5 * (decision.close - signal.initial_stop_at_decision))
+
+
+def test_live2_post_htf_acceptance_rejects_oi_up_price_down() -> None:
+    closed_1m, closed_5s, decision = _post_htf_acceptance_candles()
+    downtrend_context = tuple(
+        replace(item, close=1.08, open=1.08, high=1.08, low=1.08)
+        if item.close_time_ms <= decision.close_time_ms - 15 * 60_000
+        else item
+        for item in closed_1m
+    )
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    state.set_universe_selection(selected=True, rank=1, reason="test", selected_at_ms=0)
+    state.update_prior_context(
+        fetched_at_ms=decision.close_time_ms,
+        context_start_ms=0,
+        context_end_ms=decision.close_time_ms,
+        rows_received=288,
+        rows_used=288,
+        prior_spike_count_24h=1,
+        prior_fast_fade_count_24h=0,
+        prior_high_24h=1.05,
+        prior_low_before_high_24h=0.99,
+        prior_low_after_high_24h=1.00,
+        spike_return_pct=0.03,
+        fast_fade_retrace_fraction=0.2,
+        source="test",
+        status="ok",
+        reason="test",
+    )
+    state.update_open_interest(
+        fetched_at_ms=decision.close_time_ms,
+        latest_timestamp_ms=decision.close_time_ms,
+        previous_timestamp_ms=decision.close_time_ms - 15 * 60_000,
+        open_interest=105.0,
+        previous_open_interest=100.0,
+        open_interest_change_pct_3x5m=0.05,
+        rows_received=4,
+        source="test",
+        status="ok",
+        reason="test",
+    )
+    state.candle_book.rings[60_000].closed.extend(downtrend_context)
+    state.candle_book.rings[5_000].closed.extend(closed_5s)
+
+    signal = Live2SignalEngine(category_ids=("post_htf_acceptance_long",)).evaluate(
+        state=state,
+        candle=decision,
+        actionable_reason="test",
+    )
+
+    assert signal.verdict == "rejected_signal_contract"
+    assert "post_htf_acceptance_long:oi_up_price_down_blocked" in signal.reject_reasons
+    assert signal.features["post_htf_acceptance_oi_divergence_rejected"] is True
+
+
 def test_live2_deadline_evaluates_low_volume_real_bucket_for_backtest_parity() -> None:
     store = SymbolStateStore(("AAA/USDT:USDT",))
     engine = Live2DeadlineEngine(
@@ -582,6 +836,7 @@ class _FakeExecutionExchange:
     def __init__(self) -> None:
         self.position_amount = 0.0
         self.stop_visible = True
+        self.visible_stop_client_ids: set[str] = set()
 
     def fetch_live_account_preflight(self):
         return ExchangeLiveAccountPreflight(exchange="fake", position_mode="one_way", hedge_mode_enabled=False)
@@ -604,15 +859,21 @@ class _FakeExecutionExchange:
 
     def create_stop_market_order(self, symbol, side, amount, stop_price, *, client_order_id):
         self.stop_visible = True
+        self.visible_stop_client_ids.add(str(client_order_id))
         return {"id": f"stop-{client_order_id}"}
 
     def fetch_stop_order_by_client_order_id(self, symbol, client_order_id):
         if not self.stop_visible:
             raise LookupError("stop not visible")
+        if str(client_order_id) not in self.visible_stop_client_ids:
+            raise LookupError("stop not visible")
         return {"id": f"stop-{client_order_id}", "clientOrderId": client_order_id}
 
     def cancel_stop_order(self, symbol, order_id):
-        self.stop_visible = False
+        raw = str(order_id)
+        client_id = raw[5:] if raw.startswith("stop-") else raw
+        self.visible_stop_client_ids.discard(client_id)
+        self.stop_visible = bool(self.visible_stop_client_ids)
         return {"id": order_id, "status": "canceled"}
 
 
@@ -719,6 +980,228 @@ def test_live2_supervisor_treats_settled_stop_trigger_as_final_close() -> None:
     assert cycle.actions[0].event_type == "position_final_close_verified"
     assert engine.ready
     assert engine.protected_positions_snapshot() == ()
+
+
+def test_live2_supervisor_tp1_closes_half_and_resizes_verified_stop() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    exchange = _FakeExecutionExchange()
+    engine = Live2ExecutionEngine(
+        exchange_client=exchange,
+        config=Live2ExecutionConfig(stop_visibility_sleep_seconds=0.0),
+    )
+    assert engine.preflight().ready
+    signal = Live2SignalDecision(
+        verdict="selected",
+        reason="test",
+        category_id="test_category",
+        category_rank=1,
+        signal_entry_price=1.0,
+        initial_stop_at_decision=0.98,
+        initial_risk_pct_at_decision=0.02,
+        tp1_at_decision=1.04,
+        features={
+            "selected_source_flow_window_ms": 30_000,
+            "selected_source_flow_quote_per_second": 25.0,
+            "selected_source_flow_trades_per_second": 2.0,
+            "selected_source_flow_quote_ratio": 12.0,
+            "selected_source_flow_trade_ratio": 8.0,
+            "oi_open_interest": 100.0,
+            "oi_previous_open_interest": 98.0,
+            "oi_change_pct_3x5m": 0.0204,
+            "oi_latest_timestamp_ms": 123_000,
+        },
+    )
+    guard = Live2EntryGuardResult(
+        verdict="accepted",
+        reason="entry_guard_passed",
+        live_price=1.0,
+        signal_age_ms=100,
+        entry_price_drift_pct=0.0,
+        rr_to_tp1_at_live_price=2.0,
+    )
+    result = engine.execute_selected(state=state, signal_decision=signal, entry_guard_result=guard)
+    assert result.verdict == "selected"
+    initial = engine.protected_positions_snapshot()[0]
+    initial_stop_client_id = initial.stop_client_order_id
+    state.aggtrade_last_price = 1.041
+    supervisor = Live2PositionSupervisor(
+        exchange_client=exchange,
+        execution_engine=engine,
+        config=Live2PositionSupervisorConfig(
+            monitor_interval_ms=1,
+            stop_trigger_settle_sleep_seconds=0.0,
+            tp1_close_fraction=0.5,
+        ),
+    )
+
+    cycle = supervisor.run_cycle(store)
+
+    assert cycle.tp1_close_count == 1
+    assert cycle.final_close_count == 0
+    assert cycle.actions[0].event_type == "position_tp1_partial_close_verified"
+    assert cycle.actions[0].data["reason"] == "tp1_partial_close_verified_remaining_stop_resized"
+    protected = engine.protected_positions_snapshot()
+    assert len(protected) == 1
+    updated = protected[0]
+    assert updated.status == "tp1_partial_protected_stop_verified"
+    assert updated.amount == pytest.approx(6.0)
+    assert updated.remaining_amount == pytest.approx(6.0)
+    assert updated.tp1_close_fraction == pytest.approx(0.5)
+    assert updated.tp1_closed_amount == pytest.approx(6.0)
+    assert updated.stop_client_order_id != initial_stop_client_id
+    assert initial_stop_client_id not in exchange.visible_stop_client_ids
+    assert updated.stop_client_order_id in exchange.visible_stop_client_ids
+    assert exchange.position_amount == pytest.approx(6.0)
+    assert updated.entry_5m_oi_open_interest == pytest.approx(100.0)
+    assert updated.source_flow_quote_per_second == pytest.approx(25.0)
+
+
+def test_live2_supervisor_early_exits_when_oi_rises_and_price_stalls() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    exchange = _FakeExecutionExchange()
+    engine = Live2ExecutionEngine(
+        exchange_client=exchange,
+        config=Live2ExecutionConfig(stop_visibility_sleep_seconds=0.0),
+    )
+    assert engine.preflight().ready
+    signal = Live2SignalDecision(
+        verdict="selected",
+        reason="test",
+        category_id="test_category",
+        category_rank=1,
+        signal_entry_price=1.0,
+        initial_stop_at_decision=0.98,
+        initial_risk_pct_at_decision=0.02,
+        tp1_at_decision=1.04,
+    )
+    guard = Live2EntryGuardResult(
+        verdict="accepted",
+        reason="entry_guard_passed",
+        live_price=1.0,
+        signal_age_ms=100,
+        entry_price_drift_pct=0.0,
+        rr_to_tp1_at_live_price=2.0,
+    )
+    result = engine.execute_selected(state=state, signal_decision=signal, entry_guard_result=guard)
+    assert result.verdict == "selected"
+    position = engine.protected_positions_snapshot()[0]
+    start_ms = ((position.opened_at_ms + 4_999) // 5_000) * 5_000
+    candles = tuple(
+        Live2Candle(
+            timeframe_ms=5_000,
+            open_time_ms=start_ms + index * 5_000,
+            close_time_ms=start_ms + (index + 1) * 5_000,
+            open=1.003 if index < 3 else 1.001,
+            high=1.006 if index < 3 else 1.002,
+            low=0.999,
+            close=1.001 if index < 11 else 0.999,
+            base_volume=100.0,
+            quote_volume=1_000.0 if index < 3 else 250.0,
+            number_of_trades=40 if index < 3 else 10,
+            taker_buy_quote_volume=700.0 if index < 3 else 80.0,
+            first_trade_time_ms=start_ms + index * 5_000,
+            last_trade_time_ms=start_ms + (index + 1) * 5_000 - 1,
+            first_source=LIVE2_AGGTRADE_WS_SOURCE,
+            last_source=LIVE2_AGGTRADE_WS_SOURCE,
+            live_ws_trade_count=40 if index < 3 else 10,
+        )
+        for index in range(12)
+    )
+    store.append_closed_candles(symbol=state.symbol, candles=candles)
+    state.aggtrade_last_price = candles[-1].close
+    state.oi_status = "ok"
+    state.oi_change_pct_3x5m = 0.001
+    supervisor = Live2PositionSupervisor(
+        exchange_client=exchange,
+        execution_engine=engine,
+        config=Live2PositionSupervisorConfig(
+            monitor_interval_ms=1,
+            stop_trigger_settle_sleep_seconds=0.0,
+        ),
+    )
+
+    cycle = supervisor.run_cycle(store)
+
+    assert cycle.early_exit_close_count == 1
+    assert cycle.final_close_count == 1
+    assert cycle.actions[0].event_type == "position_early_exit_full_close_verified"
+    assert cycle.actions[0].data["reason"] == "early_exit_oi_up_price_not_progressing"
+    assert engine.protected_positions_snapshot() == ()
+    assert exchange.position_amount == 0.0
+    assert not exchange.stop_visible
+
+
+def test_live2_supervisor_does_not_early_exit_before_min_hold() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    exchange = _FakeExecutionExchange()
+    engine = Live2ExecutionEngine(
+        exchange_client=exchange,
+        config=Live2ExecutionConfig(stop_visibility_sleep_seconds=0.0),
+    )
+    assert engine.preflight().ready
+    signal = Live2SignalDecision(
+        verdict="selected",
+        reason="test",
+        category_id="test_category",
+        category_rank=1,
+        signal_entry_price=1.0,
+        initial_stop_at_decision=0.98,
+        initial_risk_pct_at_decision=0.02,
+        tp1_at_decision=1.04,
+    )
+    guard = Live2EntryGuardResult(
+        verdict="accepted",
+        reason="entry_guard_passed",
+        live_price=1.0,
+        signal_age_ms=100,
+        entry_price_drift_pct=0.0,
+        rr_to_tp1_at_live_price=2.0,
+    )
+    result = engine.execute_selected(state=state, signal_decision=signal, entry_guard_result=guard)
+    assert result.verdict == "selected"
+    position = engine.protected_positions_snapshot()[0]
+    start_ms = ((position.opened_at_ms + 4_999) // 5_000) * 5_000
+    candles = tuple(
+        Live2Candle(
+            timeframe_ms=5_000,
+            open_time_ms=start_ms + index * 5_000,
+            close_time_ms=start_ms + (index + 1) * 5_000,
+            open=1.001,
+            high=1.002,
+            low=0.999,
+            close=0.999,
+            base_volume=100.0,
+            quote_volume=500.0,
+            number_of_trades=20,
+            taker_buy_quote_volume=50.0,
+            first_trade_time_ms=start_ms + index * 5_000,
+            last_trade_time_ms=start_ms + (index + 1) * 5_000 - 1,
+            first_source=LIVE2_AGGTRADE_WS_SOURCE,
+            last_source=LIVE2_AGGTRADE_WS_SOURCE,
+            live_ws_trade_count=20,
+        )
+        for index in range(3)
+    )
+    store.append_closed_candles(symbol=state.symbol, candles=candles)
+    state.aggtrade_last_price = candles[-1].close
+    state.oi_status = "ok"
+    state.oi_change_pct_3x5m = 0.001
+    supervisor = Live2PositionSupervisor(
+        exchange_client=exchange,
+        execution_engine=engine,
+        config=Live2PositionSupervisorConfig(
+            monitor_interval_ms=1,
+            stop_trigger_settle_sleep_seconds=0.0,
+        ),
+    )
+
+    cycle = supervisor.run_cycle(store)
+
+    assert cycle.actions == []
+    assert len(engine.protected_positions_snapshot()) == 1
 
 
 def test_live2_status_grid_uses_four_column_operator_sections() -> None:

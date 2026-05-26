@@ -29,6 +29,9 @@ from .market_data.startup_tickers import Live2StartupTickerSnapshot, Live2Startu
 from .market_data.universe import Live2UniverseSelection, Live2UniverseSelector
 from .market_data.warmup import (
     Live2StartupAggTradeWarmup,
+    Live2StartupHtfBaselineConfig,
+    Live2StartupHtfBaselineResult,
+    Live2StartupHtfBaselineWarmup,
     Live2StartupWarmupConfig,
     Live2StartupWarmupProgress,
     Live2StartupWarmupResult,
@@ -113,11 +116,16 @@ class AnomalyLive2Runner:
                 tp1_close_fraction=config.position_supervisor_tp1_close_fraction,
                 breakeven_stop_offset_pct=config.position_supervisor_breakeven_stop_offset_pct,
                 flat_position_abs_epsilon=config.position_supervisor_flat_position_abs_epsilon,
+                early_exit_enabled=config.position_supervisor_early_exit_enabled,
+                early_exit_min_hold_candles=config.position_supervisor_early_exit_min_hold_candles,
+                early_exit_stall_candles=config.position_supervisor_early_exit_stall_candles,
+                early_exit_min_mfe_r=config.position_supervisor_early_exit_min_mfe_r,
             ),
         )
         self.universe_selection: Live2UniverseSelection | None = None
         self.startup_ticker_snapshot_result: Live2StartupTickerSnapshotResult | None = None
         self.startup_warmup_result: Live2StartupWarmupResult | None = None
+        self.startup_htf_baseline_result: Live2StartupHtfBaselineResult | None = None
         self.startup_context_prewarm_result: dict[str, object] | None = None
         self.session_top_tracker = Live2SessionTopTracker()
         self._last_session_top_snapshot: dict[str, object] | None = None
@@ -362,6 +370,12 @@ class AnomalyLive2Runner:
             )
             aggtrade_ready = False
             if self.universe_selection.selected_symbols:
+                self.startup_htf_baseline_result = self._run_startup_htf_baseline_warmup(writer)
+                self._set_startup_status(
+                    "HTF baseline",
+                    f"готово {self.startup_htf_baseline_result.symbols_warmed}/{self.startup_htf_baseline_result.symbols_requested} · "
+                    f"1m candles {self.startup_htf_baseline_result.candles_loaded}",
+                )
                 self.startup_warmup_result = self._run_startup_aggtrade_warmup(writer)
                 self._set_startup_status(
                     "прогрев",
@@ -1233,6 +1247,7 @@ class AnomalyLive2Runner:
             if self.startup_ticker_snapshot_result is None
             else self.startup_ticker_snapshot_result.as_dict(),
             "startup_warmup": None if self.startup_warmup_result is None else self.startup_warmup_result.as_dict(),
+            "startup_htf_baseline": None if self.startup_htf_baseline_result is None else self.startup_htf_baseline_result.as_dict(),
             "startup_context_prewarm": self.startup_context_prewarm_result,
         }
 
@@ -1450,6 +1465,7 @@ class AnomalyLive2Runner:
             if self.startup_ticker_snapshot_result is None
             else self.startup_ticker_snapshot_result.as_dict(),
             "startup_warmup": None if self.startup_warmup_result is None else self.startup_warmup_result.as_dict(),
+            "startup_htf_baseline": None if self.startup_htf_baseline_result is None else self.startup_htf_baseline_result.as_dict(),
             "startup_context_prewarm": self.startup_context_prewarm_result,
         }
 
@@ -1637,6 +1653,8 @@ class AnomalyLive2Runner:
                     "market_data_recovery_windows": self.config.market_data_recovery_windows,
                     "startup_warmup_lookback_minutes": self.config.startup_warmup_lookback_minutes,
                     "startup_warmup_max_trades_per_symbol": self.config.startup_warmup_max_trades_per_symbol,
+                    "startup_warmup_max_pages_per_symbol": self.config.startup_warmup_max_pages_per_symbol,
+                    "startup_htf_baseline_lookback_minutes": self.config.startup_htf_baseline_lookback_minutes,
                     "max_closed_candles_per_timeframe": self.config.max_closed_candles_per_timeframe,
                     "ws_reconnect_initial_delay_seconds": self.config.ws_reconnect_initial_delay_seconds,
                     "ws_reconnect_max_delay_seconds": self.config.ws_reconnect_max_delay_seconds,
@@ -1737,6 +1755,7 @@ class AnomalyLive2Runner:
                     "symbols_requested": len(selected_symbols),
                     "lookback_minutes": self.config.startup_warmup_lookback_minutes,
                     "max_trades_per_symbol": self.config.startup_warmup_max_trades_per_symbol,
+                    "max_pages_per_symbol": self.config.startup_warmup_max_pages_per_symbol,
                     "hot_path_available": False,
                     "source": "binance_futures_aggTrades_startup_rest",
                 },
@@ -1750,10 +1769,41 @@ class AnomalyLive2Runner:
                 lookback_minutes=self.config.startup_warmup_lookback_minutes,
                 max_symbols=min(self.config.universe_max_symbols, len(selected_symbols)) if selected_symbols else 1,
                 max_trades_per_symbol=self.config.startup_warmup_max_trades_per_symbol,
+                max_pages_per_symbol=self.config.startup_warmup_max_pages_per_symbol,
                 request_sleep_seconds=self.config.startup_warmup_request_sleep_seconds,
                 error_limit=self.config.startup_warmup_error_limit,
             ),
         ).run(selected_symbols, progress=self._set_warmup_progress_status)
+        writer.write_event(result.as_event())
+        return result
+
+    def _run_startup_htf_baseline_warmup(self, writer: Live2ArtifactWriter) -> Live2StartupHtfBaselineResult:
+        selected_symbols = () if self.universe_selection is None else self.universe_selection.selected_symbols
+        writer.write_event(
+            Live2Event(
+                event_type="startup_htf_baseline_warmup_starting",
+                component=Live2Component.MARKET_DATA,
+                severity=Live2Severity.INFO,
+                message="hydrating live2 rolling HTF baseline from startup-only Binance 1m klines",
+                data={
+                    "symbols_requested": len(selected_symbols),
+                    "lookback_minutes": self.config.startup_htf_baseline_lookback_minutes,
+                    "hot_path_available": False,
+                    "source": "binance_futures_klines_startup_rest_1m_htf_baseline",
+                },
+            )
+        )
+        result = Live2StartupHtfBaselineWarmup(
+            state_store=self.state_store,
+            exchange_client=self.execution_engine.exchange_client,
+            config=Live2StartupHtfBaselineConfig(
+                enabled=True,
+                lookback_minutes=self.config.startup_htf_baseline_lookback_minutes,
+                max_symbols=min(self.config.universe_max_symbols, len(selected_symbols)) if selected_symbols else 1,
+                request_sleep_seconds=self.config.startup_htf_baseline_request_sleep_seconds,
+                error_limit=self.config.startup_htf_baseline_error_limit,
+            ),
+        ).run(selected_symbols)
         writer.write_event(result.as_event())
         return result
 

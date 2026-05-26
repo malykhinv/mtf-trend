@@ -134,9 +134,13 @@ class Live2TelegramDispatcher:
             )
 
     def notify_supervisor_action(self, action: Live2PositionSupervisorAction) -> None:
-        if action.event_type in {"position_tp1_full_close_verified", "position_tp1_filled_be_stop_verified"}:
+        if action.event_type in {
+            "position_tp1_partial_close_verified",
+            "position_tp1_full_close_verified",
+            "position_tp1_filled_be_stop_verified",
+        }:
             self.send_sync(channel="positions", text=format_tp1_message(action), symbol=action.symbol)
-        elif action.event_type == "position_final_close_verified":
+        elif action.event_type in {"position_early_exit_full_close_verified", "position_final_close_verified"}:
             self.send_sync(channel="positions", text=format_final_close_message(action), symbol=action.symbol)
         elif action.event_type == "position_integrity_error" or action.severity == Live2Severity.ERROR:
             self.send_critical_sync(
@@ -356,6 +360,19 @@ def format_tp1_message(action: Live2PositionSupervisorAction) -> str:
     realized_pnl = _float_or_none(action.data.get("realized_pnl_usdt"))
     if realized_pnl is None:
         realized_pnl = _float_or_none(position.get("realized_pnl_usdt"))
+    if action.event_type == "position_tp1_partial_close_verified":
+        remaining_amount = _float_or_none(action.data.get("exchange_position_amount"))
+        if remaining_amount is None:
+            remaining_amount = _float_or_none(position.get("remaining_amount"))
+        stop_price = _float_or_none(position.get("stop_price"))
+        return (
+            f"{symbol_emoji(action.symbol)} <b>{telegram_symbol_link(action.symbol)} TP1 50% "
+            f"{format_usdt(realized_pnl or 0.0)} USDT</b>\n\n"
+            f"Exit: {format_price(fill_price)} · amount {format_price(filled_amount)}\n"
+            f"Rest: {format_price(remaining_amount)}\n"
+            f"Stop: resized and verified at {format_price(stop_price)}"
+        )
+
     if action.event_type == "position_tp1_full_close_verified":
         return (
             f"{symbol_emoji(action.symbol)} <b>{telegram_symbol_link(action.symbol)} TP1 full "

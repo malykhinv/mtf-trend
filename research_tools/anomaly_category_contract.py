@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-CATEGORY_CONTRACT_ID = "shared_pump_category_contract_v1_live_overlay_v9"
+CATEGORY_CONTRACT_ID = "shared_pump_category_contract_v1_live_overlay_v10"
 PUMP_CATEGORY_DISCOVERY = "discovery"
 PUMP_CATEGORY_FAMILY_LIVE = "live_priority"
 PUMP_CATEGORY_FAMILY_DISCOVERY = "discovery"
@@ -42,9 +42,17 @@ class PumpCategoryContract:
     min_start_lower_wick_to_range: float | None = None
     max_start_upper_wick_to_range: float | None = None
     max_prior_fast_fade_count_72h: int | None = None
+    post_htf_acceptance_long: bool = False
+    min_post_htf_ltf6_return_pct: float | None = None
+    min_post_htf_structural_risk_pct: float | None = None
+    max_post_htf_structural_risk_pct: float | None = None
+    max_post_htf_last3_quote_share: float | None = None
+    max_post_htf_top1_quote_share: float | None = None
+    post_htf_target_r: float | None = None
 
 
 DEFAULT_PUMP_CATEGORY_IDS: tuple[str, ...] = (
+    "post_htf_acceptance_long",
     "runner_oi_confirmed",
     "runner_flow",
     "runner_balanced",
@@ -53,10 +61,23 @@ DEFAULT_PUMP_CATEGORY_IDS: tuple[str, ...] = (
 TIMEFRAME_CATEGORY_PRIORITY: dict[tuple[str, str], tuple[str, ...]] = {
     ("5m", "30s"): ("runner_flow", "runner_oi_confirmed", "runner_balanced"),
     ("1m", "15s"): ("runner_oi_confirmed", "runner_flow", "runner_balanced"),
-    ("1m", "5s"): ("runner_oi_confirmed", "runner_flow", "runner_balanced"),
+    ("1m", "5s"): ("post_htf_acceptance_long", "runner_oi_confirmed", "runner_flow", "runner_balanced"),
 }
 
 SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
+    "post_htf_acceptance_long": PumpCategoryContract(
+        category_id="post_htf_acceptance_long",
+        label="post HTF acceptance long",
+        priority=5,
+        max_prior_spike_count_72h=3,
+        post_htf_acceptance_long=True,
+        min_post_htf_ltf6_return_pct=0.005,
+        min_post_htf_structural_risk_pct=0.015,
+        max_post_htf_structural_risk_pct=0.050,
+        max_post_htf_last3_quote_share=0.50,
+        max_post_htf_top1_quote_share=0.75,
+        post_htf_target_r=1.5,
+    ),
     "runner_oi_confirmed": PumpCategoryContract(
         category_id="runner_oi_confirmed",
         label="runner OI confirmed",

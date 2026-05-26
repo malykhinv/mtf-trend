@@ -138,6 +138,11 @@ no candle/ticker-derived synthetic fill for ledger/PnL
 live ledger must write scan/guard provenance (`source_scan_mode`, `danger_cold_coverage_source`, `entry_position_guard_source`) from the opened position object
 every actionable live2 entry attempt must write artifact timing from bucket close -> signal evaluation -> entry guard -> runtime gate -> execution call, and execution must write exchange-step timing for pre-position fetch, entry order/fill, post-position fetch, stop submit, and stop visibility verification
 every post-actionable live2 signal that is not selected must be visible in `live2_near_misses.csv` with blocker stage/reasons and key flow/context fields; this artifact is diagnostic only and must not loosen live entries
+live2 post-HTF acceptance long is an enabled trading category: rolling 60s HTF anomaly from 12 closed 5s candles, then exactly 6 closed 5s candles after that rolling HTF close, then entry may be selected only from the post-close 5s decision close
+post-HTF acceptance long uses structural SL from the rolling closed HTF anomaly low with a 5 bps buffer; TP1 is 1.5R from signal entry to that structural stop; no fixed percent SL is allowed for this category
+startup HTF baseline may be loaded from raw Binance 1m klines with real quote/trade-count fields; full-market 75m 5s aggTrade backfill is not required for live startup
+post-HTF acceptance long must reject if OI context is ok, OI is rising over the 3x5m window, and 15m price context is falling
+post-HTF acceptance artifacts must include `category_id=post_htf_acceptance_long` plus `post_htf_acceptance_artifact_mode`, source-flow velocity fields, and the post_htf metric set so forward live trades and near-misses can be isolated
 no stale signal order after freshness window; default live2 freshness is 5000ms to match the backtest next-5s-candle market-entry model
 prescan decisions that arrive after max_signal_age_ms must emit reject_stale_decision_latency, distinct from execution-guard reject_stale_signal
 no order if TP1 is already reached or RR collapsed at live price
@@ -685,6 +690,8 @@ Category priority is TF-specific:
 - 1m/5s: runner_oi_confirmed, runner_flow, runner_balanced
 Live category contract is shared_pump_category_contract_v1_live_overlay_v6: live/backtest both require category-specific mark-basis, minimum range expansion, minimum initial risk, prior-whipsaw cap, prior-spike cap, and prior-fast-fade exclusion where configured. If prior-spike/fast-fade, mark, or OI context is temporarily unavailable/stale, the decision is not consumed; live retries until the decision becomes stale or receives a final reject/selected category. Discovery remains backtest-only and is never a live-entry category.
 
+After P407, live2 runner categories no longer use calendar-minute setup windows. `runner_oi_confirmed`, `runner_flow`, and `runner_balanced` evaluate a trailing contiguous rolling 60s setup built from the last 12 closed 5s candles ending at the decision candle. Baseline remains closed 1m history ending before the rolling setup window. Artifacts must expose `live_setup_alignment=rolling_60s_5s_step` and `live_setup_calendar_aligned=false`.
+
 DANGER cold coverage policy: subminute ticker-radar live has a small default precise inactive-symbol budget of 5 symbols per cycle, labeled DANGER in code and artifacts, but it is idle/health gated. It may run only when cumulative WS health is strictly above 95% and there are no active symbols, no opening position, and no open position. When gated off, artifacts must show inactive_cold_coverage_gate_reason and no full-universe cold-cycle estimate should be displayed as active coverage. This improves parity/audit coverage but increases API/WS aggTrade pressure and is not a proven production edge. Set inactive_scan_slots_per_cycle=0 to disable cold coverage completely.
 ```
 
@@ -754,14 +761,31 @@ After confirmed TP1 fill, the remaining protective stop moves to breakeven and s
 Before the first closed post-fill entry-timeframe candle exists, the monitor is waiting for structural context; this is not an OHLCV integrity error while the exchange stop and TP1 orders are already placed.
 ```
 
-### Live2 position management after P341
+### Live2 position management after P408
 
 ```text
-Live2 TP1 size is exactly 100% of the exchange position. There is no default runner remainder and no BE-stop replacement after TP1.
+Live2 default position size is 12 USDT notional. TP1 is still active, but TP1 closes 50% of the exchange position by default, not 100%.
 Live2 TP1 close uses an exchange reduce-only close with verified actual fill; it must not infer a close from candle high alone.
-A TP1 close is accepted only after the exchange position is flat and the old initial stop is cancelled/verified gone.
-If TP1 close leaves exchange exposure or the old initial stop cannot be cancelled, live2 emits a strict position-integrity error and blocks further entries.
+After partial TP1, live2 must submit and verify a replacement stop for the remaining exchange amount before accepting the lifecycle transition. Only then may it cancel and verify removal of the old initial stop.
+The remaining 50% stays supervised as `tp1_partial_protected_stop_verified`: early-exit logic can still full-close it, and structural trailing may replace the stop using closed post-fill 5s structure.
+If replacement stop creation/visibility, old-stop cancellation, or post-close position state is inconsistent, live2 emits a strict position-integrity error and blocks further entries.
+Each protected position stores the entry-time 5m OI snapshot and selected source-flow velocity so later OI/flow exits can compare current state to the anomaly/entry context.
 ```
+
+### Live2 post-entry early exit after P408
+
+```text
+Live2 may full-close a protected long before TP1 only after the entry fill and initial stop have already been verified. The early-exit decision uses only closed 5s candles whose open time is after the exchange entry fill timestamp, so it cannot use the entry candle or pre-fill tape as post-entry evidence.
+
+Default minimum hold is 6 closed 5s candles. The early exit is meant for position management, not entry proof: it can close when buyer flow has clearly faded, seller pressure appears after some MFE, OI rises while price stops progressing, OI falls from the entry 5m snapshot while flow is exhausted after MFE, or the position stalls without progress long enough to make the original pump-flow thesis stale.
+
+The close must be a reduce-only exchange close with verified fill, verified flat exchange position, and verified cancellation/removal of the old initial stop. Artifacts must expose `position_early_exit_full_close_verified` and the trigger reason. Telegram remains operator UI only; artifacts remain source of truth.
+
+Structural trailing is allowed only for the post-TP1 remainder and uses recent closed post-fill 5s lows; it must replace and verify the stop through the exchange before mutating local protected-position state.
+
+This rule must not become a fee-churning micro-scalper. It is a conservative exit/trail from stale flow, not a repeated partial-close system.
+```
+
 ---
 
 ## 6. Backtest pair-mode contracts
@@ -785,3 +809,40 @@ post_htf_close_ltf_forward_confirmation
 ```
 
 The post-HTF-forward mode first waits for HTF setup candle N to close and pass setup interest. It then searches LTF confirmation only after N closes, starting in the next HTF window. LTF left context before N may be used for rejection/context, but entry is tied to the forward LTF decision candle and must not be placed retroactively inside N. This is a late-confirmation research mode, not current live2 parity.
+
+## Structural Stop Contract For Research Edge Claims
+
+Fixed-percent SL is not a valid Pump Awakening edge claim by itself. A stop may use a small execution/microstructure buffer, but the invalidation level must be a level visible on the chart and available at decision time.
+
+Valid research stop families:
+- HTF anomaly low/high after the HTF candle is closed.
+- Post-close LTF confirmation-window swing low/high.
+- Recent closed LTF swing low/high from the confirmation window.
+
+Invalid for strategy proof:
+- Fixed 1% / 1.5% / N% stop without a structural level.
+- Stop levels selected from future candles after entry.
+- Stop levels inferred from a later chart state that live would not have known.
+
+For the current long-continuation research, the most promising structural candidate is long after a closed upward HTF anomaly and post-close 5s continuation, with long invalidation below the HTF anomaly low. This is not yet a live-ready rule; live and backtest must share the same entry timing, structural stop source, stale/drift/RR guards, and actual-fill risk base before any edge claim.
+
+## Long Post-Anomaly Acceptance Hypothesis
+
+The long continuation candidate should not be framed as buying a fixed short-term return threshold. The threshold is only a measurable proxy for acceptance.
+
+The intended nature:
+- closed HTF flow anomaly after dormancy;
+- no immediate post-close rejection/fade;
+- early LTF continuation that remains structurally invalidated by the HTF anomaly low;
+- flow distributed across several 5s candles rather than one isolated print;
+- moderate taker-buy pressure is acceptable, but extreme buyer chase is not required and may be lower quality;
+- repeated prior spikes/fades reduce trust in the same continuation.
+
+Candidate implementation should expose these fields separately in artifacts: HTF structural stop source, post-close LTF return, post-close low versus HTF close, top 5s quote-volume concentration, last-half quote-volume share, taker-buy quote share, prior-spike count, risk percent, and reject reason.
+
+## Live2 current-OI position-management baseline
+
+For live2 managed positions, current open interest is not inferred from candles and is not read through private client fields. After the actual entry fill is known and the initial stop has been verified visible, live2 may fetch a current-OI snapshot through the typed exchange boundary and persist it on the protected position as the entry current-OI baseline.
+
+During supervision, OI-down early-exit logic compares fresh current-OI snapshots from the live OI poller against that protected entry current-OI baseline. Historical 5m OI remains useful context for setup/anomaly state and artifacts, but it is not the baseline for the current-OI-down exit trigger. Missing current-OI status must stay explicit in artifacts; it must not be silently replaced by 5m historical OI.
+

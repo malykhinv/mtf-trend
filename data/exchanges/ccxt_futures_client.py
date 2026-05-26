@@ -1874,6 +1874,35 @@ class CcxtFuturesClient(ExchangeClient):
         ]
         return frame.drop_duplicates(subset=["timestamp"]).sort_values("timestamp").reset_index(drop=True)
 
+    def fetch_binance_klines(
+        self,
+        *,
+        symbol: str,
+        timeframe: Timeframe,
+        start_timestamp_ms: int,
+        end_timestamp_ms: int,
+        limit: int = DEFAULT_FETCH_BATCH_SIZE,
+    ) -> list[list[object]]:
+        """Return raw Binance futures klines with quote/trade-count columns intact."""
+
+        if self.exchange != Exchange.BINANCE:
+            raise RuntimeError("fetch_binance_klines is only available for Binance futures")
+        self._ensure_markets_loaded()
+        raw_client = cast(CcxtBinanceKlineApi, self._client)
+        return self._retry_exchange_call(
+            operation="binance_fetch_klines_raw",
+            symbol=symbol,
+            endpoint="fapiPublicGetKlines",
+            call=raw_client.fapiPublicGetKlines,
+            params={
+                "symbol": self.get_market_id(symbol),
+                "interval": timeframe.value,
+                "startTime": int(start_timestamp_ms),
+                "endTime": int(end_timestamp_ms),
+                "limit": int(limit),
+            },
+        )
+
     def fetch_open_interest(
         self,
         symbol: str,

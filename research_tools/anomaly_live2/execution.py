@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from math import isfinite
 from typing import Protocol, runtime_checkable
 
-from data.exchanges.ccxt_types import ExchangeLiveAccountPreflight, ExchangeOrderFill
+from data.exchanges.ccxt_types import ExchangeLiveAccountPreflight, ExchangeOpenInterestSnapshot, ExchangeOrderFill
 
 from .clock import utc_now_ms
 from .entry_guard import Live2EntryGuardResult
@@ -73,6 +73,15 @@ class Live2ExecutionExchange(Protocol):
 
     def cancel_stop_order(self, symbol: str, order_id: str) -> dict[str, object]:
         """Cancel a conditional stop order by exchange order id."""
+        ...
+
+
+@runtime_checkable
+class Live2CurrentOpenInterestExchange(Protocol):
+    """Optional typed exchange boundary for post-fill current OI snapshots."""
+
+    def fetch_current_open_interest(self, symbol: str) -> ExchangeOpenInterestSnapshot:
+        """Return current open interest for one symbol."""
         ...
 
 
@@ -143,11 +152,27 @@ class Live2ProtectedPosition:
     stop_client_order_id: str
     pre_position_amount: float
     post_position_amount: float
+    category_id: str
     signal_entry_price: float
     initial_risk_pct: float
     tp1_price: float
     initial_amount: float
     remaining_amount: float
+    entry_5m_oi_open_interest: float | None = None
+    entry_5m_oi_previous_open_interest: float | None = None
+    entry_5m_oi_change_pct_3x5m: float | None = None
+    entry_5m_oi_latest_timestamp_ms: int | None = None
+    entry_current_oi_open_interest: float | None = None
+    entry_current_oi_timestamp_ms: int | None = None
+    entry_current_oi_last_seen_ms: int | None = None
+    entry_current_oi_source: str = ""
+    entry_current_oi_status: str = "not_seen"
+    entry_current_oi_reason: str = ""
+    source_flow_window_ms: int | None = None
+    source_flow_quote_per_second: float | None = None
+    source_flow_trades_per_second: float | None = None
+    source_flow_quote_ratio: float | None = None
+    source_flow_trade_ratio: float | None = None
     tp1_close_fraction: float = 1.0
     tp1_closed_amount: float = 0.0
     tp1_fill_price: float | None = None
@@ -174,11 +199,27 @@ class Live2ProtectedPosition:
             "stop_client_order_id": self.stop_client_order_id,
             "pre_position_amount": self.pre_position_amount,
             "post_position_amount": self.post_position_amount,
+            "category_id": self.category_id,
             "signal_entry_price": self.signal_entry_price,
             "initial_risk_pct": self.initial_risk_pct,
             "tp1_price": self.tp1_price,
             "initial_amount": self.initial_amount,
             "remaining_amount": self.remaining_amount,
+            "entry_5m_oi_open_interest": self.entry_5m_oi_open_interest,
+            "entry_5m_oi_previous_open_interest": self.entry_5m_oi_previous_open_interest,
+            "entry_5m_oi_change_pct_3x5m": self.entry_5m_oi_change_pct_3x5m,
+            "entry_5m_oi_latest_timestamp_ms": self.entry_5m_oi_latest_timestamp_ms,
+            "entry_current_oi_open_interest": self.entry_current_oi_open_interest,
+            "entry_current_oi_timestamp_ms": self.entry_current_oi_timestamp_ms,
+            "entry_current_oi_last_seen_ms": self.entry_current_oi_last_seen_ms,
+            "entry_current_oi_source": self.entry_current_oi_source,
+            "entry_current_oi_status": self.entry_current_oi_status,
+            "entry_current_oi_reason": self.entry_current_oi_reason,
+            "source_flow_window_ms": self.source_flow_window_ms,
+            "source_flow_quote_per_second": self.source_flow_quote_per_second,
+            "source_flow_trades_per_second": self.source_flow_trades_per_second,
+            "source_flow_quote_ratio": self.source_flow_quote_ratio,
+            "source_flow_trade_ratio": self.source_flow_trade_ratio,
             "tp1_close_fraction": self.tp1_close_fraction,
             "tp1_closed_amount": self.tp1_closed_amount,
             "tp1_fill_price": self.tp1_fill_price,
@@ -576,6 +617,12 @@ class Live2ExecutionEngine:
                 timing=timing,
             )
         stop_order_id = _extract_order_id(verified_stop) or stop_order_id
+        entry_current_oi_started_at_ms = utc_now_ms()
+        timing["entry_current_oi_fetch_started_at_ms"] = entry_current_oi_started_at_ms
+        entry_current_oi = self._fetch_entry_current_open_interest(state.symbol, now_ms=entry_current_oi_started_at_ms)
+        entry_current_oi_finished_at_ms = utc_now_ms()
+        timing["entry_current_oi_fetch_finished_at_ms"] = entry_current_oi_finished_at_ms
+        timing["entry_current_oi_fetch_duration_ms"] = max(0, entry_current_oi_finished_at_ms - entry_current_oi_started_at_ms)
         protected_position = Live2ProtectedPosition(
             position_id=position_id,
             symbol=state.symbol,
@@ -589,11 +636,27 @@ class Live2ExecutionEngine:
             stop_client_order_id=stop_client_order_id,
             pre_position_amount=pre_position_amount,
             post_position_amount=post_position_amount,
+            category_id=str(signal_decision.category_id or ""),
             signal_entry_price=float(signal_entry_price),
             initial_risk_pct=actual_initial_risk_pct,
             tp1_price=float(signal_decision.tp1_at_decision or 0.0),
             initial_amount=position_delta_amount,
             remaining_amount=position_delta_amount,
+            entry_5m_oi_open_interest=_finite_float_or_none(signal_decision.features.get("oi_open_interest")),
+            entry_5m_oi_previous_open_interest=_finite_float_or_none(signal_decision.features.get("oi_previous_open_interest")),
+            entry_5m_oi_change_pct_3x5m=_finite_float_or_none(signal_decision.features.get("oi_change_pct_3x5m")),
+            entry_5m_oi_latest_timestamp_ms=_int_or_none(signal_decision.features.get("oi_latest_timestamp_ms")),
+            entry_current_oi_open_interest=_finite_float_or_none(entry_current_oi.open_interest),
+            entry_current_oi_timestamp_ms=_int_or_none(entry_current_oi.timestamp_ms),
+            entry_current_oi_last_seen_ms=_int_or_none(entry_current_oi.fetched_at_ms),
+            entry_current_oi_source=str(entry_current_oi.source or ""),
+            entry_current_oi_status=str(entry_current_oi.status or ""),
+            entry_current_oi_reason=str(entry_current_oi.reason or entry_current_oi.status or ""),
+            source_flow_window_ms=_int_or_none(signal_decision.features.get("selected_source_flow_window_ms")),
+            source_flow_quote_per_second=_finite_float_or_none(signal_decision.features.get("selected_source_flow_quote_per_second")),
+            source_flow_trades_per_second=_finite_float_or_none(signal_decision.features.get("selected_source_flow_trades_per_second")),
+            source_flow_quote_ratio=_finite_float_or_none(signal_decision.features.get("selected_source_flow_quote_ratio")),
+            source_flow_trade_ratio=_finite_float_or_none(signal_decision.features.get("selected_source_flow_trade_ratio")),
         )
         self._protected_positions[state.symbol] = protected_position
         self._total_positions_protected += 1
@@ -618,11 +681,49 @@ class Live2ExecutionEngine:
             position_id=position_id,
             details={
                 "order_notional_usdt": self.config.order_notional_usdt,
+                "entry_current_open_interest": {
+                    "symbol": entry_current_oi.symbol,
+                    "exchange_symbol": entry_current_oi.exchange_symbol,
+                    "fetched_at_ms": entry_current_oi.fetched_at_ms,
+                    "timestamp_ms": entry_current_oi.timestamp_ms,
+                    "open_interest": entry_current_oi.open_interest,
+                    "source": entry_current_oi.source,
+                    "status": entry_current_oi.status,
+                    "reason": entry_current_oi.reason,
+                },
                 "protected_position": protected_position.as_dict(),
             },
             ),
             timing=timing,
         )
+
+
+    def _fetch_entry_current_open_interest(self, symbol: str, *, now_ms: int) -> ExchangeOpenInterestSnapshot:
+        if self.exchange_client is None or not isinstance(self.exchange_client, Live2CurrentOpenInterestExchange):
+            return ExchangeOpenInterestSnapshot(
+                symbol=symbol,
+                exchange_symbol=symbol,
+                fetched_at_ms=now_ms,
+                timestamp_ms=None,
+                open_interest=None,
+                source="",
+                status="disabled",
+                reason="exchange_client_has_no_fetch_current_open_interest_boundary",
+            )
+        try:
+            return self.exchange_client.fetch_current_open_interest(symbol)
+        except Exception as exc:
+            self._total_exchange_errors += 1
+            return ExchangeOpenInterestSnapshot(
+                symbol=symbol,
+                exchange_symbol=symbol,
+                fetched_at_ms=utc_now_ms(),
+                timestamp_ms=None,
+                open_interest=None,
+                source="",
+                status="error",
+                reason=f"fetch_current_open_interest_failed:{type(exc).__name__}:{str(exc)[:240]}",
+            )
 
 
     def protected_positions_snapshot(self) -> tuple[Live2ProtectedPosition, ...]:
@@ -853,6 +954,13 @@ def _finite_float_or_none(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if isfinite(parsed) else None
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
 
 
 def _extract_order_id(payload: dict[str, object]) -> str | None:

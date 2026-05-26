@@ -15,6 +15,7 @@ LIVE2_DEFAULT_MAX_CLOSED_CANDLES = 360
 LIVE2_STARTUP_AGGTRADE_REST_SOURCE = "binance_futures_aggTrades_startup_rest"
 LIVE2_AGGTRADE_WS_SOURCE = "binance_futures_aggtrade_ws"
 LIVE2_OPEN_INTEREST_SOURCE = "binance_futures_open_interest_hist_5m_poll"
+LIVE2_CURRENT_OPEN_INTEREST_SOURCE = "binance_futures_current_open_interest_poll"
 LIVE2_PRIOR_CONTEXT_SOURCE = "binance_futures_ohlcv_5m_prior_context_24h_poll"
 LIVE2_STAGE_LABELS: tuple[str, ...] = (
     "stage0",
@@ -168,6 +169,14 @@ class SymbolState:
     oi_source: str = ""
     oi_status: str = "not_seen"
     oi_reason: str = ""
+    current_oi_first_seen_ms: int | None = None
+    current_oi_last_seen_ms: int | None = None
+    current_oi_timestamp_ms: int | None = None
+    current_oi_update_count: int = 0
+    current_oi_open_interest: float | None = None
+    current_oi_source: str = ""
+    current_oi_status: str = "not_seen"
+    current_oi_reason: str = ""
     prior_context_first_seen_ms: int | None = None
     prior_context_last_seen_ms: int | None = None
     prior_context_start_ms: int | None = None
@@ -414,6 +423,12 @@ class SymbolState:
         source: str,
         status: str,
         reason: str,
+        current_fetched_at_ms: int | None = None,
+        current_timestamp_ms: int | None = None,
+        current_open_interest: float | None = None,
+        current_source: str = "",
+        current_status: str = "",
+        current_reason: str = "",
     ) -> None:
         self.updated_ms = fetched_at_ms
         if self.oi_first_seen_ms is None:
@@ -429,6 +444,17 @@ class SymbolState:
         self.oi_source = source
         self.oi_status = status
         self.oi_reason = reason
+        if current_status:
+            effective_current_seen_ms = current_fetched_at_ms if current_fetched_at_ms is not None else fetched_at_ms
+            if self.current_oi_first_seen_ms is None:
+                self.current_oi_first_seen_ms = effective_current_seen_ms
+            self.current_oi_last_seen_ms = effective_current_seen_ms
+            self.current_oi_timestamp_ms = current_timestamp_ms
+            self.current_oi_update_count += 1
+            self.current_oi_open_interest = current_open_interest
+            self.current_oi_source = current_source
+            self.current_oi_status = current_status
+            self.current_oi_reason = current_reason
         self.mark_dirty(now_ms=fetched_at_ms)
 
     def update_prior_context(
@@ -627,6 +653,14 @@ class SymbolState:
             "oi_source": self.oi_source,
             "oi_status": self.oi_status,
             "oi_reason": self.oi_reason,
+            "current_oi_first_seen_ms": self.current_oi_first_seen_ms,
+            "current_oi_last_seen_ms": self.current_oi_last_seen_ms,
+            "current_oi_timestamp_ms": self.current_oi_timestamp_ms,
+            "current_oi_update_count": self.current_oi_update_count,
+            "current_oi_open_interest": self.current_oi_open_interest,
+            "current_oi_source": self.current_oi_source,
+            "current_oi_status": self.current_oi_status,
+            "current_oi_reason": self.current_oi_reason,
             "prior_context_first_seen_ms": self.prior_context_first_seen_ms,
             "prior_context_last_seen_ms": self.prior_context_last_seen_ms,
             "prior_context_start_ms": self.prior_context_start_ms,
@@ -746,6 +780,12 @@ class SymbolStateStore:
         source: str,
         status: str,
         reason: str,
+        current_fetched_at_ms: int | None = None,
+        current_timestamp_ms: int | None = None,
+        current_open_interest: float | None = None,
+        current_source: str = "",
+        current_status: str = "",
+        current_reason: str = "",
     ) -> None:
         with self._lock:
             state = self.get_or_create(symbol)
@@ -759,6 +799,12 @@ class SymbolStateStore:
                 source=source,
                 status=status,
                 reason=reason,
+                current_fetched_at_ms=current_fetched_at_ms,
+                current_timestamp_ms=current_timestamp_ms,
+                current_open_interest=current_open_interest,
+                current_source=current_source,
+                current_status=current_status,
+                current_reason=current_reason,
             )
 
     def update_aggtrade(self, trade: Live2AggTradeEvent, *, received_at_ms: int) -> None:
@@ -812,6 +858,12 @@ class SymbolStateStore:
         source: str,
         status: str,
         reason: str,
+        current_fetched_at_ms: int | None = None,
+        current_timestamp_ms: int | None = None,
+        current_open_interest: float | None = None,
+        current_source: str = "",
+        current_status: str = "",
+        current_reason: str = "",
     ) -> None:
         with self._lock:
             state = self.get_or_create(symbol)
@@ -826,6 +878,12 @@ class SymbolStateStore:
                 source=source,
                 status=status,
                 reason=reason,
+                current_fetched_at_ms=current_fetched_at_ms,
+                current_timestamp_ms=current_timestamp_ms,
+                current_open_interest=current_open_interest,
+                current_source=current_source,
+                current_status=current_status,
+                current_reason=current_reason,
             )
 
 
@@ -891,6 +949,23 @@ class SymbolStateStore:
             for trade in trades:
                 state = self.get_or_create(trade.symbol)
                 state.update_aggtrade(trade, received_at_ms=received_at_ms)
+
+    def append_closed_candles(self, *, symbol: str, candles: tuple[Live2Candle, ...]) -> None:
+        if not candles:
+            return
+        with self._lock:
+            state = self.get_or_create(symbol)
+            for candle in sorted(candles, key=lambda item: (item.timeframe_ms, item.open_time_ms)):
+                ring = state.candle_book.rings.get(int(candle.timeframe_ms))
+                if ring is None:
+                    continue
+                existing_open_times = {int(item.open_time_ms) for item in ring.closed}
+                if int(candle.open_time_ms) in existing_open_times:
+                    continue
+                ring.closed.append(candle)
+                ring.last_closed_open_time_ms = candle.open_time_ms
+                ring.closed_count += 1
+            state.mark_dirty()
 
     def close_due_candles(self, *, now_ms: int) -> int:
         """Finalize ended real-trade candles without synthetic gap filling."""

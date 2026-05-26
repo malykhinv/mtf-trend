@@ -26,6 +26,7 @@ Live2CategoryDecisionKind = Literal["accepted", "rejected", "data_dependency_not
 
 LIVE2_BACKTEST_SETUP_TIMEFRAME_MS = 60_000
 LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS = 5_000
+LIVE2_BACKTEST_SETUP_CANDLES = LIVE2_BACKTEST_SETUP_TIMEFRAME_MS // LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS
 LIVE2_BACKTEST_BASELINE_CANDLES = 60
 LIVE2_BACKTEST_CONFIRMATION_CANDLES = 4
 LIVE2_BACKTEST_MIN_QUOTE_RATIO_START = 5.0
@@ -36,6 +37,18 @@ LIVE2_BACKTEST_MIN_HOLD_COUNT = 2
 LIVE2_BACKTEST_MAX_INITIAL_RISK_PCT = 0.16
 LIVE2_BACKTEST_STOP_BUFFER_RANGE_FRACTION = 0.05
 LIVE2_BACKTEST_TP1_R = 0.75
+POST_HTF_ACCEPTANCE_CATEGORY_ID = "post_htf_acceptance_long"
+POST_HTF_ACCEPTANCE_CONTRACT = "post_htf_acceptance_long_v1"
+POST_HTF_ACCEPTANCE_HTF_CANDLES = 12
+POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES = 6
+POST_HTF_ACCEPTANCE_BASELINE_WINDOWS = 60
+POST_HTF_ACCEPTANCE_BASELINE_WINDOW_CANDLES = 12
+POST_HTF_ACCEPTANCE_STOP_BUFFER_PCT = 0.0005
+POST_HTF_ACCEPTANCE_MIN_HTF_RETURN_PCT = 0.015
+POST_HTF_ACCEPTANCE_MIN_HTF_QUOTE_RATIO = 10.0
+POST_HTF_ACCEPTANCE_MIN_HTF_TRADE_RATIO = 8.0
+POST_HTF_ACCEPTANCE_TARGET_R = 1.5
+POST_HTF_ACCEPTANCE_OI_DIVERGENCE_WINDOW_CANDLES = 180
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,10 +131,12 @@ class Live2SignalEngine:
                 else:
                     reject_reasons.append(item)
                 continue
-            stop = float(features["initial_stop_at_decision"])
-            entry = float(features["signal_entry_price"])
-            tp1 = float(features["tp1_at_decision"])
-            initial_risk_pct = (entry / stop) - 1.0 if stop > 0 else 0.0
+            selected_features = _category_effective_features(category=category, features=features)
+            stop = float(selected_features["initial_stop_at_decision"])
+            entry = float(selected_features["signal_entry_price"])
+            tp1 = float(selected_features["tp1_at_decision"])
+            feature_initial_risk_pct = _float_or_none(selected_features.get("initial_risk_pct_at_decision"))
+            initial_risk_pct = feature_initial_risk_pct if feature_initial_risk_pct is not None else ((entry / stop) - 1.0 if stop > 0 else 0.0)
             self._total_selected += 1
             self._selected_by_category[category.category_id] += 1
             self._last_dependency_reasons = tuple(dependency_reasons)
@@ -138,7 +153,7 @@ class Live2SignalEngine:
                 dependency_reasons=tuple(dependency_reasons),
                 reject_reasons=tuple(reject_reasons),
                 features={
-                    **features,
+                    **selected_features,
                     "category_contract": CATEGORY_CONTRACT_ID,
                     "category_label": category.label,
                     "signal_dependency_reasons": tuple(dependency_reasons),
@@ -249,6 +264,11 @@ class Live2SignalEngine:
             closed_1m=closed_1m,
             decision_candle=candle,
         )
+        post_htf_acceptance = _post_htf_acceptance_setup(
+            closed_5s=closed_5s,
+            closed_1m=closed_1m,
+            decision_candle=candle,
+        )
         previous = tuple(item for item in closed_5s if item.open_time_ms < candle.open_time_ms)[-24:]
         baseline_quote = _avg([item.quote_volume for item in previous])
         baseline_trades = _avg([float(item.number_of_trades) for item in previous])
@@ -336,6 +356,13 @@ class Live2SignalEngine:
             decision_time_ms=candle.close_time_ms,
             stale_ms=self.oi_stale_ms,
         )
+        post_htf_oi_divergence = _post_htf_acceptance_oi_divergence_check(
+            closed_5s=closed_5s,
+            closed_1m=closed_1m,
+            decision_candle=candle,
+            oi_status=oi_status,
+            oi_change_pct_3x5m=state.oi_change_pct_3x5m,
+        )
         prior_context_status = _effective_context_status(
             status=state.prior_context_status,
             last_seen_ms=state.prior_context_last_seen_ms,
@@ -365,6 +392,10 @@ class Live2SignalEngine:
             "live_setup_reason": live_setup["reason"],
             "live_setup_timeframe": "1m",
             "live_setup_entry_timeframe": "5s",
+            "live_setup_alignment": live_setup.get("alignment"),
+            "live_setup_calendar_aligned": live_setup.get("calendar_aligned"),
+            "live_setup_setup_open_ms": live_setup.get("setup_open_ms"),
+            "live_setup_setup_close_ms": live_setup.get("setup_close_ms"),
             "live_setup_closed_entry_candles": live_setup.get("closed_entry_candles"),
             "live_setup_elapsed_fraction": live_setup.get("elapsed_fraction"),
             "live_setup_raw_quote_ratio": live_setup.get("raw_quote_ratio"),
@@ -383,6 +414,9 @@ class Live2SignalEngine:
             "live_setup_min_verticality_score": LIVE2_BACKTEST_MIN_VERTICALITY_SCORE,
             "live_setup_range": live_setup.get("range"),
             "live_setup_range_pct": live_setup.get("range_pct"),
+            "live_setup_flow_window_ms": live_setup.get("flow_window_ms"),
+            "live_setup_flow_quote_per_second": live_setup.get("flow_quote_per_second"),
+            "live_setup_flow_trades_per_second": live_setup.get("flow_trades_per_second"),
             "live_setup_prior_up_down_whipsaw_to_impulse_range": live_setup.get("prior_up_down_whipsaw_to_impulse_range"),
             "live_setup_flow_hold_count": live_setup.get("flow_hold_count"),
             "live_setup_start_quote_ratio_per_abs_return": live_setup.get("start_quote_ratio_per_abs_return"),
@@ -399,12 +433,67 @@ class Live2SignalEngine:
             "live_setup_baseline_trade_count_1m": live_setup.get("baseline_trade_count_1m"),
             "live_setup_baseline_range_pct_1m": live_setup.get("baseline_range_pct_1m"),
             "live_setup_baseline_source": live_setup.get("baseline_source"),
+            "post_htf_acceptance_contract": POST_HTF_ACCEPTANCE_CONTRACT,
+            "post_htf_acceptance_mode": bool(post_htf_acceptance.get("mode")),
+            "post_htf_acceptance_status": post_htf_acceptance.get("status"),
+            "post_htf_acceptance_reason": post_htf_acceptance.get("reason"),
+            "post_htf_acceptance_htf_alignment": post_htf_acceptance.get("htf_alignment"),
+            "post_htf_acceptance_htf_calendar_aligned": post_htf_acceptance.get("htf_calendar_aligned"),
+            "post_htf_acceptance_setup_timeframe": "1m",
+            "post_htf_acceptance_entry_timeframe": "5s",
+            "post_htf_acceptance_confirmation_candles": post_htf_acceptance.get("confirmation_candles"),
+            "post_htf_acceptance_required_confirmation_candles": POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES,
+            "post_htf_acceptance_required_htf_candles": POST_HTF_ACCEPTANCE_HTF_CANDLES,
+            "post_htf_acceptance_required_baseline_windows": POST_HTF_ACCEPTANCE_BASELINE_WINDOWS,
+            "post_htf_acceptance_htf_open_ms": post_htf_acceptance.get("htf_open_ms"),
+            "post_htf_acceptance_htf_close_ms": post_htf_acceptance.get("htf_close_ms"),
+            "post_htf_acceptance_htf_open": post_htf_acceptance.get("htf_open"),
+            "post_htf_acceptance_htf_high": post_htf_acceptance.get("htf_high"),
+            "post_htf_acceptance_htf_low": post_htf_acceptance.get("htf_low"),
+            "post_htf_acceptance_htf_close": post_htf_acceptance.get("htf_close"),
+            "post_htf_acceptance_htf_return_pct": post_htf_acceptance.get("htf_return_pct"),
+            "post_htf_acceptance_htf_quote_ratio": post_htf_acceptance.get("htf_quote_ratio"),
+            "post_htf_acceptance_htf_trade_ratio": post_htf_acceptance.get("htf_trade_ratio"),
+            "post_htf_acceptance_htf_flow_window_ms": post_htf_acceptance.get("htf_flow_window_ms"),
+            "post_htf_acceptance_htf_quote_per_second": post_htf_acceptance.get("htf_quote_per_second"),
+            "post_htf_acceptance_htf_trades_per_second": post_htf_acceptance.get("htf_trades_per_second"),
+            "post_htf_acceptance_ltf6_return_pct": post_htf_acceptance.get("ltf6_return_pct"),
+            "post_htf_acceptance_ltf6_quote_volume": post_htf_acceptance.get("ltf6_quote_volume"),
+            "post_htf_acceptance_ltf6_number_of_trades": post_htf_acceptance.get("ltf6_number_of_trades"),
+            "post_htf_acceptance_ltf6_flow_window_ms": post_htf_acceptance.get("ltf6_flow_window_ms"),
+            "post_htf_acceptance_ltf6_quote_per_second": post_htf_acceptance.get("ltf6_quote_per_second"),
+            "post_htf_acceptance_ltf6_trades_per_second": post_htf_acceptance.get("ltf6_trades_per_second"),
+            "post_htf_acceptance_ltf6_taker_buy_quote_share": post_htf_acceptance.get("ltf6_taker_buy_quote_share"),
+            "post_htf_acceptance_ltf6_top1_quote_share": post_htf_acceptance.get("ltf6_top1_quote_share"),
+            "post_htf_acceptance_ltf6_last3_quote_share": post_htf_acceptance.get("ltf6_last3_quote_share"),
+            "post_htf_acceptance_ltf6_low_vs_htf_close": post_htf_acceptance.get("ltf6_low_vs_htf_close"),
+            "post_htf_acceptance_signal_entry_price": post_htf_acceptance.get("signal_entry_price"),
+            "post_htf_acceptance_initial_stop_at_decision": post_htf_acceptance.get("initial_stop_at_decision"),
+            "post_htf_acceptance_initial_risk_pct_at_decision": post_htf_acceptance.get("initial_risk_pct_at_decision"),
+            "post_htf_acceptance_tp1_at_decision": post_htf_acceptance.get("tp1_at_decision"),
+            "post_htf_acceptance_target_r": post_htf_acceptance.get("target_r"),
+            "post_htf_acceptance_structural_stop_source": post_htf_acceptance.get("structural_stop_source"),
+            "post_htf_acceptance_oi_divergence_status": post_htf_oi_divergence.get("status"),
+            "post_htf_acceptance_oi_divergence_reason": post_htf_oi_divergence.get("reason"),
+            "post_htf_acceptance_oi_divergence_rejected": post_htf_oi_divergence.get("rejected"),
+            "post_htf_acceptance_oi_divergence_window_candles": post_htf_oi_divergence.get("window_candles"),
+            "post_htf_acceptance_oi_divergence_price_return_pct": post_htf_oi_divergence.get("price_return_pct"),
+            "post_htf_acceptance_oi_divergence_oi_change_pct_3x5m": post_htf_oi_divergence.get("oi_change_pct_3x5m"),
+            "post_htf_acceptance_oi_divergence_policy": "block_long_when_oi_up_and_15m_price_down",
+            "post_htf_acceptance_prior_context_lookback_hours": 24,
+            "post_htf_acceptance_research_prior_lookback_hours": 72,
+            "post_htf_acceptance_prior_context_parity_note": "live_uses_24h_prior_context_for_legacy_72h_field_name",
             "baseline_trade_count_5s": baseline_trades,
             "baseline_range_pct_5s": baseline_range,
             "baseline_taker_buy_quote_share_5s": baseline_taker_share,
             "baseline_taker_buy_quote_share_1m": live_setup.get("baseline_taker_buy_quote_share_median"),
             "start_quote_ratio": quote_ratio,
             "start_trade_ratio": trade_ratio,
+            "selected_source_flow_window_ms": live_setup.get("flow_window_ms"),
+            "selected_source_flow_quote_per_second": live_setup.get("flow_quote_per_second"),
+            "selected_source_flow_trades_per_second": live_setup.get("flow_trades_per_second"),
+            "selected_source_flow_quote_ratio": quote_ratio,
+            "selected_source_flow_trade_ratio": trade_ratio,
             "start_range_pct_ratio_to_baseline": range_ratio,
             "start_quote_ratio_per_abs_return": quote_ratio_per_abs_return,
             "start_trade_ratio_per_abs_return": trade_ratio_per_abs_return,
@@ -454,6 +543,13 @@ class Live2SignalEngine:
             "oi_status": oi_status,
             "oi_raw_status": state.oi_status,
             "oi_reason": state.oi_reason,
+            "current_oi_open_interest": state.current_oi_open_interest,
+            "current_oi_timestamp_ms": state.current_oi_timestamp_ms,
+            "current_oi_last_seen_ms": state.current_oi_last_seen_ms,
+            "current_oi_source": state.current_oi_source,
+            "current_oi_status": state.current_oi_status,
+            "current_oi_raw_status": state.current_oi_status,
+            "current_oi_reason": state.current_oi_reason,
             "prior_context_status": prior_context_status,
             "prior_context_raw_status": state.prior_context_status,
             "prior_context_reason": state.prior_context_reason,
@@ -476,6 +572,8 @@ class Live2SignalEngine:
         }
 
     def _category_accepts(self, *, category: PumpCategoryContract, features: dict[str, object]) -> Live2CategoryEvaluation:
+        if category.post_htf_acceptance_long:
+            return _post_htf_acceptance_category_accepts(category=category, features=features)
         if features.get("live_setup_status") != "ok":
             reason = str(features.get("live_setup_reason") or "live_setup_not_backtest_candidate")
             if features.get("live_setup_status") == "not_ready":
@@ -587,6 +685,86 @@ class Live2SignalEngine:
         return Live2CategoryEvaluation(True, "accepted", "accepted")
 
 
+def _category_effective_features(*, category: PumpCategoryContract, features: dict[str, object]) -> dict[str, object]:
+    if not category.post_htf_acceptance_long:
+        return features
+    entry = _float_or_none(features.get("post_htf_acceptance_signal_entry_price"))
+    stop = _float_or_none(features.get("post_htf_acceptance_initial_stop_at_decision"))
+    risk = _float_or_none(features.get("post_htf_acceptance_initial_risk_pct_at_decision"))
+    tp1 = _float_or_none(features.get("post_htf_acceptance_tp1_at_decision"))
+    return {
+        **features,
+        "signal_entry_price": entry,
+        "initial_stop_at_decision": stop,
+        "initial_risk_pct_at_decision": risk,
+        "tp1_at_decision": tp1,
+        "pump_category_family": "post_htf_acceptance",
+        "selected_source_flow_window_ms": features.get("post_htf_acceptance_ltf6_flow_window_ms"),
+        "selected_source_flow_quote_per_second": features.get("post_htf_acceptance_ltf6_quote_per_second"),
+        "selected_source_flow_trades_per_second": features.get("post_htf_acceptance_ltf6_trades_per_second"),
+        "selected_source_flow_quote_ratio": features.get("post_htf_acceptance_htf_quote_ratio"),
+        "selected_source_flow_trade_ratio": features.get("post_htf_acceptance_htf_trade_ratio"),
+        "post_htf_acceptance_selected": True,
+        "post_htf_acceptance_artifact_mode": "post_htf_acceptance_long",
+    }
+
+
+def _post_htf_acceptance_category_accepts(
+    *,
+    category: PumpCategoryContract,
+    features: dict[str, object],
+) -> Live2CategoryEvaluation:
+    status = str(features.get("post_htf_acceptance_status") or "")
+    reason = str(features.get("post_htf_acceptance_reason") or "post_htf_acceptance_not_ready")
+    if status != "ok":
+        if status == "not_ready":
+            return _dependency(reason)
+        return _reject(reason)
+    if bool(features.get("post_htf_acceptance_oi_divergence_rejected")):
+        return _reject(str(features.get("post_htf_acceptance_oi_divergence_reason") or "post_htf_acceptance_oi_up_price_down"))
+    htf_return = _float_or_none(features.get("post_htf_acceptance_htf_return_pct"))
+    if htf_return is None or htf_return < POST_HTF_ACCEPTANCE_MIN_HTF_RETURN_PCT:
+        return _reject("post_htf_acceptance_htf_return_below_min")
+    htf_quote_ratio = _float_or_none(features.get("post_htf_acceptance_htf_quote_ratio"))
+    if htf_quote_ratio is None or htf_quote_ratio < POST_HTF_ACCEPTANCE_MIN_HTF_QUOTE_RATIO:
+        return _reject("post_htf_acceptance_htf_quote_ratio_below_min")
+    htf_trade_ratio = _float_or_none(features.get("post_htf_acceptance_htf_trade_ratio"))
+    if htf_trade_ratio is None or htf_trade_ratio < POST_HTF_ACCEPTANCE_MIN_HTF_TRADE_RATIO:
+        return _reject("post_htf_acceptance_htf_trade_ratio_below_min")
+    ltf_return = _float_or_none(features.get("post_htf_acceptance_ltf6_return_pct"))
+    if category.min_post_htf_ltf6_return_pct is not None and (
+        ltf_return is None or ltf_return < category.min_post_htf_ltf6_return_pct
+    ):
+        return _reject("post_htf_acceptance_ltf6_return_below_min")
+    risk = _float_or_none(features.get("post_htf_acceptance_initial_risk_pct_at_decision"))
+    if category.min_post_htf_structural_risk_pct is not None and (
+        risk is None or risk < category.min_post_htf_structural_risk_pct
+    ):
+        return _reject("post_htf_acceptance_structural_risk_below_min")
+    if category.max_post_htf_structural_risk_pct is not None and (
+        risk is None or risk > category.max_post_htf_structural_risk_pct
+    ):
+        return _reject("post_htf_acceptance_structural_risk_above_max")
+    if features.get("prior_context_status") != "ok":
+        return _dependency("prior_24h_context_not_ready")
+    prior_spikes = _int_or_none(features.get("prior_spike_count_24h"))
+    if prior_spikes is None:
+        return _dependency("prior_spike_count_24h_not_ready")
+    if category.max_prior_spike_count_72h is not None and prior_spikes > category.max_prior_spike_count_72h:
+        return _reject("post_htf_acceptance_prior_spike_count_24h_above_max")
+    last3_quote_share = _float_or_none(features.get("post_htf_acceptance_ltf6_last3_quote_share"))
+    if category.max_post_htf_last3_quote_share is not None and (
+        last3_quote_share is None or last3_quote_share > category.max_post_htf_last3_quote_share
+    ):
+        return _reject("post_htf_acceptance_last3_quote_share_above_max")
+    top1_quote_share = _float_or_none(features.get("post_htf_acceptance_ltf6_top1_quote_share"))
+    if category.max_post_htf_top1_quote_share is not None and (
+        top1_quote_share is None or top1_quote_share > category.max_post_htf_top1_quote_share
+    ):
+        return _reject("post_htf_acceptance_top1_quote_share_above_max")
+    return Live2CategoryEvaluation(True, "accepted", "accepted")
+
+
 @dataclass(frozen=True, slots=True)
 class Live2FlowHoldSnapshot:
     """Closed live-flow confirmation available before entry.
@@ -695,31 +873,232 @@ def _flow_hold_not_ready(reason: str) -> Live2FlowHoldSnapshot:
     )
 
 
+def _aggregate_candles_to_live2_candle(*, candles: tuple[Live2Candle, ...], timeframe_ms: int) -> Live2Candle:
+    ordered = tuple(sorted(candles, key=lambda item: item.open_time_ms))
+    first = ordered[0]
+    last = ordered[-1]
+    return Live2Candle(
+        timeframe_ms=int(timeframe_ms),
+        open_time_ms=int(first.open_time_ms),
+        close_time_ms=int(last.close_time_ms),
+        open=float(first.open),
+        high=max(float(item.high) for item in ordered),
+        low=min(float(item.low) for item in ordered),
+        close=float(last.close),
+        base_volume=sum(float(item.base_volume) for item in ordered),
+        quote_volume=sum(float(item.quote_volume) for item in ordered),
+        number_of_trades=sum(int(item.number_of_trades) for item in ordered),
+        taker_buy_quote_volume=sum(float(item.taker_buy_quote_volume) for item in ordered),
+        first_trade_time_ms=int(first.first_trade_time_ms),
+        last_trade_time_ms=int(last.last_trade_time_ms),
+        first_source=first.first_source,
+        last_source=last.last_source,
+        startup_rest_trade_count=sum(int(item.startup_rest_trade_count) for item in ordered),
+        live_ws_trade_count=sum(int(item.live_ws_trade_count) for item in ordered),
+        agg_trade_id_gap_count=sum(int(item.agg_trade_id_gap_count) for item in ordered),
+        missing_agg_trade_id_count=sum(int(item.missing_agg_trade_id_count) for item in ordered),
+        max_agg_trade_id_gap=max((int(item.max_agg_trade_id_gap) for item in ordered), default=0),
+    )
+
+
+def _post_htf_acceptance_oi_divergence_check(
+    *,
+    closed_5s: tuple[Live2Candle, ...],
+    closed_1m: tuple[Live2Candle, ...],
+    decision_candle: Live2Candle,
+    oi_status: str,
+    oi_change_pct_3x5m: float | None,
+) -> dict[str, object]:
+    oi_change = _float_or_none(oi_change_pct_3x5m)
+    common = {
+        "window_candles": POST_HTF_ACCEPTANCE_OI_DIVERGENCE_WINDOW_CANDLES,
+        "oi_change_pct_3x5m": oi_change,
+    }
+    if oi_status != "ok" or oi_change is None:
+        return {**common, "status": "not_ready", "reason": "oi_context_not_ready_for_divergence_guard", "rejected": False}
+    price_return = None
+    ordered_5s = tuple(sorted((item for item in closed_5s if int(item.open_time_ms) <= decision_candle.open_time_ms), key=lambda item: item.open_time_ms))
+    if len(ordered_5s) >= POST_HTF_ACCEPTANCE_OI_DIVERGENCE_WINDOW_CANDLES:
+        window = ordered_5s[-POST_HTF_ACCEPTANCE_OI_DIVERGENCE_WINDOW_CANDLES:]
+        if window[0].open > 0:
+            price_return = (decision_candle.close / window[0].open) - 1.0
+    if price_return is None:
+        cutoff_ms = int(decision_candle.close_time_ms) - 15 * 60_000
+        baseline_1m = tuple(item for item in closed_1m if int(item.close_time_ms) <= cutoff_ms)
+        if baseline_1m and baseline_1m[-1].close > 0:
+            price_return = (decision_candle.close / baseline_1m[-1].close) - 1.0
+    if price_return is None:
+        return {**common, "status": "not_ready", "reason": "price_context_not_ready_for_oi_divergence_guard", "rejected": False}
+    rejected = oi_change > 0.0 and price_return < 0.0
+    return {
+        **common,
+        "status": "ok",
+        "reason": "oi_up_price_down_blocked" if rejected else "oi_price_divergence_guard_passed",
+        "rejected": rejected,
+        "price_return_pct": price_return,
+    }
+
+
+def _post_htf_acceptance_setup(
+    *,
+    closed_5s: tuple[Live2Candle, ...],
+    closed_1m: tuple[Live2Candle, ...],
+    decision_candle: Live2Candle,
+) -> dict[str, object]:
+    decision_open_ms = int(decision_candle.open_time_ms)
+    ordered = tuple(sorted((item for item in closed_5s if int(item.open_time_ms) <= decision_open_ms), key=lambda item: item.open_time_ms))
+    segment = ordered[-POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES:]
+    htf_segment = ordered[-(POST_HTF_ACCEPTANCE_HTF_CANDLES + POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES):-POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES]
+    htf_open_ms = int(htf_segment[0].open_time_ms) if htf_segment else decision_open_ms - (
+        POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES + POST_HTF_ACCEPTANCE_HTF_CANDLES - 1
+    ) * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS
+    htf_close_ms = htf_open_ms + POST_HTF_ACCEPTANCE_HTF_CANDLES * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS
+    common_not_ready = {
+        "mode": True,
+        "confirmation_candles": len(segment),
+        "htf_open_ms": htf_open_ms,
+        "htf_close_ms": htf_close_ms,
+        "htf_alignment": "rolling_60s_5s_step",
+        "htf_calendar_aligned": False,
+        "target_r": POST_HTF_ACCEPTANCE_TARGET_R,
+        "structural_stop_source": "rolling_closed_htf_anomaly_low_buffered_5bps",
+    }
+    if not segment or segment[-1].open_time_ms != decision_candle.open_time_ms:
+        return {**common_not_ready, "status": "not_ready", "reason": "post_htf_acceptance_ltf_segment_not_ready"}
+    if len(segment) < POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES:
+        return {**common_not_ready, "status": "not_ready", "reason": "post_htf_acceptance_waiting_for_6_closed_5s"}
+    expected_opens = tuple(
+        decision_open_ms - (POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES - 1 - index) * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS
+        for index in range(POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES)
+    )
+    actual_opens = tuple(int(item.open_time_ms) for item in segment)
+    if actual_opens != expected_opens:
+        return {**common_not_ready, "status": "rejected", "reason": "post_htf_acceptance_ltf6_window_not_contiguous"}
+    if len(htf_segment) < POST_HTF_ACCEPTANCE_HTF_CANDLES:
+        return {**common_not_ready, "status": "not_ready", "reason": "post_htf_acceptance_rolling_htf_window_not_ready"}
+    expected_htf_opens = tuple(
+        htf_open_ms + index * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS
+        for index in range(POST_HTF_ACCEPTANCE_HTF_CANDLES)
+    )
+    actual_htf_opens = tuple(int(item.open_time_ms) for item in htf_segment)
+    if actual_htf_opens != expected_htf_opens:
+        return {**common_not_ready, "status": "rejected", "reason": "post_htf_acceptance_rolling_htf_window_not_contiguous"}
+    htf = _aggregate_candles_to_live2_candle(candles=htf_segment, timeframe_ms=LIVE2_BACKTEST_SETUP_TIMEFRAME_MS)
+    baseline = tuple(item for item in closed_1m if int(item.close_time_ms) <= htf_open_ms)[-POST_HTF_ACCEPTANCE_BASELINE_WINDOWS:]
+    if len(baseline) < POST_HTF_ACCEPTANCE_BASELINE_WINDOWS:
+        return {**common_not_ready, "status": "not_ready", "reason": "post_htf_acceptance_1m_baseline_not_ready"}
+    baseline_quote = _median([item.quote_volume for item in baseline])
+    baseline_trades = _median([float(item.number_of_trades) for item in baseline])
+    if baseline_quote <= 0 or baseline_trades <= 0:
+        return {
+            **common_not_ready,
+            "status": "not_ready",
+            "reason": "post_htf_acceptance_1m_baseline_invalid",
+            "baseline_quote_1m": baseline_quote,
+            "baseline_trade_count_1m": baseline_trades,
+        }
+    htf_return = (htf.close / htf.open) - 1.0 if htf.open > 0 else None
+    htf_quote_ratio = htf.quote_volume / baseline_quote if baseline_quote > 0 else None
+    htf_trade_ratio = float(htf.number_of_trades) / baseline_trades if baseline_trades > 0 else None
+    htf_window_ms = POST_HTF_ACCEPTANCE_HTF_CANDLES * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS
+    segment_quote = sum(item.quote_volume for item in segment)
+    segment_trades = sum(float(item.number_of_trades) for item in segment)
+    segment_taker_quote = sum(item.taker_buy_quote_volume for item in segment)
+    segment_open = segment[0].open
+    segment_close = segment[-1].close
+    segment_low = min(item.low for item in segment)
+    ltf_return = (segment_close / segment_open) - 1.0 if segment_open > 0 else None
+    top1_quote_share = max((item.quote_volume for item in segment), default=0.0) / segment_quote if segment_quote > 0 else None
+    last3 = segment[-3:]
+    last3_quote_share = sum(item.quote_volume for item in last3) / segment_quote if segment_quote > 0 else None
+    taker_share = segment_taker_quote / segment_quote if segment_quote > 0 else None
+    entry = decision_candle.close
+    stop = htf.low * (1.0 - POST_HTF_ACCEPTANCE_STOP_BUFFER_PCT)
+    risk_pct = (entry - stop) / entry if entry > 0 and stop > 0 else None
+    target_r = POST_HTF_ACCEPTANCE_TARGET_R
+    tp1 = entry + target_r * (entry - stop) if entry > stop else None
+    return {
+        "mode": True,
+        "status": "ok",
+        "reason": "post_htf_acceptance_setup_ready",
+        "confirmation_candles": len(segment),
+        "htf_alignment": "rolling_60s_5s_step",
+        "htf_calendar_aligned": False,
+        "htf_open_ms": htf_open_ms,
+        "htf_close_ms": htf_close_ms,
+        "htf_open": htf.open,
+        "htf_high": htf.high,
+        "htf_low": htf.low,
+        "htf_close": htf.close,
+        "htf_return_pct": htf_return,
+        "htf_quote_ratio": htf_quote_ratio,
+        "htf_trade_ratio": htf_trade_ratio,
+        "htf_flow_window_ms": htf_window_ms,
+        "htf_quote_per_second": htf.quote_volume / (htf_window_ms / 1000.0),
+        "htf_trades_per_second": float(htf.number_of_trades) / (htf_window_ms / 1000.0),
+        "baseline_quote_1m": baseline_quote,
+        "baseline_trade_count_1m": baseline_trades,
+        "baseline_source": "startup_or_live_closed_1m_htf_baseline_for_rolling_htf",
+        "ltf6_return_pct": ltf_return,
+        "ltf6_quote_volume": segment_quote,
+        "ltf6_number_of_trades": segment_trades,
+        "ltf6_flow_window_ms": POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS,
+        "ltf6_quote_per_second": segment_quote / ((POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS) / 1000.0),
+        "ltf6_trades_per_second": segment_trades / ((POST_HTF_ACCEPTANCE_CONFIRMATION_CANDLES * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS) / 1000.0),
+        "ltf6_taker_buy_quote_share": taker_share,
+        "ltf6_top1_quote_share": top1_quote_share,
+        "ltf6_last3_quote_share": last3_quote_share,
+        "ltf6_low_vs_htf_close": (segment_low / htf.close) - 1.0 if htf.close > 0 else None,
+        "signal_entry_price": entry,
+        "initial_stop_at_decision": stop,
+        "initial_risk_pct_at_decision": risk_pct,
+        "tp1_at_decision": tp1,
+        "target_r": target_r,
+        "structural_stop_source": "rolling_closed_htf_anomaly_low_buffered_5bps",
+    }
+
+
 def _live_backtest_like_setup(
     *,
     closed_5s: tuple[Live2Candle, ...],
     closed_1m: tuple[Live2Candle, ...],
     decision_candle: Live2Candle,
 ) -> dict[str, object]:
-    setup_open_ms = (int(decision_candle.open_time_ms) // LIVE2_BACKTEST_SETUP_TIMEFRAME_MS) * LIVE2_BACKTEST_SETUP_TIMEFRAME_MS
-    segment = tuple(
-        item
-        for item in closed_5s
-        if setup_open_ms <= int(item.open_time_ms) <= int(decision_candle.open_time_ms)
-    )
+    decision_open_ms = int(decision_candle.open_time_ms)
+    ordered = tuple(sorted((item for item in closed_5s if int(item.open_time_ms) <= decision_open_ms), key=lambda item: item.open_time_ms))
+    segment = ordered[-LIVE2_BACKTEST_SETUP_CANDLES:]
+    setup_open_ms = int(segment[0].open_time_ms) if segment else decision_open_ms - (
+        LIVE2_BACKTEST_SETUP_CANDLES - 1
+    ) * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS
     if not segment or segment[-1].open_time_ms != decision_candle.open_time_ms:
         return {
             "status": "not_ready",
             "reason": "live_setup_entry_segment_not_ready",
             "closed_entry_candles": len(segment),
             "baseline_1m_count": 0,
+            "alignment": "rolling_60s_5s_step",
+            "calendar_aligned": False,
+        }
+    expected_opens = tuple(
+        decision_open_ms - (len(segment) - 1 - index) * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS
+        for index in range(len(segment))
+    )
+    actual_opens = tuple(int(item.open_time_ms) for item in segment)
+    if actual_opens != expected_opens:
+        return {
+            "status": "rejected",
+            "reason": "live_setup_rolling_window_not_contiguous",
+            "closed_entry_candles": len(segment),
+            "baseline_1m_count": 0,
+            "alignment": "rolling_60s_5s_step",
+            "calendar_aligned": False,
         }
     baseline = tuple(
         item
         for item in closed_1m
-        if int(item.open_time_ms) < setup_open_ms
+        if int(item.close_time_ms) <= setup_open_ms
     )[-LIVE2_BACKTEST_BASELINE_CANDLES:]
-    baseline_source = "closed_live_1m"
+    baseline_source = "startup_or_live_closed_1m_baseline_for_rolling_live_setup"
     baseline_quote = _median([item.quote_volume for item in baseline])
     baseline_trades = _median([float(item.number_of_trades) for item in baseline])
     baseline_range_pct = _median([_range_pct(item) for item in baseline])
@@ -730,6 +1109,8 @@ def _live_backtest_like_setup(
             "closed_entry_candles": len(segment),
             "baseline_1m_count": len(baseline),
             "baseline_source": baseline_source,
+            "alignment": "rolling_60s_5s_step",
+            "calendar_aligned": False,
         }
     if baseline_quote <= 0 or baseline_trades <= 0 or baseline_range_pct <= 0:
         return {
@@ -741,6 +1122,8 @@ def _live_backtest_like_setup(
             "baseline_trade_count_1m": baseline_trades,
             "baseline_range_pct_1m": baseline_range_pct,
             "baseline_source": baseline_source,
+            "alignment": "rolling_60s_5s_step",
+            "calendar_aligned": False,
         }
     closed_entry_candles = len(segment)
     setup_elapsed_fraction = min(
@@ -750,6 +1133,8 @@ def _live_backtest_like_setup(
     elapsed_for_ratio = max(1e-9, setup_elapsed_fraction)
     quote_volume = sum(item.quote_volume for item in segment)
     trade_count = sum(float(item.number_of_trades) for item in segment)
+    flow_window_ms = closed_entry_candles * LIVE2_BACKTEST_ENTRY_TIMEFRAME_MS
+    flow_window_seconds = max(1e-9, flow_window_ms / 1000.0)
     raw_quote_ratio = quote_volume / baseline_quote
     raw_trade_ratio = trade_count / baseline_trades
     quote_ratio = raw_quote_ratio / elapsed_for_ratio
@@ -835,6 +1220,9 @@ def _live_backtest_like_setup(
         "trade_ratio": trade_ratio,
         "range": setup_range,
         "range_pct": range_pct,
+        "flow_window_ms": flow_window_ms,
+        "flow_quote_per_second": quote_volume / flow_window_seconds,
+        "flow_trades_per_second": trade_count / flow_window_seconds,
         "range_pct_ratio_to_baseline": range_pct_ratio,
         "decision_return_from_start_open": decision_return_from_start_open,
         "start_quote_ratio_per_abs_return": quote_ratio_per_abs_return,
@@ -873,6 +1261,10 @@ def _live_backtest_like_setup(
         "baseline_trade_count_1m": baseline_trades,
         "baseline_range_pct_1m": baseline_range_pct,
         "baseline_source": baseline_source,
+        "alignment": "rolling_60s_5s_step",
+        "calendar_aligned": False,
+        "setup_open_ms": setup_open_ms,
+        "setup_close_ms": int(segment[-1].close_time_ms),
     }
     if closed_entry_candles < LIVE2_BACKTEST_CONFIRMATION_CANDLES:
         return {**common, "status": "not_ready", "reason": "live_setup_confirmation_candles_below_backtest_min"}

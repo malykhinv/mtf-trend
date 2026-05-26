@@ -7,21 +7,22 @@ never substitutes missing OI with zero.
 
 from __future__ import annotations
 
-import copy
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 import pandas as pd
 
+from data.exchanges.ccxt_types import ExchangeOpenInterestSnapshot
 from domain.enums.timeframe import Timeframe
 
 from ..clock import utc_now_ms
 from ..state import SymbolLive2Status, SymbolState, SymbolStateStore
 
 LIVE2_OPEN_INTEREST_SOURCE = "binance_futures_open_interest_hist_5m_poll"
+LIVE2_CURRENT_OPEN_INTEREST_SOURCE = "binance_futures_current_open_interest_poll"
 LIVE2_OPEN_INTEREST_TIMEFRAME = Timeframe.M5
 LIVE2_OPEN_INTEREST_TIMEFRAME_MS = LIVE2_OPEN_INTEREST_TIMEFRAME.to_milliseconds()
 
@@ -38,6 +39,10 @@ class Live2OpenInterestExchange(Protocol):
         end_timestamp_ms: int,
     ) -> pd.DataFrame:
         """Return historical open-interest rows for one symbol/timeframe."""
+        ...
+
+    def fetch_current_open_interest(self, symbol: str) -> ExchangeOpenInterestSnapshot:
+        """Return current open interest for one symbol."""
         ...
 
 
@@ -81,6 +86,12 @@ class Live2OpenInterestSnapshot:
     open_interest: float | None = None
     previous_open_interest: float | None = None
     open_interest_change_pct_3x5m: float | None = None
+    current_fetched_at_ms: int | None = None
+    current_timestamp_ms: int | None = None
+    current_open_interest: float | None = None
+    current_status: str = "not_seen"
+    current_reason: str = ""
+    current_source: str = LIVE2_CURRENT_OPEN_INTEREST_SOURCE
     rows_received: int = 0
     source: str = LIVE2_OPEN_INTEREST_SOURCE
 
@@ -100,6 +111,12 @@ class Live2OpenInterestSnapshot:
             "open_interest": self.open_interest,
             "previous_open_interest": self.previous_open_interest,
             "open_interest_change_pct_3x5m": self.open_interest_change_pct_3x5m,
+            "current_fetched_at_ms": self.current_fetched_at_ms,
+            "current_timestamp_ms": self.current_timestamp_ms,
+            "current_open_interest": self.current_open_interest,
+            "current_status": self.current_status,
+            "current_reason": self.current_reason,
+            "current_source": self.current_source,
             "rows_received": self.rows_received,
             "source": self.source,
         }
@@ -289,6 +306,12 @@ class Live2OpenInterestPoller:
                 source=snapshot.source,
                 status=snapshot.status,
                 reason=snapshot.reason,
+                current_fetched_at_ms=snapshot.current_fetched_at_ms,
+                current_timestamp_ms=snapshot.current_timestamp_ms,
+                current_open_interest=snapshot.current_open_interest,
+                current_source=snapshot.current_source,
+                current_status=snapshot.current_status,
+                current_reason=snapshot.current_reason,
             )
             self._last_poll_by_symbol[symbol] = snapshot.fetched_at_ms
             with self._lock:
@@ -407,6 +430,12 @@ class Live2OpenInterestPoller:
                 source=snapshot.source,
                 status=snapshot.status,
                 reason=snapshot.reason,
+                current_fetched_at_ms=snapshot.current_fetched_at_ms,
+                current_timestamp_ms=snapshot.current_timestamp_ms,
+                current_open_interest=snapshot.current_open_interest,
+                current_source=snapshot.current_source,
+                current_status=snapshot.current_status,
+                current_reason=snapshot.current_reason,
             )
             self._last_poll_by_symbol[symbol] = snapshot.fetched_at_ms
             with self._lock:
@@ -496,6 +525,7 @@ class Live2OpenInterestPoller:
                 reason="exchange_client_missing",
                 fetched_at_ms=now_ms,
             )
+        current_snapshot = self._fetch_current_symbol(symbol=symbol, now_ms=now_ms)
         start_ms = max(0, now_ms - int(self.config.lookback_minutes * 60_000))
         try:
             frame = self.exchange_client.fetch_open_interest(
@@ -505,13 +535,60 @@ class Live2OpenInterestPoller:
                 now_ms,
             )
         except Exception as exc:
-            return Live2OpenInterestSnapshot(
+            return _attach_current_open_interest(
+                Live2OpenInterestSnapshot(
                 symbol=symbol,
                 status="error",
                 reason=f"fetch_open_interest_failed:{type(exc).__name__}:{str(exc)[:240]}",
                 fetched_at_ms=now_ms,
+                ),
+                current_snapshot=current_snapshot,
             )
-        return _build_open_interest_snapshot(symbol=symbol, frame=frame, fetched_at_ms=now_ms)
+        history_snapshot = _build_open_interest_snapshot(symbol=symbol, frame=frame, fetched_at_ms=now_ms)
+        return _attach_current_open_interest(history_snapshot, current_snapshot=current_snapshot)
+
+    def _fetch_current_symbol(self, *, symbol: str, now_ms: int) -> ExchangeOpenInterestSnapshot:
+        assert self.exchange_client is not None
+        try:
+            snapshot = self.exchange_client.fetch_current_open_interest(symbol)
+        except Exception as exc:
+            return ExchangeOpenInterestSnapshot(
+                symbol=symbol,
+                exchange_symbol=symbol,
+                fetched_at_ms=now_ms,
+                timestamp_ms=None,
+                open_interest=None,
+                source=LIVE2_CURRENT_OPEN_INTEREST_SOURCE,
+                status="error",
+                reason=f"fetch_current_open_interest_failed:{type(exc).__name__}:{str(exc)[:240]}",
+            )
+        return snapshot
+
+
+def _attach_current_open_interest(
+    snapshot: Live2OpenInterestSnapshot,
+    *,
+    current_snapshot: ExchangeOpenInterestSnapshot,
+) -> Live2OpenInterestSnapshot:
+    return Live2OpenInterestSnapshot(
+        symbol=snapshot.symbol,
+        status=snapshot.status,
+        reason=snapshot.reason,
+        fetched_at_ms=snapshot.fetched_at_ms,
+        latest_timestamp_ms=snapshot.latest_timestamp_ms,
+        previous_timestamp_ms=snapshot.previous_timestamp_ms,
+        open_interest=snapshot.open_interest,
+        previous_open_interest=snapshot.previous_open_interest,
+        open_interest_change_pct_3x5m=snapshot.open_interest_change_pct_3x5m,
+        current_fetched_at_ms=current_snapshot.fetched_at_ms,
+        current_timestamp_ms=current_snapshot.timestamp_ms,
+        current_open_interest=current_snapshot.open_interest,
+        current_status=current_snapshot.status,
+        current_reason=str(current_snapshot.reason or current_snapshot.status),
+        current_source=current_snapshot.source or LIVE2_CURRENT_OPEN_INTEREST_SOURCE,
+        rows_received=snapshot.rows_received,
+        source=snapshot.source,
+    )
 
 
 def _build_open_interest_snapshot(
