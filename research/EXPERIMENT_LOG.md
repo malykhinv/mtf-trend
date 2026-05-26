@@ -1,4 +1,61 @@
 
+## 2026-05-26 - P413 live2 multi-position / stop-PnL validation
+
+```text
+Patch: P413 unlimited live2 positions and stop-close PnL recovery.
+
+Validation already run:
+- tests/test_live2_market_watch.py: 34 passed;
+- compileall passed for data/exchanges research_tools cli constants.py main.py.
+
+Live validation required after restart:
+- confirm `execution_status.max_open_positions_unlimited=true`;
+- confirm two different symbols can be protected concurrently while same-symbol duplicate is still rejected;
+- on a stop exit, check nearby `user_data_order_trade_update` event and `position_final_close_verified` have matching stop client/order id;
+- Telegram must show actual recovered PnL, or `PNL: n/a` if the private fill event is unavailable. It must not show `+0 USDT` for an unrecovered stop.
+```
+
+## 2026-05-26 - P412 runner shape gate validation plan
+
+```text
+Patch: P412 runner-shape gate for rolling runner categories.
+Purpose: reduce first-spike/single-print noise seen in live2 run 20260526_120454 while keeping live/backtest category parity.
+
+Rule under test: after dormancy, useful candidates should show coordinated expansion in range, quote volume, and real number_of_trades across the full rolling 60s setup, with the second 30s stronger than the first 30s. A setup dominated by one quote-volume print is rejected.
+
+Required validation:
+- run rolling 1m/5s category-profile backtest with P412;
+- inspect skip/reject reasons for runner_shape_* distribution;
+- compare rejected symbols against later hourly/top-growth runners;
+- restart live2 only after confirming reject volume is interpretable and not caused by missing 5s/1m baseline fields.
+
+Risk: stricter gate can miss AZTEC-like delayed runners where acceleration is only moderate before the later leg. If that happens, the correct next patch is a stateful delayed-acceptance candidate mode, not a blind threshold loosen.
+```
+
+## 2026-05-26 - live2 run 20260526_120454 selected trade runner audit
+
+```text
+Run: .output/results/live2_anomaly_runs/20260526_120454
+Symbols requested: HIGH, VVV, FF, OPG, NAORIS, AZTEC, BLUAI, IN.
+Artifact: selected_trade_1m_runner_audit.csv.
+
+Executed positions found: BLUAI, AZTEC, NAORIS, OPG, FF, VVV x2, HIGH. IN had deadline/reject rows but no artifact-confirmed position in this run.
+
+Replay method: position events from live2_events.csv plus Binance public 1m klines from 90m before entry to 2h after entry. Local 5s parquet cache was stale for these timestamps, so it was not used for post-entry path claims.
+
+Readout:
+- AZTEC: live stopped/finalized after ~30s, but later 2h high was +5.9% from fill; waiting 2m would have had about +8.1% max. Looks like a missed delayed runner.
+- OPG: live early-exited at loss, but later 2h high was +5.2% from fill and +6.1% after exit; waiting 1-10m still showed +6% area. Strong delayed-runner candidate.
+- VVV: two live entries. Both had later +2.2% to +3.5% possible after waits; second entry had stronger acceleration shape than first.
+- BLUAI: small but real post-exit upside; later high exceeded original TP area. Potential runner only if confirmation waited and adverse stayed small.
+- FF: very strong flow expansion and later +4-6% possible after waits, but original structural TP was wide and delayed adverse was meaningful. Treat as hot-flow candidate, not clean proof.
+- HIGH: reached about the original TP area but did not clearly become a large runner; early OI-down exit may be too aggressive for this shape, but evidence is mixed.
+- NAORIS: mostly noise; no clean runner after entry.
+- IN: no fill; rejects were mostly quote-ratio/price-retention failures and later path was weak-to-negative from early rows.
+
+Pattern hypothesis: better runners tend to show dormancy then simultaneous acceleration in range/volatility, quote volume, and trade count. The useful shape is not just quote-volume spike; it is all three dimensions moving from flat baseline into p/P expansion. This supports stricter category confirmation or delayed acceptance before entry.
+```
+
 ## 2026-05-26 - P408 live2 partial-runner validation plan
 
 ```text

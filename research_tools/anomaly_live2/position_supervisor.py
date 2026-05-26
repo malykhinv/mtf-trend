@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field, replace
 from math import isfinite
 from statistics import median
-
+from typing import Callable, Mapping
 from data.exchanges.ccxt_types import ExchangeOrderFill
 
 from .clock import utc_now_ms
@@ -138,13 +138,20 @@ class Live2PositionSupervisor:
         self._total_tp1_closes = 0
         self._total_early_exit_closes = 0
         self._total_final_closes = 0
+        self._total_stop_closes = 0
+        self._total_be_closes = 0
+        self._total_realized_pnl_usdt = 0.0
         self._total_integrity_errors = 0
         self._last_cycle_at_ms = 0
         self._last_error = ""
+        self._user_data_status_provider: Callable[[], Mapping[str, object]] | None = None
 
     @property
     def ready(self) -> bool:
         return self.exchange_client is not None and self.execution_engine.ready and not self._last_error
+
+    def set_user_data_status_provider(self, provider: Callable[[], Mapping[str, object]] | None) -> None:
+        self._user_data_status_provider = provider
 
     def run_cycle(self, state_store: SymbolStateStore) -> Live2PositionSupervisorCycleResult:
         now_ms = utc_now_ms()
@@ -182,6 +189,14 @@ class Live2PositionSupervisor:
             }:
                 result.final_close_count += 1
                 self._total_final_closes += 1
+                reason = str(action.data.get("reason") or _dict(action.data.get("position")).get("close_reason") or "")
+                if "stop_gone" in reason or "stop_trigger" in reason:
+                    self._total_stop_closes += 1
+                if "breakeven" in reason or "_be_" in reason:
+                    self._total_be_closes += 1
+            realized_delta = _float_or_none(action.data.get("realized_pnl_delta_usdt"))
+            if realized_delta is not None:
+                self._total_realized_pnl_usdt += realized_delta
             elif action.severity == Live2Severity.ERROR:
                 result.integrity_error_count += 1
                 self._total_integrity_errors += 1
@@ -215,6 +230,9 @@ class Live2PositionSupervisor:
             "total_tp1_closes": self._total_tp1_closes,
             "total_early_exit_closes": self._total_early_exit_closes,
             "total_final_closes": self._total_final_closes,
+            "total_stop_closes": self._total_stop_closes,
+            "total_be_closes": self._total_be_closes,
+            "total_realized_pnl_usdt": self._total_realized_pnl_usdt,
             "total_integrity_errors": self._total_integrity_errors,
         }
 
@@ -247,27 +265,40 @@ class Live2PositionSupervisor:
                         "stop_order_id": position.stop_order_id,
                     },
                 )
+            close_recovery = self._recover_stop_close_from_user_data(position)
+            recovered_pnl = _float_or_none(close_recovery.get("realized_pnl_usdt"))
+            total_realized_pnl = (
+                float(position.realized_pnl_usdt) + recovered_pnl
+                if recovered_pnl is not None
+                else float(position.realized_pnl_usdt)
+            )
             closed = self.execution_engine.remove_protected_position(position.symbol) or position
+            closed_position = replace(
+                closed,
+                status="closed_verified_stop_trigger_exchange_flat_stop_gone",
+                remaining_amount=0.0,
+                realized_pnl_usdt=total_realized_pnl,
+                closed_at_ms=now_ms,
+                close_reason="stop_trigger_settled_exchange_flat_stop_gone",
+                last_supervised_ms=now_ms,
+            )
+            data: dict[str, object] = {
+                "reason": "stop_trigger_settled_exchange_flat_stop_gone",
+                "exchange_position_amount": refreshed_amount,
+                "old_stop_order_id": position.stop_order_id,
+                "old_stop_client_order_id": position.stop_client_order_id,
+                **close_recovery,
+                "position": closed_position.as_dict(),
+            }
+            if recovered_pnl is not None:
+                data["realized_pnl_usdt"] = total_realized_pnl
             return Live2PositionSupervisorAction(
                 event_type="position_final_close_verified",
-                symbol=closed.symbol,
-                position_id=closed.position_id,
+                symbol=closed_position.symbol,
+                position_id=closed_position.position_id,
                 severity=Live2Severity.INFO,
                 message="exchange position is flat and protected stop is gone; final close verified",
-                data={
-                    "reason": "exchange_position_flat_stop_gone",
-                    "exchange_position_amount": exchange_amount,
-                    "old_stop_order_id": position.stop_order_id,
-                    "old_stop_client_order_id": position.stop_client_order_id,
-                    "position": replace(
-                        closed,
-                        status="closed_verified_exchange_flat_stop_gone",
-                        remaining_amount=0.0,
-                        closed_at_ms=now_ms,
-                        close_reason="exchange_position_flat_stop_gone",
-                        last_supervised_ms=now_ms,
-                    ).as_dict(),
-                },
+                data=data,
             )
 
         if self.execution_engine.verify_stop_visible(position.symbol, position.stop_client_order_id) is None:
@@ -640,27 +671,40 @@ class Live2PositionSupervisor:
                         "stop_order_id": position.stop_order_id,
                     },
                 )
+            close_recovery = self._recover_stop_close_from_user_data(position)
+            recovered_pnl = _float_or_none(close_recovery.get("realized_pnl_usdt"))
+            total_realized_pnl = (
+                float(position.realized_pnl_usdt) + recovered_pnl
+                if recovered_pnl is not None
+                else float(position.realized_pnl_usdt)
+            )
             closed = self.execution_engine.remove_protected_position(position.symbol) or position
+            closed_position = replace(
+                closed,
+                status="closed_verified_exchange_flat_stop_gone",
+                remaining_amount=0.0,
+                realized_pnl_usdt=total_realized_pnl,
+                closed_at_ms=now_ms,
+                close_reason="exchange_position_flat_stop_gone",
+                last_supervised_ms=now_ms,
+            )
+            data: dict[str, object] = {
+                "reason": "exchange_position_flat_stop_gone",
+                "exchange_position_amount": exchange_amount,
+                "old_stop_order_id": position.stop_order_id,
+                "old_stop_client_order_id": position.stop_client_order_id,
+                **close_recovery,
+                "position": closed_position.as_dict(),
+            }
+            if recovered_pnl is not None:
+                data["realized_pnl_usdt"] = total_realized_pnl
             return Live2PositionSupervisorAction(
                 event_type="position_final_close_verified",
-                symbol=closed.symbol,
-                position_id=closed.position_id,
+                symbol=closed_position.symbol,
+                position_id=closed_position.position_id,
                 severity=Live2Severity.INFO,
                 message="protected stop trigger settled: exchange position is flat and stop is gone",
-                data={
-                    "reason": "stop_trigger_settled_exchange_flat_stop_gone",
-                    "exchange_position_amount": refreshed_amount,
-                    "old_stop_order_id": position.stop_order_id,
-                    "old_stop_client_order_id": position.stop_client_order_id,
-                    "position": replace(
-                        closed,
-                        status="closed_verified_stop_trigger_exchange_flat_stop_gone",
-                        remaining_amount=0.0,
-                        closed_at_ms=now_ms,
-                        close_reason="stop_trigger_settled_exchange_flat_stop_gone",
-                        last_supervised_ms=now_ms,
-                    ).as_dict(),
-                },
+                data=data,
             )
         return None
 
@@ -774,6 +818,7 @@ class Live2PositionSupervisor:
                     "new_stop_client_order_id": new_stop_client_order_id,
                     "exchange_position_amount": remaining_amount,
                     "realized_pnl_usdt": realized_pnl,
+                    "realized_pnl_delta_usdt": realized_pnl,
                     "position": updated.as_dict(),
                 },
             )
@@ -825,6 +870,78 @@ class Live2PositionSupervisor:
                 "position": closed.as_dict(),
             },
         )
+
+    def _recover_stop_close_from_user_data(self, position: Live2ProtectedPosition) -> dict[str, object]:
+        """Recover stop-trigger realized PnL from private user-data events.
+
+        A stop-market trigger can make the protected stop disappear and flatten
+        the exchange position before REST can fetch the child fill by order id.
+        The private ORDER_TRADE_UPDATE stream is the honest source for that
+        realized profit; if it is not available, report n/a rather than a fake
+        zero.
+        """
+
+        provider = self._user_data_status_provider
+        if provider is None:
+            return {
+                "realized_pnl_status": "unavailable",
+                "realized_pnl_reason": "user_data_status_provider_not_configured",
+            }
+        try:
+            status = provider()
+        except Exception as exc:
+            return {
+                "realized_pnl_status": "unavailable",
+                "realized_pnl_reason": f"user_data_status_provider_failed:{type(exc).__name__}:{str(exc)[:240]}",
+            }
+        events_raw = status.get("recent_order_events") if isinstance(status, Mapping) else None
+        events = events_raw if isinstance(events_raw, list) else []
+        matching: list[dict[str, object]] = []
+        seen: set[tuple[object, ...]] = set()
+        for item in events:
+            if not isinstance(item, Mapping):
+                continue
+            event = dict(item)
+            if not _same_symbol(event.get("symbol"), position.symbol):
+                continue
+            client_order_id = str(event.get("client_order_id") or "")
+            order_id = str(event.get("order_id") or "")
+            if client_order_id != position.stop_client_order_id and order_id != position.stop_order_id:
+                continue
+            realized = _float_or_none(event.get("realized_profit"))
+            filled_qty = _float_or_none(event.get("last_filled_quantity"))
+            if realized is None or filled_qty is None or filled_qty <= 0.0:
+                continue
+            key = (
+                event.get("transaction_time_ms"),
+                event.get("event_time_ms"),
+                order_id,
+                client_order_id,
+                filled_qty,
+                realized,
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            matching.append(event)
+        if not matching:
+            return {
+                "realized_pnl_status": "unavailable",
+                "realized_pnl_reason": "matching_stop_fill_not_found_in_recent_user_data_events",
+                "stop_order_id": position.stop_order_id,
+                "stop_client_order_id": position.stop_client_order_id,
+            }
+        realized_pnl = sum(float(item["realized_profit"]) for item in matching if _float_or_none(item.get("realized_profit")) is not None)
+        last_event = matching[-1]
+        return {
+            "realized_pnl_status": "recovered_from_user_data_order_trade_update",
+            "realized_pnl_reason": "matched_stop_client_order_id_or_order_id",
+            "realized_pnl_usdt": realized_pnl,
+            "realized_pnl_delta_usdt": realized_pnl,
+            "exit_fill_price": _float_or_none(last_event.get("last_filled_price")) or _float_or_none(last_event.get("average_price")),
+            "exit_filled_amount": _float_or_none(last_event.get("last_filled_quantity")),
+            "matched_user_data_order_events": matching,
+        }
 
     def _close_early_exit_full_position(
         self,

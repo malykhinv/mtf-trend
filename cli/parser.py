@@ -295,6 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_live2.add_argument("--top-growth-max-cycle-seconds", type=float, default=0.75)
     anomaly_live2.add_argument("--top-growth-fetch-spacing-seconds", type=float, default=0.02)
     anomaly_live2.add_argument("--execution-order-notional-usdt", type=float, default=12.0)
+    anomaly_live2.add_argument("--execution-max-open-positions", type=int, default=0, help="0 means unlimited live2 protected positions.")
     anomaly_live2.add_argument("--position-supervisor-tp1-close-fraction", type=float, default=0.5)
     anomaly_live2.add_argument("--position-supervisor-early-exit-enabled", type=_str_to_bool, default=True)
     anomaly_live2.add_argument("--position-supervisor-early-exit-min-hold-candles", type=_positive_int_for("--position-supervisor-early-exit-min-hold-candles"), default=6)

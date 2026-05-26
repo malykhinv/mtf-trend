@@ -702,6 +702,8 @@ Live category contract is shared_pump_category_contract_v1_live_overlay_v6: live
 
 After P407, live2 runner categories no longer use calendar-minute setup windows. `runner_oi_confirmed`, `runner_flow`, and `runner_balanced` evaluate a trailing contiguous rolling 60s setup built from the last 12 closed 5s candles ending at the decision candle. Baseline remains closed 1m history ending before the rolling setup window. Artifacts must expose `live_setup_alignment=rolling_60s_5s_step` and `live_setup_calendar_aligned=false`.
 
+After P412, the same runner categories must also pass a rolling runner-shape gate before entry. The 12 closed 5s setup is split into first 30s and second 30s; quote volume, `number_of_trades`, and range must be expanded versus baseline, the second half must accelerate versus the first half, second-half return must be non-negative, and top1 quote-volume share must not dominate the setup. Live2 near-miss artifacts expose `live_setup_runner_shape_*`; backtest candidate rows expose matching `runner_shape_*` fields and category profiles apply the same thresholds.
+
 DANGER cold coverage policy: subminute ticker-radar live has a small default precise inactive-symbol budget of 5 symbols per cycle, labeled DANGER in code and artifacts, but it is idle/health gated. It may run only when cumulative WS health is strictly above 95% and there are no active symbols, no opening position, and no open position. When gated off, artifacts must show inactive_cold_coverage_gate_reason and no full-universe cold-cycle estimate should be displayed as active coverage. This improves parity/audit coverage but increases API/WS aggTrade pressure and is not a proven production edge. Set inactive_scan_slots_per_cycle=0 to disable cold coverage completely.
 ```
 
@@ -779,7 +781,8 @@ Live2 TP1 close uses an exchange reduce-only close with verified actual fill; it
 After partial TP1, live2 must submit and verify a replacement stop for the remaining exchange amount before accepting the lifecycle transition. Only then may it cancel and verify removal of the old initial stop.
 The remaining 50% stays supervised as `tp1_partial_protected_stop_verified`: early-exit logic can still full-close it, and structural trailing may replace the stop using closed post-fill 5s structure.
 If replacement stop creation/visibility, old-stop cancellation, or post-close position state is inconsistent, live2 emits a strict position-integrity error and blocks further entries.
-Each protected position stores the entry-time 5m OI snapshot and selected source-flow velocity so later OI/flow exits can compare current state to the anomaly/entry context.
+Each protected position stores 5m OI context, current-OI baselines, and selected source-flow velocity so later OI/flow exits can compare current state to the anomaly/signal/entry context. Current OI must come from Binance `/fapi/v1/openInterest` and stay separate from 5m history fields.
+After P413, live2 has no default portfolio-level position cap: `execution_max_open_positions=0` means unlimited protected positions. Per-symbol duplicate protection remains mandatory. A positive `--execution-max-open-positions` may be used to restore a hard local cap.
 ```
 
 ### Live2 post-entry early exit after P408
@@ -787,13 +790,15 @@ Each protected position stores the entry-time 5m OI snapshot and selected source
 ```text
 Live2 may full-close a protected long before TP1 only after the entry fill and initial stop have already been verified. The early-exit decision uses only closed 5s candles whose open time is after the exchange entry fill timestamp, so it cannot use the entry candle or pre-fill tape as post-entry evidence.
 
-Default minimum hold is 6 closed 5s candles. The early exit is meant for position management, not entry proof: it can close when buyer flow has clearly faded, seller pressure appears after some MFE, OI rises while price stops progressing, OI falls from the entry 5m snapshot while flow is exhausted after MFE, or the position stalls without progress long enough to make the original pump-flow thesis stale.
+Default minimum hold is 6 closed 5s candles. The early exit is meant for position management, not entry proof: it can close when buyer flow has clearly faded, seller pressure appears after some MFE, OI rises while price stops progressing, current OI falls from pump-start/signal/entry current-OI baselines while flow is exhausted after MFE, or the position stalls without progress long enough to make the original pump-flow thesis stale.
 
 The close must be a reduce-only exchange close with verified fill, verified flat exchange position, and verified cancellation/removal of the old initial stop. Artifacts must expose `position_early_exit_full_close_verified` and the trigger reason. Telegram remains operator UI only; artifacts remain source of truth.
 
 Structural trailing is allowed only for the post-TP1 remainder and uses recent closed post-fill 5s lows; it must replace and verify the stop through the exchange before mutating local protected-position state.
 
 This rule must not become a fee-churning micro-scalper. It is a conservative exit/trail from stale flow, not a repeated partial-close system.
+
+For exchange-triggered stop exits, live2 must not invent a candle/ticker fill. When the exchange position is flat and the protected stop is gone, the supervisor recovers realized PnL only from matching private user-data `ORDER_TRADE_UPDATE` events. If that fill is unavailable, artifacts must mark `realized_pnl_status=unavailable` and Telegram must print `PNL: n/a` rather than a fake zero.
 ```
 
 ---

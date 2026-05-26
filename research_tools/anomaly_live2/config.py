@@ -75,7 +75,7 @@ class AnomalyLive2Config:
     entry_guard_min_rr_to_tp1: float = 0.70
     artifact_writer_queue_max_size: int = 8192
     execution_order_notional_usdt: float = 12.0
-    execution_max_open_positions: int = 1
+    execution_max_open_positions: int = 0
     execution_stop_visibility_attempts: int = 5
     execution_stop_visibility_sleep_seconds: float = 0.5
     execution_max_position_amount_slippage_ratio: float = 0.05
@@ -216,8 +216,8 @@ class AnomalyLive2Config:
             raise ValueError("artifact_writer_queue_max_size must be > 0")
         if self.execution_order_notional_usdt <= 0:
             raise ValueError("execution_order_notional_usdt must be > 0")
-        if self.execution_max_open_positions <= 0:
-            raise ValueError("execution_max_open_positions must be > 0")
+        if self.execution_max_open_positions < 0:
+            raise ValueError("execution_max_open_positions must be >= 0; 0 means unlimited")
         if self.execution_stop_visibility_attempts <= 0:
             raise ValueError("execution_stop_visibility_attempts must be > 0")
         if self.execution_stop_visibility_sleep_seconds < 0:

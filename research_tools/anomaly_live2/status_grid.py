@@ -107,6 +107,7 @@ def format_live2_status_grid(
     pre_live_skipped = _int(decision_status.get("total_pre_live_bucket_skipped"))
 
     max_positions = _int(execution_status.get("max_open_positions"))
+    max_positions_label = "all" if bool(execution_status.get("max_open_positions_unlimited")) or max_positions == 0 else str(max_positions)
     open_positions = _int(execution_status.get("open_protected_positions"))
     protected_positions = execution_status.get("protected_positions")
     protected_count = len(protected_positions) if isinstance(protected_positions, list) else open_positions
@@ -115,7 +116,11 @@ def format_live2_status_grid(
     protected_total = _int(execution_status.get("total_positions_protected"))
     integrity_errors = _int(execution_status.get("total_integrity_errors")) + _int(supervisor_status.get("total_integrity_errors"))
     tp1_count = _int(supervisor_status.get("total_tp1_closes"))
+    early_exit_count = _int(supervisor_status.get("total_early_exit_closes"))
     final_count = _int(supervisor_status.get("total_final_closes"))
+    stop_count = _int(supervisor_status.get("total_stop_closes"))
+    be_count = _int(supervisor_status.get("total_be_closes"))
+    realized_pnl = _float_or_none(supervisor_status.get("total_realized_pnl_usdt"))
     user_stream_ready = bool(user_stream.get("ready"))
     user_stream_events = _int(user_stream.get("messages_received"))
 
@@ -206,15 +211,15 @@ def format_live2_status_grid(
         _separator_line(),
         _section_title(f"Торговля {_format_percent(trading_allowed_ratio, signed=False, precision=0)}"),
         _format_status_line(
-            _format_status_cell("Позиции", f"{open_positions}/{session_positions_total}"),
-            _format_status_cell("Ордера", total_orders),
-            _format_status_cell("RRR", "-"),
-            _format_status_cell("WR", "-"),
+            _format_status_cell("Позиции", f"{open_positions}/{max_positions_label}"),
+            _format_status_cell("Сделки", session_positions_total),
+            _format_status_cell("Closed", final_count),
+            _format_status_cell("Early", early_exit_count),
         ),
         _format_status_line(
-            _format_status_cell("PNL", "-"),
-            _format_status_cell("SL", "-"),
-            _format_status_cell("BE", "-"),
+            _format_status_cell("PNL", _format_usdt(realized_pnl) if realized_pnl is not None else "-"),
+            _format_status_cell("SL", stop_count),
+            _format_status_cell("BE", be_count),
             _format_status_cell("TP", tp1_count),
         ),
     ]
@@ -399,6 +404,13 @@ def _format_percent(value: float | None, *, signed: bool, precision: int = 1) ->
     pct = value * 100.0
     sign = "+" if signed and pct > 0 else ""
     return f"{sign}{pct:.{precision}f}%"
+
+
+def _format_usdt(value: float | None) -> str:
+    if value is None or not math.isfinite(float(value)):
+        return "-"
+    sign = "+" if float(value) > 0 else ""
+    return f"{sign}{float(value):.2f}"
 
 
 def _connection_ratio(ws_health: Mapping[str, object]) -> float | None:

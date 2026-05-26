@@ -1,5 +1,130 @@
 # Anomaly Patch Log
 
+## 2026-05-26 - P413 applied locally - unlimited live2 positions and truthful stop-close PnL
+
+Files:
+
+```text
+research_tools/anomaly_live2/config.py
+research_tools/anomaly_live2/execution.py
+research_tools/anomaly_live2/position_supervisor.py
+research_tools/anomaly_live2/runner.py
+research_tools/anomaly_live2/status_grid.py
+research_tools/anomaly_live2/telegram.py
+research_tools/anomaly_live2/user_data_stream.py
+cli/parser.py
+cli/commands.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Allow live2 to hold more than one protected position, fix operator-grid trade outcome counters, and stop reporting fake +0 USDT PnL when an exchange stop flattens a position.
+```
+
+Change:
+
+```text
+`execution_max_open_positions=0` now means unlimited protected positions and is the live2 default; a positive value still enforces a hard cap. CLI exposes `--execution-max-open-positions`. The runner passes session-scoped execution status into the grid, and the grid now displays final/early/SL/BE/TP counters plus realized PnL from the supervisor. Stop-trigger final closes try to recover realized PnL from private user-data `ORDER_TRADE_UPDATE` events matched by stop client/order id. If no matching fill is available, Telegram prints `PNL: n/a` instead of using the protected-position default zero.
+```
+
+Validation:
+
+```text
+Focused live2 tests passed: 34 passed. compileall passed for data/exchanges research_tools cli constants.py main.py.
+```
+
+Risk:
+
+```text
+Unlimited positions removes the local portfolio cap; exchange/account exposure is now bounded by signal frequency, order notional, exchange margin, and per-symbol duplicate protection only. Stop PnL recovery depends on recent private user-data events; if the event is missing or old, artifacts and Telegram mark PnL unavailable rather than inventing a fill.
+```
+
+## 2026-05-26 - P412 applied locally - runner shape gate for rolling live/backtest categories
+
+Files:
+
+```text
+research_tools/anomaly_category_contract.py
+research_tools/anomaly_live2/signal.py
+research_tools/anomaly_live2/artifacts.py
+research_tools/anomaly_live2/deadline.py
+research_tools/anomaly_strategy_backtest.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Tighten runner entries after the 20260526_120454 live audit without simply raising quote-volume. Require a real rolling wake-up shape: quote volume, number_of_trades, and range must expand together across the full 12x5s rolling setup, and the setup must not be dominated by one quote-volume print.
+```
+
+Change:
+
+```text
+The shared category contract is now v11. `runner_oi_confirmed`, `runner_flow`, and `runner_balanced` add runner-shape thresholds for quote/trade/range ratios, second-half acceleration, non-negative second-half return, and top1 quote-share cap. Live2 computes these from the last 12 closed 5s candles only. Backtest candidate rows now compute the same runner_shape_* fields and category profiles apply the same filters, so the new gate is not live-only.
+```
+
+Validation:
+
+```text
+Focused live2 tests passed: 32 passed. compileall passed for data/exchanges research_tools cli constants.py main.py.
+```
+
+Risk:
+
+```text
+This is stricter and will reduce trades. It is not proof of edge; it only removes some first-spike/single-print noise and makes the rule auditable. A follow-up rolling 1m/5s backtest/profile run is still required to quantify missed runners versus filtered noise.
+```
+
+## 2026-05-26 - P411 applied locally - current OI endpoint in live2 OI poller
+
+Files:
+
+```text
+research_tools/anomaly_live2/market_data/open_interest.py
+research_tools/anomaly_live2/artifacts.py
+research_tools/anomaly_live2/deadline.py
+tests/test_live2_market_watch.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make the live2 OI poller fetch Binance current OI directly, not only 5m open-interest-history candles.
+```
+
+Change:
+
+```text
+Each OI poll now fetches `/fapi/v1/openInterest` through `fetch_current_open_interest()` and stores it separately as `current_oi_*`. The 5m `oi_*` history fields remain the 3x5m baseline/change context and are not overwritten by the current point. Near-miss/deadline artifacts expose the current-OI columns directly.
+```
+
+Validation:
+
+```text
+Focused live2 tests passed: 30 passed. compileall passed for data/exchanges research_tools cli constants.py main.py.
+```
+
+Risk:
+
+```text
+Current OI is REST-polled, not websocket/tick. It is fresher than 5m history, but still bounded by poll interval, symbol cooldown, request queue and exchange latency.
+```
+
 ## 2026-05-26 - P410 proposed - fix ticker current-OI signature boundary
 
 Files:
@@ -33,6 +158,18 @@ Risk:
 ```text
 No trading logic change. This only fixes the state-layer signature mismatch that stopped live2 during startup ticker snapshot.
 ```
+
+## 2026-05-26 - P413/P414 proposed - live2 unlimited positions and truthful final PnL
+
+Status: PROPOSED against GitHub head / uploaded workspace.
+
+Files: `cli/parser.py`, `cli/commands.py`, `research_tools/anomaly_live2/config.py`, `research_tools/anomaly_live2/execution.py`, `research_tools/anomaly_live2/position_supervisor.py`, `research_tools/anomaly_live2/runner.py`, `research_tools/anomaly_live2/status_grid.py`, `research_tools/anomaly_live2/telegram.py`.
+
+Intent: remove the live2 one-position global cap by making `execution_max_open_positions=0` mean unlimited while keeping per-symbol duplicate protection. Fix the grid totals so TP, early exits, final closes, SL/BE buckets and realized PnL are counted from supervisor action deltas, not only TP events.
+
+Stop-close accounting: stop/flat final closes now recover realized stop PnL from recent private user-data `ORDER_TRADE_UPDATE` events matched by stop order id/client id. If recovery succeeds, final action top-level `realized_pnl_usdt` is cumulative position PnL and `realized_pnl_delta_usdt` is only the stop-leg delta. If recovery is unavailable, Telegram shows `PNL: n/a` instead of the misleading protected-position default `+0 USDT`.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py` passed in the uploaded workspace. Patch apply was checked against a reconstructed GitHub-head baseline for the touched hunks.
 
 ## 2026-05-26 - P409 proposed - live2 honest current-OI baselines
 

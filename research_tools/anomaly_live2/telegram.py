@@ -396,7 +396,13 @@ def format_tp1_message(action: Live2PositionSupervisorAction) -> str:
 def format_final_close_message(action: Live2PositionSupervisorAction) -> str:
     position = _dict(action.data.get("position"))
     reason = str(action.data.get("reason") or position.get("close_reason") or action.message or "unknown")
-    realized_pnl = _float_or_none(position.get("realized_pnl_usdt"))
+    realized_pnl = _float_or_none(action.data.get("realized_pnl_usdt"))
+    realized_status = str(action.data.get("realized_pnl_status") or "")
+    if realized_pnl is None and not (
+        reason in {"exchange_position_flat_stop_gone", "stop_trigger_settled_exchange_flat_stop_gone"}
+        and realized_status != "recovered_from_user_data_order_trade_update"
+    ):
+        realized_pnl = _float_or_none(position.get("realized_pnl_usdt"))
     pnl_line = f"PNL: {format_usdt(realized_pnl)} USDT\n" if realized_pnl is not None else "PNL: n/a\n"
     return (
         f"{symbol_emoji(action.symbol)} <b>{telegram_symbol_link(action.symbol)} позиция закрыта</b>\n\n"

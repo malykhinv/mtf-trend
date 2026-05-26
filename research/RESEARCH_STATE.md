@@ -1,3 +1,49 @@
+## 2026-05-26 - P413 live2 multi-position and stop PnL fix
+
+Current commit: UNKNOWN.
+
+Status: P413 APPLIED locally / UNKNOWN commit. Live2 now treats `execution_max_open_positions=0` as unlimited and uses it by default, while still rejecting duplicate live2 positions on the same symbol. The operator grid displays realized PnL plus final/early/SL/BE/TP counters from the position supervisor. Stop-trigger final closes recover realized PnL from private user-data order events when possible; if no stop fill event is available, Telegram shows `PNL: n/a`, not `+0 USDT`.
+
+Safety note: this removes the one-position portfolio cap. Actual exposure is now controlled by order notional, signal frequency, exchange margin, duplicate-symbol protection, and verified stop lifecycle. If a hard cap is needed again, start live2 with positive `--execution-max-open-positions`.
+
+Validation: focused live2 tests passed (34 passed); compileall passed for data/exchanges research_tools cli constants.py main.py.
+
+Next: after restart, verify `live2_events.csv` contains user-data stop fills around any `position_final_close_verified` stop event and that Telegram/grid PnL agrees with those fills.
+
+## 2026-05-26 - P412 runner shape gate applied to rolling runner categories
+
+Current commit: UNKNOWN.
+
+Status: P412 APPLIED locally / UNKNOWN commit. Live2 and the backtest category profile now require `runner_oi_confirmed`, `runner_flow`, and `runner_balanced` to show synchronous rolling-shape confirmation: quote volume, real trade count, and range expansion must be present across the full 12 closed 5s setup, the second 30s must accelerate versus the first 30s, the second-half return must be non-negative, and top1 quote-volume share must stay below the single-print cap.
+
+Why: the 20260526_120454 live audit showed that good candidates more often look like dormancy followed by coordinated range/volume/trades acceleration, not just one large quote-volume candle. This patch intentionally reduces trade count and should be judged by reject distribution plus missed-runner audit, not by one live session.
+
+Validation: focused live2 tests passed (32 passed); compileall passed for data/exchanges research_tools cli constants.py main.py.
+
+Next: run a rolling 1m/5s profile backtest with category profiles and compare filtered rejects against later top movers. If too many delayed runners are missed, the next change should be an explicit delayed-acceptance candidate state, not loosening quote-volume alone.
+
+## 2026-05-26 - P411 current OI endpoint is wired into live2 poller
+
+Current commit: UNKNOWN.
+
+Status: P411 APPLIED locally / UNKNOWN commit. Live2 OI polling now fetches Binance current OI via `/fapi/v1/openInterest` on every symbol poll and stores it as separate `current_oi_*` state/artifact fields. The existing 5m OI history remains the baseline for 3x5m context and is not treated as the current point.
+
+Validation: focused live2 tests passed (30 passed); compileall passed for available project paths.
+
+Risk/limitation: current OI is REST-polled, so it is fresher than 5m candles but not tick-level. Interpret exact OI timing through `current_oi_last_seen_ms` and `current_oi_timestamp_ms`.
+
+## 2026-05-26 - live2 run 20260526_120454 trade readout
+
+Current commit: UNKNOWN.
+
+Analyzed `.output/results/live2_anomaly_runs/20260526_120454` for HIGH, VVV, FF, OPG, NAORIS, AZTEC, BLUAI, IN. Executed/closed positions were BLUAI, AZTEC, NAORIS, OPG, FF, VVV twice, HIGH. IN had deadline/reject rows but no artifact-confirmed live2 position in this run.
+
+Key result: several names were not dead immediately after early exit. Binance 1m replay after live entries shows post-entry/post-exit upside potential in AZTEC, OPG, VVV, BLUAI, and FF. NAORIS looks like noise. HIGH was closer to TP-like movement than a clean runner and is ambiguous.
+
+Hypothesis update: the stronger delayed/runners tend to show a long quiet baseline followed by simultaneous acceleration in quote volume, trade count, and range. In this sample, OPG and FF strongly match this shape; VVV second entry partly matches; BLUAI has flow/range expansion but weaker cleanliness; AZTEC ran later despite only moderate pre-entry acceleration. This supports testing stricter entry confirmation and/or delayed confirmation, but not as proof yet.
+
+Next: derive a small replay rule from this run and prior artifacts: require all three dimensions to accelerate together versus a quiet baseline, then enter only after acceptance rather than first spike. Avoid tightening only quote-volume because that would keep some noisy names and miss the nature distinction.
+
 ## 2026-05-26 - P410 ticker current-OI signature boundary
 
 Current commit: UNKNOWN.
@@ -15,6 +61,18 @@ P409 proposed after P408 revealed that `entry_current_oi` answers only "did OI f
 Next validation: run one small live2 forward session and inspect `position_early_exit_full_close_verified` / protected-position payloads for `pump_start_current_oi_*`, `signal_current_oi_*`, `entry_current_oi_*`, and the three post-baseline change fields. Confirm the pump-start timestamp is not later than selected-signal timestamp for normal radar-covered entries; if it is later/missing, treat pump-start OI conclusion as unavailable for that trade.
 
 # Anomaly Research State
+
+## 2026-05-26 - P413/P414 live2 multi-position and truthful stop PnL
+
+Current commit: UNKNOWN.
+
+Status: PROPOSED against GitHub head / uploaded workspace.
+
+The live2 execution cap now treats `execution_max_open_positions=0` as unlimited, keeps the existing same-symbol protected-position reject, and exposes `max_open_positions_unlimited` to diagnostics. The CLI also has `--execution-max-open-positions`, defaulting to unlimited.
+
+The supervisor now counts all final close paths, early exits, stop/breakeven buckets and realized PnL deltas for the grid. Stop-trigger final closes recover realized PnL from private user-data events when available; Telegram uses top-level action PnL and prints `PNL: n/a` for unrecovered stop closes instead of showing fake zero from the closed position snapshot.
+
+Next: restart live2 and verify in `live_events.csv` that simultaneous different-symbol protected positions can coexist, while duplicate entries on the same symbol are still rejected; then inspect one TP/early/SL close in the grid and Telegram.
 
 ## 2026-05-26 - P409 live2 current-OI entry baseline completed
 

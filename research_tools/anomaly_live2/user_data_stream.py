@@ -240,7 +240,7 @@ class Live2UserDataStreamSource:
         self._account_update_events_received = 0
         self._conditional_reject_events_received = 0
         self._last_order_event: dict[str, object] | None = None
-        self._recent_order_events: deque[dict[str, object]] = deque(maxlen=20)
+        self._recent_order_events: deque[dict[str, object]] = deque(maxlen=200)
         self._thread = threading.Thread(target=self._run_thread, name="live2-binance-user-data", daemon=True)
 
     def start(self) -> None:

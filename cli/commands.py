@@ -1953,6 +1953,7 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
                 top_growth_max_cycle_seconds=float(getattr(args, "top_growth_max_cycle_seconds", 0.75)),
                 top_growth_fetch_spacing_seconds=float(getattr(args, "top_growth_fetch_spacing_seconds", 0.02)),
                 execution_order_notional_usdt=float(getattr(args, "execution_order_notional_usdt", 12.0)),
+                execution_max_open_positions=int(getattr(args, "execution_max_open_positions", 0)),
                 position_supervisor_tp1_close_fraction=float(getattr(args, "position_supervisor_tp1_close_fraction", 0.5)),
                 position_supervisor_early_exit_enabled=bool(getattr(args, "position_supervisor_early_exit_enabled", True)),
                 position_supervisor_early_exit_min_hold_candles=int(getattr(args, "position_supervisor_early_exit_min_hold_candles", 6)),

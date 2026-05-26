@@ -37,6 +37,7 @@ LIVE2_BACKTEST_MIN_HOLD_COUNT = 2
 LIVE2_BACKTEST_MAX_INITIAL_RISK_PCT = 0.16
 LIVE2_BACKTEST_STOP_BUFFER_RANGE_FRACTION = 0.05
 LIVE2_BACKTEST_TP1_R = 0.75
+LIVE2_RUNNER_SHAPE_HALF_CANDLES = LIVE2_BACKTEST_SETUP_CANDLES // 2
 POST_HTF_ACCEPTANCE_CATEGORY_ID = "post_htf_acceptance_long"
 POST_HTF_ACCEPTANCE_CONTRACT = "post_htf_acceptance_long_v1"
 POST_HTF_ACCEPTANCE_HTF_CANDLES = 12
@@ -414,6 +415,18 @@ class Live2SignalEngine:
             "live_setup_min_verticality_score": LIVE2_BACKTEST_MIN_VERTICALITY_SCORE,
             "live_setup_range": live_setup.get("range"),
             "live_setup_range_pct": live_setup.get("range_pct"),
+            "live_setup_range_pct_ratio_to_baseline": live_setup.get("range_pct_ratio_to_baseline"),
+            "live_setup_runner_shape_first_half_quote_volume": live_setup.get("runner_shape_first_half_quote_volume"),
+            "live_setup_runner_shape_second_half_quote_volume": live_setup.get("runner_shape_second_half_quote_volume"),
+            "live_setup_runner_shape_first_half_number_of_trades": live_setup.get("runner_shape_first_half_number_of_trades"),
+            "live_setup_runner_shape_second_half_number_of_trades": live_setup.get("runner_shape_second_half_number_of_trades"),
+            "live_setup_runner_shape_first_half_range_pct": live_setup.get("runner_shape_first_half_range_pct"),
+            "live_setup_runner_shape_second_half_range_pct": live_setup.get("runner_shape_second_half_range_pct"),
+            "live_setup_runner_shape_quote_acceleration": live_setup.get("runner_shape_quote_acceleration"),
+            "live_setup_runner_shape_trade_acceleration": live_setup.get("runner_shape_trade_acceleration"),
+            "live_setup_runner_shape_range_acceleration": live_setup.get("runner_shape_range_acceleration"),
+            "live_setup_runner_shape_second_half_return_pct": live_setup.get("runner_shape_second_half_return_pct"),
+            "live_setup_runner_shape_top1_quote_share": live_setup.get("runner_shape_top1_quote_share"),
             "live_setup_flow_window_ms": live_setup.get("flow_window_ms"),
             "live_setup_flow_quote_per_second": live_setup.get("flow_quote_per_second"),
             "live_setup_flow_trades_per_second": live_setup.get("flow_trades_per_second"),
@@ -495,6 +508,14 @@ class Live2SignalEngine:
             "selected_source_flow_quote_ratio": quote_ratio,
             "selected_source_flow_trade_ratio": trade_ratio,
             "start_range_pct_ratio_to_baseline": range_ratio,
+            "runner_shape_quote_ratio": quote_ratio,
+            "runner_shape_trade_ratio": trade_ratio,
+            "runner_shape_range_ratio": range_ratio,
+            "runner_shape_quote_acceleration": live_setup.get("runner_shape_quote_acceleration"),
+            "runner_shape_trade_acceleration": live_setup.get("runner_shape_trade_acceleration"),
+            "runner_shape_range_acceleration": live_setup.get("runner_shape_range_acceleration"),
+            "runner_shape_second_half_return_pct": live_setup.get("runner_shape_second_half_return_pct"),
+            "runner_shape_top1_quote_share": live_setup.get("runner_shape_top1_quote_share"),
             "start_quote_ratio_per_abs_return": quote_ratio_per_abs_return,
             "start_trade_ratio_per_abs_return": trade_ratio_per_abs_return,
             "start_taker_buy_quote_share": taker_share,
@@ -597,6 +618,9 @@ class Live2SignalEngine:
             if features.get("live_setup_status") == "not_ready":
                 return _dependency(reason)
             return _reject(reason)
+        runner_shape_evaluation = _runner_shape_accepts(category=category, features=features)
+        if runner_shape_evaluation is not None:
+            return runner_shape_evaluation
         if (
             category.max_prior_spike_count_72h is not None
             or category.max_prior_fast_fade_count_72h is not None
@@ -701,6 +725,38 @@ class Live2SignalEngine:
         if category.max_initial_risk_pct is not None and initial_risk_pct is not None and initial_risk_pct > category.max_initial_risk_pct:
             return _reject("initial_risk_pct_above_category_max")
         return Live2CategoryEvaluation(True, "accepted", "accepted")
+
+
+def _runner_shape_accepts(*, category: PumpCategoryContract, features: dict[str, object]) -> Live2CategoryEvaluation | None:
+    checks: tuple[tuple[str, str, float | None, str], ...] = (
+        ("runner_shape_quote_ratio", "min_runner_shape_quote_ratio", category.min_runner_shape_quote_ratio, "runner_shape_quote_ratio_below_category_min"),
+        ("runner_shape_trade_ratio", "min_runner_shape_trade_ratio", category.min_runner_shape_trade_ratio, "runner_shape_trade_ratio_below_category_min"),
+        ("runner_shape_range_ratio", "min_runner_shape_range_ratio", category.min_runner_shape_range_ratio, "runner_shape_range_ratio_below_category_min"),
+        ("runner_shape_quote_acceleration", "min_runner_shape_quote_acceleration", category.min_runner_shape_quote_acceleration, "runner_shape_quote_acceleration_below_category_min"),
+        ("runner_shape_trade_acceleration", "min_runner_shape_trade_acceleration", category.min_runner_shape_trade_acceleration, "runner_shape_trade_acceleration_below_category_min"),
+        ("runner_shape_range_acceleration", "min_runner_shape_range_acceleration", category.min_runner_shape_range_acceleration, "runner_shape_range_acceleration_below_category_min"),
+        ("runner_shape_second_half_return_pct", "min_runner_shape_second_half_return_pct", category.min_runner_shape_second_half_return_pct, "runner_shape_second_half_return_below_category_min"),
+    )
+    any_enabled = False
+    for feature_key, _threshold_key, threshold, reason in checks:
+        if threshold is None:
+            continue
+        any_enabled = True
+        value = _float_or_none(features.get(feature_key))
+        if value is None:
+            return _reject(f"{feature_key}_not_ready")
+        if value < threshold:
+            return _reject(reason)
+    if category.max_runner_shape_top1_quote_share is not None:
+        any_enabled = True
+        top1_quote_share = _float_or_none(features.get("runner_shape_top1_quote_share"))
+        if top1_quote_share is None:
+            return _reject("runner_shape_top1_quote_share_not_ready")
+        if top1_quote_share > category.max_runner_shape_top1_quote_share:
+            return _reject("runner_shape_top1_quote_share_above_category_max")
+    if not any_enabled:
+        return None
+    return None
 
 
 def _category_effective_features(*, category: PumpCategoryContract, features: dict[str, object]) -> dict[str, object]:
@@ -1227,6 +1283,42 @@ def _live_backtest_like_setup(
         reference_price=close_price,
         movement=max(pump_leg_risk, setup_range),
     )
+    first_half: tuple[Live2Candle, ...] = ()
+    second_half: tuple[Live2Candle, ...] = ()
+    if len(segment) >= LIVE2_RUNNER_SHAPE_HALF_CANDLES * 2:
+        first_half = tuple(segment[:LIVE2_RUNNER_SHAPE_HALF_CANDLES])
+        second_half = tuple(segment[LIVE2_RUNNER_SHAPE_HALF_CANDLES:LIVE2_RUNNER_SHAPE_HALF_CANDLES * 2])
+    first_half_quote = sum(item.quote_volume for item in first_half) if first_half else None
+    second_half_quote = sum(item.quote_volume for item in second_half) if second_half else None
+    first_half_trades = sum(float(item.number_of_trades) for item in first_half) if first_half else None
+    second_half_trades = sum(float(item.number_of_trades) for item in second_half) if second_half else None
+    first_half_range_pct = _window_range_pct(first_half)
+    second_half_range_pct = _window_range_pct(second_half)
+    runner_shape_quote_acceleration = (
+        second_half_quote / first_half_quote
+        if first_half_quote is not None and first_half_quote > 0 and second_half_quote is not None
+        else None
+    )
+    runner_shape_trade_acceleration = (
+        second_half_trades / first_half_trades
+        if first_half_trades is not None and first_half_trades > 0 and second_half_trades is not None
+        else None
+    )
+    runner_shape_range_acceleration = (
+        second_half_range_pct / first_half_range_pct
+        if first_half_range_pct is not None and first_half_range_pct > 0 and second_half_range_pct is not None
+        else None
+    )
+    runner_shape_second_half_return_pct = (
+        (second_half[-1].close / second_half[0].open) - 1.0
+        if second_half and second_half[0].open > 0
+        else None
+    )
+    runner_shape_top1_quote_share = (
+        max(item.quote_volume for item in segment) / quote_volume
+        if quote_volume > 0
+        else None
+    )
     common = {
         "closed_entry_candles": closed_entry_candles,
         "elapsed_fraction": setup_elapsed_fraction,
@@ -1238,6 +1330,17 @@ def _live_backtest_like_setup(
         "trade_ratio": trade_ratio,
         "range": setup_range,
         "range_pct": range_pct,
+        "runner_shape_first_half_quote_volume": first_half_quote,
+        "runner_shape_second_half_quote_volume": second_half_quote,
+        "runner_shape_first_half_number_of_trades": first_half_trades,
+        "runner_shape_second_half_number_of_trades": second_half_trades,
+        "runner_shape_first_half_range_pct": first_half_range_pct,
+        "runner_shape_second_half_range_pct": second_half_range_pct,
+        "runner_shape_quote_acceleration": runner_shape_quote_acceleration,
+        "runner_shape_trade_acceleration": runner_shape_trade_acceleration,
+        "runner_shape_range_acceleration": runner_shape_range_acceleration,
+        "runner_shape_second_half_return_pct": runner_shape_second_half_return_pct,
+        "runner_shape_top1_quote_share": runner_shape_top1_quote_share,
         "flow_window_ms": flow_window_ms,
         "flow_quote_per_second": quote_volume / flow_window_seconds,
         "flow_trades_per_second": trade_count / flow_window_seconds,
@@ -1438,6 +1541,17 @@ def _verticality_score(segment: tuple[Live2Candle, ...]) -> float:
 
 def _range_pct(candle: Live2Candle) -> float:
     return (candle.high - candle.low) / candle.close if candle.close > 0 else 0.0
+
+
+def _window_range_pct(candles: tuple[Live2Candle, ...]) -> float | None:
+    if not candles:
+        return None
+    open_price = candles[0].open
+    if open_price <= 0:
+        return None
+    high = max(item.high for item in candles)
+    low = min(item.low for item in candles)
+    return (high - low) / open_price
 
 
 def _effective_context_status(

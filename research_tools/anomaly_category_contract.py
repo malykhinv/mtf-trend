@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 
-CATEGORY_CONTRACT_ID = "shared_pump_category_contract_v1_live_overlay_v10"
+CATEGORY_CONTRACT_ID = "shared_pump_category_contract_v1_live_overlay_v11"
 PUMP_CATEGORY_DISCOVERY = "discovery"
 PUMP_CATEGORY_FAMILY_LIVE = "live_priority"
 PUMP_CATEGORY_FAMILY_DISCOVERY = "discovery"
@@ -49,6 +49,14 @@ class PumpCategoryContract:
     max_post_htf_last3_quote_share: float | None = None
     max_post_htf_top1_quote_share: float | None = None
     post_htf_target_r: float | None = None
+    min_runner_shape_quote_ratio: float | None = None
+    min_runner_shape_trade_ratio: float | None = None
+    min_runner_shape_range_ratio: float | None = None
+    min_runner_shape_quote_acceleration: float | None = None
+    min_runner_shape_trade_acceleration: float | None = None
+    min_runner_shape_range_acceleration: float | None = None
+    min_runner_shape_second_half_return_pct: float | None = None
+    max_runner_shape_top1_quote_share: float | None = None
 
 
 DEFAULT_PUMP_CATEGORY_IDS: tuple[str, ...] = (
@@ -94,6 +102,14 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         max_prior_spike_count_72h=30,
         max_start_taker_buy_quote_share_delta=0.35,
         max_prior_fast_fade_count_72h=2,
+        min_runner_shape_quote_ratio=4.0,
+        min_runner_shape_trade_ratio=2.0,
+        min_runner_shape_range_ratio=2.0,
+        min_runner_shape_quote_acceleration=1.15,
+        min_runner_shape_trade_acceleration=1.05,
+        min_runner_shape_range_acceleration=1.00,
+        min_runner_shape_second_half_return_pct=0.0,
+        max_runner_shape_top1_quote_share=0.70,
     ),
     "runner_flow": PumpCategoryContract(
         category_id="runner_flow",
@@ -111,6 +127,14 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         max_start_taker_buy_quote_share_delta=0.35,
         min_flow_hold_count=1,
         max_prior_fast_fade_count_72h=2,
+        min_runner_shape_quote_ratio=5.0,
+        min_runner_shape_trade_ratio=2.0,
+        min_runner_shape_range_ratio=2.5,
+        min_runner_shape_quote_acceleration=1.20,
+        min_runner_shape_trade_acceleration=1.10,
+        min_runner_shape_range_acceleration=1.00,
+        min_runner_shape_second_half_return_pct=0.0,
+        max_runner_shape_top1_quote_share=0.70,
     ),
     "runner_reclaim": PumpCategoryContract(
         category_id="runner_reclaim",
@@ -144,6 +168,14 @@ SUPPORTED_PUMP_CATEGORIES: dict[str, PumpCategoryContract] = {
         max_prior_spike_count_72h=20,
         max_start_taker_buy_quote_share_delta=0.35,
         max_prior_fast_fade_count_72h=2,
+        min_runner_shape_quote_ratio=4.0,
+        min_runner_shape_trade_ratio=2.0,
+        min_runner_shape_range_ratio=2.0,
+        min_runner_shape_quote_acceleration=1.15,
+        min_runner_shape_trade_acceleration=1.05,
+        min_runner_shape_range_acceleration=1.00,
+        min_runner_shape_second_half_return_pct=0.0,
+        max_runner_shape_top1_quote_share=0.70,
     ),
     "balanced_market": PumpCategoryContract(
         category_id="balanced_market",
@@ -199,6 +231,14 @@ def backtest_profile_overrides(category_id: str) -> dict[str, object]:
         "min_start_lower_wick_to_range": category.min_start_lower_wick_to_range,
         "max_start_upper_wick_to_range": category.max_start_upper_wick_to_range,
         "max_prior_fast_fade_count_72h": category.max_prior_fast_fade_count_72h,
+        "min_runner_shape_quote_ratio": category.min_runner_shape_quote_ratio,
+        "min_runner_shape_trade_ratio": category.min_runner_shape_trade_ratio,
+        "min_runner_shape_range_ratio": category.min_runner_shape_range_ratio,
+        "min_runner_shape_quote_acceleration": category.min_runner_shape_quote_acceleration,
+        "min_runner_shape_trade_acceleration": category.min_runner_shape_trade_acceleration,
+        "min_runner_shape_range_acceleration": category.min_runner_shape_range_acceleration,
+        "min_runner_shape_second_half_return_pct": category.min_runner_shape_second_half_return_pct,
+        "max_runner_shape_top1_quote_share": category.max_runner_shape_top1_quote_share,
     }
     if category.min_oi_change_pct_3x5m is not None:
         values["require_oi_status_ok"] = True

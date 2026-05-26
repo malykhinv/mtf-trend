@@ -331,6 +331,14 @@ class AnomalyBacktestConfig:
     max_start_trade_ratio_per_abs_return: float | None = None
     min_initial_risk_pct: float | None = None
     max_initial_risk_pct: float = 0.16
+    min_runner_shape_quote_ratio: float | None = None
+    min_runner_shape_trade_ratio: float | None = None
+    min_runner_shape_range_ratio: float | None = None
+    min_runner_shape_quote_acceleration: float | None = None
+    min_runner_shape_trade_acceleration: float | None = None
+    min_runner_shape_range_acceleration: float | None = None
+    min_runner_shape_second_half_return_pct: float | None = None
+    max_runner_shape_top1_quote_share: float | None = None
     entry_method: str = "market"
     pullback_box_fraction: float = 0.75
     entry_timeout_candles: int = 60
@@ -700,6 +708,30 @@ def _red_flag_violation_masks(signals: pd.DataFrame, *, config: AnomalyBacktestC
     if config.max_start_trade_ratio is not None:
         trade_ratio = pd.to_numeric(signals["start_trade_ratio"], errors="coerce")
         masks["start_trade_ratio_above_max"] = trade_ratio.gt(config.max_start_trade_ratio) | trade_ratio.isna()
+    if config.min_runner_shape_quote_ratio is not None:
+        ratio = pd.to_numeric(signals["start_quote_ratio"], errors="coerce")
+        masks["runner_shape_quote_ratio_below_min"] = ratio.lt(config.min_runner_shape_quote_ratio) | ratio.isna()
+    if config.min_runner_shape_trade_ratio is not None:
+        ratio = pd.to_numeric(signals["start_trade_ratio"], errors="coerce")
+        masks["runner_shape_trade_ratio_below_min"] = ratio.lt(config.min_runner_shape_trade_ratio) | ratio.isna()
+    if config.min_runner_shape_range_ratio is not None:
+        ratio = pd.to_numeric(signals["start_range_pct_ratio_to_baseline"], errors="coerce")
+        masks["runner_shape_range_ratio_below_min"] = ratio.lt(config.min_runner_shape_range_ratio) | ratio.isna()
+    if config.min_runner_shape_quote_acceleration is not None:
+        accel = pd.to_numeric(signals["runner_shape_quote_acceleration"], errors="coerce")
+        masks["runner_shape_quote_acceleration_below_min"] = accel.lt(config.min_runner_shape_quote_acceleration) | accel.isna()
+    if config.min_runner_shape_trade_acceleration is not None:
+        accel = pd.to_numeric(signals["runner_shape_trade_acceleration"], errors="coerce")
+        masks["runner_shape_trade_acceleration_below_min"] = accel.lt(config.min_runner_shape_trade_acceleration) | accel.isna()
+    if config.min_runner_shape_range_acceleration is not None:
+        accel = pd.to_numeric(signals["runner_shape_range_acceleration"], errors="coerce")
+        masks["runner_shape_range_acceleration_below_min"] = accel.lt(config.min_runner_shape_range_acceleration) | accel.isna()
+    if config.min_runner_shape_second_half_return_pct is not None:
+        ret = pd.to_numeric(signals["runner_shape_second_half_return_pct"], errors="coerce")
+        masks["runner_shape_second_half_return_below_min"] = ret.lt(config.min_runner_shape_second_half_return_pct) | ret.isna()
+    if config.max_runner_shape_top1_quote_share is not None:
+        top1 = pd.to_numeric(signals["runner_shape_top1_quote_share"], errors="coerce")
+        masks["runner_shape_top1_quote_share_above_max"] = top1.gt(config.max_runner_shape_top1_quote_share) | top1.isna()
     if config.min_baseline_quote_daily_proxy is not None:
         setup_minutes = signals["setup_timeframe"].astype(str).map({"1m": 1.0, "5m": 5.0})
         baseline_quote = pd.to_numeric(signals["baseline_quote_volume_median"], errors="coerce")
@@ -2743,6 +2775,14 @@ def build_anomaly_signals(
         "max_start_taker_buy_quote_share_delta": "start_taker_buy_quote_share_delta",
         "max_next_taker_buy_quote_share_delta": "next_n_taker_buy_quote_share_delta",
         "max_start_trade_ratio_per_abs_return": "start_trade_ratio_per_abs_return",
+        "min_runner_shape_quote_ratio": "start_quote_ratio",
+        "min_runner_shape_trade_ratio": "start_trade_ratio",
+        "min_runner_shape_range_ratio": "start_range_pct_ratio_to_baseline",
+        "min_runner_shape_quote_acceleration": "runner_shape_quote_acceleration",
+        "min_runner_shape_trade_acceleration": "runner_shape_trade_acceleration",
+        "min_runner_shape_range_acceleration": "runner_shape_range_acceleration",
+        "min_runner_shape_second_half_return_pct": "runner_shape_second_half_return_pct",
+        "max_runner_shape_top1_quote_share": "runner_shape_top1_quote_share",
     }
     for config_field, column in optional_filter_columns.items():
         if getattr(config, config_field) is not None:
@@ -2816,6 +2856,22 @@ def build_anomaly_signals(
         mask &= signals["start_range_pct_ratio_to_baseline"].astype(float).le(
             config.max_start_range_pct_ratio_to_baseline
         )
+    if config.min_runner_shape_quote_ratio is not None:
+        mask &= signals["start_quote_ratio"].astype(float).ge(config.min_runner_shape_quote_ratio)
+    if config.min_runner_shape_trade_ratio is not None:
+        mask &= signals["start_trade_ratio"].astype(float).ge(config.min_runner_shape_trade_ratio)
+    if config.min_runner_shape_range_ratio is not None:
+        mask &= signals["start_range_pct_ratio_to_baseline"].astype(float).ge(config.min_runner_shape_range_ratio)
+    if config.min_runner_shape_quote_acceleration is not None:
+        mask &= signals["runner_shape_quote_acceleration"].astype(float).ge(config.min_runner_shape_quote_acceleration)
+    if config.min_runner_shape_trade_acceleration is not None:
+        mask &= signals["runner_shape_trade_acceleration"].astype(float).ge(config.min_runner_shape_trade_acceleration)
+    if config.min_runner_shape_range_acceleration is not None:
+        mask &= signals["runner_shape_range_acceleration"].astype(float).ge(config.min_runner_shape_range_acceleration)
+    if config.min_runner_shape_second_half_return_pct is not None:
+        mask &= signals["runner_shape_second_half_return_pct"].astype(float).ge(config.min_runner_shape_second_half_return_pct)
+    if config.max_runner_shape_top1_quote_share is not None:
+        mask &= signals["runner_shape_top1_quote_share"].astype(float).le(config.max_runner_shape_top1_quote_share)
     if config.max_prior_up_down_whipsaw_to_impulse_range is not None:
         mask &= signals["prior_up_down_whipsaw_to_impulse_range"].astype(float).le(
             config.max_prior_up_down_whipsaw_to_impulse_range
@@ -4531,6 +4587,32 @@ def _build_pair_candidate_row(
     next_quote_mean = float(pd.to_numeric(entry_segment["quote_volume"], errors="coerce").mean())
     next_trade_mean = float(pd.to_numeric(entry_segment["number_of_trades"], errors="coerce").mean())
     taker_metrics = _pair_taker_metrics(entry_segment, baseline, baseline_quote_value)
+    runner_shape_segment = entry_segment.tail(12).copy()
+    runner_shape_first_half = runner_shape_segment.head(6)
+    runner_shape_second_half = runner_shape_segment.iloc[6:12]
+    runner_shape_ready = len(runner_shape_first_half) == 6 and len(runner_shape_second_half) == 6
+    runner_shape_first_half_quote = (
+        float(pd.to_numeric(runner_shape_first_half["quote_volume"], errors="coerce").sum())
+        if runner_shape_ready
+        else float("nan")
+    )
+    runner_shape_second_half_quote = (
+        float(pd.to_numeric(runner_shape_second_half["quote_volume"], errors="coerce").sum())
+        if runner_shape_ready
+        else float("nan")
+    )
+    runner_shape_first_half_trades = (
+        float(pd.to_numeric(runner_shape_first_half["number_of_trades"], errors="coerce").sum())
+        if runner_shape_ready
+        else float("nan")
+    )
+    runner_shape_second_half_trades = (
+        float(pd.to_numeric(runner_shape_second_half["number_of_trades"], errors="coerce").sum())
+        if runner_shape_ready
+        else float("nan")
+    )
+    runner_shape_first_half_range_pct = _entry_segment_range_pct(runner_shape_first_half) if runner_shape_ready else float("nan")
+    runner_shape_second_half_range_pct = _entry_segment_range_pct(runner_shape_second_half) if runner_shape_ready else float("nan")
     return {
         "symbol": symbol,
         "timeframe": setup_timeframe,
@@ -4581,6 +4663,25 @@ def _build_pair_candidate_row(
         "hold_count_model": "entry_price_activation_hold",
         "flow_hold_count_next_n_candles": flow_hold_count,
         "flow_hold_ratio_next_n_candles": _safe_divide_value(flow_hold_count, len(entry_segment)),
+        "runner_shape_first_half_quote_volume": runner_shape_first_half_quote,
+        "runner_shape_second_half_quote_volume": runner_shape_second_half_quote,
+        "runner_shape_first_half_number_of_trades": runner_shape_first_half_trades,
+        "runner_shape_second_half_number_of_trades": runner_shape_second_half_trades,
+        "runner_shape_first_half_range_pct": runner_shape_first_half_range_pct,
+        "runner_shape_second_half_range_pct": runner_shape_second_half_range_pct,
+        "runner_shape_quote_acceleration": _safe_divide_value(runner_shape_second_half_quote, runner_shape_first_half_quote),
+        "runner_shape_trade_acceleration": _safe_divide_value(runner_shape_second_half_trades, runner_shape_first_half_trades),
+        "runner_shape_range_acceleration": _safe_divide_value(runner_shape_second_half_range_pct, runner_shape_first_half_range_pct),
+        "runner_shape_second_half_return_pct": (
+            _safe_divide_value(float(runner_shape_second_half.iloc[-1]["close"]) - float(runner_shape_second_half.iloc[0]["open"]), float(runner_shape_second_half.iloc[0]["open"]))
+            if runner_shape_ready
+            else float("nan")
+        ),
+        "runner_shape_top1_quote_share": (
+            _safe_divide_value(float(pd.to_numeric(runner_shape_segment["quote_volume"], errors="coerce").max()), float(pd.to_numeric(runner_shape_segment["quote_volume"], errors="coerce").sum()))
+            if runner_shape_ready
+            else float("nan")
+        ),
         "price_retention_next_n": price_retention,
         "price_retention_model": "decision_close_vs_setup_open_to_high",
         "entry_activation_price": activation_price,
@@ -4668,6 +4769,17 @@ def _pair_taker_metrics(entry_segment: pd.DataFrame, baseline: pd.DataFrame, bas
         "next_n_taker_buy_quote_share_delta": next_share - baseline_share,
         "next_n_taker_buy_quote_share_decay": _safe_divide_value(next_share, start_share),
     }
+
+
+def _entry_segment_range_pct(segment: pd.DataFrame) -> float:
+    if segment.empty:
+        return float("nan")
+    open_price = float(segment.iloc[0]["open"])
+    if not np.isfinite(open_price) or open_price <= 0:
+        return float("nan")
+    high = float(pd.to_numeric(segment["high"], errors="coerce").max())
+    low = float(pd.to_numeric(segment["low"], errors="coerce").min())
+    return _safe_divide_value(high - low, open_price)
 
 
 def _classify_pair_outcome(*, future_ret_high: float, future_dd_low: float, config: AnomalyLabConfig) -> str:
@@ -8763,6 +8875,14 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-start-quote-ratio-per-abs-return", type=float, default=None)
     parser.add_argument("--max-start-trade-ratio-per-abs-return", type=float, default=None)
     parser.add_argument("--max-start-range-pct-ratio-to-baseline", type=float, default=None)
+    parser.add_argument("--min-runner-shape-quote-ratio", type=float, default=None)
+    parser.add_argument("--min-runner-shape-trade-ratio", type=float, default=None)
+    parser.add_argument("--min-runner-shape-range-ratio", type=float, default=None)
+    parser.add_argument("--min-runner-shape-quote-acceleration", type=float, default=None)
+    parser.add_argument("--min-runner-shape-trade-acceleration", type=float, default=None)
+    parser.add_argument("--min-runner-shape-range-acceleration", type=float, default=None)
+    parser.add_argument("--min-runner-shape-second-half-return-pct", type=float, default=None)
+    parser.add_argument("--max-runner-shape-top1-quote-share", type=float, default=None)
     parser.add_argument("--max-prior-up-down-whipsaw-to-impulse-range", type=float, default=0.60)
     parser.add_argument("--min-next-taker-buy-quote-share", type=float, default=None)
     parser.add_argument(
@@ -8852,6 +8972,14 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
         max_start_quote_ratio_per_abs_return=args.max_start_quote_ratio_per_abs_return,
         max_start_trade_ratio_per_abs_return=args.max_start_trade_ratio_per_abs_return,
         max_start_range_pct_ratio_to_baseline=args.max_start_range_pct_ratio_to_baseline,
+        min_runner_shape_quote_ratio=args.min_runner_shape_quote_ratio,
+        min_runner_shape_trade_ratio=args.min_runner_shape_trade_ratio,
+        min_runner_shape_range_ratio=args.min_runner_shape_range_ratio,
+        min_runner_shape_quote_acceleration=args.min_runner_shape_quote_acceleration,
+        min_runner_shape_trade_acceleration=args.min_runner_shape_trade_acceleration,
+        min_runner_shape_range_acceleration=args.min_runner_shape_range_acceleration,
+        min_runner_shape_second_half_return_pct=args.min_runner_shape_second_half_return_pct,
+        max_runner_shape_top1_quote_share=args.max_runner_shape_top1_quote_share,
         max_prior_up_down_whipsaw_to_impulse_range=args.max_prior_up_down_whipsaw_to_impulse_range,
         min_flow_hold_count=args.min_flow_hold_count,
         max_prior_spike_count_72h=args.max_prior_spike_count_72h,

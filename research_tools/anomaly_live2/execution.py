@@ -91,7 +91,7 @@ class Live2ExecutionConfig:
 
     max_existing_position_abs_amount: float = 0.0
     order_notional_usdt: float = 12.0
-    max_open_positions: int = 1
+    max_open_positions: int = 0
     max_position_amount_slippage_ratio: float = 0.05
     stop_visibility_attempts: int = 5
     stop_visibility_sleep_seconds: float = 0.5
@@ -101,8 +101,8 @@ class Live2ExecutionConfig:
             raise ValueError("max_existing_position_abs_amount must be >= 0")
         if self.order_notional_usdt <= 0:
             raise ValueError("order_notional_usdt must be > 0")
-        if self.max_open_positions <= 0:
-            raise ValueError("max_open_positions must be > 0")
+        if self.max_open_positions < 0:
+            raise ValueError("max_open_positions must be >= 0; 0 means unlimited")
         if self.max_position_amount_slippage_ratio < 0:
             raise ValueError("max_position_amount_slippage_ratio must be >= 0")
         if self.stop_visibility_attempts <= 0:
@@ -437,7 +437,7 @@ class Live2ExecutionEngine:
                 ),
                 timing=timing,
             )
-        if len(self._protected_positions) >= self.config.max_open_positions:
+        if self.config.max_open_positions > 0 and len(self._protected_positions) >= self.config.max_open_positions:
             self._total_rejected_capacity += 1
             return self._finish_result(
                 Live2ExecutionResult(
@@ -964,6 +964,7 @@ class Live2ExecutionEngine:
             "order_placement_status": "verified_entry_and_initial_stop_enabled",
             "trading_halted_reason": self._trading_halted_reason,
             "max_open_positions": self.config.max_open_positions,
+            "max_open_positions_unlimited": self.config.max_open_positions == 0,
             "open_protected_positions": len(self._protected_positions),
             "protected_positions": [position.as_dict() for position in self._protected_positions.values()],
             "total_execute_calls": self._total_execute_calls,

@@ -7,19 +7,21 @@ import pandas as pd
 import pytest
 
 from cli.parser import build_parser
-from data.exchanges.ccxt_types import ExchangeLiveAccountPreflight, ExchangeOrderFill
+from data.exchanges.ccxt_types import ExchangeLiveAccountPreflight, ExchangeOpenInterestSnapshot, ExchangeOrderFill
 from research_tools.anomaly_live2.artifacts import Live2ArtifactWriter
 from research_tools.anomaly_live2.config import AnomalyLive2Config
+from research_tools.anomaly_live2.contracts import Live2Severity
 from research_tools.anomaly_live2.deadline import Live2DeadlineEngine, Live2DeadlineEngineConfig, Live2DecisionRecord
 from research_tools.anomaly_live2.entry_guard import Live2EntryGuardResult
 from research_tools.anomaly_live2.execution import Live2ExecutionConfig, Live2ExecutionEngine
 from research_tools.anomaly_live2.market_data.candles import Live2AggTradeEvent, Live2Candle, Live2CandleRing
-from research_tools.anomaly_live2.position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorConfig
+from research_tools.anomaly_live2.position_supervisor import Live2PositionSupervisor, Live2PositionSupervisorAction, Live2PositionSupervisorConfig
 from research_tools.anomaly_live2.market_data.prior_context import (
     LIVE2_PRIOR_CONTEXT_TIMEFRAME_MS,
     Live2PriorContextPollConfig,
     Live2PriorContextPoller,
 )
+from research_tools.anomaly_live2.market_data.open_interest import Live2OpenInterestPollConfig, Live2OpenInterestPoller
 from research_tools.anomaly_live2.market_data.warmup import (
     Live2StartupHtfBaselineConfig,
     Live2StartupHtfBaselineWarmup,
@@ -29,13 +31,16 @@ from research_tools.anomaly_live2.signal import (
     _effective_context_status,
     _live_backtest_like_setup,
     _post_htf_acceptance_setup,
+    _runner_shape_accepts,
 )
 from research_tools.anomaly_live2.signal import Live2SignalDecision
 from research_tools.anomaly_live2.state import LIVE2_AGGTRADE_WS_SOURCE, SymbolStateStore
 from research_tools.anomaly_live2.status_grid import format_live2_status_grid
 from research_tools.anomaly_live2.top_growth import HOUR_MS, Live2TopGrowthAudit, Live2TopGrowthAuditConfig
+from research_tools.anomaly_category_contract import SUPPORTED_PUMP_CATEGORIES
 from research_tools.anomaly_continuation_lab import AnomalyLabConfig
 from research_tools.anomaly_strategy_backtest import AnomalyBacktestConfig, _build_pair_candidate_row
+from research_tools.anomaly_live2.telegram import format_final_close_message
 
 
 def _trade(
@@ -260,6 +265,7 @@ def test_live2_artifact_writer_records_near_miss_csv(tmp_path) -> None:
         assert row is not None
         writer.write_near_miss(row)
         writer._queue.join()
+        writer.close()
 
         text = (tmp_path / "live2_near_misses.csv").read_text(encoding="utf-8-sig")
         assert "AAA/USDT:USDT" in text
@@ -293,6 +299,51 @@ class _FakeHtfBaselineExchange:
             [0, "1.0", "1.02", "0.99", "1.01", "10", 59_999, "1000", 42, "5", "550", "0"],
             [60_000, "1.01", "1.03", "1.00", "1.02", "11", 119_999, "1200", 48, "6", "660", "0"],
         ]
+
+
+class _FakeOpenInterestExchange:
+    def fetch_open_interest(self, symbol, timeframe, start_timestamp_ms, end_timestamp_ms):
+        return pd.DataFrame(
+            {
+                "timestamp": [0, 300_000, 600_000, 900_000],
+                "open_interest": [100.0, 102.0, 104.0, 110.0],
+            }
+        )
+
+    def fetch_current_open_interest(self, symbol):
+        return ExchangeOpenInterestSnapshot(
+            symbol=symbol,
+            exchange_symbol="AAAUSDT",
+            fetched_at_ms=1_000_123,
+            timestamp_ms=1_000_111,
+            open_interest=112.0,
+            source="fapiPublicGetOpenInterest",
+            status="ok",
+            reason="ok",
+        )
+
+
+def test_live2_open_interest_poller_records_current_open_interest_separately() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT",))
+    state = store.get_or_create("AAA/USDT:USDT")
+    state.set_universe_selection(selected=True, rank=1, reason="test", selected_at_ms=0)
+    poller = Live2OpenInterestPoller(
+        state_store=store,
+        exchange_client=_FakeOpenInterestExchange(),
+        config=Live2OpenInterestPollConfig(poll_interval_seconds=1.0, symbol_cooldown_seconds=1.0, max_symbols_per_cycle=1),
+    )
+
+    summary = poller.poll_symbols_once(("AAA/USDT:USDT",), request_sleep_seconds=0.0)
+
+    assert summary["ok"] == 1
+    state = store.get_or_create("AAA/USDT:USDT")
+    assert state.oi_status == "ok"
+    assert state.oi_open_interest == pytest.approx(110.0)
+    assert state.oi_change_pct_3x5m == pytest.approx(0.10)
+    assert state.current_oi_status == "ok"
+    assert state.current_oi_open_interest == pytest.approx(112.0)
+    assert state.current_oi_timestamp_ms == 1_000_111
+    assert state.current_oi_source == "fapiPublicGetOpenInterest"
 
 
 def test_live2_startup_htf_baseline_warmup_loads_raw_kline_flow_fields() -> None:
@@ -531,7 +582,68 @@ def test_live2_backtest_like_setup_uses_rolling_60s_not_calendar_minute() -> Non
     assert setup["setup_open_ms"] == first_open_ms
     assert setup["setup_open_ms"] != (decision.open_time_ms // 60_000) * 60_000
     assert setup["closed_entry_candles"] == 12
+
+
+def test_live2_backtest_like_setup_exposes_runner_shape_acceleration() -> None:
+    baseline_1m = tuple(
+        _candle(timeframe_ms=60_000, open_time_ms=idx * 60_000, high=1.005, low=0.995, quote_volume=100.0, number_of_trades=10)
+        for idx in range(60)
+    )
+    first_open_ms = 60 * 60_000 + 5_000
+    previous_close = 1.0
+    segment: list[Live2Candle] = []
+    for index in range(12):
+        quote_volume = 5.0 if index < 6 else 85.0
+        number_of_trades = 2 if index < 6 else 20
+        close = previous_close + (0.001 if index < 6 else 0.010)
+        segment.append(
+            _candle(
+                timeframe_ms=5_000,
+                open_time_ms=first_open_ms + index * 5_000,
+                open_price=previous_close,
+                high=close + 0.001,
+                low=previous_close - 0.001,
+                close=close,
+                quote_volume=quote_volume,
+                number_of_trades=number_of_trades,
+            )
+        )
+        previous_close = close
+
+    setup = _live_backtest_like_setup(
+        closed_5s=tuple(segment),
+        closed_1m=baseline_1m,
+        decision_candle=segment[-1],
+    )
+
+    assert setup["status"] == "ok"
+    assert setup["runner_shape_quote_acceleration"] == 17.0
+    assert round(float(setup["runner_shape_trade_acceleration"]), 6) == 10.0
+    assert float(setup["runner_shape_range_acceleration"]) > 5.0
+    assert float(setup["runner_shape_second_half_return_pct"]) > 0.0
+    assert float(setup["runner_shape_top1_quote_share"]) < 0.70
     assert setup["elapsed_fraction"] == 1.0
+
+
+def test_live2_runner_shape_rejects_single_print_flow() -> None:
+    category = SUPPORTED_PUMP_CATEGORIES["runner_balanced"]
+    evaluation = _runner_shape_accepts(
+        category=category,
+        features={
+            "runner_shape_quote_ratio": 20.0,
+            "runner_shape_trade_ratio": 8.0,
+            "runner_shape_range_ratio": 4.0,
+            "runner_shape_quote_acceleration": 3.0,
+            "runner_shape_trade_acceleration": 2.0,
+            "runner_shape_range_acceleration": 1.5,
+            "runner_shape_second_half_return_pct": 0.01,
+            "runner_shape_top1_quote_share": 0.85,
+        },
+    )
+
+    assert evaluation is not None
+    assert evaluation.accepted is False
+    assert evaluation.reason == "runner_shape_top1_quote_share_above_category_max"
 
 
 def test_live2_setup_math_matches_backtest_pair_candidate_row() -> None:
@@ -932,6 +1044,43 @@ def test_live2_execution_records_entry_attempt_timing() -> None:
     assert result.details["execution_timing"]["duration_ms"] == result.duration_ms
 
 
+def test_live2_execution_zero_max_open_positions_means_unlimited_capacity() -> None:
+    store = SymbolStateStore(("AAA/USDT:USDT", "BBB/USDT:USDT"))
+    exchange = _FakeExecutionExchange()
+    engine = Live2ExecutionEngine(
+        exchange_client=exchange,
+        config=Live2ExecutionConfig(max_open_positions=0, stop_visibility_sleep_seconds=0.0),
+    )
+    assert engine.preflight().ready
+    signal = Live2SignalDecision(
+        verdict="selected",
+        reason="test",
+        category_id="test_category",
+        category_rank=1,
+        signal_entry_price=1.0,
+        initial_stop_at_decision=0.99,
+        initial_risk_pct_at_decision=0.01,
+        tp1_at_decision=1.02,
+    )
+    guard = Live2EntryGuardResult(
+        verdict="accepted",
+        reason="entry_guard_passed",
+        live_price=1.0,
+        signal_age_ms=100,
+        entry_price_drift_pct=0.0,
+        rr_to_tp1_at_live_price=2.0,
+    )
+
+    first = engine.execute_selected(state=store.get_or_create("AAA/USDT:USDT"), signal_decision=signal, entry_guard_result=guard)
+    exchange.position_amount = 0.0
+    second = engine.execute_selected(state=store.get_or_create("BBB/USDT:USDT"), signal_decision=signal, entry_guard_result=guard)
+
+    assert first.verdict == "selected"
+    assert second.verdict == "selected"
+    assert engine.status()["max_open_positions_unlimited"] is True
+    assert engine.status()["open_protected_positions"] == 2
+
+
 def test_live2_supervisor_treats_settled_stop_trigger_as_final_close() -> None:
     store = SymbolStateStore(("AAA/USDT:USDT",))
     state = store.get_or_create("AAA/USDT:USDT")
@@ -972,14 +1121,58 @@ def test_live2_supervisor_treats_settled_stop_trigger_as_final_close() -> None:
             stop_trigger_settle_sleep_seconds=0.0,
         ),
     )
+    position = engine.protected_positions_snapshot()[0]
+    supervisor.set_user_data_status_provider(
+        lambda: {
+            "recent_order_events": [
+                {
+                    "symbol": position.symbol,
+                    "client_order_id": position.stop_client_order_id,
+                    "order_id": position.stop_order_id,
+                    "execution_type": "TRADE",
+                    "order_status": "FILLED",
+                    "last_filled_quantity": position.remaining_amount,
+                    "last_filled_price": 0.99,
+                    "average_price": 0.99,
+                    "realized_profit": -0.12,
+                    "transaction_time_ms": 123,
+                    "event_time_ms": 123,
+                }
+            ]
+        }
+    )
 
     cycle = supervisor.run_cycle(store)
 
     assert cycle.integrity_error_count == 0
     assert cycle.final_close_count == 1
     assert cycle.actions[0].event_type == "position_final_close_verified"
+    assert cycle.actions[0].data["realized_pnl_status"] == "recovered_from_user_data_order_trade_update"
+    assert cycle.actions[0].data["realized_pnl_usdt"] == pytest.approx(-0.12)
+    assert supervisor.status()["total_stop_closes"] == 1
+    assert supervisor.status()["total_realized_pnl_usdt"] == pytest.approx(-0.12)
     assert engine.ready
     assert engine.protected_positions_snapshot() == ()
+
+
+def test_live2_final_stop_telegram_does_not_report_fake_zero_pnl() -> None:
+    action = Live2PositionSupervisorAction(
+        event_type="position_final_close_verified",
+        symbol="AAA/USDT:USDT",
+        position_id="pos-1",
+        severity=Live2Severity.INFO,
+        message="flat",
+        data={
+            "reason": "exchange_position_flat_stop_gone",
+            "realized_pnl_status": "unavailable",
+            "position": {"realized_pnl_usdt": 0.0, "close_reason": "exchange_position_flat_stop_gone"},
+        },
+    )
+
+    text = format_final_close_message(action)
+
+    assert "PNL: n/a" in text
+    assert "PNL: +0" not in text
 
 
 def test_live2_supervisor_tp1_closes_half_and_resizes_verified_stop() -> None:
@@ -1246,7 +1439,20 @@ def test_live2_status_grid_uses_four_column_operator_sections() -> None:
             "total_data_not_ready": 4,
             "total_data_dependency_not_ready": 0,
         },
-        execution_status={"max_open_positions": 1, "open_protected_positions": 0, "total_positions_protected": 0},
+        execution_status={
+            "max_open_positions": 0,
+            "max_open_positions_unlimited": True,
+            "open_protected_positions": 0,
+            "total_positions_protected": 2,
+            "position_supervisor": {
+                "total_realized_pnl_usdt": -0.34,
+                "total_stop_closes": 1,
+                "total_be_closes": 0,
+                "total_tp1_closes": 1,
+                "total_early_exit_closes": 1,
+                "total_final_closes": 2,
+            },
+        },
         user_data_stream_status={"ready": True},
         runtime_gate_status={
             "readiness": {"new_entries_allowed": True},
@@ -1274,6 +1480,8 @@ def test_live2_status_grid_uses_four_column_operator_sections() -> None:
     assert "Аномалии 14167" in text
     assert "Активные 17/143" in text
     assert "Разрывы контекста 0/0/0" in text
+    assert "PNL -0.34" in text
+    assert "SL 1" in text and "TP 1" in text
     assert "BTC 1.8%" in text and "SOL 0.9%" in text
 
 
