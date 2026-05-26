@@ -6,6 +6,7 @@ import csv
 import json
 import os
 import queue
+import time
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +38,10 @@ class Live2ArtifactWriterStatus:
     events_enqueued_by_type: dict[str, int]
     error_count: int
     last_error: str
+    dropped_count: int
+    dropped_by_kind: dict[str, int]
+    dropped_events_by_type: dict[str, int]
+    output_file_budget: dict[str, dict[str, int | bool]]
     backpressure_active: bool
 
     def as_dict(self) -> dict[str, Any]:
@@ -50,6 +55,10 @@ class Live2ArtifactWriterStatus:
             "events_enqueued_by_type": dict(getattr(self, "events_enqueued_by_type", {})),
             "error_count": self.error_count,
             "last_error": self.last_error,
+            "dropped_count": self.dropped_count,
+            "dropped_by_kind": dict(self.dropped_by_kind),
+            "dropped_events_by_type": dict(self.dropped_events_by_type),
+            "output_file_budget": self.output_file_budget,
             "backpressure_active": self.backpressure_active,
         }
 
@@ -213,9 +222,26 @@ class Live2ArtifactWriter:
         "event_data_json",
     )
 
-    def __init__(self, output_dir: Path, *, queue_max_size: int = 8192) -> None:
+    def __init__(
+        self,
+        output_dir: Path,
+        *,
+        queue_max_size: int = 8192,
+        event_max_bytes: int = 128 * 1024 * 1024,
+        near_miss_max_bytes: int = 64 * 1024 * 1024,
+        flush_every_rows: int = 256,
+        flush_interval_seconds: float = 2.0,
+    ) -> None:
         if queue_max_size <= 0:
             raise ValueError("queue_max_size must be > 0")
+        if event_max_bytes <= 0:
+            raise ValueError("event_max_bytes must be > 0")
+        if near_miss_max_bytes <= 0:
+            raise ValueError("near_miss_max_bytes must be > 0")
+        if flush_every_rows <= 0:
+            raise ValueError("flush_every_rows must be > 0")
+        if flush_interval_seconds <= 0:
+            raise ValueError("flush_interval_seconds must be > 0")
         self.output_dir = output_dir
         self.events_path = output_dir / "live2_events.csv"
         self.near_misses_path = output_dir / "live2_near_misses.csv"
@@ -226,6 +252,10 @@ class Live2ArtifactWriter:
 
         self._queue: queue.Queue[_ArtifactJob] = queue.Queue(maxsize=queue_max_size)
         self._queue_max_size = queue_max_size
+        self._event_max_bytes = int(event_max_bytes)
+        self._near_miss_max_bytes = int(near_miss_max_bytes)
+        self._flush_every_rows = int(flush_every_rows)
+        self._flush_interval_seconds = float(flush_interval_seconds)
         self._lock = threading.Lock()
         self._closed = False
         self._ready = True
@@ -235,6 +265,9 @@ class Live2ArtifactWriter:
         self._events_enqueued_by_type: dict[str, int] = {}
         self._error_count = 0
         self._last_error = ""
+        self._dropped_count = 0
+        self._dropped_by_kind: dict[str, int] = {}
+        self._dropped_events_by_type: dict[str, int] = {}
         self._events_file = self.events_path.open("w", encoding="utf-8-sig", newline="")
         self._events_writer = csv.DictWriter(self._events_file, fieldnames=self._EVENT_FIELDS)
         self._events_writer.writeheader()
@@ -243,6 +276,10 @@ class Live2ArtifactWriter:
         self._near_misses_writer = csv.DictWriter(self._near_misses_file, fieldnames=self._NEAR_MISS_FIELDS)
         self._near_misses_writer.writeheader()
         self._near_misses_file.flush()
+        self._event_rows_since_flush = 0
+        self._near_miss_rows_since_flush = 0
+        self._last_event_flush_monotonic = time.monotonic()
+        self._last_near_miss_flush_monotonic = self._last_event_flush_monotonic
         self._worker = threading.Thread(
             target=self._run_worker,
             name="live2-artifact-writer",
@@ -261,12 +298,16 @@ class Live2ArtifactWriter:
             "message": event.message,
             "data_json": json.dumps(event.data, ensure_ascii=False, sort_keys=True),
         }
+        if self._should_drop_append_row(kind="event", row=row):
+            return
         with self._lock:
             self._events_enqueued_by_type[event.event_type] = self._events_enqueued_by_type.get(event.event_type, 0) + 1
         self._enqueue(_ArtifactJob(kind="event", payload=row))
 
     def write_near_miss(self, row: dict[str, Any]) -> None:
         payload = {field: row.get(field, "") for field in self._NEAR_MISS_FIELDS}
+        if self._should_drop_append_row(kind="near_miss", row=payload):
+            return
         self._enqueue(_ArtifactJob(kind="near_miss", payload=payload))
 
     def write_status(
@@ -391,6 +432,7 @@ class Live2ArtifactWriter:
 
     def status(self) -> Live2ArtifactWriterStatus:
         with self._lock:
+            output_file_budget = self._output_file_budget_locked()
             ready = self._ready and not self._closed
             return Live2ArtifactWriterStatus(
                 ready=ready,
@@ -402,7 +444,11 @@ class Live2ArtifactWriter:
                 events_enqueued_by_type=dict(self._events_enqueued_by_type),
                 error_count=self._error_count,
                 last_error=self._last_error,
-                backpressure_active=self._rejected_count > 0,
+                dropped_count=self._dropped_count,
+                dropped_by_kind=dict(self._dropped_by_kind),
+                dropped_events_by_type=dict(self._dropped_events_by_type),
+                output_file_budget=output_file_budget,
+                backpressure_active=self._rejected_count > 0 or self._dropped_count > 0,
             )
 
     def close(self) -> None:
@@ -417,8 +463,8 @@ class Live2ArtifactWriter:
         self._worker.join(timeout=10.0)
         try:
             self._events_file.flush()
-            self._events_file.close()
             self._near_misses_file.flush()
+            self._events_file.close()
             self._near_misses_file.close()
         except OSError as exc:
             self._mark_error(f"artifact writer close failed: {type(exc).__name__}: {exc}")
@@ -458,11 +504,16 @@ class Live2ArtifactWriter:
     def _write_job(self, job: _ArtifactJob) -> None:
         if job.kind == "event":
             self._events_writer.writerow(job.payload)
-            self._events_file.flush()
+            self._event_rows_since_flush += 1
+            self._maybe_flush_append_file(
+                kind="event",
+                force=self._is_critical_event_row(job.payload),
+            )
             return
         if job.kind == "near_miss":
             self._near_misses_writer.writerow(job.payload)
-            self._near_misses_file.flush()
+            self._near_miss_rows_since_flush += 1
+            self._maybe_flush_append_file(kind="near_miss")
             return
         if job.kind == "status":
             self._atomic_write_text(
@@ -498,6 +549,98 @@ class Live2ArtifactWriter:
             file_obj.flush()
             os.fsync(file_obj.fileno())
         tmp_path.replace(path)
+
+
+    def _should_drop_append_row(self, *, kind: str, row: dict[str, Any]) -> bool:
+        if kind == "event":
+            event_type = str(row.get("event_type") or "")
+            if self._append_file_tell(self._events_file) < self._event_max_bytes:
+                return False
+            if self._is_critical_event_row(row):
+                return False
+            self._record_drop(kind="event", event_type=event_type or "unknown")
+            return True
+        if kind == "near_miss":
+            if self._append_file_tell(self._near_misses_file) < self._near_miss_max_bytes:
+                return False
+            self._record_drop(kind="near_miss", event_type="")
+            return True
+        return False
+
+    def _record_drop(self, *, kind: str, event_type: str) -> None:
+        with self._lock:
+            self._dropped_count += 1
+            self._dropped_by_kind[kind] = self._dropped_by_kind.get(kind, 0) + 1
+            if event_type:
+                self._dropped_events_by_type[event_type] = self._dropped_events_by_type.get(event_type, 0) + 1
+
+    def _append_file_tell(self, file_obj: Any) -> int:
+        try:
+            position = int(file_obj.tell())
+        except (OSError, ValueError):
+            return 0
+        return max(0, position)
+
+    def _output_file_budget_locked(self) -> dict[str, dict[str, int | bool]]:
+        event_bytes = self._append_file_tell(self._events_file)
+        near_miss_bytes = self._append_file_tell(self._near_misses_file)
+        return {
+            "live2_events.csv": {
+                "bytes": event_bytes,
+                "max_bytes": self._event_max_bytes,
+                "budget_reached": event_bytes >= self._event_max_bytes,
+            },
+            "live2_near_misses.csv": {
+                "bytes": near_miss_bytes,
+                "max_bytes": self._near_miss_max_bytes,
+                "budget_reached": near_miss_bytes >= self._near_miss_max_bytes,
+            },
+        }
+
+    def _is_critical_event_row(self, row: dict[str, Any]) -> bool:
+        severity = str(row.get("severity") or "").lower()
+        if severity in {"warning", "error", "critical"}:
+            return True
+        event_type = str(row.get("event_type") or "").lower()
+        critical_tokens = (
+            "selected",
+            "execution",
+            "entry",
+            "order",
+            "fill",
+            "stop",
+            "position",
+            "integrity",
+            "halt",
+            "failed",
+            "error",
+            "telegram",
+            "preflight",
+        )
+        return any(token in event_type for token in critical_tokens)
+
+    def _maybe_flush_append_file(self, *, kind: str, force: bool = False) -> None:
+        now = time.monotonic()
+        if kind == "event":
+            if (
+                not force
+                and self._event_rows_since_flush < self._flush_every_rows
+                and now - self._last_event_flush_monotonic < self._flush_interval_seconds
+            ):
+                return
+            self._events_file.flush()
+            self._event_rows_since_flush = 0
+            self._last_event_flush_monotonic = now
+            return
+        if (
+            not force
+            and self._near_miss_rows_since_flush < self._flush_every_rows
+            and now - self._last_near_miss_flush_monotonic < self._flush_interval_seconds
+        ):
+            return
+        self._near_misses_file.flush()
+        self._near_miss_rows_since_flush = 0
+        self._last_near_miss_flush_monotonic = now
 
     def _tmp_path_for(self, path: Path) -> Path:
         return path.with_name(f"{path.name}.{threading.get_ident()}.tmp")
