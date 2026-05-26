@@ -1,5 +1,39 @@
 # Anomaly Patch Log
 
+## 2026-05-26 - P410 proposed - fix ticker current-OI signature boundary
+
+Files:
+
+```text
+research_tools/anomaly_live2/state.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Complete the P409 state boundary: SymbolStateStore.update_ticker can pass a current-OI snapshot, so SymbolState.update_ticker must accept and persist the same fields.
+```
+
+Change:
+
+```text
+SymbolState.update_ticker now accepts current_fetched_at_ms/current_timestamp_ms/current_open_interest/current_source/current_status/current_reason, updates the latest current-OI snapshot when provided, and preserves the first valid ok current-OI snapshot for pump-start baseline.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+```
+
+Risk:
+
+```text
+No trading logic change. This only fixes the state-layer signature mismatch that stopped live2 during startup ticker snapshot.
+```
+
 ## 2026-05-26 - P409 proposed - live2 honest current-OI baselines
 
 Files:

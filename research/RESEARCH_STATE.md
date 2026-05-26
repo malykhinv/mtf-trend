@@ -1,3 +1,11 @@
+## 2026-05-26 - P410 ticker current-OI signature boundary
+
+Current commit: UNKNOWN.
+
+P410 proposed after the first post-P409 live2 start failed during startup ticker snapshot with `SymbolState.update_ticker() got an unexpected keyword argument 'current_fetched_at_ms'`. Root cause: the store-level update_ticker boundary accepted current-OI fields but the per-symbol SymbolState.update_ticker method did not. The fix completes the same typed boundary and persists current-OI first-ok/pump-start baseline when ticker startup/current-OI path provides it.
+
+Next validation: apply P410, run compileall, then restart live2 and confirm startup ticker snapshot passes and the next status reaches warmup/market-data stages.
+
 ## 2026-05-26 - P409 current-OI baseline separation
 
 Current commit: UNKNOWN.

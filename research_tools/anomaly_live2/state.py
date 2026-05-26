@@ -260,6 +260,12 @@ class SymbolState:
         source: str,
         status: str,
         reason: str,
+        current_fetched_at_ms: int | None = None,
+        current_timestamp_ms: int | None = None,
+        current_open_interest: float | None = None,
+        current_source: str = "",
+        current_status: str = "",
+        current_reason: str = "",
     ) -> None:
         self.updated_ms = fetched_at_ms
         self.ticker_market_id = market_id
@@ -274,6 +280,26 @@ class SymbolState:
         self.ticker_source = source
         self.ticker_status = status
         self.ticker_reason = reason
+        if current_status:
+            effective_current_seen_ms = current_fetched_at_ms if current_fetched_at_ms is not None else fetched_at_ms
+            self.current_oi_last_seen_ms = effective_current_seen_ms
+            self.current_oi_timestamp_ms = current_timestamp_ms
+            self.current_oi_open_interest = current_open_interest
+            self.current_oi_source = current_source
+            self.current_oi_status = current_status
+            self.current_oi_reason = current_reason
+            if self.current_oi_first_ok_seen_ms is None and current_status == "ok":
+                try:
+                    current_open_interest_float = float(current_open_interest)
+                except (TypeError, ValueError):
+                    current_open_interest_float = float("nan")
+                if isfinite(current_open_interest_float) and current_open_interest_float > 0.0:
+                    self.current_oi_first_ok_seen_ms = effective_current_seen_ms
+                    self.current_oi_first_ok_timestamp_ms = current_timestamp_ms
+                    self.current_oi_first_ok_open_interest = current_open_interest_float
+                    self.current_oi_first_ok_source = current_source
+                    self.current_oi_first_ok_status = current_status
+                    self.current_oi_first_ok_reason = current_reason
         self.mark_dirty(now_ms=fetched_at_ms)
 
     def update_aggtrade(self, trade: Live2AggTradeEvent, *, received_at_ms: int) -> None:
