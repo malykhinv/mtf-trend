@@ -1,3 +1,42 @@
+## 2026-05-27 - P421 proposed - cached targeted-flow and prepump fast path
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Speed up repeated honest anomaly-lab runs after P420 did not reduce wall time. Avoid rereading and rewriting already-covered targeted 1s/subminute cache windows, and keep the expensive offline pre-pump separability study opt-in instead of running it on every normal backtest.
+```
+
+Changes:
+
+```text
+- Targeted 1s backfill now does a narrow parquet metadata coverage check first. If the requested window is already trusted, it records exists_covered_requested_window and avoids full 1s frame loading.
+- Subminute materialization now skips any target timeframe whose existing materialized cache already covers all requested interval buckets with trusted 1s aggregation metadata.
+- run-anomaly-lab exposes --write-prepump-context and defaults it to false; the core backtest still writes candidate/signal/trade/funnel/honesty/timing artifacts.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-lab --help
+```
+
+Risk:
+
+```text
+This is intended to preserve trading results. It skips work only when trusted cache metadata proves the requested windows are already covered. The pre-pump context study becomes opt-in from the CLI because it is offline diagnostic research, not the execution/honesty contract. Enable it explicitly with --write-prepump-context true when that artifact is needed.
+```
+
 # Anomaly Patch Log
 
 ## 2026-05-27 - P420 proposed - symbol-parallel backtest execution

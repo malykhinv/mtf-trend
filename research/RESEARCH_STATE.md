@@ -1,3 +1,13 @@
+## 2026-05-27 - P421 cached targeted-flow and prepump fast path
+
+Current commit: UNKNOWN.
+
+Status: PROPOSED against local P420 workspace. P420 symbol workers did not improve observed wall time, which suggests the run is dominated by serial targeted-flow cache/materialization and/or artifact context work rather than independent candidate/trade simulation.
+
+Patch: targeted 1s backfill and subminute materialization now use narrow parquet metadata checks to skip already-covered windows without loading full 1s/target frames or rewriting target parquet. Normal `run-anomaly-lab` also defaults the offline runner/fader pre-pump context study to disabled through `--write-prepump-context false`; core candidate/signal/trade/funnel/honesty/timing artifacts remain enabled.
+
+Next: rerun the same command once. Inspect root/pair `targeted_flow_fetch.csv`, `targeted_flow_materialize.csv`, and `anomaly_timing_summary.csv`. Expected fast-path statuses are `exists_covered_requested_window` and `exists_covered_requested_intervals`; if timing is still flat, the remaining bottleneck is likely coarse candidate scan or trade simulation, not cache rewrite.
+
 ## 2026-05-27 - P420 symbol-parallel backtest execution
 
 Current commit: UNKNOWN.

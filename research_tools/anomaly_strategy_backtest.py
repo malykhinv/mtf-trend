@@ -1542,6 +1542,126 @@ def _flow_cache_validation_error(
     return None
 
 
+
+def _cache_data_path(cache_dir: Path, symbol: str, timeframe: str) -> Path:
+    return cache_dir / _cache_symbol_dir_name(symbol) / str(timeframe) / "data.parquet"
+
+
+def _read_parquet_columns(path: Path, columns: Iterable[str]) -> pd.DataFrame:
+    """Read a narrow parquet projection for cache coverage checks."""
+
+    if not path.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_parquet(path, columns=list(dict.fromkeys(str(column) for column in columns)))
+    except Exception:
+        return pd.DataFrame()
+
+
+def _cached_timestamp_row_count(path: Path) -> int:
+    frame = _read_parquet_columns(path, ["timestamp"])
+    return int(len(frame)) if not frame.empty else 0
+
+
+def _trusted_aggtrade_window_covered_from_cache(
+    cache_dir: Path,
+    symbol: str,
+    *,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+) -> bool:
+    metadata = _read_parquet_columns(
+        _cache_data_path(cache_dir, symbol, "1s"),
+        [
+            "aggregation_version",
+            "aggtrade_coverage_start_timestamp_ms",
+            "aggtrade_coverage_end_timestamp_ms",
+        ],
+    )
+    if metadata.empty:
+        return False
+    if _first_non_empty_string(metadata, "aggregation_version") != AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION:
+        return False
+    required = {"aggtrade_coverage_start_timestamp_ms", "aggtrade_coverage_end_timestamp_ms"}
+    if not required.issubset(metadata.columns):
+        return False
+    intervals_frame = metadata.loc[
+        metadata["aggtrade_coverage_start_timestamp_ms"].notna()
+        & metadata["aggtrade_coverage_end_timestamp_ms"].notna(),
+        ["aggtrade_coverage_start_timestamp_ms", "aggtrade_coverage_end_timestamp_ms"],
+    ].drop_duplicates()
+    if intervals_frame.empty:
+        return False
+    intervals = [
+        (int(row["aggtrade_coverage_start_timestamp_ms"]), int(row["aggtrade_coverage_end_timestamp_ms"]))
+        for _, row in intervals_frame.iterrows()
+    ]
+    return _coverage_intervals_cover_bucket(
+        intervals,
+        bucket_start_ms=int(start_timestamp_ms),
+        bucket_end_ms=int(end_timestamp_ms),
+    )
+
+
+def _contained_bucket_starts(start_ms: int, end_ms: int, *, timeframe_ms: int) -> range:
+    if timeframe_ms <= 0 or int(end_ms) < int(start_ms):
+        return range(0)
+    first = ((int(start_ms) + int(timeframe_ms) - 1) // int(timeframe_ms)) * int(timeframe_ms)
+    last = ((int(end_ms) - int(timeframe_ms) + 1) // int(timeframe_ms)) * int(timeframe_ms)
+    if last < first:
+        return range(0)
+    return range(first, last + int(timeframe_ms), int(timeframe_ms))
+
+
+def _trusted_materialized_entry_cache_covers_windows(
+    cache_dir: Path,
+    symbol: str,
+    *,
+    target_timeframe: str,
+    windows: Iterable[tuple[int, int]],
+) -> bool:
+    target_ms = _timeframe_to_milliseconds(target_timeframe)
+    if target_ms <= 0:
+        return False
+    expected: set[int] = set()
+    for start_ms, end_ms in _merge_targeted_timestamp_windows(windows):
+        expected.update(_contained_bucket_starts(int(start_ms), int(end_ms), timeframe_ms=target_ms))
+    if not expected:
+        return False
+    metadata = _read_parquet_columns(
+        _cache_data_path(cache_dir, symbol, target_timeframe),
+        [
+            "timestamp",
+            "aggregation_source_timeframe",
+            "aggregation_version",
+            "aggtrade_coverage_verified",
+        ],
+    )
+    if metadata.empty:
+        return False
+    validation_error = _flow_cache_validation_error(
+        metadata,
+        cache_timeframe=target_timeframe,
+        entry_timeframe=target_timeframe,
+    )
+    if validation_error is not None:
+        return False
+    timestamps = pd.to_numeric(metadata.get("timestamp"), errors="coerce").dropna().astype("int64")
+    if timestamps.empty:
+        return False
+    present = set(int(value) for value in timestamps.to_numpy())
+    if not expected.issubset(present):
+        return False
+    if "aggtrade_coverage_verified" in metadata.columns:
+        verified_rows = metadata.loc[timestamps.index, ["timestamp", "aggtrade_coverage_verified"]].copy()
+        verified_rows["timestamp"] = pd.to_numeric(verified_rows["timestamp"], errors="coerce")
+        verified_rows = verified_rows.loc[verified_rows["timestamp"].isin(expected)]
+        if verified_rows.empty:
+            return False
+        if not verified_rows["aggtrade_coverage_verified"].fillna(False).astype(bool).all():
+            return False
+    return True
+
 def _candidate_flow_source_mask(candidates: pd.DataFrame) -> pd.Series:
     mask = pd.Series(True, index=candidates.index)
     for column in (
@@ -1617,7 +1737,7 @@ def materialize_subminute_entry_caches(
                 for symbol, windows in interval_map.items()
                 if normalize_symbol(symbol) in wanted_symbols
             }
-        paths = [cache_dir / _cache_symbol_dir_name(symbol) / "1s" / "data.parquet" for symbol in sorted(interval_map)]
+        paths = [_cache_data_path(cache_dir, symbol, "1s") for symbol in sorted(interval_map)]
     else:
         paths = sorted(cache_dir.glob("*%2FUSDT%3AUSDT/1s/data.parquet"))
         if wanted_symbols:
@@ -1631,8 +1751,48 @@ def materialize_subminute_entry_caches(
     next_progress_pct = 0
     total = max(1, len(paths) * max(1, len(targets)))
     done = 0
+
+    def _maybe_emit_progress() -> None:
+        nonlocal next_progress_pct
+        if progress_label is None:
+            return
+        current_pct = int(100 * done / total)
+        if current_pct >= next_progress_pct or done == total:
+            _emit_progress(label=progress_label, done=done, total=total, started_at=started_at)
+            next_progress_pct = current_pct + 5
+
     for path in paths:
         symbol = _symbol_from_cache_symbol_dir(path.parent.parent)
+        symbol_windows = interval_map.get(symbol) if intervals_by_symbol is not None else None
+        pending_targets: list[str] = []
+        for target in targets:
+            output_path = _cache_data_path(cache_dir, symbol, target)
+            if (
+                symbol_windows is not None
+                and output_path.exists()
+                and not overwrite
+                and _trusted_materialized_entry_cache_covers_windows(
+                    cache_dir,
+                    symbol,
+                    target_timeframe=target,
+                    windows=symbol_windows,
+                )
+            ):
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "target_timeframe": target,
+                        "source_timeframe": "1s",
+                        "status": "exists_covered_requested_intervals",
+                        "path": str(output_path),
+                    }
+                )
+                done += 1
+                _maybe_emit_progress()
+            else:
+                pending_targets.append(target)
+        if not pending_targets:
+            continue
         try:
             source_frame = _read_symbol_frame(cache_dir, symbol, "1s")
             validation_error = _flow_cache_validation_error(
@@ -1642,13 +1802,12 @@ def materialize_subminute_entry_caches(
             )
             if validation_error is not None:
                 raise ValueError(validation_error)
-            symbol_windows = interval_map.get(symbol) if intervals_by_symbol is not None else None
             if symbol_windows is not None:
                 source_frame = _slice_frame_to_timestamp_windows(source_frame, symbol_windows)
                 if source_frame.empty:
                     raise ValueError("empty_1s_source_in_requested_intervals")
         except Exception as exc:
-            for target in targets:
+            for target in pending_targets:
                 rows.append(
                     {
                         "symbol": symbol,
@@ -1659,10 +1818,11 @@ def materialize_subminute_entry_caches(
                     }
                 )
                 done += 1
+                _maybe_emit_progress()
             continue
-        for target in targets:
+        for target in pending_targets:
             done += 1
-            output_path = cache_dir / _cache_symbol_dir_name(symbol) / target / "data.parquet"
+            output_path = _cache_data_path(cache_dir, symbol, target)
             existing_error: str | None = None
             existing_frame = pd.DataFrame()
             if output_path.exists() and not overwrite:
@@ -1685,11 +1845,7 @@ def materialize_subminute_entry_caches(
                             "path": str(output_path),
                         }
                     )
-                    if progress_label is not None:
-                        current_pct = int(100 * done / total)
-                        if current_pct >= next_progress_pct or done == total:
-                            _emit_progress(label=progress_label, done=done, total=total, started_at=started_at)
-                            next_progress_pct = current_pct + 5
+                    _maybe_emit_progress()
                     continue
             aggregated = _aggregate_frame_to_timeframe(
                 source_frame,
@@ -1735,11 +1891,7 @@ def materialize_subminute_entry_caches(
                         "max_timestamp_utc": _timestamp_to_utc(int(written["timestamp"].max())),
                     }
                 )
-            if progress_label is not None:
-                current_pct = int(100 * done / total)
-                if current_pct >= next_progress_pct or done == total:
-                    _emit_progress(label=progress_label, done=done, total=total, started_at=started_at)
-                    next_progress_pct = current_pct + 5
+            _maybe_emit_progress()
 
     return pd.DataFrame(rows)
 
@@ -2143,21 +2295,31 @@ def ensure_targeted_subminute_flow_cache_for_configs(
             rows_before = 0
             rows_after = 0
             try:
-                before_frame = _read_symbol_frame_optional(subminute_configs[0].lab_config.cache_dir, symbol, "1s")
-                rows_before = int(len(before_frame))
-                frame = _ensure_latency_1s_cache(
-                    subminute_configs[0].lab_config.cache_dir,
+                cache_dir = subminute_configs[0].lab_config.cache_dir
+                cache_path = _cache_data_path(cache_dir, symbol, "1s")
+                rows_before = _cached_timestamp_row_count(cache_path)
+                if _trusted_aggtrade_window_covered_from_cache(
+                    cache_dir,
                     symbol,
                     start_timestamp_ms=int(window_start),
                     end_timestamp_ms=int(window_end),
-                )
-                rows_after = int(len(frame))
-                if not _trusted_aggtrade_window_covered(
-                    frame,
-                    start_timestamp_ms=int(window_start),
-                    end_timestamp_ms=int(window_end),
                 ):
-                    status = "partial_or_empty"
+                    rows_after = rows_before
+                    status = "exists_covered_requested_window"
+                else:
+                    frame = _ensure_latency_1s_cache(
+                        cache_dir,
+                        symbol,
+                        start_timestamp_ms=int(window_start),
+                        end_timestamp_ms=int(window_end),
+                    )
+                    rows_after = int(len(frame))
+                    if not _trusted_aggtrade_window_covered(
+                        frame,
+                        start_timestamp_ms=int(window_start),
+                        end_timestamp_ms=int(window_end),
+                    ):
+                        status = "partial_or_empty"
             except Exception as exc:
                 status = "error"
                 error = f"{type(exc).__name__}: {exc}"

@@ -226,6 +226,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Symbol-level worker threads for cache-only candidate/trade simulation. Use 1 for strictly serial execution.",
     )
     anomaly_lab.add_argument("--render-charts", type=_str_to_bool, default=True)
+    anomaly_lab.add_argument(
+        "--write-prepump-context",
+        type=_str_to_bool,
+        default=False,
+        help=(
+            "Write extra offline runner/fader pre-pump context artifacts. Disabled by default because "
+            "it rereads historical context and is not part of the core backtest execution/honesty contract."
+        ),
+    )
     anomaly_lab.add_argument("--targeted-flow-backfill", type=_str_to_bool, default=True)
     anomaly_lab.add_argument("--run-entry-grid", type=_str_to_bool, default=False)
     anomaly_lab.add_argument("--grid-oi3-values", default="0.01,0.02,0.03")

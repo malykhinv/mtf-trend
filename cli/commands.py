@@ -1466,6 +1466,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 ),
                 short_fader_require_prior_context=bool(getattr(args, "short_fader_require_prior_context", False)),
                 short_fader_run_exit_grid=bool(getattr(args, "short_fader_run_exit_grid", False)),
+                write_prepump_context=bool(getattr(args, "write_prepump_context", False)),
                 symbol_workers=int(getattr(args, "backtest_symbol_workers", DEFAULT_BACKTEST_SYMBOL_WORKERS)),
             )
 
