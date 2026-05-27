@@ -867,6 +867,25 @@ The intended nature:
 
 Candidate implementation should expose these fields separately in artifacts: HTF structural stop source, post-close LTF return, post-close low versus HTF close, top 5s quote-volume concentration, last-half quote-volume share, taker-buy quote share, prior-spike count, risk percent, and reject reason.
 
+## HTF/LTF Runner Discovery Backtest Contract
+
+`run-htf-ltf-runner-discovery` is a research/discovery tool for learning which HTF anomaly shapes become early runners. It is not a live signal contract by itself.
+
+Required truth boundaries:
+- Candidate construction may use only closed HTF history, dormancy/pregrowth history, cached OI rows available by decision time, and LTF candles inside the already closed HTF anomaly candle.
+- `runner_10pct_next_hour`, `future_max_return_pct`, and anomaly-low-break fields are future labels for evaluation only. They must not be used as entry filters.
+- Entry replay starts only after closed forward LTF confirmation, enters at the next LTF open with adverse slippage, and rejects stale/drift/excess-risk cases before simulating.
+- Stop must be structural: anomaly low and closed confirmation-window lows with a small buffer. Exit is initial structural stop, structural trailing stop, or max-hold time exit. No TP is simulated.
+- Broad runs should default to cache-only 5m/1m when subminute cache is not already materialized. The command must not trigger exchange candle or seconds-data downloads during the backtest.
+
+Artifacts must expose:
+- candidate rows with dormancy, smooth pregrowth, actual OI status/change, HTF quote/trade ratios, HTF-internal LTF distribution/acceleration, runner labels, and anomaly-low-break labels;
+- signal rows with decision time, decision availability time, next-open entry, structural stop source, drift and initial-risk fields;
+- raw and live-filtered trade rows with no-TP structural trailing outcomes;
+- candidate rule scores for runner-label lift without using future labels as entry filters;
+- trade rule scores with net-PnL winrate, average/median/sum return, MFE/MAE, runner-label shares, and top20 positive-PnL dependency;
+- a research shortlist that ranks rule candidates as research-only and points to the next validation step.
+
 ## Live2 current-OI position-management baseline
 
 For live2 managed positions, current open interest is not inferred from candles and is not read through private client fields. After the actual entry fill is known and the initial stop has been verified visible, live2 may fetch a current-OI snapshot through the typed exchange boundary and persist it on the protected position as the entry current-OI baseline.

@@ -1,4 +1,25 @@
 
+## 2026-05-27 - P415 HTF/LTF runner discovery scoring validation
+
+```text
+Patch: P415 complete runner discovery scoring.
+
+What changed:
+- Added pre-entry candidate rule scores for HTF anomaly, dormancy, smooth pregrowth, actual OI growth, strong HTF flow, and sustained HTF-internal LTF flow.
+- Added trade rule scores with net-PnL winrate, avg/median/sum net return, MFE/MAE, clean-runner label share, balance score, and top20 positive-PnL dependency.
+- Added `htf_ltf_runner_research_shortlist.csv` to rank research-only rule candidates without using future labels as entry filters.
+- Added HTF-internal LTF distribution/acceleration fields to separate sustained flow from single-print noise.
+- Marked the run as cache-only/no exchange fetch in run_config and honesty report.
+
+Validation:
+- `python -m pytest tests/test_htf_ltf_runner_discovery.py tests/test_live2_market_watch.py -q` -> 40 passed.
+- `python -m compileall -q data/exchanges research_tools cli constants.py main.py` -> passed.
+- `python main.py run-htf-ltf-runner-discovery --symbols ZEC/USDT:USDT CATI/USDT:USDT --days 1 --htf-timeframe 5m --ltf-timeframe 1m ...` -> completed with 0 candidates/0 signals and valid empty artifacts.
+
+Next experiment:
+Run the broad 30d 5m/1m cache-only command, then inspect `htf_ltf_runner_candidate_rule_scores.csv`, `htf_ltf_runner_trade_rule_scores_live_filtered.csv`, `htf_ltf_runner_research_shortlist.csv`, and data-quality artifacts before interpreting profitability.
+```
+
 ## 2026-05-27 - live2 run 20260526_175528 runner/noise audit and P414 discovery smoke
 
 ```text

@@ -1,3 +1,15 @@
+## 2026-05-27 - P415 HTF/LTF runner discovery scoring completed
+
+Current commit: UNKNOWN.
+
+Status: P415 APPLIED locally / UNKNOWN commit. The P414 discovery scaffold is now completed with rule-score artifacts for candidate nature and live-filtered trade outcomes. It records HTF-internal LTF distribution/acceleration features, candidate label lift for dormancy/smooth/OI/sustained-flow rule sets, trade winrate by net PnL sign, average/median/sum net return, MFE/MAE, clean-runner label share, and top20 positive-PnL dependency.
+
+Important boundary: `runner_10pct_next_hour` and anomaly-low-break labels remain future labels for research only. They are not used to select entries. Entry replay still waits for closed LTF confirmation, enters at the next LTF open with adverse slippage, uses a structural stop plus structural trailing, and has no TP.
+
+Operational note: use 5m HTF / 1m LTF for broad 30d cache-only discovery when seconds cache is unavailable or too slow. The tool reads Parquet cache only and does not backfill/download exchange candles during the run. Use 1m/5s only after subminute cache coverage is already materialized.
+
+Next: run 30d 5m/1m discovery, inspect `htf_ltf_runner_research_shortlist.csv`, then rerun any promising rule on a different period or with existing 5s cache before changing live2 entry logic.
+
 ## 2026-05-27 - P414 live2 stop-recovery crash fix and runner discovery backtest
 
 Current commit: UNKNOWN.

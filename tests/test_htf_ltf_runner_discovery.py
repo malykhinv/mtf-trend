@@ -4,6 +4,9 @@ from research_tools.htf_ltf_runner_discovery import (
     HtfLtfRunnerDiscoveryConfig,
     _build_first_ltf_signal,
     _future_runner_label,
+    _htf_internal_ltf_features,
+    _score_candidate_rules,
+    _score_trade_rules,
     _simulate_no_tp_runner_trade,
 )
 
@@ -96,3 +99,103 @@ def test_no_tp_runner_simulation_never_marks_tp_hit() -> None:
     assert trade["tp1_hit"] is False
     assert trade["tp_model"] == "none"
     assert trade["net_return"] > 0
+
+
+def test_htf_internal_ltf_features_require_distributed_real_flow() -> None:
+    ltf = pd.DataFrame(
+        [
+            {"timestamp": 0, "open": 100.0, "high": 100.5, "low": 99.9, "close": 100.2, "volume": 1.0, "quote_volume": 100.0, "number_of_trades": 10},
+            {"timestamp": 5_000, "open": 100.2, "high": 100.7, "low": 100.1, "close": 100.5, "volume": 1.0, "quote_volume": 120.0, "number_of_trades": 11},
+            {"timestamp": 10_000, "open": 100.5, "high": 100.9, "low": 100.4, "close": 100.7, "volume": 1.0, "quote_volume": 130.0, "number_of_trades": 12},
+            {"timestamp": 15_000, "open": 100.7, "high": 101.1, "low": 100.6, "close": 100.9, "volume": 1.0, "quote_volume": 140.0, "number_of_trades": 13},
+        ]
+    )
+
+    features = _htf_internal_ltf_features(ltf, start_ms=0, end_ms=20_000, htf_open=100.0, htf_close=101.0)
+
+    assert features["htf_ltf_status"] == "ok"
+    assert features["htf_ltf_trade_count_status"] == "ok"
+    assert features["htf_ltf_sustained_flow_ok"] is True
+    assert features["htf_ltf_quote_top1_share"] < 0.55
+
+
+def test_candidate_rule_scores_keep_future_labels_as_research_only() -> None:
+    candidates = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA/USDT:USDT",
+                "htf_anomaly_gate": True,
+                "dormancy_ok": True,
+                "smooth_price_growth_ok": True,
+                "pregrowth_oi_status": "ok",
+                "pregrowth_oi_change_pct": 0.05,
+                "htf_ltf_sustained_flow_ok": True,
+                "htf_quote_ratio": 12.0,
+                "htf_trade_ratio": 9.0,
+                "pregrowth_return_pct": 0.01,
+                "htf_ltf_quote_top1_share": 0.35,
+                "runner_10pct_next_hour": True,
+                "clean_runner_without_low_break": True,
+                "anomaly_low_broken_before_runner": False,
+            },
+            {
+                "symbol": "BBB/USDT:USDT",
+                "htf_anomaly_gate": True,
+                "dormancy_ok": True,
+                "smooth_price_growth_ok": False,
+                "pregrowth_oi_status": "missing",
+                "pregrowth_oi_change_pct": float("nan"),
+                "htf_ltf_sustained_flow_ok": False,
+                "htf_quote_ratio": 7.0,
+                "htf_trade_ratio": 6.0,
+                "pregrowth_return_pct": 0.0,
+                "htf_ltf_quote_top1_share": 0.80,
+                "runner_10pct_next_hour": False,
+                "clean_runner_without_low_break": False,
+                "anomaly_low_broken_before_runner": False,
+            },
+        ]
+    )
+
+    scores = _score_candidate_rules(candidates)
+    row = scores.loc[scores["rule"].eq("dormancy_smooth_price_oi")].iloc[0]
+
+    assert row["events"] == 1
+    assert row["clean_runner_share"] == 1.0
+    assert bool(row["uses_future_label_as_entry_filter"]) is False
+
+
+def test_trade_rule_scores_report_balance_and_top20_dependency() -> None:
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": f"AAA{i}/USDT:USDT",
+                "status": "closed",
+                "htf_anomaly_gate": True,
+                "dormancy_ok": True,
+                "smooth_price_growth_ok": True,
+                "pregrowth_oi_status": "ok",
+                "pregrowth_oi_change_pct": 0.01,
+                "htf_ltf_sustained_flow_ok": True,
+                "initial_risk_pct": 0.02,
+                "ltf_quote_pace_ratio": 6.0,
+                "ltf_trade_pace_ratio": 6.0,
+                "ltf_second_half_return_pct": 0.001,
+                "ltf_taker_buy_quote_share": 0.56,
+                "net_return": 0.01 if i < 8 else -0.002,
+                "mfe_pct": 0.03,
+                "mae_pct": -0.01,
+                "runner_10pct_next_hour": i < 6,
+                "clean_runner_without_low_break": i < 5,
+            }
+            for i in range(10)
+        ]
+    )
+
+    scores = _score_trade_rules(trades, scope="test")
+    row = scores.loc[scores["rule"].eq("balanced_runner_with_oi")].iloc[0]
+
+    assert row["closed_trades"] == 10
+    assert row["win_rate"] == 0.8
+    assert row["top20pct_trade_count"] == 2
+    assert row["balance_score_0_100"] > 0

@@ -142,6 +142,10 @@ def run_htf_ltf_runner_discovery(
     signals_frame = pd.DataFrame(signal_rows)
     trades_frame = pd.DataFrame(trade_rows)
     live_filtered = _apply_live_portfolio_filter(trades_frame, max_open_positions=config.max_open_positions)
+    candidate_rule_scores = _score_candidate_rules(candidates_frame)
+    trade_rule_scores = _score_trade_rules(trades_frame, scope="raw")
+    live_trade_rule_scores = _score_trade_rules(live_filtered, scope="live_filtered")
+    research_shortlist = _research_shortlist(candidate_rule_scores, live_trade_rule_scores)
 
     artifacts = [
         (config.output_dir / "htf_ltf_runner_candidates.csv", candidates_frame),
@@ -159,6 +163,10 @@ def run_htf_ltf_runner_discovery(
             _summarize_by_column(live_filtered, "setup_nature"),
         ),
         (config.output_dir / "htf_ltf_runner_label_distribution.csv", _label_distribution(candidates_frame)),
+        (config.output_dir / "htf_ltf_runner_candidate_rule_scores.csv", candidate_rule_scores),
+        (config.output_dir / "htf_ltf_runner_trade_rule_scores.csv", trade_rule_scores),
+        (config.output_dir / "htf_ltf_runner_trade_rule_scores_live_filtered.csv", live_trade_rule_scores),
+        (config.output_dir / "htf_ltf_runner_research_shortlist.csv", research_shortlist),
         (config.output_dir / "htf_ltf_runner_funnel.csv", _build_funnel(candidates_frame, signals_frame, trades_frame)),
         (config.output_dir / "htf_ltf_runner_skip_reasons.csv", _skip_reasons(trades_frame)),
         (config.output_dir / "htf_ltf_runner_top_dependency.csv", _top_dependency(trades_frame)),
@@ -184,6 +192,8 @@ def run_htf_ltf_runner_discovery(
                         "execution_model": "next_ltf_open_after_closed_ltf_confirmation",
                         "exit_model": "structural_stop_plus_structural_trailing_no_tp",
                         "future_label_model": "separate_next_hour_10pct_label_not_used_for_entry",
+                        "data_access_model": "cache_only_no_exchange_fetch",
+                        "seconds_download_required": False,
                         "runtime_seconds": round(time.monotonic() - started_at, 3),
                     }
                 ]
@@ -270,6 +280,13 @@ def _collect_symbol_candidates(
             anomaly_low=anomaly_low,
             target_return_pct=config.runner_target_return_pct,
         )
+        htf_ltf_features = _htf_internal_ltf_features(
+            ltf,
+            start_ms=ts,
+            end_ms=close_ts,
+            htf_open=anomaly_open,
+            htf_close=anomaly_close,
+        )
 
         anomaly_gate = (
             quote_ratio >= config.min_htf_quote_ratio
@@ -337,6 +354,7 @@ def _collect_symbol_candidates(
                 "htf_anomaly_gate": anomaly_gate,
                 **pregrowth_features,
                 **oi_features,
+                **htf_ltf_features,
                 **label,
             }
         )
@@ -658,6 +676,364 @@ def _ltf_confirmation_features(
     }
 
 
+def _htf_internal_ltf_features(
+    ltf: pd.DataFrame,
+    *,
+    start_ms: int,
+    end_ms: int,
+    htf_open: float,
+    htf_close: float,
+) -> dict[str, object]:
+    if ltf.empty or "timestamp" not in ltf.columns:
+        return {
+            "htf_ltf_status": "missing_ltf_inside_htf",
+            "htf_ltf_candles": 0,
+            "htf_ltf_quote_volume": float("nan"),
+            "htf_ltf_number_of_trades": float("nan"),
+            "htf_ltf_quote_top1_share": float("nan"),
+            "htf_ltf_trade_top1_share": float("nan"),
+            "htf_ltf_green_share": float("nan"),
+            "htf_ltf_close_above_mid_share": float("nan"),
+            "htf_ltf_second_half_return_pct": float("nan"),
+            "htf_ltf_quote_acceleration": float("nan"),
+            "htf_ltf_trade_acceleration": float("nan"),
+            "htf_ltf_sustained_flow_ok": False,
+            "htf_ltf_trade_count_status": "missing",
+        }
+
+    timestamps = pd.to_numeric(ltf["timestamp"], errors="coerce")
+    segment = ltf.loc[(timestamps >= int(start_ms)) & (timestamps < int(end_ms))].copy()
+    if segment.empty:
+        return {
+            "htf_ltf_status": "missing_ltf_inside_htf",
+            "htf_ltf_candles": 0,
+            "htf_ltf_quote_volume": float("nan"),
+            "htf_ltf_number_of_trades": float("nan"),
+            "htf_ltf_quote_top1_share": float("nan"),
+            "htf_ltf_trade_top1_share": float("nan"),
+            "htf_ltf_green_share": float("nan"),
+            "htf_ltf_close_above_mid_share": float("nan"),
+            "htf_ltf_second_half_return_pct": float("nan"),
+            "htf_ltf_quote_acceleration": float("nan"),
+            "htf_ltf_trade_acceleration": float("nan"),
+            "htf_ltf_sustained_flow_ok": False,
+            "htf_ltf_trade_count_status": "missing",
+        }
+
+    quote = _numeric_column(
+        segment,
+        "quote_volume",
+        fallback=_numeric_column(segment, "close") * _numeric_column(segment, "volume"),
+    ).replace([np.inf, -np.inf], np.nan)
+    trades = _numeric_column(segment, "number_of_trades", fallback=pd.Series(np.nan, index=segment.index)).replace(
+        [np.inf, -np.inf],
+        np.nan,
+    )
+    opens = pd.to_numeric(segment["open"], errors="coerce")
+    closes = pd.to_numeric(segment["close"], errors="coerce")
+    quote_total = float(quote.sum(min_count=1))
+    trade_total = float(trades.sum(min_count=1))
+    first_half = segment.head(max(1, len(segment) // 2))
+    second_half = segment.tail(len(segment) - len(first_half))
+    first_quote = _numeric_column(
+        first_half,
+        "quote_volume",
+        fallback=_numeric_column(first_half, "close") * _numeric_column(first_half, "volume"),
+    ).replace([np.inf, -np.inf], np.nan)
+    second_quote = _numeric_column(
+        second_half,
+        "quote_volume",
+        fallback=_numeric_column(second_half, "close") * _numeric_column(second_half, "volume"),
+    ).replace([np.inf, -np.inf], np.nan)
+    first_trades = _numeric_column(first_half, "number_of_trades", fallback=pd.Series(np.nan, index=first_half.index)).replace(
+        [np.inf, -np.inf],
+        np.nan,
+    )
+    second_trades = _numeric_column(second_half, "number_of_trades", fallback=pd.Series(np.nan, index=second_half.index)).replace(
+        [np.inf, -np.inf],
+        np.nan,
+    )
+    midpoint = (float(htf_open) + float(htf_close)) / 2.0
+    quote_top1_share = _safe_divide(float(quote.max(skipna=True)), quote_total)
+    trade_top1_share = _safe_divide(float(trades.max(skipna=True)), trade_total)
+    second_half_return = (
+        _safe_divide(float(second_half.iloc[-1]["close"]) - float(second_half.iloc[0]["open"]), float(second_half.iloc[0]["open"]))
+        if not second_half.empty
+        else float("nan")
+    )
+    quote_acceleration = _safe_divide(float(second_quote.sum(min_count=1)), float(first_quote.sum(min_count=1)))
+    trade_acceleration = _safe_divide(float(second_trades.sum(min_count=1)), float(first_trades.sum(min_count=1)))
+    trade_count_status = "ok" if np.isfinite(trade_total) and trade_total > 0 else "missing"
+    sustained_flow_ok = (
+        np.isfinite(quote_total)
+        and quote_total > 0
+        and trade_count_status == "ok"
+        and np.isfinite(quote_top1_share)
+        and quote_top1_share <= 0.55
+        and np.isfinite(trade_top1_share)
+        and trade_top1_share <= 0.55
+        and float((closes > opens).mean()) >= 0.50
+        and np.isfinite(second_half_return)
+        and second_half_return >= 0.0
+        and np.isfinite(quote_acceleration)
+        and quote_acceleration >= 0.75
+        and np.isfinite(trade_acceleration)
+        and trade_acceleration >= 0.75
+    )
+    return {
+        "htf_ltf_status": "ok",
+        "htf_ltf_candles": int(len(segment)),
+        "htf_ltf_quote_volume": quote_total,
+        "htf_ltf_number_of_trades": trade_total,
+        "htf_ltf_quote_top1_share": quote_top1_share,
+        "htf_ltf_trade_top1_share": trade_top1_share,
+        "htf_ltf_green_share": float((closes > opens).mean()),
+        "htf_ltf_close_above_mid_share": float((closes >= midpoint).mean()),
+        "htf_ltf_second_half_return_pct": second_half_return,
+        "htf_ltf_quote_acceleration": quote_acceleration,
+        "htf_ltf_trade_acceleration": trade_acceleration,
+        "htf_ltf_sustained_flow_ok": bool(sustained_flow_ok),
+        "htf_ltf_trade_count_status": trade_count_status,
+    }
+
+
+def _score_candidate_rules(candidates: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "rule",
+        "events",
+        "symbols",
+        "runner_10pct_events",
+        "runner_10pct_share",
+        "clean_runner_events",
+        "clean_runner_share",
+        "low_break_share",
+        "median_htf_quote_ratio",
+        "median_htf_trade_ratio",
+        "median_pregrowth_return_pct",
+        "median_pregrowth_oi_change_pct",
+        "median_htf_ltf_quote_top1_share",
+        "uses_future_label_as_entry_filter",
+        "status",
+    ]
+    if candidates.empty:
+        return pd.DataFrame(columns=columns)
+
+    htf_gate = _bool_series(candidates, "htf_anomaly_gate")
+    dormancy = _bool_series(candidates, "dormancy_ok")
+    smooth = _bool_series(candidates, "smooth_price_growth_ok")
+    oi_growth = _actual_oi_growth_mask(candidates)
+    strong_flow = _numeric_series(candidates, "htf_quote_ratio").ge(10.0) & _numeric_series(candidates, "htf_trade_ratio").ge(8.0)
+    sustained_ltf = _bool_series(candidates, "htf_ltf_sustained_flow_ok")
+    rules: list[tuple[str, pd.Series]] = [
+        ("all_htf_anomaly_gate", htf_gate),
+        ("dormancy_ok", htf_gate & dormancy),
+        ("smooth_price_growth_ok", htf_gate & smooth),
+        ("actual_pregrowth_oi_ok", htf_gate & oi_growth),
+        ("dormancy_and_smooth_price", htf_gate & dormancy & smooth),
+        ("dormancy_smooth_price_oi", htf_gate & dormancy & smooth & oi_growth),
+        ("strong_htf_flow", htf_gate & strong_flow),
+        ("sustained_internal_ltf_flow", htf_gate & sustained_ltf),
+        ("dormant_smooth_sustained_flow", htf_gate & dormancy & smooth & sustained_ltf),
+        ("dormant_smooth_oi_sustained_flow", htf_gate & dormancy & smooth & oi_growth & sustained_ltf),
+    ]
+
+    rows: list[dict[str, object]] = []
+    for rule, mask in rules:
+        subset = candidates.loc[mask.fillna(False)].copy()
+        runners = _bool_series(subset, "runner_10pct_next_hour")
+        clean = _bool_series(subset, "clean_runner_without_low_break")
+        low_break = _bool_series(subset, "anomaly_low_broken_before_runner")
+        events = int(len(subset))
+        rows.append(
+            {
+                "rule": rule,
+                "events": events,
+                "symbols": int(subset["symbol"].nunique()) if "symbol" in subset.columns and events else 0,
+                "runner_10pct_events": int(runners.sum()) if events else 0,
+                "runner_10pct_share": float(runners.mean()) if events else float("nan"),
+                "clean_runner_events": int(clean.sum()) if events else 0,
+                "clean_runner_share": float(clean.mean()) if events else float("nan"),
+                "low_break_share": float(low_break.mean()) if events else float("nan"),
+                "median_htf_quote_ratio": _median_column(subset, "htf_quote_ratio"),
+                "median_htf_trade_ratio": _median_column(subset, "htf_trade_ratio"),
+                "median_pregrowth_return_pct": _median_column(subset, "pregrowth_return_pct"),
+                "median_pregrowth_oi_change_pct": _median_column(subset, "pregrowth_oi_change_pct"),
+                "median_htf_ltf_quote_top1_share": _median_column(subset, "htf_ltf_quote_top1_share"),
+                "uses_future_label_as_entry_filter": False,
+                "status": _candidate_rule_status(events, float(clean.mean()) if events else float("nan")),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def _score_trade_rules(trades: pd.DataFrame, *, scope: str) -> pd.DataFrame:
+    columns = [
+        "scope",
+        "rule",
+        "signals",
+        "closed_trades",
+        "symbols",
+        "win_rate",
+        "avg_net_return",
+        "median_net_return",
+        "sum_net_return",
+        "avg_mfe_pct",
+        "avg_mae_pct",
+        "runner_10pct_label_share",
+        "clean_runner_label_share",
+        "top20pct_sum_net_return",
+        "top20pct_positive_share",
+        "top20pct_trade_count",
+        "balance_score_0_100",
+        "status",
+    ]
+    if trades.empty:
+        return pd.DataFrame(columns=columns)
+
+    all_rows = pd.Series(True, index=trades.index)
+    dormancy_smooth = _bool_series(trades, "htf_anomaly_gate") & _bool_series(trades, "dormancy_ok") & _bool_series(trades, "smooth_price_growth_ok")
+    oi_growth = _actual_oi_growth_mask(trades)
+    sustained_ltf = _bool_series(trades, "htf_ltf_sustained_flow_ok")
+    low_risk = _numeric_series(trades, "initial_risk_pct").le(0.025)
+    strong_acceptance = (
+        _numeric_series(trades, "ltf_quote_pace_ratio").ge(5.0)
+        & _numeric_series(trades, "ltf_trade_pace_ratio").ge(5.0)
+        & _numeric_series(trades, "ltf_second_half_return_pct").ge(0.0)
+    )
+    taker_share = _numeric_series(trades, "ltf_taker_buy_quote_share")
+    buyer_confirmed = taker_share.ge(0.55) & taker_share.notna()
+    balanced = dormancy_smooth & sustained_ltf & low_risk & strong_acceptance
+    rules: list[tuple[str, pd.Series]] = [
+        ("all_selected", all_rows),
+        ("dormant_smooth_price", dormancy_smooth),
+        ("dormant_smooth_price_oi", dormancy_smooth & oi_growth),
+        ("sustained_internal_ltf_flow", sustained_ltf),
+        ("dormant_smooth_sustained_flow", dormancy_smooth & sustained_ltf),
+        ("low_initial_risk_le_2p5pct", low_risk),
+        ("ltf_strong_acceptance", strong_acceptance),
+        ("ltf_buyer_confirmed", buyer_confirmed),
+        ("balanced_runner_candidate", balanced),
+        ("balanced_runner_with_oi", balanced & oi_growth),
+    ]
+
+    rows: list[dict[str, object]] = []
+    for rule, mask in rules:
+        subset = trades.loc[mask.fillna(False)].copy()
+        closed = subset.loc[subset.get("status", pd.Series(index=subset.index, dtype=object)).eq("closed")].copy()
+        net = _numeric_series(closed, "net_return").dropna()
+        top = _top20_metrics(net)
+        closed_count = int(len(closed))
+        win_rate = float((net > 0).mean()) if not net.empty else float("nan")
+        avg_net = float(net.mean()) if not net.empty else float("nan")
+        median_net = float(net.median()) if not net.empty else float("nan")
+        sum_net = float(net.sum()) if not net.empty else float("nan")
+        runner_share = float(_bool_series(closed, "runner_10pct_next_hour").mean()) if closed_count else float("nan")
+        clean_share = float(_bool_series(closed, "clean_runner_without_low_break").mean()) if closed_count else float("nan")
+        score = _balance_score(
+            closed_trades=closed_count,
+            win_rate=win_rate,
+            avg_net_return=avg_net,
+            median_net_return=median_net,
+            sum_net_return=sum_net,
+            top20pct_positive_share=top["top20pct_positive_share"],
+        )
+        rows.append(
+            {
+                "scope": scope,
+                "rule": rule,
+                "signals": int(len(subset)),
+                "closed_trades": closed_count,
+                "symbols": int(closed["symbol"].nunique()) if "symbol" in closed.columns and closed_count else 0,
+                "win_rate": win_rate,
+                "avg_net_return": avg_net,
+                "median_net_return": median_net,
+                "sum_net_return": sum_net,
+                "avg_mfe_pct": _mean_column(closed, "mfe_pct"),
+                "avg_mae_pct": _mean_column(closed, "mae_pct"),
+                "runner_10pct_label_share": runner_share,
+                "clean_runner_label_share": clean_share,
+                **top,
+                "balance_score_0_100": score,
+                "status": _trade_rule_status(closed_count, avg_net, median_net, sum_net, top["top20pct_positive_share"], score),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["balance_score_0_100", "closed_trades", "sum_net_return"],
+        ascending=[False, False, False],
+    )
+
+
+def _research_shortlist(candidate_rule_scores: pd.DataFrame, live_trade_rule_scores: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    if not live_trade_rule_scores.empty:
+        viable = live_trade_rule_scores.loc[live_trade_rule_scores["closed_trades"].fillna(0).astype(int) > 0].copy()
+        viable = viable.sort_values(["balance_score_0_100", "closed_trades", "sum_net_return"], ascending=[False, False, False]).head(8)
+        for _, row in viable.iterrows():
+            rows.append(
+                {
+                    "source": "live_filtered_trade_rule",
+                    "rule": row["rule"],
+                    "status": row["status"],
+                    "closed_trades": row["closed_trades"],
+                    "win_rate": row["win_rate"],
+                    "avg_net_return": row["avg_net_return"],
+                    "median_net_return": row["median_net_return"],
+                    "sum_net_return": row["sum_net_return"],
+                    "top20pct_positive_share": row["top20pct_positive_share"],
+                    "balance_score_0_100": row["balance_score_0_100"],
+                    "runner_10pct_share": row["runner_10pct_label_share"],
+                    "clean_runner_share": row["clean_runner_label_share"],
+                    "uses_future_label_as_entry_filter": False,
+                    "next_action": "inspect trades and rerun on another period before promoting to live logic",
+                }
+            )
+    if not candidate_rule_scores.empty:
+        candidates = candidate_rule_scores.loc[candidate_rule_scores["events"].fillna(0).astype(int) > 0].copy()
+        candidates = candidates.sort_values(["clean_runner_share", "runner_10pct_share", "events"], ascending=[False, False, False]).head(5)
+        for _, row in candidates.iterrows():
+            rows.append(
+                {
+                    "source": "candidate_label_rule",
+                    "rule": row["rule"],
+                    "status": row["status"],
+                    "closed_trades": float("nan"),
+                    "win_rate": float("nan"),
+                    "avg_net_return": float("nan"),
+                    "median_net_return": float("nan"),
+                    "sum_net_return": float("nan"),
+                    "top20pct_positive_share": float("nan"),
+                    "balance_score_0_100": float("nan"),
+                    "runner_10pct_share": row["runner_10pct_share"],
+                    "clean_runner_share": row["clean_runner_share"],
+                    "uses_future_label_as_entry_filter": False,
+                    "next_action": "use only as a nature label; do not use future runner labels as entry filters",
+                }
+            )
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return pd.DataFrame(
+            columns=[
+                "rank",
+                "source",
+                "rule",
+                "status",
+                "closed_trades",
+                "win_rate",
+                "avg_net_return",
+                "median_net_return",
+                "sum_net_return",
+                "top20pct_positive_share",
+                "balance_score_0_100",
+                "runner_10pct_share",
+                "clean_runner_share",
+                "uses_future_label_as_entry_filter",
+                "next_action",
+            ]
+        )
+    frame.insert(0, "rank", np.arange(1, len(frame) + 1))
+    return frame
+
+
 def _setup_nature(
     *,
     anomaly_gate: bool,
@@ -822,6 +1198,124 @@ def _numeric_column(frame: pd.DataFrame, column: str, *, fallback: pd.Series | N
     if fallback is not None:
         return pd.to_numeric(fallback, errors="coerce")
     return pd.Series(np.nan, index=frame.index)
+
+
+def _numeric_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    if frame.empty:
+        return pd.Series(dtype=float)
+    if column not in frame.columns:
+        return pd.Series(np.nan, index=frame.index)
+    return pd.to_numeric(frame[column], errors="coerce").replace([np.inf, -np.inf], np.nan)
+
+
+def _bool_series(frame: pd.DataFrame, column: str) -> pd.Series:
+    if frame.empty:
+        return pd.Series(dtype=bool)
+    if column not in frame.columns:
+        return pd.Series(False, index=frame.index)
+    values = frame[column]
+    if pd.api.types.is_bool_dtype(values):
+        return values.fillna(False).astype(bool)
+    if pd.api.types.is_numeric_dtype(values):
+        return pd.to_numeric(values, errors="coerce").fillna(0).ne(0)
+    normalized = values.astype(str).str.strip().str.lower()
+    return normalized.isin({"1", "true", "t", "yes", "y", "ok"})
+
+
+def _actual_oi_growth_mask(frame: pd.DataFrame) -> pd.Series:
+    if frame.empty:
+        return pd.Series(dtype=bool)
+    status = frame["pregrowth_oi_status"].astype(str).str.lower().eq("ok") if "pregrowth_oi_status" in frame.columns else pd.Series(False, index=frame.index)
+    change = _numeric_series(frame, "pregrowth_oi_change_pct").ge(0.0)
+    return status & change
+
+
+def _median_column(frame: pd.DataFrame, column: str) -> float:
+    values = _numeric_series(frame, column).dropna()
+    return float(values.median()) if not values.empty else float("nan")
+
+
+def _mean_column(frame: pd.DataFrame, column: str) -> float:
+    values = _numeric_series(frame, column).dropna()
+    return float(values.mean()) if not values.empty else float("nan")
+
+
+def _candidate_rule_status(events: int, clean_runner_share: float) -> str:
+    if events <= 0:
+        return "no_events"
+    if events < 20:
+        return "low_sample_research_only"
+    if np.isfinite(clean_runner_share) and clean_runner_share >= 0.20:
+        return "interesting_label_rule_research_only"
+    return "watch_research_only"
+
+
+def _top20_metrics(net_returns: pd.Series) -> dict[str, object]:
+    net = pd.to_numeric(net_returns, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna().sort_values(ascending=False)
+    if net.empty:
+        return {
+            "top20pct_sum_net_return": float("nan"),
+            "top20pct_positive_share": float("nan"),
+            "top20pct_trade_count": 0,
+        }
+    top_n = max(1, int(math.ceil(len(net) * 0.20)))
+    top = net.head(top_n)
+    positive_total = float(net.loc[net > 0].sum())
+    top_positive = float(top.loc[top > 0].sum())
+    return {
+        "top20pct_sum_net_return": float(top.sum()),
+        "top20pct_positive_share": _safe_divide(top_positive, positive_total) if positive_total > 0 else float("nan"),
+        "top20pct_trade_count": int(top_n),
+    }
+
+
+def _clip_score(value: float, low: float, high: float) -> float:
+    if not np.isfinite(value) or high <= low:
+        return 0.0
+    return float(np.clip((value - low) / (high - low), 0.0, 1.0))
+
+
+def _balance_score(
+    *,
+    closed_trades: int,
+    win_rate: float,
+    avg_net_return: float,
+    median_net_return: float,
+    sum_net_return: float,
+    top20pct_positive_share: float,
+) -> float:
+    if closed_trades <= 0:
+        return 0.0
+    sample_score = min(1.0, closed_trades / 100.0) * 18.0
+    win_score = _clip_score(win_rate, 0.45, 0.62) * 22.0
+    avg_score = _clip_score(avg_net_return, 0.0, 0.006) * 20.0
+    median_score = _clip_score(median_net_return, -0.001, 0.004) * 20.0
+    total_score = 10.0 if np.isfinite(sum_net_return) and sum_net_return > 0.0 else 0.0
+    dependency_score = _clip_score(0.75 - top20pct_positive_share, 0.0, 0.45) * 10.0
+    return round(sample_score + win_score + avg_score + median_score + total_score + dependency_score, 2)
+
+
+def _trade_rule_status(
+    closed_trades: int,
+    avg_net_return: float,
+    median_net_return: float,
+    sum_net_return: float,
+    top20pct_positive_share: float,
+    balance_score: float,
+) -> str:
+    if closed_trades <= 0:
+        return "no_closed_trades"
+    if closed_trades < 30:
+        return "low_sample"
+    if not np.isfinite(sum_net_return) or sum_net_return <= 0.0 or not np.isfinite(avg_net_return) or avg_net_return <= 0.0:
+        return "fail_negative_expectancy"
+    if np.isfinite(top20pct_positive_share) and top20pct_positive_share > 0.65:
+        return "watch_top20_dependency"
+    if np.isfinite(median_net_return) and median_net_return <= 0.0:
+        return "watch_negative_median"
+    if balance_score >= 60.0:
+        return "interesting_research_only"
+    return "watch_research_only"
 
 
 def _positive_median(values: pd.Series) -> float:
@@ -1049,6 +1543,11 @@ def _honesty_report(config: HtfLtfRunnerDiscoveryConfig) -> pd.DataFrame:
                 "status": "ok",
                 "detail": f"entry_slippage={config.entry_slippage_pct}; exit_slippage={config.exit_slippage_pct}; round_trip_fee={2 * config.fee_rate}.",
             },
+            {
+                "check": "data_access",
+                "status": "ok",
+                "detail": "The tool reads Parquet cache through ParquetStorage only; it does not download exchange candles or seconds data during the backtest.",
+            },
         ]
     )
 
@@ -1064,8 +1563,41 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--ltf-timeframe", default="5s")
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--end-timestamp-ms", type=int, default=None)
+    parser.add_argument("--baseline-candles", type=int, default=60)
+    parser.add_argument("--dormancy-candles", type=int, default=30)
+    parser.add_argument("--pregrowth-candles", type=int, default=5)
     parser.add_argument("--runner-target-return-pct", type=float, default=0.10)
     parser.add_argument("--runner-horizon-minutes", type=int, default=60)
+    parser.add_argument("--min-htf-quote-ratio", type=float, default=5.0)
+    parser.add_argument("--min-htf-trade-ratio", type=float, default=5.0)
+    parser.add_argument("--min-htf-return-pct", type=float, default=0.010)
+    parser.add_argument("--min-dormancy-to-anomaly-quote-ratio", type=float, default=6.0)
+    parser.add_argument("--min-dormancy-to-anomaly-trade-ratio", type=float, default=5.0)
+    parser.add_argument("--max-dormancy-range-pct-median", type=float, default=0.004)
+    parser.add_argument("--min-pregrowth-return-pct", type=float, default=0.002)
+    parser.add_argument("--max-pregrowth-single-candle-return-pct", type=float, default=0.020)
+    parser.add_argument("--min-pregrowth-positive-step-share", type=float, default=0.55)
+    parser.add_argument("--min-pregrowth-oi-change-pct", type=float, default=0.0)
+    parser.add_argument("--require-pregrowth-oi", action="store_true")
+    parser.add_argument("--ltf-min-confirm-candles", type=int, default=6)
+    parser.add_argument("--ltf-max-confirm-candles", type=int, default=24)
+    parser.add_argument("--min-ltf-confirm-return-pct", type=float, default=0.004)
+    parser.add_argument("--min-ltf-quote-pace-ratio", type=float, default=3.0)
+    parser.add_argument("--min-ltf-trade-pace-ratio", type=float, default=3.0)
+    parser.add_argument("--min-ltf-taker-buy-share", type=float, default=None)
+    parser.add_argument("--min-ltf-second-half-return-pct", type=float, default=0.0)
+    parser.add_argument("--min-ltf-quote-acceleration", type=float, default=1.0)
+    parser.add_argument("--min-ltf-trade-acceleration", type=float, default=1.0)
+    parser.add_argument("--max-entry-drift-pct", type=float, default=0.004)
+    parser.add_argument("--max-initial-risk-pct", type=float, default=0.05)
+    parser.add_argument("--structural-stop-buffer-pct", type=float, default=0.0005)
+    parser.add_argument("--trail-lookback-candles", type=int, default=6)
+    parser.add_argument("--trail-buffer-pct", type=float, default=0.0005)
+    parser.add_argument("--max-hold-candles", type=int, default=720)
+    parser.add_argument("--max-open-positions", type=int, default=1)
+    parser.add_argument("--fee-rate", type=float, default=0.0004)
+    parser.add_argument("--entry-slippage-pct", type=float, default=0.0005)
+    parser.add_argument("--exit-slippage-pct", type=float, default=0.0005)
     args = parser.parse_args(argv)
     config = HtfLtfRunnerDiscoveryConfig(
         cache_dir=Path(args.cache_dir),
@@ -1074,8 +1606,41 @@ def main(argv: list[str] | None = None) -> int:
         ltf_timeframe=str(args.ltf_timeframe),
         days=int(args.days),
         end_timestamp_ms=args.end_timestamp_ms,
+        baseline_candles=int(args.baseline_candles),
+        dormancy_candles=int(args.dormancy_candles),
+        pregrowth_candles=int(args.pregrowth_candles),
+        min_htf_quote_ratio=float(args.min_htf_quote_ratio),
+        min_htf_trade_ratio=float(args.min_htf_trade_ratio),
+        min_htf_return_pct=float(args.min_htf_return_pct),
+        min_dormancy_to_anomaly_quote_ratio=float(args.min_dormancy_to_anomaly_quote_ratio),
+        min_dormancy_to_anomaly_trade_ratio=float(args.min_dormancy_to_anomaly_trade_ratio),
+        max_dormancy_range_pct_median=float(args.max_dormancy_range_pct_median),
+        min_pregrowth_return_pct=float(args.min_pregrowth_return_pct),
+        max_pregrowth_single_candle_return_pct=float(args.max_pregrowth_single_candle_return_pct),
+        min_pregrowth_positive_step_share=float(args.min_pregrowth_positive_step_share),
+        min_pregrowth_oi_change_pct=float(args.min_pregrowth_oi_change_pct),
+        require_pregrowth_oi=bool(args.require_pregrowth_oi),
         runner_target_return_pct=float(args.runner_target_return_pct),
         runner_horizon_minutes=int(args.runner_horizon_minutes),
+        ltf_min_confirm_candles=int(args.ltf_min_confirm_candles),
+        ltf_max_confirm_candles=int(args.ltf_max_confirm_candles),
+        min_ltf_confirm_return_pct=float(args.min_ltf_confirm_return_pct),
+        min_ltf_quote_pace_ratio=float(args.min_ltf_quote_pace_ratio),
+        min_ltf_trade_pace_ratio=float(args.min_ltf_trade_pace_ratio),
+        min_ltf_taker_buy_share=args.min_ltf_taker_buy_share,
+        min_ltf_second_half_return_pct=float(args.min_ltf_second_half_return_pct),
+        min_ltf_quote_acceleration=float(args.min_ltf_quote_acceleration),
+        min_ltf_trade_acceleration=float(args.min_ltf_trade_acceleration),
+        max_entry_drift_pct=float(args.max_entry_drift_pct),
+        max_initial_risk_pct=float(args.max_initial_risk_pct),
+        structural_stop_buffer_pct=float(args.structural_stop_buffer_pct),
+        trail_lookback_candles=int(args.trail_lookback_candles),
+        trail_buffer_pct=float(args.trail_buffer_pct),
+        max_hold_candles=int(args.max_hold_candles),
+        fee_rate=float(args.fee_rate),
+        entry_slippage_pct=float(args.entry_slippage_pct),
+        exit_slippage_pct=float(args.exit_slippage_pct),
+        max_open_positions=int(args.max_open_positions),
     )
     run_htf_ltf_runner_discovery(config, symbols=args.symbols)
     return 0

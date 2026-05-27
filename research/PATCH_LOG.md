@@ -1,5 +1,44 @@
 # Anomaly Patch Log
 
+## 2026-05-27 - P415 applied locally - complete HTF/LTF runner discovery scoring
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+cli/parser.py
+cli/commands.py
+tests/test_htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Complete the runner-discovery backtest so it is useful for learning early runner nature, not just replaying a raw structural-no-TP trade stream.
+```
+
+Change:
+
+```text
+The discovery run now scores pre-entry candidate rule sets, live-filtered trade rule sets, winrate/PNL/top20-dependency balance, and a research shortlist. Candidate rows also expose HTF-internal LTF distribution/acceleration features so single-print spikes can be separated from sustained volume/trade awakenings. CLI exposes the main dormancy, pregrowth, LTF acceptance, risk and trailing knobs. The run config and honesty report explicitly mark the backtest as cache-only with no exchange/seconds download.
+```
+
+Validation:
+
+```text
+Focused tests passed: 40 passed. compileall passed for data/exchanges research_tools cli constants.py main.py. Cache-only 5m/1m CLI smoke on CATI/ZEC completed and wrote empty-but-valid artifacts without exchange fetching.
+```
+
+Risk:
+
+```text
+Rule scores are discovery diagnostics, not a live edge claim. Future +10% labels are used only for post-event evaluation and shortlist context; entry replay remains next-LTF-open after closed confirmation with structural SL/trailing and no TP.
+```
+
 ## 2026-05-27 - P414 applied locally - live2 stop-recovery symbol match and HTF/LTF runner discovery
 
 Files:
