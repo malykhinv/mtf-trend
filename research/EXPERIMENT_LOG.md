@@ -1,4 +1,32 @@
 
+## 2026-05-27 - 30d HTF/LTF discovery readout and P427 honesty fix
+
+```text
+Source artifact:
+.output/results/htf_ltf_runner_discovery_30d
+
+Honesty:
+- Entry timing looks honest in the run artifacts: future labels are marked unavailable at entry for signals and entry windows.
+- Checked rows had no `entry_timestamp_ms < decision_available_timestamp_ms`.
+- No evidence of backdated trade entry was found.
+- Caveat found: `setup_nature` included future-derived `anomaly_low_broken_after_wakeup`. That did not open trades, but it contaminated category artifacts. P427 removes the future low-break branch from `setup_nature`; rerun before using setup-nature distributions as live-available features.
+
+5m_30s:
+- scanned HTF rows 4,743,864; HTF anomaly rows 12,426; clean +10% runners 29.
+- selected live-filtered trades: 83 closed / 76 symbols, WR 54.2%, avg +2.99%, median +0.35%, sum +248%.
+- top20 winners exceed total net, so top dependence remains material.
+- Best next hypothesis from fixed-window research: `ltf_confirm_return_pct >= 0.5236%` and `dormancy_range_pct_median <= 0.4566%`.
+- Verified on raw same-symbol filtering: 80 trades / 75 symbols, WR 62.5%, avg +6.25%, median +1.46%, sum +500%, 18/25 positive days, but selected after seeing the 30d result.
+
+1m_5s:
+- scanned HTF rows 20,723,117; HTF anomaly rows 14,399; clean +10% runners 239.
+- selected live-filtered trades: 518 closed / 233 symbols, WR 44.0%, avg +0.66%, median -0.18%, sum +339%.
+- strong top dependence; sustained-flow labels lift runner share but do not produce robust PnL.
+
+Conclusion:
+No live-ready edge yet. The next research path is 5m/30s, not 1m/5s: validate the confirm+tight-dormancy rule on a held-out period after P427, with setup_nature kept live-only and future labels used only for evaluation.
+```
+
 ## 2026-05-27 - P426 fixed-window entry research upgrade
 
 ```text

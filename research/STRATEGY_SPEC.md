@@ -899,6 +899,7 @@ These windows are not a parameter grid for live tuning. They are a bounded resea
 
 Required truth boundaries:
 - Candidate construction may use only closed HTF history, dormancy/pregrowth history, cached OI rows available by decision time, and LTF candles inside the already closed HTF anomaly candle.
+- Live nature/category fields such as `setup_nature` may use only live-available candidate-time features. Future low-break and runner outcomes must remain separate evaluation labels.
 - `runner_10pct_next_hour`, `future_max_return_pct`, and anomaly-low-break fields are future labels for evaluation only. They must not be used as entry filters.
 - Entry replay starts only after closed forward LTF confirmation, enters at the next LTF open with adverse slippage, and rejects stale/drift/excess-risk cases before simulating.
 - Stop must be structural: anomaly low and closed confirmation-window lows with a small buffer. Exit is initial structural stop, structural trailing stop, or max-hold time exit. No TP is simulated.

@@ -1,3 +1,13 @@
+## 2026-05-27 - P427 30d discovery honesty readout
+
+Current commit: UNKNOWN.
+
+Status: P427 APPLIED locally / UNKNOWN commit. The 30d HTF/LTF discovery artifacts show no backdated entry execution: signal and entry-window rows mark future labels unavailable at entry, and all checked entries have `entry_timestamp_ms >= decision_available_timestamp_ms`. The main caveat found during analysis was artifact/category contamination, not trade backdating: `setup_nature` used the future low-break label for `anomaly_low_broken_after_wakeup`. P427 removes that future-derived branch so future runs keep live nature and outcome labels separate.
+
+Research readout: `5m_30s` selected trades are the only currently promising area, with 83 closed live-filtered trades, WR 54.2%, avg +2.99%, median +0.35%, sum +248%, but top 20% winners exceed total net because losers/lower winners offset them. A mined but interpretable 5m fixed-window rule, `ltf_confirm_return_pct >= 0.5236%` plus `dormancy_range_pct_median <= 0.4566%`, verifies on raw same-symbol filtering at 80 trades / 75 symbols, WR 62.5%, avg +6.25%, median +1.46%, sum +500%, 18/25 positive days. Treat it as a next hypothesis, not an edge claim, because it was selected after seeing this 30d result.
+
+`1m_5s` is not strategy-ready: it has more runner labels and more trades, but selected trades have WR 44.0%, median -0.18%, and strong top dependency. Sustained-flow labels lift runner frequency on candidates but do not translate into robust PnL. Next: rerun after P427, then validate the 5m confirm+tight-dormancy hypothesis on a different period before any live promotion.
+
 ## 2026-05-27 - P426 fixed-window runner entry research artifacts
 
 Current commit: UNKNOWN.

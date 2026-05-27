@@ -486,7 +486,6 @@ def _collect_symbol_candidates(
             dormancy_ok=dormancy_ok,
             smooth_price_ok=smooth_price_ok,
             oi_ok=oi_ok,
-            label=label,
             quote_ratio=quote_ratio,
             trade_ratio=trade_ratio,
         )
@@ -1601,7 +1600,6 @@ def _setup_nature(
     dormancy_ok: bool,
     smooth_price_ok: bool,
     oi_ok: bool,
-    label: dict[str, object],
     quote_ratio: float,
     trade_ratio: float,
 ) -> str:
@@ -1613,8 +1611,6 @@ def _setup_nature(
         return "dormant_smooth_price_oi_missing_or_down"
     if quote_ratio >= 20.0 and trade_ratio >= 10.0 and not smooth_price_ok:
         return "violent_flow_spike_no_smooth_pregrowth"
-    if label.get("anomaly_low_broken_before_runner"):
-        return "anomaly_low_broken_after_wakeup"
     return "generic_htf_flow_wakeup"
 
 

@@ -1,3 +1,39 @@
+## 2026-05-27 - P427 applied locally - remove future-tainted setup nature
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Keep HTF/LTF runner discovery artifacts honest after the 30d analysis found that `setup_nature` included one future-derived category.
+```
+
+Change:
+
+```text
+`setup_nature` no longer reads `anomaly_low_broken_before_runner`. The live nature category is now based only on anomaly/dormancy/smooth pregrowth/OI/flow features available at candidate time. Future low-break and +10% runner outcomes remain separate evaluation labels and must not feed live-entry categories.
+```
+
+Validation:
+
+```text
+Focused tests passed: 44 passed. compileall passed for research_tools/htf_ltf_runner_discovery.py and the standard code set.
+```
+
+Risk:
+
+```text
+Existing 30d artifacts still contain the old mixed `setup_nature` values and should not use `anomaly_low_broken_after_wakeup` or generic setup-nature shares as live-available filters. Rerun discovery after P427 before relying on setup-nature distributions.
+```
+
 ## 2026-05-27 - P426 applied locally - fixed-window runner entry research artifacts
 
 Files:
