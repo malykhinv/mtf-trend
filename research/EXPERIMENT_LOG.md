@@ -1,4 +1,35 @@
 
+## 2026-05-27 - 5m/30s win-loss feature analysis
+
+```text
+Source:
+.output/results/htf_ltf_runner_discovery_30d/5m_30s
+
+Question:
+What distinguishes winning trades from losing trades, and which filters improve winrate, median return, top dependency, and positive-day share?
+
+Winner-vs-loser readout:
+- Selected winners had much higher LTF quote/trade pace than losers. Median ltf_quote_pace_ratio: 41.3 winners vs 21.0 losers. Median ltf_trade_pace_ratio: 8.51 vs 6.04.
+- Selected winners had stronger HTF trade/quote expansion. Median htf_trade_ratio: 10.33 vs 7.87. Median htf_quote_ratio: 18.18 vs 15.47.
+- Entry-window winners were more often dormancy-backed: dormancy_ok true share 50.9% winners vs 43.1% losers.
+- Entry-window winners had higher HTF-internal concentration and trade acceleration: higher htf_ltf_trade_top1_share, htf_ltf_quote_top1_share, htf_ltf_trade_acceleration.
+- Smooth pregrowth was not a win marker here. It was more common in losers on entry-window trades, so "slow smooth accumulation" should not be promoted from this run.
+- Simple LTF volume sustain was not enough. `window_volume_sustain_ok` lifted winners only mildly and did not solve median/top dependency alone.
+
+Rules checked on raw entry-window trades with same-symbol overlap filtering:
+- Base known rule: ltf_confirm_return_pct >= 0.5236% and dormancy_range_pct_median <= 0.4566% -> 80 trades / 75 symbols, WR 62.5%, median +1.46%, sum +499.7%, top20/sum 0.824, 18/25 positive days.
+- Add ltf_quote_pace_ratio >= 17.1 -> 67 trades / 62 symbols, WR 67.2%, median +2.81%, sum +456.3%, top20/sum 0.782, 17/25 positive days.
+- Add pregrowth_oi_change_pct <= 0.3947% -> 69 trades / 66 symbols, WR 62.3%, median +2.43%, sum +469.7%, top20/sum 0.807, 16/21 positive days.
+- Add htf_ltf_trade_top1_share >= 0.38433 -> 35 trades / 32 symbols, WR 77.1%, median +4.17%, sum +314.6%, top20/sum 0.601, 14/19 positive days.
+- Alternative: htf_ltf_trade_acceleration >= 6.06 and pregrowth_return_pct <= 0.0083% -> 58 trades / 51 symbols, WR 62.1%, median +3.85%, sum +427.5%, top20/sum 0.766, 16/21 positive days.
+
+Interpretation:
+The tradable shape looks like compressed dormancy plus abrupt real flow/price acceptance. Stronger winners are not defined by a calm smooth OI/price build-up; they look more like sudden awakening where LTF price confirms and HTF-internal activity is concentrated enough to show urgency.
+
+Risk:
+All thresholds above are in-sample from this 30d artifact. They are hypotheses only. Validate on a held-out period and on P428's 5m_30s/5m_1m/5m_15s profile set before changing live logic.
+```
+
 ## 2026-05-27 - P428 5m profile set and daily breakdown artifacts
 
 ```text

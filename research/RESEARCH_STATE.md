@@ -1,3 +1,13 @@
+## 2026-05-27 - 5m/30s win-loss feature readout
+
+Current commit: UNKNOWN.
+
+Status: ANALYSIS on existing `.output/results/htf_ltf_runner_discovery_30d/5m_30s` artifacts. Winners are not simply "more sustained volume". Compared with losers, winning selected trades have higher LTF quote/trade pace, stronger HTF trade/quote expansion, and less adverse MAE. On entry-window trades, winners more often have real dormancy, higher HTF-internal top1 quote/trade concentration, stronger HTF-internal trade acceleration, and lower smooth pregrowth. This supports a sharper hypothesis: the tradable long is compressed dormancy -> abrupt flow/price acceptance, not slow smooth accumulation.
+
+Best in-sample balance candidate remains `ltf_confirm_return_pct >= 0.5236%` plus `dormancy_range_pct_median <= 0.4566%`. Add-on filters that look useful but need out-of-sample validation: `pregrowth_oi_change_pct <= 0.3947%` gave 69 trades / 66 symbols, WR 62.3%, median +2.43%, sum +469.7%, 16/21 positive days, top20/sum 0.807; `htf_ltf_trade_top1_share >= 0.38433` gave 35 trades, WR 77.1%, median +4.17%, top20/sum 0.601 but lower sample; `ltf_quote_pace_ratio >= 17.1` gave 67 trades, WR 67.2%, median +2.81%, top20/sum 0.782 but only 17/25 positive days.
+
+Next: do not hardcode these thresholds into live. Run the new P428 profile set on a held-out period and promote only if the same family improves median trade and positive-day share without top20/sum drifting above ~1.0.
+
 ## 2026-05-27 - P428 5m runner discovery profile set
 
 Current commit: UNKNOWN.
