@@ -149,6 +149,8 @@ def run_htf_ltf_runner_discovery(
     start_ms = int(end_ms) - int(config.days) * 24 * 60 * 60 * 1000
 
     candidate_rows: list[dict[str, object]] = []
+    entry_window_rows: list[dict[str, object]] = []
+    entry_window_trade_rows: list[dict[str, object]] = []
     signal_rows: list[dict[str, object]] = []
     trade_rows: list[dict[str, object]] = []
     quality_rows: list[dict[str, object]] = []
@@ -170,6 +172,8 @@ def run_htf_ltf_runner_discovery(
         oi = _load_oi_frame(local_storage, symbol, config=config, start_ms=start_ms, end_ms=end_ms)
         local_quality_rows = [_data_quality_row(symbol=symbol, htf=htf, ltf=ltf, oi=oi, config=config)]
         local_candidate_rows: list[dict[str, object]] = []
+        local_entry_window_rows: list[dict[str, object]] = []
+        local_entry_window_trade_rows: list[dict[str, object]] = []
         local_signal_rows: list[dict[str, object]] = []
         local_trade_rows: list[dict[str, object]] = []
         scanned_rows = 0
@@ -182,6 +186,11 @@ def run_htf_ltf_runner_discovery(
                 config=config,
             )
             for candidate in local_candidate_rows:
+                windows = _build_ltf_entry_windows(candidate, ltf=ltf, oi=oi, config=config)
+                local_entry_window_rows.extend(windows)
+                for window in windows:
+                    if window.get("window_execution_ok") is True:
+                        local_entry_window_trade_rows.append(_simulate_no_tp_runner_trade(window, ltf=ltf, config=config))
                 signal = _build_first_ltf_signal(candidate, ltf=ltf, oi=oi, config=config)
                 if signal is None:
                     continue
@@ -189,6 +198,8 @@ def run_htf_ltf_runner_discovery(
                 local_trade_rows.append(_simulate_no_tp_runner_trade(signal, ltf=ltf, config=config))
         return {
             "candidates": local_candidate_rows,
+            "entry_windows": local_entry_window_rows,
+            "entry_window_trades": local_entry_window_trade_rows,
             "signals": local_signal_rows,
             "trades": local_trade_rows,
             "quality": local_quality_rows,
@@ -222,22 +233,49 @@ def run_htf_ltf_runner_discovery(
     for symbol in selected_symbols:
         result = symbol_results.get(symbol, {})
         candidate_rows.extend(result.get("candidates", []))  # type: ignore[arg-type]
+        entry_window_rows.extend(result.get("entry_windows", []))  # type: ignore[arg-type]
+        entry_window_trade_rows.extend(result.get("entry_window_trades", []))  # type: ignore[arg-type]
         signal_rows.extend(result.get("signals", []))  # type: ignore[arg-type]
         trade_rows.extend(result.get("trades", []))  # type: ignore[arg-type]
         quality_rows.extend(result.get("quality", []))  # type: ignore[arg-type]
     scanned_htf_rows = int(sum(int(result.get("scanned_rows", 0)) for result in symbol_results.values()))
 
     candidates_frame = pd.DataFrame(candidate_rows)
+    entry_windows_frame = pd.DataFrame(entry_window_rows)
+    entry_window_trades_frame = pd.DataFrame(entry_window_trade_rows)
+    entry_window_trades_live_filtered = _apply_same_symbol_overlap_filter(entry_window_trades_frame)
     signals_frame = pd.DataFrame(signal_rows)
     trades_frame = pd.DataFrame(trade_rows)
     live_filtered = _apply_same_symbol_overlap_filter(trades_frame)
     candidate_rule_scores = _score_candidate_rules(candidates_frame)
+    entry_window_rule_scores = _score_entry_window_rules(
+        entry_window_trades_frame,
+        scope="raw_no_overlap_unfiltered",
+        apply_same_symbol_filter=False,
+    )
+    entry_window_rule_scores_live_filtered = _score_entry_window_rules(
+        entry_window_trades_frame,
+        scope="per_rule_same_symbol",
+        apply_same_symbol_filter=True,
+    )
     trade_rule_scores = _score_trade_rules(trades_frame, scope="raw")
     live_trade_rule_scores = _score_trade_rules(live_filtered, scope="live_filtered")
-    research_shortlist = _research_shortlist(candidate_rule_scores, live_trade_rule_scores)
+    research_shortlist = _research_shortlist(
+        candidate_rule_scores,
+        live_trade_rule_scores,
+        entry_window_rule_scores_live_filtered=entry_window_rule_scores_live_filtered,
+    )
 
     artifacts = [
         (config.output_dir / "htf_ltf_runner_candidates.csv", candidates_frame),
+        (config.output_dir / "htf_ltf_runner_entry_windows.csv", entry_windows_frame),
+        (config.output_dir / "htf_ltf_runner_entry_window_trades_raw.csv", entry_window_trades_frame),
+        (config.output_dir / "htf_ltf_runner_entry_window_trades_live_filtered.csv", entry_window_trades_live_filtered),
+        (config.output_dir / "htf_ltf_runner_entry_window_rule_scores.csv", entry_window_rule_scores),
+        (
+            config.output_dir / "htf_ltf_runner_entry_window_rule_scores_live_filtered.csv",
+            entry_window_rule_scores_live_filtered,
+        ),
         (config.output_dir / "htf_ltf_runner_signals.csv", signals_frame),
         (config.output_dir / "htf_ltf_runner_trades_raw.csv", trades_frame),
         (config.output_dir / "htf_ltf_runner_trades_live_filtered.csv", live_filtered),
@@ -258,7 +296,14 @@ def run_htf_ltf_runner_discovery(
         (config.output_dir / "htf_ltf_runner_research_shortlist.csv", research_shortlist),
         (
             config.output_dir / "htf_ltf_runner_funnel.csv",
-            _build_funnel(candidates_frame, signals_frame, trades_frame, scanned_htf_rows=scanned_htf_rows),
+            _build_funnel(
+                candidates_frame,
+                signals_frame,
+                trades_frame,
+                scanned_htf_rows=scanned_htf_rows,
+                entry_windows=entry_windows_frame,
+                entry_window_trades=entry_window_trades_frame,
+            ),
         ),
         (config.output_dir / "htf_ltf_runner_skip_reasons.csv", _skip_reasons(trades_frame)),
         (config.output_dir / "htf_ltf_runner_top_dependency.csv", _top_dependency(trades_frame)),
@@ -289,6 +334,8 @@ def run_htf_ltf_runner_discovery(
                         "runtime_seconds": round(time.monotonic() - started_at, 3),
                         "scanned_htf_rows": scanned_htf_rows,
                         "candidate_artifact_scope": "htf_anomaly_gate_only",
+                        "entry_window_counts": ",".join(str(value) for value in _entry_window_counts(config)),
+                        "entry_window_model": "fixed_closed_ltf_windows_next_open_research",
                     }
                 ]
             ),
@@ -347,6 +394,15 @@ def _collect_symbol_candidates(
         & (_numeric_column(prepared, "_quote_volume") / baseline_quote_fast).ge(config.min_htf_quote_ratio)
         & (_numeric_column(prepared, "_number_of_trades") / baseline_trades_fast).ge(config.min_htf_trade_ratio)
         & htf_return_fast.ge(config.min_htf_return_pct)
+    )
+    quote_ratio_fast = (_numeric_column(prepared, "_quote_volume") / baseline_quote_fast).replace([np.inf, -np.inf], np.nan)
+    trade_ratio_fast = (_numeric_column(prepared, "_number_of_trades") / baseline_trades_fast).replace([np.inf, -np.inf], np.nan)
+    prior_spike_context = _prepare_prior_spike_context(
+        prepared,
+        timestamps=timestamps,
+        quote_ratio=quote_ratio_fast,
+        trade_ratio=trade_ratio_fast,
+        htf_return=htf_return_fast,
     )
     scanned_rows = int(scanned_mask.sum())
 
@@ -423,6 +479,7 @@ def _collect_symbol_candidates(
             htf_open=anomaly_open,
             htf_close=anomaly_close,
         )
+        prior_spike_features = _prior_spike_features_for_index(prior_spike_context, idx=idx, current_timestamp_ms=ts)
         status = "ok"
         setup_nature = _setup_nature(
             anomaly_gate=anomaly_gate,
@@ -466,6 +523,7 @@ def _collect_symbol_candidates(
                 "smooth_price_growth_ok": smooth_price_ok,
                 "pregrowth_oi_ok": oi_ok,
                 "htf_anomaly_gate": anomaly_gate,
+                **prior_spike_features,
                 **pregrowth_features,
                 **oi_features,
                 **htf_ltf_features,
@@ -567,6 +625,127 @@ def _build_first_ltf_signal(
             **signal_features,
         }
     return None
+
+
+def _build_ltf_entry_windows(
+    candidate: dict[str, object],
+    *,
+    ltf: pd.DataFrame,
+    oi: pd.DataFrame,
+    config: HtfLtfRunnerDiscoveryConfig,
+) -> list[dict[str, object]]:
+    if candidate.get("status") != "ok":
+        return []
+    ltf_ms = _timeframe_ms(config.ltf_timeframe)
+    htf_ms = _timeframe_ms(config.htf_timeframe)
+    start_ms = int(candidate["htf_close_ms"])
+    end_ms = start_ms + int(config.runner_horizon_minutes) * 60_000
+    segment = ltf.loc[(ltf["timestamp"].astype("int64") >= start_ms) & (ltf["timestamp"].astype("int64") < end_ms)].copy()
+    baseline_quote = float(candidate.get("baseline_quote_volume_median") or float("nan"))
+    baseline_trades = float(candidate.get("baseline_number_of_trades_median") or float("nan"))
+    anomaly_low = float(candidate["anomaly_low"])
+    rows: list[dict[str, object]] = []
+
+    for confirm_count in _entry_window_counts(config):
+        base_row = {
+            **candidate,
+            "entry_window_status": "insufficient_ltf_for_next_open",
+            "signal_status": "entry_window_research",
+            "confirmation_candles": int(confirm_count),
+            "window_future_label_available_at_entry": False,
+            "window_uses_future_label_as_entry_filter": False,
+            "window_execution_ok": False,
+            "window_execution_skip_reason": "insufficient_ltf_for_next_open",
+        }
+        if len(segment) <= confirm_count:
+            rows.append({**base_row, "window_available_candles": int(len(segment))})
+            continue
+
+        closed = segment.head(confirm_count).copy()
+        decision_row = closed.iloc[-1]
+        decision_ts = int(decision_row["timestamp"])
+        decision_available_ts = decision_ts + ltf_ms
+        entry_row = segment.iloc[confirm_count]
+        entry_ts = int(entry_row["timestamp"])
+        signal_features = _ltf_confirmation_features(
+            closed,
+            baseline_quote=baseline_quote,
+            baseline_trades=baseline_trades,
+            htf_ms=htf_ms,
+        )
+        decay_features = _ltf_decay_features(closed)
+        oi_at_decision = _oi_asof(oi, decision_available_ts)
+        raw_entry_price = float(entry_row["open"])
+        entry_price = raw_entry_price * (1.0 + config.entry_slippage_pct)
+        decision_close = float(decision_row["close"])
+        entry_drift = abs(_safe_divide(entry_price - decision_close, decision_close))
+        structural_low = min(anomaly_low, float(pd.to_numeric(closed["low"], errors="coerce").min()))
+        initial_stop = structural_low * (1.0 - config.structural_stop_buffer_pct)
+        initial_risk = entry_price - initial_stop
+        initial_risk_pct = _safe_divide(initial_risk, entry_price)
+        low_broke = bool(float(pd.to_numeric(closed["low"], errors="coerce").min()) < anomaly_low)
+        oi_change_from_pregrowth = _safe_divide(
+            float(oi_at_decision["open_interest"]) - float(candidate.get("pregrowth_oi_end", float("nan"))),
+            float(candidate.get("pregrowth_oi_end", float("nan"))),
+        )
+        execution_skip = ""
+        if entry_ts < decision_available_ts:
+            execution_skip = "entry_before_decision_available"
+        elif low_broke:
+            execution_skip = "confirmation_low_broke_anomaly_low"
+        elif not np.isfinite(initial_risk) or initial_risk <= 0.0:
+            execution_skip = "invalid_initial_risk"
+        elif entry_drift > config.max_entry_drift_pct:
+            execution_skip = "entry_drift_too_large"
+        elif initial_risk_pct > config.max_initial_risk_pct:
+            execution_skip = "initial_risk_too_large"
+        volume_sustain_ok = (
+            not bool(decay_features["ltf_quote_decay_under50"])
+            and signal_features["ltf_confirm_return_pct"] >= 0.0
+            and signal_features["ltf_quote_pace_ratio"] >= config.min_ltf_quote_pace_ratio
+            and signal_features["ltf_trade_pace_ratio"] >= config.min_ltf_trade_pace_ratio
+            and signal_features["ltf_quote_acceleration"] >= 0.8
+            and signal_features["ltf_trade_acceleration"] >= 0.8
+        )
+        prior_median_ratio = float(candidate.get("current_vs_prior_spike_median_quote", float("nan")))
+        rows.append(
+            {
+                **base_row,
+                "entry_window_status": "ok",
+                "window_available_candles": int(len(segment)),
+                "decision_timestamp_ms": decision_ts,
+                "decision_timestamp_utc": _timestamp_to_utc(decision_ts),
+                "decision_available_timestamp_ms": decision_available_ts,
+                "decision_available_timestamp_utc": _timestamp_to_utc(decision_available_ts),
+                "decision_close": decision_close,
+                "entry_timestamp_ms": entry_ts,
+                "entry_timestamp_utc": _timestamp_to_utc(entry_ts),
+                "raw_entry_price": raw_entry_price,
+                "entry_price": entry_price,
+                "entry_price_model": "next_ltf_open_plus_adverse_slippage",
+                "entry_drift_pct": entry_drift,
+                "initial_stop": initial_stop,
+                "initial_risk": initial_risk,
+                "initial_risk_pct": initial_risk_pct,
+                "structural_stop_model": "min_anomaly_low_and_closed_ltf_lows_before_decision_minus_buffer",
+                "tp_model": "none",
+                "window_low_broke_anomaly_low": low_broke,
+                "window_volume_sustain_ok": bool(volume_sustain_ok),
+                "window_volume_sustain_above_prior_median_ok": bool(volume_sustain_ok and (not np.isfinite(prior_median_ratio) or prior_median_ratio >= 1.0)),
+                "window_volume_sustain_above_prior_150pct_ok": bool(volume_sustain_ok and np.isfinite(prior_median_ratio) and prior_median_ratio >= 1.5),
+                "window_oi_status": oi_at_decision["status"],
+                "window_oi_timestamp_ms": oi_at_decision["timestamp_ms"],
+                "window_oi_available_timestamp_ms": oi_at_decision["available_timestamp_ms"],
+                "window_oi_open_interest": oi_at_decision["open_interest"],
+                "window_oi_change_from_pregrowth_end_pct": oi_change_from_pregrowth,
+                "window_oi_nonnegative_from_pregrowth_end": bool(np.isfinite(oi_change_from_pregrowth) and oi_change_from_pregrowth >= 0.0),
+                "window_execution_ok": execution_skip == "",
+                "window_execution_skip_reason": execution_skip,
+                **signal_features,
+                **decay_features,
+            }
+        )
+    return rows
 
 
 def _simulate_no_tp_runner_trade(
@@ -797,6 +976,57 @@ def _ltf_confirmation_features(
     }
 
 
+def _ltf_decay_features(closed: pd.DataFrame) -> dict[str, object]:
+    if closed.empty:
+        return {
+            "ltf_quote_min_adjacent_ratio": float("nan"),
+            "ltf_quote_decay_under50": False,
+            "ltf_quote_last_first_ratio": float("nan"),
+            "ltf_quote_top1_share": float("nan"),
+            "ltf_quote_last_share": float("nan"),
+            "ltf_trade_min_adjacent_ratio": float("nan"),
+            "ltf_trade_decay_under50": False,
+            "ltf_trade_last_first_ratio": float("nan"),
+        }
+    quote = _numeric_column(
+        closed,
+        "quote_volume",
+        fallback=_numeric_column(closed, "close") * _numeric_column(closed, "volume"),
+    ).replace([np.inf, -np.inf], np.nan)
+    trades = _numeric_column(closed, "number_of_trades", fallback=pd.Series(np.nan, index=closed.index)).replace(
+        [np.inf, -np.inf],
+        np.nan,
+    )
+    quote_values = quote.to_numpy(dtype=float)
+    trade_values = trades.to_numpy(dtype=float)
+    quote_adjacent = _adjacent_ratios(quote_values)
+    trade_adjacent = _adjacent_ratios(trade_values)
+    quote_total = float(np.nansum(quote_values))
+    trade_total = float(np.nansum(trade_values))
+    return {
+        "ltf_quote_min_adjacent_ratio": float(np.nanmin(quote_adjacent)) if quote_adjacent.size else float("nan"),
+        "ltf_quote_decay_under50": bool(quote_adjacent.size and np.nanmin(quote_adjacent) < 0.5),
+        "ltf_quote_last_first_ratio": _safe_divide(float(quote_values[-1]), float(quote_values[0])) if quote_values.size else float("nan"),
+        "ltf_quote_top1_share": _safe_divide(float(np.nanmax(quote_values)), quote_total),
+        "ltf_quote_last_share": _safe_divide(float(quote_values[-1]), quote_total) if quote_values.size else float("nan"),
+        "ltf_trade_min_adjacent_ratio": float(np.nanmin(trade_adjacent)) if trade_adjacent.size else float("nan"),
+        "ltf_trade_decay_under50": bool(trade_adjacent.size and np.nanmin(trade_adjacent) < 0.5),
+        "ltf_trade_last_first_ratio": _safe_divide(float(trade_values[-1]), float(trade_values[0])) if trade_values.size else float("nan"),
+        "ltf_trade_top1_share": _safe_divide(float(np.nanmax(trade_values)), trade_total),
+    }
+
+
+def _adjacent_ratios(values: np.ndarray) -> np.ndarray:
+    if len(values) < 2:
+        return np.array([], dtype=float)
+    previous = values[:-1].astype(float)
+    current = values[1:].astype(float)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratios = current / previous
+    ratios[~np.isfinite(ratios)] = np.nan
+    return ratios
+
+
 def _htf_internal_ltf_features(
     ltf: pd.DataFrame,
     *,
@@ -915,6 +1145,85 @@ def _htf_internal_ltf_features(
         "htf_ltf_trade_acceleration": trade_acceleration,
         "htf_ltf_sustained_flow_ok": bool(sustained_flow_ok),
         "htf_ltf_trade_count_status": trade_count_status,
+    }
+
+
+def _prepare_prior_spike_context(
+    prepared: pd.DataFrame,
+    *,
+    timestamps: pd.Series,
+    quote_ratio: pd.Series,
+    trade_ratio: pd.Series,
+    htf_return: pd.Series,
+) -> dict[str, object]:
+    quote = _numeric_column(prepared, "_quote_volume").to_numpy(dtype=float)
+    ts = pd.to_numeric(timestamps, errors="coerce").to_numpy(dtype=float)
+    spike_mask = (
+        quote_ratio.ge(3.0).fillna(False).to_numpy(dtype=bool)
+        & trade_ratio.ge(3.0).fillna(False).to_numpy(dtype=bool)
+        & htf_return.ge(0.0).fillna(False).to_numpy(dtype=bool)
+        & np.isfinite(quote)
+        & (quote > 0)
+    )
+    spike_indices = np.flatnonzero(spike_mask)
+    next_quote_ratio = np.full(len(prepared), np.nan, dtype=float)
+    valid_next = spike_indices[spike_indices + 1 < len(prepared)]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        next_quote_ratio[valid_next] = quote[valid_next + 1] / quote[valid_next]
+    return {
+        "timestamps": ts,
+        "quote": quote,
+        "spike_indices": spike_indices,
+        "next_quote_ratio": next_quote_ratio,
+    }
+
+
+def _prior_spike_features_for_index(context: dict[str, object], *, idx: int, current_timestamp_ms: int) -> dict[str, object]:
+    timestamps = context["timestamps"]  # type: ignore[assignment]
+    quote = context["quote"]  # type: ignore[assignment]
+    spike_indices = context["spike_indices"]  # type: ignore[assignment]
+    next_quote_ratio = context["next_quote_ratio"]  # type: ignore[assignment]
+    lookback_start = int(current_timestamp_ms) - 24 * 60 * 60 * 1000
+    prior = spike_indices[(spike_indices < idx) & (timestamps[spike_indices] >= lookback_start)]  # type: ignore[index]
+    if len(prior) == 0:
+        return {
+            "prior_spike_count_24h": 0,
+            "prior_spike_median_quote": float("nan"),
+            "prior_spike_max_quote": float("nan"),
+            "current_vs_prior_spike_median_quote": float("nan"),
+            "current_vs_prior_spike_max_quote": float("nan"),
+            "prior_spike_next_decay50_share": float("nan"),
+            "prior_spike_median_next_quote_ratio": float("nan"),
+            "prior_spike_median_bars_to_decay50": float("nan"),
+        }
+    prior_quote = quote[prior]  # type: ignore[index]
+    current_quote = float(quote[idx])  # type: ignore[index]
+    median_quote = float(np.nanmedian(prior_quote))
+    max_quote = float(np.nanmax(prior_quote))
+    prior_next = next_quote_ratio[prior]  # type: ignore[index]
+    bars_to_decay: list[float] = []
+    for prior_idx in prior:
+        prior_quote_value = float(quote[prior_idx])  # type: ignore[index]
+        if not np.isfinite(prior_quote_value) or prior_quote_value <= 0.0:
+            continue
+        max_known_idx = min(int(idx), int(prior_idx) + 12)
+        found = False
+        for j in range(int(prior_idx) + 1, max_known_idx + 1):
+            if float(quote[j]) < 0.5 * prior_quote_value:  # type: ignore[index]
+                bars_to_decay.append(float(j - int(prior_idx)))
+                found = True
+                break
+        if not found:
+            bars_to_decay.append(float("nan"))
+    return {
+        "prior_spike_count_24h": int(len(prior)),
+        "prior_spike_median_quote": median_quote,
+        "prior_spike_max_quote": max_quote,
+        "current_vs_prior_spike_median_quote": _safe_divide(current_quote, median_quote),
+        "current_vs_prior_spike_max_quote": _safe_divide(current_quote, max_quote),
+        "prior_spike_next_decay50_share": float(np.nanmean(prior_next < 0.5)) if np.isfinite(prior_next).any() else float("nan"),
+        "prior_spike_median_next_quote_ratio": float(np.nanmedian(prior_next)) if np.isfinite(prior_next).any() else float("nan"),
+        "prior_spike_median_bars_to_decay50": float(np.nanmedian(bars_to_decay)) if np.isfinite(bars_to_decay).any() else float("nan"),
     }
 
 
@@ -1084,8 +1393,139 @@ def _score_trade_rules(trades: pd.DataFrame, *, scope: str) -> pd.DataFrame:
     )
 
 
-def _research_shortlist(candidate_rule_scores: pd.DataFrame, live_trade_rule_scores: pd.DataFrame) -> pd.DataFrame:
+def _score_entry_window_rules(
+    trades: pd.DataFrame,
+    *,
+    scope: str,
+    apply_same_symbol_filter: bool,
+) -> pd.DataFrame:
+    columns = [
+        "scope",
+        "rule",
+        "signals",
+        "closed_trades",
+        "symbols",
+        "win_rate",
+        "avg_net_return",
+        "median_net_return",
+        "sum_net_return",
+        "avg_mfe_pct",
+        "avg_mae_pct",
+        "runner_10pct_label_share",
+        "clean_runner_label_share",
+        "top20pct_sum_net_return",
+        "top20pct_positive_share",
+        "top20pct_trade_count",
+        "balance_score_0_100",
+        "status",
+    ]
+    if trades.empty:
+        return pd.DataFrame(columns=columns)
+
+    all_rows = pd.Series(True, index=trades.index)
+    no_decay_positive = (~_bool_series(trades, "ltf_quote_decay_under50")) & _numeric_series(trades, "ltf_confirm_return_pct").ge(0.0)
+    sustain = _bool_series(trades, "window_volume_sustain_ok")
+    above_prior = _bool_series(trades, "window_volume_sustain_above_prior_median_ok")
+    above_prior_150 = _bool_series(trades, "window_volume_sustain_above_prior_150pct_ok")
+    oi_nonnegative = _bool_series(trades, "window_oi_nonnegative_from_pregrowth_end")
+    low_risk = _numeric_series(trades, "initial_risk_pct").le(0.05)
+    strong_flow = _numeric_series(trades, "ltf_quote_pace_ratio").ge(5.0) & _numeric_series(trades, "ltf_trade_pace_ratio").ge(5.0)
+    decay = _bool_series(trades, "ltf_quote_decay_under50")
+    decay_negative = decay & _numeric_series(trades, "ltf_confirm_return_pct").lt(0.0)
+    rules: list[tuple[str, pd.Series]] = [
+        ("all_entry_windows", all_rows),
+        ("no_decay_positive_price", no_decay_positive),
+        ("volume_sustain", sustain),
+        ("volume_sustain_above_prior_median", sustain & above_prior),
+        ("volume_sustain_above_prior_150pct", sustain & above_prior_150),
+        ("volume_sustain_oi_nonnegative", sustain & oi_nonnegative),
+        ("strong_sustain_low_risk", sustain & strong_flow & low_risk),
+        ("fader_decay_under50", decay),
+        ("fader_decay_under50_negative_price", decay_negative),
+    ]
+
     rows: list[dict[str, object]] = []
+    for rule, mask in rules:
+        subset_before_filter = trades.loc[mask.fillna(False)].copy()
+        subset = _apply_same_symbol_overlap_filter(subset_before_filter) if apply_same_symbol_filter else subset_before_filter
+        closed = subset.loc[subset.get("status", pd.Series(index=subset.index, dtype=object)).eq("closed")].copy()
+        net = _numeric_series(closed, "net_return").dropna()
+        top = _top20_metrics(net)
+        closed_count = int(len(closed))
+        win_rate = float((net > 0).mean()) if not net.empty else float("nan")
+        avg_net = float(net.mean()) if not net.empty else float("nan")
+        median_net = float(net.median()) if not net.empty else float("nan")
+        sum_net = float(net.sum()) if not net.empty else float("nan")
+        runner_share = float(_bool_series(closed, "runner_10pct_next_hour").mean()) if closed_count else float("nan")
+        clean_share = float(_bool_series(closed, "clean_runner_without_low_break").mean()) if closed_count else float("nan")
+        score = _balance_score(
+            closed_trades=closed_count,
+            win_rate=win_rate,
+            avg_net_return=avg_net,
+            median_net_return=median_net,
+            sum_net_return=sum_net,
+            top20pct_positive_share=top["top20pct_positive_share"],
+        )
+        rows.append(
+            {
+                "scope": scope,
+                "rule": rule,
+                "signals": int(len(subset_before_filter)),
+                "closed_trades": closed_count,
+                "symbols": int(closed["symbol"].nunique()) if "symbol" in closed.columns and closed_count else 0,
+                "win_rate": win_rate,
+                "avg_net_return": avg_net,
+                "median_net_return": median_net,
+                "sum_net_return": sum_net,
+                "avg_mfe_pct": _mean_column(closed, "mfe_pct"),
+                "avg_mae_pct": _mean_column(closed, "mae_pct"),
+                "runner_10pct_label_share": runner_share,
+                "clean_runner_label_share": clean_share,
+                **top,
+                "balance_score_0_100": score,
+                "status": _trade_rule_status(closed_count, avg_net, median_net, sum_net, top["top20pct_positive_share"], score),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns).sort_values(
+        ["balance_score_0_100", "closed_trades", "sum_net_return"],
+        ascending=[False, False, False],
+    )
+
+
+def _research_shortlist(
+    candidate_rule_scores: pd.DataFrame,
+    live_trade_rule_scores: pd.DataFrame,
+    *,
+    entry_window_rule_scores_live_filtered: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    if entry_window_rule_scores_live_filtered is not None and not entry_window_rule_scores_live_filtered.empty:
+        viable_windows = entry_window_rule_scores_live_filtered.loc[
+            entry_window_rule_scores_live_filtered["closed_trades"].fillna(0).astype(int) > 0
+        ].copy()
+        viable_windows = viable_windows.sort_values(
+            ["balance_score_0_100", "closed_trades", "sum_net_return"],
+            ascending=[False, False, False],
+        ).head(8)
+        for _, row in viable_windows.iterrows():
+            rows.append(
+                {
+                    "source": "entry_window_trade_rule",
+                    "rule": row["rule"],
+                    "status": row["status"],
+                    "closed_trades": row["closed_trades"],
+                    "win_rate": row["win_rate"],
+                    "avg_net_return": row["avg_net_return"],
+                    "median_net_return": row["median_net_return"],
+                    "sum_net_return": row["sum_net_return"],
+                    "top20pct_positive_share": row["top20pct_positive_share"],
+                    "balance_score_0_100": row["balance_score_0_100"],
+                    "runner_10pct_share": row["runner_10pct_label_share"],
+                    "clean_runner_share": row["clean_runner_label_share"],
+                    "uses_future_label_as_entry_filter": False,
+                    "next_action": "inspect fixed-window trades and validate on the other TF set before live logic",
+                }
+            )
     if not live_trade_rule_scores.empty:
         viable = live_trade_rule_scores.loc[live_trade_rule_scores["closed_trades"].fillna(0).astype(int) > 0].copy()
         viable = viable.sort_values(["balance_score_0_100", "closed_trades", "sum_net_return"], ascending=[False, False, False]).head(8)
@@ -1505,6 +1945,19 @@ def _effective_symbol_workers(value: object, *, total_items: int) -> int:
     return max(1, min(int(requested), int(total_items), max(1, int(cpu_count)), 8))
 
 
+def _entry_window_counts(config: HtfLtfRunnerDiscoveryConfig) -> tuple[int, ...]:
+    start = int(config.ltf_min_confirm_candles)
+    end = int(config.ltf_max_confirm_candles)
+    if start <= 0 or end < start:
+        return ()
+    counts = {start, end}
+    value = start
+    while value + start <= end:
+        value += start
+        counts.add(value)
+    return tuple(sorted(counts))
+
+
 def _apply_same_symbol_overlap_filter(trades: pd.DataFrame) -> pd.DataFrame:
     if trades.empty or "status" not in trades.columns:
         return trades.copy()
@@ -1620,6 +2073,8 @@ def _build_funnel(
     trades: pd.DataFrame,
     *,
     scanned_htf_rows: int,
+    entry_windows: pd.DataFrame,
+    entry_window_trades: pd.DataFrame,
 ) -> pd.DataFrame:
     rows = [
         {"stage": "htf_rows_after_scan", "count": int(scanned_htf_rows)},
@@ -1627,6 +2082,9 @@ def _build_funnel(
         {"stage": "htf_anomaly_gate_ok", "count": int(candidates["htf_anomaly_gate"].astype(bool).sum()) if "htf_anomaly_gate" in candidates.columns else 0},
         {"stage": "runner_10pct_next_hour_labels", "count": int(candidates["runner_10pct_next_hour"].astype(bool).sum()) if "runner_10pct_next_hour" in candidates.columns else 0},
         {"stage": "clean_runner_without_low_break_labels", "count": int(candidates["clean_runner_without_low_break"].astype(bool).sum()) if "clean_runner_without_low_break" in candidates.columns else 0},
+        {"stage": "entry_window_rows", "count": int(len(entry_windows))},
+        {"stage": "entry_window_execution_ok", "count": int(entry_windows["window_execution_ok"].astype(bool).sum()) if "window_execution_ok" in entry_windows.columns else 0},
+        {"stage": "entry_window_closed_trades", "count": int(entry_window_trades["status"].eq("closed").sum()) if "status" in entry_window_trades.columns else 0},
         {"stage": "ltf_signals_selected", "count": int(len(signals))},
         {"stage": "closed_trades", "count": int(trades["status"].eq("closed").sum()) if "status" in trades.columns else 0},
         {"stage": "skipped_trades", "count": int(trades["status"].eq("skipped").sum()) if "status" in trades.columns else 0},

@@ -248,12 +248,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Research HTF anomaly plus LTF confirmation runner discovery with structural no-TP replay",
     )
     runner_discovery.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_ANOMALY_LAB_DAYS)
-    runner_discovery.add_argument(
-        "--backtest-symbol-workers",
-        type=_positive_int_for("--backtest-symbol-workers"),
-        default=1,
-        help="Symbol-level worker threads for cache-only runner discovery. Default 1 avoids Windows/Parquet IO contention; raise explicitly after diagnostics show CPU-bound work.",
-    )
 
     materialize_subminute = subparsers.add_parser(
         "materialize-anomaly-subminute-cache",

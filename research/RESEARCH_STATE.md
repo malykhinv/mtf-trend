@@ -1,3 +1,13 @@
+## 2026-05-27 - P426 fixed-window runner entry research artifacts
+
+Current commit: UNKNOWN.
+
+Status: P426 APPLIED locally / UNKNOWN commit. The next fixed-profile `run-htf-ltf-runner-discovery --days N` run now writes honest early-entry research artifacts instead of forcing one current entry path. For every HTF anomaly candidate it evaluates bounded closed-LTF windows: `5m_30s` uses 2/4/6/8 closed 30s candles; `1m_5s` uses 6/12/18/24 closed 5s candles. Each window decides only after the last closed LTF candle and enters at the next LTF open with adverse slippage. Future +10% runner labels remain artifact-only and are explicitly marked as unavailable/unused at entry.
+
+Research focus: separate runner starts from fader spikes by comparing early quote-volume/trade-count sustain versus candle-to-candle decay under 50%, current spike size versus prior 24h spike median/maximum, non-negative price acceptance, structural low survival, and OI change available by decision time. Entry-window rule scores are calculated both raw and with same-symbol-only overlap filtering per rule; there is still no cap on simultaneous positions across different symbols.
+
+Next: run `.\\.venv\\Scripts\\python.exe main.py run-htf-ltf-runner-discovery --days 30`, then inspect `htf_ltf_runner_entry_window_rule_scores_live_filtered.csv`, `htf_ltf_runner_entry_window_trades_live_filtered.csv`, `htf_ltf_runner_entry_windows.csv`, `htf_ltf_runner_research_shortlist.csv`, funnel and data-quality artifacts for both profiles. Do not promote live logic until the same rule shows positive average/median net return, acceptable trade count, limited top20 dependency, real flow coverage, and stability across both TF sets or a held-out period.
+
 ## 2026-05-27 - P425 runner discovery speed and 5m/30s decay readout
 
 Current commit: UNKNOWN.

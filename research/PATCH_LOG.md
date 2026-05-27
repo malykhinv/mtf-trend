@@ -1,3 +1,46 @@
+## 2026-05-27 - P426 applied locally - fixed-window runner entry research artifacts
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+tests/test_htf_ltf_runner_discovery.py
+cli/parser.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Make the next HTF/LTF discovery run useful for honest long-entry strategy research: compare early LTF volume-sustain windows against fader-style volume decay, with OI context, structural SL/trailing, no TP, and no future-label entry leakage.
+```
+
+Change:
+
+```text
+- Add fixed closed-LTF entry windows per candidate: 5m/30s uses 2/4/6/8 candles; 1m/5s uses 6/12/18/24 candles.
+- Each window decides only after its last closed LTF candle and enters at the next LTF open with adverse slippage.
+- Add prior 24h spike context and early LTF volume/trade decay/sustain features, including whether current spike exceeds prior spike median/150% median and whether OI is non-negative from pregrowth end.
+- Write entry-window artifacts, simulated no-TP structural trades, raw and same-symbol-filtered trade rows, per-rule score tables, and shortlist rows for volume-sustain vs fader-decay rules.
+- Score same-symbol overlap per rule, so one broad research window does not suppress later more selective windows from the same strategy rule.
+- Keep the standard discovery CLI fixed-profile with only `--days`; TF sets and window counts live in code.
+```
+
+Validation:
+
+```text
+Focused tests passed: 44 passed. compileall passed for data/exchanges research_tools cli constants.py main.py. BSB 7d 5m/30s profile smoke wrote entry-window artifacts and closed 12 executable fixed-window trades without using future labels as entry filters.
+```
+
+Risk:
+
+```text
+This patch does not prove edge. It expands honest research observability and adds bounded fixed windows, which can increase runtime versus P425 but should remain far cheaper than the old all-row candidate artifact path. Treat `runner_10pct_next_hour` and clean-runner labels as evaluation labels only.
+```
+
 ## 2026-05-27 - P425 applied locally - runner discovery gate-first speedup and decay research
 
 Files:

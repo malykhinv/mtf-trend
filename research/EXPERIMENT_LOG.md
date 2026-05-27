@@ -1,4 +1,37 @@
 
+## 2026-05-27 - P426 fixed-window entry research upgrade
+
+```text
+Patch: P426 adds fixed closed-LTF entry-window artifacts to HTF/LTF runner discovery.
+
+Purpose:
+- make the next 30d run answer whether early sustained flow can separate runners from fader spikes;
+- keep the replay honest by making every window decision after closed LTF candles and entering only at the next LTF open;
+- keep future +10% labels as evaluation labels only.
+
+New artifacts per profile:
+- htf_ltf_runner_entry_windows.csv
+- htf_ltf_runner_entry_window_trades_raw.csv
+- htf_ltf_runner_entry_window_trades_live_filtered.csv
+- htf_ltf_runner_entry_window_rule_scores.csv
+- htf_ltf_runner_entry_window_rule_scores_live_filtered.csv
+
+Research questions for the next run:
+- Does `volume_sustain` beat `fader_decay_under50` on avg/median/sum net return after fees/slippage?
+- Does requiring current quote-volume >= prior 24h spike median or >=150% median improve runner capture without killing sample size?
+- Does OI non-negative from pregrowth end help, or is it only a diagnostic on this market/cache?
+- Are wins distributed across symbols/time, or mostly top20 trades?
+- Do both fixed profiles agree, or is the apparent edge TF/cache-specific?
+
+Validation already run:
+- `.\.venv\Scripts\python.exe -m pytest tests\test_htf_ltf_runner_discovery.py tests\test_live2_market_watch.py -q` -> 44 passed.
+- `.\.venv\Scripts\python.exe -m compileall -q data\exchanges research_tools cli constants.py main.py` -> passed.
+- BSB 7d 5m/30s profile smoke wrote entry-window artifacts and closed 12 executable fixed-window trades.
+
+Next command:
+.\.venv\Scripts\python.exe main.py run-htf-ltf-runner-discovery --days 30
+```
+
 ## 2026-05-27 - 7d 5m/30s runner decay research and P425 validation
 
 ```text

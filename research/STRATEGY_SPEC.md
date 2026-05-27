@@ -885,6 +885,18 @@ No timeframe, symbol, threshold, output, risk, or trailing flags should be requi
 
 Terminal progress must stay compact: one rewritten progress line per profile with processed count, percent, current symbol, and ETA, followed by one final summary line. Per-symbol diagnostics belong in artifacts, not stdout.
 
+The discovery run must also write fixed early-entry windows for runner-vs-fader research:
+
+```text
+5m_30s windows: 2, 4, 6, 8 closed 30s candles after HTF close
+1m_5s windows: 6, 12, 18, 24 closed 5s candles after HTF close
+decision time: last closed LTF candle in the window
+entry model: next LTF open plus adverse slippage
+future labels: evaluation only, never entry filters
+```
+
+These windows are not a parameter grid for live tuning. They are a bounded research lens to test whether volume/trade-count sustain, decay under 50%, current spike size versus prior same-symbol spikes, price acceptance, OI behavior, and structural-low survival separate runners from noise.
+
 Required truth boundaries:
 - Candidate construction may use only closed HTF history, dormancy/pregrowth history, cached OI rows available by decision time, and LTF candles inside the already closed HTF anomaly candle.
 - `runner_10pct_next_hour`, `future_max_return_pct`, and anomaly-low-break fields are future labels for evaluation only. They must not be used as entry filters.
@@ -895,6 +907,8 @@ Required truth boundaries:
 Artifacts must expose:
 - candidate rows with dormancy, smooth pregrowth, actual OI status/change, HTF quote/trade ratios, HTF-internal LTF distribution/acceleration, runner labels, and anomaly-low-break labels;
 - candidate rows are scoped to HTF anomaly gate rows only. The funnel/run_config must expose scanned HTF row count and pre-artifact rejected row count so speed optimizations do not hide the reject base;
+- entry-window rows with decision/availability/entry timestamps, no-future-label flags, prior 24h spike context, LTF volume/trade decay and sustain fields, OI-at-decision fields, structural stop source, drift/risk fields, and execution skip reasons;
+- entry-window no-TP trade rows and rule-score tables for raw and same-symbol-filtered scopes, including volume-sustain and fader-decay families;
 - signal rows with decision time, decision availability time, next-open entry, structural stop source, drift and initial-risk fields;
 - raw and live-filtered trade rows with no-TP structural trailing outcomes;
 - live-filtered trade rows must reject only same-symbol overlap. They must not cap simultaneous positions across different symbols;
