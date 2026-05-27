@@ -1,3 +1,11 @@
+## 2026-05-27 - P418 compact discovery progress
+
+Current commit: UNKNOWN.
+
+Status: P418 APPLIED locally / UNKNOWN commit. HTF/LTF runner discovery stdout is now compact: each profile updates one progress line with count/percent/current symbol/ETA, then prints one final summary line. Per-symbol details stay in artifacts instead of flooding the terminal.
+
+Next: run the 30d command normally; expected terminal output should be a few profile progress/summary lines, not one line per symbol.
+
 ## 2026-05-27 - P417 runner discovery overlap model
 
 Current commit: UNKNOWN.

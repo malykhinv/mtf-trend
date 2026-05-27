@@ -15,6 +15,7 @@ declare a live-ready edge from one run.
 from __future__ import annotations
 
 import math
+import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -93,10 +94,47 @@ class HtfLtfRunnerDiscoveryConfig:
             raise ValueError("ltf_max_confirm_candles must be >= ltf_min_confirm_candles")
 
 
+class _ProgressLine:
+    def __init__(self, *, label: str, total: int, min_interval_seconds: float = 0.5) -> None:
+        self.label = label
+        self.total = max(0, int(total))
+        self.min_interval_seconds = float(min_interval_seconds)
+        self.started_at = time.monotonic()
+        self.last_emit_at = 0.0
+        self.last_len = 0
+        self.enabled = bool(getattr(sys.stderr, "isatty", lambda: False)())
+
+    def update(self, *, index: int, item: str) -> None:
+        if self.total <= 0:
+            return
+        now = time.monotonic()
+        if index < self.total and now - self.last_emit_at < self.min_interval_seconds:
+            return
+        elapsed = max(0.001, now - self.started_at)
+        eta_seconds = (elapsed / max(1, index)) * max(0, self.total - index)
+        text = (
+            f"{self.label}: scanning {index}/{self.total} "
+            f"({index / self.total:.1%}) symbol={item} eta={_format_duration(eta_seconds)}"
+        )
+        if self.enabled:
+            padding = " " * max(0, self.last_len - len(text))
+            print(f"\r{text}{padding}", end="", file=sys.stderr, flush=True)
+            self.last_len = len(text)
+        else:
+            if index == 1 or index == self.total:
+                print(text, flush=True)
+        self.last_emit_at = now
+
+    def finish(self) -> None:
+        if self.enabled and self.last_len:
+            print(file=sys.stderr, flush=True)
+
+
 def run_htf_ltf_runner_discovery(
     config: HtfLtfRunnerDiscoveryConfig,
     *,
     symbols: Iterable[str] | None = None,
+    progress_label: str | None = None,
 ) -> Path:
     started_at = time.monotonic()
     config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -111,9 +149,13 @@ def run_htf_ltf_runner_discovery(
     signal_rows: list[dict[str, object]] = []
     trade_rows: list[dict[str, object]] = []
     quality_rows: list[dict[str, object]] = []
+    progress = _ProgressLine(
+        label=progress_label or f"runner discovery {config.htf_timeframe}/{config.ltf_timeframe}",
+        total=len(selected_symbols),
+    )
 
     for index, symbol in enumerate(selected_symbols, start=1):
-        print(f"runner discovery: {index}/{len(selected_symbols)} {symbol}", flush=True)
+        progress.update(index=index, item=symbol)
         htf = _load_frame(storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
         ltf = _load_frame(
             storage,
@@ -135,6 +177,7 @@ def run_htf_ltf_runner_discovery(
                 continue
             signal_rows.append(signal)
             trade_rows.append(_simulate_no_tp_runner_trade(signal, ltf=ltf, config=config))
+    progress.finish()
 
     candidates_frame = pd.DataFrame(candidate_rows)
     signals_frame = pd.DataFrame(signal_rows)
@@ -204,7 +247,7 @@ def run_htf_ltf_runner_discovery(
 
     summary = _metric_map(_summarize_trades(live_filtered))
     print(
-        "runner discovery done: "
+        f"{progress.label}: done "
         f"candidates={len(candidates_frame)} signals={len(signals_frame)} "
         f"closed={int(summary.get('closed_trades', 0))} "
         f"avg_net={float(summary.get('avg_net_return', 0.0)):.4%} "
@@ -1354,6 +1397,19 @@ def _timestamp_to_utc(timestamp_ms: object) -> str:
     if not math.isfinite(parsed):
         return ""
     return pd.to_datetime(parsed, unit="ms", utc=True).isoformat()
+
+
+def _format_duration(seconds: float) -> str:
+    if not np.isfinite(seconds) or seconds < 0:
+        return "n/a"
+    total = int(round(seconds))
+    if total < 60:
+        return f"{total}s"
+    minutes, secs = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m{secs:02d}s"
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m"
 
 
 def _apply_same_symbol_overlap_filter(trades: pd.DataFrame) -> pd.DataFrame:

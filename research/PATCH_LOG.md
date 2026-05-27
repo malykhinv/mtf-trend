@@ -1,5 +1,42 @@
 # Anomaly Patch Log
 
+## 2026-05-27 - P418 applied locally - compact runner discovery progress
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+cli/commands.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Stop printing hundreds or thousands of per-symbol progress lines during HTF/LTF runner discovery runs.
+```
+
+Change:
+
+```text
+The runner discovery scanner now renders one carriage-return progress line per profile with processed count, percent, current symbol, and ETA. Each profile still prints one final summary line. Non-interactive output is throttled to start/end lines to avoid massive logs.
+```
+
+Validation:
+
+```text
+Focused tests passed: 41 passed. compileall passed for data/exchanges research_tools cli constants.py main.py. Small two-symbol module smoke showed compact start/end progress lines and one final summary line. A full `main.py ... --days 1` smoke was intentionally stopped after the short validation timeout because it began scanning the full cache.
+```
+
+Risk:
+
+```text
+Progress is now less verbose by design. Detailed per-symbol diagnostics remain in CSV artifacts, not stdout.
+```
+
 ## 2026-05-27 - P417 applied locally - runner discovery same-symbol-only overlap
 
 Files:

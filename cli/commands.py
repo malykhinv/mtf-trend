@@ -1726,13 +1726,7 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 trail_lookback_candles=int(profile["trail_lookback_candles"]),
                 max_hold_candles=int(profile["max_hold_candles"]),
             )
-            print(
-                "runner discovery profile: "
-                f"{profile['name']} htf={profile['htf_timeframe']} ltf={profile['ltf_timeframe']} "
-                f"output={profile_output_dir}",
-                flush=True,
-            )
-            result_dir = run_discovery(discovery_config)
+            result_dir = run_discovery(discovery_config, progress_label=f"runner discovery {profile['name']}")
             index_rows.append(
                 {
                     "profile": profile["name"],

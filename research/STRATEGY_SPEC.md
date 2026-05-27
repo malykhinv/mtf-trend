@@ -883,6 +883,8 @@ The command must run exactly these TF sets unless code is deliberately changed:
 
 No timeframe, symbol, threshold, output, risk, or trailing flags should be required for the standard discovery run. Profile outputs are written under `htf_ltf_runner_discovery_<days>d/<profile>/`.
 
+Terminal progress must stay compact: one rewritten progress line per profile with processed count, percent, current symbol, and ETA, followed by one final summary line. Per-symbol diagnostics belong in artifacts, not stdout.
+
 Required truth boundaries:
 - Candidate construction may use only closed HTF history, dormancy/pregrowth history, cached OI rows available by decision time, and LTF candles inside the already closed HTF anomaly candle.
 - `runner_10pct_next_hour`, `future_max_return_pct`, and anomaly-low-break fields are future labels for evaluation only. They must not be used as entry filters.

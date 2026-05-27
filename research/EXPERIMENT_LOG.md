@@ -1,4 +1,22 @@
 
+## 2026-05-27 - P418 compact progress validation plan
+
+```text
+Patch: P418 compact HTF/LTF runner discovery progress.
+
+Expected terminal behavior:
+- one rewritten progress line per profile in an interactive terminal;
+- progress includes processed/total, percent, current symbol, and ETA;
+- each profile prints one final summary line;
+- non-interactive logs are throttled to start/end progress lines plus final summaries.
+
+Validation to run:
+- `python -m pytest tests/test_htf_ltf_runner_discovery.py tests/test_live2_market_watch.py -q` -> 41 passed;
+- `python -m compileall -q data/exchanges research_tools cli constants.py main.py` -> passed;
+- small two-symbol module smoke showed compact start/end progress lines and one final summary line;
+- full `main.py run-htf-ltf-runner-discovery --days 1` smoke was stopped after the short validation timeout because it began scanning the full cache.
+```
+
 ## 2026-05-27 - P417 same-symbol-only discovery filter
 
 ```text
