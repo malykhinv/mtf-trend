@@ -1,3 +1,11 @@
+## 2026-05-27 - P429 strict LTF wall-clock honesty proposed
+
+Current commit: UNKNOWN.
+
+Status: P429 PROPOSED against uploaded workspace / GitHub branch content not head-verified. The 5m/15s and 5m/30s artifacts were not clean edge evidence: post-entry replay used the next N available LTF rows, so sparse subminute cache could turn a one-hour hold into multi-day or multi-week exposure. P429 changes runner discovery to use configured wall-clock LTF paths and explicit gap/incomplete statuses for entry windows, future labels and post-entry replay. Flow logic now requires real `quote_volume` and `number_of_trades`; no close*volume proxy is used for strategy evidence.
+
+Next: apply P429, materialize/backfill continuous 15s/30s cache for the tested period, rerun `.\.venv\Scripts\python.exe main.py run-htf-ltf-runner-discovery --days 45`, then judge only artifacts where post-entry and future LTF path statuses are `ok` or where stop exited before any gap.
+
 ## 2026-05-27 - 5m/30s win-loss feature readout
 
 Current commit: UNKNOWN.

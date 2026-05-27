@@ -1,3 +1,39 @@
+## 2026-05-27 - P429 proposed - strict LTF wall-clock honesty for runner discovery
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Remove the optimistic sparse-LTF simulation path found in the 5m/15s and 5m/30s artifacts.
+```
+
+Change:
+
+```text
+HTF/LTF runner discovery no longer simulates post-entry exits by taking the next N available LTF rows. Entry confirmation, future runner labels, HTF-internal LTF features and post-entry replay now use configured wall-clock LTF steps. If a required candle is missing before the trade exits, the row is skipped/marked missing with an explicit LTF gap/incomplete status. Real quote_volume and number_of_trades are required for flow logic; close*volume proxy is not used.
+```
+
+Validation:
+
+```text
+compileall passed for data/exchanges research_tools cli constants.py main.py. launcher.py is not present in the uploaded workspace. Synthetic strict-window smoke checked: stop before a later gap stays closed; gap before exit becomes skipped; no-hit future label before a gap becomes missing.
+```
+
+Risk:
+
+```text
+Fresh discovery runs will likely show many skipped/missing rows until subminute cache coverage is continuous. This is intended: missing time must reduce evidence, not inflate PnL. Existing pre-P429 artifacts remain tainted by sparse-row exit simulation and should not be used as edge proof.
+```
+
 ## 2026-05-27 - P428 applied locally - runner discovery 5m profile set and daily artifacts
 
 Files:

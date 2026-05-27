@@ -97,6 +97,21 @@ class HtfLtfRunnerDiscoveryConfig:
             raise ValueError("ltf_max_confirm_candles must be >= ltf_min_confirm_candles")
 
 
+
+@dataclass(frozen=True, slots=True)
+class _StrictLtfWindow:
+    frame: pd.DataFrame
+    status: str
+    start_ms: int
+    end_exclusive_ms: int
+    expected_step_ms: int
+    expected_candles: int
+    observed_candles: int
+    first_gap_start_ms: int | None
+    first_gap_end_ms: int | None
+    max_gap_ms: int
+
+
 class _ProgressLine:
     def __init__(self, *, label: str, total: int, min_interval_seconds: float = 0.5) -> None:
         self.label = label
@@ -343,6 +358,7 @@ def run_htf_ltf_runner_discovery(
                         "candidate_artifact_scope": "htf_anomaly_gate_only",
                         "entry_window_counts": ",".join(str(value) for value in _entry_window_counts(config)),
                         "entry_window_model": "fixed_closed_ltf_windows_next_open_research",
+                        "post_entry_simulation_model": "strict_wall_clock_ltf_path_no_gap_hops",
                     }
                 ]
             ),
@@ -373,13 +389,16 @@ def _collect_symbol_candidates(
     config: HtfLtfRunnerDiscoveryConfig,
 ) -> tuple[list[dict[str, object]], int]:
     htf_ms = _timeframe_ms(config.htf_timeframe)
+    ltf_ms = _timeframe_ms(config.ltf_timeframe)
     horizon_ms = int(config.runner_horizon_minutes) * 60_000
     rows: list[dict[str, object]] = []
     prepared = htf.copy()
     prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
     prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close"]).sort_values("timestamp")
-    quote_series = _numeric_column(prepared, "quote_volume", fallback=_numeric_column(prepared, "close") * _numeric_column(prepared, "volume"))
-    trade_series = _numeric_column(prepared, "number_of_trades", fallback=pd.Series(np.nan, index=prepared.index))
+    if "quote_volume" not in prepared.columns or "number_of_trades" not in prepared.columns:
+        return [], 0
+    quote_series = _numeric_column(prepared, "quote_volume")
+    trade_series = _numeric_column(prepared, "number_of_trades")
     prepared["_quote_volume"] = quote_series
     prepared["_number_of_trades"] = trade_series
 
@@ -478,6 +497,7 @@ def _collect_symbol_candidates(
             reference_price=anomaly_close,
             anomaly_low=anomaly_low,
             target_return_pct=config.runner_target_return_pct,
+            expected_step_ms=ltf_ms,
         )
         htf_ltf_features = _htf_internal_ltf_features(
             ltf,
@@ -485,6 +505,7 @@ def _collect_symbol_candidates(
             end_ms=close_ts,
             htf_open=anomaly_open,
             htf_close=anomaly_close,
+            expected_step_ms=ltf_ms,
         )
         prior_spike_features = _prior_spike_features_for_index(prior_spike_context, idx=idx, current_timestamp_ms=ts)
         status = "ok"
@@ -552,7 +573,8 @@ def _build_first_ltf_signal(
     htf_ms = _timeframe_ms(config.htf_timeframe)
     start_ms = int(candidate["htf_close_ms"])
     end_ms = start_ms + int(config.runner_horizon_minutes) * 60_000
-    segment = ltf.loc[(ltf["timestamp"].astype("int64") >= start_ms) & (ltf["timestamp"].astype("int64") < end_ms)].copy()
+    entry_window = _strict_ltf_window(ltf, start_ms=start_ms, end_exclusive_ms=end_ms, expected_step_ms=ltf_ms)
+    segment = entry_window.frame
     if len(segment) <= config.ltf_min_confirm_candles:
         return None
     baseline_quote = float(candidate.get("baseline_quote_volume_median") or float("nan"))
@@ -628,6 +650,7 @@ def _build_first_ltf_signal(
             "signal_oi_timestamp_ms": oi_at_signal["timestamp_ms"],
             "signal_oi_available_timestamp_ms": oi_at_signal["available_timestamp_ms"],
             "signal_oi_open_interest": oi_at_signal["open_interest"],
+            **_strict_ltf_window_audit(entry_window, prefix="entry_ltf"),
             **signal_features,
         }
     return None
@@ -646,22 +669,25 @@ def _build_ltf_entry_windows(
     htf_ms = _timeframe_ms(config.htf_timeframe)
     start_ms = int(candidate["htf_close_ms"])
     end_ms = start_ms + int(config.runner_horizon_minutes) * 60_000
-    segment = ltf.loc[(ltf["timestamp"].astype("int64") >= start_ms) & (ltf["timestamp"].astype("int64") < end_ms)].copy()
+    entry_window = _strict_ltf_window(ltf, start_ms=start_ms, end_exclusive_ms=end_ms, expected_step_ms=ltf_ms)
+    segment = entry_window.frame
     baseline_quote = float(candidate.get("baseline_quote_volume_median") or float("nan"))
     baseline_trades = float(candidate.get("baseline_number_of_trades_median") or float("nan"))
     anomaly_low = float(candidate["anomaly_low"])
     rows: list[dict[str, object]] = []
 
     for confirm_count in _entry_window_counts(config):
+        unavailable_reason = _entry_window_unavailable_reason(entry_window, required_candles=int(confirm_count) + 1)
         base_row = {
             **candidate,
-            "entry_window_status": "insufficient_ltf_for_next_open",
+            "entry_window_status": unavailable_reason,
             "signal_status": "entry_window_research",
             "confirmation_candles": int(confirm_count),
             "window_future_label_available_at_entry": False,
             "window_uses_future_label_as_entry_filter": False,
             "window_execution_ok": False,
-            "window_execution_skip_reason": "insufficient_ltf_for_next_open",
+            "window_execution_skip_reason": unavailable_reason,
+            **_strict_ltf_window_audit(entry_window, prefix="entry_ltf"),
         }
         if len(segment) <= confirm_count:
             rows.append({**base_row, "window_available_candles": int(len(segment))})
@@ -766,9 +792,19 @@ def _simulate_no_tp_runner_trade(
     initial_risk = entry_price - initial_stop
     if not np.isfinite(initial_risk) or initial_risk <= 0.0:
         return _skipped_trade(signal, "invalid_initial_risk")
-    future = ltf.loc[ltf["timestamp"].astype("int64") >= entry_ts].head(config.max_hold_candles).copy()
+
+    ltf_ms = _timeframe_ms(config.ltf_timeframe)
+    max_hold_ms = int(config.max_hold_candles) * ltf_ms
+    future_window = _strict_ltf_window(
+        ltf,
+        start_ms=entry_ts,
+        end_exclusive_ms=entry_ts + max_hold_ms,
+        expected_step_ms=ltf_ms,
+    )
+    future = future_window.frame
+    window_audit = _strict_ltf_window_audit(future_window, prefix="post_entry_ltf")
     if future.empty:
-        return _skipped_trade(signal, "no_post_entry_ltf_candles")
+        return _skipped_trade(signal, _post_entry_window_skip_reason(future_window), **window_audit)
 
     active_stop = initial_stop
     trail_updates = 0
@@ -776,13 +812,13 @@ def _simulate_no_tp_runner_trade(
     min_low = entry_price
     prior_trailing_lows: list[float] = []
     trailing_lookback = max(1, int(config.trail_lookback_candles))
-    exit_reason = "time_exit"
-    exit_ts = int(future.iloc[-1]["timestamp"])
-    raw_exit_price = float(future.iloc[-1]["close"])
-    exit_price = raw_exit_price * (1.0 - config.exit_slippage_pct)
+    exit_reason = ""
+    exit_ts = float("nan")
+    raw_exit_price = float("nan")
+    exit_price = float("nan")
     exit_stop_before_update = active_stop
 
-    for idx, row in future.iterrows():
+    for _, row in future.iterrows():
         candle_ts = int(row["timestamp"])
         high = float(row["high"])
         low = float(row["low"])
@@ -809,6 +845,15 @@ def _simulate_no_tp_runner_trade(
             if len(prior_trailing_lows) > trailing_lookback:
                 prior_trailing_lows.pop(0)
 
+    if not exit_reason:
+        if future_window.status != "ok":
+            return _skipped_trade(signal, _post_entry_window_skip_reason(future_window), **window_audit)
+        exit_reason = "time_exit"
+        exit_ts = int(future.iloc[-1]["timestamp"])
+        raw_exit_price = float(future.iloc[-1]["close"])
+        exit_price = raw_exit_price * (1.0 - config.exit_slippage_pct)
+        exit_stop_before_update = active_stop
+
     gross_return = (exit_price - entry_price) / entry_price
     net_return = gross_return - 2.0 * float(config.fee_rate)
     gross_r = (exit_price - entry_price) / initial_risk
@@ -822,7 +867,7 @@ def _simulate_no_tp_runner_trade(
         "exit_reason": exit_reason,
         "exit_raw_price": raw_exit_price,
         "exit_price": exit_price,
-        "exit_price_model": "stop_or_time_exit_minus_adverse_slippage",
+        "exit_price_model": "stop_or_time_exit_minus_adverse_slippage_strict_ltf_path",
         "exit_stop_before_update": exit_stop_before_update,
         "trail_updates": trail_updates,
         "final_trailing_stop": active_stop,
@@ -835,11 +880,12 @@ def _simulate_no_tp_runner_trade(
         "net_return": net_return,
         "win": net_return > 0.0,
         "fee_rate": float(config.fee_rate),
+        **window_audit,
     }
     return result
 
 
-def _skipped_trade(signal: dict[str, object], reason: str) -> dict[str, object]:
+def _skipped_trade(signal: dict[str, object], reason: str, **extra: object) -> dict[str, object]:
     return {
         **signal,
         "status": "skipped",
@@ -852,6 +898,7 @@ def _skipped_trade(signal: dict[str, object], reason: str) -> dict[str, object]:
         "gross_r": float("nan"),
         "gross_return": float("nan"),
         "net_return": float("nan"),
+        **extra,
     }
 
 
@@ -863,14 +910,19 @@ def _future_runner_label(
     reference_price: float,
     anomaly_low: float,
     target_return_pct: float,
+    expected_step_ms: int,
 ) -> dict[str, object]:
-    future = ltf.loc[
-        (ltf["timestamp"].astype("int64") >= int(start_ms))
-        & (ltf["timestamp"].astype("int64") < int(start_ms + horizon_ms))
-    ].copy()
+    future_window = _strict_ltf_window(
+        ltf,
+        start_ms=int(start_ms),
+        end_exclusive_ms=int(start_ms + horizon_ms),
+        expected_step_ms=expected_step_ms,
+    )
+    future = future_window.frame
+    audit = _strict_ltf_window_audit(future_window, prefix="future_ltf")
     if future.empty or not np.isfinite(reference_price) or reference_price <= 0:
         return {
-            "future_label_status": "missing_ltf_future_window",
+            "future_label_status": _future_label_missing_status(future_window),
             "runner_10pct_next_hour": False,
             "runner_first_hit_ms": float("nan"),
             "runner_first_hit_utc": "",
@@ -878,13 +930,26 @@ def _future_runner_label(
             "future_min_return_pct": float("nan"),
             "anomaly_low_broken_before_runner": False,
             "clean_runner_without_low_break": False,
+            **audit,
         }
     highs = pd.to_numeric(future["high"], errors="coerce")
     lows = pd.to_numeric(future["low"], errors="coerce")
-    max_return = float(highs.max() / reference_price - 1.0)
-    min_return = float(lows.min() / reference_price - 1.0)
     hit = future.loc[highs.ge(reference_price * (1.0 + target_return_pct))]
     first_hit_ms = int(hit.iloc[0]["timestamp"]) if not hit.empty else None
+    if first_hit_ms is None and future_window.status != "ok":
+        return {
+            "future_label_status": _future_label_missing_status(future_window),
+            "runner_10pct_next_hour": False,
+            "runner_first_hit_ms": float("nan"),
+            "runner_first_hit_utc": "",
+            "future_max_return_pct": float("nan"),
+            "future_min_return_pct": float("nan"),
+            "anomaly_low_broken_before_runner": False,
+            "clean_runner_without_low_break": False,
+            **audit,
+        }
+    max_return = float(highs.max() / reference_price - 1.0)
+    min_return = float(lows.min() / reference_price - 1.0)
     before = future.loc[future["timestamp"].astype("int64") <= (first_hit_ms if first_hit_ms is not None else int(start_ms + horizon_ms))]
     low_broken = bool(not before.empty and pd.to_numeric(before["low"], errors="coerce").min() < float(anomaly_low))
     runner = first_hit_ms is not None
@@ -897,7 +962,9 @@ def _future_runner_label(
         "future_min_return_pct": min_return,
         "anomaly_low_broken_before_runner": low_broken,
         "clean_runner_without_low_break": bool(runner and not low_broken),
+        **audit,
     }
+
 
 
 def _pregrowth_features(frame: pd.DataFrame) -> dict[str, object]:
@@ -956,19 +1023,19 @@ def _ltf_confirmation_features(
     htf_ms: int,
 ) -> dict[str, float]:
     duration_ms = max(1, len(closed) * _infer_step_ms(closed))
-    quote = float(_numeric_column(closed, "quote_volume", fallback=_numeric_column(closed, "close") * _numeric_column(closed, "volume")).sum())
-    trades = float(_numeric_column(closed, "number_of_trades", fallback=pd.Series(np.nan, index=closed.index)).sum())
+    quote = float(_numeric_column(closed, "quote_volume").sum())
+    trades = float(_numeric_column(closed, "number_of_trades").sum())
     expected_quote = baseline_quote * duration_ms / htf_ms
     expected_trades = baseline_trades * duration_ms / htf_ms
     first_open = float(closed.iloc[0]["open"])
     last_close = float(closed.iloc[-1]["close"])
     first_half = closed.head(max(1, len(closed) // 2))
     second_half = closed.tail(len(closed) - len(first_half))
-    first_quote = float(_numeric_column(first_half, "quote_volume", fallback=_numeric_column(first_half, "close") * _numeric_column(first_half, "volume")).sum())
-    second_quote = float(_numeric_column(second_half, "quote_volume", fallback=_numeric_column(second_half, "close") * _numeric_column(second_half, "volume")).sum())
-    first_trades = float(_numeric_column(first_half, "number_of_trades", fallback=pd.Series(np.nan, index=first_half.index)).sum())
-    second_trades = float(_numeric_column(second_half, "number_of_trades", fallback=pd.Series(np.nan, index=second_half.index)).sum())
-    taker_quote = _numeric_column(closed, "taker_buy_quote_volume", fallback=pd.Series(np.nan, index=closed.index)).sum()
+    first_quote = float(_numeric_column(first_half, "quote_volume").sum())
+    second_quote = float(_numeric_column(second_half, "quote_volume").sum())
+    first_trades = float(_numeric_column(first_half, "number_of_trades").sum())
+    second_trades = float(_numeric_column(second_half, "number_of_trades").sum())
+    taker_quote = _numeric_column(closed, "taker_buy_quote_volume").sum()
     return {
         "ltf_confirm_return_pct": _safe_divide(last_close - first_open, first_open),
         "ltf_quote_volume": quote,
@@ -994,15 +1061,8 @@ def _ltf_decay_features(closed: pd.DataFrame) -> dict[str, object]:
             "ltf_trade_decay_under50": False,
             "ltf_trade_last_first_ratio": float("nan"),
         }
-    quote = _numeric_column(
-        closed,
-        "quote_volume",
-        fallback=_numeric_column(closed, "close") * _numeric_column(closed, "volume"),
-    ).replace([np.inf, -np.inf], np.nan)
-    trades = _numeric_column(closed, "number_of_trades", fallback=pd.Series(np.nan, index=closed.index)).replace(
-        [np.inf, -np.inf],
-        np.nan,
-    )
+    quote = _numeric_column(closed, "quote_volume").replace([np.inf, -np.inf], np.nan)
+    trades = _numeric_column(closed, "number_of_trades").replace([np.inf, -np.inf], np.nan)
     quote_values = quote.to_numpy(dtype=float)
     trade_values = trades.to_numpy(dtype=float)
     quote_adjacent = _adjacent_ratios(quote_values)
@@ -1040,6 +1100,7 @@ def _htf_internal_ltf_features(
     end_ms: int,
     htf_open: float,
     htf_close: float,
+    expected_step_ms: int,
 ) -> dict[str, object]:
     if ltf.empty or "timestamp" not in ltf.columns:
         return {
@@ -1058,12 +1119,17 @@ def _htf_internal_ltf_features(
             "htf_ltf_trade_count_status": "missing",
         }
 
-    timestamps = pd.to_numeric(ltf["timestamp"], errors="coerce")
-    segment = ltf.loc[(timestamps >= int(start_ms)) & (timestamps < int(end_ms))].copy()
-    if segment.empty:
+    ltf_window = _strict_ltf_window(
+        ltf,
+        start_ms=int(start_ms),
+        end_exclusive_ms=int(end_ms),
+        expected_step_ms=int(expected_step_ms),
+    )
+    segment = ltf_window.frame
+    if segment.empty or ltf_window.status != "ok":
         return {
-            "htf_ltf_status": "missing_ltf_inside_htf",
-            "htf_ltf_candles": 0,
+            "htf_ltf_status": ltf_window.status if ltf_window.status != "ok" else "missing_ltf_inside_htf",
+            "htf_ltf_candles": int(len(segment)),
             "htf_ltf_quote_volume": float("nan"),
             "htf_ltf_number_of_trades": float("nan"),
             "htf_ltf_quote_top1_share": float("nan"),
@@ -1075,41 +1141,21 @@ def _htf_internal_ltf_features(
             "htf_ltf_trade_acceleration": float("nan"),
             "htf_ltf_sustained_flow_ok": False,
             "htf_ltf_trade_count_status": "missing",
+            **_strict_ltf_window_audit(ltf_window, prefix="htf_ltf"),
         }
 
-    quote = _numeric_column(
-        segment,
-        "quote_volume",
-        fallback=_numeric_column(segment, "close") * _numeric_column(segment, "volume"),
-    ).replace([np.inf, -np.inf], np.nan)
-    trades = _numeric_column(segment, "number_of_trades", fallback=pd.Series(np.nan, index=segment.index)).replace(
-        [np.inf, -np.inf],
-        np.nan,
-    )
+    quote = _numeric_column(segment, "quote_volume").replace([np.inf, -np.inf], np.nan)
+    trades = _numeric_column(segment, "number_of_trades").replace([np.inf, -np.inf], np.nan)
     opens = pd.to_numeric(segment["open"], errors="coerce")
     closes = pd.to_numeric(segment["close"], errors="coerce")
     quote_total = float(quote.sum(min_count=1))
     trade_total = float(trades.sum(min_count=1))
     first_half = segment.head(max(1, len(segment) // 2))
     second_half = segment.tail(len(segment) - len(first_half))
-    first_quote = _numeric_column(
-        first_half,
-        "quote_volume",
-        fallback=_numeric_column(first_half, "close") * _numeric_column(first_half, "volume"),
-    ).replace([np.inf, -np.inf], np.nan)
-    second_quote = _numeric_column(
-        second_half,
-        "quote_volume",
-        fallback=_numeric_column(second_half, "close") * _numeric_column(second_half, "volume"),
-    ).replace([np.inf, -np.inf], np.nan)
-    first_trades = _numeric_column(first_half, "number_of_trades", fallback=pd.Series(np.nan, index=first_half.index)).replace(
-        [np.inf, -np.inf],
-        np.nan,
-    )
-    second_trades = _numeric_column(second_half, "number_of_trades", fallback=pd.Series(np.nan, index=second_half.index)).replace(
-        [np.inf, -np.inf],
-        np.nan,
-    )
+    first_quote = _numeric_column(first_half, "quote_volume").replace([np.inf, -np.inf], np.nan)
+    second_quote = _numeric_column(second_half, "quote_volume").replace([np.inf, -np.inf], np.nan)
+    first_trades = _numeric_column(first_half, "number_of_trades").replace([np.inf, -np.inf], np.nan)
+    second_trades = _numeric_column(second_half, "number_of_trades").replace([np.inf, -np.inf], np.nan)
     midpoint = (float(htf_open) + float(htf_close)) / 2.0
     quote_top1_share = _safe_divide(float(quote.max(skipna=True)), quote_total)
     trade_top1_share = _safe_divide(float(trades.max(skipna=True)), trade_total)
@@ -1151,6 +1197,7 @@ def _htf_internal_ltf_features(
         "htf_ltf_trade_acceleration": trade_acceleration,
         "htf_ltf_sustained_flow_ok": bool(sustained_flow_ok),
         "htf_ltf_trade_count_status": trade_count_status,
+        **_strict_ltf_window_audit(ltf_window, prefix="htf_ltf"),
     }
 
 
@@ -1701,9 +1748,9 @@ def _data_quality_row(
         "htf_rows": int(len(htf)),
         "ltf_rows": int(len(ltf)),
         "oi_rows": int(len(oi)),
-        "htf_quote_volume_source": "quote_volume" if "quote_volume" in htf.columns else "close_times_volume_proxy",
+        "htf_quote_volume_source": "quote_volume" if "quote_volume" in htf.columns else "missing",
         "htf_trade_count_source": "number_of_trades" if "number_of_trades" in htf.columns else "missing",
-        "ltf_quote_volume_source": "quote_volume" if "quote_volume" in ltf.columns else "close_times_volume_proxy",
+        "ltf_quote_volume_source": "quote_volume" if "quote_volume" in ltf.columns else "missing",
         "ltf_trade_count_source": "number_of_trades" if "number_of_trades" in ltf.columns else "missing",
         "taker_buy_quote_source": "taker_buy_quote_volume" if "taker_buy_quote_volume" in ltf.columns else "missing",
         "oi_source": "cached_5m_open_interest" if not oi.empty else "missing",
@@ -1897,6 +1944,156 @@ def _safe_divide(numerator: float, denominator: float) -> float:
     if not np.isfinite(numerator) or not np.isfinite(denominator) or denominator == 0.0:
         return float("nan")
     return numerator / denominator
+
+
+def _strict_ltf_window(
+    frame: pd.DataFrame,
+    *,
+    start_ms: int,
+    end_exclusive_ms: int,
+    expected_step_ms: int,
+) -> _StrictLtfWindow:
+    step_ms = int(expected_step_ms)
+    if step_ms <= 0:
+        raise ValueError("expected_step_ms must be > 0")
+    start = int(start_ms)
+    end = int(end_exclusive_ms)
+    if end <= start:
+        raise ValueError("end_exclusive_ms must be > start_ms")
+    expected_candles = max(1, int(math.ceil((end - start) / step_ms)))
+    empty = frame.iloc[0:0].copy() if isinstance(frame, pd.DataFrame) else pd.DataFrame()
+    if frame.empty or "timestamp" not in frame.columns:
+        return _StrictLtfWindow(
+            frame=empty,
+            status="no_ltf_candles",
+            start_ms=start,
+            end_exclusive_ms=end,
+            expected_step_ms=step_ms,
+            expected_candles=expected_candles,
+            observed_candles=0,
+            first_gap_start_ms=start,
+            first_gap_end_ms=None,
+            max_gap_ms=0,
+        )
+    timestamps = pd.to_numeric(frame["timestamp"], errors="coerce")
+    selected = frame.loc[timestamps.ge(start) & timestamps.lt(end)].copy()
+    selected["timestamp"] = pd.to_numeric(selected["timestamp"], errors="coerce")
+    selected = selected.dropna(subset=["timestamp"]).drop_duplicates("timestamp", keep="last").sort_values("timestamp")
+    if selected.empty:
+        return _StrictLtfWindow(
+            frame=selected,
+            status="no_ltf_candles",
+            start_ms=start,
+            end_exclusive_ms=end,
+            expected_step_ms=step_ms,
+            expected_candles=expected_candles,
+            observed_candles=0,
+            first_gap_start_ms=start,
+            first_gap_end_ms=None,
+            max_gap_ms=0,
+        )
+
+    expected_ts = start
+    prefix_positions: list[int] = []
+    previous_ts: int | None = None
+    max_gap_ms = 0
+    first_gap_start: int | None = None
+    first_gap_end: int | None = None
+    for position, (_, row) in enumerate(selected.iterrows()):
+        candle_ts = int(row["timestamp"])
+        if candle_ts != expected_ts:
+            first_gap_start = expected_ts
+            first_gap_end = candle_ts
+            max_gap_ms = abs(candle_ts - expected_ts) if previous_ts is None else max(max_gap_ms, candle_ts - previous_ts)
+            break
+        prefix_positions.append(position)
+        previous_ts = candle_ts
+        expected_ts += step_ms
+        if expected_ts >= end:
+            break
+
+    if prefix_positions:
+        prefix = selected.iloc[prefix_positions].copy().reset_index(drop=True)
+    else:
+        prefix = selected.iloc[0:0].copy().reset_index(drop=True)
+    observed = int(len(prefix))
+    if observed >= expected_candles:
+        status = "ok"
+    elif first_gap_start is not None:
+        status = "ltf_gap"
+    elif observed == 0:
+        status = "first_ltf_candle_missing"
+    else:
+        status = "incomplete_ltf_window"
+        first_gap_start = expected_ts
+        first_gap_end = None
+    return _StrictLtfWindow(
+        frame=prefix,
+        status=status,
+        start_ms=start,
+        end_exclusive_ms=end,
+        expected_step_ms=step_ms,
+        expected_candles=expected_candles,
+        observed_candles=observed,
+        first_gap_start_ms=first_gap_start,
+        first_gap_end_ms=first_gap_end,
+        max_gap_ms=int(max_gap_ms),
+    )
+
+
+def _strict_ltf_window_audit(window: _StrictLtfWindow, *, prefix: str) -> dict[str, object]:
+    frame = window.frame
+    first_ts = int(frame.iloc[0]["timestamp"]) if not frame.empty else float("nan")
+    last_ts = int(frame.iloc[-1]["timestamp"]) if not frame.empty else float("nan")
+    return {
+        f"{prefix}_path_status": window.status,
+        f"{prefix}_expected_step_ms": int(window.expected_step_ms),
+        f"{prefix}_start_ms": int(window.start_ms),
+        f"{prefix}_end_exclusive_ms": int(window.end_exclusive_ms),
+        f"{prefix}_expected_candles": int(window.expected_candles),
+        f"{prefix}_observed_continuous_candles": int(window.observed_candles),
+        f"{prefix}_first_timestamp_ms": first_ts,
+        f"{prefix}_last_timestamp_ms": last_ts,
+        f"{prefix}_first_gap_start_ms": window.first_gap_start_ms if window.first_gap_start_ms is not None else float("nan"),
+        f"{prefix}_first_gap_end_ms": window.first_gap_end_ms if window.first_gap_end_ms is not None else float("nan"),
+        f"{prefix}_max_gap_ms": int(window.max_gap_ms),
+    }
+
+
+def _entry_window_unavailable_reason(window: _StrictLtfWindow, *, required_candles: int) -> str:
+    if window.observed_candles >= int(required_candles):
+        return ""
+    if window.status == "ltf_gap":
+        return "entry_ltf_gap_before_next_open"
+    if window.status == "first_ltf_candle_missing":
+        return "entry_ltf_first_candle_missing"
+    if window.status == "no_ltf_candles":
+        return "no_entry_ltf_candles"
+    return "insufficient_ltf_for_next_open"
+
+
+def _post_entry_window_skip_reason(window: _StrictLtfWindow) -> str:
+    if window.status == "ltf_gap":
+        return "post_entry_ltf_gap_before_exit"
+    if window.status == "first_ltf_candle_missing":
+        return "post_entry_first_ltf_candle_missing"
+    if window.status == "no_ltf_candles":
+        return "no_post_entry_ltf_candles"
+    if window.status == "incomplete_ltf_window":
+        return "post_entry_ltf_window_incomplete"
+    return "post_entry_ltf_path_invalid"
+
+
+def _future_label_missing_status(window: _StrictLtfWindow) -> str:
+    if window.status == "ltf_gap":
+        return "missing_ltf_future_gap"
+    if window.status == "first_ltf_candle_missing":
+        return "missing_ltf_future_first_candle"
+    if window.status == "no_ltf_candles":
+        return "missing_ltf_future_window"
+    if window.status == "incomplete_ltf_window":
+        return "missing_ltf_future_window_incomplete"
+    return "missing_ltf_future_window"
 
 
 def _timeframe_ms(value: str) -> int:
@@ -2184,17 +2381,22 @@ def _honesty_report(config: HtfLtfRunnerDiscoveryConfig) -> pd.DataFrame:
             {
                 "check": "future_label_separation",
                 "status": "ok",
-                "detail": "runner_10pct_next_hour and low-break labels are written after the event scan and are not used to select entry.",
+                "detail": "runner_10pct_next_hour and low-break labels are written after the event scan, are not used to select entry, and require a strict continuous LTF path until runner hit or full horizon.",
             },
             {
                 "check": "entry_availability",
                 "status": "ok",
-                "detail": "entry is the next LTF open after the closed confirmation candle; no entry inside the confirming candle.",
+                "detail": "entry is the next LTF open after the closed confirmation candle; confirmation and next-open entry require a continuous LTF path with no gap hops.",
             },
             {
                 "check": "exit_model",
                 "status": "ok",
-                "detail": "no TP is simulated; exits are structural stop, structural trailing stop, or max-hold time exit.",
+                "detail": "no TP is simulated; exits are structural stop, structural trailing stop, or max-hold wall-clock time exit. If the post-entry LTF path has a gap before exit, the trade is skipped rather than carried across missing time.",
+            },
+            {
+                "check": "ltf_continuity",
+                "status": "ok",
+                "detail": "LTF confirmation, future labels and post-entry replay use configured timeframe steps; missing candles create explicit missing/gap statuses instead of sparse-row simulation.",
             },
             {
                 "check": "oi_availability",
@@ -2209,7 +2411,7 @@ def _honesty_report(config: HtfLtfRunnerDiscoveryConfig) -> pd.DataFrame:
             {
                 "check": "data_access",
                 "status": "ok",
-                "detail": "The tool reads Parquet cache through ParquetStorage only; it does not download exchange candles or seconds data during the backtest.",
+                "detail": "The tool reads Parquet cache through ParquetStorage only; it does not download exchange candles or seconds data during the backtest and does not synthesize quote-volume from close*volume for flow logic.",
             },
         ]
     )
