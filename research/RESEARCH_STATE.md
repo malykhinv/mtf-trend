@@ -1,3 +1,15 @@
+## 2026-05-27 - P420 symbol-parallel backtest execution
+
+Current commit: UNKNOWN.
+
+Status: P420 PROPOSED against uploaded/P419 workspace. User reported P419 applied locally, but GitHub head was not confirmed as containing it.
+
+Finding: after P419 removed duplicate reads and local O(n²) trailing scans, the next safe bottleneck is serial symbol processing. Candidate collection, independent trade-path resolution, and runner discovery are symbol-independent until the existing portfolio filter step.
+
+Patch boundary: no change to candidate thresholds, future-label separation, entry availability, actual/proxy entry price model, stop/TP math, fees, slippage, skip reasons, or final portfolio filtering. The patch only runs independent symbol work concurrently and merges results in deterministic order before the existing sequential portfolio filter.
+
+Validation: compileall passed for data/exchanges research_tools cli constants.py main.py. Next: run the same small symbol list twice, once with `--backtest-symbol-workers 1` and once with default 4; candidate/signal/trade counts and skip-reason summaries should match while wall-clock drops on multi-symbol cache runs.
+
 ## 2026-05-27 - P419 safe backtest hot-path speedup
 
 Current commit: UNKNOWN.

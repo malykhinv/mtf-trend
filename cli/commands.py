@@ -1224,6 +1224,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             AnomalyLabConfig,
             DEFAULT_LATENCY_EXTRA_MS,
             DEFAULT_LATENCY_GRID_MS,
+            DEFAULT_BACKTEST_SYMBOL_WORKERS,
             _parse_grid_values,
             _parse_grid_exit_rules,
             _parse_grid_profile_values,
@@ -1465,6 +1466,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 ),
                 short_fader_require_prior_context=bool(getattr(args, "short_fader_require_prior_context", False)),
                 short_fader_run_exit_grid=bool(getattr(args, "short_fader_run_exit_grid", False)),
+                symbol_workers=int(getattr(args, "backtest_symbol_workers", DEFAULT_BACKTEST_SYMBOL_WORKERS)),
             )
 
         def _run_timeframe_pair(
@@ -1729,6 +1731,7 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 ltf_max_confirm_candles=int(profile["ltf_max_confirm_candles"]),
                 trail_lookback_candles=int(profile["trail_lookback_candles"]),
                 max_hold_candles=int(profile["max_hold_candles"]),
+                symbol_workers=int(getattr(args, "backtest_symbol_workers", 4)),
             )
             result_dir = run_discovery(discovery_config, progress_label=f"runner discovery {profile['name']}")
             index_rows.append(

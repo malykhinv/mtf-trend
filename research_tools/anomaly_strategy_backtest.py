@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
 import math
+import os
 import re
 import time
 from dataclasses import asdict
@@ -101,6 +103,25 @@ _MATERIALIZED_SUBMINUTE_CACHE_VERSION = "p378_1s_ohlcv_to_subminute_full_buckets
 AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION = "p378_aggtrades_to_1s_full_buckets_v1"
 DEFAULT_LATENCY_EXTRA_MS = 5_000
 DEFAULT_LATENCY_GRID_MS = (0, 5_000)
+DEFAULT_BACKTEST_SYMBOL_WORKERS = 4
+
+
+def _effective_symbol_workers(value: object, *, total_items: int) -> int:
+    """Return a bounded symbol-level worker count for cache-only backtest work."""
+
+    if total_items <= 1:
+        return 1
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        requested = DEFAULT_BACKTEST_SYMBOL_WORKERS
+    if requested <= 1:
+        return 1
+    cpu_count = os.cpu_count() or 1
+    # Keep this bounded: each worker may hold large subminute parquet frames.
+    return max(1, min(int(requested), int(total_items), max(1, int(cpu_count)), 8))
+
+
 LATENCY_1S_BACKFILL_VERSION = AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION
 TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS = 120_000
 TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS = 120_000
@@ -375,6 +396,7 @@ class AnomalyBacktestConfig:
     prepump_context_timeframe: str = DEFAULT_PREPUMP_CONTEXT_TIMEFRAME
     prepump_context_windows: str = DEFAULT_PREPUMP_CONTEXT_WINDOWS
     prepump_context_min_coverage_ratio: float = 0.80
+    symbol_workers: int = DEFAULT_BACKTEST_SYMBOL_WORKERS
 
 
 EXECUTION_GUARD_SKIP_REASONS = {
@@ -3480,9 +3502,10 @@ def collect_pair_anomaly_rows_for_configs(
             for symbol in state["eligible_symbols"]  # type: ignore[union-attr]
         }
     )
-    progress_started_at = time.monotonic()
-    next_progress_pct = 0
-    for processed_count, symbol in enumerate(all_symbols, start=1):
+    cache_dir = resolved_configs[0].lab_config.cache_dir
+
+    def _collect_rows_for_symbol(symbol: str) -> dict[tuple[str, str], list[dict[str, object]]]:
+        local_rows_by_key: dict[tuple[str, str], list[dict[str, object]]] = {}
         symbol_states = [
             state
             for state in states
@@ -3500,7 +3523,6 @@ def collect_pair_anomaly_rows_for_configs(
                 for state in symbol_states
             }
         )
-        cache_dir = resolved_configs[0].lab_config.cache_dir
         for timeframe in required_timeframes:
             try:
                 frame_cache[timeframe] = _read_symbol_frame(cache_dir, symbol, timeframe)
@@ -3515,6 +3537,7 @@ def collect_pair_anomaly_rows_for_configs(
             entry_cache_timeframe = str(state["entry_cache_timeframe"])
             key = state["key"]
             assert isinstance(key, tuple)
+            local_rows = local_rows_by_key.setdefault(key, [])
             try:
                 if setup_timeframe in frame_errors:
                     raise frame_errors[setup_timeframe]
@@ -3569,7 +3592,7 @@ def collect_pair_anomaly_rows_for_configs(
                     collector = _collect_symbol_post_htf_close_ltf_rows
                 else:
                     collector = _collect_symbol_pair_rows
-                rows_by_key[key].extend(
+                local_rows.extend(
                     collector(
                         symbol=symbol,
                         setup_frame=setup_frame,
@@ -3579,7 +3602,7 @@ def collect_pair_anomaly_rows_for_configs(
                     )
                 )
             except Exception as exc:
-                rows_by_key[key].append(
+                local_rows.append(
                     {
                         "symbol": symbol,
                         "timeframe": setup_timeframe,
@@ -3590,16 +3613,48 @@ def collect_pair_anomaly_rows_for_configs(
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 )
-        if progress_label is not None and all_symbols:
-            current_pct = int(100 * processed_count / len(all_symbols))
-            if current_pct >= next_progress_pct or processed_count == len(all_symbols):
-                _emit_progress(
-                    label=progress_label,
-                    done=processed_count,
-                    total=len(all_symbols),
-                    started_at=progress_started_at,
-                )
-                next_progress_pct = current_pct + 5
+        return local_rows_by_key
+
+    progress_started_at = time.monotonic()
+    next_progress_pct = 0
+    symbol_results: dict[str, dict[tuple[str, str], list[dict[str, object]]]] = {}
+    workers = _effective_symbol_workers(
+        getattr(resolved_configs[0], "symbol_workers", DEFAULT_BACKTEST_SYMBOL_WORKERS),
+        total_items=len(all_symbols),
+    )
+    if workers <= 1:
+        for processed_count, symbol in enumerate(all_symbols, start=1):
+            symbol_results[symbol] = _collect_rows_for_symbol(symbol)
+            if progress_label is not None and all_symbols:
+                current_pct = int(100 * processed_count / len(all_symbols))
+                if current_pct >= next_progress_pct or processed_count == len(all_symbols):
+                    _emit_progress(
+                        label=progress_label,
+                        done=processed_count,
+                        total=len(all_symbols),
+                        started_at=progress_started_at,
+                    )
+                    next_progress_pct = current_pct + 5
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="anomaly-pair") as executor:
+            futures = {executor.submit(_collect_rows_for_symbol, symbol): symbol for symbol in all_symbols}
+            for processed_count, future in enumerate(as_completed(futures), start=1):
+                symbol = futures[future]
+                symbol_results[symbol] = future.result()
+                if progress_label is not None and all_symbols:
+                    current_pct = int(100 * processed_count / len(all_symbols))
+                    if current_pct >= next_progress_pct or processed_count == len(all_symbols):
+                        _emit_progress(
+                            label=f"{progress_label} ({workers} workers)",
+                            done=processed_count,
+                            total=len(all_symbols),
+                            started_at=progress_started_at,
+                        )
+                        next_progress_pct = current_pct + 5
+
+    for symbol in all_symbols:
+        for key, rows in symbol_results.get(symbol, {}).items():
+            rows_by_key.setdefault(key, []).extend(rows)
 
     result_by_key: dict[tuple[str, str], pd.DataFrame] = {}
     for state in states:
@@ -5191,7 +5246,7 @@ def simulate_anomaly_trades(
     if frame_cache is None:
         frame_cache = {}
     execution_frame_cache: dict[str, pd.DataFrame] = {}
-    ordered_signals = signals.sort_values(["decision_timestamp_ms", "symbol"])
+    ordered_signals = signals.sort_values(["decision_timestamp_ms", "symbol"]).reset_index(drop=True)
     latency_windows: dict[str, tuple[int, int]] = {}
     if config.latency_enabled and not ordered_signals.empty:
         entry_tf_ms = _timeframe_to_milliseconds(_effective_entry_timeframe(config))
@@ -5201,17 +5256,17 @@ def simulate_anomaly_trades(
             + int(config.max_hold_candles) * entry_tf_ms
             + 60_000
         )
-        for symbol, group in ordered_signals.groupby("symbol"):
+        for symbol, group in ordered_signals.groupby("symbol", sort=False):
             timestamps = pd.to_numeric(group["decision_timestamp_ms"], errors="coerce").dropna().astype("int64")
             if timestamps.empty:
                 continue
             latency_windows[str(symbol)] = (int(timestamps.min()), int(timestamps.max()) + int(tail_ms))
-    progress_started_at = time.monotonic()
-    next_progress_pct = 0
-    total_signals = len(ordered_signals)
-    for processed_count, (_, signal) in enumerate(ordered_signals.iterrows(), start=1):
-        symbol = str(signal["symbol"])
-        decision_ts = int(signal["decision_timestamp_ms"])
+
+    def _resolve_symbol_group(
+        symbol: str,
+        group: pd.DataFrame,
+    ) -> tuple[list[tuple[int, pd.Series, dict[str, object]]], dict[str, pd.DataFrame]]:
+        loaded_frames: dict[str, pd.DataFrame] = {}
         frame = frame_cache.get(symbol)
         if frame is None:
             frame = _read_entry_simulation_frame(
@@ -5219,16 +5274,17 @@ def simulate_anomaly_trades(
                 symbol,
                 _effective_entry_timeframe(config),
             )
-            frame_cache[symbol] = frame
+            loaded_frames[symbol] = frame
         execution_frame = None
+        execution_cache_key = f"{symbol}::__latency_1s"
         if config.latency_enabled:
-            execution_cache_key = f"{symbol}::__latency_1s"
             execution_frame = frame_cache.get(execution_cache_key)
             if execution_frame is None:
                 execution_frame = execution_frame_cache.get(symbol)
             if execution_frame is None:
                 try:
-                    window_start, window_end = latency_windows.get(symbol, (decision_ts, decision_ts))
+                    first_decision_ts = int(pd.to_numeric(group["decision_timestamp_ms"], errors="coerce").dropna().min())
+                    window_start, window_end = latency_windows.get(symbol, (first_decision_ts, first_decision_ts))
                     execution_frame = _ensure_latency_1s_cache(
                         config.lab_config.cache_dir,
                         symbol,
@@ -5237,9 +5293,82 @@ def simulate_anomaly_trades(
                     )
                 except Exception:
                     execution_frame = pd.DataFrame()
-                execution_frame_cache[symbol] = execution_frame
-                frame_cache[execution_cache_key] = execution_frame
-        result = simulate_long_signal(frame, signal, config=config, execution_frame=execution_frame)
+                loaded_frames[execution_cache_key] = execution_frame
+        resolved: list[tuple[int, pd.Series, dict[str, object]]] = []
+        for order_idx, signal in group.iterrows():
+            resolved.append(
+                (
+                    int(order_idx),
+                    signal,
+                    simulate_long_signal(frame, signal, config=config, execution_frame=execution_frame),
+                )
+            )
+        return resolved, loaded_frames
+
+    progress_started_at = time.monotonic()
+    next_progress_pct = 0
+    resolved_by_order: dict[int, tuple[pd.Series, dict[str, object]]] = {}
+    symbol_groups = [(str(symbol), group.copy()) for symbol, group in ordered_signals.groupby("symbol", sort=False)]
+    workers = _effective_symbol_workers(
+        getattr(config, "symbol_workers", DEFAULT_BACKTEST_SYMBOL_WORKERS),
+        total_items=len(symbol_groups),
+    )
+    if workers <= 1:
+        for processed_count, (symbol, group) in enumerate(symbol_groups, start=1):
+            resolved, loaded_frames = _resolve_symbol_group(symbol, group)
+            frame_cache.update(loaded_frames)
+            execution_frame_cache.update(
+                {
+                    key.removesuffix("::__latency_1s"): frame
+                    for key, frame in loaded_frames.items()
+                    if key.endswith("::__latency_1s")
+                }
+            )
+            for order_idx, signal, result in resolved:
+                resolved_by_order[int(order_idx)] = (signal, result)
+            if progress_label is not None:
+                current_pct = int(100 * processed_count / len(symbol_groups))
+                if current_pct >= next_progress_pct or processed_count == len(symbol_groups):
+                    _emit_progress(
+                        label=f"{progress_label}: resolve",
+                        done=processed_count,
+                        total=len(symbol_groups),
+                        started_at=progress_started_at,
+                    )
+                    next_progress_pct = current_pct + 5
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="anomaly-trade") as executor:
+            futures = {
+                executor.submit(_resolve_symbol_group, symbol, group): symbol
+                for symbol, group in symbol_groups
+            }
+            for processed_count, future in enumerate(as_completed(futures), start=1):
+                resolved, loaded_frames = future.result()
+                frame_cache.update(loaded_frames)
+                execution_frame_cache.update(
+                    {
+                        key.removesuffix("::__latency_1s"): frame
+                        for key, frame in loaded_frames.items()
+                        if key.endswith("::__latency_1s")
+                    }
+                )
+                for order_idx, signal, result in resolved:
+                    resolved_by_order[int(order_idx)] = (signal, result)
+                if progress_label is not None:
+                    current_pct = int(100 * processed_count / len(symbol_groups))
+                    if current_pct >= next_progress_pct or processed_count == len(symbol_groups):
+                        _emit_progress(
+                            label=f"{progress_label}: resolve ({workers} workers)",
+                            done=processed_count,
+                            total=len(symbol_groups),
+                            started_at=progress_started_at,
+                        )
+                        next_progress_pct = current_pct + 5
+
+    for order_idx in range(len(ordered_signals)):
+        signal, result = resolved_by_order[int(order_idx)]
+        symbol = str(signal["symbol"])
+        decision_ts = int(signal["decision_timestamp_ms"])
         if result.get("status") == "closed":
             entry_ts = _safe_int(result.get("entry_timestamp_ms")) or decision_ts
             open_positions = [(open_symbol, exit_ts) for open_symbol, exit_ts in open_positions if int(exit_ts) >= entry_ts]
@@ -5271,18 +5400,7 @@ def simulate_anomaly_trades(
                 result["max_open_positions"] = int(max_open_positions)
                 open_positions.append((symbol, int(exit_ts)))
         rows.append(result)
-        if progress_label is not None:
-            current_pct = int(100 * processed_count / total_signals)
-            if current_pct >= next_progress_pct or processed_count == total_signals:
-                _emit_progress(
-                    label=progress_label,
-                    done=processed_count,
-                    total=total_signals,
-                    started_at=progress_started_at,
-                )
-                next_progress_pct = current_pct + 5
     return pd.DataFrame(rows)
-
 
 def build_bare_htf_short_fader_signals(candidates: pd.DataFrame, *, config: AnomalyBacktestConfig) -> pd.DataFrame:
     if candidates.empty:
@@ -8940,6 +9058,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--prepump-context-timeframe", default=DEFAULT_PREPUMP_CONTEXT_TIMEFRAME)
     parser.add_argument("--prepump-context-windows", default=DEFAULT_PREPUMP_CONTEXT_WINDOWS)
     parser.add_argument("--prepump-context-min-coverage-ratio", type=float, default=0.80)
+    parser.add_argument("--backtest-symbol-workers", type=int, default=DEFAULT_BACKTEST_SYMBOL_WORKERS)
     parser.add_argument("--render-charts", choices=["true", "false"], default="true")
     parser.add_argument("--run-entry-grid", action="store_true")
     parser.add_argument("--grid-oi3-values", default="0.01,0.02,0.03")
@@ -9030,6 +9149,7 @@ def config_from_args(args: argparse.Namespace) -> AnomalyBacktestConfig:
         prepump_context_timeframe=str(args.prepump_context_timeframe),
         prepump_context_windows=str(args.prepump_context_windows),
         prepump_context_min_coverage_ratio=float(args.prepump_context_min_coverage_ratio),
+        symbol_workers=int(args.backtest_symbol_workers),
     )
 
 

@@ -14,7 +14,9 @@ declare a live-ready edge from one run.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import math
+import os
 import sys
 import time
 from dataclasses import asdict, dataclass
@@ -71,6 +73,7 @@ class HtfLtfRunnerDiscoveryConfig:
     fee_rate: float = 0.0004
     entry_slippage_pct: float = 0.0005
     exit_slippage_pct: float = 0.0005
+    symbol_workers: int = 4
 
     def __post_init__(self) -> None:
         if self.htf_timeframe == self.ltf_timeframe:
@@ -154,30 +157,57 @@ def run_htf_ltf_runner_discovery(
         total=len(selected_symbols),
     )
 
-    for index, symbol in enumerate(selected_symbols, start=1):
-        progress.update(index=index, item=symbol)
-        htf = _load_frame(storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
+    def _process_symbol(symbol: str) -> dict[str, list[dict[str, object]]]:
+        local_storage = ParquetStorage(config.cache_dir)
+        htf = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
         ltf = _load_frame(
-            storage,
+            local_storage,
             symbol,
             config.ltf_timeframe,
             start_ms=start_ms - htf_ms * max(config.baseline_candles, config.dormancy_candles),
             end_ms=end_ms + config.runner_horizon_minutes * 60_000,
         )
-        oi = _load_oi_frame(storage, symbol, config=config, start_ms=start_ms, end_ms=end_ms)
-        quality_rows.append(_data_quality_row(symbol=symbol, htf=htf, ltf=ltf, oi=oi, config=config))
-        if htf.empty or ltf.empty:
-            continue
+        oi = _load_oi_frame(local_storage, symbol, config=config, start_ms=start_ms, end_ms=end_ms)
+        local_quality_rows = [_data_quality_row(symbol=symbol, htf=htf, ltf=ltf, oi=oi, config=config)]
+        local_candidate_rows: list[dict[str, object]] = []
+        local_signal_rows: list[dict[str, object]] = []
+        local_trade_rows: list[dict[str, object]] = []
+        if not htf.empty and not ltf.empty:
+            local_candidate_rows = _collect_symbol_candidates(symbol=symbol, htf=htf, ltf=ltf, oi=oi, config=config)
+            for candidate in local_candidate_rows:
+                signal = _build_first_ltf_signal(candidate, ltf=ltf, oi=oi, config=config)
+                if signal is None:
+                    continue
+                local_signal_rows.append(signal)
+                local_trade_rows.append(_simulate_no_tp_runner_trade(signal, ltf=ltf, config=config))
+        return {
+            "candidates": local_candidate_rows,
+            "signals": local_signal_rows,
+            "trades": local_trade_rows,
+            "quality": local_quality_rows,
+        }
 
-        candidates = _collect_symbol_candidates(symbol=symbol, htf=htf, ltf=ltf, oi=oi, config=config)
-        candidate_rows.extend(candidates)
-        for candidate in candidates:
-            signal = _build_first_ltf_signal(candidate, ltf=ltf, oi=oi, config=config)
-            if signal is None:
-                continue
-            signal_rows.append(signal)
-            trade_rows.append(_simulate_no_tp_runner_trade(signal, ltf=ltf, config=config))
+    symbol_results: dict[str, dict[str, list[dict[str, object]]]] = {}
+    workers = _effective_symbol_workers(config.symbol_workers, total_items=len(selected_symbols))
+    if workers <= 1:
+        for index, symbol in enumerate(selected_symbols, start=1):
+            progress.update(index=index, item=symbol)
+            symbol_results[symbol] = _process_symbol(symbol)
+    else:
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="runner-discovery") as executor:
+            futures = {executor.submit(_process_symbol, symbol): symbol for symbol in selected_symbols}
+            for index, future in enumerate(as_completed(futures), start=1):
+                symbol = futures[future]
+                progress.update(index=index, item=symbol)
+                symbol_results[symbol] = future.result()
     progress.finish()
+
+    for symbol in selected_symbols:
+        result = symbol_results.get(symbol, {})
+        candidate_rows.extend(result.get("candidates", []))
+        signal_rows.extend(result.get("signals", []))
+        trade_rows.extend(result.get("trades", []))
+        quality_rows.extend(result.get("quality", []))
 
     candidates_frame = pd.DataFrame(candidate_rows)
     signals_frame = pd.DataFrame(signal_rows)
@@ -1419,6 +1449,19 @@ def _format_duration(seconds: float) -> str:
     return f"{hours}h{minutes:02d}m"
 
 
+def _effective_symbol_workers(value: object, *, total_items: int) -> int:
+    if total_items <= 1:
+        return 1
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        requested = 4
+    if requested <= 1:
+        return 1
+    cpu_count = os.cpu_count() or 1
+    return max(1, min(int(requested), int(total_items), max(1, int(cpu_count)), 8))
+
+
 def _apply_same_symbol_overlap_filter(trades: pd.DataFrame) -> pd.DataFrame:
     if trades.empty or "status" not in trades.columns:
         return trades.copy()
@@ -1656,6 +1699,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fee-rate", type=float, default=0.0004)
     parser.add_argument("--entry-slippage-pct", type=float, default=0.0005)
     parser.add_argument("--exit-slippage-pct", type=float, default=0.0005)
+    parser.add_argument("--backtest-symbol-workers", type=int, default=4)
     args = parser.parse_args(argv)
     config = HtfLtfRunnerDiscoveryConfig(
         cache_dir=Path(args.cache_dir),
@@ -1698,6 +1742,7 @@ def main(argv: list[str] | None = None) -> int:
         fee_rate=float(args.fee_rate),
         entry_slippage_pct=float(args.entry_slippage_pct),
         exit_slippage_pct=float(args.exit_slippage_pct),
+        symbol_workers=int(args.backtest_symbol_workers),
     )
     run_htf_ltf_runner_discovery(config, symbols=args.symbols)
     return 0

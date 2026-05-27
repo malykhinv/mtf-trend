@@ -1,5 +1,45 @@
 # Anomaly Patch Log
 
+## 2026-05-27 - P420 proposed - symbol-parallel backtest execution
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+research_tools/htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Further reduce cache-only backtest wall-clock time without changing candidate rules, signal availability, execution prices, TP/SL math, fees, slippage, or portfolio filtering semantics.
+```
+
+Change:
+
+```text
+1. Adds bounded symbol-level worker threads, default 4 and capped at 8 / CPU count / symbol count, with --backtest-symbol-workers to force a different value or 1 for serial runs.
+2. Multi-TF anomaly candidate precollection now processes independent symbols concurrently and merges results back in sorted symbol order before per-pair sorting/enrichment.
+3. Trade simulation resolves per-symbol independent trade paths concurrently, then applies the existing portfolio overlap/max-open filter in the original decision-time order. This preserves portfolio semantics while parallelizing expensive cache reads and path simulation.
+4. HTF/LTF runner discovery processes independent symbols concurrently and merges candidate/signal/trade/quality rows back in the original selected-symbol order.
+```
+
+Validation:
+
+```text
+Sandbox validation passed: python -m compileall -q data/exchanges research_tools cli constants.py main.py. Patch applies with git apply --check --ignore-whitespace against the P419 workspace. Full before/after artifact equality still requires the local cache; run a small fixed-symbol/fixed-period comparison with --backtest-symbol-workers 1 vs default 4.
+```
+
+Risk:
+
+```text
+Low-to-medium operational risk. The strategy/execution model is unchanged, but default parallelism can increase peak memory and disk IO because up to four symbols may load subminute frames at once. If the machine starts swapping or the disk queue explodes, run with --backtest-symbol-workers 2 or 1.
+```
+
 ## 2026-05-27 - P419 proposed - safe backtest hot-path speedup
 
 Files:

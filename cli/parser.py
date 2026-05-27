@@ -219,6 +219,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     anomaly_lab.add_argument("--short-fader-require-prior-context", type=_str_to_bool, default=False)
     anomaly_lab.add_argument("--short-fader-run-exit-grid", type=_str_to_bool, default=False)
+    anomaly_lab.add_argument(
+        "--backtest-symbol-workers",
+        type=_positive_int_for("--backtest-symbol-workers"),
+        default=4,
+        help="Symbol-level worker threads for cache-only candidate/trade simulation. Use 1 for strictly serial execution.",
+    )
     anomaly_lab.add_argument("--render-charts", type=_str_to_bool, default=True)
     anomaly_lab.add_argument("--targeted-flow-backfill", type=_str_to_bool, default=True)
     anomaly_lab.add_argument("--run-entry-grid", type=_str_to_bool, default=False)
@@ -233,6 +239,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Research HTF anomaly plus LTF confirmation runner discovery with structural no-TP replay",
     )
     runner_discovery.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_ANOMALY_LAB_DAYS)
+    runner_discovery.add_argument(
+        "--backtest-symbol-workers",
+        type=_positive_int_for("--backtest-symbol-workers"),
+        default=4,
+        help="Symbol-level worker threads for cache-only runner discovery. Use 1 for strictly serial execution.",
+    )
 
     materialize_subminute = subparsers.add_parser(
         "materialize-anomaly-subminute-cache",
