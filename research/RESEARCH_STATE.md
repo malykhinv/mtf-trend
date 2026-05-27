@@ -1,3 +1,15 @@
+## 2026-05-27 - P425 runner discovery speed and 5m/30s decay readout
+
+Current commit: UNKNOWN.
+
+Status: P425 APPLIED locally / UNKNOWN commit. The completed `.output/results/htf_ltf_runner_discovery_7d/5m_30s` run took 8571s for 581 symbols and wrote a 596MB candidate CSV because it computed future labels and LTF features for 935824 scanned HTF rows, not only the 2484 HTF anomaly rows. P425 changes the standard discovery path to gate first and write only HTF anomaly candidates while preserving scanned/rejected counts in funnel/run_config.
+
+Research artifacts written under `.output/results/htf_ltf_runner_discovery_7d/5m_30s/runner_decay_research/`. Readout: among strict HTF anomaly rows, only 15/2484 became clean +10% runners within 1h. Current selected trades were profitable on this 7d slice (41 live-filtered closed, WR 56.1%, avg +1.15%, median +0.35%) but did not truly capture runners: only 1/41 had a +10% runner label. Post-close 30s volume-sustain rules show lift but are severely undercovered: only 240/2484 anomalies had post-LTF status ok, and only 72 had 4 closed 30s candles available. Treat volume-sustain as a promising hypothesis, not proof.
+
+Working hypothesis: first-spike HTF flow alone is mostly noise. A better runner candidate waits for early LTF volume/trade sustain after the suspicious HTF candle: no immediate quote-volume decay under 50% candle-to-candle, second-half flow/trade acceleration not collapsing, price acceptance non-negative, and current spike at least comparable to prior 24h spike median. OI was not discriminative in this artifact because runner examples mostly had flat 5m OI change; do not use flat OI as confirmation.
+
+Next: rerun the fixed-profile discovery after P425, then repeat decay research on refreshed `5m_30s` and `1m_5s` artifacts with full cache coverage before changing live logic.
+
 ## 2026-05-27 - P424 speed-patch regression cleanup
 
 Current commit: UNKNOWN.

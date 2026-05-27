@@ -894,6 +894,7 @@ Required truth boundaries:
 
 Artifacts must expose:
 - candidate rows with dormancy, smooth pregrowth, actual OI status/change, HTF quote/trade ratios, HTF-internal LTF distribution/acceleration, runner labels, and anomaly-low-break labels;
+- candidate rows are scoped to HTF anomaly gate rows only. The funnel/run_config must expose scanned HTF row count and pre-artifact rejected row count so speed optimizations do not hide the reject base;
 - signal rows with decision time, decision availability time, next-open entry, structural stop source, drift and initial-risk fields;
 - raw and live-filtered trade rows with no-TP structural trailing outcomes;
 - live-filtered trade rows must reject only same-symbol overlap. They must not cap simultaneous positions across different symbols;

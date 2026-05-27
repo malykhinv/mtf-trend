@@ -1,4 +1,44 @@
 
+## 2026-05-27 - 7d 5m/30s runner decay research and P425 validation
+
+```text
+Source artifact:
+.output/results/htf_ltf_runner_discovery_7d/5m_30s
+
+Baseline run:
+- Runtime: 8571.266s for 581 symbols.
+- Scanned HTF rows: 935824.
+- HTF anomaly gate rows: 2484.
+- Candidate CSV size: 596MB because rejected/non-anomaly rows were written too.
+- Future +10% labels among strict HTF anomaly rows: 15/2484 clean runners, 0.604%.
+- Live-filtered trades: 41 closed / 38 symbols, WR 56.1%, avg +1.15%, median +0.35%, sum +47.1%.
+- Runner capture in selected trades: 1/41, so current entry path is profitable continuation harvesting on this slice, not robust runner identification.
+
+Decay research artifacts:
+.output/results/htf_ltf_runner_discovery_7d/5m_30s/runner_decay_research/
+- runner_decay_enriched_anomalies.csv
+- runner_decay_rule_scores.csv
+- runner_decay_feature_bins.csv
+- runner_decay_research_summary.csv
+
+Findings:
+- 30s post-close coverage is too sparse for a strong conclusion: post_ltf_status ok for 240/2484 anomaly rows; 4 closed 30s candles available for only 72/2484.
+- `post4_sustained_flow` had 11 events / 10 symbols / 1 clean +10% runner, clean-runner share 9.1% versus 0.6% baseline, but sample is too small.
+- `post4_sustain_150pct_prior_median` had 10 events / 1 runner, suggesting current spike above prior spike median may help, again low sample.
+- `post4_decay_under50` still had 3/49 runners, so one <50% volume-decay print alone is not a clean fader reject; price acceptance and later recovery matter.
+- OI did not separate runners in this artifact: runner anomalies mostly had `pregrowth_oi_change_pct=0.0`, so OI should be a positive/negative context only when it is actually moving and available.
+
+P425 speed validation:
+- Changed runner discovery to apply cheap HTF anomaly gate before expensive future-label/LTF/OI work and before candidate artifact writes.
+- BSB 7d 5m/30s smoke preserved 24 candidates / 6 clean runner labels, funnel scanned=1943 and rejected-before-artifact=1919.
+- BSB runtime after patch: 2.36s; candidate CSV: 17KB.
+- Tests: `python -m pytest tests/test_htf_ltf_runner_discovery.py tests/test_live2_market_watch.py -q` -> 42 passed.
+- compileall passed for data/exchanges research_tools cli constants.py main.py.
+
+Strategy implication:
+Do not trade first HTF spike alone. Research next should test: HTF anomaly + current spike >= prior 24h spike median + early LTF no-decay/sustain + non-negative price acceptance + OI not falling. This must be validated on refreshed 5m/30s and 1m/5s runs before live promotion.
+```
+
 ## 2026-05-27 - P418 compact progress validation plan
 
 ```text

@@ -3,6 +3,7 @@ import pandas as pd
 from research_tools.htf_ltf_runner_discovery import (
     HtfLtfRunnerDiscoveryConfig,
     _build_first_ltf_signal,
+    _collect_symbol_candidates,
     _future_runner_label,
     _htf_internal_ltf_features,
     _apply_same_symbol_overlap_filter,
@@ -239,3 +240,43 @@ def test_live_filter_allows_parallel_different_symbols_but_blocks_same_symbol_ov
     assert filtered.iloc[1]["parallel_other_symbol_positions_at_entry"] == 1
     assert filtered.iloc[2]["status"] == "skipped"
     assert filtered.iloc[2]["skip_reason"] == "same_symbol_overlap_position_at_entry"
+
+
+def test_candidate_collection_writes_only_htf_anomaly_gate_rows() -> None:
+    htf = pd.DataFrame(
+        [
+            {"timestamp": i * 60_000, "open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 1.0, "quote_volume": 100.0, "number_of_trades": 10.0}
+            for i in range(7)
+        ]
+    )
+    htf.loc[4, ["high", "close", "quote_volume", "number_of_trades"]] = [104.0, 103.0, 1000.0, 100.0]
+    ltf = pd.DataFrame(
+        [
+            {"timestamp": 240_000 + i * 30_000, "open": 100.0 + i, "high": 104.0 + i, "low": 99.0 + i, "close": 101.0 + i, "volume": 1.0, "quote_volume": 500.0, "number_of_trades": 50.0}
+            for i in range(5)
+        ]
+    )
+    config = HtfLtfRunnerDiscoveryConfig(
+        htf_timeframe="1m",
+        ltf_timeframe="30s",
+        baseline_candles=2,
+        dormancy_candles=2,
+        pregrowth_candles=1,
+        min_htf_quote_ratio=5.0,
+        min_htf_trade_ratio=5.0,
+        min_htf_return_pct=0.01,
+        runner_horizon_minutes=1,
+    )
+
+    candidates, scanned_rows = _collect_symbol_candidates(
+        symbol="AAA/USDT:USDT",
+        htf=htf,
+        ltf=ltf,
+        oi=pd.DataFrame(),
+        config=config,
+    )
+
+    assert scanned_rows > len(candidates)
+    assert len(candidates) == 1
+    assert candidates[0]["status"] == "ok"
+    assert candidates[0]["htf_anomaly_gate"] is True

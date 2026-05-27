@@ -73,7 +73,7 @@ class HtfLtfRunnerDiscoveryConfig:
     fee_rate: float = 0.0004
     entry_slippage_pct: float = 0.0005
     exit_slippage_pct: float = 0.0005
-    symbol_workers: int = 4
+    symbol_workers: int = 1
 
     def __post_init__(self) -> None:
         if self.htf_timeframe == self.ltf_timeframe:
@@ -157,7 +157,7 @@ def run_htf_ltf_runner_discovery(
         total=len(selected_symbols),
     )
 
-    def _process_symbol(symbol: str) -> dict[str, list[dict[str, object]]]:
+    def _process_symbol(symbol: str) -> dict[str, object]:
         local_storage = ParquetStorage(config.cache_dir)
         htf = _load_frame(local_storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
         ltf = _load_frame(
@@ -172,8 +172,15 @@ def run_htf_ltf_runner_discovery(
         local_candidate_rows: list[dict[str, object]] = []
         local_signal_rows: list[dict[str, object]] = []
         local_trade_rows: list[dict[str, object]] = []
+        scanned_rows = 0
         if not htf.empty and not ltf.empty:
-            local_candidate_rows = _collect_symbol_candidates(symbol=symbol, htf=htf, ltf=ltf, oi=oi, config=config)
+            local_candidate_rows, scanned_rows = _collect_symbol_candidates(
+                symbol=symbol,
+                htf=htf,
+                ltf=ltf,
+                oi=oi,
+                config=config,
+            )
             for candidate in local_candidate_rows:
                 signal = _build_first_ltf_signal(candidate, ltf=ltf, oi=oi, config=config)
                 if signal is None:
@@ -185,9 +192,10 @@ def run_htf_ltf_runner_discovery(
             "signals": local_signal_rows,
             "trades": local_trade_rows,
             "quality": local_quality_rows,
+            "scanned_rows": scanned_rows,
         }
 
-    symbol_results: dict[str, dict[str, list[dict[str, object]]]] = {}
+    symbol_results: dict[str, dict[str, object]] = {}
     workers = _effective_symbol_workers(config.symbol_workers, total_items=len(selected_symbols))
     if workers <= 1:
         for index, symbol in enumerate(selected_symbols, start=1):
@@ -213,10 +221,11 @@ def run_htf_ltf_runner_discovery(
 
     for symbol in selected_symbols:
         result = symbol_results.get(symbol, {})
-        candidate_rows.extend(result.get("candidates", []))
-        signal_rows.extend(result.get("signals", []))
-        trade_rows.extend(result.get("trades", []))
-        quality_rows.extend(result.get("quality", []))
+        candidate_rows.extend(result.get("candidates", []))  # type: ignore[arg-type]
+        signal_rows.extend(result.get("signals", []))  # type: ignore[arg-type]
+        trade_rows.extend(result.get("trades", []))  # type: ignore[arg-type]
+        quality_rows.extend(result.get("quality", []))  # type: ignore[arg-type]
+    scanned_htf_rows = int(sum(int(result.get("scanned_rows", 0)) for result in symbol_results.values()))
 
     candidates_frame = pd.DataFrame(candidate_rows)
     signals_frame = pd.DataFrame(signal_rows)
@@ -247,7 +256,10 @@ def run_htf_ltf_runner_discovery(
         (config.output_dir / "htf_ltf_runner_trade_rule_scores.csv", trade_rule_scores),
         (config.output_dir / "htf_ltf_runner_trade_rule_scores_live_filtered.csv", live_trade_rule_scores),
         (config.output_dir / "htf_ltf_runner_research_shortlist.csv", research_shortlist),
-        (config.output_dir / "htf_ltf_runner_funnel.csv", _build_funnel(candidates_frame, signals_frame, trades_frame)),
+        (
+            config.output_dir / "htf_ltf_runner_funnel.csv",
+            _build_funnel(candidates_frame, signals_frame, trades_frame, scanned_htf_rows=scanned_htf_rows),
+        ),
         (config.output_dir / "htf_ltf_runner_skip_reasons.csv", _skip_reasons(trades_frame)),
         (config.output_dir / "htf_ltf_runner_top_dependency.csv", _top_dependency(trades_frame)),
         (
@@ -275,6 +287,8 @@ def run_htf_ltf_runner_discovery(
                         "data_access_model": "cache_only_no_exchange_fetch",
                         "seconds_download_required": False,
                         "runtime_seconds": round(time.monotonic() - started_at, 3),
+                        "scanned_htf_rows": scanned_htf_rows,
+                        "candidate_artifact_scope": "htf_anomaly_gate_only",
                     }
                 ]
             ),
@@ -303,7 +317,7 @@ def _collect_symbol_candidates(
     ltf: pd.DataFrame,
     oi: pd.DataFrame,
     config: HtfLtfRunnerDiscoveryConfig,
-) -> list[dict[str, object]]:
+) -> tuple[list[dict[str, object]], int]:
     htf_ms = _timeframe_ms(config.htf_timeframe)
     horizon_ms = int(config.runner_horizon_minutes) * 60_000
     rows: list[dict[str, object]] = []
@@ -316,12 +330,30 @@ def _collect_symbol_candidates(
     prepared["_number_of_trades"] = trade_series
 
     min_index = max(config.baseline_candles, config.dormancy_candles, config.pregrowth_candles) + 1
-    for idx in range(min_index, len(prepared)):
+    timestamps = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    max_timestamp = int(timestamps.max()) if not timestamps.empty else 0
+    row_numbers = pd.Series(np.arange(len(prepared)), index=prepared.index)
+    positive_quote = prepared["_quote_volume"].where(prepared["_quote_volume"] > 0)
+    positive_trades = prepared["_number_of_trades"].where(prepared["_number_of_trades"] > 0)
+    baseline_quote_fast = positive_quote.shift(1).rolling(config.baseline_candles, min_periods=1).median()
+    baseline_trades_fast = positive_trades.shift(1).rolling(config.baseline_candles, min_periods=1).median()
+    htf_return_fast = (pd.to_numeric(prepared["close"], errors="coerce") - pd.to_numeric(prepared["open"], errors="coerce")) / pd.to_numeric(
+        prepared["open"],
+        errors="coerce",
+    )
+    scanned_mask = (row_numbers >= min_index) & ((timestamps + htf_ms + horizon_ms) <= (max_timestamp + htf_ms))
+    anomaly_gate_fast = (
+        scanned_mask
+        & (_numeric_column(prepared, "_quote_volume") / baseline_quote_fast).ge(config.min_htf_quote_ratio)
+        & (_numeric_column(prepared, "_number_of_trades") / baseline_trades_fast).ge(config.min_htf_trade_ratio)
+        & htf_return_fast.ge(config.min_htf_return_pct)
+    )
+    scanned_rows = int(scanned_mask.sum())
+
+    for idx in np.flatnonzero(anomaly_gate_fast.to_numpy(dtype=bool, na_value=False)):
         row = prepared.iloc[idx]
         ts = int(row["timestamp"])
         close_ts = ts + htf_ms
-        if close_ts + horizon_ms > int(prepared["timestamp"].max()) + htf_ms:
-            continue
         baseline = prepared.iloc[idx - config.baseline_candles : idx]
         dormancy = prepared.iloc[idx - config.dormancy_candles : idx]
         pregrowth = prepared.iloc[idx - config.pregrowth_candles : idx]
@@ -352,21 +384,6 @@ def _collect_symbol_candidates(
             start_ms=int(pregrowth.iloc[0]["timestamp"]),
             decision_ms=close_ts,
         )
-        label = _future_runner_label(
-            ltf,
-            start_ms=close_ts,
-            horizon_ms=horizon_ms,
-            reference_price=anomaly_close,
-            anomaly_low=anomaly_low,
-            target_return_pct=config.runner_target_return_pct,
-        )
-        htf_ltf_features = _htf_internal_ltf_features(
-            ltf,
-            start_ms=ts,
-            end_ms=close_ts,
-            htf_open=anomaly_open,
-            htf_close=anomaly_close,
-        )
 
         anomaly_gate = (
             quote_ratio >= config.min_htf_quote_ratio
@@ -389,7 +406,24 @@ def _collect_symbol_candidates(
         )
         if not config.require_pregrowth_oi and oi_features["pregrowth_oi_status"] != "ok":
             oi_ok = True
-        status = "ok" if anomaly_gate else "rejected_htf_anomaly_gate"
+        if not anomaly_gate:
+            continue
+        label = _future_runner_label(
+            ltf,
+            start_ms=close_ts,
+            horizon_ms=horizon_ms,
+            reference_price=anomaly_close,
+            anomaly_low=anomaly_low,
+            target_return_pct=config.runner_target_return_pct,
+        )
+        htf_ltf_features = _htf_internal_ltf_features(
+            ltf,
+            start_ms=ts,
+            end_ms=close_ts,
+            htf_open=anomaly_open,
+            htf_close=anomaly_close,
+        )
+        status = "ok"
         setup_nature = _setup_nature(
             anomaly_gate=anomaly_gate,
             dormancy_ok=dormancy_ok,
@@ -438,7 +472,7 @@ def _collect_symbol_candidates(
                 **label,
             }
         )
-    return rows
+    return rows, scanned_rows
 
 
 def _build_first_ltf_signal(
@@ -1580,9 +1614,16 @@ def _label_distribution(candidates: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _build_funnel(candidates: pd.DataFrame, signals: pd.DataFrame, trades: pd.DataFrame) -> pd.DataFrame:
+def _build_funnel(
+    candidates: pd.DataFrame,
+    signals: pd.DataFrame,
+    trades: pd.DataFrame,
+    *,
+    scanned_htf_rows: int,
+) -> pd.DataFrame:
     rows = [
-        {"stage": "htf_rows_after_scan", "count": int(len(candidates))},
+        {"stage": "htf_rows_after_scan", "count": int(scanned_htf_rows)},
+        {"stage": "htf_rows_rejected_before_artifact", "count": int(max(0, scanned_htf_rows - len(candidates)))},
         {"stage": "htf_anomaly_gate_ok", "count": int(candidates["htf_anomaly_gate"].astype(bool).sum()) if "htf_anomaly_gate" in candidates.columns else 0},
         {"stage": "runner_10pct_next_hour_labels", "count": int(candidates["runner_10pct_next_hour"].astype(bool).sum()) if "runner_10pct_next_hour" in candidates.columns else 0},
         {"stage": "clean_runner_without_low_break_labels", "count": int(candidates["clean_runner_without_low_break"].astype(bool).sum()) if "clean_runner_without_low_break" in candidates.columns else 0},

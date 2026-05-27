@@ -1,3 +1,40 @@
+## 2026-05-27 - P425 applied locally - runner discovery gate-first speedup and decay research
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+tests/test_htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Speed up HTF/LTF runner discovery without changing entry/exit honesty, and analyze the completed 7d `5m_30s` artifact for early runner-vs-fader volume-decay structure.
+```
+
+Change:
+
+```text
+Candidate collection now applies the cheap HTF anomaly gate before expensive future-label, HTF-internal LTF, dormancy/pregrowth/OI and signal replay work. The candidate artifact writes only HTF anomaly rows; scanned and pre-artifact rejected row counts stay visible in the funnel and run_config. Regression tests assert rejected HTF rows are not written as candidates.
+```
+
+Validation:
+
+```text
+Focused tests passed: 42 passed. compileall passed for data/exchanges research_tools cli constants.py main.py. BSB 7d 5m/30s smoke preserved 24 candidates / 6 clean runner labels while reducing runtime to 2.36s and candidate CSV to 17KB for that symbol.
+```
+
+Risk:
+
+```text
+Candidate CSV scope changed from all scanned HTF rows to HTF anomaly rows only. This is intended for speed and artifact usefulness; scanned/rejected counts remain in funnel. Any analysis that relied on rejected non-anomaly candidate rows should use a separate diagnostic scan, not the standard discovery artifact.
+```
+
 ## 2026-05-27 - P424 proposed - clean up speed-patch regressions
 
 Files:
