@@ -5,6 +5,7 @@ from research_tools.htf_ltf_runner_discovery import (
     _build_first_ltf_signal,
     _future_runner_label,
     _htf_internal_ltf_features,
+    _apply_same_symbol_overlap_filter,
     _score_candidate_rules,
     _score_trade_rules,
     _simulate_no_tp_runner_trade,
@@ -199,3 +200,42 @@ def test_trade_rule_scores_report_balance_and_top20_dependency() -> None:
     assert row["win_rate"] == 0.8
     assert row["top20pct_trade_count"] == 2
     assert row["balance_score_0_100"] > 0
+
+
+def test_live_filter_allows_parallel_different_symbols_but_blocks_same_symbol_overlap() -> None:
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA/USDT:USDT",
+                "status": "closed",
+                "entry_timestamp_ms": 1_000,
+                "decision_timestamp_ms": 900,
+                "exit_timestamp_ms": 10_000,
+                "net_return": 0.01,
+            },
+            {
+                "symbol": "BBB/USDT:USDT",
+                "status": "closed",
+                "entry_timestamp_ms": 2_000,
+                "decision_timestamp_ms": 1_900,
+                "exit_timestamp_ms": 9_000,
+                "net_return": 0.02,
+            },
+            {
+                "symbol": "AAA/USDT:USDT",
+                "status": "closed",
+                "entry_timestamp_ms": 3_000,
+                "decision_timestamp_ms": 2_900,
+                "exit_timestamp_ms": 8_000,
+                "net_return": 0.03,
+            },
+        ]
+    )
+
+    filtered = _apply_same_symbol_overlap_filter(trades)
+
+    assert filtered.iloc[0]["status"] == "closed"
+    assert filtered.iloc[1]["status"] == "closed"
+    assert filtered.iloc[1]["parallel_other_symbol_positions_at_entry"] == 1
+    assert filtered.iloc[2]["status"] == "skipped"
+    assert filtered.iloc[2]["skip_reason"] == "same_symbol_overlap_position_at_entry"

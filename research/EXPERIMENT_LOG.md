@@ -1,4 +1,20 @@
 
+## 2026-05-27 - P417 same-symbol-only discovery filter
+
+```text
+Patch: P417 remove portfolio-wide cap from HTF/LTF runner discovery.
+
+Contract:
+- Different symbols may be open at the same time in the discovery replay.
+- A symbol may not open a second simulated position while a prior position on the same symbol is still open.
+- The artifact column `parallel_other_symbol_positions_at_entry` is diagnostic only; it is not a cap.
+
+Validation to run:
+- `python -m pytest tests/test_htf_ltf_runner_discovery.py tests/test_live2_market_watch.py -q` -> 41 passed;
+- `python -m compileall -q data/exchanges research_tools cli constants.py main.py` -> passed;
+- search confirmed no `max_open_positions`/portfolio-cap code remains in `htf_ltf_runner_discovery`.
+```
+
 ## 2026-05-27 - P416 fixed TF-set command plan
 
 ```text

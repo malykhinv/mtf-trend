@@ -70,7 +70,6 @@ class HtfLtfRunnerDiscoveryConfig:
     fee_rate: float = 0.0004
     entry_slippage_pct: float = 0.0005
     exit_slippage_pct: float = 0.0005
-    max_open_positions: int = 1
 
     def __post_init__(self) -> None:
         if self.htf_timeframe == self.ltf_timeframe:
@@ -87,7 +86,6 @@ class HtfLtfRunnerDiscoveryConfig:
             "ltf_max_confirm_candles",
             "trail_lookback_candles",
             "max_hold_candles",
-            "max_open_positions",
         ):
             if int(getattr(self, name)) <= 0:
                 raise ValueError(f"{name} must be > 0")
@@ -141,7 +139,7 @@ def run_htf_ltf_runner_discovery(
     candidates_frame = pd.DataFrame(candidate_rows)
     signals_frame = pd.DataFrame(signal_rows)
     trades_frame = pd.DataFrame(trade_rows)
-    live_filtered = _apply_live_portfolio_filter(trades_frame, max_open_positions=config.max_open_positions)
+    live_filtered = _apply_same_symbol_overlap_filter(trades_frame)
     candidate_rule_scores = _score_candidate_rules(candidates_frame)
     trade_rule_scores = _score_trade_rules(trades_frame, scope="raw")
     live_trade_rule_scores = _score_trade_rules(live_filtered, scope="live_filtered")
@@ -1358,7 +1356,7 @@ def _timestamp_to_utc(timestamp_ms: object) -> str:
     return pd.to_datetime(parsed, unit="ms", utc=True).isoformat()
 
 
-def _apply_live_portfolio_filter(trades: pd.DataFrame, *, max_open_positions: int) -> pd.DataFrame:
+def _apply_same_symbol_overlap_filter(trades: pd.DataFrame) -> pd.DataFrame:
     if trades.empty or "status" not in trades.columns:
         return trades.copy()
     closed = trades.copy()
@@ -1378,9 +1376,7 @@ def _apply_live_portfolio_filter(trades: pd.DataFrame, *, max_open_positions: in
         open_positions = [(s, e) for s, e in open_positions if e >= entry_ts]
         skip_reason = ""
         if any(s == symbol for s, _ in open_positions):
-            skip_reason = "live_portfolio_filter_overlapping_symbol_position_at_entry"
-        elif len(open_positions) >= int(max_open_positions):
-            skip_reason = "live_portfolio_filter_max_open_positions_at_entry"
+            skip_reason = "same_symbol_overlap_position_at_entry"
         if skip_reason:
             skipped = row.copy()
             skipped["status"] = "skipped"
@@ -1390,7 +1386,7 @@ def _apply_live_portfolio_filter(trades: pd.DataFrame, *, max_open_positions: in
             rows.append(skipped)
         else:
             kept = row.copy()
-            kept["portfolio_open_positions_at_entry"] = len(open_positions)
+            kept["parallel_other_symbol_positions_at_entry"] = sum(1 for s, _ in open_positions if s != symbol)
             rows.append(kept)
             open_positions.append((symbol, exit_ts))
     result = pd.DataFrame(rows).sort_values("_order").drop(columns=["_order"], errors="ignore")
@@ -1594,7 +1590,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--trail-lookback-candles", type=int, default=6)
     parser.add_argument("--trail-buffer-pct", type=float, default=0.0005)
     parser.add_argument("--max-hold-candles", type=int, default=720)
-    parser.add_argument("--max-open-positions", type=int, default=1)
     parser.add_argument("--fee-rate", type=float, default=0.0004)
     parser.add_argument("--entry-slippage-pct", type=float, default=0.0005)
     parser.add_argument("--exit-slippage-pct", type=float, default=0.0005)
@@ -1640,7 +1635,6 @@ def main(argv: list[str] | None = None) -> int:
         fee_rate=float(args.fee_rate),
         entry_slippage_pct=float(args.entry_slippage_pct),
         exit_slippage_pct=float(args.exit_slippage_pct),
-        max_open_positions=int(args.max_open_positions),
     )
     run_htf_ltf_runner_discovery(config, symbols=args.symbols)
     return 0

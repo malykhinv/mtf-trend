@@ -1,5 +1,42 @@
 # Anomaly Patch Log
 
+## 2026-05-27 - P417 applied locally - runner discovery same-symbol-only overlap
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+tests/test_htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Remove the unintended portfolio-wide concurrent position cap from HTF/LTF runner discovery. The only replay overlap limit should be one open position per symbol.
+```
+
+Change:
+
+```text
+The live-filtered discovery artifact now allows parallel positions on different symbols and skips only a new signal for the same symbol while that symbol already has an open simulated position. The old `max_open_positions` config field and max-position skip reason were removed from this discovery tool.
+```
+
+Validation:
+
+```text
+Focused tests passed: 41 passed. compileall passed for data/exchanges research_tools cli constants.py main.py. Search confirmed no `max_open_positions`/portfolio-cap code remains in `htf_ltf_runner_discovery`.
+```
+
+Risk:
+
+```text
+Live-filtered trade count can increase materially versus the old cap-1 artifact. This is intended; aggregate return is still not account return because position sizing/margin allocation is not modeled.
+```
+
 ## 2026-05-27 - P416 applied locally - fixed TF-set runner discovery command
 
 Files:

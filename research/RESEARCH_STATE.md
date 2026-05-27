@@ -1,3 +1,11 @@
+## 2026-05-27 - P417 runner discovery overlap model
+
+Current commit: UNKNOWN.
+
+Status: P417 APPLIED locally / UNKNOWN commit. The HTF/LTF runner discovery live-filter no longer caps total simultaneous positions across different symbols. It only rejects same-symbol overlap while a simulated position on that symbol is still open. This matches the intended research question: do not suppress independent runners on different coins; only prevent stacking repeated entries on the same coin during one active position.
+
+Next: rerun the fixed-profile 30d discovery and compare raw vs live-filtered artifacts. Expect live-filtered counts to be much closer to raw than under any old cap-1 portfolio model.
+
 ## 2026-05-27 - P416 fixed TF-set discovery command
 
 Current commit: UNKNOWN.

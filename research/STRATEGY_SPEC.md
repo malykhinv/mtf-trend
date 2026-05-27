@@ -894,6 +894,7 @@ Artifacts must expose:
 - candidate rows with dormancy, smooth pregrowth, actual OI status/change, HTF quote/trade ratios, HTF-internal LTF distribution/acceleration, runner labels, and anomaly-low-break labels;
 - signal rows with decision time, decision availability time, next-open entry, structural stop source, drift and initial-risk fields;
 - raw and live-filtered trade rows with no-TP structural trailing outcomes;
+- live-filtered trade rows must reject only same-symbol overlap. They must not cap simultaneous positions across different symbols;
 - candidate rule scores for runner-label lift without using future labels as entry filters;
 - trade rule scores with net-PnL winrate, average/median/sum return, MFE/MAE, runner-label shares, and top20 positive-PnL dependency;
 - a research shortlist that ranks rule candidates as research-only and points to the next validation step.
