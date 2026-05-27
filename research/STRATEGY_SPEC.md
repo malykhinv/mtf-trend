@@ -1,3 +1,7 @@
+## 2026-05-27 - Strict HTF/LTF discovery replay requirement
+
+HTF/LTF runner discovery evidence is valid only when the LTF path used for confirmation, future labels and post-entry replay is continuous at the configured LTF step. A trade must not be carried across missing subminute candles. If the stop/trailing stop is hit before a later gap, that closed trade is valid; otherwise a pre-exit gap or incomplete hold window is a skip/missing-data outcome, not a time exit. Flow confirmation must use real `quote_volume` and real `number_of_trades`; synthetic `close * volume` quote-volume is not acceptable for runner/fader conclusions.
+
 ## 2026-05-26 - Live2 current-OI baseline contract
 
 Live2 must not use one OI number for three meanings. Current-OI supervision uses distinct baselines:

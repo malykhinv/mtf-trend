@@ -1,3 +1,13 @@
+## 2026-05-27 - P429 strict replay rerun required
+
+Experiment status: planned after P429.
+
+Reason: the existing 5m/15s and 5m/30s runner-discovery artifacts are optimistic because sparse LTF rows were treated as consecutive candles during post-entry replay.
+
+Required rerun: after applying P429 and rebuilding continuous subminute cache, run the fixed profile command over the same period. Compare old vs new only through counts, gap statuses, valid closed trades, day stability and top dependency; do not compare old PnL as an edge baseline.
+
+Acceptance: `future_ltf_path_status`, `entry_ltf_path_status` and `post_entry_ltf_path_status` must explain missing rows. Valid PnL can use only closed trades that exited before a gap or had a complete post-entry path.
+
 
 ## 2026-05-27 - 5m/30s win-loss feature analysis
 
