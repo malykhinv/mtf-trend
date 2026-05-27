@@ -5,6 +5,7 @@ from research_tools.htf_ltf_runner_discovery import (
     _build_ltf_entry_windows,
     _build_first_ltf_signal,
     _collect_symbol_candidates,
+    _daily_summary,
     _future_runner_label,
     _htf_internal_ltf_features,
     _apply_same_symbol_overlap_filter,
@@ -409,3 +410,47 @@ def test_entry_window_rule_scores_apply_same_symbol_overlap_per_rule() -> None:
     assert row["signals"] == 3
     assert row["closed_trades"] == 2
     assert row["win_rate"] == 1.0
+
+
+def test_daily_summary_groups_closed_trades_by_entry_day() -> None:
+    trades = pd.DataFrame(
+        [
+            {
+                "symbol": "AAA/USDT:USDT",
+                "status": "closed",
+                "entry_timestamp_utc": "2026-05-01T01:00:00+00:00",
+                "net_return": 0.02,
+                "mfe_pct": 0.04,
+                "mae_pct": -0.01,
+                "runner_10pct_next_hour": True,
+                "clean_runner_without_low_break": True,
+            },
+            {
+                "symbol": "BBB/USDT:USDT",
+                "status": "closed",
+                "entry_timestamp_utc": "2026-05-01T02:00:00+00:00",
+                "net_return": -0.01,
+                "mfe_pct": 0.01,
+                "mae_pct": -0.02,
+                "runner_10pct_next_hour": False,
+                "clean_runner_without_low_break": False,
+            },
+            {
+                "symbol": "AAA/USDT:USDT",
+                "status": "skipped",
+                "entry_timestamp_utc": "2026-05-02T01:00:00+00:00",
+                "net_return": 0.50,
+            },
+        ]
+    )
+
+    summary = _daily_summary(trades)
+    row = summary.iloc[0]
+
+    assert len(summary) == 1
+    assert row["entry_day_utc"] == "2026-05-01"
+    assert row["closed_trades"] == 2
+    assert row["symbols"] == 2
+    assert row["win_rate"] == 0.5
+    assert row["sum_net_return"] == 0.01
+    assert row["runner_10pct_label_share"] == 0.5

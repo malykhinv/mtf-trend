@@ -1,3 +1,11 @@
+## 2026-05-27 - P428 5m runner discovery profile set
+
+Current commit: UNKNOWN.
+
+Status: P428 APPLIED locally / UNKNOWN commit. The next fixed discovery run replaces `1m_5s` with two 5m-HTF profiles: `5m_1m` and `5m_15s`, keeping `5m_30s`. This matches the current readout that `1m_5s` had more runner labels but weak trade quality, negative median, and high top dependency. Standard artifacts now include daily summaries for selected trades and entry-window trades so strategy stability can be judged by day, not only by aggregate PnL.
+
+Next: rerun `.\\.venv\\Scripts\\python.exe main.py run-htf-ltf-runner-discovery --days 30` after P428 and compare `5m_30s`, `5m_1m`, and `5m_15s` on median trade, WR, positive-day share, top20 dependency, and real flow coverage.
+
 ## 2026-05-27 - P427 30d discovery honesty readout
 
 Current commit: UNKNOWN.

@@ -1760,13 +1760,22 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 "max_hold_candles": 120,
             },
             {
-                "name": "1m_5s",
-                "htf_timeframe": "1m",
-                "ltf_timeframe": "5s",
-                "ltf_min_confirm_candles": 6,
-                "ltf_max_confirm_candles": 24,
+                "name": "5m_1m",
+                "htf_timeframe": "5m",
+                "ltf_timeframe": "1m",
+                "ltf_min_confirm_candles": 1,
+                "ltf_max_confirm_candles": 4,
                 "trail_lookback_candles": 6,
-                "max_hold_candles": 720,
+                "max_hold_candles": 60,
+            },
+            {
+                "name": "5m_15s",
+                "htf_timeframe": "5m",
+                "ltf_timeframe": "15s",
+                "ltf_min_confirm_candles": 4,
+                "ltf_max_confirm_candles": 16,
+                "trail_lookback_candles": 8,
+                "max_hold_candles": 240,
             },
         ]
         index_rows: list[dict[str, object]] = []

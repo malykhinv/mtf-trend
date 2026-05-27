@@ -271,6 +271,11 @@ def run_htf_ltf_runner_discovery(
         (config.output_dir / "htf_ltf_runner_entry_windows.csv", entry_windows_frame),
         (config.output_dir / "htf_ltf_runner_entry_window_trades_raw.csv", entry_window_trades_frame),
         (config.output_dir / "htf_ltf_runner_entry_window_trades_live_filtered.csv", entry_window_trades_live_filtered),
+        (config.output_dir / "htf_ltf_runner_entry_window_by_day.csv", _daily_summary(entry_window_trades_frame)),
+        (
+            config.output_dir / "htf_ltf_runner_entry_window_by_day_live_filtered.csv",
+            _daily_summary(entry_window_trades_live_filtered),
+        ),
         (config.output_dir / "htf_ltf_runner_entry_window_rule_scores.csv", entry_window_rule_scores),
         (
             config.output_dir / "htf_ltf_runner_entry_window_rule_scores_live_filtered.csv",
@@ -279,6 +284,8 @@ def run_htf_ltf_runner_discovery(
         (config.output_dir / "htf_ltf_runner_signals.csv", signals_frame),
         (config.output_dir / "htf_ltf_runner_trades_raw.csv", trades_frame),
         (config.output_dir / "htf_ltf_runner_trades_live_filtered.csv", live_filtered),
+        (config.output_dir / "htf_ltf_runner_by_day.csv", _daily_summary(trades_frame)),
+        (config.output_dir / "htf_ltf_runner_by_day_live_filtered.csv", _daily_summary(live_filtered)),
         (config.output_dir / "htf_ltf_runner_profitability_summary.csv", _summarize_trades(trades_frame)),
         (
             config.output_dir / "htf_ltf_runner_profitability_summary_live_filtered.csv",
@@ -2049,6 +2056,56 @@ def _summarize_by_column(trades: pd.DataFrame, column: str) -> pd.DataFrame:
         clean_runner_label_share=("clean_runner_without_low_break", "mean"),
     )
     return grouped.reset_index().sort_values(["sum_net_return", "closed_trades"], ascending=[False, False])
+
+
+def _daily_summary(trades: pd.DataFrame) -> pd.DataFrame:
+    columns = [
+        "entry_day_utc",
+        "closed_trades",
+        "symbols",
+        "win_rate",
+        "avg_net_return",
+        "median_net_return",
+        "sum_net_return",
+        "avg_mfe_pct",
+        "avg_mae_pct",
+        "runner_10pct_label_share",
+        "clean_runner_label_share",
+        "top_trade_net_return",
+        "bottom_trade_net_return",
+    ]
+    if trades.empty or "status" not in trades.columns or "entry_timestamp_utc" not in trades.columns:
+        return pd.DataFrame(columns=columns)
+    closed = trades.loc[trades["status"].eq("closed")].copy()
+    if closed.empty:
+        return pd.DataFrame(columns=columns)
+    closed["entry_day_utc"] = pd.to_datetime(closed["entry_timestamp_utc"], errors="coerce", utc=True).dt.strftime("%Y-%m-%d")
+    closed = closed.loc[closed["entry_day_utc"].notna()].copy()
+    if closed.empty:
+        return pd.DataFrame(columns=columns)
+    closed["net_return"] = pd.to_numeric(closed["net_return"], errors="coerce")
+    closed["mfe_pct"] = pd.to_numeric(closed.get("mfe_pct", pd.Series(index=closed.index, dtype=float)), errors="coerce")
+    closed["mae_pct"] = pd.to_numeric(closed.get("mae_pct", pd.Series(index=closed.index, dtype=float)), errors="coerce")
+    closed["_win"] = closed["net_return"] > 0
+    if "runner_10pct_next_hour" not in closed.columns:
+        closed["runner_10pct_next_hour"] = False
+    if "clean_runner_without_low_break" not in closed.columns:
+        closed["clean_runner_without_low_break"] = False
+    grouped = closed.groupby("entry_day_utc", dropna=False).agg(
+        closed_trades=("net_return", "size"),
+        symbols=("symbol", "nunique"),
+        win_rate=("_win", "mean"),
+        avg_net_return=("net_return", "mean"),
+        median_net_return=("net_return", "median"),
+        sum_net_return=("net_return", "sum"),
+        avg_mfe_pct=("mfe_pct", "mean"),
+        avg_mae_pct=("mae_pct", "mean"),
+        runner_10pct_label_share=("runner_10pct_next_hour", "mean"),
+        clean_runner_label_share=("clean_runner_without_low_break", "mean"),
+        top_trade_net_return=("net_return", "max"),
+        bottom_trade_net_return=("net_return", "min"),
+    )
+    return grouped.reset_index().sort_values("entry_day_utc").loc[:, columns]
 
 
 def _label_distribution(candidates: pd.DataFrame) -> pd.DataFrame:

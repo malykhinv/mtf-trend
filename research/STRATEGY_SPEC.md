@@ -879,7 +879,8 @@ python main.py run-htf-ltf-runner-discovery --days N
 
 The command must run exactly these TF sets unless code is deliberately changed:
 - `5m_30s`: HTF anomaly on 5m, LTF confirmation/replay on 30s;
-- `1m_5s`: HTF anomaly on 1m, LTF confirmation/replay on 5s.
+- `5m_1m`: HTF anomaly on 5m, LTF confirmation/replay on 1m;
+- `5m_15s`: HTF anomaly on 5m, LTF confirmation/replay on 15s.
 
 No timeframe, symbol, threshold, output, risk, or trailing flags should be required for the standard discovery run. Profile outputs are written under `htf_ltf_runner_discovery_<days>d/<profile>/`.
 
@@ -889,7 +890,8 @@ The discovery run must also write fixed early-entry windows for runner-vs-fader 
 
 ```text
 5m_30s windows: 2, 4, 6, 8 closed 30s candles after HTF close
-1m_5s windows: 6, 12, 18, 24 closed 5s candles after HTF close
+5m_1m windows: 1, 2, 3, 4 closed 1m candles after HTF close
+5m_15s windows: 4, 8, 12, 16 closed 15s candles after HTF close
 decision time: last closed LTF candle in the window
 entry model: next LTF open plus adverse slippage
 future labels: evaluation only, never entry filters
@@ -910,6 +912,7 @@ Artifacts must expose:
 - candidate rows are scoped to HTF anomaly gate rows only. The funnel/run_config must expose scanned HTF row count and pre-artifact rejected row count so speed optimizations do not hide the reject base;
 - entry-window rows with decision/availability/entry timestamps, no-future-label flags, prior 24h spike context, LTF volume/trade decay and sustain fields, OI-at-decision fields, structural stop source, drift/risk fields, and execution skip reasons;
 - entry-window no-TP trade rows and rule-score tables for raw and same-symbol-filtered scopes, including volume-sustain and fader-decay families;
+- daily summary rows for selected trades and entry-window trades, raw and same-symbol-filtered, so positive-day share and day-level concentration are visible by default;
 - signal rows with decision time, decision availability time, next-open entry, structural stop source, drift and initial-risk fields;
 - raw and live-filtered trade rows with no-TP structural trailing outcomes;
 - live-filtered trade rows must reject only same-symbol overlap. They must not cap simultaneous positions across different symbols;

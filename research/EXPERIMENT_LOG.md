@@ -1,4 +1,26 @@
 
+## 2026-05-27 - P428 5m profile set and daily breakdown artifacts
+
+```text
+Patch: P428 changes the fixed HTF/LTF runner discovery set.
+
+New standard profiles:
+- 5m_30s
+- 5m_1m
+- 5m_15s
+
+Removed from standard run:
+- 1m_5s, because the 30d artifact had more labels but weak trade quality: WR 44.0%, median -0.18%, strong top dependency.
+
+New artifacts per profile:
+- htf_ltf_runner_by_day.csv
+- htf_ltf_runner_by_day_live_filtered.csv
+- htf_ltf_runner_entry_window_by_day.csv
+- htf_ltf_runner_entry_window_by_day_live_filtered.csv
+
+Use these to judge positive-day share, day-level concentration, worst-day damage, and whether a rule is a real strategy or a few large outliers.
+```
+
 ## 2026-05-27 - 30d HTF/LTF discovery readout and P427 honesty fix
 
 ```text
