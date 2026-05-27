@@ -1,3 +1,11 @@
+## 2026-05-27 - P416 fixed TF-set discovery command
+
+Current commit: UNKNOWN.
+
+Status: P416 APPLIED locally / UNKNOWN commit. `run-htf-ltf-runner-discovery` is now a fixed-profile command: the operator passes only `--days`, and the code runs both agreed TF sets, `5m/30s` and `1m/5s`, into separate artifact folders. This removes shell-level tuning/optionality from the research run and makes the tested TF contract explicit.
+
+Next: run `python main.py run-htf-ltf-runner-discovery --days 30`, then compare profile outputs through the root `htf_ltf_runner_discovery_index.csv` plus each profile's shortlist and data-quality artifacts.
+
 ## 2026-05-27 - P415 HTF/LTF runner discovery scoring completed
 
 Current commit: UNKNOWN.

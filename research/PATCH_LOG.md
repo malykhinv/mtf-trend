@@ -1,5 +1,42 @@
 # Anomaly Patch Log
 
+## 2026-05-27 - P416 applied locally - fixed TF-set runner discovery command
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Remove tuning/timeframe flags from the runner discovery command and make the agreed TF sets part of the code contract.
+```
+
+Change:
+
+```text
+`run-htf-ltf-runner-discovery` now accepts only `--days`. It always runs two cache-only profiles: `5m_30s` and `1m_5s`, each into its own output subdirectory under `htf_ltf_runner_discovery_<days>d`, with profile-specific confirmation/trailing/max-hold candle counts.
+```
+
+Validation:
+
+```text
+Help output exposes only `--days` for `run-htf-ltf-runner-discovery`. Focused tests passed: 40 passed. compileall passed for data/exchanges research_tools cli constants.py main.py.
+```
+
+Risk:
+
+```text
+This intentionally removes ad-hoc CLI tuning for the discovery command. Future parameter research should change named profiles in code, not one-off shell flags.
+```
+
 ## 2026-05-27 - P415 applied locally - complete HTF/LTF runner discovery scoring
 
 Files:

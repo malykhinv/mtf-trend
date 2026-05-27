@@ -871,6 +871,18 @@ Candidate implementation should expose these fields separately in artifacts: HTF
 
 `run-htf-ltf-runner-discovery` is a research/discovery tool for learning which HTF anomaly shapes become early runners. It is not a live signal contract by itself.
 
+The operator command is intentionally fixed-profile:
+
+```text
+python main.py run-htf-ltf-runner-discovery --days N
+```
+
+The command must run exactly these TF sets unless code is deliberately changed:
+- `5m_30s`: HTF anomaly on 5m, LTF confirmation/replay on 30s;
+- `1m_5s`: HTF anomaly on 1m, LTF confirmation/replay on 5s.
+
+No timeframe, symbol, threshold, output, risk, or trailing flags should be required for the standard discovery run. Profile outputs are written under `htf_ltf_runner_discovery_<days>d/<profile>/`.
+
 Required truth boundaries:
 - Candidate construction may use only closed HTF history, dormancy/pregrowth history, cached OI rows available by decision time, and LTF candles inside the already closed HTF anomaly candle.
 - `runner_10pct_next_hour`, `future_max_return_pct`, and anomaly-low-break fields are future labels for evaluation only. They must not be used as entry filters.

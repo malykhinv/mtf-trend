@@ -1682,7 +1682,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
 
 
 def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) -> int:
-    """Runs HTF/LTF runner discovery with structural no-TP replay."""
+    """Runs fixed HTF/LTF runner discovery profiles with structural no-TP replay."""
 
     def _run() -> int:
         from research_tools.htf_ltf_runner_discovery import (
@@ -1690,59 +1690,61 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
             run_htf_ltf_runner_discovery as run_discovery,
         )
 
-        output_dir = (
-            Path(str(args.output_dir))
-            if getattr(args, "output_dir", None)
-            else config.backtest.results_dir / "htf_ltf_runner_discovery"
-        )
-        discovery_config = HtfLtfRunnerDiscoveryConfig(
-            cache_dir=config.backtest.cache_dir,
-            output_dir=output_dir,
-            htf_timeframe=str(getattr(args, "htf_timeframe", "1m")),
-            ltf_timeframe=str(getattr(args, "ltf_timeframe", "5s")),
-            days=int(getattr(args, "days", 30)),
-            end_timestamp_ms=getattr(args, "end_timestamp_ms", None),
-            baseline_candles=int(getattr(args, "baseline_candles", 60)),
-            dormancy_candles=int(getattr(args, "dormancy_candles", 30)),
-            pregrowth_candles=int(getattr(args, "pregrowth_candles", 5)),
-            min_htf_quote_ratio=float(getattr(args, "min_htf_quote_ratio", 5.0)),
-            min_htf_trade_ratio=float(getattr(args, "min_htf_trade_ratio", 5.0)),
-            min_htf_return_pct=float(getattr(args, "min_htf_return_pct", 0.010)),
-            min_dormancy_to_anomaly_quote_ratio=float(getattr(args, "min_dormancy_to_anomaly_quote_ratio", 6.0)),
-            min_dormancy_to_anomaly_trade_ratio=float(getattr(args, "min_dormancy_to_anomaly_trade_ratio", 5.0)),
-            max_dormancy_range_pct_median=float(getattr(args, "max_dormancy_range_pct_median", 0.004)),
-            min_pregrowth_return_pct=float(getattr(args, "min_pregrowth_return_pct", 0.002)),
-            max_pregrowth_single_candle_return_pct=float(getattr(args, "max_pregrowth_single_candle_return_pct", 0.020)),
-            min_pregrowth_positive_step_share=float(getattr(args, "min_pregrowth_positive_step_share", 0.55)),
-            min_pregrowth_oi_change_pct=float(getattr(args, "min_pregrowth_oi_change_pct", 0.0)),
-            require_pregrowth_oi=bool(getattr(args, "require_pregrowth_oi", False)),
-            runner_target_return_pct=float(getattr(args, "runner_target_return_pct", 0.10)),
-            runner_horizon_minutes=int(getattr(args, "runner_horizon_minutes", 60)),
-            ltf_min_confirm_candles=int(getattr(args, "ltf_min_confirm_candles", 6)),
-            ltf_max_confirm_candles=int(getattr(args, "ltf_max_confirm_candles", 24)),
-            min_ltf_confirm_return_pct=float(getattr(args, "min_ltf_confirm_return_pct", 0.004)),
-            min_ltf_quote_pace_ratio=float(getattr(args, "min_ltf_quote_pace_ratio", 3.0)),
-            min_ltf_trade_pace_ratio=float(getattr(args, "min_ltf_trade_pace_ratio", 3.0)),
-            min_ltf_taker_buy_share=(
-                None
-                if getattr(args, "min_ltf_taker_buy_share", None) is None
-                else float(args.min_ltf_taker_buy_share)
-            ),
-            min_ltf_second_half_return_pct=float(getattr(args, "min_ltf_second_half_return_pct", 0.0)),
-            min_ltf_quote_acceleration=float(getattr(args, "min_ltf_quote_acceleration", 1.0)),
-            min_ltf_trade_acceleration=float(getattr(args, "min_ltf_trade_acceleration", 1.0)),
-            max_entry_drift_pct=float(getattr(args, "max_entry_drift_pct", 0.004)),
-            max_initial_risk_pct=float(getattr(args, "max_initial_risk_pct", 0.05)),
-            structural_stop_buffer_pct=float(getattr(args, "structural_stop_buffer_pct", 0.0005)),
-            trail_lookback_candles=int(getattr(args, "trail_lookback_candles", 6)),
-            trail_buffer_pct=float(getattr(args, "trail_buffer_pct", 0.0005)),
-            max_hold_candles=int(getattr(args, "max_hold_candles", 720)),
-            max_open_positions=int(getattr(args, "max_open_positions", 1)),
-            fee_rate=float(getattr(args, "fee_rate", 0.0004)),
-            entry_slippage_pct=float(getattr(args, "entry_slippage_pct", DEFAULT_SLIPPAGE)),
-            exit_slippage_pct=float(getattr(args, "exit_slippage_pct", DEFAULT_SLIPPAGE)),
-        )
-        run_discovery(discovery_config, symbols=getattr(args, "symbols", None))
+        days = int(getattr(args, "days", 30))
+        output_root = config.backtest.results_dir / f"htf_ltf_runner_discovery_{days}d"
+        profiles = [
+            {
+                "name": "5m_30s",
+                "htf_timeframe": "5m",
+                "ltf_timeframe": "30s",
+                "ltf_min_confirm_candles": 2,
+                "ltf_max_confirm_candles": 8,
+                "trail_lookback_candles": 4,
+                "max_hold_candles": 120,
+            },
+            {
+                "name": "1m_5s",
+                "htf_timeframe": "1m",
+                "ltf_timeframe": "5s",
+                "ltf_min_confirm_candles": 6,
+                "ltf_max_confirm_candles": 24,
+                "trail_lookback_candles": 6,
+                "max_hold_candles": 720,
+            },
+        ]
+        index_rows: list[dict[str, object]] = []
+        for profile in profiles:
+            profile_output_dir = output_root / str(profile["name"])
+            discovery_config = HtfLtfRunnerDiscoveryConfig(
+                cache_dir=config.backtest.cache_dir,
+                output_dir=profile_output_dir,
+                htf_timeframe=str(profile["htf_timeframe"]),
+                ltf_timeframe=str(profile["ltf_timeframe"]),
+                days=days,
+                ltf_min_confirm_candles=int(profile["ltf_min_confirm_candles"]),
+                ltf_max_confirm_candles=int(profile["ltf_max_confirm_candles"]),
+                trail_lookback_candles=int(profile["trail_lookback_candles"]),
+                max_hold_candles=int(profile["max_hold_candles"]),
+            )
+            print(
+                "runner discovery profile: "
+                f"{profile['name']} htf={profile['htf_timeframe']} ltf={profile['ltf_timeframe']} "
+                f"output={profile_output_dir}",
+                flush=True,
+            )
+            result_dir = run_discovery(discovery_config)
+            index_rows.append(
+                {
+                    "profile": profile["name"],
+                    "htf_timeframe": profile["htf_timeframe"],
+                    "ltf_timeframe": profile["ltf_timeframe"],
+                    "days": days,
+                    "output_dir": str(result_dir),
+                    "data_access_model": "cache_only_no_exchange_fetch",
+                }
+            )
+        output_root.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(index_rows).to_csv(output_root / "htf_ltf_runner_discovery_index.csv", index=False, encoding="utf-8-sig")
         return 0
 
     return _run_with_logging("run-htf-ltf-runner-discovery", config, _run)

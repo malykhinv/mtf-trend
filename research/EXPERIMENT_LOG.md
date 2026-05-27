@@ -1,4 +1,20 @@
 
+## 2026-05-27 - P416 fixed TF-set command plan
+
+```text
+Patch: P416 fixed runner discovery TF profiles.
+
+Command contract:
+- `run-htf-ltf-runner-discovery --days N`
+- no symbols, output, timeframe, threshold, risk, or trailing flags on the operator command;
+- code runs `5m_30s` and `1m_5s` profiles under `.output/results/htf_ltf_runner_discovery_<N>d/`.
+
+Validation to run:
+- help output exposes `--days` only for this command;
+- `python -m pytest tests/test_htf_ltf_runner_discovery.py tests/test_live2_market_watch.py -q` -> 40 passed;
+- `python -m compileall -q data/exchanges research_tools cli constants.py main.py` -> passed.
+```
+
 ## 2026-05-27 - P415 HTF/LTF runner discovery scoring validation
 
 ```text
