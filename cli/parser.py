@@ -222,8 +222,8 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument(
         "--backtest-symbol-workers",
         type=_positive_int_for("--backtest-symbol-workers"),
-        default=4,
-        help="Symbol-level worker threads for cache-only candidate/trade simulation. Use 1 for strictly serial execution.",
+        default=1,
+        help="Symbol-level worker threads for cache-only candidate/trade simulation. Default 1 avoids Windows/Parquet IO contention; raise explicitly after diagnostics show CPU-bound work.",
     )
     anomaly_lab.add_argument("--render-charts", type=_str_to_bool, default=True)
     anomaly_lab.add_argument(
@@ -251,8 +251,8 @@ def build_parser() -> argparse.ArgumentParser:
     runner_discovery.add_argument(
         "--backtest-symbol-workers",
         type=_positive_int_for("--backtest-symbol-workers"),
-        default=4,
-        help="Symbol-level worker threads for cache-only runner discovery. Use 1 for strictly serial execution.",
+        default=1,
+        help="Symbol-level worker threads for cache-only runner discovery. Default 1 avoids Windows/Parquet IO contention; raise explicitly after diagnostics show CPU-bound work.",
     )
 
     materialize_subminute = subparsers.add_parser(

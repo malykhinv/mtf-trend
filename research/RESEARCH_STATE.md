@@ -1,3 +1,15 @@
+## 2026-05-27 - P424 speed-patch regression cleanup
+
+Current commit: UNKNOWN.
+
+Status: PROPOSED against local P423 workspace. User reported that runtime may have worsened after the first speed patch and asked to inspect the recent patches for dumb regressions.
+
+Finding: P419 replaced a trusted subminute-cache prefilter with a file-presence-only prefilter. That is honest but can be slower on dirty/partial cache because invalid symbols reach the expensive main symbol pass. P420 also made 4 symbol workers the default, which can be slower on Windows/Parquet IO-bound runs due to disk contention and thread overhead. P422 wrote speed-diagnostic artifacts through the same instrumented writer, adding noisy self-referential artifact-write timing.
+
+Patch: restore the early trusted entry-cache prefilter, but make it metadata-only and cached by `(entry_cache_timeframe, entry_timeframe)`. Keep main-pass flow validation unchanged. Default symbol workers back to 1 and leave parallelism opt-in through `--backtest-symbol-workers`. Write speed-diagnostics CSVs without recording their own write cost into the already-built diagnostics frames.
+
+Next: run the same command with default workers first. If `anomaly_speed_summary.csv` shows CPU-bound collection/simulation rather than parquet/read/artifact write, rerun only then with `--backtest-symbol-workers 2` or `4` and compare counts plus runtime.
+
 ## 2026-05-27 - P423 responsive Ctrl+C for long backtests
 
 Current commit: UNKNOWN.

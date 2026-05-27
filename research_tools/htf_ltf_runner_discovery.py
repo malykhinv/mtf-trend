@@ -1464,7 +1464,7 @@ def _effective_symbol_workers(value: object, *, total_items: int) -> int:
     try:
         requested = int(value)
     except (TypeError, ValueError):
-        requested = 4
+        requested = 1
     if requested <= 1:
         return 1
     cpu_count = os.cpu_count() or 1
@@ -1708,7 +1708,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fee-rate", type=float, default=0.0004)
     parser.add_argument("--entry-slippage-pct", type=float, default=0.0005)
     parser.add_argument("--exit-slippage-pct", type=float, default=0.0005)
-    parser.add_argument("--backtest-symbol-workers", type=int, default=4)
+    parser.add_argument("--backtest-symbol-workers", type=int, default=1)
     args = parser.parse_args(argv)
     config = HtfLtfRunnerDiscoveryConfig(
         cache_dir=Path(args.cache_dir),

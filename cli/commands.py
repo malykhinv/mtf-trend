@@ -1782,7 +1782,7 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 ltf_max_confirm_candles=int(profile["ltf_max_confirm_candles"]),
                 trail_lookback_candles=int(profile["trail_lookback_candles"]),
                 max_hold_candles=int(profile["max_hold_candles"]),
-                symbol_workers=int(getattr(args, "backtest_symbol_workers", 4)),
+                symbol_workers=int(getattr(args, "backtest_symbol_workers", 1)),
             )
             result_dir = run_discovery(discovery_config, progress_label=f"runner discovery {profile['name']}")
             index_rows.append(

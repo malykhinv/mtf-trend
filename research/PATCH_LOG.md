@@ -1,3 +1,47 @@
+## 2026-05-27 - P424 proposed - clean up speed-patch regressions
+
+Files:
+
+```text
+cli/parser.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+research_tools/htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Remove regressions introduced by the recent speed/diagnostics patches without changing signal logic, execution model, fees/slippage, TP/SL, portfolio filtering, or data-quality contract.
+```
+
+Changes:
+
+```text
+- Make symbol-level workers opt-in again by defaulting anomaly-lab and HTF/LTF runner discovery to 1 worker. P420's default 4 workers can be slower on Windows/Parquet IO-bound runs.
+- Restore early trusted subminute cache prefilter for multi-TF candidate precollection. P419's file-presence-only prefilter could push invalid/partial cache symbols into the expensive main pass.
+- Make that trusted prefilter metadata-only and cached per entry-cache/entry-timeframe pair, avoiding the old full-parquet read-all behavior.
+- Keep final flow validation in the main symbol pass unchanged.
+- Stop timing the speed-diagnostics CSV writes inside the speed-diagnostics rows themselves, avoiding self-referential artifact-write noise.
+- Clean the duplicate `seconds` column in the empty speed diagnostics frame.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-lab --help
+python main.py run-htf-ltf-runner-discovery --help
+```
+
+Risk:
+
+```text
+No research/trading math is changed. Default serial execution may be slower only on machines where diagnostics prove CPU-bound work; in that case opt in with `--backtest-symbol-workers N`.
+```
+
 ## 2026-05-27 - P423 proposed - responsive Ctrl+C for long backtests
 
 Files:

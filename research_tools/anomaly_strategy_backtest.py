@@ -103,7 +103,7 @@ _MATERIALIZED_SUBMINUTE_CACHE_VERSION = "p378_1s_ohlcv_to_subminute_full_buckets
 AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION = "p378_aggtrades_to_1s_full_buckets_v1"
 DEFAULT_LATENCY_EXTRA_MS = 5_000
 DEFAULT_LATENCY_GRID_MS = (0, 5_000)
-DEFAULT_BACKTEST_SYMBOL_WORKERS = 4
+DEFAULT_BACKTEST_SYMBOL_WORKERS = 1
 
 
 def _effective_symbol_workers(value: object, *, total_items: int) -> int:
@@ -3814,19 +3814,28 @@ def _cache_symbols_for_timeframe(cache_dir: Path, timeframe: str) -> set[str]:
 
 
 def _trusted_flow_cache_symbols_for_timeframe(cache_dir: Path, *, cache_timeframe: str, entry_timeframe: str) -> set[str]:
+    """Return symbols whose entry-flow cache is trusted using metadata-only reads.
+
+    The full frame is still validated again before collection.  This prefilter is
+    only an early reject gate, so it must be exact on the version/source contract
+    without paying the cost of loading every full subminute parquet file.
+    """
+
     symbols: set[str] = set()
+    metadata_columns = ["aggregation_version"]
+    if str(cache_timeframe) != "1s":
+        metadata_columns.append("aggregation_source_timeframe")
     for path in cache_dir.glob(f"*%2FUSDT%3AUSDT/{cache_timeframe}/data.parquet"):
         symbol = _symbol_from_cache_symbol_dir(path.parent.parent)
-        try:
-            frame = _read_symbol_frame(cache_dir, symbol, cache_timeframe)
-            if _flow_cache_validation_error(
-                frame,
-                cache_timeframe=cache_timeframe,
-                entry_timeframe=entry_timeframe,
-            ) is None:
-                symbols.add(symbol)
-        except Exception:
+        metadata = _read_parquet_columns(path, metadata_columns)
+        if metadata.empty:
             continue
+        if _flow_cache_validation_error(
+            metadata,
+            cache_timeframe=cache_timeframe,
+            entry_timeframe=entry_timeframe,
+        ) is None:
+            symbols.add(symbol)
     return symbols
 
 
@@ -3852,6 +3861,7 @@ def collect_pair_anomaly_rows_for_configs(
         )
 
     wanted_symbols = set(_normalized_symbol_tuple(symbols))
+    trusted_entry_symbol_cache: dict[tuple[str, str], set[str]] = {}
     states: list[dict[str, object]] = []
     rows_by_key: dict[tuple[str, str], list[dict[str, object]]] = {}
     for config in resolved_configs:
@@ -3865,15 +3875,32 @@ def collect_pair_anomaly_rows_for_configs(
         entry_ms = _timeframe_to_milliseconds(entry_timeframe)
         eligible_symbols = set(setup_symbols)
         if entry_timeframe != setup_timeframe and entry_ms < 60_000:
-            # Do not pre-read every subminute parquet file only to build the
-            # eligible-symbol set. The exact quality/version check is still
-            # performed after the symbol frame is loaded in the main symbol-major
-            # pass below. This preserves the flow contract while avoiding a full
-            # duplicate cache scan before the real collection work starts.
-            entry_symbols = _cache_symbols_for_timeframe(
-                config.lab_config.cache_dir,
-                entry_cache_timeframe,
+            # Keep the early trusted-cache gate.  P419's file-presence-only gate
+            # was safe but could push invalid/partial subminute caches into the
+            # expensive main symbol pass.  The prefilter now uses narrow metadata
+            # reads and is cached per entry-cache/entry-timeframe pair.
+            trusted_key = (entry_cache_timeframe, entry_timeframe)
+            prefilter_started_at = time.monotonic()
+            cached_entry_symbols = trusted_entry_symbol_cache.get(trusted_key)
+            if cached_entry_symbols is None:
+                cached_entry_symbols = _trusted_flow_cache_symbols_for_timeframe(
+                    config.lab_config.cache_dir,
+                    cache_timeframe=entry_cache_timeframe,
+                    entry_timeframe=entry_timeframe,
+                )
+                trusted_entry_symbol_cache[trusted_key] = cached_entry_symbols
+                status = "computed"
+            else:
+                status = "cached"
+            append_speed_diagnostic(
+                speed_diagnostics,
+                stage="trusted_entry_cache_prefilter",
+                scope=f"{entry_cache_timeframe}->{entry_timeframe}",
+                status=status,
+                seconds=time.monotonic() - prefilter_started_at,
+                item_count=len(cached_entry_symbols),
             )
+            entry_symbols = set(cached_entry_symbols)
             if wanted_symbols:
                 entry_symbols = {symbol for symbol in entry_symbols if normalize_symbol(symbol) in wanted_symbols}
             if not entry_symbols:
@@ -6770,13 +6797,21 @@ def run_bare_htf_short_fader_backtest(
     )
     slowest_symbols_frame = speed_diagnostics_slowest_symbols_frame(speed_diagnostics)
     _write_artifact_frames(
+        [(output_dir / "anomaly_timing_summary.csv", timing_frame)],
+        progress_label="short/fader artifacts: timing summary",
+        timing_rows=speed_diagnostics,
+        timing_scope="short/fader artifacts: timing summary",
+    )
+    _write_artifact_frames(
         [
-            (output_dir / "anomaly_timing_summary.csv", timing_frame),
             (output_dir / "anomaly_speed_diagnostics.csv", speed_detail_frame),
             (output_dir / "anomaly_speed_summary.csv", speed_summary_frame),
             (output_dir / "anomaly_slowest_symbols.csv", slowest_symbols_frame),
-            (output_dir / "run_config.csv", pd.DataFrame([run_config])),
         ],
+        progress_label="short/fader artifacts: speed diagnostics",
+    )
+    _write_artifact_frames(
+        [(output_dir / "run_config.csv", pd.DataFrame([run_config]))],
         progress_label="short/fader artifacts: run config",
         timing_rows=speed_diagnostics,
         timing_scope="short/fader artifacts: run config",
@@ -9530,15 +9565,18 @@ def run_anomaly_strategy_backtest(
     )
     slowest_symbols_frame = speed_diagnostics_slowest_symbols_frame(speed_diagnostics)
     _write_artifact_frames(
+        [(output_dir / "anomaly_timing_summary.csv", timing_frame)],
+        progress_label="anomaly artifacts: timing summary",
+        timing_rows=speed_diagnostics,
+        timing_scope="timing_artifacts",
+    )
+    _write_artifact_frames(
         [
-            (output_dir / "anomaly_timing_summary.csv", timing_frame),
             (output_dir / "anomaly_speed_diagnostics.csv", speed_detail_frame),
             (output_dir / "anomaly_speed_summary.csv", speed_summary_frame),
             (output_dir / "anomaly_slowest_symbols.csv", slowest_symbols_frame),
         ],
-        progress_label="anomaly artifacts: timing summary",
-        timing_rows=speed_diagnostics,
-        timing_scope="timing_artifacts",
+        progress_label="anomaly artifacts: speed diagnostics",
     )
     _write_artifact_frames(
         [(output_dir / "run_config.csv", pd.DataFrame([run_config]))],
