@@ -122,6 +122,177 @@ def _effective_symbol_workers(value: object, *, total_items: int) -> int:
     return max(1, min(int(requested), int(total_items), max(1, int(cpu_count)), 8))
 
 
+
+def append_speed_diagnostic(
+    rows: list[dict[str, object]] | None,
+    *,
+    stage: str,
+    seconds: float,
+    scope: str = "",
+    symbol: str = "",
+    status: str = "ok",
+    output_rows: int | None = None,
+    item_count: int | None = None,
+    extra: Mapping[str, object] | None = None,
+) -> None:
+    """Append one low-overhead timing row for backtest speed forensics."""
+
+    if rows is None:
+        return
+    safe_seconds = max(0.0, float(seconds))
+    record: dict[str, object] = {
+        "stage": str(stage),
+        "scope": str(scope),
+        "symbol": str(symbol),
+        "status": str(status),
+        "seconds": round(safe_seconds, 6),
+    }
+    if output_rows is not None:
+        output_rows_int = int(output_rows)
+        record["output_rows"] = output_rows_int
+        record["rows_per_second"] = (
+            round(float(output_rows_int) / safe_seconds, 3) if safe_seconds > 0.0 else float("nan")
+        )
+    if item_count is not None:
+        item_count_int = int(item_count)
+        record["item_count"] = item_count_int
+        record["items_per_second"] = (
+            round(float(item_count_int) / safe_seconds, 3) if safe_seconds > 0.0 else float("nan")
+        )
+    if extra:
+        record.update(extra)
+    rows.append(record)
+
+
+def speed_diagnostics_frame(rows: list[dict[str, object]] | None) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "stage",
+                "scope",
+                "symbol",
+                "status",
+                "seconds",
+                "output_rows",
+                "item_count",
+                "rows_per_second",
+                "items_per_second",
+            ]
+        )
+    return pd.DataFrame(rows)
+
+
+def speed_diagnostics_summary_frame(
+    rows: list[dict[str, object]] | None,
+    *,
+    total_seconds: float | None = None,
+) -> pd.DataFrame:
+    frame = speed_diagnostics_frame(rows)
+    if frame.empty or "stage" not in frame.columns:
+        return pd.DataFrame()
+    work = frame.copy()
+    for column in ("scope", "status"):
+        if column not in work.columns:
+            work[column] = ""
+    seconds = pd.to_numeric(work.get("seconds", 0.0), errors="coerce").fillna(0.0)
+    work["_seconds"] = seconds
+    if "output_rows" in work.columns:
+        work["_output_rows"] = pd.to_numeric(work["output_rows"], errors="coerce").fillna(0.0)
+    else:
+        work["_output_rows"] = 0.0
+    if "item_count" in work.columns:
+        work["_item_count"] = pd.to_numeric(work["item_count"], errors="coerce").fillna(0.0)
+    else:
+        work["_item_count"] = 0.0
+    grouped = (
+        work.groupby(["stage", "scope", "status"], dropna=False)
+        .agg(
+            observations=("stage", "size"),
+            seconds_sum=("_seconds", "sum"),
+            seconds_mean=("_seconds", "mean"),
+            seconds_max=("_seconds", "max"),
+            output_rows_sum=("_output_rows", "sum"),
+            item_count_sum=("_item_count", "sum"),
+        )
+        .reset_index()
+    )
+    if total_seconds is None or total_seconds <= 0.0:
+        total_seconds = float(grouped["seconds_sum"].sum())
+    grouped["share_of_total_seconds"] = grouped["seconds_sum"].apply(
+        lambda value: _safe_divide_value(float(value), float(total_seconds)) if total_seconds else float("nan")
+    )
+    for column in ("seconds_sum", "seconds_mean", "seconds_max", "share_of_total_seconds"):
+        grouped[column] = pd.to_numeric(grouped[column], errors="coerce").round(6)
+    for column in ("output_rows_sum", "item_count_sum"):
+        grouped[column] = pd.to_numeric(grouped[column], errors="coerce").round(0).astype("int64")
+    grouped.sort_values(["seconds_sum", "seconds_max"], ascending=[False, False], inplace=True)
+    grouped.reset_index(drop=True, inplace=True)
+    return grouped
+
+
+def speed_diagnostics_slowest_symbols_frame(
+    rows: list[dict[str, object]] | None,
+    *,
+    limit: int = 200,
+) -> pd.DataFrame:
+    frame = speed_diagnostics_frame(rows)
+    if frame.empty or "symbol" not in frame.columns:
+        return pd.DataFrame()
+    work = frame.loc[frame["symbol"].astype(str).ne("")].copy()
+    if work.empty:
+        return pd.DataFrame()
+    work["_seconds"] = pd.to_numeric(work.get("seconds", 0.0), errors="coerce").fillna(0.0)
+    if "output_rows" in work.columns:
+        work["_output_rows"] = pd.to_numeric(work["output_rows"], errors="coerce").fillna(0.0)
+    else:
+        work["_output_rows"] = 0.0
+    if "item_count" in work.columns:
+        work["_item_count"] = pd.to_numeric(work["item_count"], errors="coerce").fillna(0.0)
+    else:
+        work["_item_count"] = 0.0
+    result = (
+        work.groupby(["stage", "scope", "symbol"], dropna=False)
+        .agg(
+            observations=("stage", "size"),
+            seconds_sum=("_seconds", "sum"),
+            seconds_max=("_seconds", "max"),
+            output_rows_sum=("_output_rows", "sum"),
+            item_count_sum=("_item_count", "sum"),
+        )
+        .reset_index()
+    )
+    for column in ("seconds_sum", "seconds_max"):
+        result[column] = pd.to_numeric(result[column], errors="coerce").round(6)
+    for column in ("output_rows_sum", "item_count_sum"):
+        result[column] = pd.to_numeric(result[column], errors="coerce").round(0).astype("int64")
+    result.sort_values(["seconds_sum", "seconds_max"], ascending=[False, False], inplace=True)
+    result.reset_index(drop=True, inplace=True)
+    return result.head(int(limit)).copy()
+
+
+def _record_stage_timing(
+    timings: dict[str, float],
+    diagnostics: list[dict[str, object]] | None,
+    key: str,
+    seconds: float,
+    *,
+    output_rows: int | None = None,
+    item_count: int | None = None,
+    status: str = "ok",
+    extra: Mapping[str, object] | None = None,
+) -> None:
+    timings[key] = float(seconds)
+    append_speed_diagnostic(
+        diagnostics,
+        stage="stage",
+        scope=key.removesuffix("_seconds"),
+        seconds=float(seconds),
+        status=status,
+        output_rows=output_rows,
+        item_count=item_count,
+        extra=extra,
+    )
+
 LATENCY_1S_BACKFILL_VERSION = AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION
 TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS = 120_000
 TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS = 120_000
@@ -849,12 +1020,41 @@ def _write_artifact_frames(
     frames: Iterable[tuple[Path, pd.DataFrame]],
     *,
     progress_label: str,
+    timing_rows: list[dict[str, object]] | None = None,
+    timing_scope: str | None = None,
 ) -> None:
     frame_list = list(frames)
     started_at = time.monotonic()
     next_progress_pct = 0
     for processed_count, (path, frame) in enumerate(frame_list, start=1):
-        frame.to_csv(path, index=False)
+        write_started_at = time.monotonic()
+        status = "ok"
+        error = ""
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            frame.to_csv(path, index=False)
+        except Exception as exc:
+            status = f"error:{type(exc).__name__}"
+            error = str(exc)
+            raise
+        finally:
+            file_size_bytes = path.stat().st_size if path.exists() else 0
+            append_speed_diagnostic(
+                timing_rows,
+                stage="artifact_write",
+                scope=timing_scope or progress_label,
+                seconds=time.monotonic() - write_started_at,
+                status=status,
+                output_rows=len(frame),
+                item_count=1,
+                extra={
+                    "path": str(path),
+                    "file_name": path.name,
+                    "columns": int(len(frame.columns)),
+                    "file_size_bytes": int(file_size_bytes),
+                    "error": error,
+                },
+            )
         next_progress_pct = _emit_progress_5pct(
             label=progress_label,
             done=processed_count,
@@ -3380,6 +3580,7 @@ def collect_pair_anomaly_rows(
     progress_label: str | None = None,
     include_derivatives_context: bool = True,
     auto_targeted_flow_backfill: bool = True,
+    speed_diagnostics: list[dict[str, object]] | None = None,
 ) -> pd.DataFrame:
     setup_timeframe = _effective_setup_timeframe(config)
     entry_timeframe = _effective_entry_timeframe(config)
@@ -3447,16 +3648,32 @@ def collect_pair_anomaly_rows(
     next_progress_pct = 0
     for processed_count, path in enumerate(paths, start=1):
         symbol = _symbol_from_cache_symbol_dir(path.parent.parent)
+        symbol_started_at = time.monotonic()
+        setup_read_seconds = 0.0
+        entry_read_seconds = 0.0
+        validation_seconds = 0.0
+        slice_aggregate_seconds = 0.0
+        collect_seconds = 0.0
+        output_row_count = 0
+        status = "ok"
+        error = ""
         try:
+            read_started_at = time.monotonic()
             setup_frame = _read_symbol_frame(lab_config.cache_dir, symbol, setup_timeframe)
+            setup_read_seconds = time.monotonic() - read_started_at
+            read_started_at = time.monotonic()
             entry_frame = _read_symbol_frame(lab_config.cache_dir, symbol, entry_cache_timeframe)
+            entry_read_seconds = time.monotonic() - read_started_at
+            validation_started_at = time.monotonic()
             validation_error = _flow_cache_validation_error(
                 entry_frame,
                 cache_timeframe=entry_cache_timeframe,
                 entry_timeframe=entry_timeframe,
             )
+            validation_seconds = time.monotonic() - validation_started_at
             if validation_error is not None:
                 raise ValueError(validation_error)
+            slice_started_at = time.monotonic()
             setup_frame = _slice_ohlcv_asof_window(
                 setup_frame,
                 timeframe=setup_timeframe,
@@ -3484,6 +3701,7 @@ def collect_pair_anomaly_rows(
                 entry_flow_source = f"cached_{entry_cache_timeframe}_aggregated_to_{entry_timeframe}"
             else:
                 entry_flow_source = _materialized_entry_flow_source(entry_frame, entry_timeframe=entry_timeframe)
+            slice_aggregate_seconds = time.monotonic() - slice_started_at
             pair_collection_mode = str(config.pair_collection_mode)
             if pair_collection_mode == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER:
                 collector = _collect_symbol_bare_htf_short_fader_rows
@@ -3493,14 +3711,20 @@ def collect_pair_anomaly_rows(
                 collector = _collect_symbol_post_htf_close_ltf_rows
             else:
                 collector = _collect_symbol_pair_rows
-            rows.extend(collector(
+            collect_started_at = time.monotonic()
+            symbol_rows = collector(
                 symbol=symbol,
                 setup_frame=setup_frame,
                 entry_frame=entry_frame,
                 config=config,
                 entry_flow_source=entry_flow_source,
-            ))
+            )
+            collect_seconds = time.monotonic() - collect_started_at
+            output_row_count = len(symbol_rows)
+            rows.extend(symbol_rows)
         except Exception as exc:
+            status = f"error:{type(exc).__name__}"
+            error = str(exc)
             rows.append(
                 {
                     "symbol": symbol,
@@ -3511,6 +3735,29 @@ def collect_pair_anomaly_rows(
                     "status": "error",
                     "error": f"{type(exc).__name__}: {exc}",
                 }
+            )
+            output_row_count = 1
+        finally:
+            append_speed_diagnostic(
+                speed_diagnostics,
+                stage="candidate_collect_symbol",
+                scope=f"{setup_timeframe}/{entry_timeframe}",
+                symbol=symbol,
+                status=status,
+                seconds=time.monotonic() - symbol_started_at,
+                output_rows=output_row_count,
+                item_count=1,
+                extra={
+                    "setup_timeframe": setup_timeframe,
+                    "entry_timeframe": entry_timeframe,
+                    "entry_cache_timeframe": entry_cache_timeframe,
+                    "setup_read_seconds": round(setup_read_seconds, 6),
+                    "entry_read_seconds": round(entry_read_seconds, 6),
+                    "flow_validation_seconds": round(validation_seconds, 6),
+                    "slice_aggregate_seconds": round(slice_aggregate_seconds, 6),
+                    "collector_seconds": round(collect_seconds, 6),
+                    "error": error,
+                },
             )
         if progress_label is not None and paths:
             current_pct = int(100 * processed_count / len(paths))
@@ -3590,6 +3837,7 @@ def collect_pair_anomaly_rows_for_configs(
     progress_label: str | None = None,
     include_derivatives_context: bool = True,
     auto_targeted_flow_backfill: bool = True,
+    speed_diagnostics: list[dict[str, object]] | None = None,
 ) -> dict[tuple[str, str], pd.DataFrame]:
     """Collect pair candidates in one symbol-major pass across multiple TF sets."""
 
@@ -3666,8 +3914,12 @@ def collect_pair_anomaly_rows_for_configs(
     )
     cache_dir = resolved_configs[0].lab_config.cache_dir
 
-    def _collect_rows_for_symbol(symbol: str) -> dict[tuple[str, str], list[dict[str, object]]]:
+    def _collect_rows_for_symbol(
+        symbol: str,
+    ) -> tuple[dict[tuple[str, str], list[dict[str, object]]], list[dict[str, object]]]:
         local_rows_by_key: dict[tuple[str, str], list[dict[str, object]]] = {}
+        local_diagnostics: list[dict[str, object]] = []
+        symbol_total_started_at = time.monotonic()
         symbol_states = [
             state
             for state in states
@@ -3685,11 +3937,15 @@ def collect_pair_anomaly_rows_for_configs(
                 for state in symbol_states
             }
         )
+        read_seconds_by_timeframe: dict[str, float] = {}
         for timeframe in required_timeframes:
+            read_started_at = time.monotonic()
             try:
                 frame_cache[timeframe] = _read_symbol_frame(cache_dir, symbol, timeframe)
             except Exception as exc:
                 frame_errors[timeframe] = exc
+            finally:
+                read_seconds_by_timeframe[timeframe] = time.monotonic() - read_started_at
 
         for state in symbol_states:
             config = state["config"]
@@ -3700,21 +3956,31 @@ def collect_pair_anomaly_rows_for_configs(
             key = state["key"]
             assert isinstance(key, tuple)
             local_rows = local_rows_by_key.setdefault(key, [])
+            state_started_at = time.monotonic()
+            validation_seconds = 0.0
+            slice_aggregate_seconds = 0.0
+            collect_seconds = 0.0
+            output_row_count = 0
+            status = "ok"
+            error = ""
             try:
                 if setup_timeframe in frame_errors:
                     raise frame_errors[setup_timeframe]
                 if entry_cache_timeframe in frame_errors:
                     raise frame_errors[entry_cache_timeframe]
+                validation_started_at = time.monotonic()
                 validation_error = _flow_cache_validation_error(
                     frame_cache[entry_cache_timeframe],
                     cache_timeframe=entry_cache_timeframe,
                     entry_timeframe=entry_timeframe,
                 )
+                validation_seconds = time.monotonic() - validation_started_at
                 if validation_error is not None:
                     raise ValueError(validation_error)
                 start_ms = int(state["start_ms"])
                 end_ms = int(state["end_ms"])
                 setup_ms = _timeframe_to_milliseconds(setup_timeframe)
+                slice_started_at = time.monotonic()
                 setup_frame = _slice_ohlcv_asof_window(
                     frame_cache[setup_timeframe],
                     timeframe=setup_timeframe,
@@ -3745,6 +4011,7 @@ def collect_pair_anomaly_rows_for_configs(
                         entry_frame,
                         entry_timeframe=entry_timeframe,
                     )
+                slice_aggregate_seconds = time.monotonic() - slice_started_at
                 pair_collection_mode = str(config.pair_collection_mode)
                 if pair_collection_mode == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER:
                     collector = _collect_symbol_bare_htf_short_fader_rows
@@ -3754,16 +4021,20 @@ def collect_pair_anomaly_rows_for_configs(
                     collector = _collect_symbol_post_htf_close_ltf_rows
                 else:
                     collector = _collect_symbol_pair_rows
-                local_rows.extend(
-                    collector(
-                        symbol=symbol,
-                        setup_frame=setup_frame,
-                        entry_frame=entry_frame,
-                        config=config,
-                        entry_flow_source=entry_flow_source,
-                    )
+                collect_started_at = time.monotonic()
+                symbol_rows = collector(
+                    symbol=symbol,
+                    setup_frame=setup_frame,
+                    entry_frame=entry_frame,
+                    config=config,
+                    entry_flow_source=entry_flow_source,
                 )
+                collect_seconds = time.monotonic() - collect_started_at
+                output_row_count = len(symbol_rows)
+                local_rows.extend(symbol_rows)
             except Exception as exc:
+                status = f"error:{type(exc).__name__}"
+                error = str(exc)
                 local_rows.append(
                     {
                         "symbol": symbol,
@@ -3775,7 +4046,47 @@ def collect_pair_anomaly_rows_for_configs(
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 )
-        return local_rows_by_key
+                output_row_count = 1
+            finally:
+                append_speed_diagnostic(
+                    local_diagnostics,
+                    stage="candidate_collect_symbol",
+                    scope=f"{setup_timeframe}/{entry_timeframe}",
+                    symbol=symbol,
+                    status=status,
+                    seconds=time.monotonic() - state_started_at,
+                    output_rows=output_row_count,
+                    item_count=1,
+                    extra={
+                        "setup_timeframe": setup_timeframe,
+                        "entry_timeframe": entry_timeframe,
+                        "entry_cache_timeframe": entry_cache_timeframe,
+                        "required_timeframes": ",".join(required_timeframes),
+                        "read_seconds_total": round(sum(read_seconds_by_timeframe.values()), 6),
+                        "setup_read_seconds": round(read_seconds_by_timeframe.get(setup_timeframe, 0.0), 6),
+                        "entry_read_seconds": round(read_seconds_by_timeframe.get(entry_cache_timeframe, 0.0), 6),
+                        "flow_validation_seconds": round(validation_seconds, 6),
+                        "slice_aggregate_seconds": round(slice_aggregate_seconds, 6),
+                        "collector_seconds": round(collect_seconds, 6),
+                        "error": error,
+                    },
+                )
+        append_speed_diagnostic(
+            local_diagnostics,
+            stage="candidate_collect_symbol_total",
+            scope="multi_tf_precollection",
+            symbol=symbol,
+            status="ok" if not frame_errors else "frame_errors_present",
+            seconds=time.monotonic() - symbol_total_started_at,
+            output_rows=sum(len(rows) for rows in local_rows_by_key.values()),
+            item_count=len(symbol_states),
+            extra={
+                "required_timeframes": ",".join(required_timeframes),
+                "read_seconds_total": round(sum(read_seconds_by_timeframe.values()), 6),
+                "frame_error_count": int(len(frame_errors)),
+            },
+        )
+        return local_rows_by_key, local_diagnostics
 
     progress_started_at = time.monotonic()
     next_progress_pct = 0
@@ -3786,7 +4097,10 @@ def collect_pair_anomaly_rows_for_configs(
     )
     if workers <= 1:
         for processed_count, symbol in enumerate(all_symbols, start=1):
-            symbol_results[symbol] = _collect_rows_for_symbol(symbol)
+            symbol_result, local_diagnostics = _collect_rows_for_symbol(symbol)
+            symbol_results[symbol] = symbol_result
+            if speed_diagnostics is not None:
+                speed_diagnostics.extend(local_diagnostics)
             if progress_label is not None and all_symbols:
                 current_pct = int(100 * processed_count / len(all_symbols))
                 if current_pct >= next_progress_pct or processed_count == len(all_symbols):
@@ -3802,7 +4116,10 @@ def collect_pair_anomaly_rows_for_configs(
             futures = {executor.submit(_collect_rows_for_symbol, symbol): symbol for symbol in all_symbols}
             for processed_count, future in enumerate(as_completed(futures), start=1):
                 symbol = futures[future]
-                symbol_results[symbol] = future.result()
+                symbol_result, local_diagnostics = future.result()
+                symbol_results[symbol] = symbol_result
+                if speed_diagnostics is not None:
+                    speed_diagnostics.extend(local_diagnostics)
                 if progress_label is not None and all_symbols:
                     current_pct = int(100 * processed_count / len(all_symbols))
                     if current_pct >= next_progress_pct or processed_count == len(all_symbols):
@@ -5397,6 +5714,7 @@ def simulate_anomaly_trades(
     config: AnomalyBacktestConfig,
     progress_label: str | None = None,
     frame_cache: dict[str, pd.DataFrame] | None = None,
+    speed_diagnostics: list[dict[str, object]] | None = None,
 ) -> pd.DataFrame:
     if signals.empty:
         return pd.DataFrame()
@@ -5427,15 +5745,21 @@ def simulate_anomaly_trades(
     def _resolve_symbol_group(
         symbol: str,
         group: pd.DataFrame,
-    ) -> tuple[list[tuple[int, pd.Series, dict[str, object]]], dict[str, pd.DataFrame]]:
+    ) -> tuple[list[tuple[int, pd.Series, dict[str, object]]], dict[str, pd.DataFrame], dict[str, object]]:
+        symbol_started_at = time.monotonic()
+        read_seconds = 0.0
+        latency_cache_seconds = 0.0
+        simulate_seconds = 0.0
         loaded_frames: dict[str, pd.DataFrame] = {}
         frame = frame_cache.get(symbol)
         if frame is None:
+            read_started_at = time.monotonic()
             frame = _read_entry_simulation_frame(
                 config.lab_config.cache_dir,
                 symbol,
                 _effective_entry_timeframe(config),
             )
+            read_seconds = time.monotonic() - read_started_at
             loaded_frames[symbol] = frame
         execution_frame = None
         execution_cache_key = f"{symbol}::__latency_1s"
@@ -5444,6 +5768,7 @@ def simulate_anomaly_trades(
             if execution_frame is None:
                 execution_frame = execution_frame_cache.get(symbol)
             if execution_frame is None:
+                latency_started_at = time.monotonic()
                 try:
                     first_decision_ts = int(pd.to_numeric(group["decision_timestamp_ms"], errors="coerce").dropna().min())
                     window_start, window_end = latency_windows.get(symbol, (first_decision_ts, first_decision_ts))
@@ -5455,8 +5780,10 @@ def simulate_anomaly_trades(
                     )
                 except Exception:
                     execution_frame = pd.DataFrame()
+                latency_cache_seconds = time.monotonic() - latency_started_at
                 loaded_frames[execution_cache_key] = execution_frame
         resolved: list[tuple[int, pd.Series, dict[str, object]]] = []
+        simulate_started_at = time.monotonic()
         for order_idx, signal in group.iterrows():
             resolved.append(
                 (
@@ -5465,7 +5792,23 @@ def simulate_anomaly_trades(
                     simulate_long_signal(frame, signal, config=config, execution_frame=execution_frame),
                 )
             )
-        return resolved, loaded_frames
+        simulate_seconds = time.monotonic() - simulate_started_at
+        closed_count = sum(1 for _order_idx, _signal, result in resolved if result.get("status") == "closed")
+        timing_row: dict[str, object] = {
+            "stage": "trade_resolve_symbol",
+            "scope": _effective_entry_timeframe(config),
+            "symbol": symbol,
+            "status": "ok",
+            "seconds": round(time.monotonic() - symbol_started_at, 6),
+            "output_rows": int(len(resolved)),
+            "item_count": int(len(group)),
+            "read_seconds": round(read_seconds, 6),
+            "latency_cache_seconds": round(latency_cache_seconds, 6),
+            "simulate_seconds": round(simulate_seconds, 6),
+            "closed_count": int(closed_count),
+            "skipped_count": int(len(resolved) - closed_count),
+        }
+        return resolved, loaded_frames, timing_row
 
     progress_started_at = time.monotonic()
     next_progress_pct = 0
@@ -5477,7 +5820,9 @@ def simulate_anomaly_trades(
     )
     if workers <= 1:
         for processed_count, (symbol, group) in enumerate(symbol_groups, start=1):
-            resolved, loaded_frames = _resolve_symbol_group(symbol, group)
+            resolved, loaded_frames, timing_row = _resolve_symbol_group(symbol, group)
+            if speed_diagnostics is not None:
+                speed_diagnostics.append(timing_row)
             frame_cache.update(loaded_frames)
             execution_frame_cache.update(
                 {
@@ -5505,7 +5850,9 @@ def simulate_anomaly_trades(
                 for symbol, group in symbol_groups
             }
             for processed_count, future in enumerate(as_completed(futures), start=1):
-                resolved, loaded_frames = future.result()
+                resolved, loaded_frames, timing_row = future.result()
+                if speed_diagnostics is not None:
+                    speed_diagnostics.append(timing_row)
                 frame_cache.update(loaded_frames)
                 execution_frame_cache.update(
                     {
@@ -6253,11 +6600,12 @@ def run_bare_htf_short_fader_backtest(
     targeted_flow_coverage: pd.DataFrame,
     timings: dict[str, float],
     total_started_at: float,
+    speed_diagnostics: list[dict[str, object]] | None = None,
 ) -> Path:
     print("bare HTF short/fader: filtering signals", flush=True)
     stage_started_at = time.monotonic()
     signals = build_bare_htf_short_fader_signals(candidates, config=config)
-    timings["short_signals_seconds"] = time.monotonic() - stage_started_at
+    _record_stage_timing(timings, speed_diagnostics, "short_signals_seconds", time.monotonic() - stage_started_at, output_rows=len(signals), item_count=len(candidates))
 
     stage_started_at = time.monotonic()
     decay_events, decay_summary = build_short_fader_decay_category_artifacts(candidates)
@@ -6278,14 +6626,16 @@ def run_bare_htf_short_fader_backtest(
             (output_dir / "anomaly_universe_contract.csv", _universe_contract_frame(symbols=symbols)),
         ],
         progress_label="short/fader artifacts: base files",
+        timing_rows=speed_diagnostics,
+        timing_scope="short/fader artifacts: base files",
     )
-    timings["short_base_artifacts_seconds"] = time.monotonic() - stage_started_at
+    _record_stage_timing(timings, speed_diagnostics, "short_base_artifacts_seconds", time.monotonic() - stage_started_at)
 
     print(f"bare HTF short/fader: simulating {len(signals)} signals", flush=True)
     stage_started_at = time.monotonic()
     frame_cache: dict[str, pd.DataFrame] = {}
     trades = simulate_short_fader_trades(signals, config=config, progress_label="short/fader trades", frame_cache=frame_cache)
-    timings["short_trades_seconds"] = time.monotonic() - stage_started_at
+    _record_stage_timing(timings, speed_diagnostics, "short_trades_seconds", time.monotonic() - stage_started_at, output_rows=len(trades), item_count=len(signals))
     live_filtered = apply_live_portfolio_filter(
         trades,
         max_open_positions=DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS,
@@ -6301,7 +6651,7 @@ def run_bare_htf_short_fader_backtest(
             reason="short_fader_run_exit_grid_false",
         )
     )
-    timings["short_exit_grid_seconds"] = time.monotonic() - stage_started_at
+    _record_stage_timing(timings, speed_diagnostics, "short_exit_grid_seconds", time.monotonic() - stage_started_at, output_rows=len(exit_grid))
 
     context_parity_report = pd.DataFrame(
         [
@@ -6360,11 +6710,13 @@ def run_bare_htf_short_fader_backtest(
             (output_dir / "anomaly_run_verdict.csv", run_verdict),
         ],
         progress_label="short/fader artifacts: trade files",
+        timing_rows=speed_diagnostics,
+        timing_scope="short/fader artifacts: trade files",
     )
-    timings["short_trade_artifacts_seconds"] = time.monotonic() - stage_started_at
+    _record_stage_timing(timings, speed_diagnostics, "short_trade_artifacts_seconds", time.monotonic() - stage_started_at)
 
     requested_symbols_normalized = _normalized_symbol_tuple(symbols)
-    timings["total_seconds"] = time.monotonic() - total_started_at
+    _record_stage_timing(timings, speed_diagnostics, "total_seconds", time.monotonic() - total_started_at)
     run_config = {
         **asdict(config),
         "feature_contract": BARE_HTF_SHORT_FADER_CONTRACT,
@@ -6395,12 +6747,23 @@ def run_bare_htf_short_fader_backtest(
     timing_frame = pd.DataFrame(
         [{"stage": key, "seconds": round(float(value), 3)} for key, value in timings.items()]
     )
+    speed_detail_frame = speed_diagnostics_frame(speed_diagnostics)
+    speed_summary_frame = speed_diagnostics_summary_frame(
+        speed_diagnostics,
+        total_seconds=float(timings.get("total_seconds", 0.0)),
+    )
+    slowest_symbols_frame = speed_diagnostics_slowest_symbols_frame(speed_diagnostics)
     _write_artifact_frames(
         [
             (output_dir / "anomaly_timing_summary.csv", timing_frame),
+            (output_dir / "anomaly_speed_diagnostics.csv", speed_detail_frame),
+            (output_dir / "anomaly_speed_summary.csv", speed_summary_frame),
+            (output_dir / "anomaly_slowest_symbols.csv", slowest_symbols_frame),
             (output_dir / "run_config.csv", pd.DataFrame([run_config])),
         ],
         progress_label="short/fader artifacts: run config",
+        timing_rows=speed_diagnostics,
+        timing_scope="short/fader artifacts: run config",
     )
     print(
         "bare HTF short/fader result: "
@@ -8704,6 +9067,7 @@ def run_anomaly_strategy_backtest(
 ) -> Path:
     total_started_at = time.monotonic()
     timings: dict[str, float] = {}
+    speed_diagnostics: list[dict[str, object]] = []
     config = _apply_red_flag_profile(config)
     run_latency_grid = bool(run_latency_grid or config.latency_enabled)
     output_dir = config.lab_config.output_dir
@@ -8745,6 +9109,8 @@ def run_anomaly_strategy_backtest(
                 (output_dir / "targeted_flow_coverage.csv", targeted_flow_coverage),
             ],
             progress_label="anomaly artifacts: targeted flow",
+            timing_rows=speed_diagnostics,
+            timing_scope="anomaly artifacts: targeted flow",
         )
         planned_windows = _targeted_flow_planned_window_count(targeted_flow_plan)
         ready_symbols = ready_symbols_from_targeted_flow_coverage(
@@ -8775,6 +9141,7 @@ def run_anomaly_strategy_backtest(
                 progress_label="anomaly candidates",
                 include_derivatives_context=derivatives_context_fetcher is None,
                 auto_targeted_flow_backfill=False,
+                speed_diagnostics=speed_diagnostics,
             )
     else:
         candidates = collect_anomaly_lab_rows(
@@ -8793,7 +9160,7 @@ def run_anomaly_strategy_backtest(
             candidates["setup_closed_entry_candles"] = candidates.get("confirmation_candles", config.lab_config.confirmation_candles)
     if not candidates.empty and not precollected_context_ready:
         candidates = enrich_candidates_with_recent_spike_context(candidates, config=config)
-    timings["candidates_seconds"] = time.monotonic() - stage_started_at
+    _record_stage_timing(timings, speed_diagnostics, "candidates_seconds", time.monotonic() - stage_started_at, output_rows=len(candidates))
     if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER:
         return run_bare_htf_short_fader_backtest(
             candidates,
@@ -8806,6 +9173,7 @@ def run_anomaly_strategy_backtest(
             targeted_flow_coverage=targeted_flow_coverage,
             timings=timings,
             total_started_at=total_started_at,
+            speed_diagnostics=speed_diagnostics,
         )
     print("anomaly signals: filtering", flush=True)
     stage_started_at = time.monotonic()
@@ -8850,6 +9218,8 @@ def run_anomaly_strategy_backtest(
         _write_artifact_frames(
             [(output_dir / "market_context_fetch_status.csv", context_fetch_status)],
             progress_label="anomaly artifacts: context fetch status",
+            timing_rows=speed_diagnostics,
+            timing_scope="anomaly artifacts: context fetch status",
         )
         candidates = _enrich_derivatives_context_for_signal_universe(
             candidates,
@@ -8863,7 +9233,7 @@ def run_anomaly_strategy_backtest(
     else:
         red_flag_universe = build_anomaly_signals(candidates, config=pre_context_config)
     signals = annotate_pump_categories(signals, candidates, config=config)
-    timings["signals_context_seconds"] = time.monotonic() - stage_started_at
+    _record_stage_timing(timings, speed_diagnostics, "signals_context_seconds", time.monotonic() - stage_started_at, output_rows=len(signals), item_count=len(candidates))
     end_ms = config.lab_config.end_timestamp_ms
     if end_ms is None:
         end_ms = int(datetime.now(tz=UTC).timestamp() * 1000)
@@ -8890,12 +9260,26 @@ def run_anomaly_strategy_backtest(
             (output_dir / "anomaly_signals.csv", signals),
         ],
         progress_label="anomaly artifacts: base files",
+        timing_rows=speed_diagnostics,
+        timing_scope="anomaly artifacts: base files",
     )
-    timings["base_artifacts_seconds"] = time.monotonic() - stage_started_at
+    _record_stage_timing(timings, speed_diagnostics, "base_artifacts_seconds", time.monotonic() - stage_started_at)
     print(f"anomaly trades: simulating {len(signals)} signals", flush=True)
     stage_started_at = time.monotonic()
-    trades = simulate_anomaly_trades(signals, config=config, progress_label="anomaly trades")
-    timings["trades_seconds"] = time.monotonic() - stage_started_at
+    trades = simulate_anomaly_trades(
+        signals,
+        config=config,
+        progress_label="anomaly trades",
+        speed_diagnostics=speed_diagnostics,
+    )
+    _record_stage_timing(
+        timings,
+        speed_diagnostics,
+        "trades_seconds",
+        time.monotonic() - stage_started_at,
+        output_rows=len(trades),
+        item_count=len(signals),
+    )
     live_filtered_trades = apply_live_portfolio_filter(
         trades,
         max_open_positions=DEFAULT_ANOMALY_LIVE_FILTER_MAX_OPEN_POSITIONS,
@@ -8962,11 +9346,13 @@ def run_anomaly_strategy_backtest(
             (output_dir / "anomaly_run_verdict.csv", run_verdict),
         ],
         progress_label="anomaly artifacts: trade files",
+        timing_rows=speed_diagnostics,
+        timing_scope="anomaly artifacts: trade files",
     )
-    timings["trade_artifacts_seconds"] = time.monotonic() - stage_started_at
+    _record_stage_timing(timings, speed_diagnostics, "trade_artifacts_seconds", time.monotonic() - stage_started_at)
     stage_started_at = time.monotonic()
     _write_prepump_context_artifacts(config=config, output_dir=output_dir)
-    timings["prepump_context_artifacts_seconds"] = time.monotonic() - stage_started_at
+    _record_stage_timing(timings, speed_diagnostics, "prepump_context_artifacts_seconds", time.monotonic() - stage_started_at)
     if run_latency_grid:
         if valid_backtest:
             print("anomaly latency grid: running variants", flush=True)
@@ -8986,8 +9372,10 @@ def run_anomaly_strategy_backtest(
         _write_artifact_frames(
             [(output_dir / "anomaly_latency_grid_summary.csv", latency_grid)],
             progress_label="anomaly artifacts: latency grid files",
+            timing_rows=speed_diagnostics,
+            timing_scope="anomaly artifacts: latency grid files",
         )
-        timings["latency_grid_seconds"] = time.monotonic() - stage_started_at
+        _record_stage_timing(timings, speed_diagnostics, "latency_grid_seconds", time.monotonic() - stage_started_at, output_rows=len(latency_grid))
     if run_entry_grid:
         if valid_backtest:
             print("anomaly entry grid: running variants", flush=True)
@@ -9011,6 +9399,8 @@ def run_anomaly_strategy_backtest(
         _write_artifact_frames(
             [(output_dir / "anomaly_entry_grid_summary.csv", grid)],
             progress_label="anomaly artifacts: grid files",
+            timing_rows=speed_diagnostics,
+            timing_scope="anomaly artifacts: grid files",
         )
         if valid_backtest and grid_signal_sets is not None and not grid.empty and "variant_id" in grid.columns:
             best_variant_id = int(grid.iloc[0]["variant_id"])
@@ -9047,7 +9437,7 @@ def run_anomaly_strategy_backtest(
                     [(output_dir / "anomaly_trade_chart_status.csv", chart_status)],
                     progress_label="anomaly artifacts: chart status",
                 )
-        timings["entry_grid_seconds"] = time.monotonic() - stage_started_at
+        _record_stage_timing(timings, speed_diagnostics, "entry_grid_seconds", time.monotonic() - stage_started_at, output_rows=len(grid))
     elif valid_backtest and not trades.empty:
         stage_started_at = time.monotonic()
         health = build_edge_health_table(trades, label="primary")
@@ -9068,8 +9458,10 @@ def run_anomaly_strategy_backtest(
                 (output_dir / "anomaly_trade_chart_status.csv", chart_status),
             ],
             progress_label="anomaly artifacts: health chart status",
+            timing_rows=speed_diagnostics,
+            timing_scope="anomaly artifacts: health chart status",
         )
-        timings["health_charts_seconds"] = time.monotonic() - stage_started_at
+        _record_stage_timing(timings, speed_diagnostics, "health_charts_seconds", time.monotonic() - stage_started_at)
     elif not valid_backtest:
         stage_started_at = time.monotonic()
         _write_artifact_frames(
@@ -9079,8 +9471,10 @@ def run_anomaly_strategy_backtest(
                 (output_dir / "anomaly_trade_chart_status.csv", _disabled_artifact_frame(artifact="anomaly_trade_chart_status.csv", reason=invalid_reason)),
             ],
             progress_label="anomaly artifacts: disabled health chart status",
+            timing_rows=speed_diagnostics,
+            timing_scope="anomaly artifacts: disabled health chart status",
         )
-        timings["health_charts_seconds"] = time.monotonic() - stage_started_at
+        _record_stage_timing(timings, speed_diagnostics, "health_charts_seconds", time.monotonic() - stage_started_at)
     requested_symbols_normalized = _normalized_symbol_tuple(symbols)
     run_config = {
         **asdict(config),
@@ -9109,17 +9503,32 @@ def run_anomaly_strategy_backtest(
         "targeted_flow_ready_windows": int((targeted_flow_coverage.get("coverage_status", pd.Series(dtype=str)).astype(str) == "ready").sum()) if not targeted_flow_coverage.empty else 0,
         "lab_config": asdict(config.lab_config),
     }
-    timings["total_seconds"] = time.monotonic() - total_started_at
+    _record_stage_timing(timings, speed_diagnostics, "total_seconds", time.monotonic() - total_started_at)
     timing_frame = pd.DataFrame(
         [{"stage": key, "seconds": round(float(value), 3)} for key, value in timings.items()]
     )
+    speed_detail_frame = speed_diagnostics_frame(speed_diagnostics)
+    speed_summary_frame = speed_diagnostics_summary_frame(
+        speed_diagnostics,
+        total_seconds=float(timings.get("total_seconds", 0.0)),
+    )
+    slowest_symbols_frame = speed_diagnostics_slowest_symbols_frame(speed_diagnostics)
     _write_artifact_frames(
-        [(output_dir / "anomaly_timing_summary.csv", timing_frame)],
+        [
+            (output_dir / "anomaly_timing_summary.csv", timing_frame),
+            (output_dir / "anomaly_speed_diagnostics.csv", speed_detail_frame),
+            (output_dir / "anomaly_speed_summary.csv", speed_summary_frame),
+            (output_dir / "anomaly_slowest_symbols.csv", slowest_symbols_frame),
+        ],
         progress_label="anomaly artifacts: timing summary",
+        timing_rows=speed_diagnostics,
+        timing_scope="timing_artifacts",
     )
     _write_artifact_frames(
         [(output_dir / "run_config.csv", pd.DataFrame([run_config]))],
         progress_label="anomaly artifacts: run config",
+        timing_rows=speed_diagnostics,
+        timing_scope="anomaly artifacts: run config",
     )
     print(
         "anomaly result: "

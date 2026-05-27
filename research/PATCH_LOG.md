@@ -1,3 +1,43 @@
+## 2026-05-27 - P422 proposed - anomaly-lab speed diagnostics
+
+Files:
+
+```text
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Stop guessing about backtest speed. Add low-overhead timing artifacts that show stage-level, per-symbol, and CSV-write costs without changing candidate logic, execution model, fees, slippage, TP/SL, portfolio filtering, or data-quality gates.
+```
+
+Changes:
+
+```text
+- anomaly-lab pair runs now write anomaly_speed_diagnostics.csv, anomaly_speed_summary.csv, and anomaly_slowest_symbols.csv beside anomaly_timing_summary.csv.
+- Multi-timeframe precollection now writes root-level anomaly_lab_precollection_speed_diagnostics.csv, anomaly_lab_precollection_speed_summary.csv, and anomaly_lab_precollection_slowest_symbols.csv.
+- Candidate collection records per-symbol setup/entry parquet read time, flow validation time, slice/aggregate time, collector time, output row count, and errors.
+- Trade simulation records per-symbol entry-frame read time, latency 1s cache time, long-signal simulation time, signal count, and closed/skipped count.
+- CSV artifact writing records per-file rows, columns, bytes, status, and write seconds.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-lab --help
+```
+
+Risk:
+
+```text
+This is diagnostics-only. It adds small timing/list bookkeeping overhead and extra CSV writes at the end of the run. It should not affect trading results; compare candidate/signal/trade counts before/after if needed.
+```
+
 ## 2026-05-27 - P421 proposed - cached targeted-flow and prepump fast path
 
 Files:

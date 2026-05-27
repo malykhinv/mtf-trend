@@ -1241,6 +1241,10 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             ready_symbols_from_targeted_flow_coverage,
             split_targeted_flow_backfill_artifacts,
             run_anomaly_strategy_backtest,
+            append_speed_diagnostic,
+            speed_diagnostics_frame,
+            speed_diagnostics_summary_frame,
+            speed_diagnostics_slowest_symbols_frame,
         )
         from research_tools.anomaly_config import ANOMALY_BACKTEST_TIMEFRAME_PAIRS
 
@@ -1527,6 +1531,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
             )
 
         precollected_by_pair: dict[tuple[str, str], pd.DataFrame] = {}
+        precollection_speed_diagnostics: list[dict[str, object]] = []
         timeframe_pairs_to_run = timeframe_pairs
         if reuse_candidates_dir is not None:
             loaded_pairs: list[tuple[str, str]] = []
@@ -1582,6 +1587,7 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 ]
                 collection_symbols = getattr(args, "symbols", None)
                 if _to_bool_flag(getattr(args, "targeted_flow_backfill", True), default=True):
+                    targeted_started_at = time.monotonic()
                     targeted_flow_backfill, targeted_flow_materialize = ensure_targeted_subminute_flow_cache_for_configs(
                         collection_configs,
                         symbols=getattr(args, "symbols", None),
@@ -1592,6 +1598,19 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                         backfill=targeted_flow_backfill,
                         materialize=targeted_flow_materialize,
                         configs=collection_configs,
+                    )
+                    append_speed_diagnostic(
+                        precollection_speed_diagnostics,
+                        stage="stage",
+                        scope="targeted_flow_precollection",
+                        seconds=time.monotonic() - targeted_started_at,
+                        output_rows=len(targeted_flow_backfill) + len(targeted_flow_materialize),
+                        item_count=len(collection_configs),
+                        extra={
+                            "targeted_flow_backfill_rows": int(len(targeted_flow_backfill)),
+                            "targeted_flow_materialize_rows": int(len(targeted_flow_materialize)),
+                            "targeted_flow_coverage_rows": int(len(targeted_flow_coverage)),
+                        },
                     )
                     output_dir.mkdir(parents=True, exist_ok=True)
                     targeted_flow_plan.to_csv(output_dir / "targeted_flow_plan.csv", index=False)
@@ -1644,13 +1663,43 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                         "anomaly-lab: collecting candidates in one symbol-major pass across timeframe pairs",
                         flush=True,
                     )
+                    collect_started_at = time.monotonic()
                     precollected_by_pair = collect_pair_anomaly_rows_for_configs(
                         collection_configs,
                         symbols=collection_symbols,
                         progress_label="anomaly candidates tf-set",
                         include_derivatives_context=False,
                         auto_targeted_flow_backfill=False,
+                        speed_diagnostics=precollection_speed_diagnostics,
                     )
+                    append_speed_diagnostic(
+                        precollection_speed_diagnostics,
+                        stage="stage",
+                        scope="candidate_precollection",
+                        seconds=time.monotonic() - collect_started_at,
+                        output_rows=sum(len(frame) for frame in precollected_by_pair.values()),
+                        item_count=len(collection_configs),
+                    )
+
+        if precollection_speed_diagnostics:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            precollection_total_seconds = sum(
+                float(row.get("seconds", 0.0))
+                for row in precollection_speed_diagnostics
+                if str(row.get("stage", "")) == "stage"
+            )
+            speed_diagnostics_frame(precollection_speed_diagnostics).to_csv(
+                output_dir / "anomaly_lab_precollection_speed_diagnostics.csv",
+                index=False,
+            )
+            speed_diagnostics_summary_frame(
+                precollection_speed_diagnostics,
+                total_seconds=precollection_total_seconds,
+            ).to_csv(output_dir / "anomaly_lab_precollection_speed_summary.csv", index=False)
+            speed_diagnostics_slowest_symbols_frame(precollection_speed_diagnostics).to_csv(
+                output_dir / "anomaly_lab_precollection_slowest_symbols.csv",
+                index=False,
+            )
 
         for setup_timeframe, entry_timeframe in timeframe_pairs_to_run:
             pair_output_dir = (

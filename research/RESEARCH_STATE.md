@@ -1,3 +1,13 @@
+## 2026-05-27 - P422 anomaly-lab speed diagnostics
+
+Current commit: UNKNOWN.
+
+Status: PROPOSED against local P421 workspace. User applied P421 but reported runtime still did not improve enough, so the next safe step is instrumentation instead of another blind optimization.
+
+Patch: anomaly-lab now writes detailed speed artifacts for pair runs and root-level multi-timeframe precollection. The diagnostics identify slow stages, slow symbols, parquet-read cost, flow-validation cost, slice/aggregation cost, collector cost, trade-resolution cost, latency-cache cost, and per-CSV artifact write cost. No candidate thresholds, execution timing, fill/stop math, fees, slippage, data-quality gates, or portfolio filters are changed.
+
+Next: rerun the same command and inspect `anomaly_lab_precollection_speed_summary.csv` at the root plus each pair folder's `anomaly_speed_summary.csv` and `anomaly_slowest_symbols.csv`. The next speed patch should target the largest `seconds_sum` bucket, not the guessed bottleneck.
+
 ## 2026-05-27 - P421 cached targeted-flow and prepump fast path
 
 Current commit: UNKNOWN.
