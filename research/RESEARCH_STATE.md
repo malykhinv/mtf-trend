@@ -1,3 +1,15 @@
+## 2026-05-27 - P419 safe backtest hot-path speedup
+
+Current commit: UNKNOWN.
+
+Status: P419 PROPOSED against uploaded workspace. GitHub branch content was reachable, but the exact branch head commit hash was not available from the local zip.
+
+Finding: the backtest had several non-strategy bottlenecks: duplicate subminute parquet scans before the real collection pass, duplicate context enrichment after shared multi-TF precollection, repeated availability-column rebuilding during slicing, and O(n²)-style structural trailing loops that rescanned prior candles for every simulated candle.
+
+Patch boundary: no change to signal thresholds, future labels, entry availability, execution price model, TP/SL rules, fees, slippage, or portfolio overlap rules. The optimization removes redundant reads/recomputations and keeps the same quality checks in the execution path.
+
+Sandbox validation: compileall passed for data/exchanges research_tools cli constants.py main.py, and synthetic old/new smoke comparisons matched for both structural-trailing paths changed by P419. Next: apply P419 locally, then run a small fixed-symbol/fixed-period before/after comparison. Counts in candidates/signals/trades and skip-reason summaries should match; runtime should drop most on full-cache multi-TF and runner-discovery runs.
+
 ## 2026-05-27 - P418 compact discovery progress
 
 Current commit: UNKNOWN.

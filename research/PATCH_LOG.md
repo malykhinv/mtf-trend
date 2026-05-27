@@ -1,5 +1,44 @@
 # Anomaly Patch Log
 
+## 2026-05-27 - P419 proposed - safe backtest hot-path speedup
+
+Files:
+
+```text
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+research_tools/htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Reduce backtest wall-clock time without changing signal selection, future-label separation, entry pricing, stop/TP math, fees, slippage, or artifact honesty.
+```
+
+Change:
+
+```text
+1. Anomaly-lab subminute collection no longer pre-reads every 5s/15s/30s or fallback 1s parquet file just to build an eligible-symbol set. It now uses file presence for the cheap prefilter and keeps the exact trusted-flow validation in the main per-symbol load path.
+2. Multi-timeframe anomaly-lab precollection now tells each per-pair run when candidates already include recent-spike and OI context, avoiding duplicate context enrichment passes immediately after the shared symbol-major collection. External --reuse-candidates-dir still refreshes context by default.
+3. OHLCV slicing no longer rebuilds availability columns when the loaded frame already has them.
+4. Structural trailing loops in anomaly backtest and HTF/LTF runner discovery keep the rolling prior lows in memory instead of rescanning the whole future frame on every candle.
+```
+
+Validation:
+
+```text
+Sandbox validation passed: python -m compileall -q data/exchanges research_tools cli constants.py main.py. Synthetic old/new smoke comparisons matched for anomaly structural trailing and HTF/LTF runner structural trailing. Still run the same small local backtest before/after and compare anomaly_signals.csv/anomaly_trades.csv key counts plus skip reasons because full cache artifacts are not in the uploaded zip.
+```
+
+Risk:
+
+```text
+Low. Flow validation is not removed; it moves from duplicate pre-scan to the existing authoritative per-symbol path. The in-memory trailing-low windows intentionally reproduce the previous timestamp < current candle semantics on deduplicated, sorted frames.
+```
+
 ## 2026-05-27 - P418 applied locally - compact runner discovery progress
 
 Files:

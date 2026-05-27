@@ -1016,7 +1016,10 @@ def _slice_ohlcv_asof_window(
     """
     if frame.empty or "timestamp" not in frame.columns:
         return frame.copy()
-    prepared = _with_ohlcv_availability_columns(frame, timeframe=timeframe)
+    if "available_timestamp_ms" in frame.columns:
+        prepared = frame
+    else:
+        prepared = _with_ohlcv_availability_columns(frame, timeframe=timeframe)
     timestamps = pd.to_numeric(prepared["timestamp"], errors="coerce")
     available = pd.to_numeric(prepared["available_timestamp_ms"], errors="coerce")
     return prepared.loc[
@@ -3235,10 +3238,11 @@ def collect_pair_anomaly_rows(
             if normalize_symbol(_symbol_from_cache_symbol_dir(path.parent.parent)) in wanted_symbols
         ]
     if entry_timeframe != setup_timeframe and _timeframe_to_milliseconds(entry_timeframe) < 60_000:
-        symbols_with_entry_cache = _trusted_flow_cache_symbols_for_timeframe(
+        # File-presence prefilter only. The exact trusted-flow cache validation
+        # remains in the per-symbol path below, after the frame is loaded once.
+        symbols_with_entry_cache = _cache_symbols_for_timeframe(
             lab_config.cache_dir,
-            cache_timeframe=entry_cache_timeframe,
-            entry_timeframe=entry_timeframe,
+            entry_cache_timeframe,
         )
         if not symbols_with_entry_cache:
             return pd.DataFrame([
@@ -3429,10 +3433,14 @@ def collect_pair_anomaly_rows_for_configs(
         entry_ms = _timeframe_to_milliseconds(entry_timeframe)
         eligible_symbols = set(setup_symbols)
         if entry_timeframe != setup_timeframe and entry_ms < 60_000:
-            entry_symbols = _trusted_flow_cache_symbols_for_timeframe(
+            # Do not pre-read every subminute parquet file only to build the
+            # eligible-symbol set. The exact quality/version check is still
+            # performed after the symbol frame is loaded in the main symbol-major
+            # pass below. This preserves the flow contract while avoiding a full
+            # duplicate cache scan before the real collection work starts.
+            entry_symbols = _cache_symbols_for_timeframe(
                 config.lab_config.cache_dir,
-                cache_timeframe=entry_cache_timeframe,
-                entry_timeframe=entry_timeframe,
+                entry_cache_timeframe,
             )
             if wanted_symbols:
                 entry_symbols = {symbol for symbol in entry_symbols if normalize_symbol(symbol) in wanted_symbols}
@@ -4950,6 +4958,8 @@ def simulate_long_signal(
     ema20_exit_triggered = False
     ema20_exit_was_better_than_final = False
 
+    prior_trailing_lows: list[float] = []
+    trailing_lookback = max(1, int(config.trail_lookback_candles))
     for idx, row in future.iterrows():
         candle_ts = int(row["timestamp"])
         high = float(row["high"])
@@ -5034,16 +5044,16 @@ def simulate_long_signal(
             ema20_exit_armed_ts = candle_ts
             ema20_exit_armed_price = close
 
-        if tp1_hit:
-            prior = simulation_frame.loc[
-                (simulation_frame["timestamp"] < candle_ts)
-                & (simulation_frame["timestamp"] >= entry_ts)
-            ].tail(config.trail_lookback_candles)
-            if not prior.empty:
-                structural_stop = float(prior["low"].min()) - config.trail_buffer_r * initial_risk
-                if structural_stop > active_stop and structural_stop < close:
-                    active_stop = structural_stop
-                    trail_stop = active_stop
+        if tp1_hit and prior_trailing_lows:
+            structural_stop = float(min(prior_trailing_lows[-trailing_lookback:])) - config.trail_buffer_r * initial_risk
+            if structural_stop > active_stop and structural_stop < close:
+                active_stop = structural_stop
+                trail_stop = active_stop
+
+        if np.isfinite(low):
+            prior_trailing_lows.append(low)
+            if len(prior_trailing_lows) > trailing_lookback:
+                prior_trailing_lows.pop(0)
 
     if remaining_fraction > 0.0:
         realized_r += remaining_fraction * ((exit_price - entry_price) / initial_risk)
@@ -8400,6 +8410,7 @@ def run_anomaly_strategy_backtest(
     *,
     symbols: Iterable[str] | None = None,
     precollected_candidates: pd.DataFrame | None = None,
+    precollected_candidates_have_context: bool = False,
     run_entry_grid: bool = False,
     grid_oi3_values: Iterable[float] = (0.01, 0.02, 0.03),
     grid_hold_values: Iterable[int] = (1, 2),
@@ -8423,13 +8434,16 @@ def run_anomaly_strategy_backtest(
     targeted_flow_materialize = pd.DataFrame()
     targeted_flow_coverage = pd.DataFrame()
     stage_started_at = time.monotonic()
+    precollected_context_ready = False
     if precollected_candidates is not None:
         candidates = precollected_candidates.copy()
-        candidates = enrich_candidates_with_open_interest(
-            candidates,
-            cache_dir=config.lab_config.cache_dir,
-            progress_label="anomaly candidates: oi context refresh",
-        )
+        precollected_context_ready = bool(precollected_candidates_have_context)
+        if not precollected_context_ready:
+            candidates = enrich_candidates_with_open_interest(
+                candidates,
+                cache_dir=config.lab_config.cache_dir,
+                progress_label="anomaly candidates: oi context refresh",
+            )
     elif _effective_entry_timeframe(config) != _effective_setup_timeframe(config):
         targeted_flow_backfill, targeted_flow_materialize = ensure_targeted_subminute_flow_cache_for_configs(
             [config],
@@ -8497,7 +8511,7 @@ def run_anomaly_strategy_backtest(
             candidates["setup_source"] = "closed_setup_tf"
             candidates["setup_elapsed_fraction"] = 1.0
             candidates["setup_closed_entry_candles"] = candidates.get("confirmation_candles", config.lab_config.confirmation_candles)
-    if not candidates.empty:
+    if not candidates.empty and not precollected_context_ready:
         candidates = enrich_candidates_with_recent_spike_context(candidates, config=config)
     timings["candidates_seconds"] = time.monotonic() - stage_started_at
     if str(getattr(config, "pair_collection_mode", PAIR_COLLECTION_MODE_FORMING)) == PAIR_COLLECTION_MODE_BARE_HTF_SHORT_FADER:

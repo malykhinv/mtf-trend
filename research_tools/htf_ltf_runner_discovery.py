@@ -516,6 +516,8 @@ def _simulate_no_tp_runner_trade(
     trail_updates = 0
     max_high = entry_price
     min_low = entry_price
+    prior_trailing_lows: list[float] = []
+    trailing_lookback = max(1, int(config.trail_lookback_candles))
     exit_reason = "time_exit"
     exit_ts = int(future.iloc[-1]["timestamp"])
     raw_exit_price = float(future.iloc[-1]["close"])
@@ -527,6 +529,7 @@ def _simulate_no_tp_runner_trade(
         high = float(row["high"])
         low = float(row["low"])
         close = float(row["close"])
+        new_high_or_equal = high >= max_high
         max_high = max(max_high, high)
         min_low = min(min_low, low)
         if low <= active_stop:
@@ -536,13 +539,17 @@ def _simulate_no_tp_runner_trade(
             exit_price = raw_exit_price * (1.0 - config.exit_slippage_pct)
             exit_stop_before_update = active_stop
             break
-        prior = future.loc[future["timestamp"].astype("int64") < candle_ts].tail(config.trail_lookback_candles)
-        if len(prior) >= config.trail_lookback_candles and high >= max_high:
-            structural_low = float(prior["low"].min())
+        if len(prior_trailing_lows) >= trailing_lookback and new_high_or_equal:
+            structural_low = float(min(prior_trailing_lows[-trailing_lookback:]))
             candidate_stop = structural_low * (1.0 - config.trail_buffer_pct)
             if candidate_stop > active_stop and candidate_stop < close:
                 active_stop = candidate_stop
                 trail_updates += 1
+
+        if np.isfinite(low):
+            prior_trailing_lows.append(low)
+            if len(prior_trailing_lows) > trailing_lookback:
+                prior_trailing_lows.pop(0)
 
     gross_return = (exit_price - entry_price) / entry_price
     net_return = gross_return - 2.0 * float(config.fee_rate)

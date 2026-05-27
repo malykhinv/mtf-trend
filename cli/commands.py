@@ -1488,6 +1488,10 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
                 backtest_config,
                 symbols=getattr(args, "symbols", None),
                 precollected_candidates=precollected_candidates,
+                precollected_candidates_have_context=(
+                    precollected_candidates is not None
+                    and collection_mode == "symbol_major_precollected"
+                ),
                 run_entry_grid=bool(getattr(args, "run_entry_grid", False)),
                 grid_oi3_values=_parse_grid_values(
                     str(getattr(args, "grid_oi3_values", "0.01,0.02,0.03")),
