@@ -1,5 +1,46 @@
 # Anomaly Patch Log
 
+## 2026-05-27 - P414 applied locally - live2 stop-recovery symbol match and HTF/LTF runner discovery
+
+Files:
+
+```text
+research_tools/anomaly_live2/position_supervisor.py
+research_tools/htf_ltf_runner_discovery.py
+cli/parser.py
+cli/commands.py
+tests/test_live2_market_watch.py
+tests/test_htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+research/STRATEGY_SPEC.md
+research/EXPERIMENT_LOG.md
+```
+
+Intent:
+
+```text
+Fix the live2 crash `NameError: _same_symbol is not defined` during stop-close PnL recovery, then add an honest HTF/LTF runner discovery replay for learning early +10% runner structure without TP.
+```
+
+Change:
+
+```text
+`position_supervisor` now compares user-data order events to protected positions through Binance market-id normalization, so `CATI/USDT:USDT` and `CATIUSDT` match without crashing. New command `run-htf-ltf-runner-discovery` writes HTF anomaly labels, LTF confirmation signals, no-TP structural stop/trailing trades, live-filtered trades, funnel, label distribution, data-quality, top-dependency and honesty artifacts.
+```
+
+Validation:
+
+```text
+Focused live2/discovery tests passed: 37 passed. compileall passed for data/exchanges research_tools cli constants.py main.py. Discovery and CLI smokes wrote artifacts for CATI/ZEC.
+```
+
+Risk:
+
+```text
+The discovery tool is research-only. It labels future +10% runners but does not use that label for entry. OI is only as honest as cached 5m open_interest availability; missing OI is visible in data-quality artifacts and cannot prove runner nature.
+```
+
 ## 2026-05-26 - P413 applied locally - unlimited live2 positions and truthful stop-close PnL
 
 Files:

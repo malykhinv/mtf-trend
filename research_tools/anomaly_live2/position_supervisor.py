@@ -21,6 +21,7 @@ from .clock import utc_now_ms
 from .contracts import Live2Component, Live2Event, Live2Severity
 from .execution import Live2ExecutionEngine, Live2ExecutionExchange, Live2ProtectedPosition
 from .market_data.candles import Live2Candle
+from .market_data.common import symbol_to_market_id
 from .state import SymbolState, SymbolStateStore
 
 
@@ -1305,6 +1306,11 @@ def _float_or_none(value: object) -> float | None:
         return None
     return parsed
 
+
+def _same_symbol(left: object, right: object) -> bool:
+    left_market_id = symbol_to_market_id(str(left or ""))
+    right_market_id = symbol_to_market_id(str(right or ""))
+    return bool(left_market_id and right_market_id and left_market_id == right_market_id)
 
 
 def _current_oi_change_pct_from_baseline(

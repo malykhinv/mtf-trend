@@ -1,3 +1,15 @@
+## 2026-05-27 - P414 live2 stop-recovery crash fix and runner discovery backtest
+
+Current commit: UNKNOWN.
+
+Status: P414 APPLIED locally / UNKNOWN commit. The latest live2 run `.output/results/live2_anomaly_runs/20260526_175528` stopped because `_recover_stop_close_from_user_data()` called missing helper `_same_symbol` while processing a CATI stop fill after TP1 partial and structural trailing. The fix adds explicit symbol matching via Binance market id normalization.
+
+Latest live readout: no trade from this run became a true +10% runner within the next hour by Binance 1m replay. CATI was the only managed partial runner: TP1 hit, stop trailed twice, then private stop fill arrived. UAI was the strongest continuation after entry at about +6.3% in 1h but still below the +10% runner label. Most entries were first-spike/noise or too fragile: early OI-down/exhaustion, seller pressure, high stall, or structural low/stop break before any large continuation.
+
+New research tool: `run-htf-ltf-runner-discovery` / `research_tools.htf_ltf_runner_discovery` scans HTF anomalies, labels next-hour +10% runners and anomaly-low breaks separately from entry, waits for closed LTF confirmation, enters only at the next LTF open, then simulates structural SL plus structural trailing with no TP. It writes candidate/signal/trade/funnel/top-dependency/data-quality/honesty artifacts.
+
+Next: run the discovery on a wider explicit universe with real 5s flow and OI coverage, then select candidate filters by clean +10% labels and live-filtered expectancy, not by raw PnL alone.
+
 ## 2026-05-26 - P413 live2 multi-position and stop PnL fix
 
 Current commit: UNKNOWN.

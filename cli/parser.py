@@ -228,6 +228,38 @@ def build_parser() -> argparse.ArgumentParser:
     anomaly_lab.add_argument("--grid-exhaustion-profiles", default="none")
     anomaly_lab.add_argument("--grid-exit-rules", default="structural_trail")
 
+    runner_discovery = subparsers.add_parser(
+        "run-htf-ltf-runner-discovery",
+        help="Research HTF anomaly plus LTF confirmation runner discovery with structural no-TP replay",
+    )
+    runner_discovery.add_argument("--symbols", nargs="*", default=None, help="List of symbols, e.g. BTC/USDT:USDT")
+    runner_discovery.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_ANOMALY_LAB_DAYS)
+    runner_discovery.add_argument("--htf-timeframe", default="1m")
+    runner_discovery.add_argument("--ltf-timeframe", default="5s")
+    runner_discovery.add_argument("--end-timestamp-ms", type=int, default=None)
+    runner_discovery.add_argument("--output-dir", default=None)
+    runner_discovery.add_argument("--runner-target-return-pct", type=float, default=0.10)
+    runner_discovery.add_argument("--runner-horizon-minutes", type=_positive_int_for("--runner-horizon-minutes"), default=60)
+    runner_discovery.add_argument("--min-htf-quote-ratio", type=float, default=5.0)
+    runner_discovery.add_argument("--min-htf-trade-ratio", type=float, default=5.0)
+    runner_discovery.add_argument("--min-htf-return-pct", type=float, default=0.010)
+    runner_discovery.add_argument("--min-pregrowth-return-pct", type=float, default=0.002)
+    runner_discovery.add_argument("--min-pregrowth-oi-change-pct", type=float, default=0.0)
+    runner_discovery.add_argument("--require-pregrowth-oi", type=_str_to_bool, default=False)
+    runner_discovery.add_argument("--ltf-min-confirm-candles", type=_positive_int_for("--ltf-min-confirm-candles"), default=6)
+    runner_discovery.add_argument("--ltf-max-confirm-candles", type=_positive_int_for("--ltf-max-confirm-candles"), default=24)
+    runner_discovery.add_argument("--min-ltf-confirm-return-pct", type=float, default=0.004)
+    runner_discovery.add_argument("--min-ltf-quote-pace-ratio", type=float, default=3.0)
+    runner_discovery.add_argument("--min-ltf-trade-pace-ratio", type=float, default=3.0)
+    runner_discovery.add_argument("--min-ltf-taker-buy-share", type=float, default=None)
+    runner_discovery.add_argument("--max-initial-risk-pct", type=float, default=0.05)
+    runner_discovery.add_argument("--trail-lookback-candles", type=_positive_int_for("--trail-lookback-candles"), default=6)
+    runner_discovery.add_argument("--max-hold-candles", type=_positive_int_for("--max-hold-candles"), default=720)
+    runner_discovery.add_argument("--max-open-positions", type=_positive_int_for("--max-open-positions"), default=1)
+    runner_discovery.add_argument("--fee-rate", type=float, default=0.0004)
+    runner_discovery.add_argument("--entry-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
+    runner_discovery.add_argument("--exit-slippage-pct", type=float, default=DEFAULT_SLIPPAGE)
+
     materialize_subminute = subparsers.add_parser(
         "materialize-anomaly-subminute-cache",
         help="Materialize honest 1s-derived 5s/15s/30s anomaly entry caches",
@@ -416,6 +448,7 @@ def resolve_handler(command_name: str) -> Handler:
         "fetch-data": commands.fetch_data,
         "update-cache": commands.update_cache,
         "run-anomaly-lab": commands.run_anomaly_lab,
+        "run-htf-ltf-runner-discovery": commands.run_htf_ltf_runner_discovery,
         "materialize-anomaly-subminute-cache": commands.materialize_anomaly_subminute_cache,
         "backfill-anomaly-aggtrade-cache": commands.backfill_anomaly_aggtrade_cache,
         "run-anomaly-live2": commands.run_anomaly_live2,

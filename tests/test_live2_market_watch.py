@@ -1126,7 +1126,7 @@ def test_live2_supervisor_treats_settled_stop_trigger_as_final_close() -> None:
         lambda: {
             "recent_order_events": [
                 {
-                    "symbol": position.symbol,
+                    "symbol": "AAAUSDT",
                     "client_order_id": position.stop_client_order_id,
                     "order_id": position.stop_order_id,
                     "execution_type": "TRADE",

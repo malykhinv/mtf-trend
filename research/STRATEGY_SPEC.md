@@ -52,6 +52,18 @@ htf_close_open_return >= 1.5%
 
 These are discovery cost-control and signal-quality gates, not proven trading categories. They can be raised for fewer/stronger events or lowered only for narrow forensic runs.
 
+For `run-htf-ltf-runner-discovery` research, the runner label is deliberately separated from the entry rule:
+
+```text
+HTF anomaly label: next-hour high >= +10% from HTF close
+clean runner label: +10% hit before breaking the HTF anomaly low
+entry rule: only closed LTF confirmation known at decision time
+execution: next LTF open after confirmation close
+exit: structural SL + structural trailing, no TP
+```
+
+The tool is meant to learn runner nature: dormancy, smooth pre-pump price/OI growth, sustained quote-volume and real trade-count expansion, and whether structural lows survive. Future labels must not be used as entry filters inside the same replay.
+
 ---
 
 ## 3. Category / nature checks

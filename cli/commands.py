@@ -1681,6 +1681,59 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
     return _run_with_logging("run-anomaly-lab", config, _run)
 
 
+def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) -> int:
+    """Runs HTF/LTF runner discovery with structural no-TP replay."""
+
+    def _run() -> int:
+        from research_tools.htf_ltf_runner_discovery import (
+            HtfLtfRunnerDiscoveryConfig,
+            run_htf_ltf_runner_discovery as run_discovery,
+        )
+
+        output_dir = (
+            Path(str(args.output_dir))
+            if getattr(args, "output_dir", None)
+            else config.backtest.results_dir / "htf_ltf_runner_discovery"
+        )
+        discovery_config = HtfLtfRunnerDiscoveryConfig(
+            cache_dir=config.backtest.cache_dir,
+            output_dir=output_dir,
+            htf_timeframe=str(getattr(args, "htf_timeframe", "1m")),
+            ltf_timeframe=str(getattr(args, "ltf_timeframe", "5s")),
+            days=int(getattr(args, "days", 30)),
+            end_timestamp_ms=getattr(args, "end_timestamp_ms", None),
+            min_htf_quote_ratio=float(getattr(args, "min_htf_quote_ratio", 5.0)),
+            min_htf_trade_ratio=float(getattr(args, "min_htf_trade_ratio", 5.0)),
+            min_htf_return_pct=float(getattr(args, "min_htf_return_pct", 0.010)),
+            min_pregrowth_return_pct=float(getattr(args, "min_pregrowth_return_pct", 0.002)),
+            min_pregrowth_oi_change_pct=float(getattr(args, "min_pregrowth_oi_change_pct", 0.0)),
+            require_pregrowth_oi=bool(getattr(args, "require_pregrowth_oi", False)),
+            runner_target_return_pct=float(getattr(args, "runner_target_return_pct", 0.10)),
+            runner_horizon_minutes=int(getattr(args, "runner_horizon_minutes", 60)),
+            ltf_min_confirm_candles=int(getattr(args, "ltf_min_confirm_candles", 6)),
+            ltf_max_confirm_candles=int(getattr(args, "ltf_max_confirm_candles", 24)),
+            min_ltf_confirm_return_pct=float(getattr(args, "min_ltf_confirm_return_pct", 0.004)),
+            min_ltf_quote_pace_ratio=float(getattr(args, "min_ltf_quote_pace_ratio", 3.0)),
+            min_ltf_trade_pace_ratio=float(getattr(args, "min_ltf_trade_pace_ratio", 3.0)),
+            min_ltf_taker_buy_share=(
+                None
+                if getattr(args, "min_ltf_taker_buy_share", None) is None
+                else float(args.min_ltf_taker_buy_share)
+            ),
+            max_initial_risk_pct=float(getattr(args, "max_initial_risk_pct", 0.05)),
+            trail_lookback_candles=int(getattr(args, "trail_lookback_candles", 6)),
+            max_hold_candles=int(getattr(args, "max_hold_candles", 720)),
+            max_open_positions=int(getattr(args, "max_open_positions", 1)),
+            fee_rate=float(getattr(args, "fee_rate", 0.0004)),
+            entry_slippage_pct=float(getattr(args, "entry_slippage_pct", DEFAULT_SLIPPAGE)),
+            exit_slippage_pct=float(getattr(args, "exit_slippage_pct", DEFAULT_SLIPPAGE)),
+        )
+        run_discovery(discovery_config, symbols=getattr(args, "symbols", None))
+        return 0
+
+    return _run_with_logging("run-htf-ltf-runner-discovery", config, _run)
+
+
 def materialize_anomaly_subminute_cache(config: AppConfig, args: argparse.Namespace) -> int:
     """Materializes 1s-derived subminute anomaly entry caches."""
 

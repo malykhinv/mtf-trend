@@ -1,4 +1,32 @@
 
+## 2026-05-27 - live2 run 20260526_175528 runner/noise audit and P414 discovery smoke
+
+```text
+Run: .output/results/live2_anomaly_runs/20260526_175528
+
+Runtime finding:
+- Crash cause was code, not exchange/network: `_same_symbol` was undefined in stop-close user-data recovery.
+- At crash, execution_status showed two protected positions: CATI partial runner remainder and TST initial-stop protected.
+- CATI had a private stop fill in user_data_order_trade_update; recovery crashed before final close accounting.
+
+Trade readout from live artifacts plus Binance public 1m klines after entry:
+- 15 opened positions found: GWEI, DEXE, UAI, 1000LUNC, NIL, GTC, AGT, CHIP, PRL, KAITO, MU, XAN, BLUAI, CATI, TST.
+- No symbol reached +10% from actual entry within 1h or 2h in this replay.
+- CATI was the only live-managed runner state: TP1 partial, two structural stop trails, then stop fill.
+- UAI had the largest later continuation, about +6.3% within 1h, but it is not a +10% runner.
+- Noise traits were common: early OI-down/exhaustion, seller pressure after MFE, high stall, flow collapse, or structural stop/anomaly-low break before any large continuation.
+
+Filtering hypothesis:
+- Do not call this run proof of runner edge; there were no true +10% runners.
+- For runner discovery, require dormancy + coordinated HTF flow/trades + smooth pre-pump price/OI growth, then wait for closed LTF acceptance.
+- Explicitly label whether anomaly low was broken after the HTF anomaly; broken-low cases should be separated from clean runners before optimizing entries.
+
+P414 discovery smoke:
+- `python -m research_tools.htf_ltf_runner_discovery --symbols ZEC/USDT:USDT CATI/USDT:USDT --days 1 ...` completed and wrote artifacts.
+- A loose synthetic smoke generated closed trades and confirmed no-TP structural stop/trailing artifact shape.
+- Focused tests passed for future-label separation, next-LTF-open entry availability, no-TP replay, and live2 stop-recovery symbol matching.
+```
+
 ## 2026-05-26 - P413 live2 multi-position / stop-PnL validation
 
 ```text
