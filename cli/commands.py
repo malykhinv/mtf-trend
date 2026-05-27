@@ -334,6 +334,7 @@ def _run_with_logging(command_name: str, config: AppConfig, body: Callable[[], i
     except KeyboardInterrupt:
         message = f"Команда остановлена пользователем: {command_name}"
         logger.info(message)
+        print(message, flush=True)
         return 130
     except Exception as exc:
         logger.exception("Ошибка: %s", exc)

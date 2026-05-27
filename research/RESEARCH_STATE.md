@@ -1,3 +1,13 @@
+## 2026-05-27 - P423 responsive Ctrl+C for long backtests
+
+Current commit: UNKNOWN.
+
+Status: PROPOSED against local P422 workspace. The operator reported that anomaly backtest Ctrl+C can look silent and may not exit even after repeated interrupts. The root causes are that `_run_with_logging` only logged KeyboardInterrupt, while ThreadPoolExecutor context-manager shutdown can wait for running pandas/parquet worker threads during interruption.
+
+Patch: install a responsive SIGINT handler in `main.py`: first Ctrl+C prints a visible stop message and raises KeyboardInterrupt; repeated Ctrl+C forces exit code 130 with `os._exit`. The anomaly-lab and HTF/LTF runner thread-pool paths now cancel queued futures and avoid context-manager shutdown waits on KeyboardInterrupt. No candidate logic, execution model, cache validation, fees/slippage, TP/SL, portfolio filtering, or artifacts semantics are changed.
+
+Next: apply P423 and start the same long run. Press Ctrl+C once: it should print a stop message. If parquet/thread cleanup still stalls, press Ctrl+C again: the process should exit immediately with code 130. Treat artifacts from forced-exit runs as partial/incomplete.
+
 ## 2026-05-27 - P422 anomaly-lab speed diagnostics
 
 Current commit: UNKNOWN.

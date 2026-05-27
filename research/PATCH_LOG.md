@@ -1,3 +1,46 @@
+## 2026-05-27 - P423 proposed - responsive Ctrl+C for long backtests
+
+Files:
+
+```text
+main.py
+cli/commands.py
+research_tools/anomaly_strategy_backtest.py
+research_tools/htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Make long anomaly backtests operable from the terminal. A first Ctrl+C must be visible and request a normal stop; a repeated Ctrl+C must force process exit instead of waiting indefinitely for thread-pool workers or pandas/parquet IO to unwind.
+```
+
+Changes:
+
+```text
+- main.py installs a responsive SIGINT handler before command execution.
+- First Ctrl+C prints an operator-visible stop message and raises KeyboardInterrupt.
+- Repeated Ctrl+C prints a force-exit message and exits with code 130 via os._exit, avoiding hangs on non-daemon worker threads.
+- _run_with_logging now prints the user stop message to console instead of only writing it to the log.
+- anomaly-lab and HTF/LTF runner ThreadPoolExecutor sections cancel queued futures and avoid context-manager shutdown waits when interrupted.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+python main.py run-anomaly-lab --help
+python main.py run-htf-ltf-runner-discovery --help
+```
+
+Risk:
+
+```text
+No trading or research math is changed. A forced second Ctrl+C intentionally skips normal cleanup and can leave partial artifacts from the interrupted run; this is preferable to an operator being unable to stop a hung backtest.
+```
+
 ## 2026-05-27 - P422 proposed - anomaly-lab speed diagnostics
 
 Files:

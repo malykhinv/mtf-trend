@@ -4112,8 +4112,9 @@ def collect_pair_anomaly_rows_for_configs(
                     )
                     next_progress_pct = current_pct + 5
     else:
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="anomaly-pair") as executor:
-            futures = {executor.submit(_collect_rows_for_symbol, symbol): symbol for symbol in all_symbols}
+        executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="anomaly-pair")
+        futures = {executor.submit(_collect_rows_for_symbol, symbol): symbol for symbol in all_symbols}
+        try:
             for processed_count, future in enumerate(as_completed(futures), start=1):
                 symbol = futures[future]
                 symbol_result, local_diagnostics = future.result()
@@ -4130,6 +4131,13 @@ def collect_pair_anomaly_rows_for_configs(
                             started_at=progress_started_at,
                         )
                         next_progress_pct = current_pct + 5
+        except KeyboardInterrupt:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
 
     for symbol in all_symbols:
         for key, rows in symbol_results.get(symbol, {}).items():
@@ -5844,11 +5852,12 @@ def simulate_anomaly_trades(
                     )
                     next_progress_pct = current_pct + 5
     else:
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="anomaly-trade") as executor:
-            futures = {
-                executor.submit(_resolve_symbol_group, symbol, group): symbol
-                for symbol, group in symbol_groups
-            }
+        executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="anomaly-trade")
+        futures = {
+            executor.submit(_resolve_symbol_group, symbol, group): symbol
+            for symbol, group in symbol_groups
+        }
+        try:
             for processed_count, future in enumerate(as_completed(futures), start=1):
                 resolved, loaded_frames, timing_row = future.result()
                 if speed_diagnostics is not None:
@@ -5873,6 +5882,13 @@ def simulate_anomaly_trades(
                             started_at=progress_started_at,
                         )
                         next_progress_pct = current_pct + 5
+        except KeyboardInterrupt:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            raise
+        else:
+            executor.shutdown(wait=True)
 
     for order_idx in range(len(ordered_signals)):
         signal, result = resolved_by_order[int(order_idx)]

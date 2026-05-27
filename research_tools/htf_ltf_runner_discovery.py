@@ -194,12 +194,21 @@ def run_htf_ltf_runner_discovery(
             progress.update(index=index, item=symbol)
             symbol_results[symbol] = _process_symbol(symbol)
     else:
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="runner-discovery") as executor:
-            futures = {executor.submit(_process_symbol, symbol): symbol for symbol in selected_symbols}
+        executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="runner-discovery")
+        futures = {executor.submit(_process_symbol, symbol): symbol for symbol in selected_symbols}
+        try:
             for index, future in enumerate(as_completed(futures), start=1):
                 symbol = futures[future]
                 progress.update(index=index, item=symbol)
                 symbol_results[symbol] = future.result()
+        except KeyboardInterrupt:
+            for future in futures:
+                future.cancel()
+            executor.shutdown(wait=False, cancel_futures=True)
+            progress.finish()
+            raise
+        else:
+            executor.shutdown(wait=True)
     progress.finish()
 
     for symbol in selected_symbols:
