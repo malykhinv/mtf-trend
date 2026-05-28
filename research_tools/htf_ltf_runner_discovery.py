@@ -229,6 +229,7 @@ def run_htf_ltf_runner_discovery(
             ltf_timeframe=config.ltf_timeframe,
             windows_by_symbol=post_entry_windows_by_symbol,
             progress_label=f"{progress_label or 'runner discovery'} targeted post-entry LTF",
+            max_merged_span_ms=None,
         )
         targeted_phase_frames.append(("post_entry", post_entry_plan, post_entry_fetch, post_entry_materialize))
         targeted_ltf_plan = _concat_targeted_phase_frames(targeted_phase_frames, frame_index=1)
@@ -726,7 +727,14 @@ def _build_targeted_ltf_post_entry_backfill_plan(
         if ltf.empty:
             continue
         oi = _load_oi_frame(storage, symbol, config=config, start_ms=start_ms, end_ms=end_ms)
-        candidate_rows, _ = _collect_symbol_candidates(symbol=symbol, htf=htf, ltf=ltf, oi=oi, config=config)
+        candidate_rows, _ = _collect_symbol_candidates(
+            symbol=symbol,
+            htf=htf,
+            ltf=ltf,
+            oi=oi,
+            config=config,
+            allowed_timestamps_ms=symbol_seed_timestamps,
+        )
         broad_candidate_count = int(len(candidate_rows))
         candidate_rows = [
             candidate
@@ -792,6 +800,7 @@ def _build_targeted_ltf_post_entry_backfill_plan(
                     "pre_entry_executable_windows": int(executable_window_count),
                     "pre_entry_first_signals": int(first_signal_count),
                     "post_entry_windows": int(len(symbol_windows)),
+                    "strict_seed_gate_applied_before_candidate_build": True,
                     "selection_model": "closed_htf_strict_seed_gate_then_known_at_entry_ltf_confirmation_no_future",
                     "window_model": "post_entry_fetch_only_for_pre_entry_strict_htf_seed_events",
                 }
@@ -809,6 +818,7 @@ def _build_targeted_ltf_post_entry_backfill_plan(
         "symbols_with_pre_entry_seeds": int(sum(1 for seeds in seed_timestamps_by_symbol.values() if seeds)),
         "skipped_no_seed_symbols": int(skipped_no_seed_symbols),
         "skipped_broad_htf_candidates_not_in_strict_seed_gate": int(skipped_broad_candidates),
+        "strict_seed_gate_applied_before_candidate_build": True,
         "symbols_with_windows": int(len(windows_by_symbol)),
         "raw_targeted_windows": int(sum(len(windows) for windows in windows_by_symbol.values())),
         "window_model": "post_entry_fetch_only_for_pre_entry_strict_htf_seed_events",
@@ -914,6 +924,7 @@ def _ensure_targeted_ltf_backfill(
     ltf_timeframe: str,
     windows_by_symbol: Mapping[str, Iterable[tuple[int, int]]],
     progress_label: str,
+    max_merged_span_ms: int | None = 10 * 60_000,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     if not windows_by_symbol:
         return (
@@ -927,6 +938,7 @@ def _ensure_targeted_ltf_backfill(
         windows_by_symbol=windows_by_symbol,
         target_timeframes=(str(ltf_timeframe),),
         progress_label=progress_label,
+        max_merged_span_ms=max_merged_span_ms,
     )
 
 def _collect_symbol_candidates(
@@ -936,6 +948,7 @@ def _collect_symbol_candidates(
     ltf: pd.DataFrame,
     oi: pd.DataFrame,
     config: HtfLtfRunnerDiscoveryConfig,
+    allowed_timestamps_ms: set[int] | None = None,
 ) -> tuple[list[dict[str, object]], int]:
     htf_ms = _timeframe_ms(config.htf_timeframe)
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
@@ -970,6 +983,11 @@ def _collect_symbol_candidates(
         & (_numeric_column(prepared, "_number_of_trades") / baseline_trades_fast).ge(config.min_htf_trade_ratio)
         & htf_return_fast.ge(config.min_htf_return_pct)
     )
+    if allowed_timestamps_ms is not None:
+        allowed_timestamps = {int(value) for value in allowed_timestamps_ms}
+        if not allowed_timestamps:
+            return [], int(scanned_mask.sum())
+        anomaly_gate_fast &= timestamps.astype("int64").isin(allowed_timestamps)
     quote_ratio_fast = (_numeric_column(prepared, "_quote_volume") / baseline_quote_fast).replace([np.inf, -np.inf], np.nan)
     trade_ratio_fast = (_numeric_column(prepared, "_number_of_trades") / baseline_trades_fast).replace([np.inf, -np.inf], np.nan)
     prior_spike_context = _prepare_prior_spike_context(

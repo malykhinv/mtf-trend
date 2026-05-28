@@ -1,3 +1,31 @@
+## 2026-05-28 - P437 proposed - merge post-entry targeted LTF windows and prune broad post-entry candidates early
+
+Files:
+
+```text
+research_tools/anomaly_strategy_backtest.py
+research_tools/htf_ltf_runner_discovery.py
+research/EXPERIMENT_LOG.md
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Reduce runner discovery runtime without weakening data quality: post-entry targeted aggTrade/LTF fetch uses gap-only merging for overlapping 60m replay windows, and post-entry planning builds candidate rows only for strict pre-entry HTF seed timestamps.
+```
+
+Honesty boundary:
+
+```text
+No trading thresholds, future-label rules, execution prices, stops, fees, slippage, or replay paths are changed. The patch only removes repeated fetch/CPU work for windows and candidates that were already selected/excluded by pre-entry strict seed data.
+```
+
+Status: PROPOSED against uploaded workspace / commit UNKNOWN.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; then rerun discovery and verify post-entry `raw_targeted_windows > merged_targeted_windows` plus unchanged selected/trade logic semantics.
+
 ## 2026-05-28 - P436 proposed - bind post-entry fetch to strict HTF seeds
 
 Files:

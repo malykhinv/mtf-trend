@@ -1,3 +1,13 @@
+## 2026-05-28 - P437 targeted LTF speed validation
+
+Question: can the 5m/30s runner discovery finish faster with identical strategy semantics by merging overlapping post-entry fetch windows and avoiding broad candidate work outside strict pre-entry HTF seed timestamps?
+
+Design: compare the previous 7d run artifacts against a rerun after P437. The expected change is operational: post-entry `raw_targeted_windows` should remain the audit count of requested replay windows, while `merged_targeted_windows` and fetch rows should drop because overlapping 60m windows are fetched as larger continuous intervals. Candidate construction should mark `strict_seed_gate_applied_before_candidate_build=True`.
+
+Acceptance: runtime and targeted fetch rows fall materially; selected signal/trade logic remains honest (`future_label_available_at_entry=False`, strict wall-clock replay, no entry before decision). If PnL changes, inspect cache coverage and strict path statuses before treating it as a strategy change.
+
+Status: PROPOSED / commit UNKNOWN.
+
 ## 2026-05-28 - P434 strict HTF awakening seed gate experiment
 
 Question: can runner discovery stay honest and become operationally usable by loading true 1s/LTF only for stronger closed-HTF awakening seeds, instead of applying arbitrary post-entry fetch caps?

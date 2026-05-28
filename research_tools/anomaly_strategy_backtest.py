@@ -2132,6 +2132,7 @@ def ensure_targeted_aggtrade_subminute_cache(
     windows_by_symbol: Mapping[str, Iterable[tuple[int, int]]],
     target_timeframes: Iterable[str],
     progress_label: str | None = None,
+    max_merged_span_ms: int | None = TARGETED_FLOW_MAX_MERGED_SPAN_MS,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Fetch true aggTrade 1s only for explicit windows and materialize requested LTF caches.
 
@@ -2142,16 +2143,34 @@ def ensure_targeted_aggtrade_subminute_cache(
 
     target_timeframes_tuple = tuple(str(tf) for tf in target_timeframes)
     normalized_windows: dict[str, list[tuple[int, int]]] = {}
+    raw_windows_by_symbol: dict[str, list[tuple[int, int]]] = {}
     for raw_symbol, raw_windows in windows_by_symbol.items():
         symbol = str(raw_symbol).strip()
         if not symbol or symbol == "__all__":
             continue
-        merged = _merge_targeted_timestamp_windows(raw_windows)
+        valid_raw = sorted((int(start), int(end)) for start, end in raw_windows if int(start) <= int(end))
+        if not valid_raw:
+            continue
+        raw_windows_by_symbol[symbol] = valid_raw
+        merged = _merge_targeted_timestamp_windows(
+            valid_raw,
+            max_merged_span_ms=max_merged_span_ms,
+        )
         if merged:
             normalized_windows[symbol] = merged
     plan_rows: list[dict[str, object]] = []
-    raw_windows_total = sum(len(tuple(raw_windows)) for raw_windows in windows_by_symbol.values())
+    raw_windows_total = sum(len(windows) for windows in raw_windows_by_symbol.values())
     merged_windows_total = sum(len(windows) for windows in normalized_windows.values())
+    raw_window_ms_total = sum(
+        int(end) - int(start) + 1
+        for windows in raw_windows_by_symbol.values()
+        for start, end in windows
+    )
+    merged_window_ms_total = sum(
+        int(end) - int(start) + 1
+        for windows in normalized_windows.values()
+        for start, end in windows
+    )
     plan_rows.append(
         {
             "symbol": "__all__",
@@ -2160,6 +2179,17 @@ def ensure_targeted_aggtrade_subminute_cache(
             "symbols_with_windows": int(len(normalized_windows)),
             "raw_targeted_windows": int(raw_windows_total),
             "merged_targeted_windows": int(merged_windows_total),
+            "raw_targeted_window_ms": int(raw_window_ms_total),
+            "merged_targeted_window_ms": int(merged_window_ms_total),
+            "merge_gap_ms": int(TARGETED_FLOW_MERGE_GAP_MS),
+            "max_merged_span_ms": (
+                "unbounded" if max_merged_span_ms is None else int(max_merged_span_ms)
+            ),
+            "merge_policy": (
+                "gap_only_unbounded_span"
+                if max_merged_span_ms is None
+                else "gap_and_max_span"
+            ),
             "data_source": "binance_futures_aggTrades_1s_then_materialized_ltf",
         }
     )
@@ -2246,7 +2276,7 @@ def _merge_targeted_timestamp_windows(
     windows: Iterable[tuple[int, int]],
     *,
     merge_gap_ms: int = TARGETED_FLOW_MERGE_GAP_MS,
-    max_merged_span_ms: int = TARGETED_FLOW_MAX_MERGED_SPAN_MS,
+    max_merged_span_ms: int | None = TARGETED_FLOW_MAX_MERGED_SPAN_MS,
 ) -> list[tuple[int, int]]:
     valid = sorted((int(start), int(end)) for start, end in windows if int(start) <= int(end))
     if not valid:
@@ -2257,7 +2287,13 @@ def _merge_targeted_timestamp_windows(
         candidate_start = prev_start
         candidate_end = max(prev_end, end)
         candidate_span = candidate_end - candidate_start + 1
-        if start <= prev_end + max(0, int(merge_gap_ms)) + 1 and candidate_span <= max(1, int(max_merged_span_ms)):
+        gap_ok = start <= prev_end + max(0, int(merge_gap_ms)) + 1
+        span_ok = (
+            True
+            if max_merged_span_ms is None
+            else candidate_span <= max(1, int(max_merged_span_ms))
+        )
+        if gap_ok and span_ok:
             merged[-1] = (candidate_start, candidate_end)
         else:
             merged.append((start, end))

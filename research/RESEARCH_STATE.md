@@ -1,3 +1,13 @@
+## 2026-05-28 - P437 targeted LTF post-entry speed patch proposed
+
+Current commit: UNKNOWN.
+
+Status: P437 PROPOSED against uploaded workspace. The 7d 5m/30s discovery run showed post-entry targeted LTF fetch did redundant work: many 60m post-entry windows differed by only one/few LTF candles but were not merged because the shared targeted aggTrade merge cap was 10 minutes. P437 keeps pre-entry merging capped, but allows post-entry targeted LTF backfill to merge by gap only (`max_merged_span_ms=None`). It also applies the strict pre-entry HTF seed timestamp filter before expensive post-entry candidate feature/label construction, rather than building broad candidates and discarding non-seeds afterwards.
+
+Honesty: this changes only fetch/materialization planning and CPU pruning. It does not change signal filters, entry price, stop/trailing simulation, future labels, fees/slippage, or strict wall-clock LTF replay.
+
+Next: apply P437, run `python -m compileall -q data/exchanges research_tools cli constants.py main.py`, then rerun the 7d discovery and compare `post_entry` rows in `htf_ltf_runner_targeted_ltf_fetch.csv`: `raw_targeted_windows` should stay the same while `merged_targeted_windows` should fall materially.
+
 ## 2026-05-28 - P436 post-entry fetch root-cause fix proposed
 
 Current commit: UNKNOWN.
