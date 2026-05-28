@@ -214,6 +214,7 @@ def run_htf_ltf_runner_discovery(
         )
         targeted_phase_frames.append(("pre_entry", pre_entry_plan, pre_entry_fetch, pre_entry_materialize))
 
+        pre_entry_seed_timestamps_by_symbol = _targeted_ltf_seed_timestamps_by_symbol(pre_entry_plan)
         post_entry_plan, post_entry_windows_by_symbol = _build_targeted_ltf_post_entry_backfill_plan(
             storage=storage,
             symbols=selected_symbols,
@@ -221,6 +222,7 @@ def run_htf_ltf_runner_discovery(
             end_ms=end_ms,
             config=config,
             progress_label=f"{progress_label or 'runner discovery'} targeted post-entry plan",
+            seed_timestamps_by_symbol=pre_entry_seed_timestamps_by_symbol,
         )
         post_entry_fetch, post_entry_materialize = _ensure_targeted_ltf_backfill(
             cache_dir=config.cache_dir,
@@ -665,6 +667,27 @@ def _concat_targeted_phase_frames(
     return pd.concat(frames, ignore_index=True, sort=False)
 
 
+def _targeted_ltf_seed_timestamps_by_symbol(plan: pd.DataFrame) -> dict[str, set[int]]:
+    """Returns HTF seed timestamps selected before any LTF/post-entry data is inspected."""
+    if plan.empty or "symbol" not in plan.columns or "timestamp_ms" not in plan.columns:
+        return {}
+    status = plan.get("targeted_ltf_plan_status", pd.Series(index=plan.index, dtype=object)).astype(str)
+    phase = plan.get("targeted_ltf_phase", pd.Series(index=plan.index, dtype=object)).astype(str)
+    selected = plan.loc[status.eq("planned") & phase.eq("pre_entry"), ["symbol", "timestamp_ms"]].copy()
+    if selected.empty:
+        return {}
+    selected["timestamp_ms"] = pd.to_numeric(selected["timestamp_ms"], errors="coerce")
+    selected = selected.dropna(subset=["symbol", "timestamp_ms"])
+    seeds: dict[str, set[int]] = {}
+    for row in selected.itertuples(index=False):
+        symbol = str(getattr(row, "symbol", ""))
+        if not symbol or symbol == "__all__":
+            continue
+        timestamp_ms = int(float(getattr(row, "timestamp_ms")))
+        seeds.setdefault(symbol, set()).add(timestamp_ms)
+    return seeds
+
+
 def _build_targeted_ltf_post_entry_backfill_plan(
     *,
     storage: ParquetStorage,
@@ -673,6 +696,7 @@ def _build_targeted_ltf_post_entry_backfill_plan(
     end_ms: int,
     config: HtfLtfRunnerDiscoveryConfig,
     progress_label: str,
+    seed_timestamps_by_symbol: Mapping[str, set[int]],
 ) -> tuple[pd.DataFrame, dict[str, list[tuple[int, int]]]]:
     rows: list[dict[str, object]] = []
     windows_by_symbol: dict[str, list[tuple[int, int]]] = {}
@@ -681,8 +705,14 @@ def _build_targeted_ltf_post_entry_backfill_plan(
     htf_ms = _timeframe_ms(config.htf_timeframe)
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
     horizon_ms = int(config.runner_horizon_minutes) * 60_000
+    skipped_no_seed_symbols = 0
+    skipped_broad_candidates = 0
     for index, symbol in enumerate(selected_symbols, start=1):
         progress.update(index=index, item=symbol)
+        symbol_seed_timestamps = seed_timestamps_by_symbol.get(symbol, set())
+        if not symbol_seed_timestamps:
+            skipped_no_seed_symbols += 1
+            continue
         htf = _load_frame(storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
         if htf.empty:
             continue
@@ -697,6 +727,13 @@ def _build_targeted_ltf_post_entry_backfill_plan(
             continue
         oi = _load_oi_frame(storage, symbol, config=config, start_ms=start_ms, end_ms=end_ms)
         candidate_rows, _ = _collect_symbol_candidates(symbol=symbol, htf=htf, ltf=ltf, oi=oi, config=config)
+        broad_candidate_count = int(len(candidate_rows))
+        candidate_rows = [
+            candidate
+            for candidate in candidate_rows
+            if (_coerce_int(candidate.get("timestamp_ms")) in symbol_seed_timestamps)
+        ]
+        skipped_broad_candidates += max(0, broad_candidate_count - int(len(candidate_rows)))
         symbol_windows: list[tuple[int, int]] = []
         symbol_rows: list[dict[str, object]] = []
         executable_window_count = 0
@@ -751,11 +788,12 @@ def _build_targeted_ltf_post_entry_backfill_plan(
                     "htf_timeframe": config.htf_timeframe,
                     "ltf_timeframe": config.ltf_timeframe,
                     "pre_entry_candidates": int(len(candidate_rows)),
+                    "pre_entry_seed_timestamps": int(len(symbol_seed_timestamps)),
                     "pre_entry_executable_windows": int(executable_window_count),
                     "pre_entry_first_signals": int(first_signal_count),
                     "post_entry_windows": int(len(symbol_windows)),
-                    "selection_model": "known_at_entry_ltf_confirmation_and_entry_guards_only",
-                    "window_model": "post_entry_fetch_for_executable_pre_entry_signal_and_runner_label",
+                    "selection_model": "closed_htf_strict_seed_gate_then_known_at_entry_ltf_confirmation_no_future",
+                    "window_model": "post_entry_fetch_only_for_pre_entry_strict_htf_seed_events",
                 }
             )
     progress.finish()
@@ -768,10 +806,13 @@ def _build_targeted_ltf_post_entry_backfill_plan(
         "ltf_timeframe": config.ltf_timeframe,
         "symbols": len(selected_symbols),
         "candidate_seed_rows": int(len(plan.loc[plan.get("targeted_ltf_plan_status", pd.Series(dtype=str)).astype(str).eq("planned")])) if not plan.empty else 0,
+        "symbols_with_pre_entry_seeds": int(sum(1 for seeds in seed_timestamps_by_symbol.values() if seeds)),
+        "skipped_no_seed_symbols": int(skipped_no_seed_symbols),
+        "skipped_broad_htf_candidates_not_in_strict_seed_gate": int(skipped_broad_candidates),
         "symbols_with_windows": int(len(windows_by_symbol)),
         "raw_targeted_windows": int(sum(len(windows) for windows in windows_by_symbol.values())),
-        "window_model": "post_entry_fetch_after_known_at_entry_pre_filter",
-        "selection_model": "no_future_labels_no_post_entry_prices",
+        "window_model": "post_entry_fetch_only_for_pre_entry_strict_htf_seed_events",
+        "selection_model": "closed_htf_strict_seed_gate_then_known_at_entry_ltf_confirmation_no_future",
     }
     if plan.empty:
         plan = pd.DataFrame([summary])
@@ -812,7 +853,7 @@ def _post_entry_plan_row(
         "symbol": signal.get("symbol", ""),
         "targeted_ltf_plan_status": "planned",
         "signal_scope": signal_scope,
-        "selection_model": "known_at_entry_ltf_confirmation_and_entry_guards_only",
+        "selection_model": "closed_htf_strict_seed_gate_then_known_at_entry_ltf_confirmation_no_future",
         "timestamp_ms": signal.get("timestamp_ms", float("nan")),
         "timestamp_utc": signal.get("timestamp_utc", ""),
         "htf_close_ms": signal.get("htf_close_ms", float("nan")),
@@ -829,7 +870,7 @@ def _post_entry_plan_row(
         "window_end_ms": int(window_end),
         "window_end_utc": _timestamp_to_utc(window_end),
         "window_ms": int(window_end - window_start + 1),
-        "window_model": "post_entry_fetch_for_executable_pre_entry_signal_and_runner_label",
+        "window_model": "post_entry_fetch_only_for_pre_entry_strict_htf_seed_events",
         "entry_drift_pct": signal.get("entry_drift_pct", float("nan")),
         "initial_risk_pct": signal.get("initial_risk_pct", float("nan")),
         "window_execution_ok": signal.get("window_execution_ok", True),

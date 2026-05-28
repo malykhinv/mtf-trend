@@ -1,3 +1,29 @@
+## 2026-05-28 - P436 proposed - bind post-entry fetch to strict HTF seeds
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix the remaining runner-discovery targeted-fetch explosion: post-entry 1s backfill was still rebuilt from the broad HTF anomaly gate, not from the stricter pre-entry HTF seed gate. This made P434's strict LTF-download definition ineffective for the expensive post-entry phase. P436 carries the pre-entry seed timestamps forward and fetches post-entry horizon only for candidates that passed the closed-HTF strict seed gate and then passed known-at-entry LTF confirmation/entry guards.
+```
+
+Honesty boundary:
+
+```text
+The post-entry fetch restriction uses only the closed-HTF seed decision already made before any LTF/post-entry data, plus normal known-at-entry LTF confirmation/entry guards. It does not use future runner labels, post-entry prices, stop outcomes, MFE/MAE, PnL, or arbitrary per-symbol caps. Broad HTF anomalies that did not pass the strict seed gate are audited as skipped for post-entry fetch, not counted as failed trades.
+```
+
+Status: PROPOSED against P435 workspace / commit UNKNOWN.
+
+Validation: run `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; then rerun 7d discovery and inspect `htf_ltf_runner_targeted_ltf_plan.csv`. The post-entry summary must show `selection_model=closed_htf_strict_seed_gate_then_known_at_entry_ltf_confirmation_no_future` and a nonzero `skipped_broad_htf_candidates_not_in_strict_seed_gate` when the broad anomaly gate is much wider than the strict seed gate.
+
 ## 2026-05-28 - P435 proposed - finite LTF decay features without RuntimeWarning spam
 
 Files:

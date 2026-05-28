@@ -1,3 +1,13 @@
+## 2026-05-28 - P436 post-entry fetch root-cause fix proposed
+
+Current commit: UNKNOWN.
+
+Status: P436 PROPOSED against P435 workspace. The interrupted 7d run finished `5m_1m` but stalled during `5m_30s` targeted post-entry fetch; the artifact ZIP contains no `5m_30s` CSVs, while the completed `5m_1m` artifacts show the broad HTF gate still creates thousands of candidates/entry windows. Code review found the actual cause: P434 tightened the pre-entry HTF seed gate, but `_build_targeted_ltf_post_entry_backfill_plan()` ignored that seed set and rebuilt post-entry plans from the broad `_collect_symbol_candidates()` anomaly gate. Therefore the expensive 60m post-entry fetch was still planned for every broad executable LTF window.
+
+Patch: carry pre-entry strict seed timestamps into post-entry planning, filter broad candidates to those seed timestamps, and audit how many broad candidates were skipped because they were not strict seeds. This is not an arbitrary cap and does not use future labels/PnL/post-entry prices.
+
+Next: apply P436 after P435, rerun `./.venv/Scripts/python.exe main.py run-htf-ltf-runner-discovery --days 7`, and check the `post_entry` summary in `htf_ltf_runner_targeted_ltf_plan.csv` before moving to 45d.
+
 ## 2026-05-28 - P435 finite LTF decay feature fix proposed
 
 Current commit: UNKNOWN.
