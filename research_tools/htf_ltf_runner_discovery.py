@@ -21,7 +21,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -74,6 +74,12 @@ class HtfLtfRunnerDiscoveryConfig:
     entry_slippage_pct: float = 0.0005
     exit_slippage_pct: float = 0.0005
     symbol_workers: int = 1
+    auto_targeted_ltf_backfill: bool = True
+    targeted_backfill_min_htf_quote_ratio: float = 12.0
+    targeted_backfill_min_htf_trade_ratio: float = 12.0
+    targeted_backfill_min_htf_return_pct: float = 0.0227
+    targeted_backfill_min_htf_range_pct: float = 0.030
+    targeted_backfill_max_events_per_symbol: int = 20
 
     def __post_init__(self) -> None:
         if self.htf_timeframe == self.ltf_timeframe:
@@ -95,6 +101,8 @@ class HtfLtfRunnerDiscoveryConfig:
                 raise ValueError(f"{name} must be > 0")
         if self.ltf_max_confirm_candles < self.ltf_min_confirm_candles:
             raise ValueError("ltf_max_confirm_candles must be >= ltf_min_confirm_candles")
+        if self.targeted_backfill_max_events_per_symbol < 0:
+            raise ValueError("targeted_backfill_max_events_per_symbol must be >= 0")
 
 
 
@@ -162,6 +170,25 @@ def run_htf_ltf_runner_discovery(
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
     end_ms = _resolve_end_timestamp_ms(config, storage, selected_symbols)
     start_ms = int(end_ms) - int(config.days) * 24 * 60 * 60 * 1000
+
+    targeted_ltf_plan = pd.DataFrame()
+    targeted_ltf_fetch = pd.DataFrame()
+    targeted_ltf_materialize = pd.DataFrame()
+    if _targeted_ltf_backfill_required(config):
+        targeted_ltf_plan, windows_by_symbol = _build_targeted_ltf_backfill_plan(
+            storage=storage,
+            symbols=selected_symbols,
+            start_ms=start_ms,
+            end_ms=end_ms,
+            config=config,
+            progress_label=f"{progress_label or 'runner discovery'} targeted plan",
+        )
+        targeted_ltf_fetch, targeted_ltf_materialize = _ensure_targeted_ltf_backfill(
+            cache_dir=config.cache_dir,
+            ltf_timeframe=config.ltf_timeframe,
+            windows_by_symbol=windows_by_symbol,
+            progress_label=f"{progress_label or 'runner discovery'} targeted LTF",
+        )
 
     candidate_rows: list[dict[str, object]] = []
     entry_window_rows: list[dict[str, object]] = []
@@ -334,6 +361,9 @@ def run_htf_ltf_runner_discovery(
             _top_dependency(live_filtered),
         ),
         (config.output_dir / "htf_ltf_runner_data_quality_summary.csv", pd.DataFrame(quality_rows)),
+        (config.output_dir / "htf_ltf_runner_targeted_ltf_plan.csv", targeted_ltf_plan),
+        (config.output_dir / "htf_ltf_runner_targeted_ltf_fetch.csv", targeted_ltf_fetch),
+        (config.output_dir / "htf_ltf_runner_targeted_ltf_materialize.csv", targeted_ltf_materialize),
         (config.output_dir / "htf_ltf_runner_honesty_report.csv", _honesty_report(config)),
         (
             config.output_dir / "run_config.csv",
@@ -351,8 +381,15 @@ def run_htf_ltf_runner_discovery(
                         "execution_model": "next_ltf_open_after_closed_ltf_confirmation",
                         "exit_model": "structural_stop_plus_structural_trailing_no_tp",
                         "future_label_model": "separate_next_hour_10pct_label_not_used_for_entry",
-                        "data_access_model": "cache_only_no_exchange_fetch",
-                        "seconds_download_required": False,
+                        "data_access_model": (
+                            "targeted_aggtrade_1s_backfill_then_strict_ltf_replay"
+                            if _targeted_ltf_backfill_required(config)
+                            else "cache_only_no_exchange_fetch"
+                        ),
+                        "seconds_download_required": bool(_targeted_ltf_backfill_required(config)),
+                        "targeted_ltf_plan_rows": int(len(targeted_ltf_plan)),
+                        "targeted_ltf_fetch_rows": int(len(targeted_ltf_fetch)),
+                        "targeted_ltf_materialize_rows": int(len(targeted_ltf_materialize)),
                         "runtime_seconds": round(time.monotonic() - started_at, 3),
                         "scanned_htf_rows": scanned_htf_rows,
                         "candidate_artifact_scope": "htf_anomaly_gate_only",
@@ -379,6 +416,199 @@ def run_htf_ltf_runner_discovery(
     )
     return config.output_dir
 
+
+
+def _targeted_ltf_backfill_required(config: HtfLtfRunnerDiscoveryConfig) -> bool:
+    if not bool(config.auto_targeted_ltf_backfill):
+        return False
+    ltf_ms = _timeframe_ms(config.ltf_timeframe)
+    return 0 < ltf_ms < 60_000
+
+
+def _build_targeted_ltf_backfill_plan(
+    *,
+    storage: ParquetStorage,
+    symbols: Iterable[str],
+    start_ms: int,
+    end_ms: int,
+    config: HtfLtfRunnerDiscoveryConfig,
+    progress_label: str,
+) -> tuple[pd.DataFrame, dict[str, list[tuple[int, int]]]]:
+    rows: list[dict[str, object]] = []
+    windows_by_symbol: dict[str, list[tuple[int, int]]] = {}
+    selected_symbols = tuple(symbols)
+    progress = _ProgressLine(label=progress_label, total=len(selected_symbols))
+    htf_ms = _timeframe_ms(config.htf_timeframe)
+    ltf_ms = _timeframe_ms(config.ltf_timeframe)
+    for index, symbol in enumerate(selected_symbols, start=1):
+        progress.update(index=index, item=symbol)
+        htf = _load_frame(storage, symbol, config.htf_timeframe, start_ms=start_ms, end_ms=end_ms)
+        symbol_rows, windows = _targeted_ltf_backfill_seeds_for_symbol(symbol=symbol, htf=htf, config=config, htf_ms=htf_ms, ltf_ms=ltf_ms)
+        rows.extend(symbol_rows)
+        if windows:
+            windows_by_symbol[symbol] = windows
+    progress.finish()
+    plan = pd.DataFrame(rows)
+    summary = {
+        "symbol": "__all__",
+        "targeted_ltf_plan_status": "summary",
+        "htf_timeframe": config.htf_timeframe,
+        "ltf_timeframe": config.ltf_timeframe,
+        "symbols": len(selected_symbols),
+        "candidate_seed_rows": int(len(plan.loc[plan.get("targeted_ltf_plan_status", pd.Series(dtype=str)).astype(str).eq("planned")])) if not plan.empty else 0,
+        "symbols_with_windows": int(len(windows_by_symbol)),
+        "raw_targeted_windows": int(sum(len(windows) for windows in windows_by_symbol.values())),
+        "window_model": "strict_htf_anomaly_start_to_max_entry_and_hold_or_runner_horizon",
+        "seed_gate": _targeted_ltf_seed_gate_description(config),
+        "min_htf_quote_ratio": float(config.targeted_backfill_min_htf_quote_ratio),
+        "min_htf_trade_ratio": float(config.targeted_backfill_min_htf_trade_ratio),
+        "min_htf_return_pct": float(config.targeted_backfill_min_htf_return_pct),
+        "min_htf_range_pct": float(config.targeted_backfill_min_htf_range_pct),
+        "max_events_per_symbol": int(config.targeted_backfill_max_events_per_symbol),
+    }
+    if plan.empty:
+        plan = pd.DataFrame([summary])
+    else:
+        plan = pd.concat([pd.DataFrame([summary]), plan], ignore_index=True, sort=False)
+    return plan, windows_by_symbol
+
+
+def _targeted_ltf_backfill_seeds_for_symbol(
+    *,
+    symbol: str,
+    htf: pd.DataFrame,
+    config: HtfLtfRunnerDiscoveryConfig,
+    htf_ms: int,
+    ltf_ms: int,
+) -> tuple[list[dict[str, object]], list[tuple[int, int]]]:
+    empty_result: tuple[list[dict[str, object]], list[tuple[int, int]]] = ([], [])
+    if htf.empty or "timestamp" not in htf.columns:
+        return empty_result
+    prepared = htf.copy()
+    prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close"]).sort_values("timestamp")
+    if prepared.empty or "quote_volume" not in prepared.columns or "number_of_trades" not in prepared.columns:
+        return empty_result
+    quote_series = _numeric_column(prepared, "quote_volume")
+    trade_series = _numeric_column(prepared, "number_of_trades")
+    prepared["_quote_volume"] = quote_series
+    prepared["_number_of_trades"] = trade_series
+    min_index = max(config.baseline_candles, config.dormancy_candles, config.pregrowth_candles) + 1
+    timestamps = pd.to_numeric(prepared["timestamp"], errors="coerce")
+    row_numbers = pd.Series(np.arange(len(prepared)), index=prepared.index)
+    positive_quote = prepared["_quote_volume"].where(prepared["_quote_volume"] > 0)
+    positive_trades = prepared["_number_of_trades"].where(prepared["_number_of_trades"] > 0)
+    baseline_quote = positive_quote.shift(1).rolling(config.baseline_candles, min_periods=1).median()
+    baseline_trades = positive_trades.shift(1).rolling(config.baseline_candles, min_periods=1).median()
+    htf_return = (pd.to_numeric(prepared["close"], errors="coerce") - pd.to_numeric(prepared["open"], errors="coerce")) / pd.to_numeric(
+        prepared["open"],
+        errors="coerce",
+    )
+    htf_range = (pd.to_numeric(prepared["high"], errors="coerce") - pd.to_numeric(prepared["low"], errors="coerce")) / pd.to_numeric(
+        prepared["open"],
+        errors="coerce",
+    )
+    quote_ratio = (_numeric_column(prepared, "_quote_volume") / baseline_quote).replace([np.inf, -np.inf], np.nan)
+    trade_ratio = (_numeric_column(prepared, "_number_of_trades") / baseline_trades).replace([np.inf, -np.inf], np.nan)
+    gate = (
+        row_numbers.ge(min_index)
+        & quote_ratio.ge(float(config.targeted_backfill_min_htf_quote_ratio))
+        & trade_ratio.ge(float(config.targeted_backfill_min_htf_trade_ratio))
+        & htf_return.ge(float(config.targeted_backfill_min_htf_return_pct))
+        & htf_range.ge(float(config.targeted_backfill_min_htf_range_pct))
+    )
+    seed_indices = list(np.flatnonzero(gate.to_numpy(dtype=bool, na_value=False)))
+    if not seed_indices:
+        return empty_result
+    scored: list[tuple[float, int]] = []
+    for idx in seed_indices:
+        score = (
+            float(htf_return.iloc[idx]) * 100.0
+            + float(htf_range.iloc[idx]) * 25.0
+            + math.log1p(max(0.0, float(quote_ratio.iloc[idx]) if np.isfinite(float(quote_ratio.iloc[idx])) else 0.0))
+            + math.log1p(max(0.0, float(trade_ratio.iloc[idx]) if np.isfinite(float(trade_ratio.iloc[idx])) else 0.0))
+        )
+        scored.append((score, int(idx)))
+    scored.sort(reverse=True)
+    max_events = int(config.targeted_backfill_max_events_per_symbol)
+    if max_events > 0:
+        seed_indices = [idx for _, idx in scored[:max_events]]
+    else:
+        seed_indices = [idx for _, idx in scored]
+    seed_indices.sort()
+    rows: list[dict[str, object]] = []
+    windows: list[tuple[int, int]] = []
+    window_tail_ms = max(
+        int(config.runner_horizon_minutes) * 60_000,
+        (int(config.ltf_max_confirm_candles) + int(config.max_hold_candles)) * int(ltf_ms),
+    )
+    for idx in seed_indices:
+        row = prepared.iloc[idx]
+        ts = int(row["timestamp"])
+        htf_close_ms = ts + int(htf_ms)
+        window_start = int(ts)
+        window_end = int(htf_close_ms + window_tail_ms - 1)
+        windows.append((window_start, window_end))
+        rows.append(
+            {
+                "symbol": symbol,
+                "targeted_ltf_plan_status": "planned",
+                "timestamp_ms": ts,
+                "timestamp_utc": _timestamp_to_utc(ts),
+                "htf_close_ms": htf_close_ms,
+                "htf_close_utc": _timestamp_to_utc(htf_close_ms),
+                "htf_timeframe": config.htf_timeframe,
+                "ltf_timeframe": config.ltf_timeframe,
+                "window_start_ms": window_start,
+                "window_start_utc": _timestamp_to_utc(window_start),
+                "window_end_ms": window_end,
+                "window_end_utc": _timestamp_to_utc(window_end),
+                "window_ms": int(window_end - window_start + 1),
+                "window_model": "htf_anomaly_start_to_max_entry_plus_hold_or_runner_horizon",
+                "seed_gate": _targeted_ltf_seed_gate_description(config),
+                "htf_return_pct": float(htf_return.iloc[idx]),
+                "htf_range_pct": float(htf_range.iloc[idx]),
+                "htf_quote_ratio": float(quote_ratio.iloc[idx]),
+                "htf_trade_ratio": float(trade_ratio.iloc[idx]),
+                "anomaly_quote_volume": float(row["_quote_volume"]),
+                "anomaly_number_of_trades": float(row["_number_of_trades"]),
+            }
+        )
+    return rows, windows
+
+
+def _targeted_ltf_seed_gate_description(config: HtfLtfRunnerDiscoveryConfig) -> str:
+    return (
+        "htf_quote_ratio>={quote:.4g} AND htf_trade_ratio>={trade:.4g} AND "
+        "htf_return_pct>={ret:.4%} AND htf_range_pct>={rng:.4%}"
+    ).format(
+        quote=float(config.targeted_backfill_min_htf_quote_ratio),
+        trade=float(config.targeted_backfill_min_htf_trade_ratio),
+        ret=float(config.targeted_backfill_min_htf_return_pct),
+        rng=float(config.targeted_backfill_min_htf_range_pct),
+    )
+
+
+def _ensure_targeted_ltf_backfill(
+    *,
+    cache_dir: Path,
+    ltf_timeframe: str,
+    windows_by_symbol: Mapping[str, Iterable[tuple[int, int]]],
+    progress_label: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if not windows_by_symbol:
+        return (
+            pd.DataFrame([{"status": "no_targeted_windows", "reason": "strict_htf_seed_gate_selected_zero_windows"}]),
+            pd.DataFrame([{"status": "not_run", "reason": "no_targeted_windows"}]),
+        )
+    from research_tools.anomaly_strategy_backtest import ensure_targeted_aggtrade_subminute_cache
+
+    return ensure_targeted_aggtrade_subminute_cache(
+        cache_dir=cache_dir,
+        windows_by_symbol=windows_by_symbol,
+        target_timeframes=(str(ltf_timeframe),),
+        progress_label=progress_label,
+    )
 
 def _collect_symbol_candidates(
     *,

@@ -1,3 +1,13 @@
+## 2026-05-28 - P430 targeted subminute rerun
+
+Experiment status: planned after P430.
+
+Question: do 5m/15s and 5m/30s have edge when the LTF path is honestly built only around strong suspected HTF events instead of requiring a full historical subminute universe?
+
+Run: `./.venv/Scripts/python.exe main.py run-htf-ltf-runner-discovery --days 45`. Keep default targeted seed gate first: quote ratio >= 12, trade ratio >= 12, HTF return >= 2.27%, HTF range >= 3.0%, max 20 events per symbol.
+
+Acceptance: target profiles must have non-empty targeted plan/fetch/materialize artifacts, high `entry_ltf_path_status=ok` and `post_entry_ltf_path_status=ok` share among planned windows, and enough closed trades to judge day stability. Edge acceptance remains median net > 0, positive expectancy after fees/slippage, clean runner share materially above base rate, and limited top-symbol dependency.
+
 ## 2026-05-27 - P429 strict replay rerun required
 
 Experiment status: planned after P429.

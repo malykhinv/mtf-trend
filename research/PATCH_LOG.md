@@ -1,3 +1,42 @@
+## 2026-05-28 - P430 proposed - targeted runner-discovery LTF backfill
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+research_tools/anomaly_strategy_backtest.py
+cli/commands.py
+cli/parser.py
+research/RESEARCH_STATE.md
+research/PATCH_LOG.md
+research/EXPERIMENT_LOG.md
+research/STRATEGY_SPEC.md
+```
+
+Commit message:
+
+```text
+P430: add targeted LTF backfill for runner discovery
+```
+
+Change:
+
+```text
+`run-htf-ltf-runner-discovery` no longer treats 15s/30s profiles as cache-only experiments. For subminute LTF profiles it first builds a strict HTF-only seed plan, fetches true Binance futures aggTrades only for windows from HTF anomaly start through possible entry/position-follow horizon, materializes the requested LTF from 1s, writes plan/fetch/materialize artifacts, then runs P429 strict replay. The subminute materializer now emits zero-trade candles only when the aggTrade coverage metadata proves the bucket is fully covered; these rows are explicitly marked.
+```
+
+Validation:
+
+```text
+compileall passed for data/exchanges research_tools cli constants.py main.py. No live/network fetch smoke was run in the sandbox.
+```
+
+Risk:
+
+```text
+The default seed gate is intentionally stricter than the generic anomaly gate to control 1s download cost and may miss weaker runners. Treat it as a data-fetch/research-cost profile, not final live logic.
+```
+
 ## 2026-05-27 - P429 proposed - strict LTF wall-clock honesty for runner discovery
 
 Files:

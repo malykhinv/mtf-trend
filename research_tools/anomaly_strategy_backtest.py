@@ -1640,23 +1640,23 @@ def _aggregate_frame_to_timeframe(frame: pd.DataFrame, *, timeframe_ms: int) -> 
     coverage_by_bucket: dict[int, bool] = {}
     coverage_columns = {"aggtrade_coverage_start_timestamp_ms", "aggtrade_coverage_end_timestamp_ms"}
     if coverage_columns.issubset(prepared.columns):
-        for bucket, group in prepared.groupby("bucket", sort=False):
-            intervals_frame = group.loc[
-                group["aggtrade_coverage_start_timestamp_ms"].notna()
-                & group["aggtrade_coverage_end_timestamp_ms"].notna(),
-                ["aggtrade_coverage_start_timestamp_ms", "aggtrade_coverage_end_timestamp_ms"],
-            ].drop_duplicates()
-            intervals = [
-                (int(row["aggtrade_coverage_start_timestamp_ms"]), int(row["aggtrade_coverage_end_timestamp_ms"]))
-                for _, row in intervals_frame.iterrows()
-            ]
-            bucket_start = int(bucket)
-            bucket_end = bucket_start + int(timeframe_ms) - 1
-            coverage_by_bucket[bucket_start] = _coverage_intervals_cover_bucket(
-                intervals,
-                bucket_start_ms=bucket_start,
-                bucket_end_ms=bucket_end,
-            )
+        intervals_frame = prepared.loc[
+            prepared["aggtrade_coverage_start_timestamp_ms"].notna()
+            & prepared["aggtrade_coverage_end_timestamp_ms"].notna(),
+            ["aggtrade_coverage_start_timestamp_ms", "aggtrade_coverage_end_timestamp_ms"],
+        ].drop_duplicates()
+        intervals = [
+            (int(row["aggtrade_coverage_start_timestamp_ms"]), int(row["aggtrade_coverage_end_timestamp_ms"]))
+            for _, row in intervals_frame.iterrows()
+        ]
+        for start_ms, end_ms in intervals:
+            for bucket_start in _contained_bucket_starts(int(start_ms), int(end_ms), timeframe_ms=int(timeframe_ms)):
+                bucket_end = int(bucket_start) + int(timeframe_ms) - 1
+                coverage_by_bucket[int(bucket_start)] = _coverage_intervals_cover_bucket(
+                    intervals,
+                    bucket_start_ms=int(bucket_start),
+                    bucket_end_ms=bucket_end,
+                )
     aggregation: dict[str, str] = {
         "timestamp": "first",
         "open": "first",
@@ -1668,14 +1668,44 @@ def _aggregate_frame_to_timeframe(frame: pd.DataFrame, *, timeframe_ms: int) -> 
         if column in prepared.columns:
             aggregation[column] = "sum"
     aggregated = prepared.groupby("bucket", as_index=False).agg(aggregation)
+    aggregated["bucket"] = pd.to_numeric(aggregated["bucket"], errors="coerce").astype("int64")
     if coverage_by_bucket:
-        aggregated = aggregated.loc[
-            aggregated["bucket"].astype("int64").map(lambda value: bool(coverage_by_bucket.get(int(value), False)))
-        ].copy()
-        if aggregated.empty:
+        rows_by_bucket = {int(row["bucket"]): row.to_dict() for _, row in aggregated.iterrows()}
+        completed_rows: list[dict[str, object]] = []
+        last_close = float("nan")
+        for bucket in sorted(bucket for bucket, covered in coverage_by_bucket.items() if covered):
+            if bucket in rows_by_bucket:
+                row = dict(rows_by_bucket[bucket])
+                row["aggtrade_zero_trade_bucket"] = False
+                close = float(row.get("close", float("nan")))
+                if np.isfinite(close):
+                    last_close = close
+                completed_rows.append(row)
+                continue
+            if not np.isfinite(last_close):
+                continue
+            row = {
+                "bucket": int(bucket),
+                "timestamp": int(bucket),
+                "open": float(last_close),
+                "high": float(last_close),
+                "low": float(last_close),
+                "close": float(last_close),
+                "aggtrade_zero_trade_bucket": True,
+            }
+            for column in ("volume", "quote_volume", "number_of_trades", "taker_buy_volume", "taker_buy_quote_volume"):
+                if column in aggregation:
+                    row[column] = 0.0
+            completed_rows.append(row)
+        if not completed_rows:
             return pd.DataFrame()
+        aggregated = pd.DataFrame(completed_rows)
         aggregated["aggtrade_coverage_verified"] = True
-    aggregated["timestamp"] = aggregated["bucket"].astype("int64")
+        aggregated["aggtrade_materialization_model"] = "full_covered_buckets_with_zero_trade_candles"
+    else:
+        aggregated["aggtrade_zero_trade_bucket"] = False
+        aggregated["aggtrade_materialization_model"] = "trade_buckets_only_no_coverage_metadata"
+    aggregated["timestamp"] = pd.to_numeric(aggregated["bucket"], errors="coerce").astype("int64")
     aggregated.drop(columns=["bucket"], inplace=True)
     aggregated.sort_values("timestamp", inplace=True)
     aggregated.reset_index(drop=True, inplace=True)
@@ -2094,6 +2124,122 @@ def materialize_subminute_entry_caches(
             _maybe_emit_progress()
 
     return pd.DataFrame(rows)
+
+
+def ensure_targeted_aggtrade_subminute_cache(
+    *,
+    cache_dir: Path,
+    windows_by_symbol: Mapping[str, Iterable[tuple[int, int]]],
+    target_timeframes: Iterable[str],
+    progress_label: str | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fetch true aggTrade 1s only for explicit windows and materialize requested LTF caches.
+
+    This is a shared targeted-cache boundary for research jobs that already know
+    the suspicious HTF windows. It does not broaden the universe, does not fetch
+    whole-history subminute data, and does not synthesize flow from OHLCV proxies.
+    """
+
+    target_timeframes_tuple = tuple(str(tf) for tf in target_timeframes)
+    normalized_windows: dict[str, list[tuple[int, int]]] = {}
+    for raw_symbol, raw_windows in windows_by_symbol.items():
+        symbol = str(raw_symbol).strip()
+        if not symbol or symbol == "__all__":
+            continue
+        merged = _merge_targeted_timestamp_windows(raw_windows)
+        if merged:
+            normalized_windows[symbol] = merged
+    plan_rows: list[dict[str, object]] = []
+    raw_windows_total = sum(len(tuple(raw_windows)) for raw_windows in windows_by_symbol.values())
+    merged_windows_total = sum(len(windows) for windows in normalized_windows.values())
+    plan_rows.append(
+        {
+            "symbol": "__all__",
+            "status": "window_plan",
+            "target_timeframes": ",".join(target_timeframes_tuple),
+            "symbols_with_windows": int(len(normalized_windows)),
+            "raw_targeted_windows": int(raw_windows_total),
+            "merged_targeted_windows": int(merged_windows_total),
+            "data_source": "binance_futures_aggTrades_1s_then_materialized_ltf",
+        }
+    )
+    if not normalized_windows:
+        return pd.DataFrame(plan_rows), pd.DataFrame([{"status": "not_run", "reason": "no_targeted_windows"}])
+
+    fetch_rows: list[dict[str, object]] = []
+    total_windows = max(1, merged_windows_total)
+    done_windows = 0
+    started_at = time.monotonic()
+    next_progress_pct = 0
+    for symbol in sorted(normalized_windows):
+        for window_start, window_end in normalized_windows[symbol]:
+            status = "ok"
+            error = ""
+            rows_before = 0
+            rows_after = 0
+            try:
+                cache_path = _cache_data_path(cache_dir, symbol, "1s")
+                rows_before = _cached_timestamp_row_count(cache_path)
+                if _trusted_aggtrade_window_covered_from_cache(
+                    cache_dir,
+                    symbol,
+                    start_timestamp_ms=int(window_start),
+                    end_timestamp_ms=int(window_end),
+                ):
+                    rows_after = rows_before
+                    status = "exists_covered_requested_window"
+                else:
+                    frame = _ensure_latency_1s_cache(
+                        cache_dir,
+                        symbol,
+                        start_timestamp_ms=int(window_start),
+                        end_timestamp_ms=int(window_end),
+                    )
+                    rows_after = int(len(frame))
+                    if not _trusted_aggtrade_window_covered(
+                        frame,
+                        start_timestamp_ms=int(window_start),
+                        end_timestamp_ms=int(window_end),
+                    ):
+                        status = "partial_or_empty"
+            except Exception as exc:
+                status = "error"
+                error = f"{type(exc).__name__}: {exc}"
+            fetch_rows.append(
+                {
+                    "symbol": symbol,
+                    "status": status,
+                    "error": error,
+                    "start_timestamp_ms": int(window_start),
+                    "end_timestamp_ms": int(window_end),
+                    "start_timestamp_utc": _timestamp_to_utc(int(window_start)),
+                    "end_timestamp_utc": _timestamp_to_utc(int(window_end)),
+                    "rows_before": int(rows_before),
+                    "rows_after": int(rows_after),
+                    "rows_delta": int(rows_after - rows_before),
+                    "aggregation_version": AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION,
+                }
+            )
+            done_windows += 1
+            if progress_label is not None and total_windows:
+                next_progress_pct = _emit_progress_5pct(
+                    label=f"{progress_label}: targeted 1s aggTrades",
+                    done=done_windows,
+                    total=total_windows,
+                    started_at=started_at,
+                    next_progress_pct=next_progress_pct,
+                )
+
+    materialize = materialize_subminute_entry_caches(
+        cache_dir=cache_dir,
+        target_timeframes=target_timeframes_tuple,
+        symbols=tuple(sorted(normalized_windows)),
+        overwrite=False,
+        progress_label=f"{progress_label}: materialize LTF" if progress_label else None,
+        intervals_by_symbol=normalized_windows,
+    )
+    fetch = pd.concat([pd.DataFrame(plan_rows).assign(row_type="plan"), pd.DataFrame(fetch_rows).assign(row_type="fetch")], ignore_index=True, sort=False)
+    return fetch, materialize
 
 
 def _merge_targeted_timestamp_windows(

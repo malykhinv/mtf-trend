@@ -1,3 +1,9 @@
+## 2026-05-28 - Targeted subminute data contract for runner discovery
+
+For `run-htf-ltf-runner-discovery`, subminute profiles must not require rebuilding the whole universe at 1s. The valid data path is targeted: identify stricter HTF anomaly seeds from closed HTF candles, fetch true aggTrade 1s only from the HTF anomaly start through the maximum entry-confirmation and position-follow horizon, materialize the requested LTF, and then run strict no-gap replay. This is a data-availability step, not a future-label or entry filter. The default seed gate is cost-control and research hygiene, not a proven live category.
+
+Zero-trade subminute candles may be materialized only when aggTrade coverage metadata proves the entire bucket was fetched. They must be marked as zero-trade covered buckets; missing coverage remains a gap/missing-data status.
+
 ## 2026-05-27 - Strict HTF/LTF discovery replay requirement
 
 HTF/LTF runner discovery evidence is valid only when the LTF path used for confirmation, future labels and post-entry replay is continuous at the configured LTF step. A trade must not be carried across missing subminute candles. If the stop/trailing stop is hit before a later gap, that closed trade is valid; otherwise a pre-exit gap or incomplete hold window is a skip/missing-data outcome, not a time exit. Flow confirmation must use real `quote_volume` and real `number_of_trades`; synthetic `close * volume` quote-volume is not acceptable for runner/fader conclusions.

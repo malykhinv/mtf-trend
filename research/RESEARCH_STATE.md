@@ -1,3 +1,11 @@
+## 2026-05-28 - P430 targeted LTF backfill for runner discovery proposed
+
+Current commit: UNKNOWN.
+
+Status: P430 PROPOSED against uploaded workspace / GitHub branch content not head-verified. The P429 strict replay run proved `5m_1m` is usable but `5m_15s` and `5m_30s` were almost empty because the command stayed cache-only and did not build subminute data around suspected entries. P430 makes runner discovery plan targeted true aggTrade 1s windows only for stricter HTF anomaly seeds, materialize the requested subminute LTF from those windows, and then run the same strict wall-clock replay. The default targeted seed gate is intentionally tighter than the generic anomaly gate: quote ratio >= 12, trade ratio >= 12, HTF return >= 2.27%, HTF range >= 3.0%, max 20 events per symbol.
+
+Next: run `./.venv/Scripts/python.exe main.py run-htf-ltf-runner-discovery --days 45` and inspect `htf_ltf_runner_targeted_ltf_plan.csv`, `htf_ltf_runner_targeted_ltf_fetch.csv`, and `htf_ltf_runner_targeted_ltf_materialize.csv` before judging 15s/30s edge. If too few events are planned, lower only one seed threshold and rerun; do not disable strict LTF replay.
+
 ## 2026-05-27 - P429 strict LTF wall-clock honesty proposed
 
 Current commit: UNKNOWN.

@@ -1792,6 +1792,12 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 trail_lookback_candles=int(profile["trail_lookback_candles"]),
                 max_hold_candles=int(profile["max_hold_candles"]),
                 symbol_workers=int(getattr(args, "backtest_symbol_workers", 1)),
+                auto_targeted_ltf_backfill=bool(getattr(args, "targeted_ltf_backfill", True)),
+                targeted_backfill_min_htf_quote_ratio=float(getattr(args, "targeted_backfill_min_htf_quote_ratio", 12.0)),
+                targeted_backfill_min_htf_trade_ratio=float(getattr(args, "targeted_backfill_min_htf_trade_ratio", 12.0)),
+                targeted_backfill_min_htf_return_pct=float(getattr(args, "targeted_backfill_min_htf_return_pct", 0.0227)),
+                targeted_backfill_min_htf_range_pct=float(getattr(args, "targeted_backfill_min_htf_range_pct", 0.030)),
+                targeted_backfill_max_events_per_symbol=int(getattr(args, "targeted_backfill_max_events_per_symbol", 20)),
             )
             result_dir = run_discovery(discovery_config, progress_label=f"runner discovery {profile['name']}")
             index_rows.append(
@@ -1801,7 +1807,11 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                     "ltf_timeframe": profile["ltf_timeframe"],
                     "days": days,
                     "output_dir": str(result_dir),
-                    "data_access_model": "cache_only_no_exchange_fetch",
+                    "data_access_model": (
+                        "targeted_aggtrade_1s_backfill_then_strict_ltf_replay"
+                        if discovery_config.auto_targeted_ltf_backfill and str(profile["ltf_timeframe"]).endswith("s")
+                        else "cache_only_no_exchange_fetch"
+                    ),
                 }
             )
         output_root.mkdir(parents=True, exist_ok=True)
