@@ -75,11 +75,16 @@ class HtfLtfRunnerDiscoveryConfig:
     exit_slippage_pct: float = 0.0005
     symbol_workers: int = 1
     auto_targeted_ltf_backfill: bool = True
-    targeted_backfill_min_htf_quote_ratio: float = 12.0
-    targeted_backfill_min_htf_trade_ratio: float = 12.0
-    targeted_backfill_min_htf_return_pct: float = 0.0227
-    targeted_backfill_min_htf_range_pct: float = 0.030
-    targeted_backfill_max_events_per_symbol: int = 20
+    targeted_backfill_min_htf_quote_ratio: float = 20.0
+    targeted_backfill_min_htf_trade_ratio: float = 20.0
+    targeted_backfill_min_htf_return_pct: float = 0.030
+    targeted_backfill_min_htf_range_pct: float = 0.040
+    targeted_backfill_min_dormancy_to_anomaly_quote_ratio: float = 14.0
+    targeted_backfill_min_dormancy_to_anomaly_trade_ratio: float = 12.0
+    targeted_backfill_max_dormancy_range_pct_median: float = 0.006
+    targeted_backfill_min_abs_quote_volume: float = 50_000.0
+    targeted_backfill_min_abs_number_of_trades: float = 150.0
+    targeted_backfill_max_events_per_symbol: int = 0
 
     def __post_init__(self) -> None:
         if self.htf_timeframe == self.ltf_timeframe:
@@ -103,6 +108,18 @@ class HtfLtfRunnerDiscoveryConfig:
             raise ValueError("ltf_max_confirm_candles must be >= ltf_min_confirm_candles")
         if self.targeted_backfill_max_events_per_symbol < 0:
             raise ValueError("targeted_backfill_max_events_per_symbol must be >= 0")
+        for name in (
+            "targeted_backfill_min_htf_quote_ratio",
+            "targeted_backfill_min_htf_trade_ratio",
+            "targeted_backfill_min_dormancy_to_anomaly_quote_ratio",
+            "targeted_backfill_min_dormancy_to_anomaly_trade_ratio",
+            "targeted_backfill_min_abs_quote_volume",
+            "targeted_backfill_min_abs_number_of_trades",
+        ):
+            if float(getattr(self, name)) < 0.0:
+                raise ValueError(f"{name} must be >= 0")
+        if self.targeted_backfill_max_dormancy_range_pct_median < 0.0:
+            raise ValueError("targeted_backfill_max_dormancy_range_pct_median must be >= 0")
 
 
 
@@ -485,13 +502,18 @@ def _build_targeted_ltf_backfill_plan(
         "symbols_with_windows": int(len(windows_by_symbol)),
         "raw_targeted_windows": int(sum(len(windows) for windows in windows_by_symbol.values())),
         "targeted_ltf_phase": "pre_entry",
-        "window_model": "strict_htf_anomaly_start_to_max_entry_next_open_only",
-        "selection_model": "closed_htf_seed_gate_only",
+        "window_model": "strict_htf_awakening_start_to_max_entry_next_open_only",
+        "selection_model": "closed_htf_strict_awakening_seed_gate_only_no_future",
         "seed_gate": _targeted_ltf_seed_gate_description(config),
         "min_htf_quote_ratio": float(config.targeted_backfill_min_htf_quote_ratio),
         "min_htf_trade_ratio": float(config.targeted_backfill_min_htf_trade_ratio),
         "min_htf_return_pct": float(config.targeted_backfill_min_htf_return_pct),
         "min_htf_range_pct": float(config.targeted_backfill_min_htf_range_pct),
+        "min_dormancy_to_anomaly_quote_ratio": float(config.targeted_backfill_min_dormancy_to_anomaly_quote_ratio),
+        "min_dormancy_to_anomaly_trade_ratio": float(config.targeted_backfill_min_dormancy_to_anomaly_trade_ratio),
+        "max_dormancy_range_pct_median": float(config.targeted_backfill_max_dormancy_range_pct_median),
+        "min_abs_quote_volume": float(config.targeted_backfill_min_abs_quote_volume),
+        "min_abs_number_of_trades": float(config.targeted_backfill_min_abs_number_of_trades),
         "max_events_per_symbol": int(config.targeted_backfill_max_events_per_symbol),
     }
     if plan.empty:
@@ -528,6 +550,11 @@ def _targeted_ltf_backfill_seeds_for_symbol(
     positive_trades = prepared["_number_of_trades"].where(prepared["_number_of_trades"] > 0)
     baseline_quote = positive_quote.shift(1).rolling(config.baseline_candles, min_periods=1).median()
     baseline_trades = positive_trades.shift(1).rolling(config.baseline_candles, min_periods=1).median()
+    dormancy_quote = positive_quote.shift(1).rolling(config.dormancy_candles, min_periods=1).median()
+    dormancy_trades = positive_trades.shift(1).rolling(config.dormancy_candles, min_periods=1).median()
+    open_series = pd.to_numeric(prepared["open"], errors="coerce")
+    dormancy_range_pct = (pd.to_numeric(prepared["high"], errors="coerce") - pd.to_numeric(prepared["low"], errors="coerce")) / open_series
+    dormancy_range_pct_median = dormancy_range_pct.shift(1).rolling(config.dormancy_candles, min_periods=1).median()
     htf_return = (pd.to_numeric(prepared["close"], errors="coerce") - pd.to_numeric(prepared["open"], errors="coerce")) / pd.to_numeric(
         prepared["open"],
         errors="coerce",
@@ -536,14 +563,23 @@ def _targeted_ltf_backfill_seeds_for_symbol(
         prepared["open"],
         errors="coerce",
     )
-    quote_ratio = (_numeric_column(prepared, "_quote_volume") / baseline_quote).replace([np.inf, -np.inf], np.nan)
-    trade_ratio = (_numeric_column(prepared, "_number_of_trades") / baseline_trades).replace([np.inf, -np.inf], np.nan)
+    anomaly_quote_volume = _numeric_column(prepared, "_quote_volume")
+    anomaly_number_of_trades = _numeric_column(prepared, "_number_of_trades")
+    quote_ratio = (anomaly_quote_volume / baseline_quote).replace([np.inf, -np.inf], np.nan)
+    trade_ratio = (anomaly_number_of_trades / baseline_trades).replace([np.inf, -np.inf], np.nan)
+    dormancy_to_anomaly_quote_ratio = (anomaly_quote_volume / dormancy_quote).replace([np.inf, -np.inf], np.nan)
+    dormancy_to_anomaly_trade_ratio = (anomaly_number_of_trades / dormancy_trades).replace([np.inf, -np.inf], np.nan)
     gate = (
         row_numbers.ge(min_index)
         & quote_ratio.ge(float(config.targeted_backfill_min_htf_quote_ratio))
         & trade_ratio.ge(float(config.targeted_backfill_min_htf_trade_ratio))
         & htf_return.ge(float(config.targeted_backfill_min_htf_return_pct))
         & htf_range.ge(float(config.targeted_backfill_min_htf_range_pct))
+        & dormancy_to_anomaly_quote_ratio.ge(float(config.targeted_backfill_min_dormancy_to_anomaly_quote_ratio))
+        & dormancy_to_anomaly_trade_ratio.ge(float(config.targeted_backfill_min_dormancy_to_anomaly_trade_ratio))
+        & dormancy_range_pct_median.le(float(config.targeted_backfill_max_dormancy_range_pct_median))
+        & anomaly_quote_volume.ge(float(config.targeted_backfill_min_abs_quote_volume))
+        & anomaly_number_of_trades.ge(float(config.targeted_backfill_min_abs_number_of_trades))
     )
     seed_indices = list(np.flatnonzero(gate.to_numpy(dtype=bool, na_value=False)))
     if not seed_indices:
@@ -579,7 +615,7 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                 "symbol": symbol,
                 "targeted_ltf_phase": "pre_entry",
                 "targeted_ltf_plan_status": "planned",
-                "selection_model": "closed_htf_seed_gate_only",
+                "selection_model": "closed_htf_strict_awakening_seed_gate_only_no_future",
                 "timestamp_ms": ts,
                 "timestamp_utc": _timestamp_to_utc(ts),
                 "htf_close_ms": htf_close_ms,
@@ -591,12 +627,17 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                 "window_end_ms": window_end,
                 "window_end_utc": _timestamp_to_utc(window_end),
                 "window_ms": int(window_end - window_start + 1),
-                "window_model": "htf_anomaly_start_to_max_entry_next_open_only",
+                "window_model": "htf_awakening_start_to_max_entry_next_open_only",
                 "seed_gate": _targeted_ltf_seed_gate_description(config),
+                "known_at_seed_cutoff_ms": htf_close_ms,
+                "known_at_seed_cutoff_utc": _timestamp_to_utc(htf_close_ms),
                 "htf_return_pct": float(htf_return.iloc[idx]),
                 "htf_range_pct": float(htf_range.iloc[idx]),
                 "htf_quote_ratio": float(quote_ratio.iloc[idx]),
                 "htf_trade_ratio": float(trade_ratio.iloc[idx]),
+                "dormancy_to_anomaly_quote_ratio": float(dormancy_to_anomaly_quote_ratio.iloc[idx]),
+                "dormancy_to_anomaly_trade_ratio": float(dormancy_to_anomaly_trade_ratio.iloc[idx]),
+                "dormancy_range_pct_median": float(dormancy_range_pct_median.iloc[idx]),
                 "anomaly_quote_volume": float(row["_quote_volume"]),
                 "anomaly_number_of_trades": float(row["_number_of_trades"]),
             }
@@ -808,12 +849,21 @@ def _coerce_int(value: object) -> int | None:
 def _targeted_ltf_seed_gate_description(config: HtfLtfRunnerDiscoveryConfig) -> str:
     return (
         "htf_quote_ratio>={quote:.4g} AND htf_trade_ratio>={trade:.4g} AND "
-        "htf_return_pct>={ret:.4%} AND htf_range_pct>={rng:.4%}"
+        "htf_return_pct>={ret:.4%} AND htf_range_pct>={rng:.4%} AND "
+        "dormancy_to_anomaly_quote_ratio>={d_quote:.4g} AND "
+        "dormancy_to_anomaly_trade_ratio>={d_trade:.4g} AND "
+        "dormancy_range_pct_median<={d_rng:.4%} AND "
+        "anomaly_quote_volume>={abs_quote:.4g} AND anomaly_number_of_trades>={abs_trades:.4g}"
     ).format(
         quote=float(config.targeted_backfill_min_htf_quote_ratio),
         trade=float(config.targeted_backfill_min_htf_trade_ratio),
         ret=float(config.targeted_backfill_min_htf_return_pct),
         rng=float(config.targeted_backfill_min_htf_range_pct),
+        d_quote=float(config.targeted_backfill_min_dormancy_to_anomaly_quote_ratio),
+        d_trade=float(config.targeted_backfill_min_dormancy_to_anomaly_trade_ratio),
+        d_rng=float(config.targeted_backfill_max_dormancy_range_pct_median),
+        abs_quote=float(config.targeted_backfill_min_abs_quote_volume),
+        abs_trades=float(config.targeted_backfill_min_abs_number_of_trades),
     )
 
 

@@ -1,3 +1,13 @@
+## 2026-05-28 - P434 strict HTF awakening seed gate experiment
+
+Question: can runner discovery stay honest and become operationally usable by loading true 1s/LTF only for stronger closed-HTF awakening seeds, instead of applying arbitrary post-entry fetch caps?
+
+Design: after P432b, require every targeted LTF seed to pass closed-HTF-only thresholds for quote ratio, trade ratio, return, range, dormancy-to-anomaly quote/trade ratios, prior dormancy range, and absolute quote/trade liquidity. Future labels and post-entry prices are not available to the gate.
+
+Acceptance: 7d run should finish without multi-hour post-entry fetch ETA, write non-empty plan/fetch/materialize artifacts, and leave enough selected events for research. If coverage is too low, tune one seed threshold at a time on held-out windows and keep the gate documented in root index/run_config.
+
+Status: PROPOSED / commit UNKNOWN.
+
 ## 2026-05-28 - P432b two-stage targeted fetch validation
 
 Experiment status: planned after P432b.

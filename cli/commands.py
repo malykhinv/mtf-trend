@@ -1763,11 +1763,16 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 "ltf_max_confirm_candles": 4,
                 "trail_lookback_candles": 6,
                 "max_hold_candles": 60,
-                "seed_min_htf_quote_ratio": 12.0,
-                "seed_min_htf_trade_ratio": 12.0,
-                "seed_min_htf_return_pct": 0.0227,
-                "seed_min_htf_range_pct": 0.030,
-                "seed_max_events_per_symbol": 20,
+                "seed_min_htf_quote_ratio": 20.0,
+                "seed_min_htf_trade_ratio": 20.0,
+                "seed_min_htf_return_pct": 0.0300,
+                "seed_min_htf_range_pct": 0.040,
+                "seed_min_dormancy_to_anomaly_quote_ratio": 14.0,
+                "seed_min_dormancy_to_anomaly_trade_ratio": 12.0,
+                "seed_max_dormancy_range_pct_median": 0.006,
+                "seed_min_abs_quote_volume": 50_000.0,
+                "seed_min_abs_number_of_trades": 150.0,
+                "seed_max_events_per_symbol": 0,
             },
             {
                 "name": "5m_30s",
@@ -1777,11 +1782,16 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 "ltf_max_confirm_candles": 8,
                 "trail_lookback_candles": 4,
                 "max_hold_candles": 120,
-                "seed_min_htf_quote_ratio": 12.0,
-                "seed_min_htf_trade_ratio": 12.0,
-                "seed_min_htf_return_pct": 0.0227,
-                "seed_min_htf_range_pct": 0.030,
-                "seed_max_events_per_symbol": 20,
+                "seed_min_htf_quote_ratio": 20.0,
+                "seed_min_htf_trade_ratio": 20.0,
+                "seed_min_htf_return_pct": 0.0300,
+                "seed_min_htf_range_pct": 0.040,
+                "seed_min_dormancy_to_anomaly_quote_ratio": 14.0,
+                "seed_min_dormancy_to_anomaly_trade_ratio": 12.0,
+                "seed_max_dormancy_range_pct_median": 0.006,
+                "seed_min_abs_quote_volume": 50_000.0,
+                "seed_min_abs_number_of_trades": 150.0,
+                "seed_max_events_per_symbol": 0,
             },
             {
                 "name": "3m_30s",
@@ -1791,11 +1801,16 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 "ltf_max_confirm_candles": 6,
                 "trail_lookback_candles": 4,
                 "max_hold_candles": 120,
-                "seed_min_htf_quote_ratio": 14.0,
-                "seed_min_htf_trade_ratio": 14.0,
-                "seed_min_htf_return_pct": 0.0180,
-                "seed_min_htf_range_pct": 0.025,
-                "seed_max_events_per_symbol": 20,
+                "seed_min_htf_quote_ratio": 24.0,
+                "seed_min_htf_trade_ratio": 24.0,
+                "seed_min_htf_return_pct": 0.0250,
+                "seed_min_htf_range_pct": 0.035,
+                "seed_min_dormancy_to_anomaly_quote_ratio": 16.0,
+                "seed_min_dormancy_to_anomaly_trade_ratio": 14.0,
+                "seed_max_dormancy_range_pct_median": 0.0055,
+                "seed_min_abs_quote_volume": 35_000.0,
+                "seed_min_abs_number_of_trades": 120.0,
+                "seed_max_events_per_symbol": 0,
             },
             {
                 "name": "1m_15s",
@@ -1805,11 +1820,16 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 "ltf_max_confirm_candles": 8,
                 "trail_lookback_candles": 8,
                 "max_hold_candles": 240,
-                "seed_min_htf_quote_ratio": 18.0,
-                "seed_min_htf_trade_ratio": 18.0,
-                "seed_min_htf_return_pct": 0.0100,
-                "seed_min_htf_range_pct": 0.018,
-                "seed_max_events_per_symbol": 15,
+                "seed_min_htf_quote_ratio": 32.0,
+                "seed_min_htf_trade_ratio": 32.0,
+                "seed_min_htf_return_pct": 0.0180,
+                "seed_min_htf_range_pct": 0.030,
+                "seed_min_dormancy_to_anomaly_quote_ratio": 20.0,
+                "seed_min_dormancy_to_anomaly_trade_ratio": 18.0,
+                "seed_max_dormancy_range_pct_median": 0.0045,
+                "seed_min_abs_quote_volume": 20_000.0,
+                "seed_min_abs_number_of_trades": 80.0,
+                "seed_max_events_per_symbol": 0,
             },
         ]
         index_rows: list[dict[str, object]] = []
@@ -1839,6 +1859,37 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 targeted_backfill_min_htf_range_pct=float(
                     _runner_discovery_profile_arg(args, "targeted_backfill_min_htf_range_pct", profile["seed_min_htf_range_pct"])
                 ),
+                targeted_backfill_min_dormancy_to_anomaly_quote_ratio=float(
+                    _runner_discovery_profile_arg(
+                        args,
+                        "targeted_backfill_min_dormancy_to_anomaly_quote_ratio",
+                        profile["seed_min_dormancy_to_anomaly_quote_ratio"],
+                    )
+                ),
+                targeted_backfill_min_dormancy_to_anomaly_trade_ratio=float(
+                    _runner_discovery_profile_arg(
+                        args,
+                        "targeted_backfill_min_dormancy_to_anomaly_trade_ratio",
+                        profile["seed_min_dormancy_to_anomaly_trade_ratio"],
+                    )
+                ),
+                targeted_backfill_max_dormancy_range_pct_median=float(
+                    _runner_discovery_profile_arg(
+                        args,
+                        "targeted_backfill_max_dormancy_range_pct_median",
+                        profile["seed_max_dormancy_range_pct_median"],
+                    )
+                ),
+                targeted_backfill_min_abs_quote_volume=float(
+                    _runner_discovery_profile_arg(args, "targeted_backfill_min_abs_quote_volume", profile["seed_min_abs_quote_volume"])
+                ),
+                targeted_backfill_min_abs_number_of_trades=float(
+                    _runner_discovery_profile_arg(
+                        args,
+                        "targeted_backfill_min_abs_number_of_trades",
+                        profile["seed_min_abs_number_of_trades"],
+                    )
+                ),
                 targeted_backfill_max_events_per_symbol=int(
                     _runner_discovery_profile_arg(args, "targeted_backfill_max_events_per_symbol", profile["seed_max_events_per_symbol"])
                 ),
@@ -1860,6 +1911,11 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                     "seed_min_htf_trade_ratio": discovery_config.targeted_backfill_min_htf_trade_ratio,
                     "seed_min_htf_return_pct": discovery_config.targeted_backfill_min_htf_return_pct,
                     "seed_min_htf_range_pct": discovery_config.targeted_backfill_min_htf_range_pct,
+                    "seed_min_dormancy_to_anomaly_quote_ratio": discovery_config.targeted_backfill_min_dormancy_to_anomaly_quote_ratio,
+                    "seed_min_dormancy_to_anomaly_trade_ratio": discovery_config.targeted_backfill_min_dormancy_to_anomaly_trade_ratio,
+                    "seed_max_dormancy_range_pct_median": discovery_config.targeted_backfill_max_dormancy_range_pct_median,
+                    "seed_min_abs_quote_volume": discovery_config.targeted_backfill_min_abs_quote_volume,
+                    "seed_min_abs_number_of_trades": discovery_config.targeted_backfill_min_abs_number_of_trades,
                     "seed_max_events_per_symbol": discovery_config.targeted_backfill_max_events_per_symbol,
                 }
             )

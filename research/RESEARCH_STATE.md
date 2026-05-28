@@ -1,3 +1,11 @@
+## 2026-05-28 - P434 stricter HTF seed gate proposed
+
+Current commit: UNKNOWN.
+
+Status: P434 PROPOSED against P432b workspace. The long 7d run showed the remaining cost problem is not full-universe loading but too many HTF seeds being allowed into targeted post-entry 1s fetch. Instead of arbitrary per-symbol caps, P434 tightens the definition of `anomaly worthy of LTF`: closed-HTF quote/trade expansion, price return/range, dormancy-to-anomaly jump, prior dormancy compression, and absolute quote/trade liquidity are all required before targeted LTF backfill is planned. This is an HTF-only cost/quality gate, not a post-factum selection rule.
+
+Next: apply P434 after P432b, skip P433 unless intentionally testing capped budget mode, run `./.venv/Scripts/python.exe main.py run-htf-ltf-runner-discovery --days 7`, and check the pre-entry `htf_ltf_runner_targeted_ltf_plan.csv` summary before judging edge. If zero/too few events pass, loosen one HTF seed parameter at a time; do not disable strict LTF replay or use future labels for seed selection.
+
 ## 2026-05-28 - P432b two-stage targeted LTF backfill proposed
 
 Current commit: UNKNOWN.

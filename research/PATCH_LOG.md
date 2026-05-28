@@ -1,3 +1,32 @@
+## 2026-05-28 - P434 proposed - stricter HTF awakening seed gate for LTF backfill
+
+Files:
+
+```text
+cli/commands.py
+cli/parser.py
+research_tools/htf_ltf_runner_discovery.py
+research/EXPERIMENT_LOG.md
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Replace budget-style LTF backfill narrowing with a stricter, explicit definition of an HTF awakening worth downloading true 1s/LTF data for. The seed gate now requires a strong closed-HTF price expansion, real quote/trade burst, dormancy-to-anomaly jump, tight prior dormancy, and minimum absolute liquidity before any targeted subminute fetch is planned.
+```
+
+Honesty boundary:
+
+```text
+The stricter LTF-download seed gate uses only the closed HTF candle and its prior baseline/dormancy context. It must not use future runner labels, post-entry prices, stop outcomes, MFE/MAE, PnL, or any later LTF candles to decide whether to download LTF. Entries can only occur after the event has passed this closed-HTF gate and then passed the normal closed-LTF confirmation/entry guards.
+```
+
+Status: PROPOSED against P432b workspace. Do not apply P433 cap patch together with this patch unless explicitly comparing budgeted research modes.
+
+Validation: run `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; then run a 7d discovery and inspect `htf_ltf_runner_targeted_ltf_plan.csv`. The pre-entry summary should show the stricter seed gate and no arbitrary per-symbol truncation unless `--targeted-backfill-max-events-per-symbol` was explicitly set.
+
 ## 2026-05-28 - P432b proposed - two-stage targeted LTF backfill after P431
 
 Files:

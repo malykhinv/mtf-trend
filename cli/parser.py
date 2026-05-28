@@ -253,6 +253,11 @@ def build_parser() -> argparse.ArgumentParser:
     runner_discovery.add_argument("--targeted-backfill-min-htf-trade-ratio", type=float, default=None)
     runner_discovery.add_argument("--targeted-backfill-min-htf-return-pct", type=float, default=None)
     runner_discovery.add_argument("--targeted-backfill-min-htf-range-pct", type=float, default=None)
+    runner_discovery.add_argument("--targeted-backfill-min-dormancy-to-anomaly-quote-ratio", type=float, default=None)
+    runner_discovery.add_argument("--targeted-backfill-min-dormancy-to-anomaly-trade-ratio", type=float, default=None)
+    runner_discovery.add_argument("--targeted-backfill-max-dormancy-range-pct-median", type=float, default=None)
+    runner_discovery.add_argument("--targeted-backfill-min-abs-quote-volume", type=float, default=None)
+    runner_discovery.add_argument("--targeted-backfill-min-abs-number-of-trades", type=float, default=None)
     runner_discovery.add_argument("--targeted-backfill-max-events-per-symbol", type=_non_negative_int_for("--targeted-backfill-max-events-per-symbol"), default=None)
 
     materialize_subminute = subparsers.add_parser(
