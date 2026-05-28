@@ -1,3 +1,23 @@
+## 2026-05-28 - P435 proposed - finite LTF decay features without RuntimeWarning spam
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Fix noisy All-NaN RuntimeWarnings in runner discovery LTF decay feature extraction by treating all-NaN adjacent-ratio/top-share inputs as missing values explicitly. This is not a warning suppressor and does not change entry logic, seed selection, replay, future labels, fees, slippage, or targeted fetch windows.
+```
+
+Status: PROPOSED against P434 workspace / commit UNKNOWN.
+
+Validation: run `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; then rerun discovery and confirm the terminal no longer floods with `All-NaN slice encountered` from `htf_ltf_runner_discovery.py`.
+
 ## 2026-05-28 - P434 proposed - stricter HTF awakening seed gate for LTF backfill
 
 Files:

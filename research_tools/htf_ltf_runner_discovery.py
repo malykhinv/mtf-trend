@@ -1577,17 +1577,36 @@ def _ltf_decay_features(closed: pd.DataFrame) -> dict[str, object]:
     trade_adjacent = _adjacent_ratios(trade_values)
     quote_total = float(np.nansum(quote_values))
     trade_total = float(np.nansum(trade_values))
+    quote_min_adjacent = _finite_min_or_nan(quote_adjacent)
+    trade_min_adjacent = _finite_min_or_nan(trade_adjacent)
+    quote_top = _finite_max_or_nan(quote_values)
+    trade_top = _finite_max_or_nan(trade_values)
     return {
-        "ltf_quote_min_adjacent_ratio": float(np.nanmin(quote_adjacent)) if quote_adjacent.size else float("nan"),
-        "ltf_quote_decay_under50": bool(quote_adjacent.size and np.nanmin(quote_adjacent) < 0.5),
+        "ltf_quote_min_adjacent_ratio": quote_min_adjacent,
+        "ltf_quote_decay_under50": bool(np.isfinite(quote_min_adjacent) and quote_min_adjacent < 0.5),
         "ltf_quote_last_first_ratio": _safe_divide(float(quote_values[-1]), float(quote_values[0])) if quote_values.size else float("nan"),
-        "ltf_quote_top1_share": _safe_divide(float(np.nanmax(quote_values)), quote_total),
+        "ltf_quote_top1_share": _safe_divide(quote_top, quote_total),
         "ltf_quote_last_share": _safe_divide(float(quote_values[-1]), quote_total) if quote_values.size else float("nan"),
-        "ltf_trade_min_adjacent_ratio": float(np.nanmin(trade_adjacent)) if trade_adjacent.size else float("nan"),
-        "ltf_trade_decay_under50": bool(trade_adjacent.size and np.nanmin(trade_adjacent) < 0.5),
+        "ltf_trade_min_adjacent_ratio": trade_min_adjacent,
+        "ltf_trade_decay_under50": bool(np.isfinite(trade_min_adjacent) and trade_min_adjacent < 0.5),
         "ltf_trade_last_first_ratio": _safe_divide(float(trade_values[-1]), float(trade_values[0])) if trade_values.size else float("nan"),
-        "ltf_trade_top1_share": _safe_divide(float(np.nanmax(trade_values)), trade_total),
+        "ltf_trade_top1_share": _safe_divide(trade_top, trade_total),
     }
+
+
+def _finite_min_or_nan(values: np.ndarray) -> float:
+    finite = values[np.isfinite(values)]
+    return float(finite.min()) if finite.size else float("nan")
+
+
+def _finite_max_or_nan(values: np.ndarray) -> float:
+    finite = values[np.isfinite(values)]
+    return float(finite.max()) if finite.size else float("nan")
+
+
+def _finite_median_or_nan(values: np.ndarray) -> float:
+    finite = values[np.isfinite(values)]
+    return float(np.median(finite)) if finite.size else float("nan")
 
 
 def _adjacent_ratios(values: np.ndarray) -> np.ndarray:
@@ -1759,8 +1778,8 @@ def _prior_spike_features_for_index(context: dict[str, object], *, idx: int, cur
         }
     prior_quote = quote[prior]  # type: ignore[index]
     current_quote = float(quote[idx])  # type: ignore[index]
-    median_quote = float(np.nanmedian(prior_quote))
-    max_quote = float(np.nanmax(prior_quote))
+    median_quote = _finite_median_or_nan(prior_quote)
+    max_quote = _finite_max_or_nan(prior_quote)
     prior_next = next_quote_ratio[prior]  # type: ignore[index]
     bars_to_decay: list[float] = []
     for prior_idx in prior:

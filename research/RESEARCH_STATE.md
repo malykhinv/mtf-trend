@@ -1,3 +1,11 @@
+## 2026-05-28 - P435 finite LTF decay feature fix proposed
+
+Current commit: UNKNOWN.
+
+Status: P435 PROPOSED against P434 workspace. The active run showed repeated `RuntimeWarning: All-NaN slice encountered` from LTF adjacent quote/trade decay features. The underlying cause is not a market/data decision: some valid closed-LTF windows have adjacent ratios that are all missing because previous buckets have zero/missing flow, and the feature code called `np.nanmin`/`np.nanmax` directly. P435 changes these feature summaries to explicit finite-only min/max/median helpers, returning `NaN`/`False` when no finite value exists.
+
+Next: apply P435 after P434, rerun the 7d discovery, and judge runtime from targeted plan/fetch artifacts rather than terminal warning spam.
+
 ## 2026-05-28 - P434 stricter HTF seed gate proposed
 
 Current commit: UNKNOWN.
