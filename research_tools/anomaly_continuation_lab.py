@@ -219,13 +219,24 @@ def _format_eta(seconds: float) -> str:
     return f"{int(seconds // 60)}m{int(seconds % 60):02d}s"
 
 
+_PROGRESS_LINE_LENGTHS: dict[str, int] = {}
+
+
 def _emit_progress(*, label: str, done: int, total: int, started_at: float) -> None:
     if total <= 0:
         return
-    pct = 100.0 * done / total
+    pct = min(100, max(0, int((100.0 * done / total) + 0.5)))
     elapsed = max(time.monotonic() - started_at, 1e-9)
     eta = elapsed * (total - done) / max(done, 1)
-    print(f"{label}: {pct:5.1f}% eta {_format_eta(eta)}", flush=True)
+    text = f"{label}: {pct:3d}% eta {_format_eta(eta)}"
+    previous_len = _PROGRESS_LINE_LENGTHS.get(label, 0)
+    padding = " " * max(0, previous_len - len(text))
+    if done >= total:
+        print(f"\r{text}{padding}", flush=True)
+        _PROGRESS_LINE_LENGTHS.pop(label, None)
+    else:
+        print(f"\r{text}{padding}", end="", flush=True)
+        _PROGRESS_LINE_LENGTHS[label] = len(text)
 
 
 def _read_symbol_frame(path: Path, *, timeframe: str, start_ms: int, end_ms: int) -> pd.DataFrame:

@@ -1,3 +1,11 @@
+## 2026-05-28 - P431 profile set, per-profile seed gates, and 1% progress proposed
+
+Current commit: UNKNOWN.
+
+Status: P431 PROPOSED against uploaded/P430 workspace. Runner discovery profile set is now `5m_1m`, `5m_30s`, `3m_30s`, and `1m_15s`. The old `5m_15s` profile is removed because the next research question is cross-HTF discovery, not three LTF variants under the same 5m HTF. Targeted subminute backfill remains seed-window-only; 1m LTF uses normal OHLCV cache, while 30s/15s profiles fetch true aggTrade/1s only around strong profile-specific HTF seed events. Seed gates are profile defaults unless explicitly overridden by CLI args, so 1m/15s no longer inherits 5m-derived thresholds. Progress lines now update in place at whole-percent increments to avoid terminal spam.
+
+Next: first update normal OHLCV cache for upper TFs with `./.venv/Scripts/python.exe main.py update-cache --days 45 --timeframes 1m 3m 5m`, then run `./.venv/Scripts/python.exe main.py run-htf-ltf-runner-discovery --days 45`. Judge subminute profiles only after checking targeted plan/fetch/materialize coverage and strict LTF path statuses.
+
 ## 2026-05-28 - P430 targeted LTF backfill for runner discovery proposed
 
 Current commit: UNKNOWN.

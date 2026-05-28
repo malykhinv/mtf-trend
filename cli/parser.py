@@ -249,11 +249,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     runner_discovery.add_argument("--days", type=_positive_int_for("--days"), default=DEFAULT_ANOMALY_LAB_DAYS)
     runner_discovery.add_argument("--targeted-ltf-backfill", type=_str_to_bool, default=True)
-    runner_discovery.add_argument("--targeted-backfill-min-htf-quote-ratio", type=float, default=12.0)
-    runner_discovery.add_argument("--targeted-backfill-min-htf-trade-ratio", type=float, default=12.0)
-    runner_discovery.add_argument("--targeted-backfill-min-htf-return-pct", type=float, default=0.0227)
-    runner_discovery.add_argument("--targeted-backfill-min-htf-range-pct", type=float, default=0.030)
-    runner_discovery.add_argument("--targeted-backfill-max-events-per-symbol", type=_non_negative_int_for("--targeted-backfill-max-events-per-symbol"), default=20)
+    runner_discovery.add_argument("--targeted-backfill-min-htf-quote-ratio", type=float, default=None)
+    runner_discovery.add_argument("--targeted-backfill-min-htf-trade-ratio", type=float, default=None)
+    runner_discovery.add_argument("--targeted-backfill-min-htf-return-pct", type=float, default=None)
+    runner_discovery.add_argument("--targeted-backfill-min-htf-range-pct", type=float, default=None)
+    runner_discovery.add_argument("--targeted-backfill-max-events-per-symbol", type=_non_negative_int_for("--targeted-backfill-max-events-per-symbol"), default=None)
 
     materialize_subminute = subparsers.add_parser(
         "materialize-anomaly-subminute-cache",

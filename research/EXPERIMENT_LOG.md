@@ -1,3 +1,15 @@
+## 2026-05-28 - P431 four-profile HTF/LTF discovery rerun
+
+Experiment status: planned after P431.
+
+Question: does the runner/fader separation survive across upper timeframes when tested on `5m_1m`, `5m_30s`, `3m_30s`, and `1m_15s` with strict wall-clock replay and targeted 1s backfill only around strong seed events?
+
+Preload: `./.venv/Scripts/python.exe main.py update-cache --days 45 --timeframes 1m 3m 5m`. This loads normal OHLCV upper-TF cache only; targeted 1s/subminute fetch remains inside discovery for 30s/15s profiles.
+
+Run: `./.venv/Scripts/python.exe main.py run-htf-ltf-runner-discovery --days 45`.
+
+Acceptance: every profile must report its seed thresholds in the root index and run config. Subminute profiles must have non-empty targeted plan/fetch/materialize artifacts, high strict path coverage, and no gap-hopping trades. Edge acceptance remains positive median/average after fees/slippage, clean runner density materially above base, positive-day share, and limited top-symbol/top20 dependency on a held-out window.
+
 ## 2026-05-28 - P430 targeted subminute rerun
 
 Experiment status: planned after P430.

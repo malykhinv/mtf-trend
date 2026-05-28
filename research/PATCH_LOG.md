@@ -1,3 +1,47 @@
+## 2026-05-28 - P431 proposed - four-profile runner discovery and non-spam progress
+
+Files:
+
+```text
+cli/commands.py
+cli/parser.py
+research_tools/anomaly_continuation_lab.py
+research_tools/anomaly_strategy_backtest.py
+research_tools/htf_ltf_runner_discovery.py
+research/EXPERIMENT_LOG.md
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Run discovery on the requested profile set: 5m/1m, 5m/30s, 3m/30s, 1m/15s. Keep targeted 1s loading bounded to suspected HTF seed windows and make seed gates profile-specific so shorter HTFs do not inherit 5m thresholds. Reduce terminal spam by making percentage progress overwrite the same line at whole-percent increments.
+```
+
+Changes:
+
+```text
+- Replace the fixed profile set with 5m_1m, 5m_30s, 3m_30s, and 1m_15s.
+- Add profile-level targeted seed defaults for quote ratio, trade ratio, HTF return/range and max events per symbol.
+- Make runner-discovery CLI seed overrides optional; absent args use the profile defaults, explicit args still override all profiles.
+- Add seed thresholds to the root discovery index for auditability.
+- Change shared progress emission from decimal/new-line progress to same-line whole-percent progress.
+```
+
+Validation:
+
+```bash
+python -m compileall -q data/exchanges research_tools cli constants.py main.py
+git apply --check /mnt/data/p431_runner_discovery_profiles_and_progress.patch
+```
+
+Risk:
+
+```text
+The seed gates are intentionally cost controls, not live edge rules. They are stricter than the generic anomaly scan to avoid loading 1s for every small move; if a profile plans too few windows, loosen one seed threshold at a time and rerun.
+```
+
 ## 2026-05-28 - P430 proposed - targeted runner-discovery LTF backfill
 
 Files:

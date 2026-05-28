@@ -129,18 +129,22 @@ class _ProgressLine:
         self.last_emit_at = 0.0
         self.last_len = 0
         self.enabled = bool(getattr(sys.stderr, "isatty", lambda: False)())
+        self.next_progress_pct = 0
 
     def update(self, *, index: int, item: str) -> None:
         if self.total <= 0:
             return
+        current_pct = min(100, max(0, int((100.0 * int(index) / self.total) + 0.5)))
+        if index < self.total and current_pct < self.next_progress_pct:
+            return
         now = time.monotonic()
-        if index < self.total and now - self.last_emit_at < self.min_interval_seconds:
+        if index < self.total and now - self.last_emit_at < self.min_interval_seconds and current_pct <= 0:
             return
         elapsed = max(0.001, now - self.started_at)
         eta_seconds = (elapsed / max(1, index)) * max(0, self.total - index)
         text = (
             f"{self.label}: scanning {index}/{self.total} "
-            f"({index / self.total:.1%}) symbol={item} eta={_format_duration(eta_seconds)}"
+            f"({current_pct:3d}%) symbol={item} eta={_format_duration(eta_seconds)}"
         )
         if self.enabled:
             padding = " " * max(0, self.last_len - len(text))
@@ -150,6 +154,7 @@ class _ProgressLine:
             if index == 1 or index == self.total:
                 print(text, flush=True)
         self.last_emit_at = now
+        self.next_progress_pct = current_pct + 1
 
     def finish(self) -> None:
         if self.enabled and self.last_len:

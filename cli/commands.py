@@ -1738,6 +1738,11 @@ def run_anomaly_lab(config: AppConfig, args: argparse.Namespace) -> int:
     return _run_with_logging("run-anomaly-lab", config, _run)
 
 
+
+def _runner_discovery_profile_arg(args: argparse.Namespace, name: str, profile_default: object) -> object:
+    value = getattr(args, name, None)
+    return profile_default if value is None else value
+
 def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) -> int:
     """Runs fixed HTF/LTF runner discovery profiles with structural no-TP replay."""
 
@@ -1751,15 +1756,6 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
         output_root = config.backtest.results_dir / f"htf_ltf_runner_discovery_{days}d"
         profiles = [
             {
-                "name": "5m_30s",
-                "htf_timeframe": "5m",
-                "ltf_timeframe": "30s",
-                "ltf_min_confirm_candles": 2,
-                "ltf_max_confirm_candles": 8,
-                "trail_lookback_candles": 4,
-                "max_hold_candles": 120,
-            },
-            {
                 "name": "5m_1m",
                 "htf_timeframe": "5m",
                 "ltf_timeframe": "1m",
@@ -1767,15 +1763,53 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 "ltf_max_confirm_candles": 4,
                 "trail_lookback_candles": 6,
                 "max_hold_candles": 60,
+                "seed_min_htf_quote_ratio": 12.0,
+                "seed_min_htf_trade_ratio": 12.0,
+                "seed_min_htf_return_pct": 0.0227,
+                "seed_min_htf_range_pct": 0.030,
+                "seed_max_events_per_symbol": 20,
             },
             {
-                "name": "5m_15s",
+                "name": "5m_30s",
                 "htf_timeframe": "5m",
+                "ltf_timeframe": "30s",
+                "ltf_min_confirm_candles": 2,
+                "ltf_max_confirm_candles": 8,
+                "trail_lookback_candles": 4,
+                "max_hold_candles": 120,
+                "seed_min_htf_quote_ratio": 12.0,
+                "seed_min_htf_trade_ratio": 12.0,
+                "seed_min_htf_return_pct": 0.0227,
+                "seed_min_htf_range_pct": 0.030,
+                "seed_max_events_per_symbol": 20,
+            },
+            {
+                "name": "3m_30s",
+                "htf_timeframe": "3m",
+                "ltf_timeframe": "30s",
+                "ltf_min_confirm_candles": 2,
+                "ltf_max_confirm_candles": 6,
+                "trail_lookback_candles": 4,
+                "max_hold_candles": 120,
+                "seed_min_htf_quote_ratio": 14.0,
+                "seed_min_htf_trade_ratio": 14.0,
+                "seed_min_htf_return_pct": 0.0180,
+                "seed_min_htf_range_pct": 0.025,
+                "seed_max_events_per_symbol": 20,
+            },
+            {
+                "name": "1m_15s",
+                "htf_timeframe": "1m",
                 "ltf_timeframe": "15s",
                 "ltf_min_confirm_candles": 4,
-                "ltf_max_confirm_candles": 16,
+                "ltf_max_confirm_candles": 8,
                 "trail_lookback_candles": 8,
                 "max_hold_candles": 240,
+                "seed_min_htf_quote_ratio": 18.0,
+                "seed_min_htf_trade_ratio": 18.0,
+                "seed_min_htf_return_pct": 0.0100,
+                "seed_min_htf_range_pct": 0.018,
+                "seed_max_events_per_symbol": 15,
             },
         ]
         index_rows: list[dict[str, object]] = []
@@ -1793,11 +1827,21 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                 max_hold_candles=int(profile["max_hold_candles"]),
                 symbol_workers=int(getattr(args, "backtest_symbol_workers", 1)),
                 auto_targeted_ltf_backfill=bool(getattr(args, "targeted_ltf_backfill", True)),
-                targeted_backfill_min_htf_quote_ratio=float(getattr(args, "targeted_backfill_min_htf_quote_ratio", 12.0)),
-                targeted_backfill_min_htf_trade_ratio=float(getattr(args, "targeted_backfill_min_htf_trade_ratio", 12.0)),
-                targeted_backfill_min_htf_return_pct=float(getattr(args, "targeted_backfill_min_htf_return_pct", 0.0227)),
-                targeted_backfill_min_htf_range_pct=float(getattr(args, "targeted_backfill_min_htf_range_pct", 0.030)),
-                targeted_backfill_max_events_per_symbol=int(getattr(args, "targeted_backfill_max_events_per_symbol", 20)),
+                targeted_backfill_min_htf_quote_ratio=float(
+                    _runner_discovery_profile_arg(args, "targeted_backfill_min_htf_quote_ratio", profile["seed_min_htf_quote_ratio"])
+                ),
+                targeted_backfill_min_htf_trade_ratio=float(
+                    _runner_discovery_profile_arg(args, "targeted_backfill_min_htf_trade_ratio", profile["seed_min_htf_trade_ratio"])
+                ),
+                targeted_backfill_min_htf_return_pct=float(
+                    _runner_discovery_profile_arg(args, "targeted_backfill_min_htf_return_pct", profile["seed_min_htf_return_pct"])
+                ),
+                targeted_backfill_min_htf_range_pct=float(
+                    _runner_discovery_profile_arg(args, "targeted_backfill_min_htf_range_pct", profile["seed_min_htf_range_pct"])
+                ),
+                targeted_backfill_max_events_per_symbol=int(
+                    _runner_discovery_profile_arg(args, "targeted_backfill_max_events_per_symbol", profile["seed_max_events_per_symbol"])
+                ),
             )
             result_dir = run_discovery(discovery_config, progress_label=f"runner discovery {profile['name']}")
             index_rows.append(
@@ -1812,6 +1856,11 @@ def run_htf_ltf_runner_discovery(config: AppConfig, args: argparse.Namespace) ->
                         if discovery_config.auto_targeted_ltf_backfill and str(profile["ltf_timeframe"]).endswith("s")
                         else "cache_only_no_exchange_fetch"
                     ),
+                    "seed_min_htf_quote_ratio": discovery_config.targeted_backfill_min_htf_quote_ratio,
+                    "seed_min_htf_trade_ratio": discovery_config.targeted_backfill_min_htf_trade_ratio,
+                    "seed_min_htf_return_pct": discovery_config.targeted_backfill_min_htf_return_pct,
+                    "seed_min_htf_range_pct": discovery_config.targeted_backfill_min_htf_range_pct,
+                    "seed_max_events_per_symbol": discovery_config.targeted_backfill_max_events_per_symbol,
                 }
             )
         output_root.mkdir(parents=True, exist_ok=True)

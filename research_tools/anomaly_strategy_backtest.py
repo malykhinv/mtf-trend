@@ -999,7 +999,7 @@ def build_red_flag_summary(candidates: pd.DataFrame, *, config: AnomalyBacktestC
     return pd.DataFrame(rows)
 
 
-def _emit_progress_5pct(
+def _emit_progress_1pct(
     *,
     label: str,
     done: int,
@@ -1009,10 +1009,10 @@ def _emit_progress_5pct(
 ) -> int:
     if total <= 0:
         return next_progress_pct
-    current_pct = int(100 * done / total)
+    current_pct = min(100, max(0, int((100.0 * done / total) + 0.5)))
     if current_pct >= next_progress_pct or done == total:
         _emit_progress(label=label, done=done, total=total, started_at=started_at)
-        return current_pct + 5
+        return current_pct + 1
     return next_progress_pct
 
 
@@ -1055,7 +1055,7 @@ def _write_artifact_frames(
                     "error": error,
                 },
             )
-        next_progress_pct = _emit_progress_5pct(
+        next_progress_pct = _emit_progress_1pct(
             label=progress_label,
             done=processed_count,
             total=len(frame_list),
@@ -2222,7 +2222,7 @@ def ensure_targeted_aggtrade_subminute_cache(
             )
             done_windows += 1
             if progress_label is not None and total_windows:
-                next_progress_pct = _emit_progress_5pct(
+                next_progress_pct = _emit_progress_1pct(
                     label=f"{progress_label}: targeted 1s aggTrades",
                     done=done_windows,
                     total=total_windows,
@@ -2686,7 +2686,7 @@ def ensure_targeted_subminute_flow_cache_for_configs(
             )
             done_windows += 1
             if progress_label is not None and total_windows:
-                next_progress_pct = _emit_progress_5pct(
+                next_progress_pct = _emit_progress_1pct(
                     label=f"{progress_label}: targeted 1s flow",
                     done=done_windows,
                     total=total_windows,
@@ -6396,7 +6396,7 @@ def simulate_short_fader_trades(
         else:
             rows.append(_attach_all_signal_columns(trade, signal))
         if progress_label is not None:
-            next_progress_pct = _emit_progress_5pct(
+            next_progress_pct = _emit_progress_1pct(
                 label=progress_label,
                 done=processed_count,
                 total=total,
@@ -7371,7 +7371,7 @@ def _build_entry_grid_signal_sets(
     for processed_count, variant in enumerate(variant_list, start=1):
         signals = build_anomaly_signals(candidates, config=variant)
         signal_sets.append((variant, signals))
-        next_progress_pct = _emit_progress_5pct(
+        next_progress_pct = _emit_progress_1pct(
             label="anomaly grid signals",
             done=processed_count,
             total=len(variant_list),
@@ -8241,7 +8241,7 @@ def _fetch_derivatives_context_for_signal_universe(
                     "message": message,
                 }
             )
-            next_progress_pct = _emit_progress_5pct(
+            next_progress_pct = _emit_progress_1pct(
                 label="anomaly derivatives context",
                 done=processed_count,
                 total=total,
@@ -9142,7 +9142,7 @@ def render_anomaly_trade_charts(
                 "chart_path": str(chart_path),
             }
         )
-        next_progress_pct = _emit_progress_5pct(
+        next_progress_pct = _emit_progress_1pct(
             label="anomaly charts",
             done=processed_count,
             total=len(selected),
@@ -9181,7 +9181,7 @@ def run_anomaly_entry_grid(
     for idx, (variant, signals) in enumerate(signal_sets, start=1):
         trades = simulate_anomaly_trades(signals, config=variant, frame_cache=frame_cache)
         rows.append(summarize_entry_grid_variant(trades, config=variant, signal_count=len(signals), variant_id=idx - 1))
-        next_progress_pct = _emit_progress_5pct(
+        next_progress_pct = _emit_progress_1pct(
             label="anomaly entry grid",
             done=idx,
             total=len(signal_sets),
@@ -9226,7 +9226,7 @@ def run_anomaly_latency_grid(
         if not summary.empty and {"metric", "value"}.issubset(summary.columns):
             row.update({str(item["metric"]): item["value"] for _, item in summary.iterrows()})
         rows.append(row)
-        next_progress_pct = _emit_progress_5pct(
+        next_progress_pct = _emit_progress_1pct(
             label="anomaly latency grid",
             done=idx,
             total=len(values),
