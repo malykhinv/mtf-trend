@@ -348,6 +348,7 @@ def run_htf_ltf_runner_discovery(
     )
     trade_rule_scores = _score_trade_rules(trades_frame, scope="raw")
     live_trade_rule_scores = _score_trade_rules(live_filtered, scope="live_filtered")
+    oos_runner_fader_hypothesis_trades = _strict_runner_fader_oos_hypothesis_trades(live_filtered)
     research_shortlist = _research_shortlist(
         candidate_rule_scores,
         live_trade_rule_scores,
@@ -372,12 +373,21 @@ def run_htf_ltf_runner_discovery(
         (config.output_dir / "htf_ltf_runner_signals.csv", signals_frame),
         (config.output_dir / "htf_ltf_runner_trades_raw.csv", trades_frame),
         (config.output_dir / "htf_ltf_runner_trades_live_filtered.csv", live_filtered),
+        (config.output_dir / "htf_ltf_runner_oos_runner_fader_v1_trades_live_filtered.csv", oos_runner_fader_hypothesis_trades),
         (config.output_dir / "htf_ltf_runner_by_day.csv", _daily_summary(trades_frame)),
         (config.output_dir / "htf_ltf_runner_by_day_live_filtered.csv", _daily_summary(live_filtered)),
+        (
+            config.output_dir / "htf_ltf_runner_oos_runner_fader_v1_by_day_live_filtered.csv",
+            _daily_summary(oos_runner_fader_hypothesis_trades),
+        ),
         (config.output_dir / "htf_ltf_runner_profitability_summary.csv", _summarize_trades(trades_frame)),
         (
             config.output_dir / "htf_ltf_runner_profitability_summary_live_filtered.csv",
             _summarize_trades(live_filtered),
+        ),
+        (
+            config.output_dir / "htf_ltf_runner_oos_runner_fader_v1_summary_live_filtered.csv",
+            _summarize_trades(oos_runner_fader_hypothesis_trades),
         ),
         (config.output_dir / "htf_ltf_runner_by_setup_nature.csv", _summarize_by_column(trades_frame, "setup_nature")),
         (
@@ -405,6 +415,10 @@ def run_htf_ltf_runner_discovery(
         (
             config.output_dir / "htf_ltf_runner_top_dependency_live_filtered.csv",
             _top_dependency(live_filtered),
+        ),
+        (
+            config.output_dir / "htf_ltf_runner_oos_runner_fader_v1_top_dependency_live_filtered.csv",
+            _top_dependency(oos_runner_fader_hypothesis_trades),
         ),
         (config.output_dir / "htf_ltf_runner_data_quality_summary.csv", pd.DataFrame(quality_rows)),
         (config.output_dir / "htf_ltf_runner_targeted_ltf_plan.csv", targeted_ltf_plan),
@@ -1972,6 +1986,7 @@ def _score_trade_rules(trades: pd.DataFrame, *, scope: str) -> pd.DataFrame:
     taker_share = _numeric_series(trades, "ltf_taker_buy_quote_share")
     buyer_confirmed = taker_share.ge(0.55) & taker_share.notna()
     balanced = dormancy_smooth & sustained_ltf & low_risk & strong_acceptance
+    oos_v1_masks = _runner_fader_oos_v1_masks(trades)
     rules: list[tuple[str, pd.Series]] = [
         ("all_selected", all_rows),
         ("dormant_smooth_price", dormancy_smooth),
@@ -1983,6 +1998,7 @@ def _score_trade_rules(trades: pd.DataFrame, *, scope: str) -> pd.DataFrame:
         ("ltf_buyer_confirmed", buyer_confirmed),
         ("balanced_runner_candidate", balanced),
         ("balanced_runner_with_oi", balanced & oi_growth),
+        *oos_v1_masks.items(),
     ]
 
     rows: list[dict[str, object]] = []
@@ -2071,6 +2087,7 @@ def _score_entry_window_rules(
     strong_flow = _numeric_series(trades, "ltf_quote_pace_ratio").ge(5.0) & _numeric_series(trades, "ltf_trade_pace_ratio").ge(5.0)
     decay = _bool_series(trades, "ltf_quote_decay_under50")
     decay_negative = decay & _numeric_series(trades, "ltf_confirm_return_pct").lt(0.0)
+    oos_v1_masks = _runner_fader_oos_v1_masks(trades)
     rules: list[tuple[str, pd.Series]] = [
         ("all_entry_windows", all_rows),
         ("no_decay_positive_price", no_decay_positive),
@@ -2081,6 +2098,7 @@ def _score_entry_window_rules(
         ("strong_sustain_low_risk", sustain & strong_flow & low_risk),
         ("fader_decay_under50", decay),
         ("fader_decay_under50_negative_price", decay_negative),
+        *oos_v1_masks.items(),
     ]
 
     rows: list[dict[str, object]] = []
@@ -2425,6 +2443,48 @@ def _actual_oi_growth_mask(frame: pd.DataFrame) -> pd.Series:
     status = frame["pregrowth_oi_status"].astype(str).str.lower().eq("ok") if "pregrowth_oi_status" in frame.columns else pd.Series(False, index=frame.index)
     change = _numeric_series(frame, "pregrowth_oi_change_pct").ge(0.0)
     return status & change
+
+
+def _runner_fader_oos_v1_masks(frame: pd.DataFrame) -> dict[str, pd.Series]:
+    """Known-at-entry runner/fader hypotheses promoted from the 2026-05-28 7d readout.
+
+    These masks are research artifacts only: they use HTF/LTF signal features that are
+    already known at the selected entry decision, and intentionally avoid future labels,
+    MFE/MAE, PnL, exit reason, or post-entry prices.
+    """
+    htf_trade_ratio = _numeric_series(frame, "htf_trade_ratio")
+    htf_quote_ratio = _numeric_series(frame, "htf_quote_ratio")
+    ltf_trade_pace_ratio = _numeric_series(frame, "ltf_trade_pace_ratio")
+
+    htf_trade_awake = htf_trade_ratio.ge(12.0)
+    ltf_not_blowoff = ltf_trade_pace_ratio.le(6.0)
+    htf_quote_not_extreme = htf_quote_ratio.le(48.0)
+
+    candidate = htf_trade_awake & ltf_not_blowoff
+    strict = candidate & htf_quote_not_extreme
+    ltf_overheat_fader_probe = htf_trade_awake & ltf_trade_pace_ratio.gt(6.0)
+    quote_blowoff_fader_probe = candidate & htf_quote_ratio.gt(48.0)
+
+    return {
+        "oos_v1_htf_trade12_ltf_trade_pace_le6": candidate,
+        "oos_v1_htf_trade12_ltf_trade_pace_le6_htf_quote_le48": strict,
+        "fader_probe_htf_trade12_ltf_trade_pace_gt6": ltf_overheat_fader_probe,
+        "fader_probe_htf_trade12_ltf_trade_pace_le6_htf_quote_gt48": quote_blowoff_fader_probe,
+    }
+
+
+def _strict_runner_fader_oos_hypothesis_trades(trades: pd.DataFrame) -> pd.DataFrame:
+    if trades.empty:
+        result = trades.copy()
+        result.insert(0, "oos_hypothesis_rule", "oos_v1_htf_trade12_ltf_trade_pace_le6_htf_quote_le48")
+        result.insert(1, "uses_future_label_as_entry_filter", False)
+        return result
+    masks = _runner_fader_oos_v1_masks(trades)
+    mask = masks["oos_v1_htf_trade12_ltf_trade_pace_le6_htf_quote_le48"]
+    subset = trades.loc[mask.fillna(False)].copy()
+    subset.insert(0, "oos_hypothesis_rule", "oos_v1_htf_trade12_ltf_trade_pace_le6_htf_quote_le48")
+    subset.insert(1, "uses_future_label_as_entry_filter", False)
+    return subset
 
 
 def _median_column(frame: pd.DataFrame, column: str) -> float:
@@ -2973,6 +3033,11 @@ def _honesty_report(config: HtfLtfRunnerDiscoveryConfig) -> pd.DataFrame:
                 "check": "entry_availability",
                 "status": "ok",
                 "detail": "entry is the next LTF open after the closed confirmation candle; confirmation and next-open entry require a continuous LTF path with no gap hops.",
+            },
+            {
+                "check": "oos_runner_fader_v1_hypothesis",
+                "status": "research_only",
+                "detail": "The OOS v1 hypothesis artifacts use only known-at-entry HTF/LTF ratios: htf_trade_ratio >= 12, ltf_trade_pace_ratio <= 6, and the strict tier also requires htf_quote_ratio <= 48. They must be validated on a held-out run before any live promotion.",
             },
             {
                 "check": "exit_model",

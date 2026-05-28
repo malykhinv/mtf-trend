@@ -1,3 +1,42 @@
+## 2026-05-28 - P438 planned 45d runner/fader OOS validation
+
+Command:
+
+```bash
+.\.venv\Scripts\python.exe main.py run-htf-ltf-runner-discovery --days 45
+```
+
+Profiles under test:
+
+```text
+5m_1m, 5m_30s, 3m_30s, 1m_15s
+```
+
+Frozen hypothesis from the 7d readout:
+
+```text
+Candidate: htf_trade_ratio >= 12 AND ltf_trade_pace_ratio <= 6
+Strict:    htf_trade_ratio >= 12 AND ltf_trade_pace_ratio <= 6 AND htf_quote_ratio <= 48
+```
+
+Rationale:
+
+```text
+The provided 7d selected/live-filtered artifacts showed that the profitable split was not maximum quote-volume or maximum LTF pace. The better pre-entry pattern was real HTF trade-count expansion with LTF pace still below blow-off. Extreme quote-ratio and overheated LTF trade pace are fader/chase probes, not promotion rules.
+```
+
+Acceptance criteria before any live promotion:
+
+```text
+- enough closed trades for a real conclusion, target >= 100 across profiles;
+- median net return > 0 and sum net return > 0 after fees/slippage;
+- positive-day share > 55%;
+- top20 winners do not explain almost all positive PnL;
+- runner_10pct label share materially exceeds all_selected;
+- result is not isolated to one symbol, one day, or one profile;
+- future labels remain artifact-only and `uses_future_label_as_entry_filter` stays false.
+```
+
 ## 2026-05-28 - P437 targeted LTF speed validation
 
 Question: can the 5m/30s runner discovery finish faster with identical strategy semantics by merging overlapping post-entry fetch windows and avoiding broad candidate work outside strict pre-entry HTF seed timestamps?
@@ -4392,3 +4431,26 @@ Key limitation: these trades were not selected by `post_htf_acceptance_long`, so
 Runtime limitation: artifacts were very large (`live2_events.csv` about 4.6 GB and `live2_near_misses.csv` about 5.1 GB) with many deadline/backlog events. Before interpreting late entries too strongly, artifact volume and scheduler pressure need their own fix.
 
 Follow-up implemented: P406 adds closed-post-fill 5s early-exit management for flow exhaustion, seller pressure, and OI-up/no-progress stalls. Next experiment should run live2 forward and inspect early-exit artifacts against TP1/final-close outcomes.
+
+## 2026-05-28 - HTF/LTF runner-vs-noise 7d separation readout
+
+Current commit: 736cd41b, dirty worktree observed.
+
+Run analyzed: `.output/results/htf_ltf_runner_discovery_7d`.
+
+Additional local analysis artifacts:
+- `.output/results/htf_ltf_runner_discovery_7d/noise_separation_analysis/valid_label_profile_summary.csv`
+- `.output/results/htf_ltf_runner_discovery_7d/noise_separation_analysis/candidate_validlabel_decisiontime_runner_lift_top.csv`
+- `.output/results/htf_ltf_runner_discovery_7d/noise_separation_analysis/candidate_30s_validlabel_shape_rules.csv`
+- `.output/results/htf_ltf_runner_discovery_7d/noise_separation_analysis/selected_30s_shape_rules.csv`
+- `.output/results/htf_ltf_runner_discovery_7d/noise_separation_analysis/selected_trades_decisiontime_net_return_top.csv`
+
+Important correction: subminute profiles have many candidates with missing LTF/future-label windows. They must not be counted as confirmed non-runners. After restricting to `future_label_status=ok` and `htf_ltf_status=ok`, valid labeled base rates are: `5m_30s` 154 rows / 17 runners / 11.0%; `3m_30s` 188 rows / 22 runners / 11.7%; `1m_15s` 266 rows / 32 runners / 12.0%; `5m_1m` 2526 rows / 101 runners / 4.0%.
+
+Candidate-level separation on valid 30s labels points to real participation and non-single-print structure, not just generic dormancy: top quintile `htf_ltf_number_of_trades >= ~6105` gives 19/69 runners (27.5%); `htf_ltf_quote_top1_share <= ~0.262` gives 17/68 runners (25.0%); `prior_spike_next_decay50_share <= ~0.371` gives 18/68 runners (26.5%). High absolute baseline/dormancy volume and moderate rather than extreme dormancy-to-anomaly ratios also lifted runner labels.
+
+This is not yet an edge claim. The selected 30s live-filtered streams are only marginally positive (`5m_30s` 46 closed, avg +0.053%, median -0.191%; `3m_30s` 57 closed, avg +0.098%, median -0.215%) and are highly top-dependent (`top20pct_positive_share` about 0.89). `5m_1m` and `1m_15s` selected streams are negative. Built-in broad entry-window rules remain negative across profiles.
+
+Working interpretation: current runner labels are mostly separated from noise by "large real crowd participation that stays distributed and historically does not collapse immediately", while the current executable/trailing trade model still enters too much late/noisy flow. Strict `dormancy_ok` by itself reduced runner rate in this 7d set, so it may be too strict or may be selecting dead illiquid names rather than usable awakening; do not remove the dormancy concept, but re-test it as a graded liquidity/dormancy band instead of a binary positive proof.
+
+Next best experiment: run a focused validation on another period using only valid-label rows and a predeclared 30s candidate family: real LTF trade-count/quote-volume participation floor, distributed top1 flow cap, prior-spike sustain history, moderate anomaly ratio/no-chase guard, and explicit entry replay PnL. Treat future runner label as evaluation only.

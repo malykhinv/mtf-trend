@@ -1,3 +1,36 @@
+## 2026-05-28 - P438 proposed - runner/fader OOS v1 research filter artifacts
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+research/EXPERIMENT_LOG.md
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Freeze the 7d runner/fader readout as a held-out 45d hypothesis instead of silently optimizing live logic. The next discovery run will score known-at-entry OOS v1 masks and write strict-filter live-filtered trades plus daily, summary, and top-dependency artifacts.
+```
+
+Hypothesis:
+
+```text
+Runner-like candidates require real HTF trade-count awakening but should not be entered after LTF trade pace has already overheated. Research candidate: htf_trade_ratio >= 12 and ltf_trade_pace_ratio <= 6. Strict tier: additionally htf_quote_ratio <= 48 to avoid quote-volume blow-off/chase.
+```
+
+Honesty boundary:
+
+```text
+No live order logic, signal timing, entry price, stop/trailing, fees, slippage, future label generation, or post-entry replay is changed. The new masks use only htf_trade_ratio, ltf_trade_pace_ratio, and htf_quote_ratio, which are already present at the selected entry decision. Future labels and PnL are output metrics only.
+```
+
+Status: PROPOSED against uploaded workspace / commit UNKNOWN.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; then run 45d discovery and inspect `htf_ltf_runner_oos_runner_fader_v1_*` artifacts plus the `oos_v1_*` rows in trade and entry-window rule-score CSVs.
+
 ## 2026-05-28 - P437 proposed - merge post-entry targeted LTF windows and prune broad post-entry candidates early
 
 Files:

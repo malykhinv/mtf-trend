@@ -1,3 +1,13 @@
+## 2026-05-28 - P438 runner/fader OOS v1 hypothesis proposed
+
+Current commit: UNKNOWN.
+
+Status: P438 PROPOSED against uploaded workspace. The 7d four-profile readout did not prove a stable edge: `5m_1m` was negative every day and all profiles were sensitive to top trades. The actionable pre-entry split was not "more volume"; it was real HTF trade-count awakening without LTF blow-off. In-sample selected/live-filtered hypothesis: `htf_trade_ratio >= 12` and `ltf_trade_pace_ratio <= 6`; strict tier additionally requires `htf_quote_ratio <= 48`. On the provided run this lifted runner share and made the non-top remainder positive, but it is still mined in-sample and must be treated as an OOS hypothesis, not live logic.
+
+Patch: add research-only OOS v1 artifacts and rule-score rows for the next 45d discovery run. The strict artifact writes filtered live-filtered trades, daily summary, profitability summary, and top-dependency summary. It uses only known-at-entry HTF/LTF ratios and explicitly marks `uses_future_label_as_entry_filter=False`.
+
+Next: run `.\.venv\Scripts\python.exe main.py run-htf-ltf-runner-discovery --days 45`; accept the hypothesis only if closed trades are sufficient, median net > 0, sum net > 0, positive-day share > 55%, top20 dependency is not dominant, and the result survives with `5m_1m` either disabled or materially improved.
+
 ## 2026-05-28 - P437 targeted LTF post-entry speed patch proposed
 
 Current commit: UNKNOWN.
@@ -3321,3 +3331,17 @@ Useful evidence from nature audit:
 - Very concentrated one-print confirmation is bad; top one 5s quote share >75% was negative in the candidate set.
 
 Next implementation should express this as a nature contract, not a naked momentum rule: post-HTF acceptance, structural HTF-low invalidation, distributed/non-blowoff 5s confirmation, controlled risk, and prior-history cleanliness.
+
+## 2026-05-28 - HTF/LTF runner noise separation state
+
+Current commit: 736cd41b, dirty worktree observed.
+
+Latest runner discovery artifact: `.output/results/htf_ltf_runner_discovery_7d`.
+
+Readout:
+- Do not treat missing subminute future-label windows as noise. Valid-label filtering changes the base: 30s/15s profiles have about 11-12% runner labels among rows with `future_label_status=ok` and `htf_ltf_status=ok`.
+- Stronger candidate separators in the valid 30s set are real LTF participation, distributed flow, and prior spike sustain: high `htf_ltf_number_of_trades`, high real `htf_ltf_quote_volume`, low `htf_ltf_quote_top1_share` / `htf_ltf_trade_top1_share`, and low `prior_spike_next_decay50_share`.
+- Binary `dormancy_ok` is not currently a positive runner separator; in this 7d set it often selects lower runner-rate rows. This does not invalidate the dormancy thesis, but it means current dormancy thresholds may be too strict or are confounding true sleep with dead liquidity.
+- Existing executable selected streams are not robust enough: `5m_30s` and `3m_30s` are only slightly positive with negative median and high top-positive dependency; `5m_1m` and `1m_15s` are negative.
+
+Current conclusion: runner-vs-noise separation is visible at the label/nature layer, but not yet proven as executable edge. The next test should be a predeclared 30s validation on another period with valid-label accounting, real participation floor, distributed-flow cap, prior-spike sustain, moderate anomaly/no-chase guard, and live-filtered structural replay.
