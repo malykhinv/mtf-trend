@@ -1,3 +1,11 @@
+## 2026-05-28 - P432b two-stage targeted LTF backfill proposed
+
+Current commit: UNKNOWN.
+
+Status: P432b PROPOSED against workspace where P431 is already applied. The previous P432 patch was too broad for the user's local state. This incremental patch keeps P431 profiles/progress intact and changes only runner discovery's targeted subminute loading model: pre-entry first, then post-entry/runner-horizon only for signals selected by known-at-entry LTF confirmation and entry guards. This should reduce 1s aggTrade fetch volume without adding lookahead or backdated decisions.
+
+Next: apply P432b after P431, run `./.venv/Scripts/python.exe main.py run-htf-ltf-runner-discovery --days 45`, then inspect `htf_ltf_runner_targeted_ltf_plan.csv` phases. `post_entry` rows must have `selection_model=known_at_entry_ltf_confirmation_and_entry_guards_only` and no future-label based selection.
+
 ## 2026-05-28 - P431 profile set, per-profile seed gates, and 1% progress proposed
 
 Current commit: UNKNOWN.

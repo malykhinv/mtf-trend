@@ -1,3 +1,13 @@
+## 2026-05-28 - P432b two-stage targeted fetch validation
+
+Experiment status: planned after P432b.
+
+Question: can targeted subminute discovery remain honest while fetching far less 1s data by splitting pre-entry confirmation windows from post-entry hold/runner horizons?
+
+Run: `./.venv/Scripts/python.exe main.py run-htf-ltf-runner-discovery --days 45` after applying P431 then P432b.
+
+Acceptance: `htf_ltf_runner_targeted_ltf_plan.csv` must contain both `pre_entry` and `post_entry` phases. Pre-entry windows should cover only HTF seed start through max confirm + next open. Post-entry windows should exist only for rows selected by `known_at_entry_ltf_confirmation_and_entry_guards_only`. Closed trades must still satisfy strict wall-clock/no-gap replay.
+
 ## 2026-05-28 - P431 four-profile HTF/LTF discovery rerun
 
 Experiment status: planned after P431.

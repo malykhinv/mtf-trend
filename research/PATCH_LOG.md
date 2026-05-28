@@ -1,3 +1,30 @@
+## 2026-05-28 - P432b proposed - two-stage targeted LTF backfill after P431
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+research/EXPERIMENT_LOG.md
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Reduce runner discovery 1s aggTrade fetch cost without weakening honesty. Fetch only HTF seed -> max LTF confirmation/next-open first, evaluate entry-worthiness using known-at-entry LTF confirmation and entry guards, then fetch post-entry hold/runner horizon only for executable pre-entry signals.
+```
+
+Honesty boundary:
+
+```text
+Post-entry fetch selection must not use future labels, post-entry OHLCV, PnL, runner hits, or stop outcomes. It can use only closed HTF seed data plus LTF confirmation/entry guard fields available by decision/entry time.
+```
+
+Status: PROPOSED against P431-applied local workspace / commit UNKNOWN.
+
+Validation: run `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; then check that targeted plan phases include `pre_entry` and `post_entry`.
+
 ## 2026-05-28 - P431 proposed - four-profile runner discovery and non-spam progress
 
 Files:
