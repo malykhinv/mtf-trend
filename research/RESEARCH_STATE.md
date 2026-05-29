@@ -1,3 +1,11 @@
+## 2026-05-29 - P446 live2 actionable data-readiness hygiene
+
+Current commit: UNKNOWN.
+
+Status: P446 PROPOSED after the artifact backpressure fix exposed that most live2 decisions were routine weak buckets or misclassified flow freshness. The intended live contract is now explicit: quiet buckets stay `market_quiet_non_actionable` in the grid and do not run the signal engine; stale flow in a closed bucket is a strategy/freshness reject (`flow_freshness_reject`), not `data_not_ready`; rolling 1m context gaps carry typed repair metadata into the existing official Binance 1m kline repair path.
+
+Next: run a 60-90 minute live smoke. Acceptance: `real_trade_bucket_for_backtest_parity` disappears, `total_data_not_ready` drops sharply, `rolling_context_repair_status_counts` is non-empty only for threshold-actionable candidates, and remaining `data_dependency_not_ready` reasons separate true rolling context gaps from confirm/HTF aggTrade gap tolerance.
+
 ## 2026-05-29 - P445 rolling fetch cost guard
 
 Current commit: UNKNOWN.

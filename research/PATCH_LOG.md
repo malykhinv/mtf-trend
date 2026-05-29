@@ -1,3 +1,15 @@
+## 2026-05-29 - P446 proposed - live2 actionable data-readiness hygiene
+
+Status: PROPOSED after local audit writer patch / commit UNKNOWN.
+
+Files: `research_tools/anomaly_live2/deadline.py`, `research_tools/anomaly_live2/signal.py`, `research_tools/anomaly_live2/state.py`, `research/STRATEGY_SPEC.md`, `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md`, `research/EXPERIMENT_LOG.md`.
+
+Purpose: fix the source of excessive `data_not_ready` / `data_dependency_not_ready` without adding fallback. Weak real-trade buckets no longer enter the live signal engine unless quote/trade/return thresholds are crossed; stale last trade inside a closed bucket is reported as `flow_freshness_reject`, not data readiness failure; rolling 1m repair metadata is preserved so the existing official-kline REST repair can actually run on threshold-actionable candidates.
+
+Honesty: no synthetic candles, no silent fallback, no changed fill/risk/exit logic. REST repair uses the existing typed Binance 1m kline boundary and re-runs the same continuity contract.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic smokes for quiet bucket gating, stale-flow verdict, and rolling repair metadata propagation.
+
 ## P445 - speed rolling targeted fetch with C/A/S impossibility gate
 
 Status: PROPOSED.

@@ -152,6 +152,7 @@ class Live2SignalEngine:
         self._selected_by_category: Counter[str] = Counter()
         self._dependency_reason_counts: Counter[str] = Counter()
         self._reject_reason_counts: Counter[str] = Counter()
+        self._rolling_context_repair_status_counts: Counter[str] = Counter()
         self._last_dependency_reasons: tuple[str, ...] = ()
         self._last_reject_reasons: tuple[str, ...] = ()
 
@@ -160,6 +161,7 @@ class Live2SignalEngine:
         features = self._features(state=state, candle=candle, actionable_reason=actionable_reason)
         repair_result = self._maybe_repair_rolling_context(state=state, features=features, decision_time_ms=int(candle.close_time_ms))
         if repair_result:
+            self._rolling_context_repair_status_counts[str(repair_result.get("status", "unknown") or "unknown")] += 1
             features = {
                 **self._features(state=state, candle=candle, actionable_reason=actionable_reason),
                 "rolling_1m_rest_repair_status": repair_result.get("status", ""),
@@ -261,6 +263,7 @@ class Live2SignalEngine:
             "selected_by_category": dict(self._selected_by_category),
             "dependency_reason_counts": dict(self._dependency_reason_counts),
             "reject_reason_counts": dict(self._reject_reason_counts),
+            "rolling_context_repair_status_counts": dict(self._rolling_context_repair_status_counts),
             "last_dependency_reasons": self._last_dependency_reasons,
             "last_reject_reasons": self._last_reject_reasons,
             "limitations": (
@@ -1544,6 +1547,7 @@ def _rolling_runner_category_setup(*, state: SymbolState, decision_candle: Live2
     evaluations: list[dict[str, object]] = []
     dependency_reasons: list[str] = []
     reject_reasons: list[str] = []
+    repair_metadata: dict[str, object] = {}
     for profile in LIVE2_ROLLING_RUNNER_PROFILES:
         result = _evaluate_rolling_profile(
             closed_30s=closed_30s,
@@ -1557,13 +1561,19 @@ def _rolling_runner_category_setup(*, state: SymbolState, decision_candle: Live2
             evaluations.append(result)
         elif status == "not_ready":
             dependency_reasons.append(f"{profile['tf_set']}:{reason}")
+            repair_metadata = _preferred_rolling_repair_metadata(repair_metadata, result)
         else:
             reject_reasons.append(f"{profile['tf_set']}:{reason}")
 
     if not evaluations:
-        if dependency_reasons and not reject_reasons:
-            return {**common, "rolling_runner_dependency_reasons": tuple(dependency_reasons)}
-        return {**common, "rolling_runner_reject_reasons": tuple(reject_reasons or ("rolling_runner_no_profile_selected",))}
+        base = {**common, **repair_metadata}
+        if dependency_reasons:
+            return {
+                **base,
+                "rolling_runner_dependency_reasons": tuple(dependency_reasons),
+                "rolling_runner_reject_reasons": tuple(reject_reasons),
+            }
+        return {**base, "rolling_runner_reject_reasons": tuple(reject_reasons or ("rolling_runner_no_profile_selected",))}
 
     def sort_key(item: dict[str, object]) -> tuple[int, int, int]:
         category_id = str(item.get("rolling_runner_category_id", ""))
@@ -1579,6 +1589,40 @@ def _rolling_runner_category_setup(*, state: SymbolState, decision_candle: Live2
         "rolling_runner_dependency_reasons": tuple(dependency_reasons),
         "rolling_runner_reject_reasons": tuple(reject_reasons),
     }
+
+
+def _preferred_rolling_repair_metadata(current: dict[str, object], candidate: dict[str, object]) -> dict[str, object]:
+    """Return the repair hint that repairs the latest missing 1m context boundary.
+
+    A profile-level dependency reason is prefixed with the profile id for audit,
+    but the REST repair hook needs the raw boundary timestamp and reason.  Keep
+    that metadata typed and outside the human-readable reason string.
+    """
+
+    repair_reason = str(candidate.get("rolling_1m_repair_reason", "") or "")
+    if not repair_reason:
+        return current
+    try:
+        before_ms = int(candidate.get("rolling_1m_repair_before_ms", 0) or 0)
+    except (TypeError, ValueError):
+        before_ms = 0
+    if before_ms <= 0:
+        return current
+    try:
+        current_before_ms = int(current.get("rolling_1m_repair_before_ms", 0) or 0)
+    except (TypeError, ValueError):
+        current_before_ms = 0
+    if current and current_before_ms >= before_ms:
+        return current
+    metadata: dict[str, object] = {
+        "rolling_1m_repair_reason": repair_reason,
+        "rolling_1m_repair_before_ms": before_ms,
+    }
+    for key in ("rolling_1m_latest_close_ms", "rolling_1m_context_gap_ms"):
+        value = candidate.get(key)
+        if value is not None:
+            metadata[key] = value
+    return metadata
 
 
 def _evaluate_rolling_profile(

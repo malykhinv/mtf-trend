@@ -346,6 +346,7 @@ class Live2DeadlineCycleResult:
     rejected_count: int = 0
     data_not_ready_count: int = 0
     data_dependency_not_ready_count: int = 0
+    flow_freshness_reject_count: int = 0
     deadline_missed_count: int = 0
     deadline_expired_backlog_count: int = 0
     pre_live_bucket_skipped_count: int = 0
@@ -360,6 +361,7 @@ class Live2DeadlineCycleResult:
             "rejected_count": self.rejected_count,
             "data_not_ready_count": self.data_not_ready_count,
             "data_dependency_not_ready_count": self.data_dependency_not_ready_count,
+            "flow_freshness_reject_count": self.flow_freshness_reject_count,
             "deadline_missed_count": self.deadline_missed_count,
             "deadline_expired_backlog_count": self.deadline_expired_backlog_count,
             "pre_live_bucket_skipped_count": self.pre_live_bucket_skipped_count,
@@ -400,6 +402,7 @@ class Live2DeadlineEngine:
         self._total_pre_live_bucket_skipped = 0
         self._total_data_not_ready = 0
         self._total_data_dependency_not_ready = 0
+        self._total_flow_freshness_reject = 0
         self._total_rejected = 0
         self._total_selected = 0
 
@@ -432,6 +435,8 @@ class Live2DeadlineEngine:
                 result.data_not_ready_count += 1
             elif decision.verdict == "data_dependency_not_ready":
                 result.data_dependency_not_ready_count += 1
+            elif decision.verdict == "flow_freshness_reject":
+                result.flow_freshness_reject_count += 1
             elif decision.verdict == "deadline_missed":
                 result.deadline_missed_count += 1
             elif decision.verdict == "deadline_expired_backlog":
@@ -445,7 +450,8 @@ class Live2DeadlineEngine:
         self._total_pre_live_bucket_skipped += result.pre_live_bucket_skipped_count
         self._total_data_not_ready += result.data_not_ready_count
         self._total_data_dependency_not_ready += result.data_dependency_not_ready_count
-        self._total_rejected += result.rejected_count
+        self._total_flow_freshness_reject += result.flow_freshness_reject_count
+        self._total_rejected += result.rejected_count + result.flow_freshness_reject_count
         self._total_selected += result.selected_count
         return result
 
@@ -463,6 +469,7 @@ class Live2DeadlineEngine:
             "total_rejected": self._total_rejected,
             "total_data_not_ready": self._total_data_not_ready,
             "total_data_dependency_not_ready": self._total_data_dependency_not_ready,
+            "total_flow_freshness_reject": self._total_flow_freshness_reject,
             "total_deadline_missed": self._total_deadline_missed,
             "total_deadline_expired_backlog": self._total_deadline_expired_backlog,
             "total_pre_live_bucket_skipped": self._total_pre_live_bucket_skipped,
@@ -553,8 +560,8 @@ class Live2DeadlineEngine:
             verdict = "deadline_missed"
             reason = "closed_bucket_was_not_evaluated_before_deadline"
         elif _is_trade_stale(candle=candle, now_ms=now_ms, stale_trade_ms=self.config.stale_trade_ms):
-            verdict = "data_not_ready"
-            reason = "latest_closed_bucket_trade_flow_is_stale"
+            verdict = "flow_freshness_reject"
+            reason = "latest_closed_bucket_trade_flow_did_not_hold_into_decision_deadline"
         else:
             # Cumulative gap/out-of-order counters are diagnostics, not a permanent
             # hard rejection. Dormant symbols naturally have no-trade gaps between
@@ -701,7 +708,7 @@ class Live2DeadlineEngine:
         if abs(return_pct) >= self.config.actionable_min_abs_return_pct:
             reasons.append("abs_return_threshold_crossed")
         if not reasons:
-            reasons.append("real_trade_bucket_for_backtest_parity")
+            return None
         return "+".join(reasons)
 
     def _apply_pre_live_bucket(
@@ -726,7 +733,8 @@ class Live2DeadlineEngine:
     def _apply_non_actionable(self, state: SymbolState, *, candle: Live2Candle, now_ms: int) -> None:
         state.status = SymbolLive2Status.WATCHING
         state.last_decision_bucket_ms = candle.open_time_ms
-        state.last_verdict = "rejected_not_actionable"
+        state.last_verdict = "market_quiet_non_actionable"
+        state.last_verdict_reason = "no_actionable_quote_trade_or_return_threshold_crossed"
         state.decision_dirty_since_ms = None
         state.updated_ms = now_ms
         state.decision_deadline_ms = None
@@ -828,6 +836,8 @@ class Live2DeadlineEngine:
             state.data_not_ready_decision_count += 1
         elif verdict == "data_dependency_not_ready":
             state.data_dependency_not_ready_decision_count += 1
+        elif verdict == "flow_freshness_reject":
+            state.flow_freshness_reject_decision_count += 1
         elif verdict.startswith("rejected"):
             state.rejected_decision_count += 1
         elif verdict == "selected":

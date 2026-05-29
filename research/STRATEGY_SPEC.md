@@ -183,7 +183,9 @@ TP1 is a full-position limit at actual_entry + 0.75 * (actual_entry - pump_leg_b
 initial SL remains max(pump_leg_bottom - structural buffer, EMA20), so TP1 risk basis and SL risk basis are deliberately separate
 pre-fill live2 entry guard uses the same signal TP1/SL basis as backtest: drift <= 0.4%, RR to signal TP1 >= 0.70, TP1 not touched before entry
 live2 signal math must use the same forming setup segment as the backtest for quote/trade setup ratios, whipsaw, effort-per-return, taker-share delta, flow_hold, and range/baseline ratios; no 5s-scaled baseline fallback may make a tradable signal before the real 60x1m baseline is available
-single-bucket actionability thresholds are operator diagnostics only; every real closed 5s trade bucket may reach the signal engine so cumulative forming-setup candidates are not skipped before backtest-equivalent filters run
+single-bucket actionability thresholds are the live hot-path candidate gate: a closed bucket must cross quote-volume, trade-count, or absolute-return actionability before the full signal engine runs; weak real-trade buckets remain `market_quiet_non_actionable` diagnostics, not trading candidates. Backtest-parity broad scanning belongs in offline diagnostics/summary artifacts, not the live execution path.
+closed-bucket last-trade freshness is a flow-continuation/fade condition, not data availability. If a threshold-actionable bucket's latest trade is stale at decision time, live2 must emit `flow_freshness_reject` rather than `data_not_ready`.
+rolling 1m context gaps may be repaired only by official exchange 1m klines with explicit source labels and then the same continuity contract must be rechecked; no synthetic zero-volume candles or silent fallback are allowed.
 ```
 
 Live scheduling contract:

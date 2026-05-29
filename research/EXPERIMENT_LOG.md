@@ -1,3 +1,20 @@
+## 2026-05-29 - P446 live2 data health smoke
+
+Question: after removing weak real-trade buckets from the live signal path and enabling rolling 1m repair metadata, do the remaining data-readiness failures represent real missing context rather than routine market quietness or flow fade?
+
+Run: start `run-anomaly-live2` for 60-90 minutes after P446 on the same universe/settings.
+
+Acceptance:
+
+```text
+- `deadline_engine.total_data_not_ready` near zero except true invalid stream cases;
+- no `real_trade_bucket_for_backtest_parity` in deadline summary/event data;
+- grid has many `market_quiet_non_actionable` statuses instead of raw deadline rows;
+- `flow_freshness_reject` exists only for threshold-actionable candles whose last trade did not hold into the decision window;
+- `signal_engine.rolling_context_repair_status_counts` shows ready/partial/throttled/error when rolling 1m context is missing;
+- selected/entry_guard/execution artifacts remain present and undropped.
+```
+
 ## 2026-05-29 - P445 rolling fetch cost audit
 
 Hypothesis: P444's coverage-safe pair gate is too expensive because it fetches many pairs that can pass the broad seed upper bounds but cannot possibly match the frozen C/A/S entry families. P445 should reduce fetch count by rejecting only mathematically impossible C/A/S pairs and by reusing already trusted target LTF caches before 1s aggTrade download.

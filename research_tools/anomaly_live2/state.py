@@ -71,6 +71,7 @@ class SymbolState:
     rejected_decision_count: int = 0
     data_not_ready_decision_count: int = 0
     data_dependency_not_ready_decision_count: int = 0
+    flow_freshness_reject_decision_count: int = 0
     deadline_missed_count: int = 0
     selected_decision_count: int = 0
     last_signal_category_id: str = ""
@@ -596,6 +597,7 @@ class SymbolState:
             "rejected_decision_count": self.rejected_decision_count,
             "data_not_ready_decision_count": self.data_not_ready_decision_count,
             "data_dependency_not_ready_decision_count": self.data_dependency_not_ready_decision_count,
+            "flow_freshness_reject_decision_count": self.flow_freshness_reject_decision_count,
             "deadline_missed_count": self.deadline_missed_count,
             "selected_decision_count": self.selected_decision_count,
             "last_signal_category_id": self.last_signal_category_id,
