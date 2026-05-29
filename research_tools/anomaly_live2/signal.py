@@ -80,6 +80,7 @@ LIVE2_ROLLING_BASELINE_WINDOWS = 60
 LIVE2_ROLLING_DORMANCY_WINDOWS = 30
 LIVE2_ROLLING_PREGROWTH_WINDOWS = 5
 LIVE2_ROLLING_PRIOR_SPIKE_LOOKBACK_MS = 24 * 60 * 60 * 1000
+LIVE2_ROLLING_CONTEXT_SAFETY_LOOKBACK_MS = LIVE2_ROLLING_PRIOR_SPIKE_LOOKBACK_MS + LIVE2_ROLLING_BASELINE_WINDOWS * 300_000
 LIVE2_ROLLING_SEED_MIN_HTF_QUOTE_RATIO = 5.0
 LIVE2_ROLLING_SEED_MIN_HTF_TRADE_RATIO = 5.0
 LIVE2_ROLLING_SEED_MIN_HTF_RETURN_PCT = 0.0100
@@ -1557,7 +1558,10 @@ def _evaluate_rolling_profile(
             continue
         htf_open_ms = int(htf[0].open_time_ms)
         history = _aggregate_1m_history_to_htf(closed_1m=closed_1m, htf_timeframe_ms=htf_timeframe_ms, before_ms=htf_open_ms)
-        required_history = LIVE2_ROLLING_BASELINE_WINDOWS + LIVE2_ROLLING_DORMANCY_WINDOWS + LIVE2_ROLLING_PREGROWTH_WINDOWS
+        required_history = max(
+            LIVE2_ROLLING_BASELINE_WINDOWS + LIVE2_ROLLING_DORMANCY_WINDOWS + LIVE2_ROLLING_PREGROWTH_WINDOWS,
+            math.ceil((LIVE2_ROLLING_PRIOR_SPIKE_LOOKBACK_MS + LIVE2_ROLLING_BASELINE_WINDOWS * htf_timeframe_ms) / htf_timeframe_ms),
+        )
         if len(history) < required_history:
             return {**profile_common, "status": "not_ready", "reason": f"rolling_1m_history_not_ready:{len(history)}/{required_history}"}
         baseline = history[-LIVE2_ROLLING_BASELINE_WINDOWS:]
@@ -1670,18 +1674,37 @@ def _closed_segment_before(
 
 
 def _aggregate_1m_history_to_htf(*, closed_1m: tuple[Live2Candle, ...], htf_timeframe_ms: int, before_ms: int) -> tuple[Live2Candle, ...]:
+    """Build calendar-aligned HTF context candles fully closed before rolling HTF.
+
+    This intentionally mirrors the rolling discovery backtest: the traded HTF
+    seed is rolling, but baseline/dormancy/pregrowth/prior-spike context comes
+    from calendar HTF candles whose close is <= rolling_window_start.  The
+    function must not create backward chunks ending exactly at ``before_ms``
+    because that would change the feature distribution versus the backtest.
+    """
+
     group_size = htf_timeframe_ms // 60_000
     if group_size <= 0:
         return ()
-    ordered = tuple(sorted((item for item in closed_1m if item.close_time_ms <= before_ms), key=lambda item: item.open_time_ms))
+    buckets: dict[int, list[Live2Candle]] = {}
+    for item in closed_1m:
+        if item.close_time_ms > before_ms:
+            continue
+        bucket_open_ms = (int(item.open_time_ms) // htf_timeframe_ms) * htf_timeframe_ms
+        bucket_close_ms = bucket_open_ms + htf_timeframe_ms
+        if bucket_close_ms > before_ms:
+            continue
+        buckets.setdefault(bucket_open_ms, []).append(item)
     groups: list[Live2Candle] = []
-    index = len(ordered)
-    while index >= group_size:
-        chunk = ordered[index - group_size:index]
-        if tuple(item.open_time_ms for item in chunk) == tuple(chunk[0].open_time_ms + offset * 60_000 for offset in range(group_size)):
-            groups.append(_aggregate_candles_to_live2_candle(candles=chunk, timeframe_ms=htf_timeframe_ms))
-        index -= group_size
-    return tuple(reversed(groups))
+    for bucket_open_ms in sorted(buckets):
+        chunk = tuple(sorted(buckets[bucket_open_ms], key=lambda item: item.open_time_ms))
+        if len(chunk) != group_size:
+            continue
+        expected = tuple(bucket_open_ms + offset * 60_000 for offset in range(group_size))
+        if tuple(item.open_time_ms for item in chunk) != expected:
+            continue
+        groups.append(_aggregate_candles_to_live2_candle(candles=chunk, timeframe_ms=htf_timeframe_ms))
+    return tuple(groups)
 
 
 def _rolling_ltf_confirmation_features(
@@ -1720,19 +1743,35 @@ def _rolling_ltf_confirmation_features(
 
 
 def _rolling_prior_spike_features(*, history: tuple[Live2Candle, ...], current: Live2Candle, current_open_ms: int) -> dict[str, float | int]:
+    """Prior-spike context with the same availability boundary as discovery.
+
+    Spike detection itself needs a pre-spike baseline.  Therefore the baseline
+    for a prior candle is taken from the full pre-current history, not only from
+    the last 24h slice.  Only after a candle is classified as a prior spike do
+    we apply the 24h lookback filter.
+    """
+
+    ordered = tuple(sorted((item for item in history if item.open_time_ms < current_open_ms), key=lambda item: item.open_time_ms))
     lookback_start = int(current_open_ms) - LIVE2_ROLLING_PRIOR_SPIKE_LOOKBACK_MS
-    prior = tuple(item for item in history if item.open_time_ms >= lookback_start)
     spike_quotes: list[float] = []
-    for idx, candle in enumerate(prior):
+    for idx, candle in enumerate(ordered):
+        if candle.open_time_ms < lookback_start:
+            continue
         if candle.quote_volume <= 0 or candle.open <= 0:
             continue
-        prev = prior[max(0, idx - LIVE2_ROLLING_BASELINE_WINDOWS):idx]
+        prev = ordered[max(0, idx - LIVE2_ROLLING_BASELINE_WINDOWS):idx]
         if len(prev) < min(10, LIVE2_ROLLING_BASELINE_WINDOWS):
             continue
         baseline_quote = _median([item.quote_volume for item in prev])
         baseline_trades = _median([float(item.number_of_trades) for item in prev])
         candle_return = (candle.close / candle.open) - 1.0
-        if baseline_quote > 0 and baseline_trades > 0 and candle.quote_volume / baseline_quote >= 3.0 and float(candle.number_of_trades) / baseline_trades >= 3.0 and candle_return >= 0.0:
+        if (
+            baseline_quote > 0
+            and baseline_trades > 0
+            and candle.quote_volume / baseline_quote >= 3.0
+            and float(candle.number_of_trades) / baseline_trades >= 3.0
+            and candle_return >= 0.0
+        ):
             spike_quotes.append(float(candle.quote_volume))
     max_quote = max(spike_quotes) if spike_quotes else float("nan")
     median_quote = _median(spike_quotes) if spike_quotes else float("nan")

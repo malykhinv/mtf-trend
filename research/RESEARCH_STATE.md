@@ -3420,3 +3420,10 @@ Current commit: UNKNOWN.
 Status: P447 PROPOSED. Live2 is prepared to trade the same rolling runner categories being tested in discovery: rolling 5m/30s and 3m/30s, first fixed C/A/S category trigger, 30s decision buckets, risk-per-trade sizing, total open-risk cap, and symbol cooldown equal to rolling HTF width. This intentionally removes the legacy 5s/1m live signal path from entry selection rather than keeping it as a fallback.
 
 Next: apply P447 only after P446 is applied, run compileall, then first run live2 in minimal-notional/limited-risk observation and compare live `deadline_decision` artifacts against rolling discovery fields before increasing size.
+## 2026-05-29 - P448 live2 rolling context parity audit
+
+Current commit: UNKNOWN.
+
+Status: P448 PROPOSED after reviewing P447 live2. P447 had no direct future/outcome field usage in C/A/S, but live defaults and context construction were not safe enough: CLI still warmed only 75 minutes of closed 1m baseline, prior-spike detection did not require full 24h plus pre-spike baseline history, and live aggregated 1m history into rolling-aligned chunks instead of the calendar HTF context used by discovery. P448 raises live startup baseline to 30h, requires enough HTF context before C/A/S can select, computes prior-spike baselines from full pre-current history, and calendar-aligns live context candles fully closed before the rolling HTF start.
+
+Next: apply P448, run compileall, then run live2 only after the rolling 45d discovery result is acceptable. In live artifacts, verify `rolling_1m_history_not_ready` disappears after startup and selected signals contain `rolling_runner_tf_set` only in `5m_30s` / `3m_30s`.

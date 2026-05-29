@@ -2158,7 +2158,7 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
                 startup_warmup_lookback_minutes=int(getattr(args, "startup_warmup_lookback_minutes", 15)),
                 startup_warmup_max_trades_per_symbol=int(getattr(args, "startup_warmup_max_trades_per_symbol", 1000)),
                 startup_warmup_max_pages_per_symbol=int(getattr(args, "startup_warmup_max_pages_per_symbol", 1)),
-                startup_htf_baseline_lookback_minutes=int(getattr(args, "startup_htf_baseline_lookback_minutes", 75)),
+                startup_htf_baseline_lookback_minutes=int(getattr(args, "startup_htf_baseline_lookback_minutes", 1800)),
                 ws_connection_max_age_seconds=float(getattr(args, "ws_connection_max_age_seconds", 84_600.0)),
                 user_data_stream_startup_wait_seconds=float(getattr(args, "user_data_stream_startup_wait_seconds", 10.0)),
                 user_data_stream_keepalive_interval_seconds=float(getattr(args, "user_data_stream_keepalive_interval_seconds", 1_800.0)),
