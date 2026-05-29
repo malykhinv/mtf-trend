@@ -9842,3 +9842,21 @@ Validation:
 ```bash
 python -m compileall -q data/exchanges research_tools cli constants.py main.py
 ```
+
+## 2026-05-29 - P453 TP1 partial structural-runner parity
+
+Status: PROPOSED. Current commit: UNKNOWN.
+
+Aligns the rolling runner discovery replay and live2 position supervisor around the intended runner-management contract: close 50% at TP1=0.75R, keep the remainder protected, and trail structurally. Live2 no longer uses early-exit conditions as close triggers by default; when an early-exit condition appears, it is written as `position_early_exit_reason_observed` telemetry on the protected position/artifacts and the position remains managed by TP1/structural trailing. Discovery replay now simulates the same TP1 partial leg before structural trailing.
+
+Validation:
+
+```bash
+python -m compileall data/exchanges research_tools cli constants.py main.py launcher.py
+```
+
+Risk:
+
+```text
+This changes the backtest exit model, so old discovery PnL is not comparable to new discovery PnL. Live still has actual-fill/exchange-boundary differences by design; this patch only aligns position-management policy.
+```

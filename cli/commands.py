@@ -2189,7 +2189,7 @@ def run_anomaly_live2(config: AppConfig, args: argparse.Namespace) -> int:
                 execution_max_total_open_risk_pct=float(getattr(args, "execution_max_total_open_risk_pct", 0.08)),
                 execution_max_open_positions=int(getattr(args, "execution_max_open_positions", 0)),
                 position_supervisor_tp1_close_fraction=float(getattr(args, "position_supervisor_tp1_close_fraction", 0.5)),
-                position_supervisor_early_exit_enabled=bool(getattr(args, "position_supervisor_early_exit_enabled", True)),
+                position_supervisor_early_exit_enabled=bool(getattr(args, "position_supervisor_early_exit_enabled", False)),
                 position_supervisor_early_exit_min_hold_candles=int(getattr(args, "position_supervisor_early_exit_min_hold_candles", 6)),
                 position_supervisor_early_exit_stall_candles=int(getattr(args, "position_supervisor_early_exit_stall_candles", 12)),
                 position_supervisor_early_exit_min_mfe_r=float(getattr(args, "position_supervisor_early_exit_min_mfe_r", 0.25)),

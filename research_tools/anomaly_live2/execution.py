@@ -206,6 +206,9 @@ class Live2ProtectedPosition:
     status: str = "protected_initial_stop_verified"
     closed_at_ms: int | None = None
     close_reason: str = ""
+    early_exit_observed_count: int = 0
+    early_exit_last_reason: str = ""
+    early_exit_last_observed_ms: int | None = None
     last_supervised_ms: int = 0
 
     def as_dict(self) -> dict[str, object]:
@@ -266,6 +269,9 @@ class Live2ProtectedPosition:
             "status": self.status,
             "closed_at_ms": self.closed_at_ms,
             "close_reason": self.close_reason,
+            "early_exit_observed_count": self.early_exit_observed_count,
+            "early_exit_last_reason": self.early_exit_last_reason,
+            "early_exit_last_observed_ms": self.early_exit_last_observed_ms,
             "last_supervised_ms": self.last_supervised_ms,
         }
 

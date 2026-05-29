@@ -85,7 +85,7 @@ class AnomalyLive2Config:
     position_supervisor_tp1_close_fraction: float = 0.5
     position_supervisor_breakeven_stop_offset_pct: float = 0.0
     position_supervisor_flat_position_abs_epsilon: float = 1e-12
-    position_supervisor_early_exit_enabled: bool = True
+    position_supervisor_early_exit_enabled: bool = False
     position_supervisor_early_exit_min_hold_candles: int = 6
     position_supervisor_early_exit_stall_candles: int = 12
     position_supervisor_early_exit_min_mfe_r: float = 0.25

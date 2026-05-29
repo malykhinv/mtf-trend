@@ -319,9 +319,8 @@ class Live2PositionSupervisor:
                 return self._close_tp1_full_position(position=position, exchange_amount=exchange_amount, now_ms=now_ms)
             early_exit = self._early_exit_decision(position=position, state=state, latest_price=float(latest_price), now_ms=now_ms)
             if early_exit.get("should_exit") is True:
-                return self._close_early_exit_full_position(
+                return self._record_early_exit_reason(
                     position=position,
-                    exchange_amount=exchange_amount,
                     now_ms=now_ms,
                     early_exit=early_exit,
                 )
@@ -337,6 +336,44 @@ class Live2PositionSupervisor:
 
         self.execution_engine.replace_protected_position(replace(position, last_supervised_ms=now_ms))
         return None
+
+
+    def _record_early_exit_reason(
+        self,
+        *,
+        position: Live2ProtectedPosition,
+        now_ms: int,
+        early_exit: dict[str, object],
+    ) -> Live2PositionSupervisorAction | None:
+        """Audit an early-exit reason without closing the live position.
+
+        Early-exit signals are research telemetry only. Trade management remains:
+        TP1 partial close, then structural stop/trailing for the remainder.
+        """
+        reason = str(early_exit.get("reason") or "early_exit_reason_observed")
+        if position.early_exit_last_reason == reason:
+            self.execution_engine.replace_protected_position(replace(position, last_supervised_ms=now_ms))
+            return None
+        updated = replace(
+            position,
+            early_exit_observed_count=int(position.early_exit_observed_count) + 1,
+            early_exit_last_reason=reason,
+            early_exit_last_observed_ms=int(now_ms),
+            last_supervised_ms=int(now_ms),
+        )
+        self.execution_engine.replace_protected_position(updated)
+        return Live2PositionSupervisorAction(
+            event_type="position_early_exit_reason_observed",
+            symbol=updated.symbol,
+            position_id=updated.position_id,
+            severity=Live2Severity.INFO,
+            message="Early-exit condition observed; position kept open by structural runner policy",
+            data={
+                "reason": reason,
+                "early_exit": early_exit,
+                "position": updated.as_dict(),
+            },
+        )
 
     def _early_exit_decision(
         self,

@@ -914,17 +914,17 @@ Required truth boundaries:
 - Live nature/category fields such as `setup_nature` may use only live-available candidate-time features. Future low-break and runner outcomes must remain separate evaluation labels.
 - `runner_10pct_next_hour`, `future_max_return_pct`, and anomaly-low-break fields are future labels for evaluation only. They must not be used as entry filters.
 - Entry replay starts only after closed forward LTF confirmation, enters at the next LTF open with adverse slippage, and rejects stale/drift/excess-risk cases before simulating.
-- Stop must be structural: anomaly low and closed confirmation-window lows with a small buffer. Exit is initial structural stop, structural trailing stop, or max-hold time exit. No TP is simulated.
+- Stop must be structural: anomaly low and closed confirmation-window lows with a small buffer. Position management closes 50% at TP1=0.75R, then manages the remaining 50% with structural trailing stop or max-hold time exit. Early-exit conditions are telemetry only unless deliberately re-enabled as a separate experiment.
 - Broad runs should default to cache-only 5m/1m when subminute cache is not already materialized. The command must not trigger exchange candle or seconds-data downloads during the backtest.
 
 Artifacts must expose:
 - candidate rows with dormancy, smooth pregrowth, actual OI status/change, HTF quote/trade ratios, HTF-internal LTF distribution/acceleration, runner labels, and anomaly-low-break labels;
 - candidate rows are scoped to HTF anomaly gate rows only. The funnel/run_config must expose scanned HTF row count and pre-artifact rejected row count so speed optimizations do not hide the reject base;
 - entry-window rows with decision/availability/entry timestamps, no-future-label flags, prior 24h spike context, LTF volume/trade decay and sustain fields, OI-at-decision fields, structural stop source, drift/risk fields, and execution skip reasons;
-- entry-window no-TP trade rows and rule-score tables for raw and same-symbol-filtered scopes, including volume-sustain and fader-decay families;
+- entry-window TP1-partial-plus-structural-trailing trade rows and rule-score tables for raw and same-symbol-filtered scopes, including volume-sustain and fader-decay families;
 - daily summary rows for selected trades and entry-window trades, raw and same-symbol-filtered, so positive-day share and day-level concentration are visible by default;
 - signal rows with decision time, decision availability time, next-open entry, structural stop source, drift and initial-risk fields;
-- raw and live-filtered trade rows with no-TP structural trailing outcomes;
+- raw and live-filtered trade rows with TP1=0.75R 50% partial close plus structural trailing outcomes;
 - live-filtered trade rows must reject only same-symbol overlap. They must not cap simultaneous positions across different symbols;
 - candidate rule scores for runner-label lift without using future labels as entry filters;
 - trade rule scores with net-PnL winrate, average/median/sum return, MFE/MAE, runner-label shares, and top20 positive-PnL dependency;

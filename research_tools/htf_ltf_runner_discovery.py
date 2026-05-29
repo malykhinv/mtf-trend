@@ -5,8 +5,8 @@ The tool separates two jobs that are easy to mix up:
 * future labels: did an HTF anomaly become a +10% runner within the next hour,
   and was the anomaly low broken before that happened;
 * executable replay: would a live bot, using only closed LTF candles available
-  at the decision time, enter and manage the trade with structural stop/trailing
-  and no take-profit.
+  at the decision time, enter, close 50% at TP1=0.75R, and manage the
+  remainder with structural stop/trailing.
 
 Artifacts are research-only. They are meant to learn runner nature, not to
 declare a live-ready edge from one run.
@@ -69,6 +69,8 @@ class HtfLtfRunnerDiscoveryConfig:
     structural_stop_buffer_pct: float = 0.0005
     trail_lookback_candles: int = 6
     trail_buffer_pct: float = 0.0005
+    tp1_r: float = 0.75
+    tp1_close_fraction: float = 0.5
     max_hold_candles: int = 720
     fee_rate: float = 0.0004
     entry_slippage_pct: float = 0.0005
@@ -125,6 +127,10 @@ class HtfLtfRunnerDiscoveryConfig:
             raise ValueError("targeted_backfill_max_dormancy_range_pct_median must be >= 0")
         if self.risk_per_trade_pct <= 0.0:
             raise ValueError("risk_per_trade_pct must be > 0")
+        if self.tp1_r <= 0.0:
+            raise ValueError("tp1_r must be > 0")
+        if not 0.0 < self.tp1_close_fraction <= 1.0:
+            raise ValueError("tp1_close_fraction must be in (0, 1]")
         if self.max_total_open_risk_pct < self.risk_per_trade_pct:
             raise ValueError("max_total_open_risk_pct must be >= risk_per_trade_pct")
 
@@ -449,7 +455,7 @@ def run_htf_ltf_runner_discovery(
                         "end_timestamp_ms": int(end_ms),
                         "end_timestamp_utc": _timestamp_to_utc(end_ms),
                         "execution_model": "next_ltf_open_after_closed_ltf_confirmation",
-                        "exit_model": "structural_stop_plus_structural_trailing_no_tp",
+                        "exit_model": "tp1_0p75r_close_50pct_then_structural_trailing",
                         "future_label_model": "separate_next_hour_10pct_label_not_used_for_entry",
                         "data_access_model": (
                             "rolling_htf_pair_superset_then_exact_ltf_seed_and_post_entry_replay"
@@ -1755,12 +1761,19 @@ def _simulate_no_tp_runner_trade(
     if future.empty:
         return _skipped_trade(signal, _post_entry_window_skip_reason(future_window), **window_audit)
 
+    tp1_r = float(config.tp1_r)
+    tp1_close_fraction = float(config.tp1_close_fraction)
+    tp1_price = entry_price + initial_risk * tp1_r
     active_stop = initial_stop
     trail_updates = 0
     max_high = entry_price
     min_low = entry_price
     prior_trailing_lows: list[float] = []
     trailing_lookback = max(1, int(config.trail_lookback_candles))
+    tp1_hit = False
+    tp1_ts = float("nan")
+    tp1_raw_price = float("nan")
+    tp1_fill_price = float("nan")
     exit_reason = ""
     exit_ts = float("nan")
     raw_exit_price = float("nan")
@@ -1776,13 +1789,18 @@ def _simulate_no_tp_runner_trade(
         max_high = max(max_high, high)
         min_low = min(min_low, low)
         if low <= active_stop:
-            exit_reason = "initial_stop" if trail_updates == 0 else "structural_trailing_stop"
+            exit_reason = "initial_stop" if not tp1_hit and trail_updates == 0 else "structural_trailing_stop"
             exit_ts = candle_ts
             raw_exit_price = active_stop
             exit_price = raw_exit_price * (1.0 - config.exit_slippage_pct)
             exit_stop_before_update = active_stop
             break
-        if len(prior_trailing_lows) >= trailing_lookback and new_high_or_equal:
+        if not tp1_hit and high >= tp1_price:
+            tp1_hit = True
+            tp1_ts = candle_ts
+            tp1_raw_price = tp1_price
+            tp1_fill_price = tp1_raw_price * (1.0 - config.exit_slippage_pct)
+        if tp1_hit and len(prior_trailing_lows) >= trailing_lookback and new_high_or_equal:
             structural_low = float(min(prior_trailing_lows[-trailing_lookback:]))
             candidate_stop = structural_low * (1.0 - config.trail_buffer_pct)
             if candidate_stop > active_stop and candidate_stop < close:
@@ -1803,9 +1821,17 @@ def _simulate_no_tp_runner_trade(
         exit_price = raw_exit_price * (1.0 - config.exit_slippage_pct)
         exit_stop_before_update = active_stop
 
-    gross_return = (exit_price - entry_price) / entry_price
+    remaining_fraction = 1.0 - tp1_close_fraction if tp1_hit else 1.0
+    tp1_leg_gross_return = 0.0
+    tp1_leg_gross_r = 0.0
+    if tp1_hit:
+        tp1_leg_gross_return = (tp1_fill_price - entry_price) / entry_price
+        tp1_leg_gross_r = (tp1_fill_price - entry_price) / initial_risk
+    rest_gross_return = (exit_price - entry_price) / entry_price
+    rest_gross_r = (exit_price - entry_price) / initial_risk
+    gross_return = tp1_close_fraction * tp1_leg_gross_return + remaining_fraction * rest_gross_return if tp1_hit else rest_gross_return
     net_return = gross_return - 2.0 * float(config.fee_rate)
-    gross_r = (exit_price - entry_price) / initial_risk
+    gross_r = tp1_close_fraction * tp1_leg_gross_r + remaining_fraction * rest_gross_r if tp1_hit else rest_gross_r
     result = {
         **signal,
         "status": "closed",
@@ -1816,12 +1842,19 @@ def _simulate_no_tp_runner_trade(
         "exit_reason": exit_reason,
         "exit_raw_price": raw_exit_price,
         "exit_price": exit_price,
-        "exit_price_model": "stop_or_time_exit_minus_adverse_slippage_strict_ltf_path",
+        "exit_price_model": "tp1_partial_then_structural_stop_or_time_exit_minus_adverse_slippage_strict_ltf_path",
         "exit_stop_before_update": exit_stop_before_update,
         "trail_updates": trail_updates,
         "final_trailing_stop": active_stop,
-        "tp1_hit": False,
-        "tp_model": "none",
+        "tp1_hit": bool(tp1_hit),
+        "tp1_r": tp1_r,
+        "tp1_price": tp1_price,
+        "tp1_timestamp_ms": tp1_ts,
+        "tp1_timestamp_utc": "" if not tp1_hit else _timestamp_to_utc(tp1_ts),
+        "tp1_raw_price": tp1_raw_price,
+        "tp1_fill_price": tp1_fill_price,
+        "tp1_close_fraction": tp1_close_fraction,
+        "tp_model": "tp1_0p75r_close_50pct_then_structural_trailing",
         "mfe_pct": _safe_divide(max_high - entry_price, entry_price),
         "mae_pct": _safe_divide(min_low - entry_price, entry_price),
         "gross_r": gross_r,
@@ -1832,7 +1865,6 @@ def _simulate_no_tp_runner_trade(
         **window_audit,
     }
     return result
-
 
 def _skipped_trade(signal: dict[str, object], reason: str, **extra: object) -> dict[str, object]:
     return {
