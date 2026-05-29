@@ -1,3 +1,13 @@
+## P443 - Fix rolling baseline overlap contamination
+
+Status: PROPOSED.
+
+Files: `research_tools/htf_ltf_runner_discovery.py`, `research/RESEARCH_STATE.md`, `research/PATCH_LOG.md`, `research/EXPERIMENT_LOG.md`.
+
+Purpose: ensure rolling HTF seed context uses only calendar HTF candles fully closed before the rolling-window start. The prior P440 implementation used calendar candle starts before the rolling start, which could include a candle overlapping the rolling anomaly window. This was not future data at decision time, but it polluted pre-seed baseline/dormancy/pregrowth with current anomaly data.
+
+Validation: `python -m compileall -q data/exchanges research_tools cli constants.py main.py`; synthetic rolling smoke should include no overlapping calendar candle in baseline history.
+
 ## P442 - restrict rolling discovery to validated TFs and add combined portfolio
 
 Status: PROPOSED.

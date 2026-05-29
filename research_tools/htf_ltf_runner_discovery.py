@@ -1057,6 +1057,7 @@ def _collect_symbol_candidates(
             return [], 0
 
     calendar_timestamps = pd.to_numeric(calendar["timestamp"], errors="coerce").astype("int64").to_numpy()
+    calendar_end_timestamps = calendar_timestamps + int(htf_ms)
     max_ltf_timestamp = int(pd.to_numeric(ltf.get("timestamp", pd.Series(dtype=float)), errors="coerce").max()) if not ltf.empty and "timestamp" in ltf.columns else 0
     scanned_rows = 0
     min_history = max(config.baseline_candles, config.dormancy_candles, config.pregrowth_candles)
@@ -1068,7 +1069,10 @@ def _collect_symbol_candidates(
             # The seed may still be valid, but this cache slice cannot honestly label/replay it yet.
             # The post-entry planner will fetch the full window after the exact seed is found.
             pass
-        history_end = int(np.searchsorted(calendar_timestamps, ts, side="left"))
+        # Baseline/dormancy/pregrowth must be strictly before the rolling window.
+        # A calendar HTF candle that overlaps the rolling window is known by seed close,
+        # but it already contains anomaly data and must not contaminate pre-seed context.
+        history_end = int(np.searchsorted(calendar_end_timestamps, ts, side="right"))
         if history_end < min_history:
             continue
         baseline = calendar.iloc[history_end - config.baseline_candles : history_end]
@@ -1201,7 +1205,7 @@ def _collect_symbol_candidates(
                 "rolling_htf_window_end_ms": close_ts,
                 "rolling_htf_window_end_utc": _timestamp_to_utc(close_ts),
                 "rolling_htf_step_ms": ltf_ms,
-                "rolling_baseline_model": "calendar_htf_history_before_rolling_window",
+                "rolling_baseline_model": "calendar_htf_candles_fully_closed_before_rolling_window_start",
                 "htf_timeframe": config.htf_timeframe,
                 "ltf_timeframe": config.ltf_timeframe,
                 "future_label_available_at_entry": False,

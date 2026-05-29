@@ -1,3 +1,11 @@
+## 2026-05-29 - P443 rolling baseline contamination guard
+
+Current commit: UNKNOWN.
+
+Status: P443 PROPOSED after P439-P442 review. The rolling HTF path compiled and used next-LTF-open entry, but calendar context for a rolling window could include a calendar HTF candle whose start was before the rolling window while its close was inside the rolling window. That is not post-decision lookahead, but it contaminates baseline/dormancy/pregrowth with anomaly-window data. P443 changes context selection to use only calendar HTF candles fully closed before the rolling window start.
+
+Next: rerun 45d rolling discovery and use combined artifacts only. Check `rolling_baseline_model=calendar_htf_candles_fully_closed_before_rolling_window_start` and verify no selected signal has `entry_timestamp_ms < decision_available_timestamp_ms`.
+
 ## 2026-05-29 - P442 combined rolling portfolio guard
 
 Current commit: UNKNOWN.

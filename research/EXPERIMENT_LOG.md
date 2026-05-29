@@ -1,3 +1,9 @@
+## 2026-05-29 - P443 rolling context purity check
+
+Hypothesis: rolling discovery must separate current rolling HTF window from baseline/dormancy/pregrowth context. Calendar HTF candles may be used as cheap historical context only when their close timestamp is `<= rolling_htf_window_start_ms`.
+
+Protocol: after P443, run 45d and audit selected signals for `entry_timestamp_ms >= decision_available_timestamp_ms`, non-empty C/A/S categories, root-level combined portfolio artifacts, and `rolling_baseline_model=calendar_htf_candles_fully_closed_before_rolling_window_start`.
+
 ## 2026-05-29 - P442 rolling combined portfolio audit
 
 Hypothesis: C/A/S was mined and validated only on `3m_30s` and `5m_30s` after excluding weak/missing TF sets. The 45d rolling replay must therefore test the combined strategy on those two profiles only, with one global risk-cap/cooldown pass across both.
