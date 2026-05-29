@@ -294,6 +294,7 @@ def _record_stage_timing(
     )
 
 LATENCY_1S_BACKFILL_VERSION = AGGTRADE_1S_FULL_BUCKET_CACHE_VERSION
+DIRECT_TARGET_AGGTRADE_CACHE_VERSION = "aggtrade_direct_target_ltf_v1"
 TARGETED_FLOW_BACKFILL_DEFAULT_BEFORE_MS = 120_000
 TARGETED_FLOW_BACKFILL_DEFAULT_AFTER_MS = 120_000
 TARGETED_FLOW_MERGE_GAP_MS = 60_000
@@ -1735,6 +1736,8 @@ def _materialized_entry_flow_source(frame: pd.DataFrame, *, entry_timeframe: str
         return "cached_ohlcv_missing_aggregation_metadata"
     if source == "1s" and version == _MATERIALIZED_SUBMINUTE_CACHE_VERSION:
         return f"cached_1s_aggregated_to_{entry_timeframe}"
+    if source == "aggTrades" and version == DIRECT_TARGET_AGGTRADE_CACHE_VERSION:
+        return f"cached_aggTrades_direct_to_{entry_timeframe}"
     if source == "1s" and not version:
         return f"cached_1s_aggregated_to_{entry_timeframe}_missing_version"
     return f"cached_{source}_materialized_to_{entry_timeframe}_unknown_version"
@@ -1764,12 +1767,14 @@ def _flow_cache_validation_error(
         return None
     version = _first_non_empty_string(frame, "aggregation_version")
     source = _first_non_empty_string(frame, "aggregation_source_timeframe")
-    if source != "1s" or version != _MATERIALIZED_SUBMINUTE_CACHE_VERSION:
-        return (
-            "untrusted_materialized_entry_flow_cache:"
-            f"source={source or 'missing'}:version={version or 'missing'}"
-        )
-    return None
+    if source == "1s" and version == _MATERIALIZED_SUBMINUTE_CACHE_VERSION:
+        return None
+    if source == "aggTrades" and version == DIRECT_TARGET_AGGTRADE_CACHE_VERSION:
+        return None
+    return (
+        "untrusted_materialized_entry_flow_cache:"
+        f"source={source or 'missing'}:version={version or 'missing'}"
+    )
 
 
 
@@ -1907,7 +1912,11 @@ def _candidate_flow_source_mask(candidates: pd.DataFrame) -> pd.Series:
         entry_ms = candidates["entry_timeframe"].map(lambda value: _timeframe_to_milliseconds(str(value)))
         subminute = entry_ms.lt(60_000)
         entry_sources = candidates["entry_trade_count_source"].astype(str)
-        mask &= ~subminute | entry_sources.str.contains("cached_1s_aggregated_to_", regex=False)
+        trusted_subminute = (
+            entry_sources.str.contains("cached_1s_aggregated_to_", regex=False)
+            | entry_sources.str.contains("cached_aggTrades_direct_to_", regex=False)
+        )
+        mask &= ~subminute | trusted_subminute
     return mask
 
 
@@ -2320,6 +2329,234 @@ def ensure_targeted_aggtrade_subminute_cache(
     )
     fetch = pd.concat([pd.DataFrame(plan_rows).assign(row_type="plan"), pd.DataFrame(fetch_rows).assign(row_type="fetch")], ignore_index=True, sort=False)
     return fetch, materialize
+
+
+def _fetch_binance_futures_aggtrades_rows(
+    symbol: str,
+    *,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+) -> pd.DataFrame:
+    market_id = _binance_futures_market_id(symbol)
+    rows: list[dict[str, object]] = []
+    endpoint = "https://fapi.binance.com/fapi/v1/aggTrades"
+    chunk_start = int(start_timestamp_ms)
+    while chunk_start <= int(end_timestamp_ms):
+        chunk_end = min(int(end_timestamp_ms), chunk_start + 3_600_000 - 1)
+        cursor = int(chunk_start)
+        while cursor <= chunk_end:
+            params = urllib.parse.urlencode(
+                {
+                    "symbol": market_id,
+                    "startTime": int(cursor),
+                    "endTime": int(chunk_end),
+                    "limit": 1000,
+                }
+            )
+            with urllib.request.urlopen(f"{endpoint}?{params}", timeout=30) as response:
+                batch = json.loads(response.read().decode("utf-8"))
+            if not batch:
+                break
+            rows.extend(dict(row) for row in batch)
+            last_ts = int(batch[-1].get("T") or batch[-1].get("time") or cursor)
+            if last_ts < cursor or len(batch) < 1000:
+                break
+            cursor = last_ts + 1
+            time.sleep(0.02)
+        chunk_start = chunk_end + 1
+    return pd.DataFrame(rows)
+
+
+def _write_direct_aggtrade_target_ltf_delta(
+    *,
+    cache_dir: Path,
+    symbol: str,
+    target_timeframe: str,
+    trades: pd.DataFrame,
+    start_timestamp_ms: int,
+    end_timestamp_ms: int,
+) -> tuple[str, int, str]:
+    if trades.empty:
+        return "empty_aggtrades", 0, ""
+    from data.storage.parquet_storage import ParquetStorage
+    from domain.enums.timeframe import Timeframe
+    from research_tools.anomaly_aggtrade_cache import aggregate_aggtrades_to_ohlcv_frame
+
+    target_ms = _timeframe_to_milliseconds(target_timeframe)
+    aggregated = aggregate_aggtrades_to_ohlcv_frame(
+        trades,
+        timeframe_ms=int(target_ms),
+        start_timestamp_ms=int(start_timestamp_ms),
+        end_timestamp_ms=int(end_timestamp_ms),
+    )
+    if aggregated.empty:
+        return "empty_materialized_target_ltf", 0, ""
+    aggregated = aggregated.copy()
+    aggregated["aggregation_source_timeframe"] = "aggTrades"
+    aggregated["aggregation_source"] = "binance_futures_aggTrades"
+    aggregated["aggregation_target_timeframe"] = str(target_timeframe)
+    aggregated["aggregation_version"] = DIRECT_TARGET_AGGTRADE_CACHE_VERSION
+    aggregated["aggtrade_coverage_verified"] = True
+    aggregated["aggtrade_materialization_model"] = "direct_aggtrades_to_target_ltf_no_1s_cache"
+    ParquetStorage(cache_dir).save_incremental_delta(symbol, Timeframe(str(target_timeframe)), aggregated)
+    return "written_interval", int(len(aggregated)), str(_cache_data_path(cache_dir, symbol, str(target_timeframe)))
+
+
+def ensure_targeted_aggtrade_direct_ltf_cache(
+    *,
+    cache_dir: Path,
+    windows_by_symbol: Mapping[str, Iterable[tuple[int, int]]],
+    target_timeframes: Iterable[str],
+    progress_label: str | None = None,
+    max_merged_span_ms: int | None = 60 * 60_000,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Fetch aggTrades only for requested windows and write target LTF directly.
+
+    This avoids the old expensive path that first materialized a 1s cache and
+    then aggregated it to 30s. The trading data is still true aggTrades; only
+    the intermediate 1s parquet is removed.
+    """
+
+    targets = tuple(dict.fromkeys(str(timeframe) for timeframe in target_timeframes))
+    for target in targets:
+        target_ms = _timeframe_to_milliseconds(target)
+        if target == "1s" or target_ms <= 0 or target_ms >= 60_000 or target_ms % 1000 != 0:
+            raise ValueError(f"target subminute timeframe must be direct aggTrade LTF, got: {target}")
+
+    normalized_windows: dict[str, list[tuple[int, int]]] = {}
+    raw_windows_by_symbol: dict[str, list[tuple[int, int]]] = {}
+    for raw_symbol, raw_windows in windows_by_symbol.items():
+        symbol = str(raw_symbol).strip()
+        if not symbol or symbol == "__all__":
+            continue
+        valid_raw = sorted((int(start), int(end)) for start, end in raw_windows if int(start) <= int(end))
+        if not valid_raw:
+            continue
+        raw_windows_by_symbol[symbol] = valid_raw
+        merged = _merge_targeted_timestamp_windows(valid_raw, max_merged_span_ms=max_merged_span_ms)
+        if merged:
+            normalized_windows[symbol] = merged
+
+    raw_windows_total = sum(len(windows) for windows in raw_windows_by_symbol.values())
+    merged_windows_total = sum(len(windows) for windows in normalized_windows.values())
+    plan_rows: list[dict[str, object]] = [
+        {
+            "symbol": "__all__",
+            "status": "window_plan",
+            "target_timeframes": ",".join(targets),
+            "symbols_with_windows": int(len(normalized_windows)),
+            "raw_targeted_windows": int(raw_windows_total),
+            "merged_targeted_windows": int(merged_windows_total),
+            "max_merged_span_ms": "unbounded" if max_merged_span_ms is None else int(max_merged_span_ms),
+            "merge_policy": "direct_aggtrades_to_target_ltf_gap_and_max_span",
+            "data_source": "binance_futures_aggTrades_direct_to_target_ltf",
+            "intermediate_1s_cache": False,
+        }
+    ]
+    if not normalized_windows:
+        return pd.DataFrame(plan_rows), pd.DataFrame([{"status": "not_run", "reason": "no_targeted_windows"}])
+
+    fetch_rows: list[dict[str, object]] = []
+    materialize_rows: list[dict[str, object]] = []
+    total_windows = max(1, merged_windows_total)
+    done_windows = 0
+    started_at = time.monotonic()
+    next_progress_pct = 0
+    for symbol in sorted(normalized_windows):
+        for window_start, window_end in normalized_windows[symbol]:
+            missing_targets: list[str] = []
+            for target in targets:
+                if _trusted_materialized_entry_cache_covers_windows(
+                    cache_dir,
+                    symbol,
+                    target_timeframe=target,
+                    windows=[(int(window_start), int(window_end))],
+                ):
+                    materialize_rows.append(
+                        {
+                            "symbol": symbol,
+                            "target_timeframe": target,
+                            "source_timeframe": "aggTrades",
+                            "status": "exists_covered_requested_intervals",
+                            "path": str(_cache_data_path(cache_dir, symbol, target)),
+                        }
+                    )
+                else:
+                    missing_targets.append(target)
+            status = "target_ltf_exists_covered_requested_window" if not missing_targets else "ok"
+            error = ""
+            trades = pd.DataFrame()
+            if missing_targets:
+                try:
+                    trades = _fetch_binance_futures_aggtrades_rows(
+                        symbol,
+                        start_timestamp_ms=int(window_start),
+                        end_timestamp_ms=int(window_end),
+                    )
+                    if trades.empty:
+                        status = "empty_aggtrades"
+                    for target in missing_targets:
+                        write_status, rows_written, path = _write_direct_aggtrade_target_ltf_delta(
+                            cache_dir=cache_dir,
+                            symbol=symbol,
+                            target_timeframe=target,
+                            trades=trades,
+                            start_timestamp_ms=int(window_start),
+                            end_timestamp_ms=int(window_end),
+                        )
+                        materialize_rows.append(
+                            {
+                                "symbol": symbol,
+                                "target_timeframe": target,
+                                "source_timeframe": "aggTrades",
+                                "status": write_status,
+                                "path": path,
+                                "new_rows": int(rows_written),
+                                "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                            }
+                        )
+                except Exception as exc:
+                    status = "error"
+                    error = f"{type(exc).__name__}: {exc}"
+                    for target in missing_targets:
+                        materialize_rows.append(
+                            {
+                                "symbol": symbol,
+                                "target_timeframe": target,
+                                "source_timeframe": "aggTrades",
+                                "status": "error",
+                                "error": error,
+                                "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                            }
+                        )
+            fetch_rows.append(
+                {
+                    "symbol": symbol,
+                    "status": status,
+                    "error": error,
+                    "start_timestamp_ms": int(window_start),
+                    "end_timestamp_ms": int(window_end),
+                    "start_timestamp_utc": _timestamp_to_utc(int(window_start)),
+                    "end_timestamp_utc": _timestamp_to_utc(int(window_end)),
+                    "target_timeframes": ",".join(targets),
+                    "aggtrade_rows_fetched": int(len(trades)) if not trades.empty else 0,
+                    "aggregation_version": DIRECT_TARGET_AGGTRADE_CACHE_VERSION,
+                    "data_source": "binance_futures_aggTrades_direct_to_target_ltf",
+                    "intermediate_1s_cache": False,
+                }
+            )
+            done_windows += 1
+            if progress_label is not None and total_windows:
+                next_progress_pct = _emit_progress_1pct(
+                    label=f"{progress_label}: targeted aggTrades→{','.join(targets)}",
+                    done=done_windows,
+                    total=total_windows,
+                    started_at=started_at,
+                    next_progress_pct=next_progress_pct,
+                )
+
+    fetch = pd.concat([pd.DataFrame(plan_rows).assign(row_type="plan"), pd.DataFrame(fetch_rows).assign(row_type="fetch")], ignore_index=True, sort=False)
+    return fetch, pd.DataFrame(materialize_rows)
 
 
 def _merge_targeted_timestamp_windows(
@@ -7904,7 +8141,10 @@ def build_backtest_honesty_report(
         bad_subminute_sources = int(
             (
                 subminute
-                & ~signals["entry_trade_count_source"].astype(str).str.contains("cached_1s_aggregated_to_", regex=False)
+                & ~(
+                    signals["entry_trade_count_source"].astype(str).str.contains("cached_1s_aggregated_to_", regex=False)
+                    | signals["entry_trade_count_source"].astype(str).str.contains("cached_aggTrades_direct_to_", regex=False)
+                )
             ).sum()
         )
     status, severity = _honesty_status(failures=bad_subminute_sources)

@@ -214,9 +214,10 @@ def _row_available_timestamp_ms(row: pd.Series, *, timeframe: str) -> int:
 def _format_eta(seconds: float) -> str:
     if not np.isfinite(seconds) or seconds < 0:
         return "unknown"
-    if seconds < 60:
-        return f"{int(seconds)}s"
-    return f"{int(seconds // 60)}m{int(seconds % 60):02d}s"
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    return f"{hours}h {minutes:02d}m {secs:02d}s"
 
 
 _PROGRESS_LINE_LENGTHS: dict[str, int] = {}

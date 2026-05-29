@@ -1203,16 +1203,16 @@ def _ensure_targeted_ltf_backfill(
     ltf_timeframe: str,
     windows_by_symbol: Mapping[str, Iterable[tuple[int, int]]],
     progress_label: str,
-    max_merged_span_ms: int | None = 10 * 60_000,
+    max_merged_span_ms: int | None = 60 * 60_000,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     if not windows_by_symbol:
         return (
             pd.DataFrame([{"status": "no_targeted_windows", "reason": "two_htf_pair_superset_selected_zero_windows"}]),
             pd.DataFrame([{"status": "not_run", "reason": "no_targeted_windows"}]),
         )
-    from research_tools.anomaly_strategy_backtest import ensure_targeted_aggtrade_subminute_cache
+    from research_tools.anomaly_strategy_backtest import ensure_targeted_aggtrade_direct_ltf_cache
 
-    return ensure_targeted_aggtrade_subminute_cache(
+    return ensure_targeted_aggtrade_direct_ltf_cache(
         cache_dir=cache_dir,
         windows_by_symbol=windows_by_symbol,
         target_timeframes=(str(ltf_timeframe),),

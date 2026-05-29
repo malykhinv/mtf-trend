@@ -3403,3 +3403,12 @@ Readout:
 - Existing executable selected streams are not robust enough: `5m_30s` and `3m_30s` are only slightly positive with negative median and high top-positive dependency; `5m_1m` and `1m_15s` are negative.
 
 Current conclusion: runner-vs-noise separation is visible at the label/nature layer, but not yet proven as executable edge. The next test should be a predeclared 30s validation on another period with valid-label accounting, real participation floor, distributed-flow cap, prior-spike sustain, moderate anomaly/no-chase guard, and live-filtered structural replay.
+
+
+## 2026-05-29 - P446 rolling fetch speed correction
+
+Current commit: UNKNOWN.
+
+Status: P446 PROPOSED after P445 did not reduce the `targeted 1s aggTrades` bottleneck. The issue is not that 1s trades are a trading feature; for 30s rolling decisions, 1s is only an intermediate materialization source. P446 keeps true aggTrade flow but writes trusted 30s target-LTF cache directly, avoiding duplicate 1s parquet work and reducing targeted window churn by merging windows up to one hour.
+
+Next: apply P446, restart the 45d rolling discovery, and confirm the progress line says `targeted aggTrades→30s` rather than `targeted 1s aggTrades`.

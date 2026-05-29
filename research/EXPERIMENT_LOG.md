@@ -4550,3 +4550,10 @@ This is not yet an edge claim. The selected 30s live-filtered streams are only m
 Working interpretation: current runner labels are mostly separated from noise by "large real crowd participation that stays distributed and historically does not collapse immediately", while the current executable/trailing trade model still enters too much late/noisy flow. Strict `dormancy_ok` by itself reduced runner rate in this 7d set, so it may be too strict or may be selecting dead illiquid names rather than usable awakening; do not remove the dormancy concept, but re-test it as a graded liquidity/dormancy band instead of a binary positive proof.
 
 Next best experiment: run a focused validation on another period using only valid-label rows and a predeclared 30s candidate family: real LTF trade-count/quote-volume participation floor, distributed top1 flow cap, prior-spike sustain history, moderate anomaly ratio/no-chase guard, and explicit entry replay PnL. Treat future runner label as evaluation only.
+
+
+## 2026-05-29 - P446 direct LTF fetch audit
+
+Hypothesis: rolling discovery for `3m/30s` and `5m/30s` does not need a stored 1s intermediate cache. True aggTrades can be fetched for targeted windows and aggregated directly to trusted 30s cache without changing signal timing or feature availability.
+
+Protocol: after P446, rerun 45d and inspect `htf_ltf_runner_targeted_ltf_fetch.csv`/materialize artifacts for `data_source=binance_futures_aggTrades_direct_to_target_ltf`, `intermediate_1s_cache=False`, and selected trades with `entry_timestamp_ms >= decision_available_timestamp_ms`.

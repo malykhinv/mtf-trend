@@ -9766,3 +9766,8 @@ Risk:
 The current-OI baseline is captured only after stop verification, intentionally after safety protection. It is close to actual entry but not an exchange-fill-timestamp OI tick. Binance current OI remains a polled endpoint, so use artifacts before treating this as a high-frequency liquidation signal.
 ```
 
+
+
+## P446 - direct targeted aggTrades to LTF cache
+
+Status: PROPOSED. Replace the rolling discovery targeted fetch path that materialized 1s cache first with direct aggTrades-to-target-LTF materialization for the official 30s LTF profiles. This preserves true trade-count/quote-volume provenance while removing the intermediate 1s parquet bottleneck, reuses already trusted direct/1s-derived target LTF cache windows, merges targeted windows up to one hour, and changes progress ETA formatting to `Hh MMm SSs`. No future labels, PnL, exits, or post-entry candles are used to decide fetch coverage.
