@@ -1,3 +1,13 @@
+## 2026-05-29 - P439 rolling HTF discovery contract proposed
+
+Current commit: UNKNOWN.
+
+Status: P439 PROPOSED against uploaded `source.zip`. Runner discovery is changed from calendar-HTF candidate discovery to rolling-HTF candidate discovery. Calendar HTF candles are not a trading model anymore; they are only a cheap two-candle safe-superset used to decide whether LTF data may contain a rolling seed. The cheap stage fetches only those two HTF candles. Full confirm/label/exit LTF is fetched only after an exact rolling LTF seed is found inside the pair.
+
+Portfolio contract: selected trades are now fixed-priority C -> A -> S, with one open trade per symbol, symbol cooldown equal to one rolling HTF window, risk_per_trade=2% and max_total_open_risk=8%. Blocked signals are written to `htf_ltf_runner_portfolio_events.csv` instead of disappearing.
+
+Next: run `.\.venv\Scripts\python.exe main.py run-htf-ltf-runner-discovery --days 45` and judge the new rolling artifacts as a new backtest model, not as directly comparable PnL against the old calendar run.
+
 ## 2026-05-28 - P438 runner/fader OOS v1 hypothesis proposed
 
 Current commit: UNKNOWN.

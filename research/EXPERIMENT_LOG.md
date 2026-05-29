@@ -1,3 +1,46 @@
+## 2026-05-29 - P439 rolling 45d discovery validation
+
+Command:
+
+```bash
+.\.venv\Scripts\python.exe main.py run-htf-ltf-runner-discovery --days 45
+```
+
+Model under test:
+
+```text
+rolling HTF seed -> first valid C/A/S category -> next LTF open -> structural exit replay -> portfolio risk cap
+```
+
+Fixed candidate priority:
+
+```text
+1. C_balanced_flow_acceptance
+2. A_resonance_prior_spike
+3. S_7d_5m30_strict
+```
+
+Portfolio constraints:
+
+```text
+risk_per_trade = 2%
+max_total_open_risk = 8%
+one open trade per symbol
+symbol cooldown = one rolling HTF window
+blocked signals written to htf_ltf_runner_portfolio_events.csv
+```
+
+Acceptance criteria:
+
+```text
+- enough closed trades after risk/cooldown filters;
+- median net return > 0;
+- positive-day share > 55%;
+- top dependency remains acceptable after removing top symbols/days;
+- portfolio_events shows no hidden capacity/cooldown drops;
+- rolling seed artifacts show pair safe-superset -> exact rolling seed -> full replay path.
+```
+
 ## 2026-05-28 - P438 planned 45d runner/fader OOS validation
 
 Command:

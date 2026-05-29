@@ -1,3 +1,36 @@
+## 2026-05-29 - P439 proposed - rolling HTF runner discovery with C/A/S portfolio constraints
+
+Files:
+
+```text
+research_tools/htf_ltf_runner_discovery.py
+research/EXPERIMENT_LOG.md
+research/PATCH_LOG.md
+research/RESEARCH_STATE.md
+```
+
+Intent:
+
+```text
+Make runner discovery match the intended live model: rolling HTF seed, first valid category trigger, fixed C/A/S priority, explicit total-risk cap, one open trade per symbol, rolling-window symbol cooldown, and auditable capacity/cooldown rejects.
+```
+
+Implementation:
+
+```text
+The old calendar HTF candle is no longer the trading seed. A pair of adjacent closed HTF candles is used only as a cheap safe-superset: if the pair could not contain a rolling seed, no LTF is fetched; if it could, only those two HTF candles are fetched first. Exact rolling HTF windows are then built from LTF. Full confirm/label/exit LTF is fetched only after an exact rolling seed exists.
+```
+
+Honesty boundary:
+
+```text
+No future labels, PnL, MFE/MAE, or exit fields are used for category selection. C/A/S uses known-at-entry fields. Risk-cap, same-symbol blocking, cooldown and rejects are part of the simulated portfolio and are written to artifacts.
+```
+
+Status: PROPOSED against uploaded `source.zip` / commit UNKNOWN.
+
+Validation: `git apply --check p439_rolling_htf_runner_discovery_source.patch`; `python -m compileall -q data/exchanges research_tools cli constants.py main.py`.
+
 ## 2026-05-28 - P438 proposed - runner/fader OOS v1 research filter artifacts
 
 Files:

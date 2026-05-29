@@ -19,7 +19,7 @@ import math
 import os
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable, Mapping
 
@@ -85,6 +85,8 @@ class HtfLtfRunnerDiscoveryConfig:
     targeted_backfill_min_abs_quote_volume: float = 50_000.0
     targeted_backfill_min_abs_number_of_trades: float = 150.0
     targeted_backfill_max_events_per_symbol: int = 0
+    risk_per_trade_pct: float = 0.02
+    max_total_open_risk_pct: float = 0.08
 
     def __post_init__(self) -> None:
         if self.htf_timeframe == self.ltf_timeframe:
@@ -120,6 +122,10 @@ class HtfLtfRunnerDiscoveryConfig:
                 raise ValueError(f"{name} must be >= 0")
         if self.targeted_backfill_max_dormancy_range_pct_median < 0.0:
             raise ValueError("targeted_backfill_max_dormancy_range_pct_median must be >= 0")
+        if self.risk_per_trade_pct <= 0.0:
+            raise ValueError("risk_per_trade_pct must be > 0")
+        if self.max_total_open_risk_pct < self.risk_per_trade_pct:
+            raise ValueError("max_total_open_risk_pct must be >= risk_per_trade_pct")
 
 
 
@@ -333,8 +339,8 @@ def run_htf_ltf_runner_discovery(
     entry_window_trades_frame = pd.DataFrame(entry_window_trade_rows)
     entry_window_trades_live_filtered = _apply_same_symbol_overlap_filter(entry_window_trades_frame)
     signals_frame = pd.DataFrame(signal_rows)
-    trades_frame = pd.DataFrame(trade_rows)
-    live_filtered = _apply_same_symbol_overlap_filter(trades_frame)
+    trades_frame = _with_runner_candidate_categories(pd.DataFrame(trade_rows))
+    live_filtered, portfolio_events = _apply_runner_candidate_portfolio(trades_frame, config=config)
     candidate_rule_scores = _score_candidate_rules(candidates_frame)
     entry_window_rule_scores = _score_entry_window_rules(
         entry_window_trades_frame,
@@ -373,6 +379,7 @@ def run_htf_ltf_runner_discovery(
         (config.output_dir / "htf_ltf_runner_signals.csv", signals_frame),
         (config.output_dir / "htf_ltf_runner_trades_raw.csv", trades_frame),
         (config.output_dir / "htf_ltf_runner_trades_live_filtered.csv", live_filtered),
+        (config.output_dir / "htf_ltf_runner_portfolio_events.csv", portfolio_events),
         (config.output_dir / "htf_ltf_runner_oos_runner_fader_v1_trades_live_filtered.csv", oos_runner_fader_hypothesis_trades),
         (config.output_dir / "htf_ltf_runner_by_day.csv", _daily_summary(trades_frame)),
         (config.output_dir / "htf_ltf_runner_by_day_live_filtered.csv", _daily_summary(live_filtered)),
@@ -442,9 +449,9 @@ def run_htf_ltf_runner_discovery(
                         "exit_model": "structural_stop_plus_structural_trailing_no_tp",
                         "future_label_model": "separate_next_hour_10pct_label_not_used_for_entry",
                         "data_access_model": (
-                            "two_stage_targeted_aggtrade_1s_backfill_then_strict_ltf_replay"
+                            "rolling_htf_pair_superset_then_exact_ltf_seed_and_post_entry_replay"
                             if _targeted_ltf_backfill_required(config)
-                            else "cache_only_no_exchange_fetch"
+                            else "cache_only_rolling_htf_no_exchange_fetch"
                         ),
                         "seconds_download_required": bool(_targeted_ltf_backfill_required(config)),
                         "targeted_ltf_plan_rows": int(len(targeted_ltf_plan)),
@@ -452,7 +459,11 @@ def run_htf_ltf_runner_discovery(
                         "targeted_ltf_materialize_rows": int(len(targeted_ltf_materialize)),
                         "runtime_seconds": round(time.monotonic() - started_at, 3),
                         "scanned_htf_rows": scanned_htf_rows,
-                        "candidate_artifact_scope": "htf_anomaly_gate_only",
+                        "candidate_artifact_scope": "rolling_htf_seed_gate_only",
+                        "portfolio_model": "fixed_priority_C_A_S_with_total_risk_cap_and_symbol_cooldown",
+                        "risk_per_trade_pct": float(config.risk_per_trade_pct),
+                        "max_total_open_risk_pct": float(config.max_total_open_risk_pct),
+                        "symbol_cooldown_ms": int(_timeframe_ms(config.htf_timeframe)),
                         "entry_window_counts": ",".join(str(value) for value in _entry_window_counts(config)),
                         "entry_window_model": "fixed_closed_ltf_windows_next_open_research",
                         "post_entry_simulation_model": "strict_wall_clock_ltf_path_no_gap_hops",
@@ -519,8 +530,8 @@ def _build_targeted_ltf_backfill_plan(
         "symbols_with_windows": int(len(windows_by_symbol)),
         "raw_targeted_windows": int(sum(len(windows) for windows in windows_by_symbol.values())),
         "targeted_ltf_phase": "pre_entry",
-        "window_model": "strict_htf_awakening_start_to_max_entry_next_open_only",
-        "selection_model": "closed_htf_strict_awakening_seed_gate_only_no_future",
+        "window_model": "two_adjacent_htf_candles_only_then_exact_ltf_rolling_seed_check",
+        "selection_model": "two_closed_htf_candle_safe_superset_for_rolling_seed_no_future",
         "seed_gate": _targeted_ltf_seed_gate_description(config),
         "min_htf_quote_ratio": float(config.targeted_backfill_min_htf_quote_ratio),
         "min_htf_trade_ratio": float(config.targeted_backfill_min_htf_trade_ratio),
@@ -556,87 +567,75 @@ def _targeted_ltf_backfill_seeds_for_symbol(
     prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close"]).sort_values("timestamp")
     if prepared.empty or "quote_volume" not in prepared.columns or "number_of_trades" not in prepared.columns:
         return empty_result
-    quote_series = _numeric_column(prepared, "quote_volume")
-    trade_series = _numeric_column(prepared, "number_of_trades")
-    prepared["_quote_volume"] = quote_series
-    prepared["_number_of_trades"] = trade_series
-    min_index = max(config.baseline_candles, config.dormancy_candles, config.pregrowth_candles) + 1
-    timestamps = pd.to_numeric(prepared["timestamp"], errors="coerce")
-    row_numbers = pd.Series(np.arange(len(prepared)), index=prepared.index)
-    positive_quote = prepared["_quote_volume"].where(prepared["_quote_volume"] > 0)
-    positive_trades = prepared["_number_of_trades"].where(prepared["_number_of_trades"] > 0)
-    baseline_quote = positive_quote.shift(1).rolling(config.baseline_candles, min_periods=1).median()
-    baseline_trades = positive_trades.shift(1).rolling(config.baseline_candles, min_periods=1).median()
-    dormancy_quote = positive_quote.shift(1).rolling(config.dormancy_candles, min_periods=1).median()
-    dormancy_trades = positive_trades.shift(1).rolling(config.dormancy_candles, min_periods=1).median()
-    open_series = pd.to_numeric(prepared["open"], errors="coerce")
-    dormancy_range_pct = (pd.to_numeric(prepared["high"], errors="coerce") - pd.to_numeric(prepared["low"], errors="coerce")) / open_series
-    dormancy_range_pct_median = dormancy_range_pct.shift(1).rolling(config.dormancy_candles, min_periods=1).median()
-    htf_return = (pd.to_numeric(prepared["close"], errors="coerce") - pd.to_numeric(prepared["open"], errors="coerce")) / pd.to_numeric(
-        prepared["open"],
-        errors="coerce",
-    )
-    htf_range = (pd.to_numeric(prepared["high"], errors="coerce") - pd.to_numeric(prepared["low"], errors="coerce")) / pd.to_numeric(
-        prepared["open"],
-        errors="coerce",
-    )
-    anomaly_quote_volume = _numeric_column(prepared, "_quote_volume")
-    anomaly_number_of_trades = _numeric_column(prepared, "_number_of_trades")
-    quote_ratio = (anomaly_quote_volume / baseline_quote).replace([np.inf, -np.inf], np.nan)
-    trade_ratio = (anomaly_number_of_trades / baseline_trades).replace([np.inf, -np.inf], np.nan)
-    dormancy_to_anomaly_quote_ratio = (anomaly_quote_volume / dormancy_quote).replace([np.inf, -np.inf], np.nan)
-    dormancy_to_anomaly_trade_ratio = (anomaly_number_of_trades / dormancy_trades).replace([np.inf, -np.inf], np.nan)
-    gate = (
-        row_numbers.ge(min_index)
-        & quote_ratio.ge(float(config.targeted_backfill_min_htf_quote_ratio))
-        & trade_ratio.ge(float(config.targeted_backfill_min_htf_trade_ratio))
-        & htf_return.ge(float(config.targeted_backfill_min_htf_return_pct))
-        & htf_range.ge(float(config.targeted_backfill_min_htf_range_pct))
-        & dormancy_to_anomaly_quote_ratio.ge(float(config.targeted_backfill_min_dormancy_to_anomaly_quote_ratio))
-        & dormancy_to_anomaly_trade_ratio.ge(float(config.targeted_backfill_min_dormancy_to_anomaly_trade_ratio))
-        & dormancy_range_pct_median.le(float(config.targeted_backfill_max_dormancy_range_pct_median))
-        & anomaly_quote_volume.ge(float(config.targeted_backfill_min_abs_quote_volume))
-        & anomaly_number_of_trades.ge(float(config.targeted_backfill_min_abs_number_of_trades))
-    )
-    seed_indices = list(np.flatnonzero(gate.to_numpy(dtype=bool, na_value=False)))
-    if not seed_indices:
+    for column in ("open", "high", "low", "close", "quote_volume", "number_of_trades"):
+        prepared[column] = pd.to_numeric(prepared[column], errors="coerce")
+    prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close", "quote_volume", "number_of_trades"]).reset_index(drop=True)
+    if len(prepared) < 2:
         return empty_result
-    scored: list[tuple[float, int]] = []
-    for idx in seed_indices:
-        score = (
-            float(htf_return.iloc[idx]) * 100.0
-            + float(htf_range.iloc[idx]) * 25.0
-            + math.log1p(max(0.0, float(quote_ratio.iloc[idx]) if np.isfinite(float(quote_ratio.iloc[idx])) else 0.0))
-            + math.log1p(max(0.0, float(trade_ratio.iloc[idx]) if np.isfinite(float(trade_ratio.iloc[idx])) else 0.0))
-        )
-        scored.append((score, int(idx)))
-    scored.sort(reverse=True)
-    max_events = int(config.targeted_backfill_max_events_per_symbol)
-    if max_events > 0:
-        seed_indices = [idx for _, idx in scored[:max_events]]
-    else:
-        seed_indices = [idx for _, idx in scored]
-    seed_indices.sort()
+
     rows: list[dict[str, object]] = []
     windows: list[tuple[int, int]] = []
-    window_tail_ms = (int(config.ltf_max_confirm_candles) + 1) * int(ltf_ms)
-    for idx in seed_indices:
-        row = prepared.iloc[idx]
-        ts = int(row["timestamp"])
-        htf_close_ms = ts + int(htf_ms)
-        window_start = int(ts)
-        window_end = int(htf_close_ms + window_tail_ms - 1)
+    scored: list[tuple[float, int]] = []
+    for idx in range(len(prepared) - 1):
+        first = prepared.iloc[idx]
+        second = prepared.iloc[idx + 1]
+        first_ts = int(first["timestamp"])
+        second_ts = int(second["timestamp"])
+        if second_ts != first_ts + int(htf_ms):
+            continue
+        pair_quote = float(first["quote_volume"]) + float(second["quote_volume"])
+        pair_trades = float(first["number_of_trades"]) + float(second["number_of_trades"])
+        pair_high = max(float(first["high"]), float(second["high"]))
+        pair_low = min(float(first["low"]), float(second["low"]))
+        pair_open_floor = min(float(first["open"]), float(second["open"]), pair_low)
+        if not np.isfinite(pair_open_floor) or pair_open_floor <= 0.0:
+            continue
+        max_possible_return = _safe_divide(pair_high - pair_open_floor, pair_open_floor)
+        max_possible_range = _safe_divide(pair_high - pair_low, pair_open_floor)
+        could_contain_seed = (
+            pair_quote >= float(config.targeted_backfill_min_abs_quote_volume)
+            and pair_trades >= float(config.targeted_backfill_min_abs_number_of_trades)
+            and max_possible_return >= float(config.targeted_backfill_min_htf_return_pct)
+            and max_possible_range >= float(config.targeted_backfill_min_htf_range_pct)
+        )
+        if not could_contain_seed:
+            continue
+        score = float(max_possible_return) * 100.0 + float(max_possible_range) * 25.0 + math.log1p(max(0.0, pair_quote)) + math.log1p(max(0.0, pair_trades))
+        scored.append((score, idx))
+
+    if not scored:
+        return empty_result
+    scored.sort(reverse=True)
+    max_events = int(config.targeted_backfill_max_events_per_symbol)
+    selected_indices = [idx for _, idx in (scored[:max_events] if max_events > 0 else scored)]
+    selected_indices = sorted(set(selected_indices))
+    for idx in selected_indices:
+        first = prepared.iloc[idx]
+        second = prepared.iloc[idx + 1]
+        first_ts = int(first["timestamp"])
+        pair_end_exclusive = first_ts + 2 * int(htf_ms)
+        pair_quote = float(first["quote_volume"]) + float(second["quote_volume"])
+        pair_trades = float(first["number_of_trades"]) + float(second["number_of_trades"])
+        pair_high = max(float(first["high"]), float(second["high"]))
+        pair_low = min(float(first["low"]), float(second["low"]))
+        pair_open_floor = min(float(first["open"]), float(second["open"]), pair_low)
+        max_possible_return = _safe_divide(pair_high - pair_open_floor, pair_open_floor)
+        max_possible_range = _safe_divide(pair_high - pair_low, pair_open_floor)
+        window_start = int(first_ts)
+        window_end = int(pair_end_exclusive - 1)
         windows.append((window_start, window_end))
         rows.append(
             {
                 "symbol": symbol,
                 "targeted_ltf_phase": "pre_entry",
                 "targeted_ltf_plan_status": "planned",
-                "selection_model": "closed_htf_strict_awakening_seed_gate_only_no_future",
-                "timestamp_ms": ts,
-                "timestamp_utc": _timestamp_to_utc(ts),
-                "htf_close_ms": htf_close_ms,
-                "htf_close_utc": _timestamp_to_utc(htf_close_ms),
+                "selection_model": "two_closed_htf_candle_safe_superset_for_rolling_seed_no_future",
+                "timestamp_ms": first_ts,
+                "timestamp_utc": _timestamp_to_utc(first_ts),
+                "pair_second_timestamp_ms": int(second["timestamp"]),
+                "pair_second_timestamp_utc": _timestamp_to_utc(int(second["timestamp"])),
+                "htf_close_ms": pair_end_exclusive,
+                "htf_close_utc": _timestamp_to_utc(pair_end_exclusive),
                 "htf_timeframe": config.htf_timeframe,
                 "ltf_timeframe": config.ltf_timeframe,
                 "window_start_ms": window_start,
@@ -644,23 +643,18 @@ def _targeted_ltf_backfill_seeds_for_symbol(
                 "window_end_ms": window_end,
                 "window_end_utc": _timestamp_to_utc(window_end),
                 "window_ms": int(window_end - window_start + 1),
-                "window_model": "htf_awakening_start_to_max_entry_next_open_only",
+                "window_model": "two_adjacent_htf_candles_only_then_exact_ltf_rolling_seed_check",
                 "seed_gate": _targeted_ltf_seed_gate_description(config),
-                "known_at_seed_cutoff_ms": htf_close_ms,
-                "known_at_seed_cutoff_utc": _timestamp_to_utc(htf_close_ms),
-                "htf_return_pct": float(htf_return.iloc[idx]),
-                "htf_range_pct": float(htf_range.iloc[idx]),
-                "htf_quote_ratio": float(quote_ratio.iloc[idx]),
-                "htf_trade_ratio": float(trade_ratio.iloc[idx]),
-                "dormancy_to_anomaly_quote_ratio": float(dormancy_to_anomaly_quote_ratio.iloc[idx]),
-                "dormancy_to_anomaly_trade_ratio": float(dormancy_to_anomaly_trade_ratio.iloc[idx]),
-                "dormancy_range_pct_median": float(dormancy_range_pct_median.iloc[idx]),
-                "anomaly_quote_volume": float(row["_quote_volume"]),
-                "anomaly_number_of_trades": float(row["_number_of_trades"]),
+                "known_at_seed_cutoff_ms": pair_end_exclusive,
+                "known_at_seed_cutoff_utc": _timestamp_to_utc(pair_end_exclusive),
+                "pair_quote_volume_upper_bound": pair_quote,
+                "pair_number_of_trades_upper_bound": pair_trades,
+                "pair_max_possible_return_pct": float(max_possible_return),
+                "pair_max_possible_range_pct": float(max_possible_range),
+                "pair_gate_used_only_as_safe_superset": True,
             }
         )
     return rows, windows
-
 
 
 def _concat_targeted_phase_frames(
@@ -747,52 +741,25 @@ def _build_targeted_ltf_post_entry_backfill_plan(
             ltf=ltf,
             oi=oi,
             config=config,
-            allowed_timestamps_ms=symbol_seed_timestamps,
         )
         broad_candidate_count = int(len(candidate_rows))
-        candidate_rows = [
-            candidate
-            for candidate in candidate_rows
-            if (_coerce_int(candidate.get("timestamp_ms")) in symbol_seed_timestamps)
-        ]
-        skipped_broad_candidates += max(0, broad_candidate_count - int(len(candidate_rows)))
+        skipped_broad_candidates += 0
         symbol_windows: list[tuple[int, int]] = []
         symbol_rows: list[dict[str, object]] = []
-        executable_window_count = 0
-        first_signal_count = 0
+        exact_rolling_seed_count = 0
         for candidate in candidate_rows:
-            entry_windows = _build_ltf_entry_windows(candidate, ltf=ltf, oi=oi, config=config)
-            for entry_window in entry_windows:
-                if entry_window.get("window_execution_ok") is not True:
-                    continue
-                planned = _post_entry_fetch_window_for_signal(entry_window, config=config, ltf_ms=ltf_ms)
-                if planned is None:
-                    continue
-                window_start, window_end = planned
-                symbol_windows.append((window_start, window_end))
-                executable_window_count += 1
-                symbol_rows.append(
-                    _post_entry_plan_row(
-                        entry_window,
-                        signal_scope="entry_window",
-                        window_start=window_start,
-                        window_end=window_end,
-                        config=config,
-                    )
-                )
-            signal = _build_first_ltf_signal(candidate, ltf=ltf, oi=oi, config=config)
-            if signal is None:
+            htf_close_ms = _coerce_int(candidate.get("htf_close_ms"))
+            if htf_close_ms is None:
                 continue
-            planned = _post_entry_fetch_window_for_signal(signal, config=config, ltf_ms=ltf_ms)
-            if planned is None:
-                continue
-            window_start, window_end = planned
+            max_hold_ms = int(config.max_hold_candles) * int(ltf_ms)
+            max_confirm_ms = (int(config.ltf_max_confirm_candles) + 1) * int(ltf_ms)
+            window_start = int(htf_close_ms)
+            window_end = int(max(int(htf_close_ms) + horizon_ms, int(htf_close_ms) + max_confirm_ms + max_hold_ms) - 1)
             symbol_windows.append((window_start, window_end))
-            first_signal_count += 1
+            exact_rolling_seed_count += 1
             symbol_rows.append(
-                _post_entry_plan_row(
-                    signal,
-                    signal_scope="first_signal",
+                _post_entry_plan_row_for_candidate(
+                    candidate,
                     window_start=window_start,
                     window_end=window_end,
                     config=config,
@@ -801,7 +768,7 @@ def _build_targeted_ltf_post_entry_backfill_plan(
         if symbol_windows:
             windows_by_symbol[symbol] = symbol_windows
             rows.extend(symbol_rows)
-        if candidate_rows or executable_window_count or first_signal_count:
+        if candidate_rows or exact_rolling_seed_count:
             rows.append(
                 {
                     "targeted_ltf_phase": "post_entry",
@@ -811,12 +778,11 @@ def _build_targeted_ltf_post_entry_backfill_plan(
                     "ltf_timeframe": config.ltf_timeframe,
                     "pre_entry_candidates": int(len(candidate_rows)),
                     "pre_entry_seed_timestamps": int(len(symbol_seed_timestamps)),
-                    "pre_entry_executable_windows": int(executable_window_count),
-                    "pre_entry_first_signals": int(first_signal_count),
+                    "exact_rolling_seed_candidates": int(exact_rolling_seed_count),
                     "post_entry_windows": int(len(symbol_windows)),
                     "strict_seed_gate_applied_before_candidate_build": True,
-                    "selection_model": "closed_htf_strict_seed_gate_then_known_at_entry_ltf_confirmation_no_future",
-                    "window_model": "post_entry_fetch_only_for_pre_entry_strict_htf_seed_events",
+                    "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future",
+                    "window_model": "post_entry_fetch_after_exact_rolling_ltf_seed",
                 }
             )
     progress.finish()
@@ -835,8 +801,8 @@ def _build_targeted_ltf_post_entry_backfill_plan(
         "strict_seed_gate_applied_before_candidate_build": True,
         "symbols_with_windows": int(len(windows_by_symbol)),
         "raw_targeted_windows": int(sum(len(windows) for windows in windows_by_symbol.values())),
-        "window_model": "post_entry_fetch_only_for_pre_entry_strict_htf_seed_events",
-        "selection_model": "closed_htf_strict_seed_gate_then_known_at_entry_ltf_confirmation_no_future",
+        "window_model": "post_entry_fetch_after_exact_rolling_ltf_seed",
+        "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future",
     }
     if plan.empty:
         plan = pd.DataFrame([summary])
@@ -864,6 +830,40 @@ def _post_entry_fetch_window_for_signal(
     return window_start, int(window_end_exclusive - 1)
 
 
+
+def _post_entry_plan_row_for_candidate(
+    candidate: Mapping[str, object],
+    *,
+    window_start: int,
+    window_end: int,
+    config: HtfLtfRunnerDiscoveryConfig,
+) -> dict[str, object]:
+    return {
+        "targeted_ltf_phase": "post_entry",
+        "symbol": candidate.get("symbol", ""),
+        "targeted_ltf_plan_status": "planned",
+        "signal_scope": "exact_rolling_seed_candidate",
+        "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future",
+        "timestamp_ms": candidate.get("timestamp_ms", float("nan")),
+        "timestamp_utc": candidate.get("timestamp_utc", ""),
+        "htf_close_ms": candidate.get("htf_close_ms", float("nan")),
+        "htf_close_utc": candidate.get("htf_close_utc", ""),
+        "rolling_htf_window_start_ms": candidate.get("rolling_htf_window_start_ms", float("nan")),
+        "rolling_htf_window_end_ms": candidate.get("rolling_htf_window_end_ms", float("nan")),
+        "htf_timeframe": config.htf_timeframe,
+        "ltf_timeframe": config.ltf_timeframe,
+        "window_start_ms": int(window_start),
+        "window_start_utc": _timestamp_to_utc(window_start),
+        "window_end_ms": int(window_end),
+        "window_end_utc": _timestamp_to_utc(window_end),
+        "window_ms": int(window_end - window_start + 1),
+        "window_model": "full_confirm_label_exit_fetch_after_exact_rolling_seed",
+        "htf_quote_ratio": candidate.get("htf_quote_ratio", float("nan")),
+        "htf_trade_ratio": candidate.get("htf_trade_ratio", float("nan")),
+        "dormancy_to_anomaly_quote_ratio": candidate.get("dormancy_to_anomaly_quote_ratio", float("nan")),
+        "dormancy_to_anomaly_trade_ratio": candidate.get("dormancy_to_anomaly_trade_ratio", float("nan")),
+    }
+
 def _post_entry_plan_row(
     signal: Mapping[str, object],
     *,
@@ -877,7 +877,7 @@ def _post_entry_plan_row(
         "symbol": signal.get("symbol", ""),
         "targeted_ltf_plan_status": "planned",
         "signal_scope": signal_scope,
-        "selection_model": "closed_htf_strict_seed_gate_then_known_at_entry_ltf_confirmation_no_future",
+        "selection_model": "two_htf_pair_superset_then_exact_rolling_ltf_seed_no_future",
         "timestamp_ms": signal.get("timestamp_ms", float("nan")),
         "timestamp_utc": signal.get("timestamp_utc", ""),
         "htf_close_ms": signal.get("htf_close_ms", float("nan")),
@@ -894,7 +894,7 @@ def _post_entry_plan_row(
         "window_end_ms": int(window_end),
         "window_end_utc": _timestamp_to_utc(window_end),
         "window_ms": int(window_end - window_start + 1),
-        "window_model": "post_entry_fetch_only_for_pre_entry_strict_htf_seed_events",
+        "window_model": "post_entry_fetch_after_exact_rolling_ltf_seed",
         "entry_drift_pct": signal.get("entry_drift_pct", float("nan")),
         "initial_risk_pct": signal.get("initial_risk_pct", float("nan")),
         "window_execution_ok": signal.get("window_execution_ok", True),
@@ -942,7 +942,7 @@ def _ensure_targeted_ltf_backfill(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     if not windows_by_symbol:
         return (
-            pd.DataFrame([{"status": "no_targeted_windows", "reason": "strict_htf_seed_gate_selected_zero_windows"}]),
+            pd.DataFrame([{"status": "no_targeted_windows", "reason": "two_htf_pair_superset_selected_zero_windows"}]),
             pd.DataFrame([{"status": "not_run", "reason": "no_targeted_windows"}]),
         )
     from research_tools.anomaly_strategy_backtest import ensure_targeted_aggtrade_subminute_cache
@@ -954,6 +954,67 @@ def _ensure_targeted_ltf_backfill(
         progress_label=progress_label,
         max_merged_span_ms=max_merged_span_ms,
     )
+
+
+def _rolling_scan_config(config: HtfLtfRunnerDiscoveryConfig, *, htf_ms: int, ltf_ms: int) -> HtfLtfRunnerDiscoveryConfig:
+    factor = max(1, int(round(float(htf_ms) / max(1.0, float(ltf_ms)))))
+    return replace(
+        config,
+        baseline_candles=max(1, int(config.baseline_candles) * factor),
+        dormancy_candles=max(1, int(config.dormancy_candles) * factor),
+        pregrowth_candles=max(1, int(config.pregrowth_candles) * factor),
+    )
+
+
+def _rolling_htf_from_ltf(ltf: pd.DataFrame, *, htf_ms: int, ltf_ms: int) -> pd.DataFrame:
+    if ltf.empty or "timestamp" not in ltf.columns:
+        return pd.DataFrame()
+    required = {"timestamp", "open", "high", "low", "close", "quote_volume", "number_of_trades"}
+    if not required.issubset(ltf.columns):
+        return pd.DataFrame()
+    frame = ltf.copy()
+    frame["timestamp"] = pd.to_numeric(frame["timestamp"], errors="coerce")
+    for column in ("open", "high", "low", "close", "quote_volume", "number_of_trades", "volume", "taker_buy_quote_volume"):
+        if column in frame.columns:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    frame = frame.dropna(subset=["timestamp", "open", "high", "low", "close"]).sort_values("timestamp").drop_duplicates("timestamp", keep="last")
+    if frame.empty:
+        return pd.DataFrame()
+    frame["expected_timestamp"] = frame["timestamp"].shift(1) + int(ltf_ms)
+    frame["continuous_from_prev"] = frame["expected_timestamp"].isna() | frame["timestamp"].eq(frame["expected_timestamp"])
+    window_candles = int(round(float(htf_ms) / float(ltf_ms)))
+    if window_candles <= 0 or len(frame) < window_candles:
+        return pd.DataFrame()
+    rows: list[dict[str, object]] = []
+    continuous = frame["continuous_from_prev"].to_numpy(dtype=bool)
+    timestamps = frame["timestamp"].astype("int64").to_numpy()
+    for end_pos in range(window_candles - 1, len(frame)):
+        start_pos = end_pos - window_candles + 1
+        if start_pos + 1 <= end_pos and not bool(np.all(continuous[start_pos + 1 : end_pos + 1])):
+            continue
+        window = frame.iloc[start_pos : end_pos + 1]
+        start_ts = int(timestamps[start_pos])
+        expected_end_exclusive = start_ts + int(htf_ms)
+        actual_end_exclusive = int(timestamps[end_pos]) + int(ltf_ms)
+        if actual_end_exclusive != expected_end_exclusive:
+            continue
+        row: dict[str, object] = {
+            "timestamp": start_ts,
+            "open": float(window.iloc[0]["open"]),
+            "high": float(pd.to_numeric(window["high"], errors="coerce").max()),
+            "low": float(pd.to_numeric(window["low"], errors="coerce").min()),
+            "close": float(window.iloc[-1]["close"]),
+            "volume": float(pd.to_numeric(window.get("volume", pd.Series(dtype=float)), errors="coerce").sum()) if "volume" in window.columns else float("nan"),
+            "quote_volume": float(pd.to_numeric(window["quote_volume"], errors="coerce").sum()),
+            "number_of_trades": float(pd.to_numeric(window["number_of_trades"], errors="coerce").sum()),
+            "rolling_htf_window_start_ms": start_ts,
+            "rolling_htf_window_end_ms": expected_end_exclusive,
+            "rolling_htf_ltf_candles": int(window_candles),
+        }
+        if "taker_buy_quote_volume" in window.columns:
+            row["taker_buy_quote_volume"] = float(pd.to_numeric(window["taker_buy_quote_volume"], errors="coerce").sum())
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 def _collect_symbol_candidates(
     *,
@@ -968,7 +1029,10 @@ def _collect_symbol_candidates(
     ltf_ms = _timeframe_ms(config.ltf_timeframe)
     horizon_ms = int(config.runner_horizon_minutes) * 60_000
     rows: list[dict[str, object]] = []
-    prepared = htf.copy()
+    prepared = _rolling_htf_from_ltf(ltf, htf_ms=htf_ms, ltf_ms=ltf_ms)
+    if prepared.empty:
+        return [], 0
+    config = _rolling_scan_config(config, htf_ms=htf_ms, ltf_ms=ltf_ms)
     prepared["timestamp"] = pd.to_numeric(prepared["timestamp"], errors="coerce")
     prepared = prepared.dropna(subset=["timestamp", "open", "high", "low", "close"]).sort_values("timestamp")
     if "quote_volume" not in prepared.columns or "number_of_trades" not in prepared.columns:
@@ -1107,6 +1171,11 @@ def _collect_symbol_candidates(
                 "timestamp_utc": _timestamp_to_utc(ts),
                 "htf_close_ms": close_ts,
                 "htf_close_utc": _timestamp_to_utc(close_ts),
+                "rolling_htf_window_start_ms": ts,
+                "rolling_htf_window_start_utc": _timestamp_to_utc(ts),
+                "rolling_htf_window_end_ms": close_ts,
+                "rolling_htf_window_end_utc": _timestamp_to_utc(close_ts),
+                "rolling_htf_step_ms": ltf_ms,
                 "htf_timeframe": config.htf_timeframe,
                 "ltf_timeframe": config.ltf_timeframe,
                 "future_label_available_at_entry": False,
@@ -2804,6 +2873,161 @@ def _entry_window_counts(config: HtfLtfRunnerDiscoveryConfig) -> tuple[int, ...]
     return tuple(sorted(counts))
 
 
+
+def _tf_set_from_row(row: Mapping[str, object]) -> str:
+    return f"{row.get('htf_timeframe', '')}_{row.get('ltf_timeframe', '')}"
+
+
+def _as_float(value: object) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+    return number if np.isfinite(number) else float("nan")
+
+
+def _runner_candidate_matches(row: Mapping[str, object]) -> list[str]:
+    tf_set = _tf_set_from_row(row)
+    if tf_set == "1m_15s":
+        return []
+    htf_trade_ratio = _as_float(row.get("htf_trade_ratio"))
+    htf_quote_ratio = _as_float(row.get("htf_quote_ratio"))
+    ltf_trade_pace_ratio = _as_float(row.get("ltf_trade_pace_ratio"))
+    ltf_quote_pace_ratio = _as_float(row.get("ltf_quote_pace_ratio"))
+    dormancy_trade_ratio = _as_float(row.get("dormancy_to_anomaly_trade_ratio"))
+    current_vs_prior_max = _as_float(row.get("current_vs_prior_spike_max_quote"))
+    second_half_return = _as_float(row.get("ltf_second_half_return_pct"))
+    pregrowth_max_single = _as_float(row.get("pregrowth_max_single_return_pct"))
+
+    matches: list[str] = []
+    if (
+        np.isfinite(dormancy_trade_ratio)
+        and dormancy_trade_ratio <= 32.0
+        and np.isfinite(current_vs_prior_max)
+        and current_vs_prior_max > 0.45
+        and np.isfinite(ltf_quote_pace_ratio)
+        and ltf_quote_pace_ratio <= 52.0
+        and np.isfinite(second_half_return)
+        and second_half_return <= 0.0125
+        and np.isfinite(pregrowth_max_single)
+        and pregrowth_max_single > 0.005
+    ):
+        matches.append("C_balanced_flow_acceptance")
+    if (
+        np.isfinite(htf_trade_ratio)
+        and htf_trade_ratio <= 18.0
+        and np.isfinite(current_vs_prior_max)
+        and current_vs_prior_max > 0.6
+        and current_vs_prior_max <= 1.5
+    ):
+        matches.append("A_resonance_prior_spike")
+    if (
+        tf_set == "5m_30s"
+        and np.isfinite(htf_trade_ratio)
+        and htf_trade_ratio >= 11.7
+        and np.isfinite(ltf_trade_pace_ratio)
+        and ltf_trade_pace_ratio <= 5.7
+        and np.isfinite(htf_quote_ratio)
+        and htf_quote_ratio <= 47.9
+    ):
+        matches.append("S_7d_5m30_strict")
+    return matches
+
+
+def _with_runner_candidate_categories(trades: pd.DataFrame) -> pd.DataFrame:
+    if trades.empty:
+        return trades.copy()
+    frame = trades.copy()
+    matched_values: list[str] = []
+    selected_values: list[str] = []
+    priority_values: list[float] = []
+    for row in frame.to_dict("records"):
+        matches = _runner_candidate_matches(row)
+        matched_values.append("|".join(matches))
+        selected_values.append(matches[0] if matches else "")
+        priority_values.append(float(1 + ["C_balanced_flow_acceptance", "A_resonance_prior_spike", "S_7d_5m30_strict"].index(matches[0])) if matches else float("nan"))
+    frame["runner_candidate_matched_categories"] = matched_values
+    frame["runner_candidate_category"] = selected_values
+    frame["runner_candidate_priority_rank"] = priority_values
+    return frame
+
+
+def _apply_runner_candidate_portfolio(
+    trades: pd.DataFrame,
+    *,
+    config: HtfLtfRunnerDiscoveryConfig,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if trades.empty:
+        return trades.copy(), pd.DataFrame()
+    required = {"entry_timestamp_ms", "exit_timestamp_ms", "symbol", "status", "runner_candidate_category"}
+    if not required.issubset(trades.columns):
+        return trades.iloc[0:0].copy(), pd.DataFrame([{"event_type": "portfolio_not_run_missing_columns", "missing_columns": ",".join(sorted(required.difference(trades.columns)))}])
+    frame = trades.copy()
+    frame["entry_timestamp_ms"] = pd.to_numeric(frame["entry_timestamp_ms"], errors="coerce")
+    frame["exit_timestamp_ms"] = pd.to_numeric(frame["exit_timestamp_ms"], errors="coerce")
+    frame = frame.sort_values(["entry_timestamp_ms", "runner_candidate_priority_rank", "symbol"], na_position="last").reset_index(drop=True)
+    active: list[dict[str, object]] = []
+    cooldown_until_by_symbol: dict[str, int] = {}
+    selected_indices: list[int] = []
+    events: list[dict[str, object]] = []
+    risk_per_trade = float(config.risk_per_trade_pct)
+    max_total_risk = float(config.max_total_open_risk_pct)
+    cooldown_ms = int(_timeframe_ms(config.htf_timeframe))
+
+    for idx, row in frame.iterrows():
+        entry_ts_value = row.get("entry_timestamp_ms")
+        if not np.isfinite(float(entry_ts_value)):
+            continue
+        entry_ts = int(float(entry_ts_value))
+        symbol = str(row.get("symbol", ""))
+        active = [position for position in active if int(position.get("exit_ts", 0)) > entry_ts]
+        category = str(row.get("runner_candidate_category", ""))
+        base_event = {
+            "event_timestamp_ms": entry_ts,
+            "event_timestamp_utc": _timestamp_to_utc(entry_ts),
+            "symbol": symbol,
+            "htf_timeframe": row.get("htf_timeframe", ""),
+            "ltf_timeframe": row.get("ltf_timeframe", ""),
+            "entry_timestamp_ms": entry_ts,
+            "entry_timestamp_utc": row.get("entry_timestamp_utc", ""),
+            "exit_timestamp_ms": row.get("exit_timestamp_ms", float("nan")),
+            "runner_candidate_category": category,
+            "runner_candidate_matched_categories": row.get("runner_candidate_matched_categories", ""),
+            "risk_per_trade_pct": risk_per_trade,
+            "max_total_open_risk_pct": max_total_risk,
+            "open_positions_before": int(len(active)),
+            "open_risk_before_pct": float(len(active) * risk_per_trade),
+            "symbol_cooldown_ms": cooldown_ms,
+        }
+        if not category:
+            events.append({**base_event, "event_type": "rejected_no_runner_candidate_category"})
+            continue
+        if str(row.get("status", "")) != "closed":
+            events.append({**base_event, "event_type": "rejected_trade_not_closed", "status": row.get("status", "")})
+            continue
+        if any(str(position.get("symbol", "")) == symbol for position in active):
+            events.append({**base_event, "event_type": "blocked_same_symbol_open"})
+            continue
+        cooldown_until = int(cooldown_until_by_symbol.get(symbol, 0))
+        if cooldown_until > entry_ts:
+            events.append({**base_event, "event_type": "blocked_symbol_cooldown", "cooldown_until_ms": cooldown_until, "cooldown_until_utc": _timestamp_to_utc(cooldown_until)})
+            continue
+        if (len(active) + 1) * risk_per_trade > max_total_risk + 1e-12:
+            events.append({**base_event, "event_type": "blocked_total_risk_cap"})
+            continue
+        exit_ts_value = row.get("exit_timestamp_ms")
+        if not np.isfinite(float(exit_ts_value)):
+            events.append({**base_event, "event_type": "rejected_missing_exit_timestamp"})
+            continue
+        exit_ts = int(float(exit_ts_value))
+        selected_indices.append(int(idx))
+        active.append({"symbol": symbol, "exit_ts": exit_ts, "risk": risk_per_trade})
+        cooldown_until_by_symbol[symbol] = max(cooldown_until_by_symbol.get(symbol, 0), exit_ts + cooldown_ms)
+        events.append({**base_event, "event_type": "selected", "open_positions_after": int(len(active)), "open_risk_after_pct": float(len(active) * risk_per_trade), "cooldown_until_ms": int(exit_ts + cooldown_ms), "cooldown_until_utc": _timestamp_to_utc(int(exit_ts + cooldown_ms))})
+    selected = frame.loc[selected_indices].copy() if selected_indices else frame.iloc[0:0].copy()
+    return selected.reset_index(drop=True), pd.DataFrame(events)
+
+
 def _apply_same_symbol_overlap_filter(trades: pd.DataFrame) -> pd.DataFrame:
     if trades.empty or "status" not in trades.columns:
         return trades.copy()
@@ -3032,12 +3256,12 @@ def _honesty_report(config: HtfLtfRunnerDiscoveryConfig) -> pd.DataFrame:
             {
                 "check": "entry_availability",
                 "status": "ok",
-                "detail": "entry is the next LTF open after the closed confirmation candle; confirmation and next-open entry require a continuous LTF path with no gap hops.",
+                "detail": "rolling HTF seed is built only from closed LTF candles; entry is the next LTF open after the first closed C/A/S confirmation candle; confirmation and next-open entry require a continuous LTF path with no gap hops.",
             },
             {
                 "check": "oos_runner_fader_v1_hypothesis",
                 "status": "research_only",
-                "detail": "The OOS v1 hypothesis artifacts use only known-at-entry HTF/LTF ratios: htf_trade_ratio >= 12, ltf_trade_pace_ratio <= 6, and the strict tier also requires htf_quote_ratio <= 48. They must be validated on a held-out run before any live promotion.",
+                "detail": "C/A/S category assignment is fixed-priority and uses only known-at-entry rolling HTF/LTF fields. It is still a research hypothesis and must be validated on a held-out run before live promotion.",
             },
             {
                 "check": "exit_model",
@@ -3055,6 +3279,11 @@ def _honesty_report(config: HtfLtfRunnerDiscoveryConfig) -> pd.DataFrame:
                 "detail": "OI is used only from cached 5m rows whose timestamp plus 5m availability is <= decision time.",
             },
             {
+                "check": "portfolio_constraints",
+                "status": "ok",
+                "detail": f"Portfolio selection uses fixed C->A->S priority, one open trade per symbol, symbol cooldown equal to one rolling HTF window, risk_per_trade={config.risk_per_trade_pct}, and max_total_open_risk={config.max_total_open_risk_pct}.",
+            },
+            {
                 "check": "costs",
                 "status": "ok",
                 "detail": f"entry_slippage={config.entry_slippage_pct}; exit_slippage={config.exit_slippage_pct}; round_trip_fee={2 * config.fee_rate}.",
@@ -3062,7 +3291,7 @@ def _honesty_report(config: HtfLtfRunnerDiscoveryConfig) -> pd.DataFrame:
             {
                 "check": "data_access",
                 "status": "ok",
-                "detail": "The tool reads Parquet cache through ParquetStorage only; it does not download exchange candles or seconds data during the backtest and does not synthesize quote-volume from close*volume for flow logic.",
+                "detail": "Targeted LTF access is two-stage: a cheap two-closed-HTF-candle safe-superset may fetch only that pair first; full confirm/label/exit LTF is fetched only after an exact rolling LTF seed exists. The strategy seed itself is rolling HTF, not calendar HTF.",
             },
         ]
     )
